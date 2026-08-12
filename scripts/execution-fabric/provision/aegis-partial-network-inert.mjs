@@ -3,10 +3,10 @@ import fs from "node:fs"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 
-const TX = "01efdfa0-2a87-4fc5-817b-e7068523637d"
-const FAILED_HEAD = "b1e9a927ffdaeb4190ea3d809919bc80398e64076fe9cea90ca0b88f24d1270e"
-const APPLY_AUTHORITY = "bef966d2-22c9-4e8e-a310-3e4385e938eb"
-const APPLY_AUTHORITY_SHA256 = "30b383e01ccc5f51a2454cb67e4ee827f950455a20f33465285b6d20ff0ea4e1"
+const TX = "864e0fde-3e8a-4800-9fb5-6e4b64cd746b"
+const FAILED_HEAD = "733bab36726e108a814279bfe79393554a28aeb33c8a9ff9619574bf25890fd0"
+const APPLY_AUTHORITY = "6cf932f6-fb5a-4a2b-b5c3-367b8e3182d9"
+const APPLY_AUTHORITY_SHA256 = "1cbb5e3a98a294ff02dd45b1f99dfab4102718d87229bdde9545d6a11ebc91ab"
 const MACHINE = "1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b"
 const ROOT = "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff"
 const INSTALLED_SELF = "/usr/local/libexec/williamos-aegis-partial-network-inert.mjs"
@@ -54,10 +54,10 @@ function validateAuthority(file) {
 }
 
 function proveFailedTransaction() {
-  const names = fs.readdirSync(`${ROOT}/journal`).filter(n => n.startsWith(`${TX}.`)).sort(); if (names.length !== 5) throw new Error("journal record set differs")
-  const phases = ["AUTHORITY_CONSUMED", "STEP_INTENT", "STEP_APPLIED", "STEP_INTENT", "FAILED_PARTIAL"], steps = [null, "RECONCILE_BOUNDED_IDENTITY", "RECONCILE_BOUNDED_IDENTITY", "INSTALL_DUAL_STACK_BROKER_BOUNDARY", null]
+  const names = fs.readdirSync(`${ROOT}/journal`).filter(n => n.startsWith(`${TX}.`)).sort(); if (names.length !== 7) throw new Error("journal record set differs")
+  const phases = ["AUTHORITY_CONSUMED", "STEP_INTENT", "STEP_APPLIED", "STEP_INTENT", "STEP_APPLIED", "STEP_INTENT", "FAILED_PARTIAL"], steps = [null, "RECONCILE_BOUNDED_IDENTITY", "RECONCILE_BOUNDED_IDENTITY", "INSTALL_DUAL_STACK_BROKER_BOUNDARY", "INSTALL_DUAL_STACK_BROKER_BOUNDARY", "INSTALL_GITHUB_HOST_AUTH_BOUNDARY", null]
   let previous = "0".repeat(64)
-  for (let i = 0; i < names.length; i++) { const r = canonicalRootJson(`${ROOT}/journal/${names[i]}`); if (!exactKeys(r, ["schemaVersion", "sequence", "previousSha256", "phase", "detail", "recordSha256"])) throw new Error("journal schema differs"); const digest = sha(Buffer.from(canonical({ schemaVersion:r.schemaVersion, sequence:r.sequence, previousSha256:r.previousSha256, phase:r.phase, detail:r.detail }))); if (r.schemaVersion !== 1 || r.sequence !== i + 1 || r.previousSha256 !== previous || r.phase !== phases[i] || r.recordSha256 !== digest || names[i] !== `${TX}.${String(i+1).padStart(6,"0")}.${digest}.json` || (steps[i] && r.detail?.stepId !== steps[i])) throw new Error("journal chain differs"); if (i === 0 && (r.detail?.authorityId !== APPLY_AUTHORITY || r.detail?.transactionId !== TX)) throw new Error("journal authority differs"); if (i === 4 && (digest !== FAILED_HEAD || r.detail?.detail !== "exact broker/default-deny/Atlas boundary differs after apply")) throw new Error("terminal failure differs"); previous = digest }
+  for (let i = 0; i < names.length; i++) { const r = canonicalRootJson(`${ROOT}/journal/${names[i]}`); if (!exactKeys(r, ["schemaVersion", "sequence", "previousSha256", "phase", "detail", "recordSha256"])) throw new Error("journal schema differs"); const digest = sha(Buffer.from(canonical({ schemaVersion:r.schemaVersion, sequence:r.sequence, previousSha256:r.previousSha256, phase:r.phase, detail:r.detail }))); if (r.schemaVersion !== 1 || r.sequence !== i + 1 || r.previousSha256 !== previous || r.phase !== phases[i] || r.recordSha256 !== digest || names[i] !== `${TX}.${String(i+1).padStart(6,"0")}.${digest}.json` || (steps[i] && r.detail?.stepId !== steps[i])) throw new Error("journal chain differs"); if (i === 0 && (r.detail?.authorityId !== APPLY_AUTHORITY || r.detail?.transactionId !== TX)) throw new Error("journal authority differs"); if (i === 6 && (digest !== FAILED_HEAD || r.detail?.detail !== "/var/lib/williamos-fabric/remote-dev-prerequisite-handoff/staged/github_known_hosts differs from signed bytes")) throw new Error("terminal failure differs"); previous = digest }
   const claim = canonicalRootJson(`${ROOT}/claims/${APPLY_AUTHORITY}.claimed`); if (!exactKeys(claim,["authorityId","transactionId","authoritySha256"]) || claim.authorityId !== APPLY_AUTHORITY || claim.transactionId !== TX || claim.authoritySha256 !== APPLY_AUTHORITY_SHA256) throw new Error("apply claim differs")
 }
 
