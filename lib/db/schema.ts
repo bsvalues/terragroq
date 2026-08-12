@@ -118,7 +118,7 @@ export const memoryFact = pgTable("memory_fact", {
   stale: boolean("stale").default(false).notNull(),
   tags: text("tags").array().default([]).notNull(),
   pinned: boolean("pinned").default(false).notNull(),
-  embedding: vector("embedding", { dimensions: 1536 }),
+  embedding: vector("embedding", { dimensions: 1024 }),
   reviewedAt: timestamp("reviewedAt"),
   lastUsedAt: timestamp("lastUsedAt"),
   supersededById: integer("supersededById"),
@@ -251,7 +251,7 @@ export const documentChunk = pgTable("document_chunk", {
   documentId: integer("documentId").notNull(),
   chunkIndex: integer("chunkIndex").notNull(),
   content: text("content").notNull(),
-  embedding: vector("embedding", { dimensions: 1536 }),
+  embedding: vector("embedding", { dimensions: 1024 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 })
 
