@@ -14,6 +14,10 @@ const CONTROL_REPOSITORY = "/var/lib/williamos-remote-dev/control/terragroq"
 const TARGET_MIRROR = "/var/lib/williamos-remote-dev/repositories/terrafusion_os_1.0.git"
 const HERMES_SOURCE_ADDRESS = "192.168.88.9"
 const PREVIOUS_HERMES_SOURCE_ADDRESS = "192.168.1.154"
+const STANDING_ROOT_KEY_PATH = "/etc/ssh/authorized_keys/williamos-fabric-standing-hash"
+const STANDING_ROOT_KEY_SHA256 = "d054724aeea3ff42bf646d4d3aed078be21183e3a67c9ae1f8d4768e97dd2967"
+const STANDING_ENTRYPOINT_PATH = "/usr/local/libexec/williamos/aegis-standing-hash-ssh-entrypoint.mjs"
+const STANDING_ENTRYPOINT_SHA256 = "ebcf0d068e11c1a3f98b515f9a59a456955d8d30abdbb8bab7897b9b315caf9a"
 const FIXED_ENV = Object.freeze({ HOME: "/nonexistent", PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1" })
 const STEPS = Object.freeze([
   "RECONCILE_BOUNDED_IDENTITY", "INSTALL_ROOT_LAUNCH_ASSETS", "INSTALL_DUAL_STACK_BROKER_BOUNDARY",
@@ -570,6 +574,10 @@ function applyGithub(authority) {
   if (!fingerprint.includes(authority.inputs.githubAccountKeyFingerprint)) fail("GITHUB_KEY_DRIFT", "GitHub account key fingerprint differs")
 }
 function applyTransport(authority) {
+  if (!exactFile(STANDING_ROOT_KEY_PATH, STANDING_ROOT_KEY_SHA256, 0, 0, 0o444)
+    || !exactFile(STANDING_ENTRYPOINT_PATH, STANDING_ENTRYPOINT_SHA256, 0, 0, 0o555)) {
+    fail("TRANSPORT_DRIFT", "standing authorized key or forced-command entrypoint differs")
+  }
   const source = staged("hermes-transport.pub", authority.inputs.hermesTransportPublicKeySha256, 0o400)
   const fingerprint = run("/usr/bin/ssh-keygen", ["-lf", source, "-E", "sha256"])
   if (!fingerprint.includes(authority.inputs.hermesTransportKeyFingerprint)) fail("TRANSPORT_KEY_DRIFT", "Hermes transport key fingerprint differs")
@@ -590,7 +598,7 @@ function applyTransport(authority) {
   run("/usr/sbin/sshd", ["-t"])
   for (const address of [HERMES_SOURCE_ADDRESS, PREVIOUS_HERMES_SOURCE_ADDRESS]) {
     const effective = run("/usr/sbin/sshd", ["-T", "-C", `user=williamos-fabric,host=aegis,addr=${address}`])
-    for (const required of ["passwordauthentication no", "kbdinteractiveauthentication no", "hostbasedauthentication no", "pubkeyauthentication yes", "authenticationmethods publickey", "forcecommand /usr/bin/node /usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs", "allowtcpforwarding no", "permittty no", "permituserenvironment no", "permituserrc no", "authorizedkeysfile /etc/ssh/authorized_keys/williamos-fabric", "authorizedkeyscommand none", "authorizedprincipalscommand none", "trustedusercakeys none"]) if (!effective.includes(required)) fail("TRANSPORT_DRIFT", "effective SSH restriction differs")
+    for (const required of ["passwordauthentication no", "kbdinteractiveauthentication no", "hostbasedauthentication no", "pubkeyauthentication yes", "authenticationmethods publickey", "forcecommand none", "allowagentforwarding no", "allowtcpforwarding no", "x11forwarding no", "permittty no", "permittunnel no", "gatewayports no", "permituserenvironment no", "permituserrc no", "authorizedkeysfile /etc/ssh/authorized_keys/williamos-fabric /etc/ssh/authorized_keys/williamos-fabric-standing-hash", "authorizedkeyscommand none", "authorizedprincipalscommand none", "trustedusercakeys none"]) if (!effective.includes(required)) fail("TRANSPORT_DRIFT", "effective SSH restriction differs")
   }
   run("/usr/bin/loginctl", ["enable-linger", "williamos-fabric"])
 }

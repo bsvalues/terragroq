@@ -252,7 +252,7 @@
     {
       "source": "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs",
       "destination": "/usr/local/libexec/williamos-aegis-root-os-adapter.mjs",
-      "sha256": "bf62c737cdd546b8f5d76919695de15588be552c187dd87fcdcfcf456f223523",
+      "sha256": "ff5df541c103cbe9cc7c5b56c45eda85d204353f82f7979e863cd132c9d9214f",
       "owner": "root",
       "group": "root",
       "mode": "0555"
@@ -276,7 +276,7 @@
     {
       "source": "scripts/execution-fabric/provision/assets/90-williamos-fabric-remote-dev.conf",
       "destination": "/etc/ssh/sshd_config.d/90-williamos-fabric-remote-dev.conf",
-      "sha256": "a6e83ce0c8b2d2c8127a268c5bd48f27ff3199894f0179afc412a5b01f7fe9c6",
+      "sha256": "0f97b3005ab5a90733c7bcde47a4d1232ea1121d375229c0e31630c3b177da99",
       "owner": "root",
       "group": "root",
       "mode": "0444"
