@@ -19,6 +19,7 @@ const ASSET_LAYOUT = Object.freeze([
 ])
 const SSH_ENTRYPOINT = "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs"
 const SSH_ENTRYPOINT_PREDECESSOR_SHA256 = "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7"
+const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "f068311975a4daa58e65e787b793f58654ade149fe53150c5675af911393c7f9"
 const SHA = /^[a-f0-9]{64}$/; const SHA40 = /^[a-f0-9]{40}$/; const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const canonical = value => value === null || ["string","boolean","number"].includes(typeof value) ? JSON.stringify(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex")
@@ -33,8 +34,10 @@ function proveControlRepository(){const config=`[core]\n\trepositoryformatversio
 function fsyncParent(file){const fd=fs.openSync(path.dirname(file),fs.constants.O_RDONLY|fs.constants.O_DIRECTORY);try{fs.fsyncSync(fd)}finally{fs.closeSync(fd)}}
 function create(file,bytes,mode){const fd=fs.openSync(file,fs.constants.O_CREAT|fs.constants.O_EXCL|fs.constants.O_WRONLY|fs.constants.O_NOFOLLOW,mode);try{fs.writeFileSync(fd,bytes);fs.fchmodSync(fd,mode);fs.fsyncSync(fd)}finally{fs.closeSync(fd)}fsyncParent(file)}
 function install(source,destination,mode){if(!parents(destination))throw new Error("bridge destination parent trust differs");const bytes=rootSource(source),temp=`${destination}.${process.pid}.tmp`;create(temp,bytes,mode);fs.renameSync(temp,destination);fsyncParent(destination);if(!rootFile(destination,mode).equals(bytes))throw new Error("installed bridge asset differs")}
+function replace(file,bytes,mode){const temp=`${file}.${process.pid}.tmp`;create(temp,bytes,mode);fs.renameSync(temp,file);fsyncParent(file);if(!rootFile(file,mode).equals(bytes))throw new Error("replaced bridge receipt differs")}
 function receiptFor(p){return {schemaVersion:1,status:"ACTIVATION_BRIDGE_VERIFIED",runId:RUN_ID,authorityId:p.authorityId,authoritySha256:sha(Buffer.from(canonical(p))),machineIdSha256:p.machineIdSha256,bootId:p.bootId,controlCommit:p.controlCommit,prerequisiteReceiptSha256:p.prerequisiteReceiptSha256,assets:p.assets.map(({destination,sha256,mode})=>({destination,sha256,mode})),schedulerEnabled:false,standingAuthority:false,executionAuthorized:false}}
 export function inspectBridgeDestinationState(destination, observedSha256, observedMode, expectedSha256){if(observedSha256===expectedSha256)return "MATCH";if(destination===SSH_ENTRYPOINT&&observedMode==="0555"&&observedSha256===SSH_ENTRYPOINT_PREDECESSOR_SHA256)return "EXACT_PREDECESSOR";return "DRIFT"}
+export function inspectBridgeReceiptState(observedSha256,expectedSha256){if(observedSha256===expectedSha256)return "MATCH";if(observedSha256===BRIDGE_RECEIPT_PREDECESSOR_SHA256)return "EXACT_PREDECESSOR";return "DRIFT"}
 
 export function inspectBridgeBootstrapAuthority(envelope, now, selfSha) {
   try {
@@ -56,10 +59,10 @@ function main(authorityPath){
   for(const a of p.assets){const source=path.join(CONTROL,...a.source.split("/"));if(sha(rootSource(source))!==a.sha256)throw new Error("reviewed source differs")}
   if(!fs.existsSync(CLAIM_ROOT)){if(!parents(CLAIM_ROOT))throw new Error("claim parent trust differs");fs.mkdirSync(CLAIM_ROOT,{mode:0o700});fs.chownSync(CLAIM_ROOT,0,0);fs.chmodSync(CLAIM_ROOT,0o700);fsyncParent(CLAIM_ROOT)}else{const cs=fs.lstatSync(CLAIM_ROOT);if(!parents(`${CLAIM_ROOT}/claim`)||!cs.isDirectory()||cs.isSymbolicLink()||cs.uid!==0||cs.gid!==0||(cs.mode&0o7777)!==0o700)throw new Error("claim root trust differs")}
   const claim=`${CLAIM_ROOT}/${p.authorityId}.consumed`;if(!fs.existsSync(claim))create(claim,Buffer.from(`${sha(Buffer.from(canonical(p)))}\n`),0o400);else if(rootFile(claim,0o400).toString("utf8")!==`${sha(Buffer.from(canonical(p)))}\n`)throw new Error("authority claim differs")
-  const receipt=receiptFor(p),receiptBytes=Buffer.from(`${canonical(receipt)}\n`);if(fs.existsSync(RECEIPT)){if(!rootFile(RECEIPT,0o444).equals(receiptBytes))throw new Error("bridge receipt differs");process.stdout.write(receiptBytes);return}
+  const receipt=receiptFor(p),receiptBytes=Buffer.from(`${canonical(receipt)}\n`);let receiptState="ABSENT";if(fs.existsSync(RECEIPT)){const current=rootFile(RECEIPT,0o444);receiptState=inspectBridgeReceiptState(sha(current),sha(receiptBytes));if(receiptState==="DRIFT")throw new Error("bridge receipt differs");if(receiptState==="MATCH"){process.stdout.write(receiptBytes);return}const backup=`${CLAIM_ROOT}/${p.authorityId}.bridge-receipt-predecessor`;if(!fs.existsSync(backup))create(backup,current,0o400);else if(!rootFile(backup,0o400).equals(current))throw new Error("bridge receipt predecessor evidence differs")}
   for(const a of p.assets){const source=path.join(CONTROL,...a.source.split("/"));if(fs.existsSync(a.destination)){const current=rootFile(a.destination,Number.parseInt(a.mode,8)),state=inspectBridgeDestinationState(a.destination,sha(current),a.mode,a.sha256);if(state==="DRIFT")throw new Error("occupied bridge destination differs");if(state==="EXACT_PREDECESSOR"){const backup=`${CLAIM_ROOT}/${p.authorityId}.ssh-entrypoint-predecessor`;if(!fs.existsSync(backup))create(backup,current,0o400);else if(!rootFile(backup,0o400).equals(current))throw new Error("SSH predecessor evidence differs");install(source,a.destination,Number.parseInt(a.mode,8))}}else install(source,a.destination,Number.parseInt(a.mode,8))}
   run("/usr/bin/systemctl",["daemon-reload"]);run("/usr/bin/systemctl",["enable","--now","williamos-aegis-remote-dev-activation.socket"])
-  create(RECEIPT,receiptBytes,0o444)
+  if(receiptState==="EXACT_PREDECESSOR")replace(RECEIPT,receiptBytes,0o444);else create(RECEIPT,receiptBytes,0o444)
   process.stdout.write(`${canonical(receipt)}\n`)
 }
 if(process.argv[1]===new URL(import.meta.url).pathname){try{main(process.argv[2])}catch(error){console.log(canonical({status:"BLOCKED",reasonCode:"ACTIVATION_BRIDGE_BOOTSTRAP_FAILED",detail:String(error.message),executionAuthorized:false}));process.exitCode=2}}

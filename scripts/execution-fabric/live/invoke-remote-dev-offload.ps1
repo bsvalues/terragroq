@@ -125,7 +125,7 @@ const packet=JSON.parse(fs.readFileSync(packetPath,"utf8"));
 const dispatchEnvelope=JSON.parse(fs.readFileSync(envelopePath,"utf8"));
 const result=contract.bindRemoteDevPacket(packet,policy,{now:new Date().toISOString(),seenRunIds:[],branch:packet.branch,dispatchEnvelope});
 if(result.status==="INACTIVE_TRUSTED_MAIN_READY"&&result.executionAuthorized===false&&JSON.stringify(result.packet)===JSON.stringify(packet)){
- const candidate={runId:packet.runId,workOrderId:authority.workOrderId,issue:authority.issue,repository:packet.repository,baseRef:packet.baseRef,baseSha:packet.baseSha,nodeId:packet.nodeId,workspace:packet.workspace,branch:packet.branch,operations:packet.operations,resources:packet.resourceLimits,network:authority.network,executionIdentity:authority.executionIdentity};
+ const candidate={runId:packet.runId,workOrderId:authority.workOrderId,issue:authority.issue,repository:packet.repository,baseRef:packet.baseRef,baseSha:packet.baseSha,nodeId:packet.nodeId,workspace:packet.workspace,branch:packet.branch,operations:packet.operations,resources:{canonicalProfileEquivalent:false,...packet.resourceLimits},network:authority.network,executionIdentity:authority.executionIdentity};
  const active=activation.validateRemoteDevActivationAuthority(authority,candidate);
  if(active.status!=="ACTIVATION_AUTHORITY_MATCHED"){process.stdout.write(JSON.stringify({status:"BLOCKED",reasonCode:"REMOTE_DEV_SCOPE_INACTIVE",detail:"trusted-main proof scope is reviewed but inactive"}));process.exit(2)}
  result={status:"READY",packet:result.packet,policySha256:result.policySha256};
