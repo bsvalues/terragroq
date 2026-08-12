@@ -310,6 +310,9 @@ function parsePublicKey(bytes) {
 }
 
 export function validateHermesKeyGenerationEvidence(manifest, evidence, publicKey) {
+  if (!exactKeys(evidence, KEY_EVIDENCE_KEYS)) {
+    fail("AEGIS_PROVISION_KEY_GENERATION_EVIDENCE_INVALID", "dedicated key generation evidence differs")
+  }
   const currentManifestSha256 = canonicalSha256(manifest)
   const acceptedManifestSha256 = new Set([
     currentManifestSha256,
@@ -318,8 +321,7 @@ export function validateHermesKeyGenerationEvidence(manifest, evidence, publicKe
   const acceptedSourceAddress = evidence.manifestSha256 === LEGACY_KEY_GENERATION_MANIFEST_SHA256
     ? "192.168.1.154"
     : manifest.invocationBoundary.sourceAddress
-  if (!exactKeys(evidence, KEY_EVIDENCE_KEYS)
-    || evidence.schemaVersion !== "1.0-hermes-aegis-standing-hash-key-evidence"
+  if (evidence.schemaVersion !== "1.0-hermes-aegis-standing-hash-key-evidence"
     || evidence.status !== "GENERATED"
     || evidence.packageId !== manifest.packageId
     || !acceptedManifestSha256.has(evidence.manifestSha256)

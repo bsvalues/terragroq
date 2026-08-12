@@ -292,7 +292,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/canonical-json.mjs", sha256: "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs", sha256: "ebcf0d068e11c1a3f98b515f9a59a456955d8d30abdbb8bab7897b9b315caf9a", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "90c79d97e73061d3177693c345513f4b942a82e877033b6ef5cb0af4a09c59cf", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "ee3118289cde6b2b57aba98b209e5894c444161a99bb3e5f6dfefa99d9a0bc18", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "72d343f3cdae8e84acc31edf7726982f4596a9a0cdd1c37692f2b85db009aeba", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
@@ -518,6 +518,13 @@ function keyGenerationEvidence(value = manifest(), publicKey = TRANSPORT_PUBLIC_
 }
 
 describe("dedicated key generation evidence compatibility", () => {
+  it("rejects null evidence with the contract-specific failure code", () => {
+    expect(() => validateHermesKeyGenerationEvidence(manifest(), null, {
+      fingerprint: publicKeyFingerprint(),
+      fileSha256: publicKeySha256(),
+    })).toThrow(expect.objectContaining({ code: "AEGIS_PROVISION_KEY_GENERATION_EVIDENCE_INVALID" }))
+  })
+
   it("accepts the exact reviewed pre-remediation manifest generation", () => {
     const approvedHistoricalManifestSha256 =
       "5774d4e98ba2620a9bf0433c00c795f69357ef473e91d85e6e8338ada8c2821c"
