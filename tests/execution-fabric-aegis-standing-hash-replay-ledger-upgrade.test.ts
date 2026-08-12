@@ -58,16 +58,19 @@ function loadFinalizedManifest() {
   return manifest
 }
 
-function provisioningJournal() {
+function provisioningJournal(manifestSha256: string) {
   return Buffer.from([
-    JSON.stringify({ schema_version: "1.0-aegis-standing-hash-mutation-journal", record_type: "AUTHORITY_CONSUMED", sequence: 0 }),
+    JSON.stringify({ schema_version: "1.0-aegis-standing-hash-mutation-journal", record_type: "AUTHORITY_CONSUMED",
+      sequence: 0, authority_id: PROVISION_ID, manifest_sha256: manifestSha256,
+      package_id: "aegis-standing-hash-provisioning-issue-595-v1" }),
     JSON.stringify({ record_type: "APPLY_COMPLETE", sequence: 1 }),
   ].join("\n") + "\n")
 }
 
 function repairJournal() {
   return Buffer.from([
-    JSON.stringify({ schema_version: "1.0-aegis-standing-hash-canonical-json-repair-journal", record_type: "AUTHORITY_CONSUMED", sequence: 0 }),
+    JSON.stringify({ schema_version: "1.0-aegis-standing-hash-canonical-json-repair-journal",
+      record_type: "AUTHORITY_CONSUMED", sequence: 0, authority_id: REPAIR_ID }),
     JSON.stringify({ record_type: "REPAIR_COMPLETE", sequence: 1 }),
   ].join("\n") + "\n")
 }
@@ -109,8 +112,6 @@ function fixture(options: {
     bindings: Object.entries(priorClosure).map(([bindingPath, digest]) => ({ path: bindingPath, sha256: digest })),
   })}\n`)
   manifest.priorState.provisioningManifestSha256 = sha256(packageBytes)
-  file(path.posix.join(manifest.priorState.releaseRoot, manifest.priorState.provisioningManifestPath),
-    packageBytes, 0, 0, 0o444)
   for (const root of manifest.priorState.privateRoots) directory(root.path, ACCOUNT.uid, ACCOUNT.gid, Number.parseInt(root.mode, 8))
   directory(manifest.priorState.releaseRoot, 0, 0, 0o755)
   for (const installed of manifest.priorState.installedFiles) {
@@ -120,14 +121,20 @@ function fixture(options: {
   }
   const authorizedKeys = Buffer.from(`${manifest.priorState.authorizedKeyPrefix}AAAAfixturekey\n`)
   file(manifest.priorState.authorizedKeysPath, authorizedKeys, ACCOUNT.uid, ACCOUNT.gid, 0o600)
-  const priorRelease = Buffer.from(`${JSON.stringify({
+  const priorReleaseBody = {
+    schema_version: "1.0-williamos-trusted-main-release",
     repository: manifest.repository,
+    trusted_ref: "refs/heads/main",
     head_commit: manifest.priorState.commit,
     release_root: manifest.priorState.releaseRoot,
     reviewed: true,
-  })}\n`)
+    deployed_at: "2026-08-10T20:00:00.000Z",
+    file_sha256: priorClosure,
+  }
+  const priorRelease = Buffer.from(`${JSON.stringify({ ...priorReleaseBody,
+    release_manifest_sha256: canonicalSha256(priorReleaseBody) })}\n`)
   file(manifest.priorState.trustedReleaseManifestPath, priorRelease, 0, 0, 0o444)
-  const provisionBytes = provisioningJournal()
+  const provisionBytes = provisioningJournal(manifest.priorState.provisioningManifestSha256)
   const repairBytes = repairJournal()
   const provisionPath = `${manifest.priorState.provisioningJournalPrefix}${PROVISION_ID}.mutation-journal.jsonl`
   const repairPath = `${manifest.priorState.repairJournalPrefix}${REPAIR_ID}.journal.jsonl`
@@ -429,12 +436,13 @@ describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
     expect(value.entries.has(value.mutationJournal)).toBe(false)
   })
 
-  it("reads prior provisioning evidence from the retained prior release rather than the launching checkout", () => {
+  it("binds prior provisioning evidence through its retained successful mutation journal", () => {
     const value = fixture()
     expect(() => run(value)).not.toThrow()
-    expect(value.entries.has(path.resolve("C:/fixture", ...value.manifest.priorState.provisioningManifestPath.split("/")))).toBe(false)
-    expect(value.entries.has(path.posix.join(value.manifest.priorState.releaseRoot,
-      value.manifest.priorState.provisioningManifestPath))).toBe(true)
+    const journalPath = `${value.manifest.priorState.provisioningJournalPrefix}${PROVISION_ID}.mutation-journal.jsonl`
+    const first = JSON.parse(value.entries.get(journalPath)!.bytes!.toString("utf8").split("\n")[0])
+    expect(first).toMatchObject({ authority_id: PROVISION_ID,
+      manifest_sha256: value.manifest.priorState.provisioningManifestSha256 })
   })
 
   it("rejects a prior provisioning-manifest path traversal before mutation", () => {
