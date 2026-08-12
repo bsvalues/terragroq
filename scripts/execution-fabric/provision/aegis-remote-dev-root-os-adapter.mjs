@@ -393,17 +393,33 @@ export function exactNftBoundaryJson(items, workerUid, gitBrokerUid) {
   return same(items, [{ table: { family: "inet", name: "williamos_aegis_remote_dev" } }, { chain: { family: "inet", table: "williamos_aegis_remote_dev", name: "output", type: "filter", hook: "output", prio: 0, policy: "accept" } },
     rule([uid(workerUid), ip("ip", "192.168.1.156"), { reject: { type: "icmp", expr: "port-unreachable" } }]), rule([uid(workerUid), ip("ip6", "::ffff:192.168.1.156"), { reject: { type: "icmpv6", expr: "port-unreachable" } }]), rule([uid(workerUid), ip("ip", "127.0.0.1"), port, { accept: null }]), rule([uid(gitBrokerUid), ip("ip", "127.0.0.1"), port, { accept: null }]), rule([ip("ip", "127.0.0.1"), port, { reject: { type: "icmp", expr: "port-unreachable" } }]), rule([uid(workerUid), { reject: { type: "icmpx", expr: "port-unreachable" } }])])
 }
-function networkBoundaryMatches() {
+function networkBoundaryMatches(deadline = Number.POSITIVE_INFINITY, resolvedIdentities = null) {
   try {
-    const worker=accountIds("williamos-fabric"), gitBroker=accountIds("williamos-git-broker"); if(!worker||!gitBroker) return false
-    const parsed=JSON.parse(run("/usr/sbin/nft", ["-j", "list", "table", "inet", "williamos_aegis_remote_dev"])); const items=parsed.nftables.filter(item=>!item.metainfo).map(item=>{ const copy=structuredClone(item); for(const value of Object.values(copy)) delete value.handle; return copy })
+    const boundedRun=(file,args,options={})=>{const remaining=deadline-Date.now();if(remaining<=0)return null;return run(file,args,{...options,timeout:Math.max(1,Math.min(options.timeout??1000,remaining))})}
+    const worker=resolvedIdentities?.worker??accountIds("williamos-fabric"), gitBroker=resolvedIdentities?.gitBroker??accountIds("williamos-git-broker"); if(!worker||!gitBroker) return false
+    const nftBytes=boundedRun("/usr/sbin/nft", ["-j", "list", "table", "inet", "williamos_aegis_remote_dev"]);if(nftBytes===null)return false
+    const parsed=JSON.parse(nftBytes); const items=parsed.nftables.filter(item=>!item.metainfo).map(item=>{ const copy=structuredClone(item); for(const value of Object.values(copy)) delete value.handle; return copy })
     if (!exactNftBoundaryJson(items,worker.uid,gitBroker.uid)) return false
     for (const unit of ["williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service", "williamos-aegis-remote-dev-git-broker.socket"]) {
-      if (run("/usr/bin/systemctl", ["is-active", unit]) !== "active" || run("/usr/bin/systemctl", ["is-enabled", unit]) !== "enabled") return false
+      if (boundedRun("/usr/bin/systemctl", ["is-active", unit]) !== "active" || boundedRun("/usr/bin/systemctl", ["is-enabled", unit]) !== "enabled") return false
     }
-    const listener = run("/usr/bin/ss", ["-H", "-ltn", "sport = :17734"])
-    return listener.split(/\r?\n/).filter(Boolean).length === 1 && listener.includes("127.0.0.1:17734")
+    const listener = boundedRun("/usr/bin/ss", ["-H", "-ltn", "sport = :17734"]);if(listener===null)return false
+    return Date.now() <= deadline && listener.split(/\r?\n/).filter(Boolean).length === 1 && listener.includes("127.0.0.1:17734")
   } catch { return false }
+}
+export function inspectBrokerReadinessSamples(samples) {
+  if (!Array.isArray(samples) || samples.length === 0 || samples.length > 50) return "BROKER_READINESS_UNPROVEN"
+  return samples.some(sample => sample === true) ? "BROKER_READY" : "BROKER_READINESS_TIMEOUT"
+}
+function waitForNetworkBoundary() {
+  const worker=accountIds("williamos-fabric"),gitBroker=accountIds("williamos-git-broker");if(!worker||!gitBroker)return false
+  const samples=[],deadline=Date.now()+5000,identities={worker,gitBroker}
+  for(let attempt=0;attempt<50&&Date.now()<deadline;attempt++) {
+    if(networkBoundaryMatches(deadline,identities)) { samples.push(true); return inspectBrokerReadinessSamples(samples)==="BROKER_READY" }
+    samples.push(false)
+    const remaining=deadline-Date.now();if(attempt<49&&remaining>0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Math.min(100,remaining))
+  }
+  return inspectBrokerReadinessSamples(samples)==="BROKER_READY"
 }
 export function inspectExactInertNetworkPredecessor(o) {
   const keys=["firstReceiptExact","secondReceiptExact","nftSemanticExact","egressActiveEnabled","brokerInactiveDisabled","gitSocketInactiveDisabled","gitServiceInactive","listenerConnectionsAbsent","workerWorkspaceDispatchAbsent"]
@@ -541,7 +557,7 @@ function applyNetwork(authority) {
   const worker = accountIds("williamos-fabric"); const gitBroker = accountIds("williamos-git-broker")
   if (!worker || !gitBroker || !sharedGroupProcessesExact(worker.gid, [worker.uid, gitBroker.uid])) fail("IDENTITY_DRIFT", "retained shared-group process exists before broker socket enable")
   run("/usr/bin/systemctl", ["enable", "--now", "williamos-aegis-remote-dev-egress.service", "williamos-aegis-remote-dev-broker.service", "williamos-aegis-remote-dev-git-broker.socket"])
-  if (!networkBoundaryMatches()) fail("NETWORK_BOUNDARY_UNPROVEN", "exact broker/default-deny/Atlas boundary differs after apply")
+  if (!waitForNetworkBoundary()) fail("NETWORK_BOUNDARY_UNPROVEN", "exact broker/default-deny/Atlas boundary readiness timed out after 5000ms")
 }
 function applyGithub(authority) {
   const known = staged("github_known_hosts", authority.inputs.githubHostKnownHostsSha256, 0o400)
