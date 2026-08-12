@@ -12,9 +12,7 @@
 #   0  ALLOW -> Hermes proceeds
 #   2  ASK   -> require explicit human approval (do NOT auto-run)
 #   3  DENY  -> block; Hermes must not run it
-# NB: no `set -e` — capg intentionally exits 2 (ASK) / 3 (DENY), and `set -e` would abort the
-# `OUT=$(...)` capture before the verdict is handled, dropping the block. We handle rc explicitly.
-set -uo pipefail
+set -euo pipefail
 CMD="${1:-${HERMES_COMMAND:-}}"
 CAPG_ROOT="${CAPG_ROOT:-/home/pilot}"   # dir containing the `capg` package
 
@@ -23,12 +21,17 @@ if [ -z "$CMD" ]; then
   exit 2
 fi
 
-# classify; python -m capg already returns 0/2/3 for ALLOW/ASK/DENY
-cd "$CAPG_ROOT"
-OUT="$(python3 -m capg "$CMD")" ; RC=$?
-echo "$OUT"
+# Keep errexit for setup while capturing CAPG's expected ASK/DENY statuses explicitly. A missing
+# or broken classifier is normalized to structured ASK instead of escaping as a generic hook error.
+if OUT="$(PYTHONPATH="$CAPG_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m capg "$CMD")"; then
+  RC=0
+else
+  RC=$?
+fi
 case "$RC" in
-  0) exit 0 ;;   # ALLOW
-  3) exit 3 ;;   # DENY (hard block)
-  *) exit 2 ;;   # ASK / anything unexpected -> fail-closed to approval
+  0) echo "$OUT"; exit 0 ;;   # ALLOW
+  2) echo "$OUT"; exit 2 ;;   # ASK
+  3) echo "$OUT"; exit 3 ;;   # DENY (hard block)
+  *) echo '{"decision":"ASK","reason":"CAPG classifier failed; command requires approval"}'
+     exit 2 ;;                 # unexpected -> fail-closed to approval
 esac
