@@ -28,6 +28,7 @@ const NEW_COMMIT = "a".repeat(40)
 const PACKAGE_COMMIT = "b".repeat(40)
 const EVIDENCE_COMMIT = "c".repeat(40)
 const FINAL_REVIEWED_COMMIT = "b1637a0d16394361dff74e1fb85851ba61f91235"
+const FINAL_PACKAGE_COMMIT = "2d2802d6a2dae6c32f18475ba22d3662dbbf0f4c"
 const ACCOUNT = { uid: 734, gid: 734, home: "/var/empty/williamos-fabric", shell: "/bin/bash" }
 const sha256 = (bytes: crypto.BinaryLike) => crypto.createHash("sha256").update(bytes).digest("hex")
 const canonicalSha256 = (value: unknown) => sha256(Buffer.from(canonicalizeUpgradeJcs(value), "utf8"))
@@ -389,7 +390,7 @@ describe("AEGIS standing hash replay-ledger one-shot upgrade", () => {
     const manifest = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"))
     expect(validateAegisStandingHashReplayLedgerUpgradeManifest(manifest)).toMatchObject({
       newRelease: { commit: FINAL_REVIEWED_COMMIT },
-      packageRelease: { commit: FINAL_REVIEWED_COMMIT },
+      packageRelease: { commit: FINAL_PACKAGE_COMMIT },
     })
   })
 

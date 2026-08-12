@@ -85,13 +85,13 @@
       "scripts/execution-fabric/canonical-json.mjs": "b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21"
     },
     "installerBindings": {
-      "scripts/execution-fabric/provision/upgrade-aegis-standing-hash-replay-ledger.mjs": "a8b6c2a99652911bc3e37df5cc6c829da89ede4dde85a0a88fd82586741a54a9",
+      "scripts/execution-fabric/provision/upgrade-aegis-standing-hash-replay-ledger.mjs": "c73bc749291facc25bbfb2a37f43c57041a64dca7d3fd949946e1ffac77734d5",
       "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs": "f2fa83eb5f82f2f3a9a8abefe7bb0c9c8c5db1f716cb5b31196715b6771660dd"
     }
   },
   "packageRelease": {
-    "commit": "b1637a0d16394361dff74e1fb85851ba61f91235",
-    "checkoutPath": "/root/williamos-package/b1637a0d16394361dff74e1fb85851ba61f91235"
+    "commit": "2d2802d6a2dae6c32f18475ba22d3662dbbf0f4c",
+    "checkoutPath": "/root/williamos-package/2d2802d6a2dae6c32f18475ba22d3662dbbf0f4c"
   },
   "install": {
     "replayJournalPath": "/var/lib/aegis-standing-hash-replay-journal.jsonl",
