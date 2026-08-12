@@ -258,6 +258,10 @@ class TestFabricMeasurementAdapter(unittest.TestCase):
                 "inventory_snapshot_sha256": "4" * 64, "topology_id": "resident",
                 "endpoint_hosts": ["127.0.0.1"],
             },
+            "execution_limits": {
+                "max_cpu_threads": 4,
+                "gpu_execution": "CPU_ONLY",
+            },
         }
 
     def test_fabric_measurement_envelope_requires_exact_validated_shape(self):
@@ -267,6 +271,11 @@ class TestFabricMeasurementAdapter(unittest.TestCase):
             lambda value: value.update({"extra": True}),
             lambda value: value["model_manifest"].pop("revision"),
             lambda value: value["runtime_manifest"].update({"api_token": "secret"}),
+            lambda value: value["execution_limits"].update({"max_gpu_vram_bytes": 0}),
+            lambda value: value["execution_limits"].update({"max_cpu_threads": True}),
+            lambda value: value["execution_limits"].update({"max_cpu_threads": 0}),
+            lambda value: value["execution_limits"].update({"gpu_execution": "GPU_ALLOWED"}),
+            lambda value: value["execution_limits"].pop("gpu_execution"),
         )
         for mutate in mutations:
             with self.subTest(mutate=mutate):
@@ -299,25 +308,66 @@ class TestFabricMeasurementAdapter(unittest.TestCase):
             captured.append((request, timeout))
             return self.FakeResponse({"model": "test-model", "embeddings": [[3.0, 4.0]]})
 
-        self.assertEqual(F.invoke_fixed_loopback("test-model", ["hello"], opener=opener),
+        self.assertEqual(F.invoke_fixed_loopback("test-model", ["hello"], 4, opener=opener),
                          [[0.6, 0.8]])
         request, timeout = captured[0]
-        self.assertEqual(request.full_url, "http://127.0.0.1:11434/api/embed")
+        self.assertEqual(F.ENDPOINT, "http://127.0.0.1:11435/api/embed")
+        self.assertEqual(F.BASE_URL, "http://127.0.0.1:11435/v1")
+        self.assertEqual(request.full_url, F.ENDPOINT)
         self.assertEqual(timeout, F.TIMEOUT_SECONDS)
-        self.assertEqual(json.loads(request.data), {"model": "test-model", "input": ["hello"]})
+        self.assertEqual(json.loads(request.data), {
+            "model": "test-model",
+            "input": ["hello"],
+            "options": {"num_gpu": 0, "num_thread": 4},
+        })
         self.assertEqual(request.get_method(), "POST")
+
+    def test_fabric_measurement_binds_admitted_cpu_limit_to_every_batch(self):
+        captured = []
+
+        def opener(request, timeout):
+            del timeout
+            payload = json.loads(request.data)
+            captured.append(payload)
+            return self.FakeResponse({
+                "model": "test-model",
+                "embeddings": [[1.0, 0.0] for _text in payload["input"]],
+            })
+
+        envelope = self.make_envelope()
+        envelope["execution_limits"]["max_cpu_threads"] = 3
+        original_run = F.bakeoff.run
+
+        def fake_run(_corpus, _backend, _base_url, model, _api_key, _k, _dimension,
+                     **_kwargs):
+            F.bakeoff.embed_texts(
+                ["text"] * (F.BATCH_SIZE + 1), backend="endpoint", model=model,
+            )
+            return {"status": "measured"}
+
+        try:
+            F.bakeoff.run = fake_run
+            self.assertEqual(F.measure(envelope, opener=opener), {"status": "measured"})
+        finally:
+            F.bakeoff.run = original_run
+
+        self.assertEqual(len(captured), 2)
+        self.assertTrue(all(payload["options"] == {
+            "num_gpu": 0,
+            "num_thread": 3,
+        } for payload in captured))
 
     def test_fabric_measurement_converts_ollama_payload_before_validation(self):
         payload = {"model": "test-model", "embeddings": [[2.0, 0.0], [0.0, 5.0]]}
         opener = lambda _request, timeout: self.FakeResponse(payload)
-        self.assertEqual(F.invoke_fixed_loopback("test-model", ["a", "b"], opener=opener),
+        self.assertEqual(F.invoke_fixed_loopback("test-model", ["a", "b"], 2, opener=opener),
                          [[1.0, 0.0], [0.0, 1.0]])
 
     def test_fabric_measurement_rejects_embedding_count_drift(self):
         payload = {"model": "test-model", "embeddings": [[1.0, 0.0]]}
         opener = lambda _request, timeout: self.FakeResponse(payload)
         with self.assertRaisesRegex(ValueError, "1 rows for 2 inputs"):
-            F.invoke_fixed_loopback("test-model", ["a", "b"], opener=opener)
+            F.invoke_fixed_loopback("test-model", ["a", "b"], 2, opener=opener)
 
     def test_fabric_measurement_rejects_dimension_drift_across_batches(self):
         responses = iter((
@@ -326,13 +376,15 @@ class TestFabricMeasurementAdapter(unittest.TestCase):
         ))
         opener = lambda _request, timeout: self.FakeResponse(next(responses))
         with self.assertRaisesRegex(ValueError, "dimension changed"):
-            F.invoke_fixed_loopback("test-model", ["text"] * (F.BATCH_SIZE + 1), opener=opener)
+            F.invoke_fixed_loopback(
+                "test-model", ["text"] * (F.BATCH_SIZE + 1), 2, opener=opener,
+            )
 
     def test_fabric_measurement_rejects_model_drift(self):
         payload = {"model": "other-model", "embeddings": [[1.0, 0.0]]}
         opener = lambda _request, timeout: self.FakeResponse(payload)
         with self.assertRaisesRegex(ValueError, "model does not match"):
-            F.invoke_fixed_loopback("test-model", ["a"], opener=opener)
+            F.invoke_fixed_loopback("test-model", ["a"], 2, opener=opener)
 
 
 class TestEvidencePackage(unittest.TestCase):

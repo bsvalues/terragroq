@@ -17,8 +17,8 @@ from bakeoff import reject_secret_fields
 from embed import validate_endpoint_payload
 
 
-ENDPOINT = "http://127.0.0.1:11434/api/embed"
-BASE_URL = "http://127.0.0.1:11434/v1"
+ENDPOINT = "http://127.0.0.1:11435/api/embed"
+BASE_URL = "http://127.0.0.1:11435/v1"
 BATCH_SIZE = 8
 TIMEOUT_SECONDS = 180
 MAX_REQUEST_BYTES = 512 * 1024
@@ -36,7 +36,7 @@ def _exact_object(value, fields, label):
 def validate_envelope(value):
     """Validate the closed input shape before any loopback request is attempted."""
     _exact_object(value, ("schema_version", "model", "model_manifest", "runtime_manifest",
-                          "host_manifest"), "execution envelope")
+                          "host_manifest", "execution_limits"), "execution envelope")
     reject_secret_fields(value, "execution envelope")
     if value["schema_version"] != "1.0-r1b-fabric-measurement-envelope":
         raise ValueError("execution envelope schema is unsupported")
@@ -55,6 +55,9 @@ def validate_envelope(value):
         "schema_version", "node_id", "machine_id_sha256", "inventory_snapshot_sha256",
         "topology_id", "endpoint_hosts",
     ), "host manifest")
+    execution_limits = _exact_object(value["execution_limits"], (
+        "max_cpu_threads", "gpu_execution",
+    ), "execution limits")
     if model_manifest["model_id"] != model:
         raise ValueError("execution envelope model identity does not match its manifest")
     if runtime_manifest["endpoint_contract"] != "ollama-embed-v1":
@@ -64,6 +67,12 @@ def validate_envelope(value):
     dimension = model_manifest["dimension"]
     if isinstance(dimension, bool) or not isinstance(dimension, int) or dimension <= 0:
         raise ValueError("model manifest dimension must be a positive integer")
+    max_cpu_threads = execution_limits["max_cpu_threads"]
+    if (isinstance(max_cpu_threads, bool) or not isinstance(max_cpu_threads, int)
+            or max_cpu_threads <= 0):
+        raise ValueError("execution limits max_cpu_threads must be a positive integer")
+    if execution_limits["gpu_execution"] != "CPU_ONLY":
+        raise ValueError("execution limits must require CPU_ONLY execution")
     for manifest in (model_manifest, runtime_manifest, host_manifest):
         reject_secret_fields(manifest, "execution manifest")
     return value
@@ -85,7 +94,7 @@ def _read_bounded_response(response):
     return payload
 
 
-def invoke_fixed_loopback(model, texts, opener=urllib.request.urlopen):
+def invoke_fixed_loopback(model, texts, max_cpu_threads, opener=urllib.request.urlopen):
     """Call only the resident Ollama loopback embedding route."""
     if not isinstance(texts, list) or not texts or len(texts) > MAX_TOTAL_INPUTS:
         raise ValueError("embedding input count is outside the fixed evaluator envelope")
@@ -95,7 +104,11 @@ def invoke_fixed_loopback(model, texts, opener=urllib.request.urlopen):
         batch = texts[offset:offset + BATCH_SIZE]
         if any(not isinstance(text, str) or not text for text in batch):
             raise ValueError("embedding inputs must be non-empty text")
-        body = json.dumps({"model": model, "input": batch}, ensure_ascii=False,
+        body = json.dumps({
+            "model": model,
+            "input": batch,
+            "options": {"num_gpu": 0, "num_thread": max_cpu_threads},
+        }, ensure_ascii=False,
                           separators=(",", ":")).encode("utf-8")
         if len(body) > MAX_REQUEST_BYTES:
             raise ValueError("loopback embedding request exceeds the byte ceiling")
@@ -145,7 +158,12 @@ def measure(envelope, opener=urllib.request.urlopen):
         del backend, base_url, api_key, batch_size, timeout, dim
         if model != validated["model"]:
             raise ValueError("bake-off requested a model outside the admitted envelope")
-        return invoke_fixed_loopback(model, texts, opener=opener)
+        return invoke_fixed_loopback(
+            model,
+            texts,
+            validated["execution_limits"]["max_cpu_threads"],
+            opener=opener,
+        )
 
     with tempfile.TemporaryDirectory(prefix="williamos-r1b-measure-") as root:
         paths = {}
