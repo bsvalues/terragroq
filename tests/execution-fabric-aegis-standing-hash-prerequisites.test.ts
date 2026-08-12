@@ -27,6 +27,7 @@ import {
   canonicalJsonRepairErrorEvidence,
   canonicalizeRepairJcs,
   repairAegisStandingHashCanonicalJson,
+  validateCanonicalJsonRepairManifest,
   validateHistoricalReleaseRoot,
   validateHistoricalRootMutationIds,
 } from "../scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs"
@@ -49,6 +50,7 @@ type RepairManifest = JsonObject & {
   previousRootMutationIds: string[]
   previousPlannedMutations: RepairMutation[]
   installedAssets: InstalledAsset[]
+  serviceAccount: { name: string, home: string, shell: string }
   authorizedKeysPath: string
   trustedReleaseManifestPath: string
 }
@@ -428,6 +430,11 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
         id: "aegis-standing-hash-canonical-json-repair-v1",
         sourcePath: "scripts/execution-fabric/canonical-json.mjs",
         targetPath: "/usr/local/libexec/canonical-json.mjs",
+        serviceAccount: {
+          name: "williamos-fabric",
+          home: "/var/empty/williamos-fabric",
+          shell: "/bin/bash",
+        },
         previousAppliedManifestSha256: "adb43b325199e3eb167298887ed01e7c434a88b0838ace17f1086132ae0f46ec",
         previousProvisioningJournalRequired: true,
         authorityMaximumAgeSeconds: 900,
@@ -453,7 +460,7 @@ describe("AEGIS standing HASH prerequisite provisioning package", () => {
       { path: "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs", sha256: "c796c9742052ada8e7744385a55ca630245a236a694632566ec0e1a232f40802", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs", sha256: "05724974cd0248fd30aaeb1483649a1d908e3d9f4d5a29019c0df1194cb0a222", textNormalization: "LF" },
       { path: "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs", sha256: "72d343f3cdae8e84acc31edf7726982f4596a9a0cdd1c37692f2b85db009aeba", textNormalization: "LF" },
-      { path: "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs", sha256: "2ac9e9fa764f3882b4de34c9c8efe9b12e2548e57ecefe4c0d097b7c41f08b92", textNormalization: "LF" },
+      { path: "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs", sha256: "38c269df7f0b5fcb0c2e5103890b37ccfd96cb05495bbeabf607feab21cceccd", textNormalization: "LF" },
     ])
     expect(value.blockedScope).toEqual(expect.arrayContaining([
       "scheduler-activation",
@@ -773,6 +780,7 @@ function injectedLinuxFs(options: {
   partialWrite?: { path: string, recordType: string, bytes: number }
   failFsync?: { path: string, occurrence: number }
   failJournalRecordType?: string
+  serviceAccountPasswd?: string
 } = {}) {
   const nodes = new Map<string, VirtualNode>()
   const descriptors = new Map<number, { kind: "real" | "virtual", fd?: number, path?: string }>()
@@ -809,7 +817,9 @@ function injectedLinuxFs(options: {
   putDirectory("/var/lib/williamos", 0o750, 734, 734)
   putDirectory("/var/lib/williamos/fabric", 0o700, 734, 734)
   nodes.set(normalize("/etc/machine-id"), node("file", 0o444, Buffer.from("00000000000000000000000000000000\n")))
-  nodes.set(normalize("/etc/passwd"), node("file", 0o444, Buffer.from("williamos-fabric:x:734:734::/home/williamos-fabric:/bin/bash\n")))
+  nodes.set(normalize("/etc/passwd"), node("file", 0o444, Buffer.from(
+    options.serviceAccountPasswd ?? "williamos-fabric:x:734:734::/var/empty/williamos-fabric:/bin/bash\n",
+  )))
   nodes.set(normalize("/etc/group"), node("file", 0o444, Buffer.from("williamos-fabric:x:734:\n")))
   for (const entry of options.existing ?? []) {
     const kind = entry.kind ?? "file"
@@ -1693,6 +1703,7 @@ function repairFixture(overrides: {
   failWritePath?: string
   partialWrite?: { recordType: string, bytes: number }
   failFsync?: { path: "repair-journal" | "journal-parent", occurrence: number }
+  serviceAccountPasswd?: string
 } = {}) {
   const value = manifest()
   const repair = value.repair
@@ -1908,6 +1919,7 @@ function repairFixture(overrides: {
       path: overrides.failFsync.path === "repair-journal" ? repairJournalPath : "/var/lib",
       occurrence: overrides.failFsync.occurrence,
     } : undefined,
+    serviceAccountPasswd: overrides.serviceAccountPasswd,
   })
   const authority: RepairAuthority = {
     schemaVersion: 1,
@@ -2177,6 +2189,28 @@ describe("AEGIS canonical JSON one-shot root repair", () => {
       code: "AEGIS_CANONICAL_REPAIR_CHECKOUT_FILE_METADATA_DRIFT",
     }))
     expect(fixture.virtual.bytesAt(`${REPAIR_JOURNAL_PREFIX}${fixture.authority.authorityId}.journal.jsonl`)).toBeUndefined()
+  })
+
+  it.each([
+    ["the superseded service-account home", "williamos-fabric:x:734:734::/home/williamos-fabric:/bin/bash\n"],
+    ["a non-reviewed shell", "williamos-fabric:x:734:734::/var/empty/williamos-fabric:/usr/sbin/nologin\n"],
+    ["duplicate account records", [
+      "williamos-fabric:x:734:734::/var/empty/williamos-fabric:/bin/bash",
+      "williamos-fabric:x:999:987::/var/empty/williamos-fabric:/bin/bash",
+      "",
+    ].join("\n")],
+  ])("rejects %s before consuming repair authority", (_label, serviceAccountPasswd) => {
+    const fixture = repairFixture({ serviceAccountPasswd })
+    expect(() => repairAegisStandingHashCanonicalJson({ ...fixture.options, mode: "apply" }))
+      .toThrow(expect.objectContaining({ code: "AEGIS_CANONICAL_REPAIR_ACCOUNT_INVALID" }))
+    expect(fixture.virtual.bytesAt(`${REPAIR_JOURNAL_PREFIX}${fixture.authority.authorityId}.journal.jsonl`)).toBeUndefined()
+  })
+
+  it("rejects an omitted repair service-account binding with the typed package error", () => {
+    const value = manifest()
+    Reflect.deleteProperty(value.repair, "serviceAccount")
+    expect(() => validateCanonicalJsonRepairManifest(value))
+      .toThrow(expect.objectContaining({ code: "AEGIS_CANONICAL_REPAIR_PACKAGE_INVALID" }))
   })
 
   it("accepts the authentic commentless historical authorized-key record", () => {
