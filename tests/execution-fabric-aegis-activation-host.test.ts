@@ -165,7 +165,8 @@ describe("AEGIS production activation host trust", () => {
   })
 
   it("archives only the exact failed pre-claim snapshot generation", () => {
-    expect(inspectPreparedSnapshotRecovery({preparedCommit:"9a04dbf4f488567d5d5328d4c26f65819aea7e3c",currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("ARCHIVE_EXACT_PRECLAIM")
+    expect(inspectPreparedSnapshotRecovery({preparedCommit:"88bd56d8f575bafaf7a6ddcf6b1a8e2e1fc4d3ec",currentCommit:"7fab579402798ba6e0d7cafbd74bba5be4d79101",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("ARCHIVE_EXACT_PRECLAIM")
+    expect(inspectPreparedSnapshotRecovery({preparedCommit:"9a04dbf4f488567d5d5328d4c26f65819aea7e3c",currentCommit:"7fab579402798ba6e0d7cafbd74bba5be4d79101",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("DRIFT")
     expect(inspectPreparedSnapshotRecovery({preparedCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("MATCH")
     expect(inspectPreparedSnapshotRecovery({preparedCommit:"f".repeat(40),currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("DRIFT")
   })
