@@ -29,6 +29,8 @@ import {
   inspectCompactionOccupancy,
   inspectPreReceiptCompactionAuthority,
   inspectPreReceiptCompactionReceipt,
+  buildPreReceiptCompactionReceipt,
+  diagnosePreReceiptCompactionReceipt,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -250,6 +252,15 @@ describe("AEGIS production activation host trust", () => {
     expect(inspectPreReceiptCompactionReceipt({...receipt,availableBytes:expected.minimumAvailableBytes-1},expected)).toBe("DRIFT")
     expect(inspectPreReceiptCompactionReceipt({...receipt,compactionSha256:"0".repeat(64)},expected)).toBe("DRIFT")
     expect(inspectPreReceiptCompactionReceipt({...receipt,extra:true},expected)).toBe("DRIFT")
+  })
+
+  it("builds the production compaction receipt with typed bounded diagnostics", () => {
+    const expected={authorityId:"22222222-2222-4222-8222-222222222222",authoritySha256:"a".repeat(64),authorityIssuedAt:"2026-08-13T05:00:00.000Z",authorityExpiresAt:"2026-08-13T05:15:00.000Z",machineIdSha256:"b".repeat(64),bootId:"11111111-1111-4111-8111-111111111111",controlCommit:"c".repeat(40),activationHostSha256:"d".repeat(64),compactionIntentSha256:"e".repeat(64),compactionSha256:"f".repeat(64),minimumAvailableBytes:32*1024*1024}
+    const receipt=buildPreReceiptCompactionReceipt(expected,128*1024*1024,"2026-08-13T05:02:00.000Z")
+    expect(diagnosePreReceiptCompactionReceipt(receipt,expected)).toEqual({status:"MATCH",reasonCode:"PRE_RECEIPT_COMPACTION_RECEIPT_MATCHED"})
+    expect(diagnosePreReceiptCompactionReceipt({...receipt,completedAt:"2026-08-13T05:15:00.000Z"},expected)).toEqual({status:"DRIFT",reasonCode:"COMPLETION_TIME_OUTSIDE_AUTHORITY"})
+    expect(diagnosePreReceiptCompactionReceipt({...receipt,availableBytes:1},expected)).toEqual({status:"DRIFT",reasonCode:"POST_CAPACITY_INSUFFICIENT"})
+    expect(diagnosePreReceiptCompactionReceipt({...receipt,extra:true},expected)).toEqual({status:"DRIFT",reasonCode:"RECEIPT_KEYS_DIFFER"})
   })
 
   it("keeps pre-receipt compaction outside the activation and network lifecycle", () => {
