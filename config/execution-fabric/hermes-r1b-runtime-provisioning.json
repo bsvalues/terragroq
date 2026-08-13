@@ -22,7 +22,11 @@
       "filename": "python-3.13.14-amd64.exe",
       "url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
       "bytes": 29225624,
-      "sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0"
+      "sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0",
+      "authenticode": {
+        "required_status": "Valid",
+        "signer_subject": "CN=Python Software Foundation, O=Python Software Foundation, L=Beaverton, S=Oregon, C=US"
+      }
     },
     "installer_policy": {
       "all_users": true,
@@ -153,6 +157,25 @@
       "path": "/root/.ollama/models/blobs/sha256-2b0cf8f17b4c723c27303015383c27ec4bf2d8314bb677d05e920dd70bb0f16b",
       "bytes": 2496703776,
       "sha256": "2b0cf8f17b4c723c27303015383c27ec4bf2d8314bb677d05e920dd70bb0f16b"
+    }
+  },
+  "security": {
+    "staging_acl": {
+      "inheritance": false,
+      "full_control": ["NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators"],
+      "other_access": false
+    },
+    "artifact_lock": {
+      "access": "read",
+      "share": "read-only",
+      "retain_through_consumption": true
+    },
+    "rollback": {
+      "python_uninstall_required_after_install_attempt": true,
+      "restore_administrator_cleanup_authority": true,
+      "remove_partial_runtime_and_staging": true,
+      "verify_absence": true,
+      "incomplete_status": "HERMES_R1B_PROVISION_ROLLBACK_INCOMPLETE"
     }
   },
   "sealing": {

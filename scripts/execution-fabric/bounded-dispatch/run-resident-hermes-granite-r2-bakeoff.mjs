@@ -49,6 +49,17 @@ function readFixedBytes(filePath, root, label) {
 function readFixedJson(filePath, root, label) { return JSON.parse(readFixedBytes(filePath, root, label).toString("utf8").replace(/^\uFEFF/, "")) }
 function writeExclusive(filePath, bytes) { let descriptor; try { descriptor = fs.openSync(filePath, "wx"); fs.writeFileSync(descriptor, bytes) } finally { if (descriptor !== undefined) fs.closeSync(descriptor) } }
 
+export function verifyTrustedAuthorityRegistry({ registry, admission }) {
+  const keys = registry && typeof registry === "object" && !Array.isArray(registry) ? Object.keys(registry).sort() : []
+  if (JSON.stringify(keys) !== JSON.stringify(["entries", "registry_id", "schema_version"])
+    || registry.schema_version !== "1.0-hermes-granite-r2-bakeoff-authority-registry"
+    || registry.registry_id !== "hermes-granite-r2-bakeoff-authorities" || !Array.isArray(registry.entries)) {
+    throw new Error("trusted-main Granite R2 authority registry is invalid")
+  }
+  const exactEntryCount = registry.entries.filter((entry) => canonicalizeJcs(entry) === canonicalizeJcs(admission)).length
+  return { exact_entry_count: exactEntryCount, verified: exactEntryCount === 1 }
+}
+
 export function proveTrustedAdmission({ admission, admissionSha256 }) {
   if (sha256(fs.readFileSync(GIT_EXECUTABLE)) !== admission.runtime.git_sha256) throw new Error("trusted Git executable bytes changed")
   const git = (...args) => {
@@ -66,15 +77,26 @@ export function proveTrustedAdmission({ admission, admissionSha256 }) {
     if (objectBytes.status !== 0 || objectBytes.error || sha256(objectBytes.stdout) !== admission.runtime[key] || sha256(fs.readFileSync(path.join(REPOSITORY_ROOT, relativePath))) !== admission.runtime[key]) throw new Error("trusted-main source closure differs from admission")
     closure[relativePath] = admission.runtime[key]
   }
+  const registryBytes = spawnSync(GIT_EXECUTABLE, ["show", `${TRUSTED_MAIN_REF}:${GRANITE_R2_CONTRACT.authorityRegistryPath}`], { cwd: REPOSITORY_ROOT, encoding: null, windowsHide: true, timeout: 10_000,
+    env: { SystemRoot: "C:\\WINDOWS", WINDIR: "C:\\WINDOWS", PATH: "C:\\Program Files\\Git\\cmd;C:\\WINDOWS\\System32", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "NUL", GIT_OPTIONAL_LOCKS: "0" } })
+  if (registryBytes.status !== 0 || registryBytes.error) throw new Error("trusted-main Granite R2 authority registry is missing")
+  let registry
+  try { registry = JSON.parse(registryBytes.stdout.toString("utf8")) } catch { throw new Error("trusted-main Granite R2 authority registry is invalid") }
+  const authority = verifyTrustedAuthorityRegistry({ registry, admission })
   return { schema_version: "1.0-trusted-hermes-granite-r2-admission-proof", admission_sha256: admissionSha256, execution_commit: admission.execution_commit,
-    inventory_snapshot_sha256: admission.placement.inventory_snapshot_sha256, source_closure_sha256: canonicalDigest(closure), exact_entry_count: 1, verified: true }
+    inventory_snapshot_sha256: admission.placement.inventory_snapshot_sha256, source_closure_sha256: canonicalDigest(closure), exact_entry_count: authority.exact_entry_count, verified: authority.verified }
 }
 
-export async function claimSingleUse({ request_id, request_sha256, admission_sha256, maximum_attempts }) {
+export async function claimSingleUseAtRoot(root, { request_id, request_sha256, admission_sha256, maximum_attempts }) {
   if (maximum_attempts !== 1) throw new Error("single-use attempt contract changed")
-  const root = ensureRoot(LEDGER_ROOT, "granite-r2-ledger"); const claimId = sha256(canonicalizeJcs({ request_id, request_sha256, admission_sha256 })); const claimedAt = new Date().toISOString()
-  try { writeExclusive(path.join(root, `claim-${claimId}.json`), Buffer.from(`${canonicalizeJcs({ schema_version: "1.0-hermes-granite-r2-single-use-claim", claim_id: claimId, request_id, request_sha256, admission_sha256, claimed_at: claimedAt, maximum_attempts: 1 })}\n`)); return { claimed: true, claim_id: claimId, claimed_at: claimedAt } }
+  if (typeof admission_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(admission_sha256)) throw new Error("single-use admission identity is invalid")
+  const claimId = `claim-${admission_sha256}`; const claimedAt = new Date().toISOString()
+  try { writeExclusive(path.join(root, `${claimId}.json`), Buffer.from(`${canonicalizeJcs({ schema_version: "1.0-hermes-granite-r2-single-use-claim", claim_id: claimId, request_id, request_sha256, admission_sha256, claimed_at: claimedAt, maximum_attempts: 1 })}\n`)); return { claimed: true, claim_id: claimId, claimed_at: claimedAt } }
   catch (error) { if (error?.code === "EEXIST") return { claimed: false, claim_id: claimId, claimed_at: claimedAt }; throw error }
+}
+
+export async function claimSingleUse(binding) {
+  return claimSingleUseAtRoot(ensureRoot(LEDGER_ROOT, "granite-r2-ledger"), binding)
 }
 function holderIsAlive(pid) { try { process.kill(pid, 0); return true } catch { return false } }
 function allocateFence(root, minimum) {

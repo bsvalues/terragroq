@@ -49,6 +49,10 @@ describe("HERMES R1B reviewed runtime provisioning package", () => {
           url: "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
           bytes: 29_225_624,
           sha256: "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0",
+          authenticode: {
+            required_status: "Valid",
+            signer_subject: "CN=Python Software Foundation, O=Python Software Foundation, L=Beaverton, S=Oregon, C=US",
+          },
         },
         installer_policy: { all_users: true, prepend_path: false, append_path: false, install_launcher: false },
       },
@@ -57,7 +61,39 @@ describe("HERMES R1B reviewed runtime provisioning package", () => {
     expect(source).toContain("PrependPath=0")
     expect(source).toContain("AppendPath=0")
     expect(source).toContain("Include_launcher=0")
+    expect(source).toContain("Get-AuthenticodeSignature -LiteralPath $Path")
+    expect(source).toContain("PYTHON_AUTHENTICODE_INVALID")
+    expect(source).toContain("PYTHON_AUTHENTICODE_SIGNER_MISMATCH")
+    const installerLock = source.indexOf("Assert-LockedArtifacts @($installerPath)")
+    const signatureRecheck = source.indexOf("Assert-PythonInstallerSignature $config.python.installer $installerPath", installerLock)
+    expect(installerLock).toBeGreaterThanOrEqual(0)
+    expect(signatureRecheck).toBeGreaterThan(installerLock)
+    expect(signatureRecheck).toBeLessThan(source.indexOf("Invoke-Fixed $installerPath $installArguments"))
     expect(source).not.toMatch(/setx|\[Environment\]::SetEnvironmentVariable|CurrentUser|HKCU|HKLM/i)
+  })
+
+  it("secures staging before download and retains verified artifact locks through consumption", () => {
+    expect(config.security.staging_acl).toEqual({
+      inheritance: false,
+      full_control: ["NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators"],
+      other_access: false,
+    })
+    expect(config.security.artifact_lock).toEqual({ access: "read", share: "read-only", retain_through_consumption: true })
+    expect(source).toContain("AtomicDirectory]::CreateDirectoryW($ExpectedStagingRoot")
+    expect(source).toContain("STAGING_ATOMIC_CREATE_FAILED_")
+    expect(source).toContain("$acl.SetAccessRuleProtection($true, $false)")
+    expect(source).toContain("Assert-MachineOnlyStagingAcl")
+    expect(source).toContain("Assert-NoReparsePath")
+    expect(source).toContain("[IO.FileShare]::Read")
+    expect(source).toContain("LOCKED_ARTIFACT_HASH_MISMATCH")
+    const mainFlow = source.indexOf("try {\n  $principal")
+    const stagingCall = source.indexOf("New-MachineOnlyStagingRoot", mainFlow)
+    const installerDownload = source.indexOf("Save-VerifiedArtifact ([pscustomobject]@{ filename = $config.python.installer.filename", mainFlow)
+    const wheelLock = source.indexOf("Assert-LockedArtifacts @($wheelPaths)", mainFlow)
+    expect(mainFlow).toBeGreaterThanOrEqual(0)
+    expect(stagingCall).toBeGreaterThan(mainFlow)
+    expect(stagingCall).toBeLessThan(installerDownload)
+    expect(wheelLock).toBeLessThan(source.indexOf("'WHEEL_INSTALL_FAILED'", wheelLock))
   })
 
   it("pins the exact minimal six-wheel no-dependency closure", () => {
@@ -155,7 +191,7 @@ describe("HERMES R1B reviewed runtime provisioning package", () => {
     expect(source).toContain("if ($args.Count -ne 0)")
     expect(source).toContain("RUNTIME_ROOT_ALREADY_EXISTS")
     expect(source).toContain("STAGING_ROOT_ALREADY_EXISTS")
-    expect(source).toContain("Assert-RegularFile $Destination")
+    expect(source).toContain("Assert-ArtifactLock $record")
     const normalizedConfig = fs.readFileSync(configPath, "utf8").replace(/\r\n/g, "\n")
     expect(source).toContain(`$ExpectedConfigSha256 = '${crypto.createHash("sha256").update(normalizedConfig).digest("hex")}'`)
     expect(source).toContain("Get-NormalizedTextSha256 $ConfigPath")
@@ -163,5 +199,25 @@ describe("HERMES R1B reviewed runtime provisioning package", () => {
     expect(source).toContain("exit 2")
     expect(source).not.toMatch(/param\s*\(|Read-Host|Invoke-Expression|Start-Process|cmd\.exe|powershell\.exe|pwsh\.exe/i)
     expect(config.authority.live_application_performed).toBe(false)
+  })
+
+  it("rolls back machine installation and reports any unrecoverable remainder distinctly", () => {
+    expect(config.security.rollback).toEqual({
+      python_uninstall_required_after_install_attempt: true,
+      restore_administrator_cleanup_authority: true,
+      remove_partial_runtime_and_staging: true,
+      verify_absence: true,
+      incomplete_status: "HERMES_R1B_PROVISION_ROLLBACK_INCOMPLETE",
+    })
+    expect(source).toContain("$PythonInstallAttempted = $true")
+    expect(source).toContain("$PythonInstallCompleted = $true")
+    expect(source).toContain("& $InstallerPath /quiet /uninstall")
+    expect(source).toContain("C:\\Windows\\System32\\takeown.exe")
+    expect(source).toContain("C:\\Windows\\System32\\icacls.exe")
+    expect(source).toContain("RUNTIME_REMAINDER_PRESENT")
+    expect(source).toContain("STAGING_REMAINDER_PRESENT")
+    expect(source).toContain("HERMES_R1B_PROVISION_ROLLBACK_INCOMPLETE original=")
+    expect(source).toContain("exit 3")
+    expect(source).not.toContain("if ($StagingCreated -and [IO.Directory]::Exists($ExpectedStagingRoot)) { try { Remove-Item")
   })
 })

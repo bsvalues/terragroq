@@ -6,6 +6,7 @@ import path from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { GRANITE_R2_CONTRACT, executeResidentHermesGraniteR2Bakeoff, prepareResidentHermesGraniteR2Bakeoff } from "../scripts/execution-fabric/bounded-dispatch/resident-hermes-granite-r2-bakeoff.mjs"
+import { claimSingleUseAtRoot, verifyTrustedAuthorityRegistry } from "../scripts/execution-fabric/bounded-dispatch/run-resident-hermes-granite-r2-bakeoff.mjs"
 import { canonicalizeJcs } from "../scripts/execution-fabric/canonical-json.mjs"
 
 const roots: string[] = []
@@ -103,5 +104,30 @@ describe("resident HERMES Granite R2 bakeoff", () => {
     const permission = JSON.parse(fs.readFileSync(path.join(process.cwd(), GRANITE_R2_CONTRACT.permissionPath), "utf8")); const registry = JSON.parse(fs.readFileSync(path.join(process.cwd(), GRANITE_R2_CONTRACT.authorityRegistryPath), "utf8"))
     expect(permission).toMatchObject({ provider_identity: "HERMES", maximum_attempts: 1, maximum_concurrency: 1, scheduler_activation_allowed: false, autonomous_dispatch_allowed: false, model_download_allowed: false, network_allowed: false, database_write_allowed: false, vector_write_allowed: false, status: "SCOPE_ONLY_NOT_AUTHORITY" })
     expect(registry.entries).toEqual([])
+  })
+
+  it("fails closed when the trusted authority registry has no exact admission", () => {
+    const value = fixture()
+    const missing = verifyTrustedAuthorityRegistry({ registry: { schema_version: "1.0-hermes-granite-r2-bakeoff-authority-registry", registry_id: "hermes-granite-r2-bakeoff-authorities", entries: [] }, admission: value.admission })
+    const mismatchedAdmission = structuredClone(value.admission); mismatchedAdmission.admission_id = "different-granite-admission"
+    const mismatched = verifyTrustedAuthorityRegistry({ registry: { schema_version: "1.0-hermes-granite-r2-bakeoff-authority-registry", registry_id: "hermes-granite-r2-bakeoff-authorities", entries: [mismatchedAdmission] }, admission: value.admission })
+    expect(missing).toEqual({ exact_entry_count: 0, verified: false })
+    expect(mismatched).toEqual({ exact_entry_count: 0, verified: false })
+  })
+
+  it("rejects malformed or mismatched authority registry identity", () => {
+    const value = fixture()
+    expect(() => verifyTrustedAuthorityRegistry({ registry: { schema_version: "1.0-hermes-granite-r2-bakeoff-authority-registry", registry_id: "wrong", entries: [] }, admission: value.admission })).toThrow("authority registry is invalid")
+    expect(() => verifyTrustedAuthorityRegistry({ registry: { schema_version: "1.0-hermes-granite-r2-bakeoff-authority-registry", registry_id: "hermes-granite-r2-bakeoff-authorities" }, admission: value.admission })).toThrow("authority registry is invalid")
+  })
+
+  it("durably rejects the same admission under a different request id", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "granite-r2-claim-")); roots.push(root)
+    const admissionSha256 = "a".repeat(64)
+    const first = await claimSingleUseAtRoot(root, { request_id: "request-one", request_sha256: "b".repeat(64), admission_sha256: admissionSha256, maximum_attempts: 1 })
+    const replay = await claimSingleUseAtRoot(root, { request_id: "request-two", request_sha256: "c".repeat(64), admission_sha256: admissionSha256, maximum_attempts: 1 })
+    expect(first).toMatchObject({ claimed: true, claim_id: `claim-${admissionSha256}` })
+    expect(replay).toMatchObject({ claimed: false, claim_id: first.claim_id })
+    expect(fs.readdirSync(root).filter((name) => name.startsWith("claim-"))).toHaveLength(1)
   })
 })
