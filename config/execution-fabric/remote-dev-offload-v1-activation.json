@@ -116,7 +116,7 @@
       "path": "scripts/execution-fabric/provision/aegis-remote-dev-root-os-adapter.mjs",
         "sha256": "4c3d18d07ee8d1a0484e3bd8576f79bdd6e4a87f8111086ae19ab4818f77667f"
     },
-    "activationHost": { "path": "scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs", "sha256": "d00bff9502c5b130d672e4c15363ea3b87e3b53fea7c5631acbf02e43f884eae" },
+    "activationHost": { "path": "scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs", "sha256": "b027fbd377c4610eba28f675e8b36b507290a28891404a945aff92282aaee4fc" },
     "activationBootstrap": { "path": "scripts/execution-fabric/provision/aegis-remote-dev-activation-bridge-bootstrap.mjs", "sha256": "daf36782e1320eea8f2c9ace3d1eba5d700cef40faef4100bc56303e865cb79f" },
     "activationPeer": { "path": "scripts/execution-fabric/provision/assets/aegis-remote-dev-activation-peer.py", "sha256": "8303b9e6e99938216b76e06f6f190f241b91adbf964a052575983510d4d5dfc0" },
     "activationSocket": { "path": "scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation.socket", "sha256": "f12e6e26f1e601f096e14e339f23a7df4ff50963a475cd9a9d88f1fe84a743ef" },
