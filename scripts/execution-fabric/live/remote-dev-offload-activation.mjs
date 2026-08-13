@@ -17,6 +17,9 @@ const SHA256 = /^[a-f0-9]{64}$/
 const SHA40 = /^[a-f0-9]{40}$/
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+const ACTIVATION_ID = "remote-dev-offload-v1-issue-734-single-use-001"
+const AUTHORITY_REFERENCE = "issue-734-terrafusion-remote-dev-single-use-001"
+const RUN_ID = "a3961b87-ed54-45d0-a975-678a02f1e163"
 
 class ActivationError extends Error {
   constructor(code, detail) { super(detail); this.code = code }
@@ -436,6 +439,28 @@ function proveRootPrerequisites(currentControlCommit, authority) {
   return result
 }
 
+export function inspectRootNoSudoProof(proof, now, expected) {
+  try {
+    exactKeys(proof,["schemaVersion","status","activationId","authorityReference","runId","machineIdSha256","bootId","activationHostSha256","authoritySha256","account","passwordStatus","sudoStatus","sudoStdout","sudoStderr","issuedAt","expiresAt"],"root no-sudo proof")
+    const current=Date.parse(now),issued=Date.parse(proof.issuedAt),expires=Date.parse(proof.expiresAt)
+    if(proof.schemaVersion!==1||proof.status!=="ROOT_NO_SUDO_VERIFIED"||proof.activationId!==ACTIVATION_ID||proof.authorityReference!==AUTHORITY_REFERENCE||proof.runId!==RUN_ID
+      ||proof.machineIdSha256!==expected.machineIdSha256||proof.bootId!==expected.bootId||proof.activationHostSha256!==expected.activationHostSha256||proof.authoritySha256!==expected.authoritySha256
+      ||proof.account!=="williamos-fabric"||proof.passwordStatus!=="L"||proof.sudoStatus!==0||proof.sudoStdout!=="User williamos-fabric is not allowed to run sudo on aegis.\n"||proof.sudoStderr!==""
+      ||![current,issued,expires].every(Number.isFinite)||current<issued||current>=expires||expires-issued!==300_000)fail("EXECUTION_IDENTITY_UNPROVEN","root no-sudo proof differs")
+    return {status:"ROOT_NO_SUDO_VERIFIED",executionAuthorized:false,proofSha256:jcsDigest(proof)}
+  } catch(error){return blocked(error)}
+}
+
+function proveRootNoSudoCapability(authority) {
+  const file=`/run/williamos-fabric/activation-${authority.run.runId}/no-sudo.json`;let cursor="/";for(const part of path.dirname(file).slice(1).split("/").filter(Boolean)){cursor=path.join(cursor,part);const parent=fs.lstatSync(cursor);if(!parent.isDirectory()||parent.isSymbolicLink()||parent.uid!==0||(parent.mode&0o022)!==0)fail("EXECUTION_IDENTITY_UNPROVEN","root no-sudo proof parent trust differs")}const stat=fs.lstatSync(file)
+  if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||stat.uid!==0||stat.gid!==0||(stat.mode&0o7777)!==0o444)fail("EXECUTION_IDENTITY_UNPROVEN","root no-sudo proof trust differs")
+  const bytes=fs.readFileSync(file),proof=JSON.parse(bytes),expected={machineIdSha256:authority.executionIdentity.machineIdSha256,bootId:fs.readFileSync("/proc/sys/kernel/random/boot_id","utf8").trim(),activationHostSha256:authority.bindings.activationHost.sha256,authoritySha256:jcsDigest(authority)}
+  if(!bytes.equals(Buffer.from(`${canonicalizeJcs(proof)}\n`)))fail("EXECUTION_IDENTITY_UNPROVEN","root no-sudo proof is not canonical")
+  const inspected=inspectRootNoSudoProof(proof,trustedRuntimeNow(),expected)
+  if(inspected.status!=="ROOT_NO_SUDO_VERIFIED")fail("EXECUTION_IDENTITY_UNPROVEN",inspected.reasons?.[0]?.detail??"root no-sudo proof is unavailable")
+  return inspected
+}
+
 export async function authorizeRemoteDevActivation(authority, candidate) {
   try {
     const matched = validateRemoteDevActivationAuthority(authority, candidate)
@@ -449,7 +474,7 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
     try { reviewedIdentity = JSON.parse(read(IDENTITY_PATH)) } catch { fail("EXECUTION_IDENTITY_UNPROVEN", "reviewed resident identity is unavailable") }
     const identityBinding = inspectResidentIdentityBinding(authority, identity, reviewedIdentity)
     if (identityBinding.status !== "RESIDENT_IDENTITY_VERIFIED") fail("EXECUTION_IDENTITY_UNPROVEN", identityBinding.reasons?.[0]?.detail ?? "fixed resident identity differs")
-    proveNoSudoCapability()
+    const noSudo = proveRootNoSudoCapability(authority)
     let checkout
     try { checkout = createTrustedProofProviders().proveTrustedCheckout() } catch { fail("TRUSTED_MAIN_UNPROVEN", "fixed trusted-main provider failed") }
     const controlPlane = inspectControlPlaneTrustedCheckout(authority, candidate, checkout)
@@ -463,6 +488,7 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
       fail("NETWORK_BOUNDARY_UNPROVEN", networkBoundary.reasons?.[0]?.detail ?? "fixed resident network boundary is unproven")
     }
     if (networkBoundary.launchAuthorityPublicKeySha256 !== prerequisites.launchAuthorityPublicKeySha256) fail("ROOT_PREREQUISITES_UNPROVEN", "network launch authority differs from the durable prerequisite receipt")
+    proveRootNoSudoCapability(authority)
 
     // Claims and leases are reachable only after the fixed resident network proof succeeds.
     const ledger = createLedgerProviders()
@@ -487,6 +513,7 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
       networkLaunchAuthorityPublicKeySha256: networkBoundary.launchAuthorityPublicKeySha256,
       rootPrerequisiteReceiptSha256: prerequisites.receiptSha256,
       rootPrerequisiteTransactionId: prerequisites.transactionId,
+      noSudoProofSha256: noSudo.proofSha256,
       claimId: claim.claim_id,
       leaseId: lease.lease_id,
       leaseReleased: false,
@@ -506,6 +533,7 @@ export async function authorizeRemoteDevActivation(authority, candidate) {
       networkLaunchAuthorityPublicKeySha256: networkBoundary.launchAuthorityPublicKeySha256,
       rootPrerequisiteReceiptSha256: prerequisites.receiptSha256,
       rootPrerequisiteTransactionId: prerequisites.transactionId,
+      noSudoProofSha256: noSudo.proofSha256,
       session,
       schedulerActivated: false,
       standingAegisAuthority: false,
