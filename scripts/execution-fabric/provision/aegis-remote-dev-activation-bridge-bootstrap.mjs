@@ -9,7 +9,7 @@ const OWNER_KEY = "/etc/williamos-fabric/owner-prerequisite-authority.pem"
 const CONTROL = "/var/lib/williamos-remote-dev/control/terragroq"
 const RECEIPT = "/var/lib/williamos-fabric/remote-dev-activation-bridge-verified.json"
 const CLAIM_ROOT = "/var/lib/williamos-fabric/remote-dev-activation-bridge-claims"
-const RUN_ID = "c9889658-bad2-43e2-8def-a0a9c9df5d3c"
+const RUN_ID = "bd39dfc5-ef3b-4789-a5e6-095385330424"
 const ASSET_LAYOUT = Object.freeze([
   ["scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs","/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs","0555"],
   ["scripts/execution-fabric/provision/assets/aegis-remote-dev-activation-peer.py","/usr/local/libexec/williamos-aegis-remote-dev-activation-peer.py","0555"],
@@ -20,8 +20,8 @@ const ASSET_LAYOUT = Object.freeze([
 const SSH_ENTRYPOINT = "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs"
 const SSH_ENTRYPOINT_PREDECESSOR_SHA256 = "dfcc26c875ccd8d7abda09131bb051becc12995ae2dd0e3865bddeb4b1856e21"
 const ACTIVATION_HOST = "/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs"
-const ACTIVATION_HOST_PREDECESSOR_SHA256 = "3d0ac39c7a3ae6ea7e31c5fba0f1ad2556ebddd31b230930d8a991b9a64d3665"
-const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "df9544b07350764c8faffbea288f215a8fe41eca7e657fc8e7dd77744f56dd75"
+const ACTIVATION_HOST_PREDECESSOR_SHA256 = "0c0a85298fd3bdb90c55bd9a031c71fbe8e5aad64669815701c299cde2a727d8"
+const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "1ea25244c7e0125195b36f5f22de5d42c6fbbb2000ece1c5b67983b1f652144f"
 const SHA = /^[a-f0-9]{64}$/; const SHA40 = /^[a-f0-9]{40}$/; const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const canonical = value => value === null || ["string","boolean","number"].includes(typeof value) ? JSON.stringify(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex")
