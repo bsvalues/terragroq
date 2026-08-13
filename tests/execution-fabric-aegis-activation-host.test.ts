@@ -32,6 +32,8 @@ import {
   buildPreReceiptCompactionReceipt,
   diagnosePreReceiptCompactionReceipt,
   buildPreReceiptCompactionExpectation,
+  diagnoseNetworkSliceStartResult,
+  diagnoseNetworkActivePostcondition,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -185,6 +187,30 @@ describe("AEGIS production activation host trust", () => {
     expect(start).toContain('"TimeoutStartSec=10"')
     expect(start).toContain('"/usr/bin/systemctl","--user","start","williamos-aegis-remote-dev.slice"')
     expect(start).not.toContain("runuser")
+  })
+
+  it("classifies the bounded system-manager slice result without retaining output", () => {
+    const exact={status:0,signal:null,errorCode:null,stdout:"",stderr:""}
+    expect(diagnoseNetworkSliceStartResult(exact)).toBe("NETWORK_SLICE_START_VERIFIED")
+    expect(diagnoseNetworkSliceStartResult({...exact,status:1})).toBe("NETWORK_SLICE_EXIT_STATUS_FAILED")
+    expect(diagnoseNetworkSliceStartResult({...exact,signal:"SIGTERM"})).toBe("NETWORK_SLICE_SIGNALLED")
+    expect(diagnoseNetworkSliceStartResult({...exact,errorCode:"ETIMEDOUT"})).toBe("NETWORK_SLICE_PROCESS_FAILED")
+    expect(diagnoseNetworkSliceStartResult({...exact,stdout:"secret"})).toBe("NETWORK_SLICE_STDOUT_UNEXPECTED")
+    expect(diagnoseNetworkSliceStartResult({...exact,stderr:"secret"})).toBe("NETWORK_SLICE_STDERR_UNEXPECTED")
+    expect(diagnoseNetworkSliceStartResult({...exact,extra:"secret"})).toBe("NETWORK_SLICE_RESULT_SCHEMA_INVALID")
+  })
+
+  it("classifies each exact active-boundary postcondition without serializing observations", () => {
+    const exact={nftExact:true,egressActiveEnabled:true,brokerInactiveDisabled:false,gitSocketInactiveDisabled:false,gitServiceInactive:true,listenerAbsent:false,workerWorkspaceAbsent:true}
+    expect(diagnoseNetworkActivePostcondition(exact)).toBe("NETWORK_ACTIVE_POSTCONDITION_VERIFIED")
+    expect(diagnoseNetworkActivePostcondition({...exact,nftExact:false})).toBe("NETWORK_NFT_POSTCONDITION_FAILED")
+    expect(diagnoseNetworkActivePostcondition({...exact,egressActiveEnabled:false})).toBe("NETWORK_EGRESS_POSTCONDITION_FAILED")
+    expect(diagnoseNetworkActivePostcondition({...exact,brokerInactiveDisabled:true})).toBe("NETWORK_BROKER_START_FAILED")
+    expect(diagnoseNetworkActivePostcondition({...exact,gitSocketInactiveDisabled:true})).toBe("NETWORK_GIT_SOCKET_START_FAILED")
+    expect(diagnoseNetworkActivePostcondition({...exact,gitServiceInactive:false})).toBe("NETWORK_GIT_SERVICE_UNEXPECTED")
+    expect(diagnoseNetworkActivePostcondition({...exact,listenerAbsent:true})).toBe("NETWORK_LISTENER_START_FAILED")
+    expect(diagnoseNetworkActivePostcondition({...exact,workerWorkspaceAbsent:false})).toBe("NETWORK_WORKER_OR_WORKSPACE_UNEXPECTED")
+    expect(diagnoseNetworkActivePostcondition({...exact,detail:"secret"})).toBe("NETWORK_POSTCONDITION_SCHEMA_INVALID")
   })
 
   it("adopts only a fresh exact pre-claim proof and archives an exact expired generation", () => {
