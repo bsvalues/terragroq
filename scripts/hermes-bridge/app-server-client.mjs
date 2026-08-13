@@ -108,7 +108,15 @@ export function createCodexChildEnvironment(source = process.env, {
   return environment
 }
 
-function defaultLaunch() {
+export function defaultLaunch() {
+  const execNode = process.env.WILLIAMOS_CODEX_EXEC_NODE
+  if (typeof execNode === "string" && execNode.length > 0) {
+    // thread/start sends the remote cwd; prepare the corresponding AEGIS worktree before dispatch.
+    return {
+      command: "ssh",
+      args: ["-o", "BatchMode=yes", execNode, "codex", "app-server", "--stdio"],
+    }
+  }
   if (process.platform !== "win32") return { command: "codex", args: ["app-server", "--stdio"] }
   const entrypoint = path.join(
     process.env.APPDATA ?? "",
