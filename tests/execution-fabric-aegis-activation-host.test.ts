@@ -22,6 +22,11 @@ import {
   inspectReceiptTicketDirectoryIdentity,
   buildNetworkFailureRecord,
   runActivationDaemonGuard,
+  buildTransientCompactionEvidence,
+  buildTransientCompactionIntent,
+  inspectTransientCompactionEvidence,
+  inspectSnapshotCapacity,
+  inspectCompactionOccupancy,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -197,6 +202,26 @@ describe("AEGIS production activation host trust", () => {
     expect(inspectPreparedSnapshotRecovery(state({entries:["control","mints","prepared.json","no-sudo.json","network-intent.json","network-applied.json","activation-failure.json"]}))).toBe("MATCH")
     expect(inspectPreparedSnapshotRecovery(state({entries:["control","mints","prepared.json","foreign"]}))).toBe("DRIFT")
     expect(inspectPreparedSnapshotRecovery(state({preparedCommit:"f".repeat(40)}))).toBe("DRIFT")
+  })
+
+  it("compacts only the fixed canonical transient inventories and preserves a capacity reserve", () => {
+    const evidence=buildTransientCompactionEvidence()
+    const intent=buildTransientCompactionIntent()
+    expect(intent.status).toBe("TRANSIENT_ACTIVATION_ARCHIVES_VALIDATED")
+    expect(evidence.status).toBe("TRANSIENT_ACTIVATION_ARCHIVES_COMPACTED")
+    expect(evidence.intentSha256).toBe(sha(`${canonical(intent)}\n`))
+    expect(inspectTransientCompactionEvidence(evidence)).toBe("EXACT")
+    expect(evidence.archives.map((entry:any)=>entry.id)).toEqual(["preclaim-88bd","preclaim-070b","preclaim-77b","partial-879d"])
+    expect(inspectTransientCompactionEvidence({...evidence,archives:evidence.archives.slice(1)})).toBe("DRIFT")
+    expect(inspectTransientCompactionEvidence({...evidence,archives:evidence.archives.map((entry:any,index:number)=>index?entry:{...entry,inventorySha256:"f".repeat(64)})})).toBe("DRIFT")
+    expect(inspectSnapshotCapacity(600*1024*1024,472*1024*1024)).toBe("SUFFICIENT")
+    expect(inspectSnapshotCapacity(600*1024*1024-1,472*1024*1024)).toBe("INSUFFICIENT")
+    expect(inspectCompactionOccupancy({sourceExists:true,targetExists:false,evidenceExists:false})).toBe("VALIDATE_ALL_AND_RECORD")
+    expect(inspectCompactionOccupancy({sourceExists:true,targetExists:false,evidenceExists:true})).toBe("VALIDATE_AND_RENAME")
+    expect(inspectCompactionOccupancy({sourceExists:false,targetExists:true,evidenceExists:true})).toBe("REMOVE_RENAMED")
+    expect(inspectCompactionOccupancy({sourceExists:false,targetExists:false,evidenceExists:true})).toBe("COMPLETE")
+    expect(inspectCompactionOccupancy({sourceExists:true,targetExists:true,evidenceExists:true})).toBe("DRIFT")
+    expect(inspectCompactionOccupancy({sourceExists:false,targetExists:true,evidenceExists:false})).toBe("DRIFT")
   })
 
   it("accepts only an exact transaction-bound network transition", () => {
