@@ -484,6 +484,13 @@ describe.skip("future-activation Hermes-mediated remote development controller",
     expect(source.indexOf("WORKER_EVIDENCE_MISMATCH")).toBeLessThan(source.indexOf("lastOperationIndex=$index"))
   })
 
+  it("gives the bounded sixty-second AEGIS relay a strict outer transport margin", () => {
+    const source = fs.readFileSync(controller, "utf8")
+    const activation=source.slice(source.indexOf("function InvokeActivation"),source.indexOf("function ExitTerminalOutput"))
+    expect(activation).toContain("WaitForExit(75000)")
+    expect(activation).not.toContain("WaitForExit(60000)")
+  })
+
   it("serializes replay validation and preserves terminal tombstones", () => {
     const source = fs.readFileSync(controller, "utf8")
     expect(source).toContain("[IO.FileShare]::None")

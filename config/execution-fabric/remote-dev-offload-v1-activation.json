@@ -74,7 +74,7 @@
     },
     "controller": {
       "path": "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1",
-      "sha256": "c5bdf4a67b4eb3d6a3260e04da07c4f2554890808aa115ff31934fcb44f9c061"
+      "sha256": "374bd62d4dc0d796d9849a65c35008f4f3ac0d7ad607fb5ace72bdffa3140544"
     },
     "contract": {
       "path": "scripts/execution-fabric/live/remote-dev-offload-contract.mjs",
