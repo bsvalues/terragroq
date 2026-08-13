@@ -20,8 +20,8 @@ const ASSET_LAYOUT = Object.freeze([
 const SSH_ENTRYPOINT = "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs"
 const SSH_ENTRYPOINT_PREDECESSOR_SHA256 = "dfcc26c875ccd8d7abda09131bb051becc12995ae2dd0e3865bddeb4b1856e21"
 const ACTIVATION_HOST = "/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs"
-const ACTIVATION_HOST_PREDECESSOR_SHA256 = "623ea9391498c005ac3a642a8d0041140dd2890dbcb371e64f8aa5bf04fe7128"
-const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "f810fcf1fb86368679c5f84a621a637be35d2d25e2f46013f7b21f518f1b8af5"
+const ACTIVATION_HOST_PREDECESSOR_SHA256 = "bdb38281726e0e44e21016747a0a3046423326fa997f8ab3d4d6a2fbf5994a33"
+const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "b9d802bbd19f6c1a2e40863a56139c73c3e6bda2387a2b0baa5c35786eb3760d"
 const SHA = /^[a-f0-9]{64}$/; const SHA40 = /^[a-f0-9]{40}$/; const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const canonical = value => value === null || ["string","boolean","number"].includes(typeof value) ? JSON.stringify(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex")
