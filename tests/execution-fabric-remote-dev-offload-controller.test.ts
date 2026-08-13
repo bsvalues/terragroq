@@ -217,6 +217,19 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(replay.status).not.toBe(0)
   }, 20_000)
 
+  it.runIf(process.platform === "win32")("passes exact adversarial argv through the PS5.1 bounded process helper", () => {
+    const source = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1"), "utf8")
+    const helper = source.slice(source.indexOf("function ConvertTo-WindowsArgument"), source.indexOf("$allowedOperations"))
+    const childPath = path.join(testRoot, `argv-child-${crypto.randomUUID()}.mjs`)
+    fs.writeFileSync(childPath, "process.stdout.write(JSON.stringify(process.argv.slice(2)))\n")
+    const values = ["", "plain", "two words", 'a"b', "ends\\", 'space and slash\\', "&|<>^%$();", "雪-δοκιμή"]
+    const script = `${helper}\n$r=Invoke-BoundedProcess 'C:\\Program Files\\nodejs\\node.exe' @(${[childPath, ...values].map(value => `'${value.replaceAll("'", "''")}'`).join(",")}) 10;if($r.TimedOut-or$r.ExitCode-ne0){exit 2};[Console]::Out.Write($r.Stdout)`
+    const encoded = Buffer.from(script, "utf16le").toString("base64")
+    const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", timeout: 15_000 })
+    expect(result.status, result.stderr).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual(values)
+  })
+
   it.runIf(process.platform === "win32")("rejects an occupied relay leaf without overwriting or deleting it", () => {
     const relay = Buffer.from("[Console]::Out.Write('SAFE')", "utf8")
     const digest = crypto.createHash("sha256").update(relay).digest("hex")
