@@ -16,6 +16,7 @@ $ExecutionContainerOwned = $false
 $ExecutionNetworkOwned = $false
 $ExecutionContainerId = $null
 $ExecutionNetworkId = $null
+$SnapshotReadLocks = [Collections.Generic.List[IO.FileStream]]::new()
 
 function Write-Receipt {
   param([hashtable]$Receipt)
@@ -88,7 +89,12 @@ function Remove-OwnedContainer {
   param([string]$ContainerId, [string]$ExpectedExecutionHash)
   if ([string]::IsNullOrWhiteSpace($ContainerId)) { return }
   $label = (@(& $DockerExecutable inspect --format '{{index .Config.Labels "williamos.execution-hash"}}' $ContainerId 2>$null) -join '').Trim()
-  if ($LASTEXITCODE -ne 0) { return }
+  if ($LASTEXITCODE -ne 0) {
+    $matches = @(& $DockerExecutable container ls --all --quiet --no-trunc --filter "id=$ContainerId" 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("CONTAINER_CLEANUP_STATE_UNKNOWN") }
+    if (-not ($matches | Where-Object { ([string]$_).Trim() -ceq $ContainerId })) { return }
+    throw [InvalidOperationException]::new("CONTAINER_CLEANUP_STATE_UNKNOWN")
+  }
   if ($label -cne $ExpectedExecutionHash) { throw [InvalidOperationException]::new("CONTAINER_OWNERSHIP_DRIFT") }
   & $DockerExecutable rm --force $ContainerId | Out-Null
   if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("CONTAINER_CLEANUP_FAILED") }
@@ -98,7 +104,12 @@ function Remove-OwnedNetwork {
   param([string]$NetworkId, [string]$ExpectedExecutionHash)
   if ([string]::IsNullOrWhiteSpace($NetworkId)) { return }
   $label = (@(& $DockerExecutable network inspect --format '{{index .Labels "williamos.execution-hash"}}' $NetworkId 2>$null) -join '').Trim()
-  if ($LASTEXITCODE -ne 0) { return }
+  if ($LASTEXITCODE -ne 0) {
+    $matches = @(& $DockerExecutable network ls --quiet --no-trunc --filter "id=$NetworkId" 2>$null)
+    if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("NETWORK_CLEANUP_STATE_UNKNOWN") }
+    if (-not ($matches | Where-Object { ([string]$_).Trim() -ceq $NetworkId })) { return }
+    throw [InvalidOperationException]::new("NETWORK_CLEANUP_STATE_UNKNOWN")
+  }
   if ($label -cne $ExpectedExecutionHash) { throw [InvalidOperationException]::new("NETWORK_OWNERSHIP_DRIFT") }
   & $DockerExecutable network rm $NetworkId | Out-Null
   if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("NETWORK_CLEANUP_FAILED") }
@@ -170,25 +181,45 @@ try {
   $memoryLimit = "$($inferenceMemoryBytes)b"
   $lastCpu = $maxCpuThreads - 1
   $cpuSet = if ($lastCpu -eq 0) { '0' } else { "0-$lastCpu" }
-  $snapshotRoot = Join-Path $ExecutionWorkRoot 'models'
   $modelParts = $modelId.Split(':')
-  $snapshotManifest = Join-Path $snapshotRoot "manifests\registry.ollama.ai\library\$($modelParts[0])\$($modelParts[1])"
-  [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($snapshotManifest))
-  Copy-Item -LiteralPath (Join-Path $ModelsRoot "manifests\registry.ollama.ai\library\$($modelParts[0])\$($modelParts[1])") -Destination $snapshotManifest
-  if ((Get-FileHash -LiteralPath $snapshotManifest -Algorithm SHA256).Hash.ToLowerInvariant() -cne $modelManifestSha256) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_MANIFEST_HASH_FAILED") }
-  $sourceManifestText = Get-Content -Raw -LiteralPath $snapshotManifest
-  $sourceManifest = $sourceManifestText | ConvertFrom-Json
+  $sourceManifestPath = Join-Path $ModelsRoot "manifests\registry.ollama.ai\library\$($modelParts[0])\$($modelParts[1])"
+  Assert-NoReparsePoint $sourceManifestPath $true
+  $sourceManifestBytes = [IO.File]::ReadAllBytes($sourceManifestPath)
+  if ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($sourceManifestBytes)).ToLowerInvariant() -cne $modelManifestSha256) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_MANIFEST_HASH_FAILED") }
+  $sourceManifest = [Text.Encoding]::UTF8.GetString($sourceManifestBytes) | ConvertFrom-Json
+  $blobSizes = @{}
+  [decimal]$plannedSnapshotBytes = $sourceManifestBytes.Length
   foreach ($layer in @($sourceManifest.config) + @($sourceManifest.layers)) {
     if ([string]$layer.digest -cnotmatch '^sha256:([a-f0-9]{64})$') { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_DIGEST_INVALID") }
     $digest = $Matches[1]
+    $sizeText = [string]$layer.size
+    [UInt64]$declaredSize = 0
+    if ($sizeText -cnotmatch '^(0|[1-9][0-9]*)$' -or -not [UInt64]::TryParse($sizeText, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref]$declaredSize)) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_SIZE_INVALID") }
+    if ($blobSizes.ContainsKey($digest) -and [UInt64]$blobSizes[$digest] -ne $declaredSize) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_SIZE_INVALID") }
+    if (-not $blobSizes.ContainsKey($digest)) { $blobSizes[$digest] = $declaredSize; $plannedSnapshotBytes += $declaredSize }
+  }
+  if ($plannedSnapshotBytes + $inputLength + $maxResultBytes -gt $maxScratchBytes) { throw [InvalidOperationException]::new("SCRATCH_SIZE_LIMIT_EXCEEDED") }
+
+  $snapshotRoot = Join-Path $ExecutionWorkRoot 'models'
+  $snapshotManifest = Join-Path $snapshotRoot "manifests\registry.ollama.ai\library\$($modelParts[0])\$($modelParts[1])"
+  [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($snapshotManifest))
+  [IO.File]::WriteAllBytes($snapshotManifest, $sourceManifestBytes)
+  [decimal]$copiedSnapshotBytes = $sourceManifestBytes.Length
+  foreach ($digest in @($blobSizes.Keys | Sort-Object)) {
     $sourceBlob = Join-Path $ModelsRoot "blobs\sha256-$digest"
+    Assert-NoReparsePoint $sourceBlob $true
+    $sourceLength = ([IO.FileInfo]::new($sourceBlob)).Length
+    if ([UInt64]$sourceLength -ne [UInt64]$blobSizes[$digest]) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_SIZE_INVALID") }
+    if ($copiedSnapshotBytes + $sourceLength + $inputLength + $maxResultBytes -gt $maxScratchBytes) { throw [InvalidOperationException]::new("SCRATCH_SIZE_LIMIT_EXCEEDED") }
     $snapshotBlob = Join-Path $snapshotRoot "blobs\sha256-$digest"
     [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($snapshotBlob))
     Copy-Item -LiteralPath $sourceBlob -Destination $snapshotBlob
     if ((Get-FileHash -LiteralPath $snapshotBlob -Algorithm SHA256).Hash.ToLowerInvariant() -cne $digest) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_HASH_FAILED") }
+    $copiedSnapshotBytes += $sourceLength
   }
-  $snapshotBytes = (Get-ChildItem -LiteralPath $ExecutionWorkRoot -File -Recurse | Measure-Object -Property Length -Sum).Sum
-  if ([uint64]$snapshotBytes -gt $maxScratchBytes) { throw [InvalidOperationException]::new("SCRATCH_SIZE_LIMIT_EXCEEDED") }
+  foreach ($snapshotFile in Get-ChildItem -LiteralPath $snapshotRoot -File -Recurse) {
+    [void]$SnapshotReadLocks.Add([IO.File]::Open($snapshotFile.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read))
+  }
   $ExecutionContainerId = (& $DockerExecutable run --detach --name $ExecutionContainer --label "williamos.execution-hash=$executionHash" --network $ExecutionNetworkId --cpus ([string]$maxCpuThreads) --cpuset-cpus $cpuSet --memory $memoryLimit --memory-swap $memoryLimit --pids-limit 64 --read-only --tmpfs '/root/.ollama:rw,noexec,nosuid,size=16777216' --mount "type=bind,source=$snapshotRoot,target=/root/.ollama/models,readonly" --env 'OLLAMA_HOST=0.0.0.0:11434' --env 'OLLAMA_KEEP_ALIVE=0' --publish '127.0.0.1:11435:11434' "sha256:$containerImageSha256").Trim()
   if ($LASTEXITCODE -ne 0 -or $ExecutionContainerId -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("CONTAINER_START_FAILED") }
   $ExecutionContainerOwned = $true
@@ -419,6 +450,8 @@ namespace WilliamOS.ExecutionFabric {
   Remove-OwnedNetwork $ExecutionNetworkId $executionHash
   $ExecutionNetworkOwned = $false
   $ExecutionNetwork = $null
+  foreach ($snapshotLock in $SnapshotReadLocks) { $snapshotLock.Dispose() }
+  $SnapshotReadLocks.Clear()
   Remove-Item -LiteralPath $ExecutionWorkRoot -Recurse -Force
   $ExecutionWorkRoot = $null
   Write-Receipt ([ordered]@{
@@ -460,6 +493,8 @@ namespace WilliamOS.ExecutionFabric {
   if ($ExecutionNetworkOwned) {
     try { Remove-OwnedNetwork $ExecutionNetworkId $executionHash; $ExecutionNetworkOwned = $false } catch { $failure = [string]$_.Exception.Message }
   }
+  foreach ($snapshotLock in $SnapshotReadLocks) { try { $snapshotLock.Dispose() } catch { } }
+  $SnapshotReadLocks.Clear()
   if ($ExecutionWorkRoot -and [IO.Directory]::Exists($ExecutionWorkRoot)) {
     try { Remove-Item -LiteralPath $ExecutionWorkRoot -Recurse -Force } catch { }
   }
