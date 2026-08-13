@@ -276,17 +276,85 @@ $runLock.Dispose();[Console]::Out.WriteLine((@{evidence=$evidence;summary=$summa
     $relayGzip = [IO.Compression.GZipStream]::new($relayStream, [IO.Compression.CompressionMode]::Compress, $true)
     try { $relayGzip.Write($relayBytes, 0, $relayBytes.Length) } finally { $relayGzip.Dispose() }
     $relayGzipB64 = [Convert]::ToBase64String($relayStream.ToArray()); $relayStream.Dispose()
-    $relayBootstrap = @'
-$ErrorActionPreference='Stop';$expected='__RELAY_SHA__';$envelope=[Console]::In.ReadToEnd()|ConvertFrom-Json;if((@($envelope.PSObject.Properties.Name|Sort-Object)-join',')-ne'relayGzip,relayInput,relaySha256'-or$envelope.relaySha256-ne$expected){exit 64};$raw=[Convert]::FromBase64String($envelope.relayGzip);$source=[IO.MemoryStream]::new([byte[]]$raw);$gzip=[IO.Compression.GZipStream]::new($source,[IO.Compression.CompressionMode]::Decompress);$target=[IO.MemoryStream]::new();try{$gzip.CopyTo($target)}finally{$gzip.Dispose();$source.Dispose()};$bytes=$target.ToArray();$target.Dispose();$hash=[Security.Cryptography.SHA256]::Create();try{$actual=([BitConverter]::ToString($hash.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$hash.Dispose()};if($actual-ne$expected){exit 64};$path=Join-Path ([IO.Path]::GetTempPath()) ('remote-dev-fixed-relay-'+[Guid]::NewGuid().ToString('N')+'.ps1');try{[IO.File]::WriteAllBytes($path,$bytes);$psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName='powershell.exe';$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardInput=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true;$psi.Arguments='-NoProfile -NonInteractive -File "'+$path+'"';$p=[Diagnostics.Process]::new();$p.StartInfo=$psi;if(-not$p.Start()){exit 2};$p.StandardInput.Write([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.relayInput)));$p.StandardInput.Close();$out=$p.StandardOutput.ReadToEndAsync();$err=$p.StandardError.ReadToEndAsync();if(-not$p.WaitForExit(5400000)){try{$p.Kill()}catch{};exit 2};[Console]::Out.Write($out.GetAwaiter().GetResult());[Console]::Error.Write($err.GetAwaiter().GetResult());exit $p.ExitCode}finally{Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue}
-'@
-    $relayBootstrap = $relayBootstrap.Replace('__RELAY_SHA__', $relaySha256)
-    $encodedRelay = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($relayBootstrap))
     $transportInput = @{ relayGzip = $relayGzipB64; relayInput = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($relayInput)); relaySha256 = $relaySha256 } | ConvertTo-Json -Compress
+    $transportBytes = [Text.Encoding]::UTF8.GetBytes($transportInput)
+    $transportSha256 = Get-Sha256Hex $transportBytes
+    $transportId = [Guid]::NewGuid().ToString('N')
+    $localTransportPath = Join-Path $runDirectory ('.hermes-relay-' + $transportId + '.json')
+    $remoteTransportPath = 'C:/Users/bs/.williamos/remote-dev-relay/' + $transportId + '.json'
+    $remoteRelayPath = 'C:/Users/bs/.williamos/remote-dev-relay/' + $transportId + '.ps1'
+    $remoteMarkerPath = 'C:/Users/bs/.williamos/remote-dev-relay/' + $transportId + '.marker'
+    $remoteCancellationPath = 'C:/Users/bs/.williamos/remote-dev-relay/' + $transportId + '.cancelled'
+    $relayBootstrap = @'
+$ErrorActionPreference='Stop'
+$expected='__RELAY_SHA__';$expectedEnvelope='__ENVELOPE_SHA__';$envelopePath='__ENVELOPE_PATH__';$relayPath='__RELAY_PATH__';$markerPath='__MARKER_PATH__';$cancellationPath='__CANCELLATION_PATH__';$transportId='__TRANSPORT_ID__'
+$mutex=$null;$lockTaken=$false;$ownsMarker=$false;$ownsRelay=$false;$p=$null
+try {
+  $mutex=[Threading.Mutex]::new($false,('Global\WilliamOSRemoteDevRelay-'+$transportId))
+  try{$lockTaken=$mutex.WaitOne(30000)}catch [Threading.AbandonedMutexException]{$lockTaken=$true}
+  if(-not$lockTaken){exit 64}
+  if(Get-Item -LiteralPath $cancellationPath -Force -ErrorAction SilentlyContinue){exit 64}
+  $jobNativeSource='using System;using System.Runtime.InteropServices;public static class WilliamOSRelayJobNative{public const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE=0x2000;[StructLayout(LayoutKind.Sequential)]public struct IO_COUNTERS{public ulong ReadOperationCount,WriteOperationCount,OtherOperationCount,ReadTransferCount,WriteTransferCount,OtherTransferCount;}[StructLayout(LayoutKind.Sequential)]public struct JOBOBJECT_BASIC_LIMIT_INFORMATION{public long PerProcessUserTimeLimit,PerJobUserTimeLimit;public uint LimitFlags;public UIntPtr MinimumWorkingSetSize,MaximumWorkingSetSize;public uint ActiveProcessLimit;public UIntPtr Affinity;public uint PriorityClass,SchedulingClass;}[StructLayout(LayoutKind.Sequential)]public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION{public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;public IO_COUNTERS IoInfo;public UIntPtr ProcessMemoryLimit,JobMemoryLimit,PeakProcessMemoryUsed,PeakJobMemoryUsed;}[DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)]public static extern IntPtr CreateJobObject(IntPtr a,string n);[DllImport("kernel32.dll",SetLastError=true)]public static extern bool SetInformationJobObject(IntPtr h,int c,IntPtr i,uint l);[DllImport("kernel32.dll",SetLastError=true)]public static extern bool AssignProcessToJobObject(IntPtr h,IntPtr p);}'
+  if(-not('WilliamOSRelayJobNative' -as [type])){Add-Type -TypeDefinition $jobNativeSource}
+  $job=[WilliamOSRelayJobNative]::CreateJobObject([IntPtr]::Zero,('Global\WilliamOSRemoteDevRelayJob-'+$transportId));if($job-eq[IntPtr]::Zero){exit 64}
+  $jobInfo=New-Object WilliamOSRelayJobNative+JOBOBJECT_EXTENDED_LIMIT_INFORMATION;$jobInfo.BasicLimitInformation.LimitFlags=[WilliamOSRelayJobNative]::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;$jobSize=[Runtime.InteropServices.Marshal]::SizeOf($jobInfo);$jobPointer=[Runtime.InteropServices.Marshal]::AllocHGlobal($jobSize)
+  try{[Runtime.InteropServices.Marshal]::StructureToPtr($jobInfo,$jobPointer,$false);if(-not[WilliamOSRelayJobNative]::SetInformationJobObject($job,9,$jobPointer,[uint32]$jobSize)){exit 64}}finally{[Runtime.InteropServices.Marshal]::FreeHGlobal($jobPointer)}
+  if(-not[WilliamOSRelayJobNative]::AssignProcessToJobObject($job,[Diagnostics.Process]::GetCurrentProcess().Handle)){exit 64}
+  $self=[Diagnostics.Process]::GetCurrentProcess();$marker=[Text.Encoding]::UTF8.GetBytes(($transportId+':'+$PID+':'+$self.StartTime.ToUniversalTime().Ticks))
+  try{$markerStream=[IO.File]::Open($markerPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)}catch [IO.IOException]{exit 64}
+  $ownsMarker=$true;try{$markerStream.Write($marker,0,$marker.Length);$markerStream.Flush($true)}finally{$markerStream.Dispose()}
+  if(Get-Item -LiteralPath $cancellationPath -Force -ErrorAction SilentlyContinue){exit 64}
+  $item=Get-Item -LiteralPath $envelopePath -Force
+  if(($item.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or$item.PSIsContainer-or$item.Length-lt2-or$item.Length-gt2097152){exit 64}
+  $envelopeBytes=[IO.File]::ReadAllBytes($envelopePath);$hash=[Security.Cryptography.SHA256]::Create()
+  try{$envelopeActual=([BitConverter]::ToString($hash.ComputeHash($envelopeBytes))).Replace('-','').ToLowerInvariant()}finally{$hash.Dispose()}
+  if($envelopeActual-ne$expectedEnvelope){exit 64}
+  $envelope=[Text.Encoding]::UTF8.GetString($envelopeBytes)|ConvertFrom-Json
+  if((@($envelope.PSObject.Properties.Name|Sort-Object)-join',')-ne'relayGzip,relayInput,relaySha256'-or$envelope.relaySha256-ne$expected){exit 64}
+  $raw=[Convert]::FromBase64String($envelope.relayGzip);$source=[IO.MemoryStream]::new([byte[]]$raw);$gzip=[IO.Compression.GZipStream]::new($source,[IO.Compression.CompressionMode]::Decompress);$target=[IO.MemoryStream]::new()
+  try{$gzip.CopyTo($target)}finally{$gzip.Dispose();$source.Dispose()};$bytes=$target.ToArray();$target.Dispose();$hash=[Security.Cryptography.SHA256]::Create()
+  try{$actual=([BitConverter]::ToString($hash.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$hash.Dispose()}
+  if($actual-ne$expected){exit 64}
+  try{$relayStream=[IO.File]::Open($relayPath,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)}catch [IO.IOException]{exit 64}
+  $ownsRelay=$true;try{$relayStream.Write($bytes,0,$bytes.Length);$relayStream.Flush($true)}finally{$relayStream.Dispose()}
+  $relayItem=Get-Item -LiteralPath $relayPath -Force
+  if(($relayItem.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or$relayItem.PSIsContainer-or$relayItem.Length-ne$bytes.Length){exit 64}
+  if(Get-Item -LiteralPath $cancellationPath -Force -ErrorAction SilentlyContinue){exit 64}
+  $psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName='powershell.exe';$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardInput=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true;$psi.Arguments='-NoProfile -NonInteractive -File "'+$relayPath+'"'
+  $p=[Diagnostics.Process]::new();$p.StartInfo=$psi;if(-not$p.Start()){exit 2}
+  $mutex.ReleaseMutex();$lockTaken=$false
+  $out=$p.StandardOutput.ReadToEndAsync();$err=$p.StandardError.ReadToEndAsync();$p.StandardInput.Write([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.relayInput)));$p.StandardInput.Close()
+  if(-not$p.WaitForExit(5400000)){try{$p.Kill()}catch{};exit 2}
+  [Console]::Out.Write($out.GetAwaiter().GetResult());[Console]::Error.Write($err.GetAwaiter().GetResult());exit $p.ExitCode
+}
+finally {
+  if($p -and -not $p.HasExited){try{$p.Kill()}catch{}}
+  if($lockTaken){try{$mutex.ReleaseMutex()}catch{}}
+  if($mutex){$mutex.Dispose()}
+  if($ownsRelay){Remove-Item -LiteralPath $relayPath -Force -ErrorAction SilentlyContinue}
+  if($ownsMarker){Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue}
+  Remove-Item -LiteralPath $envelopePath -Force -ErrorAction SilentlyContinue
+}
+'@
+    $relayBootstrap = $relayBootstrap.Replace('__RELAY_SHA__', $relaySha256).Replace('__ENVELOPE_SHA__', $transportSha256).Replace('__ENVELOPE_PATH__', $remoteTransportPath).Replace('__RELAY_PATH__',$remoteRelayPath).Replace('__TRANSPORT_ID__',$transportId).Replace('__MARKER_PATH__',$remoteMarkerPath).Replace('__CANCELLATION_PATH__',$remoteCancellationPath)
+    $encodedRelay = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($relayBootstrap))
 
     try { $sshCommand = @(Get-Command ssh.exe -CommandType Application -ErrorAction Stop)[0].Source }
     catch { Write-ResultAndExit 'BLOCKED' 'SSH_UNAVAILABLE' 'Windows OpenSSH client is unavailable' 2 }
-    try { $remote = Invoke-BoundedProcess $sshCommand @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'ConnectionAttempts=1', 'hermes', 'powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedRelay) $SshTimeoutSeconds $transportInput }
-    catch { Write-ResultAndExit 'BLOCKED' 'HERMES_START_FAILED' 'Hermes SSH process could not start' 2 }
+    try { $scpCommand = @(Get-Command scp.exe -CommandType Application -ErrorAction Stop)[0].Source }
+    catch { Write-ResultAndExit 'BLOCKED' 'SCP_UNAVAILABLE' 'Windows OpenSSH copy client is unavailable' 2 }
+    $prepareScript = '$ErrorActionPreference=''Stop'';$root=''C:\Users\bs\.williamos\remote-dev-relay'';if(Test-Path -LiteralPath $root){$i=Get-Item -LiteralPath $root -Force;if(-not$i.PSIsContainer-or($i.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){exit 64}}else{[IO.Directory]::CreateDirectory($root)|Out-Null};foreach($path in @(''' + $remoteTransportPath.Replace('/','\') + ''',''' + $remoteRelayPath.Replace('/','\') + ''',''' + $remoteMarkerPath.Replace('/','\') + ''',''' + $remoteCancellationPath.Replace('/','\') + ''')){if(Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue){exit 64}}'
+    $prepareEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($prepareScript))
+    $prepare = Invoke-BoundedProcess $sshCommand @('-o','BatchMode=yes','-o','ConnectTimeout=10','-o','ConnectionAttempts=1','hermes','powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',$prepareEncoded) 30
+    if($prepare.TimedOut-or$prepare.ExitCode-ne0){Write-ResultAndExit 'BLOCKED' 'HERMES_TRANSPORT_PREPARE_FAILED' 'Hermes relay file scope is unavailable' 2}
+    $cleanupScript = '$ErrorActionPreference=''Stop'';$transportId='''+$transportId+''';$relay='''+$remoteRelayPath.Replace('/','\')+''';$envelope='''+$remoteTransportPath.Replace('/','\')+''';$marker='''+$remoteMarkerPath.Replace('/','\')+''';$cancel='''+$remoteCancellationPath.Replace('/','\')+''';$mutex=[Threading.Mutex]::new($false,(''Global\WilliamOSRemoteDevRelay-''+$transportId));$lockTaken=$false;$cancellationCreated=$false;try{try{$lockTaken=$mutex.WaitOne(30000)}catch [Threading.AbandonedMutexException]{$lockTaken=$true};if(-not$lockTaken){exit 64};$cancelStream=$null;try{$cancelStream=[IO.File]::Open($cancel,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$cancellationCreated=$true;$cancelStream.Flush($true)}catch [IO.IOException]{$cancelItem=Get-Item -LiteralPath $cancel -Force -ErrorAction Stop;if(($cancelItem.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or$cancelItem.PSIsContainer-or$cancelItem.Length-ne0){exit 64}}finally{if($cancelStream){$cancelStream.Dispose()}};$jobSource=''using System;using System.Runtime.InteropServices;public static class WilliamOSRelayJobCleanup{[DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)]public static extern IntPtr OpenJobObject(uint a,bool i,string n);[DllImport("kernel32.dll",SetLastError=true)]public static extern bool TerminateJobObject(IntPtr h,uint e);[DllImport("kernel32.dll")]public static extern bool CloseHandle(IntPtr h);}'';if(-not(''WilliamOSRelayJobCleanup''-as[type])){Add-Type -TypeDefinition $jobSource};$markerItem=Get-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue;if($markerItem){if(($markerItem.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or$markerItem.PSIsContainer-or$markerItem.Length-lt38-or$markerItem.Length-gt96){exit 64};$parts=([IO.File]::ReadAllText($marker)-split'':'');if($parts.Count-ne3-or$parts[0]-ne$transportId-or$parts[1]-notmatch''^[1-9][0-9]*$''-or$parts[2]-notmatch''^[1-9][0-9]*$''){exit 64};$rootPid=[int]$parts[1];$root=Get-Process -Id $rootPid -ErrorAction SilentlyContinue;if($root -and $root.StartTime.ToUniversalTime().Ticks-ne[long]$parts[2]){exit 64};$job=[WilliamOSRelayJobCleanup]::OpenJobObject(8,$false,(''Global\WilliamOSRemoteDevRelayJob-''+$transportId));if($job-eq[IntPtr]::Zero){exit 64};try{if(-not[WilliamOSRelayJobCleanup]::TerminateJobObject($job,64)){exit 64}}finally{[void][WilliamOSRelayJobCleanup]::CloseHandle($job)};Start-Sleep -Milliseconds 250;if(Get-Process -Id $rootPid -ErrorAction SilentlyContinue){exit 64}};Remove-Item -LiteralPath $relay,$envelope,$marker -Force -ErrorAction SilentlyContinue;foreach($path in @($relay,$envelope,$marker)){if(Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue){exit 64}};$cancelItem=Get-Item -LiteralPath $cancel -Force;if(($cancelItem.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or$cancelItem.PSIsContainer-or$cancelItem.Length-ne0){exit 64}}finally{if($lockTaken){try{$mutex.ReleaseMutex()}catch{}};$mutex.Dispose()}'
+    $cleanupEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanupScript))
+    $transportFailure=$null;$remote=$null;$cleanup=$null
+    try {[IO.File]::WriteAllBytes($localTransportPath,$transportBytes);$copy=Invoke-BoundedProcess $scpCommand @('-q','-o','BatchMode=yes','-o','ConnectTimeout=10','-o','ConnectionAttempts=1',$localTransportPath,('hermes:'+$remoteTransportPath)) 60;if($copy.TimedOut-or$copy.ExitCode-ne0){$transportFailure='HERMES_TRANSPORT_COPY_FAILED'}else{$remote=Invoke-BoundedProcess $sshCommand @('-o','BatchMode=yes','-o','ConnectTimeout=10','-o','ConnectionAttempts=1','hermes','powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',$encodedRelay) $SshTimeoutSeconds}}
+    catch{$transportFailure='HERMES_START_FAILED'}
+    finally{Remove-Item -LiteralPath $localTransportPath -Force -ErrorAction SilentlyContinue;try{$cleanup=Invoke-BoundedProcess $sshCommand @('-o','BatchMode=yes','-o','ConnectTimeout=10','hermes','powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',$cleanupEncoded) 30}catch{$cleanup=$null}}
+    if($null-eq$cleanup-or$cleanup.TimedOut-or$cleanup.ExitCode-ne0){Write-ResultAndExit 'BLOCKED' 'HERMES_TRANSPORT_CLEANUP_UNPROVEN' 'Hermes relay process or file absence is unproven' 2}
+    if($transportFailure){Write-ResultAndExit 'BLOCKED' $transportFailure 'Hermes relay transport failed' 2}
     if ($remote.TimedOut) { Write-ResultAndExit 'BLOCKED' 'HERMES_TIMEOUT' 'Hermes relay timed out' 2 }
     if ($remote.ExitCode -ne 0) {
         $failureLines = @($remote.Stdout -split "`r?`n" | Where-Object { $_.Trim().Length -gt 0 }); $cleanupFailure = $null
