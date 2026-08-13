@@ -9,7 +9,8 @@ const source = fs.readFileSync(launcherPath, "utf8")
 
 describe("bounded resident HERMES embedding launcher", () => {
   it("has a fixed zero-argument Python evaluator command", () => {
-    expect(source).toContain('$PythonExecutable = "C:\\Python313\\python.exe"')
+    expect(source).toContain('$PythonExecutable = "C:\\Program Files\\WilliamOS\\EmbeddingRuntime\\Python313\\python.exe"')
+    expect(source).toContain('$PythonRuntimeClosureManifest = "C:\\Program Files\\WilliamOS\\EmbeddingRuntime\\runtime-closure.json"')
     expect(source).toContain('"scripts\\embedding-bakeoff\\fabric_measure.py"')
     expect(source).toContain('if ($args.Count -ne 0)')
     expect(source).not.toMatch(/Invoke-Expression|Start-Process|cmd\.exe|powershell\.exe|pwsh\.exe|shell:\s*true/i)
@@ -69,6 +70,8 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("HERMES_EMBEDDING_MODEL_MANIFEST_SHA256")
     expect(source).toContain("HERMES_EMBEDDING_WEIGHTS_SHA256")
     expect(source).toContain("HERMES_EMBEDDING_EVALUATOR_SHA256")
+    expect(source).toContain("HERMES_EMBEDDING_PYTHON_RUNTIME_CLOSURE_MANIFEST_SHA256")
+    expect(source).toContain("HERMES_EMBEDDING_PYTHON_RUNTIME_CLOSURE_ACL_VERIFIED")
     expect(source).toContain("HERMES_EMBEDDING_CORPUS_MANIFEST_SHA256")
     expect(source).toContain("HERMES_EMBEDDING_PROCESS_MEMORY_BYTES")
     expect(source).toContain("HERMES_EMBEDDING_JOB_MEMORY_BYTES")
@@ -125,6 +128,20 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("NETWORK_CLEANUP_STATE_UNKNOWN")
     expect(source).not.toContain("rm --force $ExecutionContainer\n")
     expect(source).not.toContain("network rm $ExecutionNetwork\n")
+  })
+
+  it("locks and reverifies the complete ACL-verified Python runtime closure", () => {
+    expect(source).toContain("Open-PythonRuntimeClosure $pythonRuntimeClosureManifestSha256")
+    expect(source).toContain("PYTHON_RUNTIME_CLOSURE_MANIFEST_HASH_FAILED")
+    expect(source).toContain("PYTHON_RUNTIME_CLOSURE_HASH_FAILED")
+    expect(source).toContain("PYTHON_RUNTIME_CLOSURE_SIZE_FAILED")
+    expect(source).toContain("PYTHON_RUNTIME_CLOSURE_FILE_SET_INVALID")
+    expect(source).toContain("PYTHON_RUNTIME_CLOSURE_REPARSE_INVALID")
+    expect(source).toContain("PYTHON_RUNTIME_CLOSURE_ACL_WRITE_INVALID")
+    expect(source).toContain("[IO.FileShare]::Read")
+    expect(source).toContain("Assert-PythonRuntimeClosureUnchanged")
+    expect(source).toContain("PYTHON_RUNTIME_CLOSURE_REHASH_FAILED")
+    expect(source).toContain("python_runtime_closure_reverified = $true")
   })
 
   it("executes from a closed seven-file Python source and corpus snapshot", () => {

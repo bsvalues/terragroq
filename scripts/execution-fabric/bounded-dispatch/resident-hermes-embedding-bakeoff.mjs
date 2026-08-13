@@ -9,6 +9,7 @@ export const EMBEDDING_CONTRACT = Object.freeze({
   corpusSourceCommit: "d544f19708e4aa9c7f430c3cc9fde4ff0f5c1b85",
   nodeId: "hermes-node",
   providerId: "resident-hermes",
+  modelId: "qwen3-embedding:4b",
   endpoint: "http://127.0.0.1:11435/api/embed",
   corpusManifestPath: "scripts/embedding-bakeoff/corpus/manifest.json",
   corpusManifestSha256: "0b0fdf909583990975a771195c7f7a8b6e5e938f01800369b1d6cf9fb5ca7dee",
@@ -153,14 +154,16 @@ function validateAdmission(admission) {
     || admission.corpus.documents !== 49 || admission.corpus.queries !== 80) fail("CORPUS_BINDING_MISMATCH", "admission does not bind the frozen corpus")
   exactKeys(admission.model, ["model_id", "revision", "weights_sha256", "license", "source", "dimension", "manifest_sha256", "ollama_manifest_sha256"], "admission.model")
   for (const key of ["model_id", "revision", "license", "source"]) identifier(admission.model[key], `admission.model.${key}`)
+  if (admission.model.model_id !== EMBEDDING_CONTRACT.modelId) fail("MODEL_BINDING_MISMATCH", "admission is not for the fixed Qwen embedding model")
   digest(admission.model.weights_sha256, "admission.model.weights_sha256")
   digest(admission.model.manifest_sha256, "admission.model.manifest_sha256")
   digest(admission.model.ollama_manifest_sha256, "admission.model.ollama_manifest_sha256")
   integer(admission.model.dimension, "admission.model.dimension", 1, 65_536)
-  exactKeys(admission.runtime, ["runtime_id", "version", "executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "collector_sha256", "bounded_launcher_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"], "admission.runtime")
+  exactKeys(admission.runtime, ["runtime_id", "version", "executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "python_runtime_closure_manifest_sha256", "python_runtime_closure_acl_verified", "node_executable_sha256", "powershell_executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "collector_sha256", "bounded_launcher_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"], "admission.runtime")
   identifier(admission.runtime.runtime_id, "admission.runtime.runtime_id")
   identifier(admission.runtime.version, "admission.runtime.version")
-  for (const key of ["executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "collector_sha256", "bounded_launcher_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"]) digest(admission.runtime[key], `admission.runtime.${key}`)
+  for (const key of ["executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "python_runtime_closure_manifest_sha256", "node_executable_sha256", "powershell_executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "collector_sha256", "bounded_launcher_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"]) digest(admission.runtime[key], `admission.runtime.${key}`)
+  if (admission.runtime.python_runtime_closure_acl_verified !== true) fail("PYTHON_RUNTIME_CLOSURE_INVALID", "admission does not attest an immutable machine Python runtime ACL")
   exactKeys(admission.placement, ["node_id", "machine_id_sha256", "inventory_snapshot_sha256", "host_manifest_sha256", "endpoint_contract"], "admission.placement")
   if (admission.placement.node_id !== EMBEDDING_CONTRACT.nodeId || admission.placement.endpoint_contract !== "ollama-isolated-loopback-api-embed-v1") {
     fail("PLACEMENT_BINDING_MISMATCH", "admission is not for the fixed resident HERMES endpoint contract")
@@ -201,7 +204,7 @@ function validateAdmission(admission) {
 }
 
 function validateHostAttestation(value, admission, observedAt) {
-  exactKeys(value, ["schema_version", "collector_id", "node_id", "machine_id_sha256", "inventory_snapshot_sha256", "host_manifest_sha256", "model_id", "weights_sha256", "model_manifest_sha256", "runtime_id", "runtime_version", "runtime_executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "inventory", "resources", "endpoint", "observed_at", "expires_at", "attestation_sha256", "verified"], "host attestation")
+  exactKeys(value, ["schema_version", "collector_id", "node_id", "machine_id_sha256", "inventory_snapshot_sha256", "host_manifest_sha256", "model_id", "weights_sha256", "model_manifest_sha256", "runtime_id", "runtime_version", "runtime_executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "python_runtime_closure_manifest_sha256", "python_runtime_closure_acl_verified", "node_executable_sha256", "powershell_executable_sha256", "inventory", "resources", "endpoint", "observed_at", "expires_at", "attestation_sha256", "verified"], "host attestation")
   if (value.schema_version !== "1.0-trusted-hermes-live-embedding-attestation" || value.collector_id !== "reviewed-resident-hermes-live-collector"
     || value.node_id !== EMBEDDING_CONTRACT.nodeId || value.machine_id_sha256 !== admission.placement.machine_id_sha256
     || value.inventory_snapshot_sha256 !== admission.placement.inventory_snapshot_sha256
@@ -214,6 +217,8 @@ function validateHostAttestation(value, admission, observedAt) {
     || value.git_executable_sha256 !== admission.runtime.git_executable_sha256
     || value.nvidia_smi_executable_sha256 !== admission.runtime.nvidia_smi_executable_sha256
     || value.python_executable_sha256 !== admission.runtime.python_executable_sha256
+    || value.python_runtime_closure_manifest_sha256 !== admission.runtime.python_runtime_closure_manifest_sha256
+    || value.python_runtime_closure_acl_verified !== true
     || value.node_executable_sha256 !== admission.runtime.node_executable_sha256
     || value.powershell_executable_sha256 !== admission.runtime.powershell_executable_sha256
     || value.endpoint !== EMBEDDING_CONTRACT.endpoint || value.verified !== true) fail("HOST_ATTESTATION_MISMATCH", "trusted host attestation does not match the exact admission")
@@ -221,7 +226,7 @@ function validateHostAttestation(value, admission, observedAt) {
   digest(value.attestation_sha256, "host attestation.attestation_sha256")
   timestamp(value.observed_at, "host attestation.observed_at")
   timestamp(value.expires_at, "host attestation.expires_at")
-  exactKeys(value.inventory, ["node_id", "machine_id_sha256", "cpu_threads", "memory_total_bytes", "gpu_vram_total_bytes", "container_image_sha256", "ollama_executable_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256"], "host attestation.inventory")
+  exactKeys(value.inventory, ["node_id", "machine_id_sha256", "cpu_threads", "memory_total_bytes", "gpu_vram_total_bytes", "container_image_sha256", "ollama_executable_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "python_runtime_closure_manifest_sha256", "python_runtime_closure_acl_verified", "node_executable_sha256", "powershell_executable_sha256"], "host attestation.inventory")
   exactKeys(value.resources, ["cpu_threads", "memory_total_bytes", "memory_available_bytes", "gpu_vram_total_bytes", "gpu_vram_available_bytes"], "host attestation.resources")
   for (const key of Object.keys(value.resources)) integer(value.resources[key], `host attestation.resources.${key}`, 1, Number.MAX_SAFE_INTEGER)
   if (value.inventory_snapshot_sha256 !== canonicalDigest(value.inventory)
@@ -234,6 +239,8 @@ function validateHostAttestation(value, admission, observedAt) {
     || value.inventory.git_executable_sha256 !== value.git_executable_sha256
     || value.inventory.nvidia_smi_executable_sha256 !== value.nvidia_smi_executable_sha256
     || value.inventory.python_executable_sha256 !== value.python_executable_sha256
+    || value.inventory.python_runtime_closure_manifest_sha256 !== value.python_runtime_closure_manifest_sha256
+    || value.inventory.python_runtime_closure_acl_verified !== true
     || value.inventory.node_executable_sha256 !== value.node_executable_sha256
     || value.inventory.powershell_executable_sha256 !== value.powershell_executable_sha256) fail("HOST_ATTESTATION_INVENTORY_MISMATCH", "live inventory does not bind the attested identities")
   if (value.resources.cpu_threads < admission.limits.max_cpu_threads

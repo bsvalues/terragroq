@@ -1,7 +1,9 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PythonExecutable = "C:\Python313\python.exe"
+$PythonRuntimeRoot = "C:\Program Files\WilliamOS\EmbeddingRuntime"
+$PythonRuntimeClosureManifest = "C:\Program Files\WilliamOS\EmbeddingRuntime\runtime-closure.json"
+$PythonExecutable = "C:\Program Files\WilliamOS\EmbeddingRuntime\Python313\python.exe"
 $DockerExecutable = "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
 $HermesRoot = "C:\HermesLab"
 $LedgerRoot = "C:\HermesLab\embedding-bakeoff-ledger"
@@ -17,6 +19,8 @@ $ExecutionNetworkOwned = $false
 $ExecutionContainerId = $null
 $ExecutionNetworkId = $null
 $SnapshotReadLocks = [Collections.Generic.List[IO.FileStream]]::new()
+$PythonRuntimeClosureReadLocks = [Collections.Generic.List[IO.FileStream]]::new()
+$PythonRuntimeClosureBindings = [Collections.Generic.List[hashtable]]::new()
 
 function Write-Receipt {
   param([hashtable]$Receipt)
@@ -80,6 +84,90 @@ function Assert-NoReparsePoint {
       $attributes = [IO.File]::GetAttributes($current)
       if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw [InvalidOperationException]::new("PATH_INVALID") }
     }
+  }
+}
+
+function Assert-RuntimeAcl {
+  param([string]$Path)
+  $systemSid = 'S-1-5-18'
+  $trustedInstallerSid = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+  $usersSid = 'S-1-5-32-545'
+  $administratorsSid = 'S-1-5-32-544'
+  $acl = Get-Acl -LiteralPath $Path
+  $owner = ([Security.Principal.NTAccount]$acl.Owner).Translate([Security.Principal.SecurityIdentifier]).Value
+  if ($owner -cne $trustedInstallerSid) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_ACL_OWNER_INVALID") }
+  $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object AccessControlType -eq Allow)
+  $writeRights = [Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+  foreach ($sid in @($systemSid, $trustedInstallerSid)) {
+    if (@($rules | Where-Object { $_.IdentityReference.Value -ceq $sid -and ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::FullControl) -eq [Security.AccessControl.FileSystemRights]::FullControl }).Count -lt 1) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_ACL_MACHINE_INVALID") }
+  }
+  foreach ($sid in @($usersSid, $administratorsSid)) {
+    $principalRules = @($rules | Where-Object { $_.IdentityReference.Value -ceq $sid })
+    if ($principalRules.Count -lt 1 -or @($principalRules | Where-Object { ($_.FileSystemRights -band $writeRights) -ne 0 }).Count -ne 0) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_ACL_WRITE_INVALID") }
+  }
+  foreach ($rule in $rules) {
+    if (@($systemSid, $trustedInstallerSid) -cnotcontains $rule.IdentityReference.Value -and ($rule.FileSystemRights -band $writeRights) -ne 0) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_ACL_WRITE_INVALID") }
+  }
+}
+
+function Open-PythonRuntimeClosure {
+  param([string]$ExpectedManifestSha256)
+  Assert-NoReparsePoint $PythonRuntimeRoot $true
+  Assert-NoReparsePoint $PythonRuntimeClosureManifest $true
+  $manifestLock = [IO.File]::Open($PythonRuntimeClosureManifest, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  $PythonRuntimeClosureReadLocks.Add($manifestLock)
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try { $manifestHash = ([BitConverter]::ToString($algorithm.ComputeHash($manifestLock))).Replace('-', '').ToLowerInvariant() } finally { $algorithm.Dispose() }
+  $manifestLock.Position = 0
+  if ($manifestHash -cne $ExpectedManifestSha256) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_MANIFEST_HASH_FAILED") }
+  $manifestBytes = [IO.File]::ReadAllBytes($PythonRuntimeClosureManifest)
+  try { $manifest = [Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json } catch { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_MANIFEST_INVALID") }
+  if ((@($manifest.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'entries,root,schema_version' `
+    -or $manifest.schema_version -cne '1.0-williamos-embedding-runtime-closure' `
+    -or $manifest.root -cne $PythonRuntimeRoot -or $null -eq $manifest.entries) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_MANIFEST_INVALID") }
+  $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  $expectedFiles = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+  $PythonRuntimeClosureBindings.Add(@{ stream = $manifestLock; sha256 = $ExpectedManifestSha256 })
+  foreach ($entry in @($manifest.entries)) {
+    $entryRelativePath = [string]$entry.path
+    $entrySegments = $entryRelativePath.Split([char[]]@('\'))
+    if ((@($entry.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'path,sha256,size_bytes' `
+      -or [string]::IsNullOrWhiteSpace($entryRelativePath) -or [IO.Path]::IsPathRooted($entryRelativePath) -or $entryRelativePath.Contains('/') `
+      -or @($entrySegments | Where-Object { [string]::IsNullOrWhiteSpace($_) -or $_ -eq '.' -or $_ -eq '..' -or $_.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0 }).Count -ne 0 `
+      -or [string]$entry.sha256 -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_ENTRY_INVALID") }
+    [UInt64]$size = 0
+    if (-not [UInt64]::TryParse([string]$entry.size_bytes, [Globalization.NumberStyles]::None, [Globalization.CultureInfo]::InvariantCulture, [ref]$size) `
+      -or -not $seen.Add($entryRelativePath)) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_ENTRY_INVALID") }
+    $entryPath = [IO.Path]::GetFullPath((Join-Path $PythonRuntimeRoot $entryRelativePath))
+    if (-not $entryPath.StartsWith("$PythonRuntimeRoot\", [StringComparison]::OrdinalIgnoreCase) -or -not [IO.File]::Exists($entryPath)) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_PATH_INVALID") }
+    if (-not $expectedFiles.Add($entryPath)) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_ENTRY_INVALID") }
+    Assert-NoReparsePoint $entryPath $true
+    $lock = [IO.File]::Open($entryPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $PythonRuntimeClosureReadLocks.Add($lock)
+    if ([UInt64]$lock.Length -ne $size) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_SIZE_FAILED") }
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { $actualHash = ([BitConverter]::ToString($algorithm.ComputeHash($lock))).Replace('-', '').ToLowerInvariant() } finally { $algorithm.Dispose() }
+    $lock.Position = 0
+    if ($actualHash -cne [string]$entry.sha256) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_HASH_FAILED") }
+    $PythonRuntimeClosureBindings.Add(@{ stream = $lock; sha256 = [string]$entry.sha256 })
+  }
+  if ($seen.Count -lt 1 -or -not $expectedFiles.Contains($PythonExecutable)) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_FILE_SET_INVALID") }
+  $children = @(Get-ChildItem -LiteralPath $PythonRuntimeRoot -Force -Recurse)
+  foreach ($child in $children) {
+    if (($child.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_REPARSE_INVALID") }
+    Assert-RuntimeAcl $child.FullName
+  }
+  $actualFiles = @($children | Where-Object { -not $_.PSIsContainer -and -not [StringComparer]::OrdinalIgnoreCase.Equals($_.FullName, $PythonRuntimeClosureManifest) })
+  if ($actualFiles.Count -ne $expectedFiles.Count -or @($actualFiles | Where-Object { -not $expectedFiles.Contains($_.FullName) }).Count -ne 0) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_FILE_SET_INVALID") }
+  Assert-RuntimeAcl $PythonRuntimeRoot
+}
+
+function Assert-PythonRuntimeClosureUnchanged {
+  foreach ($binding in $PythonRuntimeClosureBindings) {
+    $binding.stream.Position = 0
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { $actualHash = ([BitConverter]::ToString($algorithm.ComputeHash($binding.stream))).Replace('-', '').ToLowerInvariant() } finally { $algorithm.Dispose() }
+    if ($actualHash -cne $binding.sha256) { throw [InvalidOperationException]::new("PYTHON_RUNTIME_CLOSURE_REHASH_FAILED") }
   }
 }
 
@@ -151,6 +239,8 @@ try {
   $modelManifestSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_MODEL_MANIFEST_SHA256"
   $weightsSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_WEIGHTS_SHA256"
   $evaluatorSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_EVALUATOR_SHA256"
+  $pythonRuntimeClosureManifestSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_PYTHON_RUNTIME_CLOSURE_MANIFEST_SHA256"
+  $pythonRuntimeClosureAclVerified = Get-RequiredEnvironment "HERMES_EMBEDDING_PYTHON_RUNTIME_CLOSURE_ACL_VERIFIED"
   $bakeoffSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_BAKEOFF_SHA256"
   $embedSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_EMBED_SHA256"
   $metricsSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_METRICS_SHA256"
@@ -158,8 +248,8 @@ try {
   $identityInvalid = $runtimeExecutableSha256 -cnotmatch '^[a-f0-9]{64}$'
   $identityInvalid = $identityInvalid -or $modelManifestSha256 -cnotmatch '^[a-f0-9]{64}$'
   $identityInvalid = $identityInvalid -or $weightsSha256 -cnotmatch '^[a-f0-9]{64}$'
-  $identityInvalid = $identityInvalid -or @($evaluatorSha256, $bakeoffSha256, $embedSha256, $metricsSha256, $corpusManifestSha256).Where({ $_ -cnotmatch '^[a-f0-9]{64}$' }).Count -ne 0
-  $identityInvalid = $identityInvalid -or $modelId -cnotmatch '^[a-z0-9][a-z0-9._-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$'
+  $identityInvalid = $identityInvalid -or @($evaluatorSha256, $pythonRuntimeClosureManifestSha256, $bakeoffSha256, $embedSha256, $metricsSha256, $corpusManifestSha256).Where({ $_ -cnotmatch '^[a-f0-9]{64}$' }).Count -ne 0
+  $identityInvalid = $identityInvalid -or $modelId -cne 'qwen3-embedding:4b' -or $pythonRuntimeClosureAclVerified -cne 'True'
   if ($identityInvalid) { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
   $affinityRaw = Get-RequiredEnvironment "HERMES_EMBEDDING_CPU_AFFINITY_MASK"
   if ($affinityRaw -cnotmatch '^0x[0-9A-Fa-f]{1,16}$') { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
@@ -178,6 +268,7 @@ try {
   Assert-NoReparsePoint $ExecutionWorkRoot $true
   Assert-NoReparsePoint $PythonExecutable $true
   Assert-NoReparsePoint $DockerExecutable $true
+  Open-PythonRuntimeClosure $pythonRuntimeClosureManifestSha256
   Assert-NoReparsePoint $EvaluatorPath $true
   Assert-NoReparsePoint $ModelsRoot $true
   $hermesPrefix = $HermesRoot.TrimEnd('\') + '\'
@@ -555,6 +646,7 @@ namespace WilliamOS.ExecutionFabric {
     "NO_PROXY=127.0.0.1,localhost"
   )
   $run = [WilliamOS.ExecutionFabric.BoundedJob]::Run($PythonExecutable, $ExecutionEvaluatorPath, $sealedInputPath, $sealedInputSha256, $resultPath, $ExecutionWorkRoot, $ExecutionWorkRoot, [uint32]$timeoutMs, $maxResultBytes, $maxScratchBytes, $processMemoryBytes, $jobMemoryBytes, [uint32]$cpuRatePercent, $cpuAffinityMask, $childEnvironment)
+  Assert-PythonRuntimeClosureUnchanged
   if (-not [IO.File]::Exists($resultPath)) { throw [InvalidOperationException]::new("RESULT_MISSING") }
   Assert-NoReparsePoint $resultPath $true
   $resultLength = ([IO.FileInfo]::new($resultPath)).Length
@@ -569,6 +661,8 @@ namespace WilliamOS.ExecutionFabric {
   $ExecutionNetwork = $null
   foreach ($snapshotLock in $SnapshotReadLocks) { $snapshotLock.Dispose() }
   $SnapshotReadLocks.Clear()
+  foreach ($runtimeLock in $PythonRuntimeClosureReadLocks) { $runtimeLock.Dispose() }
+  $PythonRuntimeClosureReadLocks.Clear()
   Remove-Item -LiteralPath $ExecutionWorkRoot -Recurse -Force
   $ExecutionWorkRoot = $null
   Write-Receipt ([ordered]@{
@@ -592,6 +686,9 @@ namespace WilliamOS.ExecutionFabric {
     aggregate_memory_bytes = $jobMemoryBytes + $inferenceMemoryBytes
     container_pids_limit = 64
     runtime_reverified = $true
+    python_runtime_closure_manifest_sha256 = $pythonRuntimeClosureManifestSha256
+    python_runtime_closure_acl_verified = $true
+    python_runtime_closure_reverified = $true
     model_manifest_reverified = $true
     model_weights_reverified = $true
     container_cleaned = $true
@@ -612,6 +709,8 @@ namespace WilliamOS.ExecutionFabric {
   }
   foreach ($snapshotLock in $SnapshotReadLocks) { try { $snapshotLock.Dispose() } catch { } }
   $SnapshotReadLocks.Clear()
+  foreach ($runtimeLock in $PythonRuntimeClosureReadLocks) { try { $runtimeLock.Dispose() } catch { } }
+  $PythonRuntimeClosureReadLocks.Clear()
   if ($ExecutionWorkRoot -and [IO.Directory]::Exists($ExecutionWorkRoot)) {
     try { Remove-Item -LiteralPath $ExecutionWorkRoot -Recurse -Force } catch { }
   }

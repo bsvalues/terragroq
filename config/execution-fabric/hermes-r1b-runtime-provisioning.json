@@ -1,0 +1,163 @@
+{
+  "schema_version": "1.0-hermes-r1b-runtime-provisioning",
+  "package_id": "hermes-r1b-runtime-owner-decision-704",
+  "authority": {
+    "owner_decision": 704,
+    "target_machine": "HERMES",
+    "application_mode": "explicit-reviewed-provisioning-only",
+    "live_application_performed": false
+  },
+  "paths": {
+    "runtime_root": "C:\\Program Files\\WilliamOS\\EmbeddingRuntime",
+    "python_root": "C:\\Program Files\\WilliamOS\\EmbeddingRuntime\\Python313",
+    "python_executable": "C:\\Program Files\\WilliamOS\\EmbeddingRuntime\\Python313\\python.exe",
+    "granite_root": "C:\\Program Files\\WilliamOS\\EmbeddingRuntime\\models\\granite-embedding-311m-multilingual-r2",
+    "closure_manifest": "C:\\Program Files\\WilliamOS\\EmbeddingRuntime\\runtime-closure.json",
+    "staging_root": "C:\\ProgramData\\WilliamOS\\Provisioning\\hermes-r1b-runtime-704",
+    "docker_executable": "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe"
+  },
+  "python": {
+    "version": "3.13.14",
+    "installer": {
+      "filename": "python-3.13.14-amd64.exe",
+      "url": "https://www.python.org/ftp/python/3.13.14/python-3.13.14-amd64.exe",
+      "bytes": 29225624,
+      "sha256": "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0"
+    },
+    "installer_policy": {
+      "all_users": true,
+      "prepend_path": false,
+      "append_path": false,
+      "install_launcher": false,
+      "associate_files": false,
+      "shortcuts": false
+    }
+  },
+  "wheelhouse": {
+    "dependency_policy": "minimal-sealed-six-wheel-runtime-closure",
+    "install_mode": "offline-no-index-no-deps",
+    "tokenizers_usage": "local-native-binding-only",
+    "normal_dependency_resolution": false,
+    "exact_installed_distributions": [
+      "flatbuffers==25.12.19",
+      "numpy==2.5.2",
+      "onnxruntime==1.28.0",
+      "packaging==26.3",
+      "protobuf==7.35.1",
+      "tokenizers==0.22.2"
+    ],
+    "prohibited_distributions": [
+      "huggingface-hub",
+      "requests",
+      "urllib3",
+      "httpx",
+      "transformers",
+      "sentence-transformers"
+    ],
+    "artifacts": [
+      {
+        "name": "onnxruntime",
+        "version": "1.28.0",
+        "filename": "onnxruntime-1.28.0-cp313-cp313-win_amd64.whl",
+        "url": "https://files.pythonhosted.org/packages/56/f1/51225c202edba4dfc94e1ea03f3d78f1aaf307da75fd792c0ce1946b2514/onnxruntime-1.28.0-cp313-cp313-win_amd64.whl",
+        "bytes": 13755033,
+        "sha256": "1a1a19175464665c9b8d50bc916f216cc0b569110045b7bbca8f9f290b186f58"
+      },
+      {
+        "name": "numpy",
+        "version": "2.5.2",
+        "filename": "numpy-2.5.2-cp313-cp313-win_amd64.whl",
+        "url": "https://files.pythonhosted.org/packages/15/20/f3489f86d81ea460b2bcdceaed094142ca6579f6be0ec527b781d39afe68/numpy-2.5.2-cp313-cp313-win_amd64.whl",
+        "bytes": 12460532,
+        "sha256": "85aaccb24182c25df891ad0ec333585967e115269d5f1b17f2c9ae005bc96657"
+      },
+      {
+        "name": "flatbuffers",
+        "version": "25.12.19",
+        "filename": "flatbuffers-25.12.19-py2.py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl",
+        "bytes": 26661,
+        "sha256": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4"
+      },
+      {
+        "name": "packaging",
+        "version": "26.3",
+        "filename": "packaging-26.3-py3-none-any.whl",
+        "url": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl",
+        "bytes": 129956,
+        "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c"
+      },
+      {
+        "name": "protobuf",
+        "version": "7.35.1",
+        "filename": "protobuf-7.35.1-cp310-abi3-win_amd64.whl",
+        "url": "https://files.pythonhosted.org/packages/0a/19/8d0cb6f20a1ef7b18f1c8986ad5783f22f84cce39c6ce9a6e645ea55192e/protobuf-7.35.1-cp310-abi3-win_amd64.whl",
+        "bytes": 439996,
+        "sha256": "230a75ddfc2de4806e56696ce9640c1cdfdb6543b7cfce98d42a4c0a0e7bdb87"
+      },
+      {
+        "name": "tokenizers",
+        "version": "0.22.2",
+        "filename": "tokenizers-0.22.2-cp39-abi3-win_amd64.whl",
+        "url": "https://files.pythonhosted.org/packages/65/71/0670843133a43d43070abeb1949abfdef12a86d490bea9cd9e18e37c5ff7/tokenizers-0.22.2-cp39-abi3-win_amd64.whl",
+        "bytes": 2747786,
+        "sha256": "c9ea31edff2968b44a88f97d784c2f16dc0729b8b143ed004699ebca91f05c48"
+      }
+    ]
+  },
+  "granite": {
+    "repository": "ibm-granite/granite-embedding-311m-multilingual-r2",
+    "revision": "44399559930365213510b1ee2eb15ded83374f0e",
+    "total_bytes": 347965120,
+    "licensing": {
+      "model_license": "Apache-2.0",
+      "tokenizer_derivation": "Gemma 3",
+      "tokenizer_terms_apply": true,
+      "tokenizer_terms_url": "https://ai.google.dev/gemma/terms",
+      "statement": "Apache-2.0 is not the complete licensing statement for the derived tokenizer; the applicable Gemma tokenizer terms must also be reviewed and honored."
+    },
+    "files": [
+      { "path": "onnx/model_quint8_avx2.onnx", "url": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2/resolve/44399559930365213510b1ee2eb15ded83374f0e/onnx/model_quint8_avx2.onnx", "bytes": 313421909, "sha256": "f1fdd44e7e1ac51f12ab7957c7bd092e064d596c288513bf9d326842f669edee" },
+      { "path": "tokenizer.json", "url": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2/resolve/44399559930365213510b1ee2eb15ded83374f0e/tokenizer.json", "bytes": 33384821, "sha256": "0087c868b33bad550a78a08d19798cfd7f713cde4f020803b8f51f405503e15f" },
+      { "path": "tokenizer_config.json", "url": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2/resolve/44399559930365213510b1ee2eb15ded83374f0e/tokenizer_config.json", "bytes": 1155500, "sha256": "7947bdf0378520e69ca412b8c4dacd1cffa8aef099f851fdd5c65aa27c6b36a0" },
+      { "path": "config.json", "url": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2/resolve/44399559930365213510b1ee2eb15ded83374f0e/config.json", "bytes": 1191, "sha256": "e1e3fc842a8e0537e25d6e4c93879698b92ae96722e8c162bef334b57978a3b0" },
+      { "path": "special_tokens_map.json", "url": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2/resolve/44399559930365213510b1ee2eb15ded83374f0e/special_tokens_map.json", "bytes": 694, "sha256": "cb9e60dcf4d8d314315cb3e761fe4c2e664fda8dbf66d7815372b2639e381182" },
+      { "path": "1_Pooling/config.json", "url": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2/resolve/44399559930365213510b1ee2eb15ded83374f0e/1_Pooling/config.json", "bytes": 313, "sha256": "781299da695e58439d70d491840da22ea0935d1d57d9646eb9725f1f19754e89" },
+      { "path": "modules.json", "url": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2/resolve/44399559930365213510b1ee2eb15ded83374f0e/modules.json", "bytes": 349, "sha256": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf" },
+      { "path": "config_sentence_transformers.json", "url": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2/resolve/44399559930365213510b1ee2eb15ded83374f0e/config_sentence_transformers.json", "bytes": 283, "sha256": "f09adf93fcf868bb2fc3976a435d810b2ecdffa953d1da091d2a91168abab44b" },
+      { "path": "sentence_bert_config.json", "url": "https://huggingface.co/ibm-granite/granite-embedding-311m-multilingual-r2/resolve/44399559930365213510b1ee2eb15ded83374f0e/sentence_bert_config.json", "bytes": 60, "sha256": "967ef958285e4a7a37d8ff1832473d967edd913b4e48572f31c3d3ea361d5327" }
+    ]
+  },
+  "qwen": {
+    "action_id": "owner-decision-704-qwen-reviewed-acquisition",
+    "separate_reviewed_action": true,
+    "model": "qwen3-embedding:4b",
+    "container": "ollama",
+    "pull_command": ["exec", "ollama", "ollama", "pull", "qwen3-embedding:4b"],
+    "registry_manifest": {
+      "filename": "qwen3-embedding-4b.registry-manifest.json",
+      "url": "https://registry.ollama.ai/v2/library/qwen3-embedding/manifests/4b",
+      "bytes": 531,
+      "sha256": "df5bd2e3c74cd8d069d21dc038f1b359fcdc9458fce1c99bd43c9eb1518ff907"
+    },
+    "registry_manifest_path": "/root/.ollama/models/manifests/registry.ollama.ai/library/qwen3-embedding/4b",
+    "manifest_payload_sha256": "df5bd2e3c74cd8d069d21dc038f1b359fcdc9458fce1c99bd43c9eb1518ff907",
+    "config": {
+      "digest": "sha256:2ca34c70bbf2dc85cb69688daf0b423bdc361504ea29d7f5a35c19f739d8ee0d",
+      "path": "/root/.ollama/models/blobs/sha256-2ca34c70bbf2dc85cb69688daf0b423bdc361504ea29d7f5a35c19f739d8ee0d",
+      "bytes": 265,
+      "sha256": "2ca34c70bbf2dc85cb69688daf0b423bdc361504ea29d7f5a35c19f739d8ee0d"
+    },
+    "weights": {
+      "digest": "sha256:2b0cf8f17b4c723c27303015383c27ec4bf2d8314bb677d05e920dd70bb0f16b",
+      "path": "/root/.ollama/models/blobs/sha256-2b0cf8f17b4c723c27303015383c27ec4bf2d8314bb677d05e920dd70bb0f16b",
+      "bytes": 2496703776,
+      "sha256": "2b0cf8f17b4c723c27303015383c27ec4bf2d8314bb677d05e920dd70bb0f16b"
+    }
+  },
+  "sealing": {
+    "inheritance": false,
+    "full_control": ["NT AUTHORITY\\SYSTEM", "NT SERVICE\\TrustedInstaller"],
+    "read_execute": ["BUILTIN\\Users", "BUILTIN\\Administrators"]
+  }
+}

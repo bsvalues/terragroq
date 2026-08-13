@@ -16,7 +16,9 @@ const ADMISSION_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\admission.js
 const MODEL_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\model-manifest.json"
 const RUNTIME_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\runtime-manifest.json"
 const HOST_MANIFEST_PATH = "C:\\HermesLab\\embedding-bakeoff-admission\\host-manifest.json"
-const PYTHON_EXECUTABLE = "C:\\Python313\\python.exe"
+const PYTHON_RUNTIME_ROOT = "C:\\Program Files\\WilliamOS\\EmbeddingRuntime"
+const PYTHON_RUNTIME_CLOSURE_MANIFEST = "C:\\Program Files\\WilliamOS\\EmbeddingRuntime\\runtime-closure.json"
+const PYTHON_EXECUTABLE = "C:\\Program Files\\WilliamOS\\EmbeddingRuntime\\Python313\\python.exe"
 const NODE_EXECUTABLE = "C:\\Program Files\\nodejs\\node.exe"
 const POWERSHELL_EXECUTABLE = "C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
 const DOCKER_EXECUTABLE = "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe"
@@ -238,12 +240,16 @@ export async function collectTrustedHostAttestation({ admission }) {
     || sha256(hostManifestBytes) !== admission.placement.host_manifest_sha256) {
     throw new Error("fixed model, runtime, or host manifest bytes do not match admission")
   }
+  const pythonClosureManifestSha256 = sha256(fs.readFileSync(PYTHON_RUNTIME_CLOSURE_MANIFEST))
   if (path.resolve(process.execPath).toLowerCase() !== NODE_EXECUTABLE.toLowerCase()
     || sha256(fs.readFileSync(NODE_EXECUTABLE)) !== admission.runtime.node_executable_sha256
     || sha256(fs.readFileSync(PYTHON_EXECUTABLE)) !== admission.runtime.python_executable_sha256
     || sha256(fs.readFileSync(POWERSHELL_EXECUTABLE)) !== admission.runtime.powershell_executable_sha256
     || sha256(fs.readFileSync(DOCKER_EXECUTABLE)) !== admission.runtime.docker_executable_sha256
-    || sha256(fs.readFileSync(NVIDIA_SMI_EXECUTABLE)) !== admission.runtime.nvidia_smi_executable_sha256) {
+    || sha256(fs.readFileSync(NVIDIA_SMI_EXECUTABLE)) !== admission.runtime.nvidia_smi_executable_sha256
+    || path.dirname(path.dirname(PYTHON_EXECUTABLE)).toLowerCase() !== PYTHON_RUNTIME_ROOT.toLowerCase()
+    || pythonClosureManifestSha256 !== admission.runtime.python_runtime_closure_manifest_sha256
+    || admission.runtime.python_runtime_closure_acl_verified !== true) {
     throw new Error("resident interpreter bytes do not match admission")
   }
   const observed = spawnSync(POWERSHELL_EXECUTABLE, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", COLLECTOR_PATH], {
@@ -257,7 +263,7 @@ export async function collectTrustedHostAttestation({ admission }) {
   })
   if (observed.status !== 0 || observed.error || !observed.stdout) throw new Error("reviewed resident HERMES live collector failed")
   const live = JSON.parse(observed.stdout.replace(/^\uFEFF/, ""))
-  const expectedFields = ["schema_version", "collector_id", "node_id", "machine_id_sha256", "model_id", "weights_sha256", "model_manifest_sha256", "runtime_id", "runtime_version", "runtime_executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "inventory", "resources", "observed_at", "expires_at"]
+  const expectedFields = ["schema_version", "collector_id", "node_id", "machine_id_sha256", "model_id", "weights_sha256", "model_manifest_sha256", "runtime_id", "runtime_version", "runtime_executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "python_runtime_closure_manifest_sha256", "python_runtime_closure_acl_verified", "node_executable_sha256", "powershell_executable_sha256", "inventory", "resources", "observed_at", "expires_at"]
   if (!live || typeof live !== "object" || Array.isArray(live)
     || JSON.stringify(Object.keys(live).sort()) !== JSON.stringify(expectedFields.sort())
     || live.schema_version !== "1.0-resident-hermes-live-embedding-observation") {
@@ -281,6 +287,8 @@ export async function collectTrustedHostAttestation({ admission }) {
     git_executable_sha256: live.git_executable_sha256,
     nvidia_smi_executable_sha256: live.nvidia_smi_executable_sha256,
     python_executable_sha256: live.python_executable_sha256,
+    python_runtime_closure_manifest_sha256: live.python_runtime_closure_manifest_sha256,
+    python_runtime_closure_acl_verified: live.python_runtime_closure_acl_verified,
     node_executable_sha256: live.node_executable_sha256,
     powershell_executable_sha256: live.powershell_executable_sha256,
     inventory: live.inventory,
@@ -418,6 +426,8 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
       HERMES_EMBEDDING_MODEL_MANIFEST_SHA256: admission.model.ollama_manifest_sha256,
       HERMES_EMBEDDING_WEIGHTS_SHA256: admission.model.weights_sha256,
       HERMES_EMBEDDING_EVALUATOR_SHA256: admission.runtime.evaluator_sha256,
+      HERMES_EMBEDDING_PYTHON_RUNTIME_CLOSURE_MANIFEST_SHA256: admission.runtime.python_runtime_closure_manifest_sha256,
+      HERMES_EMBEDDING_PYTHON_RUNTIME_CLOSURE_ACL_VERIFIED: String(admission.runtime.python_runtime_closure_acl_verified),
       HERMES_EMBEDDING_BAKEOFF_SHA256: admission.runtime.bakeoff_sha256,
       HERMES_EMBEDDING_EMBED_SHA256: admission.runtime.embed_sha256,
       HERMES_EMBEDDING_METRICS_SHA256: admission.runtime.metrics_sha256,
@@ -441,7 +451,9 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     || receipt.container_cpu_threads !== admission.limits.max_inference_cpu_threads || receipt.container_memory_bytes !== admission.limits.max_inference_memory_bytes
     || receipt.aggregate_cpu_threads !== admission.limits.max_evaluator_cpu_threads + admission.limits.max_inference_cpu_threads
     || receipt.aggregate_memory_bytes !== admission.limits.max_evaluator_memory_bytes + admission.limits.max_inference_memory_bytes
-    || receipt.runtime_reverified !== true || receipt.model_manifest_reverified !== true || receipt.model_weights_reverified !== true
+    || receipt.runtime_reverified !== true || receipt.python_runtime_closure_manifest_sha256 !== admission.runtime.python_runtime_closure_manifest_sha256
+    || receipt.python_runtime_closure_acl_verified !== true || receipt.python_runtime_closure_reverified !== true
+    || receipt.model_manifest_reverified !== true || receipt.model_weights_reverified !== true
     || receipt.container_pids_limit !== 64 || receipt.container_cleaned !== true || receipt.network_cleaned !== true) {
     recoverLauncherDockerResources(executionKey)
     throw new Error(`bounded embedding evaluator failed closed after verified cleanup: ${receipt.reason_code ?? "UNKNOWN"}`)

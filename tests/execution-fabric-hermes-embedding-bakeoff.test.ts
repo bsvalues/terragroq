@@ -38,7 +38,7 @@ function fixture() {
   const permissionSha256 = sha256(fs.readFileSync(path.join(root, EMBEDDING_CONTRACT.permissionPath)))
   const admission: any = {
     schema_version: "1.0-hermes-embedding-bakeoff-admission",
-    admission_id: "issue-704-granite-test-admission",
+    admission_id: "issue-704-qwen-test-admission",
     work_order_id: EMBEDDING_CONTRACT.workOrderId,
     corpus_source_commit: EMBEDDING_CONTRACT.corpusSourceCommit,
     execution_commit: "a".repeat(40),
@@ -51,12 +51,12 @@ function fixture() {
       queries: 80,
     },
     model: {
-      model_id: "granite-embedding:278m-multilingual",
-      revision: "r2",
+      model_id: "qwen3-embedding:4b",
+      revision: "4b",
       weights_sha256: "1".repeat(64),
       license: "Apache-2.0",
       source: "ollama-library",
-      dimension: 768,
+      dimension: 2560,
       manifest_sha256: "2".repeat(64),
       ollama_manifest_sha256: "e".repeat(64),
     },
@@ -69,6 +69,8 @@ function fixture() {
       git_executable_sha256: "c".repeat(64),
       nvidia_smi_executable_sha256: "d".repeat(64),
       python_executable_sha256: "5".repeat(64),
+      python_runtime_closure_manifest_sha256: "f".repeat(64),
+      python_runtime_closure_acl_verified: true,
       node_executable_sha256: "6".repeat(64),
       powershell_executable_sha256: "7".repeat(64),
       evaluator_sha256: sha256(evaluator),
@@ -124,12 +126,14 @@ function fixture() {
     git_executable_sha256: admission.runtime.git_executable_sha256,
     nvidia_smi_executable_sha256: admission.runtime.nvidia_smi_executable_sha256,
     python_executable_sha256: admission.runtime.python_executable_sha256,
+    python_runtime_closure_manifest_sha256: admission.runtime.python_runtime_closure_manifest_sha256,
+    python_runtime_closure_acl_verified: true,
     node_executable_sha256: admission.runtime.node_executable_sha256,
     powershell_executable_sha256: admission.runtime.powershell_executable_sha256,
   })
   const request: any = {
     schema_version: "1.0-hermes-embedding-bakeoff-request",
-    request_id: "issue-704-granite-test-run",
+    request_id: "issue-704-qwen-test-run",
     admission_sha256: canonicalDigest(admission),
   }
   const proveTrustedAdmission = ({ admissionSha256, admission: admitted }: any) => ({
@@ -167,6 +171,8 @@ function attestation(admission: any) {
     nvidia_smi_executable_sha256: admission.runtime.nvidia_smi_executable_sha256,
     ollama_executable_sha256: admission.runtime.executable_sha256,
     python_executable_sha256: admission.runtime.python_executable_sha256,
+    python_runtime_closure_manifest_sha256: admission.runtime.python_runtime_closure_manifest_sha256,
+    python_runtime_closure_acl_verified: true,
     node_executable_sha256: admission.runtime.node_executable_sha256,
     powershell_executable_sha256: admission.runtime.powershell_executable_sha256,
   }
@@ -188,6 +194,8 @@ function attestation(admission: any) {
     git_executable_sha256: admission.runtime.git_executable_sha256,
     nvidia_smi_executable_sha256: admission.runtime.nvidia_smi_executable_sha256,
     python_executable_sha256: admission.runtime.python_executable_sha256,
+    python_runtime_closure_manifest_sha256: admission.runtime.python_runtime_closure_manifest_sha256,
+    python_runtime_closure_acl_verified: true,
     node_executable_sha256: admission.runtime.node_executable_sha256,
     powershell_executable_sha256: admission.runtime.powershell_executable_sha256,
     inventory,
@@ -241,6 +249,9 @@ function output(admission: any) {
       aggregate_memory_bytes: admission.limits.max_memory_bytes,
       container_pids_limit: 64,
       runtime_reverified: true,
+      python_runtime_closure_manifest_sha256: admission.runtime.python_runtime_closure_manifest_sha256,
+      python_runtime_closure_acl_verified: true,
+      python_runtime_closure_reverified: true,
       model_manifest_reverified: true,
       model_weights_reverified: true,
       container_cleaned: true,
@@ -301,6 +312,8 @@ describe("resident HERMES embedding bake-off adapter", () => {
     ["corpus source commit", (value: any) => { value.admission.corpus_source_commit = "b".repeat(40) }, "ADMISSION_INVALID"],
     ["corpus fingerprint", (value: any) => { value.admission.corpus.corpus_fingerprint = "f".repeat(64) }, "CORPUS_BINDING_MISMATCH"],
     ["node", (value: any) => { value.admission.placement.node_id = "omen" }, "PLACEMENT_BINDING_MISMATCH"],
+    ["model", (value: any) => { value.admission.model.model_id = "other-embedding:4b" }, "MODEL_BINDING_MISMATCH"],
+    ["Python closure ACL", (value: any) => { value.admission.runtime.python_runtime_closure_acl_verified = false }, "PYTHON_RUNTIME_CLOSURE_INVALID"],
     ["network", (value: any) => { value.admission.limits.network_scope = "lan" }, "NETWORK_SCOPE_INVALID"],
     ["scratch ceiling", (value: any) => { value.admission.limits.max_scratch_bytes = 1 }, "SCRATCH_CEILING_INVALID"],
     ["aggregate memory ceiling", (value: any) => { value.admission.limits.max_inference_memory_bytes += 1 }, "MEMORY_CEILING_INVALID"],
@@ -378,7 +391,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
   it.each([
     ["external provider", (result: any) => { result.external_provider_used = true }],
     ["fallback", (result: any) => { result.fallback_used = true }],
-    ["model drift", (result: any) => { result.model_id = "qwen3-embedding:4b" }],
+    ["model drift", (result: any) => { result.model_id = "other-embedding:4b" }],
     ["runtime drift", (result: any) => { result.runtime_id = "other-runtime" }],
     ["host drift", (result: any) => { result.node_id = "omen" }],
     ["endpoint drift", (result: any) => { result.endpoint = "http://127.0.0.1:11436/api/embed" }],
@@ -411,10 +424,28 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(value.releaseExclusiveLease).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    ["closure digest", (observed: any) => { observed.python_runtime_closure_manifest_sha256 = "0".repeat(64) }],
+    ["closure ACL", (observed: any) => { observed.python_runtime_closure_acl_verified = false }],
+  ])("rejects host-attested Python runtime %s drift before dispatch", async (_name, mutate) => {
+    const value = runtime()
+    value.collectTrustedHostAttestation.mockImplementation(async () => {
+      const observed: any = attestation(value.admission)
+      mutate(observed)
+      delete observed.attestation_sha256
+      observed.attestation_sha256 = canonicalDigest(observed)
+      return observed
+    })
+    await expect(executeResidentHermesEmbeddingBakeoff(value)).rejects.toThrow("HOST_ATTESTATION_MISMATCH")
+    expect(value.invokeFixedEvaluator).not.toHaveBeenCalled()
+  })
+
   it("keeps the production runner fixed, zero-argument, loopback-only, and evaluator-only", () => {
     const source = fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/bounded-dispatch/run-resident-hermes-embedding-bakeoff.mjs"), "utf8")
     expect(source).toContain('const EVALUATOR_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.evaluatorPath)')
     expect(source).toContain('const GIT_EXECUTABLE = "C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe"')
+    expect(source).toContain('const PYTHON_EXECUTABLE = "C:\\\\Program Files\\\\WilliamOS\\\\EmbeddingRuntime\\\\Python313\\\\python.exe"')
+    expect(source).toContain('const PYTHON_RUNTIME_CLOSURE_MANIFEST = "C:\\\\Program Files\\\\WilliamOS\\\\EmbeddingRuntime\\\\runtime-closure.json"')
     expect(source).toContain('endpoint !== "http://127.0.0.1:11435/api/embed"')
     expect(source).toContain('process.argv.length !== 2')
     expect(source.match(/spawnSync\(/g)).toHaveLength(4)
@@ -454,6 +485,12 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(source).toContain("sha256sum $manifestPath")
     expect(source).toContain("sha256sum $weightsPath")
     expect(source).toContain("Get-FileSha256 $python")
+    expect(source).toContain("HERMES_EMBEDDING_PYTHON_CLOSURE_HASH_WALL")
+    expect(source).toContain("HERMES_EMBEDDING_PYTHON_CLOSURE_DUPLICATE_WALL")
+    expect(source).toContain("HERMES_EMBEDDING_PYTHON_CLOSURE_REPARSE_WALL")
+    expect(source).toContain("HERMES_EMBEDDING_PYTHON_CLOSURE_ACL_WRITE_WALL")
+    expect(source).toContain("python_runtime_closure_manifest_sha256")
+    expect(source).toContain("python_runtime_closure_acl_verified")
     expect(source).toContain("Get-FileSha256 $node")
     expect(source).toContain("Get-FileSha256 $powershell")
     expect(source).toContain("Get-FileSha256 $docker")
@@ -481,5 +518,17 @@ describe("resident HERMES embedding bake-off adapter", () => {
       registry_id: "hermes-embedding-bakeoff-authorities",
       entries: [],
     })
+  })
+
+  it("contains no obsolete 278m Granite model identity in the Qwen lane", () => {
+    const obsoleteModel = ["granite-embedding", "278m-multilingual"].join(":")
+    for (const relativePath of [
+      EMBEDDING_CONTRACT.adapterPath,
+      EMBEDDING_CONTRACT.runnerPath,
+      EMBEDDING_CONTRACT.collectorPath,
+      EMBEDDING_CONTRACT.boundedLauncherPath,
+      "tests/execution-fabric-hermes-embedding-bakeoff.test.ts",
+      "tests/execution-fabric-hermes-embedding-launcher.test.ts",
+    ]) expect(fs.readFileSync(path.join(process.cwd(), relativePath), "utf8")).not.toContain(obsoleteModel)
   })
 })
