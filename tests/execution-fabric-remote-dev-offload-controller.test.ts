@@ -118,11 +118,11 @@ function runRelay(encoded: string, input: string, env: NodeJS.ProcessEnv) {
   })
 }
 
-function streamedRelayBootstrap(expectedDigest: string, envelopePath = "C:\\temp\\envelope.json", envelopeDigest = "b".repeat(64), relayPath = "C:\\temp\\relay.ps1") {
+function streamedRelayBootstrap(expectedDigest: string, envelopePath = "C:\\temp\\envelope.json", envelopeDigest = "b".repeat(64), relayPath = "C:\\temp\\relay.ps1", transportId = "a".repeat(32), markerPath = "C:\\temp\\relay.marker", cancellationPath = "C:\\temp\\relay.cancelled") {
   const source = fs.readFileSync(controller, "utf8")
   const match = source.match(/\$relayBootstrap = @'\r?\n([\s\S]*?)\r?\n'@/)
   if (!match) throw new Error("streamed relay bootstrap is absent")
-  return match[1].replace("__RELAY_SHA__", expectedDigest).replace("__ENVELOPE_SHA__", envelopeDigest).replace("__ENVELOPE_PATH__", envelopePath).replace("__RELAY_PATH__", relayPath)
+  return match[1].replace("__RELAY_SHA__", expectedDigest).replace("__ENVELOPE_SHA__", envelopeDigest).replace("__ENVELOPE_PATH__", envelopePath).replace("__RELAY_PATH__", relayPath).replaceAll("__TRANSPORT_ID__", transportId).replace("__MARKER_PATH__", markerPath).replace("__CANCELLATION_PATH__", cancellationPath)
 }
 
 function isolatedProgramDataEnv(programData: string, extra: NodeJS.ProcessEnv = {}) {
@@ -151,6 +151,15 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(source).toContain("[Guid]::NewGuid().ToString('N')")
     expect(source).toContain("[IO.FileAttributes]::ReparsePoint")
     expect(source).toContain("$transportSha256")
+    expect(source).toContain("[IO.FileMode]::CreateNew")
+    expect(source).toContain("$remoteMarkerPath")
+    expect(source).toContain("$remoteCancellationPath")
+    expect(source).toContain("Global\\WilliamOSRemoteDevRelay-")
+    expect(source).toContain("Global\\WilliamOSRemoteDevRelayJob-")
+    expect(source).toContain("AssignProcessToJobObject")
+    expect(source).toContain("JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE")
+    expect(source).toContain("TerminateJobObject")
+    expect(source).toContain("$cancellationCreated")
     expect(source).not.toContain("Replace('__RELAY_GZIP__'")
     expect(streamedRelayBootstrap("a".repeat(64))).not.toContain("$psi.ArgumentList.Add")
     expect(source).toContain("$expected='__RELAY_SHA__'")
@@ -193,7 +202,69 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(fs.existsSync(envelopePath)).toBe(false)
     const replay = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", timeout: 15_000 })
     expect(replay.status).not.toBe(0)
+  }, 20_000)
+
+  it.runIf(process.platform === "win32")("rejects an occupied relay leaf without overwriting or deleting it", () => {
+    const relay = Buffer.from("[Console]::Out.Write('SAFE')", "utf8")
+    const digest = crypto.createHash("sha256").update(relay).digest("hex")
+    const envelope = JSON.stringify({ relayGzip: zlib.gzipSync(relay).toString("base64"), relayInput: "", relaySha256: digest })
+    const envelopePath = path.join(testRoot, `relay-envelope-${crypto.randomUUID()}.json`)
+    const relayPath = path.join(testRoot, `relay-${crypto.randomUUID()}.ps1`)
+    const markerPath = path.join(testRoot, `relay-${crypto.randomUUID()}.marker`)
+    const cancellationPath = path.join(testRoot, `relay-${crypto.randomUUID()}.cancelled`)
+    fs.writeFileSync(envelopePath, envelope)
+    fs.writeFileSync(relayPath, "FOREIGN_RELAY")
+    const encoded = Buffer.from(streamedRelayBootstrap(digest, envelopePath, crypto.createHash("sha256").update(envelope).digest("hex"), relayPath, crypto.randomUUID().replaceAll("-", ""), markerPath, cancellationPath), "utf16le").toString("base64")
+    const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", timeout: 15_000 })
+    expect(result.status).toBe(64)
+    expect(fs.readFileSync(relayPath, "utf8")).toBe("FOREIGN_RELAY")
   })
+
+  it.runIf(process.platform === "win32")("a durable cancellation fence blocks a delayed bootstrap before relay creation", () => {
+    const relay = Buffer.from("[Console]::Out.Write('MUST_NOT_RUN')", "utf8")
+    const digest = crypto.createHash("sha256").update(relay).digest("hex")
+    const envelope = JSON.stringify({ relayGzip: zlib.gzipSync(relay).toString("base64"), relayInput: "", relaySha256: digest })
+    const envelopePath = path.join(testRoot, `relay-envelope-${crypto.randomUUID()}.json`)
+    const relayPath = path.join(testRoot, `relay-${crypto.randomUUID()}.ps1`)
+    const markerPath = path.join(testRoot, `relay-${crypto.randomUUID()}.marker`)
+    const cancellationPath = path.join(testRoot, `relay-${crypto.randomUUID()}.cancelled`)
+    fs.writeFileSync(envelopePath, envelope)
+    fs.writeFileSync(cancellationPath, "")
+    const encoded = Buffer.from(streamedRelayBootstrap(digest, envelopePath, crypto.createHash("sha256").update(envelope).digest("hex"), relayPath, crypto.randomUUID().replaceAll("-", ""), markerPath, cancellationPath), "utf16le").toString("base64")
+    const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", timeout: 15_000 })
+    expect(result.status).toBe(64)
+    expect(result.stdout).not.toContain("MUST_NOT_RUN")
+    expect(fs.existsSync(relayPath)).toBe(false)
+    expect(fs.existsSync(markerPath)).toBe(false)
+    expect(fs.existsSync(cancellationPath)).toBe(true)
+  })
+
+  it.runIf(process.platform === "win32")("places the bootstrap and every descendant in one terminable named job", () => {
+    const readyPath = path.join(testRoot, `descendant-ready-${crypto.randomUUID()}.txt`)
+    const writtenPath = path.join(testRoot, `escaped-${crypto.randomUUID()}.txt`)
+    const child = `[IO.File]::WriteAllText('${readyPath.replaceAll("'", "''")}', 'READY');[Threading.Thread]::Sleep(3000);[IO.File]::WriteAllText('${writtenPath.replaceAll("'", "''")}', 'ESCAPED')`
+    const childEncoded = Buffer.from(child, "utf16le").toString("base64")
+    const relay = Buffer.from(`Start-Process powershell.exe -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','${childEncoded}';[Threading.Thread]::Sleep(30000)`, "utf8")
+    const digest = crypto.createHash("sha256").update(relay).digest("hex")
+    const envelope = JSON.stringify({ relayGzip: zlib.gzipSync(relay).toString("base64"), relayInput: "", relaySha256: digest })
+    const transportId = crypto.randomUUID().replaceAll("-", "")
+    const envelopePath = path.join(testRoot, `relay-envelope-${transportId}.json`)
+    const relayPath = path.join(testRoot, `relay-${transportId}.ps1`)
+    const markerPath = path.join(testRoot, `relay-${transportId}.marker`)
+    const cancellationPath = path.join(testRoot, `relay-${transportId}.cancelled`)
+    fs.writeFileSync(envelopePath, envelope)
+    const encoded = Buffer.from(streamedRelayBootstrap(digest, envelopePath, crypto.createHash("sha256").update(envelope).digest("hex"), relayPath, transportId, markerPath, cancellationPath), "utf16le").toString("base64")
+    const running = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { stdio: "ignore" })
+    const deadline = Date.now() + 7000
+    while (!fs.existsSync(readyPath) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25)
+    expect(fs.readFileSync(readyPath, "utf8")).toBe("READY")
+    const terminate = `$s=@'\nusing System;using System.Runtime.InteropServices;public static class J{[DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)]public static extern IntPtr OpenJobObject(uint a,bool i,string n);[DllImport("kernel32.dll",SetLastError=true)]public static extern bool TerminateJobObject(IntPtr h,uint e);}\n'@;Add-Type $s;$h=[J]::OpenJobObject(8,$false,'Global\\WilliamOSRemoteDevRelayJob-${transportId}');if($h-eq[IntPtr]::Zero-or-not[J]::TerminateJobObject($h,64)){exit 1}`
+    expect(spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", terminate], { timeout: 5000 }).status).toBe(0)
+    const exitDeadline = Date.now() + 5000
+    while (running.exitCode === null && Date.now() < exitDeadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25)
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3500)
+    expect(fs.existsSync(writtenPath)).toBe(false)
+  }, 15_000)
   it("blocks before SSH while the trusted-main proof scope is inactive", () => {
     const value = fixture()
     const result = run(value.args)
