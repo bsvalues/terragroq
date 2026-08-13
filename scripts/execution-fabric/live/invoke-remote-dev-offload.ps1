@@ -60,6 +60,20 @@ function Assert-NoReparseAncestor {
     }
 }
 
+function ConvertTo-WindowsArgument {
+    param([AllowEmptyString()][string]$Value)
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+    $builder = [Text.StringBuilder]::new(); [void]$builder.Append('"'); $slashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') { $slashes++; continue }
+        if ($character -eq '"') { [void]$builder.Append(('\' * (($slashes * 2) + 1))); [void]$builder.Append('"'); $slashes = 0; continue }
+        if ($slashes -gt 0) { [void]$builder.Append(('\' * $slashes)); $slashes = 0 }
+        [void]$builder.Append($character)
+    }
+    if ($slashes -gt 0) { [void]$builder.Append(('\' * ($slashes * 2))) }
+    [void]$builder.Append('"'); return $builder.ToString()
+}
+
 function Invoke-BoundedProcess {
     param([string]$FileName, [string[]]$Arguments, [int]$TimeoutSeconds, [string]$StandardInput = $null)
     $psi = [Diagnostics.ProcessStartInfo]::new()
@@ -69,7 +83,7 @@ function Invoke-BoundedProcess {
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.RedirectStandardInput = $null -ne $StandardInput
-    foreach ($argument in $Arguments) { [void]$psi.ArgumentList.Add($argument) }
+    $psi.Arguments = (($Arguments | ForEach-Object { ConvertTo-WindowsArgument ([string]$_) }) -join ' ')
     $process = [Diagnostics.Process]::new(); $process.StartInfo = $psi
     if (-not $process.Start()) { throw 'process did not start' }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync(); $stderrTask = $process.StandardError.ReadToEndAsync()
