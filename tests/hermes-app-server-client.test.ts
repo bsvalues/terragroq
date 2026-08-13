@@ -1,10 +1,11 @@
 import { EventEmitter } from "node:events"
 import { PassThrough, Writable } from "node:stream"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   AppServerTimeoutError,
   CodexAppServerClient,
   createCodexChildEnvironment,
+  defaultLaunch,
   sanitizeAppServerText,
 } from "@/scripts/hermes-bridge/app-server-client.mjs"
 
@@ -49,6 +50,23 @@ async function connect(client: CodexAppServerClient, process: FakeProcess) {
 }
 
 describe("CodexAppServerClient", () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it("launches the App Server locally when no remote execution node is configured", () => {
+    vi.stubEnv("WILLIAMOS_CODEX_EXEC_NODE", undefined)
+
+    expect(defaultLaunch()).toEqual({ command: "codex", args: ["app-server", "--stdio"] })
+  })
+
+  it("launches the App Server over batch-mode SSH when a remote execution node is configured", () => {
+    vi.stubEnv("WILLIAMOS_CODEX_EXEC_NODE", "aegis-worker")
+
+    expect(defaultLaunch()).toEqual({
+      command: "ssh",
+      args: ["-o", "BatchMode=yes", "aegis-worker", "codex", "app-server", "--stdio"],
+    })
+  })
+
   it("passes only host and keyring discovery variables to the Codex child", () => {
     expect(createCodexChildEnvironment({
       PATH: "tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
