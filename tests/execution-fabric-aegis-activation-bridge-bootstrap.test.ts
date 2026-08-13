@@ -48,8 +48,9 @@ describe("AEGIS activation bridge bootstrap authority", () => {
   })
 
   it("upgrades only the exact reviewed activation-host predecessor", () => {
-    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="4c19a73dbbc48a6030b2f1e53d908344bac9b8bd9a57da7a791773b083c29e92"
-    expect(inspectBridgeDestinationState(destination,"bdb38281726e0e44e21016747a0a3046423326fa997f8ab3d4d6a2fbf5994a33","0555",current)).toBe("EXACT_PREDECESSOR")
+    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="523711b8c19b17aee31c796d220e976942df104679bb2b8a95d3e8e615b3589c"
+    expect(inspectBridgeDestinationState(destination,"4c19a73dbbc48a6030b2f1e53d908344bac9b8bd9a57da7a791773b083c29e92","0555",current)).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeDestinationState(destination,"bdb38281726e0e44e21016747a0a3046423326fa997f8ab3d4d6a2fbf5994a33","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"623ea9391498c005ac3a642a8d0041140dd2890dbcb371e64f8aa5bf04fe7128","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"b3cd24801770a73bbb63c3cf426e1c54f954a84b930d6d5f1ae5644e9e31b862","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c","0555",current)).toBe("DRIFT")
@@ -65,7 +66,8 @@ describe("AEGIS activation bridge bootstrap authority", () => {
   })
 
   it("accepts only the exact first bridge receipt as a bounded successor predecessor", () => {
-    expect(inspectBridgeReceiptState("b9d802bbd19f6c1a2e40863a56139c73c3e6bda2387a2b0baa5c35786eb3760d","0".repeat(64))).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeReceiptState("d65c6a014254da36942278c2740d0bc716b46b0f3476f85200f255f0080b6938","0".repeat(64))).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeReceiptState("b9d802bbd19f6c1a2e40863a56139c73c3e6bda2387a2b0baa5c35786eb3760d","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("f810fcf1fb86368679c5f84a621a637be35d2d25e2f46013f7b21f518f1b8af5","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("831b87bd2fa0797f59d427697941868a0fc3678cf6b643db353e658a194cc702","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("41b55d3f250cfb6524d203e275750d49206f91ecbbb493971ad278fec836f339","0".repeat(64))).toBe("DRIFT")
