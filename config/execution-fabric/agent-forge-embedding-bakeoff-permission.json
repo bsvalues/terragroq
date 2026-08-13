@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0-agent-forge-embedding-bakeoff-permission",
+  "permission_set_id": "resident-hermes-embedding-bakeoff-v1",
+  "agent_identity": "resident-hermes",
+  "provider_identity": "resident-hermes",
+  "allowed_actions": [
+    "invoke-fixed-loopback-embedding-endpoint",
+    "invoke-fixed-reviewed-evaluator",
+    "emit-bounded-result-receipt"
+  ],
+  "prohibited_actions": [
+    "arbitrary-executable",
+    "arbitrary-network-endpoint",
+    "authority-mutation",
+    "autonomous-scheduling",
+    "canonical-vector-write",
+    "database-mutation",
+    "external-provider-access",
+    "model-download",
+    "silent-fallback"
+  ],
+  "maximum_attempts": 1,
+  "maximum_concurrency": 1,
+  "scheduler_activation_allowed": false,
+  "autonomous_dispatch_allowed": false,
+  "fallback_allowed": false,
+  "external_provider_allowed": false,
+  "status": "SCOPE_ONLY_NOT_AUTHORITY"
+}

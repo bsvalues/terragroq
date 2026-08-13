@@ -1,7 +1,9 @@
 """Offline self-test for the embedding bake-off. No model or endpoint required:
 verifies metric correctness on known inputs and runs the full pipeline end-to-end with the
 deterministic lexical backend (which also serves as the quality floor)."""
+import base64
 import hashlib
+import io
 import json
 import math
 import os
@@ -9,17 +11,19 @@ import shutil
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import metrics as M
+import fabric_measure as F
 from bakeoff import (corpus_fingerprint, load_jsonl, main, reject_secret_fields, run,
                      validate_corpus_manifest)
 from embed import (cosine, embed_texts, lexical_embed, validate_endpoint_payload,
                    validate_sovereign_base_url)
-from evidence import build as build_evidence
+from evidence import build as build_evidence, canonical_payload
 
 def sha256_path(path):
     with open(path, "rb") as fh:
@@ -219,6 +223,170 @@ class TestEndpointBoundary(unittest.TestCase):
                     validate_sovereign_base_url(url)
 
 
+class TestFabricMeasurementAdapter(unittest.TestCase):
+    class FakeResponse:
+        def __init__(self, payload, status=200, headers=None):
+            self.payload = json.dumps(payload).encode("utf-8")
+            self.status = status
+            self.headers = headers or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, limit):
+            return self.payload[:limit]
+
+    def make_envelope(self):
+        return {
+            "schema_version": "1.0-r1b-fabric-measurement-envelope",
+            "model": "test-model",
+            "model_manifest": {
+                "schema_version": "1", "model_id": "test-model", "revision": "exact",
+                "weights_sha256": "1" * 64, "license": "Apache-2.0", "source": "fixture",
+                "dimension": 2,
+            },
+            "runtime_manifest": {
+                "schema_version": "1", "runtime_id": "ollama", "version": "1",
+                "executable_sha256": "2" * 64, "endpoint_contract": "ollama-embed-v1",
+            },
+            "host_manifest": {
+                "schema_version": "1", "node_id": "hermes-node",
+                "machine_id_sha256": "3" * 64,
+                "inventory_snapshot_sha256": "4" * 64, "topology_id": "resident",
+                "endpoint_hosts": ["127.0.0.1"],
+            },
+            "execution_limits": {
+                "max_cpu_threads": 4,
+                "gpu_execution": "CPU_ONLY",
+            },
+        }
+
+    def test_fabric_measurement_envelope_requires_exact_validated_shape(self):
+        envelope = self.make_envelope()
+        self.assertIs(F.validate_envelope(envelope), envelope)
+        mutations = (
+            lambda value: value.update({"extra": True}),
+            lambda value: value["model_manifest"].pop("revision"),
+            lambda value: value["runtime_manifest"].update({"api_token": "secret"}),
+            lambda value: value["execution_limits"].update({"max_gpu_vram_bytes": 0}),
+            lambda value: value["execution_limits"].update({"max_cpu_threads": True}),
+            lambda value: value["execution_limits"].update({"max_cpu_threads": 0}),
+            lambda value: value["execution_limits"].update({"gpu_execution": "GPU_ALLOWED"}),
+            lambda value: value["execution_limits"].pop("gpu_execution"),
+        )
+        for mutate in mutations:
+            with self.subTest(mutate=mutate):
+                candidate = json.loads(json.dumps(envelope))
+                mutate(candidate)
+                with self.assertRaises(ValueError):
+                    F.validate_envelope(candidate)
+
+    def test_fabric_measurement_stdin_rejects_non_envelope_fail_closed(self):
+        original_stdin, original_stdout, original_stderr = F.sys.stdin, F.sys.stdout, F.sys.stderr
+        stdout, stderr = io.StringIO(), io.StringIO()
+        try:
+            F.sys.stdin = SimpleNamespace(buffer=io.BytesIO(b'{}'))
+            F.sys.stdout, F.sys.stderr = stdout, stderr
+            self.assertEqual(F.main(), 2)
+        finally:
+            F.sys.stdin, F.sys.stdout, F.sys.stderr = original_stdin, original_stdout, original_stderr
+        self.assertEqual(stdout.getvalue(), "")
+        error = json.loads(stderr.getvalue())
+        self.assertEqual(error["status"], "FAILED_CLOSED")
+        self.assertFalse(error["external_provider_used"])
+        self.assertFalse(error["fallback_used"])
+        self.assertFalse(error["scheduler_activated"])
+        self.assertFalse(error["autonomous_dispatch"])
+
+    def test_fabric_measurement_uses_only_fixed_loopback_route(self):
+        captured = []
+
+        def opener(request, timeout):
+            captured.append((request, timeout))
+            return self.FakeResponse({"model": "test-model", "embeddings": [[3.0, 4.0]]})
+
+        self.assertEqual(F.invoke_fixed_loopback("test-model", ["hello"], 4, opener=opener),
+                         [[0.6, 0.8]])
+        request, timeout = captured[0]
+        self.assertEqual(F.ENDPOINT, "http://127.0.0.1:11435/api/embed")
+        self.assertEqual(F.BASE_URL, "http://127.0.0.1:11435/v1")
+        self.assertEqual(request.full_url, F.ENDPOINT)
+        self.assertEqual(timeout, F.TIMEOUT_SECONDS)
+        self.assertEqual(json.loads(request.data), {
+            "model": "test-model",
+            "input": ["hello"],
+            "options": {"num_gpu": 0, "num_thread": 4},
+        })
+        self.assertEqual(request.get_method(), "POST")
+
+    def test_fabric_measurement_binds_admitted_cpu_limit_to_every_batch(self):
+        captured = []
+
+        def opener(request, timeout):
+            del timeout
+            payload = json.loads(request.data)
+            captured.append(payload)
+            return self.FakeResponse({
+                "model": "test-model",
+                "embeddings": [[1.0, 0.0] for _text in payload["input"]],
+            })
+
+        envelope = self.make_envelope()
+        envelope["execution_limits"]["max_cpu_threads"] = 3
+        original_run = F.bakeoff.run
+
+        def fake_run(_corpus, _backend, _base_url, model, _api_key, _k, _dimension,
+                     **_kwargs):
+            F.bakeoff.embed_texts(
+                ["text"] * (F.BATCH_SIZE + 1), backend="endpoint", model=model,
+            )
+            return {"status": "measured"}
+
+        try:
+            F.bakeoff.run = fake_run
+            self.assertEqual(F.measure(envelope, opener=opener), {"status": "measured"})
+        finally:
+            F.bakeoff.run = original_run
+
+        self.assertEqual(len(captured), 2)
+        self.assertTrue(all(payload["options"] == {
+            "num_gpu": 0,
+            "num_thread": 3,
+        } for payload in captured))
+
+    def test_fabric_measurement_converts_ollama_payload_before_validation(self):
+        payload = {"model": "test-model", "embeddings": [[2.0, 0.0], [0.0, 5.0]]}
+        opener = lambda _request, timeout: self.FakeResponse(payload)
+        self.assertEqual(F.invoke_fixed_loopback("test-model", ["a", "b"], 2, opener=opener),
+                         [[1.0, 0.0], [0.0, 1.0]])
+
+    def test_fabric_measurement_rejects_embedding_count_drift(self):
+        payload = {"model": "test-model", "embeddings": [[1.0, 0.0]]}
+        opener = lambda _request, timeout: self.FakeResponse(payload)
+        with self.assertRaisesRegex(ValueError, "1 rows for 2 inputs"):
+            F.invoke_fixed_loopback("test-model", ["a", "b"], 2, opener=opener)
+
+    def test_fabric_measurement_rejects_dimension_drift_across_batches(self):
+        responses = iter((
+            {"model": "test-model", "embeddings": [[1.0, 0.0]] * F.BATCH_SIZE},
+            {"model": "test-model", "embeddings": [[1.0, 0.0, 0.0]]},
+        ))
+        opener = lambda _request, timeout: self.FakeResponse(next(responses))
+        with self.assertRaisesRegex(ValueError, "dimension changed"):
+            F.invoke_fixed_loopback(
+                "test-model", ["text"] * (F.BATCH_SIZE + 1), 2, opener=opener,
+            )
+
+    def test_fabric_measurement_rejects_model_drift(self):
+        payload = {"model": "other-model", "embeddings": [[1.0, 0.0]]}
+        opener = lambda _request, timeout: self.FakeResponse(payload)
+        with self.assertRaisesRegex(ValueError, "model does not match"):
+            F.invoke_fixed_loopback("test-model", ["a"], 2, opener=opener)
+
+
 class TestEvidencePackage(unittest.TestCase):
     def make_valid_run(self, root):
         corpus = os.path.join(HERE, "corpus")
@@ -260,6 +428,81 @@ class TestEvidencePackage(unittest.TestCase):
             json.dump(result, fh)
         return corpus, paths, result
 
+    def make_attestation(self, root, corpus, paths, result):
+        with open(paths["model"], encoding="utf-8") as fh:
+            model = json.load(fh)
+        with open(paths["runtime"], encoding="utf-8") as fh:
+            runtime = json.load(fh)
+        with open(paths["host"], encoding="utf-8") as fh:
+            host = json.load(fh)
+        identity = {
+            "host": {
+                "node_id": host["node_id"],
+                "machine_id_sha256": host["machine_id_sha256"],
+                "inventory_snapshot_sha256": host["inventory_snapshot_sha256"],
+                "topology_id": host["topology_id"],
+            },
+            "model": {
+                "model_id": model["model_id"],
+                "revision": model["revision"],
+                "weights_sha256": model["weights_sha256"],
+            },
+            "runtime": {
+                "runtime_id": runtime["runtime_id"],
+                "version": runtime["version"],
+                "executable_sha256": runtime["executable_sha256"],
+            },
+        }
+        attestation = {
+            "schema_version": "1.0-r1b-software-execution-attestation",
+            "attestation_type": "SOFTWARE_ROOTED_EXECUTION_ATTESTATION",
+            "work_order_id": "WO-WILLIAMOS-SOVEREIGN-EMBEDDING-V1",
+            "artifact_bindings": {
+                "corpus_manifest": result["manifest"]["corpus_manifest"],
+                "corpus_fingerprint": result["manifest"]["corpus_fingerprint"],
+                "corpus_files": result["manifest"]["corpus_files"],
+                "result_bundle_sha256": hashlib.sha256(canonical_payload(result)).hexdigest(),
+                "model_manifest_sha256": sha256_path(paths["model"]),
+                "runtime_manifest_sha256": sha256_path(paths["runtime"]),
+                "host_manifest_sha256": sha256_path(paths["host"]),
+            },
+            "admission": {
+                "status": "ADMITTED",
+                "authority_id": "authority-704",
+                "scope_id": "scope-embedding-bakeoff",
+                "placement_id": "placement-aegis",
+                "request_id": "request-704-001",
+                "claim_id": "claim-704-001",
+                "lease_id": "lease-704-001",
+            },
+            "execution": {
+                "root_of_trust": "SOFTWARE",
+                "provider": "LOCAL_SOFTWARE_ROOTED",
+                "external_provider_used": False,
+                "fallback_used": False,
+                "scheduler_state": "disabled",
+                "pre_execution": identity,
+                "post_execution": json.loads(json.dumps(identity)),
+            },
+            "chronology": {
+                "authority_issued_at": "2026-08-12T18:00:00Z",
+                "request_admitted_at": "2026-08-12T18:01:00Z",
+                "lease_acquired_at": "2026-08-12T18:02:00Z",
+                "execution_started_at": "2026-08-12T18:03:00Z",
+                "execution_completed_at": "2026-08-12T18:04:00Z",
+                "attested_at": "2026-08-12T18:05:00Z",
+                "authority_expires_at": "2026-08-12T19:00:00Z",
+            },
+        }
+        path = os.path.join(root, "execution-attestation.json")
+        with open(path, "wb") as fh:
+            fh.write(canonical_payload(attestation))
+        return path, attestation
+
+    def write_attestation(self, path, value):
+        with open(path, "wb") as fh:
+            fh.write(canonical_payload(value))
+
     def test_builds_four_standing_hash_targets(self):
         with tempfile.TemporaryDirectory() as root:
             corpus, paths, _result = self.make_valid_run(root)
@@ -283,6 +526,161 @@ class TestEvidencePackage(unittest.TestCase):
             self.assertNotIn("external_provider_used", package["safety"])
             self.assertEqual(targets["verification_scope"], "BYTE_INTEGRITY_ONLY")
             self.assertEqual(targets["execution_provenance_status"], "NOT_ATTESTED")
+
+    def test_valid_execution_claim_retains_integrity_without_attesting_provenance(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
+            targets = build_evidence(
+                corpus, paths["model"], paths["runtime"], paths["host"], paths["result"],
+                os.path.join(root, "evidence"), attestation_path,
+            )
+            with open(os.path.join(targets["generation_path"], "evidence-package.json"),
+                      encoding="utf-8") as fh:
+                package = json.load(fh)
+            embedded = package["execution_claim"]
+            canonical = canonical_payload(attestation)
+            self.assertEqual(base64.b64decode(embedded["canonical_bytes_base64"]), canonical)
+            self.assertEqual(embedded["sha256"], hashlib.sha256(canonical).hexdigest())
+            self.assertEqual(package["schema_version"],
+                             "1.2-r1b-execution-claim-integrity-package")
+            self.assertEqual(package["evidence_class"],
+                             "INTEGRITY_ONLY_WITH_CALLER_EXECUTION_CLAIM")
+            self.assertNotIn("execution_attestation", package)
+            self.assertFalse(package["attestation"]["execution_attested"])
+            self.assertFalse(package["attestation"]["host_identity_attested"])
+            self.assertFalse(package["attestation"]["model_weights_attested"])
+            self.assertFalse(package["attestation"]["runtime_attested"])
+            self.assertTrue(package["attestation"]["declared_manifests_only"])
+            self.assertEqual(embedded["validation"], {
+                "byte_integrity": "CANONICAL_BYTES_RETAINED",
+                "schema_consistency": "VALIDATED",
+                "provenance": "CALLER_SUPPLIED_NOT_INDEPENDENTLY_ATTESTED",
+                "signature_verified": False,
+                "hardware_root_verified": False,
+                "trusted_host_verified": False,
+            })
+            self.assertNotIn("external_provider_used", package["safety"])
+            self.assertNotIn("fallback_used", package["safety"])
+            self.assertNotIn("scheduler_state", package["safety"])
+            self.assertEqual(targets["verification_scope"],
+                             "BYTE_INTEGRITY_AND_EXECUTION_CLAIM_SCHEMA_VALIDATION")
+            self.assertEqual(targets["execution_provenance_status"],
+                             "CALLER_SUPPLIED_NOT_INDEPENDENTLY_ATTESTED")
+
+    def test_execution_claim_rejects_noncanonical_bytes(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            claim_path, claim = self.make_attestation(root, corpus, paths, result)
+            with open(claim_path, "w", encoding="utf-8") as fh:
+                json.dump(claim, fh)
+            with self.assertRaisesRegex(ValueError, "must use canonical JSON UTF-8"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"), claim_path)
+
+    def test_attestation_rejects_result_and_manifest_mismatch(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, original = self.make_attestation(root, corpus, paths, result)
+            mutations = (
+                ("result bundle", lambda value: value["artifact_bindings"].update({
+                    "result_bundle_sha256": "0" * 64,
+                })),
+                ("manifest", lambda value: value["artifact_bindings"].update({
+                    "model_manifest_sha256": "0" * 64,
+                })),
+            )
+            for label, mutate in mutations:
+                with self.subTest(label=label):
+                    candidate = json.loads(json.dumps(original))
+                    mutate(candidate)
+                    self.write_attestation(attestation_path, candidate)
+                    with self.assertRaisesRegex(ValueError, "artifact bindings do not match"):
+                        build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                                       paths["result"], os.path.join(root, "evidence"),
+                                       attestation_path)
+
+    def test_attestation_rejects_missing_fields(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
+            del attestation["admission"]["lease_id"]
+            self.write_attestation(attestation_path, attestation)
+            with self.assertRaisesRegex(ValueError, "admission must contain exactly"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"), attestation_path)
+
+    def test_attestation_rejects_secret_fields(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
+            attestation["admission"]["api_token"] = "must-not-be-retained"
+            self.write_attestation(attestation_path, attestation)
+            with self.assertRaisesRegex(ValueError, "secret-like field"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"), attestation_path)
+
+    def test_attestation_rejects_external_provider_and_fallback(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, original = self.make_attestation(root, corpus, paths, result)
+            mutations = (
+                ("external", lambda value: value["execution"].update({
+                    "external_provider_used": True,
+                })),
+                ("fallback", lambda value: value["execution"].update({"fallback_used": True})),
+            )
+            for label, mutate in mutations:
+                with self.subTest(label=label):
+                    candidate = json.loads(json.dumps(original))
+                    mutate(candidate)
+                    self.write_attestation(attestation_path, candidate)
+                    with self.assertRaisesRegex(ValueError, "forbids"):
+                        build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                                       paths["result"], os.path.join(root, "evidence"),
+                                       attestation_path)
+
+    def test_attestation_rejects_scheduler(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
+            attestation["execution"]["scheduler_state"] = "enabled"
+            self.write_attestation(attestation_path, attestation)
+            with self.assertRaisesRegex(ValueError, "scheduler_state disabled"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"), attestation_path)
+
+    def test_attestation_rejects_identity_drift(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, attestation = self.make_attestation(root, corpus, paths, result)
+            attestation["execution"]["post_execution"]["model"]["model_id"] = "drifted"
+            self.write_attestation(attestation_path, attestation)
+            with self.assertRaisesRegex(ValueError, "pre/post identity"):
+                build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                               paths["result"], os.path.join(root, "evidence"), attestation_path)
+
+    def test_attestation_rejects_stale_or_invalid_chronology(self):
+        with tempfile.TemporaryDirectory() as root:
+            corpus, paths, result = self.make_valid_run(root)
+            attestation_path, original = self.make_attestation(root, corpus, paths, result)
+            mutations = (
+                ("out-of-order", lambda value: value["chronology"].update({
+                    "execution_started_at": "2026-08-12T18:04:30Z",
+                })),
+                ("expired", lambda value: value["chronology"].update({
+                    "authority_expires_at": "2026-08-12T18:03:30Z",
+                })),
+            )
+            for label, mutate in mutations:
+                with self.subTest(label=label):
+                    candidate = json.loads(json.dumps(original))
+                    mutate(candidate)
+                    self.write_attestation(attestation_path, candidate)
+                    with self.assertRaisesRegex(ValueError, "stale or out of order"):
+                        build_evidence(corpus, paths["model"], paths["runtime"], paths["host"],
+                                       paths["result"], os.path.join(root, "evidence"),
+                                       attestation_path)
 
     def test_fabricated_result_is_rejected_without_partial_generation(self):
         with tempfile.TemporaryDirectory() as root:
