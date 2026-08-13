@@ -278,12 +278,19 @@ try {
         try { $sourceLock.Position = 0; $sourceLock.CopyTo($entryStream) } finally { $entryStream.Dispose() }
       }
     } finally { $archive.Dispose() }
+    $archiveStream.Position = 0
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { $archiveSha256 = ([BitConverter]::ToString($algorithm.ComputeHash($archiveStream))).Replace('-', '').ToLowerInvariant() } finally { $algorithm.Dispose() }
   } finally { $archiveStream.Dispose() }
   foreach ($sourceLock in $SnapshotReadLocks) { $sourceLock.Dispose() }
   $SnapshotReadLocks.Clear()
   Remove-Item -LiteralPath $sourceRoot -Recurse -Force
   $archiveLock = [IO.File]::Open($ExecutionEvaluatorPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
   [void]$SnapshotReadLocks.Add($archiveLock)
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try { $lockedArchiveSha256 = ([BitConverter]::ToString($algorithm.ComputeHash($archiveLock))).Replace('-', '').ToLowerInvariant() } finally { $algorithm.Dispose() }
+  $archiveLock.Position = 0
+  if ($lockedArchiveSha256 -cne $archiveSha256) { throw [InvalidOperationException]::new("EVALUATOR_ARCHIVE_REOPEN_MISMATCH") }
   foreach ($corpusFile in Get-ChildItem -LiteralPath $snapshotCorpusRoot -File | Sort-Object Name) {
     $expectedCorpusHash = $corpusBindings[$corpusFile.Name]
     $corpusLock = [IO.File]::Open($corpusFile.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
