@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest"
+import crypto from "node:crypto"
 import fs from "node:fs"
+import net from "node:net"
+import os from "node:os"
 import path from "node:path"
 import { inspectBridgeBootstrapAuthority, inspectBridgeDestinationState, inspectBridgeReceiptState } from "../scripts/execution-fabric/provision/aegis-remote-dev-activation-bridge-bootstrap.mjs"
+import { relayActivation } from "../scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs"
 
 describe("AEGIS activation bridge bootstrap authority", () => {
   const root=process.cwd()
@@ -16,9 +20,10 @@ describe("AEGIS activation bridge bootstrap authority", () => {
   })
 
   it("upgrades only the exact reviewed SSH entrypoint predecessor", () => {
-    const destination="/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs",current="dfcc26c875ccd8d7abda09131bb051becc12995ae2dd0e3865bddeb4b1856e21"
+    const destination="/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs",current="2c6c5ccd69e1dd13a6c02ff2c766542bb222e160e2589a1a389302ec41f079ec"
+    expect(inspectBridgeDestinationState(destination,"dfcc26c875ccd8d7abda09131bb051becc12995ae2dd0e3865bddeb4b1856e21","0555",current)).toBe("EXACT_PREDECESSOR")
     expect(inspectBridgeDestinationState(destination,current,"0555",current)).toBe("MATCH")
-    expect(inspectBridgeDestinationState(destination,"1eba36323a42353623b6659b146c7b7096d290fe883ae302524b12363e17c01f","0555",current)).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeDestinationState(destination,"1eba36323a42353623b6659b146c7b7096d290fe883ae302524b12363e17c01f","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"f".repeat(64),"0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState("/usr/local/libexec/other","1eba36323a42353623b6659b146c7b7096d290fe883ae302524b12363e17c01f","0555",current)).toBe("DRIFT")
@@ -27,12 +32,25 @@ describe("AEGIS activation bridge bootstrap authority", () => {
   it("bounds activation relay long enough for the reviewed root proof and network gate", () => {
     const source=fs.readFileSync(path.join(root,"scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs"),"utf8")
     expect(source).toContain("const ACTIVATION_RELAY_TIMEOUT_MS = 60_000")
-    expect(source).toContain("socket.setTimeout(ACTIVATION_RELAY_TIMEOUT_MS)")
+    expect(source).toContain("timeoutMs = ACTIVATION_RELAY_TIMEOUT_MS")
+    expect(source).toContain("socket.setTimeout(timeoutMs)")
+  })
+
+  it.runIf(process.platform !== "win32")("delivers an immediate structured exit-2 Unix-socket response before the relay bound", async () => {
+    const socketPath=path.join(os.tmpdir(),`williamos-activation-${crypto.randomUUID()}.sock`)
+    const response=Buffer.from('{"status":"BLOCKED","reasonCode":"PRECLAIM_DRIFT"}\n')
+    const server=net.createServer({allowHalfOpen:true},socket=>{socket.resume();socket.on("end",()=>socket.end(response))})
+    await new Promise<void>((resolve,reject)=>server.listen(socketPath,resolve).once("error",reject))
+    const output:Buffer[]=[]
+    try { expect(await relayActivation(Buffer.from('{"action":"start"}\n'),{socketPath,timeoutMs:1000,write:value=>{output.push(Buffer.from(value));return true}})).toBe(2) }
+    finally { await new Promise<void>(resolve=>server.close(()=>resolve())); fs.rmSync(socketPath,{force:true}) }
+    expect(Buffer.concat(output)).toEqual(response)
   })
 
   it("upgrades only the exact reviewed activation-host predecessor", () => {
-    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="b3cd24801770a73bbb63c3cf426e1c54f954a84b930d6d5f1ae5644e9e31b862"
-    expect(inspectBridgeDestinationState(destination,"d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c","0555",current)).toBe("EXACT_PREDECESSOR")
+    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="623ea9391498c005ac3a642a8d0041140dd2890dbcb371e64f8aa5bf04fe7128"
+    expect(inspectBridgeDestinationState(destination,"b3cd24801770a73bbb63c3cf426e1c54f954a84b930d6d5f1ae5644e9e31b862","0555",current)).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeDestinationState(destination,"d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"f".repeat(64),"0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"44a5b12ad5a2f65a9c1a841105626aaded996c14d1ca32fc893d8fcc8ca4b152","0555",current)).toBe("DRIFT")
@@ -45,7 +63,7 @@ describe("AEGIS activation bridge bootstrap authority", () => {
   })
 
   it("accepts only the exact first bridge receipt as a bounded successor predecessor", () => {
-    expect(inspectBridgeReceiptState("658f68f9f06cf0e9296ef8493718f90a1715edc1f84ca647f9205923aab0ce92","0".repeat(64))).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeReceiptState("831b87bd2fa0797f59d427697941868a0fc3678cf6b643db353e658a194cc702","0".repeat(64))).toBe("EXACT_PREDECESSOR")
     expect(inspectBridgeReceiptState("41b55d3f250cfb6524d203e275750d49206f91ecbbb493971ad278fec836f339","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("850deb1097fe7971d2574bee49650fd81b01b6cfd3c71d9a9b0684888d29f74b","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("5d2e41f957ceeba53839454392f607c1f5749886761ffd4f3df8f89a962ae043","0".repeat(64))).toBe("DRIFT")

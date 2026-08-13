@@ -18,10 +18,10 @@ const ASSET_LAYOUT = Object.freeze([
   ["scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs","/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs","0555"],
 ])
 const SSH_ENTRYPOINT = "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs"
-const SSH_ENTRYPOINT_PREDECESSOR_SHA256 = "1eba36323a42353623b6659b146c7b7096d290fe883ae302524b12363e17c01f"
+const SSH_ENTRYPOINT_PREDECESSOR_SHA256 = "dfcc26c875ccd8d7abda09131bb051becc12995ae2dd0e3865bddeb4b1856e21"
 const ACTIVATION_HOST = "/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs"
-const ACTIVATION_HOST_PREDECESSOR_SHA256 = "d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c"
-const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "658f68f9f06cf0e9296ef8493718f90a1715edc1f84ca647f9205923aab0ce92"
+const ACTIVATION_HOST_PREDECESSOR_SHA256 = "b3cd24801770a73bbb63c3cf426e1c54f954a84b930d6d5f1ae5644e9e31b862"
+const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "831b87bd2fa0797f59d427697941868a0fc3678cf6b643db353e658a194cc702"
 const SHA = /^[a-f0-9]{64}$/; const SHA40 = /^[a-f0-9]{40}$/; const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const canonical = value => value === null || ["string","boolean","number"].includes(typeof value) ? JSON.stringify(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex")
