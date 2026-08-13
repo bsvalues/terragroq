@@ -15,6 +15,7 @@ import {
   inspectLeaseHolderState,
   inspectRootNoSudoObservation,
   inspectHostRootNoSudoProof,
+  inspectPreparedSnapshotRecovery,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -106,9 +107,14 @@ describe("AEGIS production activation host trust", () => {
 
   it("proves repository config and empty hooks before the first root Git command", () => {
     const source=fs.readFileSync(path.join(root,"scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"),"utf8")
-    const start=source.indexOf("function prepareSnapshot")
+    const start=source.indexOf("function proveCanonicalControlRepository")
     expect(source.indexOf("canonical control Git config differs",start)).toBeLessThan(source.indexOf("const git = args => run",start))
     expect(source.indexOf("canonical empty hooks differ",start)).toBeLessThan(source.indexOf("const git = args => run",start))
+    const startMain=source.indexOf("function startMain")
+    const firstControlGit=source.indexOf("proveCanonicalControlRepository()",startMain)
+    expect(firstControlGit).toBeGreaterThan(startMain)
+    expect(source.slice(startMain,firstControlGit)).not.toContain('run("/usr/bin/git"')
+    expect(source.indexOf("reconcilePreparedSnapshot(currentCommit)",firstControlGit)).toBeGreaterThan(firstControlGit)
   })
 
   it("never recovers a phase or stranded lease while the original activation unit is still active", () => {
@@ -146,6 +152,12 @@ describe("AEGIS production activation host trust", () => {
     expect(inspectHostRootNoSudoProof(proof,"2026-08-13T01:12:00.000Z",expected)).toBe("FRESH")
     expect(inspectHostRootNoSudoProof(proof,proof.expiresAt,expected)).toBe("EXPIRED_EXACT")
     expect(inspectHostRootNoSudoProof({...proof,account:"bs"},"2026-08-13T01:12:00.000Z",expected)).toBe("DRIFT")
+  })
+
+  it("archives only the exact failed pre-claim snapshot generation", () => {
+    expect(inspectPreparedSnapshotRecovery({preparedCommit:"9a04dbf4f488567d5d5328d4c26f65819aea7e3c",currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("ARCHIVE_EXACT_PRECLAIM")
+    expect(inspectPreparedSnapshotRecovery({preparedCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("MATCH")
+    expect(inspectPreparedSnapshotRecovery({preparedCommit:"f".repeat(40),currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("DRIFT")
   })
 
   it("re-disables the bridge before replaying an existing settlement", () => {
