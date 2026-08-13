@@ -26,6 +26,7 @@ const MINT_ROOT = `${STATE_ROOT}/mints`
 const NO_SUDO_FILE = `${STATE_ROOT}/no-sudo.json`
 const SNAPSHOT = `${STATE_ROOT}/control`
 const UNIT = `williamos-aegis-activation-${RUN_ID}.service`
+const PRECLAIM_PREDECESSOR_COMMIT = "9a04dbf4f488567d5d5328d4c26f65819aea7e3c"
 const LEDGER_ROOT = "/var/lib/williamos/fabric/ledger"
 const OPERATIONS = Object.freeze(["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "APPLY_RESERVED_PATCH", "RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE", "COMMIT_RESERVED_PATHS", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE", "CLEAN_EXACT_WORKSPACE"])
 const ENV = Object.freeze({ HOME: "/nonexistent", PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1" })
@@ -129,6 +130,7 @@ export function inspectActivationUnitState(state,mainPid){if((state==="inactive"
 export function inspectLeaseHolderState(holder,currentBootId,observedStartTicks){if(!exactKeys(holder,["pid","boot_id","process_start_ticks"])||!Number.isSafeInteger(holder.pid)||holder.pid<=1||!GUID.test(holder.boot_id)||!/^\d+$/.test(holder.process_start_ticks))return "DRIFT";return holder.boot_id===currentBootId&&observedStartTicks===holder.process_start_ticks?"ACTIVE":"DEAD"}
 export function inspectRootNoSudoObservation(value){try{for(const key of["passwd","sudo"]){if(!exactKeys(value?.[key],["status","signal","errorCode","stdout","stderr"]))throw new Error()}if(value.passwd.status!==0||value.passwd.signal!==null||value.passwd.errorCode!==null||value.passwd.stderr!==""||!/^williamos-fabric L \d{4}-\d{2}-\d{2} -1 -1 -1 -1\n$/.test(value.passwd.stdout)||value.sudo.status!==0||value.sudo.signal!==null||value.sudo.errorCode!==null||value.sudo.stdout!=="User williamos-fabric is not allowed to run sudo on aegis.\n"||value.sudo.stderr!=="")throw new Error();return "ROOT_NO_SUDO_OBSERVED"}catch{return "DRIFT"}}
 export function inspectHostRootNoSudoProof(p,now,e){try{if(!exactKeys(p,["schemaVersion","status","activationId","authorityReference","runId","machineIdSha256","bootId","activationHostSha256","authoritySha256","account","passwordStatus","sudoStatus","sudoStdout","sudoStderr","issuedAt","expiresAt"]))throw new Error();const n=Date.parse(now),i=Date.parse(p.issuedAt),x=Date.parse(p.expiresAt);if(p.schemaVersion!==1||p.status!=="ROOT_NO_SUDO_VERIFIED"||p.activationId!==ACTIVATION_ID||p.authorityReference!==AUTHORITY_REFERENCE||p.runId!==RUN_ID||p.machineIdSha256!==e.machineIdSha256||p.bootId!==e.bootId||p.activationHostSha256!==e.activationHostSha256||p.authoritySha256!==e.authoritySha256||p.account!=="williamos-fabric"||p.passwordStatus!=="L"||p.sudoStatus!==0||p.sudoStdout!=="User williamos-fabric is not allowed to run sudo on aegis.\n"||p.sudoStderr!==""||![n,i,x].every(Number.isFinite)||n<i||x-i!==300_000)throw new Error();return n<x?"FRESH":"EXPIRED_EXACT"}catch{return "DRIFT"}}
+export function inspectPreparedSnapshotRecovery(v){try{if(!exactKeys(v,["preparedCommit","currentCommit","entries","claimExists","phaseExists","sessionExists"])||JSON.stringify([...v.entries].sort())!==JSON.stringify(["control","mints","prepared.json"])||v.claimExists||v.phaseExists||v.sessionExists||!/^([a-f0-9]{40})$/.test(v.preparedCommit)||!/^([a-f0-9]{40})$/.test(v.currentCommit))throw new Error();if(v.preparedCommit===v.currentCommit)return"MATCH";if(v.preparedCommit===PRECLAIM_PREDECESSOR_COMMIT)return"ARCHIVE_EXACT_PRECLAIM";throw new Error()}catch{return"DRIFT"}}
 function requireActivationUnitInactive(){const value=run("/usr/bin/systemctl",["is-active",UNIT],{statuses:[3,4]}),mainPid=Number(run("/usr/bin/systemctl",["show",UNIT,"--property=MainPID","--value"],{statuses:[0,1]}));const state=inspectActivationUnitState(value,mainPid);if(state==="DRIFT")throw new Error("activation unit is not proven inactive");if(state==="RESET_REQUIRED")run("/usr/bin/systemctl",["reset-failed",UNIT])}
 
 function rootResult(file,args){const r=spawnSync(file,args,{encoding:"utf8",shell:false,timeout:5000,env:ENV});return{status:r.status,signal:r.signal,errorCode:r.error?.code??null,stdout:String(r.stdout??""),stderr:String(r.stderr??"")}}
@@ -141,7 +143,7 @@ function ensureRootNoSudoProof(){
   createRootJson(NO_SUDO_FILE,proof,0o444)
 }
 
-function prepareSnapshot() {
+function proveCanonicalControlRepository() {
   const exactConfig = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ssh://git@ssh.github.com:443/bsvalues/terragroq.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`
   for (const candidate of [CONTROL_REPOSITORY, `${CONTROL_REPOSITORY}/.git`]) { const s = fs.lstatSync(candidate); if (!trustedParents(candidate) || !s.isDirectory() || s.isSymbolicLink() || s.uid !== 0 || s.gid !== 0 || (s.mode & 0o7777) !== 0o700) throw new Error("canonical control tree trust differs") }
   if (!exactRootFile(`${CONTROL_REPOSITORY}/.git/config`, 0o600).equals(Buffer.from(exactConfig))) throw new Error("canonical control Git config differs")
@@ -150,6 +152,10 @@ function prepareSnapshot() {
   const git = args => run("/usr/bin/git", ["-c", `safe.directory=${CONTROL_REPOSITORY}`, "-c", "core.hooksPath=/usr/local/share/williamos/empty-git-hooks", "-C", CONTROL_REPOSITORY, ...args])
   const head = git(["rev-parse", "HEAD"]), main = git(["rev-parse", "refs/heads/main"]), status = git(["status", "--porcelain=v1", "--untracked-files=all"])
   if (head !== main || status !== "") throw new Error("canonical control checkout differs")
+  return head
+}
+
+function prepareSnapshot(head = proveCanonicalControlRepository()) {
   if (fs.existsSync(STATE_ROOT) || fs.existsSync(PREPARING_ROOT)) throw new Error("activation state already exists")
   const fabricGid = Number(run("/usr/bin/id", ["-g", "williamos-fabric"]))
   const stagedSnapshot=`${PREPARING_ROOT}/control`, stagedMints=`${PREPARING_ROOT}/mints`
@@ -164,6 +170,7 @@ function prepareSnapshot() {
 }
 
 function inspectPreparedState(){const v=JSON.parse(exactRootFile(PREPARED_FILE,0o444));if(!exactKeys(v,["schemaVersion","status","runId","controlCommit"])||v.schemaVersion!==1||v.status!=="ACTIVATION_SNAPSHOT_PREPARED"||v.runId!==RUN_ID||!/^[a-f0-9]{40}$/.test(v.controlCommit))throw new Error("prepared activation state differs");return v.controlCommit}
+function reconcilePreparedSnapshot(currentCommit){const preparedCommit=inspectPreparedState(),authority=JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`)),candidate={runId:authority.run.runId,workOrderId:authority.workOrderId,issue:authority.issue,repository:authority.target.repository,baseRef:authority.target.baseRef,baseSha:authority.trustedMain.target.pinnedCommit,nodeId:authority.target.nodeId,workspace:authority.target.workspace,branch:authority.target.branch,operations:authority.operations,resources:authority.resources,network:authority.network,executionIdentity:authority.executionIdentity},scopeSha256=sha(Buffer.from(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`,"utf8").replace(/\r\n/g,"\n"))),claimKeySha256=sha(Buffer.from(canonical({authority_reference:AUTHORITY_REFERENCE,scope_sha256:scopeSha256}))),claimPath=`${LEDGER_ROOT}/claim-${claimKeySha256}.json`,state=inspectPreparedSnapshotRecovery({preparedCommit,currentCommit,entries:fs.readdirSync(STATE_ROOT),claimExists:fs.existsSync(claimPath),phaseExists:fs.existsSync(PHASE_FILE),sessionExists:fs.existsSync(SESSION_FILE)});if(state==="MATCH")return;if(state!=="ARCHIVE_EXACT_PRECLAIM")throw new Error("prepared snapshot recovery differs");const archive=`${STATE_ROOT}.preclaim-${preparedCommit}`;if(fs.existsSync(archive))throw new Error("prepared snapshot archive occupied");fs.renameSync(STATE_ROOT,archive);const fd=fs.openSync(path.dirname(STATE_ROOT),fs.constants.O_RDONLY|fs.constants.O_DIRECTORY);fs.fsyncSync(fd);fs.closeSync(fd);prepareSnapshot()}
 function recoverStrandedPhase(){
   const authority=JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`)),candidate={runId:authority.run.runId,workOrderId:authority.workOrderId,issue:authority.issue,repository:authority.target.repository,baseRef:authority.target.baseRef,baseSha:authority.trustedMain.target.pinnedCommit,nodeId:authority.target.nodeId,workspace:authority.target.workspace,branch:authority.target.branch,operations:authority.operations,resources:authority.resources,network:authority.network,executionIdentity:authority.executionIdentity}
   const scopeSha256=sha(Buffer.from(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`,"utf8").replace(/\r\n/g,"\n"))),requestSha256=sha(Buffer.from(canonical(candidate))),claimKeySha256=sha(Buffer.from(canonical({authority_reference:AUTHORITY_REFERENCE,scope_sha256:scopeSha256}))),claimPath=`${LEDGER_ROOT}/claim-${claimKeySha256}.json`
@@ -246,9 +253,11 @@ function startMain() {
     if (!fs.existsSync(SETTLEMENT_FILE)) throw new Error("activation recovery settlement unavailable")
     process.stdout.write(fs.readFileSync(SETTLEMENT_FILE)); return
   }
-  if (!fs.existsSync(STATE_ROOT)) prepareSnapshot(); else inspectPreparedState()
+  const currentCommit=proveCanonicalControlRepository()
+  if (!fs.existsSync(STATE_ROOT)) prepareSnapshot(currentCommit)
   requireActivationUnitInactive()
   if (recoverStrandedPhase()) return startMain()
+  reconcilePreparedSnapshot(currentCommit)
   ensureRootNoSudoProof()
   const result = run("/usr/bin/systemd-run", ["--unit", UNIT.replace(/\.service$/, ""), "--property", "Type=simple", "--property", "NoNewPrivileges=yes", "--property", "PrivateTmp=yes", "--property", "ProtectSystem=strict", "--property", `ReadWritePaths=${STATE_ROOT} /var/lib/williamos/fabric/ledger /var/lib/williamos-fabric/remote-dev-launch-tickets`, "/usr/bin/node", INSTALLED_SELF, "daemon"])
   for (let index = 0; index < 100 && !fs.existsSync(SESSION_FILE); index++) spawnSync("/usr/bin/sleep", ["0.1"])
