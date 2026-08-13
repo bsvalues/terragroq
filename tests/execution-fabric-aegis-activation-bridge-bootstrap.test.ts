@@ -20,6 +20,14 @@ describe("AEGIS activation bridge bootstrap authority", () => {
     expect(inspectBridgeDestinationState("/usr/local/libexec/other","018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7","0555",current)).toBe("DRIFT")
   })
 
+  it("upgrades only the exact reviewed activation-host predecessor", () => {
+    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="5ffc8e655ce3f40d527b38a7438e479e73ab52acc58fe028225dc6107442ca82"
+    expect(inspectBridgeDestinationState(destination,"0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d","0555",current)).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeDestinationState(destination,"f".repeat(64),"0555",current)).toBe("DRIFT")
+    expect(inspectBridgeDestinationState("/usr/local/libexec/other","0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d","0555",current)).toBe("DRIFT")
+    expect(inspectBridgeDestinationState(destination,"0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d","0777",current)).toBe("DRIFT")
+  })
+
   it("accepts only the exact first bridge receipt as a bounded successor predecessor", () => {
     expect(inspectBridgeReceiptState("74a9bc03353ee81b51711b66dedb3206fbef5d193997a4a1137c5f45157a5f59","0".repeat(64))).toBe("EXACT_PREDECESSOR")
     expect(inspectBridgeReceiptState("b681cf30dba60dd1976082cd3f917478baab4935c683e3a82f02b73f162bf931","0".repeat(64))).toBe("DRIFT")
