@@ -13,7 +13,7 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain('"scripts\\embedding-bakeoff\\fabric_measure.py"')
     expect(source).toContain('if ($args.Count -ne 0)')
     expect(source).not.toMatch(/Invoke-Expression|Start-Process|cmd\.exe|powershell\.exe|pwsh\.exe|shell:\s*true/i)
-    expect(source).not.toMatch(/HERMES_EMBEDDING_(?:COMMAND|EXECUTABLE|EVALUATOR|ENDPOINT|URL|HOST)/)
+    expect(source).not.toMatch(/HERMES_EMBEDDING_(?:COMMAND|EXECUTABLE|ENDPOINT|URL|HOST)/)
   })
 
   it("creates the evaluator suspended and assigns it before resuming", () => {
@@ -67,6 +67,8 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("HERMES_EMBEDDING_RUNTIME_EXECUTABLE_SHA256")
     expect(source).toContain("HERMES_EMBEDDING_MODEL_MANIFEST_SHA256")
     expect(source).toContain("HERMES_EMBEDDING_WEIGHTS_SHA256")
+    expect(source).toContain("HERMES_EMBEDDING_EVALUATOR_SHA256")
+    expect(source).toContain("HERMES_EMBEDDING_CORPUS_MANIFEST_SHA256")
     expect(source).toContain("HERMES_EMBEDDING_PROCESS_MEMORY_BYTES")
     expect(source).toContain("HERMES_EMBEDDING_JOB_MEMORY_BYTES")
     expect(source).toContain("HERMES_EMBEDDING_CPU_RATE_PERCENT")
@@ -108,7 +110,7 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("MODEL_SNAPSHOT_HASH_FAILED")
     expect(source).toContain("[Security.Cryptography.SHA256]::Create()")
     expect(source).not.toMatch(/SHA256\]::HashData|Convert\]::ToHexString/)
-    expect(source).toContain("$plannedSnapshotBytes + $inputLength + $maxResultBytes -gt $maxScratchBytes")
+    expect(source).toContain("$plannedSnapshotBytes + $plannedSourceBytes + $inputLength + $maxResultBytes -gt $maxScratchBytes")
     expect(source).toContain("$copiedSnapshotBytes + $sourceLength + $inputLength + $maxResultBytes -gt $maxScratchBytes")
     expect(source).toContain("[IO.FileShare]::Read")
     expect(source).toContain("$algorithm.ComputeHash($snapshotLock)")
@@ -122,6 +124,17 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("NETWORK_CLEANUP_STATE_UNKNOWN")
     expect(source).not.toContain("rm --force $ExecutionContainer\n")
     expect(source).not.toContain("network rm $ExecutionNetwork\n")
+  })
+
+  it("executes from a closed seven-file Python source and corpus snapshot", () => {
+    expect(source).toContain("EVALUATOR_SOURCE_SNAPSHOT_INVALID")
+    expect(source).toContain("EVALUATOR_CORPUS_SNAPSHOT_INVALID")
+    expect(source).toContain("EVALUATOR_CORPUS_MANIFEST_INVALID")
+    expect(source).toContain("$plannedSnapshotBytes + $plannedSourceBytes + $inputLength + $maxResultBytes -gt $maxScratchBytes")
+    expect(source).toContain("EVALUATOR_SOURCE_FILE_SET_INVALID")
+    expect(source).toContain("$algorithm.ComputeHash($sourceLock)")
+    expect(source).toContain("$ExecutionEvaluatorPath = Join-Path $sourceRoot 'fabric_measure.py'")
+    expect(source).toContain("$ExecutionEvaluatorPath, $sealedInputPath")
   })
 
   it("emits a secret-free bounded receipt", () => {

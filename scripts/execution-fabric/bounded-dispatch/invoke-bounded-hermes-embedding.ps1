@@ -148,9 +148,15 @@ try {
   $modelId = Get-RequiredEnvironment "HERMES_EMBEDDING_MODEL_ID"
   $modelManifestSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_MODEL_MANIFEST_SHA256"
   $weightsSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_WEIGHTS_SHA256"
+  $evaluatorSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_EVALUATOR_SHA256"
+  $bakeoffSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_BAKEOFF_SHA256"
+  $embedSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_EMBED_SHA256"
+  $metricsSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_METRICS_SHA256"
+  $corpusManifestSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_CORPUS_MANIFEST_SHA256"
   $identityInvalid = $runtimeExecutableSha256 -cnotmatch '^[a-f0-9]{64}$'
   $identityInvalid = $identityInvalid -or $modelManifestSha256 -cnotmatch '^[a-f0-9]{64}$'
   $identityInvalid = $identityInvalid -or $weightsSha256 -cnotmatch '^[a-f0-9]{64}$'
+  $identityInvalid = $identityInvalid -or @($evaluatorSha256, $bakeoffSha256, $embedSha256, $metricsSha256, $corpusManifestSha256).Where({ $_ -cnotmatch '^[a-f0-9]{64}$' }).Count -ne 0
   $identityInvalid = $identityInvalid -or $modelId -cnotmatch '^[a-z0-9][a-z0-9._-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$'
   if ($identityInvalid) { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
   $affinityRaw = Get-RequiredEnvironment "HERMES_EMBEDDING_CPU_AFFINITY_MASK"
@@ -208,7 +214,57 @@ try {
     if ($blobSizes.ContainsKey($digest) -and [UInt64]$blobSizes[$digest] -ne $declaredSize) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_SIZE_INVALID") }
     if (-not $blobSizes.ContainsKey($digest)) { $blobSizes[$digest] = $declaredSize; $plannedSnapshotBytes += $declaredSize }
   }
-  if ($plannedSnapshotBytes + $inputLength + $maxResultBytes -gt $maxScratchBytes) { throw [InvalidOperationException]::new("SCRATCH_SIZE_LIMIT_EXCEEDED") }
+  $sourceRoot = Join-Path $ExecutionWorkRoot 'source'
+  $sourceBindings = [ordered]@{
+    'fabric_measure.py' = $evaluatorSha256
+    'bakeoff.py' = $bakeoffSha256
+    'embed.py' = $embedSha256
+    'metrics.py' = $metricsSha256
+  }
+  $sourceCorpusRoot = Join-Path ([IO.Path]::GetDirectoryName($EvaluatorPath)) 'corpus'
+  $corpusManifestPath = Join-Path $sourceCorpusRoot 'manifest.json'
+  if ((Get-FileHash -LiteralPath $corpusManifestPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $corpusManifestSha256) { throw [InvalidOperationException]::new("EVALUATOR_CORPUS_MANIFEST_INVALID") }
+  $corpusManifest = Get-Content -Raw -LiteralPath $corpusManifestPath | ConvertFrom-Json
+  $corpusBindings = [ordered]@{
+    'manifest.json' = $corpusManifestSha256
+    'documents.jsonl' = [string]$corpusManifest.documents_sha256
+    'queries.jsonl' = [string]$corpusManifest.queries_sha256
+  }
+  [decimal]$plannedSourceBytes = 0
+  foreach ($sourceName in $sourceBindings.Keys) { $plannedSourceBytes += ([IO.FileInfo]::new((Join-Path ([IO.Path]::GetDirectoryName($EvaluatorPath)) $sourceName))).Length }
+  foreach ($corpusName in $corpusBindings.Keys) { $plannedSourceBytes += ([IO.FileInfo]::new((Join-Path $sourceCorpusRoot $corpusName))).Length }
+  if ($plannedSnapshotBytes + $plannedSourceBytes + $inputLength + $maxResultBytes -gt $maxScratchBytes) { throw [InvalidOperationException]::new("SCRATCH_SIZE_LIMIT_EXCEEDED") }
+
+  [void][IO.Directory]::CreateDirectory($sourceRoot)
+  foreach ($sourceName in $sourceBindings.Keys) {
+    $sourcePath = Join-Path ([IO.Path]::GetDirectoryName($EvaluatorPath)) $sourceName
+    Assert-NoReparsePoint $sourcePath $true
+    $destinationPath = Join-Path $sourceRoot $sourceName
+    Copy-Item -LiteralPath $sourcePath -Destination $destinationPath
+    if ((Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $sourceBindings[$sourceName]) { throw [InvalidOperationException]::new("EVALUATOR_SOURCE_SNAPSHOT_INVALID") }
+  }
+  $snapshotCorpusRoot = Join-Path $sourceRoot 'corpus'
+  [void][IO.Directory]::CreateDirectory($snapshotCorpusRoot)
+  foreach ($corpusName in $corpusBindings.Keys) {
+    $corpusPath = Join-Path $sourceCorpusRoot $corpusName
+    Assert-NoReparsePoint $corpusPath $true
+    $destinationPath = Join-Path $snapshotCorpusRoot $corpusName
+    Copy-Item -LiteralPath $corpusPath -Destination $destinationPath
+    if ((Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $corpusBindings[$corpusName]) { throw [InvalidOperationException]::new("EVALUATOR_CORPUS_SNAPSHOT_INVALID") }
+  }
+  if (@(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse).Count -ne 7) { throw [InvalidOperationException]::new("EVALUATOR_SOURCE_FILE_SET_INVALID") }
+  foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceRoot -File -Recurse | Sort-Object FullName) {
+    $relativeSource = $sourceFile.FullName.Substring($sourceRoot.Length + 1)
+    $expectedSourceHash = if ($relativeSource.StartsWith('corpus\', [StringComparison]::Ordinal)) { $corpusBindings[$relativeSource.Substring(7)] } else { $sourceBindings[$relativeSource] }
+    if ([string]$expectedSourceHash -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("EVALUATOR_SOURCE_FILE_SET_INVALID") }
+    $sourceLock = [IO.File]::Open($sourceFile.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    [void]$SnapshotReadLocks.Add($sourceLock)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { $lockedSourceHash = ([BitConverter]::ToString($algorithm.ComputeHash($sourceLock))).Replace('-', '').ToLowerInvariant() } finally { $algorithm.Dispose() }
+    $sourceLock.Position = 0
+    if ($lockedSourceHash -cne $expectedSourceHash) { throw [InvalidOperationException]::new("EVALUATOR_SOURCE_SNAPSHOT_INVALID") }
+  }
+  $ExecutionEvaluatorPath = Join-Path $sourceRoot 'fabric_measure.py'
 
   $snapshotRoot = Join-Path $ExecutionWorkRoot 'models'
   $snapshotManifest = Join-Path $snapshotRoot "manifests\registry.ollama.ai\library\$($modelParts[0])\$($modelParts[1])"
@@ -454,7 +510,7 @@ namespace WilliamOS.ExecutionFabric {
     "PYTHONDONTWRITEBYTECODE=1",
     "NO_PROXY=127.0.0.1,localhost"
   )
-  $run = [WilliamOS.ExecutionFabric.BoundedJob]::Run($PythonExecutable, $EvaluatorPath, $sealedInputPath, $resultPath, [IO.Path]::GetDirectoryName($EvaluatorPath), $ExecutionWorkRoot, [uint32]$timeoutMs, $maxResultBytes, $maxScratchBytes, $processMemoryBytes, $jobMemoryBytes, [uint32]$cpuRatePercent, $cpuAffinityMask, $childEnvironment)
+  $run = [WilliamOS.ExecutionFabric.BoundedJob]::Run($PythonExecutable, $ExecutionEvaluatorPath, $sealedInputPath, $resultPath, $sourceRoot, $ExecutionWorkRoot, [uint32]$timeoutMs, $maxResultBytes, $maxScratchBytes, $processMemoryBytes, $jobMemoryBytes, [uint32]$cpuRatePercent, $cpuAffinityMask, $childEnvironment)
   if (-not [IO.File]::Exists($resultPath)) { throw [InvalidOperationException]::new("RESULT_MISSING") }
   Assert-NoReparsePoint $resultPath $true
   $resultLength = ([IO.FileInfo]::new($resultPath)).Length

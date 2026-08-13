@@ -359,6 +359,23 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
   const modelManifest = readFixedJson(MODEL_MANIFEST_PATH, PACKET_ROOT, "model manifest")
   const runtimeManifest = readFixedJson(RUNTIME_MANIFEST_PATH, PACKET_ROOT, "runtime manifest")
   const hostManifest = readFixedJson(HOST_MANIFEST_PATH, PACKET_ROOT, "host manifest")
+  const modelBinding = modelManifest?.model_id === admission.model.model_id
+    && modelManifest?.revision === admission.model.revision
+    && modelManifest?.weights_sha256 === admission.model.weights_sha256
+    && modelManifest?.license === admission.model.license
+    && modelManifest?.source === admission.model.source
+    && modelManifest?.dimension === admission.model.dimension
+  const runtimeBinding = runtimeManifest?.runtime_id === admission.runtime.runtime_id
+    && runtimeManifest?.version === admission.runtime.version
+    && runtimeManifest?.executable_sha256 === admission.runtime.executable_sha256
+    && runtimeManifest?.endpoint_contract === "ollama-embed-v1"
+  const hostBinding = hostManifest?.node_id === admission.placement.node_id
+    && hostManifest?.machine_id_sha256 === admission.placement.machine_id_sha256
+    && hostManifest?.inventory_snapshot_sha256 === admission.placement.inventory_snapshot_sha256
+    && Array.isArray(hostManifest?.endpoint_hosts)
+    && hostManifest.endpoint_hosts.length === 1
+    && hostManifest.endpoint_hosts[0] === "127.0.0.1"
+  if (!modelBinding || !runtimeBinding || !hostBinding) throw new Error("fixed manifests contradict the admitted execution identity")
   const evaluatorInput = Buffer.from(`${canonicalizeJcs({
     schema_version: "1.0-r1b-fabric-measurement-envelope",
     model: admission.model.model_id,
@@ -399,6 +416,11 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
       HERMES_EMBEDDING_MODEL_ID: admission.model.model_id,
       HERMES_EMBEDDING_MODEL_MANIFEST_SHA256: admission.model.ollama_manifest_sha256,
       HERMES_EMBEDDING_WEIGHTS_SHA256: admission.model.weights_sha256,
+      HERMES_EMBEDDING_EVALUATOR_SHA256: admission.runtime.evaluator_sha256,
+      HERMES_EMBEDDING_BAKEOFF_SHA256: admission.runtime.bakeoff_sha256,
+      HERMES_EMBEDDING_EMBED_SHA256: admission.runtime.embed_sha256,
+      HERMES_EMBEDDING_METRICS_SHA256: admission.runtime.metrics_sha256,
+      HERMES_EMBEDDING_CORPUS_MANIFEST_SHA256: admission.corpus.manifest_sha256,
     },
   })
   if (run.error || run.status === null) {
@@ -406,7 +428,10 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     throw new Error("bounded embedding launcher exceeded its parent deadline after verified cleanup")
   }
   let receipt
-  try { receipt = JSON.parse(Buffer.from(run.stdout ?? []).toString("utf8").replace(/^\uFEFF/, "").trim()) } catch { throw new Error("bounded embedding launcher returned an invalid receipt") }
+  try { receipt = JSON.parse(Buffer.from(run.stdout ?? []).toString("utf8").replace(/^\uFEFF/, "").trim()) } catch {
+    recoverLauncherDockerResources(executionKey)
+    throw new Error("bounded embedding launcher returned an invalid receipt after verified cleanup")
+  }
   if (run.status !== 0 || receipt.status !== "COMPLETED" || receipt.evaluator_exit_code !== 0
     || receipt.job_assigned_before_resume !== true || receipt.external_provider_used !== false || receipt.fallback_used !== false
     || receipt.active_process_limit !== 1 || receipt.cpu_rate_percent !== 100 || receipt.cpu_affinity_mask !== affinityMask
@@ -417,7 +442,8 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     || receipt.aggregate_memory_bytes !== admission.limits.max_evaluator_memory_bytes + admission.limits.max_inference_memory_bytes
     || receipt.runtime_reverified !== true || receipt.model_manifest_reverified !== true || receipt.model_weights_reverified !== true
     || receipt.container_pids_limit !== 64 || receipt.container_cleaned !== true || receipt.network_cleaned !== true) {
-    throw new Error(`bounded embedding evaluator failed closed: ${receipt.reason_code ?? "UNKNOWN"}`)
+    recoverLauncherDockerResources(executionKey)
+    throw new Error(`bounded embedding evaluator failed closed after verified cleanup: ${receipt.reason_code ?? "UNKNOWN"}`)
   }
   const resultBytes = readFixedBytes(resultPath, LEDGER_ROOT, "bounded evaluator result")
   if (resultBytes.byteLength > admission.limits.max_result_bytes) throw new Error("fixed evaluator result exceeds admitted ceiling")

@@ -56,6 +56,7 @@ function fixture() {
       weights_sha256: "1".repeat(64),
       license: "Apache-2.0",
       source: "ollama-library",
+      dimension: 768,
       manifest_sha256: "2".repeat(64),
       ollama_manifest_sha256: "e".repeat(64),
     },
@@ -425,6 +426,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(source).toContain("recoverLauncherDockerResources(executionKey)")
     expect(source).toContain('value?.Config?.Labels?.["williamos.execution-hash"]')
     expect(source).toContain("bounded launcher Docker cleanup did not converge")
+    expect(source).toContain("fixed manifests contradict the admitted execution identity")
     expect(source).toContain("merge-base\", \"--is-ancestor")
     expect(source).toContain("refs/heads/main")
     expect(source).toContain("resident executable source closure differs from the admitted commit")
