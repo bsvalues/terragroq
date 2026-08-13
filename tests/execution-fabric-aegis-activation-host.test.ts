@@ -16,6 +16,7 @@ import {
   inspectRootNoSudoObservation,
   inspectHostRootNoSudoProof,
   inspectPreparedSnapshotRecovery,
+  inspectNetworkActivationState,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -168,7 +169,19 @@ describe("AEGIS production activation host trust", () => {
     expect(inspectPreparedSnapshotRecovery({preparedCommit:"88bd56d8f575bafaf7a6ddcf6b1a8e2e1fc4d3ec",currentCommit:"7fab579402798ba6e0d7cafbd74bba5be4d79101",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("ARCHIVE_EXACT_PRECLAIM")
     expect(inspectPreparedSnapshotRecovery({preparedCommit:"9a04dbf4f488567d5d5328d4c26f65819aea7e3c",currentCommit:"7fab579402798ba6e0d7cafbd74bba5be4d79101",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("DRIFT")
     expect(inspectPreparedSnapshotRecovery({preparedCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("MATCH")
+    expect(inspectPreparedSnapshotRecovery({preparedCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json","no-sudo.json","network-intent.json","network-applied.json","activation-failure.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("MATCH")
+    expect(inspectPreparedSnapshotRecovery({preparedCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json","foreign"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("DRIFT")
     expect(inspectPreparedSnapshotRecovery({preparedCommit:"f".repeat(40),currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("DRIFT")
+  })
+
+  it("accepts only an exact transaction-bound network transition", () => {
+    const exact = { journalState:"ABSENT", receiptState:"ABSENT", nftExact:true, egressActiveEnabled:true, brokerInactiveDisabled:true, gitSocketInactiveDisabled:true, gitServiceInactive:true, listenerAbsent:true, workerWorkspaceAbsent:true }
+    expect(inspectNetworkActivationState(exact)).toBe("ACTIVATE_EXACT_INERT")
+    expect(inspectNetworkActivationState({...exact, journalState:"INTENT"})).toBe("ACTIVATE_EXACT_INERT")
+    expect(inspectNetworkActivationState({...exact, brokerInactiveDisabled:false})).toBe("DRIFT")
+    expect(inspectNetworkActivationState({...exact, brokerInactiveDisabled:false, gitSocketInactiveDisabled:false, listenerAbsent:false})).toBe("ADOPT_EXACT_ACTIVE")
+    expect(inspectNetworkActivationState({...exact, journalState:"APPLIED", receiptState:"EXACT_ACTIVE", brokerInactiveDisabled:false, gitSocketInactiveDisabled:false, listenerAbsent:false})).toBe("REFRESH_EXACT_ACTIVE")
+    expect(inspectNetworkActivationState({...exact, receiptState:"FOREIGN"})).toBe("DRIFT")
   })
 
   it("re-disables the bridge before replaying an existing settlement", () => {

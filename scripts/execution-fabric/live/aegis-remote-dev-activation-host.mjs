@@ -24,6 +24,12 @@ const SETTLEMENT_FILE = `${STATE_ROOT}/settlement.json`
 const PHASE_FILE = `${STATE_ROOT}/phase.json`
 const MINT_ROOT = `${STATE_ROOT}/mints`
 const NO_SUDO_FILE = `${STATE_ROOT}/no-sudo.json`
+const NETWORK_INTENT_FILE = `${STATE_ROOT}/network-intent.json`
+const NETWORK_APPLIED_FILE = `${STATE_ROOT}/network-applied.json`
+const NETWORK_SETTLED_FILE = `${STATE_ROOT}/network-settled.json`
+const NETWORK_RECEIPT_FILE = "/run/williamos-fabric/aegis-remote-dev-network-proof.json"
+const FAILURE_FILE = `${STATE_ROOT}/activation-failure.json`
+const NETWORK_SLICE = "/user.slice/user-999.slice/user@999.service/app.slice/williamos-aegis-remote-dev.slice"
 const SNAPSHOT = `${STATE_ROOT}/control`
 const UNIT = `williamos-aegis-activation-${RUN_ID}.service`
 const PRECLAIM_PREDECESSOR_COMMIT = "88bd56d8f575bafaf7a6ddcf6b1a8e2e1fc4d3ec"
@@ -130,7 +136,8 @@ export function inspectActivationUnitState(state,mainPid){if((state==="inactive"
 export function inspectLeaseHolderState(holder,currentBootId,observedStartTicks){if(!exactKeys(holder,["pid","boot_id","process_start_ticks"])||!Number.isSafeInteger(holder.pid)||holder.pid<=1||!GUID.test(holder.boot_id)||!/^\d+$/.test(holder.process_start_ticks))return "DRIFT";return holder.boot_id===currentBootId&&observedStartTicks===holder.process_start_ticks?"ACTIVE":"DEAD"}
 export function inspectRootNoSudoObservation(value){try{for(const key of["passwd","sudo"]){if(!exactKeys(value?.[key],["status","signal","errorCode","stdout","stderr"]))throw new Error()}if(value.passwd.status!==0||value.passwd.signal!==null||value.passwd.errorCode!==null||value.passwd.stderr!==""||!/^williamos-fabric L \d{4}-\d{2}-\d{2} -1 -1 -1 -1\n$/.test(value.passwd.stdout)||value.sudo.status!==0||value.sudo.signal!==null||value.sudo.errorCode!==null||value.sudo.stdout!=="User williamos-fabric is not allowed to run sudo on aegis.\n"||value.sudo.stderr!=="")throw new Error();return "ROOT_NO_SUDO_OBSERVED"}catch{return "DRIFT"}}
 export function inspectHostRootNoSudoProof(p,now,e){try{if(!exactKeys(p,["schemaVersion","status","activationId","authorityReference","runId","machineIdSha256","bootId","activationHostSha256","authoritySha256","account","passwordStatus","sudoStatus","sudoStdout","sudoStderr","issuedAt","expiresAt"]))throw new Error();const n=Date.parse(now),i=Date.parse(p.issuedAt),x=Date.parse(p.expiresAt);if(p.schemaVersion!==1||p.status!=="ROOT_NO_SUDO_VERIFIED"||p.activationId!==ACTIVATION_ID||p.authorityReference!==AUTHORITY_REFERENCE||p.runId!==RUN_ID||p.machineIdSha256!==e.machineIdSha256||p.bootId!==e.bootId||p.activationHostSha256!==e.activationHostSha256||p.authoritySha256!==e.authoritySha256||p.account!=="williamos-fabric"||p.passwordStatus!=="L"||p.sudoStatus!==0||p.sudoStdout!=="User williamos-fabric is not allowed to run sudo on aegis.\n"||p.sudoStderr!==""||![n,i,x].every(Number.isFinite)||n<i||x-i!==300_000)throw new Error();return n<x?"FRESH":"EXPIRED_EXACT"}catch{return "DRIFT"}}
-export function inspectPreparedSnapshotRecovery(v){try{if(!exactKeys(v,["preparedCommit","currentCommit","entries","claimExists","phaseExists","sessionExists"])||JSON.stringify([...v.entries].sort())!==JSON.stringify(["control","mints","prepared.json"])||v.claimExists||v.phaseExists||v.sessionExists||!/^([a-f0-9]{40})$/.test(v.preparedCommit)||!/^([a-f0-9]{40})$/.test(v.currentCommit))throw new Error();if(v.preparedCommit===v.currentCommit)return"MATCH";if(v.preparedCommit===PRECLAIM_PREDECESSOR_COMMIT)return"ARCHIVE_EXACT_PRECLAIM";throw new Error()}catch{return"DRIFT"}}
+export function inspectPreparedSnapshotRecovery(v){try{if(!exactKeys(v,["preparedCommit","currentCommit","entries","claimExists","phaseExists","sessionExists"])||!Array.isArray(v.entries)||v.claimExists||v.phaseExists||v.sessionExists||!/^([a-f0-9]{40})$/.test(v.preparedCommit)||!/^([a-f0-9]{40})$/.test(v.currentCommit))throw new Error();const entries=[...v.entries].sort(),base=["control","mints","prepared.json"].sort(),allowed=new Set([...base,"no-sudo.json","network-intent.json","network-applied.json","network-settled.json","activation-failure.json"]);if(v.preparedCommit===v.currentCommit&&base.every(x=>entries.includes(x))&&entries.every(x=>allowed.has(x)))return"MATCH";if(v.preparedCommit===PRECLAIM_PREDECESSOR_COMMIT&&JSON.stringify(entries)===JSON.stringify(base))return"ARCHIVE_EXACT_PRECLAIM";throw new Error()}catch{return"DRIFT"}}
+export function inspectNetworkActivationState(v){try{if(!exactKeys(v,["journalState","receiptState","nftExact","egressActiveEnabled","brokerInactiveDisabled","gitSocketInactiveDisabled","gitServiceInactive","listenerAbsent","workerWorkspaceAbsent"])||!["ABSENT","INTENT","APPLIED"].includes(v.journalState)||!["ABSENT","EXACT_ACTIVE","FOREIGN"].includes(v.receiptState)||["nftExact","egressActiveEnabled","brokerInactiveDisabled","gitSocketInactiveDisabled","gitServiceInactive","listenerAbsent","workerWorkspaceAbsent"].some(k=>typeof v[k]!=="boolean"))throw new Error();if(v.receiptState==="EXACT_ACTIVE"&&v.journalState==="APPLIED"&&v.nftExact&&v.egressActiveEnabled&&!v.brokerInactiveDisabled&&!v.gitSocketInactiveDisabled&&v.gitServiceInactive&&!v.listenerAbsent&&v.workerWorkspaceAbsent)return"REFRESH_EXACT_ACTIVE";if(v.receiptState==="ABSENT"&&v.nftExact&&v.egressActiveEnabled&&v.gitServiceInactive&&v.workerWorkspaceAbsent){if(["ABSENT","INTENT","APPLIED"].includes(v.journalState)&&v.brokerInactiveDisabled&&v.gitSocketInactiveDisabled&&v.listenerAbsent)return"ACTIVATE_EXACT_INERT";if(["ABSENT","INTENT"].includes(v.journalState)&&!v.brokerInactiveDisabled&&!v.gitSocketInactiveDisabled&&!v.listenerAbsent)return"ADOPT_EXACT_ACTIVE"}throw new Error()}catch{return"DRIFT"}}
 function requireActivationUnitInactive(){const value=run("/usr/bin/systemctl",["is-active",UNIT],{statuses:[3,4]}),mainPid=Number(run("/usr/bin/systemctl",["show",UNIT,"--property=MainPID","--value"],{statuses:[0,1]}));const state=inspectActivationUnitState(value,mainPid);if(state==="DRIFT")throw new Error("activation unit is not proven inactive");if(state==="RESET_REQUIRED")run("/usr/bin/systemctl",["reset-failed",UNIT])}
 
 function rootResult(file,args){const r=spawnSync(file,args,{encoding:"utf8",shell:false,timeout:5000,env:ENV});return{status:r.status,signal:r.signal,errorCode:r.error?.code??null,stdout:String(r.stdout??""),stderr:String(r.stderr??"")}}
@@ -142,6 +149,45 @@ function ensureRootNoSudoProof(){
   if(inspectRootNoSudoObservation(observed)!=="ROOT_NO_SUDO_OBSERVED")throw new Error("root no-sudo observation differs")
   const proof={schemaVersion:1,status:"ROOT_NO_SUDO_VERIFIED",activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,runId:RUN_ID,...expected,account:"williamos-fabric",passwordStatus:"L",sudoStatus:0,sudoStdout:observed.sudo.stdout,sudoStderr:"",issuedAt,expiresAt:new Date(Date.parse(issuedAt)+300_000).toISOString()}
   createRootJson(NO_SUDO_FILE,proof,0o444)
+}
+
+const normalized = bytes => sha(Buffer.from(Buffer.from(bytes).toString("utf8").replace(/\r\n/g,"\n")))
+function networkUnit(name, active, enabled){return run("/usr/bin/systemctl",["is-active",name],{statuses:[0,3]})===active&&run("/usr/bin/systemctl",["is-enabled",name],{statuses:[0,1,3]})===enabled}
+function exactNetworkNft(){
+  const worker=Number(run("/usr/bin/id",["-u","williamos-fabric"])),broker=Number(run("/usr/bin/id",["-u","williamos-git-broker"]));if(worker!==999||!Number.isSafeInteger(broker)||broker<=0||broker===worker)return false
+  const parsed=JSON.parse(run("/usr/sbin/nft",["-j","list","table","inet","williamos_aegis_remote_dev"]));const items=parsed.nftables.filter(v=>!v.metainfo).map(v=>{const c=structuredClone(v);for(const x of Object.values(c))delete x.handle;return c})
+  const uid=right=>({match:{op:"==",left:{meta:{key:"skuid"}},right}}),ip=(protocol,right)=>({match:{op:"==",left:{payload:{protocol,field:"daddr"}},right}}),port={match:{op:"==",left:{payload:{protocol:"tcp",field:"dport"}},right:17734}},rule=expr=>({rule:{family:"inet",table:"williamos_aegis_remote_dev",chain:"output",expr}})
+  return canonical(items)===canonical([{table:{family:"inet",name:"williamos_aegis_remote_dev"}},{chain:{family:"inet",table:"williamos_aegis_remote_dev",name:"output",type:"filter",hook:"output",prio:0,policy:"accept"}},rule([uid(worker),ip("ip","192.168.1.156"),{reject:{type:"icmp",expr:"port-unreachable"}}]),rule([uid(worker),ip("ip6","::ffff:192.168.1.156"),{reject:{type:"icmpv6",expr:"port-unreachable"}}]),rule([uid(worker),ip("ip","127.0.0.1"),port,{accept:null}]),rule([uid(broker),ip("ip","127.0.0.1"),port,{accept:null}]),rule([ip("ip","127.0.0.1"),port,{reject:{type:"icmp",expr:"port-unreachable"}}]),rule([uid(worker),{reject:{type:"icmpx",expr:"port-unreachable"}}])])
+}
+function networkObservation(){
+  const listener=run("/usr/bin/ss",["-H","-ltn","sport = :17734"]),connections=run("/usr/bin/ss",["-H","-tn","sport = :17734 or dport = :17734"]),active=run("/usr/bin/systemctl",["list-units","--all","--plain","--no-legend","williamos-aegis-remote-dev-*.service"],{statuses:[0,1]})
+  return {nftExact:exactNetworkNft(),egressActiveEnabled:networkUnit("williamos-aegis-remote-dev-egress.service","active","enabled"),brokerInactiveDisabled:networkUnit("williamos-aegis-remote-dev-broker.service","inactive","disabled"),gitSocketInactiveDisabled:networkUnit("williamos-aegis-remote-dev-git-broker.socket","inactive","disabled"),gitServiceInactive:run("/usr/bin/systemctl",["is-active","williamos-aegis-remote-dev-git-broker.service"],{statuses:[3]})==="inactive",listenerAbsent:listener===""&&connections==="",workerWorkspaceAbsent:!active.split(/\r?\n/).some(line=>/williamos-aegis-remote-dev-[0-9a-f-]{36}\.service/.test(line)&&!line.includes("broker"))&&!fs.existsSync(WORKSPACE)}
+}
+function exactNetworkJournal(file,status){const bytes=exactRootFile(file,0o444),value=JSON.parse(bytes);if(!bytes.equals(Buffer.from(`${canonical(value)}\n`))||value.schemaVersion!==1||value.status!==status||value.runId!==RUN_ID||value.activationId!==ACTIVATION_ID||value.authorityReference!==AUTHORITY_REFERENCE||!GUID.test(value.proofId)||!GUID.test(value.generationId))throw new Error("network journal differs");return value}
+function ensureNetworkSlice(){
+  run("/usr/sbin/runuser",["-u","williamos-fabric","--","/usr/bin/env","HOME=/nonexistent","PATH=/usr/bin:/bin","LANG=C","LC_ALL=C","XDG_RUNTIME_DIR=/run/user/999","DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/999/bus","/usr/bin/systemctl","--user","start","williamos-aegis-remote-dev.slice"])
+  const s=fs.statSync(`/sys/fs/cgroup${NETWORK_SLICE}`,{bigint:true});if(!s.isDirectory())throw new Error("network slice unavailable");return{device:s.dev.toString(),inode:s.ino.toString(),ctimeNs:s.ctimeNs.toString()}
+}
+function ticketDirectory(){const p="/var/lib/williamos-fabric/remote-dev-launch-tickets",s=fs.statSync(p,{bigint:true}),a=run("/usr/bin/lsattr",["-d","--",p]);if(!s.isDirectory()||Number(s.uid)!==0||Number(s.gid)!==987||Number(s.mode&0o7777n)!==0o3770||!/^[-A-Za-z]*a[-A-Za-z]*\s+/.test(a))throw new Error("ticket directory differs");return{directoryPath:p,directoryIdentity:{device:s.dev.toString(),inode:s.ino.toString(),ctimeNs:s.ctimeNs.toString()},ownerUid:0,writerGid:987,mode:"3770",appendOnly:true}}
+function networkReceiptState(intent){if(!fs.existsSync(NETWORK_RECEIPT_FILE))return"ABSENT";try{const bytes=exactRootFile(NETWORK_RECEIPT_FILE,0o444),v=JSON.parse(bytes);if(!bytes.equals(Buffer.from(`${canonical(v)}\n`))||v.runId!==RUN_ID||v.activationId!==ACTIVATION_ID||v.authorityReference!==AUTHORITY_REFERENCE||v.proofId!==intent.proofId||v.enforcementGeneration?.generationId!==intent.generationId)return"FOREIGN";return"EXACT_ACTIVE"}catch{return"FOREIGN"}}
+function replaceNetworkReceipt(value){const bytes=Buffer.from(`${canonical(value)}\n`),temp=`${NETWORK_RECEIPT_FILE}.${process.pid}.tmp`;const fd=fs.openSync(temp,fs.constants.O_CREAT|fs.constants.O_EXCL|fs.constants.O_WRONLY|fs.constants.O_NOFOLLOW,0o444);try{fs.writeFileSync(fd,bytes);fs.fchmodSync(fd,0o444);fs.fsyncSync(fd)}finally{fs.closeSync(fd)}fs.renameSync(temp,NETWORK_RECEIPT_FILE);const p=fs.openSync(path.dirname(NETWORK_RECEIPT_FILE),fs.constants.O_RDONLY|fs.constants.O_DIRECTORY);fs.fsyncSync(p);fs.closeSync(p);if(!exactRootFile(NETWORK_RECEIPT_FILE,0o444).equals(bytes))throw new Error("network receipt replacement differs")}
+function ensureNetworkBoundaryReceipt(){
+  const authority=JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`)),policyBytes=fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/aegis-resident-network-boundary.json`),policy=JSON.parse(policyBytes),journalState=fs.existsSync(NETWORK_APPLIED_FILE)?"APPLIED":fs.existsSync(NETWORK_INTENT_FILE)?"INTENT":"ABSENT"
+  let intent;if(journalState==="ABSENT"){intent={schemaVersion:1,status:"NETWORK_ACTIVATION_INTENT",runId:RUN_ID,activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,proofId:crypto.randomUUID(),generationId:crypto.randomUUID()};createRootJson(NETWORK_INTENT_FILE,intent,0o444)}else intent=exactNetworkJournal(NETWORK_INTENT_FILE,"NETWORK_ACTIVATION_INTENT")
+  let observed=networkObservation(),receiptState=networkReceiptState(intent),state=inspectNetworkActivationState({journalState,receiptState,...observed});if(state==="DRIFT")throw new Error("network activation predecessor differs")
+  if(state==="ACTIVATE_EXACT_INERT"){run("/usr/bin/systemctl",["enable","--now","williamos-aegis-remote-dev-broker.service","williamos-aegis-remote-dev-git-broker.socket"]);observed=networkObservation();if(!observed.nftExact||!observed.egressActiveEnabled||observed.brokerInactiveDisabled||observed.gitSocketInactiveDisabled||observed.gitServiceInactive!==true||observed.listenerAbsent||!observed.workerWorkspaceAbsent)throw new Error("network activation postcondition differs")}
+  const cgroup=ensureNetworkSlice();if(!fs.existsSync(NETWORK_APPLIED_FILE))createRootJson(NETWORK_APPLIED_FILE,{...intent,status:"NETWORK_ACTIVATION_APPLIED"},0o444);else exactNetworkJournal(NETWORK_APPLIED_FILE,"NETWORK_ACTIVATION_APPLIED")
+  const observedAt=trustedNow(),receipt={schemaVersion:1,proofId:intent.proofId,providerId:policy.policyId,activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,runId:RUN_ID,observedAt,expiresAt:new Date(Date.parse(observedAt)+30_000).toISOString(),bootId:fs.readFileSync("/proc/sys/kernel/random/boot_id","utf8").trim(),controlGroup:NETWORK_SLICE,controlGroupIdentity:cgroup,enforcementGeneration:{generationId:intent.generationId,rulesetSha256:sha(Buffer.from(canonical(policy.enforcement)))},launcherSha256:authority.bindings.networkLauncher.sha256,workerSha256:authority.bindings.worker.sha256,launchAuthority:{algorithm:"Ed25519",publicKeyPath:"/etc/williamos-fabric/aegis-remote-dev-launch-authority.pem",publicKeySha256:sha(exactRootFile("/etc/williamos-fabric/aegis-remote-dev-launch-authority.pem",0o444))},ticketConsumption:ticketDirectory(),nodeId:"aegis",account:"williamos-fabric",machineIdSha256:authority.executionIdentity.machineIdSha256,controlPlaneCommit:inspectPreparedState(),policySha256:normalized(policyBytes),activationSha256:normalized(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`)),providerSha256:authority.bindings.networkProvider.sha256,enforcement:policy.enforcement}
+  replaceNetworkReceipt(receipt);return receipt
+}
+function settleNetworkBoundary(){
+  if(!fs.existsSync(NETWORK_INTENT_FILE)||!fs.existsSync(NETWORK_APPLIED_FILE))throw new Error("network settlement journal unavailable")
+  const intent=exactNetworkJournal(NETWORK_INTENT_FILE,"NETWORK_ACTIVATION_INTENT");exactNetworkJournal(NETWORK_APPLIED_FILE,"NETWORK_ACTIVATION_APPLIED")
+  const receiptState=networkReceiptState(intent);if(receiptState==="FOREIGN")throw new Error("network receipt differs before settlement")
+  run("/usr/bin/systemctl",["disable","--now","williamos-aegis-remote-dev-broker.service","williamos-aegis-remote-dev-git-broker.socket"]);run("/usr/bin/systemctl",["stop","williamos-aegis-remote-dev-git-broker.service"],{statuses:[0,5]})
+  if(receiptState==="EXACT_ACTIVE"){fs.unlinkSync(NETWORK_RECEIPT_FILE);const p=fs.openSync(path.dirname(NETWORK_RECEIPT_FILE),fs.constants.O_RDONLY|fs.constants.O_DIRECTORY);fs.fsyncSync(p);fs.closeSync(p)}
+  const observed=networkObservation();if(!observed.nftExact||!observed.egressActiveEnabled||!observed.brokerInactiveDisabled||!observed.gitSocketInactiveDisabled||!observed.gitServiceInactive||!observed.listenerAbsent)throw new Error("network inert settlement differs")
+  const settled={...intent,status:"NETWORK_ACTIVATION_SETTLED"};if(!fs.existsSync(NETWORK_SETTLED_FILE))createRootJson(NETWORK_SETTLED_FILE,settled,0o444);else exactNetworkJournal(NETWORK_SETTLED_FILE,"NETWORK_ACTIVATION_SETTLED")
 }
 
 function proveCanonicalControlRepository() {
@@ -189,7 +235,7 @@ async function childMain() {
   const module = await import(`${pathToFileURL(`${SNAPSHOT}/scripts/execution-fabric/live/remote-dev-offload-activation.mjs`).href}?run=${RUN_ID}`)
   const candidate = { runId: authority.run.runId, workOrderId: authority.workOrderId, issue: authority.issue, repository: authority.target.repository, baseRef: authority.target.baseRef, baseSha: authority.trustedMain.target.pinnedCommit, nodeId: authority.target.nodeId, workspace: authority.target.workspace, branch: authority.target.branch, operations: authority.operations, resources: authority.resources, network: authority.network, executionIdentity: authority.executionIdentity }
   const authorized = await module.authorizeRemoteDevActivation(authority, candidate)
-  if (authorized.status !== "AUTHORIZED_SINGLE_USE" || authorized.executionAuthorized !== true) throw new Error(JSON.stringify(authorized))
+  if (authorized.status !== "AUTHORIZED_SINGLE_USE" || authorized.executionAuthorized !== true) { process.send?.({type:"blocked",value:authorized}); throw new Error("activation authorization blocked") }
   process.send?.({ type: "authorized", value: authorized })
   process.on("message", async message => {
     if (message?.type !== "settle") return
@@ -225,6 +271,9 @@ async function daemonMain() {
       if (inspectActivationSessionToken(payload, trustedNow()).status !== "ACTIVE_SESSION_VERIFIED" || head !== snapshotGit(["rev-parse", "HEAD"])) throw new Error("authorized session differs")
       writeRootJson(PHASE_FILE, { schemaVersion: 1, phase: "ACTIVATION_CLAIMED_LEASED", runId: RUN_ID, claimId: payload.claimId, leaseId: payload.leaseId, authorityReference: AUTHORITY_REFERENCE, claimedAt: payload.issuedAt, expiresAt: payload.expiresAt })
       writeRootJson(SESSION_FILE, sessionEnvelope(payload))
+    } else if (message?.type === "blocked") {
+      const value=message.value,reason=Array.isArray(value?.reasons)&&value.reasons.length===1?value.reasons[0]:null
+      writeRootJson(FAILURE_FILE,{schemaVersion:1,status:"ACTIVATION_PRECLAIM_BLOCKED",runId:RUN_ID,reasonCode:String(reason?.code??value?.reasonCode??"ACTIVATION_HOST_DRIFT").slice(0,128),detail:String(reason?.detail??value?.detail??"activation authorization blocked").slice(0,512),observedAt:trustedNow()})
     } else if (message?.type === "settled") {
       writeRootJson(SETTLEMENT_FILE, message.value)
       process.exit(message.value?.status === "CONSUMED_SINGLE_USE" ? 0 : 2)
@@ -260,15 +309,17 @@ function startMain() {
   if (recoverStrandedPhase()) return startMain()
   reconcilePreparedSnapshot(currentCommit)
   ensureRootNoSudoProof()
+  ensureNetworkBoundaryReceipt()
   const result = run("/usr/bin/systemd-run", ["--unit", UNIT.replace(/\.service$/, ""), "--property", "Type=simple", "--property", "NoNewPrivileges=yes", "--property", "PrivateTmp=yes", "--property", "ProtectSystem=strict", "--property", `ReadWritePaths=${STATE_ROOT} /var/lib/williamos/fabric/ledger /var/lib/williamos-fabric/remote-dev-launch-tickets`, "/usr/bin/node", INSTALLED_SELF, "daemon"])
   for (let index = 0; index < 100 && !fs.existsSync(SESSION_FILE); index++) spawnSync("/usr/bin/sleep", ["0.1"])
-  if (!fs.existsSync(SESSION_FILE)) throw new Error(`activation daemon did not publish session: ${result}`)
+  if (!fs.existsSync(SESSION_FILE)) {settleNetworkBoundary();const detail=fs.existsSync(FAILURE_FILE)?JSON.parse(exactRootFile(FAILURE_FILE,0o444)).detail:"activation daemon did not publish session";throw new Error(`${detail}: ${result}`)}
   process.stdout.write(fs.readFileSync(SESSION_FILE))
 }
 
 function mintMain(requestPath, packetPath, patchPath) {
   if (process.getuid?.() !== 0 || process.argv[1] !== INSTALLED_SELF) throw new Error("fixed root ticket minter required")
   verifyBridgeReceiptLive()
+  ensureNetworkBoundaryReceipt()
   const sessionEnvelope = JSON.parse(exactRootFile(SESSION_FILE, 0o444)); const payload = sessionEnvelope.payload
   if (!crypto.verify(null, Buffer.from(canonical(payload)), exactRootFile(PUBLIC_KEY, 0o444), Buffer.from(sessionEnvelope.signature, "base64"))) throw new Error("session signature differs")
   if (inspectActivationSessionToken(payload, trustedNow()).status !== "ACTIVE_SESSION_VERIFIED" || startTicks(payload.daemonPid) !== payload.daemonStartTicks) throw new Error("active daemon differs")
@@ -292,12 +343,13 @@ function mintMain(requestPath, packetPath, patchPath) {
 
 function settleMain() {
   verifyBridgeReceiptLive()
-  if(fs.existsSync(SETTLEMENT_FILE)){run("/usr/bin/systemctl",["disable","--now","williamos-aegis-remote-dev-activation.socket"]);process.stdout.write(exactRootFile(SETTLEMENT_FILE,0o444));return}
+  if(fs.existsSync(SETTLEMENT_FILE)){settleNetworkBoundary();run("/usr/bin/systemctl",["disable","--now","williamos-aegis-remote-dev-activation.socket"]);process.stdout.write(exactRootFile(SETTLEMENT_FILE,0o444));return}
   const envelope = JSON.parse(exactRootFile(SESSION_FILE, 0o444)); const payload = envelope.payload
   if (!crypto.verify(null, Buffer.from(canonical(payload)), exactRootFile(PUBLIC_KEY, 0o444), Buffer.from(envelope.signature, "base64")) || inspectActivationSessionToken(payload, payload.issuedAt).status !== "ACTIVE_SESSION_VERIFIED" || inspectActivationHostPhase(JSON.parse(exactRootFile(PHASE_FILE, 0o444)), trustedNow()).status !== "RECOVERY_REQUIRED" || startTicks(payload.daemonPid) !== payload.daemonStartTicks) throw new Error("active daemon differs")
   process.kill(payload.daemonPid, "SIGUSR1")
   for (let index = 0; index < 100 && !fs.existsSync(SETTLEMENT_FILE); index++) spawnSync("/usr/bin/sleep", ["0.1"])
   if (!fs.existsSync(SETTLEMENT_FILE)) throw new Error("activation settlement unavailable")
+  settleNetworkBoundary()
   run("/usr/bin/systemctl", ["disable", "--now", "williamos-aegis-remote-dev-activation.socket"])
   process.stdout.write(fs.readFileSync(SETTLEMENT_FILE))
 }

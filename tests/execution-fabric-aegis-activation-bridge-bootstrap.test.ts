@@ -31,18 +31,18 @@ describe("AEGIS activation bridge bootstrap authority", () => {
   })
 
   it("upgrades only the exact reviewed activation-host predecessor", () => {
-    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c"
-    expect(inspectBridgeDestinationState(destination,"ba97c1ff4cc416e7aa27e6121a090ae37430e01e5b0197e706142c0979a1aa9b","0555",current)).toBe("EXACT_PREDECESSOR")
+    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="1c46a0ff878715df84811d159845802b6543961d3d90f4db056d21b547f56635"
+    expect(inspectBridgeDestinationState(destination,"d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c","0555",current)).toBe("EXACT_PREDECESSOR")
     expect(inspectBridgeDestinationState(destination,"0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"f".repeat(64),"0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"44a5b12ad5a2f65a9c1a841105626aaded996c14d1ca32fc893d8fcc8ca4b152","0555",current)).toBe("DRIFT")
-    expect(inspectBridgeDestinationState("/usr/local/libexec/other","ba97c1ff4cc416e7aa27e6121a090ae37430e01e5b0197e706142c0979a1aa9b","0555",current)).toBe("DRIFT")
-    expect(inspectBridgeDestinationState(destination,"ba97c1ff4cc416e7aa27e6121a090ae37430e01e5b0197e706142c0979a1aa9b","0777",current)).toBe("DRIFT")
+    expect(inspectBridgeDestinationState("/usr/local/libexec/other","d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c","0555",current)).toBe("DRIFT")
+    expect(inspectBridgeDestinationState(destination,"d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c","0777",current)).toBe("DRIFT")
   })
 
   it("accepts only the exact first bridge receipt as a bounded successor predecessor", () => {
-    expect(inspectBridgeReceiptState("41b55d3f250cfb6524d203e275750d49206f91ecbbb493971ad278fec836f339","0".repeat(64))).toBe("EXACT_PREDECESSOR")
-    expect(inspectBridgeReceiptState("5c70148840df17de905198c3aceb1f16d5a5efe7a8b25291c7b6d0bfee9b7293","0".repeat(64))).toBe("DRIFT")
+    expect(inspectBridgeReceiptState("658f68f9f06cf0e9296ef8493718f90a1715edc1f84ca647f9205923aab0ce92","0".repeat(64))).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeReceiptState("41b55d3f250cfb6524d203e275750d49206f91ecbbb493971ad278fec836f339","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("850deb1097fe7971d2574bee49650fd81b01b6cfd3c71d9a9b0684888d29f74b","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("5d2e41f957ceeba53839454392f607c1f5749886761ffd4f3df8f89a962ae043","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("74a9bc03353ee81b51711b66dedb3206fbef5d193997a4a1137c5f45157a5f59","0".repeat(64))).toBe("DRIFT")
