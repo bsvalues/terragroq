@@ -539,7 +539,7 @@ namespace WilliamOS.ExecutionFabric {
     "WILLIAMOS_EMBEDDING_CORPUS_DIR=$snapshotCorpusRoot",
     "NO_PROXY=127.0.0.1,localhost"
   )
-  $run = [WilliamOS.ExecutionFabric.BoundedJob]::Run($PythonExecutable, $ExecutionEvaluatorPath, $sealedInputPath, $resultPath, $sourceRoot, $ExecutionWorkRoot, [uint32]$timeoutMs, $maxResultBytes, $maxScratchBytes, $processMemoryBytes, $jobMemoryBytes, [uint32]$cpuRatePercent, $cpuAffinityMask, $childEnvironment)
+  $run = [WilliamOS.ExecutionFabric.BoundedJob]::Run($PythonExecutable, $ExecutionEvaluatorPath, $sealedInputPath, $resultPath, $ExecutionWorkRoot, $ExecutionWorkRoot, [uint32]$timeoutMs, $maxResultBytes, $maxScratchBytes, $processMemoryBytes, $jobMemoryBytes, [uint32]$cpuRatePercent, $cpuAffinityMask, $childEnvironment)
   if (-not [IO.File]::Exists($resultPath)) { throw [InvalidOperationException]::new("RESULT_MISSING") }
   Assert-NoReparsePoint $resultPath $true
   $resultLength = ([IO.FileInfo]::new($resultPath)).Length

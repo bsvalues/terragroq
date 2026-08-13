@@ -138,7 +138,7 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("'__main__.py'")
     expect(source).toContain("Remove-Item -LiteralPath $sourceRoot -Recurse -Force")
     expect(source).toContain("WILLIAMOS_EMBEDDING_CORPUS_DIR=$snapshotCorpusRoot")
-    expect(source).toContain("$ExecutionEvaluatorPath, $sealedInputPath")
+    expect(source).toContain("$ExecutionEvaluatorPath, $sealedInputPath, $resultPath, $ExecutionWorkRoot, $ExecutionWorkRoot")
   })
 
   it("emits a secret-free bounded receipt", () => {
