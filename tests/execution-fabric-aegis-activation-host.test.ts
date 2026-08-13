@@ -27,6 +27,8 @@ import {
   inspectTransientCompactionEvidence,
   inspectSnapshotCapacity,
   inspectCompactionOccupancy,
+  inspectPreReceiptCompactionAuthority,
+  inspectPreReceiptCompactionReceipt,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -222,6 +224,42 @@ describe("AEGIS production activation host trust", () => {
     expect(inspectCompactionOccupancy({sourceExists:false,targetExists:false,evidenceExists:true})).toBe("COMPLETE")
     expect(inspectCompactionOccupancy({sourceExists:true,targetExists:true,evidenceExists:true})).toBe("DRIFT")
     expect(inspectCompactionOccupancy({sourceExists:false,targetExists:true,evidenceExists:false})).toBe("DRIFT")
+  })
+
+  it("authorizes pre-receipt compaction only from the fresh claimed bridge generation", () => {
+    const hostSha256="a".repeat(64), machineIdSha256="b".repeat(64), bootId="11111111-1111-4111-8111-111111111111", controlCommit="c".repeat(40)
+    const payload:any={schemaVersion:1,operation:"INSTALL_ACTIVATION_BRIDGE",authorityId:"22222222-2222-4222-8222-222222222222",runId,issuedAt:"2026-08-13T05:00:00.000Z",expiresAt:"2026-08-13T05:15:00.000Z",singleUse:true,machineIdSha256,bootId,controlCommit,verifierSha256:"d".repeat(64),prerequisiteReceiptSha256:"41ea35adc284b37e381f1162e5cd2315f8a0ef2da5c2326e1a224c15e4fa541c",assets:[
+      {source:"scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs",destination:"/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs",sha256:hostSha256,mode:"0555"},
+      {source:"scripts/execution-fabric/provision/assets/aegis-remote-dev-activation-peer.py",destination:"/usr/local/libexec/williamos-aegis-remote-dev-activation-peer.py",sha256:"1".repeat(64),mode:"0555"},
+      {source:"scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation.socket",destination:"/etc/systemd/system/williamos-aegis-remote-dev-activation.socket",sha256:"2".repeat(64),mode:"0444"},
+      {source:"scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation@.service",destination:"/etc/systemd/system/williamos-aegis-remote-dev-activation@.service",sha256:"3".repeat(64),mode:"0444"},
+      {source:"scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs",destination:"/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs",sha256:"4".repeat(64),mode:"0555"},
+    ]}
+    const expected={machineIdSha256,bootId,controlCommit,activationHostSha256:hostSha256,claimSha256:sha(canonical(payload))}
+    expect(inspectPreReceiptCompactionAuthority(payload,"2026-08-13T05:01:00.000Z",expected)).toBe("MATCH")
+    expect(inspectPreReceiptCompactionAuthority(payload,payload.expiresAt,expected)).toBe("DRIFT")
+    expect(inspectPreReceiptCompactionAuthority({...payload,controlCommit:"e".repeat(40)},"2026-08-13T05:01:00.000Z",expected)).toBe("DRIFT")
+    expect(inspectPreReceiptCompactionAuthority({...payload,assets:payload.assets.map((asset:any,index:number)=>index?asset:{...asset,sha256:"f".repeat(64)})},"2026-08-13T05:01:00.000Z",expected)).toBe("DRIFT")
+    expect(inspectPreReceiptCompactionAuthority({...payload,extra:true},"2026-08-13T05:01:00.000Z",expected)).toBe("DRIFT")
+  })
+
+  it("accepts only the exact capacity-proven pre-receipt compaction result", () => {
+    const expected={authorityId:"22222222-2222-4222-8222-222222222222",authoritySha256:"a".repeat(64),authorityIssuedAt:"2026-08-13T05:00:00.000Z",authorityExpiresAt:"2026-08-13T05:15:00.000Z",machineIdSha256:"b".repeat(64),bootId:"11111111-1111-4111-8111-111111111111",controlCommit:"c".repeat(40),activationHostSha256:"d".repeat(64),compactionIntentSha256:"e".repeat(64),compactionSha256:"f".repeat(64),minimumAvailableBytes:32*1024*1024}
+    const receipt={schemaVersion:1,status:"TRANSIENT_ACTIVATION_COMPACTION_VERIFIED",runId,...expected,availableBytes:128*1024*1024,completedAt:"2026-08-13T05:02:00.000Z",executionAuthorized:false,activationAuthorized:false}
+    expect(inspectPreReceiptCompactionReceipt(receipt,expected)).toBe("MATCH")
+    expect(inspectPreReceiptCompactionReceipt({...receipt,availableBytes:expected.minimumAvailableBytes-1},expected)).toBe("DRIFT")
+    expect(inspectPreReceiptCompactionReceipt({...receipt,compactionSha256:"0".repeat(64)},expected)).toBe("DRIFT")
+    expect(inspectPreReceiptCompactionReceipt({...receipt,extra:true},expected)).toBe("DRIFT")
+  })
+
+  it("keeps pre-receipt compaction outside the activation and network lifecycle", () => {
+    const source=fs.readFileSync(path.join(root,"scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"),"utf8")
+    const compact=source.slice(source.indexOf("function compactMain"),source.indexOf("function startMain"))
+    expect(compact).toContain("compactTransientActivationState()")
+    expect(compact).not.toContain("verifyBridgeReceiptLive()")
+    expect(compact).not.toContain("ensureNetworkBoundaryReceipt()")
+    expect(compact).not.toContain("systemctl")
+    expect(source).toContain('else if (process.argv[2] === "compact") compactMain(process.argv[3])')
   })
 
   it("accepts only an exact transaction-bound network transition", () => {

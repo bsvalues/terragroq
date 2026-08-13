@@ -16,6 +16,8 @@ const INSTALLED_SELF = "/usr/local/libexec/williamos-aegis-remote-dev-activation
 const PRIVATE_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-authority.key"
 const PUBLIC_KEY = "/etc/williamos-fabric/aegis-remote-dev-launch-authority.pem"
 const BRIDGE_RECEIPT = "/var/lib/williamos-fabric/remote-dev-activation-bridge-verified.json"
+const OWNER_KEY = "/etc/williamos-fabric/owner-prerequisite-authority.pem"
+const BRIDGE_CLAIM_ROOT = "/var/lib/williamos-fabric/remote-dev-activation-bridge-claims"
 const STATE_ROOT = `/run/williamos-fabric/activation-${RUN_ID}`
 const PREPARING_ROOT = `${STATE_ROOT}.preparing`
 const COMPACTION_INTENT_FILE = `${STATE_ROOT}.compaction-intent.json`
@@ -47,6 +49,14 @@ const TRANSIENT_COMPACTION = Object.freeze([
   { id:"preclaim-77b", path:`${STATE_ROOT}.preclaim-77b1430f6c0966ce0fcfd03c46cccfa487d3b8aa`, entryCount:2661, inventorySha256:"6e51386fa04b2ebac9f8cf61aa4ecba18a10bcb84469c82e567e70174770bf3b", gitObjectsSha256:"763b211ee7807fe65813f41b174e99b5bd61a60095662b412f62f7ece8e737e2", preparedSha256:"d3b110a512823700df85f2f885f3f2edb46da05a6e70fd6cff3b9ae76a122883", activationSha256:"7db7740be6d62885437d1e20bfe2fbae5f68a15e3c0689c178b79a03abe2a639", gitHeadSha256:"28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80", gitMainRefSha256:"0bbf14cdc667003c81c20444a9f263d640d5cf02629f9a5510335ebbe35b329b" },
   { id:"partial-879d", path:PREPARING_ROOT, entryCount:2582, inventorySha256:"b3d28eaab74b34a23ba423855d454ffdc62691f6ce6f4a620cace6e8c1174e11", gitObjectsSha256:"f555d4f4bddf441e3d2f84f71a71252d77e939b1bd46c814e1b63367b8c584e5", preparedSha256:null, activationSha256:"88d0e6ce75cb2e7164354bf7e31c6901f9de3938ceba326dc474d96eac5771f3", gitHeadSha256:null, gitMainRefSha256:"e7c967191d8bf4e6c4f59cba335d32a57afe5b38b244dfa637464635a2103bb2" },
 ])
+const ACTIVATION_ASSET_LAYOUT = Object.freeze([
+  ["scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs","/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs","0555"],
+  ["scripts/execution-fabric/provision/assets/aegis-remote-dev-activation-peer.py","/usr/local/libexec/williamos-aegis-remote-dev-activation-peer.py","0555"],
+  ["scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation.socket","/etc/systemd/system/williamos-aegis-remote-dev-activation.socket","0444"],
+  ["scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation@.service","/etc/systemd/system/williamos-aegis-remote-dev-activation@.service","0444"],
+  ["scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs","/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs","0555"],
+])
+const PRE_RECEIPT_MINIMUM_AVAILABLE_BYTES = 32 * 1024 * 1024
 const LEDGER_ROOT = "/var/lib/williamos/fabric/ledger"
 const OPERATIONS = Object.freeze(["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "APPLY_RESERVED_PATCH", "RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE", "COMMIT_RESERVED_PATHS", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE", "CLEAN_EXACT_WORKSPACE"])
 const ENV = Object.freeze({ HOME: "/nonexistent", PATH: "/usr/sbin:/usr/bin:/sbin:/bin", LANG: "C", LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1" })
@@ -156,6 +166,8 @@ export function inspectTransientCompactionEvidence(value){try{if(canonical(value
 export function inspectSnapshotCapacity(availableBytes,requiredBytes){return[availableBytes,requiredBytes].every(Number.isSafeInteger)&&requiredBytes>=0&&availableBytes-requiredBytes>=128*1024*1024?"SUFFICIENT":"INSUFFICIENT"}
 function snapshotRequiredBytes(root){let total=0;const queue=[root];while(queue.length){const current=queue.shift(),s=fs.lstatSync(current);if(s.isSymbolicLink()||(!s.isDirectory()&&!s.isFile()))throw new Error("snapshot source type differs");total+=Number(s.blocks)*512;if(!Number.isSafeInteger(total))throw new Error("snapshot source size differs");if(s.isDirectory())for(const name of fs.readdirSync(current))queue.push(path.join(current,name))}return total}
 export function inspectCompactionOccupancy({sourceExists,targetExists,evidenceExists}){if([sourceExists,targetExists,evidenceExists].some(value=>typeof value!=="boolean")||sourceExists&&targetExists||targetExists&&!evidenceExists)return"DRIFT";if(!evidenceExists)return sourceExists?"VALIDATE_ALL_AND_RECORD":"DRIFT";if(sourceExists)return"VALIDATE_AND_RENAME";return targetExists?"REMOVE_RENAMED":"COMPLETE"}
+export function inspectPreReceiptCompactionAuthority(p,now,e){try{const keys=["schemaVersion","operation","authorityId","runId","issuedAt","expiresAt","singleUse","machineIdSha256","bootId","controlCommit","verifierSha256","prerequisiteReceiptSha256","assets"],expectedKeys=["machineIdSha256","bootId","controlCommit","activationHostSha256","claimSha256"],n=Date.parse(now),i=Date.parse(p?.issuedAt),x=Date.parse(p?.expiresAt);if(!exactKeys(p,keys)||!exactKeys(e,expectedKeys)||p.schemaVersion!==1||p.operation!=="INSTALL_ACTIVATION_BRIDGE"||!GUID.test(p.authorityId)||p.runId!==RUN_ID||p.singleUse!==true||p.machineIdSha256!==e.machineIdSha256||p.bootId!==e.bootId||p.controlCommit!==e.controlCommit||!SHA.test(p.verifierSha256)||p.prerequisiteReceiptSha256!=="41ea35adc284b37e381f1162e5cd2315f8a0ef2da5c2326e1a224c15e4fa541c"||!Array.isArray(p.assets)||p.assets.length!==ACTIVATION_ASSET_LAYOUT.length||![n,i,x].every(Number.isFinite)||n<i||n>=x||x-i>900_000||sha(Buffer.from(canonical(p)))!==e.claimSha256)throw new Error();for(let index=0;index<p.assets.length;index++){const a=p.assets[index],layout=ACTIVATION_ASSET_LAYOUT[index];if(!exactKeys(a,["source","destination","sha256","mode"])||a.source!==layout[0]||a.destination!==layout[1]||a.mode!==layout[2]||!SHA.test(a.sha256))throw new Error()}if(p.assets[0].sha256!==e.activationHostSha256)throw new Error();return"MATCH"}catch{return"DRIFT"}}
+export function inspectPreReceiptCompactionReceipt(v,e){try{const expectedKeys=["authorityId","authoritySha256","authorityIssuedAt","authorityExpiresAt","machineIdSha256","bootId","controlCommit","activationHostSha256","compactionIntentSha256","compactionSha256","minimumAvailableBytes"],keys=["schemaVersion","status","runId",...expectedKeys,"availableBytes","completedAt","executionAuthorized","activationAuthorized"],completed=Date.parse(v?.completedAt),issued=Date.parse(e?.authorityIssuedAt),expires=Date.parse(e?.authorityExpiresAt);if(!exactKeys(e,expectedKeys)||!exactKeys(v,keys)||v.schemaVersion!==1||v.status!=="TRANSIENT_ACTIVATION_COMPACTION_VERIFIED"||v.runId!==RUN_ID||Object.entries(e).some(([key,value])=>v[key]!==value)||![v.authoritySha256,v.machineIdSha256,v.activationHostSha256,v.compactionIntentSha256,v.compactionSha256].every(value=>typeof value==="string"&&SHA.test(value))||!GUID.test(v.authorityId)||!GUID.test(v.bootId)||!/^[a-f0-9]{40}$/.test(v.controlCommit)||![completed,issued,expires].every(Number.isFinite)||completed<issued||completed>=expires||!Number.isSafeInteger(v.availableBytes)||v.minimumAvailableBytes!==PRE_RECEIPT_MINIMUM_AVAILABLE_BYTES||v.availableBytes<v.minimumAvailableBytes||v.executionAuthorized!==false||v.activationAuthorized!==false)throw new Error();return"MATCH"}catch{return"DRIFT"}}
 function removeTrustedTree(root,top=true,fabricGid=Number(run("/usr/bin/id",["-g","williamos-fabric"]))){const s=fs.lstatSync(root);if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==0||(top?(s.gid!==fabricGid||(s.mode&0o7777)!==0o750):(s.gid!==0||(s.mode&0o022)!==0)))throw new Error("compacting root differs");for(const name of fs.readdirSync(root)){const target=path.join(root,name),v=fs.lstatSync(target);if(v.isSymbolicLink())throw new Error("compacting symlink differs");if(v.isDirectory()){if(v.uid!==0||v.gid!==0||(v.mode&0o022)!==0)throw new Error("compacting directory differs");removeTrustedTree(target,false,fabricGid);fs.rmdirSync(target)}else if(v.isFile()){if(v.uid!==0||v.gid!==0||v.nlink!==1||(v.mode&0o022)!==0)throw new Error("compacting file differs");fs.unlinkSync(target)}else throw new Error("compacting special file differs")} }
 function compactTransientActivationState(){
   const intent=buildTransientCompactionIntent(),expected=buildTransientCompactionEvidence(),anySource=TRANSIENT_COMPACTION.some(entry=>occupied(entry.path)),anyTarget=TRANSIENT_COMPACTION.some(entry=>occupied(`${STATE_ROOT}.compacting-${entry.id}`))
@@ -166,7 +178,10 @@ function compactTransientActivationState(){
   if(TRANSIENT_COMPACTION.some(entry=>occupied(entry.path)||occupied(`${STATE_ROOT}.compacting-${entry.id}`)))throw new Error("transient compaction completion occupancy differs")
   createRootJson(COMPACTION_FILE,expected,0o444)
 }
+function proveTransientCompactionComplete(){const intent=JSON.parse(exactRootFile(COMPACTION_INTENT_FILE,0o444)),evidence=JSON.parse(exactRootFile(COMPACTION_FILE,0o444));if(canonical(intent)!==canonical(buildTransientCompactionIntent())||inspectTransientCompactionEvidence(evidence)!=="EXACT"||TRANSIENT_COMPACTION.some(entry=>occupied(entry.path)||occupied(`${STATE_ROOT}.compacting-${entry.id}`)))throw new Error("transient compaction is not complete");return{intentSha256:sha(exactRootFile(COMPACTION_INTENT_FILE,0o444)),compactionSha256:sha(exactRootFile(COMPACTION_FILE,0o444))}}
+function availableRunBytes(){const stat=fs.statfsSync("/run"),value=Number(stat.bavail)*Number(stat.bsize);if(!Number.isSafeInteger(value)||value<0)throw new Error("run capacity differs");return value}
 function exactRootFile(file, mode) { const s = fs.lstatSync(file); if (!trustedParents(file) || !s.isFile() || s.isSymbolicLink() || s.nlink !== 1 || s.uid !== 0 || s.gid !== 0 || (s.mode & 0o7777) !== mode) throw new Error(`${file} trust differs`); return fs.readFileSync(file) }
+function exactRootSource(file){const s=fs.lstatSync(file);if(!trustedParents(file)||!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==0||s.gid!==0||(s.mode&0o022)!==0)throw new Error(`${file} source trust differs`);return fs.readFileSync(file)}
 function exactLedgerFile(file) { const gid=Number(run("/usr/bin/id",["-g","williamos-fabric"]));for(const [p,uid,mode] of [["/var",0,0o755],["/var/lib",0,0o755],["/var/lib/williamos",999,0o750],["/var/lib/williamos/fabric",999,0o700],[LEDGER_ROOT,999,0o700]]){const v=fs.lstatSync(p);if(!v.isDirectory()||v.isSymbolicLink()||v.uid!==uid||(v.mode&0o7777)!==mode||(uid===999&&v.gid!==gid))throw new Error("ledger ancestor trust differs")}const s=fs.lstatSync(file);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1||s.uid!==999||s.gid!==gid||(s.mode&0o7777)!==0o600)throw new Error(`${file} ledger trust differs`);return JSON.parse(fs.readFileSync(file)) }
 function writeRootJson(file, value, mode = 0o444) { const bytes = Buffer.from(`${canonical(value)}\n`); const temp = `${file}.${process.pid}.tmp`; const fd = fs.openSync(temp, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, mode); fs.writeFileSync(fd, bytes); fs.fchmodSync(fd, mode); fs.fsyncSync(fd); fs.closeSync(fd); fs.renameSync(temp, file); const parent = fs.openSync(path.dirname(file), fs.constants.O_RDONLY | fs.constants.O_DIRECTORY); fs.fsyncSync(parent); fs.closeSync(parent) }
 function createRootJson(file, value, mode = 0o400) { const bytes = Buffer.from(`${canonical(value)}\n`); const fd = fs.openSync(file, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, mode); try { fs.writeFileSync(fd, bytes); fs.fchmodSync(fd, mode); fs.fsyncSync(fd) } finally { fs.closeSync(fd) } const parent = fs.openSync(path.dirname(file), fs.constants.O_RDONLY | fs.constants.O_DIRECTORY); try { fs.fsyncSync(parent) } finally { fs.closeSync(parent) } }
@@ -342,6 +357,30 @@ async function daemonMain() {
   child.on("exit", code => { if (!fs.existsSync(SETTLEMENT_FILE)) process.exit(code ?? 2) })
 }
 
+function verifyPreReceiptCompactionAuthority(authorityPath){
+  const self=exactRootFile(INSTALLED_SELF,0o555),envelope=JSON.parse(exactRootFile(authorityPath,0o400));if(!exactKeys(envelope,["payload","signature"])||typeof envelope.signature!=="string")throw new Error("compaction authority envelope differs")
+  const p=envelope.payload,controlCommit=proveCanonicalControlRepository(),machineIdSha256=sha(Buffer.from(fs.readFileSync("/etc/machine-id","utf8").trim())),bootId=fs.readFileSync("/proc/sys/kernel/random/boot_id","utf8").trim(),activationHostSha256=sha(self),claimSha256=sha(Buffer.from(canonical(p))),expected={machineIdSha256,bootId,controlCommit,activationHostSha256,claimSha256}
+  if(inspectPreReceiptCompactionAuthority(p,trustedNow(),expected)!=="MATCH")throw new Error("compaction authority differs")
+  if(!crypto.verify(null,Buffer.from(canonical(p)),crypto.createPublicKey(exactRootFile(OWNER_KEY,0o444)),Buffer.from(envelope.signature,"base64")))throw new Error("compaction owner signature differs")
+  for(const a of p.assets){const source=path.join(CONTROL_REPOSITORY,...a.source.split("/")),mode=Number.parseInt(a.mode,8);if(sha(exactRootSource(source))!==a.sha256||sha(exactRootFile(a.destination,mode))!==a.sha256)throw new Error("compaction generation asset differs")}
+  const claimRoot=fs.lstatSync(BRIDGE_CLAIM_ROOT);if(!trustedParents(`${BRIDGE_CLAIM_ROOT}/claim`)||!claimRoot.isDirectory()||claimRoot.isSymbolicLink()||claimRoot.uid!==0||claimRoot.gid!==0||(claimRoot.mode&0o7777)!==0o700)throw new Error("compaction claim root differs")
+  if(exactRootFile(`${BRIDGE_CLAIM_ROOT}/${p.authorityId}.consumed`,0o400).toString("utf8")!==`${claimSha256}\n`)throw new Error("compaction authority claim differs")
+  return{payload:p,expected}
+}
+
+function compactMain(authorityPath) {
+  if(process.getuid?.()!==0||process.argv[1]!==INSTALLED_SELF)throw new Error("fixed root compactor required")
+  const {payload:p,expected:authorityExpected}=verifyPreReceiptCompactionAuthority(authorityPath),receiptPath=`${BRIDGE_CLAIM_ROOT}/${p.authorityId}.transient-compaction`,authoritySha256=authorityExpected.claimSha256
+  const receiptExpected=proof=>({authorityId:p.authorityId,authoritySha256,authorityIssuedAt:p.issuedAt,authorityExpiresAt:p.expiresAt,machineIdSha256:p.machineIdSha256,bootId:p.bootId,controlCommit:p.controlCommit,activationHostSha256:authorityExpected.activationHostSha256,...proof,minimumAvailableBytes:PRE_RECEIPT_MINIMUM_AVAILABLE_BYTES})
+  if(occupied(receiptPath)){const proof=proveTransientCompactionComplete(),availableBytes=availableRunBytes(),receipt=JSON.parse(exactRootFile(receiptPath,0o444));if(availableBytes<PRE_RECEIPT_MINIMUM_AVAILABLE_BYTES||inspectPreReceiptCompactionReceipt(receipt,receiptExpected(proof))!=="MATCH")throw new Error("pre-receipt compaction receipt differs");process.stdout.write(exactRootFile(receiptPath,0o444));return}
+  if(inspectPreReceiptCompactionAuthority(p,trustedNow(),authorityExpected)!=="MATCH")throw new Error("compaction authority expired before mutation")
+  compactTransientActivationState()
+  const proof=proveTransientCompactionComplete(),availableBytes=availableRunBytes(),completedAt=trustedNow(),receipt={schemaVersion:1,status:"TRANSIENT_ACTIVATION_COMPACTION_VERIFIED",runId:RUN_ID,...receiptExpected(proof),availableBytes,completedAt,executionAuthorized:false,activationAuthorized:false}
+  if(inspectPreReceiptCompactionReceipt(receipt,receiptExpected(proof))!=="MATCH")throw new Error("pre-receipt compaction result differs")
+  createRootJson(receiptPath,receipt,0o444);if(inspectPreReceiptCompactionReceipt(JSON.parse(exactRootFile(receiptPath,0o444)),receiptExpected(proof))!=="MATCH")throw new Error("pre-receipt compaction publication differs")
+  process.stdout.write(exactRootFile(receiptPath,0o444))
+}
+
 function startMain() {
   if (process.getuid?.() !== 0 || process.argv[1] !== INSTALLED_SELF) throw new Error("fixed root host required")
   verifyBridgeReceiptLive()
@@ -433,6 +472,7 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
     if (process.argv[2] === "child") await childMain()
     else if (process.argv[2] === "recover") await recoveryChildMain()
     else if (process.argv[2] === "daemon") await daemonMain()
+    else if (process.argv[2] === "compact") compactMain(process.argv[3])
     else if (process.argv[2] === "start") startMain()
     else if (process.argv[2] === "mint") mintMain(process.argv[3], process.argv[4], process.argv[5])
     else if (process.argv[2] === "settle") settleMain()
