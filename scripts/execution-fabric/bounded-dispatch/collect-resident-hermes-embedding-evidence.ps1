@@ -94,7 +94,10 @@ if ($weightsHash -notmatch "^$weightsSha256\s+") { throw 'HERMES_EMBEDDING_COLLE
 $tags = Invoke-RestMethod -Method Get -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 10
 $tagMatches = @($tags.models | Where-Object { $_.model -eq $model -and $_.digest -match '^[a-f0-9]{64}$' })
 if ($tagMatches.Count -ne 1) { throw 'HERMES_EMBEDDING_COLLECTOR_MODEL_INVENTORY_WALL' }
-$modelManifestSha256 = Get-Sha256 ([Text.Encoding]::UTF8.GetBytes($manifestText))
+$modelManifestHash = (@(& $docker exec $container sha256sum $manifestPath) -join '').Trim()
+Assert-LastExit 'HERMES_EMBEDDING_COLLECTOR_MODEL_MANIFEST_HASH_WALL'
+if ($modelManifestHash -notmatch '^([a-f0-9]{64})\s+') { throw 'HERMES_EMBEDDING_COLLECTOR_MODEL_MANIFEST_DIGEST_WALL' }
+$modelManifestSha256 = $Matches[1]
 if ($tagMatches[0].digest -ne $modelManifestSha256) { throw 'HERMES_EMBEDDING_COLLECTOR_MODEL_MANIFEST_DIGEST_WALL' }
 
 $inventory = [ordered]@{

@@ -210,7 +210,12 @@ export async function acquireExclusiveLease(binding) {
       }
       staleLeaseSha256 = sha256(retainedBytes)
       minimumFence = retained.fencing_token + 1
-      fs.renameSync(leasePath, path.join(path.dirname(leasePath), `stale-embedding-lease-${staleLeaseSha256}.json`))
+      let stalePath = path.join(path.dirname(leasePath), `stale-embedding-lease-${staleLeaseSha256}.json`)
+      for (let suffix = 1; fs.existsSync(stalePath); suffix += 1) {
+        if (!Number.isSafeInteger(suffix)) throw new Error("stale lease archive namespace exhausted")
+        stalePath = path.join(path.dirname(leasePath), `stale-embedding-lease-${staleLeaseSha256}-${suffix}.json`)
+      }
+      fs.renameSync(leasePath, stalePath)
     } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
   }
   throw new Error("exclusive lease recovery did not converge")

@@ -52,12 +52,6 @@ function Get-BoundedUInt64 {
   return $value
 }
 
-function Get-LowerSha256([byte[]]$Bytes) {
-  $algorithm = [Security.Cryptography.SHA256]::Create()
-  try { return -join ($algorithm.ComputeHash($Bytes) | ForEach-Object { $_.ToString('x2') }) }
-  finally { $algorithm.Dispose() }
-}
-
 function Assert-NoReparsePoint {
   param([string]$Path, [bool]$LeafMustExist)
   $full = [IO.Path]::GetFullPath($Path)
@@ -175,7 +169,8 @@ try {
   $modelParts = $modelId.Split(':')
   $modelManifestPath = "/root/.ollama/models/manifests/registry.ollama.ai/library/$($modelParts[0])/$($modelParts[1])"
   $modelManifestText = (@(& $DockerExecutable exec $ExecutionContainer cat $modelManifestPath) -join "`n").Trim()
-  if ($LASTEXITCODE -ne 0 -or (Get-LowerSha256 ([Text.Encoding]::UTF8.GetBytes($modelManifestText))) -cne $modelManifestSha256) { throw [InvalidOperationException]::new("MODEL_MANIFEST_REVERIFICATION_FAILED") }
+  $modelManifestHash = (@(& $DockerExecutable exec $ExecutionContainer sha256sum $modelManifestPath) -join '').Trim()
+  if ($LASTEXITCODE -ne 0 -or $modelManifestHash -cnotmatch '^([a-f0-9]{64})\s+' -or $Matches[1] -cne $modelManifestSha256) { throw [InvalidOperationException]::new("MODEL_MANIFEST_REVERIFICATION_FAILED") }
   $modelManifest = $modelManifestText | ConvertFrom-Json
   $modelLayers = @($modelManifest.layers | Where-Object mediaType -eq 'application/vnd.ollama.image.model')
   if ($modelLayers.Count -ne 1 -or [string]$modelLayers[0].digest -cne "sha256:$weightsSha256") { throw [InvalidOperationException]::new("MODEL_WEIGHTS_BINDING_FAILED") }
