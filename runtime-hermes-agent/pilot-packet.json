@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "workOrderId": "WO-HERMES-FREE-DEV-AGENT-001",
+  "workspaceRoot": "D:\\HermesWorkspaces\\williamos-free-dev-agent",
+  "model": "williamos-qwen3-4b:64k",
+  "maximumTurns": 5,
+  "toolsets": ["file", "terminal"],
+  "prompt": "Create invocation-proof.txt containing exactly HERMES_FREE_AGENT_INVOKE_OK followed by one newline. Do not modify any other file. Read it back and report the marker."
+}

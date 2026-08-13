@@ -1,0 +1,41 @@
+_config_version: 34
+
+model:
+  default: williamos-qwen3-4b:64k
+  provider: custom
+  base_url: http://inference-proxy:8080/v1
+  context_length: 65536
+  max_tokens: 8192
+
+agent:
+  max_turns: 20
+  disabled_toolsets:
+    - browser
+    - code_execution
+    - computer_use
+    - cronjob
+    - delegation
+    - messaging
+    - moa
+    - skills
+    - web
+
+terminal:
+  backend: local
+  cwd: /workspace
+  timeout: 300
+
+toolsets:
+  - file
+  - terminal
+
+worktree: false
+fallback_providers: []
+
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+
+plugins:
+  enabled: []
+  disabled: []
