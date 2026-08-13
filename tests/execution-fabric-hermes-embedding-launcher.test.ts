@@ -106,6 +106,8 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("Copy-Item -LiteralPath $sourceBlob -Destination $snapshotBlob")
     expect(source).toContain("MODEL_SNAPSHOT_MANIFEST_HASH_FAILED")
     expect(source).toContain("MODEL_SNAPSHOT_HASH_FAILED")
+    expect(source).toContain("[Security.Cryptography.SHA256]::Create()")
+    expect(source).not.toMatch(/SHA256\]::HashData|Convert\]::ToHexString/)
     expect(source).toContain("$plannedSnapshotBytes + $inputLength + $maxResultBytes -gt $maxScratchBytes")
     expect(source).toContain("$copiedSnapshotBytes + $sourceLength + $inputLength + $maxResultBytes -gt $maxScratchBytes")
     expect(source).toContain("[IO.FileShare]::Read")

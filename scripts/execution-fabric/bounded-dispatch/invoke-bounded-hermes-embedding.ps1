@@ -55,6 +55,16 @@ function Get-BoundedUInt64 {
   return $value
 }
 
+function Get-BytesSha256 {
+  param([byte[]]$Bytes)
+  $algorithm = [Security.Cryptography.SHA256]::Create()
+  try {
+    return ([BitConverter]::ToString($algorithm.ComputeHash($Bytes))).Replace('-', '').ToLowerInvariant()
+  } finally {
+    $algorithm.Dispose()
+  }
+}
+
 function Assert-NoReparsePoint {
   param([string]$Path, [bool]$LeafMustExist)
   $full = [IO.Path]::GetFullPath($Path)
@@ -185,7 +195,7 @@ try {
   $sourceManifestPath = Join-Path $ModelsRoot "manifests\registry.ollama.ai\library\$($modelParts[0])\$($modelParts[1])"
   Assert-NoReparsePoint $sourceManifestPath $true
   $sourceManifestBytes = [IO.File]::ReadAllBytes($sourceManifestPath)
-  if ([Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($sourceManifestBytes)).ToLowerInvariant() -cne $modelManifestSha256) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_MANIFEST_HASH_FAILED") }
+  if ((Get-BytesSha256 $sourceManifestBytes) -cne $modelManifestSha256) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_MANIFEST_HASH_FAILED") }
   $sourceManifest = [Text.Encoding]::UTF8.GetString($sourceManifestBytes) | ConvertFrom-Json
   $blobSizes = @{}
   [decimal]$plannedSnapshotBytes = $sourceManifestBytes.Length
