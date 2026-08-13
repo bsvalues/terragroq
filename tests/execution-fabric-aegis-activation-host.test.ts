@@ -146,6 +146,16 @@ describe("AEGIS production activation host trust", () => {
     expect(inspectRootNoSudoObservation({...good,sudo:{...good.sudo,stdout:"User williamos-fabric may run the following commands\n"}})).toBe("DRIFT")
   })
 
+  it("keeps the activation service no-new-privileges while isolating the exact root policy query", () => {
+    const source=fs.readFileSync(path.join(root,"scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"),"utf8")
+    const proof=source.slice(source.indexOf("function rootSudoPolicyResult"),source.indexOf("function ensureRootNoSudoProof"))
+    expect(proof).toContain('"/usr/bin/systemd-run"')
+    expect(proof).toContain('"NoNewPrivileges=no"')
+    expect(proof).toContain('"/usr/bin/sudo","-U","williamos-fabric","-l"')
+    expect(source).toContain('"NoNewPrivileges=yes"')
+    expect(source).not.toContain('sudo:rootResult("/usr/bin/sudo"')
+  })
+
   it("adopts only a fresh exact pre-claim proof and archives an exact expired generation", () => {
     const proof:any={schemaVersion:1,status:"ROOT_NO_SUDO_VERIFIED",activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,runId,machineIdSha256:"a".repeat(64),bootId:"11111111-1111-4111-8111-111111111111",activationHostSha256:"b".repeat(64),authoritySha256:"c".repeat(64),account:"williamos-fabric",passwordStatus:"L",sudoStatus:0,sudoStdout:"User williamos-fabric is not allowed to run sudo on aegis.\n",sudoStderr:"",issuedAt:"2026-08-13T01:10:00.000Z",expiresAt:"2026-08-13T01:15:00.000Z"}
     const expected={machineIdSha256:proof.machineIdSha256,bootId:proof.bootId,activationHostSha256:proof.activationHostSha256,authoritySha256:proof.authoritySha256}
