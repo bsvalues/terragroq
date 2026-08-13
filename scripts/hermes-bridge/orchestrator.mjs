@@ -3,7 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 
-import { CodexAppServerClient } from "./app-server-client.mjs"
+import { selectExecutionBackend } from "./execution-backend.mjs"
 import {
   completeOutcome,
   deferProviderOutcome,
@@ -285,10 +285,22 @@ export function createHermesOrchestrator(options = {}) {
   const activationPath = path.join(runtimeRoot, "control", "activation")
   const notBeforePath = path.join(runtimeRoot, "control", "authority-not-before")
   const state = options.state ?? createHermesStateStore(statePath)
+  const backendEnvironment = options.env ?? process.env
+  const executionBackend = options.executionBackend ?? selectExecutionBackend(
+    typeof backendEnvironment.WILLIAMOS_CODEX_EXEC_NODE === "string"
+      && backendEnvironment.WILLIAMOS_CODEX_EXEC_NODE.trim().length > 0
+      ? backendEnvironment
+      : {
+          ...backendEnvironment,
+          WILLIAMOS_HERMES_RUNTIME_ROOT: runtimeRoot,
+          WILLIAMOS_REPOSITORY_ROOT: workspace,
+        },
+  )
   const lifecycle = options.lifecycle ?? createRepositoryLifecycle({
     workspaceRoot: workspace,
     ownedWorktreeRoot: path.join(runtimeRoot, "worktrees"),
     validationCommands: DEFAULT_VALIDATION_COMMANDS,
+    executionBackend,
   })
   const selectOutcome = options.selectOutcome ?? selectNextOutcome
   const markComplete = options.markComplete ?? completeOutcome
@@ -318,7 +330,7 @@ export function createHermesOrchestrator(options = {}) {
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const projectLease = options.projectLease ?? projectOutcomeRuntimeLease
   const leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? 5 * 60 * 1000
-  const clientFactory = options.clientFactory ?? ((cwd) => new CodexAppServerClient({ cwd, timeoutMs: TURN_TIMEOUT_MS }))
+  const clientFactory = options.clientFactory
   const now = options.now ?? (() => new Date())
   const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
   const isProcessAlive = options.isProcessAlive ?? ((processId) => {
@@ -1304,7 +1316,7 @@ export function createHermesOrchestrator(options = {}) {
     let cp = await checkpoint(lease, sequence, "WORKTREE_INTENT", null, { branch, worktreePath, baseSha })
     sequence = cp.checkpointSequence
     const record = await lifecycle.ensureOwnedWorktree({
-      branch, name: branch.slice("codex/".length), worktreePath: cp.metadata.worktreePath,
+      branch, baseSha, name: branch.slice("codex/".length), worktreePath: cp.metadata.worktreePath,
     })
     cp = await checkpoint(lease, sequence, "WORKTREE_READY", null, { branch, worktreePath: record.worktreePath, baseSha })
     sequence = cp.checkpointSequence
@@ -1315,10 +1327,17 @@ export function createHermesOrchestrator(options = {}) {
     initialRemediationRound = Math.max(
       initialRemediationRound, lease.metadata?.validationRemediationRound ?? 0,
     )
-    const validationCommandsFor = (workingPaths) => {
-      const focusedTests = workingPaths.filter((changedPath) =>
-        changedPath.startsWith("tests/") && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(changedPath)
-          && fs.statSync(path.join(record.worktreePath, changedPath), { throwIfNoEntry: false })?.isFile())
+    const validationCommandsFor = async (workingPaths) => {
+      const candidates = workingPaths.filter((changedPath) =>
+        changedPath.startsWith("tests/") && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(changedPath))
+      const focusedTests = []
+      for (const changedPath of candidates) {
+        const entry = await executionBackend.stat({
+          workspacePath: record.worktreePath,
+          relPath: changedPath,
+        })
+        if (entry.exists && entry.isFile) focusedTests.push(changedPath)
+      }
       return [
         ...(focusedTests.length > 0 ? [{
           command: "npx", args: ["vitest", "run", ...focusedTests], timeoutMs: 5 * 60 * 1000,
@@ -1331,7 +1350,7 @@ export function createHermesOrchestrator(options = {}) {
       try {
         return await lifecycle.runValidationCommands({
           ...record,
-          commands: validationCommandsFor(workingPaths),
+          commands: await validationCommandsFor(workingPaths),
         })
       } finally {
         lifecycle.removeValidationDependencies(record)
@@ -1464,7 +1483,12 @@ export function createHermesOrchestrator(options = {}) {
       }
     }
 
-    const client = clientFactory(record.worktreePath)
+    const client = clientFactory
+      ? await clientFactory(record.worktreePath)
+      : await executionBackend.runCodexClient({
+          workspacePath: record.worktreePath,
+          timeoutMs: TURN_TIMEOUT_MS,
+        })
     let replayedTurnResult = cp.metadata.turnResult
       ? normalizeHermesTurnResult(cp.metadata.turnResult)
       : null

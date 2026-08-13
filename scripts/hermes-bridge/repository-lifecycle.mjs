@@ -463,8 +463,17 @@ export function createRepositoryLifecycle(options) {
   }
   const runner = options.runner ?? createCommandRunner()
   if (typeof runner !== "function") wall("HERMES_REPOSITORY_CONFIG_WALL", "runner function required")
+  const executionBackend = options.executionBackend ?? null
   const validationCommands = (options.validationCommands ?? []).map(normalizeValidation)
   const records = new Map()
+  const workspacePath = (value) => {
+    if (!executionBackend) return absolute(value, "worktreePath")
+    if (typeof value !== "string" || value.length === 0 || value.includes("\0")) {
+      wall("HERMES_REPOSITORY_PATH_WALL", "worktreePath absolute path required")
+    }
+    return value
+  }
+  const sameWorkspace = (left, right) => executionBackend ? left === right : samePath(left, right)
 
   async function run(command, args, {
     cwd = workspaceRoot, allowFailure = false, env = {}, timeoutMs, credentialAccess = true,
@@ -476,7 +485,25 @@ export function createRepositoryLifecycle(options) {
       if (Object.keys(env).length > 0) invocation.env = { ...env }
       if (timeoutMs !== undefined) invocation.timeoutMs = timeoutMs
       if (!credentialAccess) invocation.credentialAccess = false
-      result = normalizeResult(await runner(invocation))
+      if (executionBackend) {
+        const backendWorkspace = cwd === repositoryRoot ? repository : cwd
+        const backendResult = command === "git" && args[0] === "-C"
+          ? await executionBackend.git({
+              workspacePath: args[1] === repositoryRoot ? repository : args[1],
+              args: args.slice(2), timeoutMs,
+            })
+          : await executionBackend.runCommand({
+              workspacePath: backendWorkspace, command, args: [...args], timeoutMs, env,
+              credentialAccess,
+            })
+        result = normalizeResult({
+          code: backendResult.exitCode,
+          stdout: backendResult.stdout,
+          stderr: backendResult.stderr,
+        })
+      } else {
+        result = normalizeResult(await runner(invocation))
+      }
     } catch {
       wall("HERMES_REPOSITORY_RUNNER_WALL", `${path.basename(command)} failed to start`)
     }
@@ -494,7 +521,8 @@ export function createRepositoryLifecycle(options) {
 
   function ownedRecord(worktreePath, branch) {
     const record = records.get(branch)
-    if (!record || !samePath(record.worktreePath, worktreePath) || !inside(ownedWorktreeRoot, worktreePath)) {
+    if (!record || !sameWorkspace(record.worktreePath, worktreePath)
+      || (!executionBackend && !inside(ownedWorktreeRoot, worktreePath))) {
       wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "recorded owned worktree and branch required")
     }
     return record
@@ -509,37 +537,49 @@ export function createRepositoryLifecycle(options) {
     return sha
   }
 
-  async function createWorktree({ branch, name } = {}) {
+  async function createWorktree({ branch, name, baseSha } = {}) {
     const safeBranch = branchName(branch)
     const existing = records.get(safeBranch)
     if (existing) return { ...existing }
     await verifyOrigin()
     const leaf = safeWorktreeName(name ?? safeBranch.slice("codex/".length))
     const worktreePath = path.resolve(ownedWorktreeRoot, leaf)
-    if (!inside(ownedWorktreeRoot, worktreePath)) wall("HERMES_REPOSITORY_PATH_WALL", "worktree outside owned root")
+    if (!executionBackend && !inside(ownedWorktreeRoot, worktreePath)) wall("HERMES_REPOSITORY_PATH_WALL", "worktree outside owned root")
     const branchResult = await run("git", ["-C", repositoryRoot, "show-ref", "--verify", "--quiet", `refs/heads/${safeBranch}`], { allowFailure: true })
     if (![0, 1].includes(branchResult.code)) wall("HERMES_REPOSITORY_COMMAND_FAILED", "git show-ref failed")
     if (branchResult.code === 0) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "pre-existing branch is not owned")
-    await run("git", ["-C", repositoryRoot, "worktree", "add", "-b", safeBranch, worktreePath, "refs/remotes/origin/main"])
-    const record = Object.freeze({ repository, branch: safeBranch, worktreePath, ownedWorktreeRoot, cleaned: false })
+    const prepared = executionBackend
+      ? await executionBackend.prepareWorkspace({ branch: safeBranch, baseSha, repository })
+      : (await run("git", ["-C", repositoryRoot, "worktree", "add", "-b", safeBranch, worktreePath, "refs/remotes/origin/main"]), { workspacePath: worktreePath })
+    const record = Object.freeze({ repository, branch: safeBranch, worktreePath: prepared.workspacePath, ownedWorktreeRoot, cleaned: false })
     records.set(safeBranch, record)
     return { ...record }
   }
 
-  async function ensureOwnedWorktree({ branch, name, worktreePath } = {}) {
+  async function ensureOwnedWorktree({ branch, name, worktreePath, baseSha } = {}) {
     const safeBranch = branchName(branch)
     const leaf = safeWorktreeName(name ?? safeBranch.slice("codex/".length))
-    const intendedPath = absolute(worktreePath, "worktreePath")
+    const intendedPath = workspacePath(worktreePath)
     const computedPath = path.resolve(ownedWorktreeRoot, leaf)
-    if (!samePath(intendedPath, computedPath) || !inside(ownedWorktreeRoot, intendedPath)) {
+    if (!executionBackend && (!samePath(intendedPath, computedPath) || !inside(ownedWorktreeRoot, intendedPath))) {
       wall("HERMES_REPOSITORY_PATH_WALL", "persisted worktree intent mismatch")
     }
     const existing = records.get(safeBranch)
     if (existing) {
-      if (!samePath(existing.worktreePath, intendedPath)) {
+      if (!sameWorkspace(existing.worktreePath, intendedPath)) {
         wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "in-memory worktree record does not match persisted intent")
       }
       return { ...existing }
+    }
+    if (executionBackend) {
+      await verifyOrigin()
+      const prepared = await executionBackend.prepareWorkspace({ branch: safeBranch, baseSha, repository })
+      const record = Object.freeze({
+        repository, branch: safeBranch, worktreePath: prepared.workspacePath,
+        ownedWorktreeRoot, cleaned: false,
+      })
+      records.set(safeBranch, record)
+      return { ...record, resumed: sameWorkspace(prepared.workspacePath, intendedPath) }
     }
     await verifyOrigin()
     const listing = await run("git", ["-C", repositoryRoot, "worktree", "list", "--porcelain"])
@@ -565,16 +605,16 @@ export function createRepositoryLifecycle(options) {
 
   async function resumeOwnedWorktree({ branch, worktreePath } = {}) {
     const safeBranch = branchName(branch)
-    const absoluteWorktree = absolute(worktreePath, "worktreePath")
+    const absoluteWorktree = workspacePath(worktreePath)
     const expectedWorktree = path.resolve(ownedWorktreeRoot, safeBranch.slice("codex/".length))
-    if (!samePath(absoluteWorktree, expectedWorktree)) {
+    if (!executionBackend && !samePath(absoluteWorktree, expectedWorktree)) {
       wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup path does not match the owned branch")
     }
-    if (!inside(ownedWorktreeRoot, absoluteWorktree)) wall("HERMES_REPOSITORY_PATH_WALL", "worktree outside owned root")
+    if (!executionBackend && !inside(ownedWorktreeRoot, absoluteWorktree)) wall("HERMES_REPOSITORY_PATH_WALL", "worktree outside owned root")
     await verifyOrigin()
     const listing = await run("git", ["-C", repositoryRoot, "worktree", "list", "--porcelain"])
     const entries = worktreeEntries(listing.stdout)
-    const byPath = entries.find((entry) => entry.worktreePath && samePath(entry.worktreePath, absoluteWorktree))
+    const byPath = entries.find((entry) => entry.worktreePath && sameWorkspace(entry.worktreePath, absoluteWorktree))
     const byBranch = entries.find((entry) => entry.branch === safeBranch)
     if (!byPath || byPath !== byBranch) {
       wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "persisted worktree is not registered to the expected branch")
@@ -587,20 +627,20 @@ export function createRepositoryLifecycle(options) {
   }
 
   async function inspectChangedPaths({ worktreePath, branch } = {}) {
-    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
     const status = await run("git", ["-C", record.worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
     const diff = await run("git", ["-C", record.worktreePath, "diff", "--name-status", "-z", "--find-renames", "refs/remotes/origin/main...HEAD"])
     return [...new Set([...statusPaths(status.stdout), ...nameStatusPaths(diff.stdout)])].sort()
   }
 
   async function inspectWorkingTreePaths({ worktreePath, branch } = {}) {
-    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
     const status = await run("git", ["-C", record.worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
     return [...new Set(statusPaths(status.stdout))].sort()
   }
 
   async function inspectWorktreeHead({ worktreePath, branch } = {}) {
-    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
     const result = await run("git", ["-C", record.worktreePath, "rev-parse", "HEAD"])
     const headRefOid = result.stdout.trim()
     if (!SHA.test(headRefOid)) wall("HERMES_REPOSITORY_GIT_WALL", "40-character worktree head required")
@@ -608,7 +648,8 @@ export function createRepositoryLifecycle(options) {
   }
 
   function ensureValidationDependencies({ worktreePath, branch } = {}) {
-    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
+    if (executionBackend && !executionBackend.isLocal) return { linked: false, existing: true }
     const source = path.join(workspaceRoot, "node_modules")
     const target = path.join(record.worktreePath, "node_modules")
     if (!fs.statSync(source, { throwIfNoEntry: false })?.isDirectory()) {
@@ -626,7 +667,8 @@ export function createRepositoryLifecycle(options) {
   }
 
   function removeValidationDependencies({ worktreePath, branch } = {}) {
-    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
+    if (executionBackend && !executionBackend.isLocal) return { removed: false }
     const dependencies = path.join(record.worktreePath, "node_modules")
     const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
     if (!dependencyStat) return { removed: false }
@@ -642,6 +684,7 @@ export function createRepositoryLifecycle(options) {
   }
 
   function removeGeneratedNextOutput(record) {
+    if (executionBackend && !executionBackend.isLocal) return { removed: false }
     const worktreeStat = fs.lstatSync(record.worktreePath, { throwIfNoEntry: false })
     if (!worktreeStat) return { removed: false }
     if (!worktreeStat?.isDirectory() || worktreeStat.isSymbolicLink()
@@ -666,7 +709,7 @@ export function createRepositoryLifecycle(options) {
 
   async function removeTerminalRecoveryDependencies({ worktreePath, branch, expectedHeadSha } = {}) {
     const safeBranch = branchName(branch)
-    const absoluteWorktree = absolute(worktreePath, "worktreePath")
+    const absoluteWorktree = workspacePath(worktreePath)
     const record = ownedRecord(absoluteWorktree, safeBranch)
     if (!SHA.test(expectedHeadSha ?? "")) {
       wall("HERMES_REPOSITORY_CLEANUP_WALL", "reviewed head SHA required")
@@ -690,6 +733,30 @@ export function createRepositoryLifecycle(options) {
       wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery dependencies contain tracked files")
     }
     const dependencies = path.join(record.worktreePath, "node_modules")
+    if (executionBackend && !executionBackend.isLocal) {
+      const dependency = await executionBackend.stat({
+        workspacePath: record.worktreePath,
+        relPath: "node_modules",
+      })
+      if (!dependency.exists) return { removed: false, headRefOid: expectedHeadSha }
+      const ignored = await run(
+        "git",
+        ["-C", record.worktreePath, "check-ignore", "-q", "node_modules/"],
+        { allowFailure: true },
+      )
+      if (ignored.code !== 0) {
+        wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery dependencies are not ignored")
+      }
+      const removed = await executionBackend.runCommand({
+        workspacePath: record.worktreePath,
+        command: "rm",
+        args: ["-rf", "--", "node_modules"],
+      })
+      if (removed.exitCode !== 0) {
+        wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery dependencies could not be removed")
+      }
+      return { removed: true, headRefOid: expectedHeadSha }
+    }
     const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
     if (!dependencyStat) return { removed: false, headRefOid: expectedHeadSha }
     if (dependencyStat.isSymbolicLink()) {
@@ -717,9 +784,41 @@ export function createRepositoryLifecycle(options) {
   }
 
   async function runValidationCommands({ worktreePath, branch, commands = validationCommands } = {}) {
-    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
     const normalized = commands === validationCommands ? validationCommands : commands.map(normalizeValidation)
     if (normalized.length === 0) wall("HERMES_REPOSITORY_VALIDATION_WALL", "at least one validation command required")
+    if (executionBackend && !executionBackend.isLocal) {
+      let backendResults
+      try {
+        backendResults = await executionBackend.validate({
+          workspacePath: record.worktreePath,
+          commands: normalized,
+        })
+      } catch {
+        wall("HERMES_REPOSITORY_RUNNER_WALL", "validation failed to start")
+      }
+      const results = backendResults.map((entry, index) => ({
+        command: normalized[index].command,
+        args: [...normalized[index].args],
+        code: entry.exitCode,
+      }))
+      const failureIndex = backendResults.findIndex((entry) => entry.exitCode !== 0)
+      if (failureIndex >= 0) {
+        const command = normalized[failureIndex]
+        const result = backendResults[failureIndex]
+        const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim().slice(-4_000)
+        if (SECRET_LIKE.test(output)) wall("HERMES_REPOSITORY_SECRET_WALL", "validation output refused")
+        const error = new HermesRepositoryLifecycleError(
+          "HERMES_VALIDATION_FAILED", `${path.basename(command.command)} exited ${result.exitCode}`,
+        )
+        error.validation = {
+          command: command.command, args: [...command.args], code: result.exitCode,
+          timedOut: result.timedOut === true, output: output || "Validator exited without output.",
+        }
+        throw error
+      }
+      return results
+    }
     const results = []
     for (const command of normalized) {
       const executable = path.basename(command.command).replace(/\.(?:cmd|exe)$/i, "")
@@ -755,7 +854,7 @@ export function createRepositoryLifecycle(options) {
   }
 
   async function commitChanges({ worktreePath, branch, paths, message } = {}) {
-    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
     if (!Array.isArray(paths) || paths.length === 0) wall("HERMES_REPOSITORY_COMMIT_WALL", "changed paths required")
     const normalizedPaths = [...new Set(paths.map(safeRelativePath))].sort()
     const workingPaths = await inspectWorkingTreePaths(record)
@@ -967,7 +1066,7 @@ export function createRepositoryLifecycle(options) {
   }
 
   async function pushBranch({ worktreePath, branch } = {}) {
-    const record = ownedRecord(absolute(worktreePath, "worktreePath"), branchName(branch))
+    const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
     await verifyOrigin()
     await run("git", ["-C", record.worktreePath, "push", "--set-upstream", "origin", `refs/heads/${record.branch}:refs/heads/${record.branch}`])
     return { branch: record.branch, pushed: true }
@@ -1076,20 +1175,20 @@ export function createRepositoryLifecycle(options) {
 
   async function cleanupOwnedWorktree({ worktreePath, branch, mergeCommitSha, expectedHeadSha } = {}) {
     const safeBranch = branchName(branch)
-    const absoluteWorktree = absolute(worktreePath, "worktreePath")
+    const absoluteWorktree = workspacePath(worktreePath)
     const expectedWorktree = path.resolve(ownedWorktreeRoot, safeBranch.slice("codex/".length))
-    if (!samePath(absoluteWorktree, expectedWorktree)) {
+    if (!executionBackend && !samePath(absoluteWorktree, expectedWorktree)) {
       wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup path does not match the owned branch")
     }
     let record = records.get(safeBranch)
     if (record?.cleaned) return { branch: safeBranch, worktreePath: absoluteWorktree, cleaned: true, alreadyCleaned: true }
-    if (!inside(ownedWorktreeRoot, absoluteWorktree)) wall("HERMES_REPOSITORY_PATH_WALL", "worktree outside owned root")
+    if (!executionBackend && !inside(ownedWorktreeRoot, absoluteWorktree)) wall("HERMES_REPOSITORY_PATH_WALL", "worktree outside owned root")
     if (!SHA.test(expectedHeadSha ?? "")) wall("HERMES_REPOSITORY_CLEANUP_WALL", "reviewed head SHA required")
     if (!await verifyOriginMainContains(mergeCommitSha)) wall("HERMES_REPOSITORY_CLEANUP_WALL", "merge not present on origin/main")
     if (!record) {
       const listing = await run("git", ["-C", repositoryRoot, "worktree", "list", "--porcelain"])
       const entries = worktreeEntries(listing.stdout)
-      const byPath = entries.find((entry) => entry.worktreePath && samePath(entry.worktreePath, absoluteWorktree))
+      const byPath = entries.find((entry) => entry.worktreePath && sameWorkspace(entry.worktreePath, absoluteWorktree))
       const byBranch = entries.find((entry) => entry.branch === safeBranch)
       if (byPath || byBranch) {
         if (byPath !== byBranch) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup intent conflicts with registered git state")
@@ -1111,7 +1210,8 @@ export function createRepositoryLifecycle(options) {
     removeValidationArtifacts(record)
     const status = await run("git", ["-C", absoluteWorktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
     if (status.stdout.length > 0) wall("HERMES_REPOSITORY_CLEANUP_WALL", "owned worktree is dirty")
-    await run("git", ["-C", repositoryRoot, "worktree", "remove", absoluteWorktree])
+    if (executionBackend) await executionBackend.cleanup({ workspacePath: absoluteWorktree })
+    else await run("git", ["-C", repositoryRoot, "worktree", "remove", absoluteWorktree])
     await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, expectedHeadSha])
     records.set(safeBranch, Object.freeze({ ...record, cleaned: true }))
     return { branch: safeBranch, worktreePath: absoluteWorktree, cleaned: true, alreadyCleaned: false }

@@ -2,7 +2,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import {
   createCommandEnvironment,
@@ -82,6 +82,47 @@ function expectWall(callback: () => unknown, code: string) {
 }
 
 describe("Hermes repository lifecycle", () => {
+  it("delegates workspace, git, and validation execution to an injected backend", async () => {
+    const remoteWorkspace = "/srv/william/hermes/worktrees/hermes-goal-77"
+    const backend = {
+      prepareWorkspace: vi.fn(async () => ({ workspacePath: remoteWorkspace })),
+      git: vi.fn(async ({ args }: { args: string[] }) => ({
+        exitCode: 0,
+        stdout: args.join(" ").includes("remote get-url origin")
+          ? "https://github.com/bsvalues/terragroq.git\n"
+          : "",
+      })),
+      runCommand: vi.fn(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+      validate: vi.fn(async () => [{ exitCode: 0, stdout: "passed", stderr: "" }]),
+      cleanup: vi.fn(async () => {}),
+    }
+    const lifecycle = createRepositoryLifecycle({
+      workspaceRoot: root,
+      ownedWorktreeRoot: ownedRoot,
+      executionBackend: backend,
+      validationCommands: [{ command: "npm", args: ["test", "--", "--run"] }],
+    })
+
+    const record = await lifecycle.ensureOwnedWorktree({
+      branch, baseSha: sha, worktreePath: ownedWorktree,
+    })
+    await expect(lifecycle.runValidationCommands(record)).resolves.toEqual([
+      { command: "npm", args: ["test", "--", "--run"], code: 0 },
+    ])
+    expect(record.worktreePath).toBe(remoteWorkspace)
+    expect(backend.prepareWorkspace).toHaveBeenCalledWith({
+      branch, baseSha: sha, repository: "bsvalues/terragroq",
+    })
+    expect(backend.git).toHaveBeenCalledWith(expect.objectContaining({
+      workspacePath: "bsvalues/terragroq",
+      args: ["remote", "get-url", "origin"],
+    }))
+    expect(backend.validate).toHaveBeenCalledWith({
+      workspacePath: remoteWorkspace,
+      commands: [expect.objectContaining({ command: "npm", args: ["test", "--", "--run"] })],
+    })
+  })
+
   it("removes repository and provider secrets from child command environments", () => {
     const source = {
       Path: "C:/tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
