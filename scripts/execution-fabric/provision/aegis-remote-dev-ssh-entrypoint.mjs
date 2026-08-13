@@ -15,6 +15,7 @@ const BASE64_SOURCE = "(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{
 const COMMAND = new RegExp(`^${NODE.replaceAll("/", "\\/")} ${LAUNCHER.replaceAll("/", "\\/")} (${BASE64_SOURCE}) (${[...OPERATIONS].join("|")}) (${BASE64_SOURCE}) '(${BASE64_SOURCE})' ([1-3]) (null|[a-f0-9]{64})$`)
 const ACTIVATION_COMMAND = new RegExp(`^activation (${BASE64_SOURCE})$`)
 const ACTIVATION_SOCKET = "/run/williamos-fabric/remote-dev-activation.sock"
+const ACTIVATION_RELAY_TIMEOUT_MS = 60_000
 
 function canonicalBase64(value, maximumBytes, allowEmpty = false) {
   if (!allowEmpty && value.length === 0) return false
@@ -39,7 +40,7 @@ export function parseBoundedSshCommand(command) {
 function relayActivation(bytes) {
   const socket = net.createConnection(ACTIVATION_SOCKET)
   const chunks = []; let length = 0
-  socket.setTimeout(10_000)
+  socket.setTimeout(ACTIVATION_RELAY_TIMEOUT_MS)
   socket.on("connect", () => socket.end(bytes))
   socket.on("data", value => { length += value.length; if (length > 1_048_576) return socket.destroy(new Error("activation bridge response too large")); chunks.push(value) })
   socket.on("end", () => { const response=Buffer.concat(chunks);process.stdout.write(response);try{const parsed=JSON.parse(response);if(parsed.status === "BLOCKED")process.exitCode=2}catch{process.exitCode=2} })
