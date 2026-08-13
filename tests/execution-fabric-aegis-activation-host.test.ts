@@ -21,6 +21,7 @@ import {
   inspectNetworkSettlementState,
   inspectReceiptTicketDirectoryIdentity,
   buildNetworkFailureRecord,
+  runActivationDaemonGuard,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -203,7 +204,21 @@ describe("AEGIS production activation host trust", () => {
     const exact={journalState:"INTENT",receiptState:"ABSENT",nftExact:true,egressActiveEnabled:true,brokerInactiveDisabled:false,gitSocketInactiveDisabled:false,gitServiceInactive:true,listenerAbsent:false,workerWorkspaceAbsent:true}
     expect(inspectNetworkSettlementState(exact)).toBe("SETTLE_EXACT_ACTIVE")
     expect(inspectNetworkSettlementState({...exact,nftExact:false})).toBe("DRIFT")
-    expect(inspectNetworkSettlementState({...exact,brokerInactiveDisabled:true})).toBe("DRIFT")
+    expect(inspectNetworkSettlementState({...exact,brokerInactiveDisabled:true})).toBe("SETTLE_EXACT_PARTIAL")
+    expect(inspectNetworkSettlementState({...exact,brokerInactiveDisabled:true,listenerAbsent:true})).toBe("SETTLE_EXACT_PARTIAL")
+    expect(inspectNetworkSettlementState({...exact,gitSocketInactiveDisabled:true})).toBe("SETTLE_EXACT_PARTIAL")
+  })
+
+  it("settles the network boundary when transient daemon creation fails before a session", () => {
+    const events:string[]=[]
+    expect(()=>runActivationDaemonGuard(()=>{events.push("start");throw new Error("systemd-run failed")},()=>false,()=>events.push("sleep"),()=>events.push("cleanup"),2)).toThrow("systemd-run failed")
+    expect(events).toEqual(["start","cleanup"])
+  })
+
+  it("settles the network boundary when the daemon starts but publishes no session", () => {
+    const events:string[]=[]
+    expect(()=>runActivationDaemonGuard(()=>{events.push("start");return"unit"},()=>false,()=>events.push("sleep"),()=>events.push("cleanup"),2)).toThrow("activation daemon did not publish session")
+    expect(events).toEqual(["start","sleep","sleep","cleanup"])
   })
 
   it("publishes only the two-field ticket directory identity accepted by provider and launcher", () => {
