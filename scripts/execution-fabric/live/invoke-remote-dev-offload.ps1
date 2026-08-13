@@ -17,6 +17,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $trustedAegisFingerprint = 'SHA256:N+YNbMg3nUb0tX7ZYLJfJSt9f0dUOukBUNLyYb1WByo'
 $trustedWorkerSha256 = '7e9286b38d76e88eef13aa37628e69151aca2527b6bdfd50d9b835de0a5cb022'
+$trustedOmenIdentity = 'OMEN\bsval'
+$trustedOmenMachine = 'OMEN'
+$trustedOmenPrivateKey = 'C:\Users\bsval\.ssh\id_ed25519'
+$trustedOmenClientFingerprint = 'SHA256:yKY2L2DIR7KaYtgr4Vm5VXQrlzZmGk82GmU+2ARAWG8'
+$trustedHermesHostKey = 'AAAAC3NzaC1lZDI1NTE5AAAAIAky/ydPXYSqRbiHKARxEQLKR43KjTXXS7CTTIWbvSog'
+$trustedHermesFingerprint = 'SHA256:Iz+tH9Nr8AqGCRWzf2CDFGfii0V72zfvuiSijDBIhF0'
 
 function Write-ResultAndExit {
     param([string]$Status, [string]$ReasonCode, [string]$Detail, [int]$ExitCode)
@@ -101,10 +107,69 @@ function Get-ControllerValidationArguments {
     return @($Contract, $Activation, $Authority, $Policy, $Packet, $Envelope)
 }
 
+function Assert-TrustedOmenTransportIdentity {
+    if ([Environment]::MachineName -cne $trustedOmenMachine -or [Security.Principal.WindowsIdentity]::GetCurrent().Name -cne $trustedOmenIdentity) {
+        Write-ResultAndExit 'BLOCKED' 'OMEN_CALLER_IDENTITY_MISMATCH' 'controller caller is not the fixed OMEN identity' 2
+    }
+    $keyParentPath = 'C:\Users\bsval\.ssh'
+    if (-not (Test-Path -LiteralPath $keyParentPath -PathType Container) -or -not (Test-Path -LiteralPath $trustedOmenPrivateKey -PathType Leaf)) {
+        Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_UNAVAILABLE' 'fixed OMEN transport key is unavailable' 2
+    }
+    try {
+        $keyParent = Get-Item -LiteralPath $keyParentPath -Force -ErrorAction Stop
+        $keyItem = Get-Item -LiteralPath $trustedOmenPrivateKey -Force -ErrorAction Stop
+    }
+    catch { Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_METADATA_UNREADABLE' 'fixed OMEN transport key metadata is unreadable' 2 }
+    try {
+        $parentAcl = [IO.Directory]::GetAccessControl($keyParentPath)
+        $keyAcl = [IO.File]::GetAccessControl($trustedOmenPrivateKey)
+    }
+    catch { Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_ACL_UNREADABLE' 'fixed OMEN transport key ACL is unreadable' 2 }
+    if (-not $keyParent.PSIsContainer -or ($keyParent.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+        $keyItem.PSIsContainer -or ($keyItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $keyItem.Length -ne 399 -or
+        $parentAcl.Owner -cne $trustedOmenIdentity -or $parentAcl.AreAccessRulesProtected -or
+        $keyAcl.Owner -cne $trustedOmenIdentity -or -not $keyAcl.AreAccessRulesProtected) {
+        Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_METADATA_DRIFT' 'fixed OMEN transport key metadata differs' 2
+    }
+    $parentAccess = @($parentAcl.Access | ForEach-Object {
+        ([string]$_.IdentityReference) + '|' + ([string]$_.AccessControlType) + '|' + ([string]$_.FileSystemRights) + '|' + ([string]$_.IsInherited) + '|' + ([string]$_.InheritanceFlags) + '|' + ([string]$_.PropagationFlags)
+    } | Sort-Object)
+    $expectedParentAccess = @(
+        'BUILTIN\Administrators|Allow|FullControl|True|ContainerInherit, ObjectInherit|None',
+        'NT AUTHORITY\SYSTEM|Allow|FullControl|True|ContainerInherit, ObjectInherit|None',
+        'OMEN\bsval|Allow|FullControl|True|ContainerInherit, ObjectInherit|None'
+    ) | Sort-Object
+    if (($parentAccess -join "`n") -cne ($expectedParentAccess -join "`n")) { Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_PARENT_ACL_DRIFT' 'fixed OMEN transport key parent ACL differs' 2 }
+    $access = @($keyAcl.Access | ForEach-Object {
+        ([string]$_.IdentityReference) + '|' + ([string]$_.AccessControlType) + '|' + ([string]$_.FileSystemRights) + '|' + ([string]$_.IsInherited) + '|' + ([string]$_.InheritanceFlags) + '|' + ([string]$_.PropagationFlags)
+    } | Sort-Object)
+    $expectedAccess = @(
+        'BUILTIN\Administrators|Allow|FullControl|False|None|None',
+        'NT AUTHORITY\SYSTEM|Allow|FullControl|False|None|None',
+        'OMEN\bsval|Allow|Modify, Synchronize|False|None|None'
+    ) | Sort-Object
+    if (($access -join "`n") -cne ($expectedAccess -join "`n")) { Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_ACL_DRIFT' 'fixed OMEN transport key ACL differs' 2 }
+    $keygenPath = 'C:\Windows\System32\OpenSSH\ssh-keygen.exe'
+    try {
+        $keygenItem = Get-Item -LiteralPath $keygenPath -Force -ErrorAction Stop
+        if ($keygenItem.PSIsContainer -or ($keygenItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'invalid ssh-keygen metadata' }
+        $derived = Invoke-BoundedProcess $keygenPath @('-y', '-f', $trustedOmenPrivateKey) 10
+    }
+    catch { Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_PROOF_FAILED' 'fixed OMEN transport public-key proof failed' 2 }
+    if ($derived.TimedOut -or $derived.ExitCode -ne 0 -or $derived.Stderr.Length -ne 0) { Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_PROOF_FAILED' 'fixed OMEN transport public-key proof failed' 2 }
+    $publicMatch = [regex]::Match($derived.Stdout.Trim(), '^ssh-ed25519\s+([A-Za-z0-9+/]+={0,2})\s+bsval@OMEN$')
+    if (-not $publicMatch.Success) { Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_PROOF_FAILED' 'fixed OMEN transport public-key proof failed' 2 }
+    try { $publicBytes = [Convert]::FromBase64String($publicMatch.Groups[1].Value) }
+    catch { Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_PROOF_FAILED' 'fixed OMEN transport public-key proof failed' 2 }
+    $publicFingerprint = 'SHA256:' + [Convert]::ToBase64String(([Security.Cryptography.SHA256]::Create()).ComputeHash($publicBytes)).TrimEnd('=')
+    if ($publicFingerprint -cne $trustedOmenClientFingerprint) { Write-ResultAndExit 'BLOCKED' 'OMEN_TRANSPORT_KEY_FINGERPRINT_MISMATCH' 'fixed OMEN transport public key differs' 2 }
+}
+
 $allowedOperations = @('PROVE_PREFLIGHT','CREATE_WORKSPACE','APPLY_RESERVED_PATCH','RESTORE_DOTNET','TEST_WORKFLOW_CONTRACT','TEST_DOTNET_INFORMATIONAL','BUILD_DOTNET_RELEASE','COMMIT_RESERVED_PATHS','PUSH_AUTHORIZED_BRANCH','PROVE_POST_MERGE','CLEAN_EXACT_WORKSPACE')
 if ($allowedOperations -notcontains $Operation) { Write-ResultAndExit 'INVALID_INPUT' 'OPERATION_NOT_ALLOWED' 'operation is outside the fixed allowlist' 64 }
 if ($Attempt -lt 1 -or $Attempt -gt 3) { Write-ResultAndExit 'INVALID_INPUT' 'ATTEMPT_INVALID' 'attempt must be 1, 2, or 3' 64 }
 if ($SshTimeoutSeconds -lt 1 -or $SshTimeoutSeconds -gt 5400) { Write-ResultAndExit 'INVALID_INPUT' 'TIMEOUT_INVALID' 'SSH timeout must remain within the packet ceiling' 64 }
+Assert-TrustedOmenTransportIdentity
 
 try {
     $policyFull = Resolve-InputFile $PolicyPath 'policy'
@@ -256,6 +321,14 @@ if($state.terminalStatus-ne'ACTIVE'){
 }
 if($state.inFlightOperation){$state.terminalStatus='BLOCKED';$state.terminalReason='RUN_INCOMPLETE_PREVIOUS_DISPATCH';SaveState;Fail 'RUN_INCOMPLETE_PREVIOUS_DISPATCH' 'a previous dispatch did not settle cleanly' 2};if(-not$isCleanupRecovery-and($index-ne($state.lastOperationIndex+1)-or$attempt-ne1)){Fail 'RUN_REPLAY_OR_ORDER_INVALID' 'operation replay or order is invalid' 64};if($expectedPrevious-ne$state.lastEvidenceSha256){Fail 'EVIDENCE_CHAIN_INVALID' 'previous evidence digest is not Task 1 canonical JCS' 64}
 $knownHosts=Join-Path $markerRoot ($packet.runId+'.known_hosts');[IO.File]::WriteAllText($knownHosts,$knownHost+[Environment]::NewLine,[Text.UTF8Encoding]::new($false))
+$hermesKey='C:\Users\bs\.ssh\id_ed25519';$hermesKeyParent='C:\Users\bs\.ssh'
+try{$hermesParentItem=Get-Item -LiteralPath $hermesKeyParent -Force -ErrorAction Stop;$hermesKeyItem=Get-Item -LiteralPath $hermesKey -Force -ErrorAction Stop;$hermesParentAcl=[IO.Directory]::GetAccessControl($hermesKeyParent);$hermesKeyAcl=[IO.File]::GetAccessControl($hermesKey)}catch{Fail 'HERMES_AEGIS_KEY_UNAVAILABLE' 'Hermes AEGIS key proof is unavailable' 2}
+$hermesExpectedParentAttributes=[IO.FileAttributes]::Directory-bor[IO.FileAttributes]::Compressed;$hermesExpectedKeyAttributes=[IO.FileAttributes]::Archive-bor[IO.FileAttributes]::Compressed
+if(-not$hermesParentItem.PSIsContainer-or$hermesParentItem.Attributes-ne$hermesExpectedParentAttributes-or$hermesKeyItem.PSIsContainer-or$hermesKeyItem.Attributes-ne$hermesExpectedKeyAttributes-or$hermesKeyItem.Length-ne411-or$hermesParentAcl.Owner-cne'HERMES\bs'-or$hermesParentAcl.AreAccessRulesProtected-or$hermesKeyAcl.Owner-cne'HERMES\bs'-or-not$hermesKeyAcl.AreAccessRulesProtected){Fail 'HERMES_AEGIS_KEY_METADATA_DRIFT' 'Hermes AEGIS key metadata differs' 2}
+$hermesParentAccess=@($hermesParentAcl.Access|ForEach-Object{([string]$_.IdentityReference)+'|'+([string]$_.AccessControlType)+'|'+([string]$_.FileSystemRights)+'|'+([string]$_.IsInherited)+'|'+([string]$_.InheritanceFlags)+'|'+([string]$_.PropagationFlags)}|Sort-Object);$hermesExpectedParentAccess=@('BUILTIN\Administrators|Allow|FullControl|True|ContainerInherit, ObjectInherit|None','HERMES\bs|Allow|FullControl|True|ContainerInherit, ObjectInherit|None','NT AUTHORITY\SYSTEM|Allow|FullControl|True|ContainerInherit, ObjectInherit|None')|Sort-Object
+$hermesKeyAccess=@($hermesKeyAcl.Access|ForEach-Object{([string]$_.IdentityReference)+'|'+([string]$_.AccessControlType)+'|'+([string]$_.FileSystemRights)+'|'+([string]$_.IsInherited)+'|'+([string]$_.InheritanceFlags)+'|'+([string]$_.PropagationFlags)}|Sort-Object);$hermesExpectedKeyAccess=@('BUILTIN\Administrators|Allow|FullControl|False|None|None','HERMES\bs|Allow|Modify, Synchronize|False|None|None','NT AUTHORITY\SYSTEM|Allow|FullControl|False|None|None')|Sort-Object
+if(($hermesParentAccess-join"`n")-cne($hermesExpectedParentAccess-join"`n")-or($hermesKeyAccess-join"`n")-cne($hermesExpectedKeyAccess-join"`n")){Fail 'HERMES_AEGIS_KEY_ACL_DRIFT' 'Hermes AEGIS key ACL differs' 2}
+$hermesKeygen='C:\Windows\System32\OpenSSH\ssh-keygen.exe';try{$hermesDerived=& $hermesKeygen -y -f $hermesKey 2>$null}catch{Fail 'HERMES_AEGIS_KEY_PROOF_FAILED' 'Hermes AEGIS public-key proof failed' 2};if($LASTEXITCODE-ne0-or@($hermesDerived).Count-ne1){Fail 'HERMES_AEGIS_KEY_PROOF_FAILED' 'Hermes AEGIS public-key proof failed' 2};$hermesPublicMatch=[regex]::Match([string]$hermesDerived,'^ssh-ed25519\s+([A-Za-z0-9+/]+={0,2})\s+hermes-to-atlas$');if(-not$hermesPublicMatch.Success){Fail 'HERMES_AEGIS_KEY_PROOF_FAILED' 'Hermes AEGIS public-key proof failed' 2};$hermesPublicBytes=[Convert]::FromBase64String($hermesPublicMatch.Groups[1].Value);$hermesPublicFingerprint='SHA256:'+([Convert]::ToBase64String(([Security.Cryptography.SHA256]::Create()).ComputeHash($hermesPublicBytes))).TrimEnd('=');if($hermesPublicFingerprint-cne'SHA256:mvFpy/9iEGiFx2zYp5wuzEcURmGyGNSRJYNi0ocEWiM'){Fail 'HERMES_AEGIS_KEY_FINGERPRINT_MISMATCH' 'Hermes AEGIS public key differs' 2}
 try{$ssh=@(Get-Command ssh.exe -CommandType Application -ErrorAction Stop)[0].Source}catch{Fail 'AEGIS_SSH_UNAVAILABLE' 'SSH is unavailable' 2};$psi=[Diagnostics.ProcessStartInfo]::new();$psi.FileName=$ssh;$psi.UseShellExecute=$false;$psi.CreateNoWindow=$true;$psi.RedirectStandardInput=$true;$psi.RedirectStandardOutput=$true;$psi.RedirectStandardError=$true
 $aegisSsh='-F NUL -l williamos-fabric -o IdentitiesOnly=yes -i "C:\Users\bs\.ssh\id_ed25519" -o BatchMode=yes -o ConnectTimeout=10 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="'+$knownHosts+'" -o HostKeyAlias=aegis 192.168.88.6'
 function InvokeActivation([hashtable]$request,[string]$code,[switch]$NoFail){$b64=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($request|ConvertTo-Json -Compress -Depth 10)));$ap=[Diagnostics.ProcessStartInfo]::new();$ap.FileName=$ssh;$ap.UseShellExecute=$false;$ap.CreateNoWindow=$true;$ap.RedirectStandardOutput=$true;$ap.RedirectStandardError=$true;$ap.Arguments=$aegisSsh+' activation '+$b64;$p=[Diagnostics.Process]::new();$p.StartInfo=$ap;if(-not$p.Start()){if($NoFail){return $null}else{Fail $code 'activation request did not start'}};$out=$p.StandardOutput.ReadToEndAsync();$err=$p.StandardError.ReadToEndAsync();if(-not$p.WaitForExit(75000)){try{$p.Kill()}catch{};if($NoFail){return $null}else{Fail $code 'activation request timed out'}};$text=$out.GetAwaiter().GetResult();if($p.ExitCode-ne0){if($NoFail){return $null}else{Fail $code 'activation request failed'}};try{$value=$text|ConvertFrom-Json}catch{if($NoFail){return $null}else{Fail $code 'activation response is malformed'}};return @{Text=$text;Value=$value}}
@@ -363,16 +436,39 @@ finally {
     catch { Write-ResultAndExit 'BLOCKED' 'SSH_UNAVAILABLE' 'Windows OpenSSH client is unavailable' 2 }
     try { $scpCommand = @(Get-Command scp.exe -CommandType Application -ErrorAction Stop)[0].Source }
     catch { Write-ResultAndExit 'BLOCKED' 'SCP_UNAVAILABLE' 'Windows OpenSSH copy client is unavailable' 2 }
+    try {
+        $hermesHostBytes = [Convert]::FromBase64String($trustedHermesHostKey)
+        $hermesActualFingerprint = 'SHA256:' + [Convert]::ToBase64String(([Security.Cryptography.SHA256]::Create()).ComputeHash($hermesHostBytes)).TrimEnd('=')
+    }
+    catch { Write-ResultAndExit 'BLOCKED' 'HERMES_HOST_KEY_INVALID' 'reviewed Hermes host key is malformed' 2 }
+    if ($hermesActualFingerprint -cne $trustedHermesFingerprint) { Write-ResultAndExit 'BLOCKED' 'HERMES_HOST_KEY_MISMATCH' 'reviewed Hermes host key differs' 2 }
+    $hermesKnownHosts = Join-Path $runDirectory '.hermes-known-hosts'
+    $hermesKnownHostsBytes = [Text.UTF8Encoding]::new($false).GetBytes(('hermes ssh-ed25519 ' + $trustedHermesHostKey + "`n"))
+    if (Test-Path -LiteralPath $hermesKnownHosts) {
+        $hermesKnownHostsItem = Get-Item -LiteralPath $hermesKnownHosts -Force
+        if ($hermesKnownHostsItem.PSIsContainer -or ($hermesKnownHostsItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            -not [Linq.Enumerable]::SequenceEqual([byte[]][IO.File]::ReadAllBytes($hermesKnownHosts), [byte[]]$hermesKnownHostsBytes)) {
+            Write-ResultAndExit 'BLOCKED' 'HERMES_KNOWN_HOSTS_DRIFT' 'proof-scoped Hermes known-host file differs' 2
+        }
+    }
+    else {
+        $hermesKnownHostsStream = $null
+        try { $hermesKnownHostsStream = [IO.File]::Open($hermesKnownHosts, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None); $hermesKnownHostsStream.Write($hermesKnownHostsBytes, 0, $hermesKnownHostsBytes.Length); $hermesKnownHostsStream.Flush($true) }
+        catch { Write-ResultAndExit 'BLOCKED' 'HERMES_KNOWN_HOSTS_WRITE_FAILED' 'proof-scoped Hermes known-host file could not be created' 2 }
+        finally { if ($hermesKnownHostsStream) { $hermesKnownHostsStream.Dispose() } }
+    }
+    $hermesSsh = @('-F','NUL','-l','bs','-p','22','-o','IdentitiesOnly=yes','-i',$trustedOmenPrivateKey,'-o','BatchMode=yes','-o','ConnectTimeout=10','-o','ConnectionAttempts=1','-o','StrictHostKeyChecking=yes','-o',('UserKnownHostsFile='+$hermesKnownHosts),'-o','HostKeyAlias=hermes','192.168.88.9')
+    $hermesScp = @('-q','-F','NUL','-P','22','-o','IdentitiesOnly=yes','-i',$trustedOmenPrivateKey,'-o','BatchMode=yes','-o','ConnectTimeout=10','-o','ConnectionAttempts=1','-o','StrictHostKeyChecking=yes','-o',('UserKnownHostsFile='+$hermesKnownHosts),'-o','HostKeyAlias=hermes')
     $prepareScript = '$ErrorActionPreference=''Stop'';$root=''C:\Users\bs\.williamos\remote-dev-relay'';if(Test-Path -LiteralPath $root){$i=Get-Item -LiteralPath $root -Force;if(-not$i.PSIsContainer-or($i.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0){exit 64}}else{[IO.Directory]::CreateDirectory($root)|Out-Null};foreach($path in @(''' + $remoteTransportPath.Replace('/','\') + ''',''' + $remoteRelayPath.Replace('/','\') + ''',''' + $remoteMarkerPath.Replace('/','\') + ''',''' + $remoteCancellationPath.Replace('/','\') + ''')){if(Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue){exit 64}}'
     $prepareEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($prepareScript))
-    $prepare = Invoke-BoundedProcess $sshCommand @('-o','BatchMode=yes','-o','ConnectTimeout=10','-o','ConnectionAttempts=1','hermes','powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',$prepareEncoded) 30
+    $prepare = Invoke-BoundedProcess $sshCommand ($hermesSsh + @('powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',$prepareEncoded)) 30
     if($prepare.TimedOut-or$prepare.ExitCode-ne0){Write-ResultAndExit 'BLOCKED' 'HERMES_TRANSPORT_PREPARE_FAILED' 'Hermes relay file scope is unavailable' 2}
     $cleanupScript = '$ErrorActionPreference=''Stop'';$transportId='''+$transportId+''';$relay='''+$remoteRelayPath.Replace('/','\')+''';$envelope='''+$remoteTransportPath.Replace('/','\')+''';$marker='''+$remoteMarkerPath.Replace('/','\')+''';$cancel='''+$remoteCancellationPath.Replace('/','\')+''';$mutex=[Threading.Mutex]::new($false,(''Global\WilliamOSRemoteDevRelay-''+$transportId));$lockTaken=$false;$cancellationCreated=$false;try{try{$lockTaken=$mutex.WaitOne(30000)}catch [Threading.AbandonedMutexException]{$lockTaken=$true};if(-not$lockTaken){exit 64};$cancelStream=$null;try{$cancelStream=[IO.File]::Open($cancel,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None);$cancellationCreated=$true;$cancelStream.Flush($true)}catch [IO.IOException]{$cancelItem=Get-Item -LiteralPath $cancel -Force -ErrorAction Stop;if(($cancelItem.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or$cancelItem.PSIsContainer-or$cancelItem.Length-ne0){exit 64}}finally{if($cancelStream){$cancelStream.Dispose()}};$jobSource=''using System;using System.Runtime.InteropServices;public static class WilliamOSRelayJobCleanup{[DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)]public static extern IntPtr OpenJobObject(uint a,bool i,string n);[DllImport("kernel32.dll",SetLastError=true)]public static extern bool TerminateJobObject(IntPtr h,uint e);[DllImport("kernel32.dll")]public static extern bool CloseHandle(IntPtr h);}'';if(-not(''WilliamOSRelayJobCleanup''-as[type])){Add-Type -TypeDefinition $jobSource};$markerItem=Get-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue;if($markerItem){if(($markerItem.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or$markerItem.PSIsContainer-or$markerItem.Length-lt38-or$markerItem.Length-gt96){exit 64};$parts=([IO.File]::ReadAllText($marker)-split'':'');if($parts.Count-ne3-or$parts[0]-ne$transportId-or$parts[1]-notmatch''^[1-9][0-9]*$''-or$parts[2]-notmatch''^[1-9][0-9]*$''){exit 64};$rootPid=[int]$parts[1];$root=Get-Process -Id $rootPid -ErrorAction SilentlyContinue;if($root -and $root.StartTime.ToUniversalTime().Ticks-ne[long]$parts[2]){exit 64};$job=[WilliamOSRelayJobCleanup]::OpenJobObject(8,$false,(''Global\WilliamOSRemoteDevRelayJob-''+$transportId));if($job-eq[IntPtr]::Zero){exit 64};try{if(-not[WilliamOSRelayJobCleanup]::TerminateJobObject($job,64)){exit 64}}finally{[void][WilliamOSRelayJobCleanup]::CloseHandle($job)};Start-Sleep -Milliseconds 250;if(Get-Process -Id $rootPid -ErrorAction SilentlyContinue){exit 64}};Remove-Item -LiteralPath $relay,$envelope,$marker -Force -ErrorAction SilentlyContinue;foreach($path in @($relay,$envelope,$marker)){if(Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue){exit 64}};$cancelItem=Get-Item -LiteralPath $cancel -Force;if(($cancelItem.Attributes-band[IO.FileAttributes]::ReparsePoint)-ne0-or$cancelItem.PSIsContainer-or$cancelItem.Length-ne0){exit 64}}finally{if($lockTaken){try{$mutex.ReleaseMutex()}catch{}};$mutex.Dispose()}'
     $cleanupEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanupScript))
     $transportFailure=$null;$remote=$null;$cleanup=$null
-    try {[IO.File]::WriteAllBytes($localTransportPath,$transportBytes);$copy=Invoke-BoundedProcess $scpCommand @('-q','-o','BatchMode=yes','-o','ConnectTimeout=10','-o','ConnectionAttempts=1',$localTransportPath,('hermes:'+$remoteTransportPath)) 60;if($copy.TimedOut-or$copy.ExitCode-ne0){$transportFailure='HERMES_TRANSPORT_COPY_FAILED'}else{$remote=Invoke-BoundedProcess $sshCommand @('-o','BatchMode=yes','-o','ConnectTimeout=10','-o','ConnectionAttempts=1','hermes','powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',$encodedRelay) $SshTimeoutSeconds}}
+    try {[IO.File]::WriteAllBytes($localTransportPath,$transportBytes);$copy=Invoke-BoundedProcess $scpCommand ($hermesScp + @($localTransportPath,('bs@192.168.88.9:'+$remoteTransportPath))) 60;if($copy.TimedOut-or$copy.ExitCode-ne0){$transportFailure='HERMES_TRANSPORT_COPY_FAILED'}else{$remote=Invoke-BoundedProcess $sshCommand ($hermesSsh + @('powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',$encodedRelay)) $SshTimeoutSeconds}}
     catch{$transportFailure='HERMES_START_FAILED'}
-    finally{Remove-Item -LiteralPath $localTransportPath -Force -ErrorAction SilentlyContinue;try{$cleanup=Invoke-BoundedProcess $sshCommand @('-o','BatchMode=yes','-o','ConnectTimeout=10','hermes','powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',$cleanupEncoded) 30}catch{$cleanup=$null}}
+    finally{Remove-Item -LiteralPath $localTransportPath -Force -ErrorAction SilentlyContinue;try{$cleanup=Invoke-BoundedProcess $sshCommand ($hermesSsh + @('powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',$cleanupEncoded)) 30}catch{$cleanup=$null}}
     if($null-eq$cleanup-or$cleanup.TimedOut-or$cleanup.ExitCode-ne0){Write-ResultAndExit 'BLOCKED' 'HERMES_TRANSPORT_CLEANUP_UNPROVEN' 'Hermes relay process or file absence is unproven' 2}
     if($transportFailure){Write-ResultAndExit 'BLOCKED' $transportFailure 'Hermes relay transport failed' 2}
     if ($remote.TimedOut) { Write-ResultAndExit 'BLOCKED' 'HERMES_TIMEOUT' 'Hermes relay timed out' 2 }
