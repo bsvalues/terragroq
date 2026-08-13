@@ -16,6 +16,12 @@ import {
   inspectRootNoSudoObservation,
   inspectHostRootNoSudoProof,
   inspectPreparedSnapshotRecovery,
+  inspectNetworkActivationState,
+  inspectNetworkJournalBinding,
+  inspectNetworkSettlementState,
+  inspectReceiptTicketDirectoryIdentity,
+  buildNetworkFailureRecord,
+  runActivationDaemonGuard,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -168,7 +174,61 @@ describe("AEGIS production activation host trust", () => {
     expect(inspectPreparedSnapshotRecovery({preparedCommit:"88bd56d8f575bafaf7a6ddcf6b1a8e2e1fc4d3ec",currentCommit:"7fab579402798ba6e0d7cafbd74bba5be4d79101",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("ARCHIVE_EXACT_PRECLAIM")
     expect(inspectPreparedSnapshotRecovery({preparedCommit:"9a04dbf4f488567d5d5328d4c26f65819aea7e3c",currentCommit:"7fab579402798ba6e0d7cafbd74bba5be4d79101",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("DRIFT")
     expect(inspectPreparedSnapshotRecovery({preparedCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("MATCH")
+    expect(inspectPreparedSnapshotRecovery({preparedCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json","no-sudo.json","network-intent.json","network-applied.json","activation-failure.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("MATCH")
+    expect(inspectPreparedSnapshotRecovery({preparedCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json","foreign"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("DRIFT")
     expect(inspectPreparedSnapshotRecovery({preparedCommit:"f".repeat(40),currentCommit:"a314d3a604f1ddec83f7d793168bfa5f0adc0305",entries:["control","mints","prepared.json"],claimExists:false,phaseExists:false,sessionExists:false})).toBe("DRIFT")
+  })
+
+  it("accepts only an exact transaction-bound network transition", () => {
+    const exact = { journalState:"ABSENT", receiptState:"ABSENT", nftExact:true, egressActiveEnabled:true, brokerInactiveDisabled:true, gitSocketInactiveDisabled:true, gitServiceInactive:true, listenerAbsent:true, workerWorkspaceAbsent:true }
+    expect(inspectNetworkActivationState(exact)).toBe("ACTIVATE_EXACT_INERT")
+    expect(inspectNetworkActivationState({...exact, journalState:"INTENT"})).toBe("ACTIVATE_EXACT_INERT")
+    expect(inspectNetworkActivationState({...exact, brokerInactiveDisabled:false})).toBe("DRIFT")
+    expect(inspectNetworkActivationState({...exact, brokerInactiveDisabled:false, gitSocketInactiveDisabled:false, listenerAbsent:false})).toBe("ADOPT_EXACT_ACTIVE")
+    expect(inspectNetworkActivationState({...exact, journalState:"APPLIED", brokerInactiveDisabled:false, gitSocketInactiveDisabled:false, listenerAbsent:false})).toBe("ADOPT_EXACT_ACTIVE")
+    expect(inspectNetworkActivationState({...exact, journalState:"APPLIED", receiptState:"EXACT_ACTIVE", brokerInactiveDisabled:false, gitSocketInactiveDisabled:false, listenerAbsent:false})).toBe("REFRESH_EXACT_ACTIVE")
+    expect(inspectNetworkActivationState({...exact, receiptState:"FOREIGN"})).toBe("DRIFT")
+  })
+
+  it("requires the applied network record to bind the exact intent proof and generation", () => {
+    const intent={schemaVersion:1,status:"NETWORK_ACTIVATION_INTENT",runId,activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,proofId:"11111111-1111-4111-8111-111111111111",generationId:"22222222-2222-4222-8222-222222222222",policySha256:"a".repeat(64),activationSha256:"b".repeat(64),providerSha256:"c".repeat(64),launcherSha256:"d".repeat(64),workerSha256:"e".repeat(64)}
+    const intentSha256=sha(`${canonical(intent)}\n`),applied={...intent,status:"NETWORK_ACTIVATION_APPLIED",intentSha256}
+    expect(inspectNetworkJournalBinding(intent,applied)).toBe("NETWORK_JOURNAL_BOUND")
+    expect(inspectNetworkJournalBinding(intent,{...applied,proofId:"33333333-3333-4333-8333-333333333333"})).toBe("DRIFT")
+    expect(inspectNetworkJournalBinding(intent,{...applied,generationId:"44444444-4444-4444-8444-444444444444"})).toBe("DRIFT")
+    expect(inspectNetworkJournalBinding(intent,{...applied,policySha256:"f".repeat(64)})).toBe("DRIFT")
+    expect(inspectNetworkJournalBinding(intent,{...applied,intentSha256:"0".repeat(64)})).toBe("DRIFT")
+  })
+
+  it("can settle an exact active INTENT state after activation fails before APPLIED publication", () => {
+    const exact={journalState:"INTENT",receiptState:"ABSENT",nftExact:true,egressActiveEnabled:true,brokerInactiveDisabled:false,gitSocketInactiveDisabled:false,gitServiceInactive:true,listenerAbsent:false,workerWorkspaceAbsent:true}
+    expect(inspectNetworkSettlementState(exact)).toBe("SETTLE_EXACT_ACTIVE")
+    expect(inspectNetworkSettlementState({...exact,nftExact:false})).toBe("DRIFT")
+    expect(inspectNetworkSettlementState({...exact,brokerInactiveDisabled:true})).toBe("SETTLE_EXACT_PARTIAL")
+    expect(inspectNetworkSettlementState({...exact,brokerInactiveDisabled:true,listenerAbsent:true})).toBe("SETTLE_EXACT_PARTIAL")
+    expect(inspectNetworkSettlementState({...exact,gitSocketInactiveDisabled:true})).toBe("SETTLE_EXACT_PARTIAL")
+  })
+
+  it("settles the network boundary when transient daemon creation fails before a session", () => {
+    const events:string[]=[]
+    expect(()=>runActivationDaemonGuard(()=>{events.push("start");throw new Error("systemd-run failed")},()=>false,()=>events.push("sleep"),()=>events.push("cleanup"),2)).toThrow("systemd-run failed")
+    expect(events).toEqual(["start","cleanup"])
+  })
+
+  it("settles the network boundary when the daemon starts but publishes no session", () => {
+    const events:string[]=[]
+    expect(()=>runActivationDaemonGuard(()=>{events.push("start");return"unit"},()=>false,()=>events.push("sleep"),()=>events.push("cleanup"),2)).toThrow("activation daemon did not publish session")
+    expect(events).toEqual(["start","sleep","sleep","cleanup"])
+  })
+
+  it("publishes only the two-field ticket directory identity accepted by provider and launcher", () => {
+    expect(inspectReceiptTicketDirectoryIdentity({device:"29",inode:"88301"})).toEqual({device:"29",inode:"88301"})
+    expect(inspectReceiptTicketDirectoryIdentity({device:"29",inode:"88301",ctimeNs:"1786410000000000100"})).toBeNull()
+  })
+
+  it("records a bounded inert network failure without serializing the thrown error", () => {
+    expect(buildNetworkFailureRecord("NETWORK_ACTIVATION_FAILED_INERT","2026-08-13T02:10:00.000Z")).toEqual({schemaVersion:1,status:"NETWORK_ACTIVATION_FAILED_INERT",runId,activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,observedAt:"2026-08-13T02:10:00.000Z"})
+    expect(buildNetworkFailureRecord("foreign" as any,"2026-08-13T02:10:00.000Z")).toBeNull()
   })
 
   it("re-disables the bridge before replaying an existing settlement", () => {
