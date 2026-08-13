@@ -96,6 +96,11 @@ function Invoke-BoundedProcess {
     return @{ TimedOut = $false; ExitCode = $process.ExitCode; Stdout = $stdoutTask.GetAwaiter().GetResult(); Stderr = $stderrTask.GetAwaiter().GetResult() }
 }
 
+function Get-ControllerValidationArguments {
+    param([string]$Contract, [string]$Activation, [string]$Authority, [string]$Policy, [string]$Packet, [string]$Envelope)
+    return @($Contract, $Activation, $Authority, $Policy, $Packet, $Envelope)
+}
+
 $allowedOperations = @('PROVE_PREFLIGHT','CREATE_WORKSPACE','APPLY_RESERVED_PATCH','RESTORE_DOTNET','TEST_WORKFLOW_CONTRACT','TEST_DOTNET_INFORMATIONAL','BUILD_DOTNET_RELEASE','COMMIT_RESERVED_PATHS','PUSH_AUTHORIZED_BRANCH','PROVE_POST_MERGE','CLEAN_EXACT_WORKSPACE')
 if ($allowedOperations -notcontains $Operation) { Write-ResultAndExit 'INVALID_INPUT' 'OPERATION_NOT_ALLOWED' 'operation is outside the fixed allowlist' 64 }
 if ($Attempt -lt 1 -or $Attempt -gt 3) { Write-ResultAndExit 'INVALID_INPUT' 'ATTEMPT_INVALID' 'attempt must be 1, 2, or 3' 64 }
@@ -147,7 +152,8 @@ if(result.status==="INACTIVE_TRUSTED_MAIN_READY"&&result.executionAuthorized===f
 if(result.status!=="READY"||JSON.stringify(result.packet)!==JSON.stringify(packet)){process.stdout.write(JSON.stringify({status:"BLOCKED",reasonCode:"PACKET_NOT_PREBOUND",detail:JSON.stringify(result.reasons||[])}));process.exit(64)}
 process.stdout.write(JSON.stringify({status:"READY",packet:result.packet,policySha256:result.policySha256}));
 '@
-    $validation = Invoke-BoundedProcess $node @('--input-type=module', '-e', $validateScript, $policyFull, $contractPath, $activationPath, $activationAuthorityPath, $policyFull, $packetFull, $envelopeFull) 30
+    $validationFiles = Get-ControllerValidationArguments $contractPath $activationPath $activationAuthorityPath $policyFull $packetFull $envelopeFull
+    $validation = Invoke-BoundedProcess $node (@('--input-type=module', '-e', $validateScript, $node) + $validationFiles) 30
     if ($validation.ExitCode -eq 2) {
         try { $inactive = $validation.Stdout | ConvertFrom-Json -Depth 20 } catch { $inactive = $null }
         if ($inactive.reasonCode -eq 'REMOTE_DEV_SCOPE_INACTIVE') { Write-ResultAndExit 'BLOCKED' 'REMOTE_DEV_SCOPE_INACTIVE' 'trusted-main proof scope is reviewed but inactive' 2 }

@@ -230,6 +230,19 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(JSON.parse(result.stdout)).toEqual(values)
   })
 
+  it.runIf(process.platform === "win32")("passes the validator exactly its six declared file arguments", () => {
+    const source = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1"), "utf8")
+    const validator = source.slice(source.indexOf("$validateScript = @'"), source.indexOf("$validationFiles ="))
+    expect(validator).toContain("process.argv.slice(2)")
+    expect(source).toContain("$validateScript, $node) + $validationFiles")
+    const helper = source.slice(source.indexOf("function Get-ControllerValidationArguments"), source.indexOf("$allowedOperations"))
+    const script = `${helper}\n[Console]::Out.Write((Get-ControllerValidationArguments 'contract' 'activation' 'authority' 'policy' 'packet' 'envelope'|ConvertTo-Json -Compress))`
+    const encoded = Buffer.from(script, "utf16le").toString("base64")
+    const result = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], { encoding: "utf8", timeout: 15_000 })
+    expect(result.status, result.stderr).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual(["contract", "activation", "authority", "policy", "packet", "envelope"])
+  })
+
   it.runIf(process.platform === "win32")("rejects an occupied relay leaf without overwriting or deleting it", () => {
     const relay = Buffer.from("[Console]::Out.Write('SAFE')", "utf8")
     const digest = crypto.createHash("sha256").update(relay).digest("hex")
@@ -294,7 +307,7 @@ describe("inactive Hermes-mediated remote development controller", () => {
   it("blocks before SSH while the trusted-main proof scope is inactive", () => {
     const value = fixture()
     const result = run(value.args)
-    expect(result.status).toBe(2)
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2)
     expect(JSON.parse(result.stdout)).toMatchObject({ status: "BLOCKED", reasonCode: "REMOTE_DEV_SCOPE_INACTIVE" })
     expect(fs.existsSync(fakeLog)).toBe(false)
   })
