@@ -18,7 +18,7 @@ const ASSET_LAYOUT = Object.freeze([
   ["scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs","/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs","0555"],
 ])
 const SSH_ENTRYPOINT = "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs"
-const SSH_ENTRYPOINT_PREDECESSOR_SHA256 = "018406b0621df8b306bee113c4ea7cbed2e3af7c0d53d15e4d8dcb3cc59d3dd7"
+const SSH_ENTRYPOINT_PREDECESSOR_SHA256 = "1eba36323a42353623b6659b146c7b7096d290fe883ae302524b12363e17c01f"
 const ACTIVATION_HOST = "/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs"
 const ACTIVATION_HOST_PREDECESSOR_SHA256 = "0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d"
 const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "74a9bc03353ee81b51711b66dedb3206fbef5d193997a4a1137c5f45157a5f59"
