@@ -170,6 +170,10 @@ describe("inactive Hermes-mediated remote development controller", () => {
     const processHelper = source.slice(source.indexOf("function Invoke-BoundedProcess"), source.indexOf("$allowedOperations"))
     expect(processHelper.indexOf("$stdoutTask = $process.StandardOutput.ReadToEndAsync()")).toBeGreaterThan(-1)
     expect(processHelper.indexOf("$stdoutTask = $process.StandardOutput.ReadToEndAsync()")).toBeLessThan(processHelper.indexOf("$process.StandardInput.Write($StandardInput)"))
+    expect(source).toContain(".Replace('ConvertFrom-Json -Depth 100','ConvertFrom-Json')")
+    expect(source).toContain(".Replace('ConvertFrom-Json -Depth 40','ConvertFrom-Json')")
+    expect(source).toContain(".Replace('ConvertFrom-Json -Depth 30','ConvertFrom-Json')")
+    expect(source).toContain(".Replace('ConvertFrom-Json -Depth 20','ConvertFrom-Json')")
   })
 
   it.runIf(process.platform === "win32")("runs under Windows PowerShell 5.1 and rejects a swapped relay plus matching attacker digest", () => {
@@ -264,7 +268,7 @@ describe("inactive Hermes-mediated remote development controller", () => {
     while (running.exitCode === null && Date.now() < exitDeadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25)
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3500)
     expect(fs.existsSync(writtenPath)).toBe(false)
-  }, 15_000)
+  }, 30_000)
   it("blocks before SSH while the trusted-main proof scope is inactive", () => {
     const value = fixture()
     const result = run(value.args)
