@@ -243,7 +243,7 @@ try {
     Copy-Item -LiteralPath $sourcePath -Destination $destinationPath
     if ((Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $sourceBindings[$sourceName]) { throw [InvalidOperationException]::new("EVALUATOR_SOURCE_SNAPSHOT_INVALID") }
   }
-  $snapshotCorpusRoot = Join-Path $sourceRoot 'corpus'
+  $snapshotCorpusRoot = Join-Path $ExecutionWorkRoot 'corpus'
   [void][IO.Directory]::CreateDirectory($snapshotCorpusRoot)
   foreach ($corpusName in $corpusBindings.Keys) {
     $corpusPath = Join-Path $sourceCorpusRoot $corpusName
@@ -252,10 +252,10 @@ try {
     Copy-Item -LiteralPath $corpusPath -Destination $destinationPath
     if ((Get-FileHash -LiteralPath $destinationPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $corpusBindings[$corpusName]) { throw [InvalidOperationException]::new("EVALUATOR_CORPUS_SNAPSHOT_INVALID") }
   }
-  if (@(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse).Count -ne 7) { throw [InvalidOperationException]::new("EVALUATOR_SOURCE_FILE_SET_INVALID") }
-  foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceRoot -File -Recurse | Sort-Object FullName) {
-    $relativeSource = $sourceFile.FullName.Substring($sourceRoot.Length + 1)
-    $expectedSourceHash = if ($relativeSource.StartsWith('corpus\', [StringComparison]::Ordinal)) { $corpusBindings[$relativeSource.Substring(7)] } else { $sourceBindings[$relativeSource] }
+  if (@(Get-ChildItem -LiteralPath $sourceRoot -File -Recurse).Count -ne 4 -or @(Get-ChildItem -LiteralPath $snapshotCorpusRoot -File -Recurse).Count -ne 3) { throw [InvalidOperationException]::new("EVALUATOR_SOURCE_FILE_SET_INVALID") }
+  foreach ($sourceFile in Get-ChildItem -LiteralPath $sourceRoot -File | Sort-Object Name) {
+    $relativeSource = $sourceFile.Name
+    $expectedSourceHash = $sourceBindings[$relativeSource]
     if ([string]$expectedSourceHash -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("EVALUATOR_SOURCE_FILE_SET_INVALID") }
     $sourceLock = [IO.File]::Open($sourceFile.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     [void]$SnapshotReadLocks.Add($sourceLock)
@@ -264,7 +264,35 @@ try {
     $sourceLock.Position = 0
     if ($lockedSourceHash -cne $expectedSourceHash) { throw [InvalidOperationException]::new("EVALUATOR_SOURCE_SNAPSHOT_INVALID") }
   }
-  $ExecutionEvaluatorPath = Join-Path $sourceRoot 'fabric_measure.py'
+  Add-Type -AssemblyName System.IO.Compression
+  $ExecutionEvaluatorPath = Join-Path $ExecutionWorkRoot 'evaluator.pyz'
+  $archiveStream = [IO.File]::Open($ExecutionEvaluatorPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+  try {
+    $archive = [IO.Compression.ZipArchive]::new($archiveStream, [IO.Compression.ZipArchiveMode]::Create, $true)
+    try {
+      foreach ($sourceLock in @($SnapshotReadLocks)) {
+        $sourceName = [IO.Path]::GetFileName($sourceLock.Name)
+        $entryName = if ($sourceName -ceq 'fabric_measure.py') { '__main__.py' } else { $sourceName }
+        $entry = $archive.CreateEntry($entryName, [IO.Compression.CompressionLevel]::Optimal)
+        $entryStream = $entry.Open()
+        try { $sourceLock.Position = 0; $sourceLock.CopyTo($entryStream) } finally { $entryStream.Dispose() }
+      }
+    } finally { $archive.Dispose() }
+  } finally { $archiveStream.Dispose() }
+  foreach ($sourceLock in $SnapshotReadLocks) { $sourceLock.Dispose() }
+  $SnapshotReadLocks.Clear()
+  Remove-Item -LiteralPath $sourceRoot -Recurse -Force
+  $archiveLock = [IO.File]::Open($ExecutionEvaluatorPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+  [void]$SnapshotReadLocks.Add($archiveLock)
+  foreach ($corpusFile in Get-ChildItem -LiteralPath $snapshotCorpusRoot -File | Sort-Object Name) {
+    $expectedCorpusHash = $corpusBindings[$corpusFile.Name]
+    $corpusLock = [IO.File]::Open($corpusFile.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    [void]$SnapshotReadLocks.Add($corpusLock)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { $lockedCorpusHash = ([BitConverter]::ToString($algorithm.ComputeHash($corpusLock))).Replace('-', '').ToLowerInvariant() } finally { $algorithm.Dispose() }
+    $corpusLock.Position = 0
+    if ($lockedCorpusHash -cne $expectedCorpusHash) { throw [InvalidOperationException]::new("EVALUATOR_CORPUS_SNAPSHOT_INVALID") }
+  }
 
   $snapshotRoot = Join-Path $ExecutionWorkRoot 'models'
   $snapshotManifest = Join-Path $snapshotRoot "manifests\registry.ollama.ai\library\$($modelParts[0])\$($modelParts[1])"
@@ -508,6 +536,7 @@ namespace WilliamOS.ExecutionFabric {
     "PYTHONUTF8=1",
     "PYTHONNOUSERSITE=1",
     "PYTHONDONTWRITEBYTECODE=1",
+    "WILLIAMOS_EMBEDDING_CORPUS_DIR=$snapshotCorpusRoot",
     "NO_PROXY=127.0.0.1,localhost"
   )
   $run = [WilliamOS.ExecutionFabric.BoundedJob]::Run($PythonExecutable, $ExecutionEvaluatorPath, $sealedInputPath, $resultPath, $sourceRoot, $ExecutionWorkRoot, [uint32]$timeoutMs, $maxResultBytes, $maxScratchBytes, $processMemoryBytes, $jobMemoryBytes, [uint32]$cpuRatePercent, $cpuAffinityMask, $childEnvironment)

@@ -133,7 +133,11 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("$plannedSnapshotBytes + $plannedSourceBytes + $inputLength + $maxResultBytes -gt $maxScratchBytes")
     expect(source).toContain("EVALUATOR_SOURCE_FILE_SET_INVALID")
     expect(source).toContain("$algorithm.ComputeHash($sourceLock)")
-    expect(source).toContain("$ExecutionEvaluatorPath = Join-Path $sourceRoot 'fabric_measure.py'")
+    expect(source).toContain("$ExecutionEvaluatorPath = Join-Path $ExecutionWorkRoot 'evaluator.pyz'")
+    expect(source).toContain("[IO.Compression.ZipArchive]::new")
+    expect(source).toContain("'__main__.py'")
+    expect(source).toContain("Remove-Item -LiteralPath $sourceRoot -Recurse -Force")
+    expect(source).toContain("WILLIAMOS_EMBEDDING_CORPUS_DIR=$snapshotCorpusRoot")
     expect(source).toContain("$ExecutionEvaluatorPath, $sealedInputPath")
   })
 

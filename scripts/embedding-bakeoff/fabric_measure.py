@@ -24,7 +24,10 @@ TIMEOUT_SECONDS = 180
 MAX_REQUEST_BYTES = 512 * 1024
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_INPUTS = 256
-CORPUS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus")
+CORPUS_DIR = os.environ.get(
+    "WILLIAMOS_EMBEDDING_CORPUS_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus"),
+)
 
 
 def _exact_object(value, fields, label):
