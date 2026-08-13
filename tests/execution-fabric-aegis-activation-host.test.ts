@@ -162,6 +162,21 @@ describe("AEGIS production activation host trust", () => {
     expect(source).not.toContain('sudo:rootResult("/usr/bin/sudo"')
   })
 
+  it("delegates only the exact bounded user-slice start through the system manager", () => {
+    const source=fs.readFileSync(path.join(root,"scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"),"utf8")
+    const start=source.slice(source.indexOf("function startNetworkSliceResult"),source.indexOf("function ensureNetworkSlice"))
+    expect(start).toContain('"--wait","--collect","--pipe"')
+    expect(start).toContain('"User=williamos-fabric"')
+    expect(start).toContain('"Group=williamos-fabric"')
+    expect(start).toContain('"NoNewPrivileges=no"')
+    expect(start).toContain('"PrivateTmp=yes"')
+    expect(start).toContain('"ProtectSystem=strict"')
+    expect(start).toContain('"ReadWritePaths=/run/user/999"')
+    expect(start).toContain('"TimeoutStartSec=10"')
+    expect(start).toContain('"/usr/bin/systemctl","--user","start","williamos-aegis-remote-dev.slice"')
+    expect(start).not.toContain("runuser")
+  })
+
   it("adopts only a fresh exact pre-claim proof and archives an exact expired generation", () => {
     const proof:any={schemaVersion:1,status:"ROOT_NO_SUDO_VERIFIED",activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,runId,machineIdSha256:"a".repeat(64),bootId:"11111111-1111-4111-8111-111111111111",activationHostSha256:"b".repeat(64),authoritySha256:"c".repeat(64),account:"williamos-fabric",passwordStatus:"L",sudoStatus:0,sudoStdout:"User williamos-fabric is not allowed to run sudo on aegis.\n",sudoStderr:"",issuedAt:"2026-08-13T01:10:00.000Z",expiresAt:"2026-08-13T01:15:00.000Z"}
     const expected={machineIdSha256:proof.machineIdSha256,bootId:proof.bootId,activationHostSha256:proof.activationHostSha256,authoritySha256:proof.authoritySha256}
@@ -228,7 +243,8 @@ describe("AEGIS production activation host trust", () => {
   })
 
   it("records a bounded inert network failure without serializing the thrown error", () => {
-    expect(buildNetworkFailureRecord("NETWORK_ACTIVATION_FAILED_INERT","2026-08-13T02:10:00.000Z")).toEqual({schemaVersion:1,status:"NETWORK_ACTIVATION_FAILED_INERT",runId,activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,observedAt:"2026-08-13T02:10:00.000Z"})
+    expect(buildNetworkFailureRecord("NETWORK_ACTIVATION_FAILED_INERT","2026-08-13T02:10:00.000Z","NETWORK_SLICE_START_FAILED")).toEqual({schemaVersion:1,status:"NETWORK_ACTIVATION_FAILED_INERT",runId,activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,reasonCode:"NETWORK_SLICE_START_FAILED",observedAt:"2026-08-13T02:10:00.000Z"})
+    expect(buildNetworkFailureRecord("NETWORK_ACTIVATION_FAILED_INERT","2026-08-13T02:10:00.000Z","secret value")).toBeNull()
     expect(buildNetworkFailureRecord("foreign" as any,"2026-08-13T02:10:00.000Z")).toBeNull()
   })
 
