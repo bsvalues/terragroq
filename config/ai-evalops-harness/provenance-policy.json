@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "policyId": "WO-AEH-010-provenance-v1",
+  "authority": "validation-only",
+  "package": {
+    "name": "williamos-control-plane",
+    "lockfile": "pnpm-lock.yaml",
+    "lockfileVersion": "9.0",
+    "packageManager": "pnpm@10.17.1"
+  },
+  "python": {
+    "constraints": "requirements-constraints.txt",
+    "inputs": ["requirements.txt", "requirements-search.txt", "requirements-execution-fabric.txt"],
+    "productionLock": "requirements-lock.txt",
+    "productionLockRequiresHashes": true,
+    "constraintsAreTransitiveLock": false
+  },
+  "images": {
+    "buildArgument": "NODE_IMAGE",
+    "immutableReferencePattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$",
+    "mutableDefaultAllowedForLocalProofOnly": true
+  },
+  "models": {
+    "manifest": "config/ai-evalops-harness/model-binding.validation.json",
+    "requiredIdentityFields": ["provider", "repository", "manifestDigest", "weightDigest", "quantization", "promptTemplateDigest", "contextLength", "license"]
+  },
+  "sbom": {
+    "manifest": "config/ai-evalops-harness/sbom.validation.cdx.json",
+    "scanResult": "config/ai-evalops-harness/scan-result.validation.json",
+    "acceptedFormats": ["CycloneDX-JSON", "SPDX-JSON"],
+    "requiredBindings": ["sourceCommit", "imageDigest", "documentSha256"]
+  },
+  "lastKnownGood": {
+    "manifest": "config/ai-evalops-harness/lkg.validation.json",
+    "candidateRequiredFields": ["sourceCommit", "packageLockSha256", "pythonLockSha256", "imageDigest", "modelManifestDigest", "modelWeightDigest", "sbomSha256", "provenanceSha256", "testEvidenceSha256"],
+    "requiredFields": ["sourceCommit", "packageLockSha256", "pythonLockSha256", "imageDigest", "modelManifestDigest", "modelWeightDigest", "sbomSha256", "provenanceSha256", "testEvidenceSha256", "approvedAt", "approvedBy"]
+  },
+  "promotion": {
+    "requiredGates": ["offline-validation", "tests", "vulnerability-review", "sbom", "staging-proof", "rollback-proof", "owner-approval"],
+    "thisPolicyGrantsAuthority": false
+  },
+  "forbiddenActions": ["network-access", "image-pull", "package-install", "deployment", "service-mutation"]
+}

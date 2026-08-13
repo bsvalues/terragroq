@@ -1,0 +1,12 @@
+{
+  "fixtureOnly": true,
+  "promotionEligible": false,
+  "provider": "local-fixture",
+  "repository": "example.invalid/williamos/model",
+  "manifestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "weightDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "quantization": "Q4_K_M",
+  "promptTemplateDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "contextLength": 8192,
+  "license": "fixture-NOT-A-LICENSE"
+}

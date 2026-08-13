@@ -1,0 +1,10 @@
+DROP FUNCTION IF EXISTS ai_evalops.acknowledge_worker_cancellation_enveloped(uuid,text,text,text,text,timestamptz,uuid,uuid,uuid,uuid,uuid,uuid,bigint,bigint,text,uuid,text);
+DROP FUNCTION IF EXISTS ai_evalops.request_worker_cancellation_enveloped(uuid,text,text,text,timestamptz,uuid,uuid,uuid,uuid,bigint,bigint,text,text,text,interval,uuid,uuid,uuid);
+DROP FUNCTION IF EXISTS ai_evalops.acknowledge_worker_cancellation(uuid,uuid,uuid,uuid,uuid,uuid,bigint,bigint,text,uuid,text);
+DROP FUNCTION IF EXISTS ai_evalops.request_worker_cancellation(uuid,uuid,uuid,uuid,bigint,bigint,text,text,text,interval);
+DROP TABLE IF EXISTS ai_evalops.cancellation_acknowledgements;
+DROP TABLE IF EXISTS ai_evalops.cancellation_intents;
+DROP FUNCTION IF EXISTS ai_evalops.pull_worker_envelope(uuid,text,text,text,uuid,uuid,uuid,uuid,uuid,uuid,interval,text,timestamptz);
+DROP FUNCTION IF EXISTS ai_evalops.worker_heartbeat(uuid,text,text,text,uuid,uuid,uuid,uuid,uuid,bigint,bigint,uuid,interval,text,text,timestamptz);
+DROP FUNCTION IF EXISTS ai_evalops.consume_worker_envelope(uuid,uuid,text,text,text,text,uuid,uuid,uuid,timestamptz);
+DROP TABLE IF EXISTS ai_evalops.worker_envelope_receipts;

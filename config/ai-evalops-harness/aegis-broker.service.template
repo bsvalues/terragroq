@@ -1,0 +1,27 @@
+# INSTALLABLE_TEMPLATE=true; INERT_UNTIL_R3_MARKER=true
+[Unit]
+Description=WilliamOS AEGIS WO021 protocol broker
+ConditionPathExists=/etc/williamos/authority/WO-AEH-024-R3
+[Service]
+Type=simple
+User=williamos-aegis
+Group=williamos-aegis
+ExecStart=/usr/bin/node /opt/williamos/aegis/current/bin/aegis-protocol-broker.mjs
+EnvironmentFile=/etc/williamos/aegis/runtime.refs
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
+ReadWritePaths=/var/lib/williamos/aegis/evidence /var/log/williamos/aegis
+MemoryMax=256M
+TasksMax=8
+KillMode=control-group
+Restart=on-failure
+[Install]
+# Intentionally no WantedBy; explicit R3 activation only.

@@ -1,0 +1,11 @@
+{
+  "schema":"williamos.ai-evalops.wo-aeh-050-evidence/v1","workOrder":"WO-AEH-050","result":"REPOSITORY_SUBSTAGE_COMPLETE","authorityGate":"R3_BLOCKED","liveAdapterProven":false,
+  "tests":{"run1":{"passed":22,"failed":0},"run2":{"passed":22,"failed":0}},
+  "contract":{"operation":"TEST","separateFromBuild":true,"profile":"aegis.test.repository.v1","readOnlyContentAddressedSource":true,"sourcePrePostIdentity":true,"sourceInternallyRehashed":true,"fixedRunnerToolchainImageConfigPolicy":true,"normalizedRelativeSelectionArtifacts":true,"declaredSelectionArtifacts":true,"network":"NONE","boundedResources":true,"concurrency":1},
+  "outcomes":{"typed":["PASS","FAIL","TIMEOUT","INFRA_ERROR","OOM","DISK_QUOTA","PIDS","NETWORK","CANCELLED","AMBIGUOUS"],"classificationGroundedInContainmentReceipt":true,"testFailIsAdapterFailure":false,"artifactDigestSizeStoreReceipts":true,"resultBindsRunnerToolchainConfigPolicyImage":true,"durableResultStore":true,"durableHandoffRequired":true},
+  "lifecycle":{"wo021SdkBoundary":["PULL","HEARTBEAT","CANCEL","CANCEL_ACK"],"realEd25519CurrentRenewalCancelAckVector":true,"ackMatchesSupervisorObservation":true,"restartFirst":true,"cleanupRequired":true,"ambiguityRoutes":"WO-AEH-019"},
+  "artifacts":{"adapterSha256":"d0c7fa8d34ec47124557bcbdd2c79edad9170cf09ec0c5fe50c972777a222b6a","testSha256":"36ebe18a8591d3102d82235acf47969ad0578aa4c99c80b35d8eed98b965211f","configSha256":"5e3ce72383219a4eb6ac0abd50d028c5cd4cf3e900fada7c567ab7c6f109aa35"},
+  "ownerCounters":{"OWNER_OPERATION_TOUCH_COUNT":0,"OWNER_CREDENTIAL_TOUCH_COUNT":0,"OWNER_DIAGNOSTIC_TOUCH_COUNT":0,"OWNER_ROUTINE_DECISION_COUNT":0,"OWNER_ROUTINE_CONTACT_COUNT":0},
+  "networkAccessed":false,"processSpawned":false,"serviceMutated":false,"databaseMutated":false,"externalEffects":0,
+  "nonProofs":["No live AEGIS host, process, filesystem containment, network namespace, cgroup, runner/toolchain, protocol persistence, cancellation, cleanup, or production behavior was proven."]
+}

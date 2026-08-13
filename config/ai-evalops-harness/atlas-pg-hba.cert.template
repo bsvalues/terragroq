@@ -1,0 +1,6 @@
+# VALIDATION ONLY; R3 apply blocked. Place before any broader host rule only after exact live review.
+hostssl williamos aeh_coordinator {{EXACT_COORDINATOR_CIDR}} cert clientcert=verify-full map=aeh_cert_map
+hostssl williamos aeh_worker {{EXACT_WORKER_CIDR}} cert clientcert=verify-full map=aeh_cert_map
+# pg_ident exact map rows:
+aeh_cert_map spiffe://williamos/atlas/coordinator aeh_coordinator
+aeh_cert_map spiffe://williamos/atlas/worker aeh_worker

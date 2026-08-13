@@ -1,0 +1,27 @@
+# WO-AEH-022 — Hermes resident worker repository substage
+
+Status: `REPOSITORY_CONTRACT_VALIDATED / INDEPENDENT_REVIEW_PASS / R3_INSTALL_BLOCKED_AUTHORITY / NOT_LIVE_ADAPTER_PROVEN`.
+
+The repository-only worker core now composes through the exact WO-AEH-021 SDK action surface: `pullForWorker`, `heartbeat`, `requestCancellation`, and `acknowledgeCancellation`. Each action is a closed signed-envelope plus canonical `Uint8Array` payload. The local parser enforces the exact PULL, HEARTBEAT, CANCEL, and CANCEL_ACK field sets and semantic ID/digest/limit enums; cryptographic, freshness, replay, authority, capability, fence, and durable receipt enforcement remains owned by the exported WO021 verifier and SDK/database boundary. Startup always enters reconciliation before IDLE, and any retained descriptor routes to WO-AEH-019 without pulling.
+
+The closed validation configuration fixes the template, runtime digest, exact loopback `/api/generate` endpoint, model digest allowlist, concurrency one, non-elevated identity declaration, byte/token limits, execution timeout, and graceful/forced cancellation bounds. Unknown configuration fields—including redirects, proxies, host, path, command, args, environment, working directory, and headers—are rejected. Requests cannot supply an endpoint, command, arguments, environment, or model name. Model and runtime digests must match the signed WO021 binding.
+
+Execution performs signed pull and heartbeat before the fixed transport request. Output must be a closed record containing `Uint8Array` bytes, bounded safe token count, valid artifact digests, and explicit truncation state; its byte digest is derived locally. The fake clock enforces the execution deadline. Timeout aborts the transport and then applies the same locally bounded graceful/forced supervisor cleanup and evidence observation. The exact active binding remains retained through RUNNING, cancellation, timeout, HANDOFF, or RECONCILING; restart and overlapping work are denied. Only a typed durable WO-AEH-017/018 handoff receipt with the exact active binding clears it and returns the worker to IDLE. Execution, heartbeat, replay, revocation, malformed output, oversize, and timeout failures route to RECONCILING and never infer success or terminal truth.
+
+The heartbeat receipt must advance renewal sequence by exactly one and provide the current lease expiry; the worker replaces its active binding with that renewed sequence. Cancellation then requires exact equality among this current active binding, supplied tree binding, signed CANCEL binding, and signed CANCEL_ACK binding. It consumes signed CANCEL, records the associated descendant set, aborts transport, attempts graceful process-tree stop, escalates to bounded kill when evidence is absent, and emits signed CANCEL_ACK only when its complete canonical payload names the observed disposition plus the supervisor's non-null observation evidence UUID and digest. Unknown cleanup receives explicit ambiguity evidence and becomes `STOP_STATUS_AMBIGUOUS`, routing WO-AEH-019. Both graceful and forced evidence waits are independently bounded. The supervisor is an injected typed fixture; no process was actually created or killed.
+
+Fifteen native adversarial tests pass twice: restart-before-pull, signed action composition, concurrency-one race, forbidden request/config surfaces, model/runtime mismatch, malformed/oversize byte and token output, timeout transport/tree termination, descendant cancellation evidence, graceful-to-kill bounded ambiguity, stale/replayed/revoked SDK failure reconciliation, restart overlap, wrong-tree cancellation, ACK evidence mismatch, cancel-versus-completion, and sequential jobs separated by durable handoff. The final behavioral test uses the actual exported WO021 Ed25519 verifier/keyring across PULL, renewed HEARTBEAT, CANCEL, and ambiguity ACK with an evidence reference.
+
+No process spawned, network request occurred, model loaded, Hermes file changed, service installed/started/stopped, credential accessed, database mutated, dependency installed, live worker contacted, or issue #357 path used. Repository tests do not prove a Windows service token/ACL, OS Job Object descendant termination, actual Ollama behavior, Atlas connectivity, machine-restart recovery, live lease/fence/cancellation, GPU use, performance, or production readiness. R3 installation and live validation remain blocked on separate exact authority.
+
+Rollback removes only the module, validation config, test, report, and evidence.
+
+## Independent review closure
+
+- Reviewer: `/root/packet_assurance` (independent of the final builder lane)
+- Verdict: `PASS_REPOSITORY_CONTRACT_ONLY`; zero unresolved repository-contract blockers
+- Revalidation: native adversarial suite `15/15 PASS` twice
+- Composition: actual WO021 Ed25519 verifier/keyring flow, heartbeat-renewed binding propagation, canonical cancellation acknowledgement, and evidence UUID/digest binding were verified
+- Lifecycle: bounded timeout and process-tree cleanup, overlap exclusion, cancellation races, reconciliation routing, and durable-handoff return to IDLE were verified in injected fixtures
+- Integrity: worker, validation config, and test hashes matched; scoped diff validation passed
+- Required remaining gate: exact R3 Hermes installation authority plus live service identity, ACL, Job Object, Ollama, Atlas, restart, lease/fence, cancellation, GPU, and uninstall proof. This substage does not complete WO-AEH-022.

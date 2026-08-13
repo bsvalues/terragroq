@@ -1,0 +1,12 @@
+{
+  "schema":"williamos.ai-evalops.wo-aeh-022-evidence/v2","workOrder":"WO-AEH-022","result":"BUILDER_SUBSTAGE_COMPLETE","authorityGate":"R3_INSTALL_BLOCKED_AUTHORITY","liveAdapterProven":false,
+  "tests":{"run1":{"passed":15,"failed":0},"run2":{"passed":15,"failed":0}},
+  "protocol":{"wo021SdkActions":["pullForWorker","heartbeat","requestCancellation","acknowledgeCancellation"],"schemaFaithfulCanonicalPayloadParser":true,"actualEd25519VerifierKeyringBehavioralTest":true,"closedSignedActions":true,"payloadType":"Uint8Array","heartbeatAdvancesActiveRenewalSequence":true,"startupReconciliationBeforePull":true,"executionFailureRoutesReconciliation":true,"terminalSuccessInferred":false},
+  "constraints":{"endpoint":"http://127.0.0.1:11434/api/generate","fixedTemplate":true,"fixedRuntimeDigest":true,"exactModelDigestAllowlist":true,"concurrency":1,"nonElevatedDeclared":true,"unknownConfigRejected":true,"arbitraryCommandSurface":false,"byteTokenArtifactBounds":true,"fakeClockTimeout":true},
+  "lifecycle":{"activeBindingRetainedUntilDurableHandoff":true,"restartOverlapDenied":true,"timeoutAbortsTransportAndTree":true,"durableHandoffRequiredForIdle":true,"sequentialJobsAfterHandoff":true},
+  "cancellation":{"signedCancelAndAck":true,"exactCurrentRenewedBinding":true,"ackExactRequiredFields":true,"ackMatchesObservedDispositionAndEvidence":true,"nonNullObservationEvidenceIdAndDigest":true,"descendantAssociation":true,"gracefulAndForcedEvidenceWaitsBounded":true,"gracefulThenBoundedKill":true,"ambiguousRoutes":"WO-AEH-019","fakeSupervisor":true},
+  "artifacts":{"workerSha256":"a8f52b1ae503d60e873484e96ddad7cf4d1d4b3d23134fd4c862b7bc71d274af","configSha256":"ba061c7a22429c698fbddfbfe51de2845ba22735f9742091fc65010cd8f81053","testSha256":"0020f1139e0dc09c16378774dce4fe7a576970538c7a752e7b25e3e878bcda79"},
+  "ownerCounters":{"OWNER_OPERATION_TOUCH_COUNT":0,"OWNER_CREDENTIAL_TOUCH_COUNT":0,"OWNER_DIAGNOSTIC_TOUCH_COUNT":0,"OWNER_ROUTINE_DECISION_COUNT":0,"OWNER_ROUTINE_CONTACT_COUNT":0},"ownerOperationCertificationState":"UNVERIFIED_ZERO_OWNER_OPERATIONS",
+  "networkAccessed":false,"processSpawned":false,"serviceMutated":false,"modelLoaded":false,"databaseMutated":false,"externalEffects":0,
+  "nonProofs":["No live Hermes service identity, ACL, Job Object, Ollama request, Atlas connection, lease/fence/cancellation, machine restart, GPU behavior, performance, or production readiness was proven."]
+}

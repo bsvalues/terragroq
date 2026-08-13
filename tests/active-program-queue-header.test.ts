@@ -3,18 +3,19 @@ import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
 describe("active program queue header", () => {
-  it("keeps owner outcome delivery standing without inventing active work", () => {
+  it("selects the authorized AEH outcome while preserving standing owner outcome delivery", () => {
     const queue = readFileSync("docs/governance/active-program-queue.md", "utf8")
     const goalRegistry = readFileSync("docs/governance/goal-registry.md", "utf8")
     const loopRegistry = readFileSync("docs/governance/loop-registry.md", "utf8")
     const program = readFileSync("docs/governance/owner-outcome-delivery-program.md", "utf8")
 
-    expect(queue).toContain("Active program: `NO_ACTIVE_PROGRAM` when no eligible persisted outcome exists")
-    expect(queue).toContain("Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`")
-    expect(queue).toContain("Loop: `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`")
-    expect(queue).toContain("Risk ceiling: `R1`")
+    expect(queue).toContain("Active program: `PROGRAM-WILLIAMOS-AI-EVALOPS-HARNESS-001`")
+    expect(queue).toContain("Goal: `GOAL-WILLIAMOS-DURABLE-AI-EXECUTION-001`")
+    expect(queue).toContain("Loop: `LOOP-WILLIAMOS-DURABLE-AI-EXECUTION-001`")
+    expect(queue).toContain("Risk ceiling: `R1 ACTIVE`")
     expect(queue).toContain("WO-OWNER-OUTCOME-009")
     expect(queue).toContain("WO-OWNER-OUTCOME-009` is `READY")
+    expect(queue).toContain("PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001` remains active")
     expect(goalRegistry).toContain("GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")
     expect(goalRegistry).toContain("PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")
     expect(goalRegistry).toContain("LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001")

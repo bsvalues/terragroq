@@ -28,14 +28,16 @@ This guide is the disciplined workflow for changing this codebase.
 ## 2. Local development
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm dev          # http://localhost:3000, Turbopack
 pnpm test         # Vitest — run before every commit
 pnpm build        # production build; gates on lint + types
 ```
 
 Required environment variables (see README): `DATABASE_URL`, `BETTER_AUTH_SECRET`,
-`BETTER_AUTH_URL`. In v0 these come from the Neon integration and project settings.
+`BETTER_AUTH_URL`, and `AUTH_SIGNUP_MODE`. `LOCAL_SETUP_ENABLED` is local-only;
+`GROQ_API_KEY` is optional and secret. In v0 the database/auth values come from
+the Neon integration and project settings.
 Use `sslmode=verify-full` for Neon/Postgres URLs; the runtime normalizes ambiguous
 `sslmode=require`, `prefer`, and `verify-ca` values before passing the URL to `pg`.
 
@@ -92,8 +94,10 @@ Rules:
 
 ## 5. Changing the data model
 
-The schema is `lib/db/schema.ts` (Drizzle) applied to Neon via the integration —
-there is no migrate script in the repo.
+The application schema is `lib/db/schema.ts` (Drizzle). The validation-only AEH
+migration workflow lives under `migrations/ai-evalops-harness/` with
+`drizzle.aeh.config.ts`; it is not a live apply command and must never be pointed
+at a production `DATABASE_URL` without a separate exact authority gate.
 
 - Prefer **additive** changes (new nullable columns, new tables). Additive schema
   maps to A4 authority.

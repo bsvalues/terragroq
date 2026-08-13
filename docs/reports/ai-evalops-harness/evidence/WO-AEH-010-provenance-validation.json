@@ -1,0 +1,30 @@
+{
+  "workOrder": "WO-AEH-010",
+  "result": "PASS_VALIDATION_ONLY",
+  "baseCommit": "13709f5789c25dea408283730a6bd35e8fd894ab",
+  "headCommit": null,
+  "workingTreeMaterialization": true,
+  "changedPaths": [
+    "Dockerfile.local-app-proof", "package.json", "requirements.txt", "requirements-search.txt", "requirements-execution-fabric.txt", "requirements-constraints.txt",
+    "config/ai-evalops-harness/provenance-policy.json", "config/ai-evalops-harness/model-binding.validation.json", "config/ai-evalops-harness/sbom.validation.cdx.json", "config/ai-evalops-harness/scan-result.validation.json", "config/ai-evalops-harness/lkg.validation.json",
+    "scripts/ai-evalops-harness/provenance-check.mjs", "tests/ai-evalops-harness-provenance.test.mjs",
+    "docs/reports/ai-evalops-harness/WO-AEH-010-dependency-image-and-model-provenance.md", "docs/reports/ai-evalops-harness/evidence/WO-AEH-010-provenance-validation.json"
+  ],
+  "counters": { "testsPassed": 6, "testsFailed": 0, "contractErrors": 0, "secretKeywordMatches": 0, "externalMutations": 0 },
+  "ownerCounters": {
+    "OWNER_OPERATION_TOUCH_COUNT": 0,
+    "OWNER_CREDENTIAL_TOUCH_COUNT": 0,
+    "OWNER_DIAGNOSTIC_TOUCH_COUNT": 0,
+    "OWNER_ROUTINE_DECISION_COUNT": 0,
+    "OWNER_ROUTINE_CONTACT_COUNT": 0
+  },
+  "ownerOperationCertificationState": "UNVERIFIED_ZERO_OWNER_OPERATIONS",
+  "ownerCounterEvidence": "Repository-only command history and scoped changed paths; no owner channel or live system was accessed. This is a non-certifying observation.",
+  "secretScan": { "scope": "all WO-AEH-010 implementation paths", "method": "case-insensitive password/api_key/apikey/secret/token keyword scan", "matches": 0 },
+  "rollbackProof": { "type": "repository-path-only", "externalRollbackRequired": false, "instruction": "Revert or remove only changedPaths after verifying ownership; no external state exists." },
+  "limits": ["Fixture digests are syntax-validation values, not resolved artifacts.", "SBOM has zero components and is not a generated inventory.", "Scan status is NOT_SCANNED and findings are unknown.", "LKG candidate fixture has no approval fields and is not promotion eligible.", "Owner counters are observed, unverified, and non-certifying.", "No transitive Python lock exists."],
+  "networkAccessed": false,
+  "packagesInstalled": false,
+  "imagesPulled": false,
+  "runtimeMutated": false
+}

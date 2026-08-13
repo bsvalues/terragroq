@@ -1,0 +1,40 @@
+{
+  "schema": "williamos.ai-evalops.wo-aeh-015-evidence/v1",
+  "workOrder": "WO-AEH-015",
+  "result": "PASS_DISPOSABLE_POSTGRESQL_AND_STATIC",
+  "tests": { "passed": 21, "failed": 0, "wo015": 11, "wo009Regression": 10 },
+  "migrationSequence": [
+    { "id": "0000_expand_migration_control", "phase": "expand" },
+    { "id": "0001_contract_migration_control", "phase": "contract" },
+    { "id": "0002_durable_control_schema", "phase": "expand" }
+  ],
+  "artifacts": {
+    "typeContractSha256": "2520b392b5da284bd96f4896c9cf117a9292a4b6dd9cadebe6823acc4da1a38c",
+    "migrationSha256": "5baab6f1841036a145255af046786cb9973b0f004d7c656092562ee6f1ae4f31",
+    "rollbackSha256": "a4279548b49c1db55aeed021925c9ba9c1d597e899c32668df8582ca686f7708",
+    "manifestSha256": "980ebfcf452520f6e70c6f8c65e900e8947837ba4b8051292cd4fccf865abe88",
+    "checkerSha256": "04d5e879c159d608cc81cc3542b9b4a35379e4dc41e1800b72a3aad179a37f21",
+    "wo009TestSha256": "468cbe3bb16fa9c807d41d8535007ab89eacea3c7eaa126f331b7a0df9dfb195",
+    "wo015TestSha256": "0e6a7b8d7e00192261ac4422ceb09e5ef008f1333449173eee36c5f99e227497"
+  },
+  "ownerCounters": {
+    "OWNER_OPERATION_TOUCH_COUNT": 0,
+    "OWNER_CREDENTIAL_TOUCH_COUNT": 0,
+    "OWNER_DIAGNOSTIC_TOUCH_COUNT": 0,
+    "OWNER_ROUTINE_DECISION_COUNT": 0,
+    "OWNER_ROUTINE_CONTACT_COUNT": 0
+  },
+  "ownerOperationCertificationState": "UNVERIFIED_ZERO_OWNER_OPERATIONS",
+  "databaseAccessed": true,
+  "databaseMode": "EPHEMERAL_CACHED_POSTGRES_16_CONTAINER",
+  "containerRemovedAfterTest": true,
+  "networkAccessed": false,
+  "dependencyInstalled": false,
+  "liveMutationPerformed": false,
+  "disposableMutationPerformed": true,
+  "nonProofs": [
+    "SQL was applied only to an ephemeral cached PostgreSQL 16 container and the container was removed.",
+    "Synthetic jobs, attempts, a lease/fence, an event, and an evidence reference existed only inside the removed disposable database; rejected outbox/receipt transitions caused no delivery or external effect.",
+    "Static and property contracts do not prove transaction isolation, runtime integration, recovery, or production readiness."
+  ]
+}

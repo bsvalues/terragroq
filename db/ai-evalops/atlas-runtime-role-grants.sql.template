@@ -1,0 +1,21 @@
+\set ON_ERROR_STOP on
+BEGIN;
+REVOKE CONNECT, CREATE, TEMPORARY ON DATABASE "{{database_name}}" FROM PUBLIC;
+REVOKE ALL ON DATABASE "{{database_name}}" FROM "{{coordinator_role}}", "{{worker_role}}";
+GRANT CONNECT ON DATABASE "{{database_name}}" TO "{{coordinator_role}}", "{{worker_role}}";
+REVOKE ALL ON SCHEMA ai_evalops FROM PUBLIC, "{{coordinator_role}}", "{{worker_role}}";
+REVOKE ALL ON ALL TABLES IN SCHEMA ai_evalops FROM PUBLIC, "{{coordinator_role}}", "{{worker_role}}";
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA ai_evalops FROM PUBLIC, "{{coordinator_role}}", "{{worker_role}}";
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ai_evalops FROM PUBLIC, "{{coordinator_role}}", "{{worker_role}}";
+GRANT ALL ON ALL TABLES IN SCHEMA ai_evalops TO "{{deploy_role}}";
+GRANT ALL ON ALL SEQUENCES IN SCHEMA ai_evalops TO "{{deploy_role}}";
+{{preimage_default_revokes}}
+{{preimage_membership_revokes}}
+ALTER ROLE "{{deploy_role}}" NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOREPLICATION;
+ALTER ROLE "{{coordinator_role}}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOREPLICATION;
+ALTER ROLE "{{worker_role}}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS NOREPLICATION;
+DO $owner$ DECLARE r record; BEGIN FOR r IN SELECT p.oid::regprocedure AS identity FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='ai_evalops' LOOP EXECUTE format('ALTER FUNCTION %s OWNER TO %I',r.identity,'{{deploy_role}}'); END LOOP; END $owner$;
+ALTER SCHEMA ai_evalops OWNER TO "{{deploy_role}}";
+GRANT USAGE ON SCHEMA ai_evalops TO "{{coordinator_role}}", "{{worker_role}}";
+{{exact_wrapper_grants}}
+COMMIT;

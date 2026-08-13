@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "aeh.aegis.release.v1",
+  "releaseId": "wo-aeh-024-repository-v1",
+  "installRoot": "/opt/williamos/aegis",
+  "artifacts": [
+    {"path":"lib/execution-control/aegis-packaging.mjs","sha256":"sha256:c50b7ab5d04358d5cd3644b56299b0707a0bd44e52815257891abb8565f1d53a","mode":"0444","role":"BROKER"},
+    {"path":"scripts/ai-evalops-harness/aegis-protocol-broker.mjs","sha256":"sha256:fd112c0e0f6d937059f133701d46fe5a763be2b95ee08112852c4969dbf7465f","mode":"0550","role":"BROKER"},
+    {"path":"scripts/ai-evalops-harness/aegis-hash-child.mjs","sha256":"sha256:05b186c953641777f73130d3c2ba85ca17d7a5004656206b4a7e5d0c3af87d2b","mode":"0550","role":"CHILD"},
+    {"path":"config/ai-evalops-harness/aegis-runtime.refs.validation.json","sha256":"sha256:f619b9a97e062f3b4c89471658461d5c189cba5593944e4356b4f4926bcf8bf9","mode":"0440","role":"CONFIG"},
+    {"path":"config/ai-evalops-harness/aegis-broker.service.template","sha256":"sha256:19be6ff55d85c9772b869de250fb26365c486919c1045d4984bcaaaee3992c79","mode":"0444","role":"UNIT"},
+    {"path":"config/ai-evalops-harness/aegis-worker.packaging.service.template","sha256":"sha256:c00ca3ec212b840bb7f8be393cb7cdef79b61bb4cbcc28fde0d4570f967ffdf1","mode":"0444","role":"UNIT"},
+    {"path":"config/ai-evalops-harness/aegis-hash@.scope.template","sha256":"sha256:f7bf8d7e13f25b5914031cfbeca39e22a7c86b632beb791dbf6dfc60ac268b06","mode":"0444","role":"UNIT"},
+    {"path":"config/ai-evalops-harness/aegis-release.sbom.json","sha256":"sha256:d94234ce4ce8a10b471619188367ba651177c5373daa80690c0816b3b1100c0c","mode":"0444","role":"SBOM"}
+  ],
+  "sbomDigest": "sha256:d94234ce4ce8a10b471619188367ba651177c5373daa80690c0816b3b1100c0c"
+}

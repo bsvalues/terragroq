@@ -1,0 +1,9 @@
+{
+  "schema": "williamos.validation-scan/v1",
+  "fixtureOnly": true,
+  "scanner": "not-executed",
+  "subjectDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "status": "NOT_SCANNED",
+  "findings": null,
+  "promotionEligible": false
+}

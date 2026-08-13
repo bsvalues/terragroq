@@ -1,0 +1,7 @@
+{
+  "schema":"williamos.ai-evalops.wo-aeh-017-evidence/v1",
+  "workOrder":"WO-AEH-017","result":"PASS_DISPOSABLE_POSTGRESQL","tests":{"passed":2,"failed":0},
+  "properties":{"stateIntentAtomic":true,"requestBoundReceipts":true,"atLeastOnceDispatch":true,"staleRedelivery":true,"concurrentDispatchers":2,"concurrentWinners":1,"effectDomainIdempotency":true,"sharedEffectDomainSerialization":true,"projectionBeforeEffectLockAtEnqueue":true,"fenceValidatedAtEnqueueAndClaim":true,"wrongFenceRejected":true,"deliveredEvidenceType":"TERMINAL_RECEIPT","ambiguousEvidenceType":"RECOVERY_OBSERVATION","evidenceDigestBound":true,"claimReplayTerminalPayloadWithheld":true,"outcomeReplayIdempotent":true,"changedReplayRejected":true,"ambiguousNeverSuccess":true,"externalEffects":0},
+  "artifacts":{"engineSha256":"c3e68aa71a65f2aaa76c6441d4b536bf366bc75e5b68166033b0d82f50be17d2","migrationSha256":"827aa8790dcfc7b1f7c40bc3ae4f941bf407e292d74a8c25f0f9d86904e302fa","rollbackSha256":"6c0a26ba437f2252bbcbe8d7ff28bf24ae1175c9230ddea4e1e4e56aa837118c","manifestSha256":"dd6a3a9268aa97834cc541994a31834f2347bc84bf9180db4cb2441134d1f759","testSha256":"92864a81c5412c08e343c2dc61970d3094daece20cc86554dfbccd67a8ff537e"},
+  "liveDatabaseAccessed":false,"networkAccessed":false,"externalEffectExecuted":false,"containerRemoved":true
+}

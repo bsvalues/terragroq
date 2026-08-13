@@ -1,0 +1,42 @@
+{
+  "workOrder": "WO-AEH-009",
+  "result": "PASS",
+  "mode": "DISPOSABLE_STATIC_ONLY",
+  "databaseConnectionAttempted": false,
+  "networkAccessAttempted": false,
+  "liveInputNegativeExit": 2,
+  "tests": { "total": 10, "passed": 10, "failed": 0 },
+  "checks": [
+    "canonical-order-and-digests",
+    "fresh-and-upgrade-phase-shape",
+    "live-database-input-rejection",
+    "migration-drift-rejection",
+    "manifest-directory-exact-set-equality",
+    "extra-missing-unowned-sql-rejection",
+    "path-escape-and-filename-reuse-rejection",
+    "id-derived-migration-and-rollback-filenames",
+    "renamed-and-swapped-file-rejection",
+    "contract-old-reader-drain-gate",
+    "contract-recovery-metadata-requirement",
+    "rollback-drift-rejection",
+    "forward-fix-requirement",
+    "exact-recovery-enum-rejection",
+    "git-diff-check"
+  ],
+  "artifactSha256": {
+    "drizzle.aeh.config.ts": "18fd15c789067579485fbac5a052efe237c6c773dc9c098aee0839c262c05cf1",
+    "migrations/ai-evalops-harness/0000_expand_migration_control.sql": "f4e6e28f0a6fe70a98a4d31178242b92ef1984185281400172bb27bf750eff1f",
+    "migrations/ai-evalops-harness/0001_contract_migration_control.sql": "5a404c946b59dddcd54ad041758cb1be760b48abf7f4c0eb4077771fd40b1061",
+    "migrations/ai-evalops-harness/0001_contract_migration_control.rollback.sql": "ce62c871d4cef085bfa519dd696c27003b3cb39f8a1b3e3b841f6686461c001d",
+    "migrations/ai-evalops-harness/0002_durable_control_schema.sql": "5baab6f1841036a145255af046786cb9973b0f004d7c656092562ee6f1ae4f31",
+    "migrations/ai-evalops-harness/0002_durable_control_schema.rollback.sql": "a4279548b49c1db55aeed021925c9ba9c1d597e899c32668df8582ca686f7708",
+    "migrations/ai-evalops-harness/0003_claim_lease_engine.sql": "b0d997332ffff9a3dafacdec14ea88464ce86d6d1a773d5b6abad632bb1244bf",
+    "migrations/ai-evalops-harness/0003_claim_lease_engine.rollback.sql": "b60ce3c2fe668a753e3785de8818f125e2db12b5fc76ced5613e926f5a8af692",
+    "migrations/ai-evalops-harness/0004_transactional_outbox.sql": "1b85e6d816737b2dd1800e4e71235a45ce4da7fa236fccea47a78ee08d7c7502",
+    "migrations/ai-evalops-harness/0004_transactional_outbox.rollback.sql": "6c0a26ba437f2252bbcbe8d7ff28bf24ae1175c9230ddea4e1e4e56aa837118c",
+    "migrations/ai-evalops-harness/manifest.json": "6a44f5961bcfe966a48b5289431add813696d3d565eb500746e1412f838f215c",
+    "scripts/ai-evalops-harness/schema-drift-check.mjs": "04d5e879c159d608cc81cc3542b9b4a35379e4dc41e1800b72a3aad179a37f21",
+    "tests/ai-evalops-harness-schema-drift.test.mjs": "468cbe3bb16fa9c807d41d8535007ab89eacea3c7eaa126f331b7a0df9dfb195",
+    "docs/governance/ai-evalops-harness/database-migration-and-rollback.md": "c70622c6ae2f4a5d30f1ae2ed534d5bd799680475e72cc50b5fd18770014e3f9"
+  }
+}

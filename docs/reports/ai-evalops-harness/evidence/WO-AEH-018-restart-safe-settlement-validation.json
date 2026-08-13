@@ -1,0 +1,24 @@
+{
+  "schema": "williamos.ai-evalops.wo-aeh-018-evidence/v1",
+  "workOrder": "WO-AEH-018",
+  "result": "PASS_DISPOSABLE_POSTGRESQL",
+  "tests": { "passed": 3, "failed": 0 },
+  "bindings": ["job", "attempt", "run", "claim", "lease", "effect-domain", "fence", "holder", "instance", "boot", "authority", "capability", "input", "expiry"],
+  "negatives": ["digest-tamper", "wrong-holder", "expired-descriptor", "revoked-authority", "stale-capability", "changed-settlement-replay"],
+  "artifacts": {
+    "engineSha256": "03cbadb14b18efa4546cc2c39e9052ce455c1ee159aa9b22874cd1a50b320633",
+    "migrationSha256": "00959998aadbd6dd24223f63792afc98be67117aba5b16eb26f2e1d52fb38a2c",
+    "rollbackSha256": "e772ea30737033af1b1561f97d1d635449b8278c10bc0f97f77255d1a637f8be",
+    "manifestSha256": "980ebfcf452520f6e70c6f8c65e900e8947837ba4b8051292cd4fccf865abe88",
+    "testSha256": "72fce8276359a67f2bda8917404537a94d86299fb5e9f160217dc8b540e60855"
+  },
+  "ownerCounters": { "OWNER_OPERATION_TOUCH_COUNT": 0, "OWNER_CREDENTIAL_TOUCH_COUNT": 0, "OWNER_DIAGNOSTIC_TOUCH_COUNT": 0, "OWNER_ROUTINE_DECISION_COUNT": 0, "OWNER_ROUTINE_CONTACT_COUNT": 0 },
+  "ownerOperationCertificationState": "UNVERIFIED_ZERO_OWNER_OPERATIONS",
+  "cachedImage": "postgres:16",
+  "imagePulled": false,
+  "networkAccessed": false,
+  "liveEffectPerformed": false,
+  "disposableDatabaseMutated": true,
+  "containerRemoved": true,
+  "nonProofs": ["The descriptor and settlement rows existed only in a removed disposable database.", "No adapter, external effect, live worker, Atlas database, or production recovery was exercised.", "A durable descriptor contract does not itself prove end-to-end crash recovery or exactly-once external effects."]
+}

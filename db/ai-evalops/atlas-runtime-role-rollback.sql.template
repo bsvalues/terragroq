@@ -1,0 +1,15 @@
+\set ON_ERROR_STOP on
+BEGIN;
+REVOKE ALL ON DATABASE "{{database_name}}" FROM "{{coordinator_role}}", "{{worker_role}}";
+REVOKE ALL ON SCHEMA ai_evalops FROM PUBLIC, "{{deploy_role}}", "{{coordinator_role}}", "{{worker_role}}";
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ai_evalops FROM PUBLIC, "{{deploy_role}}", "{{coordinator_role}}", "{{worker_role}}";
+REVOKE ALL ON ALL TABLES IN SCHEMA ai_evalops FROM PUBLIC, "{{deploy_role}}", "{{coordinator_role}}", "{{worker_role}}";
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA ai_evalops FROM PUBLIC, "{{deploy_role}}", "{{coordinator_role}}", "{{worker_role}}";
+{{preimage_default_revokes}}
+{{function_owner_restore}}
+ALTER SCHEMA ai_evalops OWNER TO {{schema_owner_restore}};
+{{role_restore}}
+{{membership_restore}}
+{{acl_restore}}
+{{default_acl_restore}}
+COMMIT;

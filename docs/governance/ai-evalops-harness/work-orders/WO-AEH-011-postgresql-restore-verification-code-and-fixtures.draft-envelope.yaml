@@ -1,0 +1,125 @@
+schemaVersion: 1
+artifactType: DRAFT_WORK_ORDER_PACKET
+validationOnly: true
+dispatchReadiness: BLOCKED_AUTHORITY_AND_RESERVATION
+dispatchPerformed: false
+authorityGranted: false
+workOrderId: WO-AEH-011
+programId: PROGRAM-WILLIAMOS-AI-EVALOPS-HARNESS-001
+goalId: GOAL-WILLIAMOS-DURABLE-AI-EXECUTION-001
+loopId: LOOP-WILLIAMOS-DURABLE-AI-EXECUTION-001
+objective: "Modify backup/restore automation to enforce `ON_ERROR_STOP=1`, bound exit status and expected DB/schema/table/row/application-query invariants; corrupt, partial and empty fixture restores fail without touching live backups."
+riskClass: R2
+repositories:
+  - "HermesLab"
+  - "terragroq"
+checkoutBindings:
+  - id: HermesLab
+    repository: bsvalues/terragroq
+    root: C:\HermesLab
+    reviewAnchor: 0481061acf1f683688a00b09795647d0288c7232
+  - id: terragroq
+    repository: bsvalues/terragroq
+    root: C:\Users\bs\terragroq-review
+    reviewAnchor: 13709f5789c25dea408283730a6bd35e8fd894ab
+baseRefs:
+  - checkoutId: HermesLab
+    sha: 0481061acf1f683688a00b09795647d0288c7232
+    status: REVIEW_ANCHOR_REFRESH_REQUIRED_AT_ACTIVATION
+  - checkoutId: terragroq
+    sha: 13709f5789c25dea408283730a6bd35e8fd894ab
+    status: REVIEW_ANCHOR_REFRESH_REQUIRED_AT_ACTIVATION
+dependencies:
+  - "WO-AEH-001"
+fanInGate: ALL
+laneId: wo-aeh-011-draft
+teamRoles:
+  coordinator: UNASSIGNED
+  builder: UNASSIGNED
+  reviewer: UNASSIGNED_INDEPENDENT
+providerRequirements:
+  - repository-read
+  - repository-write-scoped-to-reservations
+  - deterministic-validation
+preferredProviders:
+  - supported-hosted-codex-session
+fallbackProviders: []
+reservations:
+  status: PRELIMINARY_AREA_BOUNDS_REFINEMENT_REQUIRED
+  paths:
+    - "HermesLab:aegis"
+    - "HermesLab:atlas"
+    - "HermesLab:hermes"
+    - "terragroq:docs/reports/ai-evalops-harness"
+  contracts:
+    - "wo-aeh-011-outcome"
+    - "backup-or-host-safety-boundary"
+  environments:
+    - "disposable-PostgreSQL-restore-fixtures"
+  protectedResources:
+    - "historical-evidence"
+    - "issue-357-quarantine"
+    - "last-restore-verified-generation"
+    - "management-access"
+    - "authoritative-state"
+allowedActions:
+  - inspect-within-declared-scope
+  - implement-only-after-authority-match
+  - validate-and-record-evidence
+forbiddenActions:
+  - authority-minting-or-self-activation
+  - secret-credential-or-protected-data-access-without-exact-authority
+  - issue-357-retry-wrap-rename-or-reuse
+  - general-shell-or-unbounded-command-runner
+authorityGrantRefs: []
+programActivationGrantRef: null
+grantStatusEventRefs: []
+authorityScopeRequired: "Exact repository paths, contracts, test environments, and any non-live integration resources."
+requiredOutputs:
+  - "Modify backup/restore automation to enforce `ON_ERROR_STOP=1`, bound exit status and expected DB/schema/table/row/application-query invariants; corrupt, partial and empty fixture restores fail without touching live backups."
+requiredValidation:
+  - "successful disposable restore"
+  - "corrupt partial and empty restores fail"
+  - "psql nonzero status fails the pipeline"
+  - "expected database schema table row and application-query invariants pass"
+  - "live backups remain untouched"
+  - "prove exact declared outcome: Modify backup/restore automation to enforce `ON_ERROR_STOP=1`, bound exit status and expected DB/schema/table/row/application-query invariants; corrupt, partial and empty fixture restores fail without touching live backups."
+reviewRequirements:
+  - reviewer-differs-from-builder
+  - all-blocking-findings-resolved
+  - authority-and-scope-independently-verified
+mergeMode: NONE_DRAFT_ONLY
+retryBudget: 2
+remediationBudget: 2
+reroutePolicy: compatible-independent-provider-only
+stopConditions:
+  - missing-stale-mismatched-or-revoked-authority
+  - reservation-collision-or-foreign-change
+  - ambiguous-base-worker-lease-fence-input-or-outcome
+  - duplicate-effect-or-evidence-gap
+  - issue-357-reuse
+evidenceTargets:
+  - "terragroq:docs/reports/ai-evalops-harness/WO-AEH-011-postgresql-restore-verification-code-and-fixtures.md"
+  - exact-base-head-and-reservation-record
+  - authority-freshness-and-validation-results
+  - rollback-or-reversal-verification
+  - all-five-owner-touch-counter-evidence
+  - maturity-state-before-and-after
+  - explicit-non-proof-statement
+  - independent-reviewer-identity-findings-and-closure
+  - immutable-config-image-model-input-output-digests-as-applicable
+  - live-worker-boot-claim-lease-fence-evidence-as-applicable
+ownerDecisionConditions:
+  - "new-spend-account-or-provider"
+  - "credential-or-secret-use"
+  - "live-database-host-network-sudo-or-backup-mutation"
+  - "reboot-outage-or-fault-injection"
+  - "runtime-worker-scheduler-or-production-activation"
+ownerTouchBudget:
+  operation: 0
+  credential: 0
+  diagnostic: 0
+  routineDecision: 0
+  routineContact: 0
+ownerOperationsAllowed: false
+communicationPolicy: FINAL_ONLY

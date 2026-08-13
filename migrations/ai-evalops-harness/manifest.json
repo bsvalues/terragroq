@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "lane": "ai-evalops-harness",
+  "databaseUse": "DISPOSABLE_ONLY",
+  "migrations": [
+    {
+      "id": "0000_expand_migration_control",
+      "phase": "expand",
+      "file": "0000_expand_migration_control.sql",
+      "sha256": "f4e6e28f0a6fe70a98a4d31178242b92ef1984185281400172bb27bf750eff1f",
+      "requiresBackupReceipt": true,
+      "recovery": "restore-before-writes-or-forward-fix-after-writes"
+    },
+    {
+      "id": "0001_contract_migration_control",
+      "phase": "contract",
+      "file": "0001_contract_migration_control.sql",
+      "sha256": "5a404c946b59dddcd54ad041758cb1be760b48abf7f4c0eb4077771fd40b1061",
+      "requiresBackupReceipt": true,
+      "requiresOldReaderDrain": true,
+      "rollbackFile": "0001_contract_migration_control.rollback.sql",
+      "rollbackSha256": "ce62c871d4cef085bfa519dd696c27003b3cb39f8a1b3e3b841f6686461c001d",
+      "recovery": "rollback-before-writes-or-forward-fix-after-writes"
+    },
+    {
+      "id": "0002_durable_control_schema",
+      "phase": "expand",
+      "file": "0002_durable_control_schema.sql",
+      "sha256": "5baab6f1841036a145255af046786cb9973b0f004d7c656092562ee6f1ae4f31",
+      "requiresBackupReceipt": true,
+      "rollbackFile": "0002_durable_control_schema.rollback.sql",
+      "rollbackSha256": "a4279548b49c1db55aeed021925c9ba9c1d597e899c32668df8582ca686f7708",
+      "recovery": "rollback-before-writes-or-forward-fix-after-writes"
+    },
+    {
+      "id": "0003_claim_lease_engine",
+      "phase": "expand",
+      "file": "0003_claim_lease_engine.sql",
+      "sha256": "b0d997332ffff9a3dafacdec14ea88464ce86d6d1a773d5b6abad632bb1244bf",
+      "requiresBackupReceipt": true,
+      "rollbackFile": "0003_claim_lease_engine.rollback.sql",
+      "rollbackSha256": "b60ce3c2fe668a753e3785de8818f125e2db12b5fc76ced5613e926f5a8af692",
+      "recovery": "rollback-before-writes-or-forward-fix-after-writes"
+    },
+    {
+      "id": "0004_transactional_outbox",
+      "phase": "expand",
+      "file": "0004_transactional_outbox.sql",
+      "sha256": "827aa8790dcfc7b1f7c40bc3ae4f941bf407e292d74a8c25f0f9d86904e302fa",
+      "requiresBackupReceipt": true,
+      "rollbackFile": "0004_transactional_outbox.rollback.sql",
+      "rollbackSha256": "6c0a26ba437f2252bbcbe8d7ff28bf24ae1175c9230ddea4e1e4e56aa837118c",
+      "recovery": "rollback-before-writes-or-forward-fix-after-writes"
+    },
+    {
+      "id": "0005_restart_safe_settlement",
+      "phase": "expand",
+      "file": "0005_restart_safe_settlement.sql",
+      "sha256": "00959998aadbd6dd24223f63792afc98be67117aba5b16eb26f2e1d52fb38a2c",
+      "requiresBackupReceipt": true,
+      "rollbackFile": "0005_restart_safe_settlement.rollback.sql",
+      "rollbackSha256": "e772ea30737033af1b1561f97d1d635449b8278c10bc0f97f77255d1a637f8be",
+      "recovery": "rollback-before-writes-or-forward-fix-after-writes"
+    },
+{"id":"0006_reconciliation_recovery","phase":"expand","file":"0006_reconciliation_recovery.sql","sha256":"7e4fbd7cdc595e897974fcb7666105505dfccc815d4ba5d31e88331469320148","requiresBackupReceipt":true,"rollbackFile":"0006_reconciliation_recovery.rollback.sql","rollbackSha256":"0730efc5b7a52856551c1480899b521ba834b3e79b5843f76c8f91fa3abb9303","recovery":"rollback-before-writes-or-forward-fix-after-writes"},
+{"id":"0007_worker_protocol_cancellation","phase":"expand","file":"0007_worker_protocol_cancellation.sql","sha256":"9053c560291194475a18ad6dabfe8a35627fd9a00d515bf7a9e2034643eac324","requiresBackupReceipt":true,"rollbackFile":"0007_worker_protocol_cancellation.rollback.sql","rollbackSha256":"6d2056b5b75676cae18bf1a1951ca66582fed28bfd3f281606c931721cbd48b2","recovery":"rollback-before-writes-or-forward-fix-after-writes"}
+  ]
+}

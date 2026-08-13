@@ -213,6 +213,36 @@ eligible merge, verification, evidence, and next-program activation do not
 require the Primary to courier a new loop. This does not authorize a merge or
 other consequential action that lacks authority under the operator playbook.
 
+## Active AI Eval-Ops and Durable Harness Loop
+
+### `LOOP-WILLIAMOS-DURABLE-AI-EXECUTION-001`
+
+Status: `ACTIVE / DEPENDENCY_DRIVEN / WO-AEH-001_COMPLETE / R2_R3_AUTHORITY_GATED`
+
+Program: `PROGRAM-WILLIAMOS-AI-EVALOPS-HARNESS-001`
+
+Goal: `GOAL-WILLIAMOS-DURABLE-AI-EXECUTION-001`
+
+Current completed Work Order: `WO-AEH-001`.
+
+Selection is dependency-cleared, authority-matched, and reservation-compatible;
+Work Order numbering does not serialize otherwise independent work. Completion
+of WO-AEH-001 releases WO-AEH-002, WO-AEH-011, and WO-AEH-013 only to fresh
+authority and reservation evaluation.
+
+Supported hosted sessions may perform matched R1 repository work. R2 requires
+exact child, path, contract, and non-live environment authority. R3 requires a
+fresh exact host/action/protected-resource/time-window grant. This loop creates
+no unattended-runtime claim and does not activate a worker or scheduler.
+
+Stop on secrets or protected data, live mutation without an exact grant,
+reservation collision, stale or ambiguous base/identity/lease/fence/outcome,
+duplicate effect, evidence gap, or any retry/wrap/rename/reuse of issue #357.
+
+Every result records maturity before/after, immutable evidence, and all five
+owner-operation counters. The standing Owner Outcome Delivery loop remains the
+parent/fallback continuation and is not superseded.
+
 ## Loop Rules
 
 - Codex continues to the next listed Work Order when it remains inside active
