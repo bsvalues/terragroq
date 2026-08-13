@@ -17,9 +17,9 @@ const SHA256 = /^[a-f0-9]{64}$/
 const SHA40 = /^[a-f0-9]{40}$/
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
-const ACTIVATION_ID = "remote-dev-offload-v1-issue-734-single-use-001"
-const AUTHORITY_REFERENCE = "issue-734-terrafusion-remote-dev-single-use-001"
-const RUN_ID = "a3961b87-ed54-45d0-a975-678a02f1e163"
+const ACTIVATION_ID = "remote-dev-offload-v1-issue-734-single-use-002"
+const AUTHORITY_REFERENCE = "issue-734-terrafusion-remote-dev-single-use-002"
+const RUN_ID = "c9889658-bad2-43e2-8def-a0a9c9df5d3c"
 
 class ActivationError extends Error {
   constructor(code, detail) { super(detail); this.code = code }
@@ -160,8 +160,8 @@ function validateInactiveBaseline() {
 
 function validateAuthority(authority) {
   exactKeys(authority, ["schemaVersion", "activationId", "authorityReference", "workOrderId", "status", "executionAuthorizedByFileAlone", "issue", "run", "target", "trustedMain", "bindings", "executionIdentity", "operations", "resources", "network", "lifecycle", "authoritySeparation", "scheduler"], "authority")
-  if (authority.schemaVersion !== 1 || authority.activationId !== "remote-dev-offload-v1-issue-734-single-use-001"
-    || authority.authorityReference !== "issue-734-terrafusion-remote-dev-single-use-001"
+  if (authority.schemaVersion !== 1 || authority.activationId !== "remote-dev-offload-v1-issue-734-single-use-002"
+    || authority.authorityReference !== "issue-734-terrafusion-remote-dev-single-use-002"
     || authority.workOrderId !== "WO-TF-REMOTE-DEV-OFFLOAD-001"
     || authority.status !== "FUTURE_DATED_SINGLE_USE_AUTHORITY" || authority.executionAuthorizedByFileAlone !== false) {
     fail(authority.authorityReference === "issue-538-aegis-single-use-hash-001" ? "HASH_SCOPE_REUSE_REJECTED" : "ACTIVATION_SCOPE_MISMATCH", "activation identity differs")

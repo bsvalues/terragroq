@@ -7,11 +7,11 @@ describe("AEGIS activation bridge bootstrap authority", () => {
   const root=process.cwd()
   it("accepts only one exact signed-payload shape in its fifteen-minute window", () => {
     const asset = (source:string,destination:string,mode="0555") => ({source,destination,sha256:"a".repeat(64),mode})
-    const payload:any={schemaVersion:1,operation:"INSTALL_ACTIVATION_BRIDGE",authorityId:"11111111-1111-4111-8111-111111111111",runId:"a3961b87-ed54-45d0-a975-678a02f1e163",issuedAt:"2026-08-12T22:30:00.000Z",expiresAt:"2026-08-12T22:45:00.000Z",singleUse:true,machineIdSha256:"b".repeat(64),bootId:"22222222-2222-4222-8222-222222222222",controlCommit:"c".repeat(40),verifierSha256:"d".repeat(64),prerequisiteReceiptSha256:"41ea35adc284b37e381f1162e5cd2315f8a0ef2da5c2326e1a224c15e4fa541c",assets:[asset("scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs","/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs"),asset("scripts/execution-fabric/provision/assets/aegis-remote-dev-activation-peer.py","/usr/local/libexec/williamos-aegis-remote-dev-activation-peer.py"),asset("scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation.socket","/etc/systemd/system/williamos-aegis-remote-dev-activation.socket","0444"),asset("scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation@.service","/etc/systemd/system/williamos-aegis-remote-dev-activation@.service","0444"),asset("scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs","/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs")]}
+    const payload:any={schemaVersion:1,operation:"INSTALL_ACTIVATION_BRIDGE",authorityId:"11111111-1111-4111-8111-111111111111",runId:"c9889658-bad2-43e2-8def-a0a9c9df5d3c",issuedAt:"2026-08-13T02:01:00.000Z",expiresAt:"2026-08-13T02:16:00.000Z",singleUse:true,machineIdSha256:"b".repeat(64),bootId:"22222222-2222-4222-8222-222222222222",controlCommit:"c".repeat(40),verifierSha256:"d".repeat(64),prerequisiteReceiptSha256:"41ea35adc284b37e381f1162e5cd2315f8a0ef2da5c2326e1a224c15e4fa541c",assets:[asset("scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs","/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs"),asset("scripts/execution-fabric/provision/assets/aegis-remote-dev-activation-peer.py","/usr/local/libexec/williamos-aegis-remote-dev-activation-peer.py"),asset("scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation.socket","/etc/systemd/system/williamos-aegis-remote-dev-activation.socket","0444"),asset("scripts/execution-fabric/provision/assets/williamos-aegis-remote-dev-activation@.service","/etc/systemd/system/williamos-aegis-remote-dev-activation@.service","0444"),asset("scripts/execution-fabric/provision/aegis-remote-dev-ssh-entrypoint.mjs","/usr/local/libexec/williamos-aegis-remote-dev-ssh-entrypoint.mjs")]}
     const envelope={payload,signature:"AA=="}
-    expect(inspectBridgeBootstrapAuthority(envelope,"2026-08-12T22:35:00.000Z",payload.verifierSha256)).toMatchObject({status:"BRIDGE_BOOTSTRAP_AUTHORITY_MATCHED"})
-    expect(inspectBridgeBootstrapAuthority({payload:{...payload,extra:true},signature:"AA=="},"2026-08-12T22:35:00.000Z",payload.verifierSha256)).toMatchObject({status:"BLOCKED"})
-    expect(inspectBridgeBootstrapAuthority({payload:{...payload,assets:payload.assets.map((v:any,i:number)=>i? v:{...v,destination:"/etc/shadow"})},signature:"AA=="},"2026-08-12T22:35:00.000Z",payload.verifierSha256)).toMatchObject({status:"BLOCKED"})
+    expect(inspectBridgeBootstrapAuthority(envelope,"2026-08-13T02:06:00.000Z",payload.verifierSha256)).toMatchObject({status:"BRIDGE_BOOTSTRAP_AUTHORITY_MATCHED"})
+    expect(inspectBridgeBootstrapAuthority({payload:{...payload,extra:true},signature:"AA=="},"2026-08-13T02:06:00.000Z",payload.verifierSha256)).toMatchObject({status:"BLOCKED"})
+    expect(inspectBridgeBootstrapAuthority({payload:{...payload,assets:payload.assets.map((v:any,i:number)=>i? v:{...v,destination:"/etc/shadow"})},signature:"AA=="},"2026-08-13T02:06:00.000Z",payload.verifierSha256)).toMatchObject({status:"BLOCKED"})
     expect(inspectBridgeBootstrapAuthority(envelope,payload.expiresAt,payload.verifierSha256)).toMatchObject({status:"BLOCKED"})
   })
 
@@ -31,15 +31,17 @@ describe("AEGIS activation bridge bootstrap authority", () => {
   })
 
   it("upgrades only the exact reviewed activation-host predecessor", () => {
-    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="5ffc8e655ce3f40d527b38a7438e479e73ab52acc58fe028225dc6107442ca82"
-    expect(inspectBridgeDestinationState(destination,"0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d","0555",current)).toBe("EXACT_PREDECESSOR")
+    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="44a5b12ad5a2f65a9c1a841105626aaded996c14d1ca32fc893d8fcc8ca4b152"
+    expect(inspectBridgeDestinationState(destination,"5ffc8e655ce3f40d527b38a7438e479e73ab52acc58fe028225dc6107442ca82","0555",current)).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeDestinationState(destination,"0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"f".repeat(64),"0555",current)).toBe("DRIFT")
-    expect(inspectBridgeDestinationState("/usr/local/libexec/other","0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d","0555",current)).toBe("DRIFT")
-    expect(inspectBridgeDestinationState(destination,"0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d","0777",current)).toBe("DRIFT")
+    expect(inspectBridgeDestinationState("/usr/local/libexec/other","5ffc8e655ce3f40d527b38a7438e479e73ab52acc58fe028225dc6107442ca82","0555",current)).toBe("DRIFT")
+    expect(inspectBridgeDestinationState(destination,"5ffc8e655ce3f40d527b38a7438e479e73ab52acc58fe028225dc6107442ca82","0777",current)).toBe("DRIFT")
   })
 
   it("accepts only the exact first bridge receipt as a bounded successor predecessor", () => {
-    expect(inspectBridgeReceiptState("5d2e41f957ceeba53839454392f607c1f5749886761ffd4f3df8f89a962ae043","0".repeat(64))).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeReceiptState("850deb1097fe7971d2574bee49650fd81b01b6cfd3c71d9a9b0684888d29f74b","0".repeat(64))).toBe("EXACT_PREDECESSOR")
+    expect(inspectBridgeReceiptState("5d2e41f957ceeba53839454392f607c1f5749886761ffd4f3df8f89a962ae043","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("74a9bc03353ee81b51711b66dedb3206fbef5d193997a4a1137c5f45157a5f59","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("b681cf30dba60dd1976082cd3f917478baab4935c683e3a82f02b73f162bf931","0".repeat(64))).toBe("DRIFT")
     expect(inspectBridgeReceiptState("0".repeat(64),"1".repeat(64))).toBe("DRIFT")
