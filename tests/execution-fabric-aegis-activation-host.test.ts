@@ -20,7 +20,7 @@ import {
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
 const canonical = (value:any):string => value===null||["string","boolean","number"].includes(typeof value)?JSON.stringify(value):Array.isArray(value)?`[${value.map(canonical).join(",")}]`:`{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`
-const runId = "a3961b87-ed54-45d0-a975-678a02f1e163"
+const runId = "c9889658-bad2-43e2-8def-a0a9c9df5d3c"
 const root = path.resolve(import.meta.dirname, "..")
 const session = () => ({
   schemaVersion: 1,
@@ -63,11 +63,11 @@ describe("AEGIS production activation host trust", () => {
   })
 
   it("accepts recovery only for one exact durable claimed phase inside the authority window", () => {
-    const phase = { schemaVersion: 1, phase: "ACTIVATION_CLAIMED_LEASED", runId, claimId: "claim-" + "a".repeat(24), leaseId: "lease-" + "b".repeat(24), authorityReference: AUTHORITY_REFERENCE, claimedAt: "2026-08-12T22:10:00.000Z", expiresAt: "2026-08-13T02:06:00.000Z" }
-    expect(inspectActivationHostPhase(phase, "2026-08-12T22:30:00.000Z")).toMatchObject({ status: "RECOVERY_REQUIRED" })
-    expect(inspectActivationHostPhase({ ...phase, extra: true }, "2026-08-12T22:30:00.000Z")).toMatchObject({ status: "BLOCKED" })
+    const phase = { schemaVersion: 1, phase: "ACTIVATION_CLAIMED_LEASED", runId, claimId: "claim-" + "a".repeat(24), leaseId: "lease-" + "b".repeat(24), authorityReference: AUTHORITY_REFERENCE, claimedAt: "2026-08-13T02:02:00.000Z", expiresAt: "2026-08-13T06:01:00.000Z" }
+    expect(inspectActivationHostPhase(phase, "2026-08-13T02:30:00.000Z")).toMatchObject({ status: "RECOVERY_REQUIRED" })
+    expect(inspectActivationHostPhase({ ...phase, extra: true }, "2026-08-13T02:30:00.000Z")).toMatchObject({ status: "BLOCKED" })
     expect(inspectActivationHostPhase(phase, phase.expiresAt)).toMatchObject({ status: "RECOVERY_REQUIRED" })
-    expect(inspectActivationHostPhase(phase, "2026-08-13T02:36:00.000Z")).toMatchObject({ status: "BLOCKED" })
+    expect(inspectActivationHostPhase(phase, "2026-08-13T06:31:00.000Z")).toMatchObject({ status: "BLOCKED" })
   })
 
   it("makes each exact operation tuple a single durable mint generation", () => {
