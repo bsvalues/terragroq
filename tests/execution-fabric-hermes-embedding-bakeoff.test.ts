@@ -57,6 +57,7 @@ function fixture() {
       license: "Apache-2.0",
       source: "ollama-library",
       manifest_sha256: "2".repeat(64),
+      ollama_manifest_sha256: "e".repeat(64),
     },
     runtime: {
       runtime_id: "ollama",
@@ -177,7 +178,7 @@ function attestation(admission: any) {
     host_manifest_sha256: admission.placement.host_manifest_sha256,
     model_id: admission.model.model_id,
     weights_sha256: admission.model.weights_sha256,
-    model_manifest_sha256: admission.model.manifest_sha256,
+    model_manifest_sha256: admission.model.ollama_manifest_sha256,
     runtime_id: admission.runtime.runtime_id,
     runtime_version: admission.runtime.version,
     runtime_executable_sha256: admission.runtime.executable_sha256,
@@ -415,12 +416,15 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(source).toContain('const GIT_EXECUTABLE = "C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe"')
     expect(source).toContain('endpoint !== "http://127.0.0.1:11435/api/embed"')
     expect(source).toContain('process.argv.length !== 2')
-    expect(source.match(/spawnSync\(/g)).toHaveLength(3)
+    expect(source.match(/spawnSync\(/g)).toHaveLength(4)
     expect(source).toContain('spawnSync(POWERSHELL_EXECUTABLE, ["-NoLogo"')
     expect(source).toContain("COLLECTOR_PATH")
     expect(source).toContain("BOUNDED_LAUNCHER_PATH")
     expect(source).toContain("HERMES_EMBEDDING_SEALED_INPUT_PATH")
     expect(source).toContain("HERMES_EMBEDDING_MAX_SCRATCH_BYTES")
+    expect(source).toContain("recoverLauncherDockerResources(executionKey)")
+    expect(source).toContain('value?.Config?.Labels?.["williamos.execution-hash"]')
+    expect(source).toContain("bounded launcher Docker cleanup did not converge")
     expect(source).toContain("merge-base\", \"--is-ancestor")
     expect(source).toContain("refs/heads/main")
     expect(source).toContain("resident executable source closure differs from the admitted commit")

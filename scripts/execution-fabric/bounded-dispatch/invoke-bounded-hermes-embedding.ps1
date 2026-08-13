@@ -224,11 +224,18 @@ try {
     $snapshotBlob = Join-Path $snapshotRoot "blobs\sha256-$digest"
     [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($snapshotBlob))
     Copy-Item -LiteralPath $sourceBlob -Destination $snapshotBlob
-    if ((Get-FileHash -LiteralPath $snapshotBlob -Algorithm SHA256).Hash.ToLowerInvariant() -cne $digest) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_HASH_FAILED") }
     $copiedSnapshotBytes += $sourceLength
   }
-  foreach ($snapshotFile in Get-ChildItem -LiteralPath $snapshotRoot -File -Recurse) {
-    [void]$SnapshotReadLocks.Add([IO.File]::Open($snapshotFile.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read))
+  $snapshotFiles = @(Get-ChildItem -LiteralPath $snapshotRoot -File -Recurse | Sort-Object FullName)
+  if ($snapshotFiles.Count -ne $blobSizes.Count + 1) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_FILE_SET_INVALID") }
+  foreach ($snapshotFile in $snapshotFiles) {
+    $snapshotLock = [IO.File]::Open($snapshotFile.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    [void]$SnapshotReadLocks.Add($snapshotLock)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { $lockedHash = ([BitConverter]::ToString($algorithm.ComputeHash($snapshotLock))).Replace('-', '').ToLowerInvariant() } finally { $algorithm.Dispose() }
+    $snapshotLock.Position = 0
+    $expectedHash = if ([StringComparer]::OrdinalIgnoreCase.Equals($snapshotFile.FullName, $snapshotManifest)) { $modelManifestSha256 } elseif ($snapshotFile.Name -cmatch '^sha256-([a-f0-9]{64})$') { $Matches[1] } else { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_FILE_SET_INVALID") }
+    if ($lockedHash -cne $expectedHash) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_HASH_FAILED") }
   }
   $ExecutionContainerId = (& $DockerExecutable run --detach --name $ExecutionContainer --label "williamos.execution-hash=$executionHash" --network $ExecutionNetworkId --cpus ([string]$maxCpuThreads) --cpuset-cpus $cpuSet --memory $memoryLimit --memory-swap $memoryLimit --pids-limit 64 --read-only --tmpfs '/root/.ollama:rw,noexec,nosuid,size=16777216' --mount "type=bind,source=$snapshotRoot,target=/root/.ollama/models,readonly" --env 'OLLAMA_HOST=0.0.0.0:11434' --env 'OLLAMA_KEEP_ALIVE=0' --publish '127.0.0.1:11435:11434' "sha256:$containerImageSha256").Trim()
   if ($LASTEXITCODE -ne 0 -or $ExecutionContainerId -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("CONTAINER_START_FAILED") }

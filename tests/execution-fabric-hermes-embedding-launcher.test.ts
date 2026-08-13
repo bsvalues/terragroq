@@ -111,6 +111,8 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("$plannedSnapshotBytes + $inputLength + $maxResultBytes -gt $maxScratchBytes")
     expect(source).toContain("$copiedSnapshotBytes + $sourceLength + $inputLength + $maxResultBytes -gt $maxScratchBytes")
     expect(source).toContain("[IO.FileShare]::Read")
+    expect(source).toContain("$algorithm.ComputeHash($snapshotLock)")
+    expect(source).toContain("MODEL_SNAPSHOT_FILE_SET_INVALID")
     expect(source).toContain("$snapshotLock.Dispose()")
     expect(source).toContain("source=$snapshotRoot,target=/root/.ollama/models,readonly")
     expect(source).toContain("Remove-OwnedContainer $ExecutionContainerId $executionHash")

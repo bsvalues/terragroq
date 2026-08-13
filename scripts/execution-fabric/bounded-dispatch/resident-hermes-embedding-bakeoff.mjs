@@ -151,10 +151,11 @@ function validateAdmission(admission) {
     || admission.corpus.corpus_id !== EMBEDDING_CONTRACT.corpusId
     || admission.corpus.corpus_fingerprint !== EMBEDDING_CONTRACT.corpusFingerprint
     || admission.corpus.documents !== 49 || admission.corpus.queries !== 80) fail("CORPUS_BINDING_MISMATCH", "admission does not bind the frozen corpus")
-  exactKeys(admission.model, ["model_id", "revision", "weights_sha256", "license", "source", "manifest_sha256"], "admission.model")
+  exactKeys(admission.model, ["model_id", "revision", "weights_sha256", "license", "source", "manifest_sha256", "ollama_manifest_sha256"], "admission.model")
   for (const key of ["model_id", "revision", "license", "source"]) identifier(admission.model[key], `admission.model.${key}`)
   digest(admission.model.weights_sha256, "admission.model.weights_sha256")
   digest(admission.model.manifest_sha256, "admission.model.manifest_sha256")
+  digest(admission.model.ollama_manifest_sha256, "admission.model.ollama_manifest_sha256")
   exactKeys(admission.runtime, ["runtime_id", "version", "executable_sha256", "container_image_sha256", "docker_executable_sha256", "git_executable_sha256", "nvidia_smi_executable_sha256", "python_executable_sha256", "node_executable_sha256", "powershell_executable_sha256", "evaluator_sha256", "bakeoff_sha256", "embed_sha256", "metrics_sha256", "canonical_json_sha256", "collector_sha256", "bounded_launcher_sha256", "adapter_sha256", "runner_sha256", "manifest_sha256"], "admission.runtime")
   identifier(admission.runtime.runtime_id, "admission.runtime.runtime_id")
   identifier(admission.runtime.version, "admission.runtime.version")
@@ -204,7 +205,7 @@ function validateHostAttestation(value, admission, observedAt) {
     || value.node_id !== EMBEDDING_CONTRACT.nodeId || value.machine_id_sha256 !== admission.placement.machine_id_sha256
     || value.inventory_snapshot_sha256 !== admission.placement.inventory_snapshot_sha256
     || value.host_manifest_sha256 !== admission.placement.host_manifest_sha256 || value.model_id !== admission.model.model_id
-    || value.weights_sha256 !== admission.model.weights_sha256 || value.model_manifest_sha256 !== admission.model.manifest_sha256
+    || value.weights_sha256 !== admission.model.weights_sha256 || value.model_manifest_sha256 !== admission.model.ollama_manifest_sha256
     || value.runtime_id !== admission.runtime.runtime_id
     || value.runtime_version !== admission.runtime.version || value.runtime_executable_sha256 !== admission.runtime.executable_sha256
     || value.container_image_sha256 !== admission.runtime.container_image_sha256

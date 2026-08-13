@@ -302,6 +302,54 @@ function writeExclusive(filePath, bytes) {
   } finally { if (descriptor !== undefined) fs.closeSync(descriptor) }
 }
 
+function recoverLauncherDockerResources(executionKey) {
+  const names = {
+    container: `williamos-r1b-${executionKey}`,
+    network: `williamos-r1b-${executionKey.slice(0, 24)}`,
+  }
+  const environment = {
+    SystemRoot: "C:\\WINDOWS",
+    WINDIR: "C:\\WINDOWS",
+    PATH: "C:\\Program Files\\Docker\\Docker\\resources\\bin;C:\\WINDOWS\\System32",
+  }
+  const docker = (args) => spawnSync(DOCKER_EXECUTABLE, args, {
+    encoding: "utf8", windowsHide: true, timeout: 10_000, maxBuffer: 1_048_576, env: environment,
+  })
+  const removeOwned = (kind, name) => {
+    const inspectArgs = kind === "container" ? ["container", "inspect", name] : ["network", "inspect", name]
+    const inspected = docker(inspectArgs)
+    if (inspected.status !== 0 || inspected.error) {
+      const listArgs = kind === "container"
+        ? ["container", "ls", "--all", "--quiet", "--no-trunc", "--filter", `name=^/${name}$`]
+        : ["network", "ls", "--quiet", "--no-trunc", "--filter", `name=^${name}$`]
+      const listed = docker(listArgs)
+      if (listed.status !== 0 || listed.error) throw new Error(`bounded launcher ${kind} cleanup state is unknown`)
+      return listed.stdout.trim().length === 0
+    }
+    const values = JSON.parse(inspected.stdout)
+    if (!Array.isArray(values) || values.length !== 1) throw new Error(`bounded launcher ${kind} cleanup inspection is invalid`)
+    const value = values[0]
+    const label = kind === "container" ? value?.Config?.Labels?.["williamos.execution-hash"] : value?.Labels?.["williamos.execution-hash"]
+    const id = value?.Id
+    if (label !== executionKey || typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id)) {
+      throw new Error(`bounded launcher ${kind} cleanup ownership drift`)
+    }
+    const removed = docker(kind === "container" ? ["rm", "--force", id] : ["network", "rm", id])
+    if (removed.status !== 0 || removed.error) throw new Error(`bounded launcher ${kind} cleanup failed`)
+    return false
+  }
+  let finalAbsenceCount = 0
+  const sleeper = new Int32Array(new SharedArrayBuffer(4))
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const containerAbsent = removeOwned("container", names.container)
+    const networkAbsent = removeOwned("network", names.network)
+    finalAbsenceCount = containerAbsent && networkAbsent ? finalAbsenceCount + 1 : 0
+    if (attempt >= 15 && finalAbsenceCount >= 4) return true
+    Atomics.wait(sleeper, 0, 0, 250)
+  }
+  throw new Error("bounded launcher Docker cleanup did not converge")
+}
+
 export async function invokeFixedEvaluator({ admission, host_attestation, endpoint, evaluator_path }) {
   if (endpoint !== "http://127.0.0.1:11435/api/embed" || evaluator_path !== EMBEDDING_CONTRACT.evaluatorPath
     || path.resolve(EVALUATOR_PATH) !== path.resolve(REPOSITORY_ROOT, "scripts/embedding-bakeoff/fabric_measure.py")) {
@@ -349,10 +397,14 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
       HERMES_EMBEDDING_CONTAINER_IMAGE_SHA256: admission.runtime.container_image_sha256,
       HERMES_EMBEDDING_RUNTIME_EXECUTABLE_SHA256: admission.runtime.executable_sha256,
       HERMES_EMBEDDING_MODEL_ID: admission.model.model_id,
-      HERMES_EMBEDDING_MODEL_MANIFEST_SHA256: admission.model.manifest_sha256,
+      HERMES_EMBEDDING_MODEL_MANIFEST_SHA256: admission.model.ollama_manifest_sha256,
       HERMES_EMBEDDING_WEIGHTS_SHA256: admission.model.weights_sha256,
     },
   })
+  if (run.error || run.status === null) {
+    recoverLauncherDockerResources(executionKey)
+    throw new Error("bounded embedding launcher exceeded its parent deadline after verified cleanup")
+  }
   let receipt
   try { receipt = JSON.parse(Buffer.from(run.stdout ?? []).toString("utf8").replace(/^\uFEFF/, "").trim()) } catch { throw new Error("bounded embedding launcher returned an invalid receipt") }
   if (run.status !== 0 || receipt.status !== "COMPLETED" || receipt.evaluator_exit_code !== 0
