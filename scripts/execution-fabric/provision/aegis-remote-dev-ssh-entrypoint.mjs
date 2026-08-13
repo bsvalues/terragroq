@@ -37,22 +37,25 @@ export function parseBoundedSshCommand(command) {
   return { executable: NODE, args: [LAUNCHER, ticket, operation, packet, patchArgument, attempt, previous] }
 }
 
-function relayActivation(bytes) {
-  const socket = net.createConnection(ACTIVATION_SOCKET)
-  const chunks = []; let length = 0
-  socket.setTimeout(ACTIVATION_RELAY_TIMEOUT_MS)
-  socket.on("connect", () => socket.end(bytes))
-  socket.on("data", value => { length += value.length; if (length > 1_048_576) return socket.destroy(new Error("activation bridge response too large")); chunks.push(value) })
-  socket.on("end", () => { const response=Buffer.concat(chunks);process.stdout.write(response);try{const parsed=JSON.parse(response);if(parsed.status === "BLOCKED")process.exitCode=2}catch{process.exitCode=2} })
-  socket.on("timeout", () => socket.destroy(new Error("activation bridge timeout")))
-  socket.on("error", error => { process.stdout.write(`${JSON.stringify({ status: "BLOCKED", reasonCode: "ACTIVATION_BRIDGE_UNAVAILABLE", detail: String(error.message).slice(0, 256), executionAuthorized: false })}\n`); process.exitCode = 2 })
+export function relayActivation(bytes, { socketPath = ACTIVATION_SOCKET, timeoutMs = ACTIVATION_RELAY_TIMEOUT_MS, write = value => process.stdout.write(value) } = {}) {
+  return new Promise(resolve => {
+    const socket = net.createConnection(socketPath)
+    const chunks = []; let length = 0, settled = false
+    const finish = exitCode => { if (settled) return; settled = true; resolve(exitCode) }
+    socket.setTimeout(timeoutMs)
+    socket.on("connect", () => socket.end(bytes))
+    socket.on("data", value => { length += value.length; if (length > 1_048_576) return socket.destroy(new Error("activation bridge response too large")); chunks.push(value) })
+    socket.on("end", () => { const response=Buffer.concat(chunks);write(response);let exitCode=0;try{const parsed=JSON.parse(response);if(parsed.status === "BLOCKED")exitCode=2}catch{exitCode=2}finish(exitCode) })
+    socket.on("timeout", () => socket.destroy(new Error("activation bridge timeout")))
+    socket.on("error", error => { write(`${JSON.stringify({ status: "BLOCKED", reasonCode: "ACTIVATION_BRIDGE_UNAVAILABLE", detail: String(error.message).slice(0, 256), executionAuthorized: false })}\n`); finish(2) })
+  })
 }
 
-function main() {
+async function main() {
   try {
     if (process.platform !== "linux") throw new Error("BOUNDED_TRANSPORT_LINUX_REQUIRED")
     const parsed = parseBoundedSshCommand(process.env.SSH_ORIGINAL_COMMAND)
-    if (parsed.activationRequest) { relayActivation(parsed.activationRequest); return }
+    if (parsed.activationRequest) { process.exitCode = await relayActivation(parsed.activationRequest); return }
     const child = spawnSync(parsed.executable, parsed.args, { stdio: "inherit", env: Object.freeze({
       HOME: "/home/williamos-fabric",
       LANG: "C.UTF-8",
@@ -70,4 +73,4 @@ function main() {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main()
