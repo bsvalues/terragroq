@@ -3,7 +3,7 @@
   "workOrderId": "WO-OMEN-STAGE5-DEV-PREFLIGHT-001",
   "sources": {
     "terrafusion": { "repository": "bsvalues/terrafusion_os_1.0", "branch": "main", "canonicalMarker": "PATH_CANON_REGISTER.md" },
-    "williamos": { "repository": "bsvalues/terragroq", "branch": "main", "databaseAuthority": "NEON_SEPARATE" }
+    "williamos": { "repository": "bsvalues/terragroq", "branch": "main", "databaseAuthority": "ATLAS_SOVEREIGN" }
   },
   "nodes": {
     "hermes": { "sshAlias": "hermes", "requiredContainers": { "ollama": 11434 }, "advertisedContainers": { "open-webui": 3000, "portainer": 9000 } },

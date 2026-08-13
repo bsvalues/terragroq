@@ -1,9 +1,10 @@
 import { embed, embedMany } from "ai"
 import { EMBEDDING_MODEL } from "./config"
+import { williamosInference } from "./provider"
 
 export async function embedText(text: string): Promise<number[]> {
   const { embedding } = await embed({
-    model: EMBEDDING_MODEL,
+    model: williamosInference.textEmbeddingModel(EMBEDDING_MODEL),
     value: text.replace(/\n/g, " ").trim(),
   })
   return embedding
@@ -12,7 +13,7 @@ export async function embedText(text: string): Promise<number[]> {
 export async function embedTexts(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return []
   const { embeddings } = await embedMany({
-    model: EMBEDDING_MODEL,
+    model: williamosInference.textEmbeddingModel(EMBEDDING_MODEL),
     values: texts.map((t) => t.replace(/\n/g, " ").trim()),
   })
   return embeddings
