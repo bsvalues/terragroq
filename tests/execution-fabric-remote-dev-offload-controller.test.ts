@@ -14,7 +14,7 @@ const root = process.cwd()
 const controller = path.join(root, "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1")
 const policyPath = path.join(root, "config/execution-fabric/remote-dev-offload-v1.policy.json")
 const policy = JSON.parse(fs.readFileSync(policyPath, "utf8"))
-const pwsh = "pwsh.exe"
+const pwsh = process.platform === "win32" ? "powershell.exe" : "pwsh.exe"
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "remote-dev-controller-"))
 const fakeBin = path.join(testRoot, "bin")
 const fakeLog = path.join(testRoot, "ssh.log")
