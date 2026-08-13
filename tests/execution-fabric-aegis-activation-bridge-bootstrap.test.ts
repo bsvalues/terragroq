@@ -31,11 +31,14 @@ describe("AEGIS activation bridge bootstrap authority", () => {
   })
 
   it("upgrades only the exact reviewed activation-host predecessor", () => {
-    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="1c46a0ff878715df84811d159845802b6543961d3d90f4db056d21b547f56635"
+    const destination="/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs", current="a06e5ba83c19586f6c97909a048a92d139057bc9590ccc5276a8927e2f86a9d5"
     expect(inspectBridgeDestinationState(destination,"d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c","0555",current)).toBe("EXACT_PREDECESSOR")
     expect(inspectBridgeDestinationState(destination,"0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"f".repeat(64),"0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"44a5b12ad5a2f65a9c1a841105626aaded996c14d1ca32fc893d8fcc8ca4b152","0555",current)).toBe("DRIFT")
+    expect(inspectBridgeDestinationState(destination,"1c46a0ff878715df84811d159845802b6543961d3d90f4db056d21b547f56635","0555",current)).toBe("DRIFT")
+    expect(inspectBridgeDestinationState(destination,"db0d3cd51563d5ca47fee8e285a6b38d57df1c158f3bc8bbc140bbb77aad79c6","0555",current)).toBe("DRIFT")
+    expect(inspectBridgeDestinationState(destination,"70ca4609b406dddc78bfa53f8aee50255d257fd9a0a9b3610854564c90a192d7","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState("/usr/local/libexec/other","d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c","0555",current)).toBe("DRIFT")
     expect(inspectBridgeDestinationState(destination,"d467800c3f288e13174d6a12c54199fbff0047e5a8e1b7ced09372dfea78562c","0777",current)).toBe("DRIFT")
   })

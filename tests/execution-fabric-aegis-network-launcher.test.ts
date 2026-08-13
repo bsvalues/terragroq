@@ -6,6 +6,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 
 import { createTicketTombstone, createWorkerExecutionEnvelope, createWorkerOverflowEnvelope, fixedTicketUnitContract, inspectSignedLaunchAuthorization, inspectWorkerExecutionEnvelope, inspectWorkerNetworkBinding } from "../scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"
+import { inspectReceiptTicketDirectoryIdentity } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const jcs = (value: any): string => value === null ? "null"
   : typeof value === "string" ? JSON.stringify(value)
@@ -21,7 +22,7 @@ const workerScope = `${enforcedSlice}/williamos-aegis-remote-dev-34d1f58a-5c15-4
 
 function fixture() {
   const launcherBytes = Buffer.from("reviewed launcher bytes\n")
-  const ticketConsumptionDirectoryIdentity = { device: "29", inode: "88301" }
+  const ticketConsumptionDirectoryIdentity = inspectReceiptTicketDirectoryIdentity({ device: "29", inode: "88301" })!
   const enforcement = {
     mechanism: "ROOT_ATTESTED_CGROUP_EGRESS_V1",
     defaultDeny: true,

@@ -17,6 +17,10 @@ import {
   inspectHostRootNoSudoProof,
   inspectPreparedSnapshotRecovery,
   inspectNetworkActivationState,
+  inspectNetworkJournalBinding,
+  inspectNetworkSettlementState,
+  inspectReceiptTicketDirectoryIdentity,
+  buildNetworkFailureRecord,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -180,8 +184,36 @@ describe("AEGIS production activation host trust", () => {
     expect(inspectNetworkActivationState({...exact, journalState:"INTENT"})).toBe("ACTIVATE_EXACT_INERT")
     expect(inspectNetworkActivationState({...exact, brokerInactiveDisabled:false})).toBe("DRIFT")
     expect(inspectNetworkActivationState({...exact, brokerInactiveDisabled:false, gitSocketInactiveDisabled:false, listenerAbsent:false})).toBe("ADOPT_EXACT_ACTIVE")
+    expect(inspectNetworkActivationState({...exact, journalState:"APPLIED", brokerInactiveDisabled:false, gitSocketInactiveDisabled:false, listenerAbsent:false})).toBe("ADOPT_EXACT_ACTIVE")
     expect(inspectNetworkActivationState({...exact, journalState:"APPLIED", receiptState:"EXACT_ACTIVE", brokerInactiveDisabled:false, gitSocketInactiveDisabled:false, listenerAbsent:false})).toBe("REFRESH_EXACT_ACTIVE")
     expect(inspectNetworkActivationState({...exact, receiptState:"FOREIGN"})).toBe("DRIFT")
+  })
+
+  it("requires the applied network record to bind the exact intent proof and generation", () => {
+    const intent={schemaVersion:1,status:"NETWORK_ACTIVATION_INTENT",runId,activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,proofId:"11111111-1111-4111-8111-111111111111",generationId:"22222222-2222-4222-8222-222222222222",policySha256:"a".repeat(64),activationSha256:"b".repeat(64),providerSha256:"c".repeat(64),launcherSha256:"d".repeat(64),workerSha256:"e".repeat(64)}
+    const intentSha256=sha(`${canonical(intent)}\n`),applied={...intent,status:"NETWORK_ACTIVATION_APPLIED",intentSha256}
+    expect(inspectNetworkJournalBinding(intent,applied)).toBe("NETWORK_JOURNAL_BOUND")
+    expect(inspectNetworkJournalBinding(intent,{...applied,proofId:"33333333-3333-4333-8333-333333333333"})).toBe("DRIFT")
+    expect(inspectNetworkJournalBinding(intent,{...applied,generationId:"44444444-4444-4444-8444-444444444444"})).toBe("DRIFT")
+    expect(inspectNetworkJournalBinding(intent,{...applied,policySha256:"f".repeat(64)})).toBe("DRIFT")
+    expect(inspectNetworkJournalBinding(intent,{...applied,intentSha256:"0".repeat(64)})).toBe("DRIFT")
+  })
+
+  it("can settle an exact active INTENT state after activation fails before APPLIED publication", () => {
+    const exact={journalState:"INTENT",receiptState:"ABSENT",nftExact:true,egressActiveEnabled:true,brokerInactiveDisabled:false,gitSocketInactiveDisabled:false,gitServiceInactive:true,listenerAbsent:false,workerWorkspaceAbsent:true}
+    expect(inspectNetworkSettlementState(exact)).toBe("SETTLE_EXACT_ACTIVE")
+    expect(inspectNetworkSettlementState({...exact,nftExact:false})).toBe("DRIFT")
+    expect(inspectNetworkSettlementState({...exact,brokerInactiveDisabled:true})).toBe("DRIFT")
+  })
+
+  it("publishes only the two-field ticket directory identity accepted by provider and launcher", () => {
+    expect(inspectReceiptTicketDirectoryIdentity({device:"29",inode:"88301"})).toEqual({device:"29",inode:"88301"})
+    expect(inspectReceiptTicketDirectoryIdentity({device:"29",inode:"88301",ctimeNs:"1786410000000000100"})).toBeNull()
+  })
+
+  it("records a bounded inert network failure without serializing the thrown error", () => {
+    expect(buildNetworkFailureRecord("NETWORK_ACTIVATION_FAILED_INERT","2026-08-13T02:10:00.000Z")).toEqual({schemaVersion:1,status:"NETWORK_ACTIVATION_FAILED_INERT",runId,activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,observedAt:"2026-08-13T02:10:00.000Z"})
+    expect(buildNetworkFailureRecord("foreign" as any,"2026-08-13T02:10:00.000Z")).toBeNull()
   })
 
   it("re-disables the bridge before replaying an existing settlement", () => {

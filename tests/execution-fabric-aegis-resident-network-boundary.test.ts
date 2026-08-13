@@ -7,6 +7,7 @@ import {
   inspectResidentNetworkBoundaryEvidence,
   proveResidentAegisNetworkBoundary,
 } from "../scripts/execution-fabric/live/aegis-resident-network-boundary.mjs"
+import { inspectReceiptTicketDirectoryIdentity } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const endpoints = Object.freeze([
   { host: "ssh.github.com", port: 443, operations: ["git-fetch", "git-push"] },
@@ -68,7 +69,7 @@ function context() {
   const launcherSha256 = "c".repeat(64)
   const workerSha256 = "d".repeat(64)
   const controlGroupIdentity = { device: "29", inode: "74319", ctimeNs: "1786410000000000000" }
-  const ticketConsumptionDirectoryIdentity = { device: "29", inode: "88301" }
+  const ticketConsumptionDirectoryIdentity = inspectReceiptTicketDirectoryIdentity({ device: "29", inode: "88301" })!
   const receipt = {
     schemaVersion: 1,
     proofId: "0f8fad5b-d9cb-469f-a165-70867728950e",
