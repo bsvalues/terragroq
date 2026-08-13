@@ -13,6 +13,7 @@ import {
   inspectRemoteDevActivationWindow,
   inspectResidentIdentityBinding,
   inspectResidentNoSudoResult,
+  inspectRootNoSudoProof,
   inspectRootPrerequisiteReceiptEvidence,
   settleRemoteDevActivationState,
   settleRemoteDevActivation,
@@ -326,5 +327,12 @@ describe("TerraFusion remote development one-run activation", () => {
       { status: 1, signal: null, errorCode: "ENOENT", stdout: "", stderr: "" },
       { status: 0, signal: null, errorCode: null, stdout: "User may run commands\n", stderr: "" },
     ]) expect(inspectResidentNoSudoResult(evidence)).toMatchObject({ status: "BLOCKED", executionAuthorized: false, reasons: [{ code: "EXECUTION_IDENTITY_UNPROVEN" }] })
+  })
+
+  it("accepts only a fresh root policy proof for the exact locked activation identity", () => {
+    const proof:any={schemaVersion:1,status:"ROOT_NO_SUDO_VERIFIED",activationId:"remote-dev-offload-v1-issue-734-single-use-001",authorityReference:"issue-734-terrafusion-remote-dev-single-use-001",runId:"a3961b87-ed54-45d0-a975-678a02f1e163",machineIdSha256:"a".repeat(64),bootId:"11111111-1111-4111-8111-111111111111",activationHostSha256:"b".repeat(64),authoritySha256:"c".repeat(64),account:"williamos-fabric",passwordStatus:"L",sudoStatus:0,sudoStdout:"User williamos-fabric is not allowed to run sudo on aegis.\n",sudoStderr:"",issuedAt:"2026-08-13T01:10:00.000Z",expiresAt:"2026-08-13T01:15:00.000Z"}
+    const expected={machineIdSha256:proof.machineIdSha256,bootId:proof.bootId,activationHostSha256:proof.activationHostSha256,authoritySha256:proof.authoritySha256}
+    expect(inspectRootNoSudoProof(proof,"2026-08-13T01:10:30.000Z",expected)).toMatchObject({status:"ROOT_NO_SUDO_VERIFIED"})
+    for(const value of [{...proof,passwordStatus:"P"},{...proof,sudoStatus:1},{...proof,sudoStdout:"sudo: a password is required\n"},{...proof,expiresAt:"2026-08-13T01:10:30.000Z"},{...proof,extra:true}])expect(inspectRootNoSudoProof(value,"2026-08-13T01:10:30.000Z",expected)).toMatchObject({status:"BLOCKED"})
   })
 })

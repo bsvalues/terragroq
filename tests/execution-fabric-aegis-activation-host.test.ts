@@ -13,6 +13,8 @@ import {
   inspectStrandedActivationLedger,
   inspectActivationUnitState,
   inspectLeaseHolderState,
+  inspectRootNoSudoObservation,
+  inspectHostRootNoSudoProof,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -27,6 +29,7 @@ const session = () => ({
   claimId: "claim-" + "a".repeat(24),
   leaseId: "lease-" + "b".repeat(24),
   proofId: "33333333-3333-4333-8333-333333333333",
+  noSudoProofSha256: "c".repeat(64),
   workspace: "/srv/william/workspaces/WO-TF-REMOTE-DEV-OFFLOAD-001",
   branch: "codex/wo-tf-remote-dev-offload-001-734",
   baseSha: "ffd2fa35f5152de2b95e7f63b220050d18193d7a",
@@ -128,6 +131,21 @@ describe("AEGIS production activation host trust", () => {
     expect(inspectLeaseHolderState(holder,holder.boot_id,null)).toBe("DEAD")
     expect(inspectLeaseHolderState(holder,"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","101")).toBe("DEAD")
     expect(inspectLeaseHolderState({...holder,pid:0},holder.boot_id,null)).toBe("DRIFT")
+  })
+
+  it("publishes root no-sudo evidence only from the locked account and exact C-locale policy denial", () => {
+    const good={passwd:{status:0,signal:null,errorCode:null,stdout:"williamos-fabric L 2026-08-10 -1 -1 -1 -1\n",stderr:""},sudo:{status:0,signal:null,errorCode:null,stdout:"User williamos-fabric is not allowed to run sudo on aegis.\n",stderr:""}}
+    expect(inspectRootNoSudoObservation(good)).toBe("ROOT_NO_SUDO_OBSERVED")
+    expect(inspectRootNoSudoObservation({...good,passwd:{...good.passwd,stdout:"williamos-fabric P 2026-08-10 -1 -1 -1 -1\n"}})).toBe("DRIFT")
+    expect(inspectRootNoSudoObservation({...good,sudo:{...good.sudo,stdout:"User williamos-fabric may run the following commands\n"}})).toBe("DRIFT")
+  })
+
+  it("adopts only a fresh exact pre-claim proof and archives an exact expired generation", () => {
+    const proof:any={schemaVersion:1,status:"ROOT_NO_SUDO_VERIFIED",activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,runId,machineIdSha256:"a".repeat(64),bootId:"11111111-1111-4111-8111-111111111111",activationHostSha256:"b".repeat(64),authoritySha256:"c".repeat(64),account:"williamos-fabric",passwordStatus:"L",sudoStatus:0,sudoStdout:"User williamos-fabric is not allowed to run sudo on aegis.\n",sudoStderr:"",issuedAt:"2026-08-13T01:10:00.000Z",expiresAt:"2026-08-13T01:15:00.000Z"}
+    const expected={machineIdSha256:proof.machineIdSha256,bootId:proof.bootId,activationHostSha256:proof.activationHostSha256,authoritySha256:proof.authoritySha256}
+    expect(inspectHostRootNoSudoProof(proof,"2026-08-13T01:12:00.000Z",expected)).toBe("FRESH")
+    expect(inspectHostRootNoSudoProof(proof,proof.expiresAt,expected)).toBe("EXPIRED_EXACT")
+    expect(inspectHostRootNoSudoProof({...proof,account:"bs"},"2026-08-13T01:12:00.000Z",expected)).toBe("DRIFT")
   })
 
   it("re-disables the bridge before replaying an existing settlement", () => {

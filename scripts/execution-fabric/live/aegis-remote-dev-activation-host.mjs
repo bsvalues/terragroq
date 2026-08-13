@@ -23,6 +23,7 @@ const SESSION_FILE = `${STATE_ROOT}/session.json`
 const SETTLEMENT_FILE = `${STATE_ROOT}/settlement.json`
 const PHASE_FILE = `${STATE_ROOT}/phase.json`
 const MINT_ROOT = `${STATE_ROOT}/mints`
+const NO_SUDO_FILE = `${STATE_ROOT}/no-sudo.json`
 const SNAPSHOT = `${STATE_ROOT}/control`
 const UNIT = `williamos-aegis-activation-${RUN_ID}.service`
 const LEDGER_ROOT = "/var/lib/williamos/fabric/ledger"
@@ -93,10 +94,10 @@ function verifyBridgeReceiptLive() {
 
 export function inspectActivationSessionToken(value, now) {
   try {
-    const keys = ["schemaVersion", "activationId", "authorityReference", "runId", "claimId", "leaseId", "proofId", "workspace", "branch", "baseSha", "issuedAt", "expiresAt", "daemonPid", "daemonStartTicks"]
+    const keys = ["schemaVersion", "activationId", "authorityReference", "runId", "claimId", "leaseId", "proofId", "noSudoProofSha256", "workspace", "branch", "baseSha", "issuedAt", "expiresAt", "daemonPid", "daemonStartTicks"]
     const current = Date.parse(now), issued = Date.parse(value?.issuedAt), expires = Date.parse(value?.expiresAt)
     if (!exactKeys(value, keys) || value.schemaVersion !== 1 || value.activationId !== ACTIVATION_ID || value.authorityReference !== AUTHORITY_REFERENCE || value.runId !== RUN_ID
-      || !/^claim-[a-f0-9]{24}$/.test(value.claimId) || !/^lease-[a-f0-9]{24}$/.test(value.leaseId) || !GUID.test(value.proofId)
+      || !/^claim-[a-f0-9]{24}$/.test(value.claimId) || !/^lease-[a-f0-9]{24}$/.test(value.leaseId) || !GUID.test(value.proofId) || !SHA.test(value.noSudoProofSha256)
       || value.workspace !== WORKSPACE || value.branch !== BRANCH || value.baseSha !== BASE_SHA || !Number.isSafeInteger(value.daemonPid) || value.daemonPid <= 1
       || !/^\d+$/.test(value.daemonStartTicks) || ![current, issued, expires].every(Number.isFinite) || current < issued || current >= expires || expires - issued > 14_400_000) throw new Error("session binding differs")
     return { status: "ACTIVE_SESSION_VERIFIED", executionAuthorized: false, runId: RUN_ID, claimId: value.claimId, leaseId: value.leaseId, proofId: value.proofId }
@@ -126,7 +127,19 @@ function startTicks(pid) { return fs.readFileSync(`/proc/${pid}/stat`, "utf8").t
 function trustedNow() { const value = run("/usr/bin/date", ["-u", "+%Y-%m-%dT%H:%M:%S.%3NZ"]); if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) throw new Error("trusted time differs"); return value }
 export function inspectActivationUnitState(state,mainPid){if((state==="inactive"||state==="unknown")&&mainPid===0)return "INACTIVE";if(state==="failed"&&mainPid===0)return "RESET_REQUIRED";return "DRIFT"}
 export function inspectLeaseHolderState(holder,currentBootId,observedStartTicks){if(!exactKeys(holder,["pid","boot_id","process_start_ticks"])||!Number.isSafeInteger(holder.pid)||holder.pid<=1||!GUID.test(holder.boot_id)||!/^\d+$/.test(holder.process_start_ticks))return "DRIFT";return holder.boot_id===currentBootId&&observedStartTicks===holder.process_start_ticks?"ACTIVE":"DEAD"}
+export function inspectRootNoSudoObservation(value){try{for(const key of["passwd","sudo"]){if(!exactKeys(value?.[key],["status","signal","errorCode","stdout","stderr"]))throw new Error()}if(value.passwd.status!==0||value.passwd.signal!==null||value.passwd.errorCode!==null||value.passwd.stderr!==""||!/^williamos-fabric L \d{4}-\d{2}-\d{2} -1 -1 -1 -1\n$/.test(value.passwd.stdout)||value.sudo.status!==0||value.sudo.signal!==null||value.sudo.errorCode!==null||value.sudo.stdout!=="User williamos-fabric is not allowed to run sudo on aegis.\n"||value.sudo.stderr!=="")throw new Error();return "ROOT_NO_SUDO_OBSERVED"}catch{return "DRIFT"}}
+export function inspectHostRootNoSudoProof(p,now,e){try{if(!exactKeys(p,["schemaVersion","status","activationId","authorityReference","runId","machineIdSha256","bootId","activationHostSha256","authoritySha256","account","passwordStatus","sudoStatus","sudoStdout","sudoStderr","issuedAt","expiresAt"]))throw new Error();const n=Date.parse(now),i=Date.parse(p.issuedAt),x=Date.parse(p.expiresAt);if(p.schemaVersion!==1||p.status!=="ROOT_NO_SUDO_VERIFIED"||p.activationId!==ACTIVATION_ID||p.authorityReference!==AUTHORITY_REFERENCE||p.runId!==RUN_ID||p.machineIdSha256!==e.machineIdSha256||p.bootId!==e.bootId||p.activationHostSha256!==e.activationHostSha256||p.authoritySha256!==e.authoritySha256||p.account!=="williamos-fabric"||p.passwordStatus!=="L"||p.sudoStatus!==0||p.sudoStdout!=="User williamos-fabric is not allowed to run sudo on aegis.\n"||p.sudoStderr!==""||![n,i,x].every(Number.isFinite)||n<i||x-i!==300_000)throw new Error();return n<x?"FRESH":"EXPIRED_EXACT"}catch{return "DRIFT"}}
 function requireActivationUnitInactive(){const value=run("/usr/bin/systemctl",["is-active",UNIT],{statuses:[3,4]}),mainPid=Number(run("/usr/bin/systemctl",["show",UNIT,"--property=MainPID","--value"],{statuses:[0,1]}));const state=inspectActivationUnitState(value,mainPid);if(state==="DRIFT")throw new Error("activation unit is not proven inactive");if(state==="RESET_REQUIRED")run("/usr/bin/systemctl",["reset-failed",UNIT])}
+
+function rootResult(file,args){const r=spawnSync(file,args,{encoding:"utf8",shell:false,timeout:5000,env:ENV});return{status:r.status,signal:r.signal,errorCode:r.error?.code??null,stdout:String(r.stdout??""),stderr:String(r.stderr??"")}}
+function ensureRootNoSudoProof(){
+  const authority=JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`)),issuedAt=trustedNow(),expected={machineIdSha256:sha(Buffer.from(fs.readFileSync("/etc/machine-id","utf8").trim())),bootId:fs.readFileSync("/proc/sys/kernel/random/boot_id","utf8").trim(),activationHostSha256:authority.bindings.activationHost.sha256,authoritySha256:sha(Buffer.from(canonical(authority)))}
+  if(fs.existsSync(NO_SUDO_FILE)){const bytes=exactRootFile(NO_SUDO_FILE,0o444),prior=JSON.parse(bytes);if(!bytes.equals(Buffer.from(`${canonical(prior)}\n`)))throw new Error("root no-sudo proof is not canonical");const state=inspectHostRootNoSudoProof(prior,issuedAt,expected);if(state==="FRESH")return;if(state!=="EXPIRED_EXACT")throw new Error("root no-sudo proof differs");const archive=`${NO_SUDO_FILE}.expired-${sha(bytes)}`;if(fs.existsSync(archive))throw new Error("root no-sudo archive occupied");fs.renameSync(NO_SUDO_FILE,archive);const parent=fs.openSync(path.dirname(NO_SUDO_FILE),fs.constants.O_RDONLY|fs.constants.O_DIRECTORY);fs.fsyncSync(parent);fs.closeSync(parent)}
+  const observed={passwd:rootResult("/usr/bin/passwd",["-S","williamos-fabric"]),sudo:rootResult("/usr/bin/sudo",["-U","williamos-fabric","-l"])}
+  if(inspectRootNoSudoObservation(observed)!=="ROOT_NO_SUDO_OBSERVED")throw new Error("root no-sudo observation differs")
+  const proof={schemaVersion:1,status:"ROOT_NO_SUDO_VERIFIED",activationId:ACTIVATION_ID,authorityReference:AUTHORITY_REFERENCE,runId:RUN_ID,...expected,account:"williamos-fabric",passwordStatus:"L",sudoStatus:0,sudoStdout:observed.sudo.stdout,sudoStderr:"",issuedAt,expiresAt:new Date(Date.parse(issuedAt)+300_000).toISOString()}
+  createRootJson(NO_SUDO_FILE,proof,0o444)
+}
 
 function prepareSnapshot() {
   const exactConfig = `[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = false\n\tlogallrefupdates = true\n[remote "origin"]\n\turl = ssh://git@ssh.github.com:443/bsvalues/terragroq.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n`
@@ -200,7 +213,7 @@ async function daemonMain() {
   child.on("message", message => {
     if (message?.type === "authorized") {
       const value = message.value
-      const payload = { schemaVersion: 1, activationId: ACTIVATION_ID, authorityReference: AUTHORITY_REFERENCE, runId: value.runId, claimId: value.claimId, leaseId: value.leaseId, proofId: value.networkProofId, workspace: WORKSPACE, branch: BRANCH, baseSha: BASE_SHA, issuedAt: trustedNow(), expiresAt: JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`)).run.expiresAt, daemonPid, daemonStartTicks }
+      const payload = { schemaVersion: 1, activationId: ACTIVATION_ID, authorityReference: AUTHORITY_REFERENCE, runId: value.runId, claimId: value.claimId, leaseId: value.leaseId, proofId: value.networkProofId, noSudoProofSha256: value.noSudoProofSha256, workspace: WORKSPACE, branch: BRANCH, baseSha: BASE_SHA, issuedAt: trustedNow(), expiresAt: JSON.parse(fs.readFileSync(`${SNAPSHOT}/config/execution-fabric/remote-dev-offload-v1-activation.json`)).run.expiresAt, daemonPid, daemonStartTicks }
       if (inspectActivationSessionToken(payload, trustedNow()).status !== "ACTIVE_SESSION_VERIFIED" || head !== snapshotGit(["rev-parse", "HEAD"])) throw new Error("authorized session differs")
       writeRootJson(PHASE_FILE, { schemaVersion: 1, phase: "ACTIVATION_CLAIMED_LEASED", runId: RUN_ID, claimId: payload.claimId, leaseId: payload.leaseId, authorityReference: AUTHORITY_REFERENCE, claimedAt: payload.issuedAt, expiresAt: payload.expiresAt })
       writeRootJson(SESSION_FILE, sessionEnvelope(payload))
@@ -236,6 +249,7 @@ function startMain() {
   if (!fs.existsSync(STATE_ROOT)) prepareSnapshot(); else inspectPreparedState()
   requireActivationUnitInactive()
   if (recoverStrandedPhase()) return startMain()
+  ensureRootNoSudoProof()
   const result = run("/usr/bin/systemd-run", ["--unit", UNIT.replace(/\.service$/, ""), "--property", "Type=simple", "--property", "NoNewPrivileges=yes", "--property", "PrivateTmp=yes", "--property", "ProtectSystem=strict", "--property", `ReadWritePaths=${STATE_ROOT} /var/lib/williamos/fabric/ledger /var/lib/williamos-fabric/remote-dev-launch-tickets`, "/usr/bin/node", INSTALLED_SELF, "daemon"])
   for (let index = 0; index < 100 && !fs.existsSync(SESSION_FILE); index++) spawnSync("/usr/bin/sleep", ["0.1"])
   if (!fs.existsSync(SESSION_FILE)) throw new Error(`activation daemon did not publish session: ${result}`)
