@@ -317,7 +317,7 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     model_manifest: modelManifest,
     runtime_manifest: runtimeManifest,
     host_manifest: hostManifest,
-    execution_limits: { max_cpu_threads: admission.limits.max_cpu_threads, gpu_execution: admission.limits.gpu_execution },
+    execution_limits: { max_cpu_threads: admission.limits.max_inference_cpu_threads, gpu_execution: admission.limits.gpu_execution },
   })}\n`, "utf8")
   if (evaluatorInput.byteLength > admission.limits.max_input_bytes) throw new Error("fixed evaluator input exceeds admitted ceiling")
   const executionKey = sha256(canonicalizeJcs({ admission, host_attestation }))
@@ -325,9 +325,9 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
   const resultPath = path.join(ledgerRoot, `result-${executionKey}.json`)
   if (evaluatorInput.byteLength > admission.limits.max_scratch_bytes) throw new Error("sealed input exceeds admitted scratch ceiling")
   writeExclusive(sealedInputPath, evaluatorInput)
-  const affinityMask = admission.limits.max_cpu_threads === 64
+  const affinityMask = admission.limits.max_evaluator_cpu_threads === 64
     ? "0xffffffffffffffff"
-    : `0x${((1n << BigInt(admission.limits.max_cpu_threads)) - 1n).toString(16)}`
+    : `0x${((1n << BigInt(admission.limits.max_evaluator_cpu_threads)) - 1n).toString(16)}`
   const run = spawnSync(POWERSHELL_EXECUTABLE, ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", BOUNDED_LAUNCHER_PATH], {
     cwd: path.dirname(BOUNDED_LAUNCHER_PATH), windowsHide: true, timeout: admission.limits.timeout_ms + 30_000,
     maxBuffer: 1_048_576,
@@ -339,7 +339,7 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
       HERMES_EMBEDDING_MAX_INPUT_BYTES: String(admission.limits.max_input_bytes),
       HERMES_EMBEDDING_MAX_RESULT_BYTES: String(admission.limits.max_result_bytes),
       HERMES_EMBEDDING_MAX_SCRATCH_BYTES: String(admission.limits.max_scratch_bytes),
-      HERMES_EMBEDDING_MAX_CPU_THREADS: String(admission.limits.max_cpu_threads),
+      HERMES_EMBEDDING_MAX_CPU_THREADS: String(admission.limits.max_inference_cpu_threads),
       HERMES_EMBEDDING_PROCESS_MEMORY_BYTES: String(admission.limits.max_evaluator_memory_bytes),
       HERMES_EMBEDDING_JOB_MEMORY_BYTES: String(admission.limits.max_evaluator_memory_bytes),
       HERMES_EMBEDDING_INFERENCE_MEMORY_BYTES: String(admission.limits.max_inference_memory_bytes),
@@ -360,8 +360,9 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     || receipt.active_process_limit !== 1 || receipt.cpu_rate_percent !== 100 || receipt.cpu_affinity_mask !== affinityMask
     || receipt.process_memory_bytes !== admission.limits.max_evaluator_memory_bytes || receipt.job_memory_bytes !== admission.limits.max_evaluator_memory_bytes
     || receipt.isolated_ollama_container !== true || receipt.internal_network !== true || receipt.gpu_execution !== "CPU_ONLY"
-    || receipt.container_cpu_threads !== admission.limits.max_cpu_threads || receipt.container_memory_bytes !== admission.limits.max_inference_memory_bytes
-    || receipt.aggregate_memory_bytes !== admission.limits.max_evaluator_memory_bytes + admission.limits.max_inference_memory_bytes || receipt.shared_cpu_affinity !== true
+    || receipt.container_cpu_threads !== admission.limits.max_inference_cpu_threads || receipt.container_memory_bytes !== admission.limits.max_inference_memory_bytes
+    || receipt.aggregate_cpu_threads !== admission.limits.max_evaluator_cpu_threads + admission.limits.max_inference_cpu_threads
+    || receipt.aggregate_memory_bytes !== admission.limits.max_evaluator_memory_bytes + admission.limits.max_inference_memory_bytes
     || receipt.runtime_reverified !== true || receipt.model_manifest_reverified !== true || receipt.model_weights_reverified !== true
     || receipt.container_pids_limit !== 64 || receipt.container_cleaned !== true || receipt.network_cleaned !== true) {
     throw new Error(`bounded embedding evaluator failed closed: ${receipt.reason_code ?? "UNKNOWN"}`)

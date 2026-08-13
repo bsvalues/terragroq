@@ -96,9 +96,22 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("runtime_reverified = $true")
     expect(source).toContain("model_manifest_reverified = $true")
     expect(source).toContain("model_weights_reverified = $true")
-    expect(source).toContain("shared_cpu_affinity = $true")
+    expect(source).toContain("aggregate_cpu_threads = [int]$maxCpuThreads + [int]$evaluatorCpuThreads")
     expect(source).toContain("aggregate_memory_bytes = $jobMemoryBytes + $inferenceMemoryBytes")
+    expect(source).not.toContain("shared_cpu_affinity")
     expect(source).not.toMatch(/--gpus|scheduler|autonomous/i)
+  })
+
+  it("copies an immutable model snapshot and cleans up only captured owned Docker IDs", () => {
+    expect(source).toContain("Copy-Item -LiteralPath $sourceBlob -Destination $snapshotBlob")
+    expect(source).toContain("MODEL_SNAPSHOT_MANIFEST_HASH_FAILED")
+    expect(source).toContain("MODEL_SNAPSHOT_HASH_FAILED")
+    expect(source).toContain("source=$snapshotRoot,target=/root/.ollama/models,readonly")
+    expect(source).toContain("Remove-OwnedContainer $ExecutionContainerId $executionHash")
+    expect(source).toContain("Remove-OwnedNetwork $ExecutionNetworkId $executionHash")
+    expect(source).toContain('if ($label -cne $ExpectedExecutionHash)')
+    expect(source).not.toContain("rm --force $ExecutionContainer\n")
+    expect(source).not.toContain("network rm $ExecutionNetwork\n")
   })
 
   it("emits a secret-free bounded receipt", () => {

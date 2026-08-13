@@ -166,12 +166,14 @@ function validateAdmission(admission) {
   digest(admission.placement.inventory_snapshot_sha256, "admission.placement.inventory_snapshot_sha256")
   digest(admission.placement.machine_id_sha256, "admission.placement.machine_id_sha256")
   digest(admission.placement.host_manifest_sha256, "admission.placement.host_manifest_sha256")
-  exactKeys(admission.limits, ["timeout_ms", "max_input_bytes", "max_scratch_bytes", "max_result_bytes", "max_cpu_threads", "max_memory_bytes", "max_evaluator_memory_bytes", "max_inference_memory_bytes", "max_gpu_vram_bytes", "minimum_memory_available_bytes", "minimum_gpu_vram_available_bytes", "gpu_execution", "network_scope"], "admission.limits")
+  exactKeys(admission.limits, ["timeout_ms", "max_input_bytes", "max_scratch_bytes", "max_result_bytes", "max_cpu_threads", "max_evaluator_cpu_threads", "max_inference_cpu_threads", "max_memory_bytes", "max_evaluator_memory_bytes", "max_inference_memory_bytes", "max_gpu_vram_bytes", "minimum_memory_available_bytes", "minimum_gpu_vram_available_bytes", "gpu_execution", "network_scope"], "admission.limits")
   integer(admission.limits.timeout_ms, "admission.limits.timeout_ms", 1000, 900_000)
   integer(admission.limits.max_input_bytes, "admission.limits.max_input_bytes", 1, 524_288)
   integer(admission.limits.max_result_bytes, "admission.limits.max_result_bytes", 1, 16_777_216)
   integer(admission.limits.max_scratch_bytes, "admission.limits.max_scratch_bytes", 1, Number.MAX_SAFE_INTEGER)
   integer(admission.limits.max_cpu_threads, "admission.limits.max_cpu_threads", 1, 64)
+  integer(admission.limits.max_evaluator_cpu_threads, "admission.limits.max_evaluator_cpu_threads", 1, 64)
+  integer(admission.limits.max_inference_cpu_threads, "admission.limits.max_inference_cpu_threads", 1, 64)
   integer(admission.limits.max_memory_bytes, "admission.limits.max_memory_bytes", 67_108_864, 68_719_476_736)
   integer(admission.limits.max_evaluator_memory_bytes, "admission.limits.max_evaluator_memory_bytes", 67_108_864, 68_719_476_736)
   integer(admission.limits.max_inference_memory_bytes, "admission.limits.max_inference_memory_bytes", 67_108_864, 68_719_476_736)
@@ -184,6 +186,9 @@ function validateAdmission(admission) {
   }
   if (admission.limits.max_evaluator_memory_bytes + admission.limits.max_inference_memory_bytes > admission.limits.max_memory_bytes) {
     fail("MEMORY_CEILING_INVALID", "evaluator and inference memory partitions exceed the admitted aggregate ceiling")
+  }
+  if (admission.limits.max_evaluator_cpu_threads + admission.limits.max_inference_cpu_threads > admission.limits.max_cpu_threads) {
+    fail("CPU_CEILING_INVALID", "evaluator and inference CPU partitions exceed the admitted aggregate ceiling")
   }
   if (admission.limits.gpu_execution !== "CPU_ONLY" || admission.limits.max_gpu_vram_bytes !== 0
     || admission.limits.network_scope !== "isolated-internal-loopback-only") fail("NETWORK_SCOPE_INVALID", "execution must remain CPU-only on an isolated internal loopback endpoint")

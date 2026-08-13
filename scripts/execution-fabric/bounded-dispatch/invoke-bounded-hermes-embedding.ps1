@@ -14,6 +14,8 @@ $ExecutionContainer = $null
 $ExecutionNetwork = $null
 $ExecutionContainerOwned = $false
 $ExecutionNetworkOwned = $false
+$ExecutionContainerId = $null
+$ExecutionNetworkId = $null
 
 function Write-Receipt {
   param([hashtable]$Receipt)
@@ -82,6 +84,26 @@ function Assert-ExactChildPath {
   return $full
 }
 
+function Remove-OwnedContainer {
+  param([string]$ContainerId, [string]$ExpectedExecutionHash)
+  if ([string]::IsNullOrWhiteSpace($ContainerId)) { return }
+  $label = (@(& $DockerExecutable inspect --format '{{index .Config.Labels "williamos.execution-hash"}}' $ContainerId 2>$null) -join '').Trim()
+  if ($LASTEXITCODE -ne 0) { return }
+  if ($label -cne $ExpectedExecutionHash) { throw [InvalidOperationException]::new("CONTAINER_OWNERSHIP_DRIFT") }
+  & $DockerExecutable rm --force $ContainerId | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("CONTAINER_CLEANUP_FAILED") }
+}
+
+function Remove-OwnedNetwork {
+  param([string]$NetworkId, [string]$ExpectedExecutionHash)
+  if ([string]::IsNullOrWhiteSpace($NetworkId)) { return }
+  $label = (@(& $DockerExecutable network inspect --format '{{index .Labels "williamos.execution-hash"}}' $NetworkId 2>$null) -join '').Trim()
+  if ($LASTEXITCODE -ne 0) { return }
+  if ($label -cne $ExpectedExecutionHash) { throw [InvalidOperationException]::new("NETWORK_OWNERSHIP_DRIFT") }
+  & $DockerExecutable network rm $NetworkId | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("NETWORK_CLEANUP_FAILED") }
+}
+
 try {
   if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw [InvalidOperationException]::new("WINDOWS_REQUIRED") }
   if ($args.Count -ne 0) { throw [InvalidOperationException]::new("ARGUMENTS_FORBIDDEN") }
@@ -114,6 +136,7 @@ try {
   if ($affinityRaw -cnotmatch '^0x[0-9A-Fa-f]{1,16}$') { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
   [UInt64]$cpuAffinityMask = [Convert]::ToUInt64($affinityRaw.Substring(2), 16)
   if ($cpuAffinityMask -eq 0) { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
+  $evaluatorCpuThreads = ([Convert]::ToString($cpuAffinityMask, 2).ToCharArray() | Where-Object { $_ -eq '1' }).Count
   if ($jobMemoryBytes -lt $processMemoryBytes) { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
 
   Assert-NoReparsePoint $HermesRoot $true
@@ -141,16 +164,35 @@ try {
   if ($LASTEXITCODE -eq 0) { throw [InvalidOperationException]::new("CONTAINER_NAME_OCCUPIED") }
   & $DockerExecutable network inspect $ExecutionNetwork *> $null
   if ($LASTEXITCODE -eq 0) { throw [InvalidOperationException]::new("NETWORK_NAME_OCCUPIED") }
-  & $DockerExecutable network create --internal $ExecutionNetwork | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("NETWORK_CREATE_FAILED") }
+  $ExecutionNetworkId = (& $DockerExecutable network create --internal --label "williamos.execution-hash=$executionHash" $ExecutionNetwork).Trim()
+  if ($LASTEXITCODE -ne 0 -or $ExecutionNetworkId -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("NETWORK_CREATE_FAILED") }
   $ExecutionNetworkOwned = $true
   $memoryLimit = "$($inferenceMemoryBytes)b"
   $lastCpu = $maxCpuThreads - 1
   $cpuSet = if ($lastCpu -eq 0) { '0' } else { "0-$lastCpu" }
-  $containerId = (& $DockerExecutable run --detach --name $ExecutionContainer --label "williamos.execution-hash=$executionHash" --network $ExecutionNetwork --cpus ([string]$maxCpuThreads) --cpuset-cpus $cpuSet --memory $memoryLimit --memory-swap $memoryLimit --pids-limit 64 --read-only --tmpfs '/root/.ollama:rw,noexec,nosuid,size=16777216' --mount "type=bind,source=$ModelsRoot,target=/root/.ollama/models,readonly" --env 'OLLAMA_HOST=0.0.0.0:11434' --env 'OLLAMA_KEEP_ALIVE=0' --publish '127.0.0.1:11435:11434' "sha256:$containerImageSha256").Trim()
-  if ($LASTEXITCODE -ne 0 -or $containerId -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("CONTAINER_START_FAILED") }
+  $snapshotRoot = Join-Path $ExecutionWorkRoot 'models'
+  $modelParts = $modelId.Split(':')
+  $snapshotManifest = Join-Path $snapshotRoot "manifests\registry.ollama.ai\library\$($modelParts[0])\$($modelParts[1])"
+  [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($snapshotManifest))
+  Copy-Item -LiteralPath (Join-Path $ModelsRoot "manifests\registry.ollama.ai\library\$($modelParts[0])\$($modelParts[1])") -Destination $snapshotManifest
+  if ((Get-FileHash -LiteralPath $snapshotManifest -Algorithm SHA256).Hash.ToLowerInvariant() -cne $modelManifestSha256) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_MANIFEST_HASH_FAILED") }
+  $sourceManifestText = Get-Content -Raw -LiteralPath $snapshotManifest
+  $sourceManifest = $sourceManifestText | ConvertFrom-Json
+  foreach ($layer in @($sourceManifest.config) + @($sourceManifest.layers)) {
+    if ([string]$layer.digest -cnotmatch '^sha256:([a-f0-9]{64})$') { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_DIGEST_INVALID") }
+    $digest = $Matches[1]
+    $sourceBlob = Join-Path $ModelsRoot "blobs\sha256-$digest"
+    $snapshotBlob = Join-Path $snapshotRoot "blobs\sha256-$digest"
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($snapshotBlob))
+    Copy-Item -LiteralPath $sourceBlob -Destination $snapshotBlob
+    if ((Get-FileHash -LiteralPath $snapshotBlob -Algorithm SHA256).Hash.ToLowerInvariant() -cne $digest) { throw [InvalidOperationException]::new("MODEL_SNAPSHOT_HASH_FAILED") }
+  }
+  $snapshotBytes = (Get-ChildItem -LiteralPath $ExecutionWorkRoot -File -Recurse | Measure-Object -Property Length -Sum).Sum
+  if ([uint64]$snapshotBytes -gt $maxScratchBytes) { throw [InvalidOperationException]::new("SCRATCH_SIZE_LIMIT_EXCEEDED") }
+  $ExecutionContainerId = (& $DockerExecutable run --detach --name $ExecutionContainer --label "williamos.execution-hash=$executionHash" --network $ExecutionNetworkId --cpus ([string]$maxCpuThreads) --cpuset-cpus $cpuSet --memory $memoryLimit --memory-swap $memoryLimit --pids-limit 64 --read-only --tmpfs '/root/.ollama:rw,noexec,nosuid,size=16777216' --mount "type=bind,source=$snapshotRoot,target=/root/.ollama/models,readonly" --env 'OLLAMA_HOST=0.0.0.0:11434' --env 'OLLAMA_KEEP_ALIVE=0' --publish '127.0.0.1:11435:11434' "sha256:$containerImageSha256").Trim()
+  if ($LASTEXITCODE -ne 0 -or $ExecutionContainerId -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("CONTAINER_START_FAILED") }
   $ExecutionContainerOwned = $true
-  $container = (& $DockerExecutable inspect $ExecutionContainer | ConvertFrom-Json)[0]
+  $container = (& $DockerExecutable inspect $ExecutionContainerId | ConvertFrom-Json)[0]
   $resourceBindingFailed = $LASTEXITCODE -ne 0
   $resourceBindingFailed = $resourceBindingFailed -or [string]($container.Image) -cne "sha256:$containerImageSha256"
   $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.Memory) -ne [int64]$inferenceMemoryBytes
@@ -160,21 +202,20 @@ try {
   $resourceBindingFailed = $resourceBindingFailed -or [int64]($container.HostConfig.PidsLimit) -ne 64
   $resourceBindingFailed = $resourceBindingFailed -or $container.HostConfig.ReadonlyRootfs -ne $true
   $resourceBindingFailed = $resourceBindingFailed -or @($container.HostConfig.DeviceRequests).Count -ne 0
-  $resourceBindingFailed = $resourceBindingFailed -or [string]($container.HostConfig.NetworkMode) -cne $ExecutionNetwork
+  $resourceBindingFailed = $resourceBindingFailed -or [string]($container.HostConfig.NetworkMode) -cne $ExecutionNetworkId
   $resourceBindingFailed = $resourceBindingFailed -or [string]($container.HostConfig.PortBindings.'11434/tcp'[0].HostIp) -cne '127.0.0.1'
   $resourceBindingFailed = $resourceBindingFailed -or [string]($container.HostConfig.PortBindings.'11434/tcp'[0].HostPort) -cne '11435'
   if ($resourceBindingFailed) { throw [InvalidOperationException]::new("CONTAINER_RESOURCE_BINDING_FAILED") }
-  $runtimeHash = (@(& $DockerExecutable exec $ExecutionContainer sha256sum /usr/bin/ollama) -join '').Trim()
+  $runtimeHash = (@(& $DockerExecutable exec $ExecutionContainerId sha256sum /usr/bin/ollama) -join '').Trim()
   if ($LASTEXITCODE -ne 0 -or $runtimeHash -cnotmatch '^([a-f0-9]{64})\s+/usr/bin/ollama$' -or $Matches[1] -cne $runtimeExecutableSha256) { throw [InvalidOperationException]::new("RUNTIME_REVERIFICATION_FAILED") }
-  $modelParts = $modelId.Split(':')
   $modelManifestPath = "/root/.ollama/models/manifests/registry.ollama.ai/library/$($modelParts[0])/$($modelParts[1])"
-  $modelManifestText = (@(& $DockerExecutable exec $ExecutionContainer cat $modelManifestPath) -join "`n").Trim()
-  $modelManifestHash = (@(& $DockerExecutable exec $ExecutionContainer sha256sum $modelManifestPath) -join '').Trim()
+  $modelManifestText = (@(& $DockerExecutable exec $ExecutionContainerId cat $modelManifestPath) -join "`n").Trim()
+  $modelManifestHash = (@(& $DockerExecutable exec $ExecutionContainerId sha256sum $modelManifestPath) -join '').Trim()
   if ($LASTEXITCODE -ne 0 -or $modelManifestHash -cnotmatch '^([a-f0-9]{64})\s+' -or $Matches[1] -cne $modelManifestSha256) { throw [InvalidOperationException]::new("MODEL_MANIFEST_REVERIFICATION_FAILED") }
   $modelManifest = $modelManifestText | ConvertFrom-Json
   $modelLayers = @($modelManifest.layers | Where-Object mediaType -eq 'application/vnd.ollama.image.model')
   if ($modelLayers.Count -ne 1 -or [string]$modelLayers[0].digest -cne "sha256:$weightsSha256") { throw [InvalidOperationException]::new("MODEL_WEIGHTS_BINDING_FAILED") }
-  $weightsHash = (@(& $DockerExecutable exec $ExecutionContainer sha256sum "/root/.ollama/models/blobs/sha256-$weightsSha256") -join '').Trim()
+  $weightsHash = (@(& $DockerExecutable exec $ExecutionContainerId sha256sum "/root/.ollama/models/blobs/sha256-$weightsSha256") -join '').Trim()
   if ($LASTEXITCODE -ne 0 -or $weightsHash -cnotmatch '^([a-f0-9]{64})\s+' -or $Matches[1] -cne $weightsSha256) { throw [InvalidOperationException]::new("MODEL_WEIGHTS_REVERIFICATION_FAILED") }
   $ready = $false
   for ($attempt = 0; $attempt -lt 60; $attempt += 1) {
@@ -372,14 +413,12 @@ namespace WilliamOS.ExecutionFabric {
   if (-not $run.TimedOut -and -not $run.OutputLimitExceeded -and -not $run.ScratchLimitExceeded -and ($resultLength -lt 1 -or [UInt64]$resultLength -gt $maxResultBytes)) { throw [InvalidOperationException]::new("RESULT_SIZE_INVALID") }
   $resultSha256 = if ($resultLength -gt 0 -and [UInt64]$resultLength -le $maxResultBytes) { (Get-FileHash -LiteralPath $resultPath -Algorithm SHA256).Hash.ToLowerInvariant() } else { $null }
   $status = if ($run.TimedOut) { "TIMED_OUT" } elseif ($run.OutputLimitExceeded -or $run.ScratchLimitExceeded) { "FAILED_CLOSED" } elseif ($run.ExitCode -eq 0) { "COMPLETED" } else { "FAILED_CLOSED" }
-  & $DockerExecutable rm --force $ExecutionContainer | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("CONTAINER_CLEANUP_FAILED") }
-  $ExecutionContainer = $null
+  Remove-OwnedContainer $ExecutionContainerId $executionHash
   $ExecutionContainerOwned = $false
-  & $DockerExecutable network rm $ExecutionNetwork | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw [InvalidOperationException]::new("NETWORK_CLEANUP_FAILED") }
-  $ExecutionNetwork = $null
+  $ExecutionContainer = $null
+  Remove-OwnedNetwork $ExecutionNetworkId $executionHash
   $ExecutionNetworkOwned = $false
+  $ExecutionNetwork = $null
   Remove-Item -LiteralPath $ExecutionWorkRoot -Recurse -Force
   $ExecutionWorkRoot = $null
   Write-Receipt ([ordered]@{
@@ -398,10 +437,10 @@ namespace WilliamOS.ExecutionFabric {
     internal_network = $true
     gpu_execution = "CPU_ONLY"
     container_cpu_threads = [int]$maxCpuThreads
+    aggregate_cpu_threads = [int]$maxCpuThreads + [int]$evaluatorCpuThreads
     container_memory_bytes = $inferenceMemoryBytes
     aggregate_memory_bytes = $jobMemoryBytes + $inferenceMemoryBytes
     container_pids_limit = 64
-    shared_cpu_affinity = $true
     runtime_reverified = $true
     model_manifest_reverified = $true
     model_weights_reverified = $true
@@ -414,16 +453,17 @@ namespace WilliamOS.ExecutionFabric {
   })
   if ($run.ExitCode -ne 0) { exit 2 }
 } catch {
-  if ($ExecutionContainerOwned -and $ExecutionContainer) {
-    try { & $DockerExecutable rm --force $ExecutionContainer *> $null } catch { }
+  $failure = [string]$_.Exception.Message
+  if ($ExecutionContainerOwned) {
+    try { Remove-OwnedContainer $ExecutionContainerId $executionHash; $ExecutionContainerOwned = $false } catch { $failure = [string]$_.Exception.Message }
   }
-  if ($ExecutionNetworkOwned -and $ExecutionNetwork) {
-    try { & $DockerExecutable network rm $ExecutionNetwork *> $null } catch { }
+  if ($ExecutionNetworkOwned) {
+    try { Remove-OwnedNetwork $ExecutionNetworkId $executionHash; $ExecutionNetworkOwned = $false } catch { $failure = [string]$_.Exception.Message }
   }
   if ($ExecutionWorkRoot -and [IO.Directory]::Exists($ExecutionWorkRoot)) {
     try { Remove-Item -LiteralPath $ExecutionWorkRoot -Recurse -Force } catch { }
   }
-  $reason = [string]$_.Exception.Message
+  $reason = $failure
   if ($reason -cnotmatch '^[A-Z][A-Z0-9_]{2,63}$') { $reason = "LAUNCHER_INTERNAL_ERROR" }
   Stop-Closed $reason
 }
