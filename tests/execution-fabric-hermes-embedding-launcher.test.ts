@@ -60,6 +60,7 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain('^result-([a-f0-9]{64})\\.json$')
     expect(source).toContain("REPARSE_POINT")
     expect(source).toContain("HERMES_EMBEDDING_TIMEOUT_MS")
+    expect(source).toContain("HERMES_EMBEDDING_SEALED_INPUT_SHA256")
     expect(source).toContain("HERMES_EMBEDDING_MAX_SCRATCH_BYTES")
     expect(source).toContain("HERMES_EMBEDDING_MAX_CPU_THREADS")
     expect(source).toContain("HERMES_EMBEDDING_CONTAINER_IMAGE_SHA256")
@@ -139,9 +140,13 @@ describe("bounded resident HERMES embedding launcher", () => {
     expect(source).toContain("$algorithm.ComputeHash($archiveStream)")
     expect(source).toContain("$algorithm.ComputeHash($archiveLock)")
     expect(source).toContain("EVALUATOR_ARCHIVE_REOPEN_MISMATCH")
+    expect(source).toContain("FileShare.None")
+    expect(source).toContain("algorithm.ComputeHash(input)")
+    expect(source).toContain("SEALED_INPUT_DIGEST_MISMATCH")
+    expect(source).toContain('Quote(python) + " -I -S " + Quote(evaluator)')
     expect(source).toContain("Remove-Item -LiteralPath $sourceRoot -Recurse -Force")
     expect(source).toContain("WILLIAMOS_EMBEDDING_CORPUS_DIR=$snapshotCorpusRoot")
-    expect(source).toContain("$ExecutionEvaluatorPath, $sealedInputPath, $resultPath, $ExecutionWorkRoot, $ExecutionWorkRoot")
+    expect(source).toContain("$ExecutionEvaluatorPath, $sealedInputPath, $sealedInputSha256, $resultPath, $ExecutionWorkRoot, $ExecutionWorkRoot")
   })
 
   it("emits a secret-free bounded receipt", () => {

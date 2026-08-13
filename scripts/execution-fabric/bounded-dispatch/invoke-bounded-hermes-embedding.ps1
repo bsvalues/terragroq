@@ -130,6 +130,8 @@ try {
   if ($args.Count -ne 0) { throw [InvalidOperationException]::new("ARGUMENTS_FORBIDDEN") }
 
   $sealedInputPath = Assert-ExactChildPath (Get-RequiredEnvironment "HERMES_EMBEDDING_SEALED_INPUT_PATH") $LedgerRoot '^sealed-([a-f0-9]{64})\.json$' $true
+  $sealedInputSha256 = Get-RequiredEnvironment "HERMES_EMBEDDING_SEALED_INPUT_SHA256"
+  if ($sealedInputSha256 -cnotmatch '^[a-f0-9]{64}$') { throw [InvalidOperationException]::new("ENVIRONMENT_INVALID") }
   $resultPath = Assert-ExactChildPath (Get-RequiredEnvironment "HERMES_EMBEDDING_RESULT_PATH") $LedgerRoot '^result-([a-f0-9]{64})\.json$' $false
   if ([IO.Path]::GetFileName($sealedInputPath).Substring(7, 64) -cne [IO.Path]::GetFileName($resultPath).Substring(7, 64)) { throw [InvalidOperationException]::new("PATH_BINDING_MISMATCH") }
   [UInt64]$timeoutMs = Get-BoundedUInt64 "HERMES_EMBEDDING_TIMEOUT_MS" 1000 900000
@@ -372,6 +374,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
@@ -465,7 +468,7 @@ namespace WilliamOS.ExecutionFabric {
       return total;
     }
 
-    public static BoundedJobResult Run(string python, string evaluator, string inputPath, string resultPath, string workingDirectory, string scratchRoot, uint timeoutMs, ulong maxResultBytes, ulong maxScratchBytes, ulong processMemoryBytes, ulong jobMemoryBytes, uint cpuRatePercent, ulong affinityMask, string[] environment) {
+    public static BoundedJobResult Run(string python, string evaluator, string inputPath, string expectedInputSha256, string resultPath, string workingDirectory, string scratchRoot, uint timeoutMs, ulong maxResultBytes, ulong maxScratchBytes, ulong processMemoryBytes, ulong jobMemoryBytes, uint cpuRatePercent, ulong affinityMask, string[] environment) {
       if (IntPtr.Size == 4 && (processMemoryBytes > UInt32.MaxValue || jobMemoryBytes > UInt32.MaxValue || affinityMask > UInt32.MaxValue)) throw new InvalidOperationException("64-bit launcher required");
       UIntPtr available, system;
       Check(GetProcessAffinityMask(GetCurrentProcess(), out available, out system), "GetProcessAffinityMask");
@@ -474,10 +477,15 @@ namespace WilliamOS.ExecutionFabric {
 
       IntPtr job = IntPtr.Zero, environmentBlock = IntPtr.Zero, attributeList = IntPtr.Zero, handleArray = IntPtr.Zero;
       PROCESS_INFORMATION processInfo = new PROCESS_INFORMATION(); bool processCreated = false, attributeInitialized = false;
-      using (SafeFileHandle input = Open(inputPath, GENERIC_READ, OPEN_EXISTING))
+      using (FileStream input = new FileStream(inputPath, FileMode.Open, FileAccess.Read, FileShare.None))
       using (SafeFileHandle output = Open(resultPath, GENERIC_WRITE, CREATE_NEW))
       using (SafeFileHandle error = Open("NUL", GENERIC_WRITE, OPEN_EXISTING)) {
         try {
+          Check(SetHandleInformation(input.SafeFileHandle.DangerousGetHandle(), HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT), "SetHandleInformation");
+          string inputSha256;
+          using (SHA256 algorithm = SHA256.Create()) inputSha256 = BitConverter.ToString(algorithm.ComputeHash(input)).Replace("-", "").ToLowerInvariant();
+          input.Position = 0;
+          if (!StringComparer.Ordinal.Equals(inputSha256, expectedInputSha256)) throw new InvalidOperationException("SEALED_INPUT_DIGEST_MISMATCH");
           job = CreateJobObject(IntPtr.Zero, null); Check(job != IntPtr.Zero, "CreateJobObject");
           JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
           limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_AFFINITY;
@@ -491,13 +499,13 @@ namespace WilliamOS.ExecutionFabric {
           IntPtr attributeSize = IntPtr.Zero;
           InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeSize);
           attributeList = Marshal.AllocHGlobal(attributeSize); Check(InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeSize), "InitializeProcThreadAttributeList"); attributeInitialized = true;
-          IntPtr[] handles = { input.DangerousGetHandle(), output.DangerousGetHandle(), error.DangerousGetHandle() };
+          IntPtr[] handles = { input.SafeFileHandle.DangerousGetHandle(), output.DangerousGetHandle(), error.DangerousGetHandle() };
           handleArray = Marshal.AllocHGlobal(IntPtr.Size * handles.Length); Marshal.Copy(handles, 0, handleArray, handles.Length);
           Check(UpdateProcThreadAttribute(attributeList, 0, new UIntPtr(PROC_THREAD_ATTRIBUTE_HANDLE_LIST), handleArray, new IntPtr(IntPtr.Size * handles.Length), IntPtr.Zero, IntPtr.Zero), "UpdateProcThreadAttribute");
 
           STARTUPINFOEX startup = new STARTUPINFOEX(); startup.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFOEX)); startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES; startup.StartupInfo.hStdInput = handles[0]; startup.StartupInfo.hStdOutput = handles[1]; startup.StartupInfo.hStdError = handles[2]; startup.lpAttributeList = attributeList;
           environmentBlock = EnvironmentBlock(environment);
-          StringBuilder command = new StringBuilder(Quote(python) + " " + Quote(evaluator));
+          StringBuilder command = new StringBuilder(Quote(python) + " -I -S " + Quote(evaluator));
           uint flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW;
           Check(CreateProcessW(python, command, IntPtr.Zero, IntPtr.Zero, true, flags, environmentBlock, workingDirectory, ref startup, out processInfo), "CreateProcessW"); processCreated = true;
           if (!AssignProcessToJobObject(job, processInfo.hProcess)) { TerminateProcess(processInfo.hProcess, 2); WaitForSingleObject(processInfo.hProcess, INFINITE); throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject"); }
@@ -506,7 +514,7 @@ namespace WilliamOS.ExecutionFabric {
           while (true) {
             uint remaining = elapsed.ElapsedMilliseconds >= timeoutMs ? 0 : timeoutMs - (uint)elapsed.ElapsedMilliseconds;
             wait = WaitForSingleObject(processInfo.hProcess, Math.Min(remaining, 50));
-            long inputSize, resultSize; Check(GetFileSizeEx(input.DangerousGetHandle(), out inputSize), "GetFileSizeEx"); Check(GetFileSizeEx(output.DangerousGetHandle(), out resultSize), "GetFileSizeEx");
+            long inputSize, resultSize; Check(GetFileSizeEx(input.SafeFileHandle.DangerousGetHandle(), out inputSize), "GetFileSizeEx"); Check(GetFileSizeEx(output.DangerousGetHandle(), out resultSize), "GetFileSizeEx");
             if (resultSize < 0 || (ulong)resultSize > maxResultBytes) { Check(TerminateJobObject(job, 125), "TerminateJobObject"); WaitForSingleObject(processInfo.hProcess, INFINITE); return new BoundedJobResult { ExitCode = 125, OutputLimitExceeded = true }; }
             ulong retainedBytes; checked { retainedBytes = (ulong)inputSize + (ulong)resultSize + DirectoryBytes(scratchRoot); }
             if (retainedBytes > maxScratchBytes) { Check(TerminateJobObject(job, 126), "TerminateJobObject"); WaitForSingleObject(processInfo.hProcess, INFINITE); return new BoundedJobResult { ExitCode = 126, ScratchLimitExceeded = true }; }
@@ -546,7 +554,7 @@ namespace WilliamOS.ExecutionFabric {
     "WILLIAMOS_EMBEDDING_CORPUS_DIR=$snapshotCorpusRoot",
     "NO_PROXY=127.0.0.1,localhost"
   )
-  $run = [WilliamOS.ExecutionFabric.BoundedJob]::Run($PythonExecutable, $ExecutionEvaluatorPath, $sealedInputPath, $resultPath, $ExecutionWorkRoot, $ExecutionWorkRoot, [uint32]$timeoutMs, $maxResultBytes, $maxScratchBytes, $processMemoryBytes, $jobMemoryBytes, [uint32]$cpuRatePercent, $cpuAffinityMask, $childEnvironment)
+  $run = [WilliamOS.ExecutionFabric.BoundedJob]::Run($PythonExecutable, $ExecutionEvaluatorPath, $sealedInputPath, $sealedInputSha256, $resultPath, $ExecutionWorkRoot, $ExecutionWorkRoot, [uint32]$timeoutMs, $maxResultBytes, $maxScratchBytes, $processMemoryBytes, $jobMemoryBytes, [uint32]$cpuRatePercent, $cpuAffinityMask, $childEnvironment)
   if (-not [IO.File]::Exists($resultPath)) { throw [InvalidOperationException]::new("RESULT_MISSING") }
   Assert-NoReparsePoint $resultPath $true
   $resultLength = ([IO.FileInfo]::new($resultPath)).Length

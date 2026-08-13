@@ -422,6 +422,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
     expect(source).toContain("COLLECTOR_PATH")
     expect(source).toContain("BOUNDED_LAUNCHER_PATH")
     expect(source).toContain("HERMES_EMBEDDING_SEALED_INPUT_PATH")
+    expect(source).toContain("HERMES_EMBEDDING_SEALED_INPUT_SHA256: sha256(evaluatorInput)")
     expect(source).toContain("HERMES_EMBEDDING_MAX_SCRATCH_BYTES")
     expect(source).toContain("recoverLauncherDockerResources(executionKey)")
     expect(source).toContain('value?.Config?.Labels?.["williamos.execution-hash"]')

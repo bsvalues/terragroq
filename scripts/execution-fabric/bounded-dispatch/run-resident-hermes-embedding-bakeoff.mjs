@@ -399,6 +399,7 @@ export async function invokeFixedEvaluator({ admission, host_attestation, endpoi
     env: {
       SystemRoot: "C:\\WINDOWS", WINDIR: "C:\\WINDOWS",
       HERMES_EMBEDDING_SEALED_INPUT_PATH: sealedInputPath,
+      HERMES_EMBEDDING_SEALED_INPUT_SHA256: sha256(evaluatorInput),
       HERMES_EMBEDDING_RESULT_PATH: resultPath,
       HERMES_EMBEDDING_TIMEOUT_MS: String(admission.limits.timeout_ms),
       HERMES_EMBEDDING_MAX_INPUT_BYTES: String(admission.limits.max_input_bytes),
