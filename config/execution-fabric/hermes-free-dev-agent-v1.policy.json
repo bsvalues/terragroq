@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "workOrderId": "WO-HERMES-FREE-DEV-AGENT-001",
+  "providerId": "hermes-agent-local-qwen-v1",
+  "runtime": "NousResearch/hermes-agent@fa83af3f9a42790730b8966ff67e7d9fb627899f",
+  "placement": {
+    "controlNode": "omen",
+    "executionNode": "hermes-node",
+    "composeProject": "williamos-hermes-agent",
+    "dockerConfig": "D:\\HermesServices\\williamos-hermes-agent\\docker-config",
+    "workspaceRoot": "D:\\HermesWorkspaces\\williamos-free-dev-agent",
+    "baselineWorkspace": "D:\\HermesWorkspaces\\williamos-free-dev-agent\\baseline",
+    "baselineCommit": "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48"
+  },
+  "model": {
+    "provider": "custom",
+    "id": "williamos-qwen3-4b:64k",
+    "baseModel": "qwen3:4b-instruct",
+    "baseUrl": "http://inference-proxy:8080/v1",
+    "contextLength": 65536,
+    "cloudFallbackAllowed": false
+  },
+  "execution": {
+    "mode": "one-shot",
+    "maximumConcurrency": 1,
+    "maximumTurns": 20,
+    "timeoutSeconds": 1800,
+    "allowedToolsets": ["file", "terminal"],
+    "persistentGatewayAllowed": false,
+    "autonomousSchedulingAllowed": false
+  },
+  "containment": {
+    "network": "williamos_free_agent_internal",
+    "onlyNetworkPeer": "inference-proxy",
+    "ollamaManagementApiReachable": false,
+    "publishedPorts": [],
+    "dockerSocketMounted": false,
+    "hostCredentialMounts": false,
+    "canonicalRepositoryMounted": false,
+    "rootFilesystemReadOnly": true,
+    "agentStatePersistence": false
+  },
+  "build": {
+    "sourcePath": "D:\\HermesServices\\williamos-hermes-agent\\source-lf",
+    "sourceOrigin": "https://github.com/NousResearch/hermes-agent.git",
+    "sourceCommit": "fa83af3f9a42790730b8966ff67e7d9fb627899f",
+    "image": "williamos-hermes-agent:0.20.0-fa83af3",
+    "imageId": "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613"
+  },
+  "allowedActions": [
+    "READ_ISOLATED_WORKSPACE",
+    "WRITE_ISOLATED_WORKSPACE",
+    "RUN_ISOLATED_VALIDATION",
+    "EMIT_REVIEWABLE_OUTPUT"
+  ],
+  "deniedActions": [
+    "ARBITRARY_HOST_ACCESS",
+    "ATLAS_ACCESS",
+    "AUTONOMOUS_DISPATCH",
+    "CLOUD_MODEL_FALLBACK",
+    "CREDENTIAL_ACCESS",
+    "DOCKER_CONTROL",
+    "GITHUB_WRITE",
+    "OWNER_CONTACT",
+    "PRODUCTION_WRITE"
+  ],
+  "promotion": {
+    "status": "PILOT_AUTHORIZED",
+    "requiredEvidence": [
+      "IMAGE_BUILD_PROVEN",
+      "LOCAL_MODEL_TOOL_CALL_PROVEN",
+      "NETWORK_ISOLATION_PROVEN",
+      "WORKSPACE_CONFINEMENT_PROVEN",
+      "INDEPENDENT_REVIEW_APPROVED"
+    ],
+    "satisfiedEvidence": {
+      "IMAGE_BUILD_PROVEN": "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613",
+      "LOCAL_MODEL_TOOL_CALL_PROVEN": "HERMES_FREE_AGENT_TOOL_OK",
+      "NETWORK_ISOLATION_PROVEN": "INFERENCE_PROXY_MANAGEMENT_DENIED_AND_DIRECT_OLLAMA_DENIED",
+      "WORKSPACE_CONFINEMENT_PROVEN": "bootstrap-1839774cf11048e7a42723f76e677044",
+      "INDEPENDENT_REVIEW_APPROVED": "2026-08-13T17:05:00Z"
+    }
+  }
+}
