@@ -5,7 +5,7 @@ if ($args.Count -ne 0) { throw 'HERMES_EMBEDDING_COLLECTOR_ARGUMENT_WALL' }
 
 $docker = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
 $nvidiaSmi = 'C:\WINDOWS\system32\nvidia-smi.exe'
-$python = 'C:\Python313\python.exe'
+$python = 'C:\Users\bs\AppData\Local\Programs\Python\Python312\python.exe'
 $powershell = 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe'
 $node = 'C:\Program Files\nodejs\node.exe'
 $git = 'C:\Program Files\Git\cmd\git.exe'

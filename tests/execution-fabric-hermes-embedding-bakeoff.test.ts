@@ -415,6 +415,7 @@ describe("resident HERMES embedding bake-off adapter", () => {
     const source = fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/bounded-dispatch/run-resident-hermes-embedding-bakeoff.mjs"), "utf8")
     expect(source).toContain('const EVALUATOR_PATH = path.join(REPOSITORY_ROOT, EMBEDDING_CONTRACT.evaluatorPath)')
     expect(source).toContain('const GIT_EXECUTABLE = "C:\\\\Program Files\\\\Git\\\\cmd\\\\git.exe"')
+    expect(source).toContain('const PYTHON_EXECUTABLE = "C:\\\\Users\\\\bs\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe"')
     expect(source).toContain('endpoint !== "http://127.0.0.1:11435/api/embed"')
     expect(source).toContain('process.argv.length !== 2')
     expect(source.match(/spawnSync\(/g)).toHaveLength(4)

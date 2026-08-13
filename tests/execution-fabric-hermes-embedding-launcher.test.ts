@@ -9,7 +9,7 @@ const source = fs.readFileSync(launcherPath, "utf8")
 
 describe("bounded resident HERMES embedding launcher", () => {
   it("has a fixed zero-argument Python evaluator command", () => {
-    expect(source).toContain('$PythonExecutable = "C:\\Python313\\python.exe"')
+    expect(source).toContain('$PythonExecutable = "C:\\Users\\bs\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"')
     expect(source).toContain('"scripts\\embedding-bakeoff\\fabric_measure.py"')
     expect(source).toContain('if ($args.Count -ne 0)')
     expect(source).not.toMatch(/Invoke-Expression|Start-Process|cmd\.exe|powershell\.exe|pwsh\.exe|shell:\s*true/i)

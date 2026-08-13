@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PythonExecutable = "C:\Python313\python.exe"
+$PythonExecutable = "C:\Users\bs\AppData\Local\Programs\Python\Python312\python.exe"
 $DockerExecutable = "C:\Program Files\Docker\Docker\resources\bin\docker.exe"
 $HermesRoot = "C:\HermesLab"
 $LedgerRoot = "C:\HermesLab\embedding-bakeoff-ledger"
