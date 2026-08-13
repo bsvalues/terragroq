@@ -31,6 +31,7 @@ import {
   inspectPreReceiptCompactionReceipt,
   buildPreReceiptCompactionReceipt,
   diagnosePreReceiptCompactionReceipt,
+  buildPreReceiptCompactionExpectation,
 } from "../scripts/execution-fabric/live/aegis-remote-dev-activation-host.mjs"
 
 const sha = (value: string) => crypto.createHash("sha256").update(value).digest("hex")
@@ -255,7 +256,10 @@ describe("AEGIS production activation host trust", () => {
   })
 
   it("builds the production compaction receipt with typed bounded diagnostics", () => {
-    const expected={authorityId:"22222222-2222-4222-8222-222222222222",authoritySha256:"a".repeat(64),authorityIssuedAt:"2026-08-13T05:00:00.000Z",authorityExpiresAt:"2026-08-13T05:15:00.000Z",machineIdSha256:"b".repeat(64),bootId:"11111111-1111-4111-8111-111111111111",controlCommit:"c".repeat(40),activationHostSha256:"d".repeat(64),compactionIntentSha256:"e".repeat(64),compactionSha256:"f".repeat(64),minimumAvailableBytes:32*1024*1024}
+    const authority={authorityId:"22222222-2222-4222-8222-222222222222",authoritySha256:"a".repeat(64),authorityIssuedAt:"2026-08-13T05:00:00.000Z",authorityExpiresAt:"2026-08-13T05:15:00.000Z",machineIdSha256:"b".repeat(64),bootId:"11111111-1111-4111-8111-111111111111",controlCommit:"c".repeat(40),activationHostSha256:"d".repeat(64)}
+    const expected=buildPreReceiptCompactionExpectation(authority,{intentSha256:"e".repeat(64),compactionSha256:"f".repeat(64)})
+    expect(expected).toHaveProperty("compactionIntentSha256","e".repeat(64))
+    expect(expected).not.toHaveProperty("intentSha256")
     const receipt=buildPreReceiptCompactionReceipt(expected,128*1024*1024,"2026-08-13T05:02:00.000Z")
     expect(diagnosePreReceiptCompactionReceipt(receipt,expected)).toEqual({status:"MATCH",reasonCode:"PRE_RECEIPT_COMPACTION_RECEIPT_MATCHED"})
     expect(diagnosePreReceiptCompactionReceipt({...receipt,completedAt:"2026-08-13T05:15:00.000Z"},expected)).toEqual({status:"DRIFT",reasonCode:"COMPLETION_TIME_OUTSIDE_AUTHORITY"})
