@@ -21,7 +21,7 @@ const SSH_ENTRYPOINT = "/usr/local/libexec/williamos-aegis-remote-dev-ssh-entryp
 const SSH_ENTRYPOINT_PREDECESSOR_SHA256 = "1eba36323a42353623b6659b146c7b7096d290fe883ae302524b12363e17c01f"
 const ACTIVATION_HOST = "/usr/local/libexec/williamos-aegis-remote-dev-activation-host.mjs"
 const ACTIVATION_HOST_PREDECESSOR_SHA256 = "0ab20d9b3df524e9201187f7f3e4927aba0376688c3fb2c4ce229d920cc19e8d"
-const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "74a9bc03353ee81b51711b66dedb3206fbef5d193997a4a1137c5f45157a5f59"
+const BRIDGE_RECEIPT_PREDECESSOR_SHA256 = "5d2e41f957ceeba53839454392f607c1f5749886761ffd4f3df8f89a962ae043"
 const SHA = /^[a-f0-9]{64}$/; const SHA40 = /^[a-f0-9]{40}$/; const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const canonical = value => value === null || ["string","boolean","number"].includes(typeof value) ? JSON.stringify(value) : Array.isArray(value) ? `[${value.map(canonical).join(",")}]` : `{${Object.keys(value).sort().map(k=>`${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`
 const sha = bytes => crypto.createHash("sha256").update(bytes).digest("hex")
