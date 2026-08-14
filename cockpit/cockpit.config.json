@@ -1,5 +1,5 @@
 {
-  "hermesOrigin": "https://hermes.williamos.local",
+  "hermesOrigin": "https://192.168.88.9:3443",
   "startupPath": "/device-bootstrap",
   "endpoints": {
     "enrollmentChallenge": "/api/device/enrollment/challenge",

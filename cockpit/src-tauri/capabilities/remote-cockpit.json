@@ -4,7 +4,7 @@
   "description": "The exact HERMES origin may request only device key generation and proof signing.",
   "windows": ["main"],
   "remote": {
-    "urls": ["https://hermes.williamos.local/*"]
+    "urls": ["https://192.168.88.9:3443/*"]
   },
   "permissions": [
     "allow-device-generate-key",
