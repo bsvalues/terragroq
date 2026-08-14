@@ -19,7 +19,7 @@ describe("universal intent router", () => {
 
   it.each([
     ["Open Projects", "/projects"],
-    ["Open System", "/runtime"],
+    ["Open System", "/system"],
     ["Show Brain Council", "/brain-council"],
     ["Go to Goal Console", "/goal-console"],
     ["Visit Work Orders", "/work-orders"],
