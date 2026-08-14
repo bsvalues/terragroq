@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events"
+import path from "node:path"
 import { PassThrough, Writable } from "node:stream"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
@@ -55,7 +56,19 @@ describe("CodexAppServerClient", () => {
   it("launches the App Server locally when no remote execution node is configured", () => {
     vi.stubEnv("WILLIAMOS_CODEX_EXEC_NODE", undefined)
 
-    expect(defaultLaunch()).toEqual({ command: "codex", args: ["app-server", "--stdio"] })
+    expect(defaultLaunch()).toEqual(process.platform === "win32"
+      ? {
+          command: process.execPath,
+          args: [
+            path.join(
+              process.env.APPDATA ?? "",
+              "npm", "node_modules", "@openai", "codex", "bin", "codex.js",
+            ),
+            "app-server",
+            "--stdio",
+          ],
+        }
+      : { command: "codex", args: ["app-server", "--stdio"] })
   })
 
   it("launches the App Server over batch-mode SSH when a remote execution node is configured", () => {
@@ -85,6 +98,25 @@ describe("CodexAppServerClient", () => {
       Path: "C:\\Program Files\\PowerShell\\7;C:\\Windows\\System32",
       USERPROFILE: "C:/Users/owner",
     })
+  })
+
+  it("preserves mixed-case Windows ProgramData for OpenSSH without admitting adjacent secrets", () => {
+    expect(createCodexChildEnvironment({
+      ProgramData: "C:\\ProgramData",
+      PROGRAMDATA_TOKEN: "secret",
+      WILLIAMOS_PRODUCTION_AUTH_COOKIE: "secret",
+      DATABASE_URL: "postgresql://secret",
+    }, { platform: "win32", existsSync: () => false })).toEqual({
+      ProgramData: "C:\\ProgramData",
+    })
+  })
+
+  it("does not broaden ProgramData or adjacent secret keys onto non-Windows children", () => {
+    expect(createCodexChildEnvironment({
+      ProgramData: "/var/lib",
+      PROGRAMDATA_TOKEN: "secret",
+      DATABASE_URL: "postgresql://secret",
+    }, { platform: "linux", existsSync: () => false })).toEqual({})
   })
 
   it("does not duplicate a differently cased stable PowerShell path with a trailing slash", () => {
