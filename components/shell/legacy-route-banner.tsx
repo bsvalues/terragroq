@@ -13,11 +13,6 @@ const LEGACY_ROUTES: Record<string, LegacyEntry> = {
     message:
       "This page reports Hermes as inactive, but the Hermes runtime is live. It is stale doctrine, not current status.",
   },
-  "/projects": {
-    label: "Legacy / design reference",
-    message:
-      "These projects are hard-coded design placeholders, not live project data.",
-  },
   "/brain-council": {
     label: "Legacy / design reference",
     message:
