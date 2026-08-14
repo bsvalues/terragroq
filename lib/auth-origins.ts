@@ -212,10 +212,27 @@ function refererOriginFromHeader(value: string | null) {
   }
 }
 
+function trustedLoopbackProxyOrigin(req: Request) {
+  if (process.env.WILLIAMOS_TRUST_LOOPBACK_HTTPS_PROXY !== "1") return null
+  const requestUrl = new URL(req.url)
+  if (requestUrl.hostname !== "127.0.0.1" && requestUrl.hostname !== "[::1]") return null
+  if (req.headers.get("forwarded") !== null || req.headers.get("x-forwarded-for") !== null) return null
+  const host = req.headers.get("host")
+  const forwardedHost = req.headers.get("x-forwarded-host")
+  const forwardedPort = req.headers.get("x-forwarded-port")
+  if (!host || host !== forwardedHost || req.headers.get("x-forwarded-proto") !== "https") return null
+  const normalized = normalizeStrictOrigin(`https://${forwardedHost}`)
+  if (!normalized.origin) return null
+  const external = new URL(normalized.origin)
+  if (forwardedPort !== (external.port || "443")) return null
+  return normalized.origin
+}
+
 function currentOriginFromRequest(req: Request) {
   return (
     strictOriginFromHeader(req.headers.get("origin")) ??
     refererOriginFromHeader(req.headers.get("referer")) ??
+    trustedLoopbackProxyOrigin(req) ??
     new URL(req.url).origin
   )
 }
