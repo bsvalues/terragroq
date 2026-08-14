@@ -57,11 +57,13 @@ describe("HERMES HTTPS proxy boundary", () => {
       origin: HERMES_HTTPS_ORIGIN,
       [DEVICE_AUTH_HEADER]: "1",
     })
-    const request = new Request(`https://${headers.host}/api/device/session/challenge`, {
+    const request = new Request("https://127.0.0.1:3100/api/device/session/challenge", {
       method: "POST",
       headers: headers as HeadersInit,
     })
 
-    expect(validateDeviceMutationOrigin(request, [HERMES_HTTPS_ORIGIN])).toBe(HERMES_HTTPS_ORIGIN)
+    expect(validateDeviceMutationOrigin(request, [HERMES_HTTPS_ORIGIN], {
+      trustLoopbackHttpsProxy: true,
+    })).toBe(HERMES_HTTPS_ORIGIN)
   })
 })

@@ -5,7 +5,9 @@ import { resolveTrustedOriginConfig } from "@/lib/auth-origins"
 import { validateDeviceMutationOrigin } from "./contract"
 
 export function deviceRequestOrigin(request: Request) {
-  return validateDeviceMutationOrigin(request, resolveTrustedOriginConfig().trustedOrigins)
+  return validateDeviceMutationOrigin(request, resolveTrustedOriginConfig().trustedOrigins, {
+    trustLoopbackHttpsProxy: process.env.WILLIAMOS_TRUST_LOOPBACK_HTTPS_PROXY === "1",
+  })
 }
 
 export async function boundedJson<T extends z.ZodType>(request: Request, schema: T): Promise<z.infer<T>> {

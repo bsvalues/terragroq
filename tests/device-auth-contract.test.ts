@@ -46,6 +46,33 @@ describe("device authentication contract", () => {
     }
   })
 
+  it("accepts the configured HTTPS origin through only an exact loopback proxy boundary", () => {
+    const origin = "https://192.168.88.9:3443"
+    const headers = {
+      origin,
+      host: "192.168.88.9:3443",
+      "x-forwarded-host": "192.168.88.9:3443",
+      "x-forwarded-port": "3443",
+      "x-forwarded-proto": "https",
+      [DEVICE_AUTH_HEADER]: "1",
+    }
+    const proxied = new Request("https://127.0.0.1:3100/api/device/challenge", { method: "POST", headers })
+    expect(validateDeviceMutationOrigin(proxied, [origin], { trustLoopbackHttpsProxy: true })).toBe(origin)
+
+    for (const [url, changedHeaders] of [
+      ["https://192.168.88.9:3100/api/device/challenge", headers],
+      [proxied.url, { ...headers, forwarded: "for=attacker" }],
+      [proxied.url, { ...headers, "x-forwarded-host": "evil.example" }],
+      [proxied.url, { ...headers, "x-forwarded-proto": "http" }],
+    ] as const) {
+      expect(() => validateDeviceMutationOrigin(
+        new Request(url, { method: "POST", headers: changedHeaders }),
+        [origin],
+        { trustLoopbackHttpsProxy: true },
+      )).toThrow("DEVICE_ORIGIN_REJECTED")
+    }
+  })
+
   it("hashes opaque values and never returns the input", () => {
     const value = "opaque-secret-value"
     const digest = hashOpaqueValue(value)
