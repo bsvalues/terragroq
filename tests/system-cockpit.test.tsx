@@ -65,6 +65,7 @@ describe("System cockpit rendered truth contract", () => {
 
     expect(dependencies.getAuthReadiness).toHaveBeenCalledWith({ probeDatabase: true })
     expect(screen.getByRole("heading", { name: "System" })).toBeTruthy()
+    expect(screen.getByText(/System does not start, stop, repair, deploy, or grant authority to any runtime/)).toBeTruthy()
 
     const atlas = screen.getByRole("heading", { name: "ATLAS" }).closest("li")
     if (!atlas) throw new Error("ATLAS signal row was not rendered")
@@ -94,6 +95,28 @@ describe("System cockpit rendered truth contract", () => {
     expect(screen.getByText("Current state-database query succeeded.")).toBeTruthy()
     expect(screen.getByRole("heading", { name: "Unavailable" })).toBeTruthy()
     expect(screen.getByText(/Operator load is unavailable because the state read-model query did not succeed/)).toBeTruthy()
+    expect(screen.getByText("System is read-only. Configuration and persisted history never become live status.")).toBeTruthy()
+  })
+
+  it("renders ATLAS unknown when the current database probe does not succeed", async () => {
+    dependencies.getAuthReadiness.mockResolvedValue({
+      ...readiness,
+      ready: false,
+      databaseReady: false,
+      checks: {
+        ...readiness.checks,
+        databaseConnectivity: { ok: false },
+      },
+    })
+    dependencies.getOperatorState.mockRejectedValue(new Error("ATLAS unavailable"))
+
+    render(await SystemPage())
+
+    const atlas = screen.getByRole("heading", { name: "ATLAS" }).closest("li")
+    if (!atlas) throw new Error("ATLAS signal row was not rendered")
+    expect(atlas.textContent).toContain("unknown")
+    expect(atlas.textContent).toContain("No live observation")
+    expect(atlas.textContent).toContain("Current state-database query did not succeed")
     expect(screen.getByText("System is read-only. Configuration and persisted history never become live status.")).toBeTruthy()
   })
 })

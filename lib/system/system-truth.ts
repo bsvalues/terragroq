@@ -51,7 +51,9 @@ export function projectSystemTruth(evidence: readonly SystemEvidence[]): SystemT
         : item.succeeded
           ? "live"
           : "unknown",
-    observedAt: item.observedAt,
+    observedAt: item.evidenceKind === "current-query" && !item.succeeded
+      ? null
+      : item.observedAt,
     source: item.source,
     summary: item.summary,
   }))
