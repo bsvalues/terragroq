@@ -595,4 +595,13 @@ describe("WorkbenchShell rendered interaction contract", () => {
     expect(status.textContent).toContain("HERMES inferred")
     expect(status.textContent).not.toContain("HERMES live")
   })
+
+  it("renders AEGIS from shared configured-role truth without claiming liveness", () => {
+    renderShell()
+    const status = screen.getByLabelText("System status")
+    expect(status.textContent).toContain("AEGIS inferred")
+    expect(status.textContent).not.toContain("AEGIS unknown")
+    expect(status.textContent).not.toContain("AEGIS live")
+    expect(screen.getByTitle("Configured as a worker node. Configuration describes role, not current liveness.")).toBeTruthy()
+  })
 })

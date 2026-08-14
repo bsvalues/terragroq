@@ -27,6 +27,7 @@ import { OutcomeExecutionControl } from "@/components/workbench/outcome-executio
 import type { AuthReadiness } from "@/lib/auth-readiness"
 import type { RuntimeStatus } from "@/lib/ai/runtime"
 import type { ProjectView } from "@/lib/operator/operator-state"
+import { projectConfiguredSystemRoleTruth } from "@/lib/system/system-truth"
 import type { Thread, ThreadItem } from "@/lib/workbench/thread-projection"
 import type { WorkbenchExecutionProjection } from "@/lib/workbench/execution-projection"
 import {
@@ -61,6 +62,7 @@ const inspectorTabs: ReadonlyArray<{ id: WorkbenchInspectorTab; label: string }>
 ]
 
 const WORKBENCH_RESTORATION_KEY = "williamos.workbench.layout.v1"
+const configuredAegisTruth = projectConfiguredSystemRoleTruth("AEGIS")
 
 function restorationKey(userId: string): string {
   return `${WORKBENCH_RESTORATION_KEY}:${userId}`
@@ -666,7 +668,7 @@ export function WorkbenchShell({
         <footer aria-label="System status" className="flex h-7 shrink-0 items-center gap-4 overflow-x-auto border-t border-[var(--workbench-hairline)] bg-[var(--workbench-canvas)] px-3 font-mono text-[9px] uppercase tracking-wider text-[var(--workbench-muted)]">
           <span title="Configured application host role; this is not a liveness probe"><b>HERMES</b> inferred</span>
           <span><b className={readiness.databaseReady ? "text-[var(--workbench-live)]" : "text-[var(--workbench-fault)]"}>ATLAS</b> {readiness.databaseReady ? "live" : "offline"}</span>
-          <span><b>AEGIS</b> unknown</span>
+          <span title={configuredAegisTruth.summary}><b>AEGIS</b> {configuredAegisTruth.truthState}</span>
           <span><b className={pulse.needsYou !== null && pulse.needsYou > 0 ? "text-[var(--workbench-warning)]" : "text-[var(--workbench-muted)]"}>Needs you</b> {pulse.needsYou ?? "unknown"}</span>
           <span><b>Working</b> {pulse.working ?? "unknown"}{pulse.queueDepth !== null && pulse.working !== null && pulse.queueDepth > pulse.working ? ` · queued ${pulse.queueDepth}` : ""}</span>
           <span className="ml-auto hidden normal-case tracking-normal md:inline">model configured: {runtime.chatModel} · observed {observedAt.slice(11, 19)} UTC</span>
