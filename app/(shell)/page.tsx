@@ -1,8 +1,17 @@
-import { getPrimaryHomeReadModel } from "@/app/(shell)/primary-home-query"
-import { PrimaryHome } from "@/components/primary-home/primary-home"
+import { getOperatorState } from "@/lib/operator/operator-state"
+import { OperatorHome } from "@/components/home/operator-home"
+import { PageHeader } from "@/components/shell/page-header"
 
-export default async function PrimaryHomePage() {
-  const home = await getPrimaryHomeReadModel()
+export default async function HomePage() {
+  const state = await getOperatorState()
 
-  return <PrimaryHome model={home.model} decisionRequest={home.decisionRequest} />
+  return (
+    <>
+      <PageHeader
+        title="Home"
+        description="Your operator briefing, projected from live system state — what is running, what was delivered, what needs you."
+      />
+      <OperatorHome state={state} />
+    </>
+  )
 }
