@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { ArrowRight, CornerDownLeft, Loader2, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -40,27 +40,46 @@ export function UniversalIntent() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
+  // Monotonic request token. Bumped whenever the surface resets, so a late
+  // /api/intent response can never populate a stale result after close.
+  const requestRef = useRef(0)
+  const openRef = useRef(open)
+  openRef.current = open
+
+  const reset = useCallback(() => {
+    requestRef.current += 1
+    setInput("")
+    setResult(null)
+    setError(null)
+    setLoading(false)
+  }, [])
+
+  // Single reset-aware close path — every way of dismissing the surface
+  // (Escape, overlay, ⌘K, a Link click) flows through here.
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      setOpen(next)
+      if (!next) reset()
+    },
+    [reset],
+  )
+
   // ⌘K / Ctrl-K toggles the command surface from anywhere — always available.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault()
-        setOpen((previous) => !previous)
+        handleOpenChange(!openRef.current)
       }
     }
     document.addEventListener("keydown", onKey)
     return () => document.removeEventListener("keydown", onKey)
-  }, [])
-
-  function reset() {
-    setInput("")
-    setResult(null)
-    setError(null)
-  }
+  }, [handleOpenChange])
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
     if (!input.trim() || loading) return
+    const token = (requestRef.current += 1)
     setLoading(true)
     setError(null)
     setResult(null)
@@ -70,12 +89,14 @@ export function UniversalIntent() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ intent: input }),
       })
+      if (requestRef.current !== token) return
       if (!response.ok) throw new Error("WilliamOS could not classify that intent.")
       setResult((await response.json()) as UniversalIntentRoute)
     } catch (caught) {
+      if (requestRef.current !== token) return
       setError(caught instanceof Error ? caught.message : "Intent routing failed.")
     } finally {
-      setLoading(false)
+      if (requestRef.current === token) setLoading(false)
     }
   }
 
@@ -83,15 +104,14 @@ export function UniversalIntent() {
   const showSuggestions = !result && !error && !loading
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next)
-        if (!next) reset()
-      }}
-    >
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-2" aria-label="Open universal intent (Command K)">
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-2"
+          aria-label="Open universal intent (Command K or Control K)"
+        >
           <Search className="h-4 w-4" aria-hidden={true} />
           <span className="hidden sm:inline">Intent</span>
           <kbd className="ml-1 hidden rounded border border-border bg-muted px-1.5 font-mono text-[10px] text-muted-foreground sm:inline">
@@ -135,7 +155,7 @@ export function UniversalIntent() {
                   <Link
                     key={item.href}
                     href={item.href}
-                    onClick={() => setOpen(false)}
+                    onClick={() => handleOpenChange(false)}
                     className="rounded-md border border-border bg-muted/30 px-2.5 py-1 text-sm transition-colors hover:bg-muted"
                   >
                     {item.label}
@@ -186,7 +206,7 @@ export function UniversalIntent() {
                     if (result.intent !== "navigation") {
                       storeIntentHandoff(result.destination!.href, input)
                     }
-                    setOpen(false)
+                    handleOpenChange(false)
                   }}
                 >
                   Open governed destination <ArrowRight className="ml-2 h-3.5 w-3.5" />
@@ -198,7 +218,7 @@ export function UniversalIntent() {
 
         <p className="flex items-center gap-1.5 border-t border-border pt-3 text-xs text-muted-foreground">
           <CornerDownLeft className="h-3 w-3" aria-hidden={true} />
-          Enter routes · ⌘K toggles · routing is deterministic and never executes
+          Enter routes · ⌘K / Ctrl-K toggles · routing is deterministic and never executes
         </p>
       </DialogContent>
     </Dialog>
