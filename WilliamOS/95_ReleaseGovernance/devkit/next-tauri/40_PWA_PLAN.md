@@ -1,5 +1,11 @@
 # 40 — PWA Plan
 
+> **Historical PWA plan note.** Installability, cache, and security observations
+> below remain planning evidence, but the PWA shell recommendation and sequence
+> are superseded by
+> [`docs/governance/williamos-workbench-ux-contract.md`](../../../../docs/governance/williamos-workbench-ux-contract.md).
+> No shell is selected until the bounded feasibility spike.
+
 **Work Order:** WO-WILLIAMOS-NEXT-TAURI-ARCH-001
 **Lane:** D — PWA scaffold (plan only)
 **Status:** DRAFT — documentation only

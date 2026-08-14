@@ -1,5 +1,10 @@
 # 30 — Next.js Scaffold Plan
 
+> **Historical shell-plan note.** The Vite/Next dual-shell and switchover
+> assumptions below are superseded by
+> [`docs/governance/williamos-workbench-ux-contract.md`](../../../../docs/governance/williamos-workbench-ux-contract.md).
+> This is planning evidence, not current shell authority.
+
 **Work Order:** WO-WILLIAMOS-NEXT-TAURI-ARCH-001
 **Lane:** C — Next.js scaffold (plan only)
 **Status:** DRAFT — documentation only

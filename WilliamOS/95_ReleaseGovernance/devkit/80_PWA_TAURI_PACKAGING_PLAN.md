@@ -10,6 +10,11 @@ tags:
   - packaging
 ---
 
+> **Historical only.** The localhost/Vite, PWA-first, tray-control, file-drop,
+> and Tauri sequencing assumptions below are superseded by
+> [`docs/governance/williamos-workbench-ux-contract.md`](../../../docs/governance/williamos-workbench-ux-contract.md).
+> No desktop shell is selected until the contract's bounded feasibility spike.
+
 # PWA / Tauri Packaging Plan
 
 ## Recommended Architecture

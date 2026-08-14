@@ -1,5 +1,11 @@
 # 00 — Current Surface Inventory
 
+> **Historical inventory note.** The observed files, routes, and safety facts
+> below remain useful baseline evidence, but the destination-page interpretation
+> and shell assumptions are superseded by
+> [`docs/governance/williamos-workbench-ux-contract.md`](../../../../docs/governance/williamos-workbench-ux-contract.md).
+> This file is not the current product interaction model.
+
 **Work Order:** WO-WILLIAMOS-NEXT-TAURI-ARCH-001
 **Lane:** A — Architecture docs only
 **Status:** DRAFT

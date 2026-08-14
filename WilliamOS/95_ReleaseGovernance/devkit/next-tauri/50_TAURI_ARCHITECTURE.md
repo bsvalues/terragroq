@@ -1,5 +1,11 @@
 # 50 — Tauri Architecture
 
+> **Historical Tauri architecture note.** Local app/server supervision, tray
+> control, file-drop, deep-link, and related native capability assumptions below
+> are superseded by
+> [`docs/governance/williamos-workbench-ux-contract.md`](../../../../docs/governance/williamos-workbench-ux-contract.md).
+> No desktop shell is selected until the bounded feasibility spike.
+
 **Work Order:** WO-WILLIAMOS-NEXT-TAURI-ARCH-001
 **Lane:** E — Tauri architecture (plan only)
 **Status:** DRAFT

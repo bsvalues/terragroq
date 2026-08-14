@@ -1,5 +1,10 @@
 # 20 — Next.js Migration Map
 
+> **Historical migration-map note.** Route and data-source inventory below may
+> be reused, but page-parity and forward migration assumptions are superseded by
+> [`docs/governance/williamos-workbench-ux-contract.md`](../../../../docs/governance/williamos-workbench-ux-contract.md).
+> It does not authorize destination-page implementation or select a shell.
+
 **Work Order:** WO-WILLIAMOS-NEXT-TAURI-ARCH-001
 **Lane:** G — Migration map
 **Status:** DRAFT
