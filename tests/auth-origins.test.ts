@@ -121,7 +121,7 @@ describe("auth trusted origin resolution", () => {
     expect(diagnostics.isCurrentOriginTrusted).toBe(true)
     expect(getOriginDiagnostics(new Request(
       "https://localhost:3100/api/auth/origin-diagnostics",
-      { headers },
+      { headers: { ...headers, "x-forwarded-for": "127.0.0.1" } },
     )).isCurrentOriginTrusted).toBe(true)
 
     for (const [url, changedHeaders] of [
