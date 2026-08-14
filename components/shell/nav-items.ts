@@ -54,6 +54,13 @@ export const navItems: NavItem[] = [
     description: "Primary Operator briefing.",
   },
   {
+    href: "/activity",
+    label: "Activity",
+    icon: Activity,
+    group: "Home",
+    description: "What agents have done.",
+  },
+  {
     href: "/work-orders",
     label: "Work Orders",
     icon: ClipboardList,
