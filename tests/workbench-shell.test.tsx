@@ -27,7 +27,14 @@ vi.mock("next/link", () => ({
 vi.mock("@/app/actions/workbench-threads", () => ({ getWorkbenchThreads: actions.getWorkbenchThreads }))
 vi.mock("@/app/actions/workbench-execution", () => ({ getWorkbenchExecution: executionActions.getWorkbenchExecution }))
 vi.mock("@/components/intent/universal-intent", () => ({
-  UniversalIntent: () => <button type="button">Ask or do anything</button>,
+  UniversalIntent: ({ selectedProject, onOpenThread }: {
+    selectedProject: { id: number; name: string } | null
+    onOpenThread: (target: { projectId: number; threadId: string }) => void
+  }) => <div>
+    <button type="button">Ask or do anything</button>
+    <span>Composer Project {selectedProject?.id ?? "none"}</span>
+    <button type="button" onClick={() => onOpenThread({ projectId: 7, threadId: "thread-outcome" })}>Open accepted Thread</button>
+  </div>,
 }))
 vi.mock("@/components/shell/user-menu", () => ({
   UserMenu: () => <button type="button">Owner menu</button>,
@@ -77,6 +84,13 @@ const thread: Thread = {
       drilldown: { mode: "EXACT", href: "/goal-console?goal=41#goal-delivery-timeline" },
     },
   }],
+}
+
+const outcomeThread: Thread = {
+  ...thread,
+  id: "thread-outcome",
+  title: "Accepted owner outcome",
+  items: [],
 }
 
 const readiness = {
@@ -409,6 +423,22 @@ describe("WorkbenchShell rendered interaction contract", () => {
     await user.click(screen.getByRole("button", { name: /^Execution$/ }))
 
     expect(await screen.findByText("Selected execution proof")).toBeTruthy()
+  })
+
+  it("passes explicit Project context and opens an accepted Thread only from the explicit action", async () => {
+    const user = userEvent.setup()
+    renderShell()
+
+    expect(screen.getByText("Composer Project none")).toBeTruthy()
+    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    await waitFor(() => expect(screen.getByText("Composer Project 7")).toBeTruthy())
+    actions.getWorkbenchThreads.mockResolvedValue([outcomeThread])
+
+    await user.click(screen.getByRole("button", { name: "Open accepted Thread" }))
+
+    await waitFor(() => expect(screen.getByRole("option", { name: /Accepted owner outcome/ }).getAttribute("aria-selected")).toBe("true"))
+    expect(screen.getByRole("heading", { name: "Accepted owner outcome" })).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByRole("main"))
   })
 
   it("renders an execution read error without changing the selected Thread", async () => {

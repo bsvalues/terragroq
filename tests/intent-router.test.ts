@@ -7,7 +7,10 @@ describe("universal intent router", () => {
     ["Explain why the activity feed is empty", "answer", "/chat", "respond"],
     ["Research authenticated desktop access", "research", "/brain-council", "research"],
     ["Ask the council to compare these two architectures", "council", "/brain-council", "council_review"],
-    ["Draft an outcome for device enrollment", "outcome", "/goal-console", "draft_outcome"],
+    ["Draft an outcome for device enrollment", "outcome", null, "start_outcome"],
+    ["Build a useful release dashboard", "outcome", null, "start_outcome"],
+    ["Fix the broken Project selector", "outcome", null, "start_outcome"],
+    ["Do improve the owner handoff", "outcome", null, "start_outcome"],
   ] as const)("routes %s to the %s contract", (input, intent, href, action) => {
     expect(routeUniversalIntent(input)).toMatchObject({
       state: "routed",
@@ -23,6 +26,9 @@ describe("universal intent router", () => {
     ["Show Brain Council", "/brain-council"],
     ["Go to Goal Console", "/goal-console"],
     ["Visit Work Orders", "/work-orders"],
+    ["Open Evidence", "/audit"],
+    ["Open Knowledge", "/memory"],
+    ["Open Raw Runtime", "/runtime?detail=technical"],
   ] as const)("routes known cockpit navigation %s", (input, href) => {
     expect(routeUniversalIntent(input)).toMatchObject({
       state: "routed",
@@ -49,7 +55,6 @@ describe("universal intent router", () => {
     "Research the rollout and deploy it",
     "Open Projects and restart the runtime",
     "Navigate to Mars",
-    "Do something useful",
     "   ",
   ])("fails closed when the request is ambiguous: %j", (input) => {
     const result = routeUniversalIntent(input)

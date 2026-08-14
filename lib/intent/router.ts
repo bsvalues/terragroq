@@ -1,3 +1,5 @@
+import { matchWorkbenchNavigationTarget } from "@/lib/intent/workbench-action-registry"
+
 export type UniversalIntent =
   | "answer"
   | "research"
@@ -9,8 +11,8 @@ export type UniversalIntent =
 export type IntentRouteState = "routed" | "authority_required" | "clarification_required"
 
 export type IntentDestination = {
-  href: string
-  action: "respond" | "research" | "council_review" | "draft_outcome" | "request_execution" | "navigate"
+  href: string | null
+  action: "respond" | "research" | "council_review" | "start_outcome" | "request_execution" | "navigate"
 }
 
 export type UniversalIntentRoute = {
@@ -29,7 +31,13 @@ const SIGNALS: Readonly<Record<Exclude<UniversalIntent, "navigation">, readonly 
   answer: [/\banswer\b/i, /\bexplain\b/i, /\bsummar(?:ize|ise)\b/i, /\bwhat\b/i, /\bwhy\b/i, /\bhow\b/i],
   research: [/\bresearch\b/i, /\binvestigate\b/i, /\bfind out\b/i, /\bstudy\b/i],
   council: [/\bcouncil\b/i, /\bdeliberat(?:e|ion)\b/i, /\bmultiple perspectives\b/i],
-  outcome: [/\boutcome\b/i, /\bgoal\b/i, /\bobjective\b/i],
+  outcome: [
+    /\boutcome\b/i,
+    /\bgoal\b/i,
+    /\bobjective\b/i,
+    /\b(?:build|fix|create|make|ship|deliver|implement)\b/i,
+    /^\s*do\b/i,
+  ],
   execution: [
     /\bexecute\b/i,
     /\brun\b/i,
@@ -46,31 +54,14 @@ const DESTINATIONS: Readonly<Record<Exclude<UniversalIntent, "navigation">, Inte
   answer: { href: "/chat", action: "respond" },
   research: { href: "/brain-council", action: "research" },
   council: { href: "/brain-council", action: "council_review" },
-  outcome: { href: "/goal-console", action: "draft_outcome" },
+  outcome: { href: null, action: "start_outcome" },
   execution: { href: "/work-orders", action: "request_execution" },
-}
-
-const NAVIGATION_TARGETS: Readonly<Record<string, string>> = {
-  home: "/",
-  projects: "/projects",
-  activity: "/activity",
-  system: "/system",
-  runtime: "/runtime",
-  chat: "/chat",
-  "work orders": "/work-orders",
-  "goal console": "/goal-console",
-  "brain council": "/brain-council",
 }
 
 function navigationDestination(input: string): IntentDestination | null {
   if (!hasNavigationSignal(input)) return null
-
-  const targets = Object.entries(NAVIGATION_TARGETS).filter(([label]) =>
-    new RegExp(`\\b${label.replace(" ", "\\s+")}\\b`, "i").test(input),
-  )
-
-  if (targets.length !== 1) return null
-  return { href: targets[0][1], action: "navigate" }
+  const target = matchWorkbenchNavigationTarget(input)
+  return target ? { href: target.action.href, action: "navigate" } : null
 }
 
 function hasNavigationSignal(input: string): boolean {
@@ -78,15 +69,9 @@ function hasNavigationSignal(input: string): boolean {
 }
 
 function withoutKnownNavigationPhrase(input: string): string {
-  const labels = Object.keys(NAVIGATION_TARGETS)
-    .sort((left, right) => right.length - left.length)
-    .map((label) => label.replace(" ", "\\s+"))
-    .join("|")
-
-  return input.replace(
-    new RegExp(`\\b(?:open|show|visit|navigate\\s+to|go\\s+to)\\s+(?:${labels})\\b`, "i"),
-    "",
-  )
+  const target = matchWorkbenchNavigationTarget(input)
+  if (!target) return input
+  return input.replace(new RegExp(`\\b(?:open|show|visit|navigate\\s+to|go\\s+to)\\s+${target.phrase.replaceAll(" ", "\\s+")}\\b`, "i"), "")
 }
 
 function clarification(reason: string): UniversalIntentRoute {

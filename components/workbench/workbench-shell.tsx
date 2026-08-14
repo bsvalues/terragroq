@@ -565,7 +565,10 @@ export function WorkbenchShell({
         <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--workbench-hairline)] bg-[var(--workbench-panel)] px-3 md:px-4">
           <span className="font-mono text-xs font-semibold sm:hidden">W</span>
           <div className="min-w-0 flex-1 truncate text-sm"><span className="text-[var(--workbench-muted)]">{selectedProject?.name ?? "WilliamOS"}</span>{selectedThread ? <span> / {selectedThread.title}</span> : null}</div>
-          <UniversalIntent />
+          <UniversalIntent
+            selectedProject={selectedProject ? { id: selectedProject.id, name: selectedProject.name } : null}
+            onOpenThread={focusThread}
+          />
           <UserMenu name={user.name} email={user.email} />
         </header>
 
