@@ -84,7 +84,6 @@ function AttemptBadge({ attempts, abandoned }: { attempts: number; abandoned: nu
 export function OperatorHome({ state }: { state: OperatorState }) {
   const activeCount = state.now.value.activeExecutions
   const idle = state.now.value.queueDepth === 0 && activeCount === 0
-  const nothingNeedsYou = state.needsWilliam.value.length === 0
   const delivered = deliveredRows(state.executions.value)
   const closedWorkOrders = state.work.value.filter((w) => w.status === "closed").length
 
@@ -97,11 +96,7 @@ export function OperatorHome({ state }: { state: OperatorState }) {
           {idle ? "idle · queue 0" : `active · queue ${state.now.value.queueDepth}`}
         </Badge>
         <span className="text-sm text-muted-foreground">
-          {idle
-            ? nothingNeedsYou
-              ? "Nothing is executing. Nothing needs you."
-              : "Nothing is executing."
-            : "An outcome is in flight."}
+          {idle ? "Nothing is executing." : "An outcome is in flight."}
         </span>
       </div>
 
@@ -226,7 +221,7 @@ export function OperatorHome({ state }: { state: OperatorState }) {
       </Section>
 
       {/* SYSTEM */}
-      <Section title="System" meta="live node truth">
+      <Section title="System" meta={`${state.systems.value.length} nodes · ${state.systems.truthState}`}>
         <div className="grid gap-3 sm:grid-cols-3">
           {state.systems.value.map((s) => {
             const up = s.status === "healthy" || s.status === "available"
@@ -255,8 +250,7 @@ export function OperatorHome({ state }: { state: OperatorState }) {
       {/* provenance */}
       <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
         projected from getOperatorState() · {state.installation} · observed{" "}
-        {new Date(state.now.observedAt).toISOString().slice(0, 19).replace("T", " ")} · truthState {state.now.truthState}{" "}
-        · 0 static claims
+        {new Date(state.now.observedAt).toISOString().slice(0, 19).replace("T", " ")} · truthState {state.now.truthState}
       </p>
     </div>
   )

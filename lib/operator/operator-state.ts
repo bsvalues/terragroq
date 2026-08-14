@@ -32,7 +32,7 @@ import { getUserId } from "@/lib/session"
 const INSTALLATION = "WILLIAMOS_PRIMARY"
 const nowIso = () => new Date().toISOString()
 
-export type TruthState = "live" | "idle-empty" | "legacy-unresolved" | "modelled" | "degraded"
+export type TruthState = "live" | "idle-empty" | "legacy-unresolved" | "modelled" | "inferred" | "degraded"
 
 export interface TruthEnvelope<T> {
   value: T
@@ -321,14 +321,15 @@ export async function getOperatorState(): Promise<OperatorState> {
 
   // --- systems: derived from live signals available in-process (no external probes) ---
   const aegisRecentlyActive = govRows.some((e) => (e.metadata.actor as string) === "hermes-codex-bridge")
+  // ATLAS status is grounded (this query returned); HERMES/AEGIS are inferred, not live-probed here.
   const systems: NodeHealth[] = [
-    { node: "ATLAS", role: "state/database", status: "healthy", detail: "read-model query returned" },
-    { node: "HERMES", role: "coordinator", status: "healthy", detail: "runtime host" },
+    { node: "ATLAS", role: "state/database", status: "healthy", detail: "live — read-model query returned" },
+    { node: "HERMES", role: "coordinator", status: "healthy", detail: "inferred — resident runtime host" },
     {
       node: "AEGIS",
       role: "worker",
       status: aegisRecentlyActive ? "available" : "unreachable",
-      detail: aegisRecentlyActive ? "recent delivery activity" : "no recent activity",
+      detail: aegisRecentlyActive ? "inferred — recent delivery activity" : "inferred — no recent activity",
     },
   ]
 
@@ -343,9 +344,9 @@ export async function getOperatorState(): Promise<OperatorState> {
     work: envelope(work, "work_order (all statuses)", "live"),
     executions: envelope(executions, "governance_event (lease lifecycle + completion) + receipts", "live"),
     recentActivity: envelope(recent, "governance_event", recent.length ? "live" : "idle-empty"),
-    needsWilliam: envelope([], "no non-terminal owner-decision blockers", "idle-empty"),
+    needsWilliam: envelope([], "owner-decision blockers not yet projected (information-model P1)", "modelled"),
     governance: envelope({ foundingADRs }, "decision (scope projection)", "live"),
     knowledge: envelope(knowledge, "memory_fact/document/evidence_record/governance_event", knowledge.evidence ? "live" : "idle-empty"),
-    systems: envelope(systems, "in-process live signals", "live"),
+    systems: envelope(systems, "in-process signals — ATLAS live, HERMES/AEGIS inferred", "inferred"),
   }
 }
