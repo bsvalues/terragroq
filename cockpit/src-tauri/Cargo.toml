@@ -1,6 +1,6 @@
 [package]
 name = "williamos-cockpit"
-version = "0.1.6"
+version = "0.1.7"
 description = "Thin authenticated desktop cockpit for WilliamOS"
 authors = ["WilliamOS"]
 edition = "2024"

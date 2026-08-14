@@ -1,13 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "WilliamOS Cockpit",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "identifier": "com.williamos.cockpit",
   "build": {
     "frontendDist": "../ui"
   },
   "app": {
     "windows": [],
+    "withGlobalTauri": true,
     "security": {
       "capabilities": ["remote-cockpit"],
       "csp": "default-src 'none'; style-src 'self'; navigate-to https://192.168.88.9:3443"
