@@ -14,8 +14,8 @@ describe("Primary Home product contract", () => {
     const page = source("app/(shell)/page.tsx")
     const query = source("app/(shell)/primary-home-query.ts")
 
-    expect(page).toContain("getPrimaryHomeReadModel")
-    expect(page).toContain("<PrimaryHome")
+    expect(page).toContain("getOperatorState")
+    expect(page).toContain("<OperatorHome")
     expect(page).not.toContain("getDashboardData")
     expect(page).not.toContain("HomeWorkRadarPanel")
     expect(page).not.toContain("WilliamOS Command Center")
@@ -80,17 +80,19 @@ describe("Primary Home product contract", () => {
     expect(decision).not.toContain("Approve recommendation")
   })
 
-  it("uses compact Home chrome without changing navigation destinations", () => {
+  it("uses compact Home chrome with the four primary cockpit destinations", () => {
     const shell = source("components/shell/app-shell.tsx")
     const frame = source("components/shell/app-shell-frame.tsx")
 
     expect(shell).toContain("AppShellFrame")
     expect(frame).toContain('const compactHome = pathname === "/"')
     expect(frame).toContain("HOME_RAIL_DESTINATIONS")
-    expect(frame).toContain('"/work-orders"')
     expect(frame).toContain('"/projects"')
-    expect(frame).toContain('"/audit"')
+    expect(frame).toContain('"/activity"')
     expect(frame).toContain('"/runtime"')
+    expect(frame).not.toContain('"/work-orders"')
+    expect(frame).not.toContain('"/audit"')
+    expect(frame).toContain("<UniversalIntent />")
     expect(frame).toContain("<SidebarNav />")
   })
 })

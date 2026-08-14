@@ -7,6 +7,7 @@ import { WoeDetailSurfacePanel } from "@/components/work-orders/woe-detail-surfa
 import { WorkOrdersView } from "@/components/work-orders/work-orders-view"
 import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
 import { OperatorOutcomeQueuePanel } from "@/components/outcome-queue/operator-outcome-queue-panel"
+import { RoutedIntentContext } from "@/components/intent/routed-intent-context"
 
 export default async function WorkOrdersPage() {
   const [orders, outcomeQueue] = await Promise.all([
@@ -20,6 +21,7 @@ export default async function WorkOrdersPage() {
         description="See what is moving, what explicitly failed, and the next governed action Hermes is expected to take from recorded Work Order state."
       />
       <div className="flex flex-col gap-6 p-6">
+        <RoutedIntentContext destination="/work-orders" />
         <OperatorOutcomeQueuePanel surface={outcomeQueue} compact />
         <ActiveWorkQueuePanel orders={orders} />
         <WorkOrdersCommandPanel orders={orders} />

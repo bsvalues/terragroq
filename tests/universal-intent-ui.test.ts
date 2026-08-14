@@ -1,0 +1,26 @@
+import { readFileSync } from "node:fs"
+import { describe, expect, it } from "vitest"
+
+const component = readFileSync("components/intent/universal-intent.tsx", "utf8")
+const shell = readFileSync("components/shell/app-shell-frame.tsx", "utf8")
+
+describe("global universal intent affordance", () => {
+  it("is present in both compact Home and normal cockpit headers", () => {
+    expect(shell.match(/<UniversalIntent \/>/g)).toHaveLength(2)
+  })
+
+  it("routes through the authenticated deterministic endpoint", () => {
+    expect(component).toContain('fetch("/api/intent"')
+    expect(component).toContain('body: JSON.stringify({ intent: input })')
+    expect(component).toContain("result.destination")
+    expect(component).toContain("storeIntentHandoff")
+    expect(component).not.toContain("?intent=")
+  })
+
+  it("makes authority and clarification states visible without auto-execution", () => {
+    expect(component).toContain('result.state === "authority_required"')
+    expect(component).toContain('result.state === "clarification_required"')
+    expect(component).toContain("Execution remains gated")
+    expect(component).not.toContain("router.push")
+  })
+})

@@ -1,7 +1,6 @@
 import { OperatorChatNativeAreaPanel } from "@/components/chat/operator-chat-native-area-panel"
 import { OperatorChat } from "@/components/chat/operator-chat"
 import { PageHeader } from "@/components/shell/page-header"
-
 export default function ChatPage() {
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">

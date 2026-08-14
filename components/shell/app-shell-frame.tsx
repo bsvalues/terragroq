@@ -8,12 +8,12 @@ import { navItems } from "./nav-items"
 import { SidebarNav } from "./sidebar-nav"
 import { UserMenu } from "./user-menu"
 import { cn } from "@/lib/utils"
+import { UniversalIntent } from "@/components/intent/universal-intent"
 
 const HOME_RAIL_DESTINATIONS: ReadonlySet<string> = new Set([
   "/",
-  "/work-orders",
   "/projects",
-  "/audit",
+  "/activity",
   "/runtime",
 ])
 
@@ -73,7 +73,10 @@ export function AppShellFrame({
               </Link>
               <span className="hidden text-sm font-semibold lg:inline">WilliamOS</span>
             </div>
-            <UserMenu name={user.name} email={user.email} />
+            <div className="flex items-center gap-2">
+              <UniversalIntent />
+              <UserMenu name={user.name} email={user.email} />
+            </div>
           </header>
           <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
         </div>
@@ -98,10 +101,10 @@ export function AppShellFrame({
         </div>
         <div className="border-t border-sidebar-border px-4 py-3 font-mono text-[10px] text-muted-foreground">
           <div className="flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-success" />
-            gateway online
+            <span className="size-1.5 rounded-full bg-muted-foreground" />
+            gateway liveness unknown
           </div>
-          <div className="mt-1 truncate">model: {modelName}</div>
+          <div className="mt-1 truncate">configured model: {modelName}</div>
         </div>
       </aside>
 
@@ -111,7 +114,10 @@ export function AppShellFrame({
             <MobileNav />
             <span className="font-mono text-sm lg:hidden">WilliamOS Primary Shell</span>
           </div>
-          <UserMenu name={user.name} email={user.email} />
+          <div className="flex items-center gap-2">
+            <UniversalIntent />
+            <UserMenu name={user.name} email={user.email} />
+          </div>
         </header>
         {healthStrip}
         <main className="flex-1 overflow-y-auto">{children}</main>
