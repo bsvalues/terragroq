@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation"
 import { getSession } from "@/lib/session"
 import { AppShell } from "@/components/shell/app-shell"
+import { LegacyRouteBanner } from "@/components/shell/legacy-route-banner"
 
 export default async function ShellLayout({
   children,
@@ -12,6 +13,7 @@ export default async function ShellLayout({
 
   return (
     <AppShell user={{ name: session.user.name, email: session.user.email }}>
+      <LegacyRouteBanner />
       {children}
     </AppShell>
   )
