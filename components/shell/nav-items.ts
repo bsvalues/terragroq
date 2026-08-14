@@ -54,7 +54,7 @@ export const navItems: NavItem[] = [
     description: "Persisted agent activity.",
   },
   {
-    href: "/runtime",
+    href: "/system",
     label: "System",
     icon: Cpu,
     group: "Cockpit",

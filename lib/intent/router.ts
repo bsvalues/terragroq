@@ -54,7 +54,7 @@ const NAVIGATION_TARGETS: Readonly<Record<string, string>> = {
   home: "/",
   projects: "/projects",
   activity: "/activity",
-  system: "/runtime",
+  system: "/system",
   runtime: "/runtime",
   chat: "/chat",
   "work orders": "/work-orders",
