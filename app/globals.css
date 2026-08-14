@@ -51,6 +51,16 @@
 
 /* WilliamOS Operator Shell — mission-control dark theme */
 :root {
+  --workbench-canvas: #111619;
+  --workbench-panel: #171d20;
+  --workbench-raised: #1c2426;
+  --workbench-hairline: #303a3b;
+  --workbench-text: #e7ece8;
+  --workbench-muted: #929e99;
+  --workbench-copper: #c58b57;
+  --workbench-live: #79aa98;
+  --workbench-warning: #d2a75c;
+  --workbench-fault: #c97668;
   --background: oklch(0.16 0.012 240);
   --foreground: oklch(0.95 0.005 240);
   --card: oklch(0.2 0.014 240);
@@ -96,5 +106,29 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  .workbench-scroll {
+    scrollbar-color: var(--workbench-hairline) transparent;
+    scrollbar-width: thin;
+  }
+
+  .workbench-focus {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2;
+    --tw-ring-color: var(--workbench-copper);
+    --tw-ring-offset-color: var(--workbench-canvas);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

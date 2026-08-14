@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { NAV_GROUP_IDS, navGroups, navItems } from "@/components/shell/nav-items"
+import { supportingCapabilities } from "@/components/workbench/supporting-capabilities"
 
 describe("four-primary cockpit navigation", () => {
   it("exposes exactly HOME, PROJECTS, ACTIVITY, and SYSTEM in the normal shell", () => {
@@ -18,12 +19,12 @@ describe("four-primary cockpit navigation", () => {
     expect(navItems.every((item) => item.group === "Cockpit")).toBe(true)
   })
 
-  it("uses the same four destinations in the compact Home rail", () => {
-    const frame = readFileSync("components/shell/app-shell-frame.tsx", "utf8")
-    const rail = frame.slice(frame.indexOf("const HOME_RAIL_DESTINATIONS"), frame.indexOf("]\n\nexport function AppShellFrame"))
-    for (const href of ['"/"', '"/projects"', '"/activity"', '"/system"']) expect(rail).toContain(href)
-    expect(rail).not.toContain('"/work-orders"')
-    expect(rail).not.toContain('"/audit"')
+  it("keeps raw Runtime available as contextual technical detail", () => {
+    expect(supportingCapabilities).toContainEqual({
+      label: "Raw Runtime",
+      href: "/runtime?detail=technical",
+      lens: "technical",
+    })
   })
 
   it("keeps supporting routes out of primary navigation without deleting them", () => {

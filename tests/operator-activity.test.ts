@@ -111,7 +111,82 @@ describe("operator activity truth", () => {
     expect(feed.items[0]).toMatchObject({
       ref: "goal:GOAL-0762",
       detail: "goal:GOAL-0762 · classified from owner intent",
+      threadId: null,
+      projectId: null,
     })
+  })
+
+  it("projects an owning Thread only from one explicit tenant-scoped source binding", async () => {
+    boundary.execute
+      .mockResolvedValueOnce({ rows: [{ n: 0, latestEventAt: "2026-08-14T05:20:00.000Z" }] })
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 44,
+          ref: "GEV-0044",
+          eventType: "GOAL_CREATED",
+          entityType: "goal",
+          entityId: "41",
+          actor: "primary",
+          reason: null,
+          metadata: {},
+          createdAt: "2026-08-14T05:20:00.000Z",
+          threadId: "thread-41",
+          projectId: 7,
+        }],
+      })
+
+    const feed = await getActivity()
+    const query = new PgDialect().sqlToQuery(boundary.execute.mock.calls[1][0] as SQL)
+
+    expect(feed.items[0]).toMatchObject({ threadId: "thread-41", projectId: 7 })
+    expect(query.sql).toMatch(/workbench_thread_source/i)
+    expect(query.sql).toMatch(/workbench_thread/i)
+    expect(query.sql).toMatch(/sourceType[\s\S]*goal[\s\S]*outcome/i)
+    expect(query.sql).toMatch(/entityType[\s\S]*goal[\s\S]*outcome_queue_item/i)
+    expect(query.sql).toMatch(/case when count\(\*\) = 1 then/i)
+    expect(query.params.filter((value) => value === "primary-user")).toHaveLength(2)
+    expect(query.sql).not.toMatch(/metadata\s*->>|(?:repo|path|title)/i)
+  })
+
+  it("keeps missing and ambiguous source ownership unavailable", async () => {
+    boundary.execute
+      .mockResolvedValueOnce({ rows: [{ n: 0, latestEventAt: "2026-08-14T05:20:00.000Z" }] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 45, ref: "WO-LOOKALIKE", eventType: "WO_TRANSITION", entityType: "work_order", entityId: "41",
+            actor: "primary", reason: null, metadata: { workOrderRef: "WO-41" },
+            createdAt: "2026-08-14T05:20:00.000Z", threadId: null, projectId: null,
+          },
+          {
+            id: 46, ref: "GEV-0046", eventType: "GOAL_CREATED", entityType: "goal", entityId: "42",
+            actor: "primary", reason: null, metadata: {},
+            createdAt: "2026-08-14T05:19:00.000Z", threadId: null, projectId: null,
+          },
+        ],
+      })
+
+    const feed = await getActivity()
+
+    expect(feed.items.map(({ threadId, projectId }) => ({ threadId, projectId }))).toEqual([
+      { threadId: null, projectId: null },
+      { threadId: null, projectId: null },
+    ])
+  })
+
+  it("exposes focus only when both durable Thread coordinates are present", () => {
+    const focusTarget = (activityModule as typeof activityModule & {
+      activityFocusTarget?: (item: activityModule.ActivityItem) => { threadId: string; projectId: number } | null
+    }).activityFocusTarget
+    const item: activityModule.ActivityItem = {
+      id: 44, at: "2026-08-14T05:20:00.000Z", kind: "goal", label: "Goal created",
+      detail: "goal:41", ref: "goal:41", threadId: "thread-41", projectId: 7,
+    }
+
+    expect(focusTarget).toBeTypeOf("function")
+    expect(focusTarget?.(item)).toEqual({ threadId: "thread-41", projectId: 7 })
+    expect(focusTarget?.({ ...item, threadId: null })).toBeNull()
+    expect(focusTarget?.({ ...item, projectId: null })).toBeNull()
   })
 
   it("summarizes churn-only persisted history instead of calling it empty", () => {

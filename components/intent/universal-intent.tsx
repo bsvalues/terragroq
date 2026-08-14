@@ -67,10 +67,9 @@ export function UniversalIntent() {
   // ⌘K / Ctrl-K toggles the command surface from anywhere — always available.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault()
-        handleOpenChange(!openRef.current)
-      }
+      if (event.isComposing || event.key.toLowerCase() !== "k" || (!event.metaKey && !event.ctrlKey)) return
+      event.preventDefault()
+      handleOpenChange(!openRef.current)
     }
     document.addEventListener("keydown", onKey)
     return () => document.removeEventListener("keydown", onKey)
@@ -111,14 +110,12 @@ export function UniversalIntent() {
         <Button
           variant="outline"
           size="sm"
-          className="gap-2"
+          className="h-9 min-w-44 justify-between gap-3 border-border/80 bg-background/50 px-3 text-muted-foreground hover:bg-muted/40 hover:text-foreground sm:min-w-64"
           aria-label="Open universal intent (Command K or Control K)"
         >
           <Search className="h-4 w-4" aria-hidden={true} />
-          <span className="hidden sm:inline">Intent</span>
-          <kbd className="ml-1 hidden rounded border border-border bg-muted px-1.5 font-mono text-[10px] text-muted-foreground sm:inline">
-            ⌘K
-          </kbd>
+          <span className="mr-auto hidden sm:inline">Ask or do anything…</span>
+          <kbd className="hidden font-mono text-[10px] text-muted-foreground/80 sm:inline">Ctrl K</kbd>
         </Button>
       </DialogTrigger>
       <DialogContent>

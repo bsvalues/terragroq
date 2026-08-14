@@ -107,7 +107,7 @@ describe("system truth projection", () => {
     expect(atlas).toMatchObject({
       system: "ATLAS",
       truthState: "unknown",
-      observedAt: "2026-08-13T18:45:00.000Z",
+      observedAt: null,
       source: "operator-state database query",
     })
   })

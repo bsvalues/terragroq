@@ -2,11 +2,14 @@ import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
 const component = readFileSync("components/intent/universal-intent.tsx", "utf8")
-const shell = readFileSync("components/shell/app-shell-frame.tsx", "utf8")
+const shell = readFileSync("components/workbench/workbench-shell.tsx", "utf8")
 
 describe("global universal intent affordance", () => {
-  it("is present in both compact Home and normal cockpit headers", () => {
-    expect(shell.match(/<UniversalIntent \/>/g)).toHaveLength(2)
+  it("uses one global affordance in the persistent Workbench", () => {
+    expect(shell.match(/<UniversalIntent \/>/g)).toHaveLength(1)
+    expect(component).toContain('event.key.toLowerCase() !== "k"')
+    expect(component).toContain("event.ctrlKey")
+    expect(component).toContain("Ask or do anything")
   })
 
   it("routes through the authenticated deterministic endpoint", () => {

@@ -10,52 +10,16 @@ function source(relativePath: string) {
 }
 
 describe("Primary Home product contract", () => {
-  it("uses one live read model instead of the retired dashboard composition", () => {
+  it("uses the persistent Thread surface instead of the retired dashboard composition", () => {
     const page = source("app/(shell)/page.tsx")
+    const workbench = source("components/workbench/workbench-shell.tsx")
 
-    expect(page).toContain("getOperatorState")
-    expect(page).toContain("<OperatorHome")
-    expect(page).not.toContain("getDashboardData")
-    expect(page).not.toContain("HomeWorkRadarPanel")
-    expect(page).not.toContain("WilliamOS Command Center")
-  })
-
-  it("keeps project identity live and project-neutral", () => {
-    const home = source("components/primary-home/primary-home.tsx")
-    const technicalDetails = source("components/primary-home/primary-home-technical-details.tsx")
-    const model = source("components/primary-home/primary-home-model.ts")
-
-    expect(home).toContain("No project identity is proven")
-    expect(home).toContain("Nothing needs you")
-    expect(home).toContain("Next without William")
-    expect(technicalDetails).toContain("Technical details")
-    expect(technicalDetails).toContain("DialogContent")
-    expect(technicalDetails).toContain("DialogTrigger")
-    expect(technicalDetails).toContain("DialogClose")
-    expect(home).not.toMatch(/TerraFusion|Property Workbench|TerraPilot|PACS/)
-    expect(model).not.toMatch(/TerraFusion|Property Workbench|TerraPilot|PACS/)
-  })
-
-  it("does not present unavailable queue truth as healthy readiness", () => {
-    const home = source("components/primary-home/primary-home.tsx")
-
-    expect(home).toContain("No active outcome is proven")
-    expect(home).toContain("Ready to begin")
-    expect(home).not.toContain("WilliamOS is ready")
-  })
-
-  it("makes the active outcome the operating surface instead of a dashboard briefing", () => {
-    const home = source("components/primary-home/primary-home.tsx")
-
-    expect(home).toContain("Active outcome")
-    expect(home).toContain("Work artifact")
-    expect(home).toContain("Recent continuity")
-    expect(home).toContain("Project horizon")
-    expect(home).toContain("OutcomeFieldBackground")
-    expect(home).not.toContain('<main className="relative min-h')
-    expect(home).not.toContain("Primary briefing")
-    expect(home).not.toContain("Recently completed")
-    expect(home).not.toContain("grid max-w-5xl gap-8 lg:grid-cols")
+    expect(page).toContain("return null")
+    expect(workbench).toContain("<EmptyThread")
+    expect(workbench).toContain("<ThreadTimeline")
+    expect(workbench).toContain("getWorkbenchThreads")
+    expect(workbench).not.toContain("OperatorHome")
+    expect(workbench).not.toContain("OutcomeFieldBackground")
   })
 
   it("records decisions only through the exact-bound authority action", () => {
@@ -68,19 +32,17 @@ describe("Primary Home product contract", () => {
     expect(decision).not.toContain("Approve recommendation")
   })
 
-  it("uses compact Home chrome with the four primary cockpit destinations", () => {
+  it("uses one persistent Workbench with the stable spatial regions", () => {
     const shell = source("components/shell/app-shell.tsx")
     const frame = source("components/shell/app-shell-frame.tsx")
+    const workbench = source("components/workbench/workbench-shell.tsx")
 
     expect(shell).toContain("AppShellFrame")
-    expect(frame).toContain('const compactHome = pathname === "/"')
-    expect(frame).toContain("HOME_RAIL_DESTINATIONS")
-    expect(frame).toContain('"/projects"')
-    expect(frame).toContain('"/activity"')
-    expect(frame).toContain('"/system"')
-    expect(frame).not.toContain('"/work-orders"')
-    expect(frame).not.toContain('"/audit"')
-    expect(frame).toContain("<UniversalIntent />")
-    expect(frame).toContain("<SidebarNav />")
+    expect(frame).toContain("<WorkbenchShell")
+    expect(workbench).toContain('aria-label="Project and Thread Explorer"')
+    expect(workbench).toContain('aria-label="Inspector"')
+    expect(workbench).toContain('id="workbench-execution"')
+    expect(workbench).toContain('aria-label="System status"')
+    expect(workbench).not.toContain("compactHome")
   })
 })

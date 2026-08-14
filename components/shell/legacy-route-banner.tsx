@@ -23,11 +23,6 @@ const LEGACY_ROUTES: Record<string, LegacyEntry> = {
     message:
       "This Forge registry is static design intent; it does not reflect live capabilities.",
   },
-  "/runtime": {
-    label: "Partially legacy",
-    message:
-      "Live runtime data appears alongside a static “systems ready” summary that is design reference, not current node truth.",
-  },
 }
 
 export function LegacyRouteBanner() {

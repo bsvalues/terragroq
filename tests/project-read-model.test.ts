@@ -32,12 +32,14 @@ describe("durable project read model", () => {
 
     expect(views).toEqual([
       {
+        id: 1,
         key: "terrafusion",
         name: "TerraFusion OS",
         lifecycle: "standby",
         resources: [],
       },
       {
+        id: 2,
         key: "williamos",
         name: "WilliamOS",
         lifecycle: "active",
@@ -87,7 +89,7 @@ describe("durable project read model", () => {
     )
 
     expect(views).toEqual([
-      { key: "williamos", name: "WilliamOS", lifecycle: "active", resources: [] },
+      { id: 1, key: "williamos", name: "WilliamOS", lifecycle: "active", resources: [] },
     ])
   })
 

@@ -1,6 +1,11 @@
 import { db } from "@/lib/db"
 import { sql } from "drizzle-orm"
 import { getUserId } from "@/lib/session"
+export {
+  activityFocusTarget,
+  activityTruthCaption,
+  summarizeActivityFeed,
+} from "@/lib/workbench/activity-presentation"
 
 /*
  * Activity — a humanized, de-noised timeline projected from governance_event.
@@ -22,6 +27,8 @@ export interface ActivityItem {
   label: string
   detail: string | null
   ref: string | null
+  threadId: string | null
+  projectId: number | null
 }
 
 export interface ActivityFeed {
@@ -31,22 +38,6 @@ export interface ActivityFeed {
   latestEventAt: string | null
   observedAt: string
   truthState: "persisted" | "idle-empty"
-}
-
-export function summarizeActivityFeed(feed: ActivityFeed): string | null {
-  if (feed.items.length === 0 && feed.churnCollapsed === 0) return null
-
-  const meaningful = feed.items.length > 0 ? `${feed.items.length} meaningful events` : null
-  const churn = feed.churnCollapsed > 0 ? `${feed.churnCollapsed} runtime/retry steps collapsed` : null
-  return [meaningful, churn].filter(Boolean).join(" · ")
-}
-
-const activityTime = (iso: string) => `${new Date(iso).toISOString().slice(0, 16).replace("T", " ")} UTC`
-
-export function activityTruthCaption(feed: ActivityFeed): string {
-  const observed = activityTime(feed.observedAt)
-  if (feed.latestEventAt === null) return `No persisted activity as of ${observed}`
-  return `Persisted activity through ${activityTime(feed.latestEventAt)} · read ${observed}`
 }
 
 type Row = {
@@ -59,6 +50,8 @@ type Row = {
   reason: string | null
   metadata: Record<string, unknown> | null
   createdAt: Date | string
+  threadId: string | null
+  projectId: number | null
 }
 
 // Retry/runtime churn that dominates the raw stream — collapsed into a count so the
@@ -112,12 +105,28 @@ export async function getActivity(limit = 60): Promise<ActivityFeed> {
   const latestEventAt = persistedLatestEventAt === null ? null : instantIso(persistedLatestEventAt)
 
   const rows = (await db.execute(
-    sql`select id, ref, "eventType" as "eventType", "entityType" as "entityType",
-          "entityId" as "entityId", actor, reason, metadata,
-          "createdAt" AT TIME ZONE current_setting('TimeZone') as "createdAt"
-        from governance_event
-        where "userId" = ${userId}
-          and "eventType" not in (${churnList})
+    sql`select event.id, event.ref, event."eventType" as "eventType", event."entityType" as "entityType",
+          event."entityId" as "entityId", event.actor, event.reason, event.metadata,
+          event."createdAt" AT TIME ZONE current_setting('TimeZone') as "createdAt",
+          owning_thread."threadId" as "threadId", owning_thread."projectId" as "projectId"
+        from governance_event event
+        left join lateral (
+          select
+            case when count(*) = 1 then max(source."threadId") else null end as "threadId",
+            case when count(*) = 1 then max(thread."projectId") else null end::int as "projectId"
+          from workbench_thread_source source
+          join workbench_thread thread
+            on thread."userId" = source."userId"
+           and thread.id = source."threadId"
+          where source."userId" = ${userId}
+            and (
+              (event."entityType" = 'goal' and source."sourceType" = 'goal' and source."sourceId" = event."entityId")
+              or
+              (event."entityType" = 'outcome_queue_item' and source."sourceType" = 'outcome' and source."sourceId" = event."entityId")
+            )
+        ) owning_thread on true
+        where event."userId" = ${userId}
+          and event."eventType" not in (${churnList})
         order by "createdAt" desc, id desc
         limit ${limit}`,
   )).rows as unknown as Row[]
@@ -136,7 +145,16 @@ export async function getActivity(limit = 60): Promise<ActivityFeed> {
     } else if (ref) {
       detail = ref
     }
-    return { id: r.id, at: instantIso(r.createdAt), kind, label, detail, ref }
+    return {
+      id: r.id,
+      at: instantIso(r.createdAt),
+      kind,
+      label,
+      detail,
+      ref,
+      threadId: r.threadId ?? null,
+      projectId: r.projectId ?? null,
+    }
   })
 
   return {
