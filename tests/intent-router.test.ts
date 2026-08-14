@@ -10,6 +10,7 @@ describe("universal intent router", () => {
     ["Draft an outcome for device enrollment", "outcome", null, "start_outcome"],
     ["Build a useful release dashboard", "outcome", null, "start_outcome"],
     ["Fix the broken Project selector", "outcome", null, "start_outcome"],
+    ["Add a compact on-screen latest-evidence timestamp to selected Thread work status.", "outcome", null, "start_outcome"],
     ["Do improve the owner handoff", "outcome", null, "start_outcome"],
   ] as const)("routes %s to the %s contract", (input, intent, href, action) => {
     expect(routeUniversalIntent(input)).toMatchObject({
@@ -51,9 +52,19 @@ describe("universal intent router", () => {
     })
   })
 
+  it("keeps non-imperative questions containing add in the answer contract", () => {
+    expect(routeUniversalIntent("How do I add evidence to a Thread?")).toMatchObject({
+      state: "routed",
+      intent: "answer",
+      destination: { href: "/chat", action: "respond" },
+      executionAuthorized: false,
+    })
+  })
+
   it.each([
     "Research the rollout and deploy it",
     "Open Projects and restart the runtime",
+    "Add a timestamp and deploy it",
     "Navigate to Mars",
     "   ",
   ])("fails closed when the request is ambiguous: %j", (input) => {
