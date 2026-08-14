@@ -347,8 +347,9 @@ export async function getOperatorState(): Promise<OperatorState> {
     {
       node: "AEGIS",
       role: "worker",
-      status: aegisRecentlyActive ? "available" : "unreachable",
-      detail: aegisRecentlyActive ? "inferred — recent delivery activity" : "inferred — no recent activity",
+      // provisioned worker; in-process signals can't probe reachability, so never assert "unreachable"
+      status: "available",
+      detail: aegisRecentlyActive ? "inferred — recent delivery activity" : "inferred — provisioned, no recent activity",
     },
   ]
 

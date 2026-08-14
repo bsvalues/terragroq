@@ -185,25 +185,28 @@ export function OperatorHome({ state }: { state: OperatorState }) {
       {/* RECENTLY DELIVERED */}
       {delivered.length > 0 ? (
         <Section title="Recently delivered" meta={`${delivered.length} outcomes · merged`}>
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1.5">
             {delivered.map((d) => (
-              <Card key={d.outcomeId}>
-                <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="font-mono text-xs text-muted-foreground">
+              <Card key={d.outcomeId} className="py-0">
+                <CardContent className="flex flex-col gap-1 px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate font-mono text-xs text-muted-foreground">
                       {d.identity} · {d.workOrderRef}
-                    </div>
-                    <div className="text-sm">
-                      {d.abandoned > 0
-                        ? `Delivered by ${d.worker} on ${d.node} after ${d.attempts} attempts`
-                        : `Delivered by ${d.worker} on ${d.node}`}
-                    </div>
+                    </span>
+                    {d.prNumber ? (
+                      <span className="shrink-0 font-mono text-xs text-primary">
+                        PR #{d.prNumber}
+                        {d.mergeSha ? <span className="text-muted-foreground"> {d.mergeSha.slice(0, 7)}</span> : null}
+                      </span>
+                    ) : null}
                   </div>
-                  <AttemptBadge attempts={d.attempts} abandoned={d.abandoned} />
-                  <span className="font-mono text-xs text-primary">
-                    {d.prNumber ? `PR #${d.prNumber}` : ""}
-                    {d.mergeSha ? <span className="text-muted-foreground"> {d.mergeSha.slice(0, 7)}</span> : null}
-                  </span>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="text-sm">
+                      Delivered by {d.worker} on {d.node}
+                      {d.abandoned > 0 ? ` · recovered after ${d.attempts} attempts` : ""}
+                    </span>
+                    <AttemptBadge attempts={d.attempts} abandoned={d.abandoned} />
+                  </div>
                 </CardContent>
               </Card>
             ))}
@@ -234,15 +237,14 @@ export function OperatorHome({ state }: { state: OperatorState }) {
       <Section title="System" meta={`${state.systems.value.length} nodes · ${state.systems.truthState}`}>
         <div className="grid gap-3 sm:grid-cols-3">
           {state.systems.value.map((s) => {
-            const up = s.status === "healthy" || s.status === "available"
+            // Colour by grounding, not by an asserted up/down we can't probe in-process:
+            // green = live signal, amber = inferred, red only when genuinely unreachable.
+            const dot = s.status === "unreachable" ? "bg-destructive" : s.detail.startsWith("live") ? "bg-emerald-500" : "bg-amber-500"
             return (
               <Card key={s.node}>
                 <CardContent className="flex flex-col gap-1 py-4">
                   <div className="flex items-center gap-2">
-                    <span
-                      className={`size-2 rounded-full ${up ? "bg-emerald-500" : "bg-destructive"}`}
-                      aria-hidden
-                    />
+                    <span className={`size-2 rounded-full ${dot}`} aria-hidden />
                     <span className="font-mono font-semibold">{s.node}</span>
                     <Badge variant="outline" className="ml-auto font-mono text-[10px]">
                       {s.status}
