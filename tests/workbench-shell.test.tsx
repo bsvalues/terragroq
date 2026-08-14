@@ -10,10 +10,13 @@ import { WorkbenchActivity } from "@/components/workbench/workbench-activity"
 import type { ProjectView } from "@/lib/operator/operator-state"
 import type { Thread } from "@/lib/workbench/thread-projection"
 
-const navigation = vi.hoisted(() => ({ pathname: "/" }))
+const navigation = vi.hoisted(() => ({ pathname: "/", replace: vi.fn() }))
 const actions = vi.hoisted(() => ({ getWorkbenchThreads: vi.fn() }))
 
-vi.mock("next/navigation", () => ({ usePathname: () => navigation.pathname }))
+vi.mock("next/navigation", () => ({
+  usePathname: () => navigation.pathname,
+  useRouter: () => ({ replace: navigation.replace }),
+}))
 vi.mock("next/link", () => ({
   default: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
     <a href={href} {...props}>{children}</a>
@@ -120,6 +123,7 @@ function renderShell(options?: {
 describe("WorkbenchShell rendered interaction contract", () => {
   beforeEach(() => {
     navigation.pathname = "/"
+    navigation.replace.mockReset()
     actions.getWorkbenchThreads.mockReset()
     actions.getWorkbenchThreads.mockResolvedValue([thread])
     window.localStorage.clear()
@@ -220,6 +224,28 @@ describe("WorkbenchShell rendered interaction contract", () => {
       const serialized = window.localStorage.getItem("williamos.workbench.layout.v1:owner-1")
       expect(serialized).toContain('"selectedProjectId":"7"')
       expect(serialized).not.toMatch(/token|cookie|secret|email/i)
+    })
+  })
+
+  it("returns a restarted Cockpit to its persisted primary mode instead of forcing Home", async () => {
+    window.localStorage.setItem("williamos.workbench.layout.v1:owner-1", JSON.stringify({
+      schemaVersion: 1,
+      selectedProjectId: "7",
+      selectedThreadId: null,
+      viewMode: "activity",
+      inspectorTab: "overview",
+      executionExpanded: true,
+      foregroundFocus: "thread",
+      mobilePane: "thread",
+    }))
+
+    renderShell()
+
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/activity"))
+    await waitFor(() => {
+      const serialized = window.localStorage.getItem("williamos.workbench.layout.v1:owner-1")
+      expect(serialized).toContain('"viewMode":"activity"')
+      expect(serialized).toContain('"executionExpanded":true')
     })
   })
 

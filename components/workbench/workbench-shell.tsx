@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useReducer, useRef, useState, useTransition } from "react"
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import {
   Activity,
   ChevronDown,
@@ -353,6 +353,7 @@ export function WorkbenchShell({
   children: React.ReactNode
 }) {
   const pathname = usePathname()
+  const router = useRouter()
   const [state, dispatch] = useReducer(reduceWorkbenchState, undefined, createInitialWorkbenchState)
   const [threads, setThreads] = useState<Thread[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -364,6 +365,7 @@ export function WorkbenchShell({
   const [pendingDomFocus, setPendingDomFocus] = useState(false)
   const [isPending, startTransition] = useTransition()
   const threadMainRef = useRef<HTMLElement>(null)
+  const restoredRouteRef = useRef<WorkbenchViewMode | null>(null)
   const routeMode = viewMode(pathname)
   const currentMode = routeMode ?? state.viewMode
   const selectedProject = projects.find((project) => String(project.id) === state.selectedProjectId) ?? null
@@ -382,9 +384,14 @@ export function WorkbenchShell({
         availableThreadIdsByProject: {},
       })
       setPendingThreadFocus(restoration.selectedThreadId)
+      if (routeMode === "home" && restoration.viewMode !== "home") {
+        restoredRouteRef.current = restoration.viewMode
+        const destination = modes.find((candidate) => candidate.mode === restoration.viewMode)
+        if (destination) router.replace(destination.href)
+      }
     }
     setRestorationRead(true)
-  }, [projects, restorationRead, user.id])
+  }, [projects, restorationRead, routeMode, router, user.id])
 
   useEffect(() => {
     if (!restorationRead) return
@@ -392,8 +399,17 @@ export function WorkbenchShell({
   }, [restorationRead, state, user.id])
 
   useEffect(() => {
-    if (routeMode) dispatch({ type: "USER_SET_VIEW_MODE", viewMode: routeMode })
-  }, [routeMode])
+    if (!restorationRead || !routeMode) return
+    const restoredRoute = restoredRouteRef.current
+    if (restoredRoute) {
+      if (routeMode === restoredRoute) {
+        restoredRouteRef.current = null
+        dispatch({ type: "USER_SET_VIEW_MODE", viewMode: routeMode })
+      }
+      return
+    }
+    dispatch({ type: "USER_SET_VIEW_MODE", viewMode: routeMode })
+  }, [restorationRead, routeMode])
 
   useEffect(() => {
     if (!selectedProject) {
