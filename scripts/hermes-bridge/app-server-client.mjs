@@ -89,7 +89,10 @@ export function createCodexChildEnvironment(source = process.env, {
   existsSync = fs.existsSync,
 } = {}) {
   const environment = Object.fromEntries(
-    Object.entries(source).filter(([key]) => CODEX_ENVIRONMENT_KEYS.has(key.toUpperCase())),
+    Object.entries(source).filter(([key]) => (
+      CODEX_ENVIRONMENT_KEYS.has(key.toUpperCase())
+      || (platform === "win32" && key.toUpperCase() === "PROGRAMDATA")
+    )),
   )
   if (platform === "win32") {
     const stablePowerShell = "C:\\Program Files\\PowerShell\\7"
