@@ -10,11 +10,12 @@ import {
   governanceEvent,
   memoryFact,
   outcomeQueueItem,
+  project,
+  projectResource,
   workOrder,
 } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
-import { loadProjects } from "@/lib/projects/load-projects"
 
 /*
  * Operator State — the single read-model every operator surface projects from.
@@ -26,6 +27,9 @@ import { loadProjects } from "@/lib/projects/load-projects"
  *    is transient state, not identity. Goals without a receipt are legacy-unresolved.
  *  - Execution is a projection over governance_event + receipts, NOT loop_run.
  *  - Every projected item carries a truth envelope (source, observedAt, freshness).
+ *
+ * Projects/Resources are a modelled registry here until the project / project_resource
+ * tables land (information-model P1); nothing else is fabricated.
  */
 
 const INSTALLATION = "WILLIAMOS_PRIMARY"
@@ -49,15 +53,16 @@ const envelope = <T>(
 ): TruthEnvelope<T> => ({ value, truthState, source, observedAt: nowIso(), freshness })
 
 export interface ProjectResource {
-  type: "repo" | "database" | "node" | "service" | "data_source"
+  type: string
   canonicalIdentity: string
-  label: string
-  relationship: string
+  label: string | null
+  relationship: string | null
 }
 export interface ProjectView {
+  id: number
   key: string
   name: string
-  lifecycle: "active" | "standby" | "archived"
+  lifecycle: string
   resources: ProjectResource[]
 }
 
@@ -129,7 +134,24 @@ function deriveScopeType(scope: string | null): string {
 
 export async function getOperatorState(): Promise<OperatorState> {
   const userId = await getUserId()
-  const projects = await loadProjects(userId)
+
+  // --- projects + resources (now real, from the project / project_resource tables, P1) ---
+  const projectRows = await db.select().from(project).where(eq(project.userId, userId)).orderBy(project.id)
+  const resourceRows = await db.select().from(projectResource).where(eq(projectResource.userId, userId))
+  const projects: ProjectView[] = projectRows.map((p) => ({
+    id: p.id,
+    key: p.key,
+    name: p.name,
+    lifecycle: p.lifecycle,
+    resources: resourceRows
+      .filter((r) => r.projectId === p.id)
+      .map((r) => ({
+        type: r.type,
+        canonicalIdentity: r.canonicalIdentity,
+        label: r.label,
+        relationship: r.relationship,
+      })),
+  }))
 
   // --- durable stores (reuse existing tables via drizzle) ---
   const goals = await db
@@ -323,7 +345,7 @@ export async function getOperatorState(): Promise<OperatorState> {
   return {
     installation: INSTALLATION,
     now: envelope({ activeExecutions, queueDepth }, "outcome_queue_item + execution projection", idle ? "idle-empty" : "live"),
-    projects: envelope(projects, "project + project_resource", projects.length ? "live" : "idle-empty"),
+    projects: envelope(projects, "project + project_resource tables", projects.length ? "live" : "idle-empty"),
     outcomes: envelope(outcomes, "goal + goal_outcome_intake_receipt", outcomes.some((o) => o.resolved) ? "live" : "legacy-unresolved"),
     work: envelope(work, "work_order (all statuses)", "live"),
     executions: envelope(executions, "governance_event (lease lifecycle + completion) + receipts", "live"),

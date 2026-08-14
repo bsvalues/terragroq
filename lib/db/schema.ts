@@ -182,6 +182,7 @@ export const doctrine = pgTable("doctrine", {
 // Work Orders: governed units of work (Track E — Work Order Engine).
 // status lifecycle (8): draft | proposed | approved | active | blocked | review | closed | aborted
 export const workOrder = pgTable("work_order", {
+  projectId: integer("projectId").references(() => project.id),
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
   ref: text("ref"), // WO-0001 style human reference
@@ -389,6 +390,7 @@ export const documentChunk = pgTable("document_chunk", {
 // Every operator goal is classified and persisted here before any execution.
 // status: classified | converted | dismissed
 export const goal = pgTable("goal", {
+  projectId: integer("projectId").references(() => project.id),
   id: serial("id").primaryKey(),
   userId: text("userId").notNull(),
   ref: text("ref"), // GOAL-0001 style human reference
