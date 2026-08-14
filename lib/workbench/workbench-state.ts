@@ -264,5 +264,7 @@ export function reduceWorkbenchState(
         backgroundVersion: action.version,
         backgroundObservedAt: action.observedAt,
       }
+    default:
+      return state
   }
 }

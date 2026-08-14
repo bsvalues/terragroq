@@ -20,7 +20,7 @@ describe("Projects workspace", () => {
 
   it("keeps contextual cockpit routes and the read-only authority boundary", () => {
     for (const href of ["/work-orders", "/audit", "/runtime", "/brain-council"]) {
-      expect(`${workbenchSource}\n${capabilitiesSource}`).toContain(`href: "${href}`)
+      expect(`${workbenchSource}\n${capabilitiesSource}`).toContain(`href: "${href}"`)
     }
     expect(workbenchSource).toContain("No generic shell authority")
   })

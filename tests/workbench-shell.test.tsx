@@ -239,6 +239,14 @@ describe("WorkbenchShell rendered interaction contract", () => {
 
     await user.click(screen.getByRole("button", { name: /Inspect/ }))
     expect(screen.getByRole("button", { name: /Inspect/ }).getAttribute("aria-pressed")).toBe("true")
+
+    const compactViews = screen.getByRole("navigation", { name: "Compact Workbench views" })
+    expect(Array.from(compactViews.querySelectorAll("a")).map((link) => link.textContent?.trim())).toEqual([
+      "Home",
+      "Projects",
+      "Activity",
+      "System",
+    ])
   })
 
   it("labels configured HERMES provenance as inferred rather than live", () => {

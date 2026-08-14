@@ -241,4 +241,11 @@ describe("workbench foreground state", () => {
       ).toBe(initial)
     }
   })
+
+  it("fails closed to the unchanged state for a runtime-invalid action", () => {
+    const initial = createInitialWorkbenchState()
+    const result = reduceWorkbenchState(initial, { type: "INVALID_RUNTIME_ACTION" } as never)
+
+    expect(result).toBe(initial)
+  })
 })

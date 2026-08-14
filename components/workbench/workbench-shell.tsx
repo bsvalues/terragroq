@@ -502,6 +502,23 @@ export function WorkbenchShell({
           <UserMenu name={user.name} email={user.email} />
         </header>
 
+        <nav aria-label="Compact Workbench views" className="grid shrink-0 grid-cols-4 border-b border-[var(--workbench-hairline)] sm:hidden">
+          {modes.map((mode) => (
+            <Link
+              key={mode.mode}
+              href={mode.href}
+              aria-current={routeMode === mode.mode ? "page" : undefined}
+              className={cn(
+                "workbench-focus flex h-11 items-center justify-center gap-1.5 border-b-2 border-transparent text-[10px] uppercase tracking-wide text-[var(--workbench-muted)]",
+                routeMode === mode.mode && "border-b-[var(--workbench-copper)] bg-[var(--workbench-raised)] text-[var(--workbench-text)]",
+              )}
+            >
+              <mode.icon className="size-3.5" aria-hidden />
+              {mode.label}
+            </Link>
+          ))}
+        </nav>
+
         <nav aria-label="Compact workbench panes" className="grid shrink-0 grid-cols-4 border-b border-[var(--workbench-hairline)] lg:hidden">
           {mobilePanes.map((pane) => <button key={pane.id} type="button" aria-pressed={state.mobilePane === pane.id} onClick={() => dispatch({ type: "USER_SET_MOBILE_PANE", pane: pane.id })} className={cn("workbench-focus flex h-11 items-center justify-center gap-1 text-[10px] text-[var(--workbench-muted)]", state.mobilePane === pane.id && "bg-[var(--workbench-raised)] text-[var(--workbench-text)]")}><pane.icon className="size-3.5" aria-hidden />{pane.label}</button>)}
         </nav>
