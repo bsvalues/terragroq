@@ -91,7 +91,9 @@ export function UniversalIntent() {
       })
       if (requestRef.current !== token) return
       if (!response.ok) throw new Error("WilliamOS could not classify that intent.")
-      setResult((await response.json()) as UniversalIntentRoute)
+      const routed = (await response.json()) as UniversalIntentRoute
+      if (requestRef.current !== token) return
+      setResult(routed)
     } catch (caught) {
       if (requestRef.current !== token) return
       setError(caught instanceof Error ? caught.message : "Intent routing failed.")
