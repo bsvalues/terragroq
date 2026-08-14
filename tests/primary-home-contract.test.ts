@@ -77,7 +77,7 @@ describe("Primary Home product contract", () => {
     expect(frame).toContain("HOME_RAIL_DESTINATIONS")
     expect(frame).toContain('"/projects"')
     expect(frame).toContain('"/activity"')
-    expect(frame).toContain('"/runtime"')
+    expect(frame).toContain('"/system"')
     expect(frame).not.toContain('"/work-orders"')
     expect(frame).not.toContain('"/audit"')
     expect(frame).toContain("<UniversalIntent />")
