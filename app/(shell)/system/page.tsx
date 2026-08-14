@@ -5,7 +5,7 @@ import { getSignupStatus, type HealthTone } from "@/components/shell/health-stat
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 import { getAuthReadiness } from "@/lib/auth-readiness"
 import { getOperatorState } from "@/lib/operator/operator-state"
-import { projectSystemTruth } from "@/lib/system/system-truth"
+import { projectConfiguredSystemRoleTruth, projectSystemTruth } from "@/lib/system/system-truth"
 import { cn } from "@/lib/utils"
 
 // System — the truthful, read-only primary. It composes signals that are actually
@@ -61,36 +61,23 @@ export default async function SystemPage() {
         ? "prod"
         : "local"
 
-  const systemTruth = projectSystemTruth([
-    {
-      system: "ATLAS",
-      signal: "state-database",
-      evidenceKind: "current-query",
-      succeeded: readiness.databaseReady,
-      observedAt: readiness.checkedAt,
-      source: "getAuthReadiness database connectivity probe",
-      summary: readiness.databaseReady
-        ? "Current state-database query succeeded."
-        : "Current state-database query did not succeed.",
-    },
-    {
-      system: "HERMES",
-      signal: "coordinator-app-host",
-      evidenceKind: "configured",
-      observedAt: null,
-      source: "issue #762 runtime topology contract",
-      summary:
-        "Configured as coordinator and app host. Configuration describes role, not current liveness.",
-    },
-    {
-      system: "AEGIS",
-      signal: "worker-node",
-      evidenceKind: "configured",
-      observedAt: null,
-      source: "issue #762 runtime topology contract",
-      summary: "Configured as a worker node. Configuration describes role, not current liveness.",
-    },
-  ])
+  const systemTruth = [
+    ...projectSystemTruth([
+      {
+        system: "ATLAS",
+        signal: "state-database",
+        evidenceKind: "current-query",
+        succeeded: readiness.databaseReady,
+        observedAt: readiness.checkedAt,
+        source: "getAuthReadiness database connectivity probe",
+        summary: readiness.databaseReady
+          ? "Current state-database query succeeded."
+          : "Current state-database query did not succeed.",
+      },
+    ]),
+    projectConfiguredSystemRoleTruth("HERMES"),
+    projectConfiguredSystemRoleTruth("AEGIS"),
+  ]
 
   const runtimeRows = [
     { label: "Chat model", value: runtime.chatModel },

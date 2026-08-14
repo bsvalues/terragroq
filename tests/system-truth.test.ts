@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest"
 
-import { projectSystemTruth } from "@/lib/system/system-truth"
+import { projectConfiguredSystemRoleTruth, projectSystemTruth } from "@/lib/system/system-truth"
 
 describe("system truth projection", () => {
+  it("shares configured AEGIS role truth without claiming current liveness", () => {
+    expect(projectConfiguredSystemRoleTruth("AEGIS")).toEqual({
+      system: "AEGIS",
+      signal: "worker-node",
+      truthState: "inferred",
+      observedAt: null,
+      source: "issue #762 runtime topology contract",
+      summary: "Configured as a worker node. Configuration describes role, not current liveness.",
+    })
+  })
+
   it("reports ATLAS live only when a current database query succeeds", () => {
     const observedAt = "2026-08-13T18:42:00.000Z"
 
