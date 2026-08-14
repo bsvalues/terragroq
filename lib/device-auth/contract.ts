@@ -85,7 +85,9 @@ export function validateDeviceMutationOrigin(
   const requestUrl = new URL(request.url)
   if (requestUrl.origin !== origin) {
     const external = new URL(origin)
-    const internalIsLoopback = requestUrl.hostname === "127.0.0.1" || requestUrl.hostname === "[::1]"
+    const internalIsLoopback = requestUrl.hostname === "localhost"
+      || requestUrl.hostname === "127.0.0.1"
+      || requestUrl.hostname === "[::1]"
     const forwardedIsExact = request.headers.get("host") === external.host
       && request.headers.get("forwarded") === null
       && request.headers.get("x-forwarded-host") === external.host

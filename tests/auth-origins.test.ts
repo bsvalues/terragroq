@@ -19,6 +19,7 @@ describe("auth trusted origin resolution", () => {
     delete process.env.V0_RUNTIME_URL
     delete process.env.BETTER_AUTH_SECRET
     delete process.env.DATABASE_URL
+    delete process.env.WILLIAMOS_TRUST_LOOPBACK_HTTPS_PROXY
   })
 
   afterEach(() => {
@@ -100,6 +101,36 @@ describe("auth trusted origin resolution", () => {
 
     expect(diagnostics.currentOrigin).toBe("https://app.example.com")
     expect(diagnostics.isCurrentOriginTrusted).toBe(true)
+  })
+
+  it("reports the exact HTTPS origin only through the enabled loopback proxy boundary", () => {
+    process.env.BETTER_AUTH_TRUSTED_ORIGINS = "https://192.168.88.9:3443"
+    process.env.WILLIAMOS_TRUST_LOOPBACK_HTTPS_PROXY = "1"
+    const headers = {
+      host: "192.168.88.9:3443",
+      "x-forwarded-host": "192.168.88.9:3443",
+      "x-forwarded-port": "3443",
+      "x-forwarded-proto": "https",
+    }
+
+    const diagnostics = getOriginDiagnostics(new Request(
+      "https://127.0.0.1:3100/api/auth/origin-diagnostics",
+      { headers },
+    ))
+    expect(diagnostics.currentOrigin).toBe("https://192.168.88.9:3443")
+    expect(diagnostics.isCurrentOriginTrusted).toBe(true)
+    expect(getOriginDiagnostics(new Request(
+      "https://localhost:3100/api/auth/origin-diagnostics",
+      { headers },
+    )).isCurrentOriginTrusted).toBe(true)
+
+    for (const [url, changedHeaders] of [
+      ["https://192.168.88.9:3100/api/auth/origin-diagnostics", headers],
+      ["https://127.0.0.1:3100/api/auth/origin-diagnostics", { ...headers, forwarded: "for=attacker" }],
+      ["https://127.0.0.1:3100/api/auth/origin-diagnostics", { ...headers, "x-forwarded-host": "evil.example" }],
+    ] as const) {
+      expect(getOriginDiagnostics(new Request(url, { headers: changedHeaders })).isCurrentOriginTrusted).toBe(false)
+    }
   })
 
   it("returns a GET-only safe diagnostics payload", async () => {
