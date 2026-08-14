@@ -9,7 +9,7 @@ export default async function HomePage() {
     <>
       <PageHeader
         title="Home"
-        description="Your operator briefing, projected from live system state — what is running, what was delivered, what needs you."
+        description="Your operator briefing, projected from current system state — grounded where live, marked where inferred."
       />
       <OperatorHome state={state} />
     </>
