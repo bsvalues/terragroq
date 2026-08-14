@@ -1,4 +1,5 @@
 import { Cpu, Database, Network, ShieldCheck } from "lucide-react"
+import Link from "next/link"
 import { PageHeader } from "@/components/shell/page-header"
 import { StatusBadge } from "@/components/status-badge"
 import { getRecentEvidence } from "@/app/actions/evidence"
@@ -66,7 +67,12 @@ async function RuntimeSupportingPanels({ databaseReady }: { databaseReady: boole
   }
 }
 
-export default async function RuntimePage() {
+export default async function RuntimePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ detail?: string | string[] }>
+}) {
+  const detail = (await searchParams).detail
   const rt = buildRuntimeStatus()
   const systemReadiness = await getAuthReadiness({ probeDatabase: true })
   const systemTruth = projectSystemTruth([
@@ -105,6 +111,21 @@ export default async function RuntimePage() {
     { icon: Network, label: "Gateway", value: rt.gateway, mono: true },
     { icon: Network, label: "Provider", value: rt.provider, mono: true },
   ]
+
+  if (detail !== "technical") {
+    return (
+      <div className="mx-auto w-full max-w-4xl p-5 md:p-8">
+        <div className="mb-5 flex items-end justify-between gap-4 border-b border-[var(--workbench-hairline)] pb-4">
+          <div>
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--workbench-muted)]">System</p>
+            <h1 className="mt-2 text-xl font-semibold">Current operating truth</h1>
+          </div>
+          <Link href="/runtime?detail=technical" className="workbench-focus text-xs text-[var(--workbench-copper)]">Open technical detail</Link>
+        </div>
+        <SystemTruthPanel signals={systemTruth} />
+      </div>
+    )
+  }
 
   return (
     <>

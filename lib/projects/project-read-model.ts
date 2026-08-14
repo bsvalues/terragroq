@@ -64,6 +64,7 @@ export function projectRowsToViews(
   }
 
   return visibleProjects.map((row) => ({
+    id: row.id,
     key: row.key,
     name: row.name,
     lifecycle: row.lifecycle as ProjectView["lifecycle"],

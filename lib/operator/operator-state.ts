@@ -55,6 +55,7 @@ export interface ProjectResource {
   relationship: string
 }
 export interface ProjectView {
+  id: number
   key: string
   name: string
   lifecycle: "active" | "standby" | "archived"

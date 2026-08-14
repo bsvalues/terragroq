@@ -18,12 +18,11 @@ describe("four-primary cockpit navigation", () => {
     expect(navItems.every((item) => item.group === "Cockpit")).toBe(true)
   })
 
-  it("uses the same four destinations in the compact Home rail", () => {
-    const frame = readFileSync("components/shell/app-shell-frame.tsx", "utf8")
-    const rail = frame.slice(frame.indexOf("const HOME_RAIL_DESTINATIONS"), frame.indexOf("]\n\nexport function AppShellFrame"))
-    for (const href of ['"/"', '"/projects"', '"/activity"', '"/runtime"']) expect(rail).toContain(href)
-    expect(rail).not.toContain('"/work-orders"')
-    expect(rail).not.toContain('"/audit"')
+  it("uses the same four modes in the persistent Workbench rail", () => {
+    const workbench = readFileSync("components/workbench/workbench-shell.tsx", "utf8")
+    for (const href of ['href: "/"', 'href: "/projects"', 'href: "/activity"', 'href: "/runtime"']) expect(workbench).toContain(href)
+    expect(workbench).toContain('aria-label="Workbench views"')
+    expect(workbench).not.toContain("compactHome")
   })
 
   it("keeps supporting routes out of primary navigation without deleting them", () => {

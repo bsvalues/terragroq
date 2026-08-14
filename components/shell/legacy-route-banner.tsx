@@ -13,11 +13,6 @@ const LEGACY_ROUTES: Record<string, LegacyEntry> = {
     message:
       "This page reports Hermes as inactive, but the Hermes runtime is live. It is stale doctrine, not current status.",
   },
-  "/projects": {
-    label: "Legacy / design reference",
-    message:
-      "These projects are hard-coded design placeholders, not live project data.",
-  },
   "/brain-council": {
     label: "Legacy / design reference",
     message:
@@ -27,11 +22,6 @@ const LEGACY_ROUTES: Record<string, LegacyEntry> = {
     label: "Legacy / design reference",
     message:
       "This Forge registry is static design intent; it does not reflect live capabilities.",
-  },
-  "/runtime": {
-    label: "Partially legacy",
-    message:
-      "Live runtime data appears alongside a static “systems ready” summary that is design reference, not current node truth.",
   },
 }
 

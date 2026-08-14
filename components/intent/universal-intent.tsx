@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { ArrowRight, Loader2, Search } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -17,6 +17,7 @@ import type { UniversalIntentRoute } from "@/lib/intent/router"
 import { storeIntentHandoff } from "@/components/intent/intent-handoff"
 
 export function UniversalIntent() {
+  const [open, setOpen] = useState(false)
   const [input, setInput] = useState("")
   const [result, setResult] = useState<UniversalIntentRoute | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -45,12 +46,29 @@ export function UniversalIntent() {
 
   const destinationHref = result?.destination?.href ?? null
 
+  useEffect(() => {
+    function openFromKeyboard(event: KeyboardEvent) {
+      if (event.isComposing || event.key.toLowerCase() !== "k" || (!event.ctrlKey && !event.metaKey)) return
+      event.preventDefault()
+      setOpen(true)
+    }
+
+    window.addEventListener("keydown", openFromKeyboard)
+    return () => window.removeEventListener("keydown", openFromKeyboard)
+  }, [])
+
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-2" aria-label="Open universal intent">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-9 min-w-44 justify-between gap-3 border-border/80 bg-background/50 px-3 text-muted-foreground hover:bg-muted/40 hover:text-foreground sm:min-w-64"
+          aria-label="Ask or do anything"
+        >
           <Search className="h-4 w-4" aria-hidden={true} />
-          <span className="hidden sm:inline">Intent</span>
+          <span className="mr-auto hidden sm:inline">Ask or do anything…</span>
+          <kbd className="hidden font-mono text-[10px] text-muted-foreground/80 sm:inline">Ctrl K</kbd>
         </Button>
       </DialogTrigger>
       <DialogContent>
@@ -104,6 +122,7 @@ export function UniversalIntent() {
                     if (result.intent !== "navigation") {
                       storeIntentHandoff(result.destination!.href, input)
                     }
+                    setOpen(false)
                   }}
                 >
                   Open governed destination <ArrowRight className="ml-2 h-3.5 w-3.5" />

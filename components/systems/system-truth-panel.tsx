@@ -1,5 +1,4 @@
 import { Database, Server, ShieldCheck } from "lucide-react"
-import { StatusBadge } from "@/components/status-badge"
 import type { SystemTruthSignal } from "@/lib/system/system-truth"
 
 const SYSTEM_ICON = {
@@ -10,51 +9,35 @@ const SYSTEM_ICON = {
 
 export function SystemTruthPanel({ signals }: { signals: SystemTruthSignal[] }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-border bg-card">
-      <header className="border-b border-border bg-muted/30 px-4 py-3">
-        <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
-          Current system truth
-        </p>
-        <h2 className="mt-1 text-lg font-semibold">ATLAS · HERMES · AEGIS</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Each claim carries its own evidence class. Configuration and persisted history never become live status.
-        </p>
-      </header>
-
-      <div className="grid gap-3 p-4 lg:grid-cols-3">
+    <section>
+      <ol className="divide-y divide-[var(--workbench-hairline)] border-y border-[var(--workbench-hairline)]">
         {signals.map((signal) => {
           const Icon = SYSTEM_ICON[signal.system]
           return (
-            <article key={`${signal.system}:${signal.signal}`} className="rounded-lg border border-border bg-background p-4">
+            <li key={`${signal.system}:${signal.signal}`} className="grid gap-3 py-4 md:grid-cols-[9rem_minmax(0,1fr)_11rem] md:items-start">
               <div className="flex items-center gap-2">
-                <Icon className="h-4 w-4 text-primary" aria-hidden={true} />
-                <h3 className="font-mono text-sm font-semibold">{signal.system}</h3>
-                <StatusBadge value={signal.truthState} label={signal.truthState} />
+                <Icon className="h-4 w-4 text-[var(--workbench-copper)]" aria-hidden={true} />
+                <h2 className="font-mono text-sm font-semibold">{signal.system}</h2>
               </div>
-              <p className="mt-3 text-sm font-medium">{signal.summary}</p>
-              <dl className="mt-3 grid gap-2 text-xs text-muted-foreground">
+              <div>
+                <p className="text-sm font-medium">{signal.summary}</p>
+                <p className="mt-1 text-xs text-[var(--workbench-muted)]">{signal.signal} · {signal.source}</p>
+              </div>
+              <dl className="text-xs text-[var(--workbench-muted)] md:text-right">
                 <div>
-                  <dt className="font-mono uppercase tracking-wider">Signal</dt>
-                  <dd className="mt-1">{signal.signal}</dd>
-                </div>
-                <div>
-                  <dt className="font-mono uppercase tracking-wider">Source</dt>
-                  <dd className="mt-1">{signal.source}</dd>
-                </div>
-                <div>
-                  <dt className="font-mono uppercase tracking-wider">Observed</dt>
-                  <dd className="mt-1">
+                  <dt className="font-mono uppercase tracking-wider">{signal.truthState}</dt>
+                  <dd className="mt-1 font-mono text-[10px]">
                     {signal.observedAt ? new Date(signal.observedAt).toISOString() : "No live observation"}
                   </dd>
                 </div>
               </dl>
-            </article>
+            </li>
           )
         })}
-      </div>
+      </ol>
 
-      <footer className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
-        SYSTEM is read-only. It does not start, stop, repair, deploy, or grant authority to any runtime.
+      <footer className="pt-3 text-xs text-[var(--workbench-muted)]">
+        System is read-only. Configuration and persisted history never become live status.
       </footer>
     </section>
   )
