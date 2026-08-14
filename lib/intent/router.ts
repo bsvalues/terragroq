@@ -36,6 +36,7 @@ const SIGNALS: Readonly<Record<Exclude<UniversalIntent, "navigation">, readonly 
     /\bgoal\b/i,
     /\bobjective\b/i,
     /\b(?:build|fix|create|make|ship|deliver|implement)\b/i,
+    /^\s*add\b/i,
     /^\s*do\b/i,
   ],
   execution: [
