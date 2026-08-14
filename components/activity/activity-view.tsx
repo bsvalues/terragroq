@@ -1,4 +1,9 @@
-import type { ActivityFeed, ActivityKind } from "@/lib/operator/activity"
+import {
+  activityTruthCaption,
+  summarizeActivityFeed,
+  type ActivityFeed,
+  type ActivityKind,
+} from "@/lib/operator/activity"
 import { Card, CardContent } from "@/components/ui/card"
 
 const dotClass: Record<ActivityKind, string> = {
@@ -16,7 +21,9 @@ function stamp(iso: string): string {
 }
 
 export function ActivityView({ feed }: { feed: ActivityFeed }) {
-  if (feed.items.length === 0) {
+  const summary = summarizeActivityFeed(feed)
+
+  if (summary === null) {
     return (
       <Card>
         <CardContent className="py-6 text-sm text-muted-foreground">No recorded activity yet.</CardContent>
@@ -24,12 +31,23 @@ export function ActivityView({ feed }: { feed: ActivityFeed }) {
     )
   }
 
+  if (feed.items.length === 0) {
+    return (
+      <Card>
+        <CardContent className="space-y-1 py-6 font-mono text-xs text-muted-foreground">
+          <p>{summary}</p>
+          <p>{activityTruthCaption(feed)}</p>
+        </CardContent>
+      </Card>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <p className="font-mono text-xs text-muted-foreground">
-        {feed.items.length} meaningful events
-        {feed.churnCollapsed > 0 ? ` · ${feed.churnCollapsed} runtime/retry steps collapsed` : ""}
+        {summary}
       </p>
+      <p className="font-mono text-xs text-muted-foreground">{activityTruthCaption(feed)}</p>
       <ol className="flex flex-col">
         {feed.items.map((it) => (
           <li key={it.id} className="relative flex gap-3 border-l border-border pb-4 pl-4 last:border-transparent last:pb-0">
