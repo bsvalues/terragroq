@@ -7,7 +7,7 @@ export async function AppShell({
   user,
   children,
 }: {
-  user: { name: string; email: string }
+  user: { id: string; name: string; email: string }
   children: React.ReactNode
 }) {
   const [readiness, runtime] = await Promise.all([
@@ -20,10 +20,12 @@ export async function AppShell({
     needsYou: null,
     queueDepth: null,
   }
+  let projectState: "available" | "degraded" = "degraded"
   if (readiness.databaseReady) {
     try {
       const operatorState = await getOperatorState()
       projects = operatorState.projects.value
+      projectState = "available"
       pulse = {
         working: operatorState.now.value.activeExecutions,
         needsYou: operatorState.needsWilliam.value.length,
@@ -39,6 +41,7 @@ export async function AppShell({
     <AppShellFrame
       user={user}
       projects={projects}
+      projectState={projectState}
       pulse={pulse}
       readiness={readiness}
       runtime={runtime}

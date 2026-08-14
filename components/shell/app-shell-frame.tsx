@@ -8,14 +8,16 @@ import { WorkbenchShell } from "@/components/workbench/workbench-shell"
 export function AppShellFrame({
   user,
   projects,
+  projectState,
   pulse,
   readiness,
   runtime,
   observedAt,
   children,
 }: {
-  user: { name: string; email: string }
+  user: { id: string; name: string; email: string }
   projects: ProjectView[]
+  projectState: "available" | "degraded"
   pulse: { working: number | null; needsYou: number | null; queueDepth: number | null }
   readiness: AuthReadiness
   runtime: RuntimeStatus
@@ -26,6 +28,7 @@ export function AppShellFrame({
     <WorkbenchShell
       user={user}
       projects={projects}
+      projectState={projectState}
       pulse={pulse}
       readiness={readiness}
       runtime={runtime}

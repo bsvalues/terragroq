@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useReducer, useState, useTransition } from "react"
+import { useEffect, useMemo, useReducer, useRef, useState, useTransition } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
@@ -58,6 +58,10 @@ const inspectorTabs: ReadonlyArray<{ id: WorkbenchInspectorTab; label: string }>
 
 const WORKBENCH_RESTORATION_KEY = "williamos.workbench.layout.v1"
 
+function restorationKey(userId: string): string {
+  return `${WORKBENCH_RESTORATION_KEY}:${userId}`
+}
+
 function viewMode(pathname: string): WorkbenchViewMode | null {
   if (pathname === "/") return "home"
   if (pathname.startsWith("/projects")) return "projects"
@@ -72,6 +76,7 @@ function stamp(value: Date): string {
 
 function ProjectExplorer({
   projects,
+  projectState,
   selectedProject,
   threads,
   selectedThread,
@@ -81,6 +86,7 @@ function ProjectExplorer({
   onThread,
 }: {
   projects: ProjectView[]
+  projectState: "available" | "degraded"
   selectedProject: ProjectView | null
   threads: Thread[]
   selectedThread: Thread | null
@@ -95,6 +101,15 @@ function ProjectExplorer({
         <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--workbench-muted)]">Projects</p>
       </div>
       <div className="workbench-scroll min-h-0 flex-1 overflow-y-auto">
+        {projectState === "degraded" ? (
+          <p role="status" className="border-b border-[var(--workbench-hairline)] px-4 py-3 text-xs leading-5 text-[var(--workbench-warning)]">
+            Project context unavailable. The durable Project projection could not be read.
+          </p>
+        ) : projects.length === 0 ? (
+          <p role="status" className="border-b border-[var(--workbench-hairline)] px-4 py-3 text-xs leading-5 text-[var(--workbench-muted)]">
+            No durable Projects are registered.
+          </p>
+        ) : null}
         <div role="listbox" aria-label="Projects" className="py-2">
           {projects.map((project) => {
             const selected = selectedProject?.id === project.id
@@ -233,16 +248,33 @@ function Inspector({
     return true
   }) ?? []
 
+  function moveTab(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft" && event.key !== "Home" && event.key !== "End") return
+    event.preventDefault()
+    const nextIndex = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? inspectorTabs.length - 1
+        : (index + (event.key === "ArrowRight" ? 1 : -1) + inspectorTabs.length) % inspectorTabs.length
+    const next = inspectorTabs[nextIndex]
+    onTab(next.id)
+    window.requestAnimationFrame(() => document.getElementById(`workbench-inspector-tab-${next.id}`)?.focus())
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--workbench-panel)]">
       <div role="tablist" aria-label="Inspector" className="workbench-scroll flex overflow-x-auto border-b border-[var(--workbench-hairline)] px-2">
-        {inspectorTabs.map((candidate) => (
+        {inspectorTabs.map((candidate, index) => (
           <button
             key={candidate.id}
+            id={`workbench-inspector-tab-${candidate.id}`}
             type="button"
             role="tab"
             aria-selected={tab === candidate.id}
+            aria-controls="workbench-inspector-panel"
+            tabIndex={tab === candidate.id ? 0 : -1}
             onClick={() => onTab(candidate.id)}
+            onKeyDown={(event) => moveTab(event, index)}
             className={cn(
               "workbench-focus border-b-2 border-transparent px-2 py-3 text-[11px]",
               tab === candidate.id ? "border-b-[var(--workbench-copper)] text-[var(--workbench-text)]" : "text-[var(--workbench-muted)]",
@@ -252,7 +284,7 @@ function Inspector({
           </button>
         ))}
       </div>
-      <div role="tabpanel" className="workbench-scroll min-h-0 flex-1 overflow-y-auto p-4 text-sm">
+      <div id="workbench-inspector-panel" role="tabpanel" aria-labelledby={`workbench-inspector-tab-${tab}`} className="workbench-scroll min-h-0 flex-1 overflow-y-auto p-4 text-sm">
         {tab === "overview" ? (
           <div className="space-y-5">
             <div>
@@ -304,14 +336,16 @@ function Inspector({
 export function WorkbenchShell({
   user,
   projects,
+  projectState,
   pulse,
   readiness,
   runtime,
   observedAt,
   children,
 }: {
-  user: { name: string; email: string }
+  user: { id: string; name: string; email: string }
   projects: ProjectView[]
+  projectState: "available" | "degraded"
   pulse: { working: number | null; needsYou: number | null; queueDepth: number | null }
   readiness: AuthReadiness
   runtime: RuntimeStatus
@@ -325,8 +359,11 @@ export function WorkbenchShell({
   const [selectedItem, setSelectedItem] = useState<ThreadItem | null>(null)
   const [pendingThreadFocus, setPendingThreadFocus] = useState<string | null>(null)
   const [loadedProjectId, setLoadedProjectId] = useState<number | null>(null)
+  const [loadGeneration, setLoadGeneration] = useState(0)
   const [restorationRead, setRestorationRead] = useState(false)
+  const [pendingDomFocus, setPendingDomFocus] = useState(false)
   const [isPending, startTransition] = useTransition()
+  const threadMainRef = useRef<HTMLElement>(null)
   const routeMode = viewMode(pathname)
   const currentMode = routeMode ?? state.viewMode
   const selectedProject = projects.find((project) => String(project.id) === state.selectedProjectId) ?? null
@@ -334,7 +371,7 @@ export function WorkbenchShell({
 
   useEffect(() => {
     if (restorationRead) return
-    const serialized = window.sessionStorage.getItem(WORKBENCH_RESTORATION_KEY)
+    const serialized = window.localStorage.getItem(restorationKey(user.id))
     const restoration = serialized ? parseWorkbenchRestoration(serialized) : null
     if (restoration) {
       const projectOnly = { ...restoration, selectedThreadId: null }
@@ -347,12 +384,12 @@ export function WorkbenchShell({
       setPendingThreadFocus(restoration.selectedThreadId)
     }
     setRestorationRead(true)
-  }, [projects, restorationRead])
+  }, [projects, restorationRead, user.id])
 
   useEffect(() => {
     if (!restorationRead) return
-    window.sessionStorage.setItem(WORKBENCH_RESTORATION_KEY, serializeWorkbenchRestoration(state))
-  }, [restorationRead, state])
+    window.localStorage.setItem(restorationKey(user.id), serializeWorkbenchRestoration(state))
+  }, [restorationRead, state, user.id])
 
   useEffect(() => {
     if (routeMode) dispatch({ type: "USER_SET_VIEW_MODE", viewMode: routeMode })
@@ -381,7 +418,7 @@ export function WorkbenchShell({
       }
     })
     return () => { active = false }
-  }, [selectedProject])
+  }, [loadGeneration, selectedProject])
 
   useEffect(() => {
     if (!pendingThreadFocus) return
@@ -397,10 +434,16 @@ export function WorkbenchShell({
     setPendingThreadFocus(null)
   }, [loadedProjectId, pendingThreadFocus, selectedProject, threads])
 
+  useEffect(() => {
+    if (!pendingDomFocus || state.mobilePane !== "thread") return
+    threadMainRef.current?.focus({ preventScroll: true })
+    setPendingDomFocus(false)
+  }, [pendingDomFocus, selectedThread, state.mobilePane])
+
   const center = useMemo(() => {
     if (routeMode === null) return children
-    if (selectedThread) return <ThreadTimeline thread={selectedThread} onSelectItem={setSelectedItem} />
     if (currentMode === "activity" || currentMode === "system") return children
+    if (selectedThread) return <ThreadTimeline thread={selectedThread} onSelectItem={setSelectedItem} />
     return <EmptyThread project={selectedProject} />
   }, [children, currentMode, routeMode, selectedProject, selectedThread])
 
@@ -408,9 +451,11 @@ export function WorkbenchShell({
     setSelectedItem(null)
     setThreads([])
     setLoadedProjectId(null)
+    setLoadGeneration((generation) => generation + 1)
     dispatch({ type: "USER_SELECT_PROJECT", projectId: String(project.id), availableProjectIds: projects.map((candidate) => String(candidate.id)) })
     dispatch({ type: "USER_SET_FOCUS", focus: "thread" })
     dispatch({ type: "USER_SET_MOBILE_PANE", pane: "thread" })
+    setPendingDomFocus(true)
   }
 
   function selectThread(thread: Thread) {
@@ -418,16 +463,18 @@ export function WorkbenchShell({
     dispatch({ type: "USER_SELECT_THREAD", threadId: thread.id, availableThreadIds: threads.map((candidate) => candidate.id) })
     dispatch({ type: "USER_SET_FOCUS", focus: "thread" })
     dispatch({ type: "USER_SET_MOBILE_PANE", pane: "thread" })
+    setPendingDomFocus(true)
   }
 
   function focusThread(target: { projectId: number; threadId: string }) {
     const project = projects.find((candidate) => candidate.id === target.projectId)
     if (!project) return
     setPendingThreadFocus(target.threadId)
+    setPendingDomFocus(true)
     selectProject(project)
   }
 
-  const explorer = <ProjectExplorer projects={projects} selectedProject={selectedProject} threads={threads} selectedThread={selectedThread} loading={isPending} error={loadError} onProject={selectProject} onThread={selectThread} />
+  const explorer = <ProjectExplorer projects={projects} projectState={projectState} selectedProject={selectedProject} threads={threads} selectedThread={selectedThread} loading={isPending} error={loadError} onProject={selectProject} onThread={selectThread} />
   const inspector = <Inspector tab={state.inspectorTab} project={selectedProject} thread={selectedThread} item={selectedItem} onTab={(tab) => dispatch({ type: "USER_SET_INSPECTOR_TAB", inspectorTab: tab })} />
 
   const mobilePanes: Array<{ id: WorkbenchMobilePane; label: string; icon: typeof PanelLeft }> = [
@@ -461,7 +508,7 @@ export function WorkbenchShell({
 
         <div className="min-h-0 flex-1 sm:grid sm:grid-cols-[16rem_minmax(0,1fr)] lg:grid-cols-[17rem_minmax(0,1fr)_20rem]">
           <aside aria-label="Project and Thread Explorer" className={cn("min-h-0 border-r border-[var(--workbench-hairline)]", state.mobilePane === "explorer" ? "h-full sm:block" : "hidden sm:block")}>{explorer}</aside>
-          <main id="workbench-thread" className={cn("workbench-scroll min-h-0 overflow-y-auto bg-[var(--workbench-canvas)]", state.mobilePane === "thread" ? "h-full" : "hidden lg:block")} tabIndex={-1}>{center}</main>
+          <main ref={threadMainRef} id="workbench-thread" className={cn("workbench-scroll min-h-0 overflow-y-auto bg-[var(--workbench-canvas)]", state.mobilePane === "thread" ? "h-full" : "hidden lg:block")} tabIndex={-1}>{center}</main>
           <aside aria-label="Inspector" className={cn("min-h-0 border-l border-[var(--workbench-hairline)]", state.mobilePane === "inspector" ? "h-full sm:col-start-2" : "hidden lg:block")}>{inspector}</aside>
           {state.mobilePane === "execution" ? <section className="h-full p-5 sm:col-start-2 lg:hidden"><p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--workbench-muted)]">Execution</p><p className="mt-3 text-sm">No authorized interrupt or generic terminal protocol is available.</p><p className="mt-2 text-xs leading-5 text-[var(--workbench-muted)]">Tests, logs, and agents remain inspectable through persisted evidence and contextual routes.</p></section> : null}
         </div>
@@ -472,7 +519,7 @@ export function WorkbenchShell({
         </section>
 
         <footer aria-label="System status" className="flex h-7 shrink-0 items-center gap-4 overflow-x-auto border-t border-[var(--workbench-hairline)] bg-[var(--workbench-canvas)] px-3 font-mono text-[9px] uppercase tracking-wider text-[var(--workbench-muted)]">
-          <span><b className="text-[var(--workbench-live)]">HERMES</b> live</span>
+          <span title="Configured application host role; this is not a liveness probe"><b>HERMES</b> inferred</span>
           <span><b className={readiness.databaseReady ? "text-[var(--workbench-live)]" : "text-[var(--workbench-fault)]"}>ATLAS</b> {readiness.databaseReady ? "live" : "offline"}</span>
           <span><b>AEGIS</b> unknown</span>
           <span><b className={pulse.needsYou !== null && pulse.needsYou > 0 ? "text-[var(--workbench-warning)]" : "text-[var(--workbench-muted)]"}>Needs you</b> {pulse.needsYou ?? "unknown"}</span>

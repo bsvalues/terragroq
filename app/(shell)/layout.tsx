@@ -12,7 +12,7 @@ export default async function ShellLayout({
   if (!session?.user) redirect("/sign-in")
 
   return (
-    <AppShell user={{ name: session.user.name, email: session.user.email }}>
+    <AppShell user={{ id: session.user.id, name: session.user.name, email: session.user.email }}>
       <LegacyRouteBanner />
       {children}
     </AppShell>
