@@ -129,7 +129,10 @@ describe("WorkbenchShell rendered interaction contract", () => {
     window.localStorage.clear()
   })
 
-  afterEach(cleanup)
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
 
   it("loads by durable Project id and reloads when the selected Project is explicitly chosen again", async () => {
     const user = userEvent.setup()
@@ -246,6 +249,52 @@ describe("WorkbenchShell rendered interaction contract", () => {
       const serialized = window.localStorage.getItem("williamos.workbench.layout.v1:owner-1")
       expect(serialized).toContain('"viewMode":"activity"')
       expect(serialized).toContain('"executionExpanded":true')
+    })
+  })
+
+  it("degrades safely when authenticated-user layout storage is unavailable", async () => {
+    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError")
+    })
+
+    expect(() => renderShell()).not.toThrow()
+    expect(screen.getByRole("navigation", { name: "Workbench views" })).toBeTruthy()
+    getItem.mockRestore()
+    cleanup()
+
+    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError")
+    })
+    expect(() => renderShell()).not.toThrow()
+    expect(screen.getByRole("navigation", { name: "Workbench views" })).toBeTruthy()
+    setItem.mockRestore()
+  })
+
+  it("clears a superseded restoration route and persists the route the owner actually selected", async () => {
+    window.localStorage.setItem("williamos.workbench.layout.v1:owner-1", JSON.stringify({
+      schemaVersion: 1,
+      selectedProjectId: "7",
+      selectedThreadId: null,
+      viewMode: "activity",
+      inspectorTab: "overview",
+      executionExpanded: false,
+      foregroundFocus: "thread",
+      mobilePane: "thread",
+    }))
+
+    const view = renderShell()
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/activity"))
+
+    navigation.pathname = "/projects"
+    view.rerender(
+      <WorkbenchShell user={{ id: "owner-1", name: "William", email: "owner@example.test" }} projects={projects} projectState="available" pulse={{ working: 1, needsYou: 0, queueDepth: 1 }} readiness={readiness} runtime={runtime} observedAt="2026-08-14T10:10:00.000Z">
+        <p>Projects mode content</p>
+      </WorkbenchShell>,
+    )
+
+    await waitFor(() => {
+      const serialized = window.localStorage.getItem("williamos.workbench.layout.v1:owner-1")
+      expect(serialized).toContain('"viewMode":"projects"')
     })
   })
 

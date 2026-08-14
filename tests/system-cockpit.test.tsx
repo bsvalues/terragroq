@@ -5,6 +5,7 @@ import { cleanup, render, screen, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import SystemPage from "@/app/(shell)/system/page"
+import RuntimePage from "@/app/(shell)/runtime/page"
 
 const dependencies = vi.hoisted(() => ({
   getAuthReadiness: vi.fn(),
@@ -118,5 +119,14 @@ describe("System cockpit rendered truth contract", () => {
     expect(atlas.textContent).toContain("No live observation")
     expect(atlas.textContent).toContain("Current state-database query did not succeed")
     expect(screen.getByText("System is read-only. Configuration and persisted history never become live status.")).toBeTruthy()
+  })
+
+  it("renders the bounded Runtime summary with an exact technical-detail destination", async () => {
+    render(await RuntimePage({ searchParams: Promise.resolve({}) }))
+
+    expect(screen.getByRole("heading", { name: "Current operating truth" })).toBeTruthy()
+    const detail = screen.getByRole("link", { name: "Open technical detail" })
+    expect(detail.getAttribute("href")).toBe("/runtime?detail=technical")
+    expect(screen.getByRole("heading", { name: "ATLAS" })).toBeTruthy()
   })
 })

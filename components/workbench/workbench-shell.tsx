@@ -374,7 +374,13 @@ export function WorkbenchShell({
 
   useEffect(() => {
     if (restorationRead) return
-    const serialized = window.localStorage.getItem(restorationKey(user.id))
+    let serialized: string | null = null
+    try {
+      serialized = window.localStorage.getItem(restorationKey(user.id))
+    } catch {
+      // Spatial restoration is optional. A blocked device store must not take
+      // down the authenticated Workbench.
+    }
     const restoration = serialized ? parseWorkbenchRestoration(serialized) : null
     if (restoration) {
       const projectOnly = { ...restoration, selectedThreadId: null }
@@ -396,7 +402,12 @@ export function WorkbenchShell({
 
   useEffect(() => {
     if (!restorationRead) return
-    window.localStorage.setItem(restorationKey(user.id), serializeWorkbenchRestoration(state))
+    try {
+      window.localStorage.setItem(restorationKey(user.id), serializeWorkbenchRestoration(state))
+    } catch {
+      // Quota and policy failures only disable restoration; they do not alter
+      // current authenticated state or authority.
+    }
   }, [restorationRead, state, user.id])
 
   useEffect(() => {
@@ -404,6 +415,11 @@ export function WorkbenchShell({
     const restoredRoute = restoredRouteRef.current
     if (restoredRoute) {
       if (routeMode === restoredRoute) {
+        restoredRouteRef.current = null
+        dispatch({ type: "USER_SET_VIEW_MODE", viewMode: routeMode })
+      } else if (routeMode !== "home") {
+        // Home is the launch route while router.replace settles. Any other
+        // route is an explicit or otherwise settled destination and wins.
         restoredRouteRef.current = null
         dispatch({ type: "USER_SET_VIEW_MODE", viewMode: routeMode })
       }
