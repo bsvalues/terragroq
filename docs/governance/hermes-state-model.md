@@ -1,5 +1,13 @@
 # Hermes State Model
 
+> **Supersession note.** "Hermes" in this document is the governed in-app *sidecar / worker-boundary
+> concept* and its state model. The physical **HERMES coordinator node** and the resident
+> **Hermes→AEGIS ExecutionBackend (PR #754)** are OPERATING, governed by
+> [`sovereign-runtime-and-review-supersession.md`](sovereign-runtime-and-review-supersession.md).
+> Read "disabled by default / not active / future worker" below as the safety posture of this bounded
+> lane — not as the status of the operating runtime.
+
+
 This state model is static doctrine. It is not a runtime state machine, database model, polling loop, permission engine, or worker activation path.
 
 ## States
