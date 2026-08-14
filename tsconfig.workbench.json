@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false
+  },
+  "include": [
+    "next-env.d.ts",
+    "components/workbench/**/*.tsx",
+    "components/shell/app-shell.tsx",
+    "components/shell/app-shell-frame.tsx",
+    "components/intent/universal-intent.tsx",
+    "lib/workbench/**/*.ts",
+    "lib/operator/**/*.ts",
+    "lib/intent/**/*.ts"
+  ],
+  "exclude": ["node_modules", "tests", "control-center/frontend"]
+}

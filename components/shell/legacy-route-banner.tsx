@@ -4,34 +4,20 @@ import { usePathname } from "next/navigation"
 
 type LegacyEntry = { label: string; message: string }
 
-// Surfaces whose displayed content is known stale or static (see WILLIAMOS_UI_TRUTH_AUDIT, P0).
-// A control plane must never present these as current operational truth, so each is labelled
-// until it is rebuilt on a live projection. Keyed by exact pathname.
+// Only surfaces whose content is still known to be illustrative remain labelled.
+// Projects and Runtime were rebuilt on live projections and must not carry stale warnings.
 const LEGACY_ROUTES: Record<string, LegacyEntry> = {
   "/hermes": {
-    label: "Legacy / design reference",
-    message:
-      "This page reports Hermes as inactive, but the Hermes runtime is live. It is stale doctrine, not current status.",
-  },
-  "/projects": {
-    label: "Legacy / design reference",
-    message:
-      "These projects are hard-coded design placeholders, not live project data.",
+    label: "Reference surface",
+    message: "Use the status bar and Runtime for current node truth; this view still includes historical Hermes doctrine.",
   },
   "/brain-council": {
-    label: "Legacy / design reference",
-    message:
-      "This Council reasoning is a static example, not live advisory output.",
+    label: "Reference surface",
+    message: "Council output shown here is illustrative until a live advisory run is recorded for the selected context.",
   },
   "/agent-forge": {
-    label: "Legacy / design reference",
-    message:
-      "This Forge registry is static design intent; it does not reflect live capabilities.",
-  },
-  "/runtime": {
-    label: "Partially legacy",
-    message:
-      "Live runtime data appears alongside a static “systems ready” summary that is design reference, not current node truth.",
+    label: "Reference surface",
+    message: "Capability definitions shown here are design records, not a live worker reachability probe.",
   },
 }
 
@@ -39,17 +25,5 @@ export function LegacyRouteBanner() {
   const pathname = usePathname()
   const entry = pathname ? LEGACY_ROUTES[pathname] : undefined
   if (!entry) return null
-
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="mx-6 mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-amber-500/50 bg-amber-500/10 px-4 py-2.5 text-sm"
-    >
-      <span className="rounded bg-amber-500/20 px-2 py-0.5 font-mono text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-300">
-        {entry.label}
-      </span>
-      <span className="text-amber-800 dark:text-amber-200/90">{entry.message}</span>
-    </div>
-  )
+  return <div role="status" aria-live="polite" className="mx-6 mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 border-l-2 border-amber-400 bg-amber-500/5 px-3 py-2 text-sm"><span className="font-mono text-[10px] font-semibold uppercase tracking-wide text-amber-300">{entry.label}</span><span className="text-amber-100/80">{entry.message}</span></div>
 }

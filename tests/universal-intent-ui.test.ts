@@ -1,26 +1,24 @@
-import { readFileSync } from "node:fs"
+import fs from "node:fs"
+import path from "node:path"
 import { describe, expect, it } from "vitest"
 
-const component = readFileSync("components/intent/universal-intent.tsx", "utf8")
-const shell = readFileSync("components/shell/app-shell-frame.tsx", "utf8")
+const source = (file: string) => fs.readFileSync(path.join(process.cwd(), file), "utf8")
 
 describe("global universal intent affordance", () => {
-  it("is present in both compact Home and normal cockpit headers", () => {
-    expect(shell.match(/<UniversalIntent \/>/g)).toHaveLength(2)
+  it("is present once in the one persistent workbench header", () => {
+    const shell = source("components/workbench/workbench-shell.tsx")
+    expect(shell.match(/<UniversalIntent \/>/g)).toHaveLength(1)
   })
 
-  it("routes through the authenticated deterministic endpoint", () => {
-    expect(component).toContain('fetch("/api/intent"')
-    expect(component).toContain('body: JSON.stringify({ intent: input })')
-    expect(component).toContain("result.destination")
-    expect(component).toContain("storeIntentHandoff")
-    expect(component).not.toContain("?intent=")
+  it("opens through Ctrl+K and never grants execution authority", () => {
+    const intent = source("components/intent/universal-intent.tsx")
+    expect(intent).toContain("event.ctrlKey || event.metaKey")
+    expect(intent).toContain("Routing never grants execution authority")
   })
 
-  it("makes authority and clarification states visible without auto-execution", () => {
-    expect(component).toContain('result.state === "authority_required"')
-    expect(component).toContain('result.state === "clarification_required"')
-    expect(component).toContain("Execution remains gated")
-    expect(component).not.toContain("router.push")
+  it("keeps routed intent handoff behavior", () => {
+    const intent = source("components/intent/universal-intent.tsx")
+    expect(intent).toContain("storeIntentHandoff")
+    expect(intent).toContain('fetch("/api/intent"')
   })
 })

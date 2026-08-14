@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 
 const page = readFileSync("app/(shell)/runtime/page.tsx", "utf8")
 const panel = readFileSync("components/systems/system-truth-panel.tsx", "utf8")
-const shell = readFileSync("components/shell/app-shell-frame.tsx", "utf8")
+const shell = readFileSync("components/workbench/workbench-shell.tsx", "utf8")
 
 describe("SYSTEM cockpit", () => {
   it("grounds ATLAS in a current database readiness query", () => {
@@ -38,11 +38,11 @@ describe("SYSTEM cockpit", () => {
     expect(page).toContain("databaseReady={systemReadiness.databaseReady}")
   })
 
-  it("does not present configuration or owner-run commands as live SYSTEM state", () => {
+  it("qualifies compact workbench status instead of asserting configured nodes are live", () => {
     expect(page).toContain("Configured runtime · source")
     expect(page).not.toContain("Active runtime · source")
     expect(page).not.toContain("<LocalOperatorPanel")
-    expect(shell).toContain("gateway liveness unknown")
+    expect(shell).toContain('system.detail.startsWith("live")')
     expect(shell).not.toContain("gateway online")
     expect(shell).not.toContain("bg-success")
   })

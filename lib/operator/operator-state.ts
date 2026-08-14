@@ -1,7 +1,6 @@
 import { db } from "@/lib/db"
-import { and, eq, sql } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import {
-  authorityGrant,
   decision,
   document,
   evidenceRecord,
