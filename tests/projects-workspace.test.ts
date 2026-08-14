@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
+import { supportingCapabilities } from "@/components/workbench/supporting-capabilities"
 
 const workbenchSource = readFileSync("components/workbench/workbench-shell.tsx", "utf8")
-const capabilitiesSource = readFileSync("components/workbench/supporting-capabilities.ts", "utf8")
 const pageSource = readFileSync("app/(shell)/projects/page.tsx", "utf8")
 
 describe("Projects workspace", () => {
@@ -19,9 +19,12 @@ describe("Projects workspace", () => {
   })
 
   it("keeps contextual cockpit routes and the read-only authority boundary", () => {
-    for (const href of ["/work-orders", "/audit", "/runtime", "/brain-council"]) {
-      expect(`${workbenchSource}\n${capabilitiesSource}`).toContain(`href: "${href}"`)
-    }
+    expect(supportingCapabilities.map((capability) => capability.href)).toEqual(expect.arrayContaining([
+      "/work-orders",
+      "/audit",
+      "/runtime?detail=technical",
+      "/brain-council",
+    ]))
     expect(workbenchSource).toContain("No generic shell authority")
   })
 
