@@ -215,7 +215,7 @@ function refererOriginFromHeader(value: string | null) {
 function trustedLoopbackProxyOrigin(req: Request) {
   if (process.env.WILLIAMOS_TRUST_LOOPBACK_HTTPS_PROXY !== "1") return null
   const requestUrl = new URL(req.url)
-  if (requestUrl.hostname !== "127.0.0.1" && requestUrl.hostname !== "[::1]") return null
+  if (requestUrl.hostname !== "localhost" && requestUrl.hostname !== "127.0.0.1" && requestUrl.hostname !== "[::1]") return null
   if (req.headers.get("forwarded") !== null || req.headers.get("x-forwarded-for") !== null) return null
   const host = req.headers.get("host")
   const forwardedHost = req.headers.get("x-forwarded-host")

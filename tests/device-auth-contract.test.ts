@@ -58,6 +58,11 @@ describe("device authentication contract", () => {
     }
     const proxied = new Request("https://127.0.0.1:3100/api/device/challenge", { method: "POST", headers })
     expect(validateDeviceMutationOrigin(proxied, [origin], { trustLoopbackHttpsProxy: true })).toBe(origin)
+    expect(validateDeviceMutationOrigin(
+      new Request("https://localhost:3100/api/device/challenge", { method: "POST", headers }),
+      [origin],
+      { trustLoopbackHttpsProxy: true },
+    )).toBe(origin)
 
     for (const [url, changedHeaders] of [
       ["https://192.168.88.9:3100/api/device/challenge", headers],

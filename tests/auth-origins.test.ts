@@ -119,6 +119,10 @@ describe("auth trusted origin resolution", () => {
     ))
     expect(diagnostics.currentOrigin).toBe("https://192.168.88.9:3443")
     expect(diagnostics.isCurrentOriginTrusted).toBe(true)
+    expect(getOriginDiagnostics(new Request(
+      "https://localhost:3100/api/auth/origin-diagnostics",
+      { headers },
+    )).isCurrentOriginTrusted).toBe(true)
 
     for (const [url, changedHeaders] of [
       ["https://192.168.88.9:3100/api/auth/origin-diagnostics", headers],
