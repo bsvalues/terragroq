@@ -13,6 +13,7 @@ import {
 import { Send, ShieldCheck, FileText, BrainCircuit, ChevronDown, Loader2 } from "lucide-react"
 import { getOperatorChatNativeArea } from "@/components/chat/operator-chat-native-area"
 import { cn } from "@/lib/utils"
+import { useRoutedIntent } from "@/components/intent/use-routed-intent"
 
 type Source = {
   ref: number
@@ -26,6 +27,7 @@ type Source = {
 const SUGGESTIONS = getOperatorChatNativeArea().suggestions
 
 export function OperatorChat({ className }: { className?: string }) {
+  const routedIntent = useRoutedIntent("/chat")
   const [input, setInput] = useState("")
   const { messages, sendMessage, status } = useChat({
     transport: new DefaultChatTransport({ api: "/api/chat" }),
@@ -36,6 +38,10 @@ export function OperatorChat({ className }: { className?: string }) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  useEffect(() => {
+    if (routedIntent) setInput(routedIntent)
+  }, [routedIntent])
 
   function submit(text: string) {
     if (!text.trim() || busy) return

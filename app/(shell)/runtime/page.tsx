@@ -13,33 +13,90 @@ import { projectContinuousCampaignStatus } from "@/components/runtime/continuous
 import { OutcomeCompletionTimelinePanel } from "@/components/runtime/outcome-completion-timeline-panel"
 import { RuntimeProbe } from "@/components/runtime/runtime-probe"
 import { ReadinessNativeAreaPanel } from "@/components/runtime/readiness-native-area-panel"
-import { SystemsStatusPanel } from "@/components/systems/systems-status-panel"
-import { LocalOperatorPanel } from "@/components/local/local-operator-panel"
+import { SystemTruthPanel } from "@/components/systems/system-truth-panel"
 import { LocalRuntimeLiveStatusPanel } from "@/components/local/local-runtime-live-status-panel"
 import { getRuntimeExecutions } from "@/app/actions/runtime-executions"
 import { getRecentOutcomeCompletionTimeline } from "@/app/actions/goal-timeline"
 import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
+import { getAuthReadiness } from "@/lib/auth-readiness"
+import { projectSystemTruth } from "@/lib/system/system-truth"
+
+async function RuntimeSupportingPanels({ databaseReady }: { databaseReady: boolean }) {
+  if (!databaseReady) {
+    return (
+      <div role="status" className="rounded-lg border border-warning/40 bg-warning/5 p-4 text-sm text-muted-foreground">
+        Supporting persisted runtime panels are unavailable while the ATLAS query is unknown.
+      </div>
+    )
+  }
+
+  try {
+    const [evidenceRecords, executionTruth, outcomeCompletionTimeline, outcomeQueueSurface] = await Promise.all([
+      getRecentEvidence(RUNTIME_EVIDENCE_HISTORY_LIMIT + 1),
+      getRuntimeExecutions(),
+      getRecentOutcomeCompletionTimeline(),
+      getOutcomeQueueSurface(),
+    ])
+    const evidenceHistory = projectRuntimeEvidenceHistory(evidenceRecords)
+    const continuousCampaignStatus = projectContinuousCampaignStatus(
+      outcomeQueueSurface,
+      outcomeCompletionTimeline,
+    )
+
+    return (
+      <>
+        <RuntimeExecutionPanel truth={executionTruth} />
+        <ContinuousCampaignStatusPanel status={continuousCampaignStatus} />
+        <OutcomeCompletionTimelinePanel timeline={outcomeCompletionTimeline} />
+        <RuntimeEvidencePanel
+          records={evidenceHistory.records}
+          limit={evidenceHistory.limit}
+          truncated={evidenceHistory.truncated}
+        />
+      </>
+    )
+  } catch {
+    return (
+      <div role="status" className="rounded-lg border border-warning/40 bg-warning/5 p-4 text-sm text-muted-foreground">
+        Supporting persisted runtime panels are unavailable; SYSTEM truth remains independently visible.
+      </div>
+    )
+  }
+}
 
 export default async function RuntimePage() {
   const rt = buildRuntimeStatus()
-  const [
-    evidenceRecords,
-    executionTruth,
-    outcomeCompletionTimeline,
-    outcomeQueueSurface,
-  ] = await Promise.all([
-    getRecentEvidence(RUNTIME_EVIDENCE_HISTORY_LIMIT + 1),
-    getRuntimeExecutions(),
-    getRecentOutcomeCompletionTimeline(),
-    getOutcomeQueueSurface(),
+  const systemReadiness = await getAuthReadiness({ probeDatabase: true })
+  const systemTruth = projectSystemTruth([
+    {
+      system: "ATLAS",
+      signal: "state-database",
+      evidenceKind: "current-query",
+      succeeded: systemReadiness.databaseReady,
+      observedAt: systemReadiness.checkedAt,
+      source: "getAuthReadiness database connectivity probe",
+      summary: systemReadiness.databaseReady
+        ? "Current state-database query succeeded."
+        : "Current state-database query did not succeed.",
+    },
+    {
+      system: "HERMES",
+      signal: "coordinator-app-host",
+      evidenceKind: "configured",
+      observedAt: null,
+      source: "issue #762 runtime topology contract",
+      summary: "Configured as coordinator and app host. Configuration describes role, not current liveness.",
+    },
+    {
+      system: "AEGIS",
+      signal: "worker-node",
+      evidenceKind: "configured",
+      observedAt: null,
+      source: "issue #762 runtime topology contract",
+      summary: "Configured as a worker node. Configuration describes role, not current liveness.",
+    },
   ])
-  const evidenceHistory = projectRuntimeEvidenceHistory(evidenceRecords)
-  const continuousCampaignStatus = projectContinuousCampaignStatus(
-    outcomeQueueSurface,
-    outcomeCompletionTimeline,
-  )
-
   const rows: { icon: typeof Cpu; label: string; value: string; mono?: boolean }[] = [
     { icon: Cpu, label: "Chat model", value: rt.chatModel, mono: true },
     { icon: Database, label: "Embedding model", value: rt.embeddingModel, mono: true },
@@ -55,12 +112,9 @@ export default async function RuntimePage() {
         description="Primary read-only status view for WilliamOS systems under command: readiness, stable areas, blocked states, disabled-by-design capabilities, advisory layers, local runtime posture, and production health."
       />
       <div className="flex flex-col gap-6 p-6">
-        <SystemsStatusPanel />
-        <RuntimeExecutionPanel truth={executionTruth} />
-        <ContinuousCampaignStatusPanel status={continuousCampaignStatus} />
-        <OutcomeCompletionTimelinePanel timeline={outcomeCompletionTimeline} />
+        <SystemTruthPanel signals={systemTruth} />
+        <RuntimeSupportingPanels databaseReady={systemReadiness.databaseReady} />
         <LocalRuntimeLiveStatusPanel />
-        <LocalOperatorPanel />
         <ReadinessNativeAreaPanel />
 
         {/* Fallback posture — the governed guarantee */}
@@ -71,8 +125,8 @@ export default async function RuntimePage() {
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium">Fallback posture</span>
                 <StatusBadge
-                  value={rt.fallback ? "stale" : "active"}
-                  label={rt.fallback ? "fallback enabled" : "explicit-only"}
+                  value={rt.fallback ? "stale" : "informational"}
+                  label={rt.fallback ? "fallback configured" : "explicit configuration"}
                 />
               </div>
               <p className="mt-1.5 text-sm text-pretty text-muted-foreground">
@@ -86,7 +140,7 @@ export default async function RuntimePage() {
         <div className="overflow-hidden rounded-lg border border-border">
           <div className="border-b border-border bg-muted/50 px-4 py-2.5">
             <h2 className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-              Active runtime · source {rt.source}
+              Configured runtime · source {rt.source}
             </h2>
           </div>
           <dl className="divide-y divide-border">
@@ -108,11 +162,6 @@ export default async function RuntimePage() {
           <RuntimeProbe />
         </div>
 
-        <RuntimeEvidencePanel
-          records={evidenceHistory.records}
-          limit={evidenceHistory.limit}
-          truncated={evidenceHistory.truncated}
-        />
       </div>
     </>
   )
