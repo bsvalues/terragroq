@@ -47,11 +47,12 @@ describe("thin Tauri cockpit contract", () => {
 
   it("builds Windows MSI and NSIS bundles with production devtools disabled", () => {
     const tauri = readJson<{
-      app: { windows: unknown[]; security: { capabilities: string[] } }
+      app: { windows: unknown[]; withGlobalTauri: boolean; security: { capabilities: string[] } }
       bundle: { active: boolean; targets: string[]; resources: Record<string, string> }
     }>("src-tauri/tauri.conf.json")
 
     expect(tauri.app.windows).toEqual([])
+    expect(tauri.app.withGlobalTauri).toBe(true)
     expect(tauri.app.security.capabilities).toEqual(["remote-cockpit"])
     expect(tauri.bundle).toMatchObject({ active: true, targets: ["msi", "nsis"] })
     expect(tauri.bundle.resources).toEqual({
