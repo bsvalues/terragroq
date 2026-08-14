@@ -2,16 +2,18 @@
 
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { WorkbenchShell } from "@/components/workbench/workbench-shell"
 import { WorkbenchActivity } from "@/components/workbench/workbench-activity"
 import type { ProjectView } from "@/lib/operator/operator-state"
 import type { Thread } from "@/lib/workbench/thread-projection"
+import type { WorkbenchExecutionProjection } from "@/lib/workbench/execution-projection"
 
 const navigation = vi.hoisted(() => ({ pathname: "/", replace: vi.fn() }))
 const actions = vi.hoisted(() => ({ getWorkbenchThreads: vi.fn() }))
+const executionActions = vi.hoisted(() => ({ getWorkbenchExecution: vi.fn() }))
 
 vi.mock("next/navigation", () => ({
   usePathname: () => navigation.pathname,
@@ -23,6 +25,7 @@ vi.mock("next/link", () => ({
   ),
 }))
 vi.mock("@/app/actions/workbench-threads", () => ({ getWorkbenchThreads: actions.getWorkbenchThreads }))
+vi.mock("@/app/actions/workbench-execution", () => ({ getWorkbenchExecution: executionActions.getWorkbenchExecution }))
 vi.mock("@/components/intent/universal-intent", () => ({
   UniversalIntent: () => <button type="button">Ask or do anything</button>,
 }))
@@ -100,6 +103,37 @@ const runtime = {
   ts: "2026-08-14T10:10:00.000Z",
 } as const
 
+function executionProjection(summary: string, observedAt: string | null = "2026-08-14T10:11:00.000Z"): WorkbenchExecutionProjection {
+  return {
+    availability: "available",
+    scope: { projectId: 7, threadId: "thread-alpha" },
+    truthState: "persisted",
+    observedAt,
+    latestPersistedAt: "2026-08-14T10:10:00.000Z",
+    freshness: { state: "fresh", detail: null },
+    work: { outcomes: [], workOrders: [] },
+    agents: [], attempts: [],
+    validations: [{
+      id: `validation-${summary}`,
+      state: "CI_PASSED",
+      summary,
+      occurredAt: "2026-08-14T10:10:00.000Z",
+      truthState: "persisted",
+      drilldown: { mode: "UNAVAILABLE", href: null },
+    }],
+    reviews: [], remediations: [], deliveries: [], events: [], evidence: [], recoveries: [],
+    coverage: { truncated: false, truncatedKinds: [], missing: [], conflicts: [] },
+    controls: { terminal: false, steer: false, pause: false, stop: false },
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((next, fail) => { resolve = next; reject = fail })
+  return { promise, resolve, reject }
+}
+
 function renderShell(options?: {
   projectState?: "available" | "degraded"
   projectRows?: ProjectView[]
@@ -126,6 +160,8 @@ describe("WorkbenchShell rendered interaction contract", () => {
     navigation.replace.mockReset()
     actions.getWorkbenchThreads.mockReset()
     actions.getWorkbenchThreads.mockResolvedValue([thread])
+    executionActions.getWorkbenchExecution.mockReset()
+    executionActions.getWorkbenchExecution.mockImplementation(() => new Promise(() => {}))
     window.localStorage.clear()
   })
 
@@ -322,6 +358,116 @@ describe("WorkbenchShell rendered interaction contract", () => {
       "Activity",
       "System",
     ])
+  })
+
+  it("keeps compact Execution truthful when no Thread is selected", async () => {
+    const user = userEvent.setup()
+    renderShell()
+
+    await user.click(screen.getByRole("button", { name: /^Execution$/ }))
+
+    expect(screen.getByText("Select a Thread to inspect execution.")).toBeTruthy()
+    expect(screen.getByText("No governed terminal protocol is available.")).toBeTruthy()
+  })
+
+  it("keeps desktop Execution collapsed until its explicit toggle is used", async () => {
+    const user = userEvent.setup()
+    renderShell()
+    const toggle = screen.getByRole("button", { name: /Execution agents · tests · logs/ })
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false")
+    expect(screen.queryByRole("region", { name: "Selected Thread execution" })).toBeNull()
+
+    await user.click(toggle)
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true")
+    expect(screen.getByRole("region", { name: "Selected Thread execution" })).toBeTruthy()
+    expect(document.activeElement).toBe(toggle)
+  })
+
+  it("shows bounded loading truth after a Thread is explicitly selected", async () => {
+    const user = userEvent.setup()
+    renderShell()
+    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
+
+    await user.click(screen.getByRole("button", { name: /^Execution$/ }))
+
+    expect(screen.getByRole("status").textContent).toBe("Reading selected Thread execution…")
+  })
+
+  it("loads execution only for the explicitly selected Project and Thread", async () => {
+    executionActions.getWorkbenchExecution.mockResolvedValue(executionProjection("Selected execution proof"))
+    const user = userEvent.setup()
+    renderShell()
+
+    expect(executionActions.getWorkbenchExecution).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    expect(executionActions.getWorkbenchExecution).not.toHaveBeenCalled()
+    await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
+    await waitFor(() => expect(executionActions.getWorkbenchExecution).toHaveBeenCalledWith(7, "thread-alpha"))
+    await user.click(screen.getByRole("button", { name: /^Execution$/ }))
+
+    expect(await screen.findByText("Selected execution proof")).toBeTruthy()
+  })
+
+  it("renders an execution read error without changing the selected Thread", async () => {
+    executionActions.getWorkbenchExecution.mockRejectedValue(new Error("read failed"))
+    const user = userEvent.setup()
+    renderShell()
+
+    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
+    await user.click(screen.getByRole("button", { name: /^Execution$/ }))
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Execution evidence could not be read")
+    expect(screen.getByRole("heading", { name: "Ship the cockpit" })).toBeTruthy()
+  })
+
+  it("renders a successful degraded projection without inventing a missing observation time", async () => {
+    executionActions.getWorkbenchExecution.mockResolvedValue(executionProjection("Persisted truth without observation time", null))
+    const user = userEvent.setup()
+    renderShell()
+
+    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
+    await user.click(screen.getByRole("button", { name: /^Execution$/ }))
+
+    expect(await screen.findByText("Persisted truth without observation time")).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Ship the cockpit" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: /^Execution$/ }).getAttribute("aria-pressed")).toBe("true")
+  })
+
+  it("ignores stale execution responses without stealing foreground pane, Inspector, or focus", async () => {
+    const first = deferred<WorkbenchExecutionProjection>()
+    const second = deferred<WorkbenchExecutionProjection>()
+    executionActions.getWorkbenchExecution
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+    const user = userEvent.setup()
+    renderShell()
+
+    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
+    await waitFor(() => expect(executionActions.getWorkbenchExecution).toHaveBeenCalledTimes(1))
+
+    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
+    await waitFor(() => expect(executionActions.getWorkbenchExecution).toHaveBeenCalledTimes(2))
+    await user.click(screen.getByRole("tab", { name: "Proof" }))
+    const intent = screen.getByRole("button", { name: "Ask or do anything" })
+    intent.focus()
+
+    await act(async () => { second.resolve(executionProjection("Newest execution proof")) })
+    expect(document.activeElement).toBe(intent)
+    expect(screen.getByRole("tab", { name: "Proof" }).getAttribute("aria-selected")).toBe("true")
+    expect(screen.getByRole("button", { name: /^Thread$/ }).getAttribute("aria-pressed")).toBe("true")
+
+    await user.click(screen.getByRole("button", { name: /^Execution$/ }))
+    expect(await screen.findByText("Newest execution proof")).toBeTruthy()
+    await act(async () => { first.resolve(executionProjection("Superseded execution proof")) })
+    expect(screen.queryByText("Superseded execution proof")).toBeNull()
+    expect(screen.getByText("Newest execution proof")).toBeTruthy()
   })
 
   it("labels configured HERMES provenance as inferred rather than live", () => {

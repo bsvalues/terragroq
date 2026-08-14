@@ -17,14 +17,17 @@ import {
 } from "lucide-react"
 
 import { getWorkbenchThreads } from "@/app/actions/workbench-threads"
+import { getWorkbenchExecution } from "@/app/actions/workbench-execution"
 import { UniversalIntent } from "@/components/intent/universal-intent"
 import { UserMenu } from "@/components/shell/user-menu"
 import { supportingCapabilities } from "@/components/workbench/supporting-capabilities"
 import { WorkbenchContextProvider } from "@/components/workbench/workbench-context"
+import { WorkbenchExecution, type WorkbenchExecutionLoadState } from "@/components/workbench/workbench-execution"
 import type { AuthReadiness } from "@/lib/auth-readiness"
 import type { RuntimeStatus } from "@/lib/ai/runtime"
 import type { ProjectView } from "@/lib/operator/operator-state"
 import type { Thread, ThreadItem } from "@/lib/workbench/thread-projection"
+import type { WorkbenchExecutionProjection } from "@/lib/workbench/execution-projection"
 import {
   createInitialWorkbenchState,
   parseWorkbenchRestoration,
@@ -364,6 +367,8 @@ export function WorkbenchShell({
   const [loadGeneration, setLoadGeneration] = useState(0)
   const [restorationRead, setRestorationRead] = useState(false)
   const [pendingDomFocus, setPendingDomFocus] = useState(false)
+  const [executionProjection, setExecutionProjection] = useState<WorkbenchExecutionProjection | null>(null)
+  const [executionLoadState, setExecutionLoadState] = useState<WorkbenchExecutionLoadState>("unselected")
   const [isPending, startTransition] = useTransition()
   const threadMainRef = useRef<HTMLElement>(null)
   const restoredRouteRef = useRef<WorkbenchViewMode | null>(null)
@@ -371,6 +376,8 @@ export function WorkbenchShell({
   const currentMode = routeMode ?? state.viewMode
   const selectedProject = projects.find((project) => String(project.id) === state.selectedProjectId) ?? null
   const selectedThread = threads.find((thread) => thread.id === state.selectedThreadId) ?? null
+  const selectedProjectId = selectedProject?.id ?? null
+  const selectedThreadId = selectedThread?.id ?? null
 
   useEffect(() => {
     if (restorationRead) return
@@ -473,6 +480,32 @@ export function WorkbenchShell({
     setPendingDomFocus(false)
   }, [pendingDomFocus, selectedThread, state.mobilePane])
 
+  useEffect(() => {
+    if (selectedProjectId === null || selectedThreadId === null) {
+      setExecutionProjection(null)
+      setExecutionLoadState("unselected")
+      return
+    }
+
+    let active = true
+    setExecutionProjection(null)
+    setExecutionLoadState("loading")
+    void getWorkbenchExecution(selectedProjectId, selectedThreadId).then((next) => {
+      if (!active) return
+      setExecutionProjection(next)
+      setExecutionLoadState("ready")
+      if (next.observedAt !== null) {
+        dispatch({ type: "BACKGROUND_REFRESH", version: Date.now(), observedAt: next.observedAt })
+      }
+    }).catch(() => {
+      if (!active) return
+      setExecutionProjection(null)
+      setExecutionLoadState("error")
+    })
+
+    return () => { active = false }
+  }, [selectedProjectId, selectedThreadId])
+
   const center = useMemo(() => {
     if (routeMode === null) return children
     if (currentMode === "activity" || currentMode === "system") return children
@@ -509,6 +542,7 @@ export function WorkbenchShell({
 
   const explorer = <ProjectExplorer projects={projects} projectState={projectState} selectedProject={selectedProject} threads={threads} selectedThread={selectedThread} loading={isPending} error={loadError} onProject={selectProject} onThread={selectThread} />
   const inspector = <Inspector tab={state.inspectorTab} project={selectedProject} thread={selectedThread} item={selectedItem} onTab={(tab) => dispatch({ type: "USER_SET_INSPECTOR_TAB", inspectorTab: tab })} />
+  const execution = <WorkbenchExecution loadState={executionLoadState} projection={executionProjection} />
 
   const mobilePanes: Array<{ id: WorkbenchMobilePane; label: string; icon: typeof PanelLeft }> = [
     { id: "explorer", label: "Explorer", icon: PanelLeft },
@@ -560,12 +594,12 @@ export function WorkbenchShell({
           <aside aria-label="Project and Thread Explorer" className={cn("min-h-0 border-r border-[var(--workbench-hairline)]", state.mobilePane === "explorer" ? "h-full sm:block" : "hidden sm:block")}>{explorer}</aside>
           <main ref={threadMainRef} id="workbench-thread" className={cn("workbench-scroll min-h-0 overflow-y-auto bg-[var(--workbench-canvas)]", state.mobilePane === "thread" ? "h-full" : "hidden lg:block")} tabIndex={-1}>{center}</main>
           <aside aria-label="Inspector" className={cn("min-h-0 border-l border-[var(--workbench-hairline)]", state.mobilePane === "inspector" ? "h-full sm:col-start-2" : "hidden lg:block")}>{inspector}</aside>
-          {state.mobilePane === "execution" ? <section className="h-full p-5 sm:col-start-2 lg:hidden"><p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--workbench-muted)]">Execution</p><p className="mt-3 text-sm">No authorized interrupt or generic terminal protocol is available.</p><p className="mt-2 text-xs leading-5 text-[var(--workbench-muted)]">Tests, logs, and agents remain inspectable through persisted evidence and contextual routes.</p></section> : null}
+          {state.mobilePane === "execution" ? <div className="h-full sm:col-start-2 lg:hidden">{execution}</div> : null}
         </div>
 
-        <section id="workbench-execution" className={cn("hidden shrink-0 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-panel)] sm:block", state.executionExpanded && "h-40")}>
+        <section id="workbench-execution" className={cn("hidden shrink-0 border-t border-[var(--workbench-hairline)] bg-[var(--workbench-panel)] lg:block", state.executionExpanded && "h-64")}>
           <button type="button" aria-expanded={state.executionExpanded} aria-controls="workbench-execution-detail" onClick={() => dispatch({ type: "USER_SET_EXECUTION_EXPANDED", expanded: !state.executionExpanded })} className="workbench-focus flex h-9 w-full items-center gap-2 px-4 text-left font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--workbench-muted)]"><TerminalSquare className="size-3.5" aria-hidden />Execution <span className="normal-case tracking-normal">agents · tests · logs</span>{state.executionExpanded ? <ChevronDown className="ml-auto size-3.5" /> : <ChevronUp className="ml-auto size-3.5" />}</button>
-          {state.executionExpanded ? <div id="workbench-execution-detail" className="grid grid-cols-3 gap-6 border-t border-[var(--workbench-hairline)] px-4 py-3 text-xs"><div><p className="font-medium">Agents</p><p className="mt-1 text-[var(--workbench-muted)]">No live agent stream is bound to this Thread.</p></div><div><p className="font-medium">Tests and logs</p><Link href="/audit" className="mt-1 block text-[var(--workbench-copper)]">Open persisted proof</Link></div><div><p className="font-medium">Terminal</p><p className="mt-1 text-[var(--workbench-muted)]">Read-only unavailable. No generic shell authority.</p></div></div> : null}
+          {state.executionExpanded ? <div id="workbench-execution-detail" className="h-[calc(100%-2.25rem)] overflow-y-auto border-t border-[var(--workbench-hairline)]">{execution}</div> : null}
         </section>
 
         <footer aria-label="System status" className="flex h-7 shrink-0 items-center gap-4 overflow-x-auto border-t border-[var(--workbench-hairline)] bg-[var(--workbench-canvas)] px-3 font-mono text-[9px] uppercase tracking-wider text-[var(--workbench-muted)]">
