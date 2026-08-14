@@ -103,11 +103,21 @@ export function OperatorHome({ state }: { state: OperatorState }) {
       {/* NEEDS YOU — surfaced prominently when the runtime has an owner decision */}
       {state.needsWilliam.value.length > 0 ? (
         <Card className="border-amber-500/50">
-          <CardContent className="py-4">
+          <CardContent className="flex flex-col gap-2 py-4">
             <div className="font-medium">
               {state.needsWilliam.value.length} decision{state.needsWilliam.value.length === 1 ? "" : "s"} need you
             </div>
-            <p className="mt-0.5 text-sm text-muted-foreground">A governed decision is waiting on your authority.</p>
+            <div className="flex flex-col gap-1">
+              {state.needsWilliam.value.map((d) => (
+                <div key={d.timelineId} className="flex flex-wrap items-center gap-x-3 text-sm">
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {d.goalRef}
+                    {d.workOrderRef ? ` · ${d.workOrderRef}` : ""}
+                  </span>
+                  {d.expectedNextState ? <span className="text-muted-foreground">→ {d.expectedNextState}</span> : null}
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
       ) : null}

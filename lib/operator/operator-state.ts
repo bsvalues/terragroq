@@ -13,6 +13,7 @@ import {
   workOrder,
 } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
+import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
 
 /*
  * Operator State — the single read-model every operator surface projects from.
@@ -130,6 +131,13 @@ export interface NodeHealth {
   detail: string
 }
 
+export interface OwnerDecision {
+  timelineId: string
+  goalRef: string
+  workOrderRef: string | null
+  expectedNextState: string | null
+}
+
 export interface OperatorState {
   installation: string
   now: TruthEnvelope<{ activeExecutions: number; queueDepth: number }>
@@ -138,7 +146,7 @@ export interface OperatorState {
   work: TruthEnvelope<Array<{ id: number; ref: string | null; title: string | null; status: string | null; closedAt: Date | null }>>
   executions: TruthEnvelope<ExecutionAttempt[]>
   recentActivity: TruthEnvelope<Array<{ at: string; type: string; actor: string | null }>>
-  needsWilliam: TruthEnvelope<unknown[]>
+  needsWilliam: TruthEnvelope<OwnerDecision[]>
   governance: TruthEnvelope<{ foundingADRs: Array<{ ref: string; scopeType: string; authorityDomainId: string; createdByUserId: string; visibleToPrimary: boolean }> }>
   knowledge: TruthEnvelope<{ canonical: number; memory: number; documents: number; evidence: number; governance: number }>
   systems: TruthEnvelope<NodeHealth[]>
@@ -183,6 +191,17 @@ export async function getOperatorState(): Promise<OperatorState> {
     evidence: await db.$count(evidenceRecord, eq(evidenceRecord.userId, userId)),
     governance: await db.$count(governanceEvent, eq(governanceEvent.userId, userId)),
   }
+
+  // --- owner decisions actually waiting on William (reuse the goal-console authority engine) ---
+  const authorityTimelines = await getActiveGoalAuthorityRequestTimelines()
+  const ownerDecisions: OwnerDecision[] = authorityTimelines
+    .filter((t) => t.truth.state === "CURRENT" && t.decisionRequest.status === "ACTIONABLE")
+    .map((t) => ({
+      timelineId: t.id,
+      goalRef: t.decisionRequest.goalRef,
+      workOrderRef: t.decisionRequest.workOrderRef,
+      expectedNextState: t.decisionRequest.expectedNextState,
+    }))
 
   const intakeByGoal = new Map(intake.map((r) => [r.goalId, r.outcomeKey]))
 
@@ -344,7 +363,11 @@ export async function getOperatorState(): Promise<OperatorState> {
     work: envelope(work, "work_order (all statuses)", "live"),
     executions: envelope(executions, "governance_event (lease lifecycle + completion) + receipts", "live"),
     recentActivity: envelope(recent, "governance_event", recent.length ? "live" : "idle-empty"),
-    needsWilliam: envelope([], "owner-decision blockers not yet projected (information-model P1)", "modelled"),
+    needsWilliam: envelope(
+      ownerDecisions,
+      "active goal authority-request timelines (ACTIONABLE, truth CURRENT)",
+      ownerDecisions.length ? "live" : "idle-empty",
+    ),
     governance: envelope({ foundingADRs }, "decision (scope projection)", "live"),
     knowledge: envelope(knowledge, "memory_fact/document/evidence_record/governance_event", knowledge.evidence ? "live" : "idle-empty"),
     systems: envelope(systems, "in-process signals — ATLAS live, HERMES/AEGIS inferred", "inferred"),
