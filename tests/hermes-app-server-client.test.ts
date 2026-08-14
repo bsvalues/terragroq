@@ -70,10 +70,12 @@ describe("CodexAppServerClient", () => {
   it("passes only host and keyring discovery variables to the Codex child", () => {
     expect(createCodexChildEnvironment({
       PATH: "tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
+      PROGRAMDATA: "C:/ProgramData",
       CODEX_HOME: "C:/Users/owner/.codex", DATABASE_URL: "postgresql://secret", BETTER_AUTH_SECRET: "secret",
       GH_TOKEN: "secret", OPENAI_API_KEY: "secret",
     }, { platform: "linux" })).toEqual({
       PATH: "tools", USERPROFILE: "C:/Users/owner", APPDATA: "C:/Users/owner/AppData/Roaming",
+      PROGRAMDATA: "C:/ProgramData",
       CODEX_HOME: "C:/Users/owner/.codex",
     })
   })
