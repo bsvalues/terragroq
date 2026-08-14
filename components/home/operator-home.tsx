@@ -43,18 +43,19 @@ function deliveredRows(executions: ExecutionAttempt[]): DeliveredRow[] {
   }
   const rows: DeliveredRow[] = []
   for (const [outcomeId, attempts] of byOutcome) {
-    if (!attempts.some((a) => a.attemptStatus === "delivered")) continue
-    const delivery = attempts.find((a) => a.delivery)?.delivery ?? null
+    const deliveredAttempt = attempts.find((a) => a.attemptStatus === "delivered")
+    if (!deliveredAttempt) continue
+    const delivery = deliveredAttempt.delivery ?? null
     rows.push({
       outcomeId,
-      identity: attempts[0].outcomeIdentity,
-      workOrderRef: attempts[0].workOrderRef,
+      identity: deliveredAttempt.outcomeIdentity,
+      workOrderRef: deliveredAttempt.workOrderRef,
       prNumber: delivery?.prNumber ?? null,
       mergeSha: delivery?.mergeSha ?? null,
       attempts: attempts.length,
       abandoned: attempts.filter((a) => a.attemptStatus === "abandoned").length,
-      node: attempts[0].node,
-      worker: attempts[0].worker,
+      node: deliveredAttempt.node,
+      worker: deliveredAttempt.worker,
     })
   }
   return rows.sort((a, b) => (b.prNumber ?? 0) - (a.prNumber ?? 0))
@@ -156,11 +157,7 @@ export function OperatorHome({ state }: { state: OperatorState }) {
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    {isActive
-                      ? activeCount > 0
-                        ? `${activeCount} running now`
-                        : "Active · nothing running now"
-                      : "Bound · no work yet"}
+                    {isActive ? "Active" : "Bound · no work yet"}
                   </p>
                   <div className="flex flex-wrap gap-1">
                     {p.resources.map((r) => (
