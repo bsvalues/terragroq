@@ -12,7 +12,7 @@
 
 **Audited baseline:** `origin/main = 2aec3bf8e7a154cd6cbb7ff85c9b6c81694fbc5a`
 
-**Status:** `ACTIVE / PHASE_0 INTEGRATION / LOCAL RUNTIME DISABLED`
+**Status:** `ACTIVE / LOCAL RUNTIME OPERATING — HERMES→AEGIS ExecutionBackend (PR #754)` · see the controlling supersession [`sovereign-runtime-and-review-supersession.md`](sovereign-runtime-and-review-supersession.md)
 
 **Risk model:** Phase 0 truth/registry integration and Phase 1 hosted proof are R1; machine-control-plane
 Phases 2-6 may reach R3; Phase 7 certification is R2. Useful product pilots remain limited to
@@ -28,7 +28,7 @@ agent, operator, dispatcher, test runner, credential courier, or status courier.
 The failed nested local Codex runtime is rejected. Issue #357 is terminal evidence, not a retry target.
 Issue #358 remains dependency-blocked and must not be represented as ready.
 
-This program deliberately proves a useful hosted Codex team before building another durable runtime.
+**SUPERSEDED (2026-08-13):** the durable local runtime now exists — the Hermes→AEGIS ExecutionBackend (PR #754) is merged and operating, and the resident supervisor runs the cycle through it. The original "prove a hosted Codex team before building another durable runtime" sequence is complete; hosted providers are now optional capability extensions. See [`sovereign-runtime-and-review-supersession.md`](sovereign-runtime-and-review-supersession.md).
 Governance, UI, schemas, and simulations cannot substitute for completed repository work.
 
 ## 2. Owner-Only Constitution
@@ -85,7 +85,7 @@ At the audited baseline:
 - the operational kernel is real but serial: one checkpoint, one selected issue, one worktree, one
   branch, one PR, and one `invokeCodex` call;
 - the Codex operator registry declares a sequential loop;
-- Codex, Claude Code, and Hermes are disabled/proposal-only in the worker registry;
+- **superseded:** Codex and Hermes are active through the ExecutionBackend (PR #754); Claude is an optional provider lane (the audited-baseline snapshot in this section is historical);
 - the agent matrix blocks Codex commit/push/merge and limits Claude to draft/synthesis work;
 - Brain Council, Agent Forge, and Hermes are truthful governance/read-model surfaces, not active
   workers;

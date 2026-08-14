@@ -316,7 +316,12 @@ of these are true:
 
 - PR checks are green
 - Vercel is green when applicable
-- CodeRabbit, Sourcery, and review checks are acceptable
+- Tier 0 deterministic review passed: tests, lint, typecheck, build, static and scope policy
+- Tier 1 sovereign independent review is satisfied by a reviewer context separate from the builder
+- Tier 3 external advisory (CodeRabbit, Sourcery, hosted analysis) is optional and additive; a rate
+  limit, quota, auth, or billing gap is `EXTERNAL_REVIEW_UNAVAILABLE`, never `REVIEW_NOT_DONE`, and is
+  never a reason to stall or to propose a paid upgrade (see
+  `docs/governance/sovereign-runtime-and-review-supersession.md`)
 - no unresolved substantive review threads
 - no requested changes
 - no failed secret scan
