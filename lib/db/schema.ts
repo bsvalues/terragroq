@@ -12,6 +12,7 @@ import {
   index,
   unique,
   uniqueIndex,
+  foreignKey,
   customType,
 } from "drizzle-orm/pg-core"
 
@@ -242,6 +243,7 @@ export const project = pgTable(
   },
   (table) => [
     unique("project_user_key_unique").on(table.userId, table.key),
+    unique("project_user_id_unique").on(table.userId, table.id),
     check(
       "project_lifecycle_check",
       sql`${table.lifecycle} IN ('active', 'standby', 'archived')`,
@@ -281,6 +283,74 @@ export const projectResource = pgTable(
     check(
       "project_resource_type_check",
       sql`${table.type} IN ('repo', 'database', 'node', 'service', 'data_source')`,
+    ),
+  ],
+)
+
+// Threads own Workbench context only. Goals and outcomes remain the durable
+// sources of task, execution, decision, and delivery truth.
+export const workbenchThread = pgTable(
+  "workbench_thread",
+  {
+    id: text("id").primaryKey(),
+    userId: text("userId").notNull(),
+    projectId: integer("projectId").notNull(),
+    title: text("title").notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("workbench_thread_user_id_unique").on(table.userId, table.id),
+    foreignKey({
+      columns: [table.userId, table.projectId],
+      foreignColumns: [project.userId, project.id],
+      name: "workbench_thread_user_project_fk",
+    }).onDelete("restrict"),
+    index("workbench_thread_user_project_updated_idx").on(
+      table.userId,
+      table.projectId,
+      table.updatedAt,
+      table.id,
+    ),
+  ],
+)
+
+export const workbenchThreadSource = pgTable(
+  "workbench_thread_source",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    threadId: text("threadId").notNull(),
+    sourceType: text("sourceType").notNull(),
+    sourceId: text("sourceId").notNull(),
+    role: text("role").notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.userId, table.threadId],
+      foreignColumns: [workbenchThread.userId, workbenchThread.id],
+      name: "workbench_thread_source_user_thread_fk",
+    }).onDelete("cascade"),
+    unique("workbench_thread_source_binding_unique").on(
+      table.userId,
+      table.threadId,
+      table.sourceType,
+      table.sourceId,
+    ),
+    uniqueIndex("workbench_thread_source_root_unique_idx")
+      .on(table.userId, table.sourceType, table.sourceId)
+      .where(sql`${table.role} = 'root'`),
+    uniqueIndex("workbench_thread_source_thread_root_unique_idx")
+      .on(table.userId, table.threadId)
+      .where(sql`${table.role} = 'root'`),
+    check(
+      "workbench_thread_source_type_check",
+      sql`${table.sourceType} IN ('goal', 'outcome')`,
+    ),
+    check(
+      "workbench_thread_source_role_check",
+      sql`${table.role} IN ('root', 'member')`,
     ),
   ],
 )
@@ -1085,6 +1155,10 @@ export type Project = typeof project.$inferSelect
 export type NewProject = typeof project.$inferInsert
 export type ProjectResource = typeof projectResource.$inferSelect
 export type NewProjectResource = typeof projectResource.$inferInsert
+export type WorkbenchThread = typeof workbenchThread.$inferSelect
+export type NewWorkbenchThread = typeof workbenchThread.$inferInsert
+export type WorkbenchThreadSource = typeof workbenchThreadSource.$inferSelect
+export type NewWorkbenchThreadSource = typeof workbenchThreadSource.$inferInsert
 export type Document = typeof document.$inferSelect
 export type EventLog = typeof eventLog.$inferSelect
 export type Goal = typeof goal.$inferSelect

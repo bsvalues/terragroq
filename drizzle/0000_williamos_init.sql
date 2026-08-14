@@ -559,6 +559,7 @@ CREATE TABLE "project" (
 	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
 	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "project_user_key_unique" UNIQUE("userId","key"),
+	CONSTRAINT "project_user_id_unique" UNIQUE("userId","id"),
 	CONSTRAINT "project_lifecycle_check" CHECK ("project"."lifecycle" IN ('active', 'standby', 'archived'))
 );
 --> statement-breakpoint
@@ -626,6 +627,29 @@ CREATE TABLE "verification" (
 	"updatedAt" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "workbench_thread" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"projectId" integer NOT NULL,
+	"title" text NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "workbench_thread_user_id_unique" UNIQUE("userId","id")
+);
+--> statement-breakpoint
+CREATE TABLE "workbench_thread_source" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"threadId" text NOT NULL,
+	"sourceType" text NOT NULL,
+	"sourceId" text NOT NULL,
+	"role" text NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "workbench_thread_source_binding_unique" UNIQUE("userId","threadId","sourceType","sourceId"),
+	CONSTRAINT "workbench_thread_source_type_check" CHECK ("workbench_thread_source"."sourceType" IN ('goal', 'outcome')),
+	CONSTRAINT "workbench_thread_source_role_check" CHECK ("workbench_thread_source"."role" IN ('root', 'member'))
+);
+--> statement-breakpoint
 CREATE TABLE "work_order" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"userId" text NOT NULL,
@@ -686,6 +710,8 @@ ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_approvalDeci
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_activeWorkOrderId_work_order_id_fk" FOREIGN KEY ("activeWorkOrderId") REFERENCES "public"."work_order"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project_resource" ADD CONSTRAINT "project_resource_projectId_project_id_fk" FOREIGN KEY ("projectId") REFERENCES "public"."project"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "workbench_thread" ADD CONSTRAINT "workbench_thread_user_project_fk" FOREIGN KEY ("userId","projectId") REFERENCES "public"."project"("userId","id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "workbench_thread_source" ADD CONSTRAINT "workbench_thread_source_user_thread_fk" FOREIGN KEY ("userId","threadId") REFERENCES "public"."workbench_thread"("userId","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "access_grant_public_token_hash_idx" ON "access_grant" USING btree ("publicTokenHash");--> statement-breakpoint
 CREATE INDEX "access_grant_user_status_expires_idx" ON "access_grant" USING btree ("userId","status","expiresAt");--> statement-breakpoint
 CREATE INDEX "access_grant_target_idx" ON "access_grant" USING btree ("targetResourceType","targetResourceId");--> statement-breakpoint
@@ -726,3 +752,7 @@ CREATE INDEX "outcome_queue_mutation_receipt_user_outcome_idx" ON "outcome_queue
 --> statement-breakpoint
 CREATE INDEX "project_resource_user_project_idx" ON "project_resource" USING btree ("userId","projectId");--> statement-breakpoint
 CREATE INDEX "project_resource_user_identity_idx" ON "project_resource" USING btree ("userId","type","canonicalIdentity");
+--> statement-breakpoint
+CREATE INDEX "workbench_thread_user_project_updated_idx" ON "workbench_thread" USING btree ("userId","projectId","updatedAt","id");--> statement-breakpoint
+CREATE UNIQUE INDEX "workbench_thread_source_root_unique_idx" ON "workbench_thread_source" USING btree ("userId","sourceType","sourceId") WHERE "workbench_thread_source"."role" = 'root';--> statement-breakpoint
+CREATE UNIQUE INDEX "workbench_thread_source_thread_root_unique_idx" ON "workbench_thread_source" USING btree ("userId","threadId") WHERE "workbench_thread_source"."role" = 'root';
