@@ -228,6 +228,63 @@ export const workOrder = pgTable("work_order", {
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 })
 
+// Projects are durable operating context, not repository aliases or task boards.
+export const project = pgTable(
+  "project",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    lifecycle: text("lifecycle").default("standby").notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("project_user_key_unique").on(table.userId, table.key),
+    check(
+      "project_lifecycle_check",
+      sql`${table.lifecycle} IN ('active', 'standby', 'archived')`,
+    ),
+  ],
+)
+
+// A project can span several concrete resources; none of them defines the project.
+export const projectResource = pgTable(
+  "project_resource",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    projectId: integer("projectId")
+      .notNull()
+      .references(() => project.id, { onDelete: "restrict" }),
+    type: text("type").notNull(),
+    canonicalIdentity: text("canonicalIdentity").notNull(),
+    label: text("label").notNull(),
+    relationship: text("relationship").notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("project_resource_identity_unique").on(
+      table.projectId,
+      table.type,
+      table.canonicalIdentity,
+      table.relationship,
+    ),
+    index("project_resource_user_project_idx").on(table.userId, table.projectId),
+    index("project_resource_user_identity_idx").on(
+      table.userId,
+      table.type,
+      table.canonicalIdentity,
+    ),
+    check(
+      "project_resource_type_check",
+      sql`${table.type} IN ('repo', 'database', 'node', 'service', 'data_source')`,
+    ),
+  ],
+)
+
 /* ------------------------------------------------------------------ */
 /* RAG corpus                                                          */
 /* ------------------------------------------------------------------ */
@@ -888,6 +945,10 @@ export type MemoryFact = typeof memoryFact.$inferSelect
 export type Decision = typeof decision.$inferSelect
 export type Doctrine = typeof doctrine.$inferSelect
 export type WorkOrder = typeof workOrder.$inferSelect
+export type Project = typeof project.$inferSelect
+export type NewProject = typeof project.$inferInsert
+export type ProjectResource = typeof projectResource.$inferSelect
+export type NewProjectResource = typeof projectResource.$inferInsert
 export type Document = typeof document.$inferSelect
 export type EventLog = typeof eventLog.$inferSelect
 export type Goal = typeof goal.$inferSelect

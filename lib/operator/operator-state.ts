@@ -14,6 +14,7 @@ import {
 } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
+import { loadProjects } from "@/lib/projects/load-projects"
 
 /*
  * Operator State — the single read-model every operator surface projects from.
@@ -25,9 +26,6 @@ import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-conso
  *    is transient state, not identity. Goals without a receipt are legacy-unresolved.
  *  - Execution is a projection over governance_event + receipts, NOT loop_run.
  *  - Every projected item carries a truth envelope (source, observedAt, freshness).
- *
- * Projects/Resources are a modelled registry here until the project / project_resource
- * tables land (information-model P1); nothing else is fabricated.
  */
 
 const INSTALLATION = "WILLIAMOS_PRIMARY"
@@ -62,41 +60,6 @@ export interface ProjectView {
   lifecycle: "active" | "standby" | "archived"
   resources: ProjectResource[]
 }
-
-// Modelled until project_resource tables exist (information-model P1).
-const PROJECTS: ProjectView[] = [
-  {
-    key: "williamos",
-    name: "WilliamOS",
-    lifecycle: "active",
-    resources: [
-      { type: "repo", canonicalIdentity: "bsvalues/terragroq", label: "WilliamOS repo", relationship: "primary-repo" },
-      { type: "database", canonicalIdentity: "atlas/williamos", label: "state DB", relationship: "state" },
-      { type: "node", canonicalIdentity: "HERMES", label: "coordinator", relationship: "coordinator" },
-      { type: "node", canonicalIdentity: "AEGIS", label: "worker", relationship: "worker" },
-    ],
-  },
-  {
-    key: "terrafusion",
-    name: "TerraFusion",
-    lifecycle: "standby",
-    resources: [
-      { type: "repo", canonicalIdentity: "bsvalues/terrafusion_os_1.0", label: "TerraFusion OS repo", relationship: "primary-repo" },
-      { type: "database", canonicalIdentity: "atlas/terrafusion", label: "TerraFusion DB", relationship: "state" },
-      { type: "data_source", canonicalIdentity: "harris-pacs", label: "Harris PACS (source)", relationship: "source" },
-      { type: "node", canonicalIdentity: "AEGIS", label: "worker", relationship: "worker" },
-    ],
-  },
-  {
-    key: "localops",
-    name: "LocalOps",
-    lifecycle: "standby",
-    resources: [
-      { type: "service", canonicalIdentity: "localops-agent", label: "governed local agent", relationship: "runtime" },
-      { type: "node", canonicalIdentity: "HERMES", label: "host", relationship: "host" },
-    ],
-  },
-]
 
 export interface OutcomeView {
   identity: string
@@ -166,6 +129,7 @@ function deriveScopeType(scope: string | null): string {
 
 export async function getOperatorState(): Promise<OperatorState> {
   const userId = await getUserId()
+  const projects = await loadProjects(userId)
 
   // --- durable stores (reuse existing tables via drizzle) ---
   const goals = await db
@@ -359,7 +323,7 @@ export async function getOperatorState(): Promise<OperatorState> {
   return {
     installation: INSTALLATION,
     now: envelope({ activeExecutions, queueDepth }, "outcome_queue_item + execution projection", idle ? "idle-empty" : "live"),
-    projects: envelope(PROJECTS, "modelled registry (project_resource tables pending, P1)", "modelled"),
+    projects: envelope(projects, "project + project_resource", projects.length ? "live" : "idle-empty"),
     outcomes: envelope(outcomes, "goal + goal_outcome_intake_receipt", outcomes.some((o) => o.resolved) ? "live" : "legacy-unresolved"),
     work: envelope(work, "work_order (all statuses)", "live"),
     executions: envelope(executions, "governance_event (lease lifecycle + completion) + receipts", "live"),

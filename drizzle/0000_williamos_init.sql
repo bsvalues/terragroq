@@ -491,6 +491,32 @@ CREATE TABLE "parked_idea" (
 	"updatedAt" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "project" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"key" text NOT NULL,
+	"name" text NOT NULL,
+	"lifecycle" text DEFAULT 'standby' NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "project_user_key_unique" UNIQUE("userId","key"),
+	CONSTRAINT "project_lifecycle_check" CHECK ("project"."lifecycle" IN ('active', 'standby', 'archived'))
+);
+--> statement-breakpoint
+CREATE TABLE "project_resource" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"projectId" integer NOT NULL,
+	"type" text NOT NULL,
+	"canonicalIdentity" text NOT NULL,
+	"label" text NOT NULL,
+	"relationship" text NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "project_resource_identity_unique" UNIQUE("projectId","type","canonicalIdentity","relationship"),
+	CONSTRAINT "project_resource_type_check" CHECK ("project_resource"."type" IN ('repo', 'database', 'node', 'service', 'data_source'))
+);
+--> statement-breakpoint
 CREATE TABLE "session" (
 	"id" text PRIMARY KEY NOT NULL,
 	"expiresAt" timestamp NOT NULL,
@@ -591,6 +617,7 @@ ALTER TABLE "goal_outcome_intake_receipt" ADD CONSTRAINT "goal_outcome_intake_re
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_goalId_goal_id_fk" FOREIGN KEY ("goalId") REFERENCES "public"."goal"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_approvalDecisionId_decision_id_fk" FOREIGN KEY ("approvalDecisionId") REFERENCES "public"."decision"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_activeWorkOrderId_work_order_id_fk" FOREIGN KEY ("activeWorkOrderId") REFERENCES "public"."work_order"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_resource" ADD CONSTRAINT "project_resource_projectId_project_id_fk" FOREIGN KEY ("projectId") REFERENCES "public"."project"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "access_grant_public_token_hash_idx" ON "access_grant" USING btree ("publicTokenHash");--> statement-breakpoint
 CREATE INDEX "access_grant_user_status_expires_idx" ON "access_grant" USING btree ("userId","status","expiresAt");--> statement-breakpoint
@@ -615,3 +642,6 @@ CREATE INDEX "outcome_queue_item_approval_decision_idx" ON "outcome_queue_item" 
 CREATE INDEX "outcome_queue_item_work_order_idx" ON "outcome_queue_item" USING btree ("activeWorkOrderId");--> statement-breakpoint
 CREATE INDEX "outcome_queue_mutation_attempt_request_idx" ON "outcome_queue_mutation_attempt" USING btree ("userId","requestHash","attemptedAt");--> statement-breakpoint
 CREATE INDEX "outcome_queue_mutation_receipt_user_outcome_idx" ON "outcome_queue_mutation_receipt" USING btree ("userId","outcomeKey","createdAt");
+--> statement-breakpoint
+CREATE INDEX "project_resource_user_project_idx" ON "project_resource" USING btree ("userId","projectId");--> statement-breakpoint
+CREATE INDEX "project_resource_user_identity_idx" ON "project_resource" USING btree ("userId","type","canonicalIdentity");
