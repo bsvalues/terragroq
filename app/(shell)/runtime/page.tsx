@@ -21,6 +21,7 @@ import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
 import { getAuthReadiness } from "@/lib/auth-readiness"
 import { projectSystemTruth } from "@/lib/system/system-truth"
+import { DeviceEnrollmentPanel } from "@/components/device/device-enrollment-panel"
 
 async function RuntimeSupportingPanels({ databaseReady }: { databaseReady: boolean }) {
   if (!databaseReady) {
@@ -113,6 +114,7 @@ export default async function RuntimePage() {
       />
       <div className="flex flex-col gap-6 p-6">
         <SystemTruthPanel signals={systemTruth} />
+        <DeviceEnrollmentPanel />
         <RuntimeSupportingPanels databaseReady={systemReadiness.databaseReady} />
         <LocalRuntimeLiveStatusPanel />
         <ReadinessNativeAreaPanel />

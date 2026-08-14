@@ -822,6 +822,142 @@ export const accessGrantEvent = pgTable(
   ],
 )
 
+// Device identity is distinct from browser sessions, scoped access grants, and
+// authority grants. Only public-key material and opaque credential hashes are
+// durable; raw challenges and session tokens must never be stored here.
+export const deviceCredential = pgTable(
+  "device_credential",
+  {
+    id: text("id").primaryKey(),
+    userId: text("userId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    publicKeySpki: text("publicKeySpki").notNull(),
+    publicKeyFingerprintSha256: text("publicKeyFingerprintSha256").notNull(),
+    activeAt: timestamp("activeAt", { withTimezone: true }).defaultNow().notNull(),
+    revokedAt: timestamp("revokedAt", { withTimezone: true }),
+    lastUsedAt: timestamp("lastUsedAt", { withTimezone: true }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("device_credential_fingerprint_idx").on(table.publicKeyFingerprintSha256),
+    index("device_credential_user_active_idx").on(table.userId, table.revokedAt, table.activeAt),
+    check(
+      "device_credential_fingerprint_check",
+      sql`${table.publicKeyFingerprintSha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check("device_credential_label_check", sql`length(trim(${table.label})) > 0`),
+    check("device_credential_spki_check", sql`length(${table.publicKeySpki}) > 0`),
+  ],
+)
+
+export const deviceChallenge = pgTable(
+  "device_challenge",
+  {
+    id: text("id").primaryKey(),
+    userId: text("userId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    credentialId: text("credentialId").references(() => deviceCredential.id, {
+      onDelete: "set null",
+    }),
+    purpose: text("purpose").notNull(),
+    challengeHash: text("challengeHash").notNull(),
+    origin: text("origin").notNull(),
+    expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumedAt", { withTimezone: true }),
+    attempts: integer("attempts").default(0).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("device_challenge_hash_idx").on(table.challengeHash),
+    index("device_challenge_user_purpose_created_idx").on(
+      table.userId,
+      table.purpose,
+      table.createdAt,
+    ),
+    index("device_challenge_credential_purpose_created_idx").on(
+      table.credentialId,
+      table.purpose,
+      table.createdAt,
+    ),
+    index("device_challenge_origin_purpose_created_idx").on(
+      table.origin,
+      table.purpose,
+      table.createdAt,
+    ),
+    index("device_challenge_expiry_idx").on(table.expiresAt, table.consumedAt),
+    check("device_challenge_purpose_check", sql`${table.purpose} IN ('enroll', 'authenticate')`),
+    check("device_challenge_hash_check", sql`${table.challengeHash} ~ '^[0-9a-f]{64}$'`),
+    check("device_challenge_attempts_check", sql`${table.attempts} >= 0`),
+    check("device_challenge_expiry_check", sql`${table.expiresAt} > ${table.createdAt}`),
+    check(
+      "device_challenge_consumed_check",
+      sql`${table.consumedAt} IS NULL OR ${table.consumedAt} >= ${table.createdAt}`,
+    ),
+  ],
+)
+
+export const deviceSession = pgTable(
+  "device_session",
+  {
+    id: text("id").primaryKey(),
+    userId: text("userId")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    credentialId: text("credentialId")
+      .notNull()
+      .references(() => deviceCredential.id, { onDelete: "cascade" }),
+    tokenHash: text("tokenHash").notNull(),
+    expiresAt: timestamp("expiresAt", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revokedAt", { withTimezone: true }),
+    lastSeenAt: timestamp("lastSeenAt", { withTimezone: true }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("device_session_token_hash_idx").on(table.tokenHash),
+    index("device_session_user_expiry_idx").on(table.userId, table.expiresAt, table.revokedAt),
+    index("device_session_credential_expiry_idx").on(
+      table.credentialId,
+      table.expiresAt,
+      table.revokedAt,
+    ),
+    check("device_session_token_hash_check", sql`${table.tokenHash} ~ '^[0-9a-f]{64}$'`),
+    check("device_session_expiry_check", sql`${table.expiresAt} > ${table.createdAt}`),
+    check(
+      "device_session_revoked_check",
+      sql`${table.revokedAt} IS NULL OR ${table.revokedAt} >= ${table.createdAt}`,
+    ),
+    check(
+      "device_session_last_seen_check",
+      sql`${table.lastSeenAt} IS NULL OR ${table.lastSeenAt} >= ${table.createdAt}`,
+    ),
+  ],
+)
+
+export const deviceAuthEvent = pgTable(
+  "device_auth_event",
+  {
+    id: text("id").primaryKey(),
+    userId: text("userId").references(() => user.id, { onDelete: "set null" }),
+    credentialId: text("credentialId").references(() => deviceCredential.id, {
+      onDelete: "set null",
+    }),
+    sessionId: text("sessionId").references(() => deviceSession.id, { onDelete: "set null" }),
+    eventType: text("eventType").notNull(),
+    metadata: jsonb("metadata").default({}).notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("device_auth_event_user_created_idx").on(table.userId, table.createdAt),
+    index("device_auth_event_credential_created_idx").on(table.credentialId, table.createdAt),
+    index("device_auth_event_session_created_idx").on(table.sessionId, table.createdAt),
+    index("device_auth_event_type_created_idx").on(table.eventType, table.createdAt),
+    check("device_auth_event_type_check", sql`length(trim(${table.eventType})) > 0`),
+  ],
+)
+
 // WO-014: Current Truth with freshness + confidence categories. Volatile truth
 // must be rechecked before mutation/commit/push/tag/release.
 // truthType: STATIC | SESSION | VOLATILE | EVIDENCE | LOCK | UNKNOWN | STALE | ASSUMED
@@ -968,6 +1104,14 @@ export type AuthorityGrant = typeof authorityGrant.$inferSelect
 export type AccessGrant = typeof accessGrant.$inferSelect
 export type AccessGrantSession = typeof accessGrantSession.$inferSelect
 export type AccessGrantEvent = typeof accessGrantEvent.$inferSelect
+export type DeviceCredential = typeof deviceCredential.$inferSelect
+export type NewDeviceCredential = typeof deviceCredential.$inferInsert
+export type DeviceChallenge = typeof deviceChallenge.$inferSelect
+export type NewDeviceChallenge = typeof deviceChallenge.$inferInsert
+export type DeviceSession = typeof deviceSession.$inferSelect
+export type NewDeviceSession = typeof deviceSession.$inferInsert
+export type DeviceAuthEvent = typeof deviceAuthEvent.$inferSelect
+export type NewDeviceAuthEvent = typeof deviceAuthEvent.$inferInsert
 export type TruthClaim = typeof truthClaim.$inferSelect
 export type AgentClaim = typeof agentClaim.$inferSelect
 export type ConflictRecord = typeof conflictRecord.$inferSelect

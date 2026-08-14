@@ -1,0 +1,10 @@
+{
+  "hermesOrigin": "https://hermes.williamos.local",
+  "startupPath": "/device-bootstrap",
+  "endpoints": {
+    "enrollmentChallenge": "/api/device/enrollment/challenge",
+    "enrollmentComplete": "/api/device/enrollment/complete",
+    "sessionChallenge": "/api/device/session/challenge",
+    "sessionComplete": "/api/device/session/complete"
+  }
+}

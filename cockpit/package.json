@@ -1,0 +1,13 @@
+{
+  "name": "@williamos/cockpit",
+  "version": "0.1.5",
+  "private": true,
+  "scripts": {
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4"
+  },
+  "packageManager": "pnpm@10.32.1"
+}
