@@ -8,7 +8,7 @@
 [`multi-agent-operator-playbook.md`](multi-agent-operator-playbook.md) and
 [`codex-operator-playbook.md`](codex-operator-playbook.md).
 
-**Ratified:** 2026-08-13 by William (owner).
+**Origin:** authored 2026-08-13 at the owner's direction during operator-doctrine discussion. Active working doctrine — **not** a formal owner-ratification record. Do not cite owner ratification of this document without a recorded owner decision.
 
 Where this document and any earlier governance document conflict on runtime status, review sourcing,
 or provider dependence, this document governs. It changes stale *assumptions*; it does not weaken the
