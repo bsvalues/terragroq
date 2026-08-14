@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+import { authenticateCockpit } from "../components/device/device-bootstrap"
 
 const root = process.cwd()
 const read = (file: string) => fs.readFileSync(path.join(root, file), "utf8")
@@ -18,6 +19,40 @@ describe("device cockpit web integration", () => {
     expect(source).toContain("/api/device/session/complete")
     expect(source).toContain("/sign-in")
     expect(source).not.toMatch(/[?&](token|session|credential)=/i)
+  })
+  it("routes an authenticated credential-less Cockpit to explicit enrollment", async () => {
+    const replace = vi.fn()
+    await authenticateCockpit({
+      getCredential: async () => null,
+      getSession: async () => ({ data: { user: { id: "primary" } } }),
+      requestChallenge: vi.fn(), sign: vi.fn(), complete: vi.fn(), replace,
+    })
+    expect(replace).toHaveBeenCalledWith("/runtime?detail=technical")
+  })
+  it("routes an unauthenticated credential-less Cockpit to recovery sign-in", async () => {
+    const replace = vi.fn()
+    await authenticateCockpit({
+      getCredential: async () => null,
+      getSession: async () => ({ data: null }),
+      requestChallenge: vi.fn(), sign: vi.fn(), complete: vi.fn(), replace,
+    })
+    expect(replace).toHaveBeenCalledWith("/sign-in")
+  })
+  it("keeps credential challenge, sign, and completion behavior intact", async () => {
+    const calls: string[] = []
+    const complete = vi.fn(async () => { calls.push("complete") })
+    const replace = vi.fn()
+    await authenticateCockpit({
+      getCredential: async () => ({ credentialId: "credential-1" }),
+      getSession: vi.fn(),
+      requestChallenge: async (credentialId) => { calls.push(`challenge:${credentialId}`); return { challengeId: "challenge-1", challenge: "nonce", proof: "proof" } },
+      sign: async (proof) => { calls.push(`sign:${proof}`); return { signature: "signature" } },
+      complete,
+      replace,
+    })
+    expect(calls).toEqual(["challenge:credential-1", "sign:proof", "complete"])
+    expect(complete).toHaveBeenCalledWith({ challengeId: "challenge-1", challenge: "nonce", signature: "signature" })
+    expect(replace).toHaveBeenCalledWith("/")
   })
   it("exposes enrollment from SYSTEM only to the native cockpit", () => {
     expect(read("app/(shell)/runtime/page.tsx")).toContain("<DeviceEnrollmentPanel />")
