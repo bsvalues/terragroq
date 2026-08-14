@@ -1,5 +1,11 @@
 # 10 — API Contract Freeze
 
+> **Historical desktop-consumer note.** Desktop-shell assumptions below are
+> superseded by
+> [`docs/governance/williamos-workbench-ux-contract.md`](../../../../docs/governance/williamos-workbench-ux-contract.md).
+> Preserve the client-is-not-authority principle; do not use this plan to
+> select a shell or infer the current device-authentication bridge.
+
 **Work Order:** WO-WILLIAMOS-NEXT-TAURI-ARCH-001
 **Lane:** B — API contract inventory
 **Status:** DRAFT

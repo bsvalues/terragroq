@@ -1,5 +1,10 @@
 # 90 — Migration Sequence
 
+> **Historical migration-sequence note.** The T1/T2/R1 sequence and
+> Vite-retirement gate below are superseded by
+> [`docs/governance/williamos-workbench-ux-contract.md`](../../../../docs/governance/williamos-workbench-ux-contract.md).
+> Shell work resumes only through the bounded feasibility spike.
+
 **Work Order:** WO-WILLIAMOS-NEXT-TAURI-ARCH-001
 **Lane:** A — Architecture docs
 **Status:** DRAFT

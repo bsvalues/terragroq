@@ -1,5 +1,11 @@
 # WilliamOS Unified System Architecture
 
+> **Superseded on product interaction and permanent top-level areas** by
+> [`williamos-workbench-ux-contract.md`](williamos-workbench-ux-contract.md).
+> The one-system, Primary-Operator, calm-intelligence, governed-execution, and
+> subsystem-boundary doctrine below remains controlling where it does not
+> conflict with the Workbench contract.
+
 Work order: WO-SHELL-001
 Title: WilliamOS Unified System Architecture
 Type: Architecture / Product Doctrine

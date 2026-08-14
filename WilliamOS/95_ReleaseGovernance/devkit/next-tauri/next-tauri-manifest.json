@@ -1,7 +1,9 @@
 {
   "name": "WilliamOS Next.js + Tauri Migration Kit",
   "work_order": "WO-WILLIAMOS-NEXT-TAURI-ARCH-001",
-  "status": "draft",
+  "status": "historical-superseded",
+  "superseded_by": "docs/governance/williamos-workbench-ux-contract.md",
+  "supersession_note": "Historical planning kit only. The Workbench interaction contract now governs, and no desktop shell is selected until its bounded feasibility spike completes.",
   "baseline": "WilliamOS v1.3.1 local hardening baseline",
   "phase_6_status": "blocked",
   "authority": "WilliamOS control plane",

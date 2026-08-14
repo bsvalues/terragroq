@@ -1,5 +1,11 @@
 # 60 — Rust Bridge Boundary
 
+> **Historical Rust bridge note.** Process, port, path, file, and worker bridge
+> proposals below are superseded by
+> [`docs/governance/williamos-workbench-ux-contract.md`](../../../../docs/governance/williamos-workbench-ux-contract.md).
+> The durable rule remains: Rust is mechanical and holds no product policy or
+> execution authority.
+
 **Work Order:** WO-WILLIAMOS-NEXT-TAURI-ARCH-001
 **Lane:** F — Rust bridge architecture (plan only)
 **Status:** DRAFT

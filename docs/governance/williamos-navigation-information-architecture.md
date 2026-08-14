@@ -1,5 +1,10 @@
 # WilliamOS Navigation & Information Architecture
 
+> **Superseded on product interaction and navigation** by
+> [`williamos-workbench-ux-contract.md`](williamos-workbench-ux-contract.md).
+> The historical route inventory remains useful, but destination-page and
+> permanent-area recommendations below are not the controlling UX model.
+
 > **Superseded on runtime status and provider dependence** by
 > [`sovereign-runtime-and-review-supersession.md`](sovereign-runtime-and-review-supersession.md): the resident Hermes→AEGIS ExecutionBackend (PR #754) is the accepted
 > execution surface and the HERMES / AEGIS nodes are operating; hosted Codex sessions are one optional
