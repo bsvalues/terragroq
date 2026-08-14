@@ -1,5 +1,13 @@
 # WilliamOS Navigation & Information Architecture
 
+> **Superseded on runtime status and provider dependence** by
+> [`sovereign-runtime-and-review-supersession.md`](sovereign-runtime-and-review-supersession.md): the resident Hermes→AEGIS ExecutionBackend (PR #754) is the accepted
+> execution surface and the HERMES / AEGIS nodes are operating; hosted Codex sessions are one optional
+> provider lane. Passages below that describe the runtime, supervisor, or Hermes as disabled, inactive,
+> or future-only, or the GitHub lifecycle as hosted-session-only, are historical. The #357 nested
+> adapter and the separate native-Windows LOCAL-IDENTITY-RUNTIME program are out of scope of this note.
+
+
 Work order: WO-SHELL-002
 Title: Navigation & Information Architecture
 Type: Architecture / Product Doctrine
