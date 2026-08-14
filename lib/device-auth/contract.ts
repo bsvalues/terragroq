@@ -63,7 +63,11 @@ export function hashOpaqueValue(value: string) {
   return createHash("sha256").update(value, "utf8").digest("hex")
 }
 
-export function validateDeviceMutationOrigin(request: Request, trustedOrigins: string[]) {
+export function validateDeviceMutationOrigin(
+  request: Request,
+  trustedOrigins: string[],
+  options: { trustLoopbackHttpsProxy?: boolean } = {},
+) {
   if (request.method !== "POST" || request.headers.get(DEVICE_AUTH_HEADER) !== "1") {
     throw new Error("DEVICE_ORIGIN_REJECTED")
   }
@@ -75,8 +79,21 @@ export function validateDeviceMutationOrigin(request: Request, trustedOrigins: s
   } catch {
     throw new Error("DEVICE_ORIGIN_REJECTED")
   }
-  if (!trustedOrigins.includes(origin) || new URL(request.url).origin !== origin) {
+  if (!trustedOrigins.includes(origin)) {
     throw new Error("DEVICE_ORIGIN_REJECTED")
+  }
+  const requestUrl = new URL(request.url)
+  if (requestUrl.origin !== origin) {
+    const external = new URL(origin)
+    const internalIsLoopback = requestUrl.hostname === "127.0.0.1" || requestUrl.hostname === "[::1]"
+    const forwardedIsExact = request.headers.get("host") === external.host
+      && request.headers.get("forwarded") === null
+      && request.headers.get("x-forwarded-host") === external.host
+      && request.headers.get("x-forwarded-port") === (external.port || "443")
+      && request.headers.get("x-forwarded-proto") === "https"
+    if (!options.trustLoopbackHttpsProxy || external.protocol !== "https:" || !internalIsLoopback || !forwardedIsExact) {
+      throw new Error("DEVICE_ORIGIN_REJECTED")
+    }
   }
   return origin
 }
