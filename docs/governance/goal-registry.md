@@ -1,3 +1,10 @@
+> **Superseded on runtime status and provider dependence** by
+> [`sovereign-runtime-and-review-supersession.md`](sovereign-runtime-and-review-supersession.md):
+> the resident Hermes→AEGIS ExecutionBackend (PR #754) is the accepted execution surface, and hosted
+> Codex sessions are one optional provider lane. Passages below that describe the runtime or supervisor
+> as disabled, or the GitHub lifecycle as hosted-session-only, are historical; the #357 nested adapter
+> stays rejected.
+
 # WilliamOS Goal Registry
 
 Work order: `WO-OWNER-OUTCOME-001 through WO-OWNER-OUTCOME-009`
@@ -181,8 +188,7 @@ zero for certification.
 
 The separate local-identity runtime goal is terminal historical evidence.
 Issue #357 is `FAILED_TERMINAL` with reason `CODEX_NETWORK_WALL`; it will not be
-retried. Issue #358 is `BLOCKED_DEPENDENCY`. The supervisor and runtime remain
-disabled and are not prerequisites for supported hosted agent execution.
+retried. Issue #358 is `BLOCKED_DEPENDENCY`. The supervisor and runtime are OPERATING through the Hermes→AEGIS ExecutionBackend (PR #754); the rejected #357 nested adapter stays disabled.
 
 ### `GOAL-PORTFOLIO-OPERATOR-001 - Continuous Program and Goal Selection`
 

@@ -1,3 +1,10 @@
+> **Superseded on runtime status and provider dependence** by
+> [`sovereign-runtime-and-review-supersession.md`](sovereign-runtime-and-review-supersession.md):
+> the resident Hermes→AEGIS ExecutionBackend (PR #754) is the accepted execution surface, and hosted
+> Codex sessions are one optional provider lane. Passages below that describe the runtime or supervisor
+> as disabled, or the GitHub lifecycle as hosted-session-only, are historical; the #357 nested adapter
+> stays rejected.
+
 # Owner Outcome Delivery Program
 
 Program: `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
