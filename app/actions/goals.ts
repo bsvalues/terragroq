@@ -1,5 +1,7 @@
 "use server"
 
+import { randomUUID } from "node:crypto"
+
 import { db } from "@/lib/db"
 import {
   doctrine,
@@ -8,6 +10,9 @@ import {
   goalOutcomeIntakeReceipt,
   governanceEvent,
   outcomeQueueItem,
+  project,
+  workbenchThread,
+  workbenchThreadSource,
   workOrder,
   type Goal,
 } from "@/lib/db/schema"
@@ -24,7 +29,17 @@ import { hashRecord } from "@/lib/governance/hash"
 import { and, desc, eq, sql } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 import { mapLegacyGoalToOutcome } from "@/lib/outcome-queue/engine"
+import { routeUniversalIntent } from "@/lib/intent/router"
 import { ensureOutcomeQueueHardeningSchema } from "@/scripts/hermes-bridge/outcome-queue-source.mjs"
+import {
+  buildOutcomeStartRequestHash,
+  buildOutcomeStartResultDigest,
+  buildRefusedOutcomeStartResultDigest,
+  normalizeOutcomeStartInput,
+  type NormalizedOutcomeStartInput,
+  type StartWorkbenchOutcomeInput,
+  type StartWorkbenchOutcomeResult,
+} from "@/lib/workbench/outcome-start"
 
 /* ------------------------------------------------------------------ */
 /* Reads                                                              */
@@ -124,12 +139,45 @@ async function ensureGoalOutcomeQueueSchema(): Promise<void> {
 /* Submit + classify                                                  */
 /* ------------------------------------------------------------------ */
 
-export async function submitGoal(command: string, idempotencyKey?: string): Promise<Goal> {
-  const userId = await getUserId()
+type GoalIntakeResult = Readonly<{
+  goal: Goal | null
+  start: StartWorkbenchOutcomeResult | null
+}>
+
+function unavailableOutcomeStart(
+  status: "CONFLICT" | "INVALID_INTENT" | "PROJECT_NOT_FOUND",
+  reason: "IDEMPOTENCY_CONFLICT" | "ROUTE_NOT_START_OUTCOME" | "PROJECT_NOT_FOUND",
+  projectId: number,
+): StartWorkbenchOutcomeResult {
+  return {
+    status,
+    reason,
+    projectId,
+    threadId: null,
+    goalId: null,
+    outcomeKey: null,
+    root: null,
+    intakeTruth: "unknown",
+    ownershipTruth: "unavailable",
+    approvalGrantedByIntake: false,
+    authorityGrantedByIntake: false,
+    executionAuthorizedByIntake: false,
+  }
+}
+
+async function persistGoalOutcome(
+  command: string,
+  idempotencyKey?: string,
+  startInput: NormalizedOutcomeStartInput | null = null,
+  authenticatedUserId?: string,
+): Promise<GoalIntakeResult> {
+  const userId = authenticatedUserId ?? await getUserId()
   const trimmed = command.trim()
   if (!trimmed) throw new Error("A goal command is required.")
   const intakeKey = normalizeIntakeKey(trimmed, idempotencyKey)
-  const intakeRequestHash = hashRecord({ command: trimmed })
+  const intakeRequestHash = startInput
+    ? buildOutcomeStartRequestHash(startInput)
+    : hashRecord({ command: trimmed })
 
   // 1. Deterministic classification, evaluated against the live lock posture so
   //    machine-checkable doctrine (WO-015) can fire (e.g. STOP/HOLD conflicts).
@@ -172,10 +220,29 @@ export async function submitGoal(command: string, idempotencyKey?: string): Prom
       throw new Error("GOAL_INTAKE_RECEIPT_DUPLICATED")
     }
     const existingReceipt = existingReceipts[0]
-    if (existingReceipt) {
-      if (existingReceipt.requestHash !== intakeRequestHash) {
-        throw new Error("GOAL_INTAKE_IDEMPOTENCY_CONFLICT")
+    if (existingReceipt && existingReceipt.requestHash !== intakeRequestHash) {
+      if (startInput) {
+        return {
+          goal: null,
+          start: unavailableOutcomeStart("CONFLICT", "IDEMPOTENCY_CONFLICT", startInput.projectId),
+        }
       }
+      throw new Error("GOAL_INTAKE_IDEMPOTENCY_CONFLICT")
+    }
+    if (startInput) {
+      const projects = await transaction
+        .select({ id: project.id, userId: project.userId })
+        .from(project)
+        .where(and(eq(project.userId, userId), eq(project.id, startInput.projectId)))
+        .limit(2)
+      if (projects.length !== 1) {
+        return {
+          goal: null,
+          start: unavailableOutcomeStart("PROJECT_NOT_FOUND", "PROJECT_NOT_FOUND", startInput.projectId),
+        }
+      }
+    }
+    if (existingReceipt) {
       const [existingGoal] = await transaction
         .select()
         .from(goal)
@@ -205,11 +272,85 @@ export async function submitGoal(command: string, idempotencyKey?: string): Prom
         }
         outcomeBinding = existingOutcome.outcomeKey
       }
-      const expectedDigest = hashRecord({
-        requestHash: intakeRequestHash,
-        goalId: existingGoal.id,
-        outcomeKey: outcomeBinding,
-      })
+      let start: StartWorkbenchOutcomeResult | null = null
+      let expectedDigest: string
+      if (startInput && existingGoal.verdict === "refuse") {
+        expectedDigest = buildRefusedOutcomeStartResultDigest({
+          requestHash: intakeRequestHash,
+          goalId: existingGoal.id,
+          refusedBinding: outcomeBinding,
+        })
+        start = {
+          status: "REFUSED",
+          projectId: startInput.projectId,
+          threadId: null,
+          goalId: existingGoal.id,
+          outcomeKey: null,
+          root: null,
+          intakeTruth: "persisted",
+          ownershipTruth: "unavailable",
+          approvalGrantedByIntake: false,
+          authorityGrantedByIntake: false,
+          executionAuthorizedByIntake: false,
+        }
+      } else if (startInput) {
+        const roots = await transaction
+          .select({
+            threadId: workbenchThreadSource.threadId,
+            sourceType: workbenchThreadSource.sourceType,
+            sourceId: workbenchThreadSource.sourceId,
+            role: workbenchThreadSource.role,
+          })
+          .from(workbenchThreadSource)
+          .where(and(
+            eq(workbenchThreadSource.userId, userId),
+            eq(workbenchThreadSource.sourceType, "outcome"),
+            eq(workbenchThreadSource.sourceId, outcomeBinding),
+            eq(workbenchThreadSource.role, "root"),
+          ))
+          .limit(2)
+        if (roots.length !== 1 || roots[0].sourceId !== outcomeBinding) {
+          throw new Error("WORKBENCH_OUTCOME_START_BINDING_WALL")
+        }
+        const [thread] = await transaction
+          .select({ id: workbenchThread.id, userId: workbenchThread.userId, projectId: workbenchThread.projectId })
+          .from(workbenchThread)
+          .where(and(
+            eq(workbenchThread.userId, userId),
+            eq(workbenchThread.id, roots[0].threadId),
+          ))
+          .limit(1)
+        if (!thread || thread.projectId !== startInput.projectId) {
+          throw new Error("WORKBENCH_OUTCOME_START_BINDING_WALL")
+        }
+        expectedDigest = buildOutcomeStartResultDigest({
+          requestHash: intakeRequestHash,
+          goalId: existingGoal.id,
+          outcomeKey: outcomeBinding,
+          threadId: thread.id,
+          rootSourceType: "outcome",
+          rootSourceId: outcomeBinding,
+        })
+        start = {
+          status: "ALREADY_ACCEPTED",
+          projectId: startInput.projectId,
+          threadId: thread.id,
+          goalId: existingGoal.id,
+          outcomeKey: outcomeBinding,
+          root: { sourceType: "outcome", sourceId: outcomeBinding },
+          intakeTruth: "persisted",
+          ownershipTruth: "project_thread_bound",
+          approvalGrantedByIntake: false,
+          authorityGrantedByIntake: false,
+          executionAuthorizedByIntake: false,
+        }
+      } else {
+        expectedDigest = hashRecord({
+          requestHash: intakeRequestHash,
+          goalId: existingGoal.id,
+          outcomeKey: outcomeBinding,
+        })
+      }
       if (expectedDigest !== existingReceipt.resultDigest) {
         throw new Error("GOAL_INTAKE_BINDING_WALL")
       }
@@ -227,7 +368,7 @@ export async function submitGoal(command: string, idempotencyKey?: string): Prom
         ))
         .returning({ id: goalOutcomeIntakeReceipt.id })
       if (!replayedReceipt) throw new Error("GOAL_INTAKE_REPLAY_WRITE_WALL")
-      return existingGoal
+      return { goal: existingGoal, start }
     }
 
     const refs = await transaction
@@ -281,11 +422,81 @@ export async function submitGoal(command: string, idempotencyKey?: string): Prom
       })
       outcomeBinding = queued.outcomeKey
     }
-    const resultDigest = hashRecord({
-      requestHash: intakeRequestHash,
-      goalId: created.id,
-      outcomeKey: outcomeBinding,
-    })
+    let start: StartWorkbenchOutcomeResult | null = null
+    let resultDigest: string
+    if (startInput && created.verdict === "refuse") {
+      resultDigest = buildRefusedOutcomeStartResultDigest({
+        requestHash: intakeRequestHash,
+        goalId: created.id,
+        refusedBinding: outcomeBinding,
+      })
+      start = {
+        status: "REFUSED",
+        projectId: startInput.projectId,
+        threadId: null,
+        goalId: created.id,
+        outcomeKey: null,
+        root: null,
+        intakeTruth: "persisted",
+        ownershipTruth: "unavailable",
+        approvalGrantedByIntake: false,
+        authorityGrantedByIntake: false,
+        executionAuthorizedByIntake: false,
+      }
+    } else if (startInput) {
+      const threadId = randomUUID()
+      const [insertedThread] = await transaction
+        .insert(workbenchThread)
+        .values({
+          id: threadId,
+          userId,
+          projectId: startInput.projectId,
+          title: trimmed.slice(0, 500),
+          createdAt: submittedAt,
+          updatedAt: submittedAt,
+        })
+        .returning({ id: workbenchThread.id })
+      if (insertedThread?.id !== threadId) throw new Error("WORKBENCH_OUTCOME_START_THREAD_WRITE_WALL")
+      const [insertedRoot] = await transaction
+        .insert(workbenchThreadSource)
+        .values({
+          userId,
+          threadId,
+          sourceType: "outcome",
+          sourceId: outcomeBinding,
+          role: "root",
+          createdAt: submittedAt,
+        })
+        .returning({ id: workbenchThreadSource.id })
+      if (!insertedRoot) throw new Error("WORKBENCH_OUTCOME_START_ROOT_WRITE_WALL")
+      resultDigest = buildOutcomeStartResultDigest({
+        requestHash: intakeRequestHash,
+        goalId: created.id,
+        outcomeKey: outcomeBinding,
+        threadId,
+        rootSourceType: "outcome",
+        rootSourceId: outcomeBinding,
+      })
+      start = {
+        status: "ACCEPTED",
+        projectId: startInput.projectId,
+        threadId,
+        goalId: created.id,
+        outcomeKey: outcomeBinding,
+        root: { sourceType: "outcome", sourceId: outcomeBinding },
+        intakeTruth: "persisted",
+        ownershipTruth: "project_thread_bound",
+        approvalGrantedByIntake: false,
+        authorityGrantedByIntake: false,
+        executionAuthorizedByIntake: false,
+      }
+    } else {
+      resultDigest = hashRecord({
+        requestHash: intakeRequestHash,
+        goalId: created.id,
+        outcomeKey: outcomeBinding,
+      })
+    }
     const [receipt] = await transaction
       .insert(goalOutcomeIntakeReceipt)
       .values({
@@ -317,6 +528,13 @@ export async function submitGoal(command: string, idempotencyKey?: string): Prom
           intakeReceiptId: receipt.id,
           requestHash: intakeRequestHash,
           resultDigest,
+          ...(start?.status === "ACCEPTED" ? {
+            projectId: start.projectId,
+            threadId: start.threadId,
+            rootSourceType: start.root.sourceType,
+            rootSourceId: start.root.sourceId,
+            executionAuthorizedByIntake: false,
+          } : {}),
         },
       })
       .returning({ id: governanceEvent.id })
@@ -334,13 +552,54 @@ export async function submitGoal(command: string, idempotencyKey?: string): Prom
         governanceEventId: governance.id,
         requestHash: intakeRequestHash,
         resultDigest,
+        ...(start?.status === "ACCEPTED" ? {
+          projectId: start.projectId,
+          threadId: start.threadId,
+          rootSourceType: start.root.sourceType,
+          rootSourceId: start.root.sourceId,
+          executionAuthorizedByIntake: false,
+        } : {}),
       },
     })
-    return created
+    return { goal: created, start }
   })
+  if (!row.goal) return row
   revalidatePath("/goal-console")
   revalidatePath("/work-orders")
   return row
+}
+
+export async function submitGoal(command: string, idempotencyKey?: string): Promise<Goal> {
+  const persisted = await persistGoalOutcome(command, idempotencyKey)
+  if (!persisted.goal) throw new Error("GOAL_INTAKE_RESULT_WALL")
+  return persisted.goal
+}
+
+export async function startGoalOutcome(
+  input: StartWorkbenchOutcomeInput,
+): Promise<StartWorkbenchOutcomeResult> {
+  const normalized = normalizeOutcomeStartInput(input)
+  const userId = await getUserId()
+  const route = routeUniversalIntent(normalized.intent)
+  if (route.state !== "routed" || route.destination?.action !== "start_outcome") {
+    return unavailableOutcomeStart(
+      "INVALID_INTENT",
+      "ROUTE_NOT_START_OUTCOME",
+      normalized.projectId,
+    )
+  }
+  const persisted = await persistGoalOutcome(
+    normalized.intent,
+    normalized.idempotencyKey,
+    normalized,
+    userId,
+  )
+  if (!persisted.start) throw new Error("WORKBENCH_OUTCOME_START_RESULT_WALL")
+  if (persisted.start.intakeTruth === "persisted") {
+    revalidatePath("/")
+    revalidatePath("/projects")
+  }
+  return persisted.start
 }
 
 /* ------------------------------------------------------------------ */

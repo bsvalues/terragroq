@@ -30,6 +30,18 @@ describe("authenticated universal intent API", () => {
     })
   })
 
+  it("previews ordinary outcome intake directly without a module handoff", async () => {
+    const response = await POST(request({ intent: "Build the useful owner cockpit" }))
+
+    expect(response.headers.get("cache-control")).toBe("no-store")
+    await expect(response.json()).resolves.toMatchObject({
+      state: "routed",
+      intent: "outcome",
+      executionAuthorized: false,
+      destination: { href: null, action: "start_outcome" },
+    })
+  })
+
   it("rejects malformed or oversized intent", async () => {
     expect((await POST(request({ intent: "" }))).status).toBe(400)
     expect((await POST(request({ intent: "x".repeat(2001) }))).status).toBe(400)
