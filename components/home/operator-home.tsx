@@ -30,6 +30,8 @@ type DeliveredRow = {
   mergeSha: string | null
   attempts: number
   abandoned: number
+  node: string
+  worker: string
 }
 
 function deliveredRows(executions: ExecutionAttempt[]): DeliveredRow[] {
@@ -51,13 +53,20 @@ function deliveredRows(executions: ExecutionAttempt[]): DeliveredRow[] {
       mergeSha: delivery?.mergeSha ?? null,
       attempts: attempts.length,
       abandoned: attempts.filter((a) => a.attemptStatus === "abandoned").length,
+      node: attempts[0].node,
+      worker: attempts[0].worker,
     })
   }
   return rows.sort((a, b) => (b.prNumber ?? 0) - (a.prNumber ?? 0))
 }
 
 function AttemptBadge({ attempts, abandoned }: { attempts: number; abandoned: number }) {
-  if (abandoned === 0) return <Badge variant="outline">1 attempt · clean</Badge>
+  if (abandoned === 0)
+    return (
+      <Badge variant="outline">
+        {attempts} attempt{attempts === 1 ? "" : "s"} · clean
+      </Badge>
+    )
   if (abandoned >= 10)
     return (
       <Badge variant="outline" className="border-amber-500/50 text-amber-700 dark:text-amber-300">
@@ -72,7 +81,9 @@ function AttemptBadge({ attempts, abandoned }: { attempts: number; abandoned: nu
 }
 
 export function OperatorHome({ state }: { state: OperatorState }) {
-  const idle = state.now.value.queueDepth === 0 && state.now.value.activeExecutions === 0
+  const activeCount = state.now.value.activeExecutions
+  const idle = state.now.value.queueDepth === 0 && activeCount === 0
+  const nothingNeedsYou = state.needsWilliam.value.length === 0
   const delivered = deliveredRows(state.executions.value)
   const closedWorkOrders = state.work.value.filter((w) => w.status === "closed").length
 
@@ -85,7 +96,11 @@ export function OperatorHome({ state }: { state: OperatorState }) {
           {idle ? "idle · queue 0" : `active · queue ${state.now.value.queueDepth}`}
         </Badge>
         <span className="text-sm text-muted-foreground">
-          {idle ? "Nothing is executing. Nothing needs you." : "An outcome is in flight."}
+          {idle
+            ? nothingNeedsYou
+              ? "Nothing is executing. Nothing needs you."
+              : "Nothing is executing."
+            : "An outcome is in flight."}
         </span>
       </div>
 
@@ -141,7 +156,11 @@ export function OperatorHome({ state }: { state: OperatorState }) {
                     </Badge>
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    {isActive ? `${delivered.length} outcomes delivered · nothing running` : "Bound · no work yet"}
+                    {isActive
+                      ? activeCount > 0
+                        ? `${activeCount} running now`
+                        : "Active · nothing running now"
+                      : "Bound · no work yet"}
                   </p>
                   <div className="flex flex-wrap gap-1">
                     {p.resources.map((r) => (
@@ -173,7 +192,9 @@ export function OperatorHome({ state }: { state: OperatorState }) {
                       {d.identity} · {d.workOrderRef}
                     </div>
                     <div className="text-sm">
-                      {d.abandoned > 0 ? `Delivered by AEGIS after ${d.attempts} attempts` : "Delivered by AEGIS"}
+                      {d.abandoned > 0
+                        ? `Delivered by ${d.worker} on ${d.node} after ${d.attempts} attempts`
+                        : `Delivered by ${d.worker} on ${d.node}`}
                     </div>
                   </div>
                   <AttemptBadge attempts={d.attempts} abandoned={d.abandoned} />
