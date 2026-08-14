@@ -9,6 +9,10 @@ import {
 } from "../../lib/outcome-queue/contract.mjs"
 import { isVerifiedPrimaryAuthorization } from "./primary-authorization-provenance.mjs"
 import {
+  HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
+  HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+} from "./work-contract.mjs"
+import {
   createHermesDatabasePool,
   HERMES_DATABASE_SCHEMA_TIMEOUT_MS,
 } from "./database-pool.mjs"
@@ -62,6 +66,8 @@ const LEGACY_GOAL_REFS = Object.freeze([
   "GOAL-0004",
   "GOAL-0005",
 ])
+const REVIEWED_WORK_CONTRACT_ID_SQL = HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID.replaceAll("'", "''")
+const REVIEWED_WORK_CONTRACT_DIGEST_SQL = HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST.replaceAll("'", "''")
 
 const QUEUE_COLUMNS = `
   q."id",
@@ -279,10 +285,94 @@ const ACQUISITION_AUTHORITY_PREDICATE = LIVE_AUTHORITY_PREDICATE.replaceAll(
   `COALESCE($8, q."activeWorkOrderId") = live_grant."workOrderId"`,
 )
 
+// Acquisition is allowed only for an outcome explicitly rooted in one tenant
+// Workbench Thread whose active Project has exactly one primary repository,
+// and that repository is WilliamOS. Queue text, refs, paths, and titles are
+// never used to infer this membership.
+const WORKBENCH_PROJECT_EXECUTION_PREDICATE = `
+  (
+    SELECT count(*)
+    FROM "workbench_thread_source" AS global_execution_root
+    WHERE global_execution_root."userId" = q."userId"
+      AND global_execution_root."sourceType" = 'outcome'
+      AND global_execution_root."sourceId" = q."outcomeKey"
+      AND global_execution_root.role = 'root'
+  ) = 1
+  AND EXISTS (
+    SELECT 1
+    FROM "workbench_thread_source" AS execution_root
+    JOIN "workbench_thread" AS execution_thread
+      ON execution_thread."userId" = execution_root."userId"
+      AND execution_thread.id = execution_root."threadId"
+    JOIN "project" AS execution_project
+      ON execution_project."userId" = execution_thread."userId"
+      AND execution_project.id = execution_thread."projectId"
+      AND execution_project.lifecycle = 'active'
+    JOIN "project_resource" AS primary_repo
+      ON primary_repo."userId" = execution_project."userId"
+      AND primary_repo."projectId" = execution_project.id
+      AND primary_repo.type = 'repo'
+      AND primary_repo.relationship = 'primary-repo'
+    WHERE execution_root."userId" = q."userId"
+      AND execution_root."sourceType" = 'outcome'
+      AND execution_root."sourceId" = q."outcomeKey"
+      AND execution_root.role = 'root'
+      AND execution_thread."userId" = q."userId"
+    GROUP BY execution_root."userId", execution_root."threadId", execution_root."sourceId"
+    HAVING count(*) = 1
+      AND min(primary_repo."canonicalIdentity") = 'bsvalues/terragroq'
+  )
+`
+
+const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
+  q."authorityLevel" = 'A2_WRITE_OWN'
+  AND EXISTS (
+    SELECT 1
+    FROM "authority_grant" AS exact_execution_grant
+    WHERE exact_execution_grant."userId" = q."userId"
+      AND exact_execution_grant.ref = q."authorityGrantRef"
+      AND exact_execution_grant.status = 'active'
+      AND exact_execution_grant."revokedAt" IS NULL
+      AND exact_execution_grant."expiresAt" IS NOT NULL
+      AND exact_execution_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+      AND exact_execution_grant."authorityLevel" = 'A2_WRITE_OWN'
+      AND exact_execution_grant."grantedTo" = 'operator'
+      AND exact_execution_grant.scope = q."outcomeKey"
+      AND exact_execution_grant."workOrderId" IS NULL
+      AND cardinality(exact_execution_grant."allowedActions") = 1
+      AND exact_execution_grant."allowedActions"[1] = 'outcome:execute'
+  )
+  AND EXISTS (
+    SELECT 1
+    FROM "outcome_queue_mutation_receipt" AS execution_receipt
+    JOIN "workbench_thread_source" AS execution_root
+      ON execution_root."userId" = execution_receipt."userId"
+      AND execution_root."sourceType" = 'outcome'
+      AND execution_root."sourceId" = execution_receipt."outcomeKey"
+      AND execution_root.role = 'root'
+    JOIN "workbench_thread" AS execution_thread
+      ON execution_thread."userId" = execution_root."userId"
+      AND execution_thread.id = execution_root."threadId"
+    WHERE execution_receipt."userId" = q."userId"
+      AND execution_receipt."outcomeKey" = q."outcomeKey"
+      AND execution_receipt.operation = 'workbench_execution.authorize'
+      AND execution_receipt."requestBinding"->>'confirmation' = 'START_WORK'
+      AND execution_receipt."requestBinding"->>'outcomeKey' = q."outcomeKey"
+      AND execution_receipt."requestBinding"->>'threadId' = execution_root."threadId"
+      AND execution_receipt."requestBinding"->>'projectId' = execution_thread."projectId"::text
+      AND execution_receipt."resultBinding"->>'grantRef' = q."authorityGrantRef"
+      AND execution_receipt."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
+      AND execution_receipt."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
+      AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}'
+  )
+`
+
 const ELIGIBILITY_PREDICATE = `
   q."userId" = $2
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${ACQUISITION_AUTHORITY_PREDICATE}
+  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
+  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}
   AND q."riskClass" IN ('R0', 'R1')
   AND (
     q."lifecycleState" = 'approved'
@@ -1356,7 +1446,9 @@ RETURNING "id"
   revalidateAcquisition: `
 SELECT
   (${LIVE_APPROVAL_PREDICATE}) AS "approvalLive",
-  (${LIVE_AUTHORITY_PREDICATE}) AS "authorityLive"
+  ((${LIVE_AUTHORITY_PREDICATE}) AND (${WORKBENCH_PROJECT_EXECUTION_PREDICATE})
+    AND (${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}))
+    AS "authorityLive"
 FROM "outcome_queue_item" AS q
 WHERE q."userId" = $2
   AND q."outcomeKey" = $3
@@ -1381,6 +1473,8 @@ WHERE q."userId" = $2
   AND ${LIVE_APPROVAL_PREDICATE}
   AND q."riskClass" IN ('R0', 'R1')
   AND ${ACQUISITION_AUTHORITY_PREDICATE}
+  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
+  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}
   AND NOT EXISTS (
     SELECT 1
     FROM unnest(q."dependencyKeys") AS dependency("outcomeKey")
@@ -1517,6 +1611,8 @@ WHERE q."userId" = $1
   AND q."leaseExpiresAt" > $7::timestamptz
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$7::timestamptz")}
+  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
+  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$7::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   deferLease: `
@@ -1534,6 +1630,8 @@ WHERE q."userId" = $1
   AND q."leaseExpiresAt" > $9::timestamptz
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
+  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
+  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   bindWorkOrder: `
@@ -1556,6 +1654,8 @@ WHERE q."userId" = $1
       `q."activeWorkOrderId" = live_grant."workOrderId"`,
       `$7 = live_grant."workOrderId"`,
     )}
+  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
+  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$8::timestamptz")}
   AND projected_work.id = $7
   AND projected_work."userId" = q."userId"
   AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
@@ -1850,6 +1950,8 @@ WHERE q."userId" = $1
   AND ${ACQUISITION_AUTHORITY_PREDICATE
     .replaceAll("$8", "$7")
     .replaceAll("$1::timestamptz", "$9::timestamptz")}
+  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
+  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
   AND projected_work."userId" = q."userId"
   AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
   AND projected_work.goal = q."goalRef"
@@ -2032,6 +2134,8 @@ WHERE q."userId" = $1
   AND q."acquisitionKey" = $7
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$12::timestamptz")}
+  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
+  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$12::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   legacyHistory: `

@@ -23,6 +23,7 @@ import { UserMenu } from "@/components/shell/user-menu"
 import { supportingCapabilities } from "@/components/workbench/supporting-capabilities"
 import { WorkbenchContextProvider } from "@/components/workbench/workbench-context"
 import { WorkbenchExecution, type WorkbenchExecutionLoadState } from "@/components/workbench/workbench-execution"
+import { OutcomeExecutionControl } from "@/components/workbench/outcome-execution-control"
 import type { AuthReadiness } from "@/lib/auth-readiness"
 import type { RuntimeStatus } from "@/lib/ai/runtime"
 import type { ProjectView } from "@/lib/operator/operator-state"
@@ -181,13 +182,14 @@ function ProjectExplorer({
   )
 }
 
-function ThreadTimeline({ thread, onSelectItem }: { thread: Thread; onSelectItem: (item: ThreadItem) => void }) {
+function ThreadTimeline({ thread, onSelectItem, workStatus }: { thread: Thread; onSelectItem: (item: ThreadItem) => void; workStatus: React.ReactNode }) {
   return (
     <article className="mx-auto w-full max-w-4xl px-5 py-6 md:px-8">
       <header className="border-b border-[var(--workbench-hairline)] pb-5">
         <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--workbench-muted)]">{thread.project.name} / Thread</p>
         <h1 className="mt-2 text-xl font-semibold tracking-tight text-[var(--workbench-text)]">{thread.title}</h1>
         <p className="mt-2 text-xs text-[var(--workbench-muted)]">Last persisted activity {stamp(thread.lastActivityAt)} UTC</p>
+        {workStatus}
       </header>
       {thread.items.length === 0 ? (
         <p className="py-8 text-sm text-[var(--workbench-muted)]">This Thread exists, but no durable timeline items are available yet.</p>
@@ -372,6 +374,8 @@ export function WorkbenchShell({
   const [isPending, startTransition] = useTransition()
   const threadMainRef = useRef<HTMLElement>(null)
   const restoredRouteRef = useRef<WorkbenchViewMode | null>(null)
+  const executionRefreshRef = useRef<() => void>(() => undefined)
+  const backgroundRefreshVersionRef = useRef(0)
   const routeMode = viewMode(pathname)
   const currentMode = routeMode ?? state.viewMode
   const selectedProject = projects.find((project) => String(project.id) === state.selectedProjectId) ?? null
@@ -484,34 +488,88 @@ export function WorkbenchShell({
     if (selectedProjectId === null || selectedThreadId === null) {
       setExecutionProjection(null)
       setExecutionLoadState("unselected")
+      executionRefreshRef.current = () => undefined
       return
     }
+    const projectId = selectedProjectId
+    const threadId = selectedThreadId
 
     let active = true
+    let inFlight = false
+    let queued = false
     setExecutionProjection(null)
     setExecutionLoadState("loading")
-    void getWorkbenchExecution(selectedProjectId, selectedThreadId).then((next) => {
-      if (!active) return
-      setExecutionProjection(next)
-      setExecutionLoadState("ready")
-      if (next.observedAt !== null) {
-        dispatch({ type: "BACKGROUND_REFRESH", version: Date.now(), observedAt: next.observedAt })
-      }
-    }).catch(() => {
-      if (!active) return
-      setExecutionProjection(null)
-      setExecutionLoadState("error")
-    })
 
-    return () => { active = false }
+    async function refresh() {
+      if (!active) return
+      if (inFlight) {
+        queued = true
+        return
+      }
+      inFlight = true
+      try {
+        const next = await getWorkbenchExecution(projectId, threadId)
+        if (!active) return
+        setExecutionProjection(next)
+        setExecutionLoadState("ready")
+        if (next.observedAt !== null) {
+          const version = Math.max(Date.now(), backgroundRefreshVersionRef.current + 1)
+          backgroundRefreshVersionRef.current = version
+          dispatch({ type: "BACKGROUND_REFRESH", version, observedAt: next.observedAt })
+        }
+      } catch {
+        if (!active) return
+        setExecutionLoadState("error")
+      } finally {
+        inFlight = false
+        if (active && queued) {
+          queued = false
+          void refresh()
+        }
+      }
+    }
+
+    const requestRefresh = () => { void refresh() }
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") requestRefresh()
+    }
+    executionRefreshRef.current = requestRefresh
+    const interval = window.setInterval(requestRefresh, 30_000)
+    window.addEventListener("online", requestRefresh)
+    document.addEventListener("visibilitychange", refreshWhenVisible)
+    requestRefresh()
+
+    return () => {
+      active = false
+      window.clearInterval(interval)
+      window.removeEventListener("online", requestRefresh)
+      document.removeEventListener("visibilitychange", refreshWhenVisible)
+      if (executionRefreshRef.current === requestRefresh) executionRefreshRef.current = () => undefined
+    }
   }, [selectedProjectId, selectedThreadId])
+
+  const repositoryEligible = selectedProject?.resources.filter((resource) => (
+    resource.type === "repo" && resource.relationship === "primary-repo"
+  )).map((resource) => resource.canonicalIdentity) ?? []
+  const canUseGovernedRepository = repositoryEligible.length === 1 && repositoryEligible[0] === "bsvalues/terragroq"
+  const workStatus = selectedProjectId !== null && selectedThreadId !== null ? (
+    <OutcomeExecutionControl
+      key={`${selectedProjectId}:${selectedThreadId}`}
+      projectId={selectedProjectId}
+      threadId={selectedThreadId}
+      repositoryEligible={canUseGovernedRepository}
+      projection={executionProjection}
+      loadState={executionLoadState}
+      onRefresh={() => executionRefreshRef.current()}
+    />
+  ) : null
 
   const center = useMemo(() => {
     if (routeMode === null) return children
     if (currentMode === "activity" || currentMode === "system") return children
-    if (selectedThread) return <ThreadTimeline thread={selectedThread} onSelectItem={setSelectedItem} />
+    if (selectedThread) return <ThreadTimeline thread={selectedThread} onSelectItem={setSelectedItem} workStatus={workStatus} />
     return <EmptyThread project={selectedProject} />
-  }, [children, currentMode, routeMode, selectedProject, selectedThread])
+  }, [children, currentMode, routeMode, selectedProject, selectedThread, workStatus])
 
   function selectProject(project: ProjectView) {
     setSelectedItem(null)

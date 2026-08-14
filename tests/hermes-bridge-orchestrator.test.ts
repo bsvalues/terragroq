@@ -139,6 +139,25 @@ function fixture(
     holderId: "test-holder",
     now: () => new Date(currentTime),
     sleep: async () => {},
+    workContractResolver: (outcome: { lane?: string }) => ({
+      version: "test.v1",
+      id: "orchestrator-fixture",
+      digest: "f".repeat(64),
+      repository: "bsvalues/terragroq",
+      lane: "test",
+      reservations: outcome.lane === "read_model"
+        ? ["app/actions/goal-timeline.ts"]
+        : [
+            "components/hermes/live-status.tsx",
+            "tests/hermes-live-status.test.tsx",
+            "tests/deleted-hermes-status.test.tsx",
+          ],
+      validationCommands: [
+        { command: "npm", args: ["run", "lint"], timeoutMs: 600_000 },
+        { command: "npm", args: ["test", "--", "--run"], timeoutMs: 900_000 },
+        { command: "npm", args: ["run", "build"], timeoutMs: 900_000 },
+      ],
+    }),
     ...orchestratorOptions,
   })
   return {
@@ -2346,7 +2365,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.runTurn).toHaveBeenCalledTimes(2)
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Vercel concluded FAILURE")
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Improve the Hermes page")
-    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("- components/**")
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("- components/hermes/live-status.tsx")
+    expect(value.client.runTurn.mock.calls[1][0].prompt).not.toContain("components/**")
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("rejected issue #357 adapter")
   })
 

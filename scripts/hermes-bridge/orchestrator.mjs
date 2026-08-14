@@ -19,6 +19,7 @@ import {
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { buildHermesCodexPrompt, HERMES_BLOCKED_SCOPE, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
+import { resolveHermesWorkContract } from "./work-contract.mjs"
 import {
   createHermesStateStore,
   hermesTurnResultDigest,
@@ -97,19 +98,6 @@ export const DEFAULT_VALIDATORS = Object.freeze([
   "npx vitest run focused changed tests",
   ...DEFAULT_VALIDATION_COMMANDS.map((entry) => `${entry.command} ${entry.args.join(" ")}`),
 ])
-
-const RESERVATIONS = Object.freeze({
-  docs: Object.freeze(["docs/**", "tests/**"]),
-  ui: Object.freeze(["app/(shell)/**", "components/**", "tests/**", "docs/reports/**"]),
-  read_model: Object.freeze([
-    "app/(shell)/**",
-    "app/actions/goal-timeline.ts",
-    "components/**",
-    "lib/**",
-    "tests/**",
-    "docs/reports/**",
-  ]),
-})
 
 const FORBIDDEN_CHANGED_PATH = /^(?:\.obsidian\/|scripts\/runtime-operator\/|scripts\/local\/williamos-codex-exec\.ps1$|lib\/auth|app\/api\/auth|lib\/db\/schema\.ts$|drizzle\/)/i
 
@@ -277,6 +265,17 @@ export function assertChangedPathsAllowed(paths, reservations) {
   }
 }
 
+export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkContract) {
+  const contract = resolver(outcome)
+  if (!contract || !Array.isArray(contract.reservations) || contract.reservations.length === 0
+    || !Array.isArray(contract.validationCommands) || contract.validationCommands.length === 0) {
+    throw Object.assign(new Error("Outcome has no exact reviewed work contract"), {
+      code: "HERMES_WORK_CONTRACT_WALL",
+    })
+  }
+  return contract
+}
+
 export function createHermesOrchestrator(options = {}) {
   const workspace = path.resolve(options.workspace ?? process.cwd())
   const runtimeRoot = path.resolve(options.runtimeRoot ?? process.env.WILLIAMOS_HERMES_RUNTIME_ROOT
@@ -285,6 +284,7 @@ export function createHermesOrchestrator(options = {}) {
   const activationPath = path.join(runtimeRoot, "control", "activation")
   const notBeforePath = path.join(runtimeRoot, "control", "authority-not-before")
   const state = options.state ?? createHermesStateStore(statePath)
+  const workContractResolver = options.workContractResolver ?? resolveHermesWorkContract
   const backendEnvironment = options.env ?? process.env
   const executionBackend = options.executionBackend ?? selectExecutionBackend(
     typeof backendEnvironment.WILLIAMOS_CODEX_EXEC_NODE === "string"
@@ -1277,8 +1277,8 @@ export function createHermesOrchestrator(options = {}) {
       return { result: "OWNER_DECISION_REQUIRED", outcomeId, nextState }
     }
     const branch = lease.metadata?.branch ?? `codex/hermes-${safeLeaf(outcomeRef(outcome))}-${outcome.id}`
-    const reservations = RESERVATIONS[outcome.lane]
-    if (!reservations) throw Object.assign(new Error("No reservation for outcome lane"), { code: "HERMES_RESERVATION_WALL" })
+    const workContract = requireHermesWorkContract(outcome, workContractResolver)
+    const reservations = workContract.reservations
     const baseSha = lease.metadata?.baseSha ?? await lifecycle.refreshOriginMain()
     const recoveryCheckpointState = current?.checkpoint?.state ?? null
     const worktreePath = lease.metadata?.worktreePath
@@ -1338,12 +1338,15 @@ export function createHermesOrchestrator(options = {}) {
         })
         if (entry.exists && entry.isFile) focusedTests.push(changedPath)
       }
-      return [
-        ...(focusedTests.length > 0 ? [{
-          command: "npx", args: ["vitest", "run", ...focusedTests], timeoutMs: 5 * 60 * 1000,
-        }] : []),
-        ...DEFAULT_VALIDATION_COMMANDS,
-      ]
+      const unregisteredFocusedTest = focusedTests.find((testPath) => (
+        !workContract.validationCommands.some((entry) => entry.args?.includes(testPath))
+      ))
+      if (unregisteredFocusedTest) {
+        throw Object.assign(new Error("Changed test is absent from the exact work contract"), {
+          code: "HERMES_WORK_CONTRACT_VALIDATOR_WALL",
+        })
+      }
+      return workContract.validationCommands
     }
     const runDeterministicValidation = async (workingPaths) => {
       lifecycle.ensureValidationDependencies(record)

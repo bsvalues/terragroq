@@ -15,6 +15,8 @@ import {
   recoverTerminalPostMergeCleanupWall,
   recoverValidationInfrastructureWall,
   redactHermesStatus,
+  resolveHermesSmokeCwd,
+  runHermesTransportSmoke,
   printHermesCycleResult,
   runHermesQueueDrain,
   runCliEntrypoint,
@@ -25,6 +27,131 @@ import { initializeHermesState } from "../scripts/hermes-bridge/state-store.mjs"
 const agentEntrypoint = fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8")
 
 describe("Hermes bridge CLI", () => {
+  it.each([
+    [{}, "HERMES_RESIDENT_AEGIS_REQUIRED"],
+    [{ WILLIAMOS_CODEX_EXEC_NODE: "local" }, "HERMES_RESIDENT_AEGIS_REQUIRED"],
+    [{ WILLIAMOS_CODEX_EXEC_NODE: "worker-2" }, "HERMES_RESIDENT_AEGIS_REQUIRED"],
+    [{ WILLIAMOS_CODEX_EXEC_NODE: "aegis" }, "HERMES_RESIDENT_AEGIS_REPOSITORY_WALL"],
+    [{ WILLIAMOS_CODEX_EXEC_NODE: "aegis", WILLIAMOS_AEGIS_REPOSITORY_ROOT: "relative/repo" }, "HERMES_RESIDENT_AEGIS_REPOSITORY_WALL"],
+  ])("fails the resident AEGIS gate before queue construction for %j", (environment, code) => {
+    const createQueueRuntime = vi.fn()
+    expect(() => createResidentHermesOrchestrator({
+      requireAegis: true,
+      environment,
+      createQueueRuntime,
+    })).toThrow(code)
+    expect(createQueueRuntime).not.toHaveBeenCalled()
+  })
+
+  it("rejects a selected local backend before resident queue construction", () => {
+    const createQueueRuntime = vi.fn()
+    expect(() => createResidentHermesOrchestrator({
+      requireAegis: true,
+      environment: {
+        WILLIAMOS_CODEX_EXEC_NODE: "aegis",
+        WILLIAMOS_AEGIS_REPOSITORY_ROOT: "/home/bs/terragroq",
+      },
+      selectExecutionBackend: () => ({ isLocal: true }),
+      createQueueRuntime,
+    })).toThrow("HERMES_RESIDENT_LOCAL_BACKEND_WALL")
+    expect(createQueueRuntime).not.toHaveBeenCalled()
+  })
+
+  it("passes the exact non-local AEGIS backend into the resident orchestrator", async () => {
+    const executionBackend = { isLocal: false }
+    const queueRuntime = {
+      selectOutcome: vi.fn(), completeOutcome: vi.fn(), terminalizeOutcome: vi.fn(),
+      deferOutcome: vi.fn(), renewOutcomeLease: vi.fn(), bindWorkOrder: vi.fn(),
+      refreshOutcome: vi.fn(), resumeAfterOwnerDecision: vi.fn(),
+      resumeAfterValidationRecovery: vi.fn(), resumeAfterReviewRecovery: vi.fn(),
+      close: vi.fn(async () => {}),
+    }
+    const createOrchestrator = vi.fn(() => ({ cycle: vi.fn() }))
+    const resident = createResidentHermesOrchestrator({
+      requireAegis: true,
+      environment: {
+        WILLIAMOS_CODEX_EXEC_NODE: "aegis",
+        WILLIAMOS_AEGIS_REPOSITORY_ROOT: "/home/bs/terragroq",
+      },
+      selectExecutionBackend: () => executionBackend,
+      queueRuntime,
+      createOrchestrator,
+    })
+    expect(createOrchestrator).toHaveBeenCalledWith(expect.objectContaining({ executionBackend }))
+    expect(queueRuntime.selectOutcome).not.toHaveBeenCalled()
+    await resident.close()
+  })
+
+  it("uses the configured AEGIS repository for remote transport smoke", () => {
+    expect(resolveHermesSmokeCwd({
+      WILLIAMOS_CODEX_EXEC_NODE: "aegis",
+      WILLIAMOS_AEGIS_REPOSITORY_ROOT: "/home/bs/terragroq",
+    })).toBe("/home/bs/terragroq")
+  })
+
+  it("fails closed when remote transport smoke has no explicit AEGIS repository", () => {
+    expect(() => resolveHermesSmokeCwd({
+      WILLIAMOS_CODEX_EXEC_NODE: "aegis",
+    })).toThrow("HERMES_SMOKE_REMOTE_CWD_WALL")
+  })
+
+  it("rejects a smoke that could fall back to the local execution backend", () => {
+    expect(() => resolveHermesSmokeCwd({})).toThrow("HERMES_SMOKE_AEGIS_REQUIRED")
+  })
+
+  it("rejects a non-AEGIS smoke target instead of attesting it as AEGIS", () => {
+    expect(() => resolveHermesSmokeCwd({
+      WILLIAMOS_CODEX_EXEC_NODE: "worker-2",
+      WILLIAMOS_AEGIS_REPOSITORY_ROOT: "/home/bs/terragroq",
+    })).toThrow("HERMES_SMOKE_AEGIS_REQUIRED")
+  })
+
+  it("rejects the filesystem root as an AEGIS smoke repository", () => {
+    expect(() => resolveHermesSmokeCwd({
+      WILLIAMOS_CODEX_EXEC_NODE: "aegis",
+      WILLIAMOS_AEGIS_REPOSITORY_ROOT: "/",
+    })).toThrow("HERMES_SMOKE_REMOTE_CWD_WALL")
+  })
+
+  it("runs the transport smoke through the selected AEGIS execution backend", async () => {
+    const calls: unknown[] = []
+    const client = {
+      connect: vi.fn(async () => {}),
+      startThread: vi.fn(async (request) => { calls.push(request); return "thread-1" }),
+      runTurn: vi.fn(async (request) => {
+        calls.push(request)
+        return { status: "completed", finalText: "HERMES_APP_SERVER_READY" }
+      }),
+      close: vi.fn(),
+    }
+    const executionBackend = {
+      runCodexClient: vi.fn(async (request) => { calls.push(request); return client }),
+    }
+    await expect(runHermesTransportSmoke({
+      environment: {
+        WILLIAMOS_CODEX_EXEC_NODE: "aegis",
+        WILLIAMOS_AEGIS_REPOSITORY_ROOT: "/home/bs/terragroq",
+      },
+      executionBackend,
+      timeoutMs: 42,
+    })).resolves.toEqual({
+      result: "PASS",
+      transport: "AEGIS_SSH_CODEX_APP_SERVER_STDIO",
+      rejectedIssue357Reused: false,
+    })
+    expect(executionBackend.runCodexClient).toHaveBeenCalledWith({
+      workspacePath: "/home/bs/terragroq",
+      timeoutMs: 42,
+    })
+    expect(calls).toContainEqual({
+      cwd: "/home/bs/terragroq",
+      approvalPolicy: "never",
+      sandbox: "read-only",
+      ephemeral: true,
+    })
+    expect(client.close).toHaveBeenCalledOnce()
+  })
+
   it("wires durable review recovery through the resident queue runtime", async () => {
     const resumeAfterReviewRecovery = vi.fn()
     const close = vi.fn(async () => {})
