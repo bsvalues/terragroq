@@ -13,6 +13,7 @@ import {
   workOrder,
 } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
+import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
 
 /*
  * Operator State — the single read-model every operator surface projects from.
@@ -32,7 +33,7 @@ import { getUserId } from "@/lib/session"
 const INSTALLATION = "WILLIAMOS_PRIMARY"
 const nowIso = () => new Date().toISOString()
 
-export type TruthState = "live" | "idle-empty" | "legacy-unresolved" | "modelled" | "degraded"
+export type TruthState = "live" | "idle-empty" | "legacy-unresolved" | "modelled" | "inferred" | "degraded"
 
 export interface TruthEnvelope<T> {
   value: T
@@ -130,6 +131,13 @@ export interface NodeHealth {
   detail: string
 }
 
+export interface OwnerDecision {
+  timelineId: string
+  goalRef: string
+  workOrderRef: string | null
+  expectedNextState: string | null
+}
+
 export interface OperatorState {
   installation: string
   now: TruthEnvelope<{ activeExecutions: number; queueDepth: number }>
@@ -138,7 +146,7 @@ export interface OperatorState {
   work: TruthEnvelope<Array<{ id: number; ref: string | null; title: string | null; status: string | null; closedAt: Date | null }>>
   executions: TruthEnvelope<ExecutionAttempt[]>
   recentActivity: TruthEnvelope<Array<{ at: string; type: string; actor: string | null }>>
-  needsWilliam: TruthEnvelope<unknown[]>
+  needsWilliam: TruthEnvelope<OwnerDecision[]>
   governance: TruthEnvelope<{ foundingADRs: Array<{ ref: string; scopeType: string; authorityDomainId: string; createdByUserId: string; visibleToPrimary: boolean }> }>
   knowledge: TruthEnvelope<{ canonical: number; memory: number; documents: number; evidence: number; governance: number }>
   systems: TruthEnvelope<NodeHealth[]>
@@ -183,6 +191,17 @@ export async function getOperatorState(): Promise<OperatorState> {
     evidence: await db.$count(evidenceRecord, eq(evidenceRecord.userId, userId)),
     governance: await db.$count(governanceEvent, eq(governanceEvent.userId, userId)),
   }
+
+  // --- owner decisions actually waiting on William (reuse the goal-console authority engine) ---
+  const authorityTimelines = await getActiveGoalAuthorityRequestTimelines()
+  const ownerDecisions: OwnerDecision[] = authorityTimelines
+    .filter((t) => t.truth.state === "CURRENT" && t.decisionRequest.status === "ACTIONABLE")
+    .map((t) => ({
+      timelineId: t.id,
+      goalRef: t.decisionRequest.goalRef,
+      workOrderRef: t.decisionRequest.workOrderRef,
+      expectedNextState: t.decisionRequest.expectedNextState,
+    }))
 
   const intakeByGoal = new Map(intake.map((r) => [r.goalId, r.outcomeKey]))
 
@@ -321,14 +340,15 @@ export async function getOperatorState(): Promise<OperatorState> {
 
   // --- systems: derived from live signals available in-process (no external probes) ---
   const aegisRecentlyActive = govRows.some((e) => (e.metadata.actor as string) === "hermes-codex-bridge")
+  // ATLAS status is grounded (this query returned); HERMES/AEGIS are inferred, not live-probed here.
   const systems: NodeHealth[] = [
-    { node: "ATLAS", role: "state/database", status: "healthy", detail: "read-model query returned" },
-    { node: "HERMES", role: "coordinator", status: "healthy", detail: "runtime host" },
+    { node: "ATLAS", role: "state/database", status: "healthy", detail: "live — read-model query returned" },
+    { node: "HERMES", role: "coordinator", status: "healthy", detail: "inferred — resident runtime host" },
     {
       node: "AEGIS",
       role: "worker",
       status: aegisRecentlyActive ? "available" : "unreachable",
-      detail: aegisRecentlyActive ? "recent delivery activity" : "no recent activity",
+      detail: aegisRecentlyActive ? "inferred — recent delivery activity" : "inferred — no recent activity",
     },
   ]
 
@@ -343,9 +363,13 @@ export async function getOperatorState(): Promise<OperatorState> {
     work: envelope(work, "work_order (all statuses)", "live"),
     executions: envelope(executions, "governance_event (lease lifecycle + completion) + receipts", "live"),
     recentActivity: envelope(recent, "governance_event", recent.length ? "live" : "idle-empty"),
-    needsWilliam: envelope([], "no non-terminal owner-decision blockers", "idle-empty"),
+    needsWilliam: envelope(
+      ownerDecisions,
+      "active goal authority-request timelines (ACTIONABLE, truth CURRENT)",
+      ownerDecisions.length ? "live" : "idle-empty",
+    ),
     governance: envelope({ foundingADRs }, "decision (scope projection)", "live"),
     knowledge: envelope(knowledge, "memory_fact/document/evidence_record/governance_event", knowledge.evidence ? "live" : "idle-empty"),
-    systems: envelope(systems, "in-process live signals", "live"),
+    systems: envelope(systems, "in-process signals — ATLAS live, HERMES/AEGIS inferred", "inferred"),
   }
 }
