@@ -2,7 +2,7 @@
 
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { WorkbenchShell } from "@/components/workbench/workbench-shell"
@@ -14,6 +14,7 @@ import type { WorkbenchExecutionProjection } from "@/lib/workbench/execution-pro
 const navigation = vi.hoisted(() => ({ pathname: "/", replace: vi.fn() }))
 const actions = vi.hoisted(() => ({ getWorkbenchThreads: vi.fn() }))
 const executionActions = vi.hoisted(() => ({ getWorkbenchExecution: vi.fn() }))
+const authorizationActions = vi.hoisted(() => ({ authorizeWorkbenchOutcomeExecution: vi.fn() }))
 
 vi.mock("next/navigation", () => ({
   usePathname: () => navigation.pathname,
@@ -26,6 +27,7 @@ vi.mock("next/link", () => ({
 }))
 vi.mock("@/app/actions/workbench-threads", () => ({ getWorkbenchThreads: actions.getWorkbenchThreads }))
 vi.mock("@/app/actions/workbench-execution", () => ({ getWorkbenchExecution: executionActions.getWorkbenchExecution }))
+vi.mock("@/app/actions/authorize-workbench-outcome-execution", () => ({ authorizeWorkbenchOutcomeExecution: authorizationActions.authorizeWorkbenchOutcomeExecution }))
 vi.mock("@/components/intent/universal-intent", () => ({
   UniversalIntent: ({ selectedProject, onOpenThread }: {
     selectedProject: { id: number; name: string } | null
@@ -141,6 +143,18 @@ function executionProjection(summary: string, observedAt: string | null = "2026-
   }
 }
 
+function projectionWithOutcome(state: string): WorkbenchExecutionProjection {
+  const base = executionProjection(`Outcome ${state}`)
+  return {
+    ...base,
+    work: {
+      outcomes: [{ id: "goal:GOAL-0007", title: "Ship the cockpit", state, drilldown: { mode: "UNAVAILABLE", href: null } }],
+      workOrders: [],
+    },
+    validations: [],
+  }
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void
   let reject!: (reason?: unknown) => void
@@ -176,11 +190,13 @@ describe("WorkbenchShell rendered interaction contract", () => {
     actions.getWorkbenchThreads.mockResolvedValue([thread])
     executionActions.getWorkbenchExecution.mockReset()
     executionActions.getWorkbenchExecution.mockImplementation(() => new Promise(() => {}))
+    authorizationActions.authorizeWorkbenchOutcomeExecution.mockReset()
     window.localStorage.clear()
   })
 
   afterEach(() => {
     cleanup()
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -407,7 +423,7 @@ describe("WorkbenchShell rendered interaction contract", () => {
 
     await user.click(screen.getByRole("button", { name: /^Execution$/ }))
 
-    expect(screen.getByRole("status").textContent).toBe("Reading selected Thread execution…")
+    expect(screen.getByText("Reading selected Thread execution…")).toBeTruthy()
   })
 
   it("loads execution only for the explicitly selected Project and Thread", async () => {
@@ -423,6 +439,79 @@ describe("WorkbenchShell rendered interaction contract", () => {
     await user.click(screen.getByRole("button", { name: /^Execution$/ }))
 
     expect(await screen.findByText("Selected execution proof")).toBeTruthy()
+  })
+
+  it("keeps selected Thread trust visible and authorizes only after explicit confirmation without opening panes", async () => {
+    executionActions.getWorkbenchExecution.mockResolvedValue(projectionWithOutcome("suggested"))
+    authorizationActions.authorizeWorkbenchOutcomeExecution.mockResolvedValue({
+      status: "AUTHORIZED_FOR_ACQUISITION", reason: null,
+      projectId: 7, threadId: "thread-alpha", outcomeKey: "goal:GOAL-0007",
+      observedAt: "2026-08-14T18:01:00.000Z", queueVersion: 1,
+      authorization: { authorityLevel: "A2_WRITE_OWN", scope: "goal:GOAL-0007", allowedAction: "outcome:execute", authorizedAt: "2026-08-14T18:01:00.000Z", expiresAt: "2026-08-17T18:01:00.000Z" },
+      executionObserved: false, workOrderObserved: false, leaseObserved: false, dispatchPerformed: false,
+    })
+    const user = userEvent.setup()
+    renderShell()
+
+    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
+    expect(await screen.findByText("Awaiting authority")).toBeTruthy()
+    expect(authorizationActions.authorizeWorkbenchOutcomeExecution).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole("button", { name: "Start work" }))
+    const confirm = screen.getByRole("button", { name: "Confirm Start work" })
+    await user.click(confirm)
+    expect(await screen.findByText("Authorized for acquisition")).toBeTruthy()
+    expect(screen.getByRole("button", { name: /^Thread$/ }).getAttribute("aria-pressed")).toBe("true")
+    expect(screen.getByRole("button", { name: /^Execution / }).getAttribute("aria-expanded")).toBe("false")
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("true")
+    expect(document.activeElement).toBe(confirm)
+  })
+
+  it("serializes selected Thread online refresh and never changes foreground state", async () => {
+    const initial = deferred<WorkbenchExecutionProjection>()
+    const queued = deferred<WorkbenchExecutionProjection>()
+    executionActions.getWorkbenchExecution
+      .mockImplementationOnce(() => initial.promise)
+      .mockImplementationOnce(() => queued.promise)
+    const user = userEvent.setup()
+    renderShell()
+
+    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
+    await waitFor(() => expect(executionActions.getWorkbenchExecution).toHaveBeenCalledTimes(1))
+    await user.click(screen.getByRole("tab", { name: "Proof" }))
+    const intent = screen.getByRole("button", { name: "Ask or do anything" })
+    intent.focus()
+
+    window.dispatchEvent(new Event("online"))
+    window.dispatchEvent(new Event("online"))
+    expect(executionActions.getWorkbenchExecution).toHaveBeenCalledTimes(1)
+    await act(async () => initial.resolve(projectionWithOutcome("suggested")))
+    await waitFor(() => expect(executionActions.getWorkbenchExecution).toHaveBeenCalledTimes(2))
+    await act(async () => queued.resolve(projectionWithOutcome("approved")))
+
+    expect(document.activeElement).toBe(intent)
+    expect(screen.getByRole("tab", { name: "Proof" }).getAttribute("aria-selected")).toBe("true")
+    expect(screen.getByRole("button", { name: /^Thread$/ }).getAttribute("aria-pressed")).toBe("true")
+    expect(screen.getByRole("button", { name: /^Execution / }).getAttribute("aria-expanded")).toBe("false")
+    expect(screen.getByText("Authorized")).toBeTruthy()
+  })
+
+  it("periodically refreshes only the selected exact Thread", async () => {
+    vi.useFakeTimers()
+    executionActions.getWorkbenchExecution.mockResolvedValue(projectionWithOutcome("approved"))
+    renderShell()
+
+    fireEvent.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    await act(async () => { await Promise.resolve() })
+    fireEvent.click(screen.getByRole("option", { name: /Ship the cockpit/ }))
+    await act(async () => { await Promise.resolve() })
+    expect(executionActions.getWorkbenchExecution).toHaveBeenCalledTimes(1)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
+    expect(executionActions.getWorkbenchExecution).toHaveBeenCalledTimes(2)
+    expect(executionActions.getWorkbenchExecution).toHaveBeenLastCalledWith(7, "thread-alpha")
   })
 
   it("passes explicit Project context and opens an accepted Thread only from the explicit action", async () => {
@@ -450,7 +539,7 @@ describe("WorkbenchShell rendered interaction contract", () => {
     await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
     await user.click(screen.getByRole("button", { name: /^Execution$/ }))
 
-    expect((await screen.findByRole("alert")).textContent).toContain("Execution evidence could not be read")
+    expect(await screen.findByText(/Execution evidence could not be read/)).toBeTruthy()
     expect(screen.getByRole("heading", { name: "Ship the cockpit" })).toBeTruthy()
   })
 

@@ -3,7 +3,8 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { CodexAppServerClient, sanitizeAppServerText } from "./app-server-client.mjs"
+import { sanitizeAppServerText } from "./app-server-client.mjs"
+import { selectExecutionBackend } from "./execution-backend.mjs"
 import { createHermesOrchestrator, retryRuntimeProjection } from "./orchestrator.mjs"
 import { createHermesOutcomeQueueRuntime } from "./outcome-queue-runtime.mjs"
 import {
@@ -68,12 +69,48 @@ export function redactHermesStatus(value) {
     .map(([key, entry]) => [key, redactHermesStatus(entry)]))
 }
 
+export function requireResidentAegisBackend(
+  environment = process.env,
+  selectBackend = selectExecutionBackend,
+) {
+  const host = typeof environment?.WILLIAMOS_CODEX_EXEC_NODE === "string"
+    ? environment.WILLIAMOS_CODEX_EXEC_NODE.trim()
+    : ""
+  if (host.toLowerCase() !== "aegis") {
+    throw Object.assign(new Error("HERMES_RESIDENT_AEGIS_REQUIRED"), {
+      code: "HERMES_RESIDENT_AEGIS_REQUIRED",
+    })
+  }
+  const repositoryRoot = typeof environment?.WILLIAMOS_AEGIS_REPOSITORY_ROOT === "string"
+    ? environment.WILLIAMOS_AEGIS_REPOSITORY_ROOT.trim()
+    : ""
+  if (!path.posix.isAbsolute(repositoryRoot) || repositoryRoot === "/") {
+    throw Object.assign(new Error("HERMES_RESIDENT_AEGIS_REPOSITORY_WALL"), {
+      code: "HERMES_RESIDENT_AEGIS_REPOSITORY_WALL",
+    })
+  }
+  const executionBackend = selectBackend(environment)
+  if (!executionBackend || executionBackend.isLocal === true) {
+    throw Object.assign(new Error("HERMES_RESIDENT_LOCAL_BACKEND_WALL"), {
+      code: "HERMES_RESIDENT_LOCAL_BACKEND_WALL",
+    })
+  }
+  return executionBackend
+}
+
 export function createResidentHermesOrchestrator(options = {}) {
-  const queueRuntime = options.queueRuntime ?? createHermesOutcomeQueueRuntime()
+  const environment = options.environment ?? process.env
+  const executionBackend = options.requireAegis === true
+    ? requireResidentAegisBackend(environment, options.selectExecutionBackend)
+    : options.executionBackend
+  const createQueueRuntime = options.createQueueRuntime ?? createHermesOutcomeQueueRuntime
+  const queueRuntime = options.queueRuntime ?? createQueueRuntime()
   const createOrchestrator = options.createOrchestrator ?? createHermesOrchestrator
   const orchestrator = createOrchestrator({
     workspace: options.workspace ?? process.cwd(),
     ...(options.orchestratorOptions ?? {}),
+    env: environment,
+    ...(executionBackend ? { executionBackend } : {}),
     selectOutcome: queueRuntime.selectOutcome,
     markComplete: queueRuntime.completeOutcome,
     markTerminal: queueRuntime.terminalizeOutcome,
@@ -160,25 +197,63 @@ export async function captureRuntimeAgreement(options = {}) {
   })
 }
 
-async function smoke() {
-  const client = new CodexAppServerClient({ cwd: process.cwd(), timeoutMs: 180_000 })
+export function resolveHermesSmokeCwd(environment = process.env) {
+  try {
+    requireResidentAegisBackend(environment, () => ({ isLocal: false }))
+  } catch (error) {
+    const repositoryWall = error?.code === "HERMES_RESIDENT_AEGIS_REPOSITORY_WALL"
+    const code = repositoryWall ? "HERMES_SMOKE_REMOTE_CWD_WALL" : "HERMES_SMOKE_AEGIS_REQUIRED"
+    throw Object.assign(new Error(code), {
+      code,
+    })
+  }
+  return path.posix.normalize(environment.WILLIAMOS_AEGIS_REPOSITORY_ROOT.trim())
+}
+
+export async function runHermesTransportSmoke({
+  environment = process.env,
+  executionBackend = selectExecutionBackend(environment),
+  timeoutMs = 180_000,
+} = {}) {
+  const smokeCwd = resolveHermesSmokeCwd(environment)
+  try {
+    requireResidentAegisBackend(environment, () => executionBackend)
+  } catch {
+    throw Object.assign(new Error("HERMES_SMOKE_AEGIS_REQUIRED"), {
+      code: "HERMES_SMOKE_AEGIS_REQUIRED",
+    })
+  }
+  if (typeof executionBackend.runCodexClient !== "function") {
+    throw Object.assign(new Error("HERMES_SMOKE_AEGIS_REQUIRED"), {
+      code: "HERMES_SMOKE_AEGIS_REQUIRED",
+    })
+  }
+  const client = await executionBackend.runCodexClient({ workspacePath: smokeCwd, timeoutMs })
   try {
     await client.connect()
     const threadId = await client.startThread({
-      cwd: process.cwd(), approvalPolicy: "never", sandbox: "read-only", ephemeral: true,
+      cwd: smokeCwd, approvalPolicy: "never", sandbox: "read-only", ephemeral: true,
     })
     const result = await client.runTurn({
       threadId,
       prompt: "Read-only Hermes transport proof. Do not use tools or modify files. Reply exactly HERMES_APP_SERVER_READY.",
-      timeoutMs: 180_000,
+      timeoutMs,
     })
     if (result.status !== "completed" || result.finalText.trim() !== "HERMES_APP_SERVER_READY") {
       throw Object.assign(new Error("Hermes App Server smoke response mismatch"), { code: "HERMES_SMOKE_WALL" })
     }
-    return { result: "PASS", transport: "CODEX_APP_SERVER_STDIO", rejectedIssue357Reused: false }
+    return {
+      result: "PASS",
+      transport: "AEGIS_SSH_CODEX_APP_SERVER_STDIO",
+      rejectedIssue357Reused: false,
+    }
   } finally {
     client.close()
   }
+}
+
+async function smoke() {
+  return runHermesTransportSmoke()
 }
 
 async function recoverNativeProviderWall() {
@@ -776,7 +851,7 @@ export async function runCli(command = process.argv[2]) {
   let orchestrator = null
   try {
     if (command === "cycle") {
-      orchestrator = createResidentHermesOrchestrator()
+      orchestrator = createResidentHermesOrchestrator({ requireAegis: true })
       printHermesCycleResult(
         await runHermesQueueDrain({ orchestrator, consumeDecision: consumePrimaryDecisionIntake }),
       )
