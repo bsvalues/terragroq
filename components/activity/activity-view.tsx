@@ -28,7 +28,7 @@ export function ActivityView({ feed }: { feed: ActivityFeed }) {
     <div className="flex flex-col gap-4">
       <p className="font-mono text-xs text-muted-foreground">
         {feed.items.length} meaningful events
-        {feed.churnCollapsed > 0 ? ` · ${feed.churnCollapsed} runtime checkpoint/lease steps collapsed` : ""}
+        {feed.churnCollapsed > 0 ? ` · ${feed.churnCollapsed} runtime/retry steps collapsed` : ""}
       </p>
       <ol className="flex flex-col">
         {feed.items.map((it) => (

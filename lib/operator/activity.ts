@@ -33,7 +33,15 @@ export interface ActivityFeed {
 
 type Row = { id: number; eventType: string; actor: string | null; reason: string | null; metadata: Record<string, unknown>; createdAt: string }
 
-const CHURN = new Set(["HERMES_RUNTIME_CHECKPOINT", "HERMES_RUNTIME_LEASE"])
+// Retry/runtime churn that dominates the raw stream — collapsed into a count so the
+// feed shows meaningful milestones (deliveries, terminals, authority, goals, transitions).
+const CHURN_TYPES = [
+  "HERMES_RUNTIME_CHECKPOINT",
+  "HERMES_RUNTIME_LEASE",
+  "HERMES_RUNTIME_FAILURE_EVAL",
+  "HERMES_OUTCOME_VALIDATION_INFRASTRUCTURE_RECOVERED",
+  "HERMES_VALIDATION_INFRASTRUCTURE_RECOVERY_CONFIRMED",
+] as const
 
 function classify(eventType: string): { kind: ActivityKind; label: string } {
   switch (eventType) {
@@ -59,9 +67,14 @@ function classify(eventType: string): { kind: ActivityKind; label: string } {
 export async function getActivity(limit = 60): Promise<ActivityFeed> {
   const userId = await getUserId()
 
+  const churnList = sql.join(
+    CHURN_TYPES.map((t) => sql`${t}`),
+    sql`, `,
+  )
+
   const churnRow = (await db.execute(
     sql`select count(*)::int as n from governance_event
-        where "userId" = ${userId} and "eventType" in ('HERMES_RUNTIME_CHECKPOINT','HERMES_RUNTIME_LEASE')`,
+        where "userId" = ${userId} and "eventType" in (${churnList})`,
   )).rows as unknown as Array<{ n: number }>
   const churnCollapsed = churnRow[0]?.n ?? 0
 
@@ -69,7 +82,7 @@ export async function getActivity(limit = 60): Promise<ActivityFeed> {
     sql`select id, "eventType" as "eventType", actor, reason, metadata, "createdAt"::text as "createdAt"
         from governance_event
         where "userId" = ${userId}
-          and "eventType" not in ('HERMES_RUNTIME_CHECKPOINT','HERMES_RUNTIME_LEASE')
+          and "eventType" not in (${churnList})
         order by "createdAt" desc
         limit ${limit}`,
   )).rows as unknown as Row[]
