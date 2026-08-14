@@ -109,10 +109,10 @@ describe("durable project read model", () => {
     expect(source).not.toContain("modelled registry (project_resource tables pending, P1)")
   })
 
-  it("keeps Home resource reconciliation compatible with valid duplicate identities", () => {
-    const source = readFileSync("components/home/operator-home.tsx", "utf8")
+  it("keeps project resource reconciliation compatible with valid duplicate identities", () => {
+    const source = readFileSync("components/projects/projects-workspace-panel.tsx", "utf8")
 
-    expect(source).toContain("key={`${r.type}:${r.canonicalIdentity}:${r.relationship}`}")
-    expect(source).not.toContain("key={r.canonicalIdentity}")
+    expect(source).toContain("key={`${resource.type}:${resource.canonicalIdentity}:${resource.relationship}`}")
+    expect(source).not.toContain("key={resource.canonicalIdentity}")
   })
 })
