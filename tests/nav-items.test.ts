@@ -7,6 +7,7 @@ describe("operator navigation information architecture", () => {
 
     expect(navItems.map((item) => item.href)).toEqual([
       "/",
+      "/activity",
       "/work-orders",
       "/audit",
       "/projects",
@@ -113,6 +114,7 @@ describe("operator navigation information architecture", () => {
 
     expect(primaryLabels).toEqual([
       "Home",
+      "Activity",
       "Work Orders",
       "Evidence",
       "Projects",

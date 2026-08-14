@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils"
 
 const HOME_RAIL_DESTINATIONS: ReadonlySet<string> = new Set([
   "/",
+  "/activity",
   "/work-orders",
   "/projects",
   "/audit",
