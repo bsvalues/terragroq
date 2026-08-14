@@ -167,7 +167,7 @@ export function OperatorHome({ state }: { state: OperatorState }) {
                   <div className="flex flex-wrap gap-1">
                     {p.resources.map((r) => (
                       <span
-                        key={r.canonicalIdentity}
+                        key={`${r.type}:${r.canonicalIdentity}:${r.relationship}`}
                         className="inline-flex items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
                       >
                         <span className="uppercase opacity-70">{r.type}</span>

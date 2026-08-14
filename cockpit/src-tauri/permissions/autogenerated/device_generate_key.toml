@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-device-generate-key"
+description = "Enables the device_generate_key command without any pre-configured scope."
+commands.allow = ["device_generate_key"]
+
+[[permission]]
+identifier = "deny-device-generate-key"
+description = "Denies the device_generate_key command without any pre-configured scope."
+commands.deny = ["device_generate_key"]

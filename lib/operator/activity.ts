@@ -11,6 +11,7 @@ import { getUserId } from "@/lib/session"
  */
 
 const nowIso = () => new Date().toISOString()
+const instantIso = (value: Date | string) => new Date(value).toISOString()
 
 export type ActivityKind = "delivery" | "terminal" | "failure" | "authority" | "goal" | "transition" | "runtime"
 
@@ -27,11 +28,38 @@ export interface ActivityFeed {
   items: ActivityItem[]
   churnCollapsed: number // checkpoint/lease events not individually listed
   source: string
+  latestEventAt: string | null
   observedAt: string
-  truthState: "live" | "idle-empty"
+  truthState: "persisted" | "idle-empty"
 }
 
-type Row = { id: number; eventType: string; actor: string | null; reason: string | null; metadata: Record<string, unknown>; createdAt: string }
+export function summarizeActivityFeed(feed: ActivityFeed): string | null {
+  if (feed.items.length === 0 && feed.churnCollapsed === 0) return null
+
+  const meaningful = feed.items.length > 0 ? `${feed.items.length} meaningful events` : null
+  const churn = feed.churnCollapsed > 0 ? `${feed.churnCollapsed} runtime/retry steps collapsed` : null
+  return [meaningful, churn].filter(Boolean).join(" · ")
+}
+
+const activityTime = (iso: string) => `${new Date(iso).toISOString().slice(0, 16).replace("T", " ")} UTC`
+
+export function activityTruthCaption(feed: ActivityFeed): string {
+  const observed = activityTime(feed.observedAt)
+  if (feed.latestEventAt === null) return `No persisted activity as of ${observed}`
+  return `Persisted activity through ${activityTime(feed.latestEventAt)} · read ${observed}`
+}
+
+type Row = {
+  id: number
+  ref: string | null
+  eventType: string
+  entityType: string | null
+  entityId: string | null
+  actor: string | null
+  reason: string | null
+  metadata: Record<string, unknown> | null
+  createdAt: Date | string
+}
 
 // Retry/runtime churn that dominates the raw stream — collapsed into a count so the
 // feed shows meaningful milestones (deliveries, terminals, authority, goals, transitions).
@@ -72,41 +100,51 @@ export async function getActivity(limit = 60): Promise<ActivityFeed> {
     sql`, `,
   )
 
-  const churnRow = (await db.execute(
-    sql`select count(*)::int as n from governance_event
-        where "userId" = ${userId} and "eventType" in (${churnList})`,
-  )).rows as unknown as Array<{ n: number }>
-  const churnCollapsed = churnRow[0]?.n ?? 0
+  const activitySummaryRow = (await db.execute(
+    sql`select
+          count(*) filter (where "eventType" in (${churnList}))::int as n,
+          max("createdAt") AT TIME ZONE current_setting('TimeZone') as "latestEventAt"
+        from governance_event
+        where "userId" = ${userId}`,
+  )).rows as unknown as Array<{ n: number; latestEventAt: Date | string | null }>
+  const churnCollapsed = activitySummaryRow[0]?.n ?? 0
+  const persistedLatestEventAt = activitySummaryRow[0]?.latestEventAt ?? null
+  const latestEventAt = persistedLatestEventAt === null ? null : instantIso(persistedLatestEventAt)
 
   const rows = (await db.execute(
-    sql`select id, "eventType" as "eventType", actor, reason, metadata, "createdAt"::text as "createdAt"
+    sql`select id, ref, "eventType" as "eventType", "entityType" as "entityType",
+          "entityId" as "entityId", actor, reason, metadata,
+          "createdAt" AT TIME ZONE current_setting('TimeZone') as "createdAt"
         from governance_event
         where "userId" = ${userId}
           and "eventType" not in (${churnList})
-        order by "createdAt" desc
+        order by "createdAt" desc, id desc
         limit ${limit}`,
   )).rows as unknown as Row[]
 
   const items: ActivityItem[] = rows.map((r) => {
     const { kind, label } = classify(r.eventType)
     const md = r.metadata ?? {}
-    const ref = (md.workOrderRef as string) ?? (md.outcomeId != null ? `outcome:${md.outcomeId}` : null)
+    const ref = (md.workOrderRef as string)
+      ?? (md.outcomeId != null ? `outcome:${md.outcomeId}` : null)
+      ?? (r.entityType && r.entityId ? `${r.entityType}:${r.entityId}` : r.ref)
     let detail: string | null = null
     if (kind === "delivery" && md.prNumber != null) {
       detail = `${ref ?? ""}${ref ? " · " : ""}PR #${md.prNumber}${md.mergeSha ? ` (${String(md.mergeSha).slice(0, 7)})` : ""}`.trim()
     } else if (r.reason) {
-      detail = r.reason
+      detail = ref ? `${ref} · ${r.reason}` : r.reason
     } else if (ref) {
       detail = ref
     }
-    return { id: r.id, at: r.createdAt, kind, label, detail, ref }
+    return { id: r.id, at: instantIso(r.createdAt), kind, label, detail, ref }
   })
 
   return {
     items,
     churnCollapsed,
     source: "governance_event (meaningful events; runtime churn collapsed)",
+    latestEventAt,
     observedAt: nowIso(),
-    truthState: items.length ? "live" : "idle-empty",
+    truthState: latestEventAt ? "persisted" : "idle-empty",
   }
 }

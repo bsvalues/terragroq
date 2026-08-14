@@ -4,7 +4,6 @@ import path from "node:path"
 
 import { describe, expect, it } from "vitest"
 
-// @ts-expect-error — plain .mjs helper, no type declarations
 import { applySchema } from "../scripts/db/apply-schema.mjs"
 
 const ddlPath = path.resolve(
@@ -17,7 +16,22 @@ const ddl = readFileSync(ddlPath, "utf8")
 
 describe("sovereign schema bootstrap DDL", () => {
   it("installs the full WilliamOS table set", () => {
-    expect((ddl.match(/CREATE TABLE/g) ?? []).length).toBe(30)
+    expect((ddl.match(/CREATE TABLE/g) ?? []).length).toBe(36)
+  })
+
+  it("bootstraps device authentication separately from access grants", () => {
+    for (const table of [
+      "device_credential",
+      "device_challenge",
+      "device_session",
+      "device_auth_event",
+    ]) {
+      expect(ddl).toContain(`CREATE TABLE "${table}"`)
+    }
+    expect(ddl).toContain('"publicKeySpki" text NOT NULL')
+    expect(ddl).toContain('"tokenHash" text NOT NULL')
+    expect(ddl).toContain('"expiresAt" timestamp with time zone NOT NULL')
+    expect(ddl).not.toMatch(/device_(?:credential|challenge|session|auth_event)[^;]*access_grant/)
   })
 
   it("enables pgvector before the first vector column", () => {

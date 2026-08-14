@@ -50,6 +50,7 @@ import {
   ArrowRight,
   Bot,
 } from "lucide-react"
+import { useRoutedIntent } from "@/components/intent/use-routed-intent"
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -146,6 +147,7 @@ export function GoalConsoleView({
   initialGoalId?: number | null
 }) {
   const router = useRouter()
+  const routedIntent = useRoutedIntent("/goal-console")
   const [goals, setGoals] = useState<Goal[]>(initialGoals)
   const [command, setCommand] = useState("")
   const [latest, setLatest] = useState<Goal | null>(() => (
@@ -188,6 +190,10 @@ export function GoalConsoleView({
         state: "stale",
         lastSuccessfulObservation: null,
       }
+
+  useEffect(() => {
+    if (routedIntent) setCommand(routedIntent)
+  }, [routedIntent])
 
   useEffect(() => {
     setGoals(initialGoals)

@@ -158,6 +158,65 @@ CREATE TABLE "decision" (
 	"updatedAt" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "device_auth_event" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text,
+	"credentialId" text,
+	"sessionId" text,
+	"eventType" text NOT NULL,
+	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "device_auth_event_type_check" CHECK (length(trim("device_auth_event"."eventType")) > 0)
+);
+--> statement-breakpoint
+CREATE TABLE "device_challenge" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"credentialId" text,
+	"purpose" text NOT NULL,
+	"challengeHash" text NOT NULL,
+	"origin" text NOT NULL,
+	"expiresAt" timestamp with time zone NOT NULL,
+	"consumedAt" timestamp with time zone,
+	"attempts" integer DEFAULT 0 NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "device_challenge_purpose_check" CHECK ("device_challenge"."purpose" IN ('enroll', 'authenticate')),
+	CONSTRAINT "device_challenge_hash_check" CHECK ("device_challenge"."challengeHash" ~ '^[0-9a-f]{64}$'),
+	CONSTRAINT "device_challenge_attempts_check" CHECK ("device_challenge"."attempts" >= 0),
+	CONSTRAINT "device_challenge_expiry_check" CHECK ("device_challenge"."expiresAt" > "device_challenge"."createdAt"),
+	CONSTRAINT "device_challenge_consumed_check" CHECK ("device_challenge"."consumedAt" IS NULL OR "device_challenge"."consumedAt" >= "device_challenge"."createdAt")
+);
+--> statement-breakpoint
+CREATE TABLE "device_credential" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"label" text NOT NULL,
+	"publicKeySpki" text NOT NULL,
+	"publicKeyFingerprintSha256" text NOT NULL,
+	"activeAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"revokedAt" timestamp with time zone,
+	"lastUsedAt" timestamp with time zone,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "device_credential_fingerprint_check" CHECK ("device_credential"."publicKeyFingerprintSha256" ~ '^[0-9a-f]{64}$'),
+	CONSTRAINT "device_credential_label_check" CHECK (length(trim("device_credential"."label")) > 0),
+	CONSTRAINT "device_credential_spki_check" CHECK (length("device_credential"."publicKeySpki") > 0)
+);
+--> statement-breakpoint
+CREATE TABLE "device_session" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"credentialId" text NOT NULL,
+	"tokenHash" text NOT NULL,
+	"expiresAt" timestamp with time zone NOT NULL,
+	"revokedAt" timestamp with time zone,
+	"lastSeenAt" timestamp with time zone,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "device_session_token_hash_check" CHECK ("device_session"."tokenHash" ~ '^[0-9a-f]{64}$'),
+	CONSTRAINT "device_session_expiry_check" CHECK ("device_session"."expiresAt" > "device_session"."createdAt"),
+	CONSTRAINT "device_session_revoked_check" CHECK ("device_session"."revokedAt" IS NULL OR "device_session"."revokedAt" >= "device_session"."createdAt"),
+	CONSTRAINT "device_session_last_seen_check" CHECK ("device_session"."lastSeenAt" IS NULL OR "device_session"."lastSeenAt" >= "device_session"."createdAt")
+);
+--> statement-breakpoint
 CREATE TABLE "doctrine" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"userId" text NOT NULL,
@@ -491,6 +550,32 @@ CREATE TABLE "parked_idea" (
 	"updatedAt" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "project" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"key" text NOT NULL,
+	"name" text NOT NULL,
+	"lifecycle" text DEFAULT 'standby' NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "project_user_key_unique" UNIQUE("userId","key"),
+	CONSTRAINT "project_lifecycle_check" CHECK ("project"."lifecycle" IN ('active', 'standby', 'archived'))
+);
+--> statement-breakpoint
+CREATE TABLE "project_resource" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"projectId" integer NOT NULL,
+	"type" text NOT NULL,
+	"canonicalIdentity" text NOT NULL,
+	"label" text NOT NULL,
+	"relationship" text NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "project_resource_identity_unique" UNIQUE("projectId","type","canonicalIdentity","relationship"),
+	CONSTRAINT "project_resource_type_check" CHECK ("project_resource"."type" IN ('repo', 'database', 'node', 'service', 'data_source'))
+);
+--> statement-breakpoint
 CREATE TABLE "session" (
 	"id" text PRIMARY KEY NOT NULL,
 	"expiresAt" timestamp NOT NULL,
@@ -587,10 +672,19 @@ CREATE TABLE "work_order" (
 ALTER TABLE "access_grant_event" ADD CONSTRAINT "access_grant_event_grantId_access_grant_id_fk" FOREIGN KEY ("grantId") REFERENCES "public"."access_grant"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "access_grant_session" ADD CONSTRAINT "access_grant_session_grantId_access_grant_id_fk" FOREIGN KEY ("grantId") REFERENCES "public"."access_grant"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "account" ADD CONSTRAINT "account_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "device_auth_event" ADD CONSTRAINT "device_auth_event_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "device_auth_event" ADD CONSTRAINT "device_auth_event_credentialId_device_credential_id_fk" FOREIGN KEY ("credentialId") REFERENCES "public"."device_credential"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "device_auth_event" ADD CONSTRAINT "device_auth_event_sessionId_device_session_id_fk" FOREIGN KEY ("sessionId") REFERENCES "public"."device_session"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "device_challenge" ADD CONSTRAINT "device_challenge_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "device_challenge" ADD CONSTRAINT "device_challenge_credentialId_device_credential_id_fk" FOREIGN KEY ("credentialId") REFERENCES "public"."device_credential"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "device_credential" ADD CONSTRAINT "device_credential_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "device_session" ADD CONSTRAINT "device_session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "device_session" ADD CONSTRAINT "device_session_credentialId_device_credential_id_fk" FOREIGN KEY ("credentialId") REFERENCES "public"."device_credential"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "goal_outcome_intake_receipt" ADD CONSTRAINT "goal_outcome_intake_receipt_goalId_goal_id_fk" FOREIGN KEY ("goalId") REFERENCES "public"."goal"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_goalId_goal_id_fk" FOREIGN KEY ("goalId") REFERENCES "public"."goal"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_approvalDecisionId_decision_id_fk" FOREIGN KEY ("approvalDecisionId") REFERENCES "public"."decision"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_activeWorkOrderId_work_order_id_fk" FOREIGN KEY ("activeWorkOrderId") REFERENCES "public"."work_order"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "project_resource" ADD CONSTRAINT "project_resource_projectId_project_id_fk" FOREIGN KEY ("projectId") REFERENCES "public"."project"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "access_grant_public_token_hash_idx" ON "access_grant" USING btree ("publicTokenHash");--> statement-breakpoint
 CREATE INDEX "access_grant_user_status_expires_idx" ON "access_grant" USING btree ("userId","status","expiresAt");--> statement-breakpoint
@@ -601,6 +695,20 @@ CREATE INDEX "access_grant_event_correlation_idx" ON "access_grant_event" USING 
 CREATE INDEX "access_grant_event_type_created_idx" ON "access_grant_event" USING btree ("eventType","createdAt");--> statement-breakpoint
 CREATE UNIQUE INDEX "access_grant_session_token_hash_idx" ON "access_grant_session" USING btree ("sessionTokenHash");--> statement-breakpoint
 CREATE INDEX "access_grant_session_grant_expires_idx" ON "access_grant_session" USING btree ("grantId","expiresAt");--> statement-breakpoint
+CREATE INDEX "device_auth_event_user_created_idx" ON "device_auth_event" USING btree ("userId","createdAt");--> statement-breakpoint
+CREATE INDEX "device_auth_event_credential_created_idx" ON "device_auth_event" USING btree ("credentialId","createdAt");--> statement-breakpoint
+CREATE INDEX "device_auth_event_session_created_idx" ON "device_auth_event" USING btree ("sessionId","createdAt");--> statement-breakpoint
+CREATE INDEX "device_auth_event_type_created_idx" ON "device_auth_event" USING btree ("eventType","createdAt");--> statement-breakpoint
+CREATE UNIQUE INDEX "device_challenge_hash_idx" ON "device_challenge" USING btree ("challengeHash");--> statement-breakpoint
+CREATE INDEX "device_challenge_user_purpose_created_idx" ON "device_challenge" USING btree ("userId","purpose","createdAt");--> statement-breakpoint
+CREATE INDEX "device_challenge_credential_purpose_created_idx" ON "device_challenge" USING btree ("credentialId","purpose","createdAt");--> statement-breakpoint
+CREATE INDEX "device_challenge_origin_purpose_created_idx" ON "device_challenge" USING btree ("origin","purpose","createdAt");--> statement-breakpoint
+CREATE INDEX "device_challenge_expiry_idx" ON "device_challenge" USING btree ("expiresAt","consumedAt");--> statement-breakpoint
+CREATE UNIQUE INDEX "device_credential_fingerprint_idx" ON "device_credential" USING btree ("publicKeyFingerprintSha256");--> statement-breakpoint
+CREATE INDEX "device_credential_user_active_idx" ON "device_credential" USING btree ("userId","revokedAt","activeAt");--> statement-breakpoint
+CREATE UNIQUE INDEX "device_session_token_hash_idx" ON "device_session" USING btree ("tokenHash");--> statement-breakpoint
+CREATE INDEX "device_session_user_expiry_idx" ON "device_session" USING btree ("userId","expiresAt","revokedAt");--> statement-breakpoint
+CREATE INDEX "device_session_credential_expiry_idx" ON "device_session" USING btree ("credentialId","expiresAt","revokedAt");--> statement-breakpoint
 CREATE INDEX "outcome_queue_acquisition_attempt_campaign_idx" ON "outcome_queue_acquisition_attempt" USING btree ("userId","campaignWindowId","attemptedAt");--> statement-breakpoint
 CREATE INDEX "outcome_queue_acquisition_attempt_identity_idx" ON "outcome_queue_acquisition_attempt" USING btree ("userId","acquisitionKeyDigest","attemptedAt");--> statement-breakpoint
 CREATE INDEX "outcome_queue_acquisition_receipt_user_outcome_idx" ON "outcome_queue_acquisition_receipt" USING btree ("userId","outcomeKey");--> statement-breakpoint
@@ -615,3 +723,6 @@ CREATE INDEX "outcome_queue_item_approval_decision_idx" ON "outcome_queue_item" 
 CREATE INDEX "outcome_queue_item_work_order_idx" ON "outcome_queue_item" USING btree ("activeWorkOrderId");--> statement-breakpoint
 CREATE INDEX "outcome_queue_mutation_attempt_request_idx" ON "outcome_queue_mutation_attempt" USING btree ("userId","requestHash","attemptedAt");--> statement-breakpoint
 CREATE INDEX "outcome_queue_mutation_receipt_user_outcome_idx" ON "outcome_queue_mutation_receipt" USING btree ("userId","outcomeKey","createdAt");
+--> statement-breakpoint
+CREATE INDEX "project_resource_user_project_idx" ON "project_resource" USING btree ("userId","projectId");--> statement-breakpoint
+CREATE INDEX "project_resource_user_identity_idx" ON "project_resource" USING btree ("userId","type","canonicalIdentity");
