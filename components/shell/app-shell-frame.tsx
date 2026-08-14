@@ -14,7 +14,7 @@ const HOME_RAIL_DESTINATIONS: ReadonlySet<string> = new Set([
   "/",
   "/projects",
   "/activity",
-  "/runtime",
+  "/system",
 ])
 
 export function AppShellFrame({

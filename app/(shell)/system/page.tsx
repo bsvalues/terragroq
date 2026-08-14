@@ -9,9 +9,9 @@ import { projectSystemTruth } from "@/lib/system/system-truth"
 import { cn } from "@/lib/utils"
 
 // System — the truthful, read-only primary. It composes signals that are actually
-// grounded (a live ATLAS database probe, configured node roles that never masquerade
+// grounded (one live ATLAS database probe, configured node roles that never masquerade
 // as liveness, explicit runtime provenance, and current operator load) and labels each
-// with its source. It never starts, stops, repairs, deploys, or grants authority.
+// with its evidence class. It never starts, stops, repairs, deploys, or grants authority.
 
 function chip(tone: HealthTone, text: string, title?: string) {
   return (
@@ -29,19 +29,36 @@ function chip(tone: HealthTone, text: string, title?: string) {
   )
 }
 
+// Operator load is projected from getOperatorState(), which queries ATLAS and will throw
+// if the state database is unreachable. That failure must NOT crash the page — the DB
+// signal above is exactly what the operator needs to see during an outage. So this read
+// is isolated; on failure the load section reports itself unavailable.
+async function loadOperatorLoad() {
+  try {
+    const state = await getOperatorState()
+    return {
+      activeExecutions: state.now.value.activeExecutions,
+      queueDepth: state.now.value.queueDepth,
+      knowledge: state.knowledge.value,
+      idle: state.now.truthState === "idle-empty",
+    }
+  } catch {
+    return null
+  }
+}
+
 export default async function SystemPage() {
-  const [readiness, state] = await Promise.all([
-    getAuthReadiness({ probeDatabase: true }),
-    getOperatorState(),
-  ])
+  const readiness = await getAuthReadiness({ probeDatabase: true })
   const runtime = buildRuntimeStatus()
   const signup = getSignupStatus(readiness)
+  const load = await loadOperatorLoad()
+
   const dbLatency = readiness.checks.databaseConnectivity?.latencyMs
   const env =
-    process.env.NODE_ENV === "production"
-      ? "prod"
-      : process.env.VERCEL_ENV === "preview"
-        ? "preview"
+    process.env.VERCEL_ENV === "preview"
+      ? "preview"
+      : process.env.NODE_ENV === "production"
+        ? "prod"
         : "local"
 
   const systemTruth = projectSystemTruth([
@@ -83,17 +100,16 @@ export default async function SystemPage() {
     { label: "Provider", value: runtime.provider },
   ]
 
-  const load = state.now.value
-  const knowledge = state.knowledge.value
-  const loadStats = [
-    { label: "Active executions", value: load.activeExecutions },
-    { label: "Queue depth", value: load.queueDepth },
-    { label: "Evidence", value: knowledge.evidence },
-    { label: "Governance events", value: knowledge.governance },
-    { label: "Memory facts", value: knowledge.memory },
-    { label: "Documents", value: knowledge.documents },
-  ]
-  const idle = load.queueDepth === 0
+  const loadStats = load
+    ? [
+        { label: "Active executions", value: load.activeExecutions },
+        { label: "Queue depth", value: load.queueDepth },
+        { label: "Evidence", value: load.knowledge.evidence },
+        { label: "Governance events", value: load.knowledge.governance },
+        { label: "Memory facts", value: load.knowledge.memory },
+        { label: "Documents", value: load.knowledge.documents },
+      ]
+    : []
 
   return (
     <>
@@ -102,32 +118,46 @@ export default async function SystemPage() {
         description="Truthful, read-only signals: platform readiness, node truth, runtime provenance, and operator load. System does not start, stop, repair, deploy, or grant authority to any runtime."
       />
       <div className="flex flex-col gap-6 p-6">
-        {/* Platform readiness — probed now */}
+        {/* Platform readiness — one live probe; the rest is configuration */}
         <section className="overflow-hidden rounded-xl border border-border bg-card">
           <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-3">
             <div>
               <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
                 Platform readiness
               </p>
-              <h2 className="mt-1 text-lg font-semibold">Probed now</h2>
+              <h2 className="mt-1 text-lg font-semibold">
+                {readiness.ready ? "Ready" : "Needs attention"}
+              </h2>
             </div>
             {chip(readiness.ready ? "ready" : "blocked", readiness.ready ? "Ready" : "Attention")}
           </header>
-          <div className="flex flex-col gap-3 p-4">
-            <div className="flex flex-wrap items-center gap-2">
-              {chip(
-                readiness.databaseReady ? "ready" : "blocked",
-                `DB: ${readiness.databaseReady ? "ready" : "blocked"}${dbLatency != null ? ` · ${dbLatency}ms` : ""}`,
-                readiness.checks.databaseConnectivity?.detail,
-              )}
-              {chip(readiness.authReady ? "ready" : "blocked", `Auth: ${readiness.authReady ? "ready" : "setup needed"}`)}
-              {chip(signup.tone, signup.label, signup.title)}
-              {chip(runtime.fallback ? "warn" : "ready", `Runtime: ${runtime.fallback ? "fallback" : "explicit"}`, runtime.fallbackPolicy)}
-              {chip(env === "local" ? "warn" : "ready", `Env: ${env}`)}
-              {chip(readiness.checks.baseUrl.ok ? "ready" : "warn", `Base URL: ${readiness.checks.baseUrl.ok ? "set" : "unset"}`, readiness.checks.baseUrl.detail)}
+          <div className="flex flex-col gap-4 p-4">
+            <div className="flex flex-col gap-2">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Live probe
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {chip(
+                  readiness.databaseReady ? "ready" : "blocked",
+                  `DB: ${readiness.databaseReady ? "ready" : "blocked"}${dbLatency != null ? ` · ${dbLatency}ms` : ""}`,
+                  readiness.checks.databaseConnectivity?.detail,
+                )}
+              </div>
+            </div>
+            <div className="flex flex-col gap-2">
+              <p className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                Configuration (not a liveness probe)
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {chip(readiness.authReady ? "ready" : "blocked", `Auth: ${readiness.authReady ? "ready" : "setup needed"}`)}
+                {chip(signup.tone, signup.label, signup.title)}
+                {chip(runtime.fallback ? "warn" : "ready", `Runtime: ${runtime.fallback ? "fallback" : "explicit"}`, runtime.fallbackPolicy)}
+                {chip(env === "local" ? "warn" : "ready", `Env: ${env}`)}
+                {chip(readiness.checks.baseUrl.ok ? "ready" : "warn", `Base URL: ${readiness.checks.baseUrl.ok ? "set" : "unset"}`, readiness.checks.baseUrl.detail)}
+              </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              Source: getAuthReadiness (database connectivity probed) · checked {new Date(readiness.checkedAt).toISOString()}
+              Source: getAuthReadiness · database connectivity is a live probe; auth, provisioning, runtime, and environment are configuration checks. Checked {new Date(readiness.checkedAt).toISOString()}.
             </p>
             {readiness.issues.length > 0 && (
               <ul className="flex flex-col gap-1.5 rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm">
@@ -169,25 +199,36 @@ export default async function SystemPage() {
           </footer>
         </section>
 
-        {/* Operator load — idle does not mean dead */}
+        {/* Operator load — idle does not mean dead; unavailable if ATLAS is down */}
         <section className="overflow-hidden rounded-xl border border-border bg-card">
           <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-muted/30 px-4 py-3">
             <div>
               <p className="font-mono text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
                 Operator load
               </p>
-              <h2 className="mt-1 text-lg font-semibold">{idle ? "Idle" : "Active"}</h2>
+              <h2 className="mt-1 text-lg font-semibold">
+                {load ? (load.idle ? "Idle" : "Active") : "Unavailable"}
+              </h2>
             </div>
-            <StatusBadge value={idle ? "informational" : "active"} label={idle ? "idle" : "live"} />
+            <StatusBadge
+              value={load ? (load.idle ? "informational" : "active") : "fail"}
+              label={load ? (load.idle ? "idle" : "live") : "unavailable"}
+            />
           </header>
-          <dl className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3">
-            {loadStats.map((stat) => (
-              <div key={stat.label} className="bg-card px-4 py-3">
-                <dt className="text-xs text-muted-foreground">{stat.label}</dt>
-                <dd className="mt-1 text-2xl font-semibold tabular-nums">{stat.value}</dd>
-              </div>
-            ))}
-          </dl>
+          {load ? (
+            <dl className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3">
+              {loadStats.map((stat) => (
+                <div key={stat.label} className="bg-card px-4 py-3">
+                  <dt className="text-xs text-muted-foreground">{stat.label}</dt>
+                  <dd className="mt-1 text-2xl font-semibold tabular-nums">{stat.value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p className="px-4 py-4 text-sm text-muted-foreground">
+              Operator load is unavailable because the state read-model query did not succeed — see the DB signal above.
+            </p>
+          )}
           <footer className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
             Source: outcome_queue_item + execution projection · knowledge counts from evidence / governance / memory / document. Idle does not mean dead.
           </footer>
