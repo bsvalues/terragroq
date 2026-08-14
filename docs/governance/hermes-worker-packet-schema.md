@@ -1,5 +1,13 @@
 # Hermes Worker Packet Schema
 
+> **Supersession note.** "Hermes" in this document is the governed in-app *sidecar / worker-boundary
+> concept* and its state model. The physical **HERMES coordinator node** and the resident
+> **Hermes→AEGIS ExecutionBackend (PR #754)** are OPERATING, governed by
+> [`sovereign-runtime-and-review-supersession.md`](sovereign-runtime-and-review-supersession.md).
+> Read "disabled by default / not active / future worker" below as the safety posture of this bounded
+> lane — not as the status of the operating runtime.
+
+
 This schema describes a future review artifact. It is not executable. It does not load workers, call tools, run commands, write files, persist state, or activate Hermes.
 
 ## Required Fields

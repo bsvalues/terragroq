@@ -1,3 +1,9 @@
+> **Superseded on runtime status and provider dependence** by
+> [`sovereign-runtime-and-review-supersession.md`](sovereign-runtime-and-review-supersession.md):
+> the resident Hermes→AEGIS ExecutionBackend (PR #754) is the accepted execution surface, and hosted
+> Codex sessions are one optional provider lane. Items below that describe the runtime as disabled or
+> the GitHub lifecycle as hosted-session-only are historical; the #357 nested adapter stays rejected.
+
 # WilliamOS Active Program Queue
 
 Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
@@ -51,7 +57,7 @@ change protected authority.
 - Issue #357 is `FAILED_TERMINAL / CODEX_NETWORK_WALL` and is not retryable.
 - Issue #358 is `BLOCKED_DEPENDENCY`; its issue packet records #357 as its
   dependency and its stale ready label has been removed.
-- Runtime activation and the local supervisor remain disabled.
+- Runtime activation and the local supervisor are OPERATING through the Hermes→AEGIS ExecutionBackend (PR #754); the nested #357 adapter stays rejected.
 - The owner authorized `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`,
   `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`, and
   `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001` as a standing WilliamOS-native
@@ -162,7 +168,7 @@ still requires the standing program authority to cover the exact bounded Work
 Order. No new database, schema, runtime, command runner, scheduler, or
 background worker is introduced.
 
-The GitHub lifecycle is executed by supported hosted Codex sessions. The queue
+The GitHub lifecycle is executed by the resident Hermes→AEGIS ExecutionBackend (PR #754); supported hosted Codex sessions are one optional provider lane. The queue
 does not claim durable dispatch or unattended background execution, and the
 rejected local adapter associated with issue #357 remains terminal and disabled.
 

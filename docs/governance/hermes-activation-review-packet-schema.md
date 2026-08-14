@@ -1,5 +1,13 @@
 # Hermes Activation Review Packet Schema
 
+> **Supersession note.** "Hermes" in this document is the governed in-app *sidecar / worker-boundary
+> concept* and its state model. The physical **HERMES coordinator node** and the resident
+> **Hermes→AEGIS ExecutionBackend (PR #754)** are OPERATING, governed by
+> [`sovereign-runtime-and-review-supersession.md`](sovereign-runtime-and-review-supersession.md).
+> Read "disabled by default / not active / future worker" below as the safety posture of this bounded
+> lane — not as the status of the operating runtime.
+
+
 An Activation Review Packet is required before any future Hermes authorization request can be considered. It is a static review artifact in this lane, not an activation workflow.
 
 ## Required Fields
