@@ -2583,7 +2583,7 @@ export async function projectOutcomeRuntimeCheckpoint({
         `UPDATE work_order
          SET status = $2,
            result = $3,
-           "commitRef" = CASE WHEN $8::boolean THEN NULL ELSE COALESCE($4, "commitRef") END,
+           "commitRef" = CASE WHEN $7::boolean THEN NULL ELSE COALESCE($4, "commitRef") END,
            evidence = ARRAY(
              SELECT DISTINCT item
              FROM unnest(COALESCE(evidence, ARRAY[]::text[]) || $5::text[]) item
@@ -2598,10 +2598,10 @@ export async function projectOutcomeRuntimeCheckpoint({
              WHERE newer."entityType" = 'work_order'
                AND newer."entityId"::text = $1::text
                AND newer."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
-               AND newer.metadata->>'executionEpochDigest' = $9
-               AND (newer.metadata->>'checkpointSequence')::integer > $7
+               AND newer.metadata->>'executionEpochDigest' = $8
+               AND (newer.metadata->>'checkpointSequence')::integer > $6
            )`,
-        [workOrder.id, projection.status, projection.result, commitRef, labels, attempt, checkpoint.sequence,
+        [workOrder.id, projection.status, projection.result, commitRef, labels, checkpoint.sequence,
           clearCommitRef, currentExecutionEpochDigest],
       )
       if (eventInserted && failureEval) {
