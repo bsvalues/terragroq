@@ -2432,6 +2432,8 @@ export async function projectOutcomeRuntimeCheckpoint({
     const workOrders = await runQuery(
       `SELECT wo.id, wo."userId" AS "userId", wo.ref, wo.goal, wo.lane, wo.status,
          wo.result, wo."commitRef", wo.assignee, wo.agent, wo."allowedFiles", wo.validators,
+         latest.id AS "latestCheckpointId",
+         latest.metadata AS "latestCheckpointMetadata",
          latest.metadata->>'checkpointState' AS "latestCheckpointState",
          latest.metadata->>'idempotencyKey' AS "latestCheckpointKey",
          latest.metadata->>'payloadDigest' AS "latestCheckpointDigest",
@@ -2442,7 +2444,7 @@ export async function projectOutcomeRuntimeCheckpoint({
        FROM work_order wo
        JOIN goal g ON g."userId" = wo."userId"
        LEFT JOIN LATERAL (
-         SELECT prior.metadata, prior."createdAt"
+         SELECT prior.id, prior.metadata, prior."createdAt"
          FROM governance_event AS prior
          WHERE prior."userId" = wo."userId"
            AND prior."entityType" = 'work_order'
@@ -2487,13 +2489,47 @@ export async function projectOutcomeRuntimeCheckpoint({
       && workOrder.latestCheckpointDigest === legacyPayloadDigest
     const exactCurrentReplay = workOrder.latestCheckpointKey === idempotencyKey
       && workOrder.latestCheckpointDigest === eventMetadata.payloadDigest
+    const persistedLegacyAttempt = Number(workOrder.latestCheckpointMetadata?.attempt)
+    const crossAttemptLegacyMetadata = Number.isSafeInteger(persistedLegacyAttempt)
+      && persistedLegacyAttempt > 0
+      && persistedLegacyAttempt !== attempt
+      ? {
+          idempotencyKey: `hermes-outcome:${outcomeId}:attempt:${persistedLegacyAttempt}:checkpoint:${checkpoint.sequence}`,
+          outcomeId,
+          workOrderRef: ref,
+          attempt: persistedLegacyAttempt,
+          checkpointSequence: checkpoint.sequence,
+          checkpointState: checkpoint.state,
+          checkpointDetail: checkpoint.detail ?? null,
+          ...evidence,
+        }
+      : null
+    const crossAttemptLegacyDigest = crossAttemptLegacyMetadata
+      ? projectionPayloadDigest(crossAttemptLegacyMetadata)
+      : null
+    const exactCrossAttemptLegacyReplay = crossAttemptLegacyMetadata !== null
+      && legacyCheckpointIsInCurrentEpoch
+      && Number.isSafeInteger(Number(workOrder.latestCheckpointId))
+      && Number(workOrder.latestCheckpointId) > 0
+      && workOrder.latestExecutionEpochDigest == null
+      && workOrder.latestCheckpointKey === crossAttemptLegacyMetadata.idempotencyKey
+      && workOrder.latestCheckpointDigest === crossAttemptLegacyDigest
+      && Number(workOrder.latestCheckpointSequence) === checkpoint.sequence
+      && canonicalJson(workOrder.latestCheckpointMetadata) === canonicalJson({
+        ...crossAttemptLegacyMetadata,
+        payloadDigest: crossAttemptLegacyDigest,
+      })
     const repairableReplayStatusSplit = (exactLegacyReplay || exactCurrentReplay)
+      && workOrder.status !== expectedPersistedStatus
+    const repairableCrossAttemptStatusSplit = exactCrossAttemptLegacyReplay
       && workOrder.status !== expectedPersistedStatus
     const workOrderIdentityMatches = workOrder.userId === authorization.userId
       && workOrder.ref === ref
       && workOrder.goal === authorization.goalRef
       && workOrder.lane === authorization.goalLane
-      && (workOrder.status === expectedPersistedStatus || repairableReplayStatusSplit)
+      && (workOrder.status === expectedPersistedStatus
+        || repairableReplayStatusSplit
+        || repairableCrossAttemptStatusSplit)
       && workOrder.assignee === "hermes-codex-bridge"
       && workOrder.agent === "codex"
       && (authorization.activeWorkOrderId === null
@@ -2531,6 +2567,60 @@ export async function projectOutcomeRuntimeCheckpoint({
         throw Object.assign(new Error("Hermes outcome Work Order contract backfill conflicted"), {
           code: "OUTCOME_WORK_ORDER_CONTRACT_WALL",
         })
+      }
+    }
+    if (exactCrossAttemptLegacyReplay) {
+      if (repairableCrossAttemptStatusSplit) {
+        const repaired = await runQuery(
+          `UPDATE work_order
+           SET status = $2,
+             result = $3,
+             "commitRef" = CASE WHEN $7::boolean THEN NULL ELSE COALESCE($4, "commitRef") END,
+             evidence = ARRAY(
+               SELECT DISTINCT item
+               FROM unnest(COALESCE(evidence, ARRAY[]::text[]) || $5::text[]) item
+               ORDER BY item
+             ),
+             "closedAt" = CASE WHEN $2 = 'closed' THEN COALESCE("closedAt", NOW()) ELSE NULL END,
+             "completedAt" = CASE WHEN $2 = 'closed' THEN COALESCE("completedAt", NOW()) ELSE NULL END,
+             "updatedAt" = NOW()
+           WHERE id = $1
+             AND status = $6
+             AND EXISTS (
+               SELECT 1 FROM governance_event exact
+               WHERE exact.id = $8
+                 AND exact."entityType" = 'work_order'
+                 AND exact."entityId"::text = $1::text
+                 AND exact."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+                 AND exact.metadata->>'idempotencyKey' = $9
+                 AND exact.metadata->>'payloadDigest' = $10
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM governance_event newer
+               WHERE newer."entityType" = 'work_order'
+                 AND newer."entityId"::text = $1::text
+                 AND newer."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+                 AND newer.id > $8
+             )
+           RETURNING id`,
+          [workOrder.id, projection.status, projection.result, commitRef, labels,
+            workOrder.status, clearCommitRef, Number(workOrder.latestCheckpointId),
+            crossAttemptLegacyMetadata.idempotencyKey, crossAttemptLegacyDigest],
+        )
+        if ((repaired?.rows?.length ?? repaired?.rowCount ?? 0) !== 1) {
+          throw Object.assign(new Error("Legacy runtime checkpoint repair lost its latest-event fence"), {
+            code: "OUTCOME_PROJECTION_CONCURRENCY_WALL",
+          })
+        }
+      }
+      await runQuery("COMMIT")
+      return {
+        workOrderId: workOrder.id,
+        workOrderRef: ref,
+        idempotencyKey,
+        status: projection.status,
+        result: projection.result,
+        commitRef,
       }
     }
     if (staleSameEpochCheckpoint) {
