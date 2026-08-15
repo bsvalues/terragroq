@@ -2074,6 +2074,8 @@ function exactAuthorizationContract(row, workContract, executionBinding, outcome
     && row?.leaseToken === executionBinding.leaseToken
     && row?.leaseHolder === executionBinding.leaseHolder
     && Number(row?.fencingToken) === executionBinding.fencingToken
+    && typeof row?.acquisitionKey === "string"
+    && row.acquisitionKey.trim() !== ""
     && receiptContract?.id === HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID
     && receiptContract?.digest === HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST
     && receiptContract?.version === HERMES_WORK_CONTRACT_VERSION
@@ -2083,6 +2085,15 @@ function exactAuthorizationContract(row, workContract, executionBinding, outcome
     && receiptContract.digest === workContract.digest
     && exactStringArray(receiptContract.reservations, workContract.allowedFiles)
     && exactStringArray(validatorLabels(receiptContract.validationCommands), workContract.validators)
+}
+
+function executionEpochDigest(row) {
+  return createHash("sha256").update(JSON.stringify([
+    row.userId,
+    row.outcomeKey,
+    row.executionBinding,
+    row.acquisitionKey,
+  ])).digest("hex")
 }
 
 function outcomeWorkOrderRef(outcomeId) {
@@ -2256,8 +2267,10 @@ export async function projectOutcomeRuntimeCheckpoint({
          contract_queue."executionBinding" AS "executionBinding",
          contract_queue."leaseToken" AS "leaseToken",
          contract_queue."leaseHolder" AS "leaseHolder",
+         contract_queue."acquisitionKey" AS "acquisitionKey",
          contract_queue."fencingToken" AS "fencingToken",
          contract_queue."activeWorkOrderId" AS "activeWorkOrderId",
+         contract_acquisition."createdAt" AS "executionEpochStartedAt",
          contract_receipt."resultBinding"->'workContract' AS "workContract"
        FROM goal AS contract_goal
        JOIN "outcome_queue_item" AS contract_queue
@@ -2266,6 +2279,11 @@ export async function projectOutcomeRuntimeCheckpoint({
        JOIN "outcome_queue_mutation_receipt" AS contract_receipt
         ON contract_receipt."userId" = contract_queue."userId"
         AND contract_receipt."outcomeKey" = contract_queue."outcomeKey"
+       JOIN "outcome_queue_acquisition_receipt" AS contract_acquisition
+         ON contract_acquisition."userId" = contract_queue."userId"
+        AND contract_acquisition."outcomeKey" = contract_queue."outcomeKey"
+        AND contract_acquisition."acquisitionKey" = contract_queue."acquisitionKey"
+        AND contract_acquisition."latestFencingToken" = contract_queue."fencingToken"
        JOIN "workbench_thread_source" AS contract_root
          ON contract_root."userId" = contract_receipt."userId"
         AND contract_root."sourceType" = 'outcome'
@@ -2294,6 +2312,7 @@ export async function projectOutcomeRuntimeCheckpoint({
          AND contract_queue."executionBinding" = $5
          AND contract_queue."leaseToken" = $6
          AND contract_queue."leaseHolder" = $7
+         AND btrim(contract_queue."acquisitionKey") <> ''
          AND contract_queue."fencingToken" = $8::integer
          AND contract_queue."leaseExpiresAt" > clock_timestamp()
          AND contract_queue."approvalState" = 'approved'
@@ -2376,6 +2395,24 @@ export async function projectOutcomeRuntimeCheckpoint({
       })
     }
     const authorization = authorizations.rows[0]
+    const currentExecutionEpochDigest = executionEpochDigest(authorization)
+    const legacyEventMetadata = {
+      idempotencyKey,
+      outcomeId,
+      workOrderRef: ref,
+      attempt,
+      checkpointSequence: checkpoint.sequence,
+      checkpointState: checkpoint.state,
+      checkpointDetail: checkpoint.detail ?? null,
+      ...evidence,
+    }
+    const eventMetadata = {
+      ...legacyEventMetadata,
+      executionEpochDigest: currentExecutionEpochDigest,
+    }
+    eventMetadata.payloadDigest = projectionPayloadDigest(eventMetadata)
+    const legacyPayloadDigest = projectionPayloadDigest(legacyEventMetadata)
+    let acceptedPayloadDigest = eventMetadata.payloadDigest
     await runQuery(
       `INSERT INTO work_order
          ("userId", ref, title, description, goal, lane, status, assignee, agent,
@@ -2394,23 +2431,41 @@ export async function projectOutcomeRuntimeCheckpoint({
     )
     const workOrders = await runQuery(
       `SELECT wo.id, wo."userId" AS "userId", wo.ref, wo.goal, wo.lane, wo.status,
-         wo.assignee, wo.agent, wo."allowedFiles", wo.validators,
-         (
-           SELECT prior.metadata->>'checkpointState'
-           FROM governance_event AS prior
-           WHERE prior."userId" = wo."userId"
-             AND prior."entityType" = 'work_order'
-             AND prior."entityId"::text = wo.id::text
-             AND prior."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
-           ORDER BY prior.id DESC
-           LIMIT 1
-         ) AS "latestCheckpointState"
+         wo.result, wo."commitRef", wo.assignee, wo.agent, wo."allowedFiles", wo.validators,
+         latest.metadata->>'checkpointState' AS "latestCheckpointState",
+         latest.metadata->>'idempotencyKey' AS "latestCheckpointKey",
+         latest.metadata->>'payloadDigest' AS "latestCheckpointDigest",
+         latest.metadata->>'checkpointSequence' AS "latestCheckpointSequence",
+         latest.metadata->>'executionEpochDigest' AS "latestExecutionEpochDigest",
+         latest."createdAt" AS "latestCheckpointCreatedAt",
+         epoch_latest.metadata->>'checkpointSequence' AS "latestExecutionEpochSequence"
        FROM work_order wo
        JOIN goal g ON g."userId" = wo."userId"
+       LEFT JOIN LATERAL (
+         SELECT prior.metadata, prior."createdAt"
+         FROM governance_event AS prior
+         WHERE prior."userId" = wo."userId"
+           AND prior."entityType" = 'work_order'
+           AND prior."entityId"::text = wo.id::text
+           AND prior."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+         ORDER BY prior.id DESC
+         LIMIT 1
+       ) AS latest ON true
+       LEFT JOIN LATERAL (
+         SELECT prior.metadata
+         FROM governance_event AS prior
+         WHERE prior."userId" = wo."userId"
+           AND prior."entityType" = 'work_order'
+           AND prior."entityId"::text = wo.id::text
+           AND prior."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+           AND prior.metadata->>'executionEpochDigest' = $3
+         ORDER BY (prior.metadata->>'checkpointSequence')::integer DESC, prior.id DESC
+         LIMIT 1
+       ) AS epoch_latest ON true
        WHERE g.id = $1::integer AND wo.ref = $2
        ORDER BY wo.id
        FOR UPDATE OF wo`,
-      [outcomeId, ref],
+      [outcomeId, ref, currentExecutionEpochDigest],
     )
     if (workOrders?.rows?.length !== 1) {
       throw Object.assign(new Error("Hermes outcome Work Order cardinality is invalid"), {
@@ -2418,14 +2473,27 @@ export async function projectOutcomeRuntimeCheckpoint({
       })
     }
     const workOrder = workOrders.rows[0]
+    const latestExecutionEpochSequence = Number(workOrder.latestExecutionEpochSequence)
+    const staleSameEpochCheckpoint = Number.isSafeInteger(latestExecutionEpochSequence)
+      && latestExecutionEpochSequence > checkpoint.sequence
     const expectedPersistedStatus = workOrder.latestCheckpointState == null
       ? "active"
       : projectionForCheckpoint(workOrder.latestCheckpointState).status
+    const legacyCheckpointIsInCurrentEpoch = Number.isFinite(Date.parse(workOrder.latestCheckpointCreatedAt))
+      && Number.isFinite(Date.parse(authorization.executionEpochStartedAt))
+      && Date.parse(workOrder.latestCheckpointCreatedAt) >= Date.parse(authorization.executionEpochStartedAt)
+    const exactLegacyReplay = legacyCheckpointIsInCurrentEpoch
+      && workOrder.latestCheckpointKey === idempotencyKey
+      && workOrder.latestCheckpointDigest === legacyPayloadDigest
+    const exactCurrentReplay = workOrder.latestCheckpointKey === idempotencyKey
+      && workOrder.latestCheckpointDigest === eventMetadata.payloadDigest
+    const repairableReplayStatusSplit = (exactLegacyReplay || exactCurrentReplay)
+      && workOrder.status !== expectedPersistedStatus
     const workOrderIdentityMatches = workOrder.userId === authorization.userId
       && workOrder.ref === ref
       && workOrder.goal === authorization.goalRef
       && workOrder.lane === authorization.goalLane
-      && workOrder.status === expectedPersistedStatus
+      && (workOrder.status === expectedPersistedStatus || repairableReplayStatusSplit)
       && workOrder.assignee === "hermes-codex-bridge"
       && workOrder.agent === "codex"
       && (authorization.activeWorkOrderId === null
@@ -2465,17 +2533,17 @@ export async function projectOutcomeRuntimeCheckpoint({
         })
       }
     }
-    const eventMetadata = {
-      idempotencyKey,
-      outcomeId,
-      workOrderRef: ref,
-      attempt,
-      checkpointSequence: checkpoint.sequence,
-      checkpointState: checkpoint.state,
-      checkpointDetail: checkpoint.detail ?? null,
-      ...evidence,
+    if (staleSameEpochCheckpoint) {
+      await runQuery("COMMIT")
+      return {
+        workOrderId: workOrder.id,
+        workOrderRef: ref,
+        idempotencyKey,
+        status: workOrder.status,
+        result: workOrder.result ?? null,
+        commitRef: workOrder.commitRef ?? null,
+      }
     }
-    eventMetadata.payloadDigest = projectionPayloadDigest(eventMetadata)
     const failureEval = failureEvalForCheckpoint(checkpoint)
     const insertedEvent = await runQuery(
       `INSERT INTO governance_event
@@ -2503,13 +2571,14 @@ export async function projectOutcomeRuntimeCheckpoint({
         [String(workOrder.id), idempotencyKey],
       )
       if (prior?.rows?.length !== 1
-        || prior.rows[0].payloadDigest !== eventMetadata.payloadDigest) {
+        || ![eventMetadata.payloadDigest, legacyPayloadDigest].includes(prior.rows[0].payloadDigest)) {
         throw Object.assign(new Error("Runtime checkpoint replay conflicts with persisted evidence"), {
           code: "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT",
         })
       }
+      acceptedPayloadDigest = prior.rows[0].payloadDigest
     }
-    if (eventInserted) {
+    if (eventInserted || repairableReplayStatusSplit) {
       await runQuery(
         `UPDATE work_order
          SET status = $2,
@@ -2529,18 +2598,13 @@ export async function projectOutcomeRuntimeCheckpoint({
              WHERE newer."entityType" = 'work_order'
                AND newer."entityId"::text = $1::text
                AND newer."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
-               AND (
-                 (newer.metadata->>'attempt')::integer > $6
-                 OR (
-                   (newer.metadata->>'attempt')::integer = $6
-                   AND (newer.metadata->>'checkpointSequence')::integer > $7
-                 )
-               )
+               AND newer.metadata->>'executionEpochDigest' = $9
+               AND (newer.metadata->>'checkpointSequence')::integer > $7
            )`,
         [workOrder.id, projection.status, projection.result, commitRef, labels, attempt, checkpoint.sequence,
-          clearCommitRef],
+          clearCommitRef, currentExecutionEpochDigest],
       )
-      if (failureEval) {
+      if (eventInserted && failureEval) {
         await runQuery(
           `INSERT INTO governance_event
              ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
@@ -2570,7 +2634,7 @@ export async function projectOutcomeRuntimeCheckpoint({
         repo: "bsvalues/terragroq",
         head: commitRef,
         notes: `Persisted Hermes runtime evidence for ${idempotencyKey}.`,
-        contentHash: eventMetadata.payloadDigest,
+        contentHash: acceptedPayloadDigest,
       }
       await runQuery(
         `INSERT INTO evidence_record
