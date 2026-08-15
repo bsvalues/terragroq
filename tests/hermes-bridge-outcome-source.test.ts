@@ -1690,6 +1690,175 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls.at(-1)?.[0]).toBe("COMMIT")
   })
 
+  it("repairs the exact latest legacy checkpoint across a local reclaim without duplicating evidence", async () => {
+    const legacyMetadata = {
+      idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:4",
+      outcomeId: 4,
+      workOrderRef: "WO-HERMES-OUTCOME-4",
+      attempt: 1,
+      checkpointSequence: 4,
+      checkpointState: "RETRYABLE_WALL",
+      checkpointDetail: "HERMES_CYCLE_FAILED",
+    }
+    const legacyDigest = createHash("sha256").update(JSON.stringify(legacyMetadata)).digest("hex")
+    const persistedLegacyMetadata = { ...legacyMetadata, payloadDigest: legacyDigest }
+    const repairQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 42, userId: "owner", status: "active", result: null, commitRef: null,
+        latestCheckpointId: 767,
+        latestCheckpointState: "RETRYABLE_WALL",
+        latestCheckpointKey: legacyMetadata.idempotencyKey,
+        latestCheckpointDigest: legacyDigest,
+        latestCheckpointSequence: 4,
+        latestExecutionEpochDigest: null,
+        latestCheckpointCreatedAt: "2026-08-15T00:46:11.754Z",
+        latestCheckpointMetadata: persistedLegacyMetadata,
+      }] })
+      .mockResolvedValueOnce({ rows: [{ id: 42 }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query: repairQuery,
+      outcomeId: 4,
+      attempt: 2,
+      checkpoint: { sequence: 4, state: "RETRYABLE_WALL", detail: "HERMES_CYCLE_FAILED" },
+    })).resolves.toMatchObject({ status: "blocked", result: "PARTIAL" })
+
+    expect(repairQuery.mock.calls.filter(([sql]) => /UPDATE work_order[\s\S]+SET status/.test(sql))).toHaveLength(1)
+    expect(repairQuery.mock.calls.some(([sql]) => /INSERT INTO governance_event|INSERT INTO evidence_record/.test(sql))).toBe(false)
+    const repairCall = repairQuery.mock.calls.find(([sql]) => /UPDATE work_order[\s\S]+SET status/.test(sql))
+    expect(repairCall?.[1]).toEqual([
+      42, "blocked", "PARTIAL", null, [], "active", false, 767,
+      legacyMetadata.idempotencyKey, legacyDigest,
+    ])
+    expectContiguousPostgresWriteBindings(repairQuery)
+    expect(repairQuery.mock.calls.at(-1)?.[0]).toBe("COMMIT")
+
+    const progressQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 42, userId: "owner", status: "blocked", result: "PARTIAL", commitRef: null,
+        latestCheckpointId: 767,
+        latestCheckpointState: "RETRYABLE_WALL",
+        latestCheckpointKey: legacyMetadata.idempotencyKey,
+        latestCheckpointDigest: legacyDigest,
+        latestCheckpointSequence: 4,
+        latestExecutionEpochDigest: null,
+        latestCheckpointCreatedAt: "2026-08-15T00:46:11.754Z",
+        latestCheckpointMetadata: persistedLegacyMetadata,
+      }] })
+      .mockResolvedValueOnce({ rows: [{ id: 93 }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query: progressQuery,
+      outcomeId: 4,
+      attempt: 2,
+      checkpoint: { sequence: 5, state: "WORKTREE_READY" },
+    })).resolves.toMatchObject({ status: "active", result: null })
+
+    const progressedEvent = progressQuery.mock.calls.find(([sql]) => /INSERT INTO governance_event/.test(sql))
+    expect(progressedEvent?.[1]?.[3]).toContain(`"executionEpochDigest":"${runtimeExecutionEpochDigest}"`)
+  })
+
+  it.each([
+    ["older acquisition epoch", { createdAt: "2026-08-15T00:40:00.000Z" }],
+    ["different execution epoch", { executionEpochDigest: "f".repeat(64) }],
+    ["altered payload digest", { digest: "f".repeat(64) }],
+    ["outcome drift", { outcomeId: 5 }],
+    ["Work Order drift", { workOrderRef: "WO-HERMES-OUTCOME-5" }],
+    ["checkpoint sequence drift", { checkpointSequence: 3 }],
+    ["checkpoint state drift", { checkpointState: "COMPLETE" }],
+    ["checkpoint detail drift", { checkpointDetail: "DIFFERENT_WALL" }],
+    ["checkpoint evidence drift", { headRefOid: "a".repeat(40) }],
+  ])("keeps cross-attempt legacy repair inert for %s", async (_name, drift) => {
+    const persistedMetadata = {
+      idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:4",
+      outcomeId: drift.outcomeId ?? 4,
+      workOrderRef: drift.workOrderRef ?? "WO-HERMES-OUTCOME-4",
+      attempt: 1,
+      checkpointSequence: drift.checkpointSequence ?? 4,
+      checkpointState: drift.checkpointState ?? "RETRYABLE_WALL",
+      checkpointDetail: drift.checkpointDetail ?? "HERMES_CYCLE_FAILED",
+      ...(drift.headRefOid ? { headRefOid: drift.headRefOid } : {}),
+    }
+    const persistedDigest = drift.digest
+      ?? createHash("sha256").update(JSON.stringify(persistedMetadata)).digest("hex")
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 42, userId: "owner", status: "active", result: null, commitRef: null,
+        latestCheckpointId: 767,
+        latestCheckpointState: persistedMetadata.checkpointState,
+        latestCheckpointKey: persistedMetadata.idempotencyKey,
+        latestCheckpointDigest: persistedDigest,
+        latestCheckpointSequence: 4,
+        latestExecutionEpochDigest: drift.executionEpochDigest ?? null,
+        latestCheckpointCreatedAt: drift.createdAt ?? "2026-08-15T00:46:11.754Z",
+        latestCheckpointMetadata: { ...persistedMetadata, payloadDigest: persistedDigest },
+      }] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query,
+      outcomeId: 4,
+      attempt: 2,
+      checkpoint: { sequence: 4, state: "RETRYABLE_WALL", detail: "HERMES_CYCLE_FAILED" },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_IDENTITY_WALL" })
+
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event|UPDATE work_order|INSERT INTO evidence_record/.test(sql))).toBe(false)
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("loses the cross-attempt repair fence when the legacy checkpoint is no longer latest", async () => {
+    const legacyMetadata = {
+      idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:4",
+      outcomeId: 4,
+      workOrderRef: "WO-HERMES-OUTCOME-4",
+      attempt: 1,
+      checkpointSequence: 4,
+      checkpointState: "RETRYABLE_WALL",
+      checkpointDetail: "HERMES_CYCLE_FAILED",
+    }
+    const legacyDigest = createHash("sha256").update(JSON.stringify(legacyMetadata)).digest("hex")
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 42, userId: "owner", status: "active", result: null, commitRef: null,
+        latestCheckpointId: 767,
+        latestCheckpointState: "RETRYABLE_WALL",
+        latestCheckpointKey: legacyMetadata.idempotencyKey,
+        latestCheckpointDigest: legacyDigest,
+        latestCheckpointSequence: 4,
+        latestExecutionEpochDigest: null,
+        latestCheckpointCreatedAt: "2026-08-15T00:46:11.754Z",
+        latestCheckpointMetadata: { ...legacyMetadata, payloadDigest: legacyDigest },
+      }] })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query,
+      outcomeId: 4,
+      attempt: 2,
+      checkpoint: { sequence: 4, state: "RETRYABLE_WALL", detail: "HERMES_CYCLE_FAILED" },
+    })).rejects.toMatchObject({ code: "OUTCOME_PROJECTION_CONCURRENCY_WALL" })
+
+    expect(query.mock.calls.filter(([sql]) => /UPDATE work_order[\s\S]+SET status/.test(sql))).toHaveLength(1)
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event|INSERT INTO evidence_record/.test(sql))).toBe(false)
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
   it("keeps non-replay status drift inert", async () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [] })
