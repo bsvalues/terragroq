@@ -71,6 +71,128 @@ async function ownedFixture(overrides: Record<string, (call: Call) => unknown> =
   return { ...value, record }
 }
 
+async function remoteDependencyFixture({
+  repositoryHashes = ["1".repeat(64), "2".repeat(64)],
+  worktreeHashes = repositoryHashes,
+  target = "absent",
+  failLink = false,
+  failValidation = false,
+  sourceLink = false,
+  dirtyAfterLink = false,
+  sourceDirectoryCode = 0,
+  sourceLinkCode = sourceLink ? 0 : 1,
+}: {
+  repositoryHashes?: string[]
+  worktreeHashes?: string[]
+  target?: "absent" | "directory" | "exact-link" | "wrong-link"
+  failLink?: boolean
+  failValidation?: boolean
+  sourceLink?: boolean
+  dirtyAfterLink?: boolean
+  sourceDirectoryCode?: number
+  sourceLinkCode?: number
+} = {}) {
+  const repositoryPath = "/srv/william/terragroq"
+  const worktreePath = "/srv/william/hermes/worktrees/hermes-goal-77"
+  const dependencySource = `${repositoryPath}/node_modules`
+  const dependencyTarget = `${worktreePath}/node_modules`
+  const calls: Array<{ workspacePath: string; command: string; args: string[] }> = []
+  let targetState = target
+  let validationSawExactLink = false
+  const hashes = (values: string[]) => [
+    `${values[0]}  package.json`,
+    `${values[1]}  pnpm-lock.yaml`,
+    "",
+  ].join("\n")
+  const backend = {
+    isLocal: false,
+    prepareWorkspace: vi.fn(async () => ({ workspacePath: worktreePath })),
+    git: vi.fn(async ({ args }: { args: string[] }) => ({
+      exitCode: 0,
+      stdout: args.join(" ").includes("remote get-url origin")
+        ? "https://github.com/bsvalues/terragroq.git\n"
+        : args.join(" ").includes("rev-parse HEAD") ? `${sha}\n` : "",
+    })),
+    runCommand: vi.fn(async ({
+      workspacePath, command, args,
+    }: { workspacePath: string; command: string; args: string[] }) => {
+      calls.push({ workspacePath, command, args: [...args] })
+      if (command === "pwd") return { exitCode: 0, stdout: `${repositoryPath}\n`, stderr: "" }
+      if (command === "sha256sum") {
+        return {
+          exitCode: 0,
+          stdout: hashes(workspacePath === "bsvalues/terragroq" ? repositoryHashes : worktreeHashes),
+          stderr: "",
+        }
+      }
+      if (command === "test" && args[0] === "-d") {
+        return { exitCode: args[1] === dependencySource ? sourceDirectoryCode : 1, stdout: "", stderr: "" }
+      }
+      if (command === "test" && args[0] === "-L") {
+        const exists = args[1] === dependencySource
+          ? sourceLinkCode === 0
+          : ["exact-link", "wrong-link"].includes(targetState)
+        return {
+          exitCode: args[1] === dependencySource ? sourceLinkCode : exists ? 0 : 1,
+          stdout: "", stderr: "",
+        }
+      }
+      if (command === "test" && args[0] === "-e") {
+        return { exitCode: targetState === "absent" ? 1 : 0, stdout: "", stderr: "" }
+      }
+      if (command === "readlink") {
+        const stdout = targetState === "exact-link" ? dependencySource : "/tmp/foreign-node-modules"
+        return { exitCode: 0, stdout: `${stdout}\n`, stderr: "" }
+      }
+      if (command === "git" && args.includes("check-ignore")) {
+        return { exitCode: 0, stdout: "", stderr: "" }
+      }
+      if (command === "git" && args.includes("ls-files")) {
+        return { exitCode: 0, stdout: "", stderr: "" }
+      }
+      if (command === "git" && args.includes("status")) {
+        return { exitCode: 0, stdout: dirtyAfterLink && targetState === "exact-link" ? "?? node_modules\0" : "", stderr: "" }
+      }
+      if (command === "ln") {
+        if (failLink) return { exitCode: 1, stdout: "", stderr: "refused" }
+        targetState = "exact-link"
+        return { exitCode: 0, stdout: "", stderr: "" }
+      }
+      if (command === "rm") {
+        targetState = "absent"
+        return { exitCode: 0, stdout: "", stderr: "" }
+      }
+      return { exitCode: 0, stdout: "", stderr: "" }
+    }),
+    validate: vi.fn(async () => {
+      validationSawExactLink = targetState === "exact-link"
+      if (failValidation) throw new Error("remote validation transport refused")
+      return [{ exitCode: 0, stdout: "passed", stderr: "" }]
+    }),
+    stat: vi.fn(async () => ({ exists: targetState !== "absent", isFile: false })),
+    cleanup: vi.fn(async () => {}),
+  }
+  const lifecycle = createRepositoryLifecycle({
+    workspaceRoot: root,
+    ownedWorktreeRoot: ownedRoot,
+    executionBackend: backend,
+    validationCommands: [{ command: "npm", args: ["test", "--", "--run"] }],
+  })
+  const record = await lifecycle.ensureOwnedWorktree({
+    branch, baseSha: sha, worktreePath: ownedWorktree,
+  })
+  return {
+    lifecycle,
+    backend,
+    record,
+    calls,
+    dependencySource,
+    dependencyTarget,
+    targetState: () => targetState,
+    validationSawExactLink: () => validationSawExactLink,
+  }
+}
+
 function expectWall(callback: () => unknown, code: string) {
   try {
     callback()
@@ -121,6 +243,118 @@ describe("Hermes repository lifecycle", () => {
       workspacePath: remoteWorkspace,
       commands: [expect.objectContaining({ command: "npm", args: ["test", "--", "--run"] })],
     })
+  })
+
+  it("provisions and removes one exact remote validation dependency link around validation", async () => {
+    const value = await remoteDependencyFixture()
+
+    const pendingProvision = value.lifecycle.ensureValidationDependencies(value.record)
+    await expect(value.lifecycle.runValidationCommands(value.record)).resolves.toEqual([
+      { command: "npm", args: ["test", "--", "--run"], code: 0 },
+    ])
+    await pendingProvision
+
+    expect(value.validationSawExactLink()).toBe(true)
+    expect(value.targetState()).toBe("absent")
+    expect(value.lifecycle.removeValidationDependencies(value.record)).toEqual({ removed: false })
+    expect(value.calls).toContainEqual({
+      workspacePath: value.record.worktreePath,
+      command: "ln",
+      args: ["-s", "--", value.dependencySource, value.dependencyTarget],
+    })
+    expect(value.calls).toContainEqual({
+      workspacePath: value.record.worktreePath,
+      command: "rm",
+      args: ["--", value.dependencyTarget],
+    })
+    expect(value.calls.filter(({ command }) => command === "rm")).toHaveLength(1)
+  })
+
+  it("refuses remote validation dependency provisioning when lock or package hashes differ", async () => {
+    const value = await remoteDependencyFixture({ worktreeHashes: ["1".repeat(64), "3".repeat(64)] })
+
+    await expect(value.lifecycle.ensureValidationDependencies(value.record)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_VALIDATION_WALL",
+    })
+    expect(value.calls.some(({ command }) => command === "ln")).toBe(false)
+    expect(value.targetState()).toBe("absent")
+  })
+
+  it("refuses a pre-existing remote dependency directory without mutation", async () => {
+    const value = await remoteDependencyFixture({ target: "directory" })
+
+    await expect(value.lifecycle.ensureValidationDependencies(value.record)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_VALIDATION_WALL",
+    })
+    expect(value.calls.some(({ command }) => command === "ln")).toBe(false)
+    expect(value.targetState()).toBe("directory")
+  })
+
+  it("removes only the exact remote dependency symlink", async () => {
+    const exact = await remoteDependencyFixture({ target: "exact-link" })
+    await expect(exact.lifecycle.removeValidationDependencies(exact.record)).resolves.toEqual({ removed: true })
+    expect(exact.targetState()).toBe("absent")
+
+    const wrong = await remoteDependencyFixture({ target: "wrong-link" })
+    await expect(wrong.lifecycle.removeValidationDependencies(wrong.record)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_CLEANUP_WALL",
+    })
+    expect(wrong.targetState()).toBe("wrong-link")
+    expect(wrong.calls.some(({ command }) => command === "rm")).toBe(false)
+  })
+
+  it("fails closed when the remote dependency link command fails", async () => {
+    const value = await remoteDependencyFixture({ failLink: true })
+
+    await expect(value.lifecycle.ensureValidationDependencies(value.record)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_VALIDATION_WALL",
+    })
+    expect(value.targetState()).toBe("absent")
+  })
+
+  it("refuses a symlinked remote dependency source", async () => {
+    const value = await remoteDependencyFixture({ sourceLink: true })
+
+    await expect(value.lifecycle.ensureValidationDependencies(value.record)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_VALIDATION_WALL",
+    })
+    expect(value.calls.some(({ command }) => command === "ln")).toBe(false)
+  })
+
+  it("fails closed on anomalous remote source directory inspection results", async () => {
+    for (const options of [{ sourceDirectoryCode: 2 }, { sourceLinkCode: 2 }]) {
+      const value = await remoteDependencyFixture(options)
+      await expect(value.lifecycle.ensureValidationDependencies(value.record)).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_VALIDATION_WALL",
+      })
+      expect(value.calls.some(({ command }) => command === "ln")).toBe(false)
+    }
+  })
+
+  it("removes an exact newly-created link when post-link verification rejects it", async () => {
+    const value = await remoteDependencyFixture({ dirtyAfterLink: true })
+
+    await expect(value.lifecycle.ensureValidationDependencies(value.record)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_VALIDATION_WALL",
+    })
+    expect(value.targetState()).toBe("absent")
+    expect(value.calls.filter(({ command }) => command === "rm")).toEqual([{
+      workspacePath: value.record.worktreePath,
+      command: "rm",
+      args: ["--", value.dependencyTarget],
+    }])
+  })
+
+  it("removes the exact remote dependency link when validation cannot start", async () => {
+    const value = await remoteDependencyFixture({ failValidation: true })
+
+    const pendingProvision = value.lifecycle.ensureValidationDependencies(value.record)
+    await expect(value.lifecycle.runValidationCommands(value.record)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_RUNNER_WALL",
+    })
+    await pendingProvision
+    expect(value.validationSawExactLink()).toBe(true)
+    expect(value.targetState()).toBe("absent")
   })
 
   it("removes repository and provider secrets from child command environments", () => {
@@ -1082,6 +1316,33 @@ describe("Hermes repository lifecycle", () => {
       expect(fs.lstatSync(path.join(recoveryWorktree, "node_modules"), { throwIfNoEntry: false })).toBeUndefined()
     } finally {
       fs.rmSync(temporary, { recursive: true, force: true })
+    }
+  })
+
+  it("terminal remote cleanup removes only the exact governed dependency symlink", async () => {
+    const exact = await remoteDependencyFixture({ target: "exact-link" })
+    await expect(exact.lifecycle.removeTerminalRecoveryDependencies({
+      ...exact.record, expectedHeadSha: sha,
+    })).resolves.toEqual({ removed: true, headRefOid: sha })
+    expect(exact.calls.filter(({ command }) => command === "rm")).toEqual([{
+      workspacePath: exact.record.worktreePath,
+      command: "rm",
+      args: ["--", exact.dependencyTarget],
+    }])
+    expect(exact.backend.runCommand).toHaveBeenCalledWith({
+      workspacePath: exact.record.worktreePath,
+      command: "rm",
+      args: ["--", exact.dependencyTarget],
+      credentialAccess: false,
+    })
+
+    for (const target of ["directory", "wrong-link"] as const) {
+      const refused = await remoteDependencyFixture({ target })
+      await expect(refused.lifecycle.removeTerminalRecoveryDependencies({
+        ...refused.record, expectedHeadSha: sha,
+      })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_CLEANUP_WALL" })
+      expect(refused.calls.some(({ command, args }) => command === "rm"
+        || args.includes("-r") || args.includes("-rf") || args.includes("-f"))).toBe(false)
     }
   })
 

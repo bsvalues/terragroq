@@ -2499,6 +2499,33 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       .toBe("")
   })
 
+  it("awaits validation dependency provisioning and removal around each validator run", async () => {
+    const value = fixture()
+    let resolveEnsure!: (value: { linked: boolean }) => void
+    let resolveRemove!: (value: { removed: boolean }) => void
+    const ensure = new Promise<{ linked: boolean }>((resolve) => { resolveEnsure = resolve })
+    const remove = new Promise<{ removed: boolean }>((resolve) => { resolveRemove = resolve })
+    value.lifecycle.ensureValidationDependencies.mockReturnValueOnce(ensure)
+    value.lifecycle.removeValidationDependencies.mockReturnValueOnce(remove)
+
+    const cycle = value.orchestrator.cycle()
+    await vi.waitFor(() => expect(value.lifecycle.ensureValidationDependencies).toHaveBeenCalledOnce())
+    expect(value.lifecycle.runValidationCommands).not.toHaveBeenCalled()
+
+    resolveEnsure({ linked: true })
+    await vi.waitFor(() => expect(value.lifecycle.removeValidationDependencies).toHaveBeenCalledOnce())
+    expect(value.lifecycle.runValidationCommands).toHaveBeenCalledOnce()
+    expect(value.lifecycle.removeValidationDependencies.mock.invocationCallOrder[0])
+      .toBeGreaterThan(value.lifecycle.runValidationCommands.mock.invocationCallOrder[0])
+
+    let settled = false
+    void cycle.finally(() => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    resolveRemove({ removed: true })
+    await expect(cycle).resolves.toMatchObject({ result: "COMPLETE" })
+  })
+
   it("terminalizes deterministic validation failures after the bounded remediation budget", async () => {
     const value = fixture()
     const validationError = Object.assign(new Error("validation failed"), {

@@ -466,6 +466,8 @@ export function createRepositoryLifecycle(options) {
   const executionBackend = options.executionBackend ?? null
   const validationCommands = (options.validationCommands ?? []).map(normalizeValidation)
   const records = new Map()
+  const remoteValidationLinks = new Map()
+  const removedRemoteValidationLinks = new Set()
   const workspacePath = (value) => {
     if (!executionBackend) return absolute(value, "worktreePath")
     if (typeof value !== "string" || value.length === 0 || value.includes("\0")) {
@@ -647,9 +649,141 @@ export function createRepositoryLifecycle(options) {
     return headRefOid
   }
 
+  async function remoteValidationCommand(workspacePath, command, args, wallCode) {
+    let result
+    try {
+      result = await executionBackend.runCommand({
+        workspacePath, command, args: [...args], credentialAccess: false,
+      })
+    } catch {
+      wall(wallCode, "remote validation dependency command failed to start")
+    }
+    const code = result?.exitCode
+    if (!Number.isInteger(code)) wall(wallCode, "remote validation dependency command result is invalid")
+    return { code, stdout: String(result.stdout ?? "") }
+  }
+
+  async function remoteRepositoryRoot(wallCode) {
+    const result = await remoteValidationCommand(repository, "pwd", ["-P"], wallCode)
+    const root = result.stdout.trim()
+    if (result.code !== 0 || !path.posix.isAbsolute(root) || root.includes("\n") || root.includes("\0")) {
+      wall(wallCode, "governed repository root is unavailable")
+    }
+    return path.posix.normalize(root)
+  }
+
+  function dependencyHashes(result, wallCode) {
+    if (result.code !== 0) wall(wallCode, "validation dependency manifests are unavailable")
+    const lines = result.stdout.trimEnd().split("\n")
+    const expected = ["package.json", "pnpm-lock.yaml"]
+    if (lines.length !== expected.length) wall(wallCode, "validation dependency manifest hashes are invalid")
+    return lines.map((line, index) => {
+      const match = /^([0-9a-f]{64})  (package\.json|pnpm-lock\.yaml)$/.exec(line.trimEnd())
+      if (!match || match[2] !== expected[index]) {
+        wall(wallCode, "validation dependency manifest hashes are invalid")
+      }
+      return match[1]
+    })
+  }
+
+  async function inspectRemoteValidationLink(record, wallCode) {
+    if (!path.posix.isAbsolute(record.worktreePath) || record.worktreePath.includes("\n")
+      || record.worktreePath.includes("\0")) {
+      wall(wallCode, "owned remote worktree path is invalid")
+    }
+    const root = await remoteRepositoryRoot(wallCode)
+    const source = path.posix.join(root, "node_modules")
+    const target = path.posix.join(record.worktreePath, "node_modules")
+    return { source, target }
+  }
+
+  async function provisionRemoteValidationDependencies(record) {
+    const wallCode = "HERMES_REPOSITORY_VALIDATION_WALL"
+    const link = await inspectRemoteValidationLink(record, wallCode)
+    const sourceDirectory = await remoteValidationCommand(repository, "test", ["-d", link.source], wallCode)
+    if (![0, 1].includes(sourceDirectory.code)) wall(wallCode, "governed validation dependencies could not be inspected")
+    if (sourceDirectory.code !== 0) wall(wallCode, "governed validation dependencies are unavailable")
+    const sourceLink = await remoteValidationCommand(repository, "test", ["-L", link.source], wallCode)
+    if (![0, 1].includes(sourceLink.code)) wall(wallCode, "governed validation dependencies could not be inspected")
+    if (sourceLink.code === 0) wall(wallCode, "governed validation dependencies must be an ordinary directory")
+
+    const hashArgs = ["--", "package.json", "pnpm-lock.yaml"]
+    const repositoryHashes = dependencyHashes(
+      await remoteValidationCommand(repository, "sha256sum", hashArgs, wallCode), wallCode,
+    )
+    const worktreeHashes = dependencyHashes(
+      await remoteValidationCommand(record.worktreePath, "sha256sum", hashArgs, wallCode), wallCode,
+    )
+    if (repositoryHashes.some((hash, index) => hash !== worktreeHashes[index])) {
+      wall(wallCode, "worktree dependency manifests do not match the governed repository")
+    }
+
+    const ignored = await remoteValidationCommand(
+      record.worktreePath, "git", ["-C", record.worktreePath, "check-ignore", "-q", "--", "node_modules/"], wallCode,
+    )
+    const tracked = await remoteValidationCommand(
+      record.worktreePath, "git", ["-C", record.worktreePath, "ls-files", "-z", "--", "node_modules"], wallCode,
+    )
+    if (ignored.code !== 0 || tracked.code !== 0 || tracked.stdout.length !== 0) {
+      wall(wallCode, "worktree validation dependencies are not ignored and untracked")
+    }
+
+    const symbolicLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", link.target], wallCode)
+    if (![0, 1].includes(symbolicLink.code)) wall(wallCode, "worktree dependency path could not be inspected")
+    let existing = symbolicLink.code === 0
+    let createdByOperation = false
+    if (existing) {
+      const target = await remoteValidationCommand(record.worktreePath, "readlink", ["--", link.target], wallCode)
+      if (target.code !== 0 || target.stdout.trim() !== link.source) {
+        wall(wallCode, "worktree dependency link does not target governed dependencies")
+      }
+    } else {
+      const exists = await remoteValidationCommand(record.worktreePath, "test", ["-e", link.target], wallCode)
+      if (![0, 1].includes(exists.code) || exists.code === 0) {
+        wall(wallCode, "worktree dependency path already exists")
+      }
+      const created = await remoteValidationCommand(
+        record.worktreePath, "ln", ["-s", "--", link.source, link.target], wallCode,
+      )
+      if (created.code !== 0) wall(wallCode, "worktree dependency link could not be created")
+      createdByOperation = true
+      existing = false
+    }
+
+    try {
+      const verifiedLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", link.target], wallCode)
+      const verifiedTarget = await remoteValidationCommand(record.worktreePath, "readlink", ["--", link.target], wallCode)
+      const status = await remoteValidationCommand(
+        record.worktreePath,
+        "git",
+        ["-C", record.worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "node_modules"],
+        wallCode,
+      )
+      if (verifiedLink.code !== 0 || verifiedTarget.code !== 0 || verifiedTarget.stdout.trim() !== link.source
+        || status.code !== 0 || status.stdout.length !== 0) {
+        wall(wallCode, "worktree dependency link verification failed")
+      }
+    } catch (error) {
+      if (createdByOperation) await removeRemoteValidationDependencies(record)
+      throw error
+    }
+    return { linked: true, existing, ...link }
+  }
+
   function ensureValidationDependencies({ worktreePath, branch } = {}) {
     const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
-    if (executionBackend && !executionBackend.isLocal) return { linked: false, existing: true }
+    if (executionBackend && !executionBackend.isLocal) {
+      const existing = remoteValidationLinks.get(record.branch)
+      if (existing) return existing.promise
+      removedRemoteValidationLinks.delete(record.branch)
+      const entry = {}
+      entry.promise = provisionRemoteValidationDependencies(record).catch((error) => {
+        if (remoteValidationLinks.get(record.branch) === entry) remoteValidationLinks.delete(record.branch)
+        throw error
+      })
+      remoteValidationLinks.set(record.branch, entry)
+      return entry.promise
+    }
     const source = path.join(workspaceRoot, "node_modules")
     const target = path.join(record.worktreePath, "node_modules")
     if (!fs.statSync(source, { throwIfNoEntry: false })?.isDirectory()) {
@@ -666,9 +800,42 @@ export function createRepositoryLifecycle(options) {
     return { linked: true, existing: false }
   }
 
+  async function removeRemoteValidationDependencies(record) {
+    const wallCode = "HERMES_REPOSITORY_CLEANUP_WALL"
+    const link = await inspectRemoteValidationLink(record, wallCode)
+    const symbolicLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", link.target], wallCode)
+    if (![0, 1].includes(symbolicLink.code)) wall(wallCode, "worktree dependency path could not be inspected")
+    if (symbolicLink.code === 1) {
+      const exists = await remoteValidationCommand(record.worktreePath, "test", ["-e", link.target], wallCode)
+      if (exists.code === 1) return { removed: false }
+      wall(wallCode, "validation dependency path is not the owned link")
+    }
+    const target = await remoteValidationCommand(record.worktreePath, "readlink", ["--", link.target], wallCode)
+    if (target.code !== 0 || target.stdout.trim() !== link.source) {
+      wall(wallCode, "validation dependency path is not the owned link")
+    }
+    const removed = await remoteValidationCommand(record.worktreePath, "rm", ["--", link.target], wallCode)
+    if (removed.code !== 0) wall(wallCode, "validation dependency link could not be removed")
+    const remainingLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", link.target], wallCode)
+    const remainingPath = await remoteValidationCommand(record.worktreePath, "test", ["-e", link.target], wallCode)
+    if (remainingLink.code !== 1 || remainingPath.code !== 1) {
+      wall(wallCode, "validation dependency link removal could not be verified")
+    }
+    removedRemoteValidationLinks.add(record.branch)
+    return { removed: true }
+  }
+
   function removeValidationDependencies({ worktreePath, branch } = {}) {
     const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
-    if (executionBackend && !executionBackend.isLocal) return { removed: false }
+    if (executionBackend && !executionBackend.isLocal) {
+      if (removedRemoteValidationLinks.has(record.branch)) return { removed: false }
+      const pending = remoteValidationLinks.get(record.branch)?.promise
+      const removal = (pending ? pending.then(() => removeRemoteValidationDependencies(record))
+        : removeRemoteValidationDependencies(record)).finally(() => {
+        remoteValidationLinks.delete(record.branch)
+      })
+      return removal
+    }
     const dependencies = path.join(record.worktreePath, "node_modules")
     const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
     if (!dependencyStat) return { removed: false }
@@ -702,8 +869,8 @@ export function createRepositoryLifecycle(options) {
     return { removed: true }
   }
 
-  function removeValidationArtifacts(record) {
-    removeValidationDependencies(record)
+  async function removeValidationArtifacts(record) {
+    await removeValidationDependencies(record)
     removeGeneratedNextOutput(record)
   }
 
@@ -734,28 +901,8 @@ export function createRepositoryLifecycle(options) {
     }
     const dependencies = path.join(record.worktreePath, "node_modules")
     if (executionBackend && !executionBackend.isLocal) {
-      const dependency = await executionBackend.stat({
-        workspacePath: record.worktreePath,
-        relPath: "node_modules",
-      })
-      if (!dependency.exists) return { removed: false, headRefOid: expectedHeadSha }
-      const ignored = await run(
-        "git",
-        ["-C", record.worktreePath, "check-ignore", "-q", "node_modules/"],
-        { allowFailure: true },
-      )
-      if (ignored.code !== 0) {
-        wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery dependencies are not ignored")
-      }
-      const removed = await executionBackend.runCommand({
-        workspacePath: record.worktreePath,
-        command: "rm",
-        args: ["-rf", "--", "node_modules"],
-      })
-      if (removed.exitCode !== 0) {
-        wall("HERMES_REPOSITORY_CLEANUP_WALL", "terminal recovery dependencies could not be removed")
-      }
-      return { removed: true, headRefOid: expectedHeadSha }
+      const result = await removeRemoteValidationDependencies(record)
+      return { removed: result.removed, headRefOid: expectedHeadSha }
     }
     const dependencyStat = fs.lstatSync(dependencies, { throwIfNoEntry: false })
     if (!dependencyStat) return { removed: false, headRefOid: expectedHeadSha }
@@ -788,36 +935,42 @@ export function createRepositoryLifecycle(options) {
     const normalized = commands === validationCommands ? validationCommands : commands.map(normalizeValidation)
     if (normalized.length === 0) wall("HERMES_REPOSITORY_VALIDATION_WALL", "at least one validation command required")
     if (executionBackend && !executionBackend.isLocal) {
-      let backendResults
+      const pendingDependencies = remoteValidationLinks.get(record.branch)?.promise
+      if (pendingDependencies) await pendingDependencies
       try {
-        backendResults = await executionBackend.validate({
-          workspacePath: record.worktreePath,
-          commands: normalized,
-        })
-      } catch {
-        wall("HERMES_REPOSITORY_RUNNER_WALL", "validation failed to start")
-      }
-      const results = backendResults.map((entry, index) => ({
-        command: normalized[index].command,
-        args: [...normalized[index].args],
-        code: entry.exitCode,
-      }))
-      const failureIndex = backendResults.findIndex((entry) => entry.exitCode !== 0)
-      if (failureIndex >= 0) {
-        const command = normalized[failureIndex]
-        const result = backendResults[failureIndex]
-        const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim().slice(-4_000)
-        if (SECRET_LIKE.test(output)) wall("HERMES_REPOSITORY_SECRET_WALL", "validation output refused")
-        const error = new HermesRepositoryLifecycleError(
-          "HERMES_VALIDATION_FAILED", `${path.basename(command.command)} exited ${result.exitCode}`,
-        )
-        error.validation = {
-          command: command.command, args: [...command.args], code: result.exitCode,
-          timedOut: result.timedOut === true, output: output || "Validator exited without output.",
+        let backendResults
+        try {
+          backendResults = await executionBackend.validate({
+            workspacePath: record.worktreePath,
+            commands: normalized,
+          })
+        } catch {
+          wall("HERMES_REPOSITORY_RUNNER_WALL", "validation failed to start")
         }
-        throw error
+        const results = backendResults.map((entry, index) => ({
+          command: normalized[index].command,
+          args: [...normalized[index].args],
+          code: entry.exitCode,
+        }))
+        const failureIndex = backendResults.findIndex((entry) => entry.exitCode !== 0)
+        if (failureIndex >= 0) {
+          const command = normalized[failureIndex]
+          const result = backendResults[failureIndex]
+          const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim().slice(-4_000)
+          if (SECRET_LIKE.test(output)) wall("HERMES_REPOSITORY_SECRET_WALL", "validation output refused")
+          const error = new HermesRepositoryLifecycleError(
+            "HERMES_VALIDATION_FAILED", `${path.basename(command.command)} exited ${result.exitCode}`,
+          )
+          error.validation = {
+            command: command.command, args: [...command.args], code: result.exitCode,
+            timedOut: result.timedOut === true, output: output || "Validator exited without output.",
+          }
+          throw error
+        }
+        return results
+      } finally {
+        if (pendingDependencies) await removeValidationDependencies(record)
       }
-      return results
     }
     const results = []
     for (const command of normalized) {
@@ -1207,7 +1360,7 @@ export function createRepositoryLifecycle(options) {
       }
     }
     ownedRecord(absoluteWorktree, safeBranch)
-    removeValidationArtifacts(record)
+    await removeValidationArtifacts(record)
     const status = await run("git", ["-C", absoluteWorktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
     if (status.stdout.length > 0) wall("HERMES_REPOSITORY_CLEANUP_WALL", "owned worktree is dirty")
     if (executionBackend) await executionBackend.cleanup({ workspacePath: absoluteWorktree })
