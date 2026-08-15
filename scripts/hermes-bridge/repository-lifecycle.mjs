@@ -26,6 +26,9 @@ const VALIDATION_CHILD_ENVIRONMENT = new Set([
   "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "WINDIR",
 ])
 const MAX_VALIDATION_TIMEOUT_MS = 20 * 60 * 1000
+const REMOTE_DEPENDENCY_MARKER = ".williamos-validation-dependencies"
+const CREATE_REMOTE_DEPENDENCY_TREE = "const fs=require('node:fs'),d=process.argv[1],m=process.argv[2],v=process.argv[3];fs.mkdirSync(d);try{fs.writeFileSync(m,v,{encoding:'utf8',flag:'wx'})}catch(e){try{fs.unlinkSync(m)}catch{}fs.rmdirSync(d);throw e}"
+const VERIFY_REMOTE_DEPENDENCY_MARKER = "const fs=require('node:fs');process.exit(fs.readFileSync(process.argv[1],'utf8')===process.argv[2]?0:1)"
 const PROHIBITED_WORD = /(^|[-_:])(deploy|production|release|tag)([-_:]|$)/i
 const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 
@@ -686,7 +689,7 @@ export function createRepositoryLifecycle(options) {
     })
   }
 
-  async function inspectRemoteValidationLink(record, wallCode) {
+  async function inspectRemoteValidationTree(record, wallCode) {
     if (!path.posix.isAbsolute(record.worktreePath) || record.worktreePath.includes("\n")
       || record.worktreePath.includes("\0")) {
       wall(wallCode, "owned remote worktree path is invalid")
@@ -694,18 +697,34 @@ export function createRepositoryLifecycle(options) {
     const root = await remoteRepositoryRoot(wallCode)
     const source = path.posix.join(root, "node_modules")
     const target = path.posix.join(record.worktreePath, "node_modules")
-    return { source, target }
+    const marker = path.posix.join(target, REMOTE_DEPENDENCY_MARKER)
+    const sourceMarker = path.posix.join(source, REMOTE_DEPENDENCY_MARKER)
+    return { source, target, marker, sourceMarker }
   }
 
-  async function provisionRemoteValidationDependencies(record) {
-    const wallCode = "HERMES_REPOSITORY_VALIDATION_WALL"
-    const link = await inspectRemoteValidationLink(record, wallCode)
-    const sourceDirectory = await remoteValidationCommand(repository, "test", ["-d", link.source], wallCode)
+  async function remoteValidationDependencyIdentity(record, wallCode, mismatchCode = wallCode) {
+    const tree = await inspectRemoteValidationTree(record, wallCode)
+    const sourceDirectory = await remoteValidationCommand(repository, "test", ["-d", tree.source], wallCode)
     if (![0, 1].includes(sourceDirectory.code)) wall(wallCode, "governed validation dependencies could not be inspected")
     if (sourceDirectory.code !== 0) wall(wallCode, "governed validation dependencies are unavailable")
-    const sourceLink = await remoteValidationCommand(repository, "test", ["-L", link.source], wallCode)
+    const sourceLink = await remoteValidationCommand(repository, "test", ["-L", tree.source], wallCode)
     if (![0, 1].includes(sourceLink.code)) wall(wallCode, "governed validation dependencies could not be inspected")
     if (sourceLink.code === 0) wall(wallCode, "governed validation dependencies must be an ordinary directory")
+    const canonical = await remoteValidationCommand(repository, "readlink", ["-f", "--", tree.source], wallCode)
+    if (canonical.code !== 0 || canonical.stdout.trim() !== tree.source) {
+      wall(wallCode, "governed validation dependency path is not canonical")
+    }
+    const sourceIdentity = await remoteValidationCommand(
+      repository, "stat", ["-Lc", "%d:%i", "--", tree.source], wallCode,
+    )
+    if (sourceIdentity.code !== 0 || !/^\d+:\d+$/.test(sourceIdentity.stdout.trim())) {
+      wall(wallCode, "governed validation dependency identity is unavailable")
+    }
+    const sourceMarker = await remoteValidationCommand(repository, "test", ["-e", tree.sourceMarker], wallCode)
+    const sourceMarkerLink = await remoteValidationCommand(repository, "test", ["-L", tree.sourceMarker], wallCode)
+    if (sourceMarker.code !== 1 || sourceMarkerLink.code !== 1) {
+      wall(wallCode, "governed validation dependencies contain a reserved provenance marker")
+    }
 
     const hashArgs = ["--", "package.json", "pnpm-lock.yaml"]
     const repositoryHashes = dependencyHashes(
@@ -715,9 +734,21 @@ export function createRepositoryLifecycle(options) {
       await remoteValidationCommand(record.worktreePath, "sha256sum", hashArgs, wallCode), wallCode,
     )
     if (repositoryHashes.some((hash, index) => hash !== worktreeHashes[index])) {
-      wall(wallCode, "worktree dependency manifests do not match the governed repository")
+      wall(mismatchCode, "automatic validation dependency lock transitions are unsupported")
     }
+    const markerValue = [
+      "williamos.validation-dependencies.v1",
+      `source=${tree.source}`,
+      `target=${tree.target}`,
+      `package=${repositoryHashes[0]}`,
+      `lock=${repositoryHashes[1]}`,
+      "",
+    ].join("\n")
+    return { ...tree, digest: `${repositoryHashes[0]}:${repositoryHashes[1]}`, markerValue,
+      sourceIdentity: sourceIdentity.stdout.trim() }
+  }
 
+  async function verifyRemoteValidationTreeGitState(record, wallCode, { requireCleanStatus = true } = {}) {
     const ignored = await remoteValidationCommand(
       record.worktreePath, "git", ["-C", record.worktreePath, "check-ignore", "-q", "--", "node_modules/"], wallCode,
     )
@@ -727,47 +758,70 @@ export function createRepositoryLifecycle(options) {
     if (ignored.code !== 0 || tracked.code !== 0 || tracked.stdout.length !== 0) {
       wall(wallCode, "worktree validation dependencies are not ignored and untracked")
     }
-
-    const symbolicLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", link.target], wallCode)
-    if (![0, 1].includes(symbolicLink.code)) wall(wallCode, "worktree dependency path could not be inspected")
-    let existing = symbolicLink.code === 0
-    let createdByOperation = false
-    if (existing) {
-      const target = await remoteValidationCommand(record.worktreePath, "readlink", ["--", link.target], wallCode)
-      if (target.code !== 0 || target.stdout.trim() !== link.source) {
-        wall(wallCode, "worktree dependency link does not target governed dependencies")
-      }
-    } else {
-      const exists = await remoteValidationCommand(record.worktreePath, "test", ["-e", link.target], wallCode)
-      if (![0, 1].includes(exists.code) || exists.code === 0) {
-        wall(wallCode, "worktree dependency path already exists")
-      }
-      const created = await remoteValidationCommand(
-        record.worktreePath, "ln", ["-s", "--", link.source, link.target], wallCode,
-      )
-      if (created.code !== 0) wall(wallCode, "worktree dependency link could not be created")
-      createdByOperation = true
-      existing = false
-    }
-
-    try {
-      const verifiedLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", link.target], wallCode)
-      const verifiedTarget = await remoteValidationCommand(record.worktreePath, "readlink", ["--", link.target], wallCode)
+    if (requireCleanStatus) {
       const status = await remoteValidationCommand(
         record.worktreePath,
         "git",
         ["-C", record.worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "node_modules"],
         wallCode,
       )
-      if (verifiedLink.code !== 0 || verifiedTarget.code !== 0 || verifiedTarget.stdout.trim() !== link.source
-        || status.code !== 0 || status.stdout.length !== 0) {
-        wall(wallCode, "worktree dependency link verification failed")
+      if (status.code !== 0 || status.stdout.length !== 0) {
+        wall(wallCode, "worktree validation dependencies changed repository status")
       }
+    }
+  }
+
+  async function provisionRemoteValidationDependencies(record) {
+    const wallCode = "HERMES_REPOSITORY_VALIDATION_WALL"
+    const tree = await remoteValidationDependencyIdentity(
+      record, wallCode, "HERMES_REPOSITORY_VALIDATION_DEPENDENCY_LOCK_WALL",
+    )
+    await verifyRemoteValidationTreeGitState(record, wallCode)
+    const targetLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", tree.target], wallCode)
+    const targetExists = await remoteValidationCommand(record.worktreePath, "test", ["-e", tree.target], wallCode)
+    if (targetLink.code !== 1 || targetExists.code !== 1) {
+      wall(wallCode, "worktree validation dependency target must be absent")
+    }
+    let markerWritten = false
+    try {
+      const created = await remoteValidationCommand(
+        record.worktreePath,
+        "node",
+        ["-e", CREATE_REMOTE_DEPENDENCY_TREE, tree.target, tree.marker, tree.markerValue],
+        wallCode,
+      )
+      if (created.code !== 0) wall(wallCode, "validation dependency staging tree could not be created")
+      markerWritten = true
+      const targetDirectory = await remoteValidationCommand(record.worktreePath, "test", ["-d", tree.target], wallCode)
+      const targetLinkAfterCopy = await remoteValidationCommand(record.worktreePath, "test", ["-L", tree.target], wallCode)
+      if (targetDirectory.code !== 0 || targetLinkAfterCopy.code !== 1) {
+        wall(wallCode, "isolated validation dependency target is not an ordinary directory")
+      }
+      const markerFile = await remoteValidationCommand(record.worktreePath, "test", ["-f", tree.marker], wallCode)
+      const markerLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", tree.marker], wallCode)
+      if (markerFile.code !== 0 || markerLink.code !== 1) {
+        wall(wallCode, "validation dependency provenance marker is not an ordinary file")
+      }
+      const copied = await remoteValidationCommand(
+        record.worktreePath,
+        "cp",
+        ["-a", "--reflink=auto", "--", `${tree.source}/.`, tree.target],
+        wallCode,
+      )
+      if (copied.code !== 0) wall(wallCode, "isolated validation dependencies could not be copied")
+      const verifiedIdentity = await remoteValidationDependencyIdentity(
+        record, wallCode, "HERMES_REPOSITORY_VALIDATION_DEPENDENCY_LOCK_WALL",
+      )
+      if (verifiedIdentity.source !== tree.source || verifiedIdentity.digest !== tree.digest
+        || verifiedIdentity.sourceIdentity !== tree.sourceIdentity) {
+        wall(wallCode, "governed validation dependency source changed during copy")
+      }
+      await verifyRemoteValidationTreeGitState(record, wallCode)
     } catch (error) {
-      if (createdByOperation) await removeRemoteValidationDependencies(record)
+      if (markerWritten) await removeRemoteValidationDependencies(record, tree.markerValue)
       throw error
     }
-    return { linked: true, existing, ...link }
+    return { copied: true, existing: false, source: tree.source, target: tree.target }
   }
 
   function ensureValidationDependencies({ worktreePath, branch } = {}) {
@@ -800,26 +854,42 @@ export function createRepositoryLifecycle(options) {
     return { linked: true, existing: false }
   }
 
-  async function removeRemoteValidationDependencies(record) {
+  async function removeRemoteValidationDependencies(record, expectedMarker = null) {
     const wallCode = "HERMES_REPOSITORY_CLEANUP_WALL"
-    const link = await inspectRemoteValidationLink(record, wallCode)
-    const symbolicLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", link.target], wallCode)
-    if (![0, 1].includes(symbolicLink.code)) wall(wallCode, "worktree dependency path could not be inspected")
-    if (symbolicLink.code === 1) {
-      const exists = await remoteValidationCommand(record.worktreePath, "test", ["-e", link.target], wallCode)
+    const tree = expectedMarker
+      ? { ...await inspectRemoteValidationTree(record, wallCode), markerValue: expectedMarker }
+      : await remoteValidationDependencyIdentity(record, wallCode)
+    const targetLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", tree.target], wallCode)
+    if (![0, 1].includes(targetLink.code)) wall(wallCode, "validation dependency target could not be inspected")
+    if (targetLink.code === 0) wall(wallCode, "validation dependency target must not be a symlink")
+    const targetDirectory = await remoteValidationCommand(record.worktreePath, "test", ["-d", tree.target], wallCode)
+    if (![0, 1].includes(targetDirectory.code)) wall(wallCode, "validation dependency target could not be inspected")
+    if (targetDirectory.code === 1) {
+      const exists = await remoteValidationCommand(record.worktreePath, "test", ["-e", tree.target], wallCode)
       if (exists.code === 1) return { removed: false }
-      wall(wallCode, "validation dependency path is not the owned link")
+      wall(wallCode, "validation dependency target is not an ordinary directory")
     }
-    const target = await remoteValidationCommand(record.worktreePath, "readlink", ["--", link.target], wallCode)
-    if (target.code !== 0 || target.stdout.trim() !== link.source) {
-      wall(wallCode, "validation dependency path is not the owned link")
+    await verifyRemoteValidationTreeGitState(record, wallCode, { requireCleanStatus: false })
+    const markerFile = await remoteValidationCommand(record.worktreePath, "test", ["-f", tree.marker], wallCode)
+    const markerLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", tree.marker], wallCode)
+    if (markerFile.code !== 0 || markerLink.code !== 1) {
+      wall(wallCode, "validation dependency provenance marker is not an ordinary file")
     }
-    const removed = await remoteValidationCommand(record.worktreePath, "rm", ["--", link.target], wallCode)
-    if (removed.code !== 0) wall(wallCode, "validation dependency link could not be removed")
-    const remainingLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", link.target], wallCode)
-    const remainingPath = await remoteValidationCommand(record.worktreePath, "test", ["-e", link.target], wallCode)
+    const marker = await remoteValidationCommand(
+      record.worktreePath,
+      "node",
+      ["-e", VERIFY_REMOTE_DEPENDENCY_MARKER, tree.marker, tree.markerValue],
+      wallCode,
+    )
+    if (marker.code !== 0) {
+      wall(wallCode, "validation dependency provenance marker is missing or invalid")
+    }
+    const removed = await remoteValidationCommand(record.worktreePath, "rm", ["-rf", "--", tree.target], wallCode)
+    if (removed.code !== 0) wall(wallCode, "isolated validation dependencies could not be removed")
+    const remainingLink = await remoteValidationCommand(record.worktreePath, "test", ["-L", tree.target], wallCode)
+    const remainingPath = await remoteValidationCommand(record.worktreePath, "test", ["-e", tree.target], wallCode)
     if (remainingLink.code !== 1 || remainingPath.code !== 1) {
-      wall(wallCode, "validation dependency link removal could not be verified")
+      wall(wallCode, "validation dependency removal could not be verified")
     }
     removedRemoteValidationLinks.add(record.branch)
     return { removed: true }
