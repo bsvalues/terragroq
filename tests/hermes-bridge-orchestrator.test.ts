@@ -172,6 +172,73 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
+function queueBoundOutcome() {
+  return {
+    id: 77,
+    userId: "owner-id",
+    ref: "GOAL-0011",
+    command: "Add a compact on-screen latest-evidence timestamp to selected Thread work status.",
+    lane: "ui",
+    mode: "implement",
+    risk: "low",
+    authority: "A2_WRITE_OWN",
+    verdict: "requires_approval",
+    requiresApproval: true,
+    status: "classified",
+    queueBinding: {
+      userId: "owner-id",
+      outcomeKey: "goal:GOAL-0011",
+      expectedVersion: 3,
+      executionBinding: "execution-goal-0011",
+      leaseHolder: "Hermes:hermes-outcome-queue",
+      leaseToken: "lease-goal-0011",
+      fencingToken: 2,
+      acquisitionKey: "acquisition-goal-0011",
+      activeWorkOrderId: 77,
+    },
+  }
+}
+
+function seedGoalStyleRetryableExecution(
+  value: ReturnType<typeof fixture>,
+  outcome = queueBoundOutcome(),
+  leaseDurationMs = 1_000,
+) {
+  const lease = value.state.acquireLease({
+    idempotencyKey: "goal-0011-acquire",
+    outcomeId: "77",
+    holderId: "crashed-holder",
+    leaseDurationMs,
+    metadata: {
+      outcome,
+      branch: "codex/hermes-goal-0011-15",
+      worktreePath: "/home/bs/.williamos/hermes-bridge/worktrees/hermes-goal-0011-15",
+      baseSha: "a".repeat(40),
+      threadId: "thread-goal-0011",
+    },
+  })
+  let sequence = lease.checkpointSequence
+  for (const [state, metadata] of [
+    ["WORKTREE_INTENT", {}],
+    ["WORKTREE_READY", {}],
+    ["CODEX_THREAD_READY", { threadId: "thread-goal-0011" }],
+    ["RETRYABLE_WALL", { threadId: "thread-goal-0011" }],
+  ] as const) {
+    const checkpoint = value.state.checkpoint({
+      idempotencyKey: `goal-0011-${state.toLowerCase()}`,
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      expectedCheckpointSequence: sequence,
+      state,
+      detail: state === "RETRYABLE_WALL" ? "HERMES_CYCLE_FAILED" : null,
+      metadata,
+    })
+    sequence = checkpoint.checkpointSequence
+  }
+  return lease
+}
+
 describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
   it("does not reproject a released historical execution without a registered contract", async () => {
     const value = fixture(undefined, { workContractResolver: () => null })
@@ -195,6 +262,151 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       result: "ALREADY_FINALIZED", outcomeId: "77",
     })
     expect(value.projectCheckpoint).not.toHaveBeenCalled()
+  })
+
+  it("reacquires an expired queue-bound GOAL checkpoint before its first restart projection", async () => {
+    const priorOutcome = queueBoundOutcome()
+    const refreshedOutcome = {
+      ...priorOutcome,
+      queueBinding: {
+        ...priorOutcome.queueBinding,
+        expectedVersion: 4,
+        fencingToken: 3,
+      },
+    }
+    const refreshQueueOutcome = vi.fn(async () => refreshedOutcome)
+    const value = fixture(undefined, { refreshQueueOutcome })
+    const runTurn = value.client.runTurn.getMockImplementation()!
+    value.client.runTurn.mockImplementation(async (input: any) => ({
+      ...await runTurn(input),
+      threadId: "thread-goal-0011",
+    }))
+    seedGoalStyleRetryableExecution(value, priorOutcome)
+    value.advance(1_001)
+    value.projectCheckpoint.mockImplementation(async () => {
+      expect(refreshQueueOutcome).toHaveBeenCalledOnce()
+      return { workOrderId: 77, status: "blocked" }
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+
+    expect(refreshQueueOutcome).toHaveBeenCalledWith(priorOutcome)
+    expect(refreshQueueOutcome.mock.invocationCallOrder[0])
+      .toBeLessThan(value.projectCheckpoint.mock.invocationCallOrder[0])
+    expect(refreshQueueOutcome.mock.invocationCallOrder[0])
+      .toBeLessThan(value.lifecycle.ensureOwnedWorktree.mock.invocationCallOrder[0])
+    expect(refreshQueueOutcome.mock.invocationCallOrder[0])
+      .toBeLessThan(value.client.connect.mock.invocationCallOrder[0])
+    expect(value.client.resumeThread).toHaveBeenCalledWith("thread-goal-0011", expect.any(Object))
+    expect((value.projectCheckpoint.mock.calls as any)[0][0]).toMatchObject({
+      attempt: 2,
+      checkpoint: {
+        sequence: 4,
+        state: "RETRYABLE_WALL",
+        detail: "HERMES_CYCLE_FAILED",
+      },
+      executionBinding: {
+        expectedVersion: 4,
+        fencingToken: 3,
+      },
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      fencingToken: 2,
+      metadata: {
+        threadId: "thread-goal-0011",
+        outcome: { queueBinding: refreshedOutcome.queueBinding },
+      },
+    })
+  })
+
+  it("preserves fail-closed preprojection while a queue-bound local lease is fresh", async () => {
+    const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
+    const value = fixture(undefined, { refreshQueueOutcome })
+    seedGoalStyleRetryableExecution(value, queueBoundOutcome(), 60_000)
+    value.projectCheckpoint.mockRejectedValue(Object.assign(new Error("fresh projection wall"), {
+      code: "FRESH_PROJECTION_WALL",
+    }))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_PROJECTION_WALL",
+      cause: { code: "FRESH_PROJECTION_WALL" },
+    })
+
+    expect(value.projectCheckpoint).toHaveBeenCalledOnce()
+    expect(refreshQueueOutcome).not.toHaveBeenCalled()
+    expect(value.lifecycle.ensureOwnedWorktree).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, " "])(
+    "does not bypass preprojection for an expired binding with leaseHolder %p",
+    async (leaseHolder) => {
+      const outcome = queueBoundOutcome()
+      if (leaseHolder === undefined) delete (outcome.queueBinding as any).leaseHolder
+      else outcome.queueBinding.leaseHolder = leaseHolder
+      const refreshQueueOutcome = vi.fn(async (selected) => selected)
+      const value = fixture(undefined, { refreshQueueOutcome })
+      seedGoalStyleRetryableExecution(value, outcome)
+      value.advance(1_001)
+      value.projectCheckpoint.mockRejectedValue(Object.assign(new Error("binding projection wall"), {
+        code: "BINDING_PROJECTION_WALL",
+      }))
+
+      await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+        code: "HERMES_RUNTIME_PROJECTION_WALL",
+        cause: { code: "BINDING_PROJECTION_WALL" },
+      })
+
+      expect(value.projectCheckpoint).toHaveBeenCalledOnce()
+      expect(refreshQueueOutcome).not.toHaveBeenCalled()
+      expect(value.lifecycle.ensureOwnedWorktree).not.toHaveBeenCalled()
+      expect(value.client.connect).not.toHaveBeenCalled()
+      expect(value.state.read().executions["77"].fencingToken).toBe(1)
+    },
+  )
+
+  it.each([undefined, "not-a-time"])(
+    "fails closed before effects when persisted local lease expiry is %p",
+    async (expiresAt) => {
+      const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
+      const value = fixture(undefined, { refreshQueueOutcome })
+      seedGoalStyleRetryableExecution(value)
+      const statePath = path.join(value.root, "state", "state.json")
+      const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"))
+      if (expiresAt === undefined) delete persisted.executions["77"].lease.expiresAt
+      else persisted.executions["77"].lease.expiresAt = expiresAt
+      fs.writeFileSync(statePath, `${JSON.stringify(persisted)}\n`)
+
+      await expect(value.orchestrator.cycle()).rejects.toBeTruthy()
+
+      expect(refreshQueueOutcome).not.toHaveBeenCalled()
+      expect(value.projectCheckpoint).not.toHaveBeenCalled()
+      expect(value.projectLease).not.toHaveBeenCalled()
+      expect(value.lifecycle.ensureOwnedWorktree).not.toHaveBeenCalled()
+      expect(value.client.connect).not.toHaveBeenCalled()
+    },
+  )
+
+  it("leaves expired durable state unchanged when canonical queue refresh walls", async () => {
+    const refreshError = Object.assign(new Error("queue binding changed"), {
+      code: "OUTCOME_QUEUE_BINDING_WALL",
+    })
+    const refreshQueueOutcome = vi.fn(async () => { throw refreshError })
+    const value = fixture(undefined, { refreshQueueOutcome })
+    seedGoalStyleRetryableExecution(value)
+    value.advance(1_001)
+    const before = value.state.read()
+
+    await expect(value.orchestrator.cycle()).rejects.toBe(refreshError)
+
+    expect(value.state.read()).toEqual(before)
+    expect(value.projectCheckpoint).not.toHaveBeenCalled()
+    expect(value.projectLease).not.toHaveBeenCalled()
+    expect(value.lifecycle.ensureOwnedWorktree).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
   })
 
   it("projects the reviewed contract before the first checkpoint and prompts with its exact validators", async () => {

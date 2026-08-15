@@ -250,6 +250,39 @@ function queueSettlementContext(outcome) {
   return outcome?.queueBinding ? { outcome } : {}
 }
 
+function hasDurableQueueBinding(binding) {
+  return binding !== null
+    && typeof binding === "object"
+    && [
+      binding.userId,
+      binding.outcomeKey,
+      binding.executionBinding,
+      binding.leaseToken,
+      binding.leaseHolder,
+      binding.acquisitionKey,
+    ].every((value) => typeof value === "string" && value.trim().length > 0)
+    && Number.isSafeInteger(binding.expectedVersion)
+    && binding.expectedVersion >= 0
+    && Number.isSafeInteger(binding.fencingToken)
+    && binding.fencingToken > 0
+    && (binding.activeWorkOrderId === undefined
+      || (Number.isSafeInteger(binding.activeWorkOrderId) && binding.activeWorkOrderId > 0))
+}
+
+function shouldRefreshExpiredBindingBeforeProjection(execution, observedAt) {
+  if (!hasDurableQueueBinding(execution?.metadata?.outcome?.queueBinding)) return false
+  const expiresAt = execution?.lease?.expiresAt
+  const expiresAtMs = typeof expiresAt === "string" && expiresAt.trim().length > 0
+    ? Date.parse(expiresAt)
+    : Number.NaN
+  if (!Number.isFinite(expiresAtMs)) {
+    throw Object.assign(new Error("Durable queue-bound execution has no valid local lease expiry"), {
+      code: "HERMES_EXECUTION_STATE_WALL",
+    })
+  }
+  return execution?.lease?.status !== "RELEASED" && expiresAtMs <= observedAt.getTime()
+}
+
 export function assertChangedPathsAllowed(paths, reservations) {
   const blocked = paths.filter((changedPath) => !allowedPath(changedPath.replace(/\\/g, "/"), reservations))
   if (blocked.length > 0) {
@@ -1049,10 +1082,12 @@ export function createHermesOrchestrator(options = {}) {
         code: "HERMES_EXECUTION_CONCURRENCY_WALL",
       })
     }
+    const initialProjectionObservedAt = now()
     for (const execution of Object.values(initialized.executions)) {
       if (execution?.metadata?.outcome
         && String(execution.metadata.outcome.id) === String(execution.outcomeId)
         && execution?.lease?.status !== "RELEASED") {
+        if (shouldRefreshExpiredBindingBeforeProjection(execution, initialProjectionObservedAt)) continue
         await projectCurrentExecution(execution.outcomeId)
         await projectCurrentLease(execution.outcomeId)
       }
