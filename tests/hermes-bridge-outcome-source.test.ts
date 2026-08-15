@@ -7,7 +7,7 @@ import {
   deferProviderOutcome,
   NATIVE_PROVIDER_RETRY_STATE,
   OUTCOME_SELECTION_SQL,
-  projectOutcomeRuntimeCheckpoint,
+  projectOutcomeRuntimeCheckpoint as projectOutcomeRuntimeCheckpointRaw,
   projectOutcomeRuntimeLease,
   readApprovedOwnerDecision,
   readValidationInfrastructureRecovery,
@@ -26,6 +26,93 @@ import {
   PRIMARY_DECISION_OWNER_EMAIL,
   primaryDecisionRequestDigest,
 } from "@/scripts/hermes-bridge/primary-decision-provenance.mjs"
+import {
+  HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
+  HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+  HERMES_WORK_CONTRACT_VERSION,
+} from "@/scripts/hermes-bridge/work-contract.mjs"
+
+const runtimeWorkContract = Object.freeze({
+  id: HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+  digest: HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
+  allowedFiles: Object.freeze([
+    "components/workbench/workbench-shell.tsx",
+    "tests/outcome-execution-control-rendered.test.tsx",
+  ]),
+  validators: Object.freeze([
+    "npx vitest run tests/outcome-execution-control-rendered.test.tsx",
+    "npm run lint",
+    "npm run build",
+  ]),
+})
+const runtimeExecutionBinding = Object.freeze({
+  userId: "owner",
+  outcomeKey: "goal:GOAL-0004",
+  expectedVersion: 2,
+  executionBinding: "execution-binding-4",
+  leaseToken: "lease-token-4",
+  leaseHolder: "hermes-runtime-4",
+  fencingToken: 2,
+})
+
+function projectOutcomeRuntimeCheckpoint(input: Record<string, any>) {
+  const query = input.query
+  return projectOutcomeRuntimeCheckpointRaw({
+    ...input,
+    workContract: runtimeWorkContract,
+    executionBinding: runtimeExecutionBinding,
+    query: query && (async (sql: string, values?: unknown[]) => {
+      if (/FROM goal AS contract_goal/.test(sql)) {
+        return { rows: [{
+          goalId: 4,
+          userId: runtimeExecutionBinding.userId,
+          goalRef: "GOAL-0004",
+          goalLane: "ui",
+          outcomeKey: runtimeExecutionBinding.outcomeKey,
+          version: runtimeExecutionBinding.expectedVersion,
+          executionBinding: runtimeExecutionBinding.executionBinding,
+          leaseToken: runtimeExecutionBinding.leaseToken,
+          leaseHolder: runtimeExecutionBinding.leaseHolder,
+          fencingToken: runtimeExecutionBinding.fencingToken,
+          activeWorkOrderId: null,
+          workContract: {
+            version: HERMES_WORK_CONTRACT_VERSION,
+            repository: "bsvalues/terragroq",
+            lane: "ui",
+            id: runtimeWorkContract.id,
+            digest: runtimeWorkContract.digest,
+            reservations: runtimeWorkContract.allowedFiles,
+            validationCommands: [
+              { command: "npx", args: ["vitest", "run", "tests/outcome-execution-control-rendered.test.tsx"] },
+              { command: "npm", args: ["run", "lint"] },
+              { command: "npm", args: ["run", "build"] },
+            ],
+          },
+        }] }
+      }
+      const result = await query(sql, values)
+      if (/SELECT wo\.id, wo\."userId" AS "userId", wo\.ref/.test(sql)) {
+        return {
+          ...result,
+          rows: result.rows?.map((entry: object) => ({
+            userId: runtimeExecutionBinding.userId,
+            ref: "WO-HERMES-OUTCOME-4",
+            goal: "GOAL-0004",
+            lane: "ui",
+            status: "active",
+            latestCheckpointState: null,
+            assignee: "hermes-codex-bridge",
+            agent: "codex",
+            allowedFiles: runtimeWorkContract.allowedFiles,
+            validators: runtimeWorkContract.validators,
+            ...entry,
+          })),
+        }
+      }
+      return result
+    }),
+  })
+}
 
 const row = { id: 4, ref: "GOAL-0004", command: "Build a WilliamOS status UI", lane: "ui", mode: "implement", risk: "low", authority: "A2_WRITE_OWN", verdict: "allow", requiresApproval: false, matchedRules: [], status: "classified" }
 const ownerDecisionPacket = {
@@ -896,14 +983,309 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })
 
     expect(query.mock.calls[2][0]).toMatch(/INSERT INTO work_order/)
+    expect(query.mock.calls[2][0]).toMatch(/"allowedFiles", validators/)
+    expect(query.mock.calls[2][1]).toEqual([
+      4, "WO-HERMES-OUTCOME-4", runtimeWorkContract.allowedFiles, runtimeWorkContract.validators,
+    ])
     expect(query.mock.calls[2][0]).toMatch(/NOT EXISTS/)
     expect(query.mock.calls[4][0]).toMatch(/INSERT INTO governance_event/)
     expect(query.mock.calls[4][0]).toMatch(/metadata->>'idempotencyKey'/)
     expect(query.mock.calls[4][1][3]).toContain('"attempt":2')
     expect(query.mock.calls[4][1][3]).toContain('"checkpointSequence":7')
+    expect(query.mock.calls[4][1][3]).not.toContain('"workContractId"')
     expect(query.mock.calls[5][1]).toEqual([
       42, "active", null, "a".repeat(40), ["pull-request:#448", `commit:${"a".repeat(40)}`], 2, 7, false,
     ])
+  })
+
+  it.each([
+    ["missing", []],
+    ["duplicate", [{}, {}]],
+    ["TerraFusion project membership", []],
+    ["ambiguous root membership", []],
+    ["grant blocking outcome execution", []],
+  ])("leaves Work Order arrays untouched when the canonical authorization receipt is %s", async (
+    _label,
+    authorizationRows,
+  ) => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: authorizationRows })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query,
+      outcomeId: 4,
+      attempt: 2,
+      workContract: runtimeWorkContract,
+      executionBinding: runtimeExecutionBinding,
+      checkpoint: { sequence: 0, state: "LEASED" },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+    const authorizationSql = query.mock.calls[2][0]
+    expect(authorizationSql).toMatch(/operation = 'workbench_execution\.authorize'/)
+    expect(authorizationSql).toMatch(/"resultBinding"->>'grantRef' = contract_queue\."authorityGrantRef"/)
+    expect(authorizationSql).toMatch(/"resultBinding"->>'decisionId' = contract_queue\."approvalDecisionId"::text/)
+    expect(authorizationSql).toMatch(/LIMIT 2/)
+    expect(authorizationSql).toMatch(/FOR UPDATE OF contract_goal, contract_queue/)
+    expect(authorizationSql).toMatch(/JOIN "workbench_thread_source" AS contract_root/)
+    expect(authorizationSql).toMatch(/contract_project\.lifecycle = 'active'/)
+    expect(authorizationSql).toMatch(/contract_repo\."canonicalIdentity" = 'bsvalues\/terragroq'/)
+    expect(authorizationSql).toMatch(/SELECT count\(\*\) = 1[\s\S]+duplicate_contract_root/)
+    expect(authorizationSql).toMatch(/SELECT count\(\*\) = 1[\s\S]+duplicate_primary_repo/)
+    expect(authorizationSql).toMatch(/unnest\(contract_grant\."blockedActions"\)/)
+    expect(query.mock.calls[2][1].slice(-3)).toEqual([
+      HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+      HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
+      HERMES_WORK_CONTRACT_VERSION,
+    ])
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO work_order|UPDATE work_order/.test(sql))).toBe(false)
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it.each([
+    ["version", { version: 99 }],
+    ["execution binding", { executionBinding: "changed-binding" }],
+    ["lease token", { leaseToken: "changed-token" }],
+    ["lease holder", { leaseHolder: "changed-holder" }],
+  ])("rejects a live authorization whose %s changed under the acquired fence", async (
+    _label,
+    drift,
+  ) => {
+    const authorization = {
+      goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "ui",
+      outcomeKey: runtimeExecutionBinding.outcomeKey,
+      version: runtimeExecutionBinding.expectedVersion,
+      executionBinding: runtimeExecutionBinding.executionBinding,
+      leaseToken: runtimeExecutionBinding.leaseToken,
+      leaseHolder: runtimeExecutionBinding.leaseHolder,
+      fencingToken: runtimeExecutionBinding.fencingToken,
+      activeWorkOrderId: null,
+      workContract: {
+        version: HERMES_WORK_CONTRACT_VERSION, repository: "bsvalues/terragroq", lane: "ui",
+        id: runtimeWorkContract.id, digest: runtimeWorkContract.digest,
+        reservations: runtimeWorkContract.allowedFiles,
+        validationCommands: [
+          { command: "npx", args: ["vitest", "run", "tests/outcome-execution-control-rendered.test.tsx"] },
+          { command: "npm", args: ["run", "lint"] },
+          { command: "npm", args: ["run", "build"] },
+        ],
+      },
+      ...drift,
+    }
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [authorization] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query, outcomeId: 4, attempt: 2, workContract: runtimeWorkContract,
+      executionBinding: runtimeExecutionBinding,
+      checkpoint: { sequence: 0, state: "LEASED" },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO work_order|UPDATE work_order/.test(sql))).toBe(false)
+  })
+
+  it.each([
+    ["lane", { lane: "read_model" }],
+    ["repository", { repository: "TerraFusion" }],
+    ["version", { version: "forged.v1" }],
+  ])("rejects receipt work-contract %s drift before mutation", async (_label, contractDrift) => {
+    const authorization = {
+      goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "ui",
+      outcomeKey: runtimeExecutionBinding.outcomeKey,
+      version: runtimeExecutionBinding.expectedVersion,
+      executionBinding: runtimeExecutionBinding.executionBinding,
+      leaseToken: runtimeExecutionBinding.leaseToken,
+      leaseHolder: runtimeExecutionBinding.leaseHolder,
+      fencingToken: runtimeExecutionBinding.fencingToken,
+      activeWorkOrderId: null,
+      workContract: {
+        version: "hermes-work-contract.v1", lane: "ui", repository: "bsvalues/terragroq",
+        id: runtimeWorkContract.id, digest: runtimeWorkContract.digest,
+        reservations: runtimeWorkContract.allowedFiles,
+        validationCommands: [
+          { command: "npx", args: ["vitest", "run", "tests/outcome-execution-control-rendered.test.tsx"] },
+          { command: "npm", args: ["run", "lint"] },
+          { command: "npm", args: ["run", "build"] },
+        ],
+        ...contractDrift,
+      },
+    }
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [authorization] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query, outcomeId: 4, attempt: 2, workContract: runtimeWorkContract,
+      executionBinding: runtimeExecutionBinding,
+      checkpoint: { sequence: 0, state: "LEASED" },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO work_order|UPDATE work_order/.test(sql))).toBe(false)
+  })
+
+  it("uses the locked database clock to reject an expired same-fence lease", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query, outcomeId: 4, attempt: 2, workContract: runtimeWorkContract,
+      executionBinding: runtimeExecutionBinding,
+      checkpoint: { sequence: 0, state: "LEASED" },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+    expect(query.mock.calls[2][0]).toMatch(/"leaseExpiresAt" > clock_timestamp\(\)/)
+    expect(query.mock.calls[2][0]).toMatch(/"lifecycleState" = 'active'/)
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO work_order|UPDATE work_order/.test(sql))).toBe(false)
+  })
+
+  it("rejects identity drift before empty-array backfill", async () => {
+    const authorization = {
+      goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "ui",
+      outcomeKey: runtimeExecutionBinding.outcomeKey, fencingToken: 2, activeWorkOrderId: 42,
+      version: runtimeExecutionBinding.expectedVersion,
+      executionBinding: runtimeExecutionBinding.executionBinding,
+      leaseToken: runtimeExecutionBinding.leaseToken,
+      leaseHolder: runtimeExecutionBinding.leaseHolder,
+      workContract: {
+        version: HERMES_WORK_CONTRACT_VERSION, repository: "bsvalues/terragroq", lane: "ui",
+        id: runtimeWorkContract.id, digest: runtimeWorkContract.digest,
+        reservations: runtimeWorkContract.allowedFiles,
+        validationCommands: [
+          { command: "npx", args: ["vitest", "run", "tests/outcome-execution-control-rendered.test.tsx"] },
+          { command: "npm", args: ["run", "lint"] },
+          { command: "npm", args: ["run", "build"] },
+        ],
+      },
+    }
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [authorization] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 42, userId: "owner", ref: "WO-HERMES-OUTCOME-4", goal: "FORGED",
+        lane: "ui", status: "active", assignee: "hermes-codex-bridge", agent: "codex",
+        allowedFiles: [], validators: [],
+      }] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query, outcomeId: 4, attempt: 2, workContract: runtimeWorkContract,
+      executionBinding: runtimeExecutionBinding,
+      checkpoint: { sequence: 0, state: "LEASED" },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_IDENTITY_WALL" })
+    expect(query.mock.calls.some(([sql]) => /SET "allowedFiles"/.test(sql))).toBe(false)
+  })
+
+  it.each([
+    ["tenant", { userId: "foreign" }, {}],
+    ["reference", { ref: "WO-FORGED" }, {}],
+    ["goal", { goal: "FORGED" }, {}],
+    ["lane", { lane: "read_model" }, {}],
+    ["status", { status: "closed" }, {}],
+    ["assignee", { assignee: "other" }, {}],
+    ["agent", { agent: "other" }, {}],
+    ["bound Work Order", {}, { activeWorkOrderId: 99 }],
+  ])("rejects %s Work Order identity drift even when both arrays already match", async (
+    _label,
+    workOrderDrift,
+    authorizationDrift,
+  ) => {
+    const authorization = {
+      goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "ui",
+      outcomeKey: runtimeExecutionBinding.outcomeKey, fencingToken: 2, activeWorkOrderId: 42,
+      version: runtimeExecutionBinding.expectedVersion,
+      executionBinding: runtimeExecutionBinding.executionBinding,
+      leaseToken: runtimeExecutionBinding.leaseToken,
+      leaseHolder: runtimeExecutionBinding.leaseHolder,
+      workContract: {
+        version: HERMES_WORK_CONTRACT_VERSION, repository: "bsvalues/terragroq", lane: "ui",
+        id: runtimeWorkContract.id, digest: runtimeWorkContract.digest,
+        reservations: runtimeWorkContract.allowedFiles,
+        validationCommands: [
+          { command: "npx", args: ["vitest", "run", "tests/outcome-execution-control-rendered.test.tsx"] },
+          { command: "npm", args: ["run", "lint"] },
+          { command: "npm", args: ["run", "build"] },
+        ],
+      },
+      ...authorizationDrift,
+    }
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [authorization] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 42, userId: "owner", ref: "WO-HERMES-OUTCOME-4", goal: "FORGED",
+        lane: "ui", status: "active", assignee: "hermes-codex-bridge", agent: "codex",
+        allowedFiles: runtimeWorkContract.allowedFiles, validators: runtimeWorkContract.validators,
+        ...workOrderDrift,
+      }] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query, outcomeId: 4, attempt: 2, workContract: runtimeWorkContract,
+      executionBinding: runtimeExecutionBinding,
+      checkpoint: { sequence: 0, state: "LEASED" },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_IDENTITY_WALL" })
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event/.test(sql))).toBe(false)
+  })
+
+  it("backfills only a deterministic Work Order whose contract arrays are both empty", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 42, userId: "owner", ref: "WO-HERMES-OUTCOME-4", allowedFiles: [], validators: [],
+        goal: "GOAL-0004", lane: "ui", status: "active",
+        assignee: "hermes-codex-bridge", agent: "codex",
+      }] })
+      .mockResolvedValueOnce({ rows: [{
+        allowedFiles: runtimeWorkContract.allowedFiles,
+        validators: runtimeWorkContract.validators,
+      }] })
+      .mockResolvedValueOnce({ rows: [{ id: 91 }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query, outcomeId: 4, attempt: 1, checkpoint: { sequence: 0, state: "LEASED" },
+    })).resolves.toMatchObject({ workOrderId: 42 })
+
+    expect(query.mock.calls[4][0]).toMatch(/cardinality\(COALESCE\("allowedFiles"/)
+    expect(query.mock.calls[4][0]).toMatch(/cardinality\(COALESCE\(validators/)
+    expect(query.mock.calls[4][1]).toEqual([
+      42, "owner", runtimeWorkContract.allowedFiles, runtimeWorkContract.validators,
+    ])
+  })
+
+  it.each([
+    ["partial", runtimeWorkContract.allowedFiles, []],
+    ["mismatched", ["components/unreviewed.tsx"], runtimeWorkContract.validators],
+  ])("fails closed when an existing deterministic Work Order has a %s contract", async (
+    _label, allowedFiles, validators,
+  ) => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{
+        id: 42, userId: "owner", ref: "WO-HERMES-OUTCOME-4", allowedFiles, validators,
+      }] })
+      .mockResolvedValueOnce({ rows: [] })
+
+    await expect(projectOutcomeRuntimeCheckpoint({
+      query, outcomeId: 4, attempt: 1, checkpoint: { sequence: 0, state: "LEASED" },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_CONTRACT_WALL" })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event/.test(sql))).toBe(false)
   })
 
   it("clears a stale projected commit reference for typed host-validation recovery", async () => {

@@ -367,6 +367,60 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
   )
 `
 
+function exactWorkContractReceiptPredicate(alias) {
+  return `
+    ${alias}."userId" = q."userId"
+    AND ${alias}."outcomeKey" = q."outcomeKey"
+    AND ${alias}.operation = 'workbench_execution.authorize'
+    AND ${alias}."requestBinding"->>'confirmation' = 'START_WORK'
+    AND ${alias}."requestBinding"->>'outcomeKey' = q."outcomeKey"
+    AND ${alias}."resultBinding"->>'grantRef' = q."authorityGrantRef"
+    AND ${alias}."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
+    AND ${alias}."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
+    AND ${alias}."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}'
+  `
+}
+
+const EXACT_PROJECTED_WORK_CONTRACT_PREDICATE = `
+  ${exactWorkContractReceiptPredicate("work_contract_receipt")}
+  AND (
+    SELECT count(*) = 1
+    FROM "outcome_queue_mutation_receipt" AS duplicate_work_contract_receipt
+    WHERE ${exactWorkContractReceiptPredicate("duplicate_work_contract_receipt")}
+  )
+  AND cardinality(projected_work."allowedFiles") > 0
+  AND projected_work."allowedFiles" = ARRAY(
+    SELECT reservation.value
+    FROM jsonb_array_elements_text(
+      work_contract_receipt."resultBinding"->'workContract'->'reservations'
+    ) WITH ORDINALITY AS reservation(value, position)
+    ORDER BY reservation.position
+  )
+  AND cardinality(projected_work.validators) > 0
+  AND projected_work.validators = ARRAY(
+    SELECT concat_ws(
+      ' ',
+      validation_command.value->>'command',
+      (
+        SELECT string_agg(validation_argument.value, ' ' ORDER BY validation_argument.position)
+        FROM jsonb_array_elements_text(
+          COALESCE(validation_command.value->'args', '[]'::jsonb)
+        ) WITH ORDINALITY AS validation_argument(value, position)
+      )
+    )
+    FROM jsonb_array_elements(
+      work_contract_receipt."resultBinding"->'workContract'->'validationCommands'
+    ) WITH ORDINALITY AS validation_command(value, position)
+    ORDER BY validation_command.position
+  )
+  AND projected_work.lane = work_contract_receipt."resultBinding"->'workContract'->>'lane'
+  AND projected_work.assignee = 'hermes-codex-bridge'
+  AND projected_work.agent = 'codex'
+  AND q."leaseHolder" IS NOT NULL
+  AND btrim(q."leaseHolder") <> ''
+  AND q."leaseHolder" = $EXPECTED_LEASE_HOLDER
+`
+
 const ELIGIBILITY_PREDICATE = `
   q."userId" = $2
   AND ${LIVE_APPROVAL_PREDICATE}
@@ -1638,7 +1692,8 @@ RETURNING ${QUEUE_COLUMNS}
 UPDATE "outcome_queue_item" AS q
 SET "activeWorkOrderId" = $7,
     "updatedAt" = $8::timestamptz
-FROM work_order AS projected_work
+FROM "outcome_queue_mutation_receipt" AS work_contract_receipt
+JOIN work_order AS projected_work ON projected_work.id = $7
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
   AND q."lifecycleState" = 'active'
@@ -1656,6 +1711,7 @@ WHERE q."userId" = $1
     )}
   AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
   AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$8::timestamptz")}
+  AND ${EXACT_PROJECTED_WORK_CONTRACT_PREDICATE.replaceAll("$EXPECTED_LEASE_HOLDER", "$9")}
   AND projected_work.id = $7
   AND projected_work."userId" = q."userId"
   AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
@@ -1934,7 +1990,9 @@ FOR UPDATE OF q
 `,
   verifyBoundWorkOrder: `
 SELECT ${QUEUE_COLUMNS}
-FROM "outcome_queue_item" AS q
+FROM "outcome_queue_mutation_receipt" AS work_contract_receipt
+JOIN "outcome_queue_item" AS q
+  ON work_contract_receipt."userId" = q."userId"
 JOIN work_order AS projected_work
   ON projected_work.id = q."activeWorkOrderId"
 WHERE q."userId" = $1
@@ -1952,6 +2010,7 @@ WHERE q."userId" = $1
     .replaceAll("$1::timestamptz", "$9::timestamptz")}
   AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
   AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
+  AND ${EXACT_PROJECTED_WORK_CONTRACT_PREDICATE.replaceAll("$EXPECTED_LEASE_HOLDER", "$10")}
   AND projected_work."userId" = q."userId"
   AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
   AND projected_work.goal = q."goalRef"
@@ -4105,6 +4164,7 @@ export async function bindOutcomeQueueWorkOrder({
   outcomeKey,
   expectedVersion,
   executionBinding,
+  leaseHolder,
   leaseToken,
   fencingToken,
   activeWorkOrderId,
@@ -4114,6 +4174,7 @@ export async function bindOutcomeQueueWorkOrder({
   const key = nonempty(outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
   const version = integer(expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
   const binding = nonempty(executionBinding, "OUTCOME_QUEUE_EXECUTION_BINDING_INVALID")
+  const holder = nonempty(leaseHolder, "OUTCOME_QUEUE_LEASE_HOLDER_INVALID")
   const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
   const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
   const workOrderId = integer(activeWorkOrderId, "OUTCOME_QUEUE_WORK_ORDER_ID_INVALID", { minimum: 1 })
@@ -4129,6 +4190,7 @@ export async function bindOutcomeQueueWorkOrder({
       fence,
       workOrderId,
       at,
+      holder,
     ])
     if (result?.rows?.length !== 1) fail("OUTCOME_QUEUE_STALE_FENCE")
     return result.rows[0]
@@ -4144,6 +4206,7 @@ export async function verifyOutcomeQueueWorkOrderBinding({
   outcomeKey,
   expectedVersion,
   executionBinding,
+  leaseHolder,
   leaseToken,
   fencingToken,
   activeWorkOrderId,
@@ -4154,6 +4217,7 @@ export async function verifyOutcomeQueueWorkOrderBinding({
   const key = nonempty(outcomeKey, "OUTCOME_QUEUE_KEY_INVALID")
   const version = integer(expectedVersion, "OUTCOME_QUEUE_VERSION_INVALID")
   const binding = nonempty(executionBinding, "OUTCOME_QUEUE_EXECUTION_BINDING_INVALID")
+  const holder = nonempty(leaseHolder, "OUTCOME_QUEUE_LEASE_HOLDER_INVALID")
   const token = nonempty(leaseToken, "OUTCOME_QUEUE_LEASE_TOKEN_INVALID")
   const fence = integer(fencingToken, "OUTCOME_QUEUE_FENCING_TOKEN_INVALID", { minimum: 1 })
   const workOrderId = integer(activeWorkOrderId, "OUTCOME_QUEUE_WORK_ORDER_ID_INVALID", { minimum: 1 })
@@ -4175,6 +4239,7 @@ export async function verifyOutcomeQueueWorkOrderBinding({
       workOrderId,
       status,
       at,
+      holder,
     ])
     if (result?.rows?.length !== 1) fail("OUTCOME_QUEUE_WORK_ORDER_BINDING_WALL")
     return result.rows[0]

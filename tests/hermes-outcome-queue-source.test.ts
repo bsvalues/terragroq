@@ -2494,6 +2494,7 @@ describe("transactional durable outcome queue source", () => {
       outcomeKey: "goal:GOAL-1000",
       expectedVersion: 4,
       executionBinding: "execution-a",
+      leaseHolder: "resident-hermes",
       leaseToken: "lease-a",
       fencingToken: 1,
       activeWorkOrderId: 472,
@@ -2501,6 +2502,7 @@ describe("transactional durable outcome queue source", () => {
     })).resolves.toEqual(bound)
     expect(query).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.bindWorkOrder, [
       userId, "goal:GOAL-1000", 4, "execution-a", "lease-a", 1, 472, now,
+      "resident-hermes",
     ])
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`q."leaseExpiresAt" > $8::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`projected_work."userId" = q."userId"`)
@@ -2514,7 +2516,56 @@ describe("transactional durable outcome queue source", () => {
     )
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
       .toContain(`live_grant."expiresAt" AT TIME ZONE 'UTC' > $8::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`FROM "outcome_queue_mutation_receipt" AS work_contract_receipt`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`count(*) = 1`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`cardinality(projected_work."allowedFiles") > 0`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`projected_work."allowedFiles" = ARRAY(`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`work_contract_receipt."resultBinding"->'workContract'->'reservations'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`cardinality(projected_work.validators) > 0`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`projected_work.validators = ARRAY(`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`work_contract_receipt."resultBinding"->'workContract'->'validationCommands'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`projected_work.lane = work_contract_receipt."resultBinding"->'workContract'->>'lane'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`projected_work.assignee = 'hermes-codex-bridge'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`projected_work.agent = 'codex'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`q."leaseHolder" IS NOT NULL`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`btrim(q."leaseHolder") <> ''`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`q."leaseHolder" = $9`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`unnest(live_grant."blockedActions")`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).not.toContain("$1::timestamptz")
+  })
+
+  it("fails closed when the projected Work Order deterministic identity drifts at bind", async () => {
+    const query = vi.fn(async () => ({ rows: [] }))
+
+    await expect(bindOutcomeQueueWorkOrder({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 4,
+      executionBinding: "execution-a",
+      leaseHolder: "different-resident",
+      leaseToken: "lease-a",
+      fencingToken: 1,
+      activeWorkOrderId: 472,
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_STALE_FENCE" })
+    expect(query).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.bindWorkOrder, [
+      userId, "goal:GOAL-1000", 4, "execution-a", "lease-a", 1, 472, now,
+      "different-resident",
+    ])
   })
 
   it("resumes a blocked queue item only through its exact accepted owner decision", async () => {
@@ -2958,6 +3009,7 @@ describe("transactional durable outcome queue source", () => {
       outcomeKey: "goal:GOAL-1000",
       expectedVersion: 1,
       executionBinding: "execution-a",
+      leaseHolder: "resident-hermes",
       leaseToken: "lease-a",
       fencingToken: 1,
       activeWorkOrderId: 472,
@@ -2974,11 +3026,54 @@ describe("transactional durable outcome queue source", () => {
       472,
       "review",
       now,
+      "resident-hermes",
     ])
     expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
       .toContain(`projected_work.status = $8`)
     expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
       .toContain(`q."leaseExpiresAt" > $9::timestamptz`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`FROM "outcome_queue_mutation_receipt" AS work_contract_receipt`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`count(*) = 1`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`cardinality(projected_work."allowedFiles") > 0`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`projected_work."allowedFiles" = ARRAY(`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`cardinality(projected_work.validators) > 0`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`projected_work.validators = ARRAY(`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`projected_work.lane = work_contract_receipt."resultBinding"->'workContract'->>'lane'`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`projected_work.assignee = 'hermes-codex-bridge'`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`projected_work.agent = 'codex'`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`q."leaseHolder" IS NOT NULL`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder)
+      .toContain(`btrim(q."leaseHolder") <> ''`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder).toContain(`q."leaseHolder" = $10`)
+    expect(OUTCOME_QUEUE_SQL.verifyBoundWorkOrder).toContain(`unnest(live_grant."blockedActions")`)
+  })
+
+  it("fails closed when the projected Work Order deterministic identity drifts during reverify", async () => {
+    const query = vi.fn(async () => ({ rows: [] }))
+
+    await expect(verifyOutcomeQueueWorkOrderBinding({
+      query,
+      userId,
+      outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 4,
+      executionBinding: "execution-a",
+      leaseHolder: "different-resident",
+      leaseToken: "lease-a",
+      fencingToken: 1,
+      activeWorkOrderId: 472,
+      expectedWorkOrderStatus: "active",
+      now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_WORK_ORDER_BINDING_WALL" })
   })
 
   it("exact-replays a committed owner-decision resume with live authority and its fresh fence", async () => {

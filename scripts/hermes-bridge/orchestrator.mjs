@@ -94,11 +94,6 @@ export const DEFAULT_VALIDATION_COMMANDS = Object.freeze([
   }),
 ])
 
-export const DEFAULT_VALIDATORS = Object.freeze([
-  "npx vitest run focused changed tests",
-  ...DEFAULT_VALIDATION_COMMANDS.map((entry) => `${entry.command} ${entry.args.join(" ")}`),
-])
-
 const FORBIDDEN_CHANGED_PATH = /^(?:\.obsidian\/|scripts\/runtime-operator\/|scripts\/local\/williamos-codex-exec\.ps1$|lib\/auth|app\/api\/auth|lib\/db\/schema\.ts$|drizzle\/)/i
 
 function readControl(pathname, fallback = "") {
@@ -274,6 +269,21 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
     })
   }
   return contract
+}
+
+function projectedWorkContract(outcome, resolver) {
+  const contract = requireHermesWorkContract(outcome, resolver)
+  return {
+    contract,
+    projection: {
+      id: contract.id,
+      digest: contract.digest,
+      allowedFiles: [...contract.reservations],
+      validators: contract.validationCommands.map(({ command, args }) => (
+        `${command} ${args.join(" ")}`
+      )),
+    },
+  }
 }
 
 export function createHermesOrchestrator(options = {}) {
@@ -539,15 +549,35 @@ export function createHermesOrchestrator(options = {}) {
         code: "HERMES_RUNTIME_PROJECTION_STATE_WALL",
       })
     }
+    const { projection: workContract } = projectedWorkContract(
+      execution.metadata?.outcome,
+      workContractResolver,
+    )
     try {
       return await retryRuntimeProjection(() => projectCheckpoint({
         outcomeId: Number(outcomeId),
         attempt: execution.fencingToken,
+        workContract,
+        executionBinding: execution.metadata?.outcome?.queueBinding
+          ? {
+              userId: execution.metadata.outcome.queueBinding.userId,
+              outcomeKey: execution.metadata.outcome.queueBinding.outcomeKey,
+              expectedVersion: execution.metadata.outcome.queueBinding.expectedVersion,
+              executionBinding: execution.metadata.outcome.queueBinding.executionBinding,
+              leaseToken: execution.metadata.outcome.queueBinding.leaseToken,
+              leaseHolder: execution.metadata.outcome.queueBinding.leaseHolder,
+              fencingToken: execution.metadata.outcome.queueBinding.fencingToken,
+            }
+          : null,
         checkpoint: {
           sequence: execution.checkpoint.sequence,
           state: execution.checkpoint.state,
           detail: execution.checkpoint.detail,
-          metadata: projectionMetadata(execution.metadata),
+          metadata: {
+            ...projectionMetadata(execution.metadata),
+            workContractId: workContract.id,
+            workContractDigest: workContract.digest,
+          },
         },
       }), { sleep })
     } catch (error) {
@@ -1021,7 +1051,8 @@ export function createHermesOrchestrator(options = {}) {
     }
     for (const execution of Object.values(initialized.executions)) {
       if (execution?.metadata?.outcome
-        && String(execution.metadata.outcome.id) === String(execution.outcomeId)) {
+        && String(execution.metadata.outcome.id) === String(execution.outcomeId)
+        && execution?.lease?.status !== "RELEASED") {
         await projectCurrentExecution(execution.outcomeId)
         await projectCurrentLease(execution.outcomeId)
       }
@@ -1277,7 +1308,10 @@ export function createHermesOrchestrator(options = {}) {
       return { result: "OWNER_DECISION_REQUIRED", outcomeId, nextState }
     }
     const branch = lease.metadata?.branch ?? `codex/hermes-${safeLeaf(outcomeRef(outcome))}-${outcome.id}`
-    const workContract = requireHermesWorkContract(outcome, workContractResolver)
+    const { contract: workContract, projection: projectedContract } = projectedWorkContract(
+      outcome,
+      workContractResolver,
+    )
     const reservations = workContract.reservations
     const baseSha = lease.metadata?.baseSha ?? await lifecycle.refreshOriginMain()
     const recoveryCheckpointState = current?.checkpoint?.state ?? null
@@ -1636,7 +1670,7 @@ export function createHermesOrchestrator(options = {}) {
         baseSha,
         attempt: (cp.metadata.providerRetryCount ?? 0) + 1,
         reservations,
-        validators: DEFAULT_VALIDATORS,
+        validators: projectedContract.validators,
         })
       for (let remediationRound = initialRemediationRound;
         remediationRound <= MAX_REMEDIATION_ROUNDS; remediationRound += 1) {
