@@ -123,6 +123,18 @@ function projectOutcomeRuntimeCheckpoint(input: Record<string, any>) {
   })
 }
 
+function expectContiguousPostgresWriteBindings(query: ReturnType<typeof vi.fn>) {
+  for (const [sql, values = []] of query.mock.calls) {
+    if (!/^\s*(?:INSERT|UPDATE|DELETE)\b/.test(sql)) continue
+    const indexes = [...sql.matchAll(/\$(\d+)/g)].map((match) => Number(match[1]))
+    const highest = indexes.length === 0 ? 0 : Math.max(...indexes)
+    expect([...new Set(indexes)].sort((left, right) => left - right)).toEqual(
+      Array.from({ length: highest }, (_, index) => index + 1),
+    )
+    expect(values).toHaveLength(highest)
+  }
+}
+
 const row = { id: 4, ref: "GOAL-0004", command: "Build a WilliamOS status UI", lane: "ui", mode: "implement", risk: "low", authority: "A2_WRITE_OWN", verdict: "allow", requiresApproval: false, matchedRules: [], status: "classified" }
 const ownerDecisionPacket = {
   blockedAction: "Resume the exact blocked validation.",
@@ -1003,7 +1015,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[4][1][3]).toContain('"checkpointSequence":7')
     expect(query.mock.calls[4][1][3]).not.toContain('"workContractId"')
     expect(query.mock.calls[5][1]).toEqual([
-      42, "active", null, "a".repeat(40), ["pull-request:#448", `commit:${"a".repeat(40)}`], 2, 7, false,
+      42, "active", null, "a".repeat(40), ["pull-request:#448", `commit:${"a".repeat(40)}`], 7, false,
       runtimeExecutionEpochDigest,
     ])
   })
@@ -1324,9 +1336,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })).resolves.toMatchObject({ commitRef: null })
 
     expect(query.mock.calls[4][1][3]).toContain('"headRefOid":null')
-    expect(query.mock.calls[5][0]).toMatch(/CASE WHEN \$8::boolean THEN NULL/)
+    expect(query.mock.calls[5][0]).toMatch(/CASE WHEN \$7::boolean THEN NULL/)
     expect(query.mock.calls[5][1]).toEqual([
-      42, "active", null, null, [], 3, 8, true,
+      42, "active", null, null, [], 8, true,
       runtimeExecutionEpochDigest,
     ])
   })
@@ -1604,6 +1616,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     const updateCall = query.mock.calls.find(([sql]) => /UPDATE work_order[\s\S]+SET status/.test(sql))
     expect(updateCall?.[0]).toMatch(/executionEpochDigest/)
     expect(updateCall?.[0]).not.toMatch(/metadata->>'attempt'\)::integer > /)
+    expectContiguousPostgresWriteBindings(query)
   })
 
   it("leaves a newer same-fence checkpoint untouched when an older checkpoint arrives late", async () => {
