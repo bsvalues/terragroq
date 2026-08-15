@@ -19,6 +19,7 @@ const queueItem = {
   goalRef: "GOAL-0077",
   version: 4,
   executionBinding: "execution-77",
+  leaseHolder: "resident-hermes",
   leaseToken: "lease-77",
   fencingToken: 3,
   acquisitionKey: "acquisition-77",
@@ -512,7 +513,10 @@ describe("Hermes durable outcome queue runtime", () => {
       id: 77,
       title: "Add the Runtime outcome timeline",
       command: "Show recent completed outcomes and merge evidence on Runtime.",
-      queueBinding: { outcomeKey: "outcome:home-radar" },
+      queueBinding: {
+        outcomeKey: "outcome:home-radar",
+        leaseHolder: "resident-hermes",
+      },
     })
   })
 
@@ -586,6 +590,27 @@ describe("Hermes durable outcome queue runtime", () => {
       },
     })
     expect(bindQueueWorkOrder).toHaveBeenCalledOnce()
+    expect(bindQueueWorkOrder).toHaveBeenCalledWith(expect.objectContaining({
+      leaseHolder: "resident-hermes",
+    }))
+  })
+
+  it("rejects a missing or blank persisted queue lease holder before Work Order binding", async () => {
+    const bindQueueWorkOrder = vi.fn()
+    const bridge = runtime({ bindQueueWorkOrder })
+    const outcome = {
+      ...goal,
+      queueBinding: {
+        ...queueItem,
+        leaseHolder: " ",
+        expectedVersion: queueItem.version,
+      },
+    }
+
+    await expect(bridge.bindWorkOrder(outcome, 472)).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_BINDING_WALL",
+    })
+    expect(bindQueueWorkOrder).not.toHaveBeenCalled()
   })
 
   it("accepts only the exact existing canonical Work Order binding during recovery", async () => {
@@ -614,6 +639,7 @@ describe("Hermes durable outcome queue runtime", () => {
     expect(verifyQueueWorkOrder).toHaveBeenCalledWith(expect.objectContaining({
       activeWorkOrderId: 472,
       expectedWorkOrderStatus: "review",
+      leaseHolder: "resident-hermes",
     }))
     await expect(bridge.bindWorkOrder(outcome, 473)).rejects.toMatchObject({
       code: "HERMES_OUTCOME_QUEUE_WORK_ORDER_WALL",
@@ -969,6 +995,7 @@ describe("Hermes durable outcome queue runtime", () => {
       lifecycleState: "completed",
       lifecycleReason: null,
       version: 5,
+      leaseHolder: null,
       leaseToken: null,
       terminalResult: "COMPLETE",
       terminalEvidenceId: null,
@@ -1010,6 +1037,7 @@ describe("Hermes durable outcome queue runtime", () => {
       lifecycleState: "blocked",
       lifecycleReason: "VALIDATION_FAILED",
       version: 5,
+      leaseHolder: null,
       leaseToken: null,
     }])
     const bridge = runtime({ acquire, readQueue })
@@ -1033,6 +1061,7 @@ describe("Hermes durable outcome queue runtime", () => {
       lifecycleState: "blocked",
       lifecycleReason: "NEW_AUTHORITY_REQUIRED",
       version: 5,
+      leaseHolder: null,
       leaseToken: null,
     }])
     const bridge = runtime({ acquire, readQueue })

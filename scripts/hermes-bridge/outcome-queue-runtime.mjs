@@ -89,6 +89,7 @@ function queueBinding(outcome) {
     || typeof binding.outcomeKey !== "string" || binding.outcomeKey.trim() === ""
     || !Number.isSafeInteger(binding.expectedVersion) || binding.expectedVersion < 0
     || typeof binding.executionBinding !== "string" || binding.executionBinding.trim() === ""
+    || typeof binding.leaseHolder !== "string" || binding.leaseHolder.trim() === ""
     || typeof binding.leaseToken !== "string" || binding.leaseToken.trim() === ""
     || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0
     || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === ""
@@ -247,6 +248,7 @@ function persistedBinding(item) {
     outcomeKey: item.outcomeKey,
     expectedVersion: Number(item.version),
     executionBinding: item.executionBinding,
+    leaseHolder: item.leaseHolder,
     leaseToken: item.leaseToken,
     fencingToken: Number(item.fencingToken),
     acquisitionKey: item.acquisitionKey,
@@ -323,6 +325,7 @@ function isExactLiveBinding(item, binding, activeWorkOrderId) {
     && item.lifecycleState === "active"
     && Number(item.version) === binding.expectedVersion
     && item.executionBinding === binding.executionBinding
+    && item.leaseHolder === binding.leaseHolder
     && item.leaseToken === binding.leaseToken
     && Number(item.fencingToken) === binding.fencingToken
     && item.acquisitionKey === binding.acquisitionKey

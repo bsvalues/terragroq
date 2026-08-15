@@ -153,8 +153,8 @@ function fixture(
             "tests/deleted-hermes-status.test.tsx",
           ],
       validationCommands: [
+        { command: "npx", args: ["vitest", "run", "tests/outcome-execution-control-rendered.test.tsx"], timeoutMs: 900_000 },
         { command: "npm", args: ["run", "lint"], timeoutMs: 600_000 },
-        { command: "npm", args: ["test", "--", "--run"], timeoutMs: 900_000 },
         { command: "npm", args: ["run", "build"], timeoutMs: 900_000 },
       ],
     }),
@@ -173,6 +173,60 @@ afterEach(() => {
 })
 
 describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
+  it("does not reproject a released historical execution without a registered contract", async () => {
+    const value = fixture(undefined, { workContractResolver: () => null })
+    const outcome = await value.selectOutcome()
+    value.selectOutcome.mockClear()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "historical-acquire", outcomeId: "77", holderId: "test-holder",
+      leaseDurationMs: 1000, metadata: { outcome },
+    })
+    value.state.checkpoint({
+      idempotencyKey: "historical-complete", outcomeId: "77", holderId: "test-holder",
+      fencingToken: lease.fencingToken, expectedCheckpointSequence: 0,
+      state: "COMPLETE", detail: "historical",
+    })
+    value.state.releaseLease({
+      idempotencyKey: "historical-release", outcomeId: "77", holderId: "test-holder",
+      fencingToken: lease.fencingToken,
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "ALREADY_FINALIZED", outcomeId: "77",
+    })
+    expect(value.projectCheckpoint).not.toHaveBeenCalled()
+  })
+
+  it("projects the reviewed contract before the first checkpoint and prompts with its exact validators", async () => {
+    const value = fixture()
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+
+    expect((value.projectCheckpoint.mock.calls as any)[0]?.[0]).toMatchObject({
+      workContract: {
+        id: "orchestrator-fixture",
+        digest: "f".repeat(64),
+        allowedFiles: [
+          "components/hermes/live-status.tsx",
+          "tests/hermes-live-status.test.tsx",
+          "tests/deleted-hermes-status.test.tsx",
+        ],
+        validators: [
+          "npx vitest run tests/outcome-execution-control-rendered.test.tsx",
+          "npm run lint",
+          "npm run build",
+        ],
+      },
+      checkpoint: { metadata: {
+        workContractId: "orchestrator-fixture",
+        workContractDigest: "f".repeat(64),
+      } },
+    })
+    const prompt = (value.client.runTurn.mock.calls as any)[0]?.[0].prompt
+    expect(prompt).toContain("npx vitest run tests/outcome-execution-control-rendered.test.tsx")
+    expect(prompt).not.toContain("npx vitest run focused changed tests")
+  })
+
   it("retries only bounded transient projection transport failures", async () => {
     const operation = vi.fn()
       .mockRejectedValueOnce(Object.assign(new Error("dns"), { code: "ENOTFOUND" }))
@@ -1563,6 +1617,21 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.projectCheckpoint).toHaveBeenCalledWith({
       outcomeId: 77,
       attempt: lease.fencingToken,
+      executionBinding: null,
+      workContract: {
+        id: "orchestrator-fixture",
+        digest: "f".repeat(64),
+        allowedFiles: [
+          "components/hermes/live-status.tsx",
+          "tests/hermes-live-status.test.tsx",
+          "tests/deleted-hermes-status.test.tsx",
+        ],
+        validators: [
+          "npx vitest run tests/outcome-execution-control-rendered.test.tsx",
+          "npm run lint",
+          "npm run build",
+        ],
+      },
       checkpoint: {
         sequence: 3,
         state: "POST_MERGE_CLEANUP_RECOVERED",
@@ -1572,6 +1641,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
           headRefOid: "c".repeat(40),
           mergeSha: "b".repeat(40),
           terminalCleanupRecoveryProofDigest: "d".repeat(64),
+          workContractId: "orchestrator-fixture",
+          workContractDigest: "f".repeat(64),
         },
       },
     })
@@ -2447,8 +2518,10 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     ])
 
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
-    const commands = value.lifecycle.runValidationCommands.mock.calls[0][0].commands
-    expect(commands).not.toContainEqual(expect.objectContaining({ command: "npx" }))
+    const commands = (value.lifecycle.runValidationCommands.mock.calls as any)[0][0].commands
+    expect(commands.flatMap(({ args }: { args: string[] }) => args)).not.toContain(
+      "tests/deleted-hermes-status.test.tsx",
+    )
   })
 
   it("replays an unfinished handoff failure without redispatching its Codex thread", async () => {

@@ -3,6 +3,11 @@ import { createHash } from "node:crypto"
 import { evaluateOutcomePolicy, PROTECTED_SCOPE_LEXEMES } from "./policy.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
 import {
+  HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
+  HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+  HERMES_WORK_CONTRACT_VERSION,
+} from "./work-contract.mjs"
+import {
   assertPrimaryDecisionPacketSafety,
   assertPrimaryDecisionTextSafety,
   derivePrimaryDecisionRecommendation,
@@ -1999,6 +2004,87 @@ const REVIEW_REMEDIATION_EXHAUSTED = "REVIEW_REMEDIATION_EXHAUSTED"
 const POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED = "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
 const SENSITIVE_RUNTIME_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 
+function normalizeRuntimeWorkContract(value) {
+  const validList = (items, maxLength) => Array.isArray(items) && items.length > 0
+    && items.length <= 50
+    && items.every((item) => typeof item === "string" && item.length > 0
+      && item.length <= maxLength && !SENSITIVE_RUNTIME_EVIDENCE.test(item))
+    && new Set(items).size === items.length
+  if (!value || typeof value.id !== "string" || !/^[a-z0-9][a-z0-9._-]{0,119}$/i.test(value.id)
+    || typeof value.digest !== "string" || !/^[0-9a-f]{64}$/.test(value.digest)
+    || !validList(value.allowedFiles, 300) || !validList(value.validators, 500)) {
+    throw Object.assign(new Error("runtime work contract is invalid"), {
+      code: "OUTCOME_WORK_ORDER_CONTRACT_INVALID",
+    })
+  }
+  return {
+    id: value.id,
+    digest: value.digest,
+    allowedFiles: [...value.allowedFiles],
+    validators: [...value.validators],
+  }
+}
+
+function exactStringArray(actual, expected) {
+  return Array.isArray(actual) && actual.length === expected.length
+    && actual.every((item, index) => item === expected[index])
+}
+
+function normalizeRuntimeExecutionBinding(value) {
+  if (!value || typeof value.userId !== "string" || value.userId.trim() === ""
+    || typeof value.outcomeKey !== "string" || value.outcomeKey.trim() === ""
+    || !Number.isSafeInteger(value.expectedVersion) || value.expectedVersion < 0
+    || typeof value.executionBinding !== "string" || value.executionBinding.trim() === ""
+    || typeof value.leaseToken !== "string" || value.leaseToken.trim() === ""
+    || typeof value.leaseHolder !== "string" || value.leaseHolder.trim() === ""
+    || !Number.isSafeInteger(value.fencingToken) || value.fencingToken <= 0) {
+    throw Object.assign(new Error("runtime execution binding is invalid"), {
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    })
+  }
+  return {
+    userId: value.userId,
+    outcomeKey: value.outcomeKey,
+    expectedVersion: value.expectedVersion,
+    executionBinding: value.executionBinding,
+    leaseToken: value.leaseToken,
+    leaseHolder: value.leaseHolder,
+    fencingToken: value.fencingToken,
+  }
+}
+
+function validatorLabels(commands) {
+  if (!Array.isArray(commands)) return null
+  const labels = []
+  for (const command of commands) {
+    if (!command || typeof command.command !== "string" || !Array.isArray(command.args)
+      || !command.args.every((argument) => typeof argument === "string")) return null
+    labels.push(`${command.command} ${command.args.join(" ")}`)
+  }
+  return labels
+}
+
+function exactAuthorizationContract(row, workContract, executionBinding, outcomeId) {
+  const receiptContract = row?.workContract
+  return Number(row?.goalId) === outcomeId
+    && row?.userId === executionBinding.userId
+    && row?.outcomeKey === executionBinding.outcomeKey
+    && Number(row?.version) === executionBinding.expectedVersion
+    && row?.executionBinding === executionBinding.executionBinding
+    && row?.leaseToken === executionBinding.leaseToken
+    && row?.leaseHolder === executionBinding.leaseHolder
+    && Number(row?.fencingToken) === executionBinding.fencingToken
+    && receiptContract?.id === HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID
+    && receiptContract?.digest === HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST
+    && receiptContract?.version === HERMES_WORK_CONTRACT_VERSION
+    && receiptContract?.repository === "bsvalues/terragroq"
+    && receiptContract?.lane === row?.goalLane
+    && receiptContract.id === workContract.id
+    && receiptContract.digest === workContract.digest
+    && exactStringArray(receiptContract.reservations, workContract.allowedFiles)
+    && exactStringArray(validatorLabels(receiptContract.validationCommands), workContract.validators)
+}
+
 function outcomeWorkOrderRef(outcomeId) {
   return `WO-HERMES-OUTCOME-${outcomeId}`
 }
@@ -2107,6 +2193,8 @@ export async function projectOutcomeRuntimeCheckpoint({
   outcomeId,
   attempt,
   checkpoint,
+  workContract,
+  executionBinding,
 } = {}) {
   if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
     throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
@@ -2122,6 +2210,16 @@ export async function projectOutcomeRuntimeCheckpoint({
     throw Object.assign(new Error("runtime checkpoint detail is invalid"), { code: "OUTCOME_PROJECTION_CHECKPOINT_INVALID" })
   }
 
+  const normalizedWorkContract = normalizeRuntimeWorkContract(workContract)
+  const normalizedExecutionBinding = normalizeRuntimeExecutionBinding(executionBinding)
+  if ((checkpoint.metadata?.workContractId !== undefined
+      && checkpoint.metadata.workContractId !== normalizedWorkContract.id)
+    || (checkpoint.metadata?.workContractDigest !== undefined
+      && checkpoint.metadata.workContractDigest !== normalizedWorkContract.digest)) {
+    throw Object.assign(new Error("checkpoint work contract evidence conflicts"), {
+      code: "OUTCOME_WORK_ORDER_CONTRACT_INVALID",
+    })
+  }
   const ref = outcomeWorkOrderRef(outcomeId)
   const idempotencyKey = `hermes-outcome:${outcomeId}:attempt:${attempt}:checkpoint:${checkpoint.sequence}`
   const evidence = checkpointEvidence(checkpoint.metadata)
@@ -2150,12 +2248,141 @@ export async function projectOutcomeRuntimeCheckpoint({
     }
     await runQuery("BEGIN")
     await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [ref])
+    const authorizations = await runQuery(
+      `SELECT contract_goal.id AS "goalId", contract_goal."userId" AS "userId",
+         contract_goal.ref AS "goalRef", contract_goal.lane AS "goalLane",
+         contract_queue."outcomeKey" AS "outcomeKey",
+         contract_queue.version AS version,
+         contract_queue."executionBinding" AS "executionBinding",
+         contract_queue."leaseToken" AS "leaseToken",
+         contract_queue."leaseHolder" AS "leaseHolder",
+         contract_queue."fencingToken" AS "fencingToken",
+         contract_queue."activeWorkOrderId" AS "activeWorkOrderId",
+         contract_receipt."resultBinding"->'workContract' AS "workContract"
+       FROM goal AS contract_goal
+       JOIN "outcome_queue_item" AS contract_queue
+         ON contract_queue."userId" = contract_goal."userId"
+        AND contract_queue."goalId" = contract_goal.id
+       JOIN "outcome_queue_mutation_receipt" AS contract_receipt
+        ON contract_receipt."userId" = contract_queue."userId"
+        AND contract_receipt."outcomeKey" = contract_queue."outcomeKey"
+       JOIN "workbench_thread_source" AS contract_root
+         ON contract_root."userId" = contract_receipt."userId"
+        AND contract_root."sourceType" = 'outcome'
+        AND contract_root."sourceId" = contract_queue."outcomeKey"
+        AND contract_root.role = 'root'
+        AND contract_root."threadId" = contract_receipt."requestBinding"->>'threadId'
+       JOIN "workbench_thread" AS contract_thread
+         ON contract_thread."userId" = contract_root."userId"
+        AND contract_thread.id = contract_root."threadId"
+        AND contract_thread."projectId"::text = contract_receipt."requestBinding"->>'projectId'
+       JOIN project AS contract_project
+         ON contract_project."userId" = contract_thread."userId"
+        AND contract_project.id = contract_thread."projectId"
+        AND contract_project.lifecycle = 'active'
+       JOIN project_resource AS contract_repo
+         ON contract_repo."userId" = contract_project."userId"
+        AND contract_repo."projectId" = contract_project.id
+        AND contract_repo.type = 'repo'
+        AND contract_repo.relationship = 'primary-repo'
+        AND contract_repo."canonicalIdentity" = 'bsvalues/terragroq'
+       WHERE contract_goal.id = $1::integer
+         AND contract_queue."userId" = $2
+         AND contract_queue."outcomeKey" = $3
+         AND contract_queue."lifecycleState" = 'active'
+         AND contract_queue.version = $4::integer
+         AND contract_queue."executionBinding" = $5
+         AND contract_queue."leaseToken" = $6
+         AND contract_queue."leaseHolder" = $7
+         AND contract_queue."fencingToken" = $8::integer
+         AND contract_queue."leaseExpiresAt" > clock_timestamp()
+         AND contract_queue."approvalState" = 'approved'
+         AND EXISTS (
+           SELECT 1 FROM decision AS contract_approval
+           WHERE contract_approval.id = contract_queue."approvalDecisionId"
+             AND contract_approval."userId" = contract_queue."userId"
+             AND contract_approval.status = 'accepted'
+             AND contract_approval.authority = 'binding'
+             AND upper(trim(contract_approval.decision)) = 'APPROVE'
+             AND contract_approval.scope = contract_queue."outcomeKey"
+         )
+         AND contract_queue."authorityState" = 'matched'
+         AND contract_queue."authorityLevel" = 'A2_WRITE_OWN'
+         AND contract_queue."authoritySubject" = 'operator'
+         AND contract_queue."authorityAction" = 'outcome:execute'
+         AND EXISTS (
+           SELECT 1 FROM authority_grant AS contract_grant
+           WHERE contract_grant."userId" = contract_queue."userId"
+             AND contract_grant.ref = contract_queue."authorityGrantRef"
+             AND contract_grant.status = 'active'
+             AND contract_grant."revokedAt" IS NULL
+             AND contract_grant."expiresAt" IS NOT NULL
+             AND contract_grant."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp()
+             AND contract_grant."authorityLevel" = 'A2_WRITE_OWN'
+             AND contract_grant."grantedTo" = 'operator'
+             AND contract_grant.scope = contract_queue."outcomeKey"
+             AND cardinality(contract_grant."allowedActions") = 1
+             AND contract_grant."allowedActions"[1] = 'outcome:execute'
+             AND NOT EXISTS (
+               SELECT 1 FROM unnest(contract_grant."blockedActions") AS blocked(action)
+               WHERE position(lower(blocked.action) IN lower(contract_queue."authorityAction")) > 0
+             )
+             AND (contract_grant."workOrderId" IS NULL
+               OR contract_grant."workOrderId" = contract_queue."activeWorkOrderId")
+         )
+         AND contract_receipt.operation = 'workbench_execution.authorize'
+         AND contract_receipt."requestBinding"->>'confirmation' = 'START_WORK'
+         AND contract_receipt."requestBinding"->>'outcomeKey' = contract_queue."outcomeKey"
+         AND contract_receipt."resultBinding"->>'grantRef' = contract_queue."authorityGrantRef"
+         AND contract_receipt."resultBinding"->>'decisionId' = contract_queue."approvalDecisionId"::text
+         AND contract_receipt."resultBinding"->'workContract'->>'id' = $9
+         AND contract_receipt."resultBinding"->'workContract'->>'digest' = $10
+         AND contract_receipt."resultBinding"->'workContract'->>'version' = $11
+         AND contract_receipt."resultBinding"->'workContract'->>'repository' = 'bsvalues/terragroq'
+         AND contract_receipt."resultBinding"->'workContract'->>'lane' = contract_goal.lane
+         AND (
+           SELECT count(*) = 1
+           FROM "workbench_thread_source" AS duplicate_contract_root
+           WHERE duplicate_contract_root."userId" = contract_queue."userId"
+             AND duplicate_contract_root."sourceType" = 'outcome'
+             AND duplicate_contract_root."sourceId" = contract_queue."outcomeKey"
+             AND duplicate_contract_root.role = 'root'
+         )
+         AND (
+           SELECT count(*) = 1
+           FROM project_resource AS duplicate_primary_repo
+           WHERE duplicate_primary_repo."userId" = contract_project."userId"
+             AND duplicate_primary_repo."projectId" = contract_project.id
+             AND duplicate_primary_repo.type = 'repo'
+             AND duplicate_primary_repo.relationship = 'primary-repo'
+         )
+       ORDER BY contract_receipt.id
+       LIMIT 2
+       FOR UPDATE OF contract_goal, contract_queue`,
+      [outcomeId, normalizedExecutionBinding.userId, normalizedExecutionBinding.outcomeKey,
+        normalizedExecutionBinding.expectedVersion, normalizedExecutionBinding.executionBinding,
+        normalizedExecutionBinding.leaseToken, normalizedExecutionBinding.leaseHolder,
+        normalizedExecutionBinding.fencingToken,
+        HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+        HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
+        HERMES_WORK_CONTRACT_VERSION],
+    )
+    if (authorizations?.rows?.length !== 1
+      || !exactAuthorizationContract(
+        authorizations.rows[0], normalizedWorkContract, normalizedExecutionBinding, outcomeId,
+      )) {
+      throw Object.assign(new Error("Canonical Workbench execution authorization is invalid"), {
+        code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+      })
+    }
+    const authorization = authorizations.rows[0]
     await runQuery(
       `INSERT INTO work_order
-         ("userId", ref, title, description, goal, lane, status, assignee, agent, "updatedAt")
+         ("userId", ref, title, description, goal, lane, status, assignee, agent,
+           "allowedFiles", validators, "updatedAt")
        SELECT g."userId", $2, COALESCE(NULLIF(g.command, ''), 'Hermes outcome ' || g.id::text),
          'Durable runtime projection for ' || COALESCE(g.ref, 'goal-' || g.id::text),
-         g.ref, g.lane, 'active', 'hermes-codex-bridge', 'codex', NOW()
+         g.ref, g.lane, 'active', 'hermes-codex-bridge', 'codex', $3::text[], $4::text[], NOW()
        FROM goal g
        WHERE g.id = $1::integer
          AND NOT EXISTS (
@@ -2163,10 +2390,21 @@ export async function projectOutcomeRuntimeCheckpoint({
            WHERE existing."userId" = g."userId" AND existing.ref = $2
          )
        RETURNING id`,
-      [outcomeId, ref],
+      [outcomeId, ref, normalizedWorkContract.allowedFiles, normalizedWorkContract.validators],
     )
     const workOrders = await runQuery(
-      `SELECT wo.id, wo."userId" AS "userId", wo.ref
+      `SELECT wo.id, wo."userId" AS "userId", wo.ref, wo.goal, wo.lane, wo.status,
+         wo.assignee, wo.agent, wo."allowedFiles", wo.validators,
+         (
+           SELECT prior.metadata->>'checkpointState'
+           FROM governance_event AS prior
+           WHERE prior."userId" = wo."userId"
+             AND prior."entityType" = 'work_order'
+             AND prior."entityId"::text = wo.id::text
+             AND prior."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+           ORDER BY prior.id DESC
+           LIMIT 1
+         ) AS "latestCheckpointState"
        FROM work_order wo
        JOIN goal g ON g."userId" = wo."userId"
        WHERE g.id = $1::integer AND wo.ref = $2
@@ -2180,6 +2418,53 @@ export async function projectOutcomeRuntimeCheckpoint({
       })
     }
     const workOrder = workOrders.rows[0]
+    const expectedPersistedStatus = workOrder.latestCheckpointState == null
+      ? "active"
+      : projectionForCheckpoint(workOrder.latestCheckpointState).status
+    const workOrderIdentityMatches = workOrder.userId === authorization.userId
+      && workOrder.ref === ref
+      && workOrder.goal === authorization.goalRef
+      && workOrder.lane === authorization.goalLane
+      && workOrder.status === expectedPersistedStatus
+      && workOrder.assignee === "hermes-codex-bridge"
+      && workOrder.agent === "codex"
+      && (authorization.activeWorkOrderId === null
+        || Number(authorization.activeWorkOrderId) === Number(workOrder.id))
+    if (!workOrderIdentityMatches) {
+      throw Object.assign(new Error("Hermes outcome Work Order identity conflicts"), {
+        code: "OUTCOME_WORK_ORDER_IDENTITY_WALL",
+      })
+    }
+    const contractMatches = exactStringArray(
+      workOrder.allowedFiles,
+      normalizedWorkContract.allowedFiles,
+    ) && exactStringArray(workOrder.validators, normalizedWorkContract.validators)
+    if (!contractMatches) {
+      const contractEmpty = Array.isArray(workOrder.allowedFiles) && workOrder.allowedFiles.length === 0
+        && Array.isArray(workOrder.validators) && workOrder.validators.length === 0
+      if (!contractEmpty) {
+        throw Object.assign(new Error("Hermes outcome Work Order contract conflicts"), {
+          code: "OUTCOME_WORK_ORDER_CONTRACT_WALL",
+        })
+      }
+      const backfilled = await runQuery(
+        `UPDATE work_order
+         SET "allowedFiles" = $3::text[], validators = $4::text[], "updatedAt" = NOW()
+         WHERE id = $1 AND "userId" = $2
+           AND cardinality(COALESCE("allowedFiles", ARRAY[]::text[])) = 0
+           AND cardinality(COALESCE(validators, ARRAY[]::text[])) = 0
+         RETURNING "allowedFiles", validators`,
+        [workOrder.id, workOrder.userId,
+          normalizedWorkContract.allowedFiles, normalizedWorkContract.validators],
+      )
+      if (backfilled?.rows?.length !== 1
+        || !exactStringArray(backfilled.rows[0].allowedFiles, normalizedWorkContract.allowedFiles)
+        || !exactStringArray(backfilled.rows[0].validators, normalizedWorkContract.validators)) {
+        throw Object.assign(new Error("Hermes outcome Work Order contract backfill conflicted"), {
+          code: "OUTCOME_WORK_ORDER_CONTRACT_WALL",
+        })
+      }
+    }
     const eventMetadata = {
       idempotencyKey,
       outcomeId,
