@@ -1418,14 +1418,14 @@ export function createHermesOrchestrator(options = {}) {
       return workContract.validationCommands
     }
     const runDeterministicValidation = async (workingPaths) => {
-      lifecycle.ensureValidationDependencies(record)
+      await lifecycle.ensureValidationDependencies(record)
       try {
         return await lifecycle.runValidationCommands({
           ...record,
           commands: await validationCommandsFor(workingPaths),
         })
       } finally {
-        lifecycle.removeValidationDependencies(record)
+        await lifecycle.removeValidationDependencies(record)
       }
     }
     let durableHeadRefOid = lease.metadata?.headRefOid ?? null
