@@ -1,8 +1,11 @@
 # S2 — Resident-model executor adapter over the Hermes-Agent kernel
 
-**Date:** 2026-08-16 · **Status:** design approved in principle (owner: A′) — spec for review
+**Date:** 2026-08-16 · **Status:** P1 implemented on branch wo/s2-resident-executor-adapter (owner review = PR); P2 pending owner-triggered live smoke on HERMES.
 **Builds on:** S1 (`ResidentModelExecutionBackend`, commit `3558e65`), WO-WILLIAMOS-HERMES-KERNEL-V1
 (T2 doctrine), `hermes-free-dev-agent` provider (policy v1, `PILOT_AUTHORIZED`).
+
+**Ledger:** S2 P1 — resident-model executor adapter over Hermes-Agent kernel — branch
+wo/s2-resident-executor-adapter — P2 live smoke pending owner.
 
 ## 0. Decision and why
 
