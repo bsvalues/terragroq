@@ -54,7 +54,6 @@ orchestrator ──runCodexClient()──▶ ResidentModelExecutionBackend
                                          ├─ Invoker (transport) commandRunner → powershell invoke-hermes-free-dev-agent.ps1 (v2 flags)
                                          └─ OutputHarvester     last fenced ```json``` block from invoker stdout → finalText
                           Docker (HERMES): williamos-hermes-agent image (pinned) ── /workspace = owned worktree (rw)
-                                                                                     /state     = thread kernel-state (rw)
                                                                                      network    = inference-proxy only
 ```
 
@@ -81,9 +80,9 @@ runtimeRoot, commandRunner, policyPath, invokerPath, now })`. All collaborators 
   `RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE`. Fail-closed by default; flipped only by §6 P2 evidence.
 - `runTurn({threadId, prompt, turn, timeoutMs})`:
   1. PacketBuilder → packet v2 (§3.3), written to `<thread>/turns/<n>/packet.json` (0600).
-  2. Invoker runs the ps1 with `-PacketPath -PolicyPath -WorkspacePath <worktree> -StatePath
-     <thread>/kernel-state -RunId <turnId>` via `commandRunner` with `timeoutMs` (default = the
-     orchestrator's `TURN_TIMEOUT_MS`), `credentialAccess:false`.
+  2. Invoker runs the ps1 with `-PacketPath -PolicyPath -WorkspacePath <worktree> -RunId <turnId>`
+     via `commandRunner` with `timeoutMs` (default = the orchestrator's `TURN_TIMEOUT_MS`),
+     `credentialAccess:false`. (P2 adds `-StatePath` once the kernel session location is known.)
   3. Exit 0 and a `HERMES_FREE_AGENT_COMPLETE runId=<turnId> …` line required; otherwise map (§5).
   4. OutputHarvester extracts the **last** fenced ```json block from stdout, must parse and satisfy
      `HERMES_TURN_OUTPUT_SCHEMA` (structural check here; the orchestrator re-validates). Missing/
@@ -96,7 +95,7 @@ runtimeRoot, commandRunner, policyPath, invokerPath, now })`. All collaborators 
 
 ### 3.3 PacketBuilder / packet v2
 Exact fields (v2): `schemaVersion:2, workOrderId, model, prompt, maximumTurns, toolsets,
-workspaceMode:"OWNED_WORKTREE", workspacePath, statePath, runId`. `prompt` = the orchestrator's
+workspaceMode:"OWNED_WORKTREE", workspacePath, runId` (P2 adds `statePath`). `prompt` = the orchestrator's
 delivery prompt verbatim + a fixed epilogue:
 
 > Finish by printing exactly one fenced ```json block that satisfies the following JSON schema and
@@ -128,21 +127,23 @@ by construction of the epilogue ("nothing after it").
 2. `containment.canonicalRepositoryMounted: false` **unchanged** — an owned worktree of the
    runtime is not the canonical checkout; the invoker must refuse a workspace whose `git
    rev-parse --git-common-dir` resolves to the canonical repository path.
-3. `containment.agentStatePersistence: "PER_THREAD_STATE_DIR"` (was `false`): the container mounts
-   `statePath` rw at the kernel's `~/.hermes` equivalent; nothing else persists.
+3. `containment.agentStatePersistence: false` **unchanged in P1**. The pinned runner is a plain
+   `hermes chat` one-shot with agent state on tmpfs; where the kernel keeps sessions is established
+   in P2, which then adds a per-thread state mount (`PER_THREAD_STATE_DIR`) as its own reviewed
+   line. Until then `resumeThread` fails closed (item 5).
 4. `execution.promptMaxChars: 60000` (was 16000 in the invoker); remediation prompts carry findings.
 5. `execution.sessionResumeProven: false` (flipped by P2 evidence only).
 6. `execution.timeoutSeconds` unchanged (1800) — must be ≤ orchestrator turn timeout (45 min).
 7. Prompt preamble text in the invoker updated from "disposable clone of the pinned baseline" to
    "the owned WilliamOS worktree for Work Order X; change only reserved paths".
 
-Invoker v2 (`invoke-hermes-free-dev-agent.ps1`): new params `-WorkspacePath -StatePath -RunId`
-accepted **only** when policy `workspaceMode === "OWNED_WORKTREE"`; validates workspace under
-`allowedWorkspaceRoots`, not the canonical repo, no symlink components; mounts `/workspace` rw and
-`/state` rw; everything else identical (image ID pin, network membership check, one host-wide
+Invoker v2 (`invoke-hermes-free-dev-agent.ps1`): new params `-WorkspacePath -RunId` accepted
+**only** when policy `workspaceMode === "OWNED_WORKTREE"`; validates workspace under
+`allowedWorkspaceRoots`, not the canonical repo, no symlink components; mounts it as `/workspace`
+rw (via the existing `WILLIAMOS_AGENT_WORKSPACE` compose variable); everything else identical (image ID pin, network membership check, one host-wide
 lock, exact-container cleanup, quarantine marker). Image and runner are **not** rebuilt in S2 —
 the JSON-block epilogue works with the pinned runner's log output. If P2 proves the pinned runner
-cannot resume a session from `/state`, that becomes a follow-up image build (own WO), and
+cannot resume a session from a mounted state dir, that becomes a follow-up (own WO), and
 `resumeThread` stays fail-closed meanwhile.
 
 `docs/runbooks/hermes-free-dev-agent.md` gains a "v2 owned-worktree mode" section.
