@@ -11,8 +11,29 @@ describe("Execution Fabric shadow authority scope contract", () => {
     const contract = JSON.parse(fs.readFileSync(path.join(
       root, "config", "execution-fabric", "shadow-authority-scopes", "WO-EF-SHADOW-004.json",
     ), "utf8"))
-    const forgeBytes = fs.readFileSync(path.join(root, contract.agent_forge_permission.source_path))
-    const forgeSha = crypto.createHash("sha256").update(forgeBytes).digest("hex")
+    // The reviewed contract (#554, 2026-08-10) recorded source_sha256 from a CRLF checkout of the
+    // permission source; canonical git bytes are LF. The binding is to the reviewed CONTENT, so accept
+    // the digest of the reviewed source in either rendering, and require the live source to be
+    // byte-identical (LF-normalised) to what was reviewed. The sealed contract itself is not rewritten:
+    // its authority expired 2026-08-11 and the review commit is pinned by sealed evidence records.
+    const sha256 = (bytes: Buffer) => crypto.createHash("sha256").update(bytes).digest("hex")
+    const lf = (bytes: Buffer) => Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n"), "utf8")
+    const crlf = (bytes: Buffer) => Buffer.from(lf(bytes).toString("utf8").replace(/\n/g, "\r\n"), "utf8")
+    const registry = JSON.parse(fs.readFileSync(path.join(
+      root, "config", "execution-fabric", "shadow-authority-registry.json",
+    ), "utf8"))
+    const reviewedCommit = registry.entries.find((entry: { reference: string }) => (
+      entry.reference === "issue-538-phase2-shadow-004"
+    )).reviewed_commit
+    const reviewedSource = spawnSync(
+      "git", ["show", `${reviewedCommit}:${contract.agent_forge_permission.source_path}`],
+      { cwd: root, encoding: null, windowsHide: true },
+    )
+    expect(reviewedSource.status).toBe(0)
+    const reviewedBytes = Buffer.from(reviewedSource.stdout)
+    const liveBytes = fs.readFileSync(path.join(root, contract.agent_forge_permission.source_path))
+    expect(lf(liveBytes).equals(lf(reviewedBytes))).toBe(true)
+    const acceptedSourceDigests = [sha256(lf(reviewedBytes)), sha256(crlf(reviewedBytes))]
 
     expect(Object.keys(contract).sort()).toEqual([
       "activation", "agent_forge_permission", "allowed_actions", "autonomous_dispatch",
@@ -43,8 +64,8 @@ describe("Execution Fabric shadow authority scope contract", () => {
       permission_area: "LOCAL_PROOF_BY_OPERATOR",
       posture: "operator-only",
       runtime_activation: false,
-      source_sha256: forgeSha,
     })
+    expect(acceptedSourceDigests).toContain(contract.agent_forge_permission.source_sha256)
     expect(contract.forbidden_actions).toEqual(expect.arrayContaining([
       "scheduler activation",
       "autonomous dispatch",
