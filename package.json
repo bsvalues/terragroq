@@ -25,6 +25,7 @@
   "dependencies": {
     "@ai-sdk/openai-compatible": "2.0.52",
     "@ai-sdk/react": "^3.0.214",
+    "@better-auth/passkey": "^1.6.29",
     "@opentelemetry/api-logs": "^0.200.0",
     "@opentelemetry/instrumentation": "^0.200.0",
     "@opentelemetry/sdk-logs": "^0.200.0",
