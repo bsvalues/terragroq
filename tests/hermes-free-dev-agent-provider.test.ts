@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest"
 const repoRoot = path.resolve(import.meta.dirname, "..")
 const read = (relative: string) => fs.readFileSync(path.join(repoRoot, relative), "utf8")
 const policy = () => JSON.parse(read("config/execution-fabric/hermes-free-dev-agent-v1.policy.json"))
+const policyV2 = () => JSON.parse(read("config/execution-fabric/hermes-free-dev-agent-v2.policy.json"))
 
 describe("Hermes free development agent provider", () => {
   it("places execution on Hermes and keeps the canonical repository out of the container", () => {
@@ -53,5 +54,45 @@ describe("Hermes free development agent provider", () => {
     expect(script).toContain("HERMES_FREE_AGENT_QUARANTINE_WALL")
     expect(script).toContain("HERMES_FREE_AGENT_CLEANUP_WALL")
     expect(script).toContain("finally {")
+  })
+})
+
+describe("Hermes free development agent provider — v2 owned-worktree mode", () => {
+  it("keeps every v1 containment and identity pin", () => {
+    const v1 = policy(); const v2 = policyV2()
+    expect(v2.schemaVersion).toBe(2)
+    expect(v2.packetSchemaVersion).toBe(2)
+    expect(v2.workOrderId).toBe(v1.workOrderId)
+    expect(v2.providerId).toBe("hermes-agent-local-qwen-v2")
+    expect(v2.runtime).toBe(v1.runtime)
+    expect(v2.model).toEqual(v1.model)
+    expect(v2.build).toEqual(v1.build)
+    expect(v2.containment).toEqual(v1.containment)
+    expect(v2.deniedActions).toEqual(v1.deniedActions)
+    expect(v2.execution.allowedToolsets).toEqual(v1.execution.allowedToolsets)
+    expect(v2.execution.maximumTurns).toBe(v1.execution.maximumTurns)
+    expect(v2.execution.timeoutSeconds).toBe(v1.execution.timeoutSeconds)
+  })
+  it("admits only the orchestrator's owned worktrees as the run workspace", () => {
+    const v2 = policyV2()
+    expect(v2.placement).toMatchObject({
+      controlNode: "omen",
+      executionNode: "hermes-node",
+      workspaceMode: "OWNED_WORKTREE",
+      allowedWorkspaceRoots: ["C:\\Users\\bs\\.williamos\\hermes-bridge\\worktrees"],
+    })
+    expect(v2.placement.workspaceRoot).toBe(policy().placement.workspaceRoot)
+  })
+  it("raises the prompt budget for remediation prompts and keeps resume fail-closed", () => {
+    const v2 = policyV2()
+    expect(v2.execution.promptMaxChars).toBe(60000)
+    expect(v2.execution.sessionResumeProven).toBe(false)
+    expect(v2.containment.agentStatePersistence).toBe(false)
+  })
+  it("stays pilot-authorised pending independent review of the v2 mode", () => {
+    const v2 = policyV2()
+    expect(v2.promotion.status).toBe("PILOT_AUTHORIZED")
+    expect(v2.promotion.requiredEvidence).toEqual([...policy().promotion.requiredEvidence, "OWNED_WORKTREE_CONFINEMENT_PROVEN"])
+    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: null })
   })
 })
