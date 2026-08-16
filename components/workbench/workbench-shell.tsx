@@ -256,6 +256,21 @@ function Inspector({
     return true
   }) ?? []
 
+  // Roving focus follows the selection in an effect, not in a frame callback. Scheduling the focus
+  // with requestAnimationFrame made it arrive an unbounded time after the tab changed: on a loaded
+  // machine the frame can be delayed long enough that the keyboard user is left with focus on the
+  // previous tab, and it made the interaction test racy for the same reason. An effect runs
+  // immediately after the commit that rendered the new tab, so the element is guaranteed to exist
+  // and focus lands with the selection. This mirrors how pendingDomFocus already works for the
+  // Thread pane below.
+  const pendingTabFocus = useRef<WorkbenchInspectorTab | null>(null)
+  useEffect(() => {
+    const target = pendingTabFocus.current
+    if (!target || target !== tab) return
+    pendingTabFocus.current = null
+    document.getElementById(`workbench-inspector-tab-${target}`)?.focus()
+  }, [tab])
+
   function moveTab(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft" && event.key !== "Home" && event.key !== "End") return
     event.preventDefault()
@@ -265,8 +280,8 @@ function Inspector({
         ? inspectorTabs.length - 1
         : (index + (event.key === "ArrowRight" ? 1 : -1) + inspectorTabs.length) % inspectorTabs.length
     const next = inspectorTabs[nextIndex]
+    pendingTabFocus.current = next.id
     onTab(next.id)
-    window.requestAnimationFrame(() => document.getElementById(`workbench-inspector-tab-${next.id}`)?.focus())
   }
 
   return (

@@ -375,12 +375,11 @@ describe("WorkbenchShell rendered interaction contract", () => {
     overview.focus()
     await user.keyboard("{ArrowRight}")
     const changes = screen.getByRole("tab", { name: "Changes" })
-    // The shell moves roving focus inside requestAnimationFrame (workbench-shell.tsx), one frame
-    // after aria-selected flips, so focus must be awaited with the selection rather than after it.
-    await waitFor(() => {
-      expect(changes.getAttribute("aria-selected")).toBe("true")
-      expect(document.activeElement).toBe(changes)
-    })
+    // Roving focus is applied in an effect, so it lands in the same commit as the selection. No
+    // waiting: if this needed a timeout it would mean focus trails the keystroke by an unbounded
+    // amount on a loaded machine, which is the defect this asserts against (issue #811).
+    expect(changes.getAttribute("aria-selected")).toBe("true")
+    expect(document.activeElement).toBe(changes)
 
     await user.click(screen.getByRole("button", { name: /Inspect/ }))
     expect(screen.getByRole("button", { name: /Inspect/ }).getAttribute("aria-pressed")).toBe("true")
