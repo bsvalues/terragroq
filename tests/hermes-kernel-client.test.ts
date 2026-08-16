@@ -185,9 +185,11 @@ describe("Hermes kernel client — runTurn", () => {
     expect(packet).toMatchObject({ statePath: "D:\\s", kernelSessionId: null })
     expect(packet).toMatchObject({ schemaVersion: 3, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: "williamos-qwen3-4b:64k", maximumTurns: 20, toolsets: ["file", "terminal"], workspaceMode: "OWNED_WORKTREE", workspacePath: "D:\\w", runId: "run-1" })
     expect(packet.prompt.startsWith("Do the thing.\n\n")).toBe(true)
-    expect(packet.prompt.endsWith(buildKernelPromptEpilogue())).toBe(true)
-    expect(buildKernelPromptEpilogue()).toContain(JSON.stringify(HERMES_TURN_OUTPUT_SCHEMA))
-    expect(buildKernelPromptEpilogue()).toContain("Do not commit, push, open PRs")
+    expect(packet.prompt.endsWith(buildKernelPromptEpilogue("run-1"))).toBe(true)
+    expect(buildKernelPromptEpilogue("run-1")).toContain(JSON.stringify(HERMES_TURN_OUTPUT_SCHEMA))
+    expect(buildKernelPromptEpilogue("run-1")).toContain("Do not commit, push, open PRs")
+    // the answer delimiter is bound to this run, so pre-written workspace content cannot forge it
+    expect(buildKernelPromptEpilogue("run-1")).toContain("runId=run-1")
   })
   it("invokes the reviewed PowerShell invoker with the packet, policy, workspace, run id and runtime quarantine path, then harvests finalText", async () => {
     const { client, calls, commandRunner, workspacePath, runtimeRoot, policyPath, invokerPath, commonDir } = fixture()
@@ -357,6 +359,42 @@ describe("Hermes kernel client — runTurn", () => {
     const recorded = fs.readFileSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "turns", "1", "stdout.txt"), "utf8")
     expect(recorded).not.toContain("ghp_")
     expect(recorded).toContain("[REDACTED]")
+  })
+})
+
+describe("Hermes kernel client - post-turn workspace confinement (issue #806)", () => {
+  it("walls a reparse point created inside a subdirectory during the turn", async () => {
+    const { client, calls, commandRunner, workspacePath, commonDir } = fixture()
+    const nested = path.join(workspacePath, "sub", "deep")
+    fs.mkdirSync(nested, { recursive: true })
+    const escape = path.join(nested, "escape")
+    commandRunner.mockImplementation(async (call: Call) => {
+      calls.push(call)
+      // the model holds a terminal for the whole turn: it links out mid-turn, then reports success
+      if (call.command !== "git" && !fs.existsSync(escape)) fs.symlinkSync(os.tmpdir(), escape, "junction")
+      return gitOr(call, commonDir, okResult(call.args[call.args.indexOf("-RunId") + 1]))
+    })
+    await client.connect()
+    const thread = await client.startThread()
+    await expect(client.runTurn({ threadId: thread, prompt: "p" })).rejects.toMatchObject({
+      code: "RESIDENT_MODEL_LANE_WORKSPACE_TAMPERED",
+    })
+    // non-vacuous: the link really exists and is really a reparse point
+    expect(fs.lstatSync(escape).isSymbolicLink()).toBe(true)
+  })
+  it("accepts a turn whose workspace gained only ordinary files and directories", async () => {
+    const { client, calls, commandRunner, workspacePath, commonDir } = fixture()
+    commandRunner.mockImplementation(async (call: Call) => {
+      calls.push(call)
+      if (call.command !== "git") {
+        fs.mkdirSync(path.join(workspacePath, "src", "nested"), { recursive: true })
+        fs.writeFileSync(path.join(workspacePath, "src", "nested", "file.txt"), "work")
+      }
+      return gitOr(call, commonDir, okResult(call.args[call.args.indexOf("-RunId") + 1]))
+    })
+    await client.connect()
+    const thread = await client.startThread()
+    await expect(client.runTurn({ threadId: thread, prompt: "p" })).resolves.toMatchObject({ status: "completed" })
   })
 })
 

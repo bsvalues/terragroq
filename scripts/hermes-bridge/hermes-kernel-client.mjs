@@ -3,7 +3,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { AppServerTimeoutError, AppServerTurnEndedError, AppServerWallError, sanitizeAppServerText } from "./app-server-client.mjs"
-import { harvestTurnOutput, HERMES_FREE_AGENT_COMPLETE_PATTERN, validateAgainstTurnSchema } from "./hermes-kernel-output.mjs"
+import { harvestTurnOutput, HERMES_FREE_AGENT_COMPLETE_PATTERN, TURN_OUTPUT_SENTINEL_CLOSE, TURN_OUTPUT_SENTINEL_OPEN, validateAgainstTurnSchema } from "./hermes-kernel-output.mjs"
 import { HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 
 export const HERMES_KERNEL_POLICY_RELATIVE = "config/execution-fabric/hermes-free-dev-agent-v2.policy.json"
@@ -42,9 +42,16 @@ function isInside(child, parent) {
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
 }
 
-export function buildKernelPromptEpilogue() {
+export function buildKernelPromptEpilogue(runId = null) {
+  const delimiters = typeof runId === "string" && runId.length > 0
+    ? [
+        `Wrap that object between a line reading exactly "${TURN_OUTPUT_SENTINEL_OPEN} runId=${runId}" and a line reading exactly "${TURN_OUTPUT_SENTINEL_CLOSE}".`,
+        "Emit those two lines once, around the answer object only, and never around anything you quote from a file.",
+      ]
+    : []
   return [
-    "Finish by printing exactly one fenced ```json block that satisfies the following JSON schema, and print nothing after it.",
+    "Finish by printing exactly one JSON object that satisfies the following JSON schema, and print nothing after it.",
+    ...delimiters,
     "Do not commit, push, open PRs, or touch paths outside the reservations named above.",
     JSON.stringify(HERMES_TURN_OUTPUT_SCHEMA),
   ].join("\n")
@@ -58,7 +65,7 @@ export function buildKernelPacket({ policy, prompt, workspacePath, runId, stateP
     schemaVersion: 3,
     workOrderId: policy.workOrderId,
     model: policy.model.id,
-    prompt: `${prompt}\n\n${buildKernelPromptEpilogue()}`,
+    prompt: `${prompt}\n\n${buildKernelPromptEpilogue(runId)}`,
     maximumTurns: policy.execution.maximumTurns,
     toolsets: [...policy.execution.allowedToolsets],
     workspaceMode: "OWNED_WORKTREE",
@@ -149,6 +156,30 @@ export function createHermesKernelClient({
   }
   const assertInvokerPresent = () => {
     if (!fs.existsSync(invokerPath)) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+  }
+  /**
+   * Confinement has to hold at the END of a turn, not only before it. The pre-turn checks see the
+   * workspace the model was handed; the model then holds a terminal for the whole turn and can
+   * create a reparse point in a subdirectory (on Windows a directory junction needs no privilege)
+   * and write through it to a path outside the owned worktree. The pre-turn scan is also top-level
+   * only, so a nested link was never observed at all. This sweep is recursive and runs after the
+   * turn, and an unreadable directory is a wall rather than a skipped branch.
+   */
+  const assertNoReparsePoints = (root, method) => {
+    const tampered = () => wall("RESIDENT_MODEL_LANE_WORKSPACE_TAMPERED", method)
+    const pending = [root]
+    while (pending.length > 0) {
+      const directory = pending.pop()
+      let entries
+      try { entries = fs.readdirSync(directory, { withFileTypes: true }) } catch { throw tampered() }
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) throw tampered()
+        if (!entry.isDirectory()) continue
+        // A linked worktree's .git is a file, so a .git *directory* here is itself a finding.
+        if (entry.name === ".git") throw tampered()
+        pending.push(path.join(directory, entry.name))
+      }
+    }
   }
 
   const gitCommonDir = async (cwd, turnTimeoutMs) => {
@@ -254,15 +285,27 @@ export function createHermesKernelClient({
       if (exitCode !== 0 || !completion || completion[1] !== runId) finish(new AppServerTurnEndedError("interrupted"))
       const commonDirAfter = await gitCommonDir(workspaceReal, turnTimeoutMs)
       if (commonDirAfter === null || commonDirAfter !== commonDirBefore) finish(wall("RESIDENT_MODEL_LANE_WORKSPACE_TAMPERED", "runTurn"))
-      const harvested = harvestTurnOutput(stdout)
+      try { assertNoReparsePoints(workspaceReal, "runTurn") } catch (error) { finish(error) }
+      const satisfiesContract = (value) => validateAgainstTurnSchema(value, HERMES_TURN_OUTPUT_SCHEMA).ok
+      const harvested = harvestTurnOutput(stdout, { runId, isAcceptable: satisfiesContract })
       if (!harvested.ok) {
         const error = new AppServerTurnEndedError("failed"); error.detail = `RESIDENT_MODEL_TURN_OUTPUT_INVALID:${harvested.reason}`
         finish(error)
       }
-      const structural = validateAgainstTurnSchema(JSON.parse(harvested.finalText), turn?.outputSchema ?? HERMES_TURN_OUTPUT_SCHEMA)
+      const parsedOutput = JSON.parse(harvested.finalText)
+      // The canonical contract is a floor, not a default: a caller-supplied schema may tighten it
+      // but can never replace or weaken the contract the model was actually given.
+      const structural = validateAgainstTurnSchema(parsedOutput, HERMES_TURN_OUTPUT_SCHEMA)
       if (!structural.ok) {
         const error = new AppServerTurnEndedError("failed"); error.detail = `RESIDENT_MODEL_TURN_OUTPUT_INVALID:${structural.reason}`
         finish(error)
+      }
+      if (turn?.outputSchema) {
+        const tightened = validateAgainstTurnSchema(parsedOutput, turn.outputSchema)
+        if (!tightened.ok) {
+          const error = new AppServerTurnEndedError("failed"); error.detail = `RESIDENT_MODEL_TURN_OUTPUT_INVALID:${tightened.reason}`
+          finish(error)
+        }
       }
       record.harvested = true
       finish(null)
