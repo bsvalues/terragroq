@@ -180,9 +180,11 @@ describe("Hermes kernel client — runTurn", () => {
     expect(Object.keys(packet).sort()).toEqual(["maximumTurns", "model", "prompt", "runId", "schemaVersion", "toolsets", "workOrderId", "workspaceMode", "workspacePath"])
     expect(packet).toMatchObject({ schemaVersion: 2, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: "williamos-qwen3-4b:64k", maximumTurns: 20, toolsets: ["file", "terminal"], workspaceMode: "OWNED_WORKTREE", workspacePath: "D:\\w", runId: "run-1" })
     expect(packet.prompt.startsWith("Do the thing.\n\n")).toBe(true)
-    expect(packet.prompt.endsWith(buildKernelPromptEpilogue())).toBe(true)
-    expect(buildKernelPromptEpilogue()).toContain(JSON.stringify(HERMES_TURN_OUTPUT_SCHEMA))
-    expect(buildKernelPromptEpilogue()).toContain("Do not commit, push, open PRs")
+    expect(packet.prompt.endsWith(buildKernelPromptEpilogue("run-1"))).toBe(true)
+    expect(buildKernelPromptEpilogue("run-1")).toContain(JSON.stringify(HERMES_TURN_OUTPUT_SCHEMA))
+    expect(buildKernelPromptEpilogue("run-1")).toContain("Do not commit, push, open PRs")
+    // the answer delimiter is bound to this run, so pre-written workspace content cannot forge it
+    expect(buildKernelPromptEpilogue("run-1")).toContain("runId=run-1")
   })
   it("invokes the reviewed PowerShell invoker with the packet, policy, workspace, run id and runtime quarantine path, then harvests finalText", async () => {
     const { client, calls, commandRunner, workspacePath, runtimeRoot, policyPath, invokerPath, commonDir } = fixture()
