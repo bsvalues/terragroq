@@ -144,7 +144,14 @@ export function createHermesKernelClient({
     if (!isInside(real, worktreesReal) || !fs.statSync(real).isDirectory()) throw wall("RESIDENT_MODEL_LANE_WORKSPACE", "connect")
     // Intra-worktree escape hatches: a top-level reparse point re-points the mount out of
     // the worktree, and node_modules is a bin/symlink farm the kernel must never inherit.
-    if (fs.existsSync(path.join(real, "node_modules"))) throw wall("RESIDENT_MODEL_LANE_WORKSPACE", "connect")
+    // The common way it appears is a cycle that died mid-validation: repository-lifecycle.mjs
+    // junctions <worktree>/node_modules to the workspace copy (:853) and unlinks it after (:919).
+    // That stays a wall, but it gets a code of its own — an operator reading the log has to be
+    // told the leftover is theirs to remove, not left guessing at a generic workspace refusal.
+    // lstat, not existsSync: a junction whose target is already gone must be named too.
+    if (fs.lstatSync(path.join(real, "node_modules"), { throwIfNoEntry: false })) {
+      throw wall("RESIDENT_MODEL_LANE_WORKSPACE_DEPENDENCIES", "connect")
+    }
     let entries
     try { entries = fs.readdirSync(real) } catch { throw wall("RESIDENT_MODEL_LANE_WORKSPACE", "connect") }
     for (const entry of entries) {
@@ -156,6 +163,18 @@ export function createHermesKernelClient({
   }
   const assertInvokerPresent = () => {
     if (!fs.existsSync(invokerPath)) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+  }
+  /**
+   * Spec §4 item 6: the kernel's own deadline must fit inside the budget the host runner enforces.
+   * This has to be asserted wherever a budget is chosen, not once at connect(): connect() sees only
+   * the client-level default, while runTurn accepts a per-turn override. A budget under the kernel
+   * deadline means commandRunner kills the invoker mid-run, so the invoker never reaches
+   * HERMES_FREE_AGENT_TIMEOUT_WALL and its container cleanup and quarantine marking never happen.
+   */
+  const assertTurnBudget = (policy, budgetMs, method) => {
+    if (!(budgetMs >= Number(policy?.execution?.timeoutSeconds ?? 0) * 1000)) {
+      throw wall("RESIDENT_MODEL_LANE_TIMEOUT", method)
+    }
   }
   /**
    * Confinement has to hold at the END of a turn, not only before it. The pre-turn checks see the
@@ -211,9 +230,7 @@ export function createHermesKernelClient({
   const client = {
     async connect() {
       const policy = readPolicy(); assertUnquarantined(); assertOwnedWorkspace(); assertInvokerPresent()
-      // Spec §4 item 6: the kernel's own deadline must fit inside the orchestrator's turn budget.
-      const kernelTimeoutMs = Number(policy?.execution?.timeoutSeconds ?? 0) * 1000
-      if (!(timeoutMs >= kernelTimeoutMs)) throw wall("RESIDENT_MODEL_LANE_TIMEOUT", "connect")
+      assertTurnBudget(policy, timeoutMs, "connect")
       connected = true
     },
     async startThread() {
@@ -235,6 +252,7 @@ export function createHermesKernelClient({
       if (!connected) throw wall("RESIDENT_MODEL_LANE_NOT_CONNECTED", "runTurn")
       const session = readSession(threadId)
       const policy = readPolicy(); assertUnquarantined(); const workspaceReal = assertOwnedWorkspace(); assertInvokerPresent()
+      assertTurnBudget(policy, turnTimeoutMs, "runTurn")
       const text = requiredString(prompt, "prompt")
       const runId = randomUUID()
       const statePath = path.join(threadsRoot, threadId, KERNEL_STATE_DIR)

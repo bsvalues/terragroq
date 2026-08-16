@@ -134,13 +134,25 @@ describe("Hermes kernel client — lane checks and threads", () => {
     const exact = fixture({ timeoutMs: 1800 * 1000 })
     await expect(exact.client.connect()).resolves.toBeUndefined()
   })
-  it("refuses a workspace carrying node_modules or a top-level reparse point", async () => {
-    const modules = fixture(); fs.mkdirSync(path.join(modules.workspacePath, "node_modules"))
-    await expect(modules.client.connect()).rejects.toMatchObject({ code: "RESIDENT_MODEL_LANE_WORKSPACE" })
-
+  it("refuses a workspace carrying a top-level reparse point", async () => {
     const junction = fixture(); const target = path.join(junction.root, "outside"); fs.mkdirSync(target)
     fs.symlinkSync(target, path.join(junction.workspacePath, "escape"), "junction")
     await expect(junction.client.connect()).rejects.toMatchObject({ code: "RESIDENT_MODEL_LANE_WORKSPACE" })
+  })
+  it("names the leftover validation dependencies when it refuses a workspace carrying node_modules", async () => {
+    // repository-lifecycle.mjs:853 junctions <worktree>/node_modules to the workspace copy so the
+    // validators can run, and :919 unlinks it afterwards. A cycle that dies between those two
+    // leaves the junction behind, and every later turn walls non-retryably. Failing closed is
+    // correct — the kernel must never inherit that bin/symlink farm — but an operator reading the
+    // log needs the code to name what to delete, not a generic workspace refusal.
+    const modules = fixture(); fs.mkdirSync(path.join(modules.workspacePath, "node_modules"))
+    await expect(modules.client.connect()).rejects.toMatchObject({ code: "RESIDENT_MODEL_LANE_WORKSPACE_DEPENDENCIES" })
+    await expect(modules.client.connect()).rejects.toBeInstanceOf(AppServerWallError)
+
+    const abandoned = fixture()
+    const source = path.join(abandoned.root, "workspace-node-modules"); fs.mkdirSync(source)
+    fs.symlinkSync(source, path.join(abandoned.workspacePath, "node_modules"), "junction")
+    await expect(abandoned.client.connect()).rejects.toMatchObject({ code: "RESIDENT_MODEL_LANE_WORKSPACE_DEPENDENCIES" })
   })
   it("starts a thread as a session directory and refuses to resume until resume is proven", async () => {
     const { client, runtimeRoot, workspacePath } = fixture()
@@ -196,7 +208,7 @@ describe("Hermes kernel client — runTurn", () => {
     commandRunner.mockImplementation(async (call: Call) => { calls.push(call); return gitOr(call, commonDir, okResult(call.args[call.args.indexOf("-RunId") + 1])) })
     await client.connect()
     const threadId = await client.startThread({ cwd: workspacePath })
-    const turn = await client.runTurn({ threadId, prompt: "Deliver WO-1", turn: { outputSchema: HERMES_TURN_OUTPUT_SCHEMA }, timeoutMs: 5000 })
+    const turn = await client.runTurn({ threadId, prompt: "Deliver WO-1", turn: { outputSchema: HERMES_TURN_OUTPUT_SCHEMA }, timeoutMs: 1800 * 1000 })
     expect(turn).toEqual({ threadId, turnId: expect.stringMatching(/^[0-9a-f-]{36}$/), status: "completed", finalText: fullTurnJson() })
     const call = calls.find((candidate) => candidate.command === "powershell")!
     expect(call.args.slice(0, 5)).toEqual(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
@@ -209,7 +221,7 @@ describe("Hermes kernel client — runTurn", () => {
     expect(arg("-QuarantinePath")).toBe(kernelQuarantinePath(runtimeRoot))
     expect(path.isAbsolute(arg("-QuarantinePath"))).toBe(true)
     expect(call.cwd).toBe(fs.realpathSync(workspacePath))
-    expect(call.timeoutMs).toBe(5000)
+    expect(call.timeoutMs).toBe(1800 * 1000)
     expect(call.credentialAccess).toBe(false)
     // I5: the git-common-dir identity is captured before and re-asserted after the invocation.
     const gitCalls = calls.filter((candidate) => candidate.command === "git")
@@ -241,6 +253,24 @@ describe("Hermes kernel client — runTurn", () => {
     const threadId = await client.startThread({ cwd: workspacePath })
     patchPolicy(policyPath, (p) => { p.execution.promptMaxChars = 40 })
     await expect(client.runTurn({ threadId, prompt: "x".repeat(41) })).rejects.toMatchObject({ code: "RESIDENT_MODEL_PROMPT_TOO_LONG" })
+  })
+  it("re-checks the per-turn budget against the kernel deadline before it touches anything", async () => {
+    // connect() can only see the client-level budget (spec §4 item 6), but runTurn takes a per-turn
+    // override. A budget under the kernel's own deadline means the host runner kills the invoker
+    // mid-run, so the invoker never reaches HERMES_FREE_AGENT_TIMEOUT_WALL and its container
+    // cleanup / quarantine never happen. The invariant has to hold where the budget is used.
+    const { client, calls, workspacePath, runtimeRoot } = fixture()
+    await client.connect()
+    const threadId = await client.startThread({ cwd: workspacePath })
+    await expect(client.runTurn({ threadId, prompt: "p", timeoutMs: 60_000 }))
+      .rejects.toMatchObject({ code: "RESIDENT_MODEL_LANE_TIMEOUT" })
+    // Refused before the git probe, the packet write and the invoker — nothing ran.
+    expect(calls).toEqual([])
+    expect(fs.existsSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "turns"))).toBe(false)
+    // The boundary is equality, not a blanket refusal: a budget at the deadline still runs.
+    await expect(client.runTurn({ threadId, prompt: "p", timeoutMs: 1800 * 1000 }))
+      .rejects.toMatchObject({ code: "APP_SERVER_TURN_INTERRUPTED" })
+    expect(calls.some((call) => call.command === "powershell")).toBe(true)
   })
   it("maps invoker outcomes onto the orchestrator's existing error taxonomy", async () => {
     const cases: Array<[(runId: string) => Record<string, unknown>, (error: any) => void]> = [
