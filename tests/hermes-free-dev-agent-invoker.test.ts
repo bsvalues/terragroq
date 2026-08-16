@@ -125,6 +125,18 @@ describe("Hermes free development agent invoker — owned-mode walls fire before
     expect(output).toContain("HERMES_FREE_AGENT_EVIDENCE_WALL")
     expect(output).not.toContain("HERMES_FREE_AGENT_WORKSPACE_ROOT_WALL")
   })
+  it.runIf(host)("refuses a policy that calls itself PROMOTED while its promotion review is unproven", () => {
+    const fixture = laneFixture((policy) => {
+      policy.promotion.status = "PROMOTED"
+      policy.promotion.promotionRequires = ["V2_OWNED_WORKTREE_REVIEW_APPROVED"]
+      policy.promotion.satisfiedEvidence.V2_OWNED_WORKTREE_REVIEW_APPROVED = null
+    })
+    const { status, output } = runInvoker(host!, fixture)
+    expect(status, output).not.toBe(0)
+    expect(output).toContain("HERMES_FREE_AGENT_PROMOTION_EVIDENCE_WALL")
+    // The promotion gate precedes the workspace walls, so it is not reached by accident.
+    expect(output).not.toContain("HERMES_FREE_AGENT_WORKSPACE_ROOT_WALL")
+  })
   it.runIf(host)("refuses a pre-existing quarantine marker at the caller's path", () => {
     const fixture = laneFixture()
     fs.writeFileSync(fixture.quarantinePath, "ACTIVE_CONTAINER=x")
@@ -146,5 +158,14 @@ describe("Hermes free development agent invoker — P2b per-thread kernel state"
     expect(source).toContain("WILLIAMOS_RESUME_SESSION=$resumeSession")
     expect(source).toContain('@("kernelSessionId", "maximumTurns", "model", "prompt", "runId", "schemaVersion", "statePath", "toolsets", "workOrderId", "workspaceMode", "workspacePath")')
     expect(source).toContain("$expectedSchema = if ($ownedMode) { 3 } else { 1 }")
+  })
+})
+
+describe("Hermes free development agent invoker — P3 promotion gate", () => {
+  it("gates a PROMOTED claim on its declared promotion evidence", () => {
+    const source = fs.readFileSync(invokerPath, "utf8")
+    expect(source).toContain('$policy.promotion.status -eq "PROMOTED"')
+    expect(source).toContain("$policy.promotion.promotionRequires")
+    expect(source).toContain("HERMES_FREE_AGENT_PROMOTION_EVIDENCE_WALL")
   })
 })

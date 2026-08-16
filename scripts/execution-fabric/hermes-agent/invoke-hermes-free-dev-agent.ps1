@@ -52,6 +52,17 @@ try {
     $expectedSchema = if ($ownedMode) { 3 } else { 1 }
     if (-not ($packet.schemaVersion -is [int] -or $packet.schemaVersion -is [long]) -or $packet.schemaVersion -ne $expectedSchema) { throw "HERMES_FREE_AGENT_PACKET_SCHEMA_WALL" }
     if ($policy.promotion.status -ne "PILOT_AUTHORIZED" -and $policy.promotion.status -ne "PROMOTED") { throw "HERMES_FREE_AGENT_PROMOTION_WALL" }
+    # A policy may only call itself PROMOTED when every line it declares in
+    # promotion.promotionRequires is satisfied: promotion is reviewed, not self-asserted.
+    if ($policy.promotion.status -eq "PROMOTED") {
+        foreach ($promotionKey in @($policy.promotion.promotionRequires)) {
+            if ($null -eq $promotionKey) { continue }
+            $promotionValue = $policy.promotion.satisfiedEvidence.$promotionKey
+            if ($null -eq $promotionValue -or (($promotionValue -is [string]) -and [string]::IsNullOrWhiteSpace($promotionValue))) {
+                throw "HERMES_FREE_AGENT_PROMOTION_EVIDENCE_WALL"
+            }
+        }
+    }
     if ($packet.workOrderId -isnot [string] -or $packet.workOrderId -ne $policy.workOrderId) { throw "HERMES_FREE_AGENT_WORK_ORDER_WALL" }
     $promptMax = if ($ownedMode) { [int]$policy.execution.promptMaxChars } else { 16000 }
     if ($packet.prompt -isnot [string] -or [string]::IsNullOrWhiteSpace($packet.prompt) -or $packet.prompt.Length -gt $promptMax) { throw "HERMES_FREE_AGENT_PROMPT_WALL" }

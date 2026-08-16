@@ -4,7 +4,10 @@
 on HERMES (PR #805, `docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md`). P2b done —
 per-thread kernel state + session continuity proven
 (`docs/reports/hermes-kernel-p2b-session-continuity-2026-08-16.md`); `sessionResumeProven` is now
-`true`. Remaining: P3 promotion (independent review of the v2 mode).
+`true`. P3: the promotion gate is built and the review packet written
+(`docs/reports/hermes-kernel-p3-promotion-review-packet-2026-08-16.md`); promotion itself is
+**pending an independent reviewer** — the authoring project cannot satisfy
+`V2_OWNED_WORKTREE_REVIEW_APPROVED`.
 **Builds on:** S1 (`ResidentModelExecutionBackend`, commit `3558e65`), WO-WILLIAMOS-HERMES-KERNEL-V1
 (T2 doctrine), `hermes-free-dev-agent` provider (policy v1, `PILOT_AUTHORIZED`).
 
@@ -196,7 +199,12 @@ orchestrator's existing provider-retry/defer path applies.
   evidence: run id, container exit 0, harvested JSON, diff confined to reservations. Then the resume
   probe (P2b, done): two turns on one thread, the second tool-free and answerable only from session
   memory; the kernel recalled the exact marker and file, so `sessionResumeProven` was flipped.
-- **P3:** promote policy v2 (`promotion.status: PROMOTED`) after INDEPENDENT_REVIEW_APPROVED.
+- **P3:** promotion is gated by `promotion.promotionRequires` (v2 declares
+  `V2_OWNED_WORKTREE_REVIEW_APPROVED`, unproven), enforced in `hermes-kernel-client.mjs`
+  (`RESIDENT_MODEL_LANE_PROMOTION_UNPROVEN`) and the invoker
+  (`HERMES_FREE_AGENT_PROMOTION_EVIDENCE_WALL`) whenever a policy claims `PROMOTED`. v1's
+  `INDEPENDENT_REVIEW_APPROVED` (2026-08-13) predates this mode and deliberately does not gate it.
+  Granting promotion = set that line + flip the status; see the review packet.
 
 ## 7. Testing (P1)
 

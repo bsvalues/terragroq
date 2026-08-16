@@ -58,6 +58,16 @@ and the invoker (`HERMES_FREE_AGENT_EVIDENCE_WALL`) refuse to run while any decl
 `b9fbca28-…`; see `docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md`). Never fill an
 evidence value in to make a run proceed — a new declared line closes the lane again until proven.
 
+**Promotion is separate from running.** `promotion.requiredEvidence` gates *running* the lane;
+`promotion.promotionRequires` gates *claiming* `promotion.status: "PROMOTED"`. The v2 mode declares
+`V2_OWNED_WORKTREE_REVIEW_APPROVED`, which is `null`: the lane runs as `PILOT_AUTHORIZED`, and
+setting the status to `PROMOTED` without that line fails closed at both enforcement points
+(`RESIDENT_MODEL_LANE_PROMOTION_UNPROVEN` / `HERMES_FREE_AGENT_PROMOTION_EVIDENCE_WALL`). The line is
+v2-scoped on purpose: `INDEPENDENT_REVIEW_APPROVED` is inherited from v1 (2026-08-13) and predates
+owned-worktree mode, so it cannot stand in for a review of it. Promotion procedure and the review
+checklist: `docs/reports/hermes-kernel-p3-promotion-review-packet-2026-08-16.md`. It must be granted
+by someone who did not build the lane.
+
 The invoker also refuses an owned workspace that contains `node_modules` or any top-level reparse
 point (`HERMES_FREE_AGENT_WORKSPACE_CONTENT_WALL`), and the client re-asserts the workspace's
 `git rev-parse --git-common-dir` after the invocation, walling on a mismatch.

@@ -111,6 +111,17 @@ export function createHermesKernelClient({
         throw wall("RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN", "connect")
       }
     }
+    // Promotion is a claim about review, not a word. A policy may only call itself PROMOTED
+    // when every line it declares in promotion.promotionRequires is satisfied — so promotion
+    // cannot be granted by editing one field, and a pilot lane is unaffected either way.
+    if (policy?.promotion?.status === "PROMOTED") {
+      for (const key of Array.isArray(policy?.promotion?.promotionRequires) ? policy.promotion.promotionRequires : []) {
+        const value = satisfied?.[key]
+        if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) {
+          throw wall("RESIDENT_MODEL_LANE_PROMOTION_UNPROVEN", "connect")
+        }
+      }
+    }
     return policy
   }
   const assertUnquarantined = () => {
