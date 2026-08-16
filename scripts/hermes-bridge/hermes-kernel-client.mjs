@@ -50,9 +50,12 @@ export function buildKernelPromptEpilogue() {
   ].join("\n")
 }
 
-export function buildKernelPacket({ policy, prompt, workspacePath, runId }) {
+export const KERNEL_STATE_DIR = "kernel-state"
+export const KERNEL_SESSION_ID_PATTERN = /^Session:[ \t]+([A-Za-z0-9_-]{4,64})[ \t]*$/m
+
+export function buildKernelPacket({ policy, prompt, workspacePath, runId, statePath, kernelSessionId = null }) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     workOrderId: policy.workOrderId,
     model: policy.model.id,
     prompt: `${prompt}\n\n${buildKernelPromptEpilogue()}`,
@@ -61,6 +64,8 @@ export function buildKernelPacket({ policy, prompt, workspacePath, runId }) {
     workspaceMode: "OWNED_WORKTREE",
     workspacePath,
     runId,
+    statePath,
+    kernelSessionId,
   }
 }
 
@@ -96,6 +101,7 @@ export function createHermesKernelClient({
     try { policy = JSON.parse(fs.readFileSync(policyPath, "utf8")) } catch { throw wall("RESIDENT_MODEL_LANE_POLICY_UNREADABLE", "connect") }
     if (!["PILOT_AUTHORIZED", "PROMOTED"].includes(policy?.promotion?.status)) throw wall("RESIDENT_MODEL_LANE_NOT_AUTHORIZED", "connect")
     if (policy?.placement?.workspaceMode !== "OWNED_WORKTREE") throw wall("RESIDENT_MODEL_LANE_WORKSPACE_MODE", "connect")
+    if (policy?.containment?.agentStatePersistence !== "PER_THREAD_STATE_DIR") throw wall("RESIDENT_MODEL_LANE_STATE_MODE", "connect")
     // The lane is closed until every declared evidence line is actually satisfied;
     // a declared-but-null entry is an unproven control, not a formality.
     const satisfied = policy?.promotion?.satisfiedEvidence ?? {}
@@ -171,13 +177,16 @@ export function createHermesKernelClient({
     async startThread() {
       if (!connected) throw wall("RESIDENT_MODEL_LANE_NOT_CONNECTED", "startThread")
       const threadId = randomUUID()
-      writeSession({ schemaVersion: SESSION_SCHEMA_VERSION, threadId, workspacePath, createdAt: now().toISOString(), turns: [] })
+      fs.mkdirSync(path.join(threadsRoot, threadId, KERNEL_STATE_DIR), { recursive: true })
+      writeSession({ schemaVersion: SESSION_SCHEMA_VERSION, threadId, workspacePath, createdAt: now().toISOString(), kernelSessionId: null, turns: [] })
       return threadId
     },
     async resumeThread(threadId) {
       const session = readSession(threadId)
       if (path.resolve(session.workspacePath) !== path.resolve(workspacePath)) throw wall("RESIDENT_MODEL_THREAD_WORKSPACE_MISMATCH", "resumeThread")
       if (readPolicy()?.execution?.sessionResumeProven !== true) throw wall("RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE", "resumeThread")
+      if (typeof session.kernelSessionId !== "string" || session.kernelSessionId.length === 0
+        || !fs.existsSync(path.join(threadsRoot, threadId, KERNEL_STATE_DIR))) throw wall("RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE", "resumeThread")
       return threadId
     },
     async runTurn({ threadId, prompt, turn, timeoutMs: turnTimeoutMs = timeoutMs } = {}) {
@@ -186,7 +195,10 @@ export function createHermesKernelClient({
       const policy = readPolicy(); assertUnquarantined(); const workspaceReal = assertOwnedWorkspace(); assertInvokerPresent()
       const text = requiredString(prompt, "prompt")
       const runId = randomUUID()
-      const packet = buildKernelPacket({ policy, prompt: text, workspacePath: workspaceReal, runId })
+      const statePath = path.join(threadsRoot, threadId, KERNEL_STATE_DIR)
+      fs.mkdirSync(statePath, { recursive: true })
+      const kernelSessionId = typeof session.kernelSessionId === "string" && session.kernelSessionId.length > 0 ? session.kernelSessionId : null
+      const packet = buildKernelPacket({ policy, prompt: text, workspacePath: workspaceReal, runId, statePath, kernelSessionId })
       if (packet.prompt.length > (policy.execution?.promptMaxChars ?? 16000)) throw wall("RESIDENT_MODEL_PROMPT_TOO_LONG", "runTurn")
       const turnIndex = session.turns.length + 1
       const turnDir = path.join(threadsRoot, threadId, "turns", String(turnIndex))
@@ -203,7 +215,7 @@ export function createHermesKernelClient({
           command: powershellCommand,
           args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
             "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", workspaceReal, "-RunId", runId,
-            "-QuarantinePath", quarantinePath],
+            "-QuarantinePath", quarantinePath, "-StatePath", statePath],
           cwd: workspaceReal, timeoutMs: turnTimeoutMs, credentialAccess: false,
         })
       } catch (error) {
@@ -218,7 +230,9 @@ export function createHermesKernelClient({
       const stdout = String(result?.stdout ?? ""); const stderr = String(result?.stderr ?? "")
       const combined = `${stdout}\n${stderr}`
       const persistedStdout = sanitizeAppServerText(combined)
-      const record = { turnId: runId, at: now().toISOString(), exitCode, packetSha256: sha256(packetBytes), stdoutSha256: sha256(persistedStdout), harvested: false }
+      const kernelSession = stdout.match(KERNEL_SESSION_ID_PATTERN)?.[1] ?? null
+      if (kernelSession) session.kernelSessionId = kernelSession
+      const record = { turnId: runId, at: now().toISOString(), exitCode, packetSha256: sha256(packetBytes), stdoutSha256: sha256(persistedStdout), harvested: false, kernelSessionId: kernelSession, resumedKernelSessionId: kernelSessionId }
       fs.writeFileSync(stdoutPath, persistedStdout, { mode: 0o600 })
       const finish = (error) => { session.turns.push(record); writeSession(session); if (error) throw error }
       if (result?.timedOut === true || TIMEOUT_WALL.test(combined)) finish(new AppServerTimeoutError(turnTimeoutMs))

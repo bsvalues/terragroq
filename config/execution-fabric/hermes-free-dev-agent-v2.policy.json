@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "packetSchemaVersion": 2,
+  "packetSchemaVersion": 3,
   "workOrderId": "WO-HERMES-FREE-DEV-AGENT-001",
   "providerId": "hermes-agent-local-qwen-v2",
   "runtime": "NousResearch/hermes-agent@fa83af3f9a42790730b8966ff67e7d9fb627899f",
@@ -43,7 +43,7 @@
     "hostCredentialMounts": false,
     "canonicalRepositoryMounted": false,
     "rootFilesystemReadOnly": true,
-    "agentStatePersistence": false
+    "agentStatePersistence": "PER_THREAD_STATE_DIR"
   },
   "build": {
     "sourcePath": "D:\\HermesServices\\williamos-hermes-agent\\source-lf",

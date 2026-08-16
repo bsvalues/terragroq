@@ -25,7 +25,7 @@ function laneFixture(mutate: (policy: any) => void = () => {}) {
   const worktreesRoot = path.join(root, "worktrees"); fs.mkdirSync(worktreesRoot)
   const foreign = path.join(root, "foreign"); fs.mkdirSync(foreign)
   const policy = {
-    schemaVersion: 2, packetSchemaVersion: 2, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001",
+    schemaVersion: 2, packetSchemaVersion: 3, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001",
     model: { id: "williamos-qwen3-4b:64k" },
     placement: {
       workspaceMode: "OWNED_WORKTREE", allowedWorkspaceRoots: [worktreesRoot],
@@ -33,7 +33,7 @@ function laneFixture(mutate: (policy: any) => void = () => {}) {
     },
     execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"], promptMaxChars: 60000, timeoutSeconds: 1800 },
     build: { image: "williamos-hermes-agent:0.20.0-fa83af3", imageId: "sha256:0" },
-    containment: { network: "williamos_free_agent_internal" },
+    containment: { network: "williamos_free_agent_internal", agentStatePersistence: "PER_THREAD_STATE_DIR" },
     promotion: {
       status: "PILOT_AUTHORIZED",
       requiredEvidence: ["IMAGE_BUILD_PROVEN", "OWNED_WORKTREE_CONFINEMENT_PROVEN"],
@@ -43,12 +43,14 @@ function laneFixture(mutate: (policy: any) => void = () => {}) {
   mutate(policy)
   const policyPath = path.join(root, "policy.json"); fs.writeFileSync(policyPath, JSON.stringify(policy, null, 2))
   const packetPath = path.join(root, "packet.json")
+  const statePath = path.join(root, "hermes-kernel", "threads", "thread-1", "kernel-state")
   fs.writeFileSync(packetPath, JSON.stringify({
-    schemaVersion: 2, workOrderId: policy.workOrderId, model: policy.model.id, prompt: "Deliver WO-1.",
+    schemaVersion: 3, workOrderId: policy.workOrderId, model: policy.model.id, prompt: "Deliver WO-1.",
     maximumTurns: 20, toolsets: ["file", "terminal"], workspaceMode: "OWNED_WORKTREE", workspacePath: foreign, runId,
+    statePath, kernelSessionId: null,
   }, null, 2))
   const composeFile = path.join(root, "compose.yaml"); fs.writeFileSync(composeFile, "")
-  return { root, foreign, policyPath, packetPath, composeFile, quarantinePath: path.join(root, "Q") }
+  return { root, foreign, policyPath, packetPath, composeFile, quarantinePath: path.join(root, "Q"), statePath }
 }
 
 function runInvoker(host: string, fixture: ReturnType<typeof laneFixture>) {
@@ -56,7 +58,7 @@ function runInvoker(host: string, fixture: ReturnType<typeof laneFixture>) {
     "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
     "-PacketPath", fixture.packetPath, "-PolicyPath", fixture.policyPath,
     "-WorkspacePath", fixture.foreign, "-RunId", runId,
-    "-QuarantinePath", fixture.quarantinePath, "-ComposeFile", fixture.composeFile,
+    "-QuarantinePath", fixture.quarantinePath, "-ComposeFile", fixture.composeFile, "-StatePath", fixture.statePath,
   ], { encoding: "utf8", windowsHide: true, timeout: 120_000 })
   return { status: result.status, output: `${result.stdout ?? ""}\n${result.stderr ?? ""}` }
 }
@@ -75,7 +77,7 @@ describe("Hermes free development agent invoker (v2 owned-worktree mode)", () =>
   })
   it("requires the exact v2 packet field set and the raised prompt budget", () => {
     const source = invoker()
-    expect(source).toContain('@("maximumTurns", "model", "prompt", "runId", "schemaVersion", "toolsets", "workOrderId", "workspaceMode", "workspacePath")')
+    expect(source).toContain('@("kernelSessionId", "maximumTurns", "model", "prompt", "runId", "schemaVersion", "statePath", "toolsets", "workOrderId", "workspaceMode", "workspacePath")')
     expect(source).toContain("$policy.execution.promptMaxChars")
     expect(source).toContain('$packet.workspaceMode -ne "OWNED_WORKTREE"')
   })
@@ -129,5 +131,20 @@ describe("Hermes free development agent invoker — owned-mode walls fire before
     const { status, output } = runInvoker(host!, fixture)
     expect(status, output).not.toBe(0)
     expect(output).toContain("HERMES_FREE_AGENT_QUARANTINE_WALL")
+  })
+})
+
+describe("Hermes free development agent invoker — P2b per-thread kernel state", () => {
+  it("requires and validates -StatePath in owned mode and runs the agent-owned service", () => {
+    const source = fs.readFileSync(invokerPath, "utf8")
+    expect(source).toContain("[string]$StatePath")
+    expect(source).toContain("HERMES_FREE_AGENT_STATE_MODE_WALL")
+    expect(source).toContain("HERMES_FREE_AGENT_STATE_PATH_WALL")
+    expect(source).toContain("HERMES_FREE_AGENT_SESSION_ID_WALL")
+    expect(source).toContain('$env:WILLIAMOS_AGENT_STATE = $resolvedState')
+    expect(source).toContain('$agentService = "agent-owned"')
+    expect(source).toContain("WILLIAMOS_RESUME_SESSION=$resumeSession")
+    expect(source).toContain('@("kernelSessionId", "maximumTurns", "model", "prompt", "runId", "schemaVersion", "statePath", "toolsets", "workOrderId", "workspaceMode", "workspacePath")')
+    expect(source).toContain("$expectedSchema = if ($ownedMode) { 3 } else { 1 }")
   })
 })

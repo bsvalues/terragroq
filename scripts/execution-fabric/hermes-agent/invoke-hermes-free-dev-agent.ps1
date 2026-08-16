@@ -6,6 +6,7 @@ param(
     ,[string]$WorkspacePath = ""
     ,[string]$RunId = ""
     ,[string]$QuarantinePath = ""
+    ,[string]$StatePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,13 +43,13 @@ try {
     $packet = Get-Content -Raw -LiteralPath $PacketPath | ConvertFrom-Json
     $ownedMode = ($policy.placement.workspaceMode -eq "OWNED_WORKTREE")
     if ($ownedMode) {
-        $expectedFields = @("maximumTurns", "model", "prompt", "runId", "schemaVersion", "toolsets", "workOrderId", "workspaceMode", "workspacePath")
+        $expectedFields = @("kernelSessionId", "maximumTurns", "model", "prompt", "runId", "schemaVersion", "statePath", "toolsets", "workOrderId", "workspaceMode", "workspacePath")
     } else {
         $expectedFields = @("maximumTurns", "model", "prompt", "schemaVersion", "toolsets", "workOrderId", "workspaceRoot")
     }
     $actualFields = @($packet.PSObject.Properties.Name | Sort-Object)
     if (Compare-Object $actualFields $expectedFields) { throw "HERMES_FREE_AGENT_PACKET_FIELDS_WALL" }
-    $expectedSchema = if ($ownedMode) { 2 } else { 1 }
+    $expectedSchema = if ($ownedMode) { 3 } else { 1 }
     if (-not ($packet.schemaVersion -is [int] -or $packet.schemaVersion -is [long]) -or $packet.schemaVersion -ne $expectedSchema) { throw "HERMES_FREE_AGENT_PACKET_SCHEMA_WALL" }
     if ($policy.promotion.status -ne "PILOT_AUTHORIZED" -and $policy.promotion.status -ne "PROMOTED") { throw "HERMES_FREE_AGENT_PROMOTION_WALL" }
     if ($packet.workOrderId -isnot [string] -or $packet.workOrderId -ne $policy.workOrderId) { throw "HERMES_FREE_AGENT_WORK_ORDER_WALL" }
@@ -98,6 +99,28 @@ try {
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($commonDir)) { throw "HERMES_FREE_AGENT_WORKSPACE_ROOT_WALL" }
         $mainCheckout = Split-Path -Parent ([IO.Path]::GetFullPath($commonDir.Trim()).TrimEnd('\'))
         if ([IO.Path]::GetFullPath($toplevel.Trim()).TrimEnd('\') -ieq $mainCheckout) { throw "HERMES_FREE_AGENT_CANONICAL_REPOSITORY_WALL" }
+        # Per-thread kernel state (policy containment.agentStatePersistence = PER_THREAD_STATE_DIR):
+        # an absolute, runtime-owned directory under <runtime root>\hermes-kernel\threads, mounted
+        # as the kernel's HERMES_HOME so sessions outlive the one-shot container.
+        if ($policy.containment.agentStatePersistence -ne "PER_THREAD_STATE_DIR") { throw "HERMES_FREE_AGENT_STATE_MODE_WALL" }
+        if ([string]::IsNullOrWhiteSpace($StatePath) -or -not [IO.Path]::IsPathRooted($StatePath)) { throw "HERMES_FREE_AGENT_STATE_PATH_WALL" }
+        $resolvedState = [IO.Path]::GetFullPath($StatePath).TrimEnd('\')
+        if ($packet.statePath -ne $StatePath) { throw "HERMES_FREE_AGENT_STATE_PATH_WALL" }
+        $runtimeRoot = Split-Path -Parent ([IO.Path]::GetFullPath($policy.placement.allowedWorkspaceRoots[0]).TrimEnd('\'))
+        $threadsRoot = (Join-Path (Join-Path $runtimeRoot "hermes-kernel") "threads").TrimEnd('\') + '\'
+        if (-not $resolvedState.StartsWith($threadsRoot, [StringComparison]::OrdinalIgnoreCase)) { throw "HERMES_FREE_AGENT_STATE_PATH_WALL" }
+        if (-not (Test-Path -LiteralPath $resolvedState -PathType Container)) { New-Item -ItemType Directory -Path $resolvedState -Force | Out-Null }
+        $stateCursor = $resolvedState
+        while ($stateCursor -and $stateCursor -ne [IO.Path]::GetPathRoot($stateCursor)) {
+            $stateItem = Get-Item -LiteralPath $stateCursor -Force -ErrorAction Stop
+            if ($stateItem.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "HERMES_FREE_AGENT_STATE_PATH_WALL" }
+            $stateCursor = Split-Path -Parent $stateCursor
+        }
+        $resumeSession = $null
+        if ($null -ne $packet.kernelSessionId) {
+            if ($packet.kernelSessionId -isnot [string] -or $packet.kernelSessionId -notmatch '^[A-Za-z0-9_-]{4,64}$') { throw "HERMES_FREE_AGENT_SESSION_ID_WALL" }
+            $resumeSession = $packet.kernelSessionId
+        }
     } else {
         if ($packet.workspaceRoot -isnot [string] -or $packet.workspaceRoot -ne $policy.placement.workspaceRoot) { throw "HERMES_FREE_AGENT_WORKSPACE_WALL" }
     }
@@ -131,6 +154,11 @@ try {
     }
 
     $env:WILLIAMOS_AGENT_WORKSPACE = $runWorkspace
+    $agentService = "agent"
+    if ($ownedMode) {
+        $env:WILLIAMOS_AGENT_STATE = $resolvedState
+        $agentService = "agent-owned"
+    }
     docker --config $policy.placement.dockerConfig compose --project-name williamos-hermes-agent --file $ComposeFile up --detach --wait inference-proxy
     if ($LASTEXITCODE -ne 0) { throw "HERMES_FREE_AGENT_PROXY_WALL" }
 
@@ -156,9 +184,10 @@ $($packet.prompt)
     $arguments = @(
         "--config", $policy.placement.dockerConfig, "compose", "--project-name", "williamos-hermes-agent", "--file", $ComposeFile,
         "run", "--detach", "--name", $containerName, "--no-deps", "-T",
-        "-e", "WILLIAMOS_QUERY_B64=$queryB64", "-e", "WILLIAMOS_MAX_TURNS=$($packet.maximumTurns)",
-        "agent", "python", "/opt/runner/run_agent.py"
+        "-e", "WILLIAMOS_QUERY_B64=$queryB64", "-e", "WILLIAMOS_MAX_TURNS=$($packet.maximumTurns)"
     )
+    if ($ownedMode -and $null -ne $resumeSession) { $arguments += @("-e", "WILLIAMOS_RESUME_SESSION=$resumeSession") }
+    $arguments += @($agentService, "python", "/opt/runner/run_agent.py")
     & docker @arguments | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "HERMES_FREE_AGENT_START_WALL" }
     $deadline = [DateTime]::UtcNow.AddSeconds($policy.execution.timeoutSeconds)
