@@ -1,6 +1,10 @@
 # S2 — Resident-model executor adapter over the Hermes-Agent kernel
 
-**Date:** 2026-08-16 · **Status:** P1 implemented on branch wo/s2-resident-executor-adapter (owner review = PR); P2 pending owner-triggered live smoke on HERMES.
+**Date:** 2026-08-16 · **Status:** P1 merged (PR #804). P2 done — owned-worktree confinement proven
+on HERMES (PR #805, `docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md`). P2b done —
+per-thread kernel state + session continuity proven
+(`docs/reports/hermes-kernel-p2b-session-continuity-2026-08-16.md`); `sessionResumeProven` is now
+`true`. Remaining: P3 promotion (independent review of the v2 mode).
 **Builds on:** S1 (`ResidentModelExecutionBackend`, commit `3558e65`), WO-WILLIAMOS-HERMES-KERNEL-V1
 (T2 doctrine), `hermes-free-dev-agent` provider (policy v1, `PILOT_AUTHORIZED`).
 
@@ -85,7 +89,7 @@ runtimeRoot, commandRunner, policyPath, invokerPath })`. All collaborators injec
   1. PacketBuilder → packet v2 (§3.3), written to `<thread>/turns/<n>/packet.json` (0600).
   2. Invoker runs the ps1 with `-PacketPath -PolicyPath -WorkspacePath <worktree> -RunId <turnId>`
      via `commandRunner` with `timeoutMs` (default = the orchestrator's `TURN_TIMEOUT_MS`),
-     `credentialAccess:false`. (P2 adds `-StatePath` once the kernel session location is known.)
+     `credentialAccess:false`, plus `-StatePath <thread>/kernel-state` (P2b).
   3. Exit 0 and a `HERMES_FREE_AGENT_COMPLETE runId=<turnId> …` line required; otherwise map (§5).
   4. OutputHarvester extracts the **last** fenced ```json block from stdout, must parse and satisfy
      `HERMES_TURN_OUTPUT_SCHEMA` (structural check here; the orchestrator re-validates). Missing/
@@ -98,7 +102,9 @@ runtimeRoot, commandRunner, policyPath, invokerPath })`. All collaborators injec
 
 ### 3.3 PacketBuilder / packet v2
 Exact fields (v2): `schemaVersion:2, workOrderId, model, prompt, maximumTurns, toolsets,
-workspaceMode:"OWNED_WORKTREE", workspacePath, runId` (P2 adds `statePath`). `prompt` = the orchestrator's
+workspaceMode:"OWNED_WORKTREE", workspacePath, runId, statePath, kernelSessionId` (schemaVersion 3
+since P2b; `kernelSessionId` is the session captured from the thread's previous turn, or null).
+`prompt` = the orchestrator's
 delivery prompt verbatim + a fixed epilogue:
 
 > Finish by printing exactly one fenced ```json block that satisfies the following JSON schema and
@@ -132,12 +138,14 @@ applies the structural check of §3.2 item 4 (no new dependency).
 2. `containment.canonicalRepositoryMounted: false` **unchanged** — an owned worktree of the
    runtime is not the canonical checkout; the invoker must refuse a workspace whose `git
    rev-parse --git-common-dir` resolves to the canonical repository path.
-3. `containment.agentStatePersistence: false` **unchanged in P1**. The pinned runner is a plain
-   `hermes chat` one-shot with agent state on tmpfs; where the kernel keeps sessions is established
-   in P2, which then adds a per-thread state mount (`PER_THREAD_STATE_DIR`) as its own reviewed
-   line. Until then `resumeThread` fails closed (item 5).
-4. `execution.promptMaxChars: 60000` (was 16000 in the invoker); remediation prompts carry findings.
-5. `execution.sessionResumeProven: false` (flipped by P2 evidence only).
+3. `containment.agentStatePersistence: "PER_THREAD_STATE_DIR"` (P2b). The pinned runner keeps agent
+   state in `HERMES_HOME` (`/opt/data`), which the v1 `agent` compose service mounts as tmpfs — so
+   sessions died with the one-shot container. The `agent-owned` service (added by P2b, identical to
+   `agent` in every containment property) binds `<runtime root>\hermes-kernel\threads\<threadId>\kernel-state`
+   there instead, and the runner resumes a validated session id from `WILLIAMOS_RESUME_SESSION`.
+   Nothing else persists; the v1 service is unchanged. No image rebuild was needed.
+5. `execution.sessionResumeProven: true` since P2b evidence; `resumeThread` still fails closed per
+   thread unless that thread captured a kernel session id and its state dir exists.
 6. `execution.timeoutSeconds` unchanged (1800) — must be ≤ orchestrator turn timeout (45 min).
 7. Prompt preamble text in the invoker updated from "disposable clone of the pinned baseline" to
    "the owned WilliamOS worktree for Work Order X; change only reserved paths".
@@ -186,7 +194,8 @@ orchestrator's existing provider-retry/defer path applies.
 - **P2 (on HERMES, owner-triggered):** live smoke `pnpm hermes:smoke` with
   `WILLIAMOS_EXECUTOR=resident-model` against a throwaway outcome on the registered contract;
   evidence: run id, container exit 0, harvested JSON, diff confined to reservations. Then the resume
-  probe: two turns on one thread; if the kernel demonstrably continues, flip `sessionResumeProven`.
+  probe (P2b, done): two turns on one thread, the second tool-free and answerable only from session
+  memory; the kernel recalled the exact marker and file, so `sessionResumeProven` was flipped.
 - **P3:** promote policy v2 (`promotion.status: PROMOTED`) after INDEPENDENT_REVIEW_APPROVED.
 
 ## 7. Testing (P1)

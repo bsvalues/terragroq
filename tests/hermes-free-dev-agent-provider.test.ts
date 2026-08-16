@@ -87,17 +87,20 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
   it("raises the prompt budget for remediation prompts and keeps resume fail-closed", () => {
     const v2 = policyV2()
     expect(v2.execution.promptMaxChars).toBe(60000)
-    expect(v2.execution.sessionResumeProven).toBe(false)
+    // P2b (2026-08-16) proved kernel session continuity across turns on HERMES; resume is open,
+    // and still additionally gated per thread by a captured kernel session id + state dir.
+    expect(v2.execution.sessionResumeProven).toBe(true)
     expect(v2.containment.agentStatePersistence).toBe("PER_THREAD_STATE_DIR")
   })
   it("stays pilot-authorised pending independent review of the v2 mode", () => {
     const v2 = policyV2()
     expect(v2.promotion.status).toBe("PILOT_AUTHORIZED")
-    expect(v2.promotion.requiredEvidence).toEqual([...policy().promotion.requiredEvidence, "OWNED_WORKTREE_CONFINEMENT_PROVEN"])
+    expect(v2.promotion.requiredEvidence).toEqual([...policy().promotion.requiredEvidence, "OWNED_WORKTREE_CONFINEMENT_PROVEN", "KERNEL_SESSION_CONTINUITY_PROVEN"])
     // P2 (2026-08-16) proved owned-worktree confinement on HERMES; the value is the completed
     // probe turn id and is documented in docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md.
-    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: "p2-b9fbca28-6fea-4898-9533-b556008ff300" })
+    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: "p2-b9fbca28-6fea-4898-9533-b556008ff300", KERNEL_SESSION_CONTINUITY_PROVEN: "p2b-1f789bdf-4f51-45f4-aeb3-5080f60a5344" })
     expect(read("docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md")).toContain("b9fbca28-6fea-4898-9533-b556008ff300")
+    expect(read("docs/reports/hermes-kernel-p2b-session-continuity-2026-08-16.md")).toContain("1f789bdf-4f51-45f4-aeb3-5080f60a5344")
   })
   it("keeps the evidence gate enforced, not decorative", () => {
     // Every declared evidence line is satisfied after P2, and both enforcement points still
