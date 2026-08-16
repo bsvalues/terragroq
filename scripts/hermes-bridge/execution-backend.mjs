@@ -131,6 +131,39 @@ export class LocalExecutionBackend extends ExecutionBackend {
   }
 }
 
+/** Typed refusal raised when a resident-model capability is selected but not yet built. */
+export class ResidentModelNotImplementedError extends Error {
+  constructor(capability) {
+    super(`resident-model executor does not implement ${capability}`)
+    this.name = "ResidentModelNotImplementedError"
+    this.code = "RESIDENT_MODEL_EXECUTOR_NOT_IMPLEMENTED"
+    this.capability = capability
+  }
+}
+
+/**
+ * Resident local-model execution context (S1 scaffold).
+ *
+ * Inherits every model-agnostic mechanic from LocalExecutionBackend unchanged —
+ * prepareWorkspace, runCommand, stat, validate, git, cleanup — because workspace and
+ * git mechanics do not depend on who authors the change. Only runCodexClient, the
+ * single Codex seam in the contract, is overridden.
+ *
+ * The agent loop that authors changes locally lands in S2. Until then this refuses
+ * fail-closed: it never returns a client that cannot actually produce a diff.
+ */
+export class ResidentModelExecutionBackend extends LocalExecutionBackend {
+  constructor(options = {}) {
+    super(options)
+    this.isResidentModel = true
+  }
+
+  async runCodexClient({ workspacePath } = {}) {
+    requiredString(workspacePath, "workspacePath")
+    throw new ResidentModelNotImplementedError("runCodexClient")
+  }
+}
+
 export class AegisExecutionBackend extends ExecutionBackend {
   constructor({
     host = process.env.WILLIAMOS_CODEX_EXEC_NODE,
@@ -240,6 +273,15 @@ export class AegisExecutionBackend extends ExecutionBackend {
 }
 
 export function selectExecutionBackend(env = process.env) {
+  // Explicit opt-in, checked first and matched exactly. WILLIAMOS_CODEX_EXEC_NODE selects
+  // WHERE Codex runs; this selects WHETHER Codex runs at all, so it cannot be folded into it.
+  // Nothing sets this variable today, so existing deployments keep their current backend.
+  if (env?.WILLIAMOS_EXECUTOR === "resident-model") {
+    const options = {}
+    if (env.WILLIAMOS_HERMES_RUNTIME_ROOT) options.runtimeRoot = env.WILLIAMOS_HERMES_RUNTIME_ROOT
+    if (env.WILLIAMOS_REPOSITORY_ROOT) options.repositoryRoot = env.WILLIAMOS_REPOSITORY_ROOT
+    return new ResidentModelExecutionBackend(options)
+  }
   const host = env?.WILLIAMOS_CODEX_EXEC_NODE
   if (typeof host === "string" && host.trim().length > 0) {
     const options = { host }

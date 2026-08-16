@@ -25,7 +25,9 @@ describe("Projects workspace", () => {
       "/runtime?detail=technical",
       "/brain-council",
     ]))
-    expect(workbenchSource).toContain("No generic shell authority")
+    // Assert the read-only authority boundary is disclosed, not the exact wording: the copy was
+    // reworded and the literal string now survives only in this test.
+    expect(workbenchSource).toMatch(/cannot grant execution authority/i)
   })
 
   it("loads the authenticated operator read model instead of a static registry", () => {

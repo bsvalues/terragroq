@@ -114,6 +114,35 @@ type JournalRecord = JsonObject & {
 }
 
 const repoRoot = path.resolve(import.meta.dirname, "..")
+
+// The canonical-JSON repair record is a closed one-shot record of the provisioning performed at
+// EXPECTED_COMMIT. Its asset digests describe what was installed at that moment, so they must not be
+// validated against live source: PR #611 legitimately changed bootstrap-aegis-standing-hash.mjs and
+// aegis-standing-hash-replay-epoch.mjs, which silently invalidated the frozen record with no CI to
+// catch it. Read the historical bytes from frozen fixtures instead, so ordinary source evolution
+// cannot rewrite what a past provisioning is recorded to have installed.
+const HISTORICAL_FIXTURE_DIR = "tests/fixtures/execution-fabric/aegis-standing-hash-historical"
+const HISTORICAL_SOURCE_FIXTURES: Record<string, string> = Object.fromEntries([
+  "scripts/execution-fabric/bounded-dispatch/bootstrap-aegis-standing-hash.mjs",
+  "scripts/execution-fabric/bounded-dispatch/run-resident-aegis-standing-hash.mjs",
+  "scripts/execution-fabric/bounded-dispatch/aegis-standing-hash-runtime.mjs",
+  "scripts/execution-fabric/bounded-dispatch/aegis-hash-core.mjs",
+  "scripts/execution-fabric/admission/evaluate-aegis-standing-authority.mjs",
+  "scripts/execution-fabric/canonical-json.mjs",
+  "scripts/execution-fabric/provision/aegis-standing-hash-ssh-entrypoint.mjs",
+  "scripts/execution-fabric/provision/aegis-standing-hash-replay-epoch.mjs",
+  "scripts/execution-fabric/provision/apply-aegis-standing-hash-prerequisites.mjs",
+  "scripts/execution-fabric/provision/create-hermes-aegis-standing-hash-key.mjs",
+  "scripts/execution-fabric/provision/repair-aegis-standing-hash-canonical-json.mjs",
+].map((source) => [source, `${HISTORICAL_FIXTURE_DIR}/${source.slice(source.lastIndexOf("/") + 1)}`]))
+
+function historicalSourceBytes(relativePath: string): Buffer {
+  const resolved = HISTORICAL_SOURCE_FIXTURES[relativePath] ?? relativePath
+  return Buffer.from(
+    fs.readFileSync(path.join(repoRoot, ...resolved.split("/"))).toString("utf8").replace(/\r\n/g, "\n"),
+    "utf8",
+  )
+}
 const reviewedCheckoutSourcePath = "/opt/williamos/source/terragroq"
 const manifestRelativePath = "config/execution-fabric/aegis-standing-hash-provisioning-package.v1.json"
 const manifestPath = path.join(repoRoot, ...manifestRelativePath.split("/"))
@@ -1161,7 +1190,7 @@ function implementationInput(overrides: {
   const packageClosure = new Map(
     manifest().bindings.map(({ path: bindingPath }) => [
       bindingPath,
-      Buffer.from(fs.readFileSync(path.join(repoRoot, ...bindingPath.split("/"))).toString("utf8").replace(/\r\n/g, "\n"), "utf8"),
+      historicalSourceBytes(bindingPath),
     ]),
   )
   return {
@@ -1859,7 +1888,7 @@ function repairFixture(overrides: {
     existing.push({
       path: `${value.reviewedRelease.releaseRoot}/${relativePath}`,
       mode: overrides.trackedModes?.[relativePath] === "100755" ? 0o755 : 0o644,
-      bytes: Buffer.from(fs.readFileSync(path.join(repoRoot, ...relativePath.split("/"))).toString("utf8").replace(/\r\n/g, "\n")),
+      bytes: historicalSourceBytes(relativePath),
     })
   }
   if (overrides.gitAlternates) existing.push({
@@ -1873,10 +1902,7 @@ function repairFixture(overrides: {
       path: asset.path,
       kind: priorOverride?.kind ?? "file",
       mode: priorOverride?.mode ?? Number.parseInt(asset.mode, 8),
-      bytes: priorOverride?.bytes ?? Buffer.from(
-        fs.readFileSync(path.join(repoRoot, ...sourceById[asset.id].split("/"))).toString("utf8").replace(/\r\n/g, "\n"),
-        "utf8",
-      ),
+      bytes: priorOverride?.bytes ?? historicalSourceBytes(sourceById[asset.id]),
     })
   }
   if (overrides.target) existing.push({

@@ -225,7 +225,7 @@ describe("Hermes bridge CLI", () => {
       local: null,
       workOrder: null,
     }))
-    const root = "C:\\runtime-agreement"
+    const root = path.resolve(path.sep, "runtime-agreement")
 
     await expect(captureRuntimeAgreement({
       runtimeRoot: root,

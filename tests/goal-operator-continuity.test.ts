@@ -25,6 +25,12 @@ import {
   projectOutcomeRuntimeLease,
 } from "../scripts/hermes-bridge/outcome-source.mjs"
 import { createHermesStateStore } from "../scripts/hermes-bridge/state-store.mjs"
+import {
+  HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
+  HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+  HERMES_WORK_CONTRACT_VERSION,
+  resolveHermesWorkContract,
+} from "../scripts/hermes-bridge/work-contract.mjs"
 
 const roots: string[] = []
 const owner = "owner-461"
@@ -34,6 +40,30 @@ const workOrderRef = "WO-HERMES-OUTCOME-461"
 const prNumber = 461
 const commit = "c".repeat(40)
 const mergeSha = "d".repeat(40)
+// The Hermes bridge only executes outcomes that resolve to the single registered,
+// reviewed work contract (deny-by-default since 4c80e9a); the persisted projectors
+// additionally bind every checkpoint to a durable queue binding and a canonical
+// Workbench authorization (6a3539a). This scenario therefore runs on that contract.
+const registeredCommand = "Add a compact on-screen latest-evidence timestamp to selected Thread work status."
+const registeredContract = resolveHermesWorkContract({
+  lane: "ui", risk: "low", authority: "A2_WRITE_OWN", command: registeredCommand,
+})!
+const changedPaths = [registeredContract.reservations[0]]
+const registeredValidators = registeredContract.validationCommands.map(
+  ({ command, args }: { command: string; args: string[] }) => `${command} ${args.join(" ")}`,
+)
+const acquisitionKey = "acquisition-goal-461"
+const queueBinding = {
+  userId: owner,
+  outcomeKey: "goal:GOAL-WOS-V1.1-003",
+  expectedVersion: 3,
+  executionBinding: "execution-goal-461",
+  leaseHolder: "Hermes:hermes-outcome-queue",
+  leaseToken: "lease-goal-461",
+  fencingToken: 1,
+  acquisitionKey,
+  activeWorkOrderId: workOrderId,
+}
 
 type EvidenceRow = {
   id: number
@@ -74,14 +104,14 @@ class PersistedRuntimeLedger {
       title: "Resident continuity and cross-surface recovery",
       description: "Durable runtime projection for GOAL-WOS-V1.1-003",
       goal: "GOAL-WOS-V1.1-003",
-      lane: "read_model",
+      lane: "ui",
       phase: null,
       status: "active",
       result: null,
       commitRef: null,
       evidence: [],
       assignee: "hermes-codex-bridge",
-      validators: ["npx vitest run tests/goal-operator-continuity.test.ts"],
+      validators: [...registeredValidators],
       stopConditions: [],
       linkedDecisionId: null,
       createdAt,
@@ -98,9 +128,72 @@ class PersistedRuntimeLedger {
       || sql.startsWith("INSERT INTO work_order")) {
       return { rows: [], rowCount: 0 }
     }
-    if (sql.startsWith('SELECT wo.id, wo."userId" AS "userId", wo.ref')) {
+    if (sql.startsWith('SELECT contract_goal.id AS "goalId"')) {
       return {
-        rows: [{ id: workOrderId, userId: owner, ref: workOrderRef }],
+        rows: [{
+          goalId: outcomeId,
+          userId: owner,
+          goalRef: "GOAL-WOS-V1.1-003",
+          goalLane: "ui",
+          outcomeKey: queueBinding.outcomeKey,
+          version: queueBinding.expectedVersion,
+          executionBinding: queueBinding.executionBinding,
+          leaseToken: queueBinding.leaseToken,
+          leaseHolder: queueBinding.leaseHolder,
+          fencingToken: queueBinding.fencingToken,
+          acquisitionKey,
+          executionEpochStartedAt: "2026-07-26T15:59:00.000Z",
+          activeWorkOrderId: workOrderId,
+          workContract: {
+            version: HERMES_WORK_CONTRACT_VERSION,
+            repository: "bsvalues/terragroq",
+            lane: "ui",
+            id: HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+            digest: HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
+            reservations: [...registeredContract.reservations],
+            validationCommands: registeredContract.validationCommands.map(
+              ({ command, args }: { command: string; args: string[] }) => ({ command, args: [...args] }),
+            ),
+          },
+        }],
+        rowCount: 1,
+      }
+    }
+    if (sql.startsWith('SELECT wo.id, wo."userId" AS "userId", wo.ref')) {
+      const latest = [...this.events].reverse().find((event) =>
+        event.eventType === "HERMES_RUNTIME_CHECKPOINT")
+      const latestMetadata = (latest?.metadata ?? null) as Record<string, unknown> | null
+      const epochLatest = [...this.events].filter((event) =>
+        event.eventType === "HERMES_RUNTIME_CHECKPOINT"
+        && (event.metadata as Record<string, unknown>).executionEpochDigest === params[2])
+        .sort((a, b) => Number((b.metadata as Record<string, unknown>).checkpointSequence)
+          - Number((a.metadata as Record<string, unknown>).checkpointSequence) || b.id - a.id)[0]
+      return {
+        rows: [{
+          id: workOrderId,
+          userId: owner,
+          ref: workOrderRef,
+          goal: this.workOrder.goal,
+          lane: this.workOrder.lane,
+          status: this.workOrder.status,
+          result: this.workOrder.result,
+          commitRef: this.workOrder.commitRef,
+          assignee: this.workOrder.assignee,
+          agent: "codex",
+          allowedFiles: [...registeredContract.reservations],
+          validators: [...registeredValidators],
+          latestCheckpointId: latest?.id ?? null,
+          latestCheckpointMetadata: latestMetadata,
+          latestCheckpointState: latestMetadata?.checkpointState ?? null,
+          latestCheckpointKey: latestMetadata?.idempotencyKey ?? null,
+          latestCheckpointDigest: latestMetadata?.payloadDigest ?? null,
+          latestCheckpointSequence: latestMetadata?.checkpointSequence === undefined
+            ? null : String(latestMetadata.checkpointSequence),
+          latestExecutionEpochDigest: latestMetadata?.executionEpochDigest ?? null,
+          latestCheckpointCreatedAt: latest?.createdAt ?? null,
+          latestExecutionEpochSequence: epochLatest
+            ? String((epochLatest.metadata as Record<string, unknown>).checkpointSequence) : null,
+        }],
         rowCount: 1,
       }
     }
@@ -239,14 +332,15 @@ function outcome() {
     id: outcomeId,
     userId: owner,
     ref: "GOAL-WOS-V1.1-003",
-    command: "Prove resident continuity through a recoverable App Server interruption.",
-    lane: "read_model",
+    command: registeredCommand,
+    lane: "ui",
     mode: "implement",
     risk: "low",
     authority: "A2_WRITE_OWN",
     verdict: "requires_approval",
     requiresApproval: true,
     status: "classified",
+    queueBinding: { ...queueBinding },
   }
 }
 
@@ -295,7 +389,6 @@ describe("WO #461 executable goal/operator continuity", { timeout: 30_000 }, () 
       checkpointProjector({ ...input, query: ledger.query })
     const projectLease = (input: Record<string, unknown>) =>
       leaseProjector({ ...input, query: ledger.query })
-    const changedPaths = ["components/goal-console/goal-timeline-read-model.ts"]
     let merged = false
     const lifecycle = {
       refreshOriginMain: vi.fn(async () => "a".repeat(40)),
@@ -324,11 +417,8 @@ describe("WO #461 executable goal/operator continuity", { timeout: 30_000 }, () 
       inspectWorktreeHead: vi.fn(async () => commit),
       ensureValidationDependencies: vi.fn(() => ({ linked: true })),
       removeValidationDependencies: vi.fn(() => ({ removed: true })),
-      runValidationCommands: vi.fn(async () => [{
-        command: "npx",
-        args: ["vitest", "run", "tests/goal-operator-continuity.test.ts"],
-        code: 0,
-      }]),
+      runValidationCommands: vi.fn(async ({ commands }: { commands: Array<{ command: string; args: string[] }> }) =>
+        commands.map(({ command, args }) => ({ command, args, code: 0 }))),
       commitChanges: vi.fn(async () => ({
         commit,
         branch: "codex/wos-v1-1-continuity-recovery",
@@ -500,7 +590,7 @@ describe("WO #461 executable goal/operator continuity", { timeout: 30_000 }, () 
       userId: owner,
       ref: "GOAL-WOS-V1.1-003",
       command: outcome().command,
-      lane: "read_model",
+      lane: "ui",
       mode: "implement",
       risk: "low",
       authority: "A2_WRITE_OWN",
@@ -516,9 +606,7 @@ describe("WO #461 executable goal/operator continuity", { timeout: 30_000 }, () 
     const projectedEvidence: GoalTimelineEvidenceRecord[] = ledger.evidence.map((row) => ({
       ...row,
       branch: "codex/wos-v1-1-continuity-recovery",
-      validators: row.result === "PASS"
-        ? ["npx vitest run tests/goal-operator-continuity.test.ts"]
-        : [],
+      validators: row.result === "PASS" ? [...registeredValidators] : [],
       knownFailures: [],
       outOfScopeChanges: [],
       deferredItems: [],

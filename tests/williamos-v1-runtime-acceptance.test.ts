@@ -188,7 +188,7 @@ function scenarioEvidence(id: string) {
       applicationStatus: "ok",
       workerProcessId: 123,
       workerNonce: "nonce",
-      workerWorkspace: "C:\\repo",
+      workerWorkspace: path.resolve(path.sep, "repo"),
     },
     "AC-14": {
       campaignId: "issue-448",
