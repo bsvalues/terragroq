@@ -356,9 +356,12 @@ describe("Hermes orchestrator over the resident-model kernel client", () => {
     const worktreesRoot = path.join(root, "worktrees"); const workspacePath = path.join(worktreesRoot, "wos-v1-1-continuity-recovery"); fs.mkdirSync(workspacePath, { recursive: true })
     const policyDir = path.join(root, "policy"); fs.mkdirSync(policyDir)
     const policyPath = path.join(policyDir, "hermes-free-dev-agent-v2.policy.json")
-    fs.writeFileSync(policyPath, JSON.stringify({ schemaVersion: 2, packetSchemaVersion: 2, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: { id: "williamos-qwen3-4b:64k" }, placement: { workspaceMode: "OWNED_WORKTREE", allowedWorkspaceRoots: [worktreesRoot] }, execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"], promptMaxChars: 60000, sessionResumeProven: false, timeoutSeconds: 1800 }, promotion: { status: "PILOT_AUTHORIZED" } }))
+    fs.writeFileSync(policyPath, JSON.stringify({ schemaVersion: 2, packetSchemaVersion: 2, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: { id: "williamos-qwen3-4b:64k" }, placement: { workspaceMode: "OWNED_WORKTREE", allowedWorkspaceRoots: [worktreesRoot] }, execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"], promptMaxChars: 60000, sessionResumeProven: false, timeoutSeconds: 1800 }, promotion: { status: "PILOT_AUTHORIZED", requiredEvidence: ["OWNED_WORKTREE_CONFINEMENT_PROVEN"], satisfiedEvidence: { OWNED_WORKTREE_CONFINEMENT_PROVEN: "bootstrap-owned-1" } } }))
+    fs.writeFileSync(path.join(root, "invoke.ps1"), "# fake")
     const invocations: string[][] = []
-    const commandRunner = vi.fn(async ({ args }: { args: string[] }) => {
+    const commandRunner = vi.fn(async ({ command, args }: { command: string; args: string[] }) => {
+      // The client probes `git rev-parse --git-common-dir` either side of the invoker.
+      if (command === "git") return { code: 0, stderr: "", stdout: `${path.join(workspacePath, ".git")}\n` }
       invocations.push(args)
       const runId = args[args.indexOf("-RunId") + 1]
       return { code: 0, stderr: "", stdout: `working\n\`\`\`json\n${kernelJson}\n\`\`\`\nHERMES_FREE_AGENT_COMPLETE runId=${runId} workspace=${workspacePath}\n` }
@@ -441,8 +444,10 @@ describe("Hermes orchestrator over the resident-model kernel client", () => {
     const worktreesRoot = path.join(root, "worktrees"); const workspacePath = path.join(worktreesRoot, "wos-v1-1-continuity-recovery"); fs.mkdirSync(workspacePath, { recursive: true })
     const policyDir = path.join(root, "policy"); fs.mkdirSync(policyDir)
     const policyPath = path.join(policyDir, "hermes-free-dev-agent-v2.policy.json")
-    fs.writeFileSync(policyPath, JSON.stringify({ schemaVersion: 2, packetSchemaVersion: 2, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: { id: "williamos-qwen3-4b:64k" }, placement: { workspaceMode: "OWNED_WORKTREE", allowedWorkspaceRoots: [worktreesRoot] }, execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"], promptMaxChars: 60000, sessionResumeProven: false, timeoutSeconds: 1800 }, promotion: { status: "PILOT_AUTHORIZED" } }))
-    const commandRunner = vi.fn(async ({ args }: { args: string[] }) => {
+    fs.writeFileSync(policyPath, JSON.stringify({ schemaVersion: 2, packetSchemaVersion: 2, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: { id: "williamos-qwen3-4b:64k" }, placement: { workspaceMode: "OWNED_WORKTREE", allowedWorkspaceRoots: [worktreesRoot] }, execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"], promptMaxChars: 60000, sessionResumeProven: false, timeoutSeconds: 1800 }, promotion: { status: "PILOT_AUTHORIZED", requiredEvidence: ["OWNED_WORKTREE_CONFINEMENT_PROVEN"], satisfiedEvidence: { OWNED_WORKTREE_CONFINEMENT_PROVEN: "bootstrap-owned-1" } } }))
+    fs.writeFileSync(path.join(root, "invoke.ps1"), "# fake")
+    const commandRunner = vi.fn(async ({ command, args }: { command: string; args: string[] }) => {
+      if (command === "git") return { code: 0, stderr: "", stdout: `${path.join(workspacePath, ".git")}\n` }
       const runId = args[args.indexOf("-RunId") + 1]
       // No fenced ```json block at all — only the completion marker.
       return { code: 0, stderr: "", stdout: `working\nHERMES_FREE_AGENT_COMPLETE runId=${runId} workspace=${workspacePath}\n` }

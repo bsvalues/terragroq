@@ -3,7 +3,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { AppServerTimeoutError, AppServerTurnEndedError, AppServerWallError, sanitizeAppServerText } from "./app-server-client.mjs"
-import { harvestTurnOutput, HERMES_FREE_AGENT_COMPLETE_PATTERN } from "./hermes-kernel-output.mjs"
+import { harvestTurnOutput, HERMES_FREE_AGENT_COMPLETE_PATTERN, validateAgainstTurnSchema } from "./hermes-kernel-output.mjs"
 import { HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 
 export const HERMES_KERNEL_POLICY_RELATIVE = "config/execution-fabric/hermes-free-dev-agent-v2.policy.json"
@@ -13,6 +13,10 @@ const SESSION_SCHEMA_VERSION = 1
 
 export function kernelThreadsRoot(runtimeRoot) {
   return path.join(path.resolve(runtimeRoot), "hermes-kernel", "threads")
+}
+
+export function kernelQuarantinePath(runtimeRoot) {
+  return path.join(path.resolve(runtimeRoot), "hermes-kernel", HERMES_KERNEL_QUARANTINE_MARKER)
 }
 
 function wall(code, method = "hermes-kernel") { return new AppServerWallError(code, method) }
@@ -60,7 +64,13 @@ export function buildKernelPacket({ policy, prompt, workspacePath, runId }) {
   }
 }
 
-const WALL_TOKEN = /HERMES_FREE_AGENT_[A-Z_]+_WALL/
+// Wall tokens are only believed at the start of a line: the model's own stdout is
+// interleaved with the invoker's, and a model that merely *mentions* a wall token
+// mid-sentence must not be able to forge a lane verdict.
+const WALL_TOKEN = /^HERMES_FREE_AGENT_[A-Z_]+_WALL/m
+const TIMEOUT_WALL = /^HERMES_FREE_AGENT_TIMEOUT_WALL/m
+const EXECUTION_WALL = /^HERMES_FREE_AGENT_EXECUTION_WALL/m
+const GIT_COMMON_DIR_ARGS = ["rev-parse", "--path-format=absolute", "--git-common-dir"]
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex")
 
 export function createHermesKernelClient({
@@ -78,6 +88,7 @@ export function createHermesKernelClient({
   if (typeof commandRunner !== "function") throw new TypeError("commandRunner must be a function")
   const threadsRoot = kernelThreadsRoot(runtimeRoot)
   const worktreesRoot = path.join(path.resolve(runtimeRoot), "worktrees")
+  const quarantinePath = kernelQuarantinePath(runtimeRoot)
   let connected = false
 
   const readPolicy = () => {
@@ -85,10 +96,21 @@ export function createHermesKernelClient({
     try { policy = JSON.parse(fs.readFileSync(policyPath, "utf8")) } catch { throw wall("RESIDENT_MODEL_LANE_POLICY_UNREADABLE", "connect") }
     if (!["PILOT_AUTHORIZED", "PROMOTED"].includes(policy?.promotion?.status)) throw wall("RESIDENT_MODEL_LANE_NOT_AUTHORIZED", "connect")
     if (policy?.placement?.workspaceMode !== "OWNED_WORKTREE") throw wall("RESIDENT_MODEL_LANE_WORKSPACE_MODE", "connect")
+    // The lane is closed until every declared evidence line is actually satisfied;
+    // a declared-but-null entry is an unproven control, not a formality.
+    const satisfied = policy?.promotion?.satisfiedEvidence ?? {}
+    for (const key of Array.isArray(policy?.promotion?.requiredEvidence) ? policy.promotion.requiredEvidence : []) {
+      const value = satisfied?.[key]
+      if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) {
+        throw wall("RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN", "connect")
+      }
+    }
     return policy
   }
   const assertUnquarantined = () => {
-    if (fs.existsSync(path.join(path.dirname(policyPath), HERMES_KERNEL_QUARANTINE_MARKER))) throw wall("RESIDENT_MODEL_LANE_QUARANTINED", "connect")
+    for (const marker of [path.join(path.dirname(policyPath), HERMES_KERNEL_QUARANTINE_MARKER), quarantinePath]) {
+      if (fs.existsSync(marker)) throw wall("RESIDENT_MODEL_LANE_QUARANTINED", "connect")
+    }
   }
   const assertOwnedWorkspace = () => {
     let real
@@ -96,7 +118,33 @@ export function createHermesKernelClient({
     let worktreesReal
     try { worktreesReal = fs.realpathSync(worktreesRoot) } catch { throw wall("RESIDENT_MODEL_LANE_WORKSPACE", "connect") }
     if (!isInside(real, worktreesReal) || !fs.statSync(real).isDirectory()) throw wall("RESIDENT_MODEL_LANE_WORKSPACE", "connect")
+    // Intra-worktree escape hatches: a top-level reparse point re-points the mount out of
+    // the worktree, and node_modules is a bin/symlink farm the kernel must never inherit.
+    if (fs.existsSync(path.join(real, "node_modules"))) throw wall("RESIDENT_MODEL_LANE_WORKSPACE", "connect")
+    let entries
+    try { entries = fs.readdirSync(real) } catch { throw wall("RESIDENT_MODEL_LANE_WORKSPACE", "connect") }
+    for (const entry of entries) {
+      let stats
+      try { stats = fs.lstatSync(path.join(real, entry)) } catch { continue }
+      if (stats.isSymbolicLink()) throw wall("RESIDENT_MODEL_LANE_WORKSPACE", "connect")
+    }
     return real
+  }
+  const assertInvokerPresent = () => {
+    if (!fs.existsSync(invokerPath)) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
+  }
+
+  const gitCommonDir = async (cwd, turnTimeoutMs) => {
+    let result
+    try {
+      result = await commandRunner({
+        command: "git", args: ["-C", cwd, ...GIT_COMMON_DIR_ARGS], cwd, timeoutMs: turnTimeoutMs, credentialAccess: false,
+      })
+    } catch { return null }
+    const exitCode = result?.exitCode ?? result?.code ?? result?.status ?? 0
+    const value = String(result?.stdout ?? "").trim()
+    if (exitCode !== 0 || value.length === 0) return null
+    return path.resolve(value)
   }
 
   const sessionPath = (threadId) => path.join(threadsRoot, threadId, "session.json")
@@ -114,10 +162,14 @@ export function createHermesKernelClient({
 
   const client = {
     async connect() {
-      readPolicy(); assertUnquarantined(); assertOwnedWorkspace()
+      const policy = readPolicy(); assertUnquarantined(); assertOwnedWorkspace(); assertInvokerPresent()
+      // Spec §4 item 6: the kernel's own deadline must fit inside the orchestrator's turn budget.
+      const kernelTimeoutMs = Number(policy?.execution?.timeoutSeconds ?? 0) * 1000
+      if (!(timeoutMs >= kernelTimeoutMs)) throw wall("RESIDENT_MODEL_LANE_TIMEOUT", "connect")
       connected = true
     },
     async startThread() {
+      if (!connected) throw wall("RESIDENT_MODEL_LANE_NOT_CONNECTED", "startThread")
       const threadId = randomUUID()
       writeSession({ schemaVersion: SESSION_SCHEMA_VERSION, threadId, workspacePath, createdAt: now().toISOString(), turns: [] })
       return threadId
@@ -128,10 +180,10 @@ export function createHermesKernelClient({
       if (readPolicy()?.execution?.sessionResumeProven !== true) throw wall("RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE", "resumeThread")
       return threadId
     },
-    async runTurn({ threadId, prompt, timeoutMs: turnTimeoutMs = timeoutMs } = {}) {
+    async runTurn({ threadId, prompt, turn, timeoutMs: turnTimeoutMs = timeoutMs } = {}) {
       if (!connected) throw wall("RESIDENT_MODEL_LANE_NOT_CONNECTED", "runTurn")
       const session = readSession(threadId)
-      const policy = readPolicy(); assertUnquarantined(); const workspaceReal = assertOwnedWorkspace()
+      const policy = readPolicy(); assertUnquarantined(); const workspaceReal = assertOwnedWorkspace(); assertInvokerPresent()
       const text = requiredString(prompt, "prompt")
       const runId = randomUUID()
       const packet = buildKernelPacket({ policy, prompt: text, workspacePath: workspaceReal, runId })
@@ -142,34 +194,56 @@ export function createHermesKernelClient({
       const packetPath = path.join(turnDir, "packet.json")
       const packetBytes = `${JSON.stringify(packet, null, 2)}\n`
       fs.writeFileSync(packetPath, packetBytes, { mode: 0o600 })
-      const result = await commandRunner({
-        command: powershellCommand,
-        args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
-          "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", workspaceReal, "-RunId", runId],
-        cwd: workspaceReal, timeoutMs: turnTimeoutMs, credentialAccess: false,
-      })
+      const stdoutPath = path.join(turnDir, "stdout.txt")
+      const commonDirBefore = await gitCommonDir(workspaceReal, turnTimeoutMs)
+      if (commonDirBefore === null) throw wall("RESIDENT_MODEL_LANE_WORKSPACE", "runTurn")
+      let result
+      try {
+        result = await commandRunner({
+          command: powershellCommand,
+          args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
+            "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", workspaceReal, "-RunId", runId,
+            "-QuarantinePath", quarantinePath],
+          cwd: workspaceReal, timeoutMs: turnTimeoutMs, credentialAccess: false,
+        })
+      } catch (error) {
+        // A transport rejection is still a turn that happened: record it before throwing.
+        const failure = sanitizeAppServerText(String(error?.message ?? error)).slice(0, 256)
+        fs.writeFileSync(stdoutPath, failure, { mode: 0o600 })
+        session.turns.push({ turnId: runId, at: now().toISOString(), exitCode: null, packetSha256: sha256(packetBytes), stdoutSha256: sha256(failure), harvested: false, failure })
+        writeSession(session)
+        throw new AppServerTurnEndedError("interrupted")
+      }
       const exitCode = result?.exitCode ?? result?.code ?? result?.status ?? 0
       const stdout = String(result?.stdout ?? ""); const stderr = String(result?.stderr ?? "")
       const combined = `${stdout}\n${stderr}`
       const persistedStdout = sanitizeAppServerText(combined)
       const record = { turnId: runId, at: now().toISOString(), exitCode, packetSha256: sha256(packetBytes), stdoutSha256: sha256(persistedStdout), harvested: false }
-      fs.writeFileSync(path.join(turnDir, "stdout.txt"), persistedStdout)
+      fs.writeFileSync(stdoutPath, persistedStdout, { mode: 0o600 })
       const finish = (error) => { session.turns.push(record); writeSession(session); if (error) throw error }
-      if (result?.timedOut === true || /HERMES_FREE_AGENT_TIMEOUT_WALL/.test(combined)) finish(new AppServerTimeoutError(turnTimeoutMs))
-      if (/HERMES_FREE_AGENT_EXECUTION_WALL/.test(combined)) finish(new AppServerTurnEndedError("failed"))
+      if (result?.timedOut === true || TIMEOUT_WALL.test(combined)) finish(new AppServerTimeoutError(turnTimeoutMs))
+      if (EXECUTION_WALL.test(combined)) finish(new AppServerTurnEndedError("failed"))
       const token = combined.match(WALL_TOKEN)?.[0]
       if (token) finish(wall(token, "runTurn"))
-      if (exitCode !== 0 || !HERMES_FREE_AGENT_COMPLETE_PATTERN.test(stdout)) finish(new AppServerTurnEndedError("interrupted"))
+      const completion = stdout.match(HERMES_FREE_AGENT_COMPLETE_PATTERN)
+      if (exitCode !== 0 || !completion || completion[1] !== runId) finish(new AppServerTurnEndedError("interrupted"))
+      const commonDirAfter = await gitCommonDir(workspaceReal, turnTimeoutMs)
+      if (commonDirAfter === null || commonDirAfter !== commonDirBefore) finish(wall("RESIDENT_MODEL_LANE_WORKSPACE_TAMPERED", "runTurn"))
       const harvested = harvestTurnOutput(stdout)
       if (!harvested.ok) {
         const error = new AppServerTurnEndedError("failed"); error.detail = `RESIDENT_MODEL_TURN_OUTPUT_INVALID:${harvested.reason}`
+        finish(error)
+      }
+      const structural = validateAgainstTurnSchema(JSON.parse(harvested.finalText), turn?.outputSchema ?? HERMES_TURN_OUTPUT_SCHEMA)
+      if (!structural.ok) {
+        const error = new AppServerTurnEndedError("failed"); error.detail = `RESIDENT_MODEL_TURN_OUTPUT_INVALID:${structural.reason}`
         finish(error)
       }
       record.harvested = true
       finish(null)
       return { threadId, turnId: runId, status: "completed", finalText: harvested.finalText }
     },
-    close() {},
+    close() { connected = false },
   }
   // Keep the surface exactly the five members the orchestrator uses.
   return Object.freeze(client)

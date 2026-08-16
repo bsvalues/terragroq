@@ -21,3 +21,60 @@ export function harvestTurnOutput(stdout) {
   if (tail && tail.startsWith("{") && tail.endsWith("}")) return classify(tail)
   return { ok: false, reason: "NO_JSON_BLOCK" }
 }
+
+function typeMatches(value, type) {
+  switch (type) {
+    case "object": return value !== null && typeof value === "object" && !Array.isArray(value)
+    case "array": return Array.isArray(value)
+    case "string": return typeof value === "string"
+    case "boolean": return typeof value === "boolean"
+    case "integer": return Number.isInteger(value)
+    case "number": return typeof value === "number" && Number.isFinite(value)
+    case "null": return value === null
+    default: return false
+  }
+}
+
+function checkValue(value, spec, label) {
+  if (!spec || typeof spec !== "object") return null
+  if (spec.type !== undefined) {
+    const types = Array.isArray(spec.type) ? spec.type : [spec.type]
+    if (!types.some((type) => typeMatches(value, type))) return `${label}:TYPE`
+  }
+  if (Array.isArray(spec.enum) && !spec.enum.includes(value)) return `${label}:ENUM`
+  if (typeof spec.pattern === "string" && (typeof value !== "string" || !new RegExp(spec.pattern).test(value))) return `${label}:PATTERN`
+  if (typeof spec.minimum === "number" && typeof value === "number" && value < spec.minimum) return `${label}:MINIMUM`
+  if (Array.isArray(value) && spec.items) {
+    for (let index = 0; index < value.length; index += 1) {
+      const failure = checkValue(value[index], spec.items, `${label}[${index}]`)
+      if (failure) return failure
+    }
+  }
+  return null
+}
+
+/**
+ * Structural JSON-Schema check for the turn-output contract. Covers exactly the
+ * constructs HERMES_TURN_OUTPUT_SCHEMA uses (required, additionalProperties:false,
+ * type incl. nullable unions, enum, pattern, minimum, array items). No dependency.
+ */
+export function validateAgainstTurnSchema(object, schema) {
+  const failure = (detail) => ({ ok: false, reason: `SCHEMA:${detail}` })
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return failure("NO_SCHEMA")
+  if (object === null || typeof object !== "object" || Array.isArray(object)) return failure("NOT_AN_OBJECT")
+  const properties = schema.properties ?? {}
+  for (const key of Array.isArray(schema.required) ? schema.required : []) {
+    if (!Object.hasOwn(object, key)) return failure(`MISSING:${key}`)
+  }
+  if (schema.additionalProperties === false) {
+    for (const key of Object.keys(object)) {
+      if (!Object.hasOwn(properties, key)) return failure(`ADDITIONAL:${key}`)
+    }
+  }
+  for (const [key, spec] of Object.entries(properties)) {
+    if (!Object.hasOwn(object, key)) continue
+    const detail = checkValue(object[key], spec, key)
+    if (detail) return failure(detail)
+  }
+  return { ok: true }
+}
