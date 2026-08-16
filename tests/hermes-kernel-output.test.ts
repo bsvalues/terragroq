@@ -1,3 +1,6 @@
+import fs from "node:fs"
+import path from "node:path"
+
 import { describe, expect, it } from "vitest"
 
 import { harvestTurnOutput, HERMES_FREE_AGENT_COMPLETE_PATTERN, validateAgainstTurnSchema } from "../scripts/hermes-bridge/hermes-kernel-output.mjs"
@@ -60,5 +63,28 @@ describe("Hermes turn output schema check", () => {
       expect(validateAgainstTurnSchema(value, HERMES_TURN_OUTPUT_SCHEMA), reason).toEqual({ ok: false, reason })
     }
     expect(validateAgainstTurnSchema(complete(), null)).toEqual({ ok: false, reason: "SCHEMA:NO_SCHEMA" })
+  })
+})
+
+describe("Hermes kernel output harvester — rendered (unfenced) kernel output", () => {
+  const fixture = () => fs.readFileSync(path.join(import.meta.dirname, "fixtures", "hermes-kernel", "p2-run-aacd3931-stdout.txt"), "utf8")
+  it("harvests the answer object from real Hermes CLI output where the fence was rendered as a box", () => {
+    const harvested = harvestTurnOutput(fixture())
+    expect(harvested.ok).toBe(true)
+    const parsed = JSON.parse((harvested as { finalText: string }).finalText)
+    expect(parsed).toMatchObject({ result: "READY_FOR_VALIDATION", workOrder: "WO-HERMES-P2-PROBE-001", branch: "p2/resident-probe", nextState: "READY_FOR_VALIDATION" })
+    expect(validateAgainstTurnSchema(parsed, HERMES_TURN_OUTPUT_SCHEMA)).toEqual({ ok: true })
+  })
+  it("takes the LAST balanced object, so an echoed prompt containing the schema object does not win", () => {
+    const echoed = "prompt echo: " + JSON.stringify({ type: "object", required: ["result"], properties: {} }) + "\n"
+    const answer = JSON.stringify({ result: "READY_FOR_VALIDATION", note: "answer" })
+    expect(harvestTurnOutput(echoed + "some rendered box chars ' + BS + 'u256d' + BS + 'u2500' + BS + 'n" + answer + "' + BS + 'nHERMES_FREE_AGENT_COMPLETE runId=x' + BS + 'n")).toEqual({ ok: true, finalText: answer })
+  })
+  it("balances braces inside JSON strings and skips non-JSON brace runs", () => {
+    const answer = JSON.stringify({ result: "OK", text: "a { not closed", nested: { deep: "}" } })
+    expect(harvestTurnOutput("noise { not json } more' + BS + 'n" + answer + "' + BS + 'ntrailer {oops")).toEqual({ ok: true, finalText: answer })
+  })
+  it("still fails closed when no object exists at all", () => {
+    expect(harvestTurnOutput("HERMES_FREE_AGENT_COMPLETE runId=x workspace=w' + BS + 'n")).toEqual({ ok: false, reason: "NO_JSON_BLOCK" })
   })
 })
