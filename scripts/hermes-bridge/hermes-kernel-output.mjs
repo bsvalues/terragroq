@@ -11,6 +11,50 @@ function classify(candidate) {
   return { ok: true, finalText: candidate }
 }
 
+/**
+ * Last balanced top-level `{…}` object in `text` that parses to a JSON object, or null.
+ * The Hermes CLI renders markdown fences as decorated boxes, so the fenced-block form is not
+ * reliably present in captured stdout; the answer object itself is. Strings and escapes are
+ * honoured while balancing so braces inside JSON strings do not confuse the scan.
+ */
+function balancedObjectAt(text, start) {
+  let depth = 0; let inString = false; let escaped = false
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === "\"") inString = false
+      continue
+    }
+    if (char === "\"") inString = true
+    else if (char === "{") depth += 1
+    else if (char === "}") {
+      depth -= 1
+      if (depth === 0) {
+        const candidate = text.slice(start, index + 1)
+        try {
+          const parsed = JSON.parse(candidate)
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return { candidate, end: index }
+        } catch { /* balanced but not JSON */ }
+        return null
+      }
+    }
+  }
+  return null
+}
+
+function lastBalancedObject(text) {
+  let last = null
+  let index = text.indexOf("{")
+  while (index !== -1) {
+    const found = balancedObjectAt(text, index)
+    if (found) { last = found.candidate; index = text.indexOf("{", found.end + 1) }
+    else index = text.indexOf("{", index + 1)
+  }
+  return last
+}
+
 export function harvestTurnOutput(stdout) {
   const text = typeof stdout === "string" ? stdout : ""
   let last = null
@@ -19,6 +63,8 @@ export function harvestTurnOutput(stdout) {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
   const tail = lines.at(-1)
   if (tail && tail.startsWith("{") && tail.endsWith("}")) return classify(tail)
+  const balanced = lastBalancedObject(text)
+  if (balanced !== null) return { ok: true, finalText: balanced }
   return { ok: false, reason: "NO_JSON_BLOCK" }
 }
 
