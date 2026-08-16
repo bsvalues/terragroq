@@ -1,5 +1,7 @@
 "use client"
 
+import Link from "next/link"
+
 import { useRouter } from "next/navigation"
 import { authClient } from "@/lib/auth-client"
 import {
@@ -44,6 +46,9 @@ export function UserMenu({ name, email }: { name: string; email: string }) {
           <span className="text-xs font-normal text-muted-foreground">{email}</span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/devices">Sign-in devices</Link>
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={handleSignOut} className="text-destructive focus:text-destructive">
           <LogOut className="h-4 w-4" />
           Sign out

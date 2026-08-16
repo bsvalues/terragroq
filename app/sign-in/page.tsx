@@ -4,6 +4,9 @@ import { getAuthReadiness } from "@/lib/auth-readiness"
 import { getAuthUxState } from "@/lib/auth-ux-state"
 import { AuthForm } from "@/components/auth-form"
 import { AuthAside } from "@/components/auth-aside"
+import { PasskeySignIn } from "@/components/auth/passkey-sign-in"
+import { passkeyResolution } from "@/lib/auth"
+import { passkeyUnavailableCopy } from "@/lib/auth-passkey"
 
 export default async function SignInPage() {
   const session = await getSession()
@@ -20,6 +23,10 @@ export default async function SignInPage() {
             <h1 className="text-2xl font-semibold">{uxState.label}</h1>
             <p className="text-muted-foreground text-sm">{uxState.description}</p>
           </div>
+          <PasskeySignIn
+            available={passkeyResolution.available}
+            unavailableReason={passkeyUnavailableCopy(passkeyResolution)}
+          />
           <AuthForm mode="sign-in" readiness={readiness} />
         </div>
       </div>
