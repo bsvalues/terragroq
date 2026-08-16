@@ -95,4 +95,17 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
     expect(v2.promotion.requiredEvidence).toEqual([...policy().promotion.requiredEvidence, "OWNED_WORKTREE_CONFINEMENT_PROVEN"])
     expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: null })
   })
+  it("leaves the lane fail-closed: the unproven evidence line is enforced, not decorative", () => {
+    // Intended state until P2 sets OWNED_WORKTREE_CONFINEMENT_PROVEN. Both enforcement points
+    // must refuse the shipped policy, so the v2 lane cannot run by accident.
+    const v2 = policyV2()
+    const unproven = v2.promotion.requiredEvidence.filter((key: string) => {
+      const value = v2.promotion.satisfiedEvidence[key]
+      return value === null || value === undefined || (typeof value === "string" && value.trim() === "")
+    })
+    expect(unproven).toEqual(["OWNED_WORKTREE_CONFINEMENT_PROVEN"])
+    expect(read("scripts/hermes-bridge/hermes-kernel-client.mjs")).toContain("RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN")
+    expect(read("scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1")).toContain("HERMES_FREE_AGENT_EVIDENCE_WALL")
+    expect(read("docs/runbooks/hermes-free-dev-agent.md")).toContain("fails closed until `OWNED_WORKTREE_CONFINEMENT_PROVEN` is set by P2 evidence")
+  })
 })

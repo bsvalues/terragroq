@@ -5,6 +5,7 @@ param(
     [string]$PolicyPath = (Join-Path $PSScriptRoot "hermes-free-dev-agent-v1.policy.json")
     ,[string]$WorkspacePath = ""
     ,[string]$RunId = ""
+    ,[string]$QuarantinePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,7 +15,7 @@ $containerName = $null
 $policy = $null
 $cleanupRequired = $false
 $cleanupWall = $false
-$quarantinePath = Join-Path (Split-Path -Parent $PolicyPath) "HERMES_FREE_AGENT_QUARANTINED"
+$markerPath = Join-Path (Split-Path -Parent $PolicyPath) "HERMES_FREE_AGENT_QUARANTINED"
 
 function Remove-ExactAgentContainer {
     param(
@@ -34,7 +35,7 @@ function Remove-ExactAgentContainer {
 try {
     $lockHeld = $mutex.WaitOne(0)
     if (-not $lockHeld) { throw "HERMES_FREE_AGENT_CONCURRENCY_WALL" }
-    if (Test-Path -LiteralPath $quarantinePath) { throw "HERMES_FREE_AGENT_QUARANTINE_WALL" }
+    if (Test-Path -LiteralPath $markerPath) { throw "HERMES_FREE_AGENT_QUARANTINE_WALL" }
 
     $policy = Get-Content -Raw -LiteralPath $PolicyPath | ConvertFrom-Json
     $env:DOCKER_CONFIG = $policy.placement.dockerConfig
@@ -49,13 +50,32 @@ try {
     if (Compare-Object $actualFields $expectedFields) { throw "HERMES_FREE_AGENT_PACKET_FIELDS_WALL" }
     $expectedSchema = if ($ownedMode) { 2 } else { 1 }
     if (-not ($packet.schemaVersion -is [int] -or $packet.schemaVersion -is [long]) -or $packet.schemaVersion -ne $expectedSchema) { throw "HERMES_FREE_AGENT_PACKET_SCHEMA_WALL" }
-    if ($policy.promotion.status -ne "PILOT_AUTHORIZED") { throw "HERMES_FREE_AGENT_PROMOTION_WALL" }
+    if ($policy.promotion.status -ne "PILOT_AUTHORIZED" -and $policy.promotion.status -ne "PROMOTED") { throw "HERMES_FREE_AGENT_PROMOTION_WALL" }
     if ($packet.workOrderId -isnot [string] -or $packet.workOrderId -ne $policy.workOrderId) { throw "HERMES_FREE_AGENT_WORK_ORDER_WALL" }
     $promptMax = if ($ownedMode) { [int]$policy.execution.promptMaxChars } else { 16000 }
     if ($packet.prompt -isnot [string] -or [string]::IsNullOrWhiteSpace($packet.prompt) -or $packet.prompt.Length -gt $promptMax) { throw "HERMES_FREE_AGENT_PROMPT_WALL" }
     if ($packet.model -isnot [string] -or $packet.model -ne $policy.model.id) { throw "HERMES_FREE_AGENT_MODEL_WALL" }
     if (-not ($packet.maximumTurns -is [int] -or $packet.maximumTurns -is [long]) -or $packet.maximumTurns -lt 1 -or $packet.maximumTurns -gt $policy.execution.maximumTurns) { throw "HERMES_FREE_AGENT_TURN_WALL" }
     if ($ownedMode) {
+        # Every declared evidence line must actually be satisfied. A declared-but-null
+        # entry is an unproven control: the lane stays closed until P2 evidence lands.
+        foreach ($evidenceKey in @($policy.promotion.requiredEvidence)) {
+            $evidenceValue = $policy.promotion.satisfiedEvidence.$evidenceKey
+            if ($null -eq $evidenceValue -or (($evidenceValue -is [string]) -and [string]::IsNullOrWhiteSpace($evidenceValue))) {
+                throw "HERMES_FREE_AGENT_EVIDENCE_WALL"
+            }
+        }
+        # The quarantine marker must not land in the version-controlled checkout: the
+        # caller names a runtime-owned absolute path and both locations are refused.
+        if (-not [string]::IsNullOrWhiteSpace($QuarantinePath)) {
+            if (-not [IO.Path]::IsPathRooted($QuarantinePath)) { throw "HERMES_FREE_AGENT_QUARANTINE_PATH_WALL" }
+            $markerPath = [IO.Path]::GetFullPath($QuarantinePath)
+            if (Test-Path -LiteralPath $markerPath) { throw "HERMES_FREE_AGENT_QUARANTINE_WALL" }
+            $markerParent = Split-Path -Parent $markerPath
+            if (-not (Test-Path -LiteralPath $markerParent -PathType Container)) {
+                New-Item -ItemType Directory -Path $markerParent -Force | Out-Null
+            }
+        }
         if ([string]::IsNullOrWhiteSpace($WorkspacePath) -or [string]::IsNullOrWhiteSpace($RunId)) { throw "HERMES_FREE_AGENT_WORKSPACE_MODE_WALL" }
         if ($RunId -notmatch '^[A-Za-z0-9-]{8,64}$' -or $packet.runId -ne $RunId) { throw "HERMES_FREE_AGENT_RUN_ID_WALL" }
         if ($packet.workspaceMode -ne "OWNED_WORKTREE" -or $packet.workspacePath -ne $WorkspacePath) { throw "HERMES_FREE_AGENT_WORKSPACE_MODE_WALL" }
@@ -67,6 +87,10 @@ try {
             $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
             if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "HERMES_FREE_AGENT_WORKSPACE_SYMLINK_WALL" }
             $cursor = Split-Path -Parent $cursor
+        }
+        if (Test-Path -LiteralPath (Join-Path $resolvedWorkspace "node_modules")) { throw "HERMES_FREE_AGENT_WORKSPACE_CONTENT_WALL" }
+        foreach ($entry in @(Get-ChildItem -LiteralPath $resolvedWorkspace -Force -ErrorAction Stop)) {
+            if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "HERMES_FREE_AGENT_WORKSPACE_CONTENT_WALL" }
         }
         $toplevel = (git -C $resolvedWorkspace rev-parse --show-toplevel 2>$null)
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($toplevel)) { throw "HERMES_FREE_AGENT_WORKSPACE_ROOT_WALL" }
@@ -127,7 +151,7 @@ $($packet.prompt)
 "@
     $queryB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($query))
     $containerName = "williamos-hermes-agent-$runId"
-    Set-Content -LiteralPath $quarantinePath -Value "ACTIVE_CONTAINER=$containerName" -Encoding Ascii -NoNewline
+    Set-Content -LiteralPath $markerPath -Value "ACTIVE_CONTAINER=$containerName" -Encoding Ascii -NoNewline
     $cleanupRequired = $true
     $arguments = @(
         "--config", $policy.placement.dockerConfig, "compose", "--project-name", "williamos-hermes-agent", "--file", $ComposeFile,
@@ -153,7 +177,7 @@ $($packet.prompt)
         throw "HERMES_FREE_AGENT_CLEANUP_WALL"
     }
     $cleanupRequired = $false
-    Remove-Item -LiteralPath $quarantinePath -Force
+    Remove-Item -LiteralPath $markerPath -Force
     if ($containerExitCode -ne 0) { throw "HERMES_FREE_AGENT_EXECUTION_WALL" }
     Write-Output "HERMES_FREE_AGENT_COMPLETE runId=$runId workspace=$runWorkspace"
 }
@@ -161,7 +185,7 @@ finally {
     if ($cleanupRequired -and $null -ne $policy -and -not [string]::IsNullOrWhiteSpace($containerName)) {
         if (Remove-ExactAgentContainer -DockerConfig $policy.placement.dockerConfig -Name $containerName) {
             $cleanupRequired = $false
-            Remove-Item -LiteralPath $quarantinePath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
         }
         else {
             $cleanupWall = $true
