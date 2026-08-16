@@ -30,6 +30,18 @@ export const PROBE_WORK_ORDER = "WO-HERMES-P2-PROBE-001"
 export const PROBE_BRANCH = "p2/resident-probe"
 export const PROBE_MARKER = "// P2 resident-model probe 2026-08-16"
 
+/** Second-turn prompt (P2b continuity): answerable only from the previous turn's context. */
+export function buildContinuityPrompt() {
+  return [
+    `Work Order: ${PROBE_WORK_ORDER}`,
+    `Branch: ${PROBE_BRANCH}`,
+    "This is a follow-up turn in the same session as your previous work on this Work Order.",
+    "Do NOT use any tools and do NOT read or change any file.",
+    "From memory of this session only: report the exact comment line you added earlier, and the file you added it to, as the two entries of the validation array (first the comment line, then the file path).",
+    `Report result READY_FOR_VALIDATION, workOrder ${PROBE_WORK_ORDER}, branch ${PROBE_BRANCH}, commit null, prUrl null, merged false, mergeCommit null, reviewThreads 0, ownerTouchCount 0, blockedScopeCrossed false, nextState READY_FOR_VALIDATION, and null for blockedAction, authorityBoundary, minimumChoice, approveConsequence, denyConsequence.`,
+  ].join("\n")
+}
+
 export function buildProbePrompt() {
   return [
     `Work Order: ${PROBE_WORK_ORDER}`,
@@ -52,6 +64,7 @@ export async function runResidentModelProbe({
   timeoutMs = 45 * 60 * 1000,
   commandRunner = createCommandRunner(),
   now = () => new Date(),
+  turns = 1,
 } = {}) {
   const summary = { startedAt: now().toISOString(), workspacePath, policyPath, invokerPath, checkout: CHECKOUT }
   const client = createHermesKernelClient({ workspacePath, runtimeRoot, commandRunner, policyPath, invokerPath, timeoutMs })
@@ -71,6 +84,24 @@ export async function runResidentModelProbe({
       await client.resumeThread(threadId, { cwd: workspacePath, approvalPolicy: "never", sandbox: "workspace-write" })
       summary.resume = "RESUMED"
     } catch (error) { summary.resume = { code: error?.code } }
+    if (turns >= 2 && summary.turn?.status === "completed") {
+      // P2b continuity: a second turn on the same thread continues the kernel session that
+      // the first turn left in the thread's state dir; the answer must come from that context.
+      const t1 = Date.now()
+      try {
+        summary.continuityTurn = await client.runTurn({ threadId, prompt: buildContinuityPrompt(), turn: { outputSchema: HERMES_TURN_OUTPUT_SCHEMA }, timeoutMs })
+        const answer = JSON.parse(summary.continuityTurn.finalText)
+        const validation = Array.isArray(answer.validation) ? answer.validation.map(String) : []
+        summary.continuity = {
+          recalledMarker: validation.some((entry) => entry.includes(PROBE_MARKER)),
+          recalledFile: validation.some((entry) => entry.includes("lib/workbench/thread-trust.ts")),
+          validation,
+        }
+      } catch (error) {
+        summary.continuityTurnError = { name: error?.name, code: error?.code, message: error?.message, detail: error?.detail ?? null }
+      }
+      summary.continuityTurnMs = Date.now() - t1
+    }
     const threadDir = path.join(runtimeRoot, "hermes-kernel", "threads", threadId)
     summary.threadDir = threadDir
     summary.session = JSON.parse(fs.readFileSync(path.join(threadDir, "session.json"), "utf8"))
@@ -87,11 +118,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const workspacePath = argValue("--workspace")
   const policyPath = argValue("--policy")
   const out = argValue("--out")
-  if (!workspacePath || !policyPath) {
-    process.stderr.write("usage: resident-model-probe.mjs --workspace <owned worktree> --policy <v2 policy> [--out <summary.json>]\n")
+  const turns = Number(argValue("--turns", "1"))
+  if (!workspacePath || !policyPath || !(turns === 1 || turns === 2)) {
+    process.stderr.write("usage: resident-model-probe.mjs --workspace <owned worktree> --policy <v2 policy> [--turns 1|2] [--out <summary.json>]\n")
     process.exit(2)
   }
-  const summary = await runResidentModelProbe({ workspacePath, policyPath })
+  const summary = await runResidentModelProbe({ workspacePath, policyPath, turns })
   const text = `${JSON.stringify(summary, null, 2)}\n`
   if (out) fs.writeFileSync(out, text)
   process.stdout.write(text)

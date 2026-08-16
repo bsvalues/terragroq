@@ -62,8 +62,14 @@ The invoker also refuses an owned workspace that contains `node_modules` or any 
 point (`HERMES_FREE_AGENT_WORKSPACE_CONTENT_WALL`), and the client re-asserts the workspace's
 `git rev-parse --git-common-dir` after the invocation, walling on a mismatch.
 
-`resumeThread` is fail-closed (`execution.sessionResumeProven: false`) until P2 proves kernel session
-continuity; the orchestrator then starts a fresh thread, and owner-decision resumes wall — by design.
+Kernel state is per WilliamOS thread (`containment.agentStatePersistence: PER_THREAD_STATE_DIR`): the
+invoker mounts `<runtime root>\hermes-kernel\threads\<threadId>\kernel-state` as the kernel's
+`HERMES_HOME` through the `agent-owned` compose service (the v1 `agent` service keeps its tmpfs
+`/opt/data`). The client captures the kernel's `Session: <id>` line and passes it back on the next
+turn, which the runner turns into `hermes chat --resume <id>`. `execution.sessionResumeProven` is
+`true` since P2b (2026-08-16, `docs/reports/hermes-kernel-p2b-session-continuity-2026-08-16.md`), but
+`resumeThread` still fails closed per thread unless that thread captured a session id and its state
+dir exists.
 
 P2 probe (owner-triggered on HERMES; `pnpm hermes:smoke` is the AEGIS/Codex transport smoke and does
 NOT drive this lane): create an owned probe worktree under `<runtime root>\worktrees`
@@ -76,5 +82,8 @@ then from the checkout root:
 It runs connect → startThread → one turn (a one-line comment in a reserved path + the schema
 JSON) → resumeThread, and prints a JSON summary; then verify `git status` of the worktree shows only
 the reserved path, the canonical checkout is clean, no `williamos-hermes-agent-*` container remains,
-and no quarantine marker exists. Record the summary and hashes under `docs/reports/`. Kernel session
-continuity (P2b) needs the per-thread state mount before `sessionResumeProven` can be flipped.
+and no quarantine marker exists. Record the summary and hashes under `docs/reports/`.
+
+Add `--turns 2` to run the P2b continuity probe: a second, tool-free turn on the same thread that
+must recall the first turn's edit from kernel session memory (`continuity.recalledMarker` and
+`continuity.recalledFile` in the summary), proving the state mount and `--resume` path end to end.
