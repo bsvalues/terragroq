@@ -19,10 +19,6 @@ export const CI_EXCLUDED_TEST_FILES: ReadonlyArray<{ file: string; reason: strin
   },
   // ---- known drift, tracked; unblock by closing the referenced WO ------------
   {
-    file: "tests/execution-fabric-aegis-remote-dev-root-handoff.test.ts",
-    reason: "entrypoint digest chain 018406b0→2c6c5ccd never regenerated; docs/governance/WO-FABRIC-REMOTE-DEV-DIGEST-CHAIN-REGEN.md",
-  },
-  {
     file: "tests/execution-fabric-shadow-authority-scope.test.ts",
     reason: "WO-EF-SHADOW-004.json source_sha256 was computed on a CRLF checkout (c8059e2a = CRLF bytes; LF canonical = 38dbbbeb); one-line owner-reviewed correction pending",
   },

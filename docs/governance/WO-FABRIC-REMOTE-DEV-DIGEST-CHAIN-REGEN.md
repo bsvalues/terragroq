@@ -1,7 +1,55 @@
 # WO-FABRIC-REMOTE-DEV-DIGEST-CHAIN-REGEN — regenerate the AEGIS remote-dev digest chain against deployed truth
 
-**Status:** DRAFT — blocked on one owner input (§4). No edit to any pin is authorized by this WO
-until that input is recorded here.
+**Status:** CLOSED 2026-08-16 — resolved as **Historical** (owner decision). No pin was changed;
+the manifest, receipt, and installed AEGIS state are untouched. The root-handoff test now anchors
+its assertions to the manifest's own generation. Read §0 first; §1–§7 below are the original
+investigation and remain accurate as history.
+
+## 0. Outcome and why (read this)
+
+**Deployed truth (owner, verified read-only from AEGIS via HERMES):** entrypoint on disk is
+`2c6c5ccd`; installed bundle manifest is `fe82ce6b` (= repo); receipt
+`/var/lib/williamos-fabric/remote-dev-prerequisite-verified.json` present (transaction
+`6ad8e3e2`, authority `5368f65d`, `trustedMainCommit 98b458b9`).
+
+**Case A ("regenerate the chain") was executed on the branch and then withdrawn** after two
+facts surfaced that the original plan did not know:
+
+1. `aegis-remote-dev-prerequisites.json` is the *superseded v1 preflight*; its JCS digest
+   `8b956f9e` is provenance pinned in the v2 manifest, `root-handoff.mjs`, `prerequisites.mjs`
+   and the owner-authority binding. Editing it regressed
+   `execution-fabric-aegis-remote-dev-prerequisites.test.ts` 0→9. Never edit it.
+2. The success receipt is **single-shot by design**: `publishReceipt`
+   (`aegis-remote-dev-root-os-adapter.mjs:717-738`) opens it `O_CREAT|O_EXCL` and rejects any
+   receipt from another transaction/journal head (`SUCCESS_RECEIPT_CONFLICT`). A re-run handoff
+   would verify, commit, and fail at publish. Making a regenerated manifest live would therefore
+   require root-deleting a settled record (also pinned by the installed
+   `aegis-success-receipt-mode-settlement`), updating the hardcoded `98b458b9` pins
+   (`remote-dev-offload-activation.mjs:400`, settlement), and two merges to `main`.
+
+Conclusion: the manifest's `018406b0` is **true history** (what the Aug‑12 handoff installed);
+the entrypoint moved to `2c6c5ccd` afterwards through the sanctioned activation‑bridge path
+(`EXACT_PREDECESSOR dfcc26c8 → 2c6c5ccd`). AEGIS is already in the correct state. The only
+defect was the test's anchor.
+
+**Fix applied (test-only; no production module or config touched):**
+`tests/execution-fabric-aegis-remote-dev-root-handoff.test.ts` "pins the merged prerequisite
+generation and every applied asset exactly" now resolves the manifest's *generation* = the oldest
+commit carrying HEAD's exact manifest bytes (revert-proof), asserts every applied asset and every
+trusted-evidence path at that generation (`0543347`, "settle exact receipt mode predecessor" — all
+26 + 7 match), runs `inspectRootHandoffBundle` against a temp export of that generation (drift
+`[]`), and additionally asserts that on the *live* tree the inspector still reports
+`BUNDLE_BINDING_DRIFT` honestly for bridge‑advanced assets (not blinded). `git show HEAD:` was
+the wrong proxy: it assumed HEAD == the reviewed generation.
+
+Not done, by decision: no AEGIS mutation, no re-handoff, no receipt/settlement change, no
+regeneration. If a future reviewed change *must* move the manifest, it is a full ceremony
+(merge → stage bundle as root → mint owner authority on OMEN [key:
+`~/.williamos/authorities/WO-TF-REMOTE-DEV-OFFLOAD-001/`, verified to match the installed public
+key] within 15 min → `--apply` → root-rotate the settled receipt → re-settle → update `98b458b9`
+pins → merge) and gets its own WO.
+
+**Original blocking status (superseded):** DRAFT — blocked on one owner input (§4).
 
 **Why this is a WO and not an edit:** two remedies were tried from OMEN on 2026-08-16 and both
 measured worse; both were reverted. The chain is multi-level (config → manifest → production

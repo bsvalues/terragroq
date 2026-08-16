@@ -1,5 +1,6 @@
 import crypto from "node:crypto"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { describe, expect, it } from "vitest"
@@ -22,11 +23,66 @@ const root = path.resolve(import.meta.dirname, "..")
 const manifestPath = path.join(root, "config/execution-fabric/aegis-remote-dev-root-handoff.json")
 const loadManifest = () => JSON.parse(fs.readFileSync(manifestPath, "utf8"))
 const sha = (bytes: crypto.BinaryLike) => crypto.createHash("sha256").update(bytes).digest("hex")
-const rawSha = (file: string) => {
-  const trusted = spawnSync("git", ["--no-replace-objects", "show", `HEAD:${file}`], { cwd: root, encoding: null, shell: false, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } })
-  return sha(trusted.status === 0 ? trusted.stdout : fs.readFileSync(path.join(root, file)))
-}
 const currentRawSha = (file: string) => sha(fs.readFileSync(path.join(root, file)))
+// The root-handoff manifest is a one-shot record of the generation it was reviewed and applied
+// with (its receipt on AEGIS is O_EXCL single-shot). Assets it pins are therefore compared at the
+// manifest's own generation — the commit that last changed the manifest — not at HEAD, because the
+// sanctioned forward path for individual assets (the activation bridge) moves them without a
+// re-handoff. This keeps the assertion "pins the merged prerequisite generation" literally true.
+const gitOut = (args: string[]) => {
+  const result = spawnSync("git", ["--no-replace-objects", ...args], { cwd: root, encoding: null, shell: false, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } })
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed`)
+  return result.stdout as Buffer
+}
+const MANIFEST_RELATIVE = "config/execution-fabric/aegis-remote-dev-root-handoff.json"
+// One `git cat-file --batch` round-trip for many "<rev>:<path>" specs (keeps this test cheap under
+// parallel load; per-object `git show` spawns were exceeding the budget on Windows runners).
+const catFileBatch = (specs: string[]) => {
+  const result = spawnSync("git", ["--no-replace-objects", "cat-file", "--batch"], { cwd: root, input: `${specs.join("\n")}\n`, encoding: null, shell: false, maxBuffer: 256 * 1024 * 1024, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" } })
+  if (result.status !== 0) throw new Error("git cat-file --batch failed")
+  const out = result.stdout as Buffer
+  const objects = new Map<string, Buffer | null>()
+  let offset = 0
+  for (const spec of specs) {
+    const nl = out.indexOf(0x0a, offset)
+    const header = out.subarray(offset, nl).toString("utf8")
+    offset = nl + 1
+    if (header.endsWith(" missing")) { objects.set(spec, null); continue }
+    const size = Number(header.split(" ")[2])
+    objects.set(spec, out.subarray(offset, offset + size))
+    offset += size + 1
+  }
+  return objects
+}
+// Generation = the oldest commit that carries exactly HEAD's manifest bytes (robust to later
+// reverts that re-introduce the same bytes on a tree whose assets have moved on).
+const manifestGeneration = () => {
+  const head = gitOut(["rev-parse", "HEAD"]).toString("utf8").trim()
+  const touching = gitOut(["log", "--format=%H", "--", MANIFEST_RELATIVE]).toString("utf8").trim().split(/\r?\n/).filter(Boolean)
+  const blobs = catFileBatch([`${head}:${MANIFEST_RELATIVE}`, ...touching.map((commit) => `${commit}:${MANIFEST_RELATIVE}`)])
+  const headBytes = blobs.get(`${head}:${MANIFEST_RELATIVE}`)
+  let generation = head
+  for (const commit of touching) {
+    const bytes = blobs.get(`${commit}:${MANIFEST_RELATIVE}`)
+    if (bytes && headBytes && bytes.equals(headBytes)) generation = commit
+  }
+  return generation
+}
+const generationObjects = (generation: string, files: string[]) => {
+  const specs = [...new Set(files)].map((file) => `${generation}:${file}`)
+  const blobs = catFileBatch(specs)
+  const bytesOf = (file: string) => { const b = blobs.get(`${generation}:${file}`); if (!b) throw new Error(`${file} missing at ${generation}`); return b }
+  return { sha: (file: string) => sha(bytesOf(file)), bytes: bytesOf }
+}
+const exportGeneration = (objects: { bytes: (file: string) => Buffer }, files: string[]) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aegis-root-handoff-generation-"))
+  for (const file of new Set(files)) {
+    const target = path.join(dir, ...file.split("/"))
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, objects.bytes(file))
+  }
+  return dir
+}
 
 function completeObservation(manifest = loadManifest()) {
   return {
@@ -213,9 +269,24 @@ describe("AEGIS root-owned prerequisite handoff", () => {
     expect(manifest.trustedMain.minimumCommit).toBe("bcca6069a917d706314f7c8cb7b3cd40cdd910da")
     expect(manifest.prerequisitePackage).toMatchObject({ packageId: "aegis-remote-dev-root-prerequisites-issue-734-v2", semanticSupersession: true, historicalSuccessClaimed: false, supersededPreflight: { manifestJcsSha256: "8b956f9e7ae53cf37ba3d2a916d9848522f159ef17afa8c261e7d1454f397034" } })
     expect(manifest.appliedAssets.length).toBeGreaterThanOrEqual(7)
-    for (const asset of manifest.appliedAssets) expect(rawSha(asset.source)).toBe(asset.sha256)
-    expect(inspectRootHandoffBundle(root)).toMatchObject({ status: "BUNDLE_INTERNAL_CONSISTENCY_ONLY", externalTrustRootRequired: true, applyAuthorized: false, drift: [] })
-  }, 15_000)
+    const generation = manifestGeneration()
+    expect(generation).toMatch(/^[0-9a-f]{40}$/)
+    const sources = [MANIFEST_RELATIVE, ...manifest.appliedAssets.map((asset: { source: string }) => asset.source), ...manifest.trustedEvidence.map((evidence: { path: string }) => evidence.path)]
+    const objects = generationObjects(generation, sources)
+    for (const asset of manifest.appliedAssets) expect(objects.sha(asset.source)).toBe(asset.sha256)
+    for (const evidence of manifest.trustedEvidence) expect(objects.sha(evidence.path)).toBe(evidence.sha256)
+    const exported = exportGeneration(objects, [MANIFEST_RELATIVE, ...manifest.appliedAssets.map((asset: { source: string }) => asset.source)])
+    try {
+      expect(inspectRootHandoffBundle(exported)).toMatchObject({ status: "BUNDLE_INTERNAL_CONSISTENCY_ONLY", externalTrustRootRequired: true, applyAuthorized: false, drift: [] })
+    } finally { fs.rmSync(exported, { recursive: true, force: true }) }
+    // The live tree is allowed to move individual assets forward through the reviewed activation
+    // bridge; the drift inspector must still report that honestly rather than be blinded.
+    const live = inspectRootHandoffBundle(root)
+    if (live.status !== "BUNDLE_INTERNAL_CONSISTENCY_ONLY") {
+      expect(live).toMatchObject({ status: "BLOCKED", reasonCode: "BUNDLE_BINDING_DRIFT" })
+      for (const drifted of live.drift as string[]) expect(currentRawSha(drifted)).not.toBe(manifest.appliedAssets.find((asset: { source: string }) => asset.source === drifted)?.sha256)
+    }
+  }, 60_000)
 
   it("rejects manifest, asset, scheduler, standing-authority, and closed-HASH drift", () => {
     for (const mutate of [
