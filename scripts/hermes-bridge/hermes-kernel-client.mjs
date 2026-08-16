@@ -151,8 +151,9 @@ export function createHermesKernelClient({
       const exitCode = result?.exitCode ?? result?.code ?? result?.status ?? 0
       const stdout = String(result?.stdout ?? ""); const stderr = String(result?.stderr ?? "")
       const combined = `${stdout}\n${stderr}`
-      const record = { turnId: runId, at: now().toISOString(), exitCode, packetSha256: sha256(packetBytes), stdoutSha256: sha256(stdout), harvested: false }
-      fs.writeFileSync(path.join(turnDir, "stdout.txt"), sanitizeAppServerText(combined))
+      const persistedStdout = sanitizeAppServerText(combined)
+      const record = { turnId: runId, at: now().toISOString(), exitCode, packetSha256: sha256(packetBytes), stdoutSha256: sha256(persistedStdout), harvested: false }
+      fs.writeFileSync(path.join(turnDir, "stdout.txt"), persistedStdout)
       const finish = (error) => { session.turns.push(record); writeSession(session); if (error) throw error }
       if (result?.timedOut === true || /HERMES_FREE_AGENT_TIMEOUT_WALL/.test(combined)) finish(new AppServerTimeoutError(turnTimeoutMs))
       if (/HERMES_FREE_AGENT_EXECUTION_WALL/.test(combined)) finish(new AppServerTurnEndedError("failed"))

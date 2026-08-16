@@ -1,3 +1,4 @@
+import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -138,7 +139,9 @@ describe("Hermes kernel client — runTurn", () => {
     expect(packet.prompt.startsWith("Deliver WO-1\n\n")).toBe(true)
     const session = JSON.parse(fs.readFileSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "session.json"), "utf8"))
     expect(session.turns).toEqual([expect.objectContaining({ turnId: turn.turnId, exitCode: 0, harvested: true, packetSha256: expect.stringMatching(/^[0-9a-f]{64}$/), stdoutSha256: expect.stringMatching(/^[0-9a-f]{64}$/), at: "2026-08-16T20:00:00.000Z" })])
-    expect(fs.readFileSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "turns", "1", "stdout.txt"), "utf8")).toContain("HERMES_FREE_AGENT_COMPLETE")
+    const persistedStdout = fs.readFileSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "turns", "1", "stdout.txt"), "utf8")
+    expect(persistedStdout).toContain("HERMES_FREE_AGENT_COMPLETE")
+    expect(session.turns[0].stdoutSha256).toBe(crypto.createHash("sha256").update(persistedStdout).digest("hex"))
   })
   it("refuses a turn before connect, for an unknown thread, or when the prompt exceeds the policy budget", async () => {
     const { client, workspacePath, policyPath } = fixture()
