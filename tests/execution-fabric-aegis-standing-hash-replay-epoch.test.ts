@@ -181,7 +181,7 @@ describe("AEGIS replay epoch initializer", () => {
   it.each([
     ["wrong platform", { platform: "win32" }, "AEGIS_REPLAY_LINUX_REQUIRED"],
     ["root", { getuid: () => 0 }, "AEGIS_REPLAY_IDENTITY_REJECTED"],
-    ["missing group", { getgid: undefined }, "AEGIS_REPLAY_IDENTITY_REJECTED"],
+    ["missing group", { getgid: null }, "AEGIS_REPLAY_IDENTITY_REJECTED"],
     ["wrong account", { username: () => "root" }, "AEGIS_REPLAY_IDENTITY_REJECTED"],
     ["wrong host", { hostname: () => "hermes" }, "AEGIS_REPLAY_HOST_REJECTED"],
   ])("rejects %s before mutation", (_label, overrides, code) => {
