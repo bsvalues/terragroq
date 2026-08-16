@@ -27,10 +27,7 @@ export const CI_EXCLUDED_TEST_FILES: ReadonlyArray<{ file: string; reason: strin
     reason: "compiles a fake ssh.exe with C:/Windows/Microsoft.NET/.../csc.exe; Windows-only",
   },
   // ---- known drift, tracked; unblock by closing the referenced WO ------------
-  {
-    file: "tests/execution-fabric-shadow-authority-scope.test.ts",
-    reason: "WO-EF-SHADOW-004.json source_sha256 was computed on a CRLF checkout (c8059e2a = CRLF bytes; LF canonical = 38dbbbeb); one-line owner-reviewed correction pending",
-  },
+  // (none at present)
 ]
 
 export default mergeConfig(

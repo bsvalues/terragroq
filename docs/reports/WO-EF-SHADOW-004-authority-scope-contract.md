@@ -26,6 +26,12 @@ skill, tool bridge, worker, scheduler, or autonomous loop. The bound permission 
 `components/agent-forge/agent-forge-surface.ts` at SHA-256
 `c8059e2a5ff4412c611c0e6e20b3e4fd728268e036ee309bc43b0754f9e76fde`.
 
+> Provenance note (2026-08-16): that digest was computed on a CRLF checkout of the source. The
+> canonical (LF, `git show b1a275e:components/agent-forge/agent-forge-surface.ts`) digest of the same
+> reviewed content is `38dbbbeb2fa9ab003e69e540ce346a4849d964d0d92e49944f1b85c5ff5a714f`. Both name the
+> same bytes modulo line endings; the sealed contract is left as reviewed because this authority
+> expired 2026-08-11 and its review commit is pinned by sealed shadow evidence. Verify with either.
+
 ## Activation boundary
 
 This contract grants no execution authority. A later, separate PR must add a future-dated authority
