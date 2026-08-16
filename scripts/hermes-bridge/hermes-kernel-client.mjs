@@ -38,6 +38,31 @@ function isInside(child, parent) {
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
 }
 
+export function buildKernelPromptEpilogue() {
+  return [
+    "Finish by printing exactly one fenced ```json block that satisfies the following JSON schema, and print nothing after it.",
+    "Do not commit, push, open PRs, or touch paths outside the reservations named above.",
+    JSON.stringify(HERMES_TURN_OUTPUT_SCHEMA),
+  ].join("\n")
+}
+
+export function buildKernelPacket({ policy, prompt, workspacePath, runId }) {
+  return {
+    schemaVersion: 2,
+    workOrderId: policy.workOrderId,
+    model: policy.model.id,
+    prompt: `${prompt}\n\n${buildKernelPromptEpilogue()}`,
+    maximumTurns: policy.execution.maximumTurns,
+    toolsets: [...policy.execution.allowedToolsets],
+    workspaceMode: "OWNED_WORKTREE",
+    workspacePath,
+    runId,
+  }
+}
+
+const WALL_TOKEN = /HERMES_FREE_AGENT_[A-Z_]+_WALL/
+const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex")
+
 export function createHermesKernelClient({
   workspacePath,
   runtimeRoot,
@@ -53,6 +78,7 @@ export function createHermesKernelClient({
   if (typeof commandRunner !== "function") throw new TypeError("commandRunner must be a function")
   const threadsRoot = kernelThreadsRoot(runtimeRoot)
   const worktreesRoot = path.join(path.resolve(runtimeRoot), "worktrees")
+  let connected = false
 
   const readPolicy = () => {
     let policy
@@ -89,6 +115,7 @@ export function createHermesKernelClient({
   const client = {
     async connect() {
       readPolicy(); assertUnquarantined(); assertOwnedWorkspace()
+      connected = true
     },
     async startThread() {
       const threadId = randomUUID()
@@ -101,13 +128,48 @@ export function createHermesKernelClient({
       if (readPolicy()?.execution?.sessionResumeProven !== true) throw wall("RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE", "resumeThread")
       return threadId
     },
-    async runTurn() { throw wall("RESIDENT_MODEL_TURN_NOT_IMPLEMENTED", "runTurn") },
+    async runTurn({ threadId, prompt, timeoutMs: turnTimeoutMs = timeoutMs } = {}) {
+      if (!connected) throw wall("RESIDENT_MODEL_LANE_NOT_CONNECTED", "runTurn")
+      const session = readSession(threadId)
+      const policy = readPolicy(); assertUnquarantined(); const workspaceReal = assertOwnedWorkspace()
+      const text = requiredString(prompt, "prompt")
+      const runId = randomUUID()
+      const packet = buildKernelPacket({ policy, prompt: text, workspacePath: workspaceReal, runId })
+      if (packet.prompt.length > (policy.execution?.promptMaxChars ?? 16000)) throw wall("RESIDENT_MODEL_PROMPT_TOO_LONG", "runTurn")
+      const turnIndex = session.turns.length + 1
+      const turnDir = path.join(threadsRoot, threadId, "turns", String(turnIndex))
+      fs.mkdirSync(turnDir, { recursive: true })
+      const packetPath = path.join(turnDir, "packet.json")
+      const packetBytes = `${JSON.stringify(packet, null, 2)}\n`
+      fs.writeFileSync(packetPath, packetBytes, { mode: 0o600 })
+      const result = await commandRunner({
+        command: powershellCommand,
+        args: ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
+          "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", workspaceReal, "-RunId", runId],
+        cwd: workspaceReal, timeoutMs: turnTimeoutMs, credentialAccess: false,
+      })
+      const exitCode = result?.exitCode ?? result?.code ?? result?.status ?? 0
+      const stdout = String(result?.stdout ?? ""); const stderr = String(result?.stderr ?? "")
+      const combined = `${stdout}\n${stderr}`
+      const record = { turnId: runId, at: now().toISOString(), exitCode, packetSha256: sha256(packetBytes), stdoutSha256: sha256(stdout), harvested: false }
+      fs.writeFileSync(path.join(turnDir, "stdout.txt"), sanitizeAppServerText(combined))
+      const finish = (error) => { session.turns.push(record); writeSession(session); if (error) throw error }
+      if (result?.timedOut === true || /HERMES_FREE_AGENT_TIMEOUT_WALL/.test(combined)) finish(new AppServerTimeoutError(turnTimeoutMs))
+      if (/HERMES_FREE_AGENT_EXECUTION_WALL/.test(combined)) finish(new AppServerTurnEndedError("failed"))
+      const token = combined.match(WALL_TOKEN)?.[0]
+      if (token) finish(wall(token, "runTurn"))
+      if (exitCode !== 0 || !HERMES_FREE_AGENT_COMPLETE_PATTERN.test(stdout)) finish(new AppServerTurnEndedError("interrupted"))
+      const harvested = harvestTurnOutput(stdout)
+      if (!harvested.ok) {
+        const error = new AppServerTurnEndedError("failed"); error.detail = `RESIDENT_MODEL_TURN_OUTPUT_INVALID:${harvested.reason}`
+        finish(error)
+      }
+      record.harvested = true
+      finish(null)
+      return { threadId, turnId: runId, status: "completed", finalText: harvested.finalText }
+    },
     close() {},
   }
   // Keep the surface exactly the five members the orchestrator uses.
   return Object.freeze(client)
-
-  // Referenced by Task 5; kept here so tree-shaking/lint don't flag unused imports meanwhile.
-  void AppServerTimeoutError; void AppServerTurnEndedError; void sanitizeAppServerText; void harvestTurnOutput
-  void HERMES_FREE_AGENT_COMPLETE_PATTERN; void HERMES_TURN_OUTPUT_SCHEMA; void timeoutMs; void invokerPath; void powershellCommand
 }
