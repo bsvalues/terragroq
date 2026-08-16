@@ -98,7 +98,7 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
     expect(v2.promotion.requiredEvidence).toEqual([...policy().promotion.requiredEvidence, "OWNED_WORKTREE_CONFINEMENT_PROVEN", "KERNEL_SESSION_CONTINUITY_PROVEN"])
     // P2 (2026-08-16) proved owned-worktree confinement on HERMES; the value is the completed
     // probe turn id and is documented in docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md.
-    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: "p2-b9fbca28-6fea-4898-9533-b556008ff300", KERNEL_SESSION_CONTINUITY_PROVEN: "p2b-1f789bdf-4f51-45f4-aeb3-5080f60a5344" })
+    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: "p2-b9fbca28-6fea-4898-9533-b556008ff300", KERNEL_SESSION_CONTINUITY_PROVEN: "p2b-1f789bdf-4f51-45f4-aeb3-5080f60a5344", V2_OWNED_WORKTREE_REVIEW_APPROVED: null })
     expect(read("docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md")).toContain("b9fbca28-6fea-4898-9533-b556008ff300")
     expect(read("docs/reports/hermes-kernel-p2b-session-continuity-2026-08-16.md")).toContain("1f789bdf-4f51-45f4-aeb3-5080f60a5344")
   })
@@ -135,5 +135,27 @@ describe("Hermes free development agent provider — P2b per-thread kernel state
     expect(runner).toContain("[A-Za-z0-9_-]{4,64}")
     expect(runner).toContain('"--resume"')
     expect(runner).toContain("HERMES_FREE_AGENT_SESSION_ID_WALL")
+  })
+})
+
+describe("Hermes free development agent provider — P3 promotion gate", () => {
+  it("declares what promotion requires and has not claimed it", () => {
+    const v2 = policyV2()
+    expect(v2.promotion.promotionRequires).toEqual(["V2_OWNED_WORKTREE_REVIEW_APPROVED"])
+    // Unproven by design: this project built the v2 mode, so it cannot review it.
+    expect(v2.promotion.satisfiedEvidence.V2_OWNED_WORKTREE_REVIEW_APPROVED).toBeNull()
+    expect(v2.promotion.status).toBe("PILOT_AUTHORIZED")
+  })
+  it("does not let v1's independent review stand in for the v2 mode", () => {
+    const v2 = policyV2()
+    // INDEPENDENT_REVIEW_APPROVED is inherited from v1 (2026-08-13) and predates owned-worktree
+    // mode entirely, so promotion is gated on a v2-scoped line instead of that value.
+    expect(v2.promotion.satisfiedEvidence.INDEPENDENT_REVIEW_APPROVED).toBe(policy().promotion.satisfiedEvidence.INDEPENDENT_REVIEW_APPROVED)
+    expect(v2.promotion.promotionRequires).not.toContain("INDEPENDENT_REVIEW_APPROVED")
+    expect(read("docs/reports/hermes-kernel-p3-promotion-review-packet-2026-08-16.md")).toContain("V2_OWNED_WORKTREE_REVIEW_APPROVED")
+  })
+  it("enforces the promotion gate at both enforcement points", () => {
+    expect(read("scripts/hermes-bridge/hermes-kernel-client.mjs")).toContain("RESIDENT_MODEL_LANE_PROMOTION_UNPROVEN")
+    expect(read("scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1")).toContain("HERMES_FREE_AGENT_PROMOTION_EVIDENCE_WALL")
   })
 })

@@ -417,3 +417,35 @@ describe("Hermes kernel client — per-thread kernel state and session continuit
     await expect(client.resumeThread(threadId, { cwd: workspacePath })).rejects.toMatchObject({ code: "RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE" })
   })
 })
+
+describe("Hermes kernel client — promotion is reviewed, not self-asserted (P3)", () => {
+  it("leaves a pilot lane untouched while its promotion evidence is unproven", async () => {
+    const { client, policyPath } = fixture()
+    patchPolicy(policyPath, (p) => {
+      p.promotion.status = "PILOT_AUTHORIZED"
+      p.promotion.promotionRequires = ["V2_OWNED_WORKTREE_REVIEW_APPROVED"]
+      p.promotion.satisfiedEvidence.V2_OWNED_WORKTREE_REVIEW_APPROVED = null
+    })
+    await expect(client.connect()).resolves.toBeUndefined()
+  })
+  it("refuses a policy that calls itself PROMOTED while a declared promotion line is unproven", async () => {
+    for (const unproven of [null, undefined, "", "   "]) {
+      const { client, policyPath } = fixture()
+      patchPolicy(policyPath, (p) => {
+        p.promotion.status = "PROMOTED"
+        p.promotion.promotionRequires = ["V2_OWNED_WORKTREE_REVIEW_APPROVED"]
+        p.promotion.satisfiedEvidence.V2_OWNED_WORKTREE_REVIEW_APPROVED = unproven
+      })
+      await expect(client.connect()).rejects.toMatchObject({ code: "RESIDENT_MODEL_LANE_PROMOTION_UNPROVEN" })
+    }
+  })
+  it("accepts PROMOTED once every declared promotion line is satisfied", async () => {
+    const { client, policyPath } = fixture()
+    patchPolicy(policyPath, (p) => {
+      p.promotion.status = "PROMOTED"
+      p.promotion.promotionRequires = ["V2_OWNED_WORKTREE_REVIEW_APPROVED"]
+      p.promotion.satisfiedEvidence.V2_OWNED_WORKTREE_REVIEW_APPROVED = "review-2026-08-20-codex"
+    })
+    await expect(client.connect()).resolves.toBeUndefined()
+  })
+})
