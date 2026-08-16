@@ -1,10 +1,15 @@
 import { betterAuth } from "better-auth"
 import { emailOTP } from "better-auth/plugins/email-otp"
+import { passkey } from "@better-auth/passkey"
 import { pool } from "@/lib/db"
 import { createEmailOtpOptions } from "@/lib/auth-email-otp"
 import { resolveAuthBaseUrl, resolveTrustedOriginConfig } from "@/lib/auth-origins"
+import { resolvePasskeyRelyingParty } from "@/lib/auth-passkey"
 
 const trustedOriginConfig = resolveTrustedOriginConfig()
+// Passkeys are only offered when the canonical origin can actually carry them: WebAuthn binds a
+// credential to a domain, so an IP origin is refused rather than advertised and then failing.
+export const passkeyResolution = resolvePasskeyRelyingParty(resolveAuthBaseUrl())
 
 export const auth = betterAuth({
   database: pool,
@@ -14,7 +19,16 @@ export const auth = betterAuth({
     autoSignIn: true,
   },
   trustedOrigins: trustedOriginConfig.trustedOrigins,
-  plugins: [emailOTP(createEmailOtpOptions())],
+  plugins: [
+    emailOTP(createEmailOtpOptions()),
+    ...(passkeyResolution.available
+      ? [passkey({
+          rpID: passkeyResolution.relyingParty.rpID,
+          rpName: passkeyResolution.relyingParty.rpName,
+          origin: passkeyResolution.relyingParty.origin,
+        })]
+      : []),
+  ],
   session: {
     expiresIn: 60 * 60 * 24 * 7,
     updateAge: 60 * 60 * 24,
