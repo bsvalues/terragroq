@@ -355,3 +355,39 @@ describe("Hermes kernel client — runTurn", () => {
     expect(recorded).toContain("[REDACTED]")
   })
 })
+
+describe("Hermes kernel client - post-turn workspace confinement (issue #806)", () => {
+  it("walls a reparse point created inside a subdirectory during the turn", async () => {
+    const { client, calls, commandRunner, workspacePath, commonDir } = fixture()
+    const nested = path.join(workspacePath, "sub", "deep")
+    fs.mkdirSync(nested, { recursive: true })
+    const escape = path.join(nested, "escape")
+    commandRunner.mockImplementation(async (call: Call) => {
+      calls.push(call)
+      // the model holds a terminal for the whole turn: it links out mid-turn, then reports success
+      if (call.command !== "git" && !fs.existsSync(escape)) fs.symlinkSync(os.tmpdir(), escape, "junction")
+      return gitOr(call, commonDir, okResult(call.args[call.args.indexOf("-RunId") + 1]))
+    })
+    await client.connect()
+    const thread = await client.startThread()
+    await expect(client.runTurn({ threadId: thread, prompt: "p" })).rejects.toMatchObject({
+      code: "RESIDENT_MODEL_LANE_WORKSPACE_TAMPERED",
+    })
+    // non-vacuous: the link really exists and is really a reparse point
+    expect(fs.lstatSync(escape).isSymbolicLink()).toBe(true)
+  })
+  it("accepts a turn whose workspace gained only ordinary files and directories", async () => {
+    const { client, calls, commandRunner, workspacePath, commonDir } = fixture()
+    commandRunner.mockImplementation(async (call: Call) => {
+      calls.push(call)
+      if (call.command !== "git") {
+        fs.mkdirSync(path.join(workspacePath, "src", "nested"), { recursive: true })
+        fs.writeFileSync(path.join(workspacePath, "src", "nested", "file.txt"), "work")
+      }
+      return gitOr(call, commonDir, okResult(call.args[call.args.indexOf("-RunId") + 1]))
+    })
+    await client.connect()
+    const thread = await client.startThread()
+    await expect(client.runTurn({ threadId: thread, prompt: "p" })).resolves.toMatchObject({ status: "completed" })
+  })
+})

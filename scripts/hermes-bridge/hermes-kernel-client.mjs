@@ -140,6 +140,30 @@ export function createHermesKernelClient({
   const assertInvokerPresent = () => {
     if (!fs.existsSync(invokerPath)) throw wall("RESIDENT_MODEL_LANE_INVOKER_MISSING", "connect")
   }
+  /**
+   * Confinement has to hold at the END of a turn, not only before it. The pre-turn checks see the
+   * workspace the model was handed; the model then holds a terminal for the whole turn and can
+   * create a reparse point in a subdirectory (on Windows a directory junction needs no privilege)
+   * and write through it to a path outside the owned worktree. The pre-turn scan is also top-level
+   * only, so a nested link was never observed at all. This sweep is recursive and runs after the
+   * turn, and an unreadable directory is a wall rather than a skipped branch.
+   */
+  const assertNoReparsePoints = (root, method) => {
+    const tampered = () => wall("RESIDENT_MODEL_LANE_WORKSPACE_TAMPERED", method)
+    const pending = [root]
+    while (pending.length > 0) {
+      const directory = pending.pop()
+      let entries
+      try { entries = fs.readdirSync(directory, { withFileTypes: true }) } catch { throw tampered() }
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) throw tampered()
+        if (!entry.isDirectory()) continue
+        // A linked worktree's .git is a file, so a .git *directory* here is itself a finding.
+        if (entry.name === ".git") throw tampered()
+        pending.push(path.join(directory, entry.name))
+      }
+    }
+  }
 
   const gitCommonDir = async (cwd, turnTimeoutMs) => {
     let result
@@ -236,6 +260,7 @@ export function createHermesKernelClient({
       if (exitCode !== 0 || !completion || completion[1] !== runId) finish(new AppServerTurnEndedError("interrupted"))
       const commonDirAfter = await gitCommonDir(workspaceReal, turnTimeoutMs)
       if (commonDirAfter === null || commonDirAfter !== commonDirBefore) finish(wall("RESIDENT_MODEL_LANE_WORKSPACE_TAMPERED", "runTurn"))
+      try { assertNoReparsePoints(workspaceReal, "runTurn") } catch (error) { finish(error) }
       const satisfiesContract = (value) => validateAgainstTurnSchema(value, HERMES_TURN_OUTPUT_SCHEMA).ok
       const harvested = harvestTurnOutput(stdout, { runId, isAcceptable: satisfiesContract })
       if (!harvested.ok) {
