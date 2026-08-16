@@ -83,3 +83,6 @@ control-center/backend/copilot.db
 copilot_index.db
 *_index.db
 *.db
+
+# Hermes free-dev-agent durable quarantine marker (runtime state, never versioned)
+HERMES_FREE_AGENT_QUARANTINED
