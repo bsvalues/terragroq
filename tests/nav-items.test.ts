@@ -28,11 +28,16 @@ describe("four-primary cockpit navigation", () => {
   })
 
   it("keeps supporting routes out of primary navigation without deleting them", () => {
-    expect(navItems.map((item) => item.href)).not.toEqual(expect.arrayContaining(["/work-orders", "/audit", "/brain-council", "/goal-console", "/chat"]))
-    const intent = readFileSync("lib/intent/router.ts", "utf8")
-    expect(intent).toContain('"work orders": "/work-orders"')
-    expect(intent).toContain('"brain council": "/brain-council"')
-    expect(intent).toContain('"goal console": "/goal-console"')
-    expect(intent).toContain('chat: "/chat"')
+    const supporting = ["/work-orders", "/audit", "/brain-council", "/goal-console", "/chat"]
+    expect(navItems.map((item) => item.href)).not.toEqual(expect.arrayContaining(supporting))
+    // Assert the routes stay reachable, not the literal syntax that expresses them: the intent
+    // router moved from a flat phrase->href map to intent-keyed destinations, which silently
+    // broke this check while every route remained reachable.
+    const hrefs = (source: string) => Array.from(source.matchAll(/href: "(\/[a-z-]+)"/g), (match) => match[1])
+    const reachable = new Set([
+      ...hrefs(readFileSync("lib/intent/router.ts", "utf8")),
+      ...hrefs(readFileSync("components/workbench/supporting-capabilities.ts", "utf8")),
+    ])
+    for (const href of supporting) expect([...reachable]).toContain(href)
   })
 })

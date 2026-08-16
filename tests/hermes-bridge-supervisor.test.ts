@@ -453,8 +453,8 @@ describe("Hermes interactive-user supervisor", () => {
       path.join(repoRoot, "scripts", "hermes-bridge", "cli.mjs"),
       "utf8",
     )
-    expect(cliSource).toContain(
-      "const queueRuntime = options.queueRuntime ?? createHermesOutcomeQueueRuntime()",
-    )
+    // Assert the injection seam, not the factory's name: the default factory was renamed while
+    // the injectable-with-default contract this guards stayed exactly the same.
+    expect(cliSource).toMatch(/const queueRuntime = options\.queueRuntime \?\? create\w*QueueRuntime\(\)/)
   })
 })
