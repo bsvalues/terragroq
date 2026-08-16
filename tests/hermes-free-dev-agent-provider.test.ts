@@ -93,19 +93,22 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
     const v2 = policyV2()
     expect(v2.promotion.status).toBe("PILOT_AUTHORIZED")
     expect(v2.promotion.requiredEvidence).toEqual([...policy().promotion.requiredEvidence, "OWNED_WORKTREE_CONFINEMENT_PROVEN"])
-    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: null })
+    // P2 (2026-08-16) proved owned-worktree confinement on HERMES; the value is the completed
+    // probe turn id and is documented in docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md.
+    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: "p2-b9fbca28-6fea-4898-9533-b556008ff300" })
+    expect(read("docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md")).toContain("b9fbca28-6fea-4898-9533-b556008ff300")
   })
-  it("leaves the lane fail-closed: the unproven evidence line is enforced, not decorative", () => {
-    // Intended state until P2 sets OWNED_WORKTREE_CONFINEMENT_PROVEN. Both enforcement points
-    // must refuse the shipped policy, so the v2 lane cannot run by accident.
+  it("keeps the evidence gate enforced, not decorative", () => {
+    // Every declared evidence line is satisfied after P2, and both enforcement points still
+    // exist so a future declared-but-unproven line closes the lane again.
     const v2 = policyV2()
     const unproven = v2.promotion.requiredEvidence.filter((key: string) => {
       const value = v2.promotion.satisfiedEvidence[key]
       return value === null || value === undefined || (typeof value === "string" && value.trim() === "")
     })
-    expect(unproven).toEqual(["OWNED_WORKTREE_CONFINEMENT_PROVEN"])
+    expect(unproven).toEqual([])
     expect(read("scripts/hermes-bridge/hermes-kernel-client.mjs")).toContain("RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN")
     expect(read("scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1")).toContain("HERMES_FREE_AGENT_EVIDENCE_WALL")
-    expect(read("docs/runbooks/hermes-free-dev-agent.md")).toContain("fails closed until `OWNED_WORKTREE_CONFINEMENT_PROVEN` is set by P2 evidence")
+    expect(read("docs/runbooks/hermes-free-dev-agent.md")).toContain("`OWNED_WORKTREE_CONFINEMENT_PROVEN`")
   })
 })

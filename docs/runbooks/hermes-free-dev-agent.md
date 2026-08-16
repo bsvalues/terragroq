@@ -51,12 +51,12 @@ walls (`HERMES_FREE_AGENT_WORKSPACE_*_WALL`). No baseline clone is made in this 
 final fenced ```json block is the turn result the orchestrator validates; validation, commit, push,
 PR and merge stay in WilliamOS.
 
-The v2 lane **fails closed until `OWNED_WORKTREE_CONFINEMENT_PROVEN` is set by P2 evidence**: the
-policy declares that line in `promotion.requiredEvidence` with a `null` value in
-`promotion.satisfiedEvidence`, and both the client (`RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN`) and the
-invoker (`HERMES_FREE_AGENT_EVIDENCE_WALL`) refuse to run while any declared line is unproven. That
-is the intended shipped state — do not fill the value in to make a run proceed; it is set only by the
-P2 live smoke on HERMES.
+The v2 lane is gated by evidence: every line in `promotion.requiredEvidence` must have a non-null
+value in `promotion.satisfiedEvidence`, and both the client (`RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN`)
+and the invoker (`HERMES_FREE_AGENT_EVIDENCE_WALL`) refuse to run while any declared line is unproven.
+`OWNED_WORKTREE_CONFINEMENT_PROVEN` was set by the P2 probe on HERMES on 2026-08-16 (turn
+`b9fbca28-…`; see `docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md`). Never fill an
+evidence value in to make a run proceed — a new declared line closes the lane again until proven.
 
 The invoker also refuses an owned workspace that contains `node_modules` or any top-level reparse
 point (`HERMES_FREE_AGENT_WORKSPACE_CONTENT_WALL`), and the client re-asserts the workspace's
@@ -65,6 +65,16 @@ point (`HERMES_FREE_AGENT_WORKSPACE_CONTENT_WALL`), and the client re-asserts th
 `resumeThread` is fail-closed (`execution.sessionResumeProven: false`) until P2 proves kernel session
 continuity; the orchestrator then starts a fresh thread, and owner-decision resumes wall — by design.
 
-P2 (owner-triggered on HERMES): `WILLIAMOS_EXECUTOR=resident-model pnpm hermes:smoke` against a
-throwaway outcome on the registered contract; record run id, exit code, harvested JSON, and a diff
-confined to reservations under `docs/reports/`. Then the two-turn resume probe.
+P2 probe (owner-triggered on HERMES; `pnpm hermes:smoke` is the AEGIS/Codex transport smoke and does
+NOT drive this lane): create an owned probe worktree under `<runtime root>\worktrees`
+(`git -C <checkout> worktree add -b p2/resident-probe <path> main`), write a probe copy of the v2
+policy **without a BOM** (`[IO.File]::WriteAllText($path, $json, [Text.UTF8Encoding]::new($false))`),
+then from the checkout root:
+
+    node scripts/hermes-bridge/resident-model-probe.mjs --workspace <probe worktree> --policy <policy> --out <summary.json>
+
+It runs connect → startThread → one turn (a one-line comment in a reserved path + the schema
+JSON) → resumeThread, and prints a JSON summary; then verify `git status` of the worktree shows only
+the reserved path, the canonical checkout is clean, no `williamos-hermes-agent-*` container remains,
+and no quarantine marker exists. Record the summary and hashes under `docs/reports/`. Kernel session
+continuity (P2b) needs the per-thread state mount before `sessionResumeProven` can be flipped.
