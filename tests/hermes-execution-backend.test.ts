@@ -8,6 +8,8 @@ import {
   AegisExecutionBackend,
   ExecutionBackend,
   LocalExecutionBackend,
+  ResidentModelExecutionBackend,
+  ResidentModelNotImplementedError,
   selectExecutionBackend,
 } from "../scripts/hermes-bridge/execution-backend.mjs"
 
@@ -19,6 +21,50 @@ describe("execution backends", () => {
     expect(selectExecutionBackend({ WILLIAMOS_CODEX_EXEC_NODE: "  " })).toBeInstanceOf(LocalExecutionBackend)
     expect(selectExecutionBackend({ WILLIAMOS_CODEX_EXEC_NODE: "aegis" })).toBeInstanceOf(AegisExecutionBackend)
     expect(selectExecutionBackend({})).toBeInstanceOf(ExecutionBackend)
+  })
+
+  it("selects the resident model backend only on an exact opt-in", () => {
+    expect(selectExecutionBackend({ WILLIAMOS_EXECUTOR: "resident-model" })).toBeInstanceOf(ResidentModelExecutionBackend)
+    for (const value of ["resident", "resident-model ", "RESIDENT-MODEL", "", " "]) {
+      expect(selectExecutionBackend({ WILLIAMOS_EXECUTOR: value })).not.toBeInstanceOf(ResidentModelExecutionBackend)
+    }
+    // Whether Codex runs outranks where Codex runs.
+    expect(selectExecutionBackend({ WILLIAMOS_EXECUTOR: "resident-model", WILLIAMOS_CODEX_EXEC_NODE: "aegis" }))
+      .toBeInstanceOf(ResidentModelExecutionBackend)
+    // Absent the opt-in, existing selection is untouched.
+    expect(selectExecutionBackend({ WILLIAMOS_CODEX_EXEC_NODE: "aegis" })).toBeInstanceOf(AegisExecutionBackend)
+    expect(selectExecutionBackend({})).toBeInstanceOf(LocalExecutionBackend)
+  })
+
+  it("inherits every model-agnostic mechanic and refuses only the Codex seam", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-resident-"))
+    const repositoryRoot = path.join(root, "repository")
+    fs.mkdirSync(repositoryRoot)
+    const calls: Call[] = []
+    const backend = new ResidentModelExecutionBackend({
+      runtimeRoot: path.join(root, "runtime"), repositoryRoot,
+      commandRunner: async (call: Call) => { calls.push(call); return { code: 0, stdout: "ok", stderr: "" } },
+    })
+    expect(backend).toBeInstanceOf(LocalExecutionBackend)
+
+    const { workspacePath } = await backend.prepareWorkspace({ branch: "codex/resident-1", baseSha: "b".repeat(40), repository: "bsvalues/terragroq" })
+    fs.mkdirSync(workspacePath, { recursive: true })
+    fs.writeFileSync(path.join(workspacePath, "present.txt"), "yes")
+    expect(await backend.stat({ workspacePath, relPath: "present.txt" })).toEqual({ exists: true, isFile: true })
+    expect(await backend.validate({ workspacePath, commands: [{ command: "npm", args: ["test"], timeoutMs: 1000 }] }))
+      .toEqual([{ exitCode: 0, stdout: "ok", stderr: "" }])
+    expect(await backend.git({ workspacePath, args: ["status"] })).toEqual({ exitCode: 0, stdout: "ok" })
+    await backend.cleanup({ workspacePath })
+    expect(calls.at(-1)?.args).toEqual(["-C", repositoryRoot, "worktree", "remove", workspacePath])
+
+    // The seam refuses fail-closed rather than returning an unusable client.
+    await expect(backend.runCodexClient({ workspacePath })).rejects.toMatchObject({
+      code: "RESIDENT_MODEL_EXECUTOR_NOT_IMPLEMENTED", capability: "runCodexClient",
+    })
+    await expect(backend.runCodexClient({ workspacePath })).rejects.toBeInstanceOf(ResidentModelNotImplementedError)
+    // Argument discipline still matches the parent contract.
+    await expect(backend.runCodexClient({})).rejects.toBeInstanceOf(TypeError)
+    fs.rmSync(root, { recursive: true, force: true })
   })
 
   it("keeps local execution, filesystem checks, validation, git, and Codex cwd local", async () => {
