@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { CodexAppServerClient } from "./app-server-client.mjs"
+import { createHermesKernelClient, HERMES_KERNEL_INVOKER_RELATIVE, HERMES_KERNEL_POLICY_RELATIVE } from "./hermes-kernel-client.mjs"
 import { createCommandRunner } from "./repository-lifecycle.mjs"
 
 function requiredString(value, name) {
@@ -131,36 +132,31 @@ export class LocalExecutionBackend extends ExecutionBackend {
   }
 }
 
-/** Typed refusal raised when a resident-model capability is selected but not yet built. */
-export class ResidentModelNotImplementedError extends Error {
-  constructor(capability) {
-    super(`resident-model executor does not implement ${capability}`)
-    this.name = "ResidentModelNotImplementedError"
-    this.code = "RESIDENT_MODEL_EXECUTOR_NOT_IMPLEMENTED"
-    this.capability = capability
-  }
-}
-
 /**
- * Resident local-model execution context (S1 scaffold).
+ * Resident local-model execution context (S2).
  *
- * Inherits every model-agnostic mechanic from LocalExecutionBackend unchanged —
- * prepareWorkspace, runCommand, stat, validate, git, cleanup — because workspace and
- * git mechanics do not depend on who authors the change. Only runCodexClient, the
- * single Codex seam in the contract, is overridden.
- *
- * The agent loop that authors changes locally lands in S2. Until then this refuses
- * fail-closed: it never returns a client that cannot actually produce a diff.
+ * Inherits every local mechanic (worktrees, commands, validation, git, cleanup) and overrides the
+ * single Codex seam with the Hermes-kernel adapter: the reviewed hermes-free-dev-agent lane runs
+ * against this backend's owned worktree and returns the orchestrator's turn JSON. No agent loop
+ * lives here (WO-WILLIAMOS-HERMES-KERNEL-V1 §1).
  */
 export class ResidentModelExecutionBackend extends LocalExecutionBackend {
-  constructor(options = {}) {
+  constructor({ kernelPolicyPath, kernelInvokerPath, ...options } = {}) {
     super(options)
     this.isResidentModel = true
+    this.kernelPolicyPath = path.resolve(kernelPolicyPath ?? path.join(this.repositoryRoot, HERMES_KERNEL_POLICY_RELATIVE))
+    this.kernelInvokerPath = path.resolve(kernelInvokerPath ?? path.join(this.repositoryRoot, HERMES_KERNEL_INVOKER_RELATIVE))
   }
 
-  async runCodexClient({ workspacePath } = {}) {
-    requiredString(workspacePath, "workspacePath")
-    throw new ResidentModelNotImplementedError("runCodexClient")
+  async runCodexClient({ workspacePath, timeoutMs } = {}) {
+    return createHermesKernelClient({
+      workspacePath: requiredString(workspacePath, "workspacePath"),
+      runtimeRoot: this.runtimeRoot,
+      commandRunner: this.commandRunner,
+      policyPath: this.kernelPolicyPath,
+      invokerPath: this.kernelInvokerPath,
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    })
   }
 }
 

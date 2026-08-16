@@ -9,7 +9,6 @@ import {
   ExecutionBackend,
   LocalExecutionBackend,
   ResidentModelExecutionBackend,
-  ResidentModelNotImplementedError,
   selectExecutionBackend,
 } from "../scripts/hermes-bridge/execution-backend.mjs"
 
@@ -36,7 +35,7 @@ describe("execution backends", () => {
     expect(selectExecutionBackend({})).toBeInstanceOf(LocalExecutionBackend)
   })
 
-  it("inherits every model-agnostic mechanic and refuses only the Codex seam", async () => {
+  it("inherits every model-agnostic mechanic and routes the Codex seam through the Hermes-kernel client", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-resident-"))
     const repositoryRoot = path.join(root, "repository")
     fs.mkdirSync(repositoryRoot)
@@ -57,11 +56,11 @@ describe("execution backends", () => {
     await backend.cleanup({ workspacePath })
     expect(calls.at(-1)?.args).toEqual(["-C", repositoryRoot, "worktree", "remove", workspacePath])
 
-    // The seam refuses fail-closed rather than returning an unusable client.
-    await expect(backend.runCodexClient({ workspacePath })).rejects.toMatchObject({
-      code: "RESIDENT_MODEL_EXECUTOR_NOT_IMPLEMENTED", capability: "runCodexClient",
-    })
-    await expect(backend.runCodexClient({ workspacePath })).rejects.toBeInstanceOf(ResidentModelNotImplementedError)
+    // S2: the seam returns the Hermes-kernel adapter, never a Codex client.
+    const client = await backend.runCodexClient({ workspacePath, timeoutMs: 1234 })
+    expect(Object.keys(client).sort()).toEqual(["close", "connect", "resumeThread", "runTurn", "startThread"])
+    // Lane checks are enforced by the client, not the backend: no policy here → wall on connect.
+    await expect(client.connect()).rejects.toMatchObject({ code: "RESIDENT_MODEL_LANE_POLICY_UNREADABLE" })
     // Argument discipline still matches the parent contract.
     await expect(backend.runCodexClient({})).rejects.toBeInstanceOf(TypeError)
     fs.rmSync(root, { recursive: true, force: true })
