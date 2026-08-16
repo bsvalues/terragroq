@@ -26,10 +26,6 @@ export const CI_EXCLUDED_TEST_FILES: ReadonlyArray<{ file: string; reason: strin
     file: "tests/execution-fabric-shadow-authority-scope.test.ts",
     reason: "WO-EF-SHADOW-004.json source_sha256 was computed on a CRLF checkout (c8059e2a = CRLF bytes; LF canonical = 38dbbbeb); one-line owner-reviewed correction pending",
   },
-  {
-    file: "tests/goal-operator-continuity.test.ts",
-    reason: "fixture predates 4c80e9a/6a3539a: projectors now accept only the single registered UI work contract, so the read_model scenario cannot pass without a WO to re-scope it",
-  },
 ]
 
 export default mergeConfig(

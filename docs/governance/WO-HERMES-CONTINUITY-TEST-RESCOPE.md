@@ -1,7 +1,22 @@
 # WO-HERMES-CONTINUITY-TEST-RESCOPE — re-scope `goal-operator-continuity` onto the governed work-contract runtime
 
-**Status:** DRAFT (diagnosis complete 2026-08-16; no fix applied). Excluded from CI by
-`vitest.ci.config.ts` with a pointer here.
+**Status:** CLOSED — option A executed 2026-08-16 (owner decision). Test green; CI exclusion
+removed.
+
+**What changed in `tests/goal-operator-continuity.test.ts`:** the scenario now runs on the
+registered contract via the *real* `resolveHermesWorkContract` (lane `ui`, registered intent
+text; no injected resolver); the outcome carries a durable `queueBinding`; `changedPaths` is the
+contract's first reservation and validators are the contract's three commands;
+`PersistedRuntimeLedger.query` answers the canonical authorization SELECT
+(`FROM goal AS contract_goal …`) with one row shaped like the sibling
+`hermes-bridge-outcome-source` fixture, and answers the enriched `work_order` SELECT with the
+`latest*` / `epoch_latest` LATERAL columns derived from its own recorded checkpoint events. The
+continuity claim itself — interrupt → resume same thread → single fenced completion, projected
+identically across Goal timeline / Runtime / Trace / Evidence — is unchanged.
+
+Negative control recorded: removing `queueBinding` fails at
+`HERMES_RUNTIME_PROJECTION_WALL ← OUTCOME_WORK_ORDER_AUTHORIZATION_WALL`, proving the new
+authorization path is exercised, not bypassed.
 
 ## Symptom
 
