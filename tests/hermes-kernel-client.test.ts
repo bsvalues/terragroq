@@ -46,8 +46,9 @@ function fixture(overrides: Record<string, unknown> = {}) {
   const policyDir = path.join(root, "policy"); fs.mkdirSync(policyDir)
   const policyPath = path.join(policyDir, "hermes-free-dev-agent-v2.policy.json")
   fs.writeFileSync(policyPath, JSON.stringify({
-    schemaVersion: 2, packetSchemaVersion: 2, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001",
+    schemaVersion: 2, packetSchemaVersion: 3, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001",
     model: { id: "williamos-qwen3-4b:64k" },
+    containment: { agentStatePersistence: "PER_THREAD_STATE_DIR" },
     placement: { workspaceMode: "OWNED_WORKTREE", allowedWorkspaceRoots: [path.join(runtimeRoot, "worktrees")] },
     execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"], promptMaxChars: 60000, sessionResumeProven: false, timeoutSeconds: 1800 },
     promotion: { status: "PILOT_AUTHORIZED", requiredEvidence: [...REQUIRED_EVIDENCE], satisfiedEvidence: { ...SATISFIED_EVIDENCE } },
@@ -149,7 +150,7 @@ describe("Hermes kernel client — lane checks and threads", () => {
     expect(threadId).toBe("00000000-0000-4000-8000-000000000001")
     const sessionPath = path.join(kernelThreadsRoot(runtimeRoot), threadId, "session.json")
     expect(JSON.parse(fs.readFileSync(sessionPath, "utf8"))).toEqual({
-      schemaVersion: 1, threadId, workspacePath, createdAt: "2026-08-16T20:00:00.000Z", turns: [],
+      schemaVersion: 1, threadId, workspacePath, createdAt: "2026-08-16T20:00:00.000Z", kernelSessionId: null, turns: [],
     })
     await expect(client.resumeThread(threadId, { cwd: workspacePath })).rejects.toMatchObject({ code: "RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE" })
     await expect(client.resumeThread("unknown-thread", { cwd: workspacePath })).rejects.toMatchObject({ code: "RESIDENT_MODEL_THREAD_UNKNOWN" })
@@ -162,6 +163,9 @@ describe("Hermes kernel client — lane checks and threads", () => {
     patchPolicy(policyPath, (p) => { p.execution.sessionResumeProven = true })
     await client.connect()
     const threadId = await client.startThread({ cwd: workspacePath })
+    // A kernel session must have been captured before a thread is resumable (P2b).
+    const sessionFile = path.join(kernelThreadsRoot(runtimeRoot), threadId, "session.json")
+    const session = JSON.parse(fs.readFileSync(sessionFile, "utf8")); session.kernelSessionId = "20260816_200044_30d6e1"; fs.writeFileSync(sessionFile, JSON.stringify(session))
     await expect(client.resumeThread(threadId, { cwd: workspacePath })).resolves.toBe(threadId)
     const other = createHermesKernelClient({ workspacePath: path.join(runtimeRoot, "worktrees", "other"), runtimeRoot, commandRunner: async () => ({ code: 0, stdout: "", stderr: "" }), policyPath, invokerPath: path.join(runtimeRoot, "x.ps1") })
     fs.mkdirSync(path.join(runtimeRoot, "worktrees", "other"), { recursive: true })
@@ -176,9 +180,10 @@ const okResult = (runId: string, json = fullTurnJson()) => ({
 describe("Hermes kernel client — runTurn", () => {
   it("builds a v2 packet with the verbatim prompt plus the output-contract epilogue", () => {
     const policy = { workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: { id: "williamos-qwen3-4b:64k" }, execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"] } }
-    const packet = buildKernelPacket({ policy, prompt: "Do the thing.", workspacePath: "D:\\w", runId: "run-1" })
-    expect(Object.keys(packet).sort()).toEqual(["maximumTurns", "model", "prompt", "runId", "schemaVersion", "toolsets", "workOrderId", "workspaceMode", "workspacePath"])
-    expect(packet).toMatchObject({ schemaVersion: 2, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: "williamos-qwen3-4b:64k", maximumTurns: 20, toolsets: ["file", "terminal"], workspaceMode: "OWNED_WORKTREE", workspacePath: "D:\\w", runId: "run-1" })
+    const packet = buildKernelPacket({ policy, prompt: "Do the thing.", workspacePath: "D:\\w", runId: "run-1", statePath: "D:\\s" })
+    expect(Object.keys(packet).sort()).toEqual(["kernelSessionId", "maximumTurns", "model", "prompt", "runId", "schemaVersion", "statePath", "toolsets", "workOrderId", "workspaceMode", "workspacePath"])
+    expect(packet).toMatchObject({ statePath: "D:\\s", kernelSessionId: null })
+    expect(packet).toMatchObject({ schemaVersion: 3, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: "williamos-qwen3-4b:64k", maximumTurns: 20, toolsets: ["file", "terminal"], workspaceMode: "OWNED_WORKTREE", workspacePath: "D:\\w", runId: "run-1" })
     expect(packet.prompt.startsWith("Do the thing.\n\n")).toBe(true)
     expect(packet.prompt.endsWith(buildKernelPromptEpilogue("run-1"))).toBe(true)
     expect(buildKernelPromptEpilogue("run-1")).toContain(JSON.stringify(HERMES_TURN_OUTPUT_SCHEMA))
@@ -214,7 +219,8 @@ describe("Hermes kernel client — runTurn", () => {
       expect(probe.credentialAccess).toBe(false)
     }
     const packet = JSON.parse(fs.readFileSync(arg("-PacketPath"), "utf8"))
-    expect(packet).toMatchObject({ schemaVersion: 2, runId: turn.turnId, workspaceMode: "OWNED_WORKTREE", workspacePath: fs.realpathSync(workspacePath) })
+    expect(packet).toMatchObject({ schemaVersion: 3, runId: turn.turnId, workspaceMode: "OWNED_WORKTREE", workspacePath: fs.realpathSync(workspacePath), kernelSessionId: null })
+    expect(arg("-StatePath")).toBe(path.join(kernelThreadsRoot(runtimeRoot), threadId, "kernel-state"))
     expect(packet.prompt.startsWith("Deliver WO-1\n\n")).toBe(true)
     const session = JSON.parse(fs.readFileSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "session.json"), "utf8"))
     expect(session.turns).toEqual([expect.objectContaining({ turnId: turn.turnId, exitCode: 0, harvested: true, packetSha256: expect.stringMatching(/^[0-9a-f]{64}$/), stdoutSha256: expect.stringMatching(/^[0-9a-f]{64}$/), at: "2026-08-16T20:00:00.000Z" })])
@@ -389,5 +395,63 @@ describe("Hermes kernel client - post-turn workspace confinement (issue #806)", 
     await client.connect()
     const thread = await client.startThread()
     await expect(client.runTurn({ threadId: thread, prompt: "p" })).resolves.toMatchObject({ status: "completed" })
+  })
+})
+
+describe("Hermes kernel client — per-thread kernel state and session continuity (P2b)", () => {
+  const sessionLine = (id: string) => `Session:        ${id}\n`
+  it("refuses a policy without per-thread state persistence", async () => {
+    const { client, policyPath } = fixture()
+    const p = JSON.parse(fs.readFileSync(policyPath, "utf8")); p.containment.agentStatePersistence = false; fs.writeFileSync(policyPath, JSON.stringify(p))
+    await expect(client.connect()).rejects.toMatchObject({ code: "RESIDENT_MODEL_LANE_STATE_MODE" })
+  })
+  it("creates the thread's kernel-state dir, passes it to the invoker, and threads the captured kernel session through later turns", async () => {
+    const { client, calls, commandRunner, workspacePath, runtimeRoot } = fixture()
+    let invocation = 0
+    commandRunner.mockImplementation(async (call: Call) => {
+      calls.push(call)
+      if (call.command === "git") return { code: 0, stdout: path.join(runtimeRoot, "canonical", ".git"), stderr: "" }
+      invocation += 1
+      const r = okResult(call.args[call.args.indexOf("-RunId") + 1])
+      r.stdout = `chatter\n${r.stdout}${sessionLine(invocation === 1 ? "20260816_200044_30d6e1" : "20260816_201500_abcdef")}`
+      return r
+    })
+    await client.connect()
+    const threadId = await client.startThread({ cwd: workspacePath })
+    const stateDir = path.join(kernelThreadsRoot(runtimeRoot), threadId, "kernel-state")
+    expect(fs.existsSync(stateDir)).toBe(true)
+    const first = await client.runTurn({ threadId, prompt: "first" })
+    const firstCall = calls.filter((c) => c.command === "powershell").at(-1)!
+    const argOf = (call: Call, flag: string) => call.args[call.args.indexOf(flag) + 1]
+    expect(argOf(firstCall, "-StatePath")).toBe(stateDir)
+    const firstPacket = JSON.parse(fs.readFileSync(argOf(firstCall, "-PacketPath"), "utf8"))
+    expect(firstPacket).toMatchObject({ schemaVersion: 3, statePath: stateDir, kernelSessionId: null })
+    let session = JSON.parse(fs.readFileSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "session.json"), "utf8"))
+    expect(session.kernelSessionId).toBe("20260816_200044_30d6e1")
+    expect(session.turns[0]).toMatchObject({ turnId: first.turnId, kernelSessionId: "20260816_200044_30d6e1", resumedKernelSessionId: null })
+    await client.runTurn({ threadId, prompt: "second" })
+    const secondCall = calls.filter((c) => c.command === "powershell").at(-1)!
+    const secondPacket = JSON.parse(fs.readFileSync(argOf(secondCall, "-PacketPath"), "utf8"))
+    expect(secondPacket.kernelSessionId).toBe("20260816_200044_30d6e1")
+    session = JSON.parse(fs.readFileSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "session.json"), "utf8"))
+    expect(session.turns[1]).toMatchObject({ resumedKernelSessionId: "20260816_200044_30d6e1", kernelSessionId: "20260816_201500_abcdef" })
+    expect(session.kernelSessionId).toBe("20260816_201500_abcdef")
+  })
+  it("resumes only when resume is proven AND a kernel session was captured AND the state dir exists", async () => {
+    const { client, calls, commandRunner, workspacePath, runtimeRoot, policyPath } = fixture()
+    const p = JSON.parse(fs.readFileSync(policyPath, "utf8")); p.execution.sessionResumeProven = true; fs.writeFileSync(policyPath, JSON.stringify(p))
+    commandRunner.mockImplementation(async (call: Call) => {
+      calls.push(call)
+      if (call.command === "git") return { code: 0, stdout: path.join(runtimeRoot, "canonical", ".git"), stderr: "" }
+      const r = okResult(call.args[call.args.indexOf("-RunId") + 1]); r.stdout = `${r.stdout}${sessionLine("20260816_200044_30d6e1")}`; return r
+    })
+    await client.connect()
+    const threadId = await client.startThread({ cwd: workspacePath })
+    // proven, but no kernel session captured yet → still unavailable
+    await expect(client.resumeThread(threadId, { cwd: workspacePath })).rejects.toMatchObject({ code: "RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE" })
+    await client.runTurn({ threadId, prompt: "first" })
+    await expect(client.resumeThread(threadId, { cwd: workspacePath })).resolves.toBe(threadId)
+    fs.rmSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "kernel-state"), { recursive: true, force: true })
+    await expect(client.resumeThread(threadId, { cwd: workspacePath })).rejects.toMatchObject({ code: "RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE" })
   })
 })

@@ -61,13 +61,14 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
   it("keeps every v1 containment and identity pin", () => {
     const v1 = policy(); const v2 = policyV2()
     expect(v2.schemaVersion).toBe(2)
-    expect(v2.packetSchemaVersion).toBe(2)
+    expect(v2.packetSchemaVersion).toBe(3)
     expect(v2.workOrderId).toBe(v1.workOrderId)
     expect(v2.providerId).toBe("hermes-agent-local-qwen-v2")
     expect(v2.runtime).toBe(v1.runtime)
     expect(v2.model).toEqual(v1.model)
     expect(v2.build).toEqual(v1.build)
-    expect(v2.containment).toEqual(v1.containment)
+    // P2b: the only containment delta is per-thread kernel state (spec §4 item 3).
+    expect(v2.containment).toEqual({ ...v1.containment, agentStatePersistence: "PER_THREAD_STATE_DIR" })
     expect(v2.deniedActions).toEqual(v1.deniedActions)
     expect(v2.execution.allowedToolsets).toEqual(v1.execution.allowedToolsets)
     expect(v2.execution.maximumTurns).toBe(v1.execution.maximumTurns)
@@ -86,17 +87,20 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
   it("raises the prompt budget for remediation prompts and keeps resume fail-closed", () => {
     const v2 = policyV2()
     expect(v2.execution.promptMaxChars).toBe(60000)
-    expect(v2.execution.sessionResumeProven).toBe(false)
-    expect(v2.containment.agentStatePersistence).toBe(false)
+    // P2b (2026-08-16) proved kernel session continuity across turns on HERMES; resume is open,
+    // and still additionally gated per thread by a captured kernel session id + state dir.
+    expect(v2.execution.sessionResumeProven).toBe(true)
+    expect(v2.containment.agentStatePersistence).toBe("PER_THREAD_STATE_DIR")
   })
   it("stays pilot-authorised pending independent review of the v2 mode", () => {
     const v2 = policyV2()
     expect(v2.promotion.status).toBe("PILOT_AUTHORIZED")
-    expect(v2.promotion.requiredEvidence).toEqual([...policy().promotion.requiredEvidence, "OWNED_WORKTREE_CONFINEMENT_PROVEN"])
+    expect(v2.promotion.requiredEvidence).toEqual([...policy().promotion.requiredEvidence, "OWNED_WORKTREE_CONFINEMENT_PROVEN", "KERNEL_SESSION_CONTINUITY_PROVEN"])
     // P2 (2026-08-16) proved owned-worktree confinement on HERMES; the value is the completed
     // probe turn id and is documented in docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md.
-    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: "p2-b9fbca28-6fea-4898-9533-b556008ff300" })
+    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: "p2-b9fbca28-6fea-4898-9533-b556008ff300", KERNEL_SESSION_CONTINUITY_PROVEN: "p2b-1f789bdf-4f51-45f4-aeb3-5080f60a5344" })
     expect(read("docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md")).toContain("b9fbca28-6fea-4898-9533-b556008ff300")
+    expect(read("docs/reports/hermes-kernel-p2b-session-continuity-2026-08-16.md")).toContain("1f789bdf-4f51-45f4-aeb3-5080f60a5344")
   })
   it("keeps the evidence gate enforced, not decorative", () => {
     // Every declared evidence line is satisfied after P2, and both enforcement points still
@@ -110,5 +114,26 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
     expect(read("scripts/hermes-bridge/hermes-kernel-client.mjs")).toContain("RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN")
     expect(read("scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1")).toContain("HERMES_FREE_AGENT_EVIDENCE_WALL")
     expect(read("docs/runbooks/hermes-free-dev-agent.md")).toContain("`OWNED_WORKTREE_CONFINEMENT_PROVEN`")
+  })
+})
+
+describe("Hermes free development agent provider — P2b per-thread kernel state", () => {
+  it("adds an owned-mode compose service whose HERMES_HOME is the per-thread state dir, and leaves `agent` on tmpfs", () => {
+    const compose = read("runtime-hermes-agent/compose.yaml")
+    const [agentBlock, ownedBlock] = [compose.split("\n  agent-owned:\n")[0], compose.split("\n  agent-owned:\n")[1].split("\n  inference-proxy:\n")[0]]
+    expect(agentBlock).toContain("- /opt/data:rw,nosuid,size=256m,mode=0755")
+    expect(ownedBlock).toContain("${WILLIAMOS_AGENT_STATE:?set the per-thread kernel state dir}:/opt/data")
+    expect(ownedBlock).not.toContain("/opt/data:rw,nosuid")
+    expect(ownedBlock).toContain("${WILLIAMOS_AGENT_WORKSPACE:?set the owned worktree}:/workspace")
+    expect(ownedBlock).toContain("read_only: true")
+    expect(ownedBlock).toContain("- ALL")
+    expect(ownedBlock).toContain("no-new-privileges:true")
+  })
+  it("resumes a captured kernel session only through a validated env var in the runner", () => {
+    const runner = read("runtime-hermes-agent/run_agent.py")
+    expect(runner).toContain("WILLIAMOS_RESUME_SESSION")
+    expect(runner).toContain("[A-Za-z0-9_-]{4,64}")
+    expect(runner).toContain('"--resume"')
+    expect(runner).toContain("HERMES_FREE_AGENT_SESSION_ID_WALL")
   })
 })

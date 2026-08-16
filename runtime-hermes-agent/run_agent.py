@@ -1,5 +1,6 @@
 import base64
 import os
+import re
 import subprocess
 import sys
 
@@ -29,6 +30,15 @@ def main():
         "--max-turns",
         turns,
     ]
+
+    # Owned-worktree mode only: continue the thread's previous kernel session (its state dir
+    # is mounted as HERMES_HOME by the agent-owned service). The id was captured by WilliamOS
+    # from the previous run's "Session:" line and validated by the invoker; re-validate here.
+    resume = os.environ.get("WILLIAMOS_RESUME_SESSION", "")
+    if resume:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{4,64}", resume):
+            raise SystemExit("HERMES_FREE_AGENT_SESSION_ID_WALL")
+        command.extend(["--resume", resume])
     raise SystemExit(subprocess.run(command, check=False).returncode)
 
 

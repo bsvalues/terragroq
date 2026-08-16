@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "packetSchemaVersion": 2,
+  "packetSchemaVersion": 3,
   "workOrderId": "WO-HERMES-FREE-DEV-AGENT-001",
   "providerId": "hermes-agent-local-qwen-v2",
   "runtime": "NousResearch/hermes-agent@fa83af3f9a42790730b8966ff67e7d9fb627899f",
@@ -32,7 +32,7 @@
     "persistentGatewayAllowed": false,
     "autonomousSchedulingAllowed": false,
     "promptMaxChars": 60000,
-    "sessionResumeProven": false
+    "sessionResumeProven": true
   },
   "containment": {
     "network": "williamos_free_agent_internal",
@@ -43,7 +43,7 @@
     "hostCredentialMounts": false,
     "canonicalRepositoryMounted": false,
     "rootFilesystemReadOnly": true,
-    "agentStatePersistence": false
+    "agentStatePersistence": "PER_THREAD_STATE_DIR"
   },
   "build": {
     "sourcePath": "D:\\HermesServices\\williamos-hermes-agent\\source-lf",
@@ -77,7 +77,8 @@
       "NETWORK_ISOLATION_PROVEN",
       "WORKSPACE_CONFINEMENT_PROVEN",
       "INDEPENDENT_REVIEW_APPROVED",
-      "OWNED_WORKTREE_CONFINEMENT_PROVEN"
+      "OWNED_WORKTREE_CONFINEMENT_PROVEN",
+      "KERNEL_SESSION_CONTINUITY_PROVEN"
     ],
     "satisfiedEvidence": {
       "IMAGE_BUILD_PROVEN": "sha256:612bd343622ef393269a0cb2b2e3f042927b53d7e5aa2641855df377cbc81613",
@@ -85,7 +86,8 @@
       "NETWORK_ISOLATION_PROVEN": "INFERENCE_PROXY_MANAGEMENT_DENIED_AND_DIRECT_OLLAMA_DENIED",
       "WORKSPACE_CONFINEMENT_PROVEN": "bootstrap-1839774cf11048e7a42723f76e677044",
       "INDEPENDENT_REVIEW_APPROVED": "2026-08-13T17:05:00Z",
-      "OWNED_WORKTREE_CONFINEMENT_PROVEN": "p2-b9fbca28-6fea-4898-9533-b556008ff300"
+      "OWNED_WORKTREE_CONFINEMENT_PROVEN": "p2-b9fbca28-6fea-4898-9533-b556008ff300",
+      "KERNEL_SESSION_CONTINUITY_PROVEN": "p2b-1f789bdf-4f51-45f4-aeb3-5080f60a5344"
     }
   }
 }

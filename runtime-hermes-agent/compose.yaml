@@ -42,6 +42,50 @@ services:
     cpus: 4
     command: ["chat", "--help"]
 
+  # Owned-worktree mode (WilliamOS resident executor, policy v2): identical to `agent`
+  # except HERMES_HOME (/opt/data) is a per-thread host directory instead of tmpfs, so the
+  # kernel's session survives the one-shot container and a later turn can `--resume` it.
+  # /workspace is the orchestrator's owned worktree. Only invoke-hermes-free-dev-agent.ps1
+  # (owned mode) sets WILLIAMOS_AGENT_STATE; the v1 `agent` service is unchanged.
+  agent-owned:
+    image: williamos-hermes-agent:0.20.0-fa83af3
+    profiles: ["manual"]
+    networks:
+      - inference
+    depends_on:
+      inference-proxy:
+        condition: service_started
+    volumes:
+      - ${WILLIAMOS_AGENT_WORKSPACE:?set the owned worktree}:/workspace
+      - ${WILLIAMOS_AGENT_STATE:?set the per-thread kernel state dir}:/opt/data
+      - ./config.yaml:/opt/data/config.yaml:ro
+      - ./run_agent.py:/opt/runner/run_agent.py:ro
+    environment:
+      HERMES_UID: "10000"
+      HERMES_GID: "10000"
+      HERMES_API_TIMEOUT: "1800"
+      HERMES_STREAM_READ_TIMEOUT: "1800"
+      HERMES_WRITE_SAFE_ROOT: /workspace
+    working_dir: /workspace
+    read_only: true
+    tmpfs:
+      - /run:rw,exec,nosuid,size=64m,mode=0755
+      - /tmp:rw,exec,nosuid,size=512m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 512
+    mem_limit: 8g
+    cpus: 4
+    command: ["chat", "--help"]
+
   inference-proxy:
     image: williamos-hermes-agent:0.20.0-fa83af3
     profiles: ["manual"]
