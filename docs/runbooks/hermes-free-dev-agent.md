@@ -97,3 +97,32 @@ and no quarantine marker exists. Record the summary and hashes under `docs/repor
 Add `--turns 2` to run the P2b continuity probe: a second, tool-free turn on the same thread that
 must recall the first turn's edit from kernel session memory (`continuity.recalledMarker` and
 `continuity.recalledFile` in the summary), proving the state mount and `--resume` path end to end.
+
+## HERMES deployment wiring — INERT pending the P3 review (2026-08-16)
+
+The resident-model executor is wired on HERMES but deliberately switched off. Note first what the
+running "WilliamOS deployment" on that host actually is: the **web app** (`server.js` on port 3100
+plus `hermes-https-proxy.mjs`, started by the *WilliamOS Live* / *WilliamOS HTTPS* scheduled tasks).
+The orchestrator is a separate CLI and **is not running** there; the flat runtime those tasks serve
+predates S2 and contains none of this lane's code.
+
+| Piece | State |
+|---|---|
+| Checkout | `C:\HermesLab\terragroq-s2` on `main`, clean — the lane's deployment source; the probe and the launcher both run from it |
+| `<checkout>\.env.local` | read by **every** supervisor start, so it deliberately does **not** set `WILLIAMOS_EXECUTOR` (a run started for any other reason must keep the Codex lane). Carries `WILLIAMOS_REPOSITORY_ROOT` only; the switch is present but commented out |
+| `C:\ProgramData\WilliamOS\start-williamos-resident-executor.ps1` | the only thing that selects the lane: it exports `WILLIAMOS_EXECUTOR=resident-model` into its own environment (inherited by the cycle child) and calls `supervisor.ps1`. **Not scheduled, not started** |
+| `<runtime root>\control\activation` | `disabled` — `orchestrator.mjs:917` returns `DISABLED` unless it reads exactly `enabled` |
+| `DATABASE_URL` | unset — the outcome queue (`outcome-queue-runtime.mjs:468`) has no data source |
+
+Verified read-only (no turn, no Docker): a plain supervisor start resolves to
+`LocalExecutionBackend` (Codex lane); the launcher's environment resolves to
+`ResidentModelExecutionBackend` with the v2 policy and invoker resolving inside the checkout; the
+runtime's `worktrees` directory matches the policy's `allowedWorkspaceRoots` exactly; and
+`connect()` succeeds against the real policy, so the lane itself is open.
+
+**Do not start the launcher before the P3 independent review lands**
+(`docs/reports/hermes-kernel-p3-promotion-review-packet-2026-08-16.md`). Starting it begins
+autonomous cycling: on success the orchestrator commits, pushes, opens **and merges** pull requests,
+driven by the local 4B model, on a lane that is still `PILOT_AUTHORIZED`. Turning it on is three
+owner decisions — flip `control/activation` to `enabled`, provide `DATABASE_URL`, and run (or
+schedule) the launcher.
