@@ -52,7 +52,7 @@ classes from `app-server-client.mjs` so orchestrator retry/abandon logic is unch
 ```
 orchestrator ──runCodexClient()──▶ ResidentModelExecutionBackend
                                     └─ createHermesKernelClient()  (new: scripts/hermes-bridge/hermes-kernel-client.mjs)
-                                         ├─ SessionStore        <runtimeRoot>/hermes-kernel/threads/<threadId>/{session.json, kernel-state/}
+                                         ├─ SessionStore        <runtimeRoot>/hermes-kernel/threads/<threadId>/session.json
                                          ├─ PacketBuilder       prompt.mjs delivery prompt + output-contract epilogue → packet.v2.json
                                          ├─ Invoker (transport) commandRunner → powershell invoke-hermes-free-dev-agent.ps1 (v2 flags)
                                          └─ OutputHarvester     last fenced ```json``` block from invoker stdout → finalText
@@ -66,7 +66,7 @@ Everything above the Docker line is WilliamOS; everything below is the reviewed 
 
 ### 3.1 `ResidentModelExecutionBackend.runCodexClient({workspacePath, timeoutMs})`
 Replaces S1's typed throw. Returns `createHermesKernelClient({ workspacePath, timeoutMs,
-runtimeRoot, commandRunner, policyPath, invokerPath, now })`. All collaborators injectable
+runtimeRoot, commandRunner, policyPath, invokerPath })`. All collaborators injectable
 (the backend already owns `commandRunner`, `runtimeRoot`).
 
 ### 3.2 `createHermesKernelClient` (new module)
@@ -77,8 +77,8 @@ runtimeRoot, commandRunner, policyPath, invokerPath, now })`. All collaborators 
   `RESIDENT_MODEL_LANE_*` code. Never invokes Docker.
 - `startThread()`: mints `threadId` (UUID v4), creates the thread dir + `session.json`
   `{schemaVersion:1, threadId, workspacePath, createdAt, turns:[]}`; returns id.
-- `resumeThread(threadId)`: loads `session.json`; requires same `workspacePath` and that
-  `kernel-state/` exists; if kernel resume is not proven for the installed image
+- `resumeThread(threadId)`: loads `session.json`; requires the same `workspacePath`; if kernel
+  resume is not proven for the installed image
   (policy `execution.sessionResumeProven !== true`) → throw `AppServerWallError`
   `RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE`. Fail-closed by default; flipped only by §6 P2 evidence.
 - `runTurn({threadId, prompt, turn, timeoutMs})`:
@@ -115,9 +115,11 @@ out through the backend's `commandRunner` (already the sanctioned local process 
 concurrency lock, exact-container cleanup and quarantine semantics.
 
 ### 3.5 OutputHarvester
-Pure function `harvestTurnOutput(stdout) → {finalText|null, reason}`; last fenced json block; also
-tolerates a final bare JSON object line. Rejects when >1 candidate disagrees? No — last wins,
-by construction of the epilogue ("nothing after it").
+Pure function `harvestTurnOutput(stdout) → { ok:true, finalText } | { ok:false, reason }`; last
+fenced json block; also tolerates a final bare JSON object line. Rejects when >1 candidate
+disagrees? No — last wins, by construction of the epilogue ("nothing after it"). A companion pure
+function `validateAgainstTurnSchema(object, schema) → { ok:true } | { ok:false, reason:"SCHEMA:<detail>" }`
+applies the structural check of §3.2 item 4 (no new dependency).
 
 ## 4. Policy v2 and invoker v2 (explicit, reviewed changes — each is a WO line)
 
@@ -148,6 +150,17 @@ lock, exact-container cleanup, quarantine marker). Image and runner are **not** 
 the JSON-block epilogue works with the pinned runner's log output. If P2 proves the pinned runner
 cannot resume a session from a mounted state dir, that becomes a follow-up (own WO), and
 `resumeThread` stays fail-closed meanwhile.
+
+**Note — how owned-worktree mode differs from v1, and why that is defensible.** Two containment
+properties change: (a) `/workspace` is the *live owned worktree*, not a disposable clone of the
+pinned baseline, so kernel writes survive the run; (b) the kernel uses its native `file` toolset for
+edits rather than SEA (T2 §4). Neither is a hole, because WilliamOS still re-derives the diff from
+git in `assertChangedPathsAllowed` and remains the only party that commits, pushes, opens PRs and
+merges — a kernel write outside the reservations is caught and refused, not trusted. It *is*
+nevertheless a widened blast radius versus the disposable clone, and that is precisely why
+`OWNED_WORKTREE_CONFINEMENT_PROVEN` is a required evidence line gating the lane: until P2 proves
+confinement on HERMES, both the client and the invoker refuse to run
+(`RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN` / `HERMES_FREE_AGENT_EVIDENCE_WALL`).
 
 `docs/runbooks/hermes-free-dev-agent.md` gains a "v2 owned-worktree mode" section.
 
