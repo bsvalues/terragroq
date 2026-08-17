@@ -131,7 +131,30 @@ function runRelay(encoded: string, input: string, env: NodeJS.ProcessEnv) {
   })
 }
 
-function streamedRelayBootstrap(expectedDigest: string, envelopePath = "C:\\temp\\envelope.json", envelopeDigest = "b".repeat(64), relayPath = "C:\\temp\\relay.ps1", transportId = "a".repeat(32), markerPath = "C:\\temp\\relay.marker", cancellationPath = "C:\\temp\\relay.cancelled") {
+/**
+ * Defaults are per-run paths under `testRoot`, not fixed `C:\temp\relay.*` locations.
+ *
+ * The bootstrap opens its marker with `FileMode::CreateNew` and exits 64 if it already exists, and
+ * exits 64 if the cancellation file exists. With shared fixed paths, any INTERRUPTED run left
+ * `C:\temp\relay.marker` behind — the happy path removes it, an aborted one cannot — and every
+ * later run of the swapped-relay case then failed with exit 64 instead of the relay's exit 7,
+ * permanently, until someone deleted a file in `C:\temp` by hand. That is exactly what happened on
+ * this machine (marker content `aaaa…:18936:639225770585923230`, the default transport id).
+ *
+ * The transport id is also unique per call now: it names a `Global\` mutex and job object, so a
+ * shared constant made two concurrent runs on one machine contend on a 30s mutex wait.
+ *
+ * Callers that assert on occupancy or cancellation still pass explicit paths.
+ */
+function streamedRelayBootstrap(
+  expectedDigest: string,
+  envelopePath = path.join(testRoot, `envelope-${crypto.randomUUID()}.json`),
+  envelopeDigest = "b".repeat(64),
+  relayPath = path.join(testRoot, `relay-${crypto.randomUUID()}.ps1`),
+  transportId = crypto.randomUUID().replaceAll("-", ""),
+  markerPath = path.join(testRoot, `relay-${crypto.randomUUID()}.marker`),
+  cancellationPath = path.join(testRoot, `relay-${crypto.randomUUID()}.cancelled`),
+) {
   const source = fs.readFileSync(controller, "utf8")
   const match = source.match(/\$relayBootstrap = @'\r?\n([\s\S]*?)\r?\n'@/)
   if (!match) throw new Error("streamed relay bootstrap is absent")
