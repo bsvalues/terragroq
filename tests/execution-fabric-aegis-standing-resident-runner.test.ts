@@ -257,7 +257,7 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
     await expect(providers.claimAdmission(binding)).rejects.toThrow("LEDGER_UNTRUSTED")
   })
 
-  it("reads trusted closure bytes through a no-follow descriptor and rejects inode drift", () => {
+  it("reads trusted closure bytes through a no-follow descriptor where supported, and rejects inode drift", () => {
     const root = tempRoot("aegis-standing-closure-descriptor-")
     const relative = "scripts/execution-fabric/closure.mjs"
     write(root, relative, "export const trusted = true\n")
@@ -278,13 +278,70 @@ describe("resident AEGIS standing HASH_VERIFY runner", () => {
         const stats = fs.lstatSync(candidate)
         return new Proxy(stats, {
           get(statsTarget, statsProperty, statsReceiver) {
-            if (statsProperty === "ino") return statsTarget.ino + 1
+            // NOT `statsTarget.ino + 1`. NTFS inodes routinely exceed Number.MAX_SAFE_INTEGER
+            // (measured: 394 of 400 freshly created temp files on this volume, the index climbing
+            // by 2^48 per file), and above 2^53 float64 spacing is 2 — so `+ 1` returns the SAME
+            // number, the "drift" was not drift, and this test silently stopped exercising the
+            // check the moment the volume's index crossed 2^53. It then fails permanently, not
+            // intermittently. Linux inodes are small, so CI never saw it. Use a value that is
+            // exactly representable and provably different from any real inode.
+            if (statsProperty === "ino") return statsTarget.ino === 1 ? 2 : 1
             return Reflect.get(statsTarget, statsProperty, statsReceiver)
           },
         })
       },
     })
     expect(() => readTrustedClosureFile(driftedFs, root, relative)).toThrow("TRUSTED_MAIN_MISMATCH")
+  })
+
+  it("compares real inode identity rather than a platform constant", () => {
+    // The drift test above fakes drift with a Proxy over lstatSync, so it would pass unchanged on a
+    // platform where `ino` was always 0 — a vacuous comparison and a silent loss of the control.
+    // Pin the premise with real values so that can never happen unnoticed.
+    const root = tempRoot("aegis-standing-closure-ino-premise-")
+    const first = write(root, "scripts/execution-fabric/closure.mjs", "export const trusted = true\n")
+    const second = write(root, "scripts/execution-fabric/other.mjs", "export const other = true\n")
+    const stats = fs.lstatSync(first)
+    const descriptor = fs.openSync(first, fs.constants.O_RDONLY)
+    try {
+      expect(stats.ino).not.toBe(0)
+      expect(fs.fstatSync(descriptor).ino).toBe(stats.ino)
+      expect(fs.fstatSync(descriptor).dev).toBe(stats.dev)
+      expect(fs.lstatSync(second).ino).not.toBe(stats.ino)
+    } finally {
+      fs.closeSync(descriptor)
+    }
+  })
+
+  it("fails closed when the descriptor it opened is not the entry it stat'd", () => {
+    // This is the attack O_NOFOLLOW prevents on POSIX and CANNOT prevent on Windows, where
+    // fs.constants.O_NOFOLLOW is undefined: between the lstat and the open, the entry becomes
+    // something else. Only the post-open identity comparison catches that, so it must — on every
+    // platform, with real inodes rather than a stubbed stat.
+    const root = tempRoot("aegis-standing-closure-swap-")
+    const relative = "scripts/execution-fabric/closure.mjs"
+    write(root, relative, "export const trusted = true\n")
+    const decoy = write(root, "scripts/execution-fabric/decoy.mjs", "export const trusted = false\n")
+    const swappedFs = Object.create(fs) as typeof fs
+    Object.defineProperty(swappedFs, "openSync", {
+      value: (_candidate: fs.PathLike, flags: number) => fs.openSync(decoy, flags),
+    })
+    expect(() => readTrustedClosureFile(swappedFs, root, relative)).toThrow("TRUSTED_MAIN_MISMATCH")
+  })
+
+  it("pins the platform regime behind the runner's `O_NOFOLLOW ?? 0` fallback", () => {
+    // The runner opens trusted files with `O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)` at six sites.
+    // O_NOFOLLOW makes the kernel REFUSE to open a symlink, and it is undefined on Windows — so
+    // there the `?? 0` silently degrades every one of those to an ordinary open, and "no-follow" is
+    // not a property the code has. That is survivable only because the identity comparison after
+    // each open DETECTS what the flag would have PREVENTED (see the swap test above): the guarantee
+    // is prevent-then-verify on POSIX and verify-only on Windows, never trust-the-path.
+    //
+    // Asserted here rather than as an exported constant on purpose: the runner's bytes are sealed by
+    // a reviewed-digest authority record (`resident_runner_sha256`,
+    // execution-fabric-aegis-standing-authority.test.ts:164), so naming the fallback in that file
+    // would break the seal and require re-authorization — too high a price for a readability win.
+    expect(fs.constants.O_NOFOLLOW === undefined).toBe(process.platform === "win32")
   })
 
   it("binds execution to an immutable root-owned resident machine identity", () => {
