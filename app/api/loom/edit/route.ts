@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process"
 
+import fs from "node:fs/promises"
+
 import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL } from "@/lib/loom/providers"
-import { resolveWorkspacePath } from "@/lib/loom/workspace"
+import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/receipts"
 
 export const dynamic = "force-dynamic"
@@ -39,7 +41,7 @@ export async function POST(request: Request) {
   const task = typeof body.task === "string" ? body.task.trim() : ""
   if (!task) return Response.json({ error: "TASK_REQUIRED" }, { status: 400 })
 
-  const resolved = resolveWorkspacePath(PROJECT_ROOT, body.path)
+  const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
   if (!resolved.ok || !resolved.relative) {
     return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
   }

@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 
+import fs from "node:fs/promises"
+
 import { getSession } from "@/lib/session"
-import { resolveWorkspacePath } from "@/lib/loom/workspace"
+import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -26,7 +28,7 @@ export async function GET(request: Request) {
 
   const requested = new URL(request.url).searchParams.get("path")
   const scoped = requested !== null && requested !== ""
-  const resolved = scoped ? resolveWorkspacePath(PROJECT_ROOT, requested) : null
+  const resolved = scoped ? await resolveRealWorkspacePath(PROJECT_ROOT, requested, fs.realpath) : null
   if (scoped && (!resolved?.ok || !resolved.relative)) {
     return Response.json({ error: resolved?.refusal ?? "PATH_INVALID" }, { status: 400 })
   }

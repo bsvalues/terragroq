@@ -52,6 +52,61 @@ export function resolveWorkspacePath(root: string, requested: unknown): Workspac
   return { ok: true, absolute, relative }
 }
 
+/**
+ * Resolve a path AND follow every link on the way, then check containment again.
+ *
+ * The lexical check above is necessary and not sufficient. `path.resolve` reasons about strings, so
+ * a symlink or Windows junction sitting inside the workspace and pointing anywhere on the host
+ * passes it cleanly -- the string never leaves the root even though the file does. That is not
+ * theoretical: a junction planted in the checkout let this API read the private key of the CA that
+ * signs every device certificate in the lab, which is enough to mint a credential and sign in as the
+ * owner. An agent with edit permission can create such a link, so this cannot rest on trusting
+ * whatever is already in the tree.
+ *
+ * Both sides are resolved to their real locations before comparison, so the check is about where the
+ * file actually is rather than how it was spelled. For a path that does not exist yet -- a new file
+ * being written -- the nearest existing ancestor is resolved and the remaining segments appended, so
+ * creation is still possible without letting a linked parent smuggle the target out of the workspace.
+ */
+export async function resolveRealWorkspacePath(
+  root: string,
+  requested: unknown,
+  realpath: (p: string) => Promise<string>,
+): Promise<WorkspacePathResult> {
+  const lexical = resolveWorkspacePath(root, requested)
+  if (!lexical.ok || !lexical.absolute) return lexical
+
+  let realRoot: string
+  try {
+    realRoot = await realpath(path.resolve(root))
+  } catch {
+    return { ok: false, refusal: "PATH_INVALID" }
+  }
+
+  // Walk up to the nearest ancestor that exists, remembering what was missing below it.
+  const missing: string[] = []
+  let probe = lexical.absolute
+  for (;;) {
+    try {
+      probe = await realpath(probe)
+      break
+    } catch {
+      const parent = path.dirname(probe)
+      if (parent === probe) return { ok: false, refusal: "PATH_INVALID" }
+      missing.unshift(path.basename(probe))
+      probe = parent
+    }
+  }
+
+  const real = missing.length > 0 ? path.resolve(probe, ...missing) : probe
+  const withSeparator = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep
+  if (real !== realRoot && !real.startsWith(withSeparator)) {
+    return { ok: false, refusal: "PATH_ESCAPES_WORKSPACE" }
+  }
+
+  return { ok: true, absolute: real, relative: path.relative(realRoot, real).replace(/\\/g, "/") }
+}
+
 /** Directories that are never worth showing and would swamp the tree if they were. */
 export function isIgnoredEntry(name: string): boolean {
   return WORKSPACE_IGNORED.has(name)

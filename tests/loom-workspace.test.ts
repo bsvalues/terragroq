@@ -1,6 +1,8 @@
+import path from "node:path"
+
 import { describe, expect, it } from "vitest"
 
-import { isIgnoredEntry, looksBinary, resolveWorkspacePath } from "@/lib/loom/workspace"
+import { isIgnoredEntry, looksBinary, resolveRealWorkspacePath, resolveWorkspacePath } from "@/lib/loom/workspace"
 import { LOOM_OPERATIONS, resolveLoomOperation } from "@/lib/loom/operations"
 
 const ROOT = process.platform === "win32" ? "C:\\work\\repo" : "/work/repo"
@@ -85,5 +87,58 @@ describe("operation catalogue", () => {
       expect(["git", "node", "powershell"]).toContain(operation.command)
       expect(operation.args.every((argument) => typeof argument === "string")).toBe(true)
     }
+  })
+})
+
+describe("workspace containment survives links", () => {
+  // path.resolve reasons about strings, so a link inside the workspace pointing outside it passes a
+  // lexical check while the file it names sits on the host. This is the case that let this API read
+  // the private key of the CA that signs every device certificate in the lab, so it gets its own
+  // assertions. Roots are built with forward slashes and resolved, which is valid on both platforms.
+  const linkRoot = path.resolve(process.platform === "win32" ? "C:/work/repo" : "/work/repo")
+  const outside = path.resolve(path.dirname(linkRoot), "elsewhere")
+  const planted = path.join(linkRoot, "planted-link")
+
+  /** Stands in for fs.realpath: the planted link resolves to a location outside the workspace. */
+  const realpath = async (candidate) => {
+    if (candidate === planted || candidate.startsWith(planted + path.sep)) {
+      return candidate.replace(planted, outside)
+    }
+    return candidate
+  }
+
+  it("refuses a path that leaves the workspace through a link", async () => {
+    expect(await resolveRealWorkspacePath(linkRoot, "planted-link/secret.key", realpath))
+      .toMatchObject({ ok: false, refusal: "PATH_ESCAPES_WORKSPACE" })
+  })
+
+  it("refuses the link itself, not only paths beneath it", async () => {
+    expect(await resolveRealWorkspacePath(linkRoot, "planted-link", realpath)).toMatchObject({ ok: false })
+  })
+
+  it("still allows ordinary paths inside the workspace", async () => {
+    const result = await resolveRealWorkspacePath(linkRoot, "lib/loom/workspace.ts", realpath)
+    expect(result.ok).toBe(true)
+    expect(result.relative).toBe("lib/loom/workspace.ts")
+  })
+
+  it("allows a file that does not exist yet, so new files can still be created", async () => {
+    // realpath throws for a missing leaf; the nearest existing ancestor is resolved instead.
+    const missingLeaf = async (candidate) => {
+      if (candidate.endsWith("brand-new.ts")) throw new Error("ENOENT")
+      return realpath(candidate)
+    }
+    const result = await resolveRealWorkspacePath(linkRoot, "lib/brand-new.ts", missingLeaf)
+    expect(result.ok).toBe(true)
+    expect(result.relative).toBe("lib/brand-new.ts")
+  })
+
+  it("refuses a new file whose missing parent resolves outside the workspace", async () => {
+    const missingLeaf = async (candidate) => {
+      if (candidate.endsWith("new.ts")) throw new Error("ENOENT")
+      return realpath(candidate)
+    }
+    expect(await resolveRealWorkspacePath(linkRoot, "planted-link/new.ts", missingLeaf))
+      .toMatchObject({ ok: false, refusal: "PATH_ESCAPES_WORKSPACE" })
   })
 })
