@@ -27,16 +27,29 @@ export async function GET(request: Request) {
   const device = (await headers()).get("x-williamos-device")
   if (!device) return new Response(null, { status: 303, headers: { location: "/sign-in" } })
 
-  // One operator: the certificate proves *a* trusted device, and the cockpit has exactly one owner
-  // to attach it to. If that ever stops being true, this is the line that must grow a mapping.
+  // The certificate proves a trusted DEVICE; it must still resolve to the right operator. Taking the
+  // oldest row was wrong: this database also holds abandoned rows from setup and diagnostics, and
+  // the oldest of those is not the owner. Resolve explicitly, and refuse to guess when ambiguous --
+  // signing someone into the wrong identity is worse than sending them to a sign-in page.
   let userId: string | undefined
   try {
-    const result = await pool.query('SELECT "id" FROM "user" ORDER BY "createdAt" ASC LIMIT 1')
-    userId = result.rows[0]?.id
+    const configured = process.env.WILLIAMOS_OWNER_EMAIL?.trim().toLowerCase()
+    if (configured) {
+      const byEmail = await pool.query('SELECT "id" FROM "user" WHERE lower("email") = $1 LIMIT 1', [configured])
+      userId = byEmail.rows[0]?.id
+    }
+    if (!userId) {
+      // Fall back to the only account that can actually sign in: one with a credential.
+      const credentialed = await pool.query(
+        `SELECT u."id" FROM "user" u
+           JOIN "account" a ON a."userId" = u."id" AND a."providerId" = 'credential' AND a."password" IS NOT NULL`,
+      )
+      if (credentialed.rowCount === 1) userId = credentialed.rows[0].id
+    }
   } catch {
     return new Response(null, { status: 303, headers: { location: "/sign-in" } })
   }
-  if (!userId) return new Response(null, { status: 303, headers: { location: "/sign-in" } })
+  if (!userId) return new Response(null, { status: 303, headers: { location: "/sign-in?reason=owner-unresolved" } })
 
   const context = await auth.$context
   const session = await context.internalAdapter.createSession(userId, false)
