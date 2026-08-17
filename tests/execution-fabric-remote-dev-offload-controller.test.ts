@@ -14,7 +14,13 @@ const root = process.cwd()
 const controller = path.join(root, "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1")
 const policyPath = path.join(root, "config/execution-fabric/remote-dev-offload-v1.policy.json")
 const policy = JSON.parse(fs.readFileSync(policyPath, "utf8"))
-const pwsh = process.platform === "win32" ? "powershell.exe" : "pwsh.exe"
+// The controller under test is a Windows PowerShell 5.1 script (WindowsIdentity, ProgramData,
+// named jobs), so every test that executes it is Windows-only by construction and says so with
+// `it.runIf(isWindows)`. What is NOT Windows-only is reading that script and asserting its
+// contents — and those assertions were being lost because the file could not even load off
+// Windows. See the beforeAll below.
+const isWindows = process.platform === "win32"
+const pwsh = isWindows ? "powershell.exe" : "pwsh.exe"
 const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "remote-dev-controller-"))
 const fakeBin = path.join(testRoot, "bin")
 const fakeLog = path.join(testRoot, "ssh.log")
@@ -53,8 +59,15 @@ beforeAll(() => {
   fs.mkdirSync(fakeBin, { recursive: true })
   const source = path.join(testRoot, "FakeSsh.cs")
   fs.writeFileSync(source, `using System; using System.IO; using System.Threading; public static class FakeSsh { public static int Main(string[] args) { var log=Environment.GetEnvironmentVariable("REMOTE_DEV_FAKE_SSH_LOG"); if(!String.IsNullOrEmpty(log)) File.AppendAllText(log, String.Join("\\t", args)+Environment.NewLine); var input=Console.In.ReadToEnd(); if(!String.IsNullOrEmpty(log)) File.WriteAllText(log+".stdin", input); int delay=0; Int32.TryParse(Environment.GetEnvironmentVariable("REMOTE_DEV_FAKE_SSH_DELAY_MS"), out delay); if(delay>0) Thread.Sleep(delay); var output=Environment.GetEnvironmentVariable("REMOTE_DEV_FAKE_SSH_OUTPUT"); if(output!=null) Console.WriteLine(output); var error=Environment.GetEnvironmentVariable("REMOTE_DEV_FAKE_SSH_ERROR"); if(error!=null) Console.Error.WriteLine(error); int code=0; Int32.TryParse(Environment.GetEnvironmentVariable("REMOTE_DEV_FAKE_SSH_EXIT"), out code); return code; } }`)
-  const compiled = spawnSync("C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe", ["/nologo", `/out:${path.join(fakeBin, "ssh.exe")}`, source], { encoding: "utf8" })
-  if (compiled.status !== 0) throw new Error(compiled.stderr)
+  // The fake ssh is a .NET console app, so csc.exe can only build it on Windows. Every test that
+  // actually invokes it is inside the future-activation `describe.skip` block below; the live
+  // Windows tests only assert it was *not* called. So off Windows we simply go without it instead
+  // of failing the whole file at setup — which is exactly what kept this suite out of CI.
+  if (!isWindows) return
+  const csc = "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe"
+  if (!fs.existsSync(csc)) throw new Error(`the .NET Framework compiler is required to build the fake ssh: ${csc}`)
+  const compiled = spawnSync(csc, ["/nologo", `/out:${path.join(fakeBin, "ssh.exe")}`, source], { encoding: "utf8" })
+  if (compiled.status !== 0) throw new Error(compiled.stderr || `csc.exe exited ${compiled.status}`)
 })
 
 afterAll(() => { for (const entry of evidenceRoots) fs.rmSync(entry, { recursive: true, force: true }); fs.rmSync(testRoot, { recursive: true, force: true }) })
@@ -62,7 +75,7 @@ afterAll(() => { for (const entry of evidenceRoots) fs.rmSync(entry, { recursive
 function run(args: string[], env: Record<string, string> = {}) {
   fs.rmSync(fakeLog, { force: true })
   fs.rmSync(`${fakeLog}.stdin`, { force: true })
-  return spawnSync(pwsh, args, { encoding: "utf8", timeout: 15_000, env: { ...process.env, PATH: `${fakeBin};${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: fakeLog, ...env } })
+  return spawnSync(pwsh, args, { encoding: "utf8", timeout: 15_000, env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH}`, REMOTE_DEV_FAKE_SSH_LOG: fakeLog, ...env } })
 }
 
 function decodedRelay(encodedBootstrap: string) {
@@ -205,7 +218,7 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(source).toContain(".Replace('ConvertFrom-Json -Depth 20','ConvertFrom-Json')")
   })
 
-  it.runIf(process.platform === "win32")("runs under Windows PowerShell 5.1 and rejects a swapped relay plus matching attacker digest", () => {
+  it.runIf(isWindows)("runs under Windows PowerShell 5.1 and rejects a swapped relay plus matching attacker digest", () => {
     const goodRelay = Buffer.from("[Console]::Out.Write('RELAY_OK');exit 7", "utf8")
     const goodDigest = crypto.createHash("sha256").update(goodRelay).digest("hex")
     const goodEnvelope = JSON.stringify({
@@ -237,7 +250,7 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(replay.status).not.toBe(0)
   }, 20_000)
 
-  it.runIf(process.platform === "win32")("passes exact adversarial argv through the PS5.1 bounded process helper", () => {
+  it.runIf(isWindows)("passes exact adversarial argv through the PS5.1 bounded process helper", () => {
     const source = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1"), "utf8")
     const helper = source.slice(source.indexOf("function ConvertTo-WindowsArgument"), source.indexOf("$allowedOperations"))
     const childPath = path.join(testRoot, `argv-child-${crypto.randomUUID()}.mjs`)
@@ -250,7 +263,7 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(JSON.parse(result.stdout)).toEqual(values)
   })
 
-  it.runIf(process.platform === "win32")("passes the validator exactly its six declared file arguments", () => {
+  it.runIf(isWindows)("passes the validator exactly its six declared file arguments", () => {
     const source = fs.readFileSync(path.join(root, "scripts/execution-fabric/live/invoke-remote-dev-offload.ps1"), "utf8")
     const validator = source.slice(source.indexOf("$validateScript = @'"), source.indexOf("$validationFiles ="))
     expect(validator).toContain("process.argv.slice(2)")
@@ -263,7 +276,7 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(JSON.parse(result.stdout)).toEqual(["contract", "activation", "authority", "policy", "packet", "envelope"])
   })
 
-  it.runIf(process.platform === "win32")("rejects an occupied relay leaf without overwriting or deleting it", () => {
+  it.runIf(isWindows)("rejects an occupied relay leaf without overwriting or deleting it", () => {
     const relay = Buffer.from("[Console]::Out.Write('SAFE')", "utf8")
     const digest = crypto.createHash("sha256").update(relay).digest("hex")
     const envelope = JSON.stringify({ relayGzip: zlib.gzipSync(relay).toString("base64"), relayInput: "", relaySha256: digest })
@@ -279,7 +292,7 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(fs.readFileSync(relayPath, "utf8")).toBe("FOREIGN_RELAY")
   })
 
-  it.runIf(process.platform === "win32")("a durable cancellation fence blocks a delayed bootstrap before relay creation", () => {
+  it.runIf(isWindows)("a durable cancellation fence blocks a delayed bootstrap before relay creation", () => {
     const relay = Buffer.from("[Console]::Out.Write('MUST_NOT_RUN')", "utf8")
     const digest = crypto.createHash("sha256").update(relay).digest("hex")
     const envelope = JSON.stringify({ relayGzip: zlib.gzipSync(relay).toString("base64"), relayInput: "", relaySha256: digest })
@@ -298,7 +311,7 @@ describe("inactive Hermes-mediated remote development controller", () => {
     expect(fs.existsSync(cancellationPath)).toBe(true)
   })
 
-  it.runIf(process.platform === "win32")("places the bootstrap and every descendant in one terminable named job", () => {
+  it.runIf(isWindows)("places the bootstrap and every descendant in one terminable named job", () => {
     const readyPath = path.join(testRoot, `descendant-ready-${crypto.randomUUID()}.txt`)
     const writtenPath = path.join(testRoot, `escaped-${crypto.randomUUID()}.txt`)
     const child = `[IO.File]::WriteAllText('${readyPath.replaceAll("'", "''")}', 'READY');[Threading.Thread]::Sleep(3000);[IO.File]::WriteAllText('${writtenPath.replaceAll("'", "''")}', 'ESCAPED')`
@@ -324,7 +337,10 @@ describe("inactive Hermes-mediated remote development controller", () => {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3500)
     expect(fs.existsSync(writtenPath)).toBe(false)
   }, 30_000)
-  it("blocks before SSH while the trusted-main proof scope is inactive", () => {
+  // Executes the PS5.1 controller itself, so it belongs with the Windows-gated behavioural tests
+  // rather than the source assertions — it was simply never gated, because the whole file was
+  // excluded from the one environment where that would have shown up.
+  it.runIf(isWindows)("blocks before SSH while the trusted-main proof scope is inactive", () => {
     const value = fixture()
     const result = run(value.args)
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2)
