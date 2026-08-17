@@ -1,6 +1,13 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+import dynamic from "next/dynamic"
+
+// CodeMirror touches the DOM on construction, so it is loaded in the browser only.
+const CodeEditor = dynamic(() => import("@/components/loom/code-editor").then((module) => module.CodeEditor), {
+  ssr: false,
+  loading: () => <p className="p-3 font-mono text-xs text-muted-foreground">opening…</p>,
+})
 
 type Entry = { name: string; path: string; directory: boolean }
 type OpenFile = { path: string; content: string; modifiedAt: string }
@@ -192,16 +199,13 @@ export function Workspace() {
         {note ? <p className="border-b border-border px-3 py-1 text-xs text-amber-600">{note}</p> : null}
 
         {view === "edit" ? (
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if ((event.ctrlKey || event.metaKey) && event.key === "s") { event.preventDefault(); void save() }
-            }}
-            spellCheck={false}
-            placeholder="Pick a file on the left."
-            className="min-h-0 flex-1 resize-none bg-background p-3 font-mono text-xs leading-5 outline-none"
-          />
+          <div className="min-h-0 flex-1 overflow-auto">
+            {open ? (
+              <CodeEditor path={open.path} value={draft} onChange={setDraft} onSave={() => void save()} />
+            ) : (
+              <p className="p-3 text-xs text-muted-foreground">Pick a file on the left.</p>
+            )}
+          </div>
         ) : (
           <pre className="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5">
             {(diff || "…").split("\n").map((line, index) => (
