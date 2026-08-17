@@ -2,6 +2,7 @@ import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 
 import { getSession } from "@/lib/session"
+import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/providers"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -36,6 +37,13 @@ export async function POST(request: Request) {
 
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
   if (!prompt) return Response.json({ error: "PROMPT_REQUIRED" }, { status: 400 })
+
+  // Local is the default and the fallback; going off the machine has to be asked for.
+  const provider = resolveProvider((body as { provider?: unknown }).provider)
+  if (provider.id === "local") {
+    const model = typeof (body as { model?: unknown }).model === "string" ? (body as { model: string }).model : LOCAL_MODEL
+    return streamLocal(prompt, request.signal, model)
+  }
 
   // The id is validated rather than trusted: it reaches a command line, and only this shape can.
   const requested = typeof body.sessionId === "string" && SESSION_ID.test(body.sessionId) ? body.sessionId : null
@@ -118,6 +126,84 @@ export async function POST(request: Request) {
     },
     cancel() {
       child.kill()
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-store, no-transform",
+      "x-accel-buffering": "no",
+    },
+  })
+}
+
+/**
+ * Answer with the model running on this machine.
+ *
+ * Ollama already streams NDJSON, so its chunks are re-shaped into the same events the browser
+ * consumes from the cloud path -- the workroom should not care which model is talking, and the
+ * operator should not have to learn two transcript formats to compare them.
+ */
+async function streamLocal(prompt: string, signal: AbortSignal, model: string): Promise<Response> {
+  const encoder = new TextEncoder()
+
+  let upstream: Response
+  try {
+    upstream = await fetch(`${LOCAL_ENDPOINT}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      // An unknown name is rejected by the local runtime itself, which already knows exactly which
+      // models exist -- duplicating that list here would only let the two disagree.
+      body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], stream: true }),
+      signal,
+    })
+  } catch {
+    // Naming the model and the endpoint matters: "the local model is not running" is actionable,
+    // where a bare failure sends the operator looking for a bug in the cockpit.
+    return Response.json({ error: "LOCAL_MODEL_UNAVAILABLE", model, endpoint: LOCAL_ENDPOINT }, { status: 503 })
+  }
+  if (!upstream.ok || !upstream.body) {
+    return Response.json({ error: "LOCAL_MODEL_REFUSED", status: upstream.status, model }, { status: 503 })
+  }
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: Record<string, unknown>) => {
+        try { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)) } catch { /* reader gone */ }
+      }
+      send({ type: "session", sessionId: null, resumed: false, provider: "local", model })
+
+      const reader = upstream.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      let text = ""
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split("\n")
+          buffer = lines.pop() ?? ""
+          for (const line of lines) {
+            if (!line.trim()) continue
+            let chunk: { message?: { content?: string }; done?: boolean }
+            try { chunk = JSON.parse(line) } catch { continue }
+            const piece = chunk.message?.content
+            if (piece) {
+              text += piece
+              // Tokens arrive one at a time; the browser renders the growing answer as it forms.
+              send({ type: "delta", text: piece })
+            }
+          }
+        }
+        send({ type: "event", event: { type: "assistant", message: { content: [{ type: "text", text }] } } })
+        send({ type: "done", reason: null, code: 0 })
+      } catch (error) {
+        send({ type: "done", reason: String((error as Error)?.message ?? "LOCAL_STREAM_FAILED") })
+      } finally {
+        try { controller.close() } catch { /* already closed */ }
+      }
     },
   })
 
