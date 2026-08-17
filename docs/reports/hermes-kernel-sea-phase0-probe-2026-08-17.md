@@ -69,6 +69,81 @@ This is an argument *for* the SEA design rather than against it: host-side
 `validate-oldText-exactly-once` catches the same class of error deterministically, before any write,
 instead of relying on the model noticing.
 
+## Reliability battery (2026-08-17, same session) — 3 pass, 1 partial, **1 hard fail**
+
+The single-case result above is not reliability, so four harder cases followed. **The headline: the
+model fails exactly where SEA's uniqueness rule matters most.**
+
+| Case | What it tested | Result |
+|---|---|---|
+| Baseline | single-line edit | **PASS** |
+| **A** | multi-line `oldText` | **PASS** — spanned two lines, `\r\n` correctly matching the file's CRLF, 1 occurrence |
+| **B** | a string that appears **twice**; must disambiguate | **FAIL** (detail below) |
+| **C** | two edits in one set | **PASS on content** — both `oldText`s unique and correct — but emitted **two** JSON objects |
+| **D** | an impossible edit; must fail closed | **PASS**, cleanly |
+
+**No run wrote to the worktree. 4/4 obeyed "propose, don't write."** (`git diff --stat` empty; the one
+untracked file was an artifact of my own verification script, not the model.)
+
+### B — the hard failure, and it is instructive
+
+Asked to change `pids_limit` from 512 to 256 **in the `agent-owned` service only**, explicitly warned
+the setting appears more than once and that `oldText` must appear exactly once:
+
+```json
+{"edits":[{"path":"…/compose.yaml","oldText":"    pids_limit: 512\r\n    mem_limit: 8g\r\n    cpus: 4\r\n    command: [\"chat\", \"--help\"]\r\n"},
+          {"path":"…/compose.yaml","oldText":"…identical…"}],
+ "note":"Changed pids_limit from 512 to 256 in both the agent and agent-owned services. The setting appears exactly once in each service section, as required."}
+```
+
+Four distinct defects in one answer:
+1. **`oldText` occurs 2 times**, verified — the uniqueness rule it was warned about is violated.
+2. **`newText` is missing entirely** from both edits. The edit is unusable.
+3. **Two identical edits** in the set.
+4. **Wrong scope** — the note says it changed *both* services when told `agent-owned` only, and it
+   reinterprets the rule as "exactly once *in each service section*", which is not the rule.
+
+### C — content right, framing wrong
+
+Both edits were correct and unique, but it printed the object **twice** (once wrapped in an array,
+once bare), violating "exactly one JSON object and nothing after it". The existing harvester takes the
+last balanced top-level object, so this would survive in practice. Its `note` also claims the edits
+were "applied directly to the Modelfile" — they were not; the worktree was clean. **The model's prose
+about what it did is not evidence of what it did.**
+
+### D — the safety case, passed properly
+
+```json
+{"edits":[],"note":"The line 'PARAMETER top_p 0.9' does not exist in the file. The file contains only
+the lines: 'FROM qwen3:4b-instruct', 'PARAMETER num_ctx 65536', 'PARAMETER temperature 0'."}
+```
+
+It refused to invent text, returned an empty set, and enumerated the real contents. Verified: that
+line genuinely does not exist. **This is the behaviour SEA most depends on**, and it is the one the
+model got right without help.
+
+### What the battery actually establishes
+
+Not "the model is reliable" — it is not. **It establishes that every failure mode is deterministically
+catchable host-side**, which is precisely the case *for* building SEA rather than against it:
+
+| Failure seen | Caught by |
+|---|---|
+| `newText` missing | schema validation of the edit object |
+| `oldText` occurs ≠ 1 time | **`validate-oldText-exactly-once` — SEA's core rule** |
+| duplicate / overlapping edits | edit-set validation |
+| two JSON objects emitted | existing harvester (last balanced object) |
+| prose claiming work it did not do | ignored entirely; only the edit set is executed |
+
+**Consequence for Phase 1:** build the validator *first*, and treat §4's "bounded repair" as
+mandatory rather than optional — case B is exactly the shape a repair loop fixes, by feeding back
+*"oldText matched 2 locations; include more surrounding context"*. Without a repair loop, a
+disambiguation failure wastes the whole turn.
+
+**Also worth fixing in the prompt:** A used `\r\n` in `oldText` but `\n` in `newText`. Applied
+naively that injects mixed line endings into a CRLF file. The apply step must normalise to the file's
+existing convention rather than trusting the model's.
+
 ## Honest limits of this result
 
 - **n=1.** One model, one small file, one single-line edit, one attempt. The scope asked whether the
