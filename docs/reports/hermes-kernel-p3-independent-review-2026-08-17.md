@@ -144,6 +144,21 @@ not byte-sealed, so a hand-written policy is still a possible bypass on any host
 digest-seals other authority-bearing files. Tracked with the Q4 finding; the C6 wall does not address
 it, because that wall checks deployed artifacts, not which policy file was supplied.
 
+**Attempted and reverted 2026-08-17 — recorded so the next attempt starts better informed.** I
+implemented a `HERMES_FREE_AGENT_POLICY_PATH_WALL` requiring `-PolicyPath` in owned mode to resolve
+inside the repository's `config/execution-fabric/`. It works in production (the client already passes
+exactly that path) but broke four behavioural invoker tests, which deliberately supply **synthetic
+policies from temp directories** in order to prove the workspace-root, evidence, promotion and
+quarantine walls fire. The only ways to make them pass were to weaken the wall, or to have tests write
+policies into a version-controlled directory — and a dirty working tree breaks the suites that assert
+on real git state, which cost 16 spurious failures earlier the same day. Shipping a control whose only
+route to green is making tests dirty the repo is worse than leaving the gap recorded.
+
+The right shape is probably **content**, not path: require the supplied policy to byte-match a
+reviewed copy, with the behavioural tests reworked to use the real policy plus injected evidence
+rather than hand-written files. That is a test-harness change as much as a control change.
+Follow-up: `WO-WILLIAMOS-HERMES-POLICY-PROVENANCE-001`.
+
 ### C2 — closed: correction to the record
 The builder stated the packet's open minors were fixed across PRs **#814, #818, #819, #821, #823**.
 Only **#814 (`dc0eed6`)** touches this lane. #818 was an NTFS inode-drift test, #819 offload-worker

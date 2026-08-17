@@ -179,12 +179,28 @@ cannot resume a session from a mounted state dir, that becomes a follow-up (own 
 properties change: (a) `/workspace` is the *live owned worktree*, not a disposable clone of the
 pinned baseline, so kernel writes survive the run; (b) the kernel uses its native `file` toolset for
 edits rather than SEA (T2 §4). Neither is a hole, because WilliamOS still re-derives the diff from
-git in `assertChangedPathsAllowed` and remains the only party that commits, pushes, opens PRs and
+git in `assertChangedPathsAllowed` — **for tracked and untracked paths only; see the correction
+below** — and remains the only party that commits, pushes, opens PRs and
 merges — a kernel write outside the reservations is caught and refused, not trusted. It *is*
 nevertheless a widened blast radius versus the disposable clone, and that is precisely why
 `OWNED_WORKTREE_CONFINEMENT_PROVEN` is a required evidence line gating the lane: until P2 proves
 confinement on HERMES, both the client and the invoker refuse to run
 (`RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN` / `HERMES_FREE_AGENT_EVIDENCE_WALL`).
+
+> **CORRECTION 2026-08-17 (P3 independent review).** "Re-derives the diff from git" was overstated,
+> and the review caught it. `inspectWorkingTreePaths` / `inspectChangedPaths` run
+> `git status --porcelain=v1 -z --untracked-files=all` **without `--ignored`**
+> (`scripts/hermes-bridge/repository-lifecycle.mjs`), so writes to ignored paths — `.env`, `build/`,
+> `coverage/`, `.venv/`, `.codex/` — are never enumerated and never checked against the reservations.
+>
+> **Containment still holds** (those writes stay inside the owned worktree, and the reviewer found no
+> path from an ignored write to influencing host-side validation: vitest loads no dotenv and its only
+> setup file is `tests/setup/webstorage.ts`). What does **not** hold is the *reservation* claim: it is
+> "every tracked or untracked changed path," not "every changed path."
+>
+> Not fixed here on purpose. `assertChangedPathsAllowed` is **shared with the Codex lane**, and adding
+> `--ignored` would enumerate build output and the validation `node_modules` junction, tripping
+> reservation checks for both lanes. Follow-up: `WO-WILLIAMOS-CHANGED-PATH-IGNORED-001`.
 
 `docs/runbooks/hermes-free-dev-agent.md` gains a "v2 owned-worktree mode" section.
 

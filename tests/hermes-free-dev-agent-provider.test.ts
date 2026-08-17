@@ -83,7 +83,7 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
       },
     })
     // The invoker must actually enforce them, not merely carry them.
-    const invoker = fs.readFileSync("scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1", "utf8")
+    const invoker = read("scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1")
     expect(invoker).toContain("HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL")
     expect(invoker).toContain("$policy.containment.deployedArtifactSha256")
     expect(v2.deniedActions).toEqual(v1.deniedActions)
