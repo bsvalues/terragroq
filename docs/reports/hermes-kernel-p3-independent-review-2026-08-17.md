@@ -31,8 +31,8 @@ builder's claim that the open minors were fixed was false for four of the five P
 | C3 | `runTurn` does not bind the thread to the workspace, unlike `resumeThread` | yes | **closed** |
 | C4 | Owned mode does not require `-QuarantinePath`, so the marker can land in the checkout | yes | **closed** |
 | C5 | Record the T2 §4 **and §5** deviations as dated accepted deviations with a named follow-up WO | yes (record) | **open** |
-| C6 | Pin or verify the three deployed host files the containment claim rests on | no | **open** |
-| C7 | Neutralise the leftover `PROVISIONAL` probe policy on HERMES | no | **open** |
+| C6 | Pin or verify the three deployed host files the containment claim rests on | no | **closed** |
+| C7 | Neutralise the leftover `PROVISIONAL` probe policy on HERMES | no | **closed** (partly pre-existing; structural remainder tracked) |
 | C8 | Adopt a per-thread state retention rule and state the trust-surface argument | no | **open** |
 | C9 | Make the inherited v1 review line's scope legible inside the policy file | no | **open** |
 
@@ -53,6 +53,42 @@ policy-directory default (`config/execution-fabric/`), so an aborted run would w
 `ACTIVE_CONTAINER=` into the version-controlled checkout — dirtying the repo and quarantining the
 lane. The kernel client always passed it; the manual/runbook path did not. Note the behavioural
 invoker test for this is host-gated (`it.runIf`), so it does not execute on a Linux runner.
+
+### C6 — closed
+The deployed `compose.yaml`, `config.yaml` and `run_agent.py` were verified against the repo copies on
+2026-08-17 and **byte-match**:
+
+| Artifact | SHA-256 (deployed on HERMES == repo copy) |
+|---|---|
+| `compose.yaml` | `ada957ab2af985aec2f117fc5757f31e326564e344f1ba2358ff37ce1b7d21be` |
+| `config.yaml` | `f8d55cf9c44a3352ee28627b30f8bcaf2f4555a7cdfa419dfae4e67675e454e1` |
+| `run_agent.py` | `8cd7619ddeb7cdbb59c14c9288da1ada4e9c0c8e3d5a6f570dc6f838105e849d` |
+
+That confirms the load-bearing claim the reviewer could not verify — **as of that moment**, which is
+exactly why a one-off check is not the fix. The digests are now recorded in
+`containment.deployedArtifactSha256` in the v2 policy, and the invoker verifies all three against it
+in owned mode before any turn, raising `HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL` on a missing,
+malformed or mismatched artifact. Previously the image ID and network membership were pinned, but
+`ComposeFile` was only checked to **exist** and the other two were not checked at all.
+
+The digests sit under `containment`, which `tests/hermes-free-dev-agent-provider.test.ts` deep-equals
+— so a deployed-artifact change cannot land without a reviewed policy change in the same commit, and
+the provider test additionally asserts the invoker actually enforces the field rather than merely
+carrying it. The digests pin the **deployed** bytes and are deliberately not compared against a repo
+working copy, whose line endings vary by checkout platform.
+
+### C7 — closed, and it was already true before the review
+The named artifact does not exist. Verified on HERMES 2026-08-17: `Test-Path` on
+`D:\HermesServices\williamos-hermes-agent\hermes-free-dev-agent-v2.probe.policy.json` → `False`, and a
+full listing of that directory shows only `hermes-free-dev-agent-v1.policy.json`. It was removed on
+2026-08-16 after the P2 report was written; the removal was recorded in a commit message but never in
+the report that advertised it, so the reviewer — who correctly flagged P2/P2b content as accepted
+without verification — read a stale claim. The P2 report now carries a dated correction.
+
+**The structural remainder is NOT closed:** the invoker accepts any `-PolicyPath` and the v2 policy is
+not byte-sealed, so a hand-written policy is still a possible bypass on any host. This repo already
+digest-seals other authority-bearing files. Tracked with the Q4 finding; the C6 wall does not address
+it, because that wall checks deployed artifacts, not which policy file was supplied.
 
 ### C2 — closed: correction to the record
 The builder stated the packet's open minors were fixed across PRs **#814, #818, #819, #821, #823**.
