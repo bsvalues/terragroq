@@ -225,11 +225,20 @@ describe("Hermes kernel client — runTurn", () => {
     expect(call.credentialAccess).toBe(false)
     // I5: the git-common-dir identity is captured before and re-asserted after the invocation.
     const gitCalls = calls.filter((candidate) => candidate.command === "git")
-    expect(gitCalls).toHaveLength(2)
-    for (const probe of gitCalls) {
+    const commonDirProbes = gitCalls.filter((candidate) => candidate.args.includes("--git-common-dir"))
+    const ignoredProbes = gitCalls.filter((candidate) => candidate.args.includes("--ignored=matching"))
+    expect(commonDirProbes).toHaveLength(2)
+    // Ignored-path snapshots bracket the turn too, so a write the reservation check cannot see is
+    // still recorded in the turn evidence (P3 finding Q1.1).
+    expect(ignoredProbes).toHaveLength(2)
+    expect(gitCalls).toHaveLength(4)
+    for (const probe of commonDirProbes) {
       expect(probe.args).toEqual(["-C", fs.realpathSync(workspacePath), "rev-parse", "--path-format=absolute", "--git-common-dir"])
-      expect(probe.credentialAccess).toBe(false)
     }
+    for (const probe of ignoredProbes) {
+      expect(probe.args).toEqual(["-C", fs.realpathSync(workspacePath), "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all"])
+    }
+    for (const probe of gitCalls) expect(probe.credentialAccess).toBe(false)
     const packet = JSON.parse(fs.readFileSync(arg("-PacketPath"), "utf8"))
     expect(packet).toMatchObject({ schemaVersion: 3, runId: turn.turnId, workspaceMode: "OWNED_WORKTREE", workspacePath: fs.realpathSync(workspacePath), kernelSessionId: null })
     expect(arg("-StatePath")).toBe(path.join(kernelThreadsRoot(runtimeRoot), threadId, "kernel-state"))
@@ -244,6 +253,45 @@ describe("Hermes kernel client — runTurn", () => {
       expect(fs.statSync(stdoutPath).mode & 0o777).toBe(0o600)
       expect(fs.statSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "turns", "1", "packet.json")).mode & 0o777).toBe(0o600)
     }
+  })
+  it("records ignored paths the turn created, which reservation checks cannot see", async () => {
+    // assertChangedPathsAllowed runs `git status` without --ignored, so a write to .env or build/ is
+    // never enumerated and never checked against reservations (P3 finding Q1.1). Fixed here rather
+    // than in the shared repository-lifecycle function, which the Codex lane also uses.
+    const { client, commandRunner, workspacePath, runtimeRoot, commonDir } = fixture()
+    let turnRan = false
+    commandRunner.mockImplementation(async (call: Call) => {
+      if (call.command === "git" && call.args.includes("--ignored=matching")) {
+        // Pre-existing ignored content (the validation junction) must NOT be reported; only what
+        // this turn added.
+        const before = "!! node_modules/\0"
+        return { code: 0, stderr: "", stdout: turnRan ? `${before}!! .env\0!! build/out.js\0` : before }
+      }
+      if (call.command === "git") return { code: 0, stdout: `${commonDir}\n`, stderr: "" }
+      turnRan = true
+      return okResult(call.args[call.args.indexOf("-RunId") + 1])
+    })
+    await client.connect()
+    const threadId = await client.startThread({ cwd: workspacePath })
+    await client.runTurn({ threadId, prompt: "p" })
+
+    const session = JSON.parse(fs.readFileSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "session.json"), "utf8"))
+    expect(session.turns[0].ignoredPathsCreated).toEqual([".env", "build/out.js"])
+  })
+  it("distinguishes 'no ignored writes' from 'could not tell'", async () => {
+    // A silent absence would read as a clean turn, so an unusable snapshot records null.
+    const { client, commandRunner, workspacePath, runtimeRoot, commonDir } = fixture()
+    commandRunner.mockImplementation(async (call: Call) => {
+      if (call.command === "git" && call.args.includes("--ignored=matching")) return { code: 128, stderr: "fatal", stdout: "" }
+      if (call.command === "git") return { code: 0, stdout: `${commonDir}\n`, stderr: "" }
+      return okResult(call.args[call.args.indexOf("-RunId") + 1])
+    })
+    await client.connect()
+    const threadId = await client.startThread({ cwd: workspacePath })
+    await client.runTurn({ threadId, prompt: "p" })
+
+    const session = JSON.parse(fs.readFileSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "session.json"), "utf8"))
+    expect(session.turns[0].ignoredPathsCreated).toBeNull()
   })
   it("prunes stale kernel thread state beyond the declared retention budget", async () => {
     // Kernel state is a trust surface: model-authored text persists in the thread state dir and
