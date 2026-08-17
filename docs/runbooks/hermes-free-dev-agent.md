@@ -116,12 +116,20 @@ and keeps `session.json` and `turns/`. Deleting the whole thread dir would leave
 retained `turnResultDigest` attesting to bytes that exist nowhere, destroying the audit trail to
 reclaim a few megabytes. So do **not** widen the budget to keep evidence: evidence is already kept.
 
-**Known foot-gun (W4, tracked in that WO):** the prune is age/count based and knows nothing about live
-leases. An outcome parked awaiting an owner decision for longer than `maxAgeHours` loses its
-`kernel-state/`, and the owner-decision resume path then raises
-`HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL` — **terminal** — instead of falling back to a fresh
-thread the way the ordinary path does. Until that is fixed, **`maxAgeHours` must exceed the
-owner-decision SLA**; at the declared 168h that is seven days.
+**Resumable state is never expired on a timer (W4, fixed 2026-08-17).** An outcome parked awaiting an
+owner decision does no turns while it waits, so its thread ages out; deleting its `kernel-state/` made
+`resumeThread` fail, and the orchestrator turns *that* failure into a **terminal**
+`HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL` instead of starting a fresh thread. A slow human decision
+destroyed the work. The wall is correct and deliberately fail-closed, so the fix is in the prune: a
+thread that captured a kernel session and still has its state dir — exactly what `resumeThread`
+requires — is exempt from age expiry. **You no longer need to keep `maxAgeHours` above the
+owner-decision SLA.**
+
+Volume is still bounded: `maxThreads` applies to every thread, resumable or not. What was given up is
+the *time* bound on resumable state, deliberately — bounded accumulation was the requirement, and
+expiring live work was never part of it. The client cannot simply ask which threads are live:
+`threadId` lives in the Postgres governance event, not in the local state store, whose metadata is a
+whitelist that excludes it.
 
 Kernel state is per WilliamOS thread (`containment.agentStatePersistence: PER_THREAD_STATE_DIR`): the
 invoker mounts `<runtime root>\hermes-kernel\threads\<threadId>\kernel-state` as the kernel's

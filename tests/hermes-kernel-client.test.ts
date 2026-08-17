@@ -307,6 +307,8 @@ describe("Hermes kernel client — runTurn", () => {
     seed("00000000-0000-4000-8000-0000000000aa", "2026-08-16T19:59:00.000Z") // fresh, within budget
     seed("00000000-0000-4000-8000-0000000000bb", "2026-08-10T00:00:00.000Z") // older than maxAgeHours
     seed("00000000-0000-4000-8000-0000000000cc", "2026-08-11T00:00:00.000Z") // older than maxAgeHours
+    // None of the seeded threads captured a kernel session, so none is resumable and all are
+    // eligible for age-based expiry. The resumable exemption is covered by its own test below.
 
     await client.connect()
     const threadId = await client.startThread({ cwd: workspacePath })
@@ -322,6 +324,49 @@ describe("Hermes kernel client — runTurn", () => {
     for (const id of ["00000000-0000-4000-8000-0000000000bb", "00000000-0000-4000-8000-0000000000cc"]) {
       expect(fs.existsSync(sessionOf(id))).toBe(true)
     }
+  })
+  it("never expires resumable state on a timer, so a slow owner decision cannot destroy the work", async () => {
+    // An outcome parked awaiting an owner decision does no turns while it waits, so its thread ages
+    // out. Deleting its kernel-state makes resumeThread fail, and the orchestrator turns THAT
+    // failure into a terminal HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL rather than starting a
+    // fresh thread. Seven days is well inside the range of a human decision (P3 W4).
+    const { client, runtimeRoot, workspacePath, policyPath } = fixture()
+    patchPolicy(policyPath, (p) => { p.containment.threadStateRetention = { maxThreads: 10, maxAgeHours: 1 } })
+    const root = kernelThreadsRoot(runtimeRoot)
+    const seed = (id: string, createdAt: string, kernelSessionId: string | null) => {
+      fs.mkdirSync(path.join(root, id, "kernel-state"), { recursive: true })
+      fs.writeFileSync(path.join(root, id, "session.json"), JSON.stringify({ schemaVersion: 1, threadId: id, workspacePath, createdAt, kernelSessionId, turns: [] }))
+    }
+    // Both are far older than maxAgeHours; only one is resumable.
+    seed("00000000-0000-4000-8000-0000000000d1", "2026-08-01T00:00:00.000Z", "20260801_120000_abc123")
+    seed("00000000-0000-4000-8000-0000000000d2", "2026-08-01T00:00:00.000Z", null)
+
+    await client.connect()
+    await client.startThread({ cwd: workspacePath })
+
+    expect(fs.existsSync(path.join(root, "00000000-0000-4000-8000-0000000000d1", "kernel-state"))).toBe(true)
+    expect(fs.existsSync(path.join(root, "00000000-0000-4000-8000-0000000000d2", "kernel-state"))).toBe(false)
+  })
+  it("still bounds resumable state by count, so exempting it from the timer is not unbounded", async () => {
+    // The age exemption gives up the TIME bound on resumable state, not the VOLUME bound. C8 asked
+    // for bounded accumulation, and the count cap still applies to every thread.
+    const { client, runtimeRoot, workspacePath, policyPath } = fixture()
+    patchPolicy(policyPath, (p) => { p.containment.threadStateRetention = { maxThreads: 2, maxAgeHours: 100000 } })
+    const root = kernelThreadsRoot(runtimeRoot)
+    const ids = ["a1", "a2", "a3"].map((s) => `00000000-0000-4000-8000-0000000000${s}`)
+    ids.forEach((id, index) => {
+      fs.mkdirSync(path.join(root, id, "kernel-state"), { recursive: true })
+      fs.writeFileSync(path.join(root, id, "session.json"), JSON.stringify({
+        schemaVersion: 1, threadId: id, workspacePath,
+        createdAt: `2026-08-1${index}T00:00:00.000Z`, kernelSessionId: `2026081${index}_120000_abc`, turns: [],
+      }))
+    })
+    await client.connect()
+    await client.startThread({ cwd: workspacePath })
+
+    // maxThreads 2, plus the thread just started: the oldest resumable one is still evicted.
+    expect(fs.existsSync(path.join(root, ids[2], "kernel-state"))).toBe(true)
+    expect(fs.existsSync(path.join(root, ids[0], "kernel-state"))).toBe(false)
   })
   it("keeps working when the retention budget is absent, rather than closing the lane", async () => {
     // Retention is housekeeping over already-contained state, not a containment control: a missing

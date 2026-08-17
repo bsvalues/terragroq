@@ -297,16 +297,44 @@ export function createHermesKernelClient({
       if (!entry.isDirectory() || !/^[0-9a-f-]{36}$/i.test(entry.name) || entry.name === keepThreadId) continue
       const directory = path.join(threadsRoot, entry.name)
       let createdAt = NaN
-      try { createdAt = Date.parse(JSON.parse(fs.readFileSync(path.join(directory, "session.json"), "utf8")).createdAt) } catch { /* fall through to mtime */ }
+      let kernelSessionId = null
+      try {
+        const session = JSON.parse(fs.readFileSync(path.join(directory, "session.json"), "utf8"))
+        createdAt = Date.parse(session.createdAt)
+        kernelSessionId = session.kernelSessionId ?? null
+      } catch { /* fall through to mtime */ }
       if (!Number.isFinite(createdAt)) {
         try { createdAt = fs.statSync(directory).mtimeMs } catch { continue }
       }
-      threads.push({ directory, createdAt })
+      // A thread is resumable when it captured a kernel session AND still has its state dir — which
+      // is exactly what `resumeThread` requires. See the age exemption below.
+      const resumable = typeof kernelSessionId === "string" && kernelSessionId.length > 0
+        && fs.existsSync(path.join(directory, KERNEL_STATE_DIR))
+      threads.push({ directory, createdAt, resumable })
     }
     threads.sort((a, b) => b.createdAt - a.createdAt)
     const cutoff = now().getTime() - maxAgeHours * 3_600_000
     for (const [index, thread] of threads.entries()) {
-      if (index < maxThreads && thread.createdAt >= cutoff) continue
+      const overCount = index >= maxThreads
+      // Resumable state is NOT expired on a timer.
+      //
+      // An outcome parked awaiting an owner decision does no turns while it waits, so its thread
+      // ages out. Deleting its `kernel-state/` makes `resumeThread` fail, and the orchestrator turns
+      // that specific failure into a TERMINAL `HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL`
+      // (orchestrator.mjs) rather than falling back to a fresh thread the way the ordinary path
+      // does. A slow human decision would therefore destroy the work — the P3 reviewer's W4.
+      //
+      // The wall is correct and deliberately fail-closed (S2 spec §1), so the fix belongs here: the
+      // prune must not delete state that is still resumable. The client cannot ask which threads are
+      // live — `threadId` lives in the Postgres governance event, not in the local state store, whose
+      // metadata is a whitelist that excludes it — so resumability is the best available proxy, and
+      // it is the exact property `resumeThread` tests.
+      //
+      // Volume is still bounded: the count cap applies to every thread, resumable or not. What is
+      // given up is the TIME bound on resumable state, and that trade is deliberate — bounded
+      // accumulation is the C8 requirement; expiring live work is not.
+      const overAge = thread.createdAt < cutoff && !thread.resumable
+      if (!overCount && !overAge) continue
       // Remove the TRUST SURFACE, keep the EVIDENCE. Only `kernel-state/` is deleted: that is the
       // persisted model-authored memory this rule exists to bound. `session.json` and `turns/`
       // (packet.json, stdout.txt) stay, because the orchestrator's ledger retains only
