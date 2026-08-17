@@ -58,9 +58,18 @@ and the invoker (`HERMES_FREE_AGENT_EVIDENCE_WALL`) refuse to run while any decl
 `b9fbca28-…`; see `docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md`). Never fill an
 evidence value in to make a run proceed — a new declared line closes the lane again until proven.
 
-**Promotion is separate from running.** `promotion.requiredEvidence` gates *running* the lane;
-`promotion.promotionRequires` gates *claiming* `promotion.status: "PROMOTED"`. The v2 mode declares
-`V2_OWNED_WORKTREE_REVIEW_APPROVED`, which is `null`: the lane runs as `PILOT_AUTHORIZED`, and
+**Promotion is separate from running, and both are separate from ACTIVATION.**
+`promotion.requiredEvidence` gates *running* the lane; `promotion.promotionRequires` gates *claiming*
+`promotion.status: "PROMOTED"`.
+
+**Promoted 2026-08-17.** `V2_OWNED_WORKTREE_REVIEW_APPROVED = "review-2026-08-17-t1-indep-opus5"`,
+granted by a Tier 1 sovereign independent review performed in a separate isolated reviewer context
+that did not build the lane (`docs/reports/hermes-kernel-p3-independent-review-2026-08-17.md`).
+**That grant authorises no activation.** `control/activation`, `DATABASE_URL` and running the launcher
+remain three separate owner decisions — see the activation section below, which is unchanged by the
+promotion.
+
+Historically the line was `null`: the lane ran as `PILOT_AUTHORIZED`, and
 setting the status to `PROMOTED` without that line fails closed at both enforcement points
 (`RESIDENT_MODEL_LANE_PROMOTION_UNPROVEN` / `HERMES_FREE_AGENT_PROMOTION_EVIDENCE_WALL`). The line is
 v2-scoped on purpose: `INDEPENDENT_REVIEW_APPROVED` is inherited from v1 (2026-08-13) and predates

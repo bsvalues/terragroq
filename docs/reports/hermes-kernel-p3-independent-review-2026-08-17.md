@@ -1,10 +1,24 @@
 # P3 — independent review result: hermes-free-dev-agent **v2 owned-worktree mode**
 
 **Reference:** `review-2026-08-17-t1-indep-opus5`
-**Verdict: `APPROVE_WITH_CONDITIONS`**
-**Promotion NOT granted.** `promotion.satisfiedEvidence.V2_OWNED_WORKTREE_REVIEW_APPROVED` remains
-`null` and `promotion.status` remains `PILOT_AUTHORIZED` until the blocking conditions below are
-closed. Requested by
+**Verdict: `APPROVE_WITH_CONDITIONS`** → all nine conditions closed → closure independently
+re-verified **`CONDITIONS_CLOSED`** (2026-08-17, same reviewer, against `main` = `d87c400`).
+
+**PROMOTION GRANTED 2026-08-17.**
+`promotion.satisfiedEvidence.V2_OWNED_WORKTREE_REVIEW_APPROVED = "review-2026-08-17-t1-indep-opus5"`,
+`promotion.status = "PROMOTED"`. **This review is now closed.**
+
+> **The grant authorises promotion only. It authorises NO activation.** `control/activation`,
+> `DATABASE_URL`, and running the launcher remain three separate owner decisions. A 4B model
+> committing, pushing, opening and merging to `main` under a bot-only merge gate is a distinct
+> authorisation no reviewer has been asked for, and **this record must not be cited as having given
+> it** (reviewer's words, on both passes).
+
+The CI content pin was **re-pinned to the granted value, not deleted** — it is the only non-circular
+leg of the evidence machinery, since both runtime enforcement points read the same operator-controlled
+policy file. `promotion.evidenceScope` is now pinned too (W5).
+
+Requested by
 [the P3 packet](hermes-kernel-p3-promotion-review-packet-2026-08-16.md); tier per
 [`sovereign-runtime-and-review-supersession.md`](../governance/sovereign-runtime-and-review-supersession.md)
 **Tier 1 — sovereign independent review** (a reviewer role in a separate isolated context; not the
