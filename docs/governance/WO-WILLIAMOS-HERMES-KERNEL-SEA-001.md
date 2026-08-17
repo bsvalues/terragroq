@@ -39,9 +39,18 @@ becomes a dirty worktree that fails validation and enters remediation.
   occurred **exactly once**, and it did **not** write to the worktree when told not to. 1m 37s, 4 tool
   calls. Report: [`../reports/hermes-kernel-sea-phase0-probe-2026-08-17.md`](../reports/hermes-kernel-sea-phase0-probe-2026-08-17.md).
   The premise holds, so Option B is viable and this WO is "build SEA" rather than "fix the model".
-  **But n=1 is not reliability** — repeat with multi-line `oldText`, a target string that appears more
-  than once, multi-edit sets, and failure cases (the model must fail closed when the edit is
-  impossible) before committing to Phase 1.
+  **RELIABILITY BATTERY RUN (same day): 3 pass, 1 partial, 1 HARD FAIL.** Multi-line `oldText` passed;
+  the impossible-edit case failed closed correctly (returned `{"edits":[]}`, refused to fabricate);
+  multi-edit was correct but emitted two JSON objects. **The ambiguous-string case FAILED**: asked to
+  change a setting appearing twice, it produced an `oldText` matching **2** locations, **omitted
+  `newText` entirely**, duplicated the edit, and changed the wrong scope. **The model fails exactly
+  where SEA's uniqueness rule matters most.** No run wrote to the worktree (4/4).
+  This strengthens rather than weakens the case for SEA: **every failure is deterministically
+  catchable host-side** (missing `newText` → schema; `oldText` ≠ 1 → validate-exactly-once; duplicate
+  edits → set validation; double JSON → existing harvester). **Phase 1 must build the validator FIRST
+  and treat §4's "bounded repair" as mandatory** — case B is exactly what a repair loop fixes by
+  feeding back "oldText matched 2 locations, add context". Also: the model mixed `\r\n` in `oldText`
+  with `\n` in `newText`, so apply must normalise to the file's convention, not the model's.
   Notable: the model's first tool call used a hallucinated filename (`Modelffile…`), got *File not
   found*, and self-corrected — the Pilot 0 failure mode, recoverable in-turn, and exactly what
   host-side `validate-oldText-exactly-once` catches deterministically.
