@@ -33,6 +33,21 @@ function resolveBash(): string {
 
 const bash = resolveBash()
 const bashUid = execFileSync(bash, ["-lc", "id -u"], { encoding: "utf8" }).trim()
+
+/**
+ * Per-case budget for the heavier cases, which each spawn Git Bash several times.
+ *
+ * These carried a hardcoded `15_000`, and a per-case argument OVERRIDES the config's
+ * `testTimeout` — so `vitest.ci.config.ts`'s 60_000 never applied to them. 15s is ample on Linux
+ * (the whole file runs in ~22s on the hosted runner), but every spawn on Windows pays MSYS
+ * process-creation cost: the same file takes ~294s standalone, and under full-suite parallel load
+ * one of these needed ~24s and failed on the 15s budget. That only became visible once the file
+ * joined the CI profile and started running under load.
+ *
+ * Budgeted per platform rather than raised to one number sized for the slow case: Linux keeps the
+ * tight guard, so a genuine regression there still trips it instead of hiding under Windows headroom.
+ */
+const CASE_TIMEOUT_MS = isWindows ? 120_000 : 15_000
 const tempRoots: string[] = []
 const reservedPaths = [
   ".github/workflows/dotnet-test.yml",
@@ -335,7 +350,7 @@ describe("fixed AEGIS remote development worker", () => {
     fs.rmSync(path.join(value.repository, "backend/src/Program.cs"))
     const packet = makePacket(value.baseSha, patch)
     expect(runWorker("APPLY_RESERVED_PATCH", value, { packet, patch }).json).toMatchObject({ status: "PATH_NOT_RESERVED" })
-  }, 15_000)
+  }, CASE_TIMEOUT_MS)
 
   it("rejects symlinked roots, traversal, wrong Git identity, dirty state, and extra staged paths", () => {
     const symlinked = fixture()
@@ -429,13 +444,13 @@ describe("fixed AEGIS remote development worker", () => {
     expect(fs.readFileSync(path.join(process.cwd(), "scripts/execution-fabric/live/aegis-remote-dev-network-launcher.mjs"), "utf8")).toContain('ReadOnlyPaths=/tmp /var/tmp /run/user/${uid}')
     expect(source).toContain('measure_scratch; SCRATCH_BEFORE="$SCRATCH_MEASURED_BYTES"')
     expect(source).toContain('measure_scratch; SCRATCH_AFTER="$SCRATCH_MEASURED_BYTES"')
-  }, 15_000)
+  }, CASE_TIMEOUT_MS)
 
   it("requires project quota accounting and enforcement to be active", () => {
     const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
     expect(runWorker("PROVE_PREFLIGHT", value, { env: { FAKE_QUOTA_STATE: "off" } }).json).toMatchObject({ status: "SCRATCH_CONFINEMENT_FAILED" })
     expect(fs.readFileSync(worker, "utf8")).toContain('state -p')
-  }, 15_000)
+  }, CASE_TIMEOUT_MS)
 
   it("accepts xfsprogs 6.6 project-inherit flag P and the exact numeric #734 report row", () => {
     const liveFormat = fixture(); fs.rmSync(liveFormat.physicalWorkspace, { recursive: true, force: true })
@@ -561,13 +576,13 @@ if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\
     expect(fs.existsSync(lock)).toBe(false)
     expect(fs.existsSync(value.physicalWorkspace)).toBe(false)
     expect(fs.existsSync(path.join(quarantine, ".williamos-remote-dev-owner.json"))).toBe(true)
-  }, 15_000)
+  }, CASE_TIMEOUT_MS)
 
   it("rechecks the quarantine namespace under the lifecycle lock before workspace creation", () => {
     const value = fixture(); fs.rmSync(value.physicalWorkspace, { recursive: true, force: true })
     expect(runWorker("CREATE_WORKSPACE", value, { env: { FAKE_QUARANTINE_ON_LOCK: "1" } }).json).toMatchObject({ status: "QUARANTINE_RECOVERY_REQUIRED" })
     expect(fs.existsSync(value.physicalWorkspace)).toBe(false)
-  }, 15_000)
+  }, CASE_TIMEOUT_MS)
 
   it("fails closed on malformed, symlinked, or multiple Work Order quarantines", () => {
     const malformed = fixture()
@@ -674,7 +689,7 @@ if [[ "\${1:-}" == -un ]]; then printf '%s\n' williamos-fabric; else printf '%s\
     expect(source).toContain("WORKSPACE_LOCK_BUSY")
     expect(source).toContain("PARTIAL_WORKSPACE_RECOVERED")
     expect(source).toContain("validate_trusted_parent")
-  }, 15_000)
+  }, CASE_TIMEOUT_MS)
 
   it("deterministically resets an exact owned partial repository during workspace creation", () => {
     const value = fixture()
@@ -688,14 +703,14 @@ exit 0
     const result = runWorker("CREATE_WORKSPACE", value, { env: { FAKE_BASE_SHA: value.baseSha } })
     expect(result.json).toMatchObject({ status: "SUCCEEDED" })
     expect(fs.existsSync(path.join(value.repository, "partial-clone.tmp"))).toBe(false)
-  }, 15_000)
+  }, CASE_TIMEOUT_MS)
 
   it("rejects every nested mount before exact cleanup", () => {
     const value = fixture()
     fs.writeFileSync(path.join(value.physicalWorkspace, ".williamos-post-merge-proven"), `${value.packet.runId}:${value.baseSha}\n`)
     expect(runWorker("CLEAN_EXACT_WORKSPACE", value, { env: { FAKE_NESTED_MOUNT: "1" } }).json).toMatchObject({ status: "CLEANUP_NESTED_MOUNT" })
     expect(fs.existsSync(value.physicalWorkspace)).toBe(true)
-  }, 15_000)
+  }, CASE_TIMEOUT_MS)
 
   it("does not clean without exact ownership and post-merge proof", () => {
     const value = fixture()
@@ -703,6 +718,6 @@ exit 0
     fs.writeFileSync(path.join(value.physicalWorkspace, ".williamos-post-merge-proven"), "wrong\n")
     expect(runWorker("CLEAN_EXACT_WORKSPACE", value).json).toMatchObject({ status: "CLEANUP_NOT_AUTHORIZED" })
     expect(fs.existsSync(value.physicalWorkspace)).toBe(true)
-  }, 15_000)
+  }, CASE_TIMEOUT_MS)
 
 })
