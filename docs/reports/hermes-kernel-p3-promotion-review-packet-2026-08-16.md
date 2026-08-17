@@ -19,6 +19,28 @@ promotion keys on a new, v2-scoped line instead.
 
 ## What promotion would authorise
 
+> **AMENDED 2026-08-17 — P3 review condition C1.** The paragraph below is mechanically true and
+> operationally misleading, and the Tier 1 reviewer refused a plain `APPROVE` partly because of it.
+> Read this box first.
+>
+> **What this review actually gates is activation, not a word.**
+> `docs/runbooks/hermes-free-dev-agent.md` states the launcher must not be started before the P3
+> independent review lands, and that starting it begins autonomous cycling in which the orchestrator
+> commits, pushes, opens **and merges** pull requests driven by the local 4B model. The merge gate is
+> **bot-only**: `reviewed: hasExactHeadReview || hasCodeRabbitReview`
+> (`scripts/hermes-bridge/repository-lifecycle.mjs:1191`), satisfiable by
+> `chatgpt-codex-connector` or CodeRabbit with no human in the loop — and per the review-sourcing
+> supersession, external advisory review is **Tier 3, additive only, never sufficient**.
+>
+> So the question a reviewer is really answering is: *may a 4B local model commit, push, open and
+> merge to `main` under automated review only?* — not *may the "pilot" caveat be dropped?*
+>
+> **This review does NOT grant activation.** The three activation steps remain separate owner
+> decisions, and granting `V2_OWNED_WORKTREE_REVIEW_APPROVED` authorises none of them:
+> 1. flip `control/activation` to `enabled`,
+> 2. set `DATABASE_URL` for the outcome queue,
+> 3. run or schedule the launcher.
+
 Nothing at runtime changes on promotion: both enforcement points already accept
 `PILOT_AUTHORIZED` **or** `PROMOTED`. Promotion is a governance statement — that this mode has been
 independently examined — and it removes the "pilot" caveat from the lane's status. Because
