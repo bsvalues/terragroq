@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react"
 
+import { BASELINE_STEPS, type BaselineResult, nodePassed } from "@/lib/fabric/baseline"
+
 type Node = {
   name: string
   role?: string
@@ -27,6 +29,8 @@ export function NodeBoard() {
   const [checkedAt, setCheckedAt] = useState<string | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [baseline, setBaseline] = useState<BaselineResult[] | null>(null)
+  const [testing, setTesting] = useState(false)
 
   const load = useCallback(async () => {
     setBusy(true)
@@ -46,6 +50,22 @@ export function NodeBoard() {
 
   useEffect(() => { void load() }, [load])
 
+  /** The acceptance gate, run on demand: not a claim about the plane, a demonstration of it. */
+  const runBaseline = useCallback(async () => {
+    setTesting(true)
+    setError(null)
+    try {
+      const response = await fetch("/api/fabric/baseline", { method: "POST", cache: "no-store" })
+      const payload = await response.json()
+      if (!response.ok) { setError(payload.error ?? `baseline failed (${response.status})`); return }
+      setBaseline(payload.results ?? [])
+    } catch (caught) {
+      setError(String(caught))
+    } finally {
+      setTesting(false)
+    }
+  }, [])
+
   const reachable = nodes.filter((node) => node.reachable).length
 
   return (
@@ -61,6 +81,14 @@ export function NodeBoard() {
           className="rounded-md border border-border px-3 py-1 text-xs disabled:opacity-40"
         >
           {busy ? "Checking…" : "Check again"}
+        </button>
+        <button
+          type="button"
+          onClick={() => void runBaseline()}
+          disabled={testing}
+          className="rounded-md border border-border px-3 py-1 text-xs disabled:opacity-40"
+        >
+          {testing ? "Running the gate…" : "Run baseline test"}
         </button>
         {checkedAt ? (
           <span className="text-[11px] text-muted-foreground">
@@ -86,6 +114,35 @@ export function NodeBoard() {
             </div>
 
             {node.role ? <p className="text-xs text-muted-foreground">{node.role}</p> : null}
+
+            {baseline ? (() => {
+              const mine = baseline.filter((r) => r.node === node.name)
+              if (mine.length === 0) return null
+              const passed = nodePassed(mine)
+              return (
+                <div className="flex flex-col gap-1 rounded border border-border/60 p-2">
+                  <p className={`text-xs font-medium ${passed ? "text-emerald-600" : "text-amber-600"}`}>
+                    baseline {passed ? "PASS" : "FAIL"}
+                  </p>
+                  {BASELINE_STEPS.map((step) => {
+                    const result = mine.find((r) => r.step === step.id)
+                    return (
+                      <p key={step.id} className="flex gap-2 text-[11px]">
+                        <span aria-hidden className={result?.ok ? "text-emerald-600" : "text-amber-600"}>
+                          {result ? (result.ok ? "OK" : "!!") : "--"}
+                        </span>
+                        <span className="text-muted-foreground">{step.label}</span>
+                        {/* On failure the meaning is shown, not just the error: the point is which
+                            capability the plane is missing on this node. */}
+                        {result && !result.ok ? (
+                          <span className="text-amber-700 dark:text-amber-400">{step.meaning}</span>
+                        ) : null}
+                      </p>
+                    )
+                  })}
+                </div>
+              )
+            })() : null}
 
             {node.reachable ? (
               <dl className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-1 text-xs">
