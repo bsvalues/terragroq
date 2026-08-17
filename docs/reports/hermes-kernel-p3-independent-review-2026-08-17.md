@@ -33,8 +33,8 @@ builder's claim that the open minors were fixed was false for four of the five P
 | C5 | Record the T2 §4 **and §5** deviations as dated accepted deviations with a named follow-up WO | yes (record) | **closed** |
 | C6 | Pin or verify the three deployed host files the containment claim rests on | no | **closed** |
 | C7 | Neutralise the leftover `PROVISIONAL` probe policy on HERMES | no | **closed** (partly pre-existing; structural remainder tracked) |
-| C8 | Adopt a per-thread state retention rule and state the trust-surface argument | no | **open** |
-| C9 | Make the inherited v1 review line's scope legible inside the policy file | no | **open** |
+| C8 | Adopt a per-thread state retention rule and state the trust-surface argument | no | **closed** |
+| C9 | Make the inherited v1 review line's scope legible inside the policy file | no | **closed** |
 
 ### C3 — closed
 `runTurn` now rejects a thread belonging to another workspace with
@@ -80,6 +80,33 @@ with named follow-up work orders:
   load-bearing and now digest-pinned by C6. Records that persisted kernel state is a trust surface
   bounded by no retention or review rule. Follow-up
   `WO-WILLIAMOS-HERMES-KERNEL-STATE-RETENTION-001`, which also carries C8.
+
+### C8 — closed
+Thread state now has a declared, enforced budget: `containment.threadStateRetention`
+(`maxThreads: 20`, `maxAgeHours: 168`). `startThread` prunes thread dirs beyond either bound, never
+touching the thread it just created, only uuid-shaped leaves strictly inside the runtime's own
+threads root. Ordering uses `session.json.createdAt`, falling back to directory mtime.
+
+A missing or malformed budget is deliberately **not** a wall — retention is housekeeping over
+already-contained state, not a containment control, and closing the lane over a bookkeeping error
+would trade a real capability for nothing. A conservative fallback still bounds growth, and both
+behaviours are tested.
+
+The trust-surface argument is stated where it belongs rather than left implicit: in the client beside
+the code, and in the deviation record (D2). The point is not disk. Model-authored text persists in
+`state.db` and re-enters the next turn's context **without review** — precisely what P2b proved — and
+WO §2 classifies kernel memory as review-gated and never auto-adopted. Retention bounds how long that
+survives; it does **not** answer who reviews what accumulates, which stays with
+`WO-WILLIAMOS-HERMES-KERNEL-STATE-RETENTION-001`.
+
+### C9 — closed
+`promotion.evidenceScope` now annotates every evidence line in the v2 policy itself, so scope is
+legible in the file rather than only in a packet. It records that `INDEPENDENT_REVIEW_APPROVED`
+(`2026-08-13T17:05:00Z`) is **v1-scoped**, predates owned-worktree mode, did not examine the
+live-worktree mount, per-thread state mount or resume path, does **not** constitute review of v2, and
+is deliberately absent from `promotionRequires`. It also records that `WORKSPACE_CONFINEMENT_PROVEN`
+is superseded for v2 by `OWNED_WORKTREE_CONFINEMENT_PROVEN`, and that
+`V2_OWNED_WORKTREE_REVIEW_APPROVED` stays `null` while this review's conditions remain open.
 
 ### C6 — closed
 The deployed `compose.yaml`, `config.yaml` and `run_agent.py` were verified against the repo copies on

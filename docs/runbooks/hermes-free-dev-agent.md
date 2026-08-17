@@ -92,6 +92,17 @@ or spawned. A shorter budget would let the host runner kill the invoker mid-run,
 would never reach its own `HERMES_FREE_AGENT_TIMEOUT_WALL` and its container cleanup and quarantine
 marking would never happen. Raise the caller's budget; do not lower `timeoutSeconds` to fit it.
 
+**Kernel state is a trust surface, and it is now bounded.** Model-authored text persists in the
+thread's `state.db` and re-enters the next turn's context without review (that is what P2b proved),
+so it must not accumulate across outcomes. `containment.threadStateRetention` declares the budget
+(`maxThreads: 20`, `maxAgeHours: 168`) and `startThread` prunes thread dirs beyond either bound —
+never the thread being started, and only uuid-shaped leaves inside `<runtime root>\hermes-kernel\
+threads\`. A missing or malformed budget falls back conservatively instead of walling: retention is
+housekeeping over already-contained state, not a containment control. What it does **not** do is
+decide *what may accumulate and who reviews it* — that stays with
+`WO-WILLIAMOS-HERMES-KERNEL-STATE-RETENTION-001`. Do not widen the budget to keep evidence; copy the
+thread dir out instead.
+
 Kernel state is per WilliamOS thread (`containment.agentStatePersistence: PER_THREAD_STATE_DIR`): the
 invoker mounts `<runtime root>\hermes-kernel\threads\<threadId>\kernel-state` as the kernel's
 `HERMES_HOME` through the `agent-owned` compose service (the v1 `agent` service keeps its tmpfs

@@ -227,6 +227,53 @@ export function createHermesKernelClient({
     fs.writeFileSync(sessionPath(session.threadId), `${JSON.stringify(session, null, 2)}\n`)
   }
 
+  /**
+   * Kernel state is a TRUST SURFACE, not just disk. Model-authored text persists in the thread's
+   * state dir (`state.db`) and re-enters the next turn's context without review — that is exactly
+   * what P2b proved. WO-WILLIAMOS-HERMES-KERNEL-V1 §2 classifies kernel memory as review-gated and
+   * never auto-adopted, so it must not accumulate indefinitely across outcomes. Nothing pruned these
+   * dirs before (~5.4 MB each, one per outcome, never reused across outcomes). Raised by the P3
+   * independent review (condition C8); see
+   * docs/governance/hermes-kernel-v2-doctrine-deviations-2026-08-17.md.
+   *
+   * A missing or malformed policy budget is deliberately NOT a wall: retention is housekeeping over
+   * already-contained state, not a containment control, and closing the lane over a bookkeeping
+   * error would trade a real capability for nothing. The declared values are the reviewed ones and
+   * CI pins them via the policy's `containment` block.
+   */
+  const THREAD_RETENTION_FALLBACK = Object.freeze({ maxThreads: 20, maxAgeHours: 168 })
+  const resolveThreadRetention = (policy) => {
+    const declared = policy?.containment?.threadStateRetention
+    const positive = (value) => Number.isSafeInteger(value) && value > 0
+    if (!declared || !positive(declared.maxThreads) || !positive(declared.maxAgeHours)) return THREAD_RETENTION_FALLBACK
+    return { maxThreads: declared.maxThreads, maxAgeHours: declared.maxAgeHours }
+  }
+  const pruneThreadState = (policy, keepThreadId) => {
+    const { maxThreads, maxAgeHours } = resolveThreadRetention(policy)
+    let entries
+    try { entries = fs.readdirSync(threadsRoot, { withFileTypes: true }) } catch { return }
+    const threads = []
+    for (const entry of entries) {
+      // uuid-shaped leaves only, and never the thread being started.
+      if (!entry.isDirectory() || !/^[0-9a-f-]{36}$/i.test(entry.name) || entry.name === keepThreadId) continue
+      const directory = path.join(threadsRoot, entry.name)
+      let createdAt = NaN
+      try { createdAt = Date.parse(JSON.parse(fs.readFileSync(path.join(directory, "session.json"), "utf8")).createdAt) } catch { /* fall through to mtime */ }
+      if (!Number.isFinite(createdAt)) {
+        try { createdAt = fs.statSync(directory).mtimeMs } catch { continue }
+      }
+      threads.push({ directory, createdAt })
+    }
+    threads.sort((a, b) => b.createdAt - a.createdAt)
+    const cutoff = now().getTime() - maxAgeHours * 3_600_000
+    for (const [index, thread] of threads.entries()) {
+      if (index < maxThreads && thread.createdAt >= cutoff) continue
+      // Belt and braces: only ever a leaf strictly inside the runtime's own threads root.
+      if (!isInside(thread.directory, threadsRoot)) continue
+      try { fs.rmSync(thread.directory, { recursive: true, force: true }) } catch { /* best-effort housekeeping */ }
+    }
+  }
+
   const client = {
     async connect() {
       const policy = readPolicy(); assertUnquarantined(); assertOwnedWorkspace(); assertInvokerPresent()
@@ -238,6 +285,7 @@ export function createHermesKernelClient({
       const threadId = randomUUID()
       fs.mkdirSync(path.join(threadsRoot, threadId, KERNEL_STATE_DIR), { recursive: true })
       writeSession({ schemaVersion: SESSION_SCHEMA_VERSION, threadId, workspacePath, createdAt: now().toISOString(), kernelSessionId: null, turns: [] })
+      pruneThreadState(readPolicy(), threadId)
       return threadId
     },
     async resumeThread(threadId) {

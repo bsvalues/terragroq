@@ -74,6 +74,8 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
     expect(v2.containment).toEqual({
       ...v1.containment,
       agentStatePersistence: "PER_THREAD_STATE_DIR",
+      // P3 review condition C8: kernel state is a trust surface, so it gets a declared budget.
+      threadStateRetention: { maxThreads: 20, maxAgeHours: 168 },
       deployedArtifactSha256: {
         "compose.yaml": "ada957ab2af985aec2f117fc5757f31e326564e344f1ba2358ff37ce1b7d21be",
         "config.yaml": "f8d55cf9c44a3352ee28627b30f8bcaf2f4555a7cdfa419dfae4e67675e454e1",

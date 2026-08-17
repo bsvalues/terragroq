@@ -44,6 +44,10 @@
     "canonicalRepositoryMounted": false,
     "rootFilesystemReadOnly": true,
     "agentStatePersistence": "PER_THREAD_STATE_DIR",
+    "threadStateRetention": {
+      "maxThreads": 20,
+      "maxAgeHours": 168
+    },
     "deployedArtifactSha256": {
       "compose.yaml": "ada957ab2af985aec2f117fc5757f31e326564e344f1ba2358ff37ce1b7d21be",
       "config.yaml": "f8d55cf9c44a3352ee28627b30f8bcaf2f4555a7cdfa419dfae4e67675e454e1",
@@ -97,6 +101,16 @@
       "OWNED_WORKTREE_CONFINEMENT_PROVEN": "p2-b9fbca28-6fea-4898-9533-b556008ff300",
       "KERNEL_SESSION_CONTINUITY_PROVEN": "p2b-1f789bdf-4f51-45f4-aeb3-5080f60a5344",
       "V2_OWNED_WORKTREE_REVIEW_APPROVED": null
+    },
+    "evidenceScope": {
+      "IMAGE_BUILD_PROVEN": "v1-inherited; image identity is unchanged by v2",
+      "LOCAL_MODEL_TOOL_CALL_PROVEN": "v1-inherited; unchanged by v2",
+      "NETWORK_ISOLATION_PROVEN": "v1-inherited; network membership is unchanged by v2",
+      "WORKSPACE_CONFINEMENT_PROVEN": "v1-inherited and SUPERSEDED for v2 by OWNED_WORKTREE_CONFINEMENT_PROVEN: it covers the disposable BASELINE_CLONE workspace, not the live owned worktree",
+      "INDEPENDENT_REVIEW_APPROVED": "v1-SCOPED (2026-08-13T17:05:00Z), inherited verbatim. It PREDATES owned-worktree mode and did not examine the live-worktree mount, the per-thread state mount, or the resume path. It does NOT constitute review of v2 and is deliberately absent from promotionRequires; v2 review keys on V2_OWNED_WORKTREE_REVIEW_APPROVED",
+      "OWNED_WORKTREE_CONFINEMENT_PROVEN": "v2-scoped; P2 live probe on HERMES 2026-08-16, docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md",
+      "KERNEL_SESSION_CONTINUITY_PROVEN": "v2-scoped; P2b continuity probe 2026-08-16, docs/reports/hermes-kernel-p2b-session-continuity-2026-08-16.md",
+      "V2_OWNED_WORKTREE_REVIEW_APPROVED": "v2-scoped; null until an independent reviewer who did not build this lane grants it. P3 review 2026-08-17 returned APPROVE_WITH_CONDITIONS (review-2026-08-17-t1-indep-opus5), so this stays null while conditions remain open"
     }
   }
 }

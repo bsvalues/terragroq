@@ -76,9 +76,16 @@ container and re-enters the next turn's context without review — a trust surfa
 classifies kernel memory/skills as review-gated and never auto-adopted. Bounded today by the disabled
 toolsets above and by threads never crossing outcomes; **not** bounded by any retention or review rule.
 
-**Follow-up:** `WO-WILLIAMOS-HERMES-KERNEL-STATE-RETENTION-001` — retention/pruning for
-`<runtime root>\hermes-kernel\threads\` (nothing prunes it today; ~5.4 MB per outcome) **and** an
-explicit statement of what may accumulate in kernel state and who reviews it. Tracks P3 condition C8.
+**Partly addressed 2026-08-17 (P3 condition C8).** Retention now exists and is enforced:
+`containment.threadStateRetention` (`maxThreads: 20`, `maxAgeHours: 168`), pruned by `startThread`,
+never touching the thread being started and only uuid-shaped leaves inside the runtime's own threads
+root. A missing budget falls back conservatively rather than walling, because retention is
+housekeeping over already-contained state, not a containment control.
+
+**Follow-up (still open):** `WO-WILLIAMOS-HERMES-KERNEL-STATE-RETENTION-001` — retention bounds how
+long model-authored state survives; it does **not** answer *what may accumulate in kernel state and
+who reviews it*, which is the WO §2 requirement (kernel memory review-gated, never auto-adopted).
+That question remains open.
 
 ---
 
