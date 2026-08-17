@@ -94,6 +94,17 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
     const invoker = read("scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1")
     expect(invoker).toContain("HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL")
     expect(invoker).toContain("$policy.containment.deployedArtifactSha256")
+    // Provenance: the supplied policy must byte-match the reviewed copy, or every wall above is
+    // asserted against a file the caller wrote. Its POSITION is the design: after the walls the
+    // behavioural tests drive with synthetic policies, and before the first docker call — so a
+    // synthetic policy still trips the wall under test while a forged one is refused before
+    // anything executes. Assert the ordering, not just the presence.
+    expect(invoker).toContain("HERMES_FREE_AGENT_POLICY_PROVENANCE_WALL")
+    const provenanceAt = invoker.indexOf("HERMES_FREE_AGENT_POLICY_PROVENANCE_WALL")
+    expect(provenanceAt).toBeGreaterThan(invoker.indexOf("HERMES_FREE_AGENT_EVIDENCE_WALL"))
+    expect(provenanceAt).toBeGreaterThan(invoker.indexOf("HERMES_FREE_AGENT_WORKSPACE_ROOT_WALL"))
+    expect(provenanceAt).toBeGreaterThan(invoker.indexOf("HERMES_FREE_AGENT_PROMOTION_EVIDENCE_WALL"))
+    expect(provenanceAt).toBeLessThan(invoker.indexOf("image inspect"))
     // Every pinned artifact is enforced, so the policy and the wall cannot drift apart.
     for (const artifact of Object.keys(v2.containment.deployedArtifactSha256)) {
       expect(invoker).toContain(`"${artifact}"`)
