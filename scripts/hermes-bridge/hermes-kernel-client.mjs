@@ -214,6 +214,45 @@ export function createHermesKernelClient({
     return path.resolve(value)
   }
 
+  /**
+   * Ignored paths written during a turn are invisible to the reservation check.
+   *
+   * `assertChangedPathsAllowed` re-derives changed paths from
+   * `git status --porcelain=v1 -z --untracked-files=all` **without `--ignored`**, so a kernel write
+   * to `.env`, `build/`, `coverage/`, `.venv/` or `.codex/` is never enumerated and never tested
+   * against the contract's reservations. Containment is unaffected — those writes stay inside the
+   * owned worktree — but the claim "every changed path is re-derived from git" was false, and the
+   * P3 review caught it (finding Q1.1).
+   *
+   * The fix belongs HERE and not in `repository-lifecycle.mjs`: that function is shared with the
+   * Codex lane, and adding `--ignored` there would enumerate build output and the validation
+   * `node_modules` junction on every run, tripping reservation checks for both lanes. Snapshotting
+   * before and after the turn reports only what THIS turn created, so pre-existing ignored content
+   * (the junction included) is not flagged.
+   *
+   * This reports; it does not wall. Whether an ignored-path write should be fatal is a policy
+   * question for WO-WILLIAMOS-CHANGED-PATH-IGNORED-001, and walling on it today would fail runs that
+   * are legitimate under every control the lane actually enforces.
+   */
+  const ignoredPaths = async (cwd, turnTimeoutMs) => {
+    let result
+    try {
+      result = await commandRunner({
+        command: "git",
+        args: ["-C", cwd, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all"],
+        cwd, timeoutMs: turnTimeoutMs, credentialAccess: false,
+      })
+    } catch { return null }
+    const exitCode = result?.exitCode ?? result?.code ?? result?.status ?? 0
+    if (exitCode !== 0) return null
+    return new Set(
+      String(result?.stdout ?? "")
+        .split("\0")
+        .filter((entry) => entry.startsWith("!! "))
+        .map((entry) => entry.slice(3)),
+    )
+  }
+
   const sessionPath = (threadId) => path.join(threadsRoot, threadId, "session.json")
   const readSession = (threadId) => {
     if (typeof threadId !== "string" || !/^[0-9a-f-]{36}$/i.test(threadId)) throw wall("RESIDENT_MODEL_THREAD_UNKNOWN", "resumeThread")
@@ -331,6 +370,7 @@ export function createHermesKernelClient({
       const stdoutPath = path.join(turnDir, "stdout.txt")
       const commonDirBefore = await gitCommonDir(workspaceReal, turnTimeoutMs)
       if (commonDirBefore === null) throw wall("RESIDENT_MODEL_LANE_WORKSPACE", "runTurn")
+      const ignoredBefore = await ignoredPaths(workspaceReal, turnTimeoutMs)
       let result
       try {
         result = await commandRunner({
@@ -366,6 +406,17 @@ export function createHermesKernelClient({
       const commonDirAfter = await gitCommonDir(workspaceReal, turnTimeoutMs)
       if (commonDirAfter === null || commonDirAfter !== commonDirBefore) finish(wall("RESIDENT_MODEL_LANE_WORKSPACE_TAMPERED", "runTurn"))
       try { assertNoReparsePoints(workspaceReal, "runTurn") } catch (error) { finish(error) }
+      // Reservation checks cannot see ignored paths; record what this turn created there so the gap
+      // is at least observable in the turn evidence. Reported, never fatal — see `ignoredPaths`.
+      const ignoredAfter = await ignoredPaths(workspaceReal, turnTimeoutMs)
+      if (ignoredBefore !== null && ignoredAfter !== null) {
+        const created = [...ignoredAfter].filter((entry) => !ignoredBefore.has(entry)).sort()
+        if (created.length > 0) record.ignoredPathsCreated = created
+      } else {
+        // Distinguish "nothing was created" from "we could not tell" — a silent absence here would
+        // read as a clean turn.
+        record.ignoredPathsCreated = null
+      }
       const satisfiesContract = (value) => validateAgainstTurnSchema(value, HERMES_TURN_OUTPUT_SCHEMA).ok
       const harvested = harvestTurnOutput(stdout, { runId, isAcceptable: satisfiesContract })
       if (!harvested.ok) {
