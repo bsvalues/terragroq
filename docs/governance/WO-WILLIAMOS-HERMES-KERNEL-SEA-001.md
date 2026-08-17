@@ -21,7 +21,24 @@ hallucinated paths. WilliamOS re-deriving changed paths from git tells you *whic
 does not validate an edit, apply it atomically, or roll back a partial write. Today a botched edit
 becomes a dirty worktree that fails validation and enters remediation.
 
-## Scope
+## Scope — see the scoping document
+
+**[`WO-WILLIAMOS-HERMES-KERNEL-SEA-001-scope.md`](WO-WILLIAMOS-HERMES-KERNEL-SEA-001-scope.md)**
+(2026-08-17) carries the analysis. Headlines:
+
+- **SEA does not exist** anywhere in this repo — doctrine only.
+- **Disabling the `file` toolset buys nothing on its own**: `terminal` is a shell in `/workspace`, so
+  `sed`/`python`/redirection still write. Toolsets are coarse, so dropping `file` also removes
+  *reading*. That tension is the actual design problem.
+- **Recommended: Option B, the out-of-loop adapter** §4 already sanctions — the kernel proposes
+  structured edits, WilliamOS discards working-tree changes and applies only those. No image rebuild,
+  no re-proving containment, host-side and unit-testable. Option A (in-kernel tool) means a new image,
+  new digest pins, and plausibly re-running P2/P2b.
+- **Phase 0 is a probe, not code.** SEA's premise is that a small model which fails at free-form
+  editing succeeds at structured JSON. Pilot 0 proved the failure; **nobody has proven the success.**
+  If the probe fails, this WO is not "build SEA" — it is "improve the model or the prompt".
+
+## Original scope note
 
 Introduce the SEA edit path for the resident lane and re-assert §4's acceptance criterion. Not a
 blocker for pilot operation; **is** a precondition for any future claim that §4 is *satisfied* rather
