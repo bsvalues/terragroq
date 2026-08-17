@@ -1,5 +1,6 @@
 import { passkeyResolution } from "@/lib/auth"
 import { onboardingSteps } from "@/lib/device-onboarding"
+import { IdentityProfileForm } from "@/components/auth/identity-profile-form"
 
 export const dynamic = "force-dynamic"
 
@@ -45,6 +46,16 @@ export default function TrustPage() {
           </li>
         ))}
       </ol>
+
+      <section className="flex flex-col gap-3 border-t border-border pt-6">
+        <h2 className="text-sm font-medium">Skip the password on this device</h2>
+        <p className="text-xs text-muted-foreground">
+          Install an identity for this device and WilliamOS will recognise it automatically. It
+          carries a private key, so it is only issued against a one-time code from a device you are
+          already signed in on.
+        </p>
+        <IdentityProfileForm />
+      </section>
 
       <p className="text-xs text-muted-foreground">
         Not an Apple device? Open{" "}
