@@ -245,6 +245,24 @@ describe("Hermes kernel client — runTurn", () => {
       expect(fs.statSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "turns", "1", "packet.json")).mode & 0o777).toBe(0o600)
     }
   })
+  it("refuses a turn for a thread that belongs to a different workspace", async () => {
+    // resumeThread binds the thread to this workspace; runTurn did not. A thread owns the kernel
+    // session id and state dir for ONE worktree, so running a turn from a client pointed at another
+    // workspace would hand that session's memory to the wrong tree. Raised by the P3 independent
+    // review (review-2026-08-17-t1-indep-opus5, condition C3).
+    const first = fixture()
+    await first.client.connect()
+    const threadId = await first.client.startThread({ cwd: first.workspacePath })
+
+    const otherWorkspace = path.join(first.runtimeRoot, "worktrees", "resident-2")
+    fs.mkdirSync(otherWorkspace, { recursive: true })
+    const other = fixture({ runtimeRoot: first.runtimeRoot, workspacePath: otherWorkspace, policyPath: first.policyPath, invokerPath: first.invokerPath })
+    await other.client.connect()
+    await expect(other.client.runTurn({ threadId, prompt: "p" }))
+      .rejects.toMatchObject({ code: "RESIDENT_MODEL_THREAD_WORKSPACE_MISMATCH" })
+    // Refused before the invoker ran at all.
+    expect(other.calls.filter((call) => call.command === "powershell")).toEqual([])
+  })
   it("refuses a turn before connect, for an unknown thread, or when the prompt exceeds the policy budget", async () => {
     const { client, workspacePath, policyPath } = fixture()
     await expect(client.runTurn({ threadId: "x", prompt: "p" })).rejects.toMatchObject({ code: "RESIDENT_MODEL_LANE_NOT_CONNECTED" })

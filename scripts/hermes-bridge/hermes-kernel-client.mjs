@@ -251,6 +251,13 @@ export function createHermesKernelClient({
     async runTurn({ threadId, prompt, turn, timeoutMs: turnTimeoutMs = timeoutMs } = {}) {
       if (!connected) throw wall("RESIDENT_MODEL_LANE_NOT_CONNECTED", "runTurn")
       const session = readSession(threadId)
+      // Bind the thread to this workspace on the per-turn path too, not only in resumeThread (see
+      // above). A thread owns the kernel session id and state dir for ONE worktree; running a turn
+      // against a different workspace would hand that session's memory to the wrong tree. Same
+      // "asserted at connect/resume, absent where it is used" shape as the turn-budget gap.
+      if (path.resolve(session.workspacePath) !== path.resolve(workspacePath)) {
+        throw wall("RESIDENT_MODEL_THREAD_WORKSPACE_MISMATCH", "runTurn")
+      }
       const policy = readPolicy(); assertUnquarantined(); const workspaceReal = assertOwnedWorkspace(); assertInvokerPresent()
       assertTurnBudget(policy, turnTimeoutMs, "runTurn")
       const text = requiredString(prompt, "prompt")

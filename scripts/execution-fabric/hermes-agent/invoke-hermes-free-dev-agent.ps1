@@ -79,6 +79,14 @@ try {
         }
         # The quarantine marker must not land in the version-controlled checkout: the
         # caller names a runtime-owned absolute path and both locations are refused.
+        #
+        # In owned-worktree mode the parameter is MANDATORY. Without it $markerPath stays at the
+        # policy-directory default, i.e. config/execution-fabric/ — so an aborted run would leave
+        # ACTIVE_CONTAINER= in the version-controlled checkout, dirtying the repo and quarantining
+        # the lane. The kernel client always passes it; the manual/runbook path is what this guards.
+        if ($ownedMode -and [string]::IsNullOrWhiteSpace($QuarantinePath)) {
+            throw "HERMES_FREE_AGENT_QUARANTINE_PATH_WALL"
+        }
         if (-not [string]::IsNullOrWhiteSpace($QuarantinePath)) {
             if (-not [IO.Path]::IsPathRooted($QuarantinePath)) { throw "HERMES_FREE_AGENT_QUARANTINE_PATH_WALL" }
             $markerPath = [IO.Path]::GetFullPath($QuarantinePath)
