@@ -173,6 +173,15 @@ reviewed copy, with the behavioural tests reworked to use the real policy plus i
 rather than hand-written files. That is a test-harness change as much as a control change.
 Follow-up: `WO-WILLIAMOS-HERMES-POLICY-PROVENANCE-001`.
 
+> **CLOSED 2026-08-17.** Implemented as `HERMES_FREE_AGENT_POLICY_PROVENANCE_WALL` — the supplied
+> policy must byte-match the reviewed repo copy in owned mode. **The predicted test-harness rework
+> was not needed.** Provenance does not have to run first, only before anything *executes*: placed
+> after the walls the behavioural tests drive with synthetic policies and before the first `docker`
+> call, a synthetic policy still trips the wall under test while a forged one — which by definition
+> satisfies the earlier walls, since it asserts its own evidence — is refused before any container
+> starts. All four behavioural tests pass untouched. The provider test pins the wall's *position*
+> rather than its presence, because the position is the design.
+
 ### C2 — closed: correction to the record
 The builder stated the packet's open minors were fixed across PRs **#814, #818, #819, #821, #823**.
 Only **#814 (`dc0eed6`)** touches this lane. #818 was an NTFS inode-drift test, #819 offload-worker

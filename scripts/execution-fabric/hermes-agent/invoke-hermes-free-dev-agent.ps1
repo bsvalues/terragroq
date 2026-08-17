@@ -148,6 +148,31 @@ try {
     if (Compare-Object @($packet.toolsets | Sort-Object) @($policy.execution.allowedToolsets | Sort-Object)) { throw "HERMES_FREE_AGENT_TOOLSET_WALL" }
     if (-not (Test-Path -LiteralPath $ComposeFile -PathType Leaf)) { throw "HERMES_FREE_AGENT_COMPOSE_WALL" }
     if ($ownedMode) {
+        # PROVENANCE: the policy in hand must BE the reviewed one.
+        #
+        # Every wall in this script - promotion, evidence, workspace roots, toolsets, image id, the
+        # artifact digests below - is asserted against the policy the caller supplied. Accepting any
+        # -PolicyPath therefore let a hand-written copy assert its own controls as proven. The P2
+        # bootstrap did exactly that: a copy outside version control carrying
+        # OWNED_WORKTREE_CONFINEMENT_PROVEN "...PROVISIONAL", used to open the lane in order to prove
+        # the very control it asserted. Structural half of P3 condition C7.
+        #
+        # Content, not path: the supplied file may live anywhere, but must byte-match the reviewed
+        # copy in the repository. An earlier attempt constrained the PATH instead and was reverted -
+        # it broke the behavioural tests, which legitimately drive synthetic policies to prove the
+        # other walls fire. This check is deliberately placed AFTER those walls and before the first
+        # docker call, so a synthetic policy still trips the wall under test while a forged one is
+        # refused before anything executes.
+        #
+        # Owned mode is driven by the orchestrator from a checkout, so the reviewed copy is resolved
+        # relative to this script. A deployed invoker with no repository beside it cannot run owned
+        # mode - that is intended, not incidental.
+        $reviewedPolicyPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\..\config\execution-fabric\hermes-free-dev-agent-v2.policy.json"))
+        if (-not (Test-Path -LiteralPath $reviewedPolicyPath -PathType Leaf)) { throw "HERMES_FREE_AGENT_POLICY_PROVENANCE_WALL" }
+        $suppliedPolicyDigest = (Get-FileHash -LiteralPath $PolicyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $reviewedPolicyDigest = (Get-FileHash -LiteralPath $reviewedPolicyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($suppliedPolicyDigest -ne $reviewedPolicyDigest) { throw "HERMES_FREE_AGENT_POLICY_PROVENANCE_WALL" }
+
         # Every remaining containment property in the policy - rootFilesystemReadOnly,
         # dockerSocketMounted:false, hostCredentialMounts:false, publishedPorts:[], the state bind,
         # and config.yaml's disabled skills/code-execution/memory - is true only if the DEPLOYED
