@@ -35,6 +35,11 @@ try {
     })
     atomicPersistSchedulerLockOwner(ownerPath, renewed)
     Atomics.store(control, 2, renewed.generation)
+    // Publish the renewal as an event. The acquirer waits on this index during startup
+    // confirmation, so it wakes on the renewal itself rather than re-reading the owner file on a
+    // millisecond poll — which matters most on a saturated host, where the poll competed with the
+    // very worker it was waiting for.
+    Atomics.notify(control, 2)
   }
 
   renew()

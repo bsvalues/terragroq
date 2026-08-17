@@ -491,6 +491,31 @@ describe("WO-MAO-023 remediated real-store scheduler", { timeout: 30_000 }, () =
     expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
   })
 
+  it("waits for the next renewal when startup finds its own lease already lapsed", () => {
+    // The worker publishes its first renewal, then the test hook delays its ready acknowledgement
+    // past the lease duration. So the acquirer arrives to find a record that is unmistakably ITS
+    // OWN, with a live heartbeat behind it, whose lease lapsed while this thread was not scheduled.
+    //
+    // That is the shape a saturated runner produces, and giving up on it refuses a lock that is
+    // provably healthy: the worker republishes within one heartbeat interval. Waiting for that
+    // renewal is safe because an expired record is never accepted — only a fresh one is.
+    const statePath = configuration().statePath
+    const unlock = acquireSchedulerLock(statePath, {
+      timeoutMs: 2_000, leaseDurationMs: 200, heartbeatIntervalMs: 20,
+      heartbeatStartTimeoutMs: SHARED_RUNNER_HEARTBEAT_ACK_MS,
+      heartbeatStopTimeoutMs: SHARED_RUNNER_HEARTBEAT_ACK_MS,
+      heartbeatTestDelays: { startAckMs: 400, stopAckMs: 0 },
+    }) as ReturnType<typeof acquireSchedulerLock> & { assertOwned: () => void }
+    try {
+      const owner = JSON.parse(fs.readFileSync(`${statePath}.lock/owner.json`, "utf8"))
+      // Accepted only on a renewal published AFTER the delayed acknowledgement.
+      expect(owner.generation).toBeGreaterThan(2)
+      expect(owner.expiresAt).toBeGreaterThan(Date.now())
+      expect(() => unlock.assertOwned()).not.toThrow()
+    } finally { unlock() }
+    expect(fs.existsSync(`${statePath}.lock`)).toBe(false)
+  })
+
   it("waits for a bounded delayed stop acknowledgement before deleting the owned lock", () => {
     const statePath = configuration().statePath
     const unlock = acquireSchedulerLock(statePath, {
