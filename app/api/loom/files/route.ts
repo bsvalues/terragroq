@@ -2,7 +2,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 import { getSession } from "@/lib/session"
-import { isIgnoredEntry, looksBinary, resolveWorkspacePath } from "@/lib/loom/workspace"
+import { isIgnoredEntry, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   if (!session) return refuse("UNAUTHENTICATED", 401)
 
   const url = new URL(request.url)
-  const resolved = resolveWorkspacePath(PROJECT_ROOT, url.searchParams.get("path") ?? "")
+  const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, url.searchParams.get("path") ?? "", fs.realpath)
   if (!resolved.ok || !resolved.absolute) return refuse(resolved.refusal ?? "PATH_INVALID", 400)
 
   let stats
@@ -80,7 +80,7 @@ export async function PUT(request: Request) {
   }
   if (typeof body.content !== "string") return refuse("CONTENT_REQUIRED", 400)
 
-  const resolved = resolveWorkspacePath(PROJECT_ROOT, body.path)
+  const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
   if (!resolved.ok || !resolved.absolute) return refuse(resolved.refusal ?? "PATH_INVALID", 400)
 
   let current
