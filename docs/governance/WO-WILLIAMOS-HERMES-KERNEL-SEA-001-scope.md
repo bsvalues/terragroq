@@ -82,6 +82,12 @@ land, even though the kernel still holds `file` and `terminal` for reading and i
 
 **Option B**, in three phases, with a probe first.
 
+> **PHASE 0 RESULT 2026-08-17: PASS (n=1).** The premise holds — the model emitted a valid structured
+> edit, `oldText` byte-exact and occurring exactly once, and did not write when told not to. See
+> [`../reports/hermes-kernel-sea-phase0-probe-2026-08-17.md`](../reports/hermes-kernel-sea-phase0-probe-2026-08-17.md).
+> Option B is therefore viable. **n=1 is not reliability**: repeat with multi-line `oldText`, a string
+> occurring more than once, multi-edit sets, and failure cases before Phase 1.
+
 - **Phase 0 — probe (do this before committing to anything).** Can `williamos-qwen3-4b:64k` reliably
   emit a valid structured edit for a real reserved-path change? SEA's entire premise is that a small
   model that fails at free-form editing succeeds at structured JSON. **That is an assumption, not a
