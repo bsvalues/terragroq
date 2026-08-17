@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic"
  * machine that has already presented a certificate issued by the cockpit's own authority. The proof
  * happens at the transport layer; this route only converts it into the session the app already uses.
  *
- * The device header is asserted solely by the HTTPS proxy, which strips any inbound copy before
+ * The x-williamos-device-cert header is asserted solely by the proxy, which strips any inbound copy before
  * forwarding, and the app listens on loopback so nothing else can reach it. A request without that
  * header is simply not a certificate-bearing device and falls through to the ordinary path.
  */
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
   const next = url.searchParams.get("next")
   const destination = typeof next === "string" && next.startsWith("/") && !next.startsWith("//") ? next : "/"
 
-  const device = (await headers()).get("x-williamos-device")
+  const device = (await headers()).get("x-williamos-device-cert")
   if (!device) return new Response(null, { status: 303, headers: { location: "/sign-in" } })
 
   // The certificate proves a trusted DEVICE; it must still resolve to the right operator. Taking the
