@@ -53,11 +53,19 @@ export async function POST(request: Request) {
     prompt,
   ]
 
+  // An API key in the environment silently outranks the operator's signed-in subscription, so the
+  // agent bills a pay-as-you-go account instead of the plan he already pays for -- and fails with
+  // "credit balance too low" while perfectly good credentials sit unused. The cockpit runs as the
+  // operator, so it uses the operator's login.
+  const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" }
+  delete env.ANTHROPIC_API_KEY
+  delete env.ANTHROPIC_AUTH_TOKEN
+
   const child = spawn(AGENT_BIN, args, {
     cwd: PROJECT_ROOT,
     shell: false,
     windowsHide: true,
-    env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+    env,
   })
 
   // The prompt is passed as an argument, but --print still waits on stdin and then fails the turn.
