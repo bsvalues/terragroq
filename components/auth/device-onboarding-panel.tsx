@@ -60,7 +60,7 @@ export function DeviceOnboardingPanel({ origin }: { origin: string }) {
       {platform === "apple" ? (
         <div className="flex flex-wrap items-center gap-3">
           <Button asChild size="sm" variant="outline">
-            <a href="/api/device-onboarding/trust-profile" download>
+            <a href="/api/device-onboarding/trust-profile">
               Install trust profile
             </a>
           </Button>

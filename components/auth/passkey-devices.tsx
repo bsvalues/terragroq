@@ -90,7 +90,7 @@ export function PasskeyDevices({ available, unavailableReason }: { available: bo
     setError(null)
     setNotice(null)
     try {
-      const result = await authClient.passkey.addPasskey({ name: defaultLabel() })
+      const result = await authClient.passkey.addPasskey({ name: defaultLabel(), authenticatorAttachment: "platform" })
       if (result?.error) throw new Error(result.error.message ?? "This device could not be enrolled.")
       setNotice("This device can now sign you in.")
       await refresh()

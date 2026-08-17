@@ -2,6 +2,8 @@ import { passkeyResolution } from "@/lib/auth"
 import { passkeyUnavailableCopy } from "@/lib/auth-passkey"
 import { PasskeyDevices } from "@/components/auth/passkey-devices"
 import { DeviceOnboardingPanel } from "@/components/auth/device-onboarding-panel"
+import { DeviceLinkPanel } from "@/components/auth/device-link-panel"
+import { deviceLinkEntryUrl } from "@/lib/device-link"
 
 export const dynamic = "force-dynamic"
 
@@ -23,6 +25,8 @@ export default function DevicesPage() {
       </header>
 
       <PasskeyDevices available={available} unavailableReason={passkeyUnavailableCopy(passkeyResolution)} />
+
+      <DeviceLinkPanel entryUrl={deviceLinkEntryUrl(origin ?? "")} />
 
       {origin ? <DeviceOnboardingPanel origin={origin} /> : null}
     </div>
