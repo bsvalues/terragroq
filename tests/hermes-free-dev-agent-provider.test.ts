@@ -67,8 +67,23 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
     expect(v2.runtime).toBe(v1.runtime)
     expect(v2.model).toEqual(v1.model)
     expect(v2.build).toEqual(v1.build)
-    // P2b: the only containment delta is per-thread kernel state (spec §4 item 3).
-    expect(v2.containment).toEqual({ ...v1.containment, agentStatePersistence: "PER_THREAD_STATE_DIR" })
+    // Two containment deltas, both deliberate: per-thread kernel state (P2b, spec §4 item 3) and
+    // the deployed-artifact digests (P3 review condition C6). This deep-equal is what content-pins
+    // those digests in CI, so a deployed compose/config/runner change cannot land without a
+    // reviewed policy change in the same commit.
+    expect(v2.containment).toEqual({
+      ...v1.containment,
+      agentStatePersistence: "PER_THREAD_STATE_DIR",
+      deployedArtifactSha256: {
+        "compose.yaml": "ada957ab2af985aec2f117fc5757f31e326564e344f1ba2358ff37ce1b7d21be",
+        "config.yaml": "f8d55cf9c44a3352ee28627b30f8bcaf2f4555a7cdfa419dfae4e67675e454e1",
+        "run_agent.py": "8cd7619ddeb7cdbb59c14c9288da1ada4e9c0c8e3d5a6f570dc6f838105e849d",
+      },
+    })
+    // The invoker must actually enforce them, not merely carry them.
+    const invoker = fs.readFileSync("scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1", "utf8")
+    expect(invoker).toContain("HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL")
+    expect(invoker).toContain("$policy.containment.deployedArtifactSha256")
     expect(v2.deniedActions).toEqual(v1.deniedActions)
     expect(v2.execution.allowedToolsets).toEqual(v1.execution.allowedToolsets)
     expect(v2.execution.maximumTurns).toBe(v1.execution.maximumTurns)

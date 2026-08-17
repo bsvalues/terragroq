@@ -57,5 +57,21 @@ per-thread state mount (spec §4 item 3, deferred) — its own reviewed line (P2
 4. HERMES runs a flat file deployment of `main@bc373452` under `C:\HermesLab\...`; the S2 code is not
    in the running deployment yet — wiring the resident orchestrator to `WILLIAMOS_EXECUTOR=resident-model`
    is a separate deployment decision.
+> **CORRECTION 2026-08-17 (P3 review condition C7).** Finding 5 below is **stale**. Everything it
+> lists as "left on HERMES" — including the probe policy copy carrying
+> `OWNED_WORKTREE_CONFINEMENT_PROVEN: "P2-PROBE-2026-08-16-PROVISIONAL"` — was removed later the same
+> day, after this report was written. Because the removal was never recorded here, the P3 independent
+> reviewer read this section and raised the probe policy as a standing evidence-gate bypass (C7).
+> Verified absent on HERMES 2026-08-17: `Test-Path
+> 'D:\HermesServices\williamos-hermes-agent\hermes-free-dev-agent-v2.probe.policy.json'` → `False`,
+> and a listing of that directory shows only `hermes-free-dev-agent-v1.policy.json`.
+> **A report that describes a bypass which no longer exists is itself a hazard** — it sends a reviewer
+> hunting and, if believed, overstates the lane's exposure. Record cleanup in the report that claimed
+> the artifact, not only in a commit message.
+>
+> The structural point behind C7 survives and is NOT closed by this correction: the invoker accepts
+> any `-PolicyPath`, and the v2 policy is not byte-sealed, so a hand-written policy remains a possible
+> bypass on any host. That is tracked with the Q4 finding in the P3 review record.
+
 5. Left on HERMES: probe worktree/branch `p2/resident-probe` (dirty by design), probe policy copy,
    thread evidence dirs under `<runtime root>\hermes-kernel\threads\`.

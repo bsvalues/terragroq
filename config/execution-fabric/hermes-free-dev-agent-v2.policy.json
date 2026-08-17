@@ -43,7 +43,12 @@
     "hostCredentialMounts": false,
     "canonicalRepositoryMounted": false,
     "rootFilesystemReadOnly": true,
-    "agentStatePersistence": "PER_THREAD_STATE_DIR"
+    "agentStatePersistence": "PER_THREAD_STATE_DIR",
+    "deployedArtifactSha256": {
+      "compose.yaml": "ada957ab2af985aec2f117fc5757f31e326564e344f1ba2358ff37ce1b7d21be",
+      "config.yaml": "f8d55cf9c44a3352ee28627b30f8bcaf2f4555a7cdfa419dfae4e67675e454e1",
+      "run_agent.py": "8cd7619ddeb7cdbb59c14c9288da1ada4e9c0c8e3d5a6f570dc6f838105e849d"
+    }
   },
   "build": {
     "sourcePath": "D:\\HermesServices\\williamos-hermes-agent\\source-lf",

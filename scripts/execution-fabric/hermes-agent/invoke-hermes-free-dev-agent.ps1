@@ -147,6 +147,32 @@ try {
     if (@($packet.toolsets | Where-Object { $_ -isnot [string] }).Count -ne 0) { throw "HERMES_FREE_AGENT_TOOLSET_WALL" }
     if (Compare-Object @($packet.toolsets | Sort-Object) @($policy.execution.allowedToolsets | Sort-Object)) { throw "HERMES_FREE_AGENT_TOOLSET_WALL" }
     if (-not (Test-Path -LiteralPath $ComposeFile -PathType Leaf)) { throw "HERMES_FREE_AGENT_COMPOSE_WALL" }
+    if ($ownedMode) {
+        # Every remaining containment property in the policy - rootFilesystemReadOnly,
+        # dockerSocketMounted:false, hostCredentialMounts:false, publishedPorts:[], the state bind,
+        # and config.yaml's disabled skills/code-execution/memory - is true only if the DEPLOYED
+        # compose file and runner still match the reviewed copies. Until this wall existed those
+        # properties were prose: the image ID and network membership were pinned, but ComposeFile was
+        # only checked to EXIST and config.yaml / run_agent.py were not checked at all. P2b
+        # hand-edited the deployed compose.yaml and run_agent.py, and nothing would have noticed had
+        # they stayed edited. Raised by the P3 independent review (condition C6).
+        #
+        # The digests live in the policy because CI content-pins the policy
+        # (tests/hermes-free-dev-agent-provider.test.ts deep-equals containment), so changing a
+        # deployed artifact requires a reviewed policy change in the same commit. They pin the
+        # DEPLOYED bytes; they are deliberately not compared against a repo working copy, whose line
+        # endings vary by checkout platform.
+        $deployedRoot = Split-Path -Parent ([IO.Path]::GetFullPath($ComposeFile))
+        $expectedArtifacts = $policy.containment.deployedArtifactSha256
+        if ($null -eq $expectedArtifacts) { throw "HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL" }
+        foreach ($artifact in @("compose.yaml", "config.yaml", "run_agent.py")) {
+            $expectedDigest = $expectedArtifacts.$artifact
+            if ($expectedDigest -isnot [string] -or $expectedDigest -notmatch '^[a-f0-9]{64}$') { throw "HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL" }
+            $artifactPath = Join-Path $deployedRoot $artifact
+            if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) { throw "HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL" }
+            if ((Get-FileHash -LiteralPath $artifactPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedDigest) { throw "HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL" }
+        }
+    }
     $image = @(docker --config $policy.placement.dockerConfig image inspect $policy.build.image | ConvertFrom-Json)[0]
     if ($LASTEXITCODE -ne 0 -or $image.Id -ne $policy.build.imageId) { throw "HERMES_FREE_AGENT_IMAGE_ID_WALL" }
 
