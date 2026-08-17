@@ -12,7 +12,12 @@ export default async function ShellLayout({
   const session = await getSession()
   if (!session?.user) {
     // A device whose certificate TLS already verified does not get asked to log in.
-    const device = (await headers()).get("x-williamos-device")
+    //
+    // This must be the header the PROXY asserts, not the one a client sets. It briefly read
+    // "x-williamos-device" -- the device-mutation header from lib/device-auth/contract.ts, which any
+    // client can send -- so certificate devices stopped being recognised and landed on the sign-in
+    // page instead, while an ordinary client could have triggered the redirect by asking for it.
+    const device = (await headers()).get("x-williamos-device-cert")
     redirect(device ? "/api/device-cert/session?next=/" : "/sign-in")
   }
 

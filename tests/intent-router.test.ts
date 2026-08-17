@@ -78,3 +78,28 @@ describe("universal intent router", () => {
     })
   })
 })
+
+describe("the workroom and the lab are reachable by name", () => {
+  // Both surfaces shipped with no entry anywhere, so they existed only for someone who already knew
+  // the URL. Primary navigation is deliberately capped at four, so the way to reach them is the
+  // intent router -- which means the words the operator would actually type have to resolve.
+  const target = (phrase) => routeUniversalIntent(phrase)?.destination?.href ?? null
+
+  it("routes the words an operator would use for the workroom", () => {
+    for (const phrase of ["open the workroom", "show me the loom", "go to the editor"]) {
+      expect(target(phrase)).toBe("/loom")
+    }
+  })
+
+  it("routes the lab by the words used for it in practice", () => {
+    // "servers" and "machines" are what it actually gets called, far more often than "fabric".
+    for (const phrase of ["show me the servers", "open the lab", "go to the machines", "show the nodes"]) {
+      expect(target(phrase)).toBe("/fabric")
+    }
+  })
+
+  it("does not navigate without a navigation signal", () => {
+    // "the servers are slow" is a statement, not a request to go somewhere.
+    expect(target("the servers are slow")).not.toBe("/fabric")
+  })
+})

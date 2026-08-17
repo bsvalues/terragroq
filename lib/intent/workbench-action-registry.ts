@@ -26,7 +26,19 @@ const capabilityIds: Readonly<Record<string, string>> = {
   Hermes: "hermes",
   Forge: "forge",
   "Goal Console": "goal-console",
+  Workroom: "workroom",
+  Lab: "lab",
   "Raw Runtime": "raw-runtime",
+}
+
+// Words the operator would actually type for a surface, where they differ from its label. The lab
+// page in particular gets asked for as "the servers" or "the machines" far more often than by name.
+const navigationAliasesByLabel: Readonly<Record<string, readonly string[]>> = {
+  Council: ["brain council"],
+  Forge: ["agent forge"],
+  "Raw Runtime": ["runtime"],
+  Workroom: ["loom", "work room", "workspace", "editor", "terminal"],
+  Lab: ["fabric", "nodes", "machines", "servers", "the lab"],
 }
 
 const capabilities: readonly WorkbenchActionDescriptor[] = supportingCapabilities.map((capability) => ({
@@ -35,13 +47,7 @@ const capabilities: readonly WorkbenchActionDescriptor[] = supportingCapabilitie
   label: capability.label,
   href: capability.href,
   keywords: [capability.label.toLowerCase(), capability.lens],
-  navigationAliases: capability.label === "Council"
-    ? ["brain council"]
-    : capability.label === "Forge"
-      ? ["agent forge"]
-      : capability.label === "Raw Runtime"
-        ? ["runtime"]
-        : undefined,
+  navigationAliases: navigationAliasesByLabel[capability.label],
 }))
 
 export const workbenchActionRegistry: readonly WorkbenchActionDescriptor[] = [
