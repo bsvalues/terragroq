@@ -26,11 +26,11 @@ builder's claim that the open minors were fixed was false for four of the five P
 
 | # | Condition | Blocking | Status |
 |---|---|---|---|
-| C1 | Restate what promotion authorises: the runbook names this review as the activation gate, and merge review is bot-only | yes | **open** |
+| C1 | Restate what promotion authorises: the runbook names this review as the activation gate, and merge review is bot-only | yes | **closed** |
 | C2 | Correct the false PR attribution for the "fixed minors" claim | yes (record) | **closed** (below) |
 | C3 | `runTurn` does not bind the thread to the workspace, unlike `resumeThread` | yes | **closed** |
 | C4 | Owned mode does not require `-QuarantinePath`, so the marker can land in the checkout | yes | **closed** |
-| C5 | Record the T2 §4 **and §5** deviations as dated accepted deviations with a named follow-up WO | yes (record) | **open** |
+| C5 | Record the T2 §4 **and §5** deviations as dated accepted deviations with a named follow-up WO | yes (record) | **closed** |
 | C6 | Pin or verify the three deployed host files the containment claim rests on | no | **closed** |
 | C7 | Neutralise the leftover `PROVISIONAL` probe policy on HERMES | no | **closed** (partly pre-existing; structural remainder tracked) |
 | C8 | Adopt a per-thread state retention rule and state the trust-surface argument | no | **open** |
@@ -53,6 +53,33 @@ policy-directory default (`config/execution-fabric/`), so an aborted run would w
 `ACTIVE_CONTAINER=` into the version-controlled checkout — dirtying the repo and quarantining the
 lane. The kernel client always passed it; the manual/runbook path did not. Note the behavioural
 invoker test for this is host-gated (`it.runIf`), so it does not execute on a Linux runner.
+
+### C1 — closed
+The promotion packet now carries a dated amendment at the head of "What promotion would authorise"
+stating what this review actually gates: the runbook forbids starting the launcher before this review
+lands, and starting it begins autonomous cycling in which the orchestrator commits, pushes, opens
+**and merges** PRs driven by the local 4B model, under a **bot-only** merge gate
+(`reviewed: hasExactHeadReview || hasCodeRabbitReview`, `repository-lifecycle.mjs:1191`) — which the
+review-sourcing supersession classes as Tier 3, additive only, never sufficient. The amendment states
+explicitly that granting `V2_OWNED_WORKTREE_REVIEW_APPROVED` authorises **none** of the three
+activation steps, which remain separate owner decisions.
+
+### C5 — closed
+Both deviations are recorded, dated, and scoped in
+[`docs/governance/hermes-kernel-v2-doctrine-deviations-2026-08-17.md`](../governance/hermes-kernel-v2-doctrine-deviations-2026-08-17.md),
+with named follow-up work orders:
+
+- **D1 (§4, SEA)** — accepted for this lane on the WO's own reasoning (§3: in-process hooks are not
+  the boundary; `terminal` is allowed regardless, so disabling `file` would not remove free-form
+  editing). Records plainly that §4's *reliability* criterion — atomic apply, verify, rollback — is
+  **uncompensated**, not compensated, by path re-derivation. Follow-up
+  `WO-WILLIAMOS-HERMES-KERNEL-SEA-001`.
+- **D2 (§5, host mounts + non-disposable runtime)** — the live worktree and the second writable state
+  mount, neither previously written down. Accepted on the evidenced confinement and the
+  `agent`/`agent-owned` containment equivalence, with the `config.yaml` mitigation named as
+  load-bearing and now digest-pinned by C6. Records that persisted kernel state is a trust surface
+  bounded by no retention or review rule. Follow-up
+  `WO-WILLIAMOS-HERMES-KERNEL-STATE-RETENTION-001`, which also carries C8.
 
 ### C6 — closed
 The deployed `compose.yaml`, `config.yaml` and `run_agent.py` were verified against the repo copies on
