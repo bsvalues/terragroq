@@ -245,6 +245,39 @@ describe("Hermes kernel client — runTurn", () => {
       expect(fs.statSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "turns", "1", "packet.json")).mode & 0o777).toBe(0o600)
     }
   })
+  it("prunes stale kernel thread state beyond the declared retention budget", async () => {
+    // Kernel state is a trust surface: model-authored text persists in the thread state dir and
+    // re-enters the next turn's context unreviewed. Nothing pruned it before (P3 condition C8).
+    const { client, runtimeRoot, workspacePath, policyPath } = fixture()
+    patchPolicy(policyPath, (p) => { p.containment.threadStateRetention = { maxThreads: 2, maxAgeHours: 1 } })
+    const root = kernelThreadsRoot(runtimeRoot)
+    const seed = (id: string, createdAt: string) => {
+      fs.mkdirSync(path.join(root, id, "kernel-state"), { recursive: true })
+      fs.writeFileSync(path.join(root, id, "session.json"), JSON.stringify({ schemaVersion: 1, threadId: id, workspacePath, createdAt, kernelSessionId: null, turns: [] }))
+    }
+    // fixture()'s clock is fixed at 2026-08-16T20:00:00Z.
+    seed("00000000-0000-4000-8000-0000000000aa", "2026-08-16T19:59:00.000Z") // fresh, within budget
+    seed("00000000-0000-4000-8000-0000000000bb", "2026-08-10T00:00:00.000Z") // older than maxAgeHours
+    seed("00000000-0000-4000-8000-0000000000cc", "2026-08-11T00:00:00.000Z") // older than maxAgeHours
+
+    await client.connect()
+    const threadId = await client.startThread({ cwd: workspacePath })
+
+    // The new thread survives, as does the one inside both budgets; the aged ones are gone.
+    expect(fs.existsSync(path.join(root, threadId))).toBe(true)
+    expect(fs.existsSync(path.join(root, "00000000-0000-4000-8000-0000000000aa"))).toBe(true)
+    expect(fs.existsSync(path.join(root, "00000000-0000-4000-8000-0000000000bb"))).toBe(false)
+    expect(fs.existsSync(path.join(root, "00000000-0000-4000-8000-0000000000cc"))).toBe(false)
+  })
+  it("keeps working when the retention budget is absent, rather than closing the lane", async () => {
+    // Retention is housekeeping over already-contained state, not a containment control: a missing
+    // budget must not wall a run. The fallback still bounds growth.
+    const { client, policyPath, workspacePath, runtimeRoot } = fixture()
+    patchPolicy(policyPath, (p) => { delete p.containment.threadStateRetention })
+    await client.connect()
+    const threadId = await client.startThread({ cwd: workspacePath })
+    expect(fs.existsSync(path.join(kernelThreadsRoot(runtimeRoot), threadId, "session.json"))).toBe(true)
+  })
   it("refuses a turn for a thread that belongs to a different workspace", async () => {
     // resumeThread binds the thread to this workspace; runTurn did not. A thread owns the kernel
     // session id and state dir for ONE worktree, so running a turn from a client pointed at another
