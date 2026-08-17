@@ -3,6 +3,7 @@ import { spawn } from "node:child_process"
 import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL } from "@/lib/loom/providers"
 import { resolveWorkspacePath } from "@/lib/loom/workspace"
+import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/receipts"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -80,6 +81,12 @@ export async function POST(request: Request) {
       }
 
       send({ type: "started", file: resolved.relative, model })
+      void recordLoomStart({
+        userId: session.user.id,
+        kind: "edit",
+        subject: resolved.relative!,
+        metadata: { model, provider: "local", task: task.slice(0, 500) },
+      })
 
       const timer = setTimeout(() => {
         child.kill()
@@ -97,6 +104,15 @@ export async function POST(request: Request) {
         try { receipt = JSON.parse(stdout) } catch { receipt = null }
         // An unparseable receipt is reported as such: claiming success from a zero exit code while
         // the outcome is unknown is exactly how a half-applied edit gets called done.
+        // The adapter's verdict is the evidence for this change; it is recorded before the stream
+        // closes so a reader can see whether edits verified or the workspace was restored.
+        void recordLoomEvidence({ userId: session.user.id, subject: resolved.relative!, receipt: receipt as Record<string, unknown> | null })
+        void recordLoomEnd({
+          userId: session.user.id,
+          kind: "edit",
+          subject: resolved.relative!,
+          outcome: { code, model, success: (receipt as { success?: boolean } | null)?.success ?? null },
+        })
         finish({ type: "done", reason: null, code, receipt, raw: receipt === null ? stdout.slice(0, 2000) : undefined })
       })
 

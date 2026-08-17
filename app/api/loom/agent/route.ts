@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 
 import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/providers"
+import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
   const provider = resolveProvider((body as { provider?: unknown }).provider)
   if (provider.id === "local") {
     const model = typeof (body as { model?: unknown }).model === "string" ? (body as { model: string }).model : LOCAL_MODEL
-    return streamLocal(prompt, request.signal, model)
+    return streamLocal(prompt, request.signal, model, session.user.id)
   }
 
   // The id is validated rather than trusted: it reaches a command line, and only this shape can.
@@ -92,11 +93,25 @@ export async function POST(request: Request) {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        void recordLoomEnd({
+          userId: session.user.id,
+          kind: "agent",
+          subject: sessionId,
+          outcome: { provider: provider.id, external: provider.external, code: event.code ?? null, reason: event.reason ?? null },
+        })
         send(event)
         try { controller.close() } catch { /* already closed */ }
       }
 
       send({ type: "session", sessionId, resumed: resuming })
+      // An external turn is the case the doctrine cares most about: the receipt names the provider
+      // and records that work left the machine.
+      void recordLoomStart({
+        userId: session.user.id,
+        kind: "agent",
+        subject: sessionId,
+        metadata: { provider: provider.id, external: provider.external, metered: provider.metered, resumed: resuming },
+      })
 
       const timer = setTimeout(() => {
         child.kill()
@@ -145,7 +160,7 @@ export async function POST(request: Request) {
  * consumes from the cloud path -- the workroom should not care which model is talking, and the
  * operator should not have to learn two transcript formats to compare them.
  */
-async function streamLocal(prompt: string, signal: AbortSignal, model: string): Promise<Response> {
+async function streamLocal(prompt: string, signal: AbortSignal, model: string, userId: string): Promise<Response> {
   const encoder = new TextEncoder()
 
   let upstream: Response
@@ -173,6 +188,9 @@ async function streamLocal(prompt: string, signal: AbortSignal, model: string): 
         try { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)) } catch { /* reader gone */ }
       }
       send({ type: "session", sessionId: null, resumed: false, provider: "local", model })
+      // The provider doctrine requires selection to be visible AND recorded; local turns are
+      // receipted exactly like external ones so the trail shows which of the two answered.
+      void recordLoomStart({ userId, kind: "agent", subject: model, metadata: { provider: "local", external: false, metered: false } })
 
       const reader = upstream.body!.getReader()
       const decoder = new TextDecoder()
@@ -198,9 +216,12 @@ async function streamLocal(prompt: string, signal: AbortSignal, model: string): 
           }
         }
         send({ type: "event", event: { type: "assistant", message: { content: [{ type: "text", text }] } } })
+        void recordLoomEnd({ userId, kind: "agent", subject: model, outcome: { provider: "local", code: 0, characters: text.length } })
         send({ type: "done", reason: null, code: 0 })
       } catch (error) {
-        send({ type: "done", reason: String((error as Error)?.message ?? "LOCAL_STREAM_FAILED") })
+        const reason = String((error as Error)?.message ?? "LOCAL_STREAM_FAILED")
+        void recordLoomEnd({ userId, kind: "agent", subject: model, outcome: { provider: "local", reason } })
+        send({ type: "done", reason })
       } finally {
         try { controller.close() } catch { /* already closed */ }
       }
