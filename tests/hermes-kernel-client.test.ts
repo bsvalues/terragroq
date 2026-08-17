@@ -263,11 +263,17 @@ describe("Hermes kernel client — runTurn", () => {
     await client.connect()
     const threadId = await client.startThread({ cwd: workspacePath })
 
-    // The new thread survives, as does the one inside both budgets; the aged ones are gone.
-    expect(fs.existsSync(path.join(root, threadId))).toBe(true)
-    expect(fs.existsSync(path.join(root, "00000000-0000-4000-8000-0000000000aa"))).toBe(true)
-    expect(fs.existsSync(path.join(root, "00000000-0000-4000-8000-0000000000bb"))).toBe(false)
-    expect(fs.existsSync(path.join(root, "00000000-0000-4000-8000-0000000000cc"))).toBe(false)
+    // The trust surface goes; the evidence stays. Deleting the whole thread dir would leave the
+    // orchestrator's retained turnResultDigest attesting to bytes that exist nowhere (P3 W3).
+    const stateOf = (id: string) => path.join(root, id, "kernel-state")
+    const sessionOf = (id: string) => path.join(root, id, "session.json")
+    expect(fs.existsSync(stateOf(threadId))).toBe(true)
+    expect(fs.existsSync(stateOf("00000000-0000-4000-8000-0000000000aa"))).toBe(true)
+    expect(fs.existsSync(stateOf("00000000-0000-4000-8000-0000000000bb"))).toBe(false)
+    expect(fs.existsSync(stateOf("00000000-0000-4000-8000-0000000000cc"))).toBe(false)
+    for (const id of ["00000000-0000-4000-8000-0000000000bb", "00000000-0000-4000-8000-0000000000cc"]) {
+      expect(fs.existsSync(sessionOf(id))).toBe(true)
+    }
   })
   it("keeps working when the retention budget is absent, rather than closing the lane", async () => {
     // Retention is housekeeping over already-contained state, not a containment control: a missing

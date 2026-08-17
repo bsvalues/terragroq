@@ -268,9 +268,16 @@ export function createHermesKernelClient({
     const cutoff = now().getTime() - maxAgeHours * 3_600_000
     for (const [index, thread] of threads.entries()) {
       if (index < maxThreads && thread.createdAt >= cutoff) continue
+      // Remove the TRUST SURFACE, keep the EVIDENCE. Only `kernel-state/` is deleted: that is the
+      // persisted model-authored memory this rule exists to bound. `session.json` and `turns/`
+      // (packet.json, stdout.txt) stay, because the orchestrator's ledger retains only
+      // `turnResultDigest` — deleting the whole thread dir would leave those digests attesting to
+      // bytes that no longer exist anywhere, destroying the audit trail to reclaim a few MB.
+      // Raised by the P3 reviewer (W3) against my first implementation, which took the whole dir.
+      const state = path.join(thread.directory, KERNEL_STATE_DIR)
       // Belt and braces: only ever a leaf strictly inside the runtime's own threads root.
-      if (!isInside(thread.directory, threadsRoot)) continue
-      try { fs.rmSync(thread.directory, { recursive: true, force: true }) } catch { /* best-effort housekeeping */ }
+      if (!isInside(state, threadsRoot)) continue
+      try { fs.rmSync(state, { recursive: true, force: true }) } catch { /* best-effort housekeeping */ }
     }
   }
 

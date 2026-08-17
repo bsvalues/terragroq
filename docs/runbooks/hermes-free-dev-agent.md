@@ -109,8 +109,19 @@ never the thread being started, and only uuid-shaped leaves inside `<runtime roo
 threads\`. A missing or malformed budget falls back conservatively instead of walling: retention is
 housekeeping over already-contained state, not a containment control. What it does **not** do is
 decide *what may accumulate and who reviews it* — that stays with
-`WO-WILLIAMOS-HERMES-KERNEL-STATE-RETENTION-001`. Do not widen the budget to keep evidence; copy the
-thread dir out instead.
+`WO-WILLIAMOS-HERMES-KERNEL-STATE-RETENTION-001`.
+
+The prune removes **only `kernel-state/`** — the persisted model-authored memory it exists to bound —
+and keeps `session.json` and `turns/`. Deleting the whole thread dir would leave the orchestrator's
+retained `turnResultDigest` attesting to bytes that exist nowhere, destroying the audit trail to
+reclaim a few megabytes. So do **not** widen the budget to keep evidence: evidence is already kept.
+
+**Known foot-gun (W4, tracked in that WO):** the prune is age/count based and knows nothing about live
+leases. An outcome parked awaiting an owner decision for longer than `maxAgeHours` loses its
+`kernel-state/`, and the owner-decision resume path then raises
+`HERMES_OWNER_DECISION_THREAD_RECOVERY_WALL` — **terminal** — instead of falling back to a fresh
+thread the way the ordinary path does. Until that is fixed, **`maxAgeHours` must exceed the
+owner-decision SLA**; at the declared 168h that is seven days.
 
 Kernel state is per WilliamOS thread (`containment.agentStatePersistence: PER_THREAD_STATE_DIR`): the
 invoker mounts `<runtime root>\hermes-kernel\threads\<threadId>\kernel-state` as the kernel's

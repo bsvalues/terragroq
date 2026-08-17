@@ -1,3 +1,4 @@
+import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
@@ -54,6 +55,10 @@ describe("Hermes free development agent provider", () => {
     expect(script).toContain("HERMES_FREE_AGENT_QUARANTINE_WALL")
     expect(script).toContain("HERMES_FREE_AGENT_CLEANUP_WALL")
     expect(script).toContain("finally {")
+    // P3 W2: the mandatory -QuarantinePath wall in owned mode had no test at all. Without it the
+    // marker falls back to the policy directory, i.e. the version-controlled checkout.
+    expect(script).toContain("HERMES_FREE_AGENT_QUARANTINE_PATH_WALL")
+    expect(script).toContain('$ownedMode -and [string]::IsNullOrWhiteSpace($QuarantinePath)')
   })
 })
 
@@ -80,16 +85,39 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
         "compose.yaml": "ada957ab2af985aec2f117fc5757f31e326564e344f1ba2358ff37ce1b7d21be",
         "config.yaml": "f8d55cf9c44a3352ee28627b30f8bcaf2f4555a7cdfa419dfae4e67675e454e1",
         "run_agent.py": "8cd7619ddeb7cdbb59c14c9288da1ada4e9c0c8e3d5a6f570dc6f838105e849d",
+        // The proxy source is the egress mediator behind NETWORK_ISOLATION_PROVEN, so it is pinned
+        // with the topology rather than left as the one unpinned file in the deployed root.
+        "inference_proxy.py": "606947a46c8a0bf3848a3c5cb6bd9e127a6d3881d8cbb37ffc6a4de10019ebfa",
       },
     })
     // The invoker must actually enforce them, not merely carry them.
     const invoker = read("scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1")
     expect(invoker).toContain("HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL")
     expect(invoker).toContain("$policy.containment.deployedArtifactSha256")
+    // Every pinned artifact is enforced, so the policy and the wall cannot drift apart.
+    for (const artifact of Object.keys(v2.containment.deployedArtifactSha256)) {
+      expect(invoker).toContain(`"${artifact}"`)
+    }
     expect(v2.deniedActions).toEqual(v1.deniedActions)
     expect(v2.execution.allowedToolsets).toEqual(v1.execution.allowedToolsets)
     expect(v2.execution.maximumTurns).toBe(v1.execution.maximumTurns)
     expect(v2.execution.timeoutSeconds).toBe(v1.execution.timeoutSeconds)
+  })
+
+  it("pins deployed-artifact digests to reviewable repo content, not to opaque hex", () => {
+    // A pinned digest a reviewer cannot check is a number they must take on faith: a coordinated
+    // artifact+policy+test edit would pass CI unexamined. Asserting the pin equals the sha256 of the
+    // LF-normalised repo copy makes changing a deployed artifact require changing REVIEWABLE CONTENT.
+    // It also means the wall fails CLOSED if the deployed host ever stops matching the repo, instead
+    // of silently trusting a one-off attestation. Raised by the P3 reviewer as the highest-value
+    // follow-up after the grant.
+    const pinned = policyV2().containment.deployedArtifactSha256
+    expect(Object.keys(pinned).sort()).toEqual(["compose.yaml", "config.yaml", "inference_proxy.py", "run_agent.py"])
+    for (const [artifact, digest] of Object.entries(pinned)) {
+      const bytes = fs.readFileSync(path.join(repoRoot, "runtime-hermes-agent", artifact))
+      const normalised = Buffer.from(bytes.toString("utf8").replaceAll("\r\n", "\n"), "utf8")
+      expect(crypto.createHash("sha256").update(normalised).digest("hex")).toBe(digest)
+    }
   })
   it("admits only the orchestrator's owned worktrees as the run workspace", () => {
     const v2 = policyV2()
