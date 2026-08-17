@@ -1,9 +1,7 @@
 import crypto from "node:crypto"
 import fs from "node:fs/promises"
 
-import { headers } from "next/headers"
-
-import { auth, passkeyResolution } from "@/lib/auth"
+import { passkeyResolution } from "@/lib/auth"
 import { buildAppleTrustProfile } from "@/lib/device-onboarding"
 
 export const dynamic = "force-dynamic"
@@ -11,20 +9,17 @@ export const dynamic = "force-dynamic"
 /**
  * Serves the cockpit's root CA as an installable Apple configuration profile.
  *
- * Authenticated only: this is an onboarding convenience for the Primary Operator adding one of his
- * own devices, not a public trust-anchor distribution point. The payload is a *public* certificate
- * — no key material — but requiring a session keeps the surface consistent with the rest of the
- * cockpit and keeps the file off an unauthenticated URL.
+ * Deliberately unauthenticated. The payload is the *public* root certificate — no key material —
+ * and gating it created a deadlock on the device that needs it most: a phone cannot get a trusted
+ * connection until this profile is installed, and Safari will not run WebAuthn over a connection it
+ * considers insecure, so requiring a session to fetch the trust anchor made passkey enrollment on a
+ * phone impossible. A LAN-scoped cockpit serving its own public trust anchor is the same thing every
+ * captive portal does; nothing here is secret.
  *
  * The certificate path is configuration, not a guess, so a missing setting is reported plainly
  * instead of serving an empty profile that would install cleanly and trust nothing.
  */
 export async function GET() {
-  const session = await auth.api.getSession({ headers: await headers() })
-  if (!session?.user) {
-    return new Response("Sign in first.", { status: 401, headers: { "content-type": "text/plain; charset=utf-8" } })
-  }
-
   const certificatePath = process.env.WILLIAMOS_ROOT_CA_PATH
   if (!certificatePath) {
     return Response.json(
@@ -67,8 +62,11 @@ export async function GET() {
   return new Response(profile, {
     status: 200,
     headers: {
+      // No Content-Disposition on purpose. iOS only offers to INSTALL a configuration profile when
+      // it is served inline with this media type; an attachment disposition makes Safari save it to
+      // Files instead, where it silently never installs and the certificate never appears under
+      // Certificate Trust Settings.
       "content-type": "application/x-apple-aspen-config",
-      "content-disposition": 'attachment; filename="williamos-trust.mobileconfig"',
       "cache-control": "no-store",
     },
   })

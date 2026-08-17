@@ -26,11 +26,24 @@ export const auth = betterAuth({
           rpID: passkeyResolution.relyingParty.rpID,
           rpName: passkeyResolution.relyingParty.rpName,
           origin: passkeyResolution.relyingParty.origin,
+          // Ask for the authenticator built into the device in front of the operator: Windows Hello
+          // here, Face ID on the phone. Without this the browser offers its whole provider list --
+          // phone-by-QR, USB key, password managers -- and on Windows 10 the QR path cannot work at
+          // all, so the owner is left choosing between options that dead-end.
+          authenticatorSelection: {
+            authenticatorAttachment: "platform",
+            residentKey: "preferred",
+            userVerification: "preferred",
+          },
         })]
       : []),
   ],
   session: {
-    expiresIn: 60 * 60 * 24 * 7,
+    // A single-operator cockpit on the owner's own LAN should not re-interrogate him every week.
+    // The session is bound to this device's cookie jar behind an HTTPS boundary that only answers
+    // on the private network, and it rolls forward on use, so an active operator is never asked
+    // again. Ninety days is the outer bound for a device left untouched.
+    expiresIn: 60 * 60 * 24 * 90,
     updateAge: 60 * 60 * 24,
   },
   ...(process.env.NODE_ENV === "development"

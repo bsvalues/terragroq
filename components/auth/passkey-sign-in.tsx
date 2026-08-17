@@ -30,6 +30,7 @@ export function PasskeySignIn({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const autofillStarted = useRef(false)
+  const [platformAuthenticator, setPlatformAuthenticator] = useState<boolean | null>(null)
 
   // Conditional UI: if the browser has a credential for this site it can be offered inline from
   // the email field without the owner pressing anything. Unsupported browsers simply ignore it.
@@ -48,6 +49,14 @@ export function PasskeySignIn({
       }
     })()
   }, [available, router])
+
+  useEffect(() => {
+    const api = typeof window === "undefined" ? undefined : window.PublicKeyCredential
+    if (!api?.isUserVerifyingPlatformAuthenticatorAvailable) { setPlatformAuthenticator(false); return }
+    void api.isUserVerifyingPlatformAuthenticatorAvailable()
+      .then((present) => setPlatformAuthenticator(present))
+      .catch(() => setPlatformAuthenticator(false))
+  }, [])
 
   if (!available) {
     return unavailableReason ? (
@@ -79,7 +88,7 @@ export function PasskeySignIn({
     <div className="flex flex-col gap-3">
       <Button type="button" onClick={signInWithDevice} disabled={busy} className="w-full gap-2">
         <Fingerprint className="h-4 w-4" aria-hidden />
-        {busy ? "Waiting for this device…" : "Sign in with this device"}
+        {busy ? "Waiting for your device…" : platformAuthenticator === false ? "Sign in with your phone or a key" : "Sign in with this device"}
       </Button>
       {error ? (
         <p role="alert" className="text-xs text-destructive">

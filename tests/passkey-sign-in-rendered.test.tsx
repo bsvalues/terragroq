@@ -24,6 +24,10 @@ vi.mock("@/lib/auth-client", () => ({
 import { PasskeySignIn } from "@/components/auth/passkey-sign-in"
 
 beforeEach(() => {
+  // jsdom has no WebAuthn: describe a machine that DOES have a built-in authenticator by default.
+  ;(window as unknown as { PublicKeyCredential: unknown }).PublicKeyCredential = {
+    isUserVerifyingPlatformAuthenticatorAvailable: () => Promise.resolve(true),
+  }
   dependencies.push.mockReset()
   dependencies.refresh.mockReset()
   dependencies.signInPasskey.mockReset().mockResolvedValue({ error: null })
@@ -67,5 +71,16 @@ describe("passkey sign-in surface (issue #803)", () => {
   it("renders nothing at all when unavailable with no reason to give", () => {
     const { container } = render(<PasskeySignIn available={false} />)
     expect(container.textContent).toBe("")
+  })
+
+  it("does not promise a built-in unlock on a machine that has none", async () => {
+    ;(window as unknown as { PublicKeyCredential: unknown }).PublicKeyCredential = {
+      isUserVerifyingPlatformAuthenticatorAvailable: () => Promise.resolve(false),
+    }
+    render(<PasskeySignIn available={true} />)
+    // A desktop with no fingerprint reader, no camera and no Hello PIN can only use a phone or a
+    // security key, so the affordance must say that rather than offering "this device".
+    expect(await screen.findByRole("button", { name: /sign in with your phone or a key/i })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /sign in with this device/i })).toBeNull()
   })
 })
