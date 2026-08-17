@@ -3,6 +3,7 @@ import { spawn } from "node:child_process"
 
 import { getSession } from "@/lib/session"
 import { resolveLoomOperation } from "@/lib/loom/operations"
+import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 
 export const dynamic = "force-dynamic"
 // Node runtime, not edge: this streams the output of a real process on this machine.
@@ -66,11 +67,25 @@ export async function POST(request: Request) {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        // Recorded on every exit path -- timeout, output cap, cancel, crash and success alike -- so
+        // an operation cannot end without leaving a trace of how it ended.
+        void recordLoomEnd({
+          userId: session.user.id,
+          kind: "operation",
+          subject: operation.id,
+          outcome: { code: event.code ?? null, reason: event.reason ?? null, mutating: operation.mutating },
+        })
         send(event)
         try { controller.close() } catch { /* already closed */ }
       }
 
       send({ type: "started", operation: operation.id, label: operation.label, mutating: operation.mutating })
+      void recordLoomStart({
+        userId: session.user.id,
+        kind: "operation",
+        subject: operation.id,
+        metadata: { scope: operation.scope, mutating: operation.mutating },
+      })
 
       // A runaway process must not be able to fill memory or run forever unattended.
       const timer = setTimeout(() => {
