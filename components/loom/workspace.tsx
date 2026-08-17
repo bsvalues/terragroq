@@ -89,6 +89,9 @@ export function Workspace() {
   const [diff, setDiff] = useState<string>("")
   const [note, setNote] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [task, setTask] = useState("")
+  const [editing, setEditing] = useState(false)
+  const [progress, setProgress] = useState<string[]>([])
 
   useEffect(() => {
     fetch("/api/loom/files?path=", { cache: "no-store" })
@@ -154,6 +157,61 @@ export function Workspace() {
     }
   }, [open, draft, saving])
 
+  /**
+   * Ask the local model to make a change, through the structured-edit adapter.
+   *
+   * The adapter restores the file if nothing verifies, so a failed attempt is a no-op rather than a
+   * half-edited file. Afterwards the file is re-read from disk instead of trusting what was sent --
+   * the point of watching an agent work is seeing what actually happened.
+   */
+  const runLocalEdit = useCallback(async () => {
+    if (!open || editing || !task.trim()) return
+    setEditing(true)
+    setProgress([])
+    setNote(null)
+    try {
+      const response = await fetch("/api/loom/edit", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: open.path, task: task.trim() }),
+      })
+      if (!response.ok || !response.body) {
+        setNote(`could not start the local edit (${response.status})`)
+        return
+      }
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+        for (const line of lines) {
+          if (!line.trim()) continue
+          let event: Record<string, unknown>
+          try { event = JSON.parse(line) } catch { continue }
+          if (event.type === "started") setProgress((c) => [...c, `working on ${String(event.file)} with ${String(event.model)}`])
+          if (event.type === "progress" && typeof event.text === "string") setProgress((c) => [...c, event.text as string])
+          if (event.type === "done") {
+            const receipt = event.receipt as { success?: boolean; trace?: { events?: Array<Record<string, unknown>> } } | null
+            const attempts = receipt?.trace?.events?.filter((entry) => entry.event === "model_call").length ?? 0
+            setProgress((c) => [...c, receipt?.success
+              ? `applied and verified after ${attempts} attempt${attempts === 1 ? "" : "s"}`
+              : `nothing verified — the file was left unchanged${event.reason ? ` (${String(event.reason)})` : ""}`])
+          }
+        }
+      }
+      await openFile(open.path)
+      setTask("")
+    } catch (error) {
+      setNote(String(error))
+    } finally {
+      setEditing(false)
+    }
+  }, [open, editing, task, openFile])
+
   const dirty = open !== null && draft !== open.content
 
   return (
@@ -197,6 +255,34 @@ export function Workspace() {
         </div>
 
         {note ? <p className="border-b border-border px-3 py-1 text-xs text-amber-600">{note}</p> : null}
+
+        {open ? (
+          <div className="flex flex-col gap-1 border-b border-border px-3 py-2">
+            <div className="flex items-center gap-2">
+              <input
+                value={task}
+                onChange={(event) => setTask(event.target.value)}
+                onKeyDown={(event) => { if (event.key === "Enter") void runLocalEdit() }}
+                disabled={editing}
+                placeholder="Ask the local model to change this file…"
+                className="flex-1 rounded border border-border bg-background px-2 py-1 text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => void runLocalEdit()}
+                disabled={editing || !task.trim()}
+                className="rounded bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-40"
+              >
+                {editing ? "Working…" : "Local edit"}
+              </button>
+            </div>
+            {progress.length > 0 ? (
+              <p className="max-h-16 overflow-auto font-mono text-[11px] text-muted-foreground">
+                {progress[progress.length - 1]}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {view === "edit" ? (
           <div className="min-h-0 flex-1 overflow-auto">
