@@ -79,7 +79,7 @@
     "PRODUCTION_WRITE"
   ],
   "promotion": {
-    "status": "PILOT_AUTHORIZED",
+    "status": "PROMOTED",
     "requiredEvidence": [
       "IMAGE_BUILD_PROVEN",
       "LOCAL_MODEL_TOOL_CALL_PROVEN",
@@ -100,7 +100,7 @@
       "INDEPENDENT_REVIEW_APPROVED": "2026-08-13T17:05:00Z",
       "OWNED_WORKTREE_CONFINEMENT_PROVEN": "p2-b9fbca28-6fea-4898-9533-b556008ff300",
       "KERNEL_SESSION_CONTINUITY_PROVEN": "p2b-1f789bdf-4f51-45f4-aeb3-5080f60a5344",
-      "V2_OWNED_WORKTREE_REVIEW_APPROVED": null
+      "V2_OWNED_WORKTREE_REVIEW_APPROVED": "review-2026-08-17-t1-indep-opus5"
     },
     "evidenceScope": {
       "IMAGE_BUILD_PROVEN": "v1-inherited; image identity is unchanged by v2",
@@ -110,7 +110,7 @@
       "INDEPENDENT_REVIEW_APPROVED": "v1-SCOPED (2026-08-13T17:05:00Z), inherited verbatim. It PREDATES owned-worktree mode and did not examine the live-worktree mount, the per-thread state mount, or the resume path. It does NOT constitute review of v2 and is deliberately absent from promotionRequires; v2 review keys on V2_OWNED_WORKTREE_REVIEW_APPROVED",
       "OWNED_WORKTREE_CONFINEMENT_PROVEN": "v2-scoped; P2 live probe on HERMES 2026-08-16, docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md",
       "KERNEL_SESSION_CONTINUITY_PROVEN": "v2-scoped; P2b continuity probe 2026-08-16, docs/reports/hermes-kernel-p2b-session-continuity-2026-08-16.md",
-      "V2_OWNED_WORKTREE_REVIEW_APPROVED": "v2-scoped; null until an independent reviewer who did not build this lane grants it. P3 review 2026-08-17 returned APPROVE_WITH_CONDITIONS (review-2026-08-17-t1-indep-opus5), so this stays null while conditions remain open"
+      "V2_OWNED_WORKTREE_REVIEW_APPROVED": "v2-scoped; GRANTED 2026-08-17 by Tier 1 sovereign independent review review-2026-08-17-t1-indep-opus5, performed in a separate isolated reviewer context that did not build this lane. Verdict APPROVE_WITH_CONDITIONS, all nine conditions then closed and closure independently re-verified (CONDITIONS_CLOSED). Record: docs/reports/hermes-kernel-p3-independent-review-2026-08-17.md. This grants PROMOTION ONLY. It authorises NO activation: control/activation, DATABASE_URL and running the launcher remain three separate owner decisions, and this line must never be cited as having given them"
     }
   }
 }

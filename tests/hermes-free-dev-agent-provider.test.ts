@@ -109,13 +109,23 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
     expect(v2.execution.sessionResumeProven).toBe(true)
     expect(v2.containment.agentStatePersistence).toBe("PER_THREAD_STATE_DIR")
   })
-  it("stays pilot-authorised pending independent review of the v2 mode", () => {
+  it("is promoted on a recorded independent review of the v2 mode", () => {
     const v2 = policyV2()
-    expect(v2.promotion.status).toBe("PILOT_AUTHORIZED")
+    expect(v2.promotion.status).toBe("PROMOTED")
     expect(v2.promotion.requiredEvidence).toEqual([...policy().promotion.requiredEvidence, "OWNED_WORKTREE_CONFINEMENT_PROVEN", "KERNEL_SESSION_CONTINUITY_PROVEN"])
     // P2 (2026-08-16) proved owned-worktree confinement on HERMES; the value is the completed
     // probe turn id and is documented in docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md.
-    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: "p2-b9fbca28-6fea-4898-9533-b556008ff300", KERNEL_SESSION_CONTINUITY_PROVEN: "p2b-1f789bdf-4f51-45f4-aeb3-5080f60a5344", V2_OWNED_WORKTREE_REVIEW_APPROVED: null })
+    // V2_OWNED_WORKTREE_REVIEW_APPROVED granted 2026-08-17 by the Tier 1 independent review. This
+    // deep-equal is RE-PINNED to the granted value rather than deleted: it is the only non-circular
+    // leg of the evidence machinery (both runtime enforcement points read the same operator-controlled
+    // policy), so removing it to make the suite green would remove the anti-self-certification control.
+    expect(v2.promotion.satisfiedEvidence).toEqual({ ...policy().promotion.satisfiedEvidence, OWNED_WORKTREE_CONFINEMENT_PROVEN: "p2-b9fbca28-6fea-4898-9533-b556008ff300", KERNEL_SESSION_CONTINUITY_PROVEN: "p2b-1f789bdf-4f51-45f4-aeb3-5080f60a5344", V2_OWNED_WORKTREE_REVIEW_APPROVED: "review-2026-08-17-t1-indep-opus5" })
+    expect(read("docs/reports/hermes-kernel-p3-independent-review-2026-08-17.md")).toContain("review-2026-08-17-t1-indep-opus5")
+    // W5: the scope annotation is pinned too, so it cannot go stale or be deleted silently.
+    expect(Object.keys(v2.promotion.evidenceScope).sort()).toEqual(Object.keys(v2.promotion.satisfiedEvidence).sort())
+    expect(v2.promotion.evidenceScope.INDEPENDENT_REVIEW_APPROVED).toContain("v1-SCOPED")
+    expect(v2.promotion.evidenceScope.V2_OWNED_WORKTREE_REVIEW_APPROVED).toContain("GRANTED 2026-08-17")
+    expect(v2.promotion.evidenceScope.V2_OWNED_WORKTREE_REVIEW_APPROVED).toContain("authorises NO activation")
     expect(read("docs/reports/hermes-kernel-p2-resident-model-probe-2026-08-16.md")).toContain("b9fbca28-6fea-4898-9533-b556008ff300")
     expect(read("docs/reports/hermes-kernel-p2b-session-continuity-2026-08-16.md")).toContain("1f789bdf-4f51-45f4-aeb3-5080f60a5344")
   })
@@ -156,12 +166,19 @@ describe("Hermes free development agent provider — P2b per-thread kernel state
 })
 
 describe("Hermes free development agent provider — P3 promotion gate", () => {
-  it("declares what promotion requires and has not claimed it", () => {
+  it("claims promotion only with its declared review line satisfied", () => {
     const v2 = policyV2()
     expect(v2.promotion.promotionRequires).toEqual(["V2_OWNED_WORKTREE_REVIEW_APPROVED"])
-    // Unproven by design: this project built the v2 mode, so it cannot review it.
-    expect(v2.promotion.satisfiedEvidence.V2_OWNED_WORKTREE_REVIEW_APPROVED).toBeNull()
-    expect(v2.promotion.status).toBe("PILOT_AUTHORIZED")
+    // Granted 2026-08-17 by an independent reviewer that did not build this lane. The gate is what
+    // matters, not the word: PROMOTED is only legitimate while every promotionRequires line is
+    // satisfied, and both enforcement points refuse the lane otherwise.
+    expect(v2.promotion.status).toBe("PROMOTED")
+    for (const key of v2.promotion.promotionRequires) {
+      const value = v2.promotion.satisfiedEvidence[key]
+      expect(typeof value === "string" && value.trim().length > 0).toBe(true)
+    }
+    expect(read("scripts/hermes-bridge/hermes-kernel-client.mjs")).toContain("RESIDENT_MODEL_LANE_PROMOTION_UNPROVEN")
+    expect(read("scripts/execution-fabric/hermes-agent/invoke-hermes-free-dev-agent.ps1")).toContain("HERMES_FREE_AGENT_PROMOTION_EVIDENCE_WALL")
   })
   it("does not let v1's independent review stand in for the v2 mode", () => {
     const v2 = policyV2()
