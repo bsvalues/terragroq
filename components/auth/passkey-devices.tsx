@@ -43,6 +43,11 @@ function defaultLabel(): string {
  */
 export function PasskeyDevices({ available, unavailableReason }: { available: boolean; unavailableReason?: string | null }) {
   const [devices, setDevices] = useState<Passkey[] | null>(null)
+  // Whether THIS computer has a built-in authenticator (Windows Hello, Touch ID). A desktop with
+  // no fingerprint reader, no camera and no Hello PIN has none, and the browser will then only
+  // offer a phone, a security key, or a password manager. Saying "use Windows Hello" on such a
+  // machine is a lie the owner discovers halfway through a prompt, so ask the browser instead.
+  const [platformAuthenticator, setPlatformAuthenticator] = useState<boolean | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -60,6 +65,14 @@ export function PasskeyDevices({ available, unavailableReason }: { available: bo
   useEffect(() => {
     if (available) void refresh()
   }, [available, refresh])
+
+  useEffect(() => {
+    const api = typeof window === "undefined" ? undefined : window.PublicKeyCredential
+    if (!api?.isUserVerifyingPlatformAuthenticatorAvailable) { setPlatformAuthenticator(false); return }
+    void api.isUserVerifyingPlatformAuthenticatorAvailable()
+      .then((present) => setPlatformAuthenticator(present))
+      .catch(() => setPlatformAuthenticator(false))
+  }, [])
 
   if (!available) {
     return (
@@ -112,7 +125,9 @@ export function PasskeyDevices({ available, unavailableReason }: { available: bo
           Add this device
         </Button>
         <p className="text-xs text-muted-foreground">
-          Uses Windows Hello, Touch ID or Face ID. Nothing secret leaves the device.
+          {platformAuthenticator === false
+            ? "This computer has no built-in authenticator, so choose the phone option in the prompt and scan the code with your phone. Nothing secret leaves either device."
+            : "Uses this computer's built-in unlock, or choose the phone option to scan with your phone. Nothing secret leaves the device."}
         </p>
       </div>
 
