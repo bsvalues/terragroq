@@ -11,7 +11,27 @@ import { bindRemoteDevPacket } from "../scripts/execution-fabric/live/remote-dev
 const root = process.cwd()
 const worker = path.join(root, "scripts/execution-fabric/live/aegis-remote-dev-worker.sh")
 const policy = JSON.parse(fs.readFileSync(path.join(root, "config/execution-fabric/remote-dev-offload-v1.policy.json"), "utf8"))
-const bash = "C:\\Program Files\\Git\\bin\\bash.exe"
+// The worker under test is a POSIX shell script, so this suite needs a real bash and POSIX-shaped
+// paths. On Linux both are native. On Windows the only bash that can run it is Git's, and MSYS
+// needs `C:\x\y` rewritten as `/c/x/y`. Both are discovered rather than hardcoded to one machine's
+// layout — the hardcoded Program Files path is what kept this file out of the CI profile.
+const isWindows = process.platform === "win32"
+
+function resolveBash(): string {
+  if (!isWindows) return "/bin/bash"
+  // Git for Windows always ships bash beside the git it installed, whatever the install root:
+  // <root>/cmd/git.exe → <root>/bin/bash.exe. Fall back to the default location.
+  const gitPath = spawnSync("where", ["git"], { encoding: "utf8" }).stdout?.split(/\r?\n/).find(Boolean)?.trim()
+  const candidates = [
+    ...(gitPath ? [path.join(path.dirname(path.dirname(gitPath)), "bin", "bash.exe")] : []),
+    "C:\\Program Files\\Git\\bin\\bash.exe",
+  ]
+  const found = candidates.find((candidate) => fs.existsSync(candidate))
+  if (!found) throw new Error(`Git Bash is required to run ${path.basename(worker)} on Windows; looked in ${candidates.join(", ")}`)
+  return found
+}
+
+const bash = resolveBash()
 const bashUid = execFileSync(bash, ["-lc", "id -u"], { encoding: "utf8" }).trim()
 const tempRoots: string[] = []
 const reservedPaths = [
@@ -22,7 +42,11 @@ const reservedPaths = [
 ]
 const operations = ["PROVE_PREFLIGHT", "CREATE_WORKSPACE", "APPLY_RESERVED_PATCH", "RESTORE_DOTNET", "TEST_WORKFLOW_CONTRACT", "TEST_DOTNET_INFORMATIONAL", "BUILD_DOTNET_RELEASE", "COMMIT_RESERVED_PATHS", "PUSH_AUTHORIZED_BRANCH", "PROVE_POST_MERGE", "CLEAN_EXACT_WORKSPACE"]
 const launchTicketId = "34d1f58a-5c15-4e62-845f-f54f73829e2f"
-const toPosix = (value: string) => `/${value[0].toLowerCase()}${value.slice(2).replaceAll("\\", "/")}`
+// `C:\x\y` → `/c/x/y` for MSYS; already POSIX everywhere else.
+const toPosix = (value: string) => (isWindows ? `/${value[0].toLowerCase()}${value.slice(2).replaceAll("\\", "/")}` : value)
+// bash resolves `node` from PATH, and on Windows the Node directory is not on the MSYS PATH by
+// default. Take it from the interpreter actually running this suite instead of a fixed install dir.
+const nodeDirectory = toPosix(path.dirname(process.execPath))
 const sha256 = (value: Buffer | string) => crypto.createHash("sha256").update(value).digest("hex")
 const encode = (value: Buffer | string) => Buffer.from(value).toString("base64")
 
@@ -254,7 +278,7 @@ function runWorker(operation: string, value: ReturnType<typeof fixture>, options
   const patch = options.patch ?? value.patch
   const result = spawnSync(bash, [worker, operation, encode(JSON.stringify(packet)), encode(patch), String(options.attempt ?? 1), options.previous ?? "null", launchTicketId], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${toPosix(value.fakeBin)}:${toPosix("C:\\Program Files\\nodejs")}:${process.env.PATH}`, REMOTE_DEV_WORKER_ROOT: toPosix(value.hostRoot), REMOTE_DEV_PROCESS_TIMEOUT_SECONDS: "2", WILLIAMOS_NETWORK_OPERATION: operation, WILLIAMOS_NETWORK_PACKET_B64: encode(JSON.stringify(packet)), WILLIAMOS_NETWORK_TICKET_B64: encode("test-ticket"), ...options.env },
+    env: { ...process.env, PATH: `${toPosix(value.fakeBin)}:${nodeDirectory}:${process.env.PATH}`, REMOTE_DEV_WORKER_ROOT: toPosix(value.hostRoot), REMOTE_DEV_PROCESS_TIMEOUT_SECONDS: "2", WILLIAMOS_NETWORK_OPERATION: operation, WILLIAMOS_NETWORK_PACKET_B64: encode(JSON.stringify(packet)), WILLIAMOS_NETWORK_TICKET_B64: encode("test-ticket"), ...options.env },
     timeout: 40_000,
   })
   const lines = result.stdout.trim().split(/\r?\n/).filter(Boolean)

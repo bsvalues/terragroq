@@ -17,11 +17,7 @@ export const CI_EXCLUDED_TEST_FILES: ReadonlyArray<{ file: string; reason: strin
     file: "tests/lab-dev-preflight.test.ts",
     reason: "probes the real lab hosts (HERMES/ATLAS ports, remote git identity)",
   },
-  // ---- Windows-only by construction (hardcode git-bash / csc.exe paths); portability follow-up --
-  {
-    file: "tests/execution-fabric-remote-dev-offload-worker.test.ts",
-    reason: "hardcodes C:/Program Files/Git/bin/bash.exe and Windows uid semantics; ENOENT on Linux runners",
-  },
+  // ---- Windows-only by construction (hardcode csc.exe paths); portability follow-up ------------
   {
     file: "tests/execution-fabric-remote-dev-offload-controller.test.ts",
     reason: "compiles a fake ssh.exe with C:/Windows/Microsoft.NET/.../csc.exe; Windows-only",
