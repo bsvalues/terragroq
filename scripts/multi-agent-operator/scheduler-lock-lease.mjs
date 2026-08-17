@@ -154,19 +154,29 @@ function confirmedHeartbeatOwner(ownerPath, owner, heartbeat) {
   const deadline = Date.now() + heartbeat.confirmationTimeoutMs
   for (;;) {
     if (Atomics.load(heartbeat.control, 4) !== 0) return null
+    let generation = Atomics.load(heartbeat.control, 2)
     try {
       const current = readOwner(ownerPath).owner
-      const generation = Atomics.load(heartbeat.control, 2)
-      if (validOwner(current, owner.statePath) && current.nonce === owner.nonce
-        && current.generation === generation && current.expiresAt > Date.now()) {
+      generation = Atomics.load(heartbeat.control, 2)
+      const ours = validOwner(current, owner.statePath) && current.nonce === owner.nonce
+      if (ours && current.generation === generation && current.expiresAt > Date.now()) {
         return current
       }
-      const renewalPublicationInProgress = validOwner(current, owner.statePath)
-        && current.nonce === owner.nonce && current.generation === generation + 1
-      if (!renewalPublicationInProgress) return null
+      // Ours, but not yet acceptable. Two benign shapes: the renewal is mid-publication (the file is
+      // one generation ahead of the control word), or the lease lapsed while this thread was not
+      // scheduled. Neither means the heartbeat is dead — a live worker republishes within one
+      // interval — so wait for that renewal instead of refusing a lock that is provably ours.
+      // An expired record is still never ACCEPTED; only a fresh one is. Anything not ours, or a
+      // worker that set the error flag, remains an immediate failure.
+      const republishing = ours
+        && (current.generation === generation + 1 || current.expiresAt <= Date.now())
+      if (!republishing) return null
     } catch { /* retry a bounded atomic-replace visibility race */ }
-    if (Date.now() >= deadline) return null
-    Atomics.wait(WAIT, 0, 0, 1)
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) return null
+    // Wake on the heartbeat's next renewal (it notifies this index after each store) rather than
+    // polling. Returns immediately if the generation already moved.
+    Atomics.wait(heartbeat.control, 2, generation, remaining)
   }
 }
 
