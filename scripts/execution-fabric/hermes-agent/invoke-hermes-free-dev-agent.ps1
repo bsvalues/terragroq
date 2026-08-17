@@ -165,7 +165,11 @@ try {
         $deployedRoot = Split-Path -Parent ([IO.Path]::GetFullPath($ComposeFile))
         $expectedArtifacts = $policy.containment.deployedArtifactSha256
         if ($null -eq $expectedArtifacts) { throw "HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL" }
-        foreach ($artifact in @("compose.yaml", "config.yaml", "run_agent.py")) {
+        # inference_proxy.py is in this set because it IS the egress mediator: compose mounts it into
+        # the proxy, the proxy is the agent's only network peer, and NETWORK_ISOLATION_PROVEN /
+        # onlyNetworkPeer rest on what it allows. Pinning the compose file while leaving the proxy
+        # source unpinned would pin the topology and not the policy it enforces.
+        foreach ($artifact in @("compose.yaml", "config.yaml", "run_agent.py", "inference_proxy.py")) {
             $expectedDigest = $expectedArtifacts.$artifact
             if ($expectedDigest -isnot [string] -or $expectedDigest -notmatch '^[a-f0-9]{64}$') { throw "HERMES_FREE_AGENT_DEPLOYED_ARTIFACT_WALL" }
             $artifactPath = Join-Path $deployedRoot $artifact
