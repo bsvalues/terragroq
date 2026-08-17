@@ -48,5 +48,9 @@ export function resolveProvider(id: unknown): LoomProvider {
   return match ?? LOOM_PROVIDERS.find((provider) => provider.id === DEFAULT_PROVIDER)!
 }
 
-export const LOCAL_MODEL = process.env.WILLIAMOS_LOCAL_MODEL ?? "williamos-qwen3-4b:64k"
+// A coding-tuned 7B is the default because it was measured to be the smallest installed model that
+// is actually dependable here: it produced a correct, verified edit on its first attempt, where the
+// 4B failed all three attempts on the same task. It also fits the 6GB card, so it runs on the GPU
+// rather than spilling to CPU.
+export const LOCAL_MODEL = process.env.WILLIAMOS_LOCAL_MODEL ?? "qwen2.5-coder:7b"
 export const LOCAL_ENDPOINT = process.env.WILLIAMOS_LOCAL_ENDPOINT ?? "http://127.0.0.1:11434"
