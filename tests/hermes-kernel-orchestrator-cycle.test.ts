@@ -345,172 +345,119 @@ const kernelJson = JSON.stringify({
   blockedAction: null, authorityBoundary: null, minimumChoice: null, approveConsequence: null, denyConsequence: null,
 })
 
+/**
+ * One kernel-lane scenario: policy v2 next to a fake invoker, the orchestrator's owned worktree as
+ * the workspace, and a lifecycle whose only difference from the continuity test is that
+ * `ensureOwnedWorktree` hands back that workspace. The cases below differ solely in what the fake
+ * invoker prints, so that is the only parameter — anything else diverging between them would be an
+ * accident rather than a fixture.
+ */
+function kernelScenario(printTurn: (runId: string, workspacePath: string) => string) {
+  const root = runtimeRoot()
+  const clock = Date.parse("2026-08-16T20:00:00.000Z"); const now = () => new Date(clock)
+  const ledger = new PersistedRuntimeLedger(now)
+  const projectCheckpoint = (input: Record<string, unknown>) => (projectOutcomeRuntimeCheckpoint as any)({ ...input, query: ledger.query })
+  const projectLease = (input: Record<string, unknown>) => (projectOutcomeRuntimeLease as any)({ ...input, query: ledger.query })
+  const worktreesRoot = path.join(root, "worktrees")
+  const workspacePath = path.join(worktreesRoot, "wos-v1-1-continuity-recovery")
+  fs.mkdirSync(workspacePath, { recursive: true })
+  const policyDir = path.join(root, "policy"); fs.mkdirSync(policyDir)
+  const policyPath = path.join(policyDir, "hermes-free-dev-agent-v2.policy.json")
+  fs.writeFileSync(policyPath, JSON.stringify({
+    schemaVersion: 2, packetSchemaVersion: 3, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001",
+    model: { id: "williamos-qwen3-4b:64k" },
+    containment: { agentStatePersistence: "PER_THREAD_STATE_DIR" },
+    placement: { workspaceMode: "OWNED_WORKTREE", allowedWorkspaceRoots: [worktreesRoot] },
+    execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"], promptMaxChars: 60000, sessionResumeProven: false, timeoutSeconds: 1800 },
+    promotion: { status: "PILOT_AUTHORIZED", requiredEvidence: ["OWNED_WORKTREE_CONFINEMENT_PROVEN"], satisfiedEvidence: { OWNED_WORKTREE_CONFINEMENT_PROVEN: "bootstrap-owned-1" } },
+  }))
+  const invokerPath = path.join(root, "invoke.ps1"); fs.writeFileSync(invokerPath, "# fake")
+  const invocations: string[][] = []
+  const commandRunner = vi.fn(async ({ command, args }: { command: string; args: string[] }) => {
+    // The client probes `git rev-parse --git-common-dir` either side of the invoker.
+    if (command === "git") return { code: 0, stderr: "", stdout: `${path.join(workspacePath, ".git")}\n` }
+    invocations.push(args)
+    return { code: 0, stderr: "", stdout: printTurn(args[args.indexOf("-RunId") + 1], workspacePath) }
+  })
+  let merged = false
+  const lifecycle = {
+    refreshOriginMain: vi.fn(async () => "a".repeat(40)),
+    ensureOwnedWorktree: vi.fn(async ({ branch }: { branch: string }) => ({ branch, worktreePath: workspacePath })),
+    discoverPullRequest: vi.fn(async () => null),
+    inspectPullRequest: vi.fn(async () => ({
+      state: merged ? "MERGED" : "OPEN",
+      baseRefName: "main",
+      isDraft: false,
+      checksGreen: true,
+      checksComplete: true,
+      failedChecks: [],
+      reviewed: true,
+      reviewCompleted: true,
+      reviewRequested: true,
+      codexReviewFindings: [],
+      unresolvedThreadCount: 0,
+      headRefOid: commit,
+      mergeCommit: merged ? { oid: mergeSha } : null,
+    })),
+    inspectChangedPaths: vi.fn(async () => changedPaths),
+    inspectWorkingTreePaths: vi.fn(async () => changedPaths),
+    inspectWorktreeHead: vi.fn(async () => commit),
+    ensureValidationDependencies: vi.fn(() => ({ linked: true })),
+    removeValidationDependencies: vi.fn(() => ({ removed: true })),
+    runValidationCommands: vi.fn(async ({ commands }: { commands: Array<{ command: string; args: string[] }> }) =>
+      commands.map(({ command, args }) => ({ command, args, code: 0 }))),
+    commitChanges: vi.fn(async () => ({
+      commit,
+      branch: "codex/wos-v1-1-continuity-recovery",
+      paths: changedPaths,
+    })),
+    pushBranch: vi.fn(async () => ({ pushed: true })),
+    createPullRequest: vi.fn(async () => ({
+      number: prNumber,
+      url: `https://github.com/bsvalues/terragroq/pull/${prNumber}`,
+    })),
+    requestCodexReview: vi.fn(async () => ({ requested: true })),
+    inspectReviewFindings: vi.fn(async () => []),
+    resolveReviewThreads: vi.fn(async () => ({ resolved: 0 })),
+    inspectPullRequestFiles: vi.fn(async () => changedPaths),
+    mergePullRequest: vi.fn(async () => {
+      merged = true
+      return { merged: true }
+    }),
+    verifyOriginMainContains: vi.fn(async () => true),
+    cleanupOwnedWorktree: vi.fn(async () => ({ cleaned: true })),
+  } as any
+  const markComplete = vi.fn(async () => true)
+  const stateStore = () => createHermesStateStore(path.join(root, "state", "state.json"), { now: () => clock })
+  const orchestrator = createHermesOrchestrator({
+    workspace: process.cwd(), runtimeRoot: root, state: stateStore(),
+    lifecycle, selectOutcome: vi.fn(async () => outcome()), markComplete, markTerminal: vi.fn(async () => true), deferOutcome: vi.fn(async () => true),
+    projectCheckpoint, projectLease,
+    clientFactory: (worktreePath: string) => createHermesKernelClient({ workspacePath: worktreePath, runtimeRoot: root, commandRunner, policyPath, invokerPath, now, powershellCommand: "powershell" }),
+    holderId: "resident-kernel", now, sleep: async () => {}, leaseRenewalIntervalMs: 60 * 60 * 1000,
+  })
+  return { orchestrator, lifecycle, markComplete, invocations, stateStore }
+}
+
+const completionLine = (runId: string, workspacePath: string) =>
+  `HERMES_FREE_AGENT_COMPLETE runId=${runId} workspace=${workspacePath}\n`
+
 describe("Hermes orchestrator over the resident-model kernel client", () => {
   it("completes one fenced delivery when the kernel lane returns the turn JSON", async () => {
-    const root = runtimeRoot()
-    let clock = Date.parse("2026-08-16T20:00:00.000Z"); const now = () => new Date(clock)
-    const ledger = new PersistedRuntimeLedger(now)
-    const projectCheckpoint = (input: Record<string, unknown>) => (projectOutcomeRuntimeCheckpoint as any)({ ...input, query: ledger.query })
-    const projectLease = (input: Record<string, unknown>) => (projectOutcomeRuntimeLease as any)({ ...input, query: ledger.query })
-    // kernel lane fixture: policy v2 next to a fake invoker; workspace = the orchestrator's owned worktree
-    const worktreesRoot = path.join(root, "worktrees"); const workspacePath = path.join(worktreesRoot, "wos-v1-1-continuity-recovery"); fs.mkdirSync(workspacePath, { recursive: true })
-    const policyDir = path.join(root, "policy"); fs.mkdirSync(policyDir)
-    const policyPath = path.join(policyDir, "hermes-free-dev-agent-v2.policy.json")
-    fs.writeFileSync(policyPath, JSON.stringify({ schemaVersion: 2, packetSchemaVersion: 3, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: { id: "williamos-qwen3-4b:64k" }, containment: { agentStatePersistence: "PER_THREAD_STATE_DIR" }, placement: { workspaceMode: "OWNED_WORKTREE", allowedWorkspaceRoots: [worktreesRoot] }, execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"], promptMaxChars: 60000, sessionResumeProven: false, timeoutSeconds: 1800 }, promotion: { status: "PILOT_AUTHORIZED", requiredEvidence: ["OWNED_WORKTREE_CONFINEMENT_PROVEN"], satisfiedEvidence: { OWNED_WORKTREE_CONFINEMENT_PROVEN: "bootstrap-owned-1" } } }))
-    fs.writeFileSync(path.join(root, "invoke.ps1"), "# fake")
-    const invocations: string[][] = []
-    const commandRunner = vi.fn(async ({ command, args }: { command: string; args: string[] }) => {
-      // The client probes `git rev-parse --git-common-dir` either side of the invoker.
-      if (command === "git") return { code: 0, stderr: "", stdout: `${path.join(workspacePath, ".git")}\n` }
-      invocations.push(args)
-      const runId = args[args.indexOf("-RunId") + 1]
-      return { code: 0, stderr: "", stdout: `working\n\`\`\`json\n${kernelJson}\n\`\`\`\nHERMES_FREE_AGENT_COMPLETE runId=${runId} workspace=${workspacePath}\n` }
-    })
-    let merged = false
-    // lifecycle: same as the continuity test but ensureOwnedWorktree returns the kernel workspace
-    const lifecycle = {
-      refreshOriginMain: vi.fn(async () => "a".repeat(40)),
-      ensureOwnedWorktree: vi.fn(async ({ branch }: { branch: string }) => ({
-        branch,
-        worktreePath: workspacePath,
-      })),
-      discoverPullRequest: vi.fn(async () => null),
-      inspectPullRequest: vi.fn(async () => ({
-        state: merged ? "MERGED" : "OPEN",
-        baseRefName: "main",
-        isDraft: false,
-        checksGreen: true,
-        checksComplete: true,
-        failedChecks: [],
-        reviewed: true,
-        reviewCompleted: true,
-        reviewRequested: true,
-        codexReviewFindings: [],
-        unresolvedThreadCount: 0,
-        headRefOid: commit,
-        mergeCommit: merged ? { oid: mergeSha } : null,
-      })),
-      inspectChangedPaths: vi.fn(async () => changedPaths),
-      inspectWorkingTreePaths: vi.fn(async () => changedPaths),
-      inspectWorktreeHead: vi.fn(async () => commit),
-      ensureValidationDependencies: vi.fn(() => ({ linked: true })),
-      removeValidationDependencies: vi.fn(() => ({ removed: true })),
-      runValidationCommands: vi.fn(async ({ commands }: { commands: Array<{ command: string; args: string[] }> }) =>
-        commands.map(({ command, args }) => ({ command, args, code: 0 }))),
-      commitChanges: vi.fn(async () => ({
-        commit,
-        branch: "codex/wos-v1-1-continuity-recovery",
-        paths: changedPaths,
-      })),
-      pushBranch: vi.fn(async () => ({ pushed: true })),
-      createPullRequest: vi.fn(async () => ({
-        number: prNumber,
-        url: `https://github.com/bsvalues/terragroq/pull/${prNumber}`,
-      })),
-      requestCodexReview: vi.fn(async () => ({ requested: true })),
-      inspectReviewFindings: vi.fn(async () => []),
-      resolveReviewThreads: vi.fn(async () => ({ resolved: 0 })),
-      inspectPullRequestFiles: vi.fn(async () => changedPaths),
-      mergePullRequest: vi.fn(async () => {
-        merged = true
-        return { merged: true }
-      }),
-      verifyOriginMainContains: vi.fn(async () => true),
-      cleanupOwnedWorktree: vi.fn(async () => ({ cleaned: true })),
-    } as any
-    const markComplete = vi.fn(async () => true)
-    const orchestrator = createHermesOrchestrator({
-      workspace: process.cwd(), runtimeRoot: root, state: createHermesStateStore(path.join(root, "state", "state.json"), { now: () => clock }),
-      lifecycle, selectOutcome: vi.fn(async () => outcome()), markComplete, markTerminal: vi.fn(async () => true), deferOutcome: vi.fn(async () => true),
-      projectCheckpoint, projectLease,
-      clientFactory: (worktreePath: string) => createHermesKernelClient({ workspacePath: worktreePath, runtimeRoot: root, commandRunner, policyPath, invokerPath: path.join(root, "invoke.ps1"), now, powershellCommand: "powershell" }),
-      holderId: "resident-kernel", now, sleep: async () => {}, leaseRenewalIntervalMs: 60 * 60 * 1000,
-    })
+    const { orchestrator, lifecycle, markComplete, invocations, stateStore } = kernelScenario(
+      (runId, workspacePath) => `working\n\`\`\`json\n${kernelJson}\n\`\`\`\n${completionLine(runId, workspacePath)}`,
+    )
     await expect(orchestrator.cycle()).resolves.toEqual({ result: "COMPLETE", outcomeId: String(outcomeId), prNumber, mergeSha, changedPaths })
     expect(invocations).toHaveLength(1)
     expect(invocations[0]).toContain("-WorkspacePath")
     expect(lifecycle.createPullRequest).toHaveBeenCalledOnce()
     expect(markComplete).toHaveBeenCalledOnce()
-    const completed = orchestrator && (createHermesStateStore(path.join(root, "state", "state.json"), { now: () => clock }).read().executions[String(outcomeId)])
-    expect(completed).toMatchObject({ checkpoint: { state: "COMPLETE" } })
+    expect(stateStore().read().executions[String(outcomeId)]).toMatchObject({ checkpoint: { state: "COMPLETE" } })
   })
 
   it("rejects with APP_SERVER_TURN_FAILED when the kernel lane never fences a JSON block", async () => {
-    const root = runtimeRoot()
-    let clock = Date.parse("2026-08-16T20:00:00.000Z"); const now = () => new Date(clock)
-    const ledger = new PersistedRuntimeLedger(now)
-    const projectCheckpoint = (input: Record<string, unknown>) => (projectOutcomeRuntimeCheckpoint as any)({ ...input, query: ledger.query })
-    const projectLease = (input: Record<string, unknown>) => (projectOutcomeRuntimeLease as any)({ ...input, query: ledger.query })
-    const worktreesRoot = path.join(root, "worktrees"); const workspacePath = path.join(worktreesRoot, "wos-v1-1-continuity-recovery"); fs.mkdirSync(workspacePath, { recursive: true })
-    const policyDir = path.join(root, "policy"); fs.mkdirSync(policyDir)
-    const policyPath = path.join(policyDir, "hermes-free-dev-agent-v2.policy.json")
-    fs.writeFileSync(policyPath, JSON.stringify({ schemaVersion: 2, packetSchemaVersion: 3, workOrderId: "WO-HERMES-FREE-DEV-AGENT-001", model: { id: "williamos-qwen3-4b:64k" }, containment: { agentStatePersistence: "PER_THREAD_STATE_DIR" }, placement: { workspaceMode: "OWNED_WORKTREE", allowedWorkspaceRoots: [worktreesRoot] }, execution: { maximumTurns: 20, allowedToolsets: ["file", "terminal"], promptMaxChars: 60000, sessionResumeProven: false, timeoutSeconds: 1800 }, promotion: { status: "PILOT_AUTHORIZED", requiredEvidence: ["OWNED_WORKTREE_CONFINEMENT_PROVEN"], satisfiedEvidence: { OWNED_WORKTREE_CONFINEMENT_PROVEN: "bootstrap-owned-1" } } }))
-    fs.writeFileSync(path.join(root, "invoke.ps1"), "# fake")
-    const commandRunner = vi.fn(async ({ command, args }: { command: string; args: string[] }) => {
-      if (command === "git") return { code: 0, stderr: "", stdout: `${path.join(workspacePath, ".git")}\n` }
-      const runId = args[args.indexOf("-RunId") + 1]
-      // No fenced ```json block at all — only the completion marker.
-      return { code: 0, stderr: "", stdout: `working\nHERMES_FREE_AGENT_COMPLETE runId=${runId} workspace=${workspacePath}\n` }
-    })
-    let merged = false
-    const lifecycle = {
-      refreshOriginMain: vi.fn(async () => "a".repeat(40)),
-      ensureOwnedWorktree: vi.fn(async ({ branch }: { branch: string }) => ({
-        branch,
-        worktreePath: workspacePath,
-      })),
-      discoverPullRequest: vi.fn(async () => null),
-      inspectPullRequest: vi.fn(async () => ({
-        state: merged ? "MERGED" : "OPEN",
-        baseRefName: "main",
-        isDraft: false,
-        checksGreen: true,
-        checksComplete: true,
-        failedChecks: [],
-        reviewed: true,
-        reviewCompleted: true,
-        reviewRequested: true,
-        codexReviewFindings: [],
-        unresolvedThreadCount: 0,
-        headRefOid: commit,
-        mergeCommit: merged ? { oid: mergeSha } : null,
-      })),
-      inspectChangedPaths: vi.fn(async () => changedPaths),
-      inspectWorkingTreePaths: vi.fn(async () => changedPaths),
-      inspectWorktreeHead: vi.fn(async () => commit),
-      ensureValidationDependencies: vi.fn(() => ({ linked: true })),
-      removeValidationDependencies: vi.fn(() => ({ removed: true })),
-      runValidationCommands: vi.fn(async ({ commands }: { commands: Array<{ command: string; args: string[] }> }) =>
-        commands.map(({ command, args }) => ({ command, args, code: 0 }))),
-      commitChanges: vi.fn(async () => ({
-        commit,
-        branch: "codex/wos-v1-1-continuity-recovery",
-        paths: changedPaths,
-      })),
-      pushBranch: vi.fn(async () => ({ pushed: true })),
-      createPullRequest: vi.fn(async () => ({
-        number: prNumber,
-        url: `https://github.com/bsvalues/terragroq/pull/${prNumber}`,
-      })),
-      requestCodexReview: vi.fn(async () => ({ requested: true })),
-      inspectReviewFindings: vi.fn(async () => []),
-      resolveReviewThreads: vi.fn(async () => ({ resolved: 0 })),
-      inspectPullRequestFiles: vi.fn(async () => changedPaths),
-      mergePullRequest: vi.fn(async () => {
-        merged = true
-        return { merged: true }
-      }),
-      verifyOriginMainContains: vi.fn(async () => true),
-      cleanupOwnedWorktree: vi.fn(async () => ({ cleaned: true })),
-    } as any
-    const markComplete = vi.fn(async () => true)
-    const orchestrator = createHermesOrchestrator({
-      workspace: process.cwd(), runtimeRoot: root, state: createHermesStateStore(path.join(root, "state", "state.json"), { now: () => clock }),
-      lifecycle, selectOutcome: vi.fn(async () => outcome()), markComplete, markTerminal: vi.fn(async () => true), deferOutcome: vi.fn(async () => true),
-      projectCheckpoint, projectLease,
-      clientFactory: (worktreePath: string) => createHermesKernelClient({ workspacePath: worktreePath, runtimeRoot: root, commandRunner, policyPath, invokerPath: path.join(root, "invoke.ps1"), now, powershellCommand: "powershell" }),
-      holderId: "resident-kernel", now, sleep: async () => {}, leaseRenewalIntervalMs: 60 * 60 * 1000,
-    })
+    // No fenced ```json block at all — only the completion marker.
+    const { orchestrator } = kernelScenario((runId, workspacePath) => `working\n${completionLine(runId, workspacePath)}`)
     await expect(orchestrator.cycle()).rejects.toMatchObject({ code: "APP_SERVER_TURN_FAILED" })
   })
 })

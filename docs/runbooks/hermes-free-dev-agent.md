@@ -72,6 +72,26 @@ The invoker also refuses an owned workspace that contains `node_modules` or any 
 point (`HERMES_FREE_AGENT_WORKSPACE_CONTENT_WALL`), and the client re-asserts the workspace's
 `git rev-parse --git-common-dir` after the invocation, walling on a mismatch.
 
+**`RESIDENT_MODEL_LANE_WORKSPACE_DEPENDENCIES` — the one wall with a routine cause.** WilliamOS
+junctions `<worktree>\node_modules` to the workspace copy so validators can run
+(`repository-lifecycle.mjs:853`) and unlinks it afterwards (`:919`). A cycle that dies in between
+leaves the junction, and every later turn on that worktree walls non-retryably. That is correct —
+the kernel must never inherit a bin/symlink farm reaching outside the worktree — and the wall is
+*not* to be worked around by widening the check. Clear it instead, after confirming what it is:
+
+    Get-Item <worktree>\node_modules | Select-Object LinkType, Target   # expect Junction → <workspace>\node_modules
+    cmd /c rmdir "<worktree>\node_modules"                              # removes the junction, never its target
+
+If it is a real directory rather than a junction, something other than the validation lane wrote it:
+investigate before deleting. A dangling junction (target already gone) raises the same wall — the
+check uses `lstat`, so it names the leftover rather than falling through to a generic refusal.
+
+The turn budget is re-checked per turn, not only at `connect()`: a `runTurn` `timeoutMs` below the
+policy's `execution.timeoutSeconds` walls `RESIDENT_MODEL_LANE_TIMEOUT` before anything is written
+or spawned. A shorter budget would let the host runner kill the invoker mid-run, so the invoker
+would never reach its own `HERMES_FREE_AGENT_TIMEOUT_WALL` and its container cleanup and quarantine
+marking would never happen. Raise the caller's budget; do not lower `timeoutSeconds` to fit it.
+
 Kernel state is per WilliamOS thread (`containment.agentStatePersistence: PER_THREAD_STATE_DIR`): the
 invoker mounts `<runtime root>\hermes-kernel\threads\<threadId>\kernel-state` as the kernel's
 `HERMES_HOME` through the `agent-owned` compose service (the v1 `agent` service keeps its tmpfs

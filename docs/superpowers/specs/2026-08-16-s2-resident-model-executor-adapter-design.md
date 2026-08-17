@@ -77,10 +77,15 @@ runtimeRoot, commandRunner, policyPath, invokerPath })`. All collaborators injec
 (the backend already owns `commandRunner`, `runtimeRoot`).
 
 ### 3.2 `createHermesKernelClient` (new module)
-- `connect()`: reads policy v2; requires `promotion.status ∈ {PILOT_AUTHORIZED, PROMOTED}`,
-  `placement.workspaceMode === "OWNED_WORKTREE"`, `workspacePath` under
-  `<runtimeRoot>/worktrees/` (realpath, no symlinks); requires the durable quarantine marker
-  (`HERMES_FREE_AGENT_QUARANTINED`) to be absent. Any failure → `AppServerWallError` with a
+- `connect()`: reads policy v2 and requires, in order — `promotion.status ∈ {PILOT_AUTHORIZED,
+  PROMOTED}`; `placement.workspaceMode === "OWNED_WORKTREE"`; `containment.agentStatePersistence
+  === "PER_THREAD_STATE_DIR"` (P2b); every line in `promotion.requiredEvidence` non-null in
+  `satisfiedEvidence`; every line in `promotion.promotionRequires` satisfied *when and only when*
+  the policy claims `PROMOTED` (P3); the durable quarantine marker (`HERMES_FREE_AGENT_QUARANTINED`)
+  absent from both the policy directory and `<runtimeRoot>/hermes-kernel/`; `workspacePath` under
+  `<runtimeRoot>/worktrees/` by realpath with no symlinked path component, no top-level reparse
+  point inside it, and no `node_modules` entry; the invoker file present; and the turn budget at
+  least the kernel's own deadline (§4 item 6). Any failure → `AppServerWallError` with a
   `RESIDENT_MODEL_LANE_*` code. Never invokes Docker.
 - `startThread()`: mints `threadId` (UUID v4), creates the thread dir + `session.json`
   `{schemaVersion:1, threadId, workspacePath, createdAt, turns:[]}`; returns id.
@@ -89,10 +94,18 @@ runtimeRoot, commandRunner, policyPath, invokerPath })`. All collaborators injec
   (policy `execution.sessionResumeProven !== true`) → throw `AppServerWallError`
   `RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE`. Fail-closed by default; flipped only by §6 P2 evidence.
 - `runTurn({threadId, prompt, turn, timeoutMs})`:
-  1. PacketBuilder → packet v2 (§3.3), written to `<thread>/turns/<n>/packet.json` (0600).
-  2. Invoker runs the ps1 with `-PacketPath -PolicyPath -WorkspacePath <worktree> -RunId <turnId>`
-     via `commandRunner` with `timeoutMs` (default = the orchestrator's `TURN_TIMEOUT_MS`),
-     `credentialAccess:false`, plus `-StatePath <thread>/kernel-state` (P2b).
+  0. Re-runs the whole `connect()` lane check (policy, quarantine, workspace, invoker) plus the
+     §4 item 6 budget check against **this turn's** `timeoutMs`, not just the client default — a
+     per-turn override under the kernel deadline would let `commandRunner` kill the invoker before
+     it could raise its own timeout wall, losing container cleanup and quarantine marking.
+     Refused here, nothing is written and no process runs.
+  1. PacketBuilder → packet v3 (§3.3), written to `<thread>/turns/<n>/packet.json` (0600).
+  2. Invoker runs the ps1 with `-PacketPath -PolicyPath -WorkspacePath <worktree> -RunId <turnId>
+     -QuarantinePath <runtimeRoot>/hermes-kernel/HERMES_FREE_AGENT_QUARANTINED -StatePath
+     <thread>/kernel-state` (the last two from P2/P2b) via `commandRunner` with `timeoutMs`
+     (default = the orchestrator's `TURN_TIMEOUT_MS`) and `credentialAccess:false`. The turn is
+     bracketed by `git rev-parse --path-format=absolute --git-common-dir` probes, and followed by
+     a recursive reparse-point sweep of the workspace.
   3. Exit 0 and a `HERMES_FREE_AGENT_COMPLETE runId=<turnId> …` line required; otherwise map (§5).
   4. OutputHarvester extracts the **last** fenced ```json block from stdout, must parse and satisfy
      `HERMES_TURN_OUTPUT_SCHEMA` (structural check here; the orchestrator re-validates). Missing/
@@ -177,15 +190,41 @@ confinement on HERMES, both the client and the invoker refuse to run
 
 ## 5. Error handling (fail-closed mapping)
 
+Every `RESIDENT_MODEL_*` code the adapter can raise, and what each one means — a wall an operator
+reads in a log has to name its own remedy:
+
+| Condition | Code (all `AppServerWallError`, non-retryable) |
+|---|---|
+| policy file missing or not JSON | `RESIDENT_MODEL_LANE_POLICY_UNREADABLE` |
+| `promotion.status` neither `PILOT_AUTHORIZED` nor `PROMOTED` | `RESIDENT_MODEL_LANE_NOT_AUTHORIZED` |
+| `placement.workspaceMode !== "OWNED_WORKTREE"` | `RESIDENT_MODEL_LANE_WORKSPACE_MODE` |
+| `containment.agentStatePersistence !== "PER_THREAD_STATE_DIR"` | `RESIDENT_MODEL_LANE_STATE_MODE` |
+| a declared `requiredEvidence` line is null/blank/absent | `RESIDENT_MODEL_LANE_EVIDENCE_UNPROVEN` |
+| policy claims `PROMOTED` with an unsatisfied `promotionRequires` line | `RESIDENT_MODEL_LANE_PROMOTION_UNPROVEN` |
+| quarantine marker present (policy dir or runtime root) | `RESIDENT_MODEL_LANE_QUARANTINED` |
+| workspace outside `<runtimeRoot>/worktrees/`, symlinked component, unreadable, or carrying a top-level reparse point | `RESIDENT_MODEL_LANE_WORKSPACE` |
+| workspace carries `node_modules` — usually the validation junction (`repository-lifecycle.mjs:853`) left by a cycle that died before `:919` unlinked it. Fail-closed; the operator removes it | `RESIDENT_MODEL_LANE_WORKSPACE_DEPENDENCIES` |
+| invoker script absent | `RESIDENT_MODEL_LANE_INVOKER_MISSING` |
+| turn budget below the kernel's `execution.timeoutSeconds` (checked at `connect()` **and** per turn) | `RESIDENT_MODEL_LANE_TIMEOUT` |
+| `startThread`/`runTurn` before `connect()`, or after `close()` | `RESIDENT_MODEL_LANE_NOT_CONNECTED` |
+| git common-dir changed across the turn, or a reparse point appeared inside the workspace | `RESIDENT_MODEL_LANE_WORKSPACE_TAMPERED` |
+| packet prompt over `execution.promptMaxChars` | `RESIDENT_MODEL_PROMPT_TOO_LONG` |
+| unknown/malformed thread id or unreadable session file | `RESIDENT_MODEL_THREAD_UNKNOWN` |
+| session belongs to a different workspace | `RESIDENT_MODEL_THREAD_WORKSPACE_MISMATCH` |
+| resume requested but unproven for the image, or no captured kernel session / state dir | `RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE` |
+
+Invoker outcomes map onto the orchestrator's existing taxonomy instead:
+
 | Condition | Adapter behaviour |
 |---|---|
-| quarantine marker present, policy not authorised, workspace outside allowed roots | `connect()`/`runTurn()` throw `AppServerWallError` `RESIDENT_MODEL_LANE_*` (non-retryable) |
-| invoker exit ≠ 0 with a `HERMES_FREE_AGENT_*_WALL` token | `AppServerWallError` carrying that token (non-retryable) |
+| invoker exit ≠ 0 with a `HERMES_FREE_AGENT_*_WALL` token at the start of a line | `AppServerWallError` carrying that token (non-retryable) |
 | invoker `HERMES_FREE_AGENT_TIMEOUT_WALL` or commandRunner timeout | `AppServerTimeoutError` (retryable) |
 | invoker `HERMES_FREE_AGENT_EXECUTION_WALL` (agent exited non-zero) | `AppServerTurnEndedError("failed")` |
-| complete but no valid JSON block | `AppServerTurnEndedError("failed")`, `detail:"RESIDENT_MODEL_TURN_OUTPUT_INVALID"` |
-| process killed / lost stdout | `AppServerTurnEndedError("interrupted")` |
-| resume requested but unproven / state missing | `AppServerWallError` `RESIDENT_MODEL_THREAD_RESUME_UNAVAILABLE` |
+| complete but no valid JSON block | `AppServerTurnEndedError("failed")`, `detail:"RESIDENT_MODEL_TURN_OUTPUT_INVALID:<reason>"` |
+| process killed / lost stdout / completion line absent or for another run id | `AppServerTurnEndedError("interrupted")` |
+
+A wall token is only believed at the start of a line: the model's stdout is interleaved with the
+invoker's, so a model that merely *mentions* a token mid-sentence cannot forge a lane verdict.
 
 No silent fallback to Codex or any cloud model (RULE-0005): failure surfaces as a wall; the
 orchestrator's existing provider-retry/defer path applies.
