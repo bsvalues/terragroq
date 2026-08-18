@@ -7,6 +7,14 @@ export interface NodeRecord {
   os?: string
   role?: string
   enrolled?: boolean
+  /**
+   * How the node runs work, which decides how lifecycle control is proven against it.
+   *
+   * Absent means containers, so every node that predates this keeps the behaviour it had. A cockpit
+   * that is deliberately not a service host declares "processes" instead, and is proved by starting
+   * and ending a bounded process rather than by having a container runtime installed.
+   */
+  workloads?: "containers" | "processes"
 }
 
 export interface RunOptions {
@@ -74,3 +82,6 @@ export declare function decodeCliXml(text: unknown): string
 
 /** The line of ssh stderr that names the actual fault, skipping OpenSSH's advisories. */
 export declare function meaningfulSshError(stderr: unknown): string
+
+/** The connection policy: pinned host key, batch mode, the fabric service key. */
+export declare function sshArgs(node: NodeRecord, command: string, fabricRoot: string): string[]

@@ -5,6 +5,7 @@ import path from "node:path"
 import { promisify } from "node:util"
 
 import { getSession } from "@/lib/session"
+import { brokeredExec } from "@/lib/fabric/broker.mjs"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -50,6 +51,19 @@ const LINUX_PROBE = [
   `echo "gpudriver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)"`,
 ].join("; ")
 
+// A Windows node answers in PowerShell. Sending it `nproc` and `free -g` because it happens to be
+// reached over ssh is the same conflation of transport with dialect that made the baseline gate
+// report the cockpit as unmanageable.
+const WINDOWS_PROBE = [
+  '"host=" + $env:COMPUTERNAME',
+  '"cores=" + (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors',
+  '$o = Get-CimInstance Win32_OperatingSystem',
+  '"mem=" + [math]::Round($o.FreePhysicalMemory/1MB,1) + "/" + [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)',
+  '"uptime=" + [string]([math]::Round(((Get-Date) - $o.LastBootUpTime).TotalDays,1)) + " days"',
+  '"disk=" + ((Get-PSDrive C -ErrorAction SilentlyContinue | ForEach-Object { "C:" + [math]::Round($_.Free/1GB,0) + "G" }) -join " ")',
+  '"gpu=" + ((Get-CimInstance Win32_VideoController).Name -join ";")',
+].join("; ")
+
 function parseProbe(text: string): Record<string, string> {
   const fields: Record<string, string> = {}
   for (const line of text.split("\n")) {
@@ -77,20 +91,11 @@ async function probeLocal(): Promise<Record<string, string>> {
   return parseProbe(stdout)
 }
 
-async function probeSsh(node: NodeRecord): Promise<Record<string, string>> {
-  const { stdout } = await run(
-    "ssh",
-    [
-      "-i", path.join(FABRIC, "keys", "williamos-fabric"),
-      "-o", `UserKnownHostsFile=${path.join(FABRIC, "known_hosts")}`,
-      "-o", "StrictHostKeyChecking=yes",
-      "-o", "BatchMode=yes",
-      "-o", "ConnectTimeout=8",
-      `${node.user}@${node.host}`,
-      LINUX_PROBE,
-    ],
-    { timeout: PROBE_TIMEOUT_MS, windowsHide: true },
-  )
+async function probeSsh(name: string, windows: boolean): Promise<Record<string, string>> {
+  // Through the broker: an unknown node is denied rather than attempted, host keys are pinned, and
+  // the probe appears in the same audit log as every other action taken against this lab. A read-only
+  // probe still belongs in the ledger -- "who looked at what, when" is half of an audit trail.
+  const { stdout } = await brokeredExec(name, windows ? WINDOWS_PROBE : LINUX_PROBE, { timeout: PROBE_TIMEOUT_MS, action: "probe" })
   return parseProbe(stdout)
 }
 
@@ -109,7 +114,7 @@ export async function GET() {
     Object.entries(registry).map(async ([name, node]) => {
       const started = Date.now()
       try {
-        const fields = node.transport === "local" ? await probeLocal() : await probeSsh(node)
+        const fields = node.transport === "local" ? await probeLocal() : await probeSsh(name, node.os === "windows")
         return { name, ...node, reachable: true, ms: Date.now() - started, fields }
       } catch (error) {
         // The reason is kept: "unreachable" alone sends the reader looking in the wrong place, while
