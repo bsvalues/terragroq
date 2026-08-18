@@ -1,9 +1,10 @@
 import { and, eq } from "drizzle-orm"
 
 import { createWorkOrder, transitionWorkOrder } from "@/app/actions/work-orders"
-import { db } from "@/lib/db"
+import { db, pool } from "@/lib/db"
 import { workOrder } from "@/lib/db/schema"
 import { getSession, getUserId } from "@/lib/session"
+import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -53,6 +54,30 @@ export async function POST() {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
   const userId = await getUserId()
+
+  // Only the owner may record authority. Without this the whole model is circular: any account could
+  // mint itself this grant and then satisfy the work-context gate with the grant it had just issued.
+  // Being signed in is not being the owner, and approval is not authority.
+  const ownerId = await resolveOwnerUserId(
+    {
+      byEmail: async (email) => {
+        const rows = await pool.query('SELECT "id" FROM "user" WHERE lower("email") = $1 LIMIT 1', [email])
+        return (rows.rows[0]?.id as string | undefined) ?? null
+      },
+      soleCredentialed: async () => {
+        const rows = await pool.query(
+          `SELECT u."id" FROM "user" u
+             JOIN "account" a ON a."userId" = u."id" AND a."providerId" = 'credential' AND a."password" IS NOT NULL`,
+        )
+        return rows.rowCount === 1 ? (rows.rows[0].id as string) : null
+      },
+    },
+    process.env.WILLIAMOS_OWNER_EMAIL,
+  )
+  const owner = assertOwner(userId, ownerId)
+  if (!owner.ok) {
+    return Response.json({ error: owner.failure, detail: owner.detail }, { status: owner.failure === "NOT_OWNER" ? 403 : 409, headers: { "cache-control": "no-store" } })
+  }
 
   const existing = await db
     .select()
