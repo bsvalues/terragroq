@@ -1,5 +1,5 @@
-import { hashRecord } from "@/lib/governance/hash"
-import { AUTHORITY_LEVELS } from "@/lib/goal/taxonomy"
+import { hashRecord } from "./hash.ts"
+import { AUTHORITY_LEVELS } from "../goal/taxonomy.ts"
 
 /**
  * The pre-execution gate: an agent does not get to mutate until it proves it understands the job.

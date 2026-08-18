@@ -20,6 +20,27 @@ permissions:
   contents: read
 
 jobs:
+  work-context:
+    name: work context receipt (#831)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Reviewer-side half of the pre-execution gate. The route gate refuses unproven mutations made
+    # through the application; a lane committing straight to a branch never touches it, which is how
+    # most work actually arrives. Acceptance criterion 8 of #831: reject a pull request carrying no
+    # valid receipt even when the tests are green.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the receipt's anchor is a commit on main, which a shallow clone lacks
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Verify the declared work-context receipt
+        run: node --no-warnings scripts/verify-pr-work-context.mjs
+
   test:
     name: vitest (deterministic suite)
     runs-on: ubuntu-latest
