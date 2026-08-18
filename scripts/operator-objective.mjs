@@ -83,3 +83,10 @@ const resolved = await fetch(`${BASE}/api/resource?identity=PACS`, { headers: { 
 const record = await resolved.text()
 console.log(`GET  /api/resource?identity=PACS -> HTTP ${resolved.status}`)
 console.log(record.slice(0, 700))
+
+// #878: with the record resolved, ask whether it agrees with what we already recorded.
+const reconciled = await call(`${BASE}/api/resource/reconcile`, { identity: "PACS" }, sessionCookie)
+const verdict = await reconciled.text()
+console.log(`POST /api/resource/reconcile     -> HTTP ${reconciled.status}`)
+console.log(verdict.slice(0, 700))
+
