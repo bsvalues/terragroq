@@ -31,6 +31,8 @@ export interface NodeRecord {
 export interface RunOptions {
   fabricRoot?: string
   stepTimeoutMs?: number
+  /** Where each step is recorded. Injectable so tests do not append to the lab's real ledger. */
+  audit?: (node: string, action: string, rc: number | string, detail: string) => Promise<void>
   exec?: (
     file: string,
     args: string[],
