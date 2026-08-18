@@ -1,0 +1,16 @@
+{
+  "$comment": "Claude Code's attachment point for WO-WILLIAMOS-FRONTIER-AGENT-PREEXECUTION-GATE (#831). Codex and AEGIS are gated at the packet/invoker chokepoint; Claude Code edits files directly, so its gate has to sit where tools are granted. The hook runs against the same lib/governance/work-context-receipt.ts validator as the HTTP path. Reads are never gated.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings scripts/governance/work-context-hook.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}
