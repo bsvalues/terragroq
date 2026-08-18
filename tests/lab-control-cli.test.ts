@@ -3,13 +3,48 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { afterEach, describe, expect, test } from "vitest"
+import { afterEach, beforeAll, describe, expect, test } from "vitest"
 
 const repoRoot = path.resolve(__dirname, "..")
 const scriptRoot = path.join(repoRoot, "scripts", "lab-control")
 const pwsh = process.platform === "win32" ? "pwsh.exe" : "pwsh"
 const tempRoots: string[] = []
 const nowUtc = "2026-08-08T12:00:00Z"
+
+/**
+ * How long one CLI invocation may take.
+ *
+ * Every test here cold-starts pwsh, which makes this the slowest suite in the repository. The
+ * previous 15s literal sat close enough to the real cost that a loaded CI runner could exceed it,
+ * and a spawnSync timeout returns empty stdout rather than raising -- so the suite failed with
+ * "expected '' to contain 'HERMES'", which reads as a logic break in code the branch never touched.
+ * That is #833: one commit both passing and failing, with nothing to tell the two apart.
+ *
+ * The budget is now generous and named, and assertCompleted turns exceeding it into a failure that
+ * says so. A red suite has to mean something specific, or agents learn to merge through red.
+ */
+const SPAWN_BUDGET_MS = Number(process.env.LAB_CONTROL_TEST_BUDGET_MS ?? 60_000)
+
+/**
+ * Fail loudly when a CLI invocation did not actually finish.
+ *
+ * spawnSync reports a timeout by setting `error` and returning empty output, so without this the
+ * suite asserts on stdout that was never produced and blames the assertion. Naming the real cause is
+ * the whole point: a flake nobody can attribute is one that gets merged through.
+ */
+function assertCompleted(result: ReturnType<typeof spawnSync>, label: string) {
+  if (result.error) {
+    throw new Error(
+      `${label} did not complete within ${SPAWN_BUDGET_MS}ms (${result.error.message}). This is an ` +
+        `execution-budget failure, not an assertion failure; raise LAB_CONTROL_TEST_BUDGET_MS if the ` +
+        `host is genuinely this slow.`,
+    )
+  }
+  if (result.signal) {
+    throw new Error(`${label} was killed by ${result.signal} before it could produce output.`)
+  }
+  return result
+}
 
 type FixtureMode =
   | "healthy"
@@ -419,7 +454,7 @@ function runCommand(command: string, mode: FixtureMode = "healthy") {
         LAB_CONTROL_TEST_TASK_EVIDENCE_B64: fixture.receipt.taskEvidenceB64,
         LAB_CONTROL_TEST_TASK_EVIDENCE_SHA256: fixture.receipt.hermesTaskEvidenceHash,
       },
-      timeout: 15_000,
+      timeout: SPAWN_BUDGET_MS,
     },
   )
   return {
@@ -427,6 +462,22 @@ function runCommand(command: string, mode: FixtureMode = "healthy") {
     sshArgs: readFileSync(fixture.log, "utf8"),
   }
 }
+
+/**
+ * Pay pwsh's cold start once, before any test is being timed.
+ *
+ * Otherwise the first test in the file absorbs process startup, module compilation and JIT on top of
+ * its own work -- which is why #833 always struck the first test rather than a random one. Warming up
+ * here does not make the suite faster; it makes every test cost the same, which is what determinism
+ * means for a suite that shells out.
+ */
+beforeAll(() => {
+  spawnSync(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "exit 0"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    timeout: SPAWN_BUDGET_MS,
+  })
+})
 
 afterEach(() => {
   while (tempRoots.length > 0) {
@@ -652,8 +703,9 @@ describe("OMEN lab-control CLI", () => {
         root,
         "-SkipUserPath",
       ],
-      { cwd: repoRoot, encoding: "utf8", timeout: 15_000 },
+      { cwd: repoRoot, encoding: "utf8", timeout: SPAWN_BUDGET_MS },
     )
+    assertCompleted(result, "install-lab-control")
 
     expect(result.status).toBe(0)
     for (const command of ["lab-status", "lab-hermes", "lab-atlas", "lab-containers", "lab-backups"]) {
@@ -681,8 +733,9 @@ describe("OMEN lab-control CLI", () => {
         root,
         "-SkipUserPath",
       ],
-      { cwd: repoRoot, encoding: "utf8", timeout: 15_000 },
+      { cwd: repoRoot, encoding: "utf8", timeout: SPAWN_BUDGET_MS },
     )
+    assertCompleted(result, "install-lab-control")
 
     expect(result.status).not.toBe(0)
     expect(result.stderr).toContain("Refusing to overwrite modified managed file")
@@ -708,8 +761,9 @@ describe("OMEN lab-control CLI", () => {
         "-SkipUserPath",
         "-WhatIf",
       ],
-      { cwd: repoRoot, encoding: "utf8", timeout: 15_000 },
+      { cwd: repoRoot, encoding: "utf8", timeout: SPAWN_BUDGET_MS },
     )
+    assertCompleted(result, "install-lab-control")
 
     expect(result.status).toBe(0)
     expect(existsSync(root)).toBe(false)
