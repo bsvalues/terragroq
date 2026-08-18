@@ -235,6 +235,17 @@ for pair in "atlas:tf-postgres=$PG_STATUS" "atlas:williamos-postgres=$WM_STATUS"
     FAILED|UNAVAILABLE) FAIL_REASONS="$FAIL_REASONS ${pair%%=*}=${pair#*=}" ;;
   esac
 done
+# A database dump that exists and hashes correctly, but whose restore was never exercised, is the
+# exact claim that has been false every time in this lab. If the verify container never came up, or
+# the pull failed, or the restore errored, the status silently stays HASH_VERIFIED -- and the first
+# version of this gate exited 0 with the brain's restore unproven. For databases, bytes are not
+# protection: they must reach RESTORE_VERIFIED or the run failed. Found by sovereign review.
+for pair in "atlas:tf-postgres=$PG_STATUS" "atlas:williamos-postgres=$WM_STATUS"; do
+  case "${pair#*=}" in
+    RESTORE_VERIFIED|FAILED|UNAVAILABLE) : ;;
+    *) FAIL_REASONS="$FAIL_REASONS ${pair%%=*}=restore_not_proven(${pair#*=})" ;;
+  esac
+done
 [ "$SEC_OK" = yes ] || FAIL_REASONS="$FAIL_REASONS secondary_copy_mismatch"
 [ "$PRI_CJ_SHA" = "$SEC_CJ_SHA" ] || FAIL_REASONS="$FAIL_REASONS crown_jewel_set_mismatch"
 

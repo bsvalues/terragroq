@@ -136,6 +136,53 @@ exit 1
 Verified afterwards that `/backup-primary/backup-state.json` still held generation
 `20260818T201901Z` — the negative test did not damage the thing it was testing.
 
+## Sovereign review (Tier 1) and what it caught
+
+The supersession's Tier 1 is a reviewer role in a context separate from the builder. Tier 3 external
+advisers were all unavailable — Codex and Sourcery quota-exhausted, CodeRabbit did not auto-review —
+which per doctrine is `EXTERNAL_REVIEW_UNAVAILABLE`, not `REVIEW_NOT_DONE`, and never a reason to
+stall or to lower the sovereign tiers.
+
+The sovereign lane itself turned out to be **broken by the same defect as everything else today**:
+HERMES's `ollama` container bound `D:/HermesData/ollama`, and there is no `D:` on HERMES. The model
+store was a throwaway directory inside the VM — `ollama list` was empty and a pull died with "no
+space left on device". The 34 GB of models are safe on ATLAS at `/forge/models/ollama`. The container
+was recreated with identical image, ports, GPU, env and restart policy, changing only the mount to
+`F:/HermesData/ollama`, and `qwen2.5-coder:7b` pulled onto the RTX 3050.
+
+Review was run against the exact diff. Its first pass degenerated into a repeated, self-contradictory
+finding and was discarded rather than dressed up; a second pass with a repetition penalty produced
+three findings. Two were style or non-issues. The third was real:
+
+> exit codes lost through pipes or subshells — the readiness loop could fail silently
+
+Traced to a genuine **false green in the fail-closed gate itself**: if the pgvector verify container
+never became ready, or the image pull failed, or the restore errored, `WM_RESTORE` stayed `SKIPPED`,
+so `WM_STATUS` remained `HASH_VERIFIED` — and `HASH_VERIFIED` was not in the gate's failure set. The
+run would have exited **0 with the brain's restore never proven**. Precisely the class of defect this
+whole program exists to remove, reproduced in the code written to remove it.
+
+**Remediated:** for the two database sources, anything short of `RESTORE_VERIFIED` now fails the run.
+Bytes are not protection for a database. Non-database sources may still report `COPIED`, so the gate
+discriminates instead of failing everything.
+
+**Gate truth table** (`scripts/lab-control/aegis/gate-truth-table.sh`, extracts the gate's own logic
+from the deployed script so it cannot drift into testing a restatement):
+
+| Case | Expect | Got |
+|---|---|---|
+| all sources restore-verified | PASS | PASS |
+| williamos dump failed | FAIL | FAIL |
+| hermes unreachable | FAIL | FAIL |
+| secondary copy mismatch | FAIL | FAIL |
+| crown-jewel set hash mismatch | FAIL | FAIL |
+| **williamos hash-only, restore not proven** | **FAIL** | **FAIL** |
+| **tf-postgres hash-only, restore skipped** | **FAIL** | **FAIL** |
+| **williamos restore only partial** | **FAIL** | **FAIL** |
+| forge copied but not restore-verified | PASS | PASS |
+
+`GATE_TRUTH_TABLE: ALL PASS`
+
 ## Status: AEGIS backup `PROVEN`
 
 Upgraded from the `NOT_PROVEN` recorded in #862, on current evidence: a cron-fired run whose receipt
