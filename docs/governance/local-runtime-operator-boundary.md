@@ -7,6 +7,13 @@ Canonical playbook:
 
 ## Host Decision
 
+> **Partly superseded.** The host clauses below — that the HP OMEN is the only authorized Phase 1
+> operator host, and that Docker on it is validation-only — are superseded by
+> [`omen-cockpit-boundary.md`](omen-cockpit-boundary.md)
+> (`WILLIAMOS-OMEN-COCKPIT-BOUNDARY-001`). OMEN is the cockpit; it hosts no service and no container
+> runtime. Everything else in this document, including its credential controls and owner gates,
+> remains in force.
+
 The HP OMEN is the only authorized Phase 1 operator host. GitHub remains the
 source repository, pull-request system, and CI validator. It is not authorized
 to host the autonomous WilliamOS operator.
