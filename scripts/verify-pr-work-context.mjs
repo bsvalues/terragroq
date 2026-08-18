@@ -39,13 +39,22 @@ function fail(verdict) {
   process.exit(1)
 }
 
-// The owner is not a builder lane. #831 gates agent lanes before they mutate; applying it to the
-// person the gate exists to protect would be the owner-babysitting the issue rules out.
-const OWNER = "bsvalues"
-if (author === OWNER) {
-  console.log(`author is the owner (${author}); the builder-lane gate does not apply. Reporting only.`)
-  const declared = parseDeclaredReceipt(pr.body)
-  console.log(declared ? `a ${RECEIPT_BLOCK} is present anyway.` : `no ${RECEIPT_BLOCK} declared.`)
+// Who authored a pull request cannot decide whether the gate applies here.
+//
+// Every agent in this lab creates pull requests with the owner's gh credentials, so a builder lane
+// and the owner are the same GitHub identity. An author-based exemption would therefore exempt
+// exactly the lanes #831 exists to gate, while looking like it worked. It would be a gate that never
+// fires.
+//
+// So the gate applies to every pull request, and the way out is an explicit, auditable claim rather
+// than an identity check. An agent could write the marker too -- nothing here can stop that -- but a
+// written claim is permanent and attributable, which is the standard the doctrine already sets for
+// the things a machine cannot verify.
+const EXEMPT = /^WORK_CONTEXT_EXEMPT:\s*(.+)$/m
+const exemption = EXEMPT.exec(pr.body ?? "")
+if (exemption) {
+  console.log(`exempted by an explicit claim in the pull request body: ${exemption[1].trim()}`)
+  console.log(`author: ${author || "unknown"}. This is recorded, not verified.`)
   process.exit(0)
 }
 
