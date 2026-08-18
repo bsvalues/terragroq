@@ -16,6 +16,12 @@ import type { ResourceRecord } from "@/lib/resource/resolve"
  * bug, and an agent that cannot see why it was stopped will route around the stop.
  */
 
+/**
+ * Operations that only look. These stay permitted while a conflict is open, because verification is how
+ * a contradiction gets resolved -- forbidding it would make an open conflict permanent.
+ */
+export const READ_ONLY_OPERATIONS = ["read", "verify", "inspect"] as const
+
 /** Operations that reproduce an artefact, and so can duplicate completed work. */
 export const REPRODUCING_OPERATIONS = ["restore", "import", "migrate", "reimport", "rebuild"] as const
 
@@ -49,8 +55,12 @@ export function assertOperationAllowed(input: {
 
   // An unresolved contradiction about a resource stops work on it. Refusing is not resolving: the
   // conflict stays open and visible, and nothing here decides which side of it is right.
+  const readOnly = (READ_ONLY_OPERATIONS as readonly string[]).includes(operation)
   const blocking = input.openConflicts.find((conflict) => BLOCKING.has(conflict.severity.toLowerCase()))
-  if (blocking) {
+  // A blocking conflict stops work on a resource, but NOT looking at it. Refusing verification while a
+  // contradiction is open would make the contradiction unresolvable: the only way to settle whether the
+  // record or the evidence is right is to go and check. #881 refused both, which was wrong.
+  if (blocking && !readOnly) {
     return {
       allowed: false,
       refusal: "BLOCKED_BY_CONFLICT",

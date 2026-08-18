@@ -96,4 +96,12 @@ const decision = await proposed.text()
 console.log(`POST /api/resource/operation     -> HTTP ${proposed.status}`)
 console.log(decision.slice(0, 600))
 
+// #882: does the record still hold? The first step that goes and looks -- through the broker, with a
+// fixed read-only probe, targeted only by what the record declares.
+const verified = await call(`${BASE}/api/resource/verify`, { identity: "PACS" }, sessionCookie)
+const observed = await verified.text()
+console.log(`POST /api/resource/verify        -> HTTP ${verified.status}`)
+console.log(observed.slice(0, 900))
+
+
 
