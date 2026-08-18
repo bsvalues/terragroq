@@ -29,6 +29,17 @@ decline.
 
 Failure exits 2 with the failed premise on stderr, which is what makes Claude Code block the call.
 
+## Activation: it starts enforcing on the NEXT session
+
+Claude Code reads `.claude/settings.json` when a session starts. A session that was already running
+when this file landed **is not gated** — its hook registry was built before the file existed.
+
+This was verified rather than assumed, and the assumption was wrong: a write to a non-reserved path
+went straight through in the session that introduced the hook, while piping the identical event into
+the script by hand refused it correctly. Testing the script proves the logic; it does not prove the
+harness is invoking it. To confirm enforcement is live, attempt a write outside the reservation in a
+fresh session and check it is refused.
+
 ## Establishing context
 
 ```bash
