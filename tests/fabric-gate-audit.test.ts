@@ -44,3 +44,25 @@ describe("the gate records what it did", () => {
       .toEqual(withLedger.map((r: { step: string; ok: boolean }) => [r.step, r.ok]))
   })
 })
+
+describe("an absent ledger is not a broken one", () => {
+  it("does not throw, and does not attempt a write, when there is no fabric root", async () => {
+    // On a machine with no fabric directory -- CI, most obviously -- the previous behaviour attempted
+    // and failed a write for every step of every node: six throwing filesystem calls per node on a
+    // suite that is already timing-sensitive.
+    const { auditFabricAction } = await import("@/lib/fabric/audit.mjs")
+    await expect(auditFabricAction("C:/no-such-fabric-root-xyz", "n", "a", 0, "x")).resolves.toBeUndefined()
+  })
+
+  it("still reports a ledger that exists but cannot be written", async () => {
+    // Absent and broken are different states, and only one of them is worth reporting.
+    const { auditFabricAction } = await import("@/lib/fabric/audit.mjs")
+    const os = await import("node:os")
+    const fs = await import("node:fs/promises")
+    const path = await import("node:path")
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ledger-"))
+    // A directory where the log file must live makes appendFile fail while the root exists.
+    await fs.mkdir(path.join(root, "audit.log"))
+    await expect(auditFabricAction(root, "n", "a", 0, "x")).rejects.toThrow(/AUDIT_UNAVAILABLE/)
+  })
+})
