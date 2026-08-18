@@ -71,7 +71,14 @@ const setCookie = completed.headers.getSetCookie?.() ?? []
 const sessionCookie = setCookie.map((c) => c.split(";")[0]).join("; ")
 console.log(`authenticated as the synthetic operator; session expires ${completedBody.expiresAt}`)
 
+// #874: objectives are submitted to the intake seam, which admits them as work. The old /api/intent
+// call is kept below so a run records BOTH what intake did and what the classifier still does.
+const admitted = await call(`${BASE}/api/objective`, { objective }, sessionCookie)
+const admission = await admitted.text()
+console.log(`POST /api/objective -> HTTP ${admitted.status}`)
+console.log(admission.slice(0, 400))
+
 const submitted = await call(`${BASE}/api/intent`, { intent: objective }, sessionCookie)
 const result = await submitted.text()
-console.log(`POST /api/intent -> HTTP ${submitted.status}`)
-console.log(result.slice(0, 600))
+console.log(`POST /api/intent    -> HTTP ${submitted.status}`)
+console.log(result.slice(0, 400))
