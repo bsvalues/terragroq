@@ -51,7 +51,22 @@ HSSH="ssh -i $HK -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=
 HDIR=$P/hermes/$STAMP; mkdir -p "$HDIR"
 H_STATUS=UNAVAILABLE; H_HEAD=""; H_FILES=0; H_BYTES=0
 if $HSSH $HH hostname >/dev/null 2>&1; then
-  scp -i $HK -o BatchMode=yes -o ConnectTimeout=10 -r "$HH:C:/HermesLab" "$HDIR/HermesLab" >/dev/null 2>&1 && H_STATUS=COPIED || H_STATUS=FAILED
+  # scp -r pulled 27.32 GB / 1,078,891 files here: a dozen williamos-runtime-<sha> deployment
+  # copies, each with its own node_modules and .next. That is commit-pinned build output, already
+  # named in this script's own "excluded" list, and it made the nightly run about three hours long.
+  # The repo this step exists to preserve is 113 files. Tar with exclusions on the Hermes side and
+  # move one file rather than a million.
+  HTGZ='C:/Users/bs/hermeslab-crownjewel.tgz'
+  H_STATUS=FAILED
+  if $HSSH $HH "tar -czf $HTGZ -C C:/HermesLab --exclude=node_modules --exclude=.next --exclude=dist --exclude=.venv --exclude=.pnpm ." >/dev/null 2>&1; then
+    mkdir -p "$HDIR/HermesLab"
+    if scp -i $HK -o BatchMode=yes -o ConnectTimeout=10 "$HH:$HTGZ" "$HDIR/hermeslab.tgz" >/dev/null 2>&1 \
+       && tar -xzf "$HDIR/hermeslab.tgz" -C "$HDIR/HermesLab" >/dev/null 2>&1; then
+      H_STATUS=COPIED
+      rm -f "$HDIR/hermeslab.tgz"
+    fi
+  fi
+  $HSSH $HH "Remove-Item -Force -ErrorAction SilentlyContinue $HTGZ" >/dev/null 2>&1
   $HSSH $HH "docker exec ollama ollama list" > "$HDIR/ollama-models.txt" 2>/dev/null
   if [ "$H_STATUS" = COPIED ] && git -C "$HDIR/HermesLab" rev-parse HEAD >/dev/null 2>&1 && git -C "$HDIR/HermesLab" fsck --connectivity-only >/dev/null 2>&1; then
     H_STATUS=RESTORE_VERIFIED; H_HEAD=$(git -C "$HDIR/HermesLab" rev-parse --short HEAD)

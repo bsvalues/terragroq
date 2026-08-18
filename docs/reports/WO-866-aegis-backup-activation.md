@@ -75,11 +75,72 @@ Transfer note: OMEN has no key to AEGIS, and the cmd.exe wrapper in the exec pat
 8191 characters. Deployment routes OMEN → ATLAS → AEGIS, which both ends can already reach, with an
 md5 comparison on both sides rather than trusting the copy.
 
-## Status
+## The Hermes step could not have been scheduled as written
 
-See the run evidence appended below. AEGIS classification is upgraded from the `NOT_PROVEN` recorded
-in #862 only on the strength of a fresh scheduled run whose receipt covers the `williamos` brain with
-restore proof.
+`scp -r "$HH:C:/HermesLab"` was pulling **27.32 GB across 1,078,891 files** — eight-plus
+`williamos-runtime-<sha>` deployment copies, each ~1.1 GB with its own `node_modules` and `.next`.
+That is commit-pinned build output, reproducible from git, and already named in this script's own
+`excluded` list. The repository the step exists to preserve — `C:\HermesLab\.git` — is **113 files**.
+At the observed rate the nightly job would have run about three hours, mostly copying `node_modules`.
+
+Replaced with a tar built on the Hermes side with exclusions, transferred as one file:
+**27.32 GB → 1.3 GB, a 20x reduction**, and one transfer instead of a million round trips.
+
+The exclusion behaviour was verified rather than assumed: on `bsdtar 3.5.2 / libarchive 3.5.2`,
+`--exclude=node_modules` **does** match nested path components (a probe tree kept only
+`./src/keep/b.txt`, dropping both a nested and a top-level `node_modules`). An earlier suspicion that
+it matched whole pathnames only was wrong.
+
+Remaining inefficiency, deliberately not addressed here: the `williamos-runtime-<sha>` copies still
+contribute their source trees. They are commit-pinned and arguably belong in the existing
+`git-pushed-repos` exclusion, which would take this step from minutes to seconds.
+
+## Evidence
+
+**Scheduled acceptance run** — fired by cron, not by hand:
+
+```
+==== AEGIS BACKUP v1 start 20260818T201901Z ====
+   forge files=38976 bytes=3151652846 bundles_ok=9/9
+   williamos dump bytes=129389 sha=d568f3a766c52a2d86ce84dec247565d34c149df7e5c7b9c300fa49d2503eecb
+   williamos restore: RESTORE_VERIFIED  tables=40 goals=17 vector_ext=1
+   secondary pg copy sha match: yes
+==== BACKUP v1 VERIFIED (all sources protected) ====
+```
+
+`tables=40 goals=17` match the ATLAS source exactly, and `vector_ext=1` confirms the extension
+survived — the thing stock postgres would have silently dropped.
+
+**Health state after the run** (`/backup-primary/backup-state.json`):
+
+- `scheduler` — was hardcoded `OFF`, now `CRON`
+- `primary_result` — `RESTORE_VERIFIED/RESTORE_VERIFIED/RESTORE_VERIFIED/RESTORE_VERIFIED` (was three)
+- `atlas:williamos-postgres` — `RESTORE_VERIFIED`, present in `protected_sources` for the first time
+- crown-jewel manifest sha matches across primary and secondary: `8b05ff40b0bb96d8…`
+- `last_restore_verify` — `20260818T201901Z`, replacing 2026-08-10
+
+**Fail-closed negative test**, run against a variant with both pre-move addresses restored and its
+backup roots redirected into `/tmp` so it could not overwrite real receipts or health state:
+
+```
+==== BACKUP v1 FAILED: atlas:tf-postgres=FAILED atlas:williamos-postgres=FAILED
+     forge=FAILED hermes=UNAVAILABLE ====
+exit 1
+```
+
+| Case | Exit | Verdict |
+|---|---|---|
+| both nodes at dead pre-move addresses | 1 | fails closed |
+| **unmodified scheduled run (positive control)** | **0** | **passes** |
+
+Verified afterwards that `/backup-primary/backup-state.json` still held generation
+`20260818T201901Z` — the negative test did not damage the thing it was testing.
+
+## Status: AEGIS backup `PROVEN`
+
+Upgraded from the `NOT_PROVEN` recorded in #862, on current evidence: a cron-fired run whose receipt
+covers the `williamos` brain with restore proof, a health surface that reports the real schedule and
+the real protected set, and a fail-closed failure path demonstrated with a passing positive control.
 
 ## Out of scope, untouched
 
