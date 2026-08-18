@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { assertOwner, resolveOwnerUserId, type OwnerLookup } from "../lib/governance/owner"
+import { DECLARED_PRIMARY_EMAIL, isDeclaredPrimaryEmail } from "../lib/primary-identity"
 
 function lookup(overrides: Partial<OwnerLookup> = {}): OwnerLookup {
   return {
@@ -57,5 +58,24 @@ describe("owner-only authority recording", () => {
     const verdict = assertOwner("user-2", null)
     expect(verdict.ok).toBe(false)
     expect(verdict.failure).toBe("OWNER_UNRESOLVED")
+  })
+})
+
+describe("one definition of the owner", () => {
+  it("looks the owner up by the same identity device authentication gates on", async () => {
+    // The device enrollment, credential and revoke routes all require isDeclaredPrimaryEmail. If this
+    // resolved by a different rule the operator could hold write authority while being refused
+    // management of his own devices, and nothing would report the contradiction.
+    let asked: string | null = null
+    await resolveOwnerUserId(lookup({ byEmail: async (email) => { asked = email; return "owner-1" } }))
+    expect(asked).not.toBeNull()
+    expect(isDeclaredPrimaryEmail(asked!)).toBe(true)
+  })
+
+  it("still lets an explicit configuration override the declared identity", async () => {
+    let asked: string | null = null
+    await resolveOwnerUserId(lookup({ byEmail: async (email) => { asked = email; return "owner-2" } }), "someone@else.test")
+    expect(asked).toBe("someone@else.test")
+    expect(asked).not.toBe(DECLARED_PRIMARY_EMAIL)
   })
 })
