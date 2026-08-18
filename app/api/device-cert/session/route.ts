@@ -3,7 +3,8 @@ import crypto from "node:crypto"
 import { headers } from "next/headers"
 
 import { auth } from "@/lib/auth"
-import { pool } from "@/lib/db"
+import { resolveOwnerUserId } from "@/lib/governance/owner"
+import { ownerLookup } from "@/lib/governance/owner-lookup"
 
 export const dynamic = "force-dynamic"
 
@@ -31,21 +32,9 @@ export async function GET(request: Request) {
   // oldest row was wrong: this database also holds abandoned rows from setup and diagnostics, and
   // the oldest of those is not the owner. Resolve explicitly, and refuse to guess when ambiguous --
   // signing someone into the wrong identity is worse than sending them to a sign-in page.
-  let userId: string | undefined
+  let userId: string | null = null
   try {
-    const configured = process.env.WILLIAMOS_OWNER_EMAIL?.trim().toLowerCase()
-    if (configured) {
-      const byEmail = await pool.query('SELECT "id" FROM "user" WHERE lower("email") = $1 LIMIT 1', [configured])
-      userId = byEmail.rows[0]?.id
-    }
-    if (!userId) {
-      // Fall back to the only account that can actually sign in: one with a credential.
-      const credentialed = await pool.query(
-        `SELECT u."id" FROM "user" u
-           JOIN "account" a ON a."userId" = u."id" AND a."providerId" = 'credential' AND a."password" IS NOT NULL`,
-      )
-      if (credentialed.rowCount === 1) userId = credentialed.rows[0].id
-    }
+    userId = await resolveOwnerUserId(ownerLookup(), process.env.WILLIAMOS_OWNER_EMAIL)
   } catch {
     return new Response(null, { status: 303, headers: { location: "/sign-in" } })
   }
