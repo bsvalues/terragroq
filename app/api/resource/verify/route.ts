@@ -1,3 +1,4 @@
+import { appendGovernanceEvent } from "@/lib/governance/events"
 import { brokeredExec } from "@/lib/fabric/broker.mjs"
 import { pool } from "@/lib/db"
 import { getSession } from "@/lib/session"
@@ -102,6 +103,26 @@ export async function POST(request: Request) {
   const contradicted = observations.filter((observation) => observation.agrees === false)
   const confirmed = observations.filter((observation) => observation.agrees === true)
   const unreachable = observations.filter((observation) => observation.exists === null)
+
+  // Recorded so the answer can return to the thread that asked without re-running the probe. The
+  // thread binds to this event by reference; nothing copies the verdict.
+  const observedSummary = {
+    probed: observations.length,
+    confirmed: confirmed.length,
+    contradicted: contradicted.length,
+    unreachable: unreachable.length,
+    observations: observations.map((item) => ({ identity: item.identity, detail: item.detail, agrees: item.agrees })),
+  }
+  await appendGovernanceEvent({
+    userId: session.user.id,
+    eventType: "EVIDENCE_RECORDED",
+    entityType: "resource_verification",
+    entityId: record.identity,
+    actor: "williamos",
+    reason: `bounded verification of ${record.identity} (#882)`,
+    after: observedSummary,
+    metadata: observedSummary,
+  })
 
   return Response.json(
     {
