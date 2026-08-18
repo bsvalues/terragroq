@@ -17,6 +17,21 @@ import {
 const NODE = { transport: "ssh", host: "10.0.0.1", user: "svc" }
 
 /**
+ * Alter a hex string so it is guaranteed to differ from the original.
+ *
+ * The fakes need a value that is definitely NOT the real digest. Doing that by overwriting the first
+ * character with a constant is the obvious approach and it is quietly wrong: whenever the digest
+ * already began with that character the "corrupted" value equalled the original, the runner
+ * correctly reported success, and the test failed roughly one run in sixteen. That is #833 -- a
+ * suite that returned both answers for the same commit, which makes it useless as a merge gate.
+ *
+ * Choosing the replacement relative to the original character removes the coincidence entirely.
+ */
+function corruptHex(hex: string): string {
+  return hex.replace(/^./, (c) => (c === "0" ? "1" : "0"))
+}
+
+/**
  * An honest Linux node: it really writes the payload it was given and really hashes it, so a bug in
  * the runner's own hashing shows up as a failure rather than being masked by a canned digest.
  */
@@ -39,7 +54,8 @@ function honestNode(overrides: { corruptPull?: boolean; wrongPushHash?: boolean;
         const target = /> (\S+)/.exec(command)?.[1] ?? ""
         files.set(target, payload)
         const digest = crypto.createHash("sha256").update(payload).digest("hex")
-        return { stdout: `${overrides.wrongPushHash ? digest.replace(/^./, "0") : digest}\n` }
+        const wrong = corruptHex(digest)
+        return { stdout: `${overrides.wrongPushHash ? wrong : digest}\n` }
       }
       if (command.startsWith("cat ")) {
         const stored = files.get(command.slice(4).trim()) ?? ""
@@ -217,5 +233,15 @@ describe("summarise", () => {
     const results = await runNodeBaseline("n1", NODE, { exec: honestNode({ failAt: "docker" }).exec })
     const summary = summarise({ ranAt: "now", results })
     expect(summary.nodes[0].firstFailure).toMatchObject({ step: "containers" })
+  })
+})
+
+describe("corruptHex", () => {
+  it("changes the value for every possible leading character", () => {
+    for (const c of "0123456789abcdef") {
+      const original = `${c}${"a".repeat(63)}`
+      expect(corruptHex(original)).not.toBe(original)
+      expect(corruptHex(original)).toHaveLength(original.length)
+    }
   })
 })
