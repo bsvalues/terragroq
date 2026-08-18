@@ -68,3 +68,9 @@ export declare function encodePowerShell(command: string): string
  * from this file breaks `tsc --noEmit` on main without any test going red.
  */
 export declare function assertNoCmdVariableExpansion(args: readonly string[]): void
+
+/** Turn PowerShell's CLIXML error-stream encoding back into the sentence it started as. */
+export declare function decodeCliXml(text: unknown): string
+
+/** The line of ssh stderr that names the actual fault, skipping OpenSSH's advisories. */
+export declare function meaningfulSshError(stderr: unknown): string
