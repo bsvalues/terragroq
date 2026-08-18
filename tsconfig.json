@@ -6,6 +6,9 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    // The reviewer-side gate (scripts/verify-pr-work-context.mjs) runs on a bare Node 24 in CI,
+    // which strips types but does not guess extensions, so its imports must name the .ts file.
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
