@@ -96,7 +96,7 @@ describe("work context receipt", () => {
 
   it("goes stale when the work order changes underneath the lane", () => {
     const issued = issueWorkContextReceipt(proven)
-    expect(verifyWorkContextReceipt(issued.receipt, { ...proven, authorityLevel: "A4_RELEASE" }).ok).toBe(false)
+    expect(verifyWorkContextReceipt(issued.receipt, { ...proven, authorityLevel: "A4_SCHEMA" }).ok).toBe(false)
   })
 
   it("tells a stale receipt apart from a doctored one, because the remedies differ", () => {
@@ -179,11 +179,13 @@ describe("receipt authority binding", () => {
   })
 
   it("refuses authority the lane simply asserted about itself", () => {
-    // The grant exists but only reaches A2; claiming A4 must not pass because the lane said so.
-    const verdict = assertAuthorityGranted("A4_RELEASE", scopeKeys,
+    // The grant exists but only reaches A2; claiming a real higher level must not pass just because
+    // the lane said so. A4_SCHEMA is used deliberately -- it is a level that actually exists, so this
+    // tests the rank check rather than the unknown-id check.
+    const verdict = assertAuthorityGranted("A4_SCHEMA", scopeKeys,
       [{ scope: null, authorityLevel: "A2_WRITE_OWN", status: "active" }], covers)
     expect(verdict.ok).toBe(false)
-    expect(verdict.detail).toContain("A4_RELEASE is required")
+    expect(verdict.detail).toContain("A4_SCHEMA is required")
   })
 
   it("refuses a revoked or expired grant", () => {
@@ -232,5 +234,27 @@ describe("receipt authority binding", () => {
     ], covers)
     expect(verdict.detail).toContain("revoked")
     expect(verdict.detail).toContain("does not cover")
+  })
+})
+
+describe("unknown authority levels fail closed", () => {
+  const covers = (grant: { authorityLevel: string; status: string }, required: string) =>
+    grant.status === "active" && grant.authorityLevel === required
+      ? { ok: true, reason: "covered" }
+      : { ok: false, reason: "not covered" }
+  const granted = [{ scope: null, authorityLevel: "A2_WRITE_OWN", status: "active" }]
+
+  it("refuses an authority id that does not exist", () => {
+    // authorityRank() ranks an unknown id 0, so without this check grantCovers reports "covered"
+    // for anything misspelled -- and a typo becomes a free pass while the correct spelling is
+    // refused.
+    for (const bogus of ["A5_DEPLOY", "A9_ROOT", "NONSENSE_LEVEL", "A4_RELEASE", "a2_write_own"]) {
+      expect(assertAuthorityGranted(bogus, ["WO-1"], granted, covers))
+        .toMatchObject({ ok: false, failure: "FAILED_AUTHORITY_NOT_GRANTED" })
+    }
+  })
+
+  it("still accepts the real level the grant provides", () => {
+    expect(assertAuthorityGranted("A2_WRITE_OWN", ["WO-1"], granted, covers).ok).toBe(true)
   })
 })
