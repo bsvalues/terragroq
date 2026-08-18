@@ -264,6 +264,15 @@ export const projectResource = pgTable(
     canonicalIdentity: text("canonicalIdentity").notNull(),
     label: text("label").notNull(),
     relationship: text("relationship").notNull(),
+    // What may be done to this resource at all. Resolution is a read; this is a declaration, not a grant.
+    allowedOperations: text("allowedOperations").array().notNull().default(sql`'{}'::text[]`),
+    // An agent drafts the first version of a record from artefacts it found. Until a human confirms it,
+    // every answer derived from it has to be able to say it is unconfirmed.
+    ratifiedAt: timestamp("ratifiedAt", { withTimezone: true }),
+    ratifiedBy: text("ratifiedBy"),
+    // Names the resource these rows describe, e.g. "pacs". Without it the parts of a resource have no
+    // handle to resolve by, which is what acceptance run 4 hit.
+    resourceKey: text("resourceKey"),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
