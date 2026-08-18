@@ -183,6 +183,33 @@ from the deployed script so it cannot drift into testing a restatement):
 
 `GATE_TRUTH_TABLE: ALL PASS`
 
+## The #831 gate rejected this twice, and was right both times
+
+Recorded because the failures are more useful than the pass, and because both were mine.
+
+**1. `FAILED_STALE_MAIN` + no declared receipt.** The first receipt was anchored to `d9b92c1` while
+main had moved three commits, one of which was #868 — the very check that would judge it. The pull
+request also carried no `WORK_CONTEXT_RECEIPT` block at all. Fixed by rebasing onto `1f9161b`,
+re-issuing, and declaring the block in the body.
+
+**2. `FAILED_SCOPE_ESCAPE`.** The reservation matcher is:
+
+```js
+return normalized.endsWith("/") ? path.startsWith(normalized) : path === normalized
+```
+
+A reservation is a **prefix only when it ends in `/`**. `scripts/lab-control` without the slash must
+match a file path exactly, so it matched nothing and every changed file counted as an escape. The
+declaration was malformed, not the gate. Re-issued as `scripts/lab-control/` and `docs/reports/`.
+
+**Operational note for the next lane:** `gh run rerun --failed` replays the *original event payload*,
+which carries the pull request body as it was when the event fired. Editing the body and re-running
+therefore re-checks the old body and fails identically. CI here triggers on
+`[opened, synchronize, reopened]` — not `edited` — so a corrected receipt needs a push to be seen.
+
+Throughout all of this the vitest suite was green. That is the point of criterion 8: a green suite is
+not a proven premise.
+
 ## Status: AEGIS backup `PROVEN`
 
 Upgraded from the `NOT_PROVEN` recorded in #862, on current evidence: a cron-fired run whose receipt
