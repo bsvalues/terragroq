@@ -62,6 +62,26 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 
+  it("rejects a loopback-looking request that was actually forwarded by the proxy", async () => {
+    // Host is set by the caller, so it cannot establish locality on its own. A request that carries
+    // forwarding headers reached this server through the proxy and is therefore not a local client,
+    // whatever it claims its Host to be.
+    const req = new Request("http://localhost/api/setup/local-config", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Forwarded-Host": "192.168.88.9:3443",
+      },
+      body: JSON.stringify({}),
+    })
+    const response = await POST(req)
+    const body = await response.json()
+
+    expect(response.status).toBe(403)
+    expect(body.ok).toBe(false)
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
   it("rejects writes when signup mode is closed", async () => {
     process.env.AUTH_SIGNUP_MODE = "closed"
 

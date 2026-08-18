@@ -47,6 +47,15 @@ describe("HERMES HTTPS proxy boundary", () => {
     })
   })
 
+  it("overwrites a hostile Host, which is what keeps the local setup route unreachable", () => {
+    // /api/setup/local-config decides it is being called locally by reading Host, and rewrites
+    // DATABASE_URL and BETTER_AUTH_SECRET when it believes that. Preserving the caller's Host here
+    // would look like a proxy fix and would expose that route to the network.
+    const forwarded = buildUpstreamHeaders({ host: "localhost", "content-type": "application/json" })
+    expect(forwarded.host).toBe("192.168.88.9:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
+  })
+
   it("strips upstream hop-by-hop headers and adds the HTTPS transport policy", () => {
     expect(buildDownstreamHeaders({
       connection: "keep-alive",
