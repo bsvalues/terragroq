@@ -78,7 +78,8 @@ const admission = await admitted.text()
 console.log(`POST /api/objective -> HTTP ${admitted.status}`)
 console.log(admission.slice(0, 400))
 
-const submitted = await call(`${BASE}/api/intent`, { intent: objective }, sessionCookie)
-const result = await submitted.text()
-console.log(`POST /api/intent    -> HTTP ${submitted.status}`)
-console.log(result.slice(0, 400))
+// #876: with an objective admitted, ask WilliamOS what the objective is ABOUT.
+const resolved = await fetch(`${BASE}/api/resource?identity=PACS`, { headers: { cookie: sessionCookie } })
+const record = await resolved.text()
+console.log(`GET  /api/resource?identity=PACS -> HTTP ${resolved.status}`)
+console.log(record.slice(0, 700))
