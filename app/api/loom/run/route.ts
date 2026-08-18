@@ -4,6 +4,7 @@ import { spawn } from "node:child_process"
 import { getSession } from "@/lib/session"
 import { resolveLoomOperation } from "@/lib/loom/operations"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
+import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
 export const dynamic = "force-dynamic"
 // Node runtime, not edge: this streams the output of a real process on this machine.
@@ -40,6 +41,14 @@ export async function POST(request: Request) {
     return Response.json({ error: resolution.refusal }, { status: resolution.refusal === "UNKNOWN_OPERATION" ? 404 : 409 })
   }
   const operation = resolution.operation
+
+  // Reading repository state or tailing a log proves nothing and changes nothing; restarting the
+  // cockpit does. The gate follows the operation's own mutating flag rather than a second list that
+  // could drift away from it.
+  if (operation.mutating) {
+    const context = await requireWorkContext()
+    if (!context.ok) return workContextRefusal(context)
+  }
 
   const command = operation.command === "node" ? process.execPath : operation.command
   const child = spawn(command, [...operation.args], {

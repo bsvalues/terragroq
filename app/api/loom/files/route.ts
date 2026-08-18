@@ -3,6 +3,7 @@ import path from "node:path"
 
 import { getSession } from "@/lib/session"
 import { isIgnoredEntry, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -71,6 +72,11 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
+
+  // Writing to the checkout is a mutation, so the premise has to have been proven first. Reads stay
+  // open: gating them would push a lane toward working blind rather than toward proving context.
+  const context = await requireWorkContext()
+  if (!context.ok) return workContextRefusal(context)
 
   let body: { path?: unknown; content?: unknown; modifiedAt?: unknown }
   try {
