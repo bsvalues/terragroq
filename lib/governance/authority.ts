@@ -6,7 +6,7 @@
 // covers the required authority level and action. This module holds the pure,
 // deterministic checks so they are reproducible and unit-testable.
 
-import { authorityRank, type AuthorityId } from "@/lib/goal/taxonomy"
+import { isAuthorityId, providedAuthorityRank, requiredAuthorityRank, type AuthorityId } from "@/lib/goal/taxonomy"
 import type { AuthorityGrant } from "@/lib/db/schema"
 
 export interface GrantCheck {
@@ -37,7 +37,16 @@ export function grantCovers(
   const live = isGrantActive(grant)
   if (!live.ok) return live
 
-  if (authorityRank(requiredAuthority) > authorityRank(grant.authorityLevel)) {
+  // Directional ranking: an undefined REQUIRED level outranks everything so nothing covers it, and an
+  // undefined GRANTED level provides nothing. Using the raw rank here meant a misspelled requirement
+  // ranked 0 and every grant "covered" it.
+  if (!isAuthorityId(requiredAuthority)) {
+    return { ok: false, reason: `"${requiredAuthority}" is not a defined authority level` }
+  }
+  if (!isAuthorityId(grant.authorityLevel)) {
+    return { ok: false, reason: `Grant ${grant.ref ?? `#${grant.id}`} declares undefined authority "${grant.authorityLevel}"` }
+  }
+  if (requiredAuthorityRank(requiredAuthority) > providedAuthorityRank(grant.authorityLevel)) {
     return {
       ok: false,
       reason: `Grant provides ${grant.authorityLevel} but ${requiredAuthority} is required`,
@@ -66,6 +75,8 @@ export function strongestActiveGrant(grants: AuthorityGrant[], now: Date = new D
   const active = grants.filter((g) => isGrantActive(g, now).ok)
   if (active.length === 0) return null
   return active.reduce((best, g) =>
-    authorityRank(g.authorityLevel) > authorityRank(best.authorityLevel) ? g : best,
+    // provided-rank: a grant declaring an undefined level ranks below every real one rather than
+    // being picked as the strongest.
+    providedAuthorityRank(g.authorityLevel) > providedAuthorityRank(best.authorityLevel) ? g : best,
   )
 }

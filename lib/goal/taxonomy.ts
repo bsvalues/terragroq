@@ -112,8 +112,45 @@ export function mode(id: string) {
 export function authority(id: string) {
   return AUTHORITY_LEVELS.find((a) => a.id === id)
 }
+/**
+ * Raw rank lookup. An id nobody defined ranks 0.
+ *
+ * Prefer the directional helpers below for anything that decides whether an action is permitted. This
+ * function cannot be made safe on its own, because it is used on BOTH sides of every comparison: an
+ * undefined id has to rank HIGH when it is the level being demanded, so nothing covers it, and LOW
+ * when it is the level being provided, so it grants nothing. One default cannot satisfy both, and the
+ * one it has silently satisfies neither -- `grantCovers` compared 0 against a real grant and reported
+ * "covered", so a misspelled level was a free pass while the correct spelling was refused.
+ */
 export function authorityRank(id: string): number {
   return authority(id)?.rank ?? 0
+}
+
+/** Whether this string is actually one of the defined authority levels. */
+export function isAuthorityId(id: string | null | undefined): boolean {
+  return typeof id === "string" && AUTHORITY_LEVELS.some((level) => level.id === id.trim())
+}
+
+/**
+ * Rank a level that is being DEMANDED. An undefined id outranks everything, so no grant covers it.
+ *
+ * That is the fail-closed direction: a caller asking for authority nobody defined should be refused,
+ * not quietly treated as asking for the least.
+ */
+export function requiredAuthorityRank(id: string | null | undefined): number {
+  if (!isAuthorityId(id)) return Number.POSITIVE_INFINITY
+  return authorityRank((id as string).trim())
+}
+
+/**
+ * Rank a level that is being PROVIDED -- by a grant, a ceiling, or an agent's maximum.
+ *
+ * An undefined id provides nothing, so it ranks below every real level. A malformed grant must not
+ * become the strongest one in the registry.
+ */
+export function providedAuthorityRank(id: string | null | undefined): number {
+  if (!isAuthorityId(id)) return -1
+  return authorityRank((id as string).trim())
 }
 
 // The default, safest posture for any newly classified goal.
