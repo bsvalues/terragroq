@@ -14,12 +14,35 @@ import { describe, expect, it } from "vitest"
  * Comparing the two as data closes it, and does so in the suite people actually run.
  */
 
-const PAIRS = [
-  ["lib/fabric/run-baseline.mjs", "lib/fabric/run-baseline.d.mts"],
-  ["scripts/governance/device-session.mjs", "scripts/governance/device-session.d.mts"],
-] as const
-
 const ROOT = path.resolve(__dirname, "..")
+
+const SKIP_DIRECTORIES = new Set(["node_modules", ".git", ".next", "dist", "build", ".williamos"])
+
+/**
+ * Discovered, not listed.
+ *
+ * A hardcoded list guards the pairs that existed the day it was written and silently misses the next
+ * one -- which is the same shape as the bug this file exists to catch. Walking for them means a new
+ * pair is covered the moment it appears, without anyone remembering to add it here.
+ */
+function findPairs(directory: string, found: [string, string][] = []): [string, string][] {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const full = path.join(directory, entry.name)
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRECTORIES.has(entry.name)) findPairs(full, found)
+    } else if (entry.name.endsWith(".d.mts")) {
+      const implementation = full.slice(0, -".d.mts".length) + ".mjs"
+      if (fs.existsSync(implementation)) {
+        found.push([path.relative(ROOT, implementation), path.relative(ROOT, full)])
+      }
+    }
+  }
+  return found
+}
+
+const PAIRS = findPairs(ROOT)
+
+
 
 /** Names exported at runtime: `export function x`, `export const x`, `export async function x`. */
 function runtimeExports(source: string): string[] {
@@ -49,6 +72,22 @@ describe.each(PAIRS)("%s declares everything it exports", (implPath, declPath) =
     // at runtime, and fail only when the line actually executes.
     const phantom = declaredExports(decl).filter((name) => !runtimeExports(impl).includes(name))
     expect(phantom, `${declPath} declares absent exports: ${phantom.join(", ")}`).toEqual([])
+  })
+})
+
+describe("the discovery itself", () => {
+  // If the walk ever returned nothing, every describe.each above would vanish and the suite would go
+  // green having checked nothing at all -- the quietest possible failure.
+  it("finds the pairs that are known to exist", () => {
+    const implementations = PAIRS.map(([impl]) => impl.split(path.sep).join("/"))
+    expect(implementations).toContain("lib/fabric/run-baseline.mjs")
+    expect(implementations).toContain("scripts/governance/device-session.mjs")
+  })
+
+  it("pairs each declaration with its own sibling implementation", () => {
+    for (const [impl, decl] of PAIRS) {
+      expect(impl.slice(0, -".mjs".length)).toBe(decl.slice(0, -".d.mts".length))
+    }
   })
 })
 
