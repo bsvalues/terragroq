@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto"
 import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/providers"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
+import { assertThreadResume, loomThreadOwner } from "@/lib/loom/threads"
+import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -50,6 +52,25 @@ export async function POST(request: Request) {
   const requested = typeof body.sessionId === "string" && SESSION_ID.test(body.sessionId) ? body.sessionId : null
   const resuming = requested !== null && body.resume === true
   const sessionId = requested ?? randomUUID()
+
+  // Shape is not ownership. Resuming replays a thread's whole history, so the id has to belong to
+  // the caller -- otherwise anyone holding another operator's id can read their conversation.
+  const resume = assertThreadResume({
+    resuming,
+    owner: resuming && requested ? await loomThreadOwner(requested) : null,
+    userId: session.user.id,
+  })
+  if (!resume.ok) {
+    return Response.json({ error: resume.failure, detail: resume.detail }, { status: 403, headers: { "cache-control": "no-store" } })
+  }
+
+  // This path spawns the CLI with acceptEdits against the real checkout, which makes it the most
+  // powerful mutation surface in the application -- strictly broader than /api/loom/edit, which has
+  // been gated since #831. Leaving it open meant a lane refused a one-line edit could ask the agent
+  // to make the same change, so the gate was decoration. The local path above is deliberately not
+  // gated: it only produces text, and gating conversation pushes operators back to working blind.
+  const context = await requireWorkContext()
+  if (!context.ok) return workContextRefusal(context)
 
   const args = [
     "--print",
