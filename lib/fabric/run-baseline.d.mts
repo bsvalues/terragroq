@@ -15,6 +15,17 @@ export interface NodeRecord {
    * and ending a bounded process rather than by having a container runtime installed.
    */
   workloads?: "containers" | "processes"
+  /** Free-text provenance, e.g. why a node is addressed by name rather than by address. */
+  note?: string
+  /**
+   * Fields this code has not heard of.
+   *
+   * The registry is edited by more than one lane, and a field this type does not name is far more
+   * likely to be another lane's than to be junk. Declaring the type closed made the safe-write path
+   * -- whose entire purpose is carrying unknown fields through untouched -- fail to typecheck, which
+   * is the type disagreeing with the requirement rather than with the code.
+   */
+  [key: string]: unknown
 }
 
 export interface RunOptions {
