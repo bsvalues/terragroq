@@ -192,11 +192,19 @@ async function main() {
     return
   }
 
-  const verdict = verifyWorkContextReceipt(claim?.receipt, {
-    ...claim?.facts,
-    mainSha: live.mainSha,
-    doctrineDigest: live.doctrineDigest,
-  })
+  // The claim carries the values it was issued against, so a stale receipt and a doctored one can be
+  // told apart -- they have different remedies, and reporting both as "main has moved" pointed a
+  // tampered claim at the wrong fix.
+  //
+  // The third argument comes from the claim file and is therefore lane-supplied, which is safe: live
+  // main and doctrine are substituted over it before verification, so it never widens what passes. It
+  // is consulted only after a mismatch has already been decided, and only to choose which refusal to
+  // report. Steering that choice would require finding a preimage for the issued token.
+  const verdict = verifyWorkContextReceipt(
+    claim?.receipt,
+    { ...claim?.facts, mainSha: live.mainSha, doctrineDigest: live.doctrineDigest },
+    { mainSha: claim?.facts?.mainSha, doctrineDigest: claim?.facts?.doctrineDigest },
+  )
   if (!verdict.ok) {
     deny(formatRefusal({ failure: verdict.failure, detail: verdict.detail }))
     return
