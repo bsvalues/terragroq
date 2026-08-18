@@ -61,3 +61,10 @@ export declare function defaultExec(
   options: { timeout: number; windowsHide: boolean },
 ): Promise<{ stdout: string; stderr?: string }>
 export declare function encodePowerShell(command: string): string
+
+/**
+ * Throws when an argument carries a %NAME% pair, which cmd.exe substitutes before ssh sees it.
+ * Declared here as well as implemented in the .mjs: vitest does not typecheck, so an export missing
+ * from this file breaks `tsc --noEmit` on main without any test going red.
+ */
+export declare function assertNoCmdVariableExpansion(args: readonly string[]): void
