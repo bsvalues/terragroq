@@ -50,6 +50,7 @@ export type WorkContextFailure =
   | "FAILED_EXISTING_SUBSYSTEM_NOT_RECONCILED"
   | "FAILED_SCOPE_COLLISION"
   | "FAILED_PREMATURE_HANDOFF"
+  | "FAILED_AUTHORITY_NOT_GRANTED"
 
 export interface WorkContextVerdict {
   ok: boolean
@@ -145,4 +146,68 @@ export function verifyWorkContextReceipt(presented: unknown, live: WorkContextFa
  */
 export function requiresWorkContext(mutating: boolean): boolean {
   return mutating
+}
+
+/**
+ * Prove the authority the lane claims is one somebody actually granted it.
+ *
+ * Until now the receipt took `authorityLevel` as a claim, which made it decoration: a lane could
+ * write "A4_RELEASE" into its own premise and the gate would hash it approvingly. The doctrine this
+ * repository already states is the opposite -- approval is not authority, and nothing may act above
+ * A0 unless a durable grant record exists that is active and covers the level. So the claim is now
+ * checked against grant rows.
+ *
+ * Scope is enforced when the grant declares one. A grant issued for one outcome must not silently
+ * cover a different piece of work: that is how a narrow permission becomes a general one.
+ *
+ * The grant checks themselves are NOT reimplemented here -- `grantCovers` already encodes revocation,
+ * expiry, rank and blocked actions, and a second copy of that logic would eventually disagree with
+ * the first.
+ */
+export function assertAuthorityGranted(
+  claimed: string,
+  scopeKeys: readonly string[],
+  grants: readonly AuthorityGrantLike[],
+  covers: (grant: AuthorityGrantLike, required: string) => { ok: boolean; reason: string },
+): WorkContextVerdict {
+  if (!NON_EMPTY(claimed)) {
+    return { ok: false, failure: "FAILED_WORK_ORDER_NOT_READ", detail: "no authority level claimed" }
+  }
+  if (!Array.isArray(grants) || grants.length === 0) {
+    return {
+      ok: false,
+      failure: "FAILED_AUTHORITY_NOT_GRANTED",
+      detail: `no authority grant exists covering ${claimed}`,
+    }
+  }
+
+  const reasons: string[] = []
+  for (const grant of grants) {
+    const verdict = covers(grant, claimed)
+    if (!verdict.ok) {
+      reasons.push(verdict.reason)
+      continue
+    }
+    // An unscoped grant is general by construction. A scoped one must name this work.
+    const scope = typeof grant.scope === "string" ? grant.scope.trim() : ""
+    if (scope && !scopeKeys.some((key) => NON_EMPTY(key) && scope.includes(key.trim()))) {
+      reasons.push(`grant scope "${scope}" does not cover ${scopeKeys.filter(Boolean).join(" or ")}`)
+      continue
+    }
+    return { ok: true }
+  }
+
+  return {
+    ok: false,
+    failure: "FAILED_AUTHORITY_NOT_GRANTED",
+    // The reasons matter: "expired", "wrong scope" and "rank too low" are three different fixes.
+    detail: reasons.slice(0, 3).join("; ") || `no active grant covers ${claimed}`,
+  }
+}
+
+/** The parts of a grant this check reads. Kept structural so tests need no database. */
+export interface AuthorityGrantLike {
+  scope?: string | null
+  authorityLevel: string
+  status: string
 }

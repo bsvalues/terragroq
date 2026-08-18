@@ -1,7 +1,8 @@
 import { getSession } from "@/lib/session"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { pool } from "@/lib/db"
-import { issueWorkContextReceipt, type WorkContextFacts } from "@/lib/governance/work-context-receipt"
+import { assertAuthorityGranted, issueWorkContextReceipt, type WorkContextFacts } from "@/lib/governance/work-context-receipt"
+import { grantCovers } from "@/lib/governance/authority"
 import { measureLiveWorkContext } from "@/lib/governance/work-context-live"
 
 export const dynamic = "force-dynamic"
@@ -45,6 +46,42 @@ export async function POST(request: Request) {
     // Measured values overwrite claimed ones rather than merging under them.
     mainSha: live.mainSha,
     doctrineDigest: live.doctrineDigest,
+  }
+
+  // The claimed authority is checked against grant rows before a receipt is issued. Taking it as a
+  // claim made it decoration: a lane could write its own authority level into its own premise.
+  let grants: Array<{ scope: string | null; authorityLevel: string; status: string; expiresAt: Date | null; ref: string | null; id: number; allowedActions: string[]; blockedActions: string[]; revokeReason: string | null }> = []
+  try {
+    const rows = await pool.query(
+      `SELECT "id", "ref", "scope", "authorityLevel", "status", "expiresAt", "allowedActions", "blockedActions", "revokeReason"
+         FROM "authority_grant" WHERE "userId" = $1`,
+      [session.user.id],
+    )
+    grants = rows.rows
+  } catch {
+    // An unreadable grant registry is not permission. Refusing is the only safe reading.
+    return Response.json(
+      { ok: false, failure: "FAILED_AUTHORITY_NOT_GRANTED", detail: "the authority registry could not be read" },
+      { status: 409, headers: { "cache-control": "no-store" } },
+    )
+  }
+
+  const authority = assertAuthorityGranted(
+    facts.authorityLevel,
+    [facts.workOrderRef, facts.parentOutcome],
+    grants,
+    (grant, required) => grantCovers(grant as never, required as never),
+  )
+  if (!authority.ok) {
+    return Response.json(
+      {
+        ok: false,
+        failure: authority.failure,
+        detail: authority.detail,
+        remedy: "An owner-recorded authority grant covering this work order or outcome must exist before a lane may mutate. Approval is not authority.",
+      },
+      { status: 409, headers: { "cache-control": "no-store" } },
+    )
   }
 
   const verdict = issueWorkContextReceipt(facts)
