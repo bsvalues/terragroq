@@ -103,5 +103,18 @@ const observed = await verified.text()
 console.log(`POST /api/resource/verify        -> HTTP ${verified.status}`)
 console.log(observed.slice(0, 900))
 
+// #884: the whole point -- one read that returns the answer to the thread that asked.
+const admittedRef = JSON.parse(admission).workOrder
+const thread = await fetch(`${BASE}/api/objective/thread?workOrder=${admittedRef}&identity=PACS`, {
+  headers: { cookie: sessionCookie },
+})
+const answer = await thread.json()
+console.log(`GET  /api/objective/thread       -> HTTP ${thread.status}`)
+console.log(`  ${answer.summary ?? answer.error}`)
+for (const item of answer.items ?? []) {
+  console.log(`  [${item.kind}] ${item.basis}/${item.state}  ${String(item.summary).slice(0, 96)}`)
+}
+
+
 
 
