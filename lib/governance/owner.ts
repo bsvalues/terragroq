@@ -13,6 +13,8 @@
  * this is here to prevent.
  */
 
+import { DECLARED_PRIMARY_EMAIL, normalizeIdentityEmail } from "@/lib/primary-identity"
+
 export interface OwnerLookup {
   /** The user id for a configured owner address, or null. */
   byEmail(email: string): Promise<string | null>
@@ -27,11 +29,14 @@ export interface OwnerVerdict {
 }
 
 export async function resolveOwnerUserId(lookup: OwnerLookup, configuredEmail?: string): Promise<string | null> {
-  const configured = configuredEmail?.trim().toLowerCase()
-  if (configured) {
-    const byEmail = await lookup.byEmail(configured)
-    if (byEmail) return byEmail
-  }
+  // Falling back to DECLARED_PRIMARY_EMAIL rather than skipping straight to the credential count is
+  // what keeps governance and device authentication talking about the same person. The device
+  // enrollment, credential and revoke routes all gate on that constant; if this resolved an owner by
+  // a different rule, the operator could hold write authority while being refused management of his
+  // own devices, and nothing would report a contradiction.
+  const configured = normalizeIdentityEmail(configuredEmail?.trim() || DECLARED_PRIMARY_EMAIL)
+  const byEmail = await lookup.byEmail(configured)
+  if (byEmail) return byEmail
   return await lookup.soleCredentialed()
 }
 

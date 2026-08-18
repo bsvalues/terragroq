@@ -65,6 +65,15 @@ if (-not (Test-Path (Join-Path $standalone "server.js"))) {
   throw "No standalone build at $standalone. Run 'pnpm build' first."
 }
 
+# The runtime's .env.local is the one file here that cannot be rebuilt, and the standalone output
+# ships a .env.local of its own -- the repository's. Copying the standalone tree wholesale therefore
+# replaces the runtime's configuration with the developer's: a different DATABASE_URL, a different
+# BETTER_AUTH_SECRET, and no device identity for the phone's mTLS. The application still answers 200
+# on /sign-in while doing it, so nothing looks wrong. This is not hypothetical; it happened.
+$envPath = Join-Path $Runtime ".env.local"
+$envGuard = $null
+if (Test-Path $envPath) { $envGuard = (Get-FileHash $envPath -Algorithm SHA256).Hash }
+
 # Stop the supervised task AND anything still holding the port. Stop-ScheduledTask returns before the
 # child process has exited, and a half-stopped server keeps its file handles, so the copy below would
 # silently fail on exactly the files that matter.
@@ -99,6 +108,14 @@ if ($WithDependencies) {
 
 if (-not (Test-Path (Join-Path $Runtime ".env.local"))) {
   throw "The runtime lost its .env.local. Restore it before starting: the cockpit cannot resolve the owner without WILLIAMOS_OWNER_EMAIL."
+}
+
+# Prove the configuration survived the copy rather than assuming it did.
+if ($envGuard) {
+  $envNow = if (Test-Path $envPath) { (Get-FileHash $envPath -Algorithm SHA256).Hash } else { $null }
+  if ($envNow -ne $envGuard) {
+    throw "The deploy modified $envPath. Nothing here should touch it; restore it from the runtime backup before starting, or the cockpit will come up pointed at the wrong database."
+  }
 }
 
 Start-ScheduledTask -TaskName $TaskName
