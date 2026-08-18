@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  assertAuthorityGranted,
   issueWorkContextReceipt,
   receiptToken,
   requiresWorkContext,
@@ -99,5 +100,80 @@ describe("work context receipt", () => {
     expect(requiresWorkContext(true)).toBe(true)
     // Reads stay open: gating them pushes a lane toward working blind instead of proving context.
     expect(requiresWorkContext(false)).toBe(false)
+  })
+})
+
+describe("receipt authority binding", () => {
+  // grantCovers is the real implementation's checker; these tests supply a stand-in so the binding
+  // logic is tested without a database, and so a change in rank rules is caught by ITS tests, not
+  // duplicated here.
+  const covers = (grant: { authorityLevel: string; status: string }, required: string) =>
+    grant.status !== "active"
+      ? { ok: false, reason: `grant status is ${grant.status}` }
+      : grant.authorityLevel === required
+        ? { ok: true, reason: "covered" }
+        : { ok: false, reason: `grant provides ${grant.authorityLevel} but ${required} is required` }
+
+  const scopeKeys = ["WO-831-GATE", "OUTCOME-762"]
+
+  it("refuses a lane with no grant at all", () => {
+    expect(assertAuthorityGranted("A2_WRITE_OWN", scopeKeys, [], covers))
+      .toMatchObject({ ok: false, failure: "FAILED_AUTHORITY_NOT_GRANTED" })
+  })
+
+  it("refuses authority the lane simply asserted about itself", () => {
+    // The grant exists but only reaches A2; claiming A4 must not pass because the lane said so.
+    const verdict = assertAuthorityGranted("A4_RELEASE", scopeKeys,
+      [{ scope: null, authorityLevel: "A2_WRITE_OWN", status: "active" }], covers)
+    expect(verdict.ok).toBe(false)
+    expect(verdict.detail).toContain("A4_RELEASE is required")
+  })
+
+  it("refuses a revoked or expired grant", () => {
+    for (const status of ["revoked", "expired"]) {
+      expect(assertAuthorityGranted("A2_WRITE_OWN", scopeKeys,
+        [{ scope: null, authorityLevel: "A2_WRITE_OWN", status }], covers).ok).toBe(false)
+    }
+  })
+
+  it("refuses a grant issued for different work", () => {
+    // This is the quiet failure worth catching: a narrow permission becoming a general one.
+    const verdict = assertAuthorityGranted("A2_WRITE_OWN", scopeKeys,
+      [{ scope: "goal:GOAL-0011", authorityLevel: "A2_WRITE_OWN", status: "active" }], covers)
+    expect(verdict).toMatchObject({ ok: false, failure: "FAILED_AUTHORITY_NOT_GRANTED" })
+    expect(verdict.detail).toContain("does not cover")
+  })
+
+  it("accepts a grant scoped to this work order", () => {
+    expect(assertAuthorityGranted("A2_WRITE_OWN", scopeKeys,
+      [{ scope: "wo:WO-831-GATE", authorityLevel: "A2_WRITE_OWN", status: "active" }], covers).ok).toBe(true)
+  })
+
+  it("accepts a grant scoped to the parent outcome", () => {
+    expect(assertAuthorityGranted("A2_WRITE_OWN", scopeKeys,
+      [{ scope: "OUTCOME-762", authorityLevel: "A2_WRITE_OWN", status: "active" }], covers).ok).toBe(true)
+  })
+
+  it("accepts an unscoped grant, which is general by construction", () => {
+    expect(assertAuthorityGranted("A2_WRITE_OWN", scopeKeys,
+      [{ scope: "", authorityLevel: "A2_WRITE_OWN", status: "active" }], covers).ok).toBe(true)
+  })
+
+  it("finds a covering grant among several that do not cover", () => {
+    const verdict = assertAuthorityGranted("A2_WRITE_OWN", scopeKeys, [
+      { scope: "goal:GOAL-0011", authorityLevel: "A2_WRITE_OWN", status: "active" },
+      { scope: null, authorityLevel: "A2_WRITE_OWN", status: "revoked" },
+      { scope: "wo:WO-831-GATE", authorityLevel: "A2_WRITE_OWN", status: "active" },
+    ], covers)
+    expect(verdict.ok).toBe(true)
+  })
+
+  it("reports why each candidate failed, since the fixes differ", () => {
+    const verdict = assertAuthorityGranted("A2_WRITE_OWN", scopeKeys, [
+      { scope: null, authorityLevel: "A2_WRITE_OWN", status: "revoked" },
+      { scope: "goal:GOAL-0011", authorityLevel: "A2_WRITE_OWN", status: "active" },
+    ], covers)
+    expect(verdict.detail).toContain("revoked")
+    expect(verdict.detail).toContain("does not cover")
   })
 })
