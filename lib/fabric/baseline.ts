@@ -27,12 +27,23 @@ export interface BaselineStep {
 
 export const BASELINE_STEPS: readonly BaselineStep[] = [
   { id: "reach", label: "Run a command", meaning: "The plane cannot execute anything on this node." },
-  { id: "containers", label: "See container state", meaning: "The plane is blind to what this node is running." },
-  { id: "start", label: "Start a service", meaning: "The plane can look but cannot act." },
+  { id: "containers", label: "See running workloads", meaning: "The plane is blind to what this node is running." },
+  { id: "start", label: "Start a workload", meaning: "The plane can look but cannot act." },
   { id: "push", label: "Send a file (verified)", meaning: "The plane cannot deliver code or config here." },
   { id: "pull", label: "Retrieve a file (verified)", meaning: "The plane cannot collect evidence from this node." },
-  { id: "stop", label: "Stop and clean up", meaning: "The plane can start work it cannot end -- the worst of the three." },
+  { id: "stop", label: "Stop it and clean up", meaning: "The plane can start work it cannot end -- the worst of the three." },
 ] as const
+
+/**
+ * How a node runs work, which decides how the gate proves lifecycle control over it.
+ *
+ * The steps proved "the plane can start and stop something here" by running a container, because
+ * every server node happens to run containers. That silently made a container runtime a requirement
+ * of being managed -- so the cockpit laptop, which by design is not a service host, failed a gate for
+ * lacking software it was never supposed to need. The capability under test is lifecycle control, not
+ * Docker.
+ */
+export type NodeWorkloads = "containers" | "processes"
 
 export const PROBE_CONTAINER = "fabric-baseline-probe"
 
