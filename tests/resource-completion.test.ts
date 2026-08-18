@@ -50,11 +50,23 @@ describe("refusing work already done", () => {
 })
 
 describe("an open contradiction stops work", () => {
-  it("refuses on a blocking conflict before anything else, and cites it", () => {
-    const verdict = assertOperationAllowed({ record: record(), operation: "read", openConflicts: [conflict] })
+  it("refuses a mutating operation on a blocking conflict, and cites it", () => {
+    const verdict = assertOperationAllowed({ record: record(), operation: "restore", openConflicts: [conflict] })
     expect(verdict.allowed).toBe(false)
     expect(verdict.refusal).toBe("BLOCKED_BY_CONFLICT")
     expect(verdict.citedConflict).toBe("CONFLICT-0001")
+  })
+
+  it("still permits looking while a conflict is open, because that is how it gets resolved", () => {
+    // #881 refused read and verify here too. That made an open conflict permanent: the only way to
+    // settle whether the record or the evidence is right is to go and check.
+    for (const operation of ["read", "verify"]) {
+      expect(assertOperationAllowed({ record: record(), operation, openConflicts: [conflict] }).allowed).toBe(true)
+    }
+    // "inspect" is read-only but this record does not permit it, so it is still refused -- and for the
+    // right reason. Being harmless is not the same as being declared.
+    const undeclared = assertOperationAllowed({ record: record(), operation: "inspect", openConflicts: [conflict] })
+    expect(undeclared.refusal).toBe("OPERATION_NOT_PERMITTED")
   })
 
   it("ignores a low-severity conflict, which is not blocking", () => {

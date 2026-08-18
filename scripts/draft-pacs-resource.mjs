@@ -58,7 +58,8 @@ const ROWS = [
   },
   {
     type: "data_source",
-    canonicalIdentity: "aegis:~/verify-pacs-bak.out",
+    // Absolute: a shell-quoted "~" is a literal tilde, and the probe correctly refuses to guess a home.
+    canonicalIdentity: "aegis:/home/bs/verify-pacs-bak.out",
     label: "Backup verification receipt: RESTORE VERIFYONLY reports the backup set valid, VERIFY_RESULT=PASS",
     relationship: RELATIONSHIP.completionEvidence,
     allowedOperations: ["read"],
