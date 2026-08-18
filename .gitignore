@@ -86,3 +86,6 @@ copilot_index.db
 
 # Hermes free-dev-agent durable quarantine marker (runtime state, never versioned)
 HERMES_FREE_AGENT_QUARANTINED
+
+# Work context receipt (WO-WILLIAMOS-FRONTIER-AGENT-PREEXECUTION-GATE) - per-lane, never shared
+.williamos/
