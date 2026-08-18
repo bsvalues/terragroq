@@ -46,11 +46,25 @@ export interface WorkContextFacts {
 export type WorkContextFailure =
   | "FAILED_CONTEXT_NOT_PROVEN"
   | "FAILED_STALE_MAIN"
+  /** The token was not issued for the facts presented alongside it -- a different failure from staleness. */
+  | "FAILED_RECEIPT_MISMATCH"
   | "FAILED_WORK_ORDER_NOT_READ"
   | "FAILED_EXISTING_SUBSYSTEM_NOT_RECONCILED"
   | "FAILED_SCOPE_COLLISION"
   | "FAILED_PREMATURE_HANDOFF"
   | "FAILED_AUTHORITY_NOT_GRANTED"
+
+/**
+ * The measured values a receipt was issued against, when the caller holds them.
+ *
+ * The ledger path does not need this: it looks the facts up by token, so anything that fails to match
+ * is drift by construction. A caller that carries the lane's own claims alongside the token -- the
+ * Claude Code PreToolUse hook -- can supply it and get the two causes told apart.
+ */
+export interface IssuedAgainst {
+  mainSha?: string
+  doctrineDigest?: string
+}
 
 export interface WorkContextVerdict {
   ok: boolean
@@ -122,20 +136,63 @@ export function receiptToken(facts: WorkContextFacts): string {
  * outlive the premise it was issued for. A moved main, an edited Work Order, or a changed doctrine
  * digest all produce a different token and therefore a refusal -- without anyone having to notice.
  */
-export function verifyWorkContextReceipt(presented: unknown, live: WorkContextFacts): WorkContextVerdict {
+export function verifyWorkContextReceipt(
+  presented: unknown,
+  live: WorkContextFacts,
+  issuedAgainst?: IssuedAgainst,
+): WorkContextVerdict {
   if (!NON_EMPTY(presented)) {
     return { ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN", detail: "no work context receipt was presented" }
   }
   const issued = issueWorkContextReceipt(live)
   if (!issued.ok) return issued
-  if (issued.receipt !== presented.trim()) {
+  const token = presented.trim()
+  if (issued.receipt === token) return { ok: true, receipt: issued.receipt }
+
+  // A mismatch has two very different causes with two very different remedies, and reporting both as
+  // "main has moved" sent a tampered receipt to the wrong fix. When the caller can say what the
+  // receipt was issued against, re-derive with those measured values: if the token comes back, the
+  // lane's claims are intact and only measured truth moved. If it still does not, the token was never
+  // issued for these claims.
+  if (issuedAgainst?.mainSha || issuedAgainst?.doctrineDigest) {
+    const asIssued = receiptToken({
+      ...live,
+      mainSha: issuedAgainst.mainSha ?? live.mainSha,
+      doctrineDigest: issuedAgainst.doctrineDigest ?? live.doctrineDigest,
+    })
+    if (asIssued === token) {
+      return { ok: false, failure: "FAILED_STALE_MAIN", detail: describeDrift(live, issuedAgainst) }
+    }
     return {
       ok: false,
-      failure: "FAILED_STALE_MAIN",
-      detail: "the receipt does not match current truth; main, the work order, or doctrine has moved",
+      failure: "FAILED_RECEIPT_MISMATCH",
+      detail: "the receipt was not issued for these facts; re-establish context rather than editing the claim",
     }
   }
-  return { ok: true, receipt: issued.receipt }
+
+  // No issuance context available. The ledger path stores the facts itself, so a mismatch there can
+  // only mean measured truth moved.
+  return {
+    ok: false,
+    failure: "FAILED_STALE_MAIN",
+    detail: "the receipt does not match current truth; main, the work order, or doctrine has moved",
+  }
+}
+
+const short = (sha: string) => sha.trim().slice(0, 10)
+
+/** Name what actually drifted, so the lane re-establishes knowing why rather than guessing. */
+function describeDrift(live: WorkContextFacts, issuedAgainst: IssuedAgainst): string {
+  const moved: string[] = []
+  if (issuedAgainst.mainSha && issuedAgainst.mainSha.trim().toLowerCase() !== live.mainSha.trim().toLowerCase()) {
+    moved.push(`main moved ${short(issuedAgainst.mainSha)} -> ${short(live.mainSha)}`)
+  }
+  if (issuedAgainst.doctrineDigest && issuedAgainst.doctrineDigest.trim() !== live.doctrineDigest.trim()) {
+    moved.push("the controlling doctrine changed")
+  }
+  return moved.length > 0
+    ? `${moved.join("; ")}; re-establish context`
+    : "the receipt is stale against current truth; re-establish context"
 }
 
 /**

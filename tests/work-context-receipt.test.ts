@@ -9,6 +9,9 @@ import {
   type WorkContextFacts,
 } from "@/lib/governance/work-context-receipt"
 
+/** A different, VALID 40-hex sha, for the case where main has advanced under the lane. */
+const MOVED_MAIN = "ab".repeat(20)
+
 /** A lane that has actually done the work the gate asks for. */
 const proven: WorkContextFacts = {
   mainSha: "6f0e1022aa11bb22cc33dd44ee55ff6677889900",
@@ -76,8 +79,12 @@ describe("work context receipt", () => {
   })
 
   it("goes stale the moment main moves", () => {
+    // MOVED_MAIN must be a VALID 40-hex sha. The literal here was 41 characters, so this case was
+    // rejected by the sha shape check and never reached the comparison -- it passed because an
+    // unparseable sha reports FAILED_STALE_MAIN too, which is the same verdict for a different reason.
     const issued = issueWorkContextReceipt(proven)
-    const afterMerge = { ...proven, mainSha: "aaaaaaa1111222233334444555566667777888899" }
+    const afterMerge = { ...proven, mainSha: MOVED_MAIN }
+    expect(issueWorkContextReceipt(afterMerge).ok).toBe(true)
     expect(verifyWorkContextReceipt(issued.receipt, afterMerge))
       .toMatchObject({ ok: false, failure: "FAILED_STALE_MAIN" })
   })
@@ -90,6 +97,56 @@ describe("work context receipt", () => {
   it("goes stale when the work order changes underneath the lane", () => {
     const issued = issueWorkContextReceipt(proven)
     expect(verifyWorkContextReceipt(issued.receipt, { ...proven, authorityLevel: "A4_RELEASE" }).ok).toBe(false)
+  })
+
+  it("tells a stale receipt apart from a doctored one, because the remedies differ", () => {
+    // Both used to report FAILED_STALE_MAIN, which sent a tampered claim at the wrong fix.
+    const issued = issueWorkContextReceipt(proven)
+
+    // Facts intact, measured truth moved -> genuinely stale.
+    const stale = verifyWorkContextReceipt(
+      issued.receipt,
+      { ...proven, mainSha: MOVED_MAIN },
+      { mainSha: proven.mainSha, doctrineDigest: proven.doctrineDigest },
+    )
+    expect(stale).toMatchObject({ ok: false, failure: "FAILED_STALE_MAIN" })
+    expect(stale.detail).toContain("main moved")
+
+    // A widened reservation, token unchanged -> never issued for these facts.
+    const doctored = verifyWorkContextReceipt(
+      issued.receipt,
+      { ...proven, reservedPaths: [...proven.reservedPaths, "app/"] },
+      { mainSha: proven.mainSha, doctrineDigest: proven.doctrineDigest },
+    )
+    expect(doctored).toMatchObject({ ok: false, failure: "FAILED_RECEIPT_MISMATCH" })
+    expect(doctored.detail).toContain("not issued for these facts")
+  })
+
+  it("names doctrine drift as doctrine drift rather than as a moved main", () => {
+    const issued = issueWorkContextReceipt(proven)
+    const verdict = verifyWorkContextReceipt(
+      issued.receipt,
+      { ...proven, doctrineDigest: "e".repeat(64) },
+      { mainSha: proven.mainSha, doctrineDigest: proven.doctrineDigest },
+    )
+    expect(verdict).toMatchObject({ ok: false, failure: "FAILED_STALE_MAIN" })
+    expect(verdict.detail).toContain("doctrine")
+    expect(verdict.detail).not.toContain("main moved")
+  })
+
+  it("keeps the ledger path's meaning when no issuance context is supplied", () => {
+    // requireWorkContext() looks the facts up by token, so a mismatch there IS drift by construction.
+    const issued = issueWorkContextReceipt(proven)
+    expect(verifyWorkContextReceipt(issued.receipt, { ...proven, mainSha: "b".repeat(40) }))
+      .toMatchObject({ ok: false, failure: "FAILED_STALE_MAIN" })
+  })
+
+  it("still accepts a valid receipt when issuance context is supplied", () => {
+    const issued = issueWorkContextReceipt(proven)
+    expect(verifyWorkContextReceipt(issued.receipt, proven, {
+      mainSha: proven.mainSha,
+      doctrineDigest: proven.doctrineDigest,
+    }).ok).toBe(true)
   })
 
   it("treats a reservation as a set, so ordering does not mint a different receipt", () => {

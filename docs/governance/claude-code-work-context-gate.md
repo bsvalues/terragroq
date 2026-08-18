@@ -52,7 +52,18 @@ the declared reservation.
 re-derives from the local claim. So it stops drift, staleness and scope creep — not a determined
 forger. Closing that gap is the next increment.
 
-**Known wording wart:** a tampered receipt reports `FAILED_STALE_MAIN` ("main, the work order, or
-doctrine has moved"), because any mismatch lands in that branch of the shared validator. The refusal
-is correct; the sentence is misleading. Left alone here rather than edited, since the validator is
-#834's surface.
+## Stale is not the same as doctored
+
+`verifyWorkContextReceipt` takes an optional third argument naming what the receipt was issued
+against. When supplied, a mismatch is re-derived with those measured values: if the token comes back,
+the lane's claims are intact and only measured truth moved (`FAILED_STALE_MAIN`, naming whether main
+or doctrine drifted); if it still does not, the token was never issued for those claims
+(`FAILED_RECEIPT_MISMATCH`). The two have different remedies — re-establish versus stop editing the
+claim — and reporting both as "main has moved" pointed a doctored receipt at the wrong fix.
+
+The ledger path omits the argument and keeps its original meaning: `requireWorkContext()` looks the
+facts up by token, so anything that fails to match there is drift by construction.
+
+The argument is lane-supplied in the hook path, which is safe. Live main and doctrine are substituted
+over it before verification, so it can never widen what passes; it is read only after a mismatch has
+been decided, and only to choose which refusal to report.
