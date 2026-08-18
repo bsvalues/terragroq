@@ -90,3 +90,10 @@ const verdict = await reconciled.text()
 console.log(`POST /api/resource/reconcile     -> HTTP ${reconciled.status}`)
 console.log(verdict.slice(0, 700))
 
+// #880: the question the whole incident turned on -- may this work be done, or is it already done?
+const proposed = await call(`${BASE}/api/resource/operation`, { identity: "PACS", operation: "restore" }, sessionCookie)
+const decision = await proposed.text()
+console.log(`POST /api/resource/operation     -> HTTP ${proposed.status}`)
+console.log(decision.slice(0, 600))
+
+
