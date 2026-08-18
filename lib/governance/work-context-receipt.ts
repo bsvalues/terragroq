@@ -1,4 +1,5 @@
 import { hashRecord } from "@/lib/governance/hash"
+import { AUTHORITY_LEVELS } from "@/lib/goal/taxonomy"
 
 /**
  * The pre-execution gate: an agent does not get to mutate until it proves it understands the job.
@@ -172,6 +173,18 @@ export function assertAuthorityGranted(
 ): WorkContextVerdict {
   if (!NON_EMPTY(claimed)) {
     return { ok: false, failure: "FAILED_WORK_ORDER_NOT_READ", detail: "no authority level claimed" }
+  }
+  // An unknown level must not be treated as a low one. authorityRank() returns 0 for any id it does
+  // not recognise, so grantCovers compares 0 against the grant's rank and reports "covered" -- which
+  // means a lane claiming "A9_ROOT" or "NONSENSE" sails through while a lane claiming the real
+  // "A9_RELEASE" is correctly refused. The claim is checked against the taxonomy first so a
+  // misspelling fails closed instead of becoming a free pass.
+  if (!AUTHORITY_LEVELS.some((level) => level.id === claimed.trim())) {
+    return {
+      ok: false,
+      failure: "FAILED_AUTHORITY_NOT_GRANTED",
+      detail: `"${claimed.trim()}" is not a defined authority level`,
+    }
   }
   if (!Array.isArray(grants) || grants.length === 0) {
     return {
