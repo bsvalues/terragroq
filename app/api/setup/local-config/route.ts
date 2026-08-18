@@ -15,6 +15,23 @@ function localSetupEnabled() {
   return process.env.NODE_ENV !== "production"
 }
 
+/**
+ * Evidence that a request did NOT come straight from this machine.
+ *
+ * The loopback check reads the Host header, which the caller controls, so on its own it proves
+ * nothing. Today this route is safe for two reasons that live in other files: the standalone server
+ * forces NODE_ENV=production, and the HERMES proxy overwrites Host before forwarding. Both are
+ * correct and neither is visible from here -- someone making the proxy preserve the original Host,
+ * which looks like a fix, would quietly expose an unauthenticated rewrite of DATABASE_URL and
+ * BETTER_AUTH_SECRET in any non-production deployment.
+ *
+ * A client connecting directly to the loopback socket does not set forwarding headers. The proxy
+ * always does. That asymmetry is checkable here and does not depend on anyone else's care.
+ */
+function wasForwarded(headers: Headers) {
+  return headers.has("x-forwarded-host") || headers.has("x-forwarded-for") || headers.has("forwarded")
+}
+
 function isLoopbackHost(url: URL) {
   return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1"
 }
@@ -126,7 +143,7 @@ export async function POST(req: Request) {
   }
 
   const url = new URL(req.url)
-  if (!isLoopbackHost(url)) {
+  if (!isLoopbackHost(url) || wasForwarded(req.headers)) {
     return NextResponse.json(
       {
         ok: false,
