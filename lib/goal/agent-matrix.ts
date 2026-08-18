@@ -5,7 +5,7 @@
 // The matrix caps the maximum authority each agent may ever be granted, plus
 // the explicit allowed / blocked action lists from the playbook.
 
-import { authority, authorityRank, type AuthorityId } from "./taxonomy"
+import { authority, providedAuthorityRank, requiredAuthorityRank, type AuthorityId } from "./taxonomy"
 
 export type AgentCatalogStatus = "registered" | "retired"
 export type AgentExecutionStatus =
@@ -148,7 +148,9 @@ export function checkAgentPermission(
   if (spec.catalogStatus !== "registered") {
     return { allowed: false, reason: `${spec.label} is not active in the agent catalog` }
   }
-  if (authorityRank(authorityLevel) > authorityRank(spec.maxAuthority)) {
+  // The requested level is the demand and the spec is the ceiling, so they rank in opposite
+  // directions: an undefined request must exceed any ceiling instead of passing as the lowest.
+  if (requiredAuthorityRank(authorityLevel) > providedAuthorityRank(spec.maxAuthority)) {
     return {
       allowed: false,
       reason: `${spec.label} is capped at ${spec.maxAuthority}; cannot be granted ${authorityLevel}`,

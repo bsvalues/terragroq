@@ -9,7 +9,7 @@
 // its required evidence; it does not perform the mutation itself.
 
 import type { WorkOrder } from "@/lib/db/schema"
-import { authorityRank, type AuthorityId } from "./taxonomy"
+import { providedAuthorityRank, requiredAuthorityRank, type AuthorityId } from "./taxonomy"
 import { EXECUTE_LOOP_VERSION } from "@/lib/governance/execute-guard"
 
 /* ------------------------------------------------------------------ */
@@ -131,7 +131,8 @@ export function evaluateLoop(input: LoopInput, wo: WorkOrder | null): LoopOutcom
   const evidenceCollected: string[] = []
   let stopReason: string | null = null
 
-  const loopRank = authorityRank(input.authority)
+  // The loop's authority is what it demands; the grant is what is provided.
+  const loopRank = requiredAuthorityRank(input.authority)
 
   /* ---- §8.4 stop conditions, evaluated in priority order ---------- */
 
@@ -168,7 +169,7 @@ export function evaluateLoop(input: LoopInput, wo: WorkOrder | null): LoopOutcom
         grant?.reason ??
         "Execute loop blocked: no active authority grant exists. Approval is not authority — grant it explicitly."
       blockers.push(stopReason)
-    } else if (loopRank > authorityRank(String(grant.authorityLevel))) {
+    } else if (loopRank > providedAuthorityRank(String(grant.authorityLevel))) {
       stopReason = `Execute loop needs ${input.authority} but the active grant only provides ${grant.authorityLevel}.`
       blockers.push(stopReason)
     } else if (input.repoDirty) {

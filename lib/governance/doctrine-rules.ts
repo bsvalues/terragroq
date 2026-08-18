@@ -3,7 +3,7 @@
 // playbook's FIXED constitutional rules as deterministic predicates so /goal,
 // /loop, WO transitions, and evidence acceptance can all enforce them uniformly.
 
-import { authorityRank } from "@/lib/goal/taxonomy"
+import { authorityRank, providedAuthorityRank, requiredAuthorityRank } from "@/lib/goal/taxonomy"
 
 export type DoctrineVerdictKind = "forbidden" | "requires_approval"
 
@@ -106,7 +106,8 @@ export const DOCTRINE_RULES: RuleDef[] = [
     name: "No production/data touch without A7/A8 authority",
     check: (ctx, text) => {
       const touchesProd = /(production|prod deploy|prod data|live data|touch prod|prod database)/.test(text)
-      if (touchesProd && authorityRank(ctx.authority ?? "A0_READ_ONLY") < authorityRank("A7_COMMIT")) {
+      // provided-rank on the actor's authority: an undefined level holds nothing, so the rule fires.
+      if (touchesProd && providedAuthorityRank(ctx.authority ?? "A0_READ_ONLY") < authorityRank("A7_COMMIT")) {
         return violation(
           { id: "DR-004", name: "No production/data touch without A7/A8 authority" },
           "forbidden",
@@ -123,7 +124,7 @@ export const DOCTRINE_RULES: RuleDef[] = [
     name: "No canon promotion without A9 authority",
     check: (ctx, text) => {
       const promotesCanon = /(promote.*canon|canon promot|make.*canon|canonize|to canon)/.test(text)
-      if (promotesCanon && authorityRank(ctx.authority ?? "A0_READ_ONLY") < authorityRank("A9_RELEASE")) {
+      if (promotesCanon && providedAuthorityRank(ctx.authority ?? "A0_READ_ONLY") < authorityRank("A9_RELEASE")) {
         return violation(
           { id: "DR-005", name: "No canon promotion without A9 authority" },
           "forbidden",
@@ -159,7 +160,7 @@ export const DOCTRINE_RULES: RuleDef[] = [
       if (
         ctx.agentMaxAuthority &&
         ctx.authority &&
-        authorityRank(ctx.authority) > authorityRank(ctx.agentMaxAuthority)
+        requiredAuthorityRank(ctx.authority) > providedAuthorityRank(ctx.agentMaxAuthority)
       ) {
         return violation(
           { id: "DR-007", name: "No agent authority escalation" },
