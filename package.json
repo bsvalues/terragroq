@@ -13,6 +13,7 @@
     "hermes:status": "node scripts/hermes-bridge/cli.mjs status",
     "hermes:cycle": "node --env-file=.env.local scripts/hermes-bridge/cli.mjs cycle",
     "hermes:authorize": "node --env-file=.env.local scripts/hermes-bridge/primary-authorization-bridge.mjs",
+    "fabric:baseline": "node scripts/fabric/run-baseline.mjs",
     "fabric:recommend": "node scripts/execution-fabric/recommend-placement.mjs",
     "fabric:dispatch-contract": "node scripts/execution-fabric/evaluate-dispatch-contract.mjs",
     "fabric:bounded-dispatch": "node scripts/execution-fabric/bounded-dispatch/run-resident-hermes-bounded-dispatch.mjs",
