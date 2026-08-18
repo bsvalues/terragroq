@@ -76,9 +76,16 @@ describe("brokered execution", () => {
     expect(result.stderr).toBe("disk full")
   })
 
-  it("reports an unwritable ledger instead of proceeding silently", async () => {
-    // Auditing is not optional: a call that cannot be recorded is a call nobody can review.
+  it("skips a ledger that is absent, and reports one that is broken", async () => {
+    // These are different states. A machine with no fabric directory is not misconfigured, it simply
+    // has no ledger; a directory that exists but cannot be appended to is a real fault worth raising.
+    // Auditing every gate step made the difference matter: treating absent as broken meant six
+    // throwing filesystem calls per node on machines that never had a ledger.
     await expect(auditBrokerAction(path.join(tmpdir(), "no-such-fabric-root-xyz"), "n", "exec", 0, "x"))
-      .rejects.toThrow(/AUDIT_UNAVAILABLE/)
+      .resolves.toBeUndefined()
+
+    const root = await mkdtemp(path.join(tmpdir(), "fabric-broken-"))
+    await mkdir(path.join(root, "audit.log"))
+    await expect(auditBrokerAction(root, "n", "exec", 0, "x")).rejects.toThrow(/AUDIT_UNAVAILABLE/)
   })
 })
