@@ -42,15 +42,39 @@ widening `reservedPaths` invalidates it (verified).
 Two exemptions exist and are deliberately narrow: paths outside the project root (scratch files are
 not repository mutations), and the receipt file itself (otherwise context could never be established).
 
-## What this slice proves, and what it does not
+## Provenance: a receipt is worth what its issuer is worth
 
-**Proves:** a complete, currently-valid premise exists before any mutation, and the mutation is inside
-the declared reservation.
+| mode | issued by | authority checked | claim recorded | what the hook trusts |
+|---|---|---|---|---|
+| `ledger` | the cockpit, via `POST /api/governance/work-context` | yes, against an owner-recorded grant | yes, as a governance event | facts resolved **from the ledger**; the local file is just an opaque token |
+| `local` | `establish-work-context` on this machine | no | no | the claims in the local file |
 
-**Does not prove:** that the receipt was issued by the ledger. Issuance is recorded server-side by
-`POST /api/governance/work-context`, and `requireWorkContext()` checks that ledger; this hook
-re-derives from the local claim. So it stops drift, staleness and scope creep — not a determined
-forger. Closing that gap is the next increment.
+The mode is written into the receipt and printed on every issue, so the weaker one is never mistaken
+for the stronger one. Under `ledger`, editing the local file widens nothing — the reservation the hook
+enforces comes back from the governance event, not from disk. Under `local`, premises are still
+complete and staleness is still automatic, but nothing checked authority and nothing recorded the
+claim, so it stops drift and scope creep rather than a determined forger.
+
+If a receipt claims `ledger` and the ledger cannot be read, the hook **refuses** — an unreadable
+ledger must not become an open gate, which is the same reading `requireWorkContext()` already takes.
+It never silently falls back to local checking, because a cockpit outage would then quietly weaken the
+gate.
+
+### Turning on ledger provenance
+
+The cockpit authenticates an agent as an **enrolled device** (`lib/device-auth`), which is also the
+direction the topology settled on: the client initiates a device-authenticated session, and its
+durable identity is the enrolled credential rather than an address. That needs two things:
+
+1. `WILLIAMOS_COCKPIT_CA` pointing at the cockpit authority's certificate. There is deliberately no
+   "skip TLS verification" switch — this client exists to prove an identity, and a transport that
+   accepts any certificate lets anything on the path impersonate the cockpit and harvest that proof.
+2. `~/.williamos/device-credential.json` — `{ credentialId, privateKeyPkcs8 }` for a credential the
+   **owner enrols once**. Enrolment requires a session on the declared primary email by design: an
+   agent that could enrol itself would not be gated by any of this.
+
+Until both exist, issuance falls back to `local` with a warning on every run. Lanes that must not
+proceed on the weaker mode can pass `--require-ledger`, which refuses instead of falling back.
 
 ## Stale is not the same as doctored
 

@@ -18,13 +18,18 @@ import { pathToFileURL } from "node:url"
  * A second validator would be a second source of truth, which is the exact failure the receipt design
  * calls out.
  *
- * WHAT THIS SLICE PROVES, precisely:
- *   - a receipt exists, is complete, and is currently valid against live main + doctrine digest
- *   - the file about to be mutated lies inside the paths the lane reserved
- * WHAT IT DOES NOT PROVE: that the receipt was issued by the ledger. Issuance is recorded server-side
- * by POST /api/governance/work-context, and the HTTP gate checks the ledger; this hook re-derives
- * from the local claim. So it stops drift, staleness and scope creep -- not a determined forger. That
- * boundary is stated rather than papered over, and closing it is the next increment.
+ * How much this proves depends on how the receipt was ISSUED, and the mode is recorded rather than
+ * assumed:
+ *
+ *   ledger  the cockpit issued it against an owner-recorded authority grant and wrote the claims to
+ *           the governance event log. The hook resolves the facts back FROM the ledger, so the local
+ *           file holds nothing but an opaque token and editing it widens nothing.
+ *   local   this machine minted it. Premises are complete and staleness is still automatic, but no
+ *           authority was checked and no claim was recorded, so it stops drift and scope creep --
+ *           not a determined forger.
+ *
+ * Local exists because the cockpit path needs a device credential the owner enrols once, and a gate
+ * that cannot be used until then is a gate that gets switched off.
  */
 
 export const RECEIPT_RELATIVE_PATH = path.join(".williamos", "work-context.json")
@@ -160,7 +165,11 @@ async function main() {
   })
   if (!decision.gated) process.exit(0)
 
-  const receiptPath = path.join(projectRoot, RECEIPT_RELATIVE_PATH)
+  // Overridable so the routing can be exercised against a fixture. This grants no new power: a lane
+  // already controls the default receipt file, and a ledger-provenance token still has to exist in
+  // the ledger to verify.
+  const receiptPath = process.env.WILLIAMOS_WORK_CONTEXT_RECEIPT
+    ?? path.join(projectRoot, RECEIPT_RELATIVE_PATH)
   let claim
   try {
     claim = JSON.parse(fs.readFileSync(receiptPath, "utf8"))
@@ -192,25 +201,66 @@ async function main() {
     return
   }
 
-  // The claim carries the values it was issued against, so a stale receipt and a doctored one can be
-  // told apart -- they have different remedies, and reporting both as "main has moved" pointed a
-  // tampered claim at the wrong fix.
+  // How the receipt is verified follows how it was ISSUED.
   //
-  // The third argument comes from the claim file and is therefore lane-supplied, which is safe: live
-  // main and doctrine are substituted over it before verification, so it never widens what passes. It
-  // is consulted only after a mismatch has already been decided, and only to choose which refusal to
-  // report. Steering that choice would require finding a preimage for the issued token.
-  const verdict = verifyWorkContextReceipt(
-    claim?.receipt,
-    { ...claim?.facts, mainSha: live.mainSha, doctrineDigest: live.doctrineDigest },
-    { mainSha: claim?.facts?.mainSha, doctrineDigest: claim?.facts?.doctrineDigest },
-  )
+  // A ledger-provenance receipt is resolved from the cockpit: the facts come back from the governance
+  // event, so this file holds nothing but an opaque token and cannot be edited to widen anything. A
+  // local-provenance receipt can only be checked against its own claims, which is weaker and is why
+  // the mode is recorded rather than assumed.
+  let facts = claim?.facts
+  let verdict
+  if (claim?.provenance === "ledger") {
+    try {
+      const { openDeviceSession, requestJson, DEFAULT_COCKPIT } = await import("./device-session.mjs")
+      const cockpit = claim.cockpit ?? DEFAULT_COCKPIT
+      const session = await openDeviceSession({ baseUrl: cockpit, projectRoot })
+      const looked = await requestJson(
+        `${cockpit}/api/governance/work-context?receipt=${encodeURIComponent(String(claim.receipt))}`,
+        { cookie: session.cookie, origin: session.origin },
+      )
+      if (looked.status !== 200 || !looked.json?.facts) {
+        deny(formatRefusal({
+          failure: "FAILED_CONTEXT_NOT_PROVEN",
+          detail: `the ledger does not hold that receipt (HTTP ${looked.status})`,
+        }))
+        return
+      }
+      facts = looked.json.facts
+    } catch (error) {
+      // An unreadable ledger must not become an open gate.
+      deny(formatRefusal({
+        failure: "FAILED_CONTEXT_NOT_PROVEN",
+        detail: `the receipt ledger could not be read: ${error?.message ?? error}`,
+      }))
+      return
+    }
+    // Ledger facts are authoritative, so a mismatch here is drift by construction -- no issuance
+    // context is supplied, which is exactly how requireWorkContext() reads it.
+    verdict = verifyWorkContextReceipt(claim.receipt, {
+      ...facts,
+      mainSha: live.mainSha,
+      doctrineDigest: live.doctrineDigest,
+    })
+  } else {
+    // The claim carries the values it was issued against, so a stale receipt and a doctored one can be
+    // told apart -- they have different remedies, and reporting both as "main has moved" pointed a
+    // tampered claim at the wrong fix.
+    //
+    // The third argument is lane-supplied here, which is safe: live main and doctrine are substituted
+    // over it before verification, so it never widens what passes. It is consulted only after a
+    // mismatch has been decided, and only to choose which refusal to report.
+    verdict = verifyWorkContextReceipt(
+      claim?.receipt,
+      { ...facts, mainSha: live.mainSha, doctrineDigest: live.doctrineDigest },
+      { mainSha: facts?.mainSha, doctrineDigest: facts?.doctrineDigest },
+    )
+  }
   if (!verdict.ok) {
     deny(formatRefusal({ failure: verdict.failure, detail: verdict.detail }))
     return
   }
 
-  const reservation = reservationVerdict(decision.target, claim?.facts?.reservedPaths, projectRoot)
+  const reservation = reservationVerdict(decision.target, facts?.reservedPaths, projectRoot)
   if (!reservation.ok) {
     deny(formatRefusal({ failure: "FAILED_SCOPE_COLLISION", detail: reservation.detail }))
     return

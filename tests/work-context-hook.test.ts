@@ -178,3 +178,77 @@ describe("consequential command list", () => {
     expect(CONSEQUENTIAL_COMMANDS.every((pattern) => pattern instanceof RegExp)).toBe(true)
   })
 })
+
+describe("provenance decides how much the receipt proves", () => {
+  // A receipt is worth what its issuer is worth. A ledger-issued one is resolved back FROM the
+  // cockpit, so this file is only an opaque token; a locally minted one can be checked against its
+  // own claims and nothing more. Recording the mode is what keeps the weaker one from being mistaken
+  // for the stronger one.
+  const hookPath = path.resolve(__dirname, "..", "scripts", "governance", "work-context-hook.mjs")
+  const repoRoot = path.resolve(__dirname, "..")
+
+  const invokeWithReceipt = async (receipt: unknown, env: Record<string, string> = {}) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wc-prov-")); roots.push(dir)
+    const receiptFile = path.join(dir, "receipt.json")
+    fs.writeFileSync(receiptFile, JSON.stringify(receipt))
+    const pending = run("node", ["--no-warnings", hookPath], {
+      env: {
+        ...process.env,
+        WILLIAMOS_PROJECT_ROOT: repoRoot,
+        WILLIAMOS_WORK_CONTEXT_RECEIPT: receiptFile,
+        WILLIAMOS_DEVICE_CREDENTIAL: path.join(dir, "absent-credential.json"),
+        ...env,
+      },
+      timeout: 90_000,
+    })
+    pending.child.stdin?.end(JSON.stringify({
+      tool_name: "Write",
+      tool_input: { file_path: path.join(repoRoot, "scripts", "governance", "probe.mjs") },
+    }))
+    try {
+      await pending
+      return { code: 0, stderr: "" }
+    } catch (error) {
+      const failure = error as { code?: number; stderr?: string }
+      return { code: failure.code ?? -1, stderr: failure.stderr ?? "" }
+    }
+  }
+
+  it("refuses a ledger-provenance receipt when the ledger cannot be read", async () => {
+    // An unreadable ledger must not become an open gate -- the same reading requireWorkContext takes.
+    const result = await invokeWithReceipt({
+      receipt: "0".repeat(64),
+      provenance: "ledger",
+      facts: { reservedPaths: ["scripts/governance"] },
+    })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain("FAILED_CONTEXT_NOT_PROVEN")
+    expect(result.stderr).toContain("ledger could not be read")
+  })
+
+  it("does not silently downgrade a ledger receipt to local checking", async () => {
+    // The failure must name the ledger. If it fell through to local verification it would report a
+    // token mismatch instead, and a cockpit outage would quietly weaken the gate.
+    const result = await invokeWithReceipt({
+      receipt: "0".repeat(64),
+      provenance: "ledger",
+      facts: { reservedPaths: ["scripts/governance"] },
+    })
+    expect(result.stderr).not.toContain("FAILED_RECEIPT_MISMATCH")
+  })
+
+  it("refuses a locally minted receipt whose token does not match its own claims", async () => {
+    const result = await invokeWithReceipt({
+      receipt: "0".repeat(64),
+      provenance: "local",
+      facts: {
+        workOrderRef: "WO-X", parentOutcome: "OUT", authorityLevel: "A2",
+        reservedPaths: ["scripts/governance"], existingSubsystem: "none-found",
+        topologySource: "canonical-registry", collisions: [],
+        remainingParentAcceptance: "something", mainSha: "a".repeat(40), doctrineDigest: "d".repeat(64),
+      },
+    })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toMatch(/FAILED_RECEIPT_MISMATCH|FAILED_STALE_MAIN/)
+  })
+})
