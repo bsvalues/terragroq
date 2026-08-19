@@ -53,9 +53,16 @@ afterEach(() => {
 
 describe("parsing the worker's own retry time", () => {
   it("reads the real codex message, ordinal and all", () => {
-    const epoch = parseCodexRetryAfter("ERROR: You've hit your usage limit. Visit x or try again at Aug 19th, 2026 8:33 PM.")
+    // Written first with the literal message from the night it was observed, which made the test a time
+    // bomb: the parser deliberately rejects a refill time that has already passed, so the assertion
+    // inverted the moment the wall clock went by. The behaviour under test is the parse, not the date.
+    const epoch = parseCodexRetryAfter("ERROR: You've hit your usage limit. Visit x or try again at Dec 31st, 2099 8:33 PM.")
     expect(epoch).not.toBeNull()
-    expect(new Date((epoch as number) * 1000).getFullYear()).toBe(2026)
+    expect(new Date((epoch as number) * 1000).getFullYear()).toBe(2099)
+  })
+
+  it("rejects a refill time that has already passed rather than scheduling a wait into the past", () => {
+    expect(parseCodexRetryAfter("try again at Aug 19th, 2020 8:33 PM.")).toBeNull()
   })
 
   it("returns null rather than guessing when there is no time", () => {
