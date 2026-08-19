@@ -37,8 +37,12 @@ New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow `
     -Protocol TCP -LocalPort $port -Profile Private -LocalAddress $overlayAddress | Out-Null
 
 # --- verify rather than assume ---
-$relay = @(netsh interface portproxy show v4tov4) -match [regex]::Escape($overlayAddress)
-if (-not $relay) { throw "RELAY_MISSING: portproxy entry for ${overlayAddress}:$port was not created" }
+# Match the address AND the port. Matching the address alone would pass on any entry that happens to
+# share it -- a relay pointing at the wrong port would verify clean, which is the exact false green
+# this script exists to prevent. netsh prints "listenAddress listenPort connectAddress connectPort".
+$relayPattern = "^\s*$([regex]::Escape($overlayAddress))\s+$port\s+$([regex]::Escape($lanAddress))\s+$port\s*$"
+$relay = @(netsh interface portproxy show v4tov4) -match $relayPattern
+if (-not $relay) { throw "RELAY_MISSING: no portproxy entry ${overlayAddress}:$port -> ${lanAddress}:$port" }
 
 $rule = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
 if (-not $rule -or -not $rule.Enabled) { throw "FIREWALL_RULE_MISSING: '$ruleName' absent or disabled" }

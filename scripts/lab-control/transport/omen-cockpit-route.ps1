@@ -34,8 +34,24 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 # Drop every existing mapping for the name before adding one, so repeat runs cannot accumulate
 # conflicting entries (Windows resolves the FIRST match, so a stale line silently wins).
-$kept = @(Get-Content -LiteralPath $hostsFile) | Where-Object { $_ -notmatch [regex]::Escape($hostName) }
-Set-Content -LiteralPath $hostsFile -Value ($kept + "$target $hostName")
+#
+# Parsed rather than pattern-matched, because a substring match on the name is wrong in three
+# separate ways: it deletes comments that merely mention the name, it deletes unrelated records for
+# names that CONTAIN it (foo.williamos.lan), and a leading-position-only regex misses the name when
+# it appears as a second or later alias. A hosts line is "<address> <name> [alias...]" with an
+# optional trailing comment, so the names are compared as whole tokens and only the matching name is
+# removed -- the line survives if it still carries other names.
+$kept = foreach ($line in @(Get-Content -LiteralPath $hostsFile)) {
+    $withoutComment, $comment = ($line -split '#', 2)
+    $tokens = @($withoutComment -split '\s+' | Where-Object { $_ })
+    if ($tokens.Count -lt 2) { $line; continue }          # comment-only or blank: keep verbatim
+    $names = @($tokens[1..($tokens.Count - 1)] | Where-Object { $_ -ne $hostName })
+    if ($names.Count -eq $tokens.Count - 1) { $line; continue }   # name not present: keep verbatim
+    # @(...) around the address, or PowerShell nests the name array and renders it System.Object[].
+    if ($names.Count -gt 0) { ((@($tokens[0]) + $names) -join ' ') + $(if ($comment) { " #$comment" }) }
+    # otherwise the record existed only for this name -- drop it
+}
+Set-Content -LiteralPath $hostsFile -Value (@($kept) + "$target $hostName")
 ipconfig /flushdns | Out-Null
 
 $resolved = (Resolve-DnsName -Name $hostName -Type A -ErrorAction SilentlyContinue |
