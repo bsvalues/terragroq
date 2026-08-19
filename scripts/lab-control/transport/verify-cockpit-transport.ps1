@@ -5,6 +5,13 @@
 # overlay would ALSO be green if the relay had quietly stripped client-certificate authentication and
 # started handing sessions to anybody who connected. Proving the reachability without proving the
 # refusal is how a transport change silently becomes an authentication bypass.
+[CmdletBinding()]
+param(
+    # Off the lab LAN, the direct LAN address MUST be unreachable. Asserting that -- rather than
+    # skipping the case -- is what makes an off-LAN run mean something: a green overlay result while
+    # the LAN is still reachable proves only that the machine has a network, not that it left one.
+    [switch] $OffLan
+)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -56,18 +63,27 @@ function Invoke-CockpitProbe {
 }
 
 $failures = @()
-foreach ($case in @(
-    @{ Name = 'LAN + device certificate';     Address = $lanAddress;     Cert = $true  },
-    @{ Name = 'overlay + device certificate'; Address = $overlayAddress; Cert = $true  }
-)) {
-    $result = Invoke-CockpitProbe -Address $case.Address -WithCertificate:$case.Cert
-    $ok = $result.Status -eq '303' -and $result.Location -eq '/' -and $result.HasCookie
-    if (-not $ok) {
-        $detail = if ($result.Error) { $result.Error } else { "got '$($result.Status)' -> '$($result.Location)' cookie=$($result.HasCookie)" }
-        $failures += "$($case.Name): expected 303 -> / with session cookie, $detail"
-    }
-    '  {0,-32} {1,-4} {2} cookie={3}' -f $case.Name, $(if ($result.Status) { $result.Status } else { '---' }), $(if ($result.Location) { $result.Location } else { $result.Error }), $result.HasCookie
+
+# The LAN case flips meaning depending on where the machine is. On the LAN it must succeed; off the
+# LAN it must fail, and a success there means the machine never actually left the network.
+$lan = Invoke-CockpitProbe -Address $lanAddress -WithCertificate
+$lanReachable = $lan.Status -eq '303'
+if ($OffLan) {
+    if ($lanReachable) { $failures += "NOT ACTUALLY OFF-LAN: the direct LAN address $lanAddress still answers, so this run proves nothing about off-site access" }
+} elseif (-not ($lanReachable -and $lan.Location -eq '/' -and $lan.HasCookie)) {
+    $detail = if ($lan.Error) { $lan.Error } else { "got '$($lan.Status)' -> '$($lan.Location)' cookie=$($lan.HasCookie)" }
+    $failures += "LAN + device certificate: expected 303 -> / with session cookie, $detail"
 }
+'  {0,-32} {1,-4} {2}' -f $(if ($OffLan) { 'LAN direct (must be UNREACHABLE)' } else { 'LAN + device certificate' }),
+    $(if ($lan.Status) { $lan.Status } else { '---' }),
+    $(if ($lan.Status) { "$($lan.Location) cookie=$($lan.HasCookie)" } else { $lan.Error })
+
+$overlay = Invoke-CockpitProbe -Address $overlayAddress -WithCertificate
+if (-not ($overlay.Status -eq '303' -and $overlay.Location -eq '/' -and $overlay.HasCookie)) {
+    $detail = if ($overlay.Error) { $overlay.Error } else { "got '$($overlay.Status)' -> '$($overlay.Location)' cookie=$($overlay.HasCookie)" }
+    $failures += "overlay + device certificate: expected 303 -> / with session cookie, $detail"
+}
+'  {0,-32} {1,-4} {2} cookie={3}' -f 'overlay + device certificate', $(if ($overlay.Status) { $overlay.Status } else { '---' }), $(if ($overlay.Location) { $overlay.Location } else { $overlay.Error }), $overlay.HasCookie
 
 # CONTROL: same overlay path, no client certificate. This MUST be refused a session.
 $control = Invoke-CockpitProbe -Address $overlayAddress
@@ -81,7 +97,12 @@ if ($control.Error -or -not $control.Status) {
 '  {0,-32} {1,-4} {2} cookie={3}' -f 'overlay, NO cert (control)', $(if ($control.Status) { $control.Status } else { '---' }), $(if ($control.Location) { $control.Location } else { $control.Error }), $control.HasCookie
 
 if ($failures.Count -gt 0) {
-    $failures | ForEach-Object { Write-Error $_ }
+    # Deliberately NOT Write-Error. This script sets $ErrorActionPreference = 'Stop', under which
+    # Write-Error THROWS -- so the script died on its own failure report and never reached the exit
+    # below. It still exited non-zero (unhandled exceptions do), which is exactly why the defect
+    # survived a negative test: the exit code looked right for the wrong reason, and any caller
+    # capturing output got an exception instead of the findings.
+    foreach ($failure in $failures) { [Console]::Error.WriteLine("FAIL: $failure") }
     exit 1
 }
-'OFFSITE_TRANSPORT_VERIFIED cert=' + $deviceCert.Thumbprint.Substring(0, 12) + ' expires=' + $deviceCert.NotAfter.ToString('yyyy-MM-dd')
+$(if ($OffLan) { 'OFFSITE_TRANSPORT_VERIFIED_OFF_LAN cert=' } else { 'OFFSITE_TRANSPORT_VERIFIED cert=' }) + $deviceCert.Thumbprint.Substring(0, 12) + ' expires=' + $deviceCert.NotAfter.ToString('yyyy-MM-dd')
