@@ -49,10 +49,14 @@ export function parseDeclaredReceipt(body: string | null | undefined): DeclaredR
   const match = fence.exec(body)
   if (!match) return null
   try {
-    const parsed = JSON.parse(match[1].trim()) as { token?: unknown; facts?: unknown }
-    if (typeof parsed.token !== "string" || !parsed.token.trim()) return null
+    const parsed = JSON.parse(match[1].trim()) as { token?: unknown; receipt?: unknown; facts?: unknown }
+    // establish-work-context.mjs writes the token under `receipt`, and its own closing line tells the
+    // lane to paste that file. Rejecting the file the tool just produced made the documented recovery
+    // path unusable, so both spellings of the same field are accepted.
+    const token = typeof parsed.token === "string" ? parsed.token : parsed.receipt
+    if (typeof token !== "string" || !token.trim()) return null
     if (!parsed.facts || typeof parsed.facts !== "object") return null
-    return { token: parsed.token.trim(), facts: parsed.facts as WorkContextFacts }
+    return { token: token.trim(), facts: parsed.facts as WorkContextFacts }
   } catch {
     return null
   }
@@ -134,6 +138,12 @@ function within(file: string, reserved: string[]): boolean {
   return reserved.some((entry) => {
     const normalized = entry.trim().replace(/\\/g, "/")
     if (!normalized) return false
-    return normalized.endsWith("/") ? path.startsWith(normalized) : path === normalized
+    // A reservation is a directory when it says so, and also when it plainly names one: --reserve
+    // scripts/runtime-operator without a trailing slash used to mean "exactly that file", so every
+    // directory reservation escaped its own scope and no honest lane could pass.
+    if (normalized.endsWith("/")) return path.startsWith(normalized)
+    if (normalized.endsWith("/**")) return path.startsWith(normalized.slice(0, -2))
+    if (path === normalized) return true
+    return !normalized.includes(".") && path.startsWith(`${normalized}/`)
   })
 }
