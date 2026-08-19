@@ -8,7 +8,10 @@ import { buildCodexPrompt, parseCodexResult } from "./prompt.mjs"
 
 const execFile = promisify(execFileCallback)
 const REPOSITORY = "bsvalues/terragroq"
-const SECRET_FIELD = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}\b|\bgh[oprsu]_[A-Za-z0-9]{20,}\b|(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s]+|(?:password|token|api[_ -]?key|client[_ -]?secret)\s*[:=]\s*["']?[^\s"']{12,})/i
+// The generic name=value arm requires a quoted literal. Unquoted, it matched ordinary source: a
+// React request counter written `const token = (requestRef.current += 1)` reads as "token = " followed
+// by twelve non-space characters, and that one line made every patch to its file unwinnable.
+const SECRET_FIELD = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}\b|\bgh[oprsu]_[A-Za-z0-9]{20,}\b|(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s]+|(?:password|token|api[_ -]?key|client[_ -]?secret)\s*[:=]\s*["'][^\s"']{12,}["'])/i
 const ENVIRONMENT_ALLOWLIST = new Set([
   "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "PATH", "TEMP", "TMP", "USERPROFILE", "HOME",
   "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
@@ -64,12 +67,32 @@ function assertRelativePath(candidate) {
   if (path.isAbsolute(candidate) || candidate.includes("\\") || candidate.split("/").includes("..")) throw new Error("PATCH_PATH_WALL")
 }
 
-function assertNoSecretMaterial(workspace, changedPaths) {
+/** Lines this patch adds, without the leading marker and without the +++ file headers. */
+export function addedLines(unifiedPatch) {
+  return String(unifiedPatch ?? "")
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+    .map((line) => line.slice(1))
+}
+
+/**
+ * Refuse secret material the patch introduces.
+ *
+ * Scanning whole file contents made the wall unwinnable wherever a pre-existing line happened to look
+ * like a credential: the worker was refused for code it never wrote and could not touch, with a wall
+ * name that accused it of committing a secret. A worker answers for what it adds; anything already on
+ * main is main's business, and the same principle the test gate now uses.
+ *
+ * The binary check stays on file content, because a file that is binary is binary however it got there.
+ */
+function assertNoSecretMaterial(workspace, changedPaths, unifiedPatch) {
   for (const changedPath of changedPaths) {
     const fullPath = path.join(workspace, changedPath)
     if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) continue
-    const content = fs.readFileSync(fullPath)
-    if (content.includes(0) || SECRET_FIELD.test(content.toString("utf8"))) throw new Error("PATCH_SECRET_OR_BINARY_WALL")
+    if (fs.readFileSync(fullPath).includes(0)) throw new Error("PATCH_SECRET_OR_BINARY_WALL")
+  }
+  if (addedLines(unifiedPatch).some((line) => SECRET_FIELD.test(line))) {
+    throw new Error("PATCH_SECRET_OR_BINARY_WALL")
   }
 }
 
@@ -94,7 +117,7 @@ export async function inspectWorkspaceChanges(workspace, allowedPaths) {
   if (indexEntries.some((entry) => /^(?:120000|160000)\s/.test(entry.stdout))) throw new Error("PATCH_SYMLINK_OR_SUBMODULE_WALL")
   if (splitNul(unstagedResult.stdout).length > 0) throw new Error("PATCH_UNSTAGED_WALL")
   if (splitNul(untrackedResult.stdout).length > 0) throw new Error("PATCH_UNTRACKED_WALL")
-  assertNoSecretMaterial(workspace, changedPaths)
+  assertNoSecretMaterial(workspace, changedPaths, patchResult.stdout)
   return { changedPaths, patchBytes: Buffer.byteLength(patchResult.stdout, "utf8") }
 }
 
