@@ -336,7 +336,7 @@ export async function runOperationalKernelCycle({ root, registry, adapters }) {
     const checkpointFile = path.join(root, "state", "kernel-checkpoint.json")
     const checkpoint = readJson(checkpointFile)
     if (!checkpoint) throw error
-    const rateLimited = message.match(/^CODEX_RATE_LIMIT_WALL(?::retry-(\d+))?/)
+    const rateLimited = message.match(/^(?:CODEX|PROVIDER)_RATE_LIMIT_WALL(?::retry-(\d+))?/)
     if (rateLimited) {
       // The worker said when its meter refills; anything else is a guess, so an unparsed limit waits an
       // hour and asks again. Attempts are untouched: waiting is not failing.
@@ -344,7 +344,7 @@ export async function runOperationalKernelCycle({ root, registry, adapters }) {
       return transition(root, checkpoint, "WAITING_PROVIDER", {
         retryAfter,
         resumeState: checkpoint.state,
-        failureCode: "CODEX_RATE_LIMIT_WALL",
+        failureCode: message.startsWith("PROVIDER") ? "PROVIDER_RATE_LIMIT_WALL" : "CODEX_RATE_LIMIT_WALL",
         ownerDecisionRequired: false,
       })
     }

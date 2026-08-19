@@ -6,6 +6,7 @@ import { promisify } from "node:util"
 import pg from "pg"
 
 import { createNativeAdapters } from "./native-adapters.mjs"
+import { IMPLEMENTATION, buildWorkerPrompt, laneRoster, selectLane } from "./worker-lanes.mjs"
 import { brokeredExec } from "../../lib/fabric/broker.mjs"
 
 /**
@@ -135,7 +136,7 @@ async function run(command, args, options = {}) {
       maxBuffer: 16 * 1024 * 1024,
       timeout: options.timeout ?? 30 * 60 * 1000,
       windowsHide: true,
-      env: process.env,
+      env: options.env ?? process.env,
     })
     // codex exec appends piped stdin to its prompt and waits for EOF before starting, so a child left
     // holding an open stdin pipe hangs forever at zero CPU -- the first dispatched worker did exactly
@@ -146,7 +147,7 @@ async function run(command, args, options = {}) {
     const output = `${error?.stdout ?? ""}${error?.stderr ?? ""}`
     // The worker saying "usage limit" is not a process failure and must not be audited as one:
     // the loop parks either way, but the checkpoint should name the actual reason and when it lifts.
-    if (/hit your usage limit/i.test(output)) {
+    if (/hit your usage limit|usage limit reached|credit balance is too low/i.test(output)) {
       const retryAfter = parseCodexRetryAfter(output)
       throw new Error(retryAfter ? `CODEX_RATE_LIMIT_WALL:retry-${retryAfter}` : "CODEX_RATE_LIMIT_WALL")
     }
@@ -304,27 +305,70 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
      * worktree is restored to pristine, and the kernel re-applies the patch through its own walls --
      * path boundary, budget, secrets, binaries -- exactly as if it had arrived from anywhere else.
      */
+    /**
+     * Dispatch the selected lane's worker and hand the kernel a patch (WO-0028).
+     *
+     * Selection is policy over the roster: the assigned lane serves when available; an exhausted lane
+     * reroutes to any other approved lane with the capability, and the reason is recorded; only when
+     * nothing capable remains does this park, with the soonest declared refill time. Every lane's
+     * output goes through the same collection: diff taken, worktree restored to pristine, and the
+     * kernel re-applies through its own walls.
+     */
     async invokeCodex({ workOrderId, workspace, task, allowedPaths, remediation, feedback }) {
-      const prompt = [
-        `You are a bounded WilliamOS worker completing ${workOrderId}.`,
-        ``,
-        `Task:`,
-        task,
-        ``,
-        `Hard boundary: change ONLY these paths (a trailing /** means the subtree):`,
-        ...allowedPaths.map((allowed) => `  - ${allowed}`),
-        ``,
-        `Rules: edit files in place. Do not commit, stage, branch, push, or touch git config.`,
-        `Do not create files outside the boundary. Keep the change minimal and covered by a test.`,
-        remediation ? `\nUntrusted review feedback; address only actionable items inside the boundary:\n${String(feedback ?? "").slice(0, 8000)}` : ``,
-      ].join("\n")
-      await run("codex", ["exec", "--sandbox", "workspace-write", "-C", workspace, prompt], { timeout: 45 * 60 * 1000 })
-      await run("git", ["add", "-A"], { cwd: workspace })
-      const patch = (await run("git", ["diff", "--cached", "--binary"], { cwd: workspace })).stdout
-      await run("git", ["reset", "--hard", "HEAD"], { cwd: workspace })
-      await run("git", ["clean", "-fd"], { cwd: workspace })
-      if (!patch.trim()) throw new Error("CODEX_PATCH_REQUIRED_WALL")
-      return { result: "PATCH_READY", unifiedPatch: patch }
+      const statusFile = path.join(root, "state", "provider-status.json")
+      const status = fs.existsSync(statusFile) ? JSON.parse(fs.readFileSync(statusFile, "utf8")) : {}
+      const registry = await this.buildRegistry()
+      const assigned = registry.workOrders.find((record) => record.workOrderId === workOrderId)?.agent ?? "codex"
+      const prompt = buildWorkerPrompt({ workOrderId, task, allowedPaths, remediation, feedback })
+
+      const attempted = []
+      for (;;) {
+        const choice = selectLane({ assigned, roster: laneRoster(), status, capability: IMPLEMENTATION })
+        if (choice.wait) {
+          const retry = choice.retryAfterMs ? Math.floor(choice.retryAfterMs / 1000) : null
+          throw new Error(retry ? `PROVIDER_RATE_LIMIT_WALL:retry-${retry}` : "PROVIDER_RATE_LIMIT_WALL")
+        }
+        const lane = choice.lane
+        if (attempted.includes(lane.id)) throw new Error("PROVIDER_ROTATION_WALL")
+        attempted.push(lane.id)
+        try {
+          if (lane.id === "codex") {
+            await run("codex", ["exec", "--sandbox", "workspace-write", "-C", workspace, prompt], { timeout: 45 * 60 * 1000 })
+          } else if (lane.id === "claude") {
+            // The workroom precedent: the operator's signed-in subscription, never an API key.
+            const environment = { ...process.env }
+            delete environment.ANTHROPIC_API_KEY
+            delete environment.ANTHROPIC_AUTH_TOKEN
+            await run("claude", ["-p", prompt, "--permission-mode", "acceptEdits", "--allowedTools", "Edit Write Read Grep Glob LS"], { cwd: workspace, timeout: 45 * 60 * 1000, env: environment })
+          } else {
+            throw new Error("PROVIDER_LANE_WALL")
+          }
+        } catch (error) {
+          const message = String(error?.message ?? "")
+          const limited = /^(?:CODEX|PROVIDER)_RATE_LIMIT_WALL(?::retry-(\d+))?/.exec(message)
+          if (limited) {
+            // Remember when this lane refills and let policy pick the next one, rather than parking the
+            // whole system on one meter.
+            const until = limited[1] ? new Date(Number(limited[1]) * 1000) : new Date(Date.now() + 60 * 60 * 1000)
+            status[lane.id] = { unavailableUntil: until.toISOString(), reason: "RATE_LIMITED" }
+            fs.mkdirSync(path.dirname(statusFile), { recursive: true })
+            fs.writeFileSync(statusFile, JSON.stringify(status, null, 2) + "\n", "utf8")
+            continue
+          }
+          throw error
+        }
+        fs.mkdirSync(path.dirname(statusFile), { recursive: true })
+        fs.writeFileSync(statusFile, JSON.stringify({
+          ...status,
+          lastDispatch: { workOrderId, lane: lane.id, rerouted: choice.rerouted, reason: choice.reason, at: new Date().toISOString() },
+        }, null, 2) + "\n", "utf8")
+        await run("git", ["add", "-A"], { cwd: workspace })
+        const patch = (await run("git", ["diff", "--cached", "--binary"], { cwd: workspace })).stdout
+        await run("git", ["reset", "--hard", "HEAD"], { cwd: workspace })
+        await run("git", ["clean", "-fd"], { cwd: workspace })
+        if (!patch.trim()) throw new Error("CODEX_PATCH_REQUIRED_WALL")
+        return { result: "PATCH_READY", unifiedPatch: patch }
+      }
     },
 
     async validate({ workspace, requiredValidation }) {
