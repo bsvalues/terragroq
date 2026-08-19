@@ -211,6 +211,12 @@ async function runCycle({ root, registry, adapters }) {
   if (checkpoint?.state === "FAILED_RECOVERABLE" && Date.parse(checkpoint.nextAttemptAt) > Date.now()) {
     return { ...checkpoint, ownerDecisionRequired: false }
   }
+  // A provider wait is not a failure and never burns attempts: the queue simply wakes itself when the
+  // condition clears. Known provider exhaustion ending in a terminal state that a human must reactivate
+  // is the defect this state exists to remove.
+  if (checkpoint?.state === "WAITING_PROVIDER" && Date.parse(checkpoint.retryAfter) > Date.now()) {
+    return { ...checkpoint, ownerDecisionRequired: false }
+  }
   await adapters.assertRuntime()
 
   if (!checkpoint || TERMINAL_STATES.has(checkpoint.state)) {
@@ -251,6 +257,9 @@ async function runCycle({ root, registry, adapters }) {
   const authority = getAuthority(registry, checkpoint.workOrderId)
   if (checkpoint.state === "FAILED_RECOVERABLE") {
     checkpoint = transition(root, checkpoint, checkpoint.resumeState, { nextAttemptAt: null, resumeState: null })
+  }
+  if (checkpoint.state === "WAITING_PROVIDER") {
+    checkpoint = transition(root, checkpoint, checkpoint.resumeState, { retryAfter: null, resumeState: null, failureCode: null })
   }
   if (checkpoint.state === "COMPLETED") return completionResult({ checkpoint, registry, adapters })
   if (checkpoint.state === "LEASED") {
@@ -327,6 +336,18 @@ export async function runOperationalKernelCycle({ root, registry, adapters }) {
     const checkpointFile = path.join(root, "state", "kernel-checkpoint.json")
     const checkpoint = readJson(checkpointFile)
     if (!checkpoint) throw error
+    const rateLimited = message.match(/^CODEX_RATE_LIMIT_WALL(?::retry-(\d+))?/)
+    if (rateLimited) {
+      // The worker said when its meter refills; anything else is a guess, so an unparsed limit waits an
+      // hour and asks again. Attempts are untouched: waiting is not failing.
+      const retryAfter = new Date(rateLimited[1] ? Number(rateLimited[1]) * 1000 : Date.now() + 60 * 60 * 1000).toISOString()
+      return transition(root, checkpoint, "WAITING_PROVIDER", {
+        retryAfter,
+        resumeState: checkpoint.state,
+        failureCode: "CODEX_RATE_LIMIT_WALL",
+        ownerDecisionRequired: false,
+      })
+    }
     if (isRecoverableFailure(message)) {
       const attempt = (checkpoint.attempt ?? 1) + 1
       if (attempt > 3) return transition(root, checkpoint, "FAILED_TERMINAL", { failureCode: message, ownerDecisionRequired: false })
