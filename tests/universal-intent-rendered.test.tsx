@@ -5,63 +5,74 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 
-const outcomeActions = vi.hoisted(() => ({ startWorkbenchOutcome: vi.fn() }))
-vi.mock("@/app/actions/start-workbench-outcome", () => outcomeActions)
-
 import { UniversalIntent } from "@/components/intent/universal-intent"
-import type { StartWorkbenchOutcomeResult } from "@/lib/workbench/outcome-start"
 
-const accepted = (status: "ACCEPTED" | "ALREADY_ACCEPTED" = "ACCEPTED"): StartWorkbenchOutcomeResult => ({
-  status, projectId: 7, threadId: "thread-outcome", goalId: 41,
-  outcomeKey: "goal:GOAL-0041", root: { sourceType: "outcome", sourceId: "goal:GOAL-0041" },
-  intakeTruth: "persisted", ownershipTruth: "project_thread_bound", approvalGrantedByIntake: false,
-  authorityGrantedByIntake: false, executionAuthorizedByIntake: false,
-})
+/**
+ * The composer submits an ordinary-language objective (#891, #871 boundary 1).
+ *
+ * The objectives below are the ones #871 actually used. One never matched a pattern, one matched two,
+ * and one matched `answer` and was answered with a link to /chat. All three must become work.
+ */
+const NEVER_MATCHED = "Verify the deployed PACS state against the recorded completion evidence"
+const ROUTED_TO_A_PAGE = "Determine what the recovered OMEN Benton database is"
 
-const refused: StartWorkbenchOutcomeResult = {
-  status: "REFUSED", projectId: 7, threadId: null, goalId: 42, outcomeKey: null, root: null,
-  intakeTruth: "persisted", ownershipTruth: "unavailable", approvalGrantedByIntake: false,
-  authorityGrantedByIntake: false, executionAuthorizedByIntake: false,
-}
+type FakeResponse = { ok: boolean; status: number; json: () => Promise<unknown> }
 
-const failed = (
-  status: "CONFLICT" | "INVALID_INTENT" | "PROJECT_NOT_FOUND",
-): StartWorkbenchOutcomeResult => ({
+const reply = (body: unknown, status = 200): FakeResponse => ({
+  ok: status < 400,
   status,
-  reason: status === "CONFLICT"
-    ? "IDEMPOTENCY_CONFLICT"
-    : status === "INVALID_INTENT" ? "ROUTE_NOT_START_OUTCOME" : "PROJECT_NOT_FOUND",
-  projectId: 7,
-  threadId: null,
-  goalId: null,
-  outcomeKey: null,
-  root: null,
-  intakeTruth: "unknown",
-  ownershipTruth: "unavailable",
-  approvalGrantedByIntake: false,
-  authorityGrantedByIntake: false,
-  executionAuthorizedByIntake: false,
+  json: async () => body,
 })
 
-function route(action: "start_outcome" | "navigate" = "start_outcome") {
-  return {
-    ok: true,
-    json: async () => ({
-      state: "routed",
-      intent: action === "start_outcome" ? "outcome" : "navigation",
-      destination: action === "start_outcome" ? { href: null, action } : { href: "/projects", action },
-      executionAuthorized: false,
-      authority: { required: false, granted: false },
-      reason: "A single deterministic intent contract matched.",
-    }),
-  }
+const CLARIFICATION = {
+  state: "clarification_required",
+  intent: null,
+  destination: null,
+  executionAuthorized: false,
+  authority: { required: false, granted: false },
+  reason: "No deterministic intent contract matched.",
 }
+
+const ANSWER = {
+  state: "routed",
+  intent: "answer",
+  destination: { href: "/chat", action: "respond" },
+  executionAuthorized: false,
+  authority: { required: false, granted: false },
+  reason: "A single deterministic intent contract matched.",
+}
+
+const NAVIGATION = {
+  state: "routed",
+  intent: "navigation",
+  destination: { href: "/projects", action: "navigate" },
+  executionAuthorized: false,
+  authority: { required: false, granted: false },
+  reason: "A single deterministic intent contract matched.",
+}
+
+const admission = (over: Record<string, unknown> = {}) => ({
+  ok: true,
+  status: "admitted",
+  workOrder: "WO-0142",
+  thread: "thread-0142",
+  title: NEVER_MATCHED,
+  submittedBy: "operator-1",
+  authority: { granted: false, note: "admitted as a draft; execution requires a recorded authority grant" },
+  ...over,
+})
 
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>((next) => { resolve = next })
   return { promise, resolve }
 }
+
+let intentReply: () => Promise<FakeResponse>
+let objectiveReply: () => Promise<FakeResponse>
+
+const calls = () => vi.mocked(fetch).mock.calls as unknown as Array<[string, { body: string }]>
+const objectiveCalls = () => calls().filter(([url]) => String(url) === "/api/objective")
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -71,9 +82,9 @@ beforeAll(() => {
 })
 
 beforeEach(() => {
-  outcomeActions.startWorkbenchOutcome.mockReset()
-  outcomeActions.startWorkbenchOutcome.mockResolvedValue(accepted())
-  vi.stubGlobal("fetch", vi.fn(async () => route()))
+  intentReply = async () => reply(CLARIFICATION)
+  objectiveReply = async () => reply(admission(), 201)
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => (String(url) === "/api/intent" ? intentReply() : objectiveReply())))
 })
 
 afterEach(() => {
@@ -99,146 +110,146 @@ describe("UniversalIntent shared Workbench contract", () => {
     expect(screen.getByRole("link", { name: "Raw Runtime" })).toBeTruthy()
   })
 
-  it("previews then explicitly accepts a Project-bound outcome without Goal Console handoff", async () => {
-    const user = userEvent.setup()
-    const onOpenThread = vi.fn()
-    render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={onOpenThread} />)
-
-    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Fix the owner handoff")
-    await user.keyboard("{Enter}")
-    expect(await screen.findByText("Ready to start in WilliamOS")).toBeTruthy()
-    expect(outcomeActions.startWorkbenchOutcome).not.toHaveBeenCalled()
-
-    await user.click(screen.getByRole("button", { name: "Start outcome" }))
-    await waitFor(() => expect(outcomeActions.startWorkbenchOutcome).toHaveBeenCalledOnce())
-    expect(outcomeActions.startWorkbenchOutcome.mock.calls[0][0]).toMatchObject({ projectId: 7, intent: "Fix the owner handoff" })
-    expect(outcomeActions.startWorkbenchOutcome.mock.calls[0][0].idempotencyKey).toMatch(/^[0-9a-f-]{36}$/)
-    expect(await screen.findByText("Accepted by WilliamOS")).toBeTruthy()
-    expect(screen.getByText("This intake granted no approval, authority, lease, or execution.")).toBeTruthy()
-    expect(screen.queryByRole("link", { name: /Goal Console/i })).toBeNull()
-    expect(onOpenThread).not.toHaveBeenCalled()
-
-    await user.click(screen.getByRole("button", { name: "Open Thread" }))
-    expect(onOpenThread).toHaveBeenCalledWith({ projectId: 7, threadId: "thread-outcome" })
-  })
-
-  it("fails closed without an explicit selected Project", async () => {
+  it("admits an objective the classifier never recognised, and shows what came back", async () => {
     const user = userEvent.setup()
     render(<UniversalIntent selectedProject={null} onOpenThread={vi.fn()} />)
 
-    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Build a release view")
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), NEVER_MATCHED)
     await user.keyboard("{Enter}")
 
-    expect((await screen.findByRole("alert")).textContent).toContain("Select a Project")
-    expect(screen.queryByRole("button", { name: "Start outcome" })).toBeNull()
-    expect(outcomeActions.startWorkbenchOutcome).not.toHaveBeenCalled()
+    expect(await screen.findByText("Admitted as work")).toBeTruthy()
+    await waitFor(() => expect(objectiveCalls()).toHaveLength(1))
+    expect(JSON.parse(objectiveCalls()[0][1].body)).toEqual({ objective: NEVER_MATCHED })
+    expect(screen.getByText(NEVER_MATCHED)).toBeTruthy()
+    expect(screen.getByText("WO-0142")).toBeTruthy()
+    expect(screen.getByText("thread-0142")).toBeTruthy()
+    // Admission is not authorisation, in the response's own words.
+    expect(
+      screen.getByText(/Admission is not authorisation — admitted as a draft; execution requires a recorded authority grant/),
+    ).toBeTruthy()
+    // No Project was selected, and admission did not need one.
+    expect(screen.queryByText(/Select a Project/i)).toBeNull()
   })
 
-  it("shows replay and refusal truth without claiming Working", async () => {
+  it("admits an objective the classifier would have answered with a page instead of work", async () => {
     const user = userEvent.setup()
-    outcomeActions.startWorkbenchOutcome.mockResolvedValueOnce(accepted("ALREADY_ACCEPTED"))
-    const first = render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)
-    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Build a release view")
-    await user.keyboard("{Enter}")
-    await user.click(await screen.findByRole("button", { name: "Start outcome" }))
-    expect(await screen.findByText("Already accepted by WilliamOS")).toBeTruthy()
-    expect(screen.getByText("This intake granted no approval, authority, lease, or execution.")).toBeTruthy()
-    expect(screen.queryByText(/Unapproved and unverified|not executing/i)).toBeNull()
-    expect(screen.queryByText(/Working/i)).toBeNull()
-    first.unmount()
-
-    outcomeActions.startWorkbenchOutcome.mockResolvedValueOnce(refused)
-    render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)
-    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Build a release view")
-    await user.keyboard("{Enter}")
-    await user.click(await screen.findByRole("button", { name: "Start outcome" }))
-    expect(await screen.findByText("Refused by doctrine")).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "Open Thread" })).toBeNull()
-  })
-
-  it("renders an idempotency conflict as a terminal typed result without recovery or retry", async () => {
-    const user = userEvent.setup()
-    outcomeActions.startWorkbenchOutcome.mockResolvedValueOnce(failed("CONFLICT"))
+    intentReply = async () => reply(ANSWER)
     render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)
 
-    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Build a release view")
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), ROUTED_TO_A_PAGE)
     await user.keyboard("{Enter}")
-    await user.click(await screen.findByRole("button", { name: "Start outcome" }))
 
-    expect(await screen.findByText("Request identity conflict")).toBeTruthy()
-    expect(screen.getByText(/already bound to a different Project or intent/i)).toBeTruthy()
-    expect(screen.queryByText("Acceptance recovery required")).toBeNull()
-    expect(screen.queryByRole("button", { name: "Retry acceptance" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Open Thread" })).toBeNull()
+    expect(await screen.findByText("Admitted as work")).toBeTruthy()
+    await waitFor(() => expect(objectiveCalls()).toHaveLength(1))
+    expect(JSON.parse(objectiveCalls()[0][1].body)).toEqual({ objective: ROUTED_TO_A_PAGE })
+    expect(screen.queryByRole("link", { name: "Open destination" })).toBeNull()
   })
 
-  it.each([
-    ["INVALID_INTENT", "Intent was not accepted"],
-    ["PROJECT_NOT_FOUND", "Project unavailable"],
-  ] as const)("fails closed for the typed %s result", async (status, heading) => {
+  it("lets a navigation intent keep navigating without admitting anything", async () => {
     const user = userEvent.setup()
-    outcomeActions.startWorkbenchOutcome.mockResolvedValueOnce(failed(status))
+    intentReply = async () => reply(NAVIGATION)
     render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)
 
-    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Build a release view")
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Open Projects")
     await user.keyboard("{Enter}")
-    await user.click(await screen.findByRole("button", { name: "Start outcome" }))
 
-    expect(await screen.findByText(heading)).toBeTruthy()
-    expect(screen.getByText(/No outcome, Thread, authority, lease, or execution is claimed/i)).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "Retry acceptance" })).toBeNull()
-    expect(screen.queryByRole("button", { name: "Open Thread" })).toBeNull()
+    const destination = await screen.findByRole("link", { name: "Open destination" })
+    expect(destination.getAttribute("href")).toBe("/projects")
+    expect(objectiveCalls()).toHaveLength(0)
+    expect(screen.queryByText("Admitted as work")).toBeNull()
   })
 
-  it("ignores a late acceptance after close and reuses the attempt key after a recoverable failure", async () => {
+  it("still admits when the classifier itself is unavailable", async () => {
     const user = userEvent.setup()
-    const pending = deferred<StartWorkbenchOutcomeResult>()
-    outcomeActions.startWorkbenchOutcome.mockImplementationOnce(() => pending.promise)
-    const onOpenThread = vi.fn()
-    render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={onOpenThread} />)
-    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Build a release view")
-    await user.keyboard("{Enter}")
-    await user.dblClick(await screen.findByRole("button", { name: "Start outcome" }))
-    expect(outcomeActions.startWorkbenchOutcome).toHaveBeenCalledTimes(1)
-    expect(screen.getByRole("status").textContent).toBe("Persisting acceptance…")
-    const firstKey = outcomeActions.startWorkbenchOutcome.mock.calls[0][0].idempotencyKey
-    await user.keyboard("{Escape}")
-    await act(async () => { pending.resolve(accepted()) })
-    expect(screen.queryByText("Accepted by WilliamOS")).toBeNull()
-    expect(onOpenThread).not.toHaveBeenCalled()
+    intentReply = async () => { throw new Error("classifier down") }
+    render(<UniversalIntent selectedProject={null} onOpenThread={vi.fn()} />)
 
-    outcomeActions.startWorkbenchOutcome.mockRejectedValueOnce(new Error("WORKBENCH_OUTCOME_START_BINDING_WALL"))
-    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Build a release view")
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), NEVER_MATCHED)
     await user.keyboard("{Enter}")
-    await user.click(await screen.findByRole("button", { name: "Start outcome" }))
-    expect(await screen.findByText("Acceptance recovery required")).toBeTruthy()
-    expect(outcomeActions.startWorkbenchOutcome.mock.calls[1][0].idempotencyKey).toBe(firstKey)
-    outcomeActions.startWorkbenchOutcome.mockResolvedValueOnce(accepted("ALREADY_ACCEPTED"))
-    await user.click(screen.getByRole("button", { name: "Retry acceptance" }))
-    expect(await screen.findByText("Already accepted by WilliamOS")).toBeTruthy()
-    expect(outcomeActions.startWorkbenchOutcome.mock.calls[2][0].idempotencyKey).toBe(firstKey)
+
+    expect(await screen.findByText("Admitted as work")).toBeTruthy()
+    await waitFor(() => expect(objectiveCalls()).toHaveLength(1))
   })
 
-  it("lets a newer palette request supersede an older route response", async () => {
+  it("keeps admission while reporting a thread it could not create", async () => {
     const user = userEvent.setup()
-    const older = deferred<ReturnType<typeof route>>()
-    const newer = deferred<ReturnType<typeof route>>()
-    vi.mocked(fetch)
-      .mockImplementationOnce(() => older.promise as unknown as Promise<Response>)
-      .mockImplementationOnce(() => newer.promise as unknown as Promise<Response>)
-    render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)
+    objectiveReply = async () => reply(admission({ thread: null, threadError: "relation workbench_thread does not exist" }), 201)
+    render(<UniversalIntent selectedProject={null} onOpenThread={vi.fn()} />)
 
-    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Build the old view")
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), NEVER_MATCHED)
+    await user.keyboard("{Enter}")
+
+    expect(await screen.findByText("Admitted as work")).toBeTruthy()
+    expect(screen.getByText("not created")).toBeTruthy()
+    expect(screen.getByText(/its thread could not be created \(relation workbench_thread does not exist\)/)).toBeTruthy()
+  })
+
+  it("fails closed on a typed admission refusal without claiming a record", async () => {
+    const user = userEvent.setup()
+    objectiveReply = async () => reply({ error: "UNAUTHENTICATED" }, 401)
+    render(<UniversalIntent selectedProject={null} onOpenThread={vi.fn()} />)
+
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), NEVER_MATCHED)
+    await user.keyboard("{Enter}")
+
+    const alert = await screen.findByRole("alert")
+    expect(alert.textContent).toContain("Objective was not admitted")
+    expect(alert.textContent).toContain("Sign in before submitting an objective.")
+    expect(alert.textContent).toContain("Nothing was recorded")
+    expect(screen.queryByText("Admitted as work")).toBeNull()
+  })
+
+  it("reports the bound refused by the objective seam rather than inventing one", async () => {
+    const user = userEvent.setup()
+    objectiveReply = async () => reply({ error: "OBJECTIVE_TOO_LONG", detail: "an objective may be at most 2000 characters" }, 400)
+    render(<UniversalIntent selectedProject={null} onOpenThread={vi.fn()} />)
+
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), NEVER_MATCHED)
+    await user.keyboard("{Enter}")
+
+    expect((await screen.findByRole("alert")).textContent).toContain("An objective may be at most 2000 characters.")
+  })
+
+  it("does not admit the same unchanged objective twice", async () => {
+    const user = userEvent.setup()
+    render(<UniversalIntent selectedProject={null} onOpenThread={vi.fn()} />)
+
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), NEVER_MATCHED)
+    await user.keyboard("{Enter}")
+    expect(await screen.findByText("Admitted as work")).toBeTruthy()
+
+    await user.keyboard("{Enter}")
+    await user.keyboard("{Enter}")
+    expect(objectiveCalls()).toHaveLength(1)
+    expect(screen.getByText("WO-0142")).toBeTruthy()
+
+    // Editing the draft makes it a different ask, and that one is admitted.
+    await user.type(screen.getByRole("textbox", { name: "Intent palette" }), " again")
+    await user.keyboard("{Enter}")
+    await waitFor(() => expect(objectiveCalls()).toHaveLength(2))
+    expect(JSON.parse(objectiveCalls()[1][1].body)).toEqual({ objective: `${NEVER_MATCHED} again` })
+  })
+
+  it("lets a newer submission supersede an older admission response", async () => {
+    const user = userEvent.setup()
+    const older = deferred<FakeResponse>()
+    const newer = deferred<FakeResponse>()
+    const queued = [older.promise, newer.promise]
+    objectiveReply = () => queued.shift()!
+    render(<UniversalIntent selectedProject={null} onOpenThread={vi.fn()} />)
+
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Old objective")
     await user.keyboard("{Enter}")
     const palette = await screen.findByRole("textbox", { name: "Intent palette" })
     await user.clear(palette)
-    await user.type(palette, "Fix the newer view")
+    await user.type(palette, "New objective")
     await user.keyboard("{Enter}")
-    await act(async () => { newer.resolve(route()) })
-    expect(await screen.findByText("Ready to start in WilliamOS")).toBeTruthy()
 
-    await act(async () => { older.resolve(route("navigate")) })
-    expect(screen.getByText("Ready to start in WilliamOS")).toBeTruthy()
-    expect(screen.queryByRole("link", { name: "Open destination" })).toBeNull()
+    await act(async () => { newer.resolve(reply(admission({ workOrder: "WO-NEW", title: "New objective" }), 201)) })
+    expect(await screen.findByText("WO-NEW")).toBeTruthy()
+
+    await act(async () => { older.resolve(reply(admission({ workOrder: "WO-OLD", title: "Old objective" }), 201)) })
+    expect(screen.getByText("WO-NEW")).toBeTruthy()
+    expect(screen.queryByText("WO-OLD")).toBeNull()
   })
 })
