@@ -405,16 +405,17 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
     async validate({ workspace, requiredValidation }) {
       // A fresh worktree has no dependencies; the store makes this cheap and deterministic.
       try {
-        await run("pnpm.cmd", ["install", "--frozen-lockfile"], { cwd: workspace, timeout: 10 * 60 * 1000 })
+        // Node refuses to spawn .cmd shims without a shell; cmd.exe /c is the explicit, safe form.
+        await run("cmd.exe", ["/c", "pnpm", "install", "--frozen-lockfile"], { cwd: workspace, timeout: 10 * 60 * 1000 })
       } catch {
         throw new Error("VALIDATION_INSTALL_WALL")
       }
       for (const gate of requiredValidation) {
         try {
           if (gate === "diff-check") await run("git", ["diff", "--cached", "--check"], { cwd: workspace })
-          else if (gate === "lint") await run("pnpm.cmd", ["run", "lint"], { cwd: workspace })
-          else if (gate === "test") await run("pnpm.cmd", ["exec", "vitest", "run"], { cwd: workspace, timeout: 20 * 60 * 1000 })
-          else if (gate === "build") await run("pnpm.cmd", ["run", "build"], { cwd: workspace, timeout: 20 * 60 * 1000 })
+          else if (gate === "lint") await run("cmd.exe", ["/c", "pnpm", "run", "lint"], { cwd: workspace, timeout: 20 * 60 * 1000 })
+          else if (gate === "test") await run("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run"], { cwd: workspace, timeout: 20 * 60 * 1000 })
+          else if (gate === "build") await run("cmd.exe", ["/c", "pnpm", "run", "build"], { cwd: workspace, timeout: 20 * 60 * 1000 })
           else throw new Error("VALIDATION_COMMAND_WALL")
         } catch {
           throw new Error(`VALIDATION_${gate.replaceAll("-", "_").toUpperCase()}_WALL`)
