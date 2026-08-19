@@ -1,4 +1,5 @@
 import { appendGovernanceEvent } from "@/lib/governance/events"
+import { bindThreadSource } from "@/lib/objective/thread-binding"
 import { brokeredExec } from "@/lib/fabric/broker.mjs"
 import { pool } from "@/lib/db"
 import { getSession } from "@/lib/session"
@@ -30,7 +31,7 @@ export async function POST(request: Request) {
   const session = await getSession()
   if (!session?.user) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  let body: { identity?: unknown }
+  let body: { identity?: unknown; thread?: unknown }
   try {
     body = await request.json()
   } catch {
@@ -123,6 +124,11 @@ export async function POST(request: Request) {
     after: observedSummary,
     metadata: observedSummary,
   })
+
+  const thread = typeof body.thread === "string" ? body.thread.trim() : ""
+  if (thread) {
+    await bindThreadSource({ userId: session.user.id, threadId: thread, sourceType: "governance_event", sourceId: `resource_verification:${record.identity}`, role: "member" })
+  }
 
   return Response.json(
     {

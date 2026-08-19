@@ -1,4 +1,5 @@
 import { recordConflict, resolveConflict } from "@/app/actions/conflicts"
+import { bindThreadSource } from "@/lib/objective/thread-binding"
 import { pool } from "@/lib/db"
 import { getSession } from "@/lib/session"
 import { reconcileResource } from "@/lib/resource/reconcile"
@@ -26,7 +27,7 @@ export async function POST(request: Request) {
   const session = await getSession()
   if (!session?.user) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  let body: { identity?: unknown }
+  let body: { identity?: unknown; thread?: unknown }
   try {
     body = await request.json()
   } catch {
@@ -60,6 +61,13 @@ export async function POST(request: Request) {
   }
 
   const verdict = reconcileResource(record)
+  const thread = typeof body.thread === "string" ? body.thread.trim() : ""
+  if (thread) {
+    // Bound by reference: the thread records THAT this resource and this reconciliation belong to it,
+    // never what they said. The read side re-derives both.
+    await bindThreadSource({ userId: session.user.id, threadId: thread, sourceType: "resource", sourceId: record.identity, role: "member" })
+    await bindThreadSource({ userId: session.user.id, threadId: thread, sourceType: "reconciliation", sourceId: record.identity, role: "member" })
+  }
 
   let conflictRef: string | null = null
   let closedConflict: string | null = null

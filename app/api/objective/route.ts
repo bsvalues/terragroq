@@ -1,6 +1,7 @@
 import { createWorkOrder } from "@/app/actions/work-orders"
 import { getSession } from "@/lib/session"
 import { assertAdmissible, normaliseObjective, objectiveTitle } from "@/lib/objective/intake"
+import { createObjectiveThread, resolveThreadProject } from "@/lib/objective/thread-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -38,11 +39,33 @@ export async function POST(request: Request) {
   const title = objectiveTitle(objective)
   const created = await createWorkOrder({ title, description: objective, lane: "operator-objective" })
 
+  // The thread is durable from the moment the objective is admitted, so everything the objective
+  // produces has somewhere to attach. A thread that exists only as a query cannot be listed, linked
+  // to, or carried forward.
+  let thread: string | null = null
+  let threadError: string | null = null
+  try {
+    const projectId = await resolveThreadProject(session.user.id, typeof (body as { project?: unknown }).project === "string" ? (body as { project: string }).project : undefined)
+      // A work order without a ref cannot be a thread root, and inventing one would break the binding
+      // that lets an objective find its own thread later.
+      if (created.ref) {
+      thread = await createObjectiveThread({ userId: session.user.id, projectId, workOrderRef: created.ref, title })
+      }
+  } catch (error) {
+    // The objective is admitted either way -- losing the thread is a degraded answer, not a lost
+    // request -- but the reason is reported. A silent null is how a binding that never worked went
+    // unnoticed through an entire acceptance run.
+    thread = null
+    threadError = (error as Error)?.message ?? "thread creation failed"
+  }
+
   return Response.json(
     {
       ok: true,
       status: "admitted",
       workOrder: created.ref,
+      thread,
+      ...(threadError ? { threadError } : {}),
       title,
       submittedBy: session.user.id,
       // Stated in the response so a caller cannot read admission as permission.
