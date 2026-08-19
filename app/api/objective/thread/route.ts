@@ -1,6 +1,7 @@
 import { pool } from "@/lib/db"
 import { getSession } from "@/lib/session"
 import { buildThreadItems, summariseThread, type VerificationSummary } from "@/lib/objective/thread"
+import { threadBindings, threadForWorkOrder } from "@/lib/objective/thread-binding"
 import { assertOperationAllowed, type OpenConflict } from "@/lib/resource/completion"
 import { reconcileResource } from "@/lib/resource/reconcile"
 import { shapeResourceRecord, type ResourceRow } from "@/lib/resource/resolve"
@@ -24,9 +25,19 @@ export async function GET(request: Request) {
   if (!session?.user) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
   const url = new URL(request.url)
-  const workOrderRef = url.searchParams.get("workOrder")?.trim()
+  const requestedThread = url.searchParams.get("thread")?.trim()
+  let workOrderRef = url.searchParams.get("workOrder")?.trim()
   const identity = url.searchParams.get("identity")?.trim() ?? "PACS"
-  if (!workOrderRef) return Response.json({ error: "WORK_ORDER_REQUIRED" }, { status: 400 })
+
+  // A thread can be addressed by its own id now that it is durable. The work order remains accepted so
+  // an objective can still find its thread from the reference it was handed at admission.
+  let bindings: Awaited<ReturnType<typeof threadBindings>> = []
+  if (requestedThread) {
+    bindings = await threadBindings(session.user.id, requestedThread)
+    if (bindings.length === 0) return Response.json({ error: "THREAD_UNKNOWN", thread: requestedThread }, { status: 404 })
+    workOrderRef = bindings.find((binding) => binding.role === "root" && binding.sourceType === "work_order")?.sourceId ?? workOrderRef
+  }
+  if (!workOrderRef) return Response.json({ error: "WORK_ORDER_OR_THREAD_REQUIRED" }, { status: 400 })
 
   try {
     const objective = await pool.query(
@@ -84,8 +95,17 @@ export async function GET(request: Request) {
       verification,
     })
 
+    const threadId = requestedThread ?? (await threadForWorkOrder(session.user.id, workOrderRef))
     return Response.json(
-      { workOrder: workOrderRef, identity, summary: summariseThread(items), items },
+      {
+        thread: threadId,
+        workOrder: workOrderRef,
+        identity,
+        // Bindings are shown so a reader can see what the thread is built FROM, not just what it says.
+        boundSources: bindings.length > 0 ? bindings : undefined,
+        summary: summariseThread(items),
+        items,
+      },
       { headers: { "cache-control": "no-store" } },
     )
   } catch {

@@ -85,7 +85,8 @@ console.log(`GET  /api/resource?identity=PACS -> HTTP ${resolved.status}`)
 console.log(record.slice(0, 700))
 
 // #878: with the record resolved, ask whether it agrees with what we already recorded.
-const reconciled = await call(`${BASE}/api/resource/reconcile`, { identity: "PACS" }, sessionCookie)
+const admittedThread = JSON.parse(admission).thread
+const reconciled = await call(`${BASE}/api/resource/reconcile`, { identity: "PACS", thread: admittedThread }, sessionCookie)
 const verdict = await reconciled.text()
 console.log(`POST /api/resource/reconcile     -> HTTP ${reconciled.status}`)
 console.log(verdict.slice(0, 700))
@@ -98,7 +99,7 @@ console.log(decision.slice(0, 600))
 
 // #882: does the record still hold? The first step that goes and looks -- through the broker, with a
 // fixed read-only probe, targeted only by what the record declares.
-const verified = await call(`${BASE}/api/resource/verify`, { identity: "PACS" }, sessionCookie)
+const verified = await call(`${BASE}/api/resource/verify`, { identity: "PACS", thread: admittedThread }, sessionCookie)
 const observed = await verified.text()
 console.log(`POST /api/resource/verify        -> HTTP ${verified.status}`)
 console.log(observed.slice(0, 900))
@@ -119,7 +120,9 @@ if (process.env.WILLIAMOS_OPERATOR_RELOCATE === "1") {
 }
 
 const admittedRef = JSON.parse(admission).workOrder
-const thread = await fetch(`${BASE}/api/objective/thread?workOrder=${admittedRef}&identity=PACS`, {
+// Addressed by the thread id itself now that threads are durable, falling back to the work order.
+const threadQuery = admittedThread ? `thread=${admittedThread}` : `workOrder=${admittedRef}`
+const thread = await fetch(`${BASE}/api/objective/thread?${threadQuery}&identity=PACS`, {
   headers: { cookie: sessionCookie },
 })
 const answer = await thread.json()
