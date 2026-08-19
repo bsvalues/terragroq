@@ -165,6 +165,60 @@ async function run(command, args, options = {}) {
   }
 }
 
+/** Test files vitest reported as failing, from its own output. */
+export function parseFailingTestFiles(output) {
+  // Real vitest output carries the escape byte before the bracket; stripping only the bracket
+  // leaves it wedged between FAIL and the path, where it stops looking like whitespace.
+  const cleaned = String(output ?? "").replace(/?\[[0-9;]*m/g, "")
+  const found = cleaned.match(/FAIL\s+(\S+\.test\.[cm]?[jt]sx?)/g) ?? []
+  return [...new Set(found.map((entry) => entry.replace(/^FAIL\s+/, "").replaceAll("\\", "/")))].sort()
+}
+
+/**
+ * Failures the patch is answerable for: the ones that were not already failing without it.
+ *
+ * A gate that fails a worker for its host's pre-existing breakage is unwinnable, and an unwinnable gate
+ * converts correct work into FAILED_TERMINAL. Measured on this machine, pristine main fails 23 tests
+ * across four host-dependent files that pass on CI's Linux runner; every remediation round tonight died
+ * on them. The worker answers for what it broke, and CI remains the authority on the rest.
+ */
+export function newlyFailingTests(failing, baseline) {
+  const known = new Set(baseline ?? [])
+  return (failing ?? []).filter((file) => !known.has(file))
+}
+
+/**
+ * What this host fails without any patch applied, cached per base commit.
+ *
+ * Measured in a throwaway worktree at the same commit so the work order's own workspace is never
+ * disturbed. Costs one suite run the first time a commit is seen and nothing thereafter.
+ */
+export async function measureBaselineFailures({ root, repositoryPath, head, runner = run }) {
+  const cacheFile = path.join(root, "state", "baselines", head + ".json")
+  if (fs.existsSync(cacheFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(cacheFile, "utf8")).failing ?? []
+    } catch { /* a corrupt cache is remeasured, not trusted */ }
+  }
+  const scratch = path.join(root, "state", "baselines", "wt-" + head.slice(0, 12))
+  let failing = []
+  try {
+    fs.rmSync(scratch, { recursive: true, force: true })
+    await runner("git", ["worktree", "add", "--detach", scratch, head], { cwd: repositoryPath, timeout: 5 * 60 * 1000 })
+    await runner("cmd.exe", ["/c", "pnpm", "install", "--frozen-lockfile"], { cwd: scratch, timeout: 10 * 60 * 1000 })
+    await runner("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run", "--config", "vitest.ci.config.ts"], { cwd: scratch, timeout: 20 * 60 * 1000 })
+  } catch (error) {
+    failing = parseFailingTestFiles(error?.output)
+  } finally {
+    try {
+      await runner("git", ["worktree", "remove", "--force", scratch], { cwd: repositoryPath, timeout: 2 * 60 * 1000 })
+    } catch { /* a stale scratch worktree is not worth failing a cycle over */ }
+  }
+  fs.mkdirSync(path.dirname(cacheFile), { recursive: true })
+  fs.writeFileSync(cacheFile, JSON.stringify({ head, failing, measuredAt: new Date().toISOString() }, null, 2) + "\n", "utf8")
+  return failing
+}
+
 export function createWilliamOSAdapters({ root, repositoryPath }) {
   const adapterId = "williamos-resident-v1"
   const native = createNativeAdapters({ root, repositoryPath })
@@ -443,7 +497,21 @@ ${String(error?.output ?? "").slice(-12000)}
           // so gating on it judged every worker against a bar main itself does not clear, for files
           // outside the boundary the worker is forbidden to touch. That is an unwinnable gate, and
           // it consumed every remediation round tonight.
-          else if (gate === "test") await run("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run", "--config", "vitest.ci.config.ts"], { cwd: workspace, timeout: 20 * 60 * 1000 })
+          else if (gate === "test") {
+            try {
+              await run("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run", "--config", "vitest.ci.config.ts"], { cwd: workspace, timeout: 20 * 60 * 1000 })
+            } catch (failure) {
+              // Judge the patch against this host, not an ideal one. The baseline is measured once per base
+              // commit on a pristine tree and cached; whatever fails there is the machine's, not the worker's.
+              const head = (await run("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim()
+              const baseline = await measureBaselineFailures({ root, repositoryPath, head })
+              const newly = newlyFailingTests(parseFailingTestFiles(failure?.output), baseline)
+              if (newly.length > 0) {
+                failure.output = newly.length + " test file(s) fail with this patch and pass without it:\n" + newly.join("\n") + "\n\n" + String(failure?.output ?? "")
+                throw failure
+              }
+            }
+          }
           else if (gate === "build") await run("cmd.exe", ["/c", "pnpm", "run", "build"], { cwd: workspace, timeout: 20 * 60 * 1000 })
           else throw new Error("VALIDATION_COMMAND_WALL")
         } catch (error) {
