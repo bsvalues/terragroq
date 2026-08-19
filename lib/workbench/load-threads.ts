@@ -31,6 +31,12 @@ export interface WorkbenchThreadRepository {
   listGoals(userId: string, ids: number[], limit: number): Promise<GoalRow[]>
   listOutcomes(userId: string, selector: { sourceIds: string[]; goalIds: number[] }, limit: number): Promise<OutcomeRow[]>
   listWorkOrders(userId: string, ids: number[], limit: number): Promise<WorkOrderRow[]>
+  /**
+   * Resolve work order refs to their rows, for a Thread whose binding names its work order the way
+   * an objective thread records it. Optional: a repository that cannot resolve refs leaves such a
+   * Thread fail-closed, which is the honest answer -- a ref's digits are not a row id.
+   */
+  listWorkOrdersByRef?(userId: string, refs: string[], limit: number): Promise<WorkOrderRow[]>
   listDecisions(userId: string, ids: number[], limit: number): Promise<DecisionRow[]>
   listEvidence(userId: string, workOrderIds: number[], evidenceIds: number[], limit: number): Promise<EvidenceRow[]>
   listGovernanceEvents(userId: string, targets: WorkbenchThreadTargets, limit: number): Promise<GovernanceEventRow[]>
@@ -106,14 +112,24 @@ function sourceDrilldown(kind: ThreadSourceKind, id: string) {
 
 /**
  * A persisted binding names its source in the table's vocabulary; the projection names it in
- * ThreadSourceKind. `outcome` is the table's older spelling of `outcome_queue_item`. The
- * binding's sourceId is carried verbatim in either vocabulary — it is the source's own
- * identity, never a row id to be resolved.
+ * ThreadSourceKind. `outcome` is the table's older spelling of `outcome_queue_item`.
+ *
+ * A goal or outcome binding's sourceId is the source's own identity and is carried verbatim. A
+ * work_order binding names its work order either by row id or by ref — an objective thread binds
+ * its root by ref, because a work order without a ref cannot be a thread root — so a ref is
+ * resolved to the canonical row identity that the work_order sources, their drilldowns, and the
+ * evidence and event joins already speak. A ref is resolved by lookup, never by reading digits out
+ * of it: refs are a per-operator sequence, so WO-0026 is not row 26.
  */
 const PERSISTED_SOURCE_KIND: Record<PersistedSourceType, ThreadSourceKind> = {
   goal: "goal",
   outcome: "outcome_queue_item",
   work_order: "work_order",
+}
+
+function workOrderRowId(sourceId: string): number | null {
+  const value = Number(sourceId)
+  return Number.isSafeInteger(value) ? value : null
 }
 
 function binding(threadId: string, userId: string, projectId: number, sourceKind: ThreadSourceKind, sourceId: string, role: "root" | "member" = "member"): ThreadBindingInput {
@@ -147,10 +163,33 @@ export async function loadAuthenticatedWorkbenchThreads(
     .map((row) => Number(row.sourceId))
     .filter(Number.isSafeInteger)).sort((left, right) => left - right)
   const persistedOutcomeIds = distinct(persistedBindings.filter((row) => row.sourceType === "outcome").map((row) => row.sourceId)).sort()
-  const persistedWorkOrderIds = distinct(persistedBindings
-    .filter((row) => row.sourceType === "work_order")
-    .map((row) => Number(row.sourceId))
-    .filter(Number.isSafeInteger)).sort((left, right) => left - right)
+  const persistedWorkOrderBindings = persistedBindings.filter((row) => row.sourceType === "work_order")
+  const persistedWorkOrderRefs = distinct(persistedWorkOrderBindings
+    .map((row) => row.sourceId)
+    .filter((sourceId) => workOrderRowId(sourceId) === null)).sort()
+  const workOrderRefRead = bounded<WorkOrderRow>(persistedWorkOrderRefs.length > 0 && repo.listWorkOrdersByRef
+    ? await repo.listWorkOrdersByRef(userId, persistedWorkOrderRefs, WORKBENCH_SOURCE_LIMIT + 1)
+    : [])
+  const refWorkOrders = owned(workOrderRefRead.rows, userId)
+    .filter((row) => row.ref !== null && persistedWorkOrderRefs.includes(row.ref))
+  const workOrderIdByRef = new Map<string, number>()
+  for (const ref of persistedWorkOrderRefs) {
+    // One ref naming two rows is not a Thread whose work order can be identified, so it stays
+    // unresolved rather than attaching whichever row was returned first.
+    const matches = distinct(refWorkOrders.filter((row) => row.ref === ref).map((row) => row.id))
+    if (matches.length === 1) workOrderIdByRef.set(ref, matches[0])
+  }
+  const workOrderIdFor = (sourceId: string): number | null => (
+    workOrderRowId(sourceId) ?? workOrderIdByRef.get(sourceId) ?? null
+  )
+  const persistedSourceId = (row: BindingRow): string => {
+    if (row.sourceType !== "work_order") return row.sourceId
+    const id = workOrderIdFor(row.sourceId)
+    return id === null ? row.sourceId : String(id)
+  }
+  const persistedWorkOrderIds = distinct(persistedWorkOrderBindings
+    .map((row) => workOrderIdFor(row.sourceId))
+    .filter((id): id is number => id !== null)).sort((left, right) => left - right)
 
   const outcomeRead = bounded(await repo.listOutcomes(userId, {
     sourceIds: persistedOutcomeIds,
@@ -198,7 +237,7 @@ export async function loadAuthenticatedWorkbenchThreads(
   for (const thread of threads) {
     const persisted = persistedBindings.filter((row) => row.threadId === thread.id)
     for (const row of persisted) {
-      allBindings.push(binding(thread.id, userId, projectId, PERSISTED_SOURCE_KIND[row.sourceType], row.sourceId, row.role))
+      allBindings.push(binding(thread.id, userId, projectId, PERSISTED_SOURCE_KIND[row.sourceType], persistedSourceId(row), row.role))
     }
     const threadOutcomes = outcomes.filter((outcome) => persisted.some((row) => (
       row.sourceType === "outcome" && row.sourceId === outcome.outcomeKey
@@ -209,7 +248,7 @@ export async function loadAuthenticatedWorkbenchThreads(
     ])
     const threadGoals = goals.filter((row) => threadGoalIds.includes(row.id))
     const threadWorkOrderIds = distinct([
-      ...persisted.filter((row) => row.sourceType === "work_order").map((row) => Number(row.sourceId)).filter(Number.isSafeInteger),
+      ...persisted.filter((row) => row.sourceType === "work_order").map((row) => workOrderIdFor(row.sourceId)).filter((id): id is number => id !== null),
       ...threadGoals.flatMap((row) => row.linkedWorkOrderId === null ? [] : [row.linkedWorkOrderId]),
       ...threadOutcomes.flatMap((row) => row.activeWorkOrderId === null ? [] : [row.activeWorkOrderId]),
     ])
@@ -259,7 +298,7 @@ export async function loadAuthenticatedWorkbenchThreads(
     for (const row of persistedBindings.filter((candidate) => candidate.role === "root")) truncatedSourceKinds.add(PERSISTED_SOURCE_KIND[row.sourceType])
   }
   for (const [read, kind] of [
-    [goalRead, "goal"], [outcomeRead, "outcome_queue_item"], [workOrderRead, "work_order"],
+    [goalRead, "goal"], [outcomeRead, "outcome_queue_item"], [workOrderRead, "work_order"], [workOrderRefRead, "work_order"],
     [decisionRead, "decision"], [evidenceRead, "evidence_record"], [governanceRead, "governance_event"], [auditRead, "event_log"],
   ] as const) if (read.truncated) truncatedSourceKinds.add(kind)
 
@@ -275,7 +314,7 @@ export async function loadAuthenticatedWorkbenchThreads(
     threads: threads.map((thread) => {
       const roots = persistedBindings.filter((row) => row.threadId === thread.id && row.role === "root")
       const root = roots.length === 1 ? roots[0] : null
-      return { ...thread, projectKey: project.key, projectName: project.name, rootSourceKind: root === null ? null : PERSISTED_SOURCE_KIND[root.sourceType], rootSourceId: root === null ? null : root.sourceId }
+      return { ...thread, projectKey: project.key, projectName: project.name, rootSourceKind: root === null ? null : PERSISTED_SOURCE_KIND[root.sourceType], rootSourceId: root === null ? null : persistedSourceId(root) }
     }),
     bindings: [...bindingsBySource.values()],
     sources,
