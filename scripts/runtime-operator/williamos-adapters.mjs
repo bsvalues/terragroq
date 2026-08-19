@@ -438,7 +438,12 @@ ${String(error?.output ?? "").slice(-12000)}
         try {
           if (gate === "diff-check") await run("git", ["diff", "--cached", "--check"], { cwd: workspace })
           else if (gate === "lint") await run("cmd.exe", ["/c", "pnpm", "run", "lint"], { cwd: workspace, timeout: 20 * 60 * 1000 })
-          else if (gate === "test") await run("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run"], { cwd: workspace, timeout: 20 * 60 * 1000 })
+          // The same standard CI holds main to. The bare suite includes host-dependent files that
+          // probe live lab hosts -- vitest.ci.config.ts excludes them with a stated reason each --
+          // so gating on it judged every worker against a bar main itself does not clear, for files
+          // outside the boundary the worker is forbidden to touch. That is an unwinnable gate, and
+          // it consumed every remediation round tonight.
+          else if (gate === "test") await run("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run", "--config", "vitest.ci.config.ts"], { cwd: workspace, timeout: 20 * 60 * 1000 })
           else if (gate === "build") await run("cmd.exe", ["/c", "pnpm", "run", "build"], { cwd: workspace, timeout: 20 * 60 * 1000 })
           else throw new Error("VALIDATION_COMMAND_WALL")
         } catch (error) {
