@@ -79,10 +79,24 @@ export function parseCodexRetryAfter(text) {
   return Number.isFinite(parsed) && parsed > Date.now() ? Math.floor(parsed / 1000) : null
 }
 
-/** The GitHub issue this work order is projected to, named in its description. Projection, not trigger. */
+/**
+ * The GitHub issue this work order is projected to. Projection, not trigger.
+ *
+ * Stated explicitly, never inferred. Taking the first #N in a free-text description meant any work
+ * order that cited prior art misprojected onto whatever it cited: WO-0029 named #871 as background
+ * before naming its own #891, so the kernel delivered correct work, wrote "Closes #871" into its pull
+ * request, and left the issue it was actually for untouched and open.
+ *
+ * A description with no explicit projection returns null, which omits the work order from the registry.
+ * That is the intended failure: a work order whose projection cannot be read is not dispatched, rather
+ * than dispatched at a guess. Omitting beats fabricating.
+ */
 export function parseProjectionIssue(description) {
-  const match = /(?:issue[ #]|#)(\d{2,6})\b/i.exec(description ?? "")
-  return match ? Number(match[1]) : null
+  const text = String(description ?? "")
+  const explicit =
+    /projected\s+at\s+(?:github\s+)?issue\s*#?(\d{2,6})\b/i.exec(text) ??
+    /\bprojection\s*[:=]\s*#?(\d{2,6})\b/i.exec(text)
+  return explicit ? Number(explicit[1]) : null
 }
 
 /** An owner grant is linked when the work order names its ref, or the grant's scope names the work order. */

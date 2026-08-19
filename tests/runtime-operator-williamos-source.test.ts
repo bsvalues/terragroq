@@ -32,7 +32,10 @@ const grant = (over: Record<string, unknown> = {}) => ({
 describe("projection parsing", () => {
   it("reads the projected GitHub issue out of the objective text", () => {
     expect(parseProjectionIssue(workOrder().description as string)).toBe(890)
-    expect(parseProjectionIssue("see #891 for the composer")).toBe(891)
+    // This case used to expect 891, which codified the defect: a bare issue reference in prose counted
+    // as a projection, so WO-0029 -- which cited #871 as prior art before naming its own #891 -- was
+    // delivered against #871 and left #891 open. A mention is not a projection.
+    expect(parseProjectionIssue("see #891 for the composer")).toBeNull()
   })
 
   it("returns null rather than inventing a projection", () => {
