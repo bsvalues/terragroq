@@ -205,6 +205,81 @@ describe("loadAuthenticatedWorkbenchThreads", () => {
     ))).toBe(false)
   })
 
+  it("names a work_order root's members in the persisted vocabulary the table actually carries", async () => {
+    // The objective flow hangs governance_event members beneath a work_order root, and their
+    // sourceIds are the entity keys that flow wrote -- not governance event row ids.
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const },
+      ]),
+      listMemberBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "governance_event" as const, sourceId: "resource_verification:PACS", role: "member" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "work_order:11", "evidence_record:21", "governance_event:31",
+    ]))
+    // The unreachable member is reported under its own kind. A binding the loader cannot name is a
+    // binding it cannot honestly report as missing either.
+    expect(result[0].coverage.missingSources).toContain("governance_event:resource_verification:PACS")
+    expect(result[0].coverage.missingSources.some((key) => key.startsWith("undefined:"))).toBe(false)
+    expect(result[0].coverage.conflicts).toEqual([])
+  })
+
+  it("leaves a persisted type the projection has no kind for out of the Thread entirely", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const },
+      ]),
+      listMemberBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "resource" as const, sourceId: "PACS", role: "member" as const },
+        { threadId: "thread-a", userId: "owner", sourceType: "reconciliation" as const, sourceId: "PACS", role: "member" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "work_order:11", "evidence_record:21",
+    ]))
+    // Neither an invented source kind nor a missing-source claim the projection cannot express.
+    expect(result[0].coverage.missingSources).toEqual(["conversation"])
+    expect(result[0].coverage.conflicts).toEqual([])
+  })
+
+  it("fails a Thread closed when its root is a type the projection has no kind for", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "reconciliation" as const, sourceId: "PACS", role: "root" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(result).toHaveLength(1)
+    expect(result[0].items).toEqual([])
+    expect(result[0].coverage.conflicts).toContain("ROOT_BINDING_MISSING:thread-a")
+  })
+
+  it("reads the table's newer outcome_queue_item spelling as the same outcome as outcome", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "outcome_queue_item" as const, sourceId: "OUT-7", role: "root" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(repo.listOutcomes).toHaveBeenCalledWith("owner", { sourceIds: ["OUT-7"], goalIds: [] }, 501)
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "outcome_queue_item:OUT-7", "goal:4", "work_order:11",
+    ]))
+    expect(result[0].coverage.missingSources).not.toContain("outcome_queue_item:OUT-7")
+  })
+
   it("loads the recorded history of a work_order-rooted Thread bound by its work order ref", async () => {
     // An objective thread binds its root by ref, which is how every work_order root is written.
     const repo = repository({
