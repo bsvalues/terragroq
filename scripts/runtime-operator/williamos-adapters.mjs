@@ -55,6 +55,21 @@ const REPOSITORY = "bsvalues/terragroq"
  * branch.
  */
 
+/**
+ * When the worker says its meter refills, as epoch seconds.
+ *
+ * "You have hit your usage limit ... try again at Aug 19th, 2026 8:33 PM." is machine-readable
+ * scheduling information, not an owner boundary. Parsed here so the kernel can wait exactly that long
+ * instead of burning retry attempts against a known-empty meter or asking a human to say "release".
+ */
+export function parseCodexRetryAfter(text) {
+  const match = /try again at ([^.\r\n]+?)(?:\.|$)/i.exec(String(text ?? ""))
+  if (!match) return null
+  const cleaned = match[1].replace(/(\d+)(?:st|nd|rd|th)/g, "$1").trim()
+  const parsed = Date.parse(cleaned)
+  return Number.isFinite(parsed) && parsed > Date.now() ? Math.floor(parsed / 1000) : null
+}
+
 /** The GitHub issue this work order is projected to, named in its description. Projection, not trigger. */
 export function parseProjectionIssue(description) {
   const match = /(?:issue[ #]|#)(\d{2,6})\b/i.exec(description ?? "")
@@ -131,7 +146,10 @@ async function run(command, args, options = {}) {
     const output = `${error?.stdout ?? ""}${error?.stderr ?? ""}`
     // The worker saying "usage limit" is not a process failure and must not be audited as one:
     // the loop parks either way, but the checkpoint should name the actual reason and when it lifts.
-    if (/hit your usage limit/i.test(output)) throw new Error("CODEX_RATE_LIMIT_WALL")
+    if (/hit your usage limit/i.test(output)) {
+      const retryAfter = parseCodexRetryAfter(output)
+      throw new Error(retryAfter ? `CODEX_RATE_LIMIT_WALL:retry-${retryAfter}` : "CODEX_RATE_LIMIT_WALL")
+    }
     throw new Error(`PROCESS_WALL:${command}`)
   }
 }
