@@ -156,6 +156,55 @@ describe("loadAuthenticatedWorkbenchThreads", () => {
     expect(result[0].coverage.missingSources).toContain("outcome_queue_item:9")
   })
 
+  it("loads the recorded history of a work_order-rooted Thread", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(repo.listWorkOrders).toHaveBeenCalledWith("owner", [11], 501)
+    expect(repo.listEvidence).toHaveBeenCalledWith("owner", [11], [], 501)
+    expect(result).toHaveLength(1)
+    expect(result[0].coverage.conflicts).toEqual([])
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "work_order:11", "evidence_record:21", "governance_event:31",
+    ]))
+    expect(result[0].items.find((item) => item.source.kind === "work_order")?.source.drilldown).toEqual({
+      mode: "EXACT",
+      href: "/work-orders#work-order-11",
+    })
+    // The root is the work order itself, so unreachable neighbours stay out rather than being
+    // mislabelled as the root's own content.
+    expect(result[0].items.some((item) => ["goal", "outcome_queue_item"].includes(item.source.kind))).toBe(false)
+    expect(result[0].items.some((item) => item.source.kind === "work_order" && item.source.id !== "11")).toBe(false)
+    expect(result[0].items.some((item) => item.source.kind === "decision")).toBe(false)
+    expect(result[0].coverage.missingSources).not.toContain("outcome_queue_item:11")
+  })
+
+  it("follows the explicit durable edges a work_order root owns", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "12", role: "root" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(repo.listWorkOrders).toHaveBeenCalledWith("owner", [12], 501)
+    expect(repo.listDecisions).toHaveBeenCalledWith("owner", [5], 501)
+    expect(result[0].coverage.conflicts).toEqual([])
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "work_order:12", "decision:5",
+    ]))
+    // Evidence, governance, and audit rows belong to work order 11; they are not this root's history.
+    expect(result[0].items.some((item) => (
+      ["evidence_record", "governance_event", "event_log"].includes(item.source.kind)
+    ))).toBe(false)
+  })
+
   it("fails closed for a missing tenant project and never queries thread data", async () => {
     const repo = repository({ getProject: vi.fn(async () => null) })
 

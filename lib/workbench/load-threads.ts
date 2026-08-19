@@ -11,7 +11,8 @@ export const WORKBENCH_SOURCE_LIMIT = 500
 
 type ProjectRow = { id: number; userId: string; key: string; name: string }
 type ThreadRow = { id: string; userId: string; projectId: number; title: string; createdAt: Date; updatedAt: Date }
-type BindingRow = { threadId: string; userId: string; sourceType: "goal" | "outcome"; sourceId: string; role: "root" | "member" }
+type PersistedSourceType = "goal" | "outcome" | "work_order"
+type BindingRow = { threadId: string; userId: string; sourceType: PersistedSourceType; sourceId: string; role: "root" | "member" }
 type GoalRow = { id: number; userId: string; ref: string | null; command: string; rationale: string | null; recommendedMove: string | null; verdict: string; linkedWorkOrderId: number | null; createdAt: Date; updatedAt: Date }
 type OutcomeRow = { id: number; userId: string; outcomeKey: string; goalId: number | null; title: string; objective: string | null; lifecycleState: string; activeWorkOrderId: number | null; approvalDecisionId: number | null; terminalEvidenceId: number | null; createdAt: Date; updatedAt: Date }
 type WorkOrderRow = { id: number; userId: string; ref: string | null; title: string; description: string | null; status: string; result: string | null; linkedDecisionId: number | null; createdAt: Date; updatedAt: Date }
@@ -103,6 +104,18 @@ function sourceDrilldown(kind: ThreadSourceKind, id: string) {
   return register ? { mode: "REGISTER" as const, href: register } : { mode: "UNAVAILABLE" as const, href: null }
 }
 
+/**
+ * A persisted binding names its source in the table's vocabulary; the projection names it in
+ * ThreadSourceKind. `outcome` is the table's older spelling of `outcome_queue_item`. The
+ * binding's sourceId is carried verbatim in either vocabulary — it is the source's own
+ * identity, never a row id to be resolved.
+ */
+const PERSISTED_SOURCE_KIND: Record<PersistedSourceType, ThreadSourceKind> = {
+  goal: "goal",
+  outcome: "outcome_queue_item",
+  work_order: "work_order",
+}
+
 function binding(threadId: string, userId: string, projectId: number, sourceKind: ThreadSourceKind, sourceId: string, role: "root" | "member" = "member"): ThreadBindingInput {
   return { threadId, userId, projectId, sourceKind, sourceId, role }
 }
@@ -134,6 +147,10 @@ export async function loadAuthenticatedWorkbenchThreads(
     .map((row) => Number(row.sourceId))
     .filter(Number.isSafeInteger)).sort((left, right) => left - right)
   const persistedOutcomeIds = distinct(persistedBindings.filter((row) => row.sourceType === "outcome").map((row) => row.sourceId)).sort()
+  const persistedWorkOrderIds = distinct(persistedBindings
+    .filter((row) => row.sourceType === "work_order")
+    .map((row) => Number(row.sourceId))
+    .filter(Number.isSafeInteger)).sort((left, right) => left - right)
 
   const outcomeRead = bounded(await repo.listOutcomes(userId, {
     sourceIds: persistedOutcomeIds,
@@ -148,6 +165,7 @@ export async function loadAuthenticatedWorkbenchThreads(
   const goals = owned(goalRead.rows, userId).filter((row) => goalIds.includes(row.id))
 
   const workOrderIds = distinct([
+    ...persistedWorkOrderIds,
     ...goals.flatMap((row) => row.linkedWorkOrderId === null ? [] : [row.linkedWorkOrderId]),
     ...outcomes.flatMap((row) => row.activeWorkOrderId === null ? [] : [row.activeWorkOrderId]),
   ]).sort((left, right) => left - right)
@@ -177,14 +195,10 @@ export async function loadAuthenticatedWorkbenchThreads(
   ))
 
   const allBindings: ThreadBindingInput[] = []
-  const canonicalPersistedId = (row: BindingRow): string => {
-    if (row.sourceType === "goal") return row.sourceId
-    return row.sourceId
-  }
   for (const thread of threads) {
     const persisted = persistedBindings.filter((row) => row.threadId === thread.id)
     for (const row of persisted) {
-      allBindings.push(binding(thread.id, userId, projectId, row.sourceType === "goal" ? "goal" : "outcome_queue_item", canonicalPersistedId(row), row.role))
+      allBindings.push(binding(thread.id, userId, projectId, PERSISTED_SOURCE_KIND[row.sourceType], row.sourceId, row.role))
     }
     const threadOutcomes = outcomes.filter((outcome) => persisted.some((row) => (
       row.sourceType === "outcome" && row.sourceId === outcome.outcomeKey
@@ -195,6 +209,7 @@ export async function loadAuthenticatedWorkbenchThreads(
     ])
     const threadGoals = goals.filter((row) => threadGoalIds.includes(row.id))
     const threadWorkOrderIds = distinct([
+      ...persisted.filter((row) => row.sourceType === "work_order").map((row) => Number(row.sourceId)).filter(Number.isSafeInteger),
       ...threadGoals.flatMap((row) => row.linkedWorkOrderId === null ? [] : [row.linkedWorkOrderId]),
       ...threadOutcomes.flatMap((row) => row.activeWorkOrderId === null ? [] : [row.activeWorkOrderId]),
     ])
@@ -241,7 +256,7 @@ export async function loadAuthenticatedWorkbenchThreads(
 
   const truncatedSourceKinds = new Set<ThreadSourceKind>()
   if (threadListTruncated || memberBindingRead.truncated) {
-    for (const row of persistedBindings.filter((candidate) => candidate.role === "root")) truncatedSourceKinds.add(row.sourceType === "goal" ? "goal" : "outcome_queue_item")
+    for (const row of persistedBindings.filter((candidate) => candidate.role === "root")) truncatedSourceKinds.add(PERSISTED_SOURCE_KIND[row.sourceType])
   }
   for (const [read, kind] of [
     [goalRead, "goal"], [outcomeRead, "outcome_queue_item"], [workOrderRead, "work_order"],
@@ -260,7 +275,7 @@ export async function loadAuthenticatedWorkbenchThreads(
     threads: threads.map((thread) => {
       const roots = persistedBindings.filter((row) => row.threadId === thread.id && row.role === "root")
       const root = roots.length === 1 ? roots[0] : null
-      return { ...thread, projectKey: project.key, projectName: project.name, rootSourceKind: root === null ? null : root.sourceType === "goal" ? "goal" as const : "outcome_queue_item" as const, rootSourceId: root === null ? null : canonicalPersistedId(root) }
+      return { ...thread, projectKey: project.key, projectName: project.name, rootSourceKind: root === null ? null : PERSISTED_SOURCE_KIND[root.sourceType], rootSourceId: root === null ? null : root.sourceId }
     }),
     bindings: [...bindingsBySource.values()],
     sources,
