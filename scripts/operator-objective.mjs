@@ -104,6 +104,14 @@ console.log(`POST /api/resource/verify        -> HTTP ${verified.status}`)
 console.log(observed.slice(0, 900))
 
 // #884: the whole point -- one read that returns the answer to the thread that asked.
+// #887: the one governed mutating operation, invoked only when explicitly asked for. The operator
+// supplies an identity; what moves and where is whatever the ratified record says.
+if (process.env.WILLIAMOS_OPERATOR_RELOCATE === "1") {
+  const relocated = await call(`${BASE}/api/resource/relocate`, { identity: "PACS" }, sessionCookie)
+  console.log(`POST /api/resource/relocate      -> HTTP ${relocated.status}`)
+  console.log((await relocated.text()).slice(0, 700))
+}
+
 const admittedRef = JSON.parse(admission).workOrder
 const thread = await fetch(`${BASE}/api/objective/thread?workOrder=${admittedRef}&identity=PACS`, {
   headers: { cookie: sessionCookie },
