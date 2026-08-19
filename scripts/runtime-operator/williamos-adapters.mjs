@@ -6,6 +6,33 @@ import { promisify } from "node:util"
 import pg from "pg"
 
 import { createNativeAdapters } from "./native-adapters.mjs"
+import { brokeredExec } from "../../lib/fabric/broker.mjs"
+
+/**
+ * GitHub through the broker, on the worker node.
+ *
+ * HERMES has no gh CLI and no GitHub credential, deliberately: it is the control plane. AEGIS holds the
+ * authenticated gh, so every GitHub projection and delivery call routes there through the fabric broker
+ * -- the one way this system touches a node -- and lands in its audit ledger like everything else.
+ */
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'\\''`)}'`
+}
+
+async function ghRemote(args, { timeout = 60_000 } = {}) {
+  try {
+    const result = await brokeredExec("aegis", ["gh", ...args.map(shellQuote)].join(" "), { action: "resident-gh", timeout })
+    return { stdout: result.stdout ?? "" }
+  } catch {
+    throw new Error("PROCESS_WALL:gh")
+  }
+}
+
+async function shipRemoteFile(content, remotePath) {
+  const encoded = Buffer.from(content, "utf8").toString("base64")
+  await brokeredExec("aegis", "echo " + encoded + " | base64 -d > " + shellQuote(remotePath), { action: "resident-gh" })
+}
+
 
 const execFile = promisify(execFileCallback)
 const REPOSITORY = "bsvalues/terragroq"
@@ -150,7 +177,7 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
         throw new Error("AUTHORITY_ACTIVATION_WALL")
       }
       try {
-        await run("gh", ["auth", "status"], { timeout: 30_000 })
+        await ghRemote(["auth", "status"], { timeout: 30_000 })
       } catch {
         throw new Error("RUNTIME_READINESS_WALL")
       }
@@ -183,16 +210,54 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
     prepareWorkspace: native.prepareWorkspace,
     applyAndInspect: native.applyAndInspect,
     inspectExistingPatch: native.inspectExistingPatch,
-    inspectPullRequest: native.inspectPullRequest,
-    merge: native.merge,
     verifyMergedMain: native.verifyMergedMain,
+
+    async inspectPullRequest(pr) {
+      const pull = JSON.parse((await ghRemote(["pr", "view", String(pr), "--repo", REPOSITORY, "--json", "state,mergeable,reviewDecision,statusCheckRollup,reviews"])).stdout)
+      if (pull.state === "MERGED") return { decision: "MERGE", reason: "ALREADY_MERGED", feedback: "" }
+      const graph = await ghRemote(["api", "graphql", "-f", "query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved comments(last:1){nodes{body path}}}}}}}", "-f", "owner=bsvalues", "-f", "repo=terragroq", "-F", `number=${pr}`])
+      const threads = JSON.parse(graph.stdout).data.repository.pullRequest.reviewThreads.nodes
+      const unresolved = threads.filter((thread) => !thread.isResolved)
+      const checks = pull.statusCheckRollup ?? []
+      const failures = checks.filter((check) => check.__typename === "StatusContext"
+        ? !new Set(["SUCCESS", "PENDING", "EXPECTED"]).has(check.state)
+        : check.status === "COMPLETED" && !new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]).has(check.conclusion))
+      const pending = checks.length === 0 || checks.some((check) => check.__typename === "StatusContext"
+        ? new Set(["PENDING", "EXPECTED"]).has(check.state)
+        : check.status !== "COMPLETED")
+      if (unresolved.length > 0 || failures.length > 0 || pull.reviewDecision === "CHANGES_REQUESTED") {
+        const feedback = [
+          ...unresolved.map((thread) => (thread.comments.nodes.at(-1)?.path ?? "PR") + ": " + String(thread.comments.nodes.at(-1)?.body ?? "").slice(0, 4000)),
+          ...failures.map((check) => "Check " + (check.name ?? check.context ?? "unknown") + ": " + (check.conclusion ?? check.state)),
+        ].join("\n")
+        return {
+          decision: "REMEDIATE",
+          reason: unresolved.length ? "UNRESOLVED_REVIEW_THREADS" : "FAILED_CHECK",
+          feedback,
+          threadIds: unresolved.map((thread) => thread.id),
+          threadPaths: unresolved.map((thread) => thread.comments.nodes.at(-1)?.path ?? null),
+        }
+      }
+      if (pending || pull.mergeable !== "MERGEABLE") return { decision: "WAIT", reason: "CHECKS_OR_MERGEABILITY_PENDING", feedback: "" }
+      return { decision: "MERGE", reason: "ALL_GATES_GREEN", feedback: "" }
+    },
+
+    async merge(pr) {
+      let pull = JSON.parse((await ghRemote(["pr", "view", String(pr), "--repo", REPOSITORY, "--json", "state,mergeCommit"])).stdout)
+      if (pull.state !== "MERGED") {
+        await ghRemote(["pr", "merge", String(pr), "--repo", REPOSITORY, "--squash", "--delete-branch"], { timeout: 120_000 })
+        pull = JSON.parse((await ghRemote(["pr", "view", String(pr), "--repo", REPOSITORY, "--json", "state,mergeCommit"])).stdout)
+      }
+      if (pull.state !== "MERGED" || !pull.mergeCommit?.oid) throw new Error("MERGE_VERIFICATION_WALL")
+      return { mergeSha: pull.mergeCommit.oid }
+    },
 
     async lease(issueNumber) {
       const ref = await refForIssue(issueNumber)
       await pool.query(`UPDATE work_order SET "status" = 'active' WHERE "ref" = $1 AND "lane" = 'operator-objective'`, [ref])
       // GitHub label is projection; its failure must never block the lease that already happened.
       try {
-        await run("gh", ["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:leased"], { timeout: 60_000 })
+        await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:leased"])
       } catch { /* projection only */ }
     },
 
@@ -200,7 +265,8 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
       const ref = await refForIssue(issueNumber)
       await pool.query(`UPDATE work_order SET "status" = 'completed' WHERE "ref" = $1 AND "lane" = 'operator-objective'`, [ref])
       try {
-        await native.complete(issueNumber)
+        await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:done"])
+        await ghRemote(["issue", "close", String(issueNumber), "--repo", REPOSITORY, "--comment", "WilliamOS resident kernel verified the merged-main completion evidence."])
       } catch { /* projection only */ }
     },
 
@@ -305,18 +371,17 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
       }
       await run("git", ["push", "-u", "origin", effectiveBranch], { cwd: workspace })
       if (existingPr) return { branch: effectiveBranch, pr: existingPr }
-      const existing = await run("gh", ["pr", "list", "--repo", REPOSITORY, "--head", effectiveBranch, "--state", "all", "--json", "number", "--jq", ".[0].number"])
+      const existing = await ghRemote(["pr", "list", "--repo", REPOSITORY, "--head", effectiveBranch, "--state", "all", "--json", "number", "--jq", ".[0].number"])
       let pr = Number(existing.stdout.trim())
       if (!pr) {
-        const bodyFile = path.join(root, "state", "requests", `${workOrderId.toLowerCase()}-pr.md`)
-        fs.mkdirSync(path.dirname(bodyFile), { recursive: true })
-        fs.writeFileSync(bodyFile, body, "utf8")
-        const created = await run("gh", ["pr", "create", "--repo", REPOSITORY, "--base", "main", "--head", effectiveBranch, "--title", `runtime(operator): ${workOrderId}`, "--body-file", bodyFile])
+        const remoteBody = "/tmp/" + workOrderId.toLowerCase() + "-pr.md"
+        await shipRemoteFile(body, remoteBody)
+        const created = await ghRemote(["pr", "create", "--repo", REPOSITORY, "--base", "main", "--head", effectiveBranch, "--title", `runtime(operator): ${workOrderId}`, "--body-file", remoteBody], { timeout: 120_000 })
         pr = Number(created.stdout.trim().split("/").at(-1))
       }
       if (!Number.isInteger(pr) || !pr) throw new Error("PR_RECONCILIATION_WALL")
       try {
-        await run("gh", ["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--remove-label", "williamos:leased", "--add-label", "williamos:monitoring"], { timeout: 60_000 })
+        await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--remove-label", "williamos:leased", "--add-label", "williamos:monitoring"])
       } catch { /* projection only */ }
       return { branch: effectiveBranch, pr }
     },
