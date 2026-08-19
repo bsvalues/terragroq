@@ -128,6 +128,10 @@ async function run(command, args, options = {}) {
     pending.child?.stdin?.end()
     return await pending
   } catch (error) {
+    const output = `${error?.stdout ?? ""}${error?.stderr ?? ""}`
+    // The worker saying "usage limit" is not a process failure and must not be audited as one:
+    // the loop parks either way, but the checkpoint should name the actual reason and when it lifts.
+    if (/hit your usage limit/i.test(output)) throw new Error("CODEX_RATE_LIMIT_WALL")
     throw new Error(`PROCESS_WALL:${command}`)
   }
 }
