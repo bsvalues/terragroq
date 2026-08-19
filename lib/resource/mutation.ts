@@ -18,7 +18,7 @@ import type { ResourceRecord } from "@/lib/resource/resolve"
  * If it can move something the record did not declare, it is wrong.
  */
 
-export const MUTATING_OPERATIONS = ["relocate-source"] as const
+export const MUTATING_OPERATIONS = ["relocate-source", "restore-database"] as const
 export type MutatingOperation = (typeof MUTATING_OPERATIONS)[number]
 
 /** Where a relocation puts things on the destination node. Fixed, not caller-supplied. */
@@ -102,6 +102,58 @@ export function planRelocation(record: ResourceRecord): RelocationVerdict {
       : { ok: false, refusal: "NOTHING_TO_RELOCATE", detail: "the record declares no source artefacts", plans: [] }
   }
   return { ok: true, plans }
+}
+
+export interface RestorePlan {
+  node: string
+  backupPath: string
+  database: string
+}
+
+/**
+ * Where the database gets restored, and from which artefact.
+ *
+ * The backup must already be on the declared owner: restoring across a network from another machine
+ * would work and would also leave the workload depending on the node it was supposed to move off. It
+ * picks the largest declared source on the owner, because a spatial backup and an OLTP backup are both
+ * sources and only one of them is the database being moved.
+ */
+export function planRestore(record: ResourceRecord, database: string): RelocationVerdictOf<RestorePlan> {
+  const owner = record.workloadOwner?.identity?.trim().toLowerCase() ?? null
+  if (!owner || !SAFE_NODE.test(owner)) {
+    return { ok: false, refusal: "NO_DECLARED_OWNER", detail: "the record declares no workload owner", plan: null }
+  }
+  const onOwner = record.sources
+    .map((item) => {
+      const separator = item.identity.indexOf(":")
+      if (separator <= 0) return null
+      const node = item.identity.slice(0, separator).trim().toLowerCase()
+      const path = item.identity.slice(separator + 1).trim()
+      return { node, path, bytes: recordedBytesFrom(item.label) ?? 0 }
+    })
+    .filter((item): item is { node: string; path: string; bytes: number } => Boolean(item))
+    .filter((item) => item.node === owner && SAFE_PATH.test(item.path) && item.path.startsWith("/"))
+    .sort((a, b) => b.bytes - a.bytes)
+
+  if (onOwner.length === 0) {
+    return {
+      ok: false,
+      refusal: "NOTHING_TO_RELOCATE",
+      detail: "no declared source sits on the workload owner yet; relocate before restoring",
+      plan: null,
+    }
+  }
+  if (!/^[A-Za-z0-9_]{1,64}$/.test(database)) {
+    return { ok: false, refusal: "PATH_REFUSED", detail: "the database name is not a plain identifier", plan: null }
+  }
+  return { ok: true, plan: { node: owner, backupPath: onOwner[0].path, database } }
+}
+
+export interface RelocationVerdictOf<T> {
+  ok: boolean
+  refusal?: RelocationRefusal
+  detail?: string
+  plan: T | null
 }
 
 function recordedBytesFrom(label: string): number | null {

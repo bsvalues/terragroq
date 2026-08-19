@@ -1,4 +1,4 @@
-import { recordConflict } from "@/app/actions/conflicts"
+import { recordConflict, resolveConflict } from "@/app/actions/conflicts"
 import { pool } from "@/lib/db"
 import { getSession } from "@/lib/session"
 import { reconcileResource } from "@/lib/resource/reconcile"
@@ -62,6 +62,23 @@ export async function POST(request: Request) {
   const verdict = reconcileResource(record)
 
   let conflictRef: string | null = null
+  let closedConflict: string | null = null
+
+  // A contradiction that has stopped being true should stop blocking. It is closed on the evidence that
+  // settled it, not by anyone deciding it away -- and only when reconciliation itself says the record and
+  // the recorded artefacts now agree.
+  if (verdict.classification === "EVIDENCE_BACKED") {
+    const standing = await pool.query(
+      `SELECT "id", "ref" FROM conflict_record
+        WHERE "userId" = $1 AND "detectedBetween" = $2 AND "status" = 'open' LIMIT 1`,
+      [session.user.id, `resource:${record.identity} declared-owner vs recorded-evidence`],
+    )
+    if (standing.rows[0]) {
+      await resolveConflict(standing.rows[0].id, `Reconciliation now returns EVIDENCE_BACKED: ${verdict.summary}`)
+      closedConflict = standing.rows[0].ref
+    }
+  }
+
   if (verdict.classification === "CONFLICTING") {
     const detectedBetween = `resource:${record.identity} declared-owner vs recorded-evidence`
     const existing = await pool.query(
@@ -83,7 +100,7 @@ export async function POST(request: Request) {
   }
 
   return Response.json(
-    { ...verdict, conflict: conflictRef, recordRatified: record.ratified },
+    { ...verdict, conflict: conflictRef, closedConflict, recordRatified: record.ratified },
     { headers: { "cache-control": "no-store" } },
   )
 }

@@ -18,6 +18,12 @@ export const RELATIONSHIP = {
   runtime: "runtime",
   derivative: "derivative",
   completionEvidence: "completion-evidence",
+  /**
+   * Retained, but no longer the workload's. An artefact that has been superseded is not deleted and
+   * not pretended away: it stays visible with its provenance, and stops driving reconciliation, because
+   * a copy left behind on the old node is not evidence that the workload still lives there.
+   */
+  archive: "archive",
 } as const
 
 export interface ResourceRow {
@@ -40,6 +46,7 @@ export interface ResourceRecord {
   runtime: Array<{ identity: string; label: string; type: string }>
   derivatives: Array<{ identity: string; label: string; type: string }>
   completionEvidence: Array<{ identity: string; label: string }>
+  archive: Array<{ identity: string; label: string; type: string }>
   allowedOperations: string[]
   ratified: boolean
   /** Present when unratified, so no caller can mistake a draft for settled truth. */
@@ -72,6 +79,7 @@ export function shapeResourceRecord(identity: string, rows: ResourceRow[]): Reso
     completionEvidence: rows
       .filter((row) => row.relationship === RELATIONSHIP.completionEvidence)
       .map((row) => ({ identity: row.canonicalIdentity, label: row.label })),
+    archive: rows.filter((row) => row.relationship === RELATIONSHIP.archive).map(member),
     allowedOperations,
     ratified,
     ...(ratified
