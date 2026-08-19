@@ -310,7 +310,9 @@ async function runCycle({ root, registry, adapters }) {
 }
 
 function isRecoverableFailure(message) {
-  return /CODEX_(?:NETWORK|RATE_LIMIT)_WALL|PROCESS_WALL:(?:gh|git)/.test(message)
+  // A dead worker process is a retry, not a verdict: the resident loop must survive a crashed codex
+  // the same way it survives a flaky gh or git, or any worker crash parks the system terminally.
+  return /CODEX_(?:NETWORK|RATE_LIMIT)_WALL|PROCESS_WALL:(?:gh|git|codex)/.test(message)
 }
 
 function isOwnerWall(message) {

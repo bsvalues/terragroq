@@ -114,7 +114,7 @@ export function buildRegistryRecords(workOrders, grants, adapterId) {
 
 async function run(command, args, options = {}) {
   try {
-    return await execFile(command, args, {
+    const pending = execFile(command, args, {
       cwd: options.cwd,
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
@@ -122,7 +122,16 @@ async function run(command, args, options = {}) {
       windowsHide: true,
       env: process.env,
     })
+    // codex exec appends piped stdin to its prompt and waits for EOF before starting, so a child left
+    // holding an open stdin pipe hangs forever at zero CPU -- the first dispatched worker did exactly
+    // that for 25 minutes. Closing stdin at spawn says: nothing is coming. Harmless for git and pnpm.
+    pending.child?.stdin?.end()
+    return await pending
   } catch (error) {
+    const output = `${error?.stdout ?? ""}${error?.stderr ?? ""}`
+    // The worker saying "usage limit" is not a process failure and must not be audited as one:
+    // the loop parks either way, but the checkpoint should name the actual reason and when it lifts.
+    if (/hit your usage limit/i.test(output)) throw new Error("CODEX_RATE_LIMIT_WALL")
     throw new Error(`PROCESS_WALL:${command}`)
   }
 }
