@@ -151,7 +151,9 @@ async function run(command, args, options = {}) {
       const retryAfter = parseCodexRetryAfter(output)
       throw new Error(retryAfter ? `CODEX_RATE_LIMIT_WALL:retry-${retryAfter}` : "CODEX_RATE_LIMIT_WALL")
     }
-    throw new Error(`PROCESS_WALL:${command}`)
+    const wall = new Error(`PROCESS_WALL:${command}`)
+    wall.output = output
+    throw wall
   }
 }
 
@@ -417,7 +419,18 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
           else if (gate === "test") await run("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run"], { cwd: workspace, timeout: 20 * 60 * 1000 })
           else if (gate === "build") await run("cmd.exe", ["/c", "pnpm", "run", "build"], { cwd: workspace, timeout: 20 * 60 * 1000 })
           else throw new Error("VALIDATION_COMMAND_WALL")
-        } catch {
+        } catch (error) {
+          // The wall string carries no detail by design, so the detail goes where the remediation
+          // worker can read it: a gitignored file inside the worktree. Blind remediation burned two
+          // rounds tonight editing against a bare wall code.
+          try {
+            const tail = String(error?.output ?? "").slice(-6000)
+            fs.mkdirSync(path.join(workspace, ".williamos"), { recursive: true })
+            fs.writeFileSync(path.join(workspace, ".williamos", "validation-feedback.txt"), `gate: ${gate}
+
+${tail}
+`, "utf8")
+          } catch { /* feedback is best effort; the wall is not */ }
           throw new Error(`VALIDATION_${gate.replaceAll("-", "_").toUpperCase()}_WALL`)
         }
       }
