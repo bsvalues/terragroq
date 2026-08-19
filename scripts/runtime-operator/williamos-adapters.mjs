@@ -159,6 +159,9 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
   const adapterId = "williamos-resident-v1"
   const native = createNativeAdapters({ root, repositoryPath })
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 2 })
+  // native applyAndInspect writes state/requests/active.patch and assumed the legacy dispatch had
+  // created the directory; the replacement dispatch must keep that floor under it.
+  fs.mkdirSync(path.join(root, "state", "requests"), { recursive: true })
   let issueToRef = new Map()
 
   async function loadWorkOrders() {
