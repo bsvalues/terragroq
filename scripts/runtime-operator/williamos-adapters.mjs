@@ -64,6 +64,14 @@ const REPOSITORY = "bsvalues/terragroq"
  * instead of burning retry attempts against a known-empty meter or asking a human to say "release".
  */
 export function parseCodexRetryAfter(text) {
+  const body = String(text ?? "")
+  // The Claude CLI states the same fact as epoch seconds after a pipe ("limit reached|1755640380").
+  // Same information, different dialect; the kernel should wait exactly as long either way.
+  const epoch = /limit reached\|(\d{9,11})(?![\d])/i.exec(body)
+  if (epoch) {
+    const seconds = Number(epoch[1])
+    return seconds * 1000 > Date.now() ? seconds : null
+  }
   const match = /try again at ([^.\r\n]+?)(?:\.|$)/i.exec(String(text ?? ""))
   if (!match) return null
   const cleaned = match[1].replace(/(\d+)(?:st|nd|rd|th)/g, "$1").trim()
@@ -147,7 +155,7 @@ async function run(command, args, options = {}) {
     const output = `${error?.stdout ?? ""}${error?.stderr ?? ""}`
     // The worker saying "usage limit" is not a process failure and must not be audited as one:
     // the loop parks either way, but the checkpoint should name the actual reason and when it lifts.
-    if (/hit your usage limit|usage limit reached|credit balance is too low/i.test(output)) {
+    if (/hit your usage limit|usage limit reached|limit reached\|\d+|credit balance is too low|rate.?limit/i.test(output)) {
       const retryAfter = parseCodexRetryAfter(output)
       throw new Error(retryAfter ? `CODEX_RATE_LIMIT_WALL:retry-${retryAfter}` : "CODEX_RATE_LIMIT_WALL")
     }
@@ -378,6 +386,20 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
           }
         } catch (error) {
           const message = String(error?.message ?? "")
+          // Whatever killed the worker, keep what it said. A wall code with no output behind it
+          // costs a whole cycle to diagnose and can only be guessed at afterwards.
+          try {
+            const diagnostics = path.join(root, "state", "diagnostics")
+            fs.mkdirSync(diagnostics, { recursive: true })
+            fs.writeFileSync(
+              path.join(diagnostics, `${workOrderId}-${lane.id}.log`),
+              `${message}
+
+${String(error?.output ?? "").slice(-12000)}
+`,
+              "utf8",
+            )
+          } catch { /* diagnostics are best effort; the wall is not */ }
           const limited = /^(?:CODEX|PROVIDER)_RATE_LIMIT_WALL(?::retry-(\d+))?/.exec(message)
           if (limited) {
             // Remember when this lane refills and let policy pick the next one, rather than parking the
