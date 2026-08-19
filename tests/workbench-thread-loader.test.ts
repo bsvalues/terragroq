@@ -156,6 +156,208 @@ describe("loadAuthenticatedWorkbenchThreads", () => {
     expect(result[0].coverage.missingSources).toContain("outcome_queue_item:9")
   })
 
+  it("loads the recorded history of a work_order-rooted Thread", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(repo.listWorkOrders).toHaveBeenCalledWith("owner", [11], 501)
+    expect(repo.listEvidence).toHaveBeenCalledWith("owner", [11], [], 501)
+    expect(result).toHaveLength(1)
+    expect(result[0].coverage.conflicts).toEqual([])
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "work_order:11", "evidence_record:21", "governance_event:31",
+    ]))
+    expect(result[0].items.find((item) => item.source.kind === "work_order")?.source.drilldown).toEqual({
+      mode: "EXACT",
+      href: "/work-orders#work-order-11",
+    })
+    // The root is the work order itself, so unreachable neighbours stay out rather than being
+    // mislabelled as the root's own content.
+    expect(result[0].items.some((item) => ["goal", "outcome_queue_item"].includes(item.source.kind))).toBe(false)
+    expect(result[0].items.some((item) => item.source.kind === "work_order" && item.source.id !== "11")).toBe(false)
+    expect(result[0].items.some((item) => item.source.kind === "decision")).toBe(false)
+    expect(result[0].coverage.missingSources).not.toContain("outcome_queue_item:11")
+  })
+
+  it("follows the explicit durable edges a work_order root owns", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "12", role: "root" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(repo.listWorkOrders).toHaveBeenCalledWith("owner", [12], 501)
+    expect(repo.listDecisions).toHaveBeenCalledWith("owner", [5], 501)
+    expect(result[0].coverage.conflicts).toEqual([])
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "work_order:12", "decision:5",
+    ]))
+    // Evidence, governance, and audit rows belong to work order 11; they are not this root's history.
+    expect(result[0].items.some((item) => (
+      ["evidence_record", "governance_event", "event_log"].includes(item.source.kind)
+    ))).toBe(false)
+  })
+
+  it("names a work_order root's members in the persisted vocabulary the table actually carries", async () => {
+    // The objective flow hangs governance_event members beneath a work_order root, and their
+    // sourceIds are the entity keys that flow wrote -- not governance event row ids.
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const },
+      ]),
+      listMemberBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "governance_event" as const, sourceId: "resource_verification:PACS", role: "member" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "work_order:11", "evidence_record:21", "governance_event:31",
+    ]))
+    // The unreachable member is reported under its own kind. A binding the loader cannot name is a
+    // binding it cannot honestly report as missing either.
+    expect(result[0].coverage.missingSources).toContain("governance_event:resource_verification:PACS")
+    expect(result[0].coverage.missingSources.some((key) => key.startsWith("undefined:"))).toBe(false)
+    expect(result[0].coverage.conflicts).toEqual([])
+  })
+
+  it("leaves a persisted type the projection has no kind for out of the Thread entirely", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const },
+      ]),
+      listMemberBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "resource" as const, sourceId: "PACS", role: "member" as const },
+        { threadId: "thread-a", userId: "owner", sourceType: "reconciliation" as const, sourceId: "PACS", role: "member" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "work_order:11", "evidence_record:21",
+    ]))
+    // Neither an invented source kind nor a missing-source claim the projection cannot express.
+    expect(result[0].coverage.missingSources).toEqual(["conversation"])
+    expect(result[0].coverage.conflicts).toEqual([])
+  })
+
+  it("fails a Thread closed when its root is a type the projection has no kind for", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "reconciliation" as const, sourceId: "PACS", role: "root" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(result).toHaveLength(1)
+    expect(result[0].items).toEqual([])
+    expect(result[0].coverage.conflicts).toContain("ROOT_BINDING_MISSING:thread-a")
+  })
+
+  it("reads the table's newer outcome_queue_item spelling as the same outcome as outcome", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "outcome_queue_item" as const, sourceId: "OUT-7", role: "root" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(repo.listOutcomes).toHaveBeenCalledWith("owner", { sourceIds: ["OUT-7"], goalIds: [] }, 501)
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "outcome_queue_item:OUT-7", "goal:4", "work_order:11",
+    ]))
+    expect(result[0].coverage.missingSources).not.toContain("outcome_queue_item:OUT-7")
+  })
+
+  it("loads the recorded history of a work_order-rooted Thread bound by its work order ref", async () => {
+    // An objective thread binds its root by ref, which is how every work_order root is written.
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "WO-11", role: "root" as const },
+      ]),
+      listWorkOrdersByRef: vi.fn(async () => [
+        { id: 11, userId: "owner", ref: "WO-11", title: "Implementation", description: "Build it", status: "active", result: null, linkedDecisionId: null, createdAt: at("2026-08-03T00:00:00Z"), updatedAt: at("2026-08-08T00:00:00Z") },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(repo.listWorkOrdersByRef).toHaveBeenCalledWith("owner", ["WO-11"], 501)
+    expect(repo.listWorkOrders).toHaveBeenCalledWith("owner", [11], 501)
+    expect(repo.listEvidence).toHaveBeenCalledWith("owner", [11], [], 501)
+    expect(result).toHaveLength(1)
+    expect(result[0].coverage.conflicts).toEqual([])
+    expect(result[0].items.map((item) => `${item.source.kind}:${item.source.id}`)).toEqual(expect.arrayContaining([
+      "work_order:11", "evidence_record:21", "governance_event:31",
+    ]))
+    // The ref resolves to the row identity the rest of the projection already speaks, so the
+    // binding is satisfied rather than reported missing, and the drilldown lands on the record.
+    expect(result[0].coverage.missingSources).not.toContain("work_order:WO-11")
+    expect(result[0].items.find((item) => item.source.kind === "work_order")?.source.drilldown).toEqual({
+      mode: "EXACT",
+      href: "/work-orders#work-order-11",
+    })
+  })
+
+  it("never reads a row id out of a work order ref's digits", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "WO-0011", role: "root" as const },
+      ]),
+      listWorkOrdersByRef: vi.fn(async () => []),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(repo.listWorkOrders).toHaveBeenCalledWith("owner", [], 501)
+    expect(result).toHaveLength(1)
+    expect(result[0].items).toEqual([])
+    expect(result[0].coverage.missingSources).toContain("work_order:WO-0011")
+  })
+
+  it("leaves an ambiguous work order ref unresolved rather than attaching either row", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "WO-11", role: "root" as const },
+      ]),
+      listWorkOrdersByRef: vi.fn(async () => [
+        { id: 11, userId: "owner", ref: "WO-11", title: "Implementation", description: "Build it", status: "active", result: null, linkedDecisionId: null, createdAt: at("2026-08-03T00:00:00Z"), updatedAt: at("2026-08-08T00:00:00Z") },
+        { id: 12, userId: "owner", ref: "WO-11", title: "Governance", description: "Review it", status: "review", result: null, linkedDecisionId: 5, createdAt: at("2026-08-03T01:00:00Z"), updatedAt: at("2026-08-08T01:00:00Z") },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(repo.listWorkOrders).toHaveBeenCalledWith("owner", [], 501)
+    expect(result[0].items).toEqual([])
+    expect(result[0].coverage.missingSources).toContain("work_order:WO-11")
+  })
+
+  it("does not ask a repository that cannot resolve refs, and keeps the ref-bound Thread visible", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [
+        { threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "WO-11", role: "root" as const },
+      ]),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo })
+
+    expect(repo.listWorkOrdersByRef).toBeUndefined()
+    expect(result).toHaveLength(1)
+    expect(result[0].coverage.missingSources).toContain("work_order:WO-11")
+  })
+
   it("fails closed for a missing tenant project and never queries thread data", async () => {
     const repo = repository({ getProject: vi.fn(async () => null) })
 
