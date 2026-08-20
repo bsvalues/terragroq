@@ -193,14 +193,14 @@ export function Desk() {
 function SurfaceView({ surface }: { surface: Surface }) {
   if (surface.kind === "browser") {
     // Anonymity is a server guarantee: the document comes from the environment's own cookieless
-    // proxy. Scripts run -- the page is client-rendered and would be a blank shell without them --
-    // but inside an opaque-origin sandbox with no cookies and no top-navigation, so every fetch the
-    // page makes is anonymous too and it can never carry the session back into the legacy shell.
+    // proxy, which also strips scripts server-side -- the page's own boot code crashes under an
+    // opaque-origin sandbox and tears down the markup. What renders is the page's server-rendered
+    // truth, styled, in every browser, with no way to carry the session back into the legacy shell.
     return (
       <iframe
         src={`/api/environment/anon${surface.subject}`}
         title={surface.subject}
-        sandbox="allow-scripts"
+        sandbox=""
         className="h-full min-h-0 w-full bg-white"
       />
     )
