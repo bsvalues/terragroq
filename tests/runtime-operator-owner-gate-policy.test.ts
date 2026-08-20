@@ -72,9 +72,9 @@ describe("#911's change set, classified", () => {
   })
 })
 
-describe("the six gates, and only those six", () => {
+describe("the canonical gates, and only those", () => {
   const cases = [
-    ["MONEY", { spendsMoney: true }],
+    ["FINANCIAL", { spendsMoney: true }],
     ["CREDENTIALS", { touchesCredentials: true }],
     ["POLICY", { changesReviewedPolicy: true }],
     ["SCOPE", { outsideObjectiveScope: true }],
@@ -105,14 +105,42 @@ describe("the six gates, and only those six", () => {
       summary: "buy a disk and change the policy",
       effects: { spendsMoney: true, changesReviewedPolicy: true },
     })
-    expect(verdict.gates).toEqual(["MONEY", "POLICY"])
+    expect(verdict.gates).toEqual(["FINANCIAL", "POLICY"])
+  })
+
+  // Omitted from the first draft, which named six gates from memory. The playbook is the authority:
+  // "protected, production, destructive, financial, legal, credential, or scope-expanding".
+  it("honours the canonical categories an earlier draft dropped", () => {
+    expect(classifyProposedAction({ effects: { mutatesProductionData: true } }).gate).toBe("PRODUCTION")
+    expect(classifyProposedAction({ effects: { releaseOrCutover: true } }).gate).toBe("PRODUCTION")
+    expect(classifyProposedAction({ effects: { protectedResource: true } }).gate).toBe("PROTECTED")
+    expect(classifyProposedAction({ effects: { unresolvedLegalPrivacyOrSecurityRisk: true } }).gate).toBe("LEGAL")
+  })
+
+  it("treats a malformed flag as set, because a caller that cannot state a boolean has not stated it", () => {
+    expect(classifyProposedAction({ effects: { spendsMoney: "maybe" } }).gated).toBe(true)
+  })
+
+  it("refuses a malformed destroys declaration instead of degrading it to nothing", () => {
+    // This shape previously became [] and skipped the destruction gate entirely.
+    for (const destroys of ["D:/HermesData", 7, { path: "D:/x" }]) {
+      const verdict = classifyProposedAction({ effects: { destroys } })
+      expect(verdict.gate).toBe("DESTRUCTIVE")
+      expect(verdict.unclassifiable).toBe(true)
+    }
+  })
+
+  it("refuses a destroy target that is not an object or omits the verification flag", () => {
+    expect(classifyProposedAction({ effects: { destroys: ["D:/x"] } }).gate).toBe("DESTRUCTIVE")
+    expect(classifyProposedAction({ effects: { destroys: [{ path: "D:/x" }] } }).gate).toBe("DESTRUCTIVE")
+    expect(classifyProposedAction({ effects: { destroys: [{ path: "D:/x", verifiedCopyElsewhere: "yes" }] } }).gate).toBe("DESTRUCTIVE")
   })
 })
 
 describe("an action that cannot describe itself", () => {
   it("stops rather than defaulting to harmless", () => {
     // The dangerous default is not "gated"; it is a silent pass for something nobody characterised.
-    for (const action of [undefined, {}, { summary: "do the thing" }, { effects: null }]) {
+    for (const action of [undefined, {}, { summary: "do the thing" }, { effects: null }, { effects: [] }, { effects: "none" }]) {
       const verdict = classifyProposedAction(action)
       expect(verdict.gated).toBe(true)
       expect(verdict.unclassifiable).toBe(true)
@@ -120,6 +148,6 @@ describe("an action that cannot describe itself", () => {
   })
 
   it("says so plainly rather than naming a gate it did not really hit", () => {
-    expect(classifyProposedAction({}).reason).toContain("declared no effects")
+    expect(classifyProposedAction({}).reason).toContain("declared no readable effects")
   })
 })
