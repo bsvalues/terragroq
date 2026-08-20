@@ -495,6 +495,28 @@ describe("authenticated goal outcome intake idempotency", () => {
     expect(JSON.stringify({ result, outcome: harness.state.outcomes[0] })).not.toMatch(/workOrder|lease|acquisition|dispatch/i)
   })
 
+  it("preserves legacy startGoalOutcome admission when Project lifecycle and repository metadata drift", async () => {
+    harness.state.projects[0].lifecycle = "archived"
+    harness.state.projectResources[0].canonicalIdentity = "bsvalues/not-terragroq"
+
+    const result = await startGoalOutcome({
+      projectId: 7,
+      intent: "Deliver a legacy operator-visible outcome",
+      idempotencyKey: "workbench-outcome:legacy-project-drift-0001",
+    })
+
+    expect(result).toMatchObject({
+      status: "ACCEPTED",
+      projectId: 7,
+      ownershipTruth: "project_thread_bound",
+    })
+    expect(harness.state.goals).toHaveLength(1)
+    expect(harness.state.outcomes).toHaveLength(1)
+    expect(harness.state.receipts).toHaveLength(1)
+    expect(harness.state.threads).toHaveLength(1)
+    expect(harness.state.threadSources).toHaveLength(1)
+  })
+
   it("persists the exact registered #911 outcome classification and sole outcome root without minting authority", async () => {
     const intent = "record structured #911 reliability remediation without host mutation"
     const result = await startWorkbenchOutcome({
@@ -596,6 +618,44 @@ describe("authenticated goal outcome intake idempotency", () => {
     expect(harness.state.threadSources).toHaveLength(1)
     expect(harness.state.governance).toHaveLength(1)
     expect(harness.state.events).toHaveLength(1)
+  })
+
+  it("replays the exact registered #911 receipt after response loss despite later Project eligibility drift", async () => {
+    harness.state.failAfterCommit = true
+    const input = {
+      projectId: 7,
+      intent: "record structured #911 reliability remediation without host mutation",
+      idempotencyKey: "workbench-outcome:issue-911-response-loss-drift-0001",
+    }
+    await expect(startWorkbenchOutcome(input)).rejects.toThrow("SIMULATED_RESPONSE_LOSS")
+    const threadId = String(harness.state.threads[0].id)
+    harness.state.projects[0].lifecycle = "archived"
+    harness.state.projectResources[0].canonicalIdentity = "bsvalues/not-terragroq"
+
+    const replay = await startWorkbenchOutcome(input)
+
+    expect(replay).toMatchObject({ status: "ALREADY_ACCEPTED", threadId })
+    expect(harness.state.goals).toHaveLength(1)
+    expect(harness.state.outcomes).toHaveLength(1)
+    expect(harness.state.receipts).toHaveLength(1)
+    expect(harness.state.receipts[0].replayCount).toBe(1)
+    expect(harness.state.threads).toHaveLength(1)
+    expect(harness.state.threadSources).toHaveLength(1)
+  })
+
+  it("walls a corrupted exact #911 replay before considering later Project eligibility drift", async () => {
+    const input = {
+      projectId: 7,
+      intent: "record structured #911 reliability remediation without host mutation",
+      idempotencyKey: "workbench-outcome:issue-911-corrupt-drift-0001",
+    }
+    await startWorkbenchOutcome(input)
+    harness.state.projects[0].lifecycle = "archived"
+    harness.state.projectResources[0].canonicalIdentity = "bsvalues/not-terragroq"
+    harness.state.threadSources[0].sourceId = "forged-outcome"
+
+    await expect(startWorkbenchOutcome(input)).rejects.toThrow("WORKBENCH_OUTCOME_START_BINDING_WALL")
+    expect(harness.state.receipts[0].replayCount).toBe(0)
   })
 
   it("serializes concurrent same-key starts to one accepted graph", async () => {
