@@ -65,7 +65,9 @@ const FINDING_CONTROL = /(?:ignore\s+(?:(?:all\s+|any\s+|the\s+)?previous|(?:the
 function validFindingEffects(effects) {
   if (!effects || typeof effects !== "object" || Array.isArray(effects)) return false
   const entries = Object.entries(effects)
-  if (entries.length === 0 || entries.some(([key]) => !FINDING_EFFECT_KEYS.has(key))) return false
+  if (entries.length !== FINDING_EFFECT_KEYS.size
+    || entries.some(([key]) => !FINDING_EFFECT_KEYS.has(key))
+    || [...FINDING_EFFECT_KEYS].some((key) => !Object.hasOwn(effects, key))) return false
   for (const [key, value] of entries) {
     if (key !== "destroys" && typeof value !== "boolean") return false
     if (key === "destroys" && (!Array.isArray(value) || value.some((target) =>
@@ -89,7 +91,6 @@ function validFindingPaths(paths) {
 
 function validFindingMetadata(metadata) {
   return Number.isSafeInteger(metadata?.sequence) && metadata.sequence > 0
-    && Number.isSafeInteger(metadata?.issueNumber) && metadata.issueNumber > 0
     && validFindingText(metadata?.summary) && validFindingText(metadata?.task)
     && validFindingPaths(metadata?.paths) && validFindingEffects(metadata?.effects)
 }
@@ -702,6 +703,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
       const authority = await client.query(
         `SELECT parent.id AS "parentId", parent."userId", parent.ref AS "parentRef",
                 parent.status AS "parentStatus", parent."authorityGranted",
+                parent.description AS "parentDescription",
                 parent.goal, parent.loop, parent.scope, parent."nonGoals",
                 parent."allowedFiles" AS "parentAllowedFiles",
                 parent."forbiddenFiles", parent.validators AS "parentValidators",
@@ -739,7 +741,8 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
       const sourceEscapes = validFindingPaths(sourcePaths)
         ? sourcePaths.some((candidate) => !pathWithin(candidate, envelope.parentAllowedFiles ?? []))
         : true
-      const sourceEffects = validFindingMetadata(source.metadata)
+      const authoritativeIssueNumber = parseProjectionIssue(envelope.parentDescription)
+      const sourceEffects = validFindingMetadata(source.metadata) && authoritativeIssueNumber !== null
         ? { ...source.metadata.effects, outsideObjectiveScope: Boolean(source.metadata.effects.outsideObjectiveScope) || sourceEscapes }
         : undefined
       const sourceClassification = classifyProposedAction({ effects: sourceEffects })
@@ -749,7 +752,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
         if (sourceClassification.gated) throw new Error("DERIVED_OWNER_GATE_WALL")
         if (typeof payload.workOrderId !== "string" || !/^WO-[A-Z0-9-]+$/.test(payload.workOrderId)
           || !Number.isInteger(payload.issueNumber) || payload.issueNumber <= 0
-          || payload.issueNumber !== source.metadata.issueNumber
+          || payload.issueNumber !== authoritativeIssueNumber
           || payload.task !== source.metadata.task || !validFindingText(payload.task)
           || !Array.isArray(payload.allowedPaths) || payload.allowedPaths.length === 0
           || JSON.stringify(payload.allowedPaths) !== JSON.stringify(sourcePaths)
@@ -838,8 +841,10 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
     async collectFindings() {
       const result = await pool.query(
         `SELECT finding.id AS "sourceFindingEventId", finding."userId", finding.actor,
-                finding."entityId", finding.metadata
+                finding."entityId", finding.metadata, parent.description AS "parentDescription"
            FROM governance_event AS finding
+           JOIN work_order AS parent
+             ON parent.id::text = finding."entityId" AND parent."userId" = finding."userId"
           WHERE finding."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
             AND finding."entityType" = 'work_order'
             AND NOT EXISTS (
@@ -859,7 +864,8 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           || typeof metadata.findingId !== "string" || metadata.findingId.trim() === ""
           || typeof row.userId !== "string" || row.userId.trim() === ""
           || typeof metadata.objectiveWorkOrderId !== "string" || metadata.objectiveWorkOrderId.trim() === "") return []
-        const malformed = !validFindingMetadata(metadata)
+        const issueNumber = parseProjectionIssue(row.parentDescription)
+        const malformed = !validFindingMetadata(metadata) || issueNumber === null
         return [{
           sourceFindingEventId: row.sourceFindingEventId,
           sourceUserId: row.userId,
@@ -868,7 +874,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           findingId: metadata.findingId,
           objectiveWorkOrderId: metadata.objectiveWorkOrderId,
           sequence: metadata.sequence,
-          issueNumber: metadata.issueNumber,
+          issueNumber,
           summary: validFindingText(metadata.summary) ? metadata.summary : "Malformed structured finding",
           task: validFindingText(metadata.task) ? metadata.task : "Malformed structured finding",
           paths: validFindingPaths(metadata.paths) ? metadata.paths : [],

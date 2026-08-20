@@ -7,16 +7,28 @@ import { afterEach, describe, expect, it } from "vitest"
 import { createWilliamOSAdapters } from "../scripts/runtime-operator/williamos-adapters.mjs"
 
 const roots: string[] = []
+const EMPTY_EFFECTS = {
+  spendsMoney: false,
+  irreversible: false,
+  mutatesProductionData: false,
+  releaseOrCutover: false,
+  protectedResource: false,
+  unresolvedLegalPrivacyOrSecurityRisk: false,
+  touchesCredentials: false,
+  changesReviewedPolicy: false,
+  outsideObjectiveScope: false,
+  competesWithPriority: false,
+  destroys: [],
+}
 const SOURCE_METADATA = {
   schemaVersion: 1,
   findingId: "FINDING-911-COMPOSE",
   objectiveWorkOrderId: "WO-0031",
   sequence: 1,
-  issueNumber: 911,
   summary: "reconcile compose with the running container",
   task: "reconcile the repository-owned compose source",
   paths: ["scripts/runtime-operator/williamos-adapters.mjs"],
-  effects: { destroys: [] },
+  effects: EMPTY_EFFECTS,
 }
 const SOURCE_DIGEST = crypto.createHash("sha256").update(JSON.stringify(SOURCE_METADATA)).digest("hex")
 const GATE_METADATA = {
@@ -24,18 +36,16 @@ const GATE_METADATA = {
   findingId: "FINDING-911-REPIN",
   objectiveWorkOrderId: "WO-0031",
   sequence: 2,
-  issueNumber: 911,
   summary: "repin service paths",
   task: "repin service paths",
   paths: ["scripts/runtime-operator/owner-gate-policy.mjs"],
-  effects: { changesReviewedPolicy: true },
+  effects: { ...EMPTY_EFFECTS, changesReviewedPolicy: true },
 }
 const GATE_DIGEST = crypto.createHash("sha256").update(JSON.stringify(GATE_METADATA)).digest("hex")
 const INVALID_ORDER_METADATA = {
   ...SOURCE_METADATA,
   findingId: "FINDING-BAD-ORDER",
   sequence: 0,
-  issueNumber: null,
 }
 const INVALID_ORDER_DIGEST = crypto.createHash("sha256").update(JSON.stringify(INVALID_ORDER_METADATA)).digest("hex")
 
@@ -83,7 +93,10 @@ function databaseFor({
         expiresAt: new Date("2026-09-20T13:00:00Z"),
         revokedAt: null,
       }] }
-      if (sql.includes("RUNTIME_OBJECTIVE_FINDING_RECORDED")) return { rows: findings }
+      if (sql.includes("RUNTIME_OBJECTIVE_FINDING_RECORDED")) return { rows: findings.map((finding) => ({
+        parentDescription: "Authorized under GRANT-0018. Projected at GitHub issue 911.",
+        ...finding,
+      })) }
       if (sql.includes("UPDATE work_order")) {
         state.updates.push({ sql, params })
         return { rows: [{ id: params[0] }] }
@@ -149,6 +162,7 @@ function transactionalDatabase({
         parentId: 31,
         userId: "owner-1",
         parentRef: "WO-0031",
+        parentDescription: "Authorized under GRANT-0018. Projected at GitHub issue 911.",
         parentStatus,
         authorityGranted,
         goal: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
@@ -233,9 +247,25 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
       summary: "reconcile compose with the running container",
       task: "reconcile the repository-owned compose source",
       paths: ["scripts/runtime-operator/williamos-adapters.mjs"],
-      effects: { destroys: [] },
+      effects: EMPTY_EFFECTS,
       malformed: false,
     }])
+  })
+
+  it("derives projection identity from the exact parent instead of worker metadata", async () => {
+    const spoofed = { ...SOURCE_METADATA, issueNumber: 357 }
+    const database = databaseFor({ findings: [{
+      sourceFindingEventId: 441,
+      userId: "owner-1",
+      actor: "hermes",
+      entityId: "31",
+      metadata: spoofed,
+    }] })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    await expect(adapters.collectFindings()).resolves.toEqual([
+      expect.objectContaining({ issueNumber: 911, malformed: false }),
+    ])
   })
 
   it("quarantines a malformed effect declaration without dropping its valid sibling", async () => {
@@ -272,7 +302,7 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
     ])
   })
 
-  it("marks invalid sequence and issue fields malformed without dropping a valid sibling", async () => {
+  it("marks an invalid sequence malformed without dropping a valid sibling", async () => {
     const database = databaseFor({ findings: [
       { sourceFindingEventId: 440, userId: "owner-1", actor: "hermes", entityId: "31", metadata: INVALID_ORDER_METADATA },
       { sourceFindingEventId: 441, userId: "owner-1", actor: "hermes", entityId: "31", metadata: SOURCE_METADATA },
