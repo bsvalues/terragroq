@@ -271,7 +271,14 @@ async function converse(world: WorkingWorldSnapshot, text: string): Promise<stri
 }
 
 export async function POST(request: Request) {
-  const userId = await getUserId()
+  // Session resolution THROWS on a cookieless request rather than returning null; both spell
+  // unauthenticated, and neither may spell 500.
+  let userId: string | null = null
+  try {
+    userId = await getUserId()
+  } catch {
+    userId = null
+  }
   if (!userId) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
   let body: { worldId?: unknown; text?: unknown }

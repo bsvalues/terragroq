@@ -1,5 +1,3 @@
-import { getUserId } from "@/lib/session"
-
 /**
  * Server-guaranteed anonymous document fetcher for browser surfaces (#762).
  *
@@ -22,10 +20,11 @@ export const dynamic = "force-dynamic"
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 const SAFE_PATH = /^[A-Za-z0-9/_-]*$/
 
+// Deliberately unauthenticated: this route serves documents to sandboxed, COOKIELESS frames -- the
+// whole point is that the frame carries no session, so it cannot present one here either. Demanding
+// auth was a catch-22 that blanked every browser surface. Nothing is exposed that an anonymous
+// visitor could not fetch directly: GET only, self-origin only, plain page paths only.
 export async function GET(request: Request, { params }: { params: Promise<{ path?: string[] }> }) {
-  const userId = await getUserId()
-  if (!userId) return new Response("UNAUTHENTICATED", { status: 401 })
-
   const segments = (await params).path ?? []
   const path = `/${segments.join("/")}`
   if (!SAFE_PATH.test(segments.join("/"))) return new Response("PATH_REFUSED", { status: 400 })
