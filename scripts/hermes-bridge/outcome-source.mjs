@@ -3205,25 +3205,10 @@ export async function projectOutcomeRuntimeLease({
     })
   }
 
-  const ref = outcomeWorkOrderRef(outcomeId)
+  let ref = outcomeWorkOrderRef(outcomeId)
   const leaseExpiresAt = new Date(lease.expiresAt).toISOString()
-  const idempotencyKey = [
-    `hermes-outcome:${outcomeId}`,
-    `attempt:${attempt}`,
-    `lease:${lease.status}`,
-    `checkpoint:${checkpointSequence}`,
-    `expires:${Date.parse(leaseExpiresAt)}`,
-  ].join(":")
-  const eventMetadata = {
-    idempotencyKey,
-    outcomeId,
-    workOrderRef: ref,
-    attempt,
-    checkpointSequence,
-    leaseStatus: lease.status,
-    leaseExpiresAt,
-  }
-  eventMetadata.payloadDigest = projectionPayloadDigest(eventMetadata)
+  let idempotencyKey
+  let eventMetadata
   let runQuery = normalizeQuery(query)
   let pool
   let client
@@ -3242,6 +3227,58 @@ export async function projectOutcomeRuntimeLease({
       runQuery = client.query.bind(client)
     }
     await runQuery("BEGIN")
+    const derived = await runQuery(
+      `SELECT receipt."resultBinding"->>'workOrderRef' AS "workOrderRef"
+       FROM "outcome_queue_item" AS queue
+       JOIN "outcome_queue_mutation_receipt" AS receipt
+         ON receipt."userId" = queue."userId"
+        AND receipt."outcomeKey" = queue."outcomeKey"
+       JOIN work_order AS child
+         ON child."userId" = queue."userId"
+        AND child.id = queue."activeWorkOrderId"
+        AND child.id::text = receipt."resultBinding"->>'workOrderId'
+        AND child.ref = receipt."resultBinding"->>'workOrderRef'
+       WHERE queue."goalId" = $1::integer
+         AND receipt.operation = 'runtime_finding.derive'
+         AND receipt."requestBinding"->>'operation' = 'runtime_finding.derive'
+         AND receipt."resultBinding"->>'goalId' = queue."goalId"::text
+         AND receipt."resultBinding"->>'outcomeKey' = queue."outcomeKey"
+       ORDER BY receipt.id
+       LIMIT 2
+       FOR UPDATE OF queue, child`,
+      [outcomeId],
+    )
+    if ((derived?.rows?.length ?? 0) > 1) {
+      throw Object.assign(new Error("Derived Hermes lease Work Order cardinality is invalid"), {
+        code: "OUTCOME_WORK_ORDER_CARDINALITY_WALL",
+      })
+    }
+    if (derived?.rows?.length === 1) {
+      const derivedRef = derived.rows[0].workOrderRef
+      if (typeof derivedRef !== "string" || derivedRef.trim() === "") {
+        throw Object.assign(new Error("Derived Hermes lease Work Order identity is invalid"), {
+          code: "OUTCOME_WORK_ORDER_IDENTITY_WALL",
+        })
+      }
+      ref = derivedRef
+    }
+    idempotencyKey = [
+      `hermes-outcome:${outcomeId}`,
+      `attempt:${attempt}`,
+      `lease:${lease.status}`,
+      `checkpoint:${checkpointSequence}`,
+      `expires:${Date.parse(leaseExpiresAt)}`,
+    ].join(":")
+    eventMetadata = {
+      idempotencyKey,
+      outcomeId,
+      workOrderRef: ref,
+      attempt,
+      checkpointSequence,
+      leaseStatus: lease.status,
+      leaseExpiresAt,
+    }
+    eventMetadata.payloadDigest = projectionPayloadDigest(eventMetadata)
     await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [ref])
     const workOrders = await runQuery(
       `SELECT wo.id, wo."userId" AS "userId", wo.ref

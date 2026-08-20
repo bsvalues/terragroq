@@ -109,7 +109,7 @@ describe("Hermes durable outcome queue runtime", () => {
     }
     const contract = {
       ...contractBody,
-      digest: createHash("sha256").update(JSON.stringify(contractBody)).digest("hex"),
+      digest: createHash("sha256").update(canonicalJson(contractBody)).digest("hex"),
     }
     const derivedQueue = {
       ...queueItem, id: 203,

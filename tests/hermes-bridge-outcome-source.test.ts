@@ -1948,6 +1948,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [{ id: 42, userId: "owner" }] })
       .mockResolvedValueOnce({ rows: [{ id: 92 }] })
       .mockResolvedValueOnce({ rows: [] })
@@ -1964,9 +1965,29 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       leaseStatus: "RELEASED",
       checkpointSequence: 9,
     })
-    expect(query.mock.calls[3][0]).toMatch(/HERMES_RUNTIME_LEASE/)
-    expect(query.mock.calls[3][1][3]).toContain('"leaseStatus":"RELEASED"')
-    expect(query.mock.calls[3][1][3]).not.toMatch(/holder|token|secret/i)
+    expect(query.mock.calls[4][0]).toMatch(/HERMES_RUNTIME_LEASE/)
+    expect(query.mock.calls[4][1][3]).toContain('"leaseStatus":"RELEASED"')
+    expect(query.mock.calls[4][1][3]).not.toMatch(/holder|token|secret/i)
+  })
+
+  it("projects a derived lease against the exact receipt-bound child Work Order", async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ workOrderRef: "WO-HERMES-OUTCOME-4-R01-F101" }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 201, userId: "owner" }] })
+      .mockResolvedValueOnce({ rows: [{ id: 92 }] })
+      .mockResolvedValueOnce({ rows: [] })
+    await expect(projectOutcomeRuntimeLease({
+      query, outcomeId: 202, attempt: 1, checkpointSequence: 1,
+      lease: { status: "ACTIVE", expiresAt: "2026-08-20T20:00:00.000Z" },
+    })).resolves.toMatchObject({
+      workOrderId: 201, workOrderRef: "WO-HERMES-OUTCOME-4-R01-F101",
+    })
+    expect(query.mock.calls[1][0]).toMatch(/runtime_finding\.derive/)
+    expect(query.mock.calls[2]).toEqual([
+      "SELECT pg_advisory_xact_lock(hashtext($1))", ["WO-HERMES-OUTCOME-4-R01-F101"],
+    ])
   })
 
   it("rejects malformed runtime lease evidence before persistence", async () => {

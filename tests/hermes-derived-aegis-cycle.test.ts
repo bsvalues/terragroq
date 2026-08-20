@@ -1,330 +1,297 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
 import { AegisExecutionBackend } from "../scripts/hermes-bridge/execution-backend.mjs"
 import { createHermesOrchestrator } from "../scripts/hermes-bridge/orchestrator.mjs"
 import { createHermesOutcomeQueueRuntime } from "../scripts/hermes-bridge/outcome-queue-runtime.mjs"
-import {
-  acquireNextEligibleOutcome,
-  OUTCOME_QUEUE_SQL,
-} from "../scripts/hermes-bridge/outcome-queue-source.mjs"
+import { OUTCOME_QUEUE_SQL } from "../scripts/hermes-bridge/outcome-queue-source.mjs"
+import { projectOutcomeRuntimeCheckpoint, projectOutcomeRuntimeLease } from "../scripts/hermes-bridge/outcome-source.mjs"
+import { createRepositoryLifecycle } from "../scripts/hermes-bridge/repository-lifecycle.mjs"
 import { createHermesStateStore } from "../scripts/hermes-bridge/state-store.mjs"
 
+const databaseUrl = process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL
+const runDatabase = databaseUrl ? describe : describe.skip
 const roots: string[] = []
-const now = new Date("2026-08-20T18:00:00.000Z")
-const ownerTouchCounters = {
-  OWNER_OPERATION_TOUCH_COUNT: 0,
-  OWNER_CREDENTIAL_TOUCH_COUNT: 0,
-  OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
-  OWNER_ROUTINE_DECISION_COUNT: 0,
-  OWNER_ROUTINE_CONTACT_COUNT: 0,
-}
+const reportPath = "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"
+const now = new Date()
+const baseSha = "f".repeat(40)
+const headSha = "d".repeat(40)
+const mergeSha = "e".repeat(40)
+const childRef = "WO-HERMES-OUTCOME-4-R01-F101"
+const goalRef = "GOAL-RUNTIME-FINDING-101"
+const outcomeKey = `runtime-finding:101:${"a".repeat(64)}`
 
 const canonicalJson = (value: any): string => value && typeof value === "object"
-  ? Array.isArray(value)
-    ? `[${value.map(canonicalJson).join(",")}]`
+  ? Array.isArray(value) ? `[${value.map(canonicalJson).join(",")}]`
     : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
   : JSON.stringify(value)
+
+const contractBody = {
+  version: "hermes-work-contract.v1", id: "runtime-finding.101.v1",
+  repository: "bsvalues/terragroq", lane: "docs", reservations: [reportPath],
+  validationCommands: [{ command: "git", args: ["diff", "--check"], timeoutMs: 300_000 }],
+  projection: { issueNumber: 911, completionOwned: false },
+  delivery: { authorityLevel: "A2_WRITE_OWN", allowedActions: ["implement"], commitAllowed: true, tagAllowed: false, pushAllowed: true },
+}
+const contract = { ...contractBody, digest: createHash("sha256").update(canonicalJson(contractBody)).digest("hex") }
+const requestBinding = {
+  operation: "runtime_finding.derive", sourceFindingEventId: 101,
+  sourcePayloadDigest: "a".repeat(64), sourceCheckpointId: 91,
+  sourceCheckpointDigest: "b".repeat(64), parentWorkOrderId: 4,
+  parentWorkOrderRef: "WO-HERMES-OUTCOME-4", parentContractId: "parent.v1",
+  parentContractDigest: "c".repeat(64), parentAuthorizationDecisionId: 74,
+  parentImplementationGrantId: 81,
+}
+const resultBinding = {
+  outcomeKey, goalId: 202, goalRef, queueId: 203, workOrderId: 201, workOrderRef: childRef,
+  decisionId: 204, approvalDecisionId: 204, grantId: 207,
+  grantRef: "RUNTIME-FINDING-QUEUE-GRANT-101", queueGrantId: 207,
+  queueGrantRef: "RUNTIME-FINDING-QUEUE-GRANT-101", implementationGrantId: 205,
+  implementationGrantRef: "RUNTIME-FINDING-IMPL-GRANT-101", workContract: contract,
+}
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
-describe("derived finding through the governed AEGIS cycle", { timeout: 30_000 }, () => {
-  it("preserves the exact receipt-bound child graph through reviewed completion", async () => {
-    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-derived-aegis-"))
-    roots.push(runtimeRoot)
+function scopedDatabaseUrl(url: string, schema: string) {
+  const parsed = new URL(url)
+  parsed.hostname = parsed.hostname.replace("-pooler.", ".")
+  parsed.searchParams.set("options", `-csearch_path=${schema}`)
+  return parsed.toString()
+}
+
+async function bootstrap(client: import("pg").PoolClient, schema: string) {
+  await client.query(`CREATE SCHEMA "${schema}"`)
+  await client.query(`SET search_path TO "${schema}"`)
+  const tables = new Set([
+    "authority_grant", "decision", "event_log", "evidence_record", "goal",
+    "governance_event", "outcome_queue_item", "project", "project_resource", "user", "work_order",
+    "workbench_thread", "workbench_thread_source",
+  ])
+  const source = fs.readFileSync(path.join(process.cwd(), "drizzle", "0000_williamos_init.sql"), "utf8")
+  for (const sql of source.split("--> statement-breakpoint").map((value) => value.trim()).filter(Boolean)) {
+    const created = sql.match(/^CREATE TABLE "([^"]+)"/)?.[1]
+    const altered = sql.match(/^ALTER TABLE "([^"]+)"/)?.[1]
+    const indexed = sql.match(/^CREATE (?:UNIQUE )?INDEX "[^"]+" ON "([^"]+)"/)?.[1]
+    const refs = [...sql.matchAll(/REFERENCES "public"\."([^"]+)"/g)].map((match) => match[1])
+    if (!(created && tables.has(created)) && !(altered && tables.has(altered) && refs.every((ref) => tables.has(ref)))
+      && !(indexed && tables.has(indexed))) continue
+    await client.query(sql.replaceAll('"public".', `"${schema}".`))
+  }
+  for (const sql of [
+    OUTCOME_QUEUE_SQL.ensureMutationReceiptTable,
+    OUTCOME_QUEUE_SQL.ensureMutationReceiptOutcomeIndex,
+    OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable,
+    OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptOutcomeIndex,
+    OUTCOME_QUEUE_SQL.ensureGoalOutcomeIntakeReceiptTable,
+    OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptTable,
+    OUTCOME_QUEUE_SQL.ensureMutationAttemptTable,
+    OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptIndexes,
+    OUTCOME_QUEUE_SQL.ensureMutationAttemptRequestIndex,
+  ]) await client.query(sql)
+}
+
+async function seed(client: import("pg").PoolClient) {
+  await client.query("BEGIN")
+  try {
+    await client.query(`INSERT INTO "user" (id,name,email) VALUES ('primary-user','Primary','bsvalues@gmail.com')`)
+    await client.query(`INSERT INTO decision (id,"userId",ref,title,decision,status,authority,owner,scope,evidence,tags,locked) VALUES
+      (74,'primary-user','DEC-PARENT','Parent','APPROVE','accepted','binding','primary-user','parent',ARRAY['parent'],ARRAY['workbench'],true),
+      (204,'primary-user','DEC-CHILD','Child','APPROVE','accepted','binding','WilliamOS',$1,ARRAY['runtime-finding:101'],ARRAY['RUNTIME_FINDING_DERIVED_AUTHORIZATION'],true)`, [outcomeKey])
+    await client.query(`INSERT INTO authority_grant
+      (id,"userId",ref,"workOrderId","grantedBy","grantedTo","authorityLevel",scope,"allowedActions","blockedActions",status,"expiresAt") VALUES
+      (81,'primary-user','PARENT-IMPL',4,'primary-user','operator','A2_WRITE_OWN','WO-HERMES-OUTCOME-4',ARRAY['implement'],ARRAY['host-storage-mutation'],'active','2099-01-01'),
+      (205,'primary-user','RUNTIME-FINDING-IMPL-GRANT-101',201,'hermes','operator','A2_WRITE_OWN',$1,ARRAY['implement'],ARRAY['host-storage-mutation'],'active','2099-01-01'),
+      (207,'primary-user','RUNTIME-FINDING-QUEUE-GRANT-101',201,'hermes','operator','A2_WRITE_OWN',$2,ARRAY['outcome:execute'],ARRAY['host-storage-mutation'],'active','2099-01-01')`, [childRef, outcomeKey])
+    await client.query(`INSERT INTO work_order
+      (id,"userId",ref,title,goal,scope,"allowedFiles",validators,lane,status,priority,assignee,"authorityLevel","authorityGranted","authorityGrantId","acceptanceCriteria",agent,"approvedBy","linkedDecisionId","commitAllowed","tagAllowed","pushAllowed") VALUES
+      (4,'primary-user','WO-HERMES-OUTCOME-4','Parent','Parent','parent',ARRAY['docs/reports'],ARRAY['git diff --check'],'operator-objective','active','high','hermes-codex-bridge','A2_WRITE_OWN','parent',81,ARRAY['parent'],'hermes','primary-user',74,true,false,true),
+      (201,'primary-user',$1,'Derived docs',$2,$2,ARRAY[$3],ARRAY['git diff --check'],'docs','approved','high','hermes-codex-bridge','A2_WRITE_OWN','A2_WRITE_OWN',205,ARRAY['docs-only'],'codex','williamos-runtime-policy',204,true,false,true)`, [childRef, goalRef, reportPath])
+    await client.query(`INSERT INTO goal (id,"userId",ref,command,lane,mode,risk,authority,verdict,"matchedRules","requiresApproval","linkedWorkOrderId",status)
+      VALUES (202,'primary-user',$1,'Reconcile compose drift','docs','implementation','R1','A2_WRITE_OWN','allow',ARRAY['runtime_finding.derive'],false,201,'classified')`, [goalRef])
+    await client.query(`INSERT INTO governance_event (id,"userId",ref,"eventType","entityType","entityId",actor,reason,metadata) VALUES
+      (101,'primary-user','FINDING-101','RUNTIME_OBJECTIVE_FINDING_RECORDED','work_order','4','hermes','finding',$1::jsonb),
+      (102,'primary-user','DERIVED-101','RUNTIME_FINDING_DERIVED','work_order','201','williamos-runtime-operator','derived',$2::jsonb)`, [
+      JSON.stringify({ payloadDigest: requestBinding.sourcePayloadDigest, sourceCheckpointId: 91,
+        sourceCheckpointDigest: requestBinding.sourceCheckpointDigest, objectiveWorkOrderId: "WO-HERMES-OUTCOME-4",
+        workContractId: "parent.v1", workContractDigest: requestBinding.parentContractDigest,
+        authorizationDecisionId: 74, implementationGrantId: 81 }),
+      JSON.stringify({ sourceFindingEventId: 101, outcomeKey, workOrderRef: childRef }),
+    ])
+    await client.query(`INSERT INTO outcome_queue_item
+      (id,"userId","outcomeKey","goalId","goalRef",title,objective,"queueOrder","dependencyKeys","riskClass","approvalState","approvedBy","approvedAt","approvalDecisionId","authorityState","authorityLevel","authorityGrantRef","authoritySubject","authorityAction","lifecycleState","activeWorkOrderId",version,"fencingToken")
+      VALUES (203,'primary-user',$1,202,$2,'Reconcile compose drift','Reconcile compose drift',100,ARRAY[]::text[],'R1','approved','hermes',$3,204,'matched','A2_WRITE_OWN','RUNTIME-FINDING-QUEUE-GRANT-101','operator','outcome:execute','approved',201,0,0)`, [outcomeKey, goalRef, now.toISOString()])
+    await client.query(`INSERT INTO outcome_queue_mutation_receipt
+      (id,"userId","idempotencyKey",operation,"outcomeKey","requestHash","requestBinding","resultBinding")
+      VALUES (206,'primary-user','derive-101','runtime_finding.derive',$1,$2,$3::jsonb,$4::jsonb)`, [outcomeKey,
+      createHash("sha256").update(canonicalJson(requestBinding)).digest("hex"), JSON.stringify(requestBinding), JSON.stringify(resultBinding)])
+    await client.query("COMMIT")
+  } catch (error) {
+    await client.query("ROLLBACK")
+    throw error
+  }
+}
+
+function deliveryHarness() {
+  const state = { committed: false, created: false, requested: false, merged: false, cleaned: false }
+  let validationTree = false
+  const calls: any[] = []
+  const validations: string[] = []
+  const runner = vi.fn(async (call: any) => {
+    calls.push(call)
+    const remote = String(call.args?.at(-1) ?? "").replaceAll("'", "")
+    const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" })
+    if (remote.includes("exec pwd -P")) return ok("/worker/repo\n")
+    if (remote.includes("exec sha256sum -- package.json pnpm-lock.yaml")) {
+      return ok(`${"1".repeat(64)}  package.json\n${"2".repeat(64)}  pnpm-lock.yaml\n`)
+    }
+    if (remote.includes("exec stat -Lc %d:%i")) return ok("2049:777\n")
+    if (remote.includes("exec readlink -f -- /worker/repo/node_modules")) return ok("/worker/repo/node_modules\n")
+    if (remote.includes("exec test -L")) return { code: 1, stdout: "", stderr: "" }
+    if (remote.includes("exec test -d /worker/repo/node_modules")) return ok()
+    if (remote.includes("exec test -d") && remote.includes("/worker/runtime/worktrees/")) {
+      return validationTree ? ok() : { code: 1, stdout: "", stderr: "" }
+    }
+    if (remote.includes("exec test -f") && remote.includes(".williamos-validation-dependencies")) {
+      return validationTree ? ok() : { code: 1, stdout: "", stderr: "" }
+    }
+    if (remote.includes("exec test -e") && remote.includes("/worker/repo/node_modules/")) {
+      return { code: 1, stdout: "", stderr: "" }
+    }
+    if (remote.includes("exec test -e") && remote.includes("/worker/runtime/worktrees/")) {
+      return validationTree ? ok() : { code: 1, stdout: "", stderr: "" }
+    }
+    if (remote.includes("exec node -e")) { validationTree = true; return ok() }
+    if (remote.includes("exec cp -a --reflink=auto")) return ok()
+    if (remote.includes("exec rm -rf --") && remote.includes("node_modules")) { validationTree = false; return ok() }
+    if (remote.includes("check-ignore -q -- node_modules/")) return ok()
+    if (remote.includes("ls-files -z -- node_modules")) return ok()
+    if (remote.includes("status --porcelain=v1 -z --untracked-files=all -- node_modules")) return ok()
+    if (remote.includes("remote get-url origin")) return ok("https://github.com/bsvalues/terragroq.git\n")
+    if (remote.includes("rev-parse refs/remotes/origin/main")) return ok(`${state.merged ? mergeSha : baseSha}\n`)
+    if (remote.includes("show-ref --verify --quiet")) return { code: 1, stdout: "", stderr: "" }
+    if (remote.includes("worktree list --porcelain")) return ok("")
+    if (remote.includes("status --porcelain=v1 -z --untracked-files=all")) return ok(state.committed ? "" : `?? ${reportPath}\0`)
+    if (remote.includes("diff --name-status -z --find-renames")) return ok(`A\0${reportPath}\0`)
+    if (remote.includes("diff --cached --quiet")) return { code: 1, stdout: "", stderr: "" }
+    if (remote.includes("rev-parse HEAD")) return ok(`${state.committed ? headSha : baseSha}\n`)
+    if (remote.includes("exec git commit -m")) { state.committed = true; return ok("commit\n") }
+    if (remote.includes("exec git diff --check")) { validations.push("git diff --check"); return ok() }
+    if (remote.includes("exec gh pr list")) return ok(JSON.stringify(state.created ? [{ number: 991, headRefName: "codex/hermes-goal-runtime-finding-101-202", state: state.merged ? "MERGED" : "OPEN", url: "https://github.com/bsvalues/terragroq/pull/991", mergeCommit: state.merged ? { oid: mergeSha } : null }] : []))
+    if (remote.includes("exec gh pr create")) { state.created = true; return ok("https://github.com/bsvalues/terragroq/pull/991\n") }
+    if (remote.includes("exec gh pr comment")) { state.requested = true; return ok() }
+    if (remote.includes("exec gh pr view")) return ok(JSON.stringify({ number: 991, headRefName: "codex/hermes-goal-runtime-finding-101-202", headRefOid: headSha, baseRefName: "main", state: state.merged ? "MERGED" : "OPEN", isDraft: false, reviewDecision: "APPROVED", statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS" }], reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: headSha } }], mergeCommit: state.merged ? { oid: mergeSha } : null, url: "https://github.com/bsvalues/terragroq/pull/991" }))
+    if (remote.includes("exec gh api graphql")) return ok(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } }, comments: { nodes: state.requested ? [{ author: { login: "bsvalues" }, body: `@codex review Exact-head review requested for ${headSha}.`, createdAt: "2026-08-20T18:01:00.000Z", updatedAt: "2026-08-20T18:01:00.000Z" }] : [], pageInfo: { hasPreviousPage: false, hasNextPage: false } } } } } }))
+    if (remote.includes("pulls/991/files?per_page=100")) return ok(JSON.stringify([[{ filename: reportPath }]]))
+    if (remote.includes("exec gh pr merge")) { state.merged = true; return ok() }
+    if (remote.includes("merge-base --is-ancestor")) return ok()
+    if (remote.includes("worktree remove")) { state.cleaned = true; return ok() }
+    return ok()
+  })
+  const prompts: string[] = []
+  const client = { connect: vi.fn(async () => {}), startThread: vi.fn(async () => "thread-101"), resumeThread: vi.fn(async () => "thread-101"), runTurn: vi.fn(async ({ prompt }: any) => {
+    prompts.push(prompt)
+    return { threadId: "thread-101", turnId: "turn-101", status: "completed", finalText: JSON.stringify({ result: "READY_FOR_VALIDATION", workOrder: childRef, branch: "codex/hermes-goal-runtime-finding-101-202", commit: null, prUrl: null, merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0, ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE", blockedAction: null, authorityBoundary: null, minimumChoice: null, approveConsequence: null, denyConsequence: null }) }
+  }), close: vi.fn(async () => {}) }
+  const backend = new AegisExecutionBackend({ host: "aegis-worker", runtimeRoot: "/worker/runtime", repositoryRoot: "/worker/repo", commandRunner: runner, clientFactory: vi.fn(async () => client) })
+  const lifecycle = createRepositoryLifecycle({ repository: "bsvalues/terragroq", workspaceRoot: path.resolve("C:/workspace/terragroq"), repositoryRoot: path.resolve("C:/workspace/terragroq"), ownedWorktreeRoot: path.resolve("C:/workspace-owned/hermes"), validationCommands: contract.validationCommands, executionBackend: backend })
+  return { state, calls, validations, prompts, backend, lifecycle }
+}
+
+describe("derived AEGIS repository seam without database claims", () => {
+  it("runs the registered validator through the real repository lifecycle and AEGIS boundary", async () => {
+    const harness = deliveryHarness()
+    const record = await harness.lifecycle.createWorktree({ branch: "codex/hermes-goal-runtime-finding-101-202", baseSha })
+    await expect(harness.lifecycle.runValidationCommands(record, contract.validationCommands)).resolves.toEqual([{ command: "git", args: ["diff", "--check"], code: 0 }])
+    expect(harness.validations).toEqual(["git diff --check"])
+    expect(harness.calls.every((call) => call.command === "ssh")).toBe(true)
+  })
+})
+
+runDatabase("derived finding durable AEGIS cycle", { timeout: 60_000 }, () => {
+  let pool: import("pg").Pool
+  let client: import("pg").PoolClient
+  let schema = ""
+  let scopedUrl = ""
+
+  beforeAll(async () => {
+    const { Pool } = await import("pg")
+    pool = new Pool({ connectionString: databaseUrl })
+    client = await pool.connect()
+    schema = `hermes_derived_aegis_${randomUUID().replaceAll("-", "")}`
+    await bootstrap(client, schema)
+    scopedUrl = scopedDatabaseUrl(databaseUrl!, schema)
+    await seed(client)
+  })
+  afterAll(async () => {
+    if (client && schema) { await client.query("SET search_path TO public"); await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`) }
+    client?.release()
+    await pool?.end()
+  })
+
+  it("persists exact child authority and terminal rows through real queue SQL", async () => {
+    const storedContract = (await client.query(
+      `SELECT "resultBinding"->'workContract' AS contract FROM outcome_queue_mutation_receipt WHERE id=206`,
+    )).rows[0].contract
+    const storedBody = {
+      version: storedContract.version, id: storedContract.id, repository: storedContract.repository,
+      lane: storedContract.lane, reservations: storedContract.reservations,
+      validationCommands: storedContract.validationCommands, projection: storedContract.projection,
+      delivery: storedContract.delivery,
+    }
+    expect(createHash("sha256").update(canonicalJson(storedBody)).digest("hex")).toBe(storedContract.digest)
+    const runtimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-derived-aegis-")); roots.push(runtimeRoot)
     fs.mkdirSync(path.join(runtimeRoot, "control"), { recursive: true })
     fs.writeFileSync(path.join(runtimeRoot, "control", "activation"), "enabled\n")
     fs.writeFileSync(path.join(runtimeRoot, "control", "authority-not-before"), "2026-08-20T00:00:00.000Z\n")
-
-    const sourceEventId = 101
-    const childWorkOrderId = 201
-    const childGoalId = 202
-    const queueId = 203
-    const decisionId = 204
-    const implementationGrantId = 205
-    const receiptId = 206
-    const queueGrantId = 207
-    const childWorkOrderRef = "WO-HERMES-OUTCOME-4-R01-F101"
-    const childGoalRef = "GOAL-RUNTIME-FINDING-101"
-    const outcomeKey = `runtime-finding:${sourceEventId}:${"a".repeat(64)}`
-    const queueGrantRef = "RUNTIME-FINDING-QUEUE-GRANT-101"
-    const implementationGrantRef = "RUNTIME-FINDING-IMPL-GRANT-101"
-    const changedPaths = ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"]
-    const contractBody = {
-      version: "hermes-work-contract.v1",
-      id: "runtime-finding.101.v1",
-      repository: "bsvalues/terragroq",
-      lane: "docs",
-      reservations: changedPaths,
-      validationCommands: [{ command: "git", args: ["diff", "--check"], timeoutMs: 300_000 }],
-      projection: { issueNumber: 911, completionOwned: false },
-      delivery: {
-        authorityLevel: "A2_WRITE_OWN", allowedActions: ["implement"],
-        commitAllowed: true, tagAllowed: false, pushAllowed: true,
-      },
-    }
-    const contract = {
-      ...contractBody,
-      digest: createHash("sha256").update(JSON.stringify(contractBody)).digest("hex"),
-    }
-    const requestBinding = {
-      operation: "runtime_finding.derive", sourceFindingEventId: sourceEventId,
-      sourcePayloadDigest: "a".repeat(64), sourceCheckpointId: 91,
-      sourceCheckpointDigest: "b".repeat(64), parentWorkOrderId: 4,
-      parentWorkOrderRef: "WO-HERMES-OUTCOME-4", parentContractId: "parent.v1",
-      parentContractDigest: "c".repeat(64), parentAuthorizationDecisionId: 74,
-      parentImplementationGrantId: 81,
-    }
-    const resultBinding = {
-      outcomeKey, goalId: childGoalId, goalRef: childGoalRef, queueId,
-      workOrderId: childWorkOrderId, workOrderRef: childWorkOrderRef,
-      decisionId, approvalDecisionId: decisionId,
-      grantId: queueGrantId, grantRef: queueGrantRef,
-      queueGrantId, queueGrantRef, implementationGrantId, implementationGrantRef,
-      workContract: contract,
-    }
-    const queue = {
-      id: queueId, userId: "primary-user", outcomeKey, goalId: childGoalId,
-      goalRef: childGoalRef, title: "Reconcile compose drift", objective: "Reconcile compose drift",
-      riskClass: "R1", priority: 100, orderKey: 100, dependencies: [],
-      approvalState: "approved", authorityState: "matched", lifecycleState: "approved",
-      authorityLevel: "A2_WRITE_OWN", authoritySubject: "operator",
-      authorityAction: "outcome:execute", approvalDecisionId: decisionId,
-      authorityGrantRef: queueGrantRef, activeWorkOrderId: childWorkOrderId,
-      version: 0, fencingToken: 0,
-    } as any
-    const goalRow = {
-      id: childGoalId, userId: "primary-user", ref: childGoalRef,
-      command: "Reconcile compose drift", lane: "docs", mode: "implementation", risk: "R1",
-      authority: "A2_WRITE_OWN", verdict: "allow", requiresApproval: false,
-      matchedRules: ["runtime_finding.derive"], status: "classified",
-      derivedReceiptOperation: "runtime_finding.derive",
-      derivedRequestHash: createHash("sha256").update(canonicalJson(requestBinding)).digest("hex"),
-      derivedRequestBinding: Object.fromEntries(Object.entries(requestBinding).reverse()),
-      derivedResultBinding: resultBinding,
-      derivedWorkOrderId: childWorkOrderId, derivedWorkOrderRef: childWorkOrderRef,
-      derivedWorkOrderUserId: "primary-user", derivedWorkOrderGoal: childGoalRef,
-      derivedWorkOrderAuthorityGrantId: implementationGrantId, derivedWorkOrderStatus: "approved",
-      derivedApprovalDecisionId: decisionId, derivedApprovalStatus: "accepted",
-      derivedApprovalAuthority: "binding", derivedApprovalScope: outcomeKey,
-      derivedApprovalLocked: true, derivedApprovalDecision: "APPROVE",
-      derivedApprovalEvidence: [`runtime-finding:${sourceEventId}`],
-      derivedQueueGrantId: queueGrantId, derivedQueueGrantRef: queueGrantRef,
-      derivedQueueGrantStatus: "active", derivedQueueGrantRevokedAt: null,
-      derivedQueueGrantExpiresAt: "2099-01-01T00:00:00.000Z",
-      derivedQueueGrantGrantedTo: "operator", derivedQueueGrantAuthorityLevel: "A2_WRITE_OWN",
-      derivedQueueGrantScope: outcomeKey, derivedQueueGrantWorkOrderId: childWorkOrderId,
-      derivedQueueGrantAllowedActions: ["outcome:execute"],
-      derivedQueueGrantBlockedActions: ["host-storage-mutation"],
-      derivedImplementationGrantId: implementationGrantId,
-      derivedImplementationGrantRef: implementationGrantRef,
-      derivedImplementationGrantStatus: "active", derivedImplementationGrantRevokedAt: null,
-      derivedImplementationGrantExpiresAt: "2099-01-01T00:00:00.000Z",
-      derivedImplementationGrantGrantedTo: "operator",
-      derivedImplementationGrantAuthorityLevel: "A2_WRITE_OWN",
-      derivedImplementationGrantScope: childWorkOrderRef,
-      derivedImplementationGrantWorkOrderId: childWorkOrderId,
-      derivedImplementationGrantAllowedActions: ["implement"],
-      derivedImplementationGrantBlockedActions: ["host-storage-mutation"],
-      derivedSourceFindingEventId: sourceEventId, derivedSourceUserId: "primary-user",
-      derivedSourcePayloadDigest: requestBinding.sourcePayloadDigest,
-      derivedSourceCheckpointId: requestBinding.sourceCheckpointId,
-      derivedSourceCheckpointDigest: requestBinding.sourceCheckpointDigest,
-      derivedSourceParentWorkOrderRef: requestBinding.parentWorkOrderRef,
-      derivedSourceParentContractId: requestBinding.parentContractId,
-      derivedSourceParentContractDigest: requestBinding.parentContractDigest,
-      derivedSourceAuthorizationDecisionId: requestBinding.parentAuthorizationDecisionId,
-      derivedSourceImplementationGrantId: requestBinding.parentImplementationGrantId,
-      derivedParentWorkOrderId: requestBinding.parentWorkOrderId,
-      derivedParentWorkOrderRef: requestBinding.parentWorkOrderRef,
-      derivedParentWorkOrderUserId: "primary-user",
-    }
-
-    const acquisitionQuery = vi.fn(async (sql: string, values: any[] = []) => {
-      if (["BEGIN", "COMMIT", "ROLLBACK", OUTCOME_QUEUE_SQL.acquireLock].includes(sql)) return { rows: [] }
-      if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt || sql === OUTCOME_QUEUE_SQL.readAcquisition) {
-        return { rows: [] }
-      }
-      if (sql === OUTCOME_QUEUE_SQL.acquire) {
-        Object.assign(queue, {
-          lifecycleState: "active", version: 1, fencingToken: 1,
-          acquisitionKey: values[2], executionBinding: values[3], leaseHolder: values[4],
-          leaseToken: values[5], leaseExpiresAt: values[6],
-        })
-        return { rows: [{ ...queue }] }
-      }
-      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionReceipt) return { rows: [{ id: 301 }] }
-      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt) return { rows: [{ id: 302 }] }
-      throw new Error(`unexpected acquisition query: ${sql.slice(0, 80)}`)
+    const harness = deliveryHarness()
+    const queue = createHermesOutcomeQueueRuntime({
+      databaseUrl: scopedUrl, holderId: "resident-hermes", runtimeRoot,
+      campaignWindowId: "campaign-v1-2", processIdentity: "supervisor-nonce-1", now: () => now,
+      // The isolated schema is built directly from the production DDL above.
+      ensureQueueSchema: async () => true,
     })
-    const acquisitionClient = { query: acquisitionQuery, release: vi.fn() }
-    const poolQuery = vi.fn(async (sql: string) => {
-      if (sql.includes("FROM goal")) return { rows: [goalRow] }
-      throw new Error(`unexpected pool query: ${sql.slice(0, 80)}`)
-    })
-    const completeQueue = vi.fn(async (input: any) => {
-      expect(input).toMatchObject({
-        userId: "primary-user", outcomeKey, activeWorkOrderId: childWorkOrderId,
-        authorityGrantRef: queueGrantRef,
-      })
-      Object.assign(queue, { lifecycleState: "completed", leaseHolder: null, leaseToken: null, leaseExpiresAt: null })
-      return { outcome: { ...queue }, replayed: false }
-    })
-    const completeGoal = vi.fn(async (input: any) => {
-      expect(input).toMatchObject({ outcomeId: childGoalId })
-      return true
-    })
-    const queueRuntime = createHermesOutcomeQueueRuntime({
-      databaseUrl: "postgresql://fixture", holderId: "resident-hermes",
-      campaignWindowId: "campaign-v1-2", processIdentity: "supervisor-nonce-1",
-      now: () => now, resolvePrimary: vi.fn(async () => ({ id: "primary-user" })),
-      createPool: vi.fn(async () => ({ query: poolQuery, end: vi.fn(), on: vi.fn() })),
-      acquire: (input: Record<string, unknown>) => acquireNextEligibleOutcome({
-        ...input, query: Object.assign(acquisitionQuery, { connect: async () => acquisitionClient }),
-      }),
-      checkpointProofProvider: vi.fn(async ({ outcome }: any) => ({
-        outcomeId: String(outcome.goalId), outcomeKey: outcome.outcomeKey,
-        workOrderId: outcome.activeWorkOrderId, fencingToken: outcome.fencingToken,
-        sequence: 0, state: "LEASED",
-        commit: { headSha: null, mergeSha: null, prNumber: null },
-      })),
-      ensureQueueSchema: vi.fn(async () => true),
-      verifyQueueWorkOrder: vi.fn(async () => ({ ...queue })),
-      completeQueue, completeGoal,
-      consumeRuntimeFindings: vi.fn(async () => ({ queuedChildren: 0 })),
-    })
-
-    const sshCalls: any[] = []
-    const turnPrompts: string[] = []
-    const client = {
-      connect: vi.fn(async () => {}),
-      startThread: vi.fn(async () => "thread-derived-101"),
-      resumeThread: vi.fn(async () => "thread-derived-101"),
-      runTurn: vi.fn(async ({ prompt }: { prompt: string }) => {
-        turnPrompts.push(prompt)
-        const branch = prompt.match(/codex\/[a-z0-9-]+/)?.[0] ?? "codex/hermes-goal-runtime-finding-101-202"
-        return {
-          threadId: "thread-derived-101", turnId: "turn-derived-101", status: "completed",
-          finalText: JSON.stringify({
-            result: "READY_FOR_VALIDATION", workOrder: childWorkOrderRef, branch,
-            commit: null, prUrl: null, merged: false, mergeCommit: null,
-            validation: ["pass"], reviewThreads: 0, ownerTouchCount: 0,
-            blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE",
-            blockedAction: null, authorityBoundary: null, minimumChoice: null,
-            approveConsequence: null, denyConsequence: null,
-          }),
-        }
-      }),
-      close: vi.fn(async () => {}),
-    }
-    const backend = new AegisExecutionBackend({
-      host: "aegis-worker", runtimeRoot: "/worker/runtime", repositoryRoot: "/worker/repo",
-      clientFactory: vi.fn(async () => client),
-      commandRunner: vi.fn(async (call: any) => {
-        sshCalls.push(call)
-        return { code: 0, stdout: "", stderr: "" }
-      }),
-    })
-    const runAppServer = vi.spyOn(backend, "runCodexClient")
-    let merged = false
-    const commit = "d".repeat(40)
-    const mergeSha = "e".repeat(40)
-    const prNumber = 991
-    const validationSeen: any[] = []
-    const lifecycle = {
-      refreshOriginMain: vi.fn(async () => "f".repeat(40)),
-      ensureOwnedWorktree: vi.fn(async ({ branch, baseSha }: any) => {
-        const prepared = await backend.prepareWorkspace({ branch, baseSha, repository: "bsvalues/terragroq" })
-        expect(prepared.workspacePath).toMatch(/^\/worker\/runtime\/worktrees\//)
-        return { branch, worktreePath: prepared.workspacePath }
-      }),
-      resumeOwnedWorktree: vi.fn(), discoverPullRequest: vi.fn(async () => null),
-      inspectPullRequest: vi.fn(async () => ({
-        state: merged ? "MERGED" : "OPEN", baseRefName: "main", isDraft: false,
-        checksGreen: true, checksComplete: true, failedChecks: [], reviewed: true,
-        reviewCompleted: true, reviewRequested: true, codexReviewFindings: [],
-        unresolvedThreadCount: 0, headRefOid: commit,
-        mergeCommit: merged ? { oid: mergeSha } : null,
-      })),
-      inspectChangedPaths: vi.fn(async () => changedPaths),
-      inspectWorkingTreePaths: vi.fn(async () => changedPaths),
-      inspectWorktreeHead: vi.fn(async () => commit),
-      ensureValidationDependencies: vi.fn(async () => ({ linked: false })),
-      removeValidationDependencies: vi.fn(async () => ({ removed: false })),
-      runValidationCommands: vi.fn(async ({ worktreePath, commands }: any) => {
-        validationSeen.push(...commands)
-        const results = await backend.validate({ workspacePath: worktreePath, commands })
-        return results.map((result: any, index: number) => ({
-          command: commands[index].command, args: commands[index].args, code: result.exitCode,
-        }))
-      }),
-      commitChanges: vi.fn(async ({ worktreePath, branch }: any) => {
-        await backend.git({ workspacePath: worktreePath, args: ["status", "--short"] })
-        return { commit, branch, paths: changedPaths }
-      }),
-      pushBranch: vi.fn(async ({ worktreePath, branch }: any) => {
-        await backend.git({ workspacePath: worktreePath, args: ["push", "origin", branch] })
-        return { pushed: true }
-      }),
-      createPullRequest: vi.fn(async () => ({
-        number: prNumber, url: `https://github.com/bsvalues/terragroq/pull/${prNumber}`,
-      })),
-      requestCodexReview: vi.fn(async () => ({ requested: true })),
-      inspectReviewFindings: vi.fn(async () => []),
-      resolveReviewThreads: vi.fn(async () => ({ resolved: 0 })),
-      inspectPullRequestFiles: vi.fn(async () => changedPaths),
-      mergePullRequest: vi.fn(async () => { merged = true; return { merged: true } }),
-      verifyOriginMainContains: vi.fn(async () => true),
-      cleanupOwnedWorktree: vi.fn(async ({ worktreePath }: any) => {
-        await backend.cleanup({ workspacePath: worktreePath })
-        return { cleaned: true }
-      }),
-    }
-    const projected: any[] = []
     const state = createHermesStateStore(path.join(runtimeRoot, "state", "state.json"), { now: () => now.getTime() })
-    const orchestrator = createHermesOrchestrator({
-      workspace: process.cwd(), runtimeRoot,
-      state,
-      lifecycle, executionBackend: backend, selectOutcome: queueRuntime.selectOutcome,
-      markComplete: queueRuntime.completeOutcome, markTerminal: queueRuntime.terminalizeOutcome,
-      deferOutcome: queueRuntime.deferOutcome, bindQueueWorkOrder: queueRuntime.bindWorkOrder,
-      refreshQueueOutcome: vi.fn(async (outcome: any) => outcome),
-      projectCheckpoint: vi.fn(async (input: any) => {
-        projected.push(input)
-        expect(input).toMatchObject({
-          outcomeId: childGoalId, workContract: { id: contract.id, digest: contract.digest },
-          executionBinding: { outcomeKey },
-        })
-        return { workOrderId: childWorkOrderId, workOrderRef: childWorkOrderRef, status: "approved" }
-      }),
-      projectLease: vi.fn(async () => ({ workOrderId: childWorkOrderId })),
-      holderId: "resident-hermes", now: () => now, sleep: async () => {},
-      leaseRenewalIntervalMs: 60 * 60 * 1000,
-    })
+    const orchestrator = createHermesOrchestrator({ workspace: process.cwd(), runtimeRoot, state, lifecycle: harness.lifecycle, executionBackend: harness.backend,
+      selectOutcome: queue.selectOutcome, markComplete: queue.completeOutcome, markTerminal: queue.terminalizeOutcome, deferOutcome: queue.deferOutcome,
+      renewQueueLease: queue.renewOutcomeLease, bindQueueWorkOrder: queue.bindWorkOrder, refreshQueueOutcome: queue.refreshOutcome,
+      resumeQueueAfterDecision: queue.resumeAfterOwnerDecision, resumeQueueAfterValidationRecovery: queue.resumeAfterValidationRecovery,
+      resumeQueueAfterReviewRecovery: queue.resumeAfterReviewRecovery,
+      projectCheckpoint: (input: any) => projectOutcomeRuntimeCheckpoint({ ...input, databaseUrl: scopedUrl }),
+      projectLease: (input: any) => projectOutcomeRuntimeLease({ ...input, databaseUrl: scopedUrl }),
+      holderId: "resident-hermes", now: () => now, sleep: async () => {}, leaseRenewalIntervalMs: 3_600_000 })
+    try {
+      await expect(orchestrator.cycle()).resolves.toEqual({ result: "COMPLETE", outcomeId: "202", prNumber: 991, mergeSha, changedPaths: [reportPath] })
+    } finally { await queue.close() }
 
-    await expect(orchestrator.cycle()).resolves.toEqual({
-      result: "COMPLETE", outcomeId: String(childGoalId), prNumber, mergeSha, changedPaths,
-    })
-    expect(runAppServer).toHaveBeenCalledOnce()
-    expect(turnPrompts).toHaveLength(1)
-    expect(turnPrompts[0]).toContain(childWorkOrderRef)
-    expect(validationSeen).toEqual(contract.validationCommands)
-    expect(projected.length).toBeGreaterThan(0)
-    expect(completeQueue).toHaveBeenCalledOnce()
-    expect(completeGoal).toHaveBeenCalledOnce()
-    expect(queue.lifecycleState).toBe("completed")
-    expect(state.read().ownerTouchCounters).toEqual(ownerTouchCounters)
-    const trace = JSON.stringify({ sshCalls, validationSeen }).toLowerCase()
-    expect(trace).not.toMatch(/codex exec|runtime-operator|hermes-kernel|issue\s*#?357|\b#357\b/)
-    expect(sshCalls.every((call) => call.command === "ssh")).toBe(true)
-    expect({ childWorkOrderId, childGoalId, queueId, decisionId, implementationGrantId, receiptId, queueGrantId })
-      .toEqual({ childWorkOrderId: 201, childGoalId: 202, queueId: 203, decisionId: 204,
-        implementationGrantId: 205, receiptId: 206, queueGrantId: 207 })
-    await queueRuntime.close()
+    const durableQueue = (await client.query(`SELECT * FROM outcome_queue_item WHERE id=203`)).rows[0]
+    expect(durableQueue).toMatchObject({ outcomeKey, goalId: 202, activeWorkOrderId: 201, authorityGrantRef: "RUNTIME-FINDING-QUEUE-GRANT-101", lifecycleState: "completed", terminalResult: "COMPLETE", leaseHolder: null, leaseToken: null, leaseExpiresAt: null })
+    expect(durableQueue.terminalEvidenceRefs).toEqual([
+      "EV-HERMES-202-1-9", `merge:${mergeSha}`, "pr:991",
+    ])
+    expect((await client.query(`SELECT id,ref,status,"linkedWorkOrderId" FROM goal WHERE id=202`)).rows).toEqual([{ id: 202, ref: goalRef, status: "converted", linkedWorkOrderId: 201 }])
+    expect((await client.query(`SELECT id,ref,lane,status,"allowedFiles",validators,"authorityGrantId" FROM work_order WHERE id=201`)).rows).toEqual([{ id: 201, ref: childRef, lane: "docs", status: "closed", allowedFiles: [reportPath], validators: ["git diff --check"], authorityGrantId: 205 }])
+    expect((await client.query(`SELECT id,ref,"workOrderId",scope,"allowedActions",status FROM authority_grant WHERE id IN (205,207) ORDER BY id`)).rows).toEqual([
+      { id: 205, ref: "RUNTIME-FINDING-IMPL-GRANT-101", workOrderId: 201, scope: childRef, allowedActions: ["implement"], status: "active" },
+      { id: 207, ref: "RUNTIME-FINDING-QUEUE-GRANT-101", workOrderId: 201, scope: outcomeKey, allowedActions: ["outcome:execute"], status: "active" },
+    ])
+    const receipt = (await client.query(`SELECT id,operation,"outcomeKey","resultBinding" FROM outcome_queue_mutation_receipt WHERE id=206`)).rows[0]
+    expect(receipt).toMatchObject({ id: 206, operation: "runtime_finding.derive", outcomeKey, resultBinding: { goalId: 202, queueId: 203, workOrderId: 201, workOrderRef: childRef, decisionId: 204, queueGrantId: 207, implementationGrantId: 205, workContract: { id: contract.id, digest: contract.digest, reservations: [reportPath] } } })
+    expect((await client.query(`SELECT "outcomeKey","firstFencingToken","latestFencingToken" FROM outcome_queue_acquisition_receipt`)).rows).toEqual([{ outcomeKey, firstFencingToken: 1, latestFencingToken: 1 }])
+    const events = (await client.query(`SELECT "eventType",metadata FROM governance_event WHERE "entityId" IN ('201','202') ORDER BY id`)).rows
+    expect(events.some((row) => row.eventType === "HERMES_RUNTIME_CHECKPOINT" && row.metadata.workOrderRef === childRef)).toBe(true)
+    expect(events.some((row) => row.eventType === "HERMES_OUTCOME_COMPLETED")).toBe(true)
+    const evidence = (await client.query(`SELECT "filesChanged",validators FROM evidence_record WHERE "workOrderId"=201`)).rows
+    expect(evidence.length).toBeGreaterThan(0)
+    expect(evidence.every((row) => row.filesChanged.every((entry: string) => entry === reportPath))).toBe(true)
+    expect(harness.validations).toEqual(["git diff --check"])
+    expect(harness.prompts[0]).toContain(childRef)
+    expect(harness.state.cleaned).toBe(true)
+    expect(state.read().ownerTouchCounters).toEqual({ OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0, OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0, OWNER_ROUTINE_CONTACT_COUNT: 0 })
+    expect(JSON.stringify(harness.calls).toLowerCase()).not.toMatch(/codex exec|runtime-operator|hermes-kernel|issue\s*#?357|\b#357\b/)
   })
 })

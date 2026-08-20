@@ -306,7 +306,7 @@ async function loadLinkedGoal(withPool, queueItem) {
       delivery: contract.delivery,
     }
     const contractDigest = contractBody
-      ? createHash("sha256").update(JSON.stringify(contractBody)).digest("hex")
+      ? createHash("sha256").update(canonicalJson(contractBody)).digest("hex")
       : null
     const exactRequestKeys = [
       "operation", "parentAuthorizationDecisionId", "parentContractDigest", "parentContractId",

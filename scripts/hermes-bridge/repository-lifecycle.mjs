@@ -264,7 +264,11 @@ function normalizeValidation(command, index) {
   }
   assertSafeInvocation(normalized.command, normalized.args)
   const executable = path.basename(normalized.command).toLowerCase().replace(/\.(cmd|exe)$/i, "")
-  if (!VALIDATION_EXECUTABLES.has(executable)) {
+  const exactReadOnlyGitDiffCheck = executable === "git"
+    && normalized.args.length === 2
+    && normalized.args[0] === "diff"
+    && normalized.args[1] === "--check"
+  if (!VALIDATION_EXECUTABLES.has(executable) && !exactReadOnlyGitDiffCheck) {
     wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}] executable is not allowed`)
   }
   if (!normalized.env || typeof normalized.env !== "object" || Array.isArray(normalized.env)

@@ -591,6 +591,41 @@ describe("Hermes repository lifecycle", () => {
     })).toThrow(HermesRepositoryLifecycleError)
   })
 
+  it("allows only the exact read-only git diff check validator", async () => {
+    const calls: Call[] = []
+    const lifecycle = createRepositoryLifecycle({
+      workspaceRoot: root,
+      ownedWorktreeRoot: ownedRoot,
+      validationCommands: [{ command: "git", args: ["diff", "--check"] }],
+      runner: async (call: Call) => {
+        calls.push(call)
+        if (call.args.includes("remote") && call.args.includes("get-url")) {
+          return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+        }
+        if (call.args.includes("show-ref")) return { code: 1, stdout: "" }
+        return { code: 0, stdout: "" }
+      },
+    })
+    const record = await lifecycle.createWorktree({ branch })
+    calls.length = 0
+    await lifecycle.runValidationCommands(record)
+    expect(calls.at(-1)).toMatchObject({
+      command: "git", args: ["diff", "--check"], credentialAccess: false,
+    })
+
+    for (const args of [
+      ["status"], ["diff"], ["diff", "--cached", "--check"],
+      ["diff", "--check", "docs/report.md"], ["-C", root, "diff", "--check"],
+    ]) {
+      expect(() => createRepositoryLifecycle({
+        workspaceRoot: root,
+        ownedWorktreeRoot: ownedRoot,
+        validationCommands: [{ command: "git", args }],
+        runner: async () => ({ code: 0 }),
+      })).toThrow(HermesRepositoryLifecycleError)
+    }
+  })
+
   it("removes only owned generated Next output immediately before a build", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-next-validation-"))
     const workspaceRoot = path.join(tempRoot, "repository")
