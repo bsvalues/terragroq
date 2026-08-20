@@ -280,6 +280,8 @@ function DecisionInspectorItem({ item }: { item: ThreadItem }) {
           <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Choice</dt><dd className="mt-1">{detail.choice}</dd></div>
           <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Disposition</dt><dd className="mt-1">{detail.disposition}</dd></div>
           <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Execution released</dt><dd className="mt-1">No</dd></div>
+          <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Decision record</dt><dd className="mt-1">#{detail.decisionId}</dd></div>
+          <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Evidence record</dt><dd className="mt-1">#{detail.evidenceId}</dd></div>
         </dl>
       ) : (
         <p role="status" className="text-xs leading-5 text-[var(--workbench-fault)]">The persisted decision receipt conflicts with its gated finding. No action is available.</p>

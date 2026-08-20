@@ -1,4 +1,11 @@
+import { createHash } from "node:crypto"
+
 import type { ThreadBindingInput, ThreadSourceInput, ThreadTruth } from "@/lib/workbench/thread-projection"
+import { projectRuntimeFindingActionability } from "@/scripts/hermes-bridge/runtime-finding-decision.mjs"
+import {
+  primaryDecisionRequestDigest,
+  PRIMARY_DECISION_OWNER_EMAIL,
+} from "@/scripts/hermes-bridge/primary-decision-provenance.mjs"
 
 type RuntimeFindingEvent = Readonly<{
   id: number
@@ -12,15 +19,15 @@ type RuntimeFindingEvent = Readonly<{
 
 type WorkOrderIdentity = Readonly<{ id: number; ref: string | null }>
 
-type RuntimeFindingRequest = Readonly<Record<string, unknown>> | null
+type RuntimeFindingRequest = Readonly<Record<string, unknown>>
 
 type ProjectionInput = Readonly<{
   userId: string
   projectId: number
-  threadId: string
+  thread: Readonly<{ id: string; workOrderId: number }>
   workOrder: WorkOrderIdentity
   events: readonly RuntimeFindingEvent[]
-  actionableRequest: RuntimeFindingRequest
+  actionableRequest: RuntimeFindingRequest | readonly RuntimeFindingRequest[] | null
 }>
 
 type ProjectionResult = Readonly<{
@@ -55,21 +62,68 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+  if (value && typeof value === "object") {
+    const row = value as Record<string, unknown>
+    return `{${Object.keys(row).sort().map((key) => `${JSON.stringify(key)}:${canonical(row[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value) ?? "null"
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex")
+}
+
+function digest(value: unknown): string | null {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : null
+}
+
+function requests(value: ProjectionInput["actionableRequest"]): RuntimeFindingRequest[] {
+  if (Array.isArray(value)) return value as RuntimeFindingRequest[]
+  return value ? [value as RuntimeFindingRequest] : []
+}
+
 function boundEvent(event: RuntimeFindingEvent, input: ProjectionInput): boolean {
   return event.userId === input.userId
     && event.entityType === "work_order"
     && event.entityId === String(input.workOrder.id)
 }
 
-function requestMatches(
-  request: RuntimeFindingRequest,
+function exactRequest(
+  request: RuntimeFindingRequest | null,
   input: ProjectionInput,
   gateEvent: RuntimeFindingEvent,
   gateMetadata: Record<string, unknown>,
   normalizedGates: readonly string[],
-): request is Readonly<Record<string, unknown>> {
+  sourceMetadata: Record<string, unknown>,
+): request is RuntimeFindingRequest {
   if (!request) return false
-  return request.sourceKind === "RUNTIME_FINDING"
+  const packet = record(request.decisionPacket)
+  const projection = projectRuntimeFindingActionability({
+    parentWorkOrderRowId: request.parentWorkOrderRowId,
+    parentWorkOrderRef: request.parentWorkOrderRef,
+    authorityGrantId: request.authorityGrantId,
+    authorityGrantRef: request.authorityGrantRef,
+    authorityGrantLevel: request.authorityGrantLevel,
+    sourceFindingEventId: request.sourceFindingEventId,
+    gateSettlementEventId: request.gateSettlementEventId,
+    findingId: request.findingId,
+    sequence: request.sequence,
+    gates: request.gates,
+  })
+  const canonicalGate = {
+    sourceFindingEventId: positiveInteger(gateMetadata.sourceFindingEventId),
+    sourceUserId: gateMetadata.sourceUserId,
+    findingId: gateMetadata.findingId,
+    objectiveWorkOrderId: gateMetadata.objectiveWorkOrderId,
+    issueNumber: gateMetadata.issueNumber,
+    gate: gateMetadata.gate,
+    gates: normalizedGates,
+    reason: gateMetadata.reason,
+  }
+  return input.thread.workOrderId === input.workOrder.id
+    && request.sourceKind === "RUNTIME_FINDING"
     && request.ownerUserId === input.userId
     && positiveInteger(request.parentWorkOrderRowId) === input.workOrder.id
     && request.parentWorkOrderRef === input.workOrder.ref
@@ -78,6 +132,18 @@ function requestMatches(
     && request.findingId === gateMetadata.findingId
     && request.gate === gateMetadata.gate
     && sameStrings(gates(request.gates) ?? [], normalizedGates)
+    && positiveInteger(request.authorityGrantId) !== null
+    && text(request.authorityGrantRef) !== null
+    && ["A2_WRITE_OWN", "A3_INTEGRATE"].includes(text(request.authorityGrantLevel) ?? "")
+    && positiveInteger(request.sequence) === positiveInteger(sourceMetadata.sequence)
+    && digest(request.sourcePayloadDigest) === sha256(JSON.stringify(sourceMetadata))
+    && digest(gateMetadata.payloadDigest) === sha256(JSON.stringify(canonicalGate))
+    && request.gatePayloadDigest === gateMetadata.payloadDigest
+    && request.actionableProjectionId === projection.id
+    && positiveInteger(request.actionableProjectionVersion) === projection.version
+    && request.actionableProjectionDigest === projection.digest
+    && packet !== null
+    && digest(request.decisionPacketDigest) === sha256(JSON.stringify(packet))
 }
 
 function exactReceipt(
@@ -86,12 +152,29 @@ function exactReceipt(
   gateEvent: RuntimeFindingEvent,
   gateMetadata: Record<string, unknown>,
   normalizedGates: readonly string[],
+  request: RuntimeFindingRequest,
 ): Record<string, unknown> | null {
   if (!boundEvent(event, input) || event.eventType !== "RUNTIME_FINDING_OWNER_DECIDED") return null
   const metadata = record(event.metadata)
   const choice = text(metadata?.choice)
   const disposition = text(metadata?.disposition)
+  const bindingKeys = [
+    "sourceKind", "ownerUserId", "parentWorkOrderRowId", "parentWorkOrderRef", "authorityGrantId",
+    "authorityGrantRef", "authorityGrantLevel", "sourceFindingEventId", "sourcePayloadDigest",
+    "gateSettlementEventId", "gatePayloadDigest", "actionableProjectionId", "actionableProjectionVersion",
+    "actionableProjectionDigest", "findingId", "sequence", "gate", "gates", "decisionPacketDigest",
+  ]
+  const bindingMatches = metadata !== null && bindingKeys.every((key) => canonical(metadata[key]) === canonical(request[key]))
+  const allowedReceiptKeys = new Set([
+    ...bindingKeys, "choice", "requestDigest", "responseDigest", "accountEmail", "disposition",
+    "resumeReleased", "receiptDigest", "decisionId", "evidenceId",
+  ])
+  const receiptPayload = metadata ? Object.fromEntries(Object.entries(metadata).filter(([key]) => (
+    !["receiptDigest", "decisionId", "evidenceId"].includes(key)
+  ))) : null
   if (!metadata
+    || !bindingMatches
+    || Object.keys(metadata).some((key) => !allowedReceiptKeys.has(key))
     || metadata.sourceKind !== "RUNTIME_FINDING"
     || metadata.ownerUserId !== input.userId
     || positiveInteger(metadata.parentWorkOrderRowId) !== input.workOrder.id
@@ -103,8 +186,20 @@ function exactReceipt(
     || !sameStrings(gates(metadata.gates) ?? [], normalizedGates)
     || !["APPROVE", "DENY"].includes(choice ?? "")
     || !["AUTHORITY_MATERIALIZATION_REQUIRED", "DENIED_RESOLVED"].includes(disposition ?? "")
-    || metadata.resumeReleased !== false) return null
-  return { choice, disposition, resumeReleased: false }
+    || metadata.resumeReleased !== false
+    || digest(metadata.requestDigest) !== primaryDecisionRequestDigest(request)
+    || digest(metadata.responseDigest) === null
+    || text(metadata.accountEmail)?.toLowerCase() !== PRIMARY_DECISION_OWNER_EMAIL
+    || digest(metadata.receiptDigest) !== sha256(canonical(receiptPayload))
+    || positiveInteger(metadata.decisionId) === null
+    || positiveInteger(metadata.evidenceId) === null) return null
+  return {
+    choice,
+    disposition,
+    resumeReleased: false,
+    decisionId: positiveInteger(metadata.decisionId),
+    evidenceId: positiveInteger(metadata.evidenceId),
+  }
 }
 
 function source(
@@ -115,7 +210,7 @@ function source(
 ): ProjectionResult {
   return {
     bindings: [{
-      threadId: input.threadId,
+      threadId: input.thread.id,
       userId: input.userId,
       projectId: input.projectId,
       sourceKind: "governance_event",
@@ -138,7 +233,8 @@ function source(
 }
 
 export function projectRuntimeFindingDecisionSources(input: ProjectionInput): ProjectionResult {
-  if (!Number.isSafeInteger(input.projectId) || input.projectId <= 0 || !input.threadId || !input.workOrder.ref) {
+  if (!Number.isSafeInteger(input.projectId) || input.projectId <= 0 || !input.thread.id
+    || input.thread.workOrderId !== input.workOrder.id || !input.workOrder.ref) {
     return { bindings: [], sources: [] }
   }
   const result: { bindings: ThreadBindingInput[]; sources: ThreadSourceInput[] } = { bindings: [], sources: [] }
@@ -155,6 +251,16 @@ export function projectRuntimeFindingDecisionSources(input: ProjectionInput): Pr
       && event.id === sourceFindingEventId
     ))
     const sourceMetadata = sourceEvents.length === 1 ? record(sourceEvents[0].metadata) : null
+    let canonicalRequest: RuntimeFindingRequest | null = null
+    if (gateMetadata && normalizedGates && sourceMetadata) {
+      canonicalRequest = requests(input.actionableRequest).find((request) => {
+        try {
+          return exactRequest(request, input, gateEvent, gateMetadata, normalizedGates, sourceMetadata)
+        } catch {
+          return false
+        }
+      }) ?? null
+    }
     const gateValid = gateMetadata !== null
       && normalizedGates !== null
       && gateMetadata.sourceUserId === input.userId
@@ -172,9 +278,11 @@ export function projectRuntimeFindingDecisionSources(input: ProjectionInput): Pr
         || positiveInteger(receiptMetadata?.sourceFindingEventId) === sourceFindingEventId
         || receiptMetadata?.findingId === gateMetadata?.findingId
     })
-    const receipts = receiptEvents.map((event) => exactReceipt(event, input, gateEvent, gateMetadata ?? {}, normalizedGates ?? []))
+    const receipts = canonicalRequest
+      ? receiptEvents.map((event) => exactReceipt(event, input, gateEvent, gateMetadata ?? {}, normalizedGates ?? [], canonicalRequest!))
+      : receiptEvents.map(() => null)
     const receiptConflict = receiptEvents.length > 1 || receipts.some((receipt) => receipt === null)
-    const actionable = requestMatches(input.actionableRequest, input, gateEvent, gateMetadata ?? {}, normalizedGates ?? [])
+    const actionable = canonicalRequest !== null
     let projection: ProjectionResult = { bindings: [], sources: [] }
     if ((!gateValid || receiptConflict) && (receiptEvents.length > 0 || actionable)) {
       projection = source(input, gateEvent, {
@@ -184,8 +292,8 @@ export function projectRuntimeFindingDecisionSources(input: ProjectionInput): Pr
       projection = source(input, receiptEvents[0], {
         basis: "PERSISTED", state: "RECORDED", detail: "Authenticated runtime finding decision receipt",
       }, { state: "OWNER_DECIDED", ...receipts[0] })
-    } else if (gateValid && actionable && input.actionableRequest) {
-      const packet = record(input.actionableRequest.decisionPacket) ?? {}
+    } else if (gateValid && actionable && canonicalRequest) {
+      const packet = record(canonicalRequest.decisionPacket) ?? {}
       projection = source(input, gateEvent, {
         basis: "PERSISTED", state: "CURRENT", detail: "Canonical runtime finding decision request",
       }, {
@@ -193,8 +301,8 @@ export function projectRuntimeFindingDecisionSources(input: ProjectionInput): Pr
         why: text(gateMetadata.reason) ?? "Owner authority is required for this gated finding.",
         blockedAction: text(packet.blockedAction) ?? "Gated runtime work remains blocked.",
         gates: normalizedGates,
-        recommendation: text(input.actionableRequest.recommendation) ?? "DENY",
-        recommendationRationale: text(input.actionableRequest.recommendationRationale),
+        recommendation: text(canonicalRequest.recommendation) ?? "DENY",
+        recommendationRationale: text(canonicalRequest.recommendationRationale),
         choices: ["APPROVE", "DENY"],
         consequences: {
           APPROVE: text(packet.approveConsequence) ?? "Record approval without executing gated work.",

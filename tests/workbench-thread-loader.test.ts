@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 
 import {
@@ -6,6 +7,55 @@ import {
 } from "@/lib/workbench/load-threads"
 
 const at = (value: string) => new Date(value)
+const sha256 = (value: string) => createHash("sha256").update(value).digest("hex")
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+  if (value && typeof value === "object") {
+    const row = value as Record<string, unknown>
+    return `{${Object.keys(row).sort().map((key) => `${JSON.stringify(key)}:${canonical(row[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
+function runtimeFindingFixture() {
+  const sourceMetadata = { findingId: "FINDING-11", objectiveWorkOrderId: "WO-11", sequence: 1 }
+  const gateBinding = {
+    sourceFindingEventId: 442, sourceUserId: "owner", findingId: "FINDING-11", objectiveWorkOrderId: "WO-11",
+    issueNumber: 911, gate: "POLICY", gates: ["POLICY"], reason: "policy change",
+  }
+  const gateMetadata = { ...gateBinding, payloadDigest: sha256(JSON.stringify(gateBinding)) }
+  const decisionPacket = {
+    blockedAction: "Materialize gated work", authorityBoundary: "Owner authority required",
+    approveConsequence: "Record authority only", denyConsequence: "Resolve denied",
+    minimumChoice: "APPROVE_OR_DENY",
+  }
+  const projection = {
+    id: "RUNTIME_FINDING_ACTIONABILITY_V1", version: 1, parentWorkOrderRowId: 11, parentWorkOrderRef: "WO-11",
+    authorityGrantId: 18, authorityGrantRef: "GRANT-0018", sourceFindingEventId: 442,
+    authorityGrantLevel: "A2_WRITE_OWN",
+    gateSettlementEventId: 501, findingId: "FINDING-11", sequence: 1, gates: ["POLICY"], routineSiblingState: "SETTLED",
+  }
+  return {
+    events: [{
+      id: 442, userId: "owner", ref: null, entityType: "work_order", entityId: "11",
+      eventType: "RUNTIME_OBJECTIVE_FINDING_RECORDED", reason: null, metadata: sourceMetadata,
+      createdAt: at("2026-08-20T15:59:00Z"),
+    }, {
+      id: 501, userId: "owner", ref: null, entityType: "work_order", entityId: "11",
+      eventType: "RUNTIME_FINDING_OWNER_GATED", reason: "policy change", metadata: gateMetadata,
+      createdAt: at("2026-08-20T16:00:00Z"),
+    }],
+    request: {
+      sourceKind: "RUNTIME_FINDING", ownerUserId: "owner", parentWorkOrderRowId: 11, parentWorkOrderRef: "WO-11",
+      authorityGrantId: 18, authorityGrantRef: "GRANT-0018", authorityGrantLevel: "A2_WRITE_OWN",
+      sourceFindingEventId: 442, sourcePayloadDigest: sha256(JSON.stringify(sourceMetadata)),
+      gateSettlementEventId: 501, gatePayloadDigest: gateMetadata.payloadDigest,
+      actionableProjectionId: projection.id, actionableProjectionVersion: projection.version,
+      actionableProjectionDigest: sha256(canonical(projection)), findingId: "FINDING-11", sequence: 1,
+      gate: "POLICY", gates: ["POLICY"], allowedChoices: ["APPROVE", "DENY"], recommendation: "DENY",
+      recommendationRationale: "Default deny", decisionPacket, decisionPacketDigest: sha256(JSON.stringify(decisionPacket)),
+    },
+  }
+}
 
 function repository(overrides: Partial<WorkbenchThreadRepository> = {}): WorkbenchThreadRepository {
   return {
@@ -58,38 +108,14 @@ function repository(overrides: Partial<WorkbenchThreadRepository> = {}): Workben
 
 describe("loadAuthenticatedWorkbenchThreads", () => {
   it("binds the canonical runtime finding request only into its owning authenticated Thread", async () => {
+    const runtime = runtimeFindingFixture()
     const repo = repository({
       listRootBindings: vi.fn(async () => [{
         threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const,
       }]),
-      listGovernanceEvents: vi.fn(async () => [{
-        id: 442, userId: "owner", ref: null, entityType: "work_order", entityId: "11",
-        eventType: "RUNTIME_OBJECTIVE_FINDING_RECORDED", reason: null,
-        metadata: { findingId: "FINDING-11", objectiveWorkOrderId: "WO-11", sequence: 1 },
-        createdAt: at("2026-08-20T15:59:00Z"),
-      }, {
-        id: 501, userId: "owner", ref: null, entityType: "work_order", entityId: "11",
-        eventType: "RUNTIME_FINDING_OWNER_GATED", reason: "policy change",
-        metadata: {
-          sourceFindingEventId: 442, sourceUserId: "owner", findingId: "FINDING-11",
-          objectiveWorkOrderId: "WO-11", gate: "POLICY", gates: ["POLICY"],
-          reason: "policy change", payloadDigest: "a".repeat(64),
-        },
-        createdAt: at("2026-08-20T16:00:00Z"),
-      }]),
+      listGovernanceEvents: vi.fn(async () => runtime.events),
     })
-    const readRuntimeFindingDecision = vi.fn(async () => ({
-      sourceKind: "RUNTIME_FINDING", ownerUserId: "owner",
-      parentWorkOrderRowId: 11, parentWorkOrderRef: "WO-11",
-      sourceFindingEventId: 442, gateSettlementEventId: 501,
-      findingId: "FINDING-11", gate: "POLICY", gates: ["POLICY"],
-      allowedChoices: ["APPROVE", "DENY"], recommendation: "DENY",
-      recommendationRationale: "Default deny",
-      decisionPacket: {
-        blockedAction: "Materialize gated work", authorityBoundary: "Owner authority required",
-        approveConsequence: "Record authority only", denyConsequence: "Resolve denied",
-      },
-    }))
+    const readRuntimeFindingDecision = vi.fn(async () => runtime.request)
 
     const result = await loadAuthenticatedWorkbenchThreads(7, {
       authenticate: async () => "owner", repository: repo, readRuntimeFindingDecision,
@@ -100,6 +126,54 @@ describe("loadAuthenticatedWorkbenchThreads", () => {
       expect.objectContaining({ rawState: "ACTIONABLE", summary: "policy change" }),
     ])
     expect(result[0].coverage.conflicts).toEqual([])
+  })
+
+  it("projects a runtime finding only into the single direct work-order Thread, never a transitive goal Thread", async () => {
+    const runtime = runtimeFindingFixture()
+    const repo = repository({
+      listThreads: vi.fn(async () => [{
+        id: "thread-goal", userId: "owner", projectId: 7, title: "Goal Thread",
+        createdAt: at("2026-08-01T00:00:00Z"), updatedAt: at("2026-08-10T00:00:00Z"),
+      }, {
+        id: "thread-work-order", userId: "owner", projectId: 7, title: "Work Order Thread",
+        createdAt: at("2026-08-02T00:00:00Z"), updatedAt: at("2026-08-11T00:00:00Z"),
+      }]),
+      listRootBindings: vi.fn(async () => [{
+        threadId: "thread-goal", userId: "owner", sourceType: "goal" as const, sourceId: "4", role: "root" as const,
+      }, {
+        threadId: "thread-work-order", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const,
+      }]),
+      listGovernanceEvents: vi.fn(async () => runtime.events),
+    })
+    const readRuntimeFindingDecision = vi.fn(async () => runtime.request)
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo, readRuntimeFindingDecision })
+    const goal = result.find((thread) => thread.id === "thread-goal")!
+    const direct = result.find((thread) => thread.id === "thread-work-order")!
+
+    expect(goal.items.some((item) => item.source.kind === "governance_event" && item.source.id === "501")).toBe(false)
+    expect(direct.items.filter((item) => item.source.kind === "governance_event" && item.source.id === "501")).toHaveLength(1)
+  })
+
+  it("fails closed when more than one Thread directly claims the same work order", async () => {
+    const runtime = runtimeFindingFixture()
+    const repo = repository({
+      listThreads: vi.fn(async () => ["a", "b"].map((suffix) => ({
+        id: `thread-${suffix}`, userId: "owner", projectId: 7, title: `Thread ${suffix}`,
+        createdAt: at("2026-08-01T00:00:00Z"), updatedAt: at("2026-08-10T00:00:00Z"),
+      }))),
+      listRootBindings: vi.fn(async () => ["a", "b"].map((suffix) => ({
+        threadId: `thread-${suffix}`, userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const,
+      }))),
+      listGovernanceEvents: vi.fn(async () => runtime.events),
+    })
+    const readRuntimeFindingDecision = vi.fn(async () => runtime.request)
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo, readRuntimeFindingDecision })
+
+    expect(result.flatMap((thread) => thread.items).some((item) => (
+      item.source.kind === "governance_event" && item.source.id === "501"
+    ))).toBe(false)
   })
 
   it("authenticates, traverses only explicit durable edges in bounded batches, and preserves link conflicts", async () => {

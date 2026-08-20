@@ -120,6 +120,8 @@ export type ThreadDecisionDetail = Readonly<{
   choice?: "APPROVE" | "DENY"
   disposition?: "AUTHORITY_MATERIALIZATION_REQUIRED" | "DENIED_RESOLVED"
   resumeReleased?: false
+  decisionId?: number
+  evidenceId?: number
 }>
 
 export type ThreadCoverage = Readonly<{
@@ -305,14 +307,20 @@ function decisionDetail(value: unknown): ThreadDecisionDetail | null {
   if (state === "OWNER_DECIDED") {
     const choice = text(data.choice)
     const disposition = text(data.disposition)
+    const decisionId = Number(data.decisionId)
+    const evidenceId = Number(data.evidenceId)
     if (!(["APPROVE", "DENY"].includes(choice ?? ""))
       || !(["AUTHORITY_MATERIALIZATION_REQUIRED", "DENIED_RESOLVED"].includes(disposition ?? ""))
-      || data.resumeReleased !== false) return { state: "CONFLICTING" }
+      || data.resumeReleased !== false
+      || !Number.isSafeInteger(decisionId) || decisionId <= 0
+      || !Number.isSafeInteger(evidenceId) || evidenceId <= 0) return { state: "CONFLICTING" }
     return {
       state,
       choice: choice as "APPROVE" | "DENY",
       disposition: disposition as "AUTHORITY_MATERIALIZATION_REQUIRED" | "DENIED_RESOLVED",
       resumeReleased: false,
+      decisionId,
+      evidenceId,
     }
   }
   const normalizedGates = Array.isArray(data.gates)

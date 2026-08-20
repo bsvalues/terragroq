@@ -13,6 +13,7 @@ vi.mock("@/lib/registers/events", () => ({ logEvent: boundary.logEvent }))
 vi.mock("next/cache", () => ({ revalidatePath: boundary.revalidatePath }))
 
 import {
+  createDecision,
   deleteDecision,
   linkEvidence,
   setDecisionAuthority,
@@ -48,18 +49,31 @@ describe("generic decision action runtime-finding guard", () => {
     boundary.select.mockImplementation(() => query([protectedReceipt]))
   })
 
-  it("walls status, authority, evidence, supersession, and deletion before any write", async () => {
-    const attempts = [
-      () => updateDecisionStatus(71, "rejected"),
-      () => setDecisionAuthority(71, "advisory"),
-      () => linkEvidence(71, "EV-OTHER"),
-      () => supersedeDecision(71, { title: "Replacement", decision: "Replace" }),
-      () => deleteDecision(71),
+  it("walls every mutation when any protected namespace signal survives corruption", async () => {
+    const corrupted = [
+      { ...protectedReceipt, locked: false, scope: "corrupted", tags: [] },
+      { ...protectedReceipt, ref: "ADR-CORRUPTED", locked: false, tags: [] },
+      { ...protectedReceipt, ref: "ADR-CORRUPTED", locked: false, scope: "corrupted" },
     ]
-
-    for (const attempt of attempts) {
-      await expect(attempt()).rejects.toThrow("RUNTIME_FINDING_DECISION_GENERIC_MUTATION_WALL")
+    for (const row of corrupted) {
+      boundary.select.mockImplementation(() => query([row]))
+      const attempts = [
+        () => updateDecisionStatus(71, "rejected"),
+        () => setDecisionAuthority(71, "advisory"),
+        () => linkEvidence(71, "EV-OTHER"),
+        () => supersedeDecision(71, { title: "Replacement", decision: "Replace" }),
+        () => deleteDecision(71),
+      ]
+      for (const attempt of attempts) {
+        await expect(attempt()).rejects.toThrow("RUNTIME_FINDING_DECISION_GENERIC_MUTATION_WALL")
+      }
     }
+    await expect(createDecision({
+      title: "Collision", decision: "Forge", scope: "runtime-finding:999",
+    })).rejects.toThrow("RUNTIME_FINDING_DECISION_GENERIC_MUTATION_WALL")
+    await expect(createDecision({
+      title: "Collision", decision: "Forge", tags: "RUNTIME_FINDING_OWNER_DECISION",
+    })).rejects.toThrow("RUNTIME_FINDING_DECISION_GENERIC_MUTATION_WALL")
     expect(boundary.update).not.toHaveBeenCalled()
     expect(boundary.insert).not.toHaveBeenCalled()
     expect(boundary.delete).not.toHaveBeenCalled()

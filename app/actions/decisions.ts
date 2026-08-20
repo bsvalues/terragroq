@@ -7,7 +7,10 @@ import { logEvent } from "@/lib/registers/events"
 import { and, desc, eq, ilike, or } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 import { isProtectedV12AuthorityScope } from "@/lib/outcome-queue/v1-2-protected-authority"
-import { isProtectedRuntimeFindingDecision } from "@/scripts/hermes-bridge/runtime-finding-decision.mjs"
+import {
+  isProtectedRuntimeFindingDecision,
+  RUNTIME_FINDING_DECISION_PROTECTED_TAG,
+} from "@/scripts/hermes-bridge/runtime-finding-decision.mjs"
 
 /* ------------------------------------------------------------------ */
 /* Reads                                                              */
@@ -78,7 +81,11 @@ function splitList(v?: string): string[] {
 }
 
 function assertGenericDecisionScope(row: { scope?: string | null } & Record<string, unknown>) {
-  if (isProtectedRuntimeFindingDecision(row)) {
+  const tags = Array.isArray(row.tags) ? row.tags : splitList(typeof row.tags === "string" ? row.tags : undefined)
+  if (isProtectedRuntimeFindingDecision(row)
+    || String(row.ref ?? "").startsWith("RUNTIME-FINDING-DECISION-")
+    || String(row.scope ?? "").startsWith("runtime-finding:")
+    || tags.includes(RUNTIME_FINDING_DECISION_PROTECTED_TAG)) {
     throw new Error("RUNTIME_FINDING_DECISION_GENERIC_MUTATION_WALL")
   }
   if (row.scope && isProtectedV12AuthorityScope(row.scope)) {
@@ -119,7 +126,7 @@ export async function createDecision(input: {
   reviewAt?: string
 }): Promise<Decision> {
   const userId = await getUserId()
-  assertGenericDecisionScope({ scope: input.scope })
+  assertGenericDecisionScope({ scope: input.scope, tags: splitList(input.tags) })
   const ref = await nextRef(userId)
   const status = input.status ?? "proposed"
   const [row] = await db
@@ -238,7 +245,7 @@ export async function supersedeDecision(
   },
 ): Promise<Decision> {
   const userId = await getUserId()
-  assertGenericDecisionScope({ scope: input.scope })
+  assertGenericDecisionScope({ scope: input.scope, tags: splitList(input.tags) })
   const [old] = await db
     .select()
     .from(decision)
