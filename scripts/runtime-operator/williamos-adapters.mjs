@@ -212,34 +212,57 @@ export function newlyFailingTests(failing, baseline) {
 }
 
 /**
+ * The deterministic suite does not finish inside twenty minutes on this host.
+ *
+ * That was the old budget, and a suite killed by its own deadline prints no failure summary, so the
+ * differential gate read the corpse and found no failing files. Both sides of the comparison were
+ * blank, which the gate could not tell apart from a clean run.
+ */
+const SUITE_TIMEOUT_MS = 45 * 60 * 1000
+
+/**
  * What this host fails without any patch applied, cached per base commit.
  *
  * Measured in a throwaway worktree at the same commit so the work order's own workspace is never
  * disturbed. Costs one suite run the first time a commit is seen and nothing thereafter.
+ *
+ * Returns null when no measurement happened: a run killed by its deadline, an install that never
+ * produced a suite, output truncated before the summary. That is not the same claim as "this host
+ * fails nothing", and recording it as if it were is permanent -- every baseline cached here said
+ * `[]` for a suite that never reached its summary, so every later cycle compared against a fiction.
+ * An unmeasured baseline is retried, never remembered.
  */
 export async function measureBaselineFailures({ root, repositoryPath, head, runner = run }) {
   const cacheFile = path.join(root, "state", "baselines", head + ".json")
   if (fs.existsSync(cacheFile)) {
     try {
-      return JSON.parse(fs.readFileSync(cacheFile, "utf8")).failing ?? []
+      // Only a record that says it was measured is believed. The ones written before this marker
+      // existed cannot be told apart from a blind run, so they are remeasured rather than trusted.
+      const cached = JSON.parse(fs.readFileSync(cacheFile, "utf8"))
+      if (cached?.measured === true) return cached.failing ?? []
     } catch { /* a corrupt cache is remeasured, not trusted */ }
   }
   const scratch = path.join(root, "state", "baselines", "wt-" + head.slice(0, 12))
   let failing = []
+  let measured = true
   try {
     fs.rmSync(scratch, { recursive: true, force: true })
     await runner("git", ["worktree", "add", "--detach", scratch, head], { cwd: repositoryPath, timeout: 5 * 60 * 1000 })
     await runner("cmd.exe", ["/c", "pnpm", "install", "--frozen-lockfile"], { cwd: scratch, timeout: 10 * 60 * 1000 })
-    await runner("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run", "--config", "vitest.ci.config.ts"], { cwd: scratch, timeout: 20 * 60 * 1000 })
+    await runner("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run", "--config", "vitest.ci.config.ts"], { cwd: scratch, timeout: SUITE_TIMEOUT_MS })
   } catch (error) {
     failing = parseFailingTestFiles(error?.output)
+    // A suite that failed while naming no test file was not read. Only a run that either finished
+    // clean or named what it broke has measured anything.
+    measured = failing.length > 0
   } finally {
     try {
       await runner("git", ["worktree", "remove", "--force", scratch], { cwd: repositoryPath, timeout: 2 * 60 * 1000 })
     } catch { /* a stale scratch worktree is not worth failing a cycle over */ }
   }
+  if (!measured) return null
   fs.mkdirSync(path.dirname(cacheFile), { recursive: true })
-  fs.writeFileSync(cacheFile, JSON.stringify({ head, failing, measuredAt: new Date().toISOString() }, null, 2) + "\n", "utf8")
+  fs.writeFileSync(cacheFile, JSON.stringify({ head, failing, measured: true, measuredAt: new Date().toISOString() }, null, 2) + "\n", "utf8")
   return failing
 }
 
@@ -720,13 +743,21 @@ ${String(error?.output ?? "").slice(-12000)}
           // it consumed every remediation round tonight.
           else if (gate === "test") {
             try {
-              await run("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run", "--config", "vitest.ci.config.ts"], { cwd: workspace, timeout: 20 * 60 * 1000 })
+              await run("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run", "--config", "vitest.ci.config.ts"], { cwd: workspace, timeout: SUITE_TIMEOUT_MS })
             } catch (failure) {
               // Judge the patch against this host, not an ideal one. The baseline is measured once per base
               // commit on a pristine tree and cached; whatever fails there is the machine's, not the worker's.
+              const failing = parseFailingTestFiles(failure?.output)
+              // Fail closed when the comparison is unavailable. A suite whose failure named no test
+              // file, or a host whose baseline could not be measured, leaves the gate with nothing to
+              // compare -- and a gate that saw nothing must not certify a patch. Read the other way
+              // round it reported every red suite as clean, and the first real verdict arrived from
+              // CI, long after the pull request was open.
+              if (failing.length === 0) throw failure
               const head = (await run("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim()
               const baseline = await measureBaselineFailures({ root, repositoryPath, head })
-              const newly = newlyFailingTests(parseFailingTestFiles(failure?.output), baseline)
+              if (baseline === null) throw failure
+              const newly = newlyFailingTests(failing, baseline)
               if (newly.length > 0) {
                 failure.output = newly.length + " test file(s) fail with this patch and pass without it:\n" + newly.join("\n") + "\n\n" + String(failure?.output ?? "")
                 throw failure
