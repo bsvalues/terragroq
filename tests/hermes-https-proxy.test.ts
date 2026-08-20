@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest"
+import http from "node:http"
+import net from "node:net"
 
 import { DEVICE_AUTH_HEADER, validateDeviceMutationOrigin } from "@/lib/device-auth/contract"
 import {
@@ -16,6 +18,26 @@ import {
 /** A socket stub shaped like the parts of tls.TLSSocket this proxy actually reads. */
 function socketWith({ authorized, CN }: { authorized: boolean; CN?: unknown }) {
   return { authorized, getPeerCertificate: () => (CN === undefined ? {} : { subject: { CN } }) }
+}
+
+async function parseRawRequestHeaders(requestText: string) {
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
+    const server = http.createServer((request, response) => {
+      resolve(buildUpstreamHeaders(request.headers, null, request.rawHeaders))
+      response.end("ok")
+      server.close()
+    })
+    server.on("clientError", (error) => {
+      reject(error)
+      server.close()
+    })
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      if (!address || typeof address === "string") return reject(new Error("TEST_SERVER_ADDRESS_WALL"))
+      const socket = net.createConnection(address.port, "127.0.0.1", () => socket.end(requestText))
+      socket.on("error", reject)
+    })
+  })
 }
 
 describe("HERMES HTTPS proxy boundary", () => {
@@ -62,6 +84,12 @@ describe("HERMES HTTPS proxy boundary", () => {
     expect(forwarded["x-forwarded-proto"]).toBe("https")
   })
 
+  it("canonicalizes an approved DNS Host to the lowercase Server Action origin", () => {
+    const forwarded = buildUpstreamHeaders({ host: "Hermes.Local:3443" })
+    expect(forwarded.host).toBe("hermes.local:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("hermes.local:3443")
+  })
+
   it.each([
     ["untrusted hostname", "evil.example:3443"],
     ["local setup hostname", "localhost:3443"],
@@ -80,6 +108,19 @@ describe("HERMES HTTPS proxy boundary", () => {
       host: "hermes.local:3443",
       Host: "evil.example:3443",
     })
+    expect(forwarded.host).toBe("192.168.88.9:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
+  })
+
+  it("detects duplicate Host lines through the real IncomingMessage parser", async () => {
+    const forwarded = await parseRawRequestHeaders([
+      "GET / HTTP/1.1",
+      "Host: hermes.local:3443",
+      "Host: evil.example:3443",
+      "Connection: close",
+      "",
+      "",
+    ].join("\r\n"))
     expect(forwarded.host).toBe("192.168.88.9:3443")
     expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
   })

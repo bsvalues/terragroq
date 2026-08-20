@@ -47,16 +47,26 @@ const APPROVED_HTTPS_HOSTS = new Set([
   CANONICAL_HTTPS_HOST,
 ])
 
-export function buildUpstreamHeaders(headers, device = null) {
+function inboundHostValues(headers, rawHeaders) {
+  if (rawHeaders !== null) {
+    if (!Array.isArray(rawHeaders) || rawHeaders.length % 2 !== 0
+      || rawHeaders.some((value) => typeof value !== "string")) return []
+    const values = []
+    for (let index = 0; index < rawHeaders.length; index += 2) {
+      if (rawHeaders[index].toLowerCase() === "host") values.push(rawHeaders[index + 1])
+    }
+    return values
+  }
+  return Object.entries(headers)
+    .filter(([name]) => name.toLowerCase() === "host")
+    .map(([, value]) => value)
+}
+
+export function buildUpstreamHeaders(headers, device = null, rawHeaders = null) {
   const forwarded = {}
-  let inboundHost
-  let inboundHostCount = 0
+  const inboundHosts = inboundHostValues(headers, rawHeaders)
   for (const [name, value] of Object.entries(headers)) {
     const normalizedName = name.toLowerCase()
-    if (normalizedName === "host") {
-      inboundHost = value
-      inboundHostCount += 1
-    }
     if (
       !HOP_BY_HOP_HEADERS.has(normalizedName)
       && normalizedName !== "forwarded"
@@ -67,10 +77,11 @@ export function buildUpstreamHeaders(headers, device = null) {
       forwarded[normalizedName] = value
     }
   }
-  const externalHost = inboundHostCount === 1
-    && typeof inboundHost === "string"
-    && APPROVED_HTTPS_HOSTS.has(inboundHost)
-    ? inboundHost
+  const normalizedHost = inboundHosts.length === 1 && typeof inboundHosts[0] === "string"
+    ? inboundHosts[0].toLowerCase()
+    : null
+  const externalHost = normalizedHost !== null && APPROVED_HTTPS_HOSTS.has(normalizedHost)
+    ? normalizedHost
     : CANONICAL_HTTPS_HOST
   forwarded.host = externalHost
   forwarded["x-forwarded-host"] = externalHost
@@ -130,7 +141,11 @@ export function createHermesHttpsProxy({ pfx, passphrase, clientCa }) {
       port: 3100,
       method: request.method,
       path: request.url,
-      headers: buildUpstreamHeaders(request.headers, verifiedDeviceName(request.socket)),
+      headers: buildUpstreamHeaders(
+        request.headers,
+        verifiedDeviceName(request.socket),
+        request.rawHeaders,
+      ),
     }, (upstreamResponse) => {
       // Once the application has answered, the guard relaxes: a streaming response (the Thread's
       // conversation) legitimately goes quiet for longer than any polite request timeout while a
