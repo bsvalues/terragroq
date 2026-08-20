@@ -226,7 +226,8 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
             queue_grant.id AS "queueGrantId", queue_grant.ref AS "queueGrantRef",
             queue_grant."userId" AS "queueGrantUserId", queue_grant.status AS "queueGrantStatus",
             queue_grant."revokedAt" AS "queueGrantRevokedAt",
-            queue_grant."expiresAt" AS "queueGrantExpiresAt",
+            EXTRACT(EPOCH FROM (queue_grant."expiresAt" AT TIME ZONE 'UTC'))
+              AS "queueGrantExpiresAtEpoch",
             queue_grant."grantedBy" AS "queueGrantGrantedBy",
             queue_grant."grantedTo" AS "queueGrantGrantedTo",
             queue_grant."authorityLevel" AS "queueGrantAuthorityLevel",
@@ -238,7 +239,8 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
             implementation_grant."userId" AS "implementationGrantUserId",
             implementation_grant.status AS "implementationGrantStatus",
             implementation_grant."revokedAt" AS "implementationGrantRevokedAt",
-            implementation_grant."expiresAt" AS "implementationGrantExpiresAt",
+            EXTRACT(EPOCH FROM (implementation_grant."expiresAt" AT TIME ZONE 'UTC'))
+              AS "implementationGrantExpiresAtEpoch",
             implementation_grant."grantedBy" AS "implementationGrantGrantedBy",
             implementation_grant."grantedTo" AS "implementationGrantGrantedTo",
             implementation_grant."authorityLevel" AS "implementationGrantAuthorityLevel",
@@ -287,6 +289,8 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
     contract: "workbench-execution-authorization.v1", ...request,
   })).digest("hex")
   const expiresAt = Date.parse(binding?.expiresAt ?? "")
+  const queueGrantExpiresAtMs = Number(row.queueGrantExpiresAtEpoch) * 1000
+  const implementationGrantExpiresAtMs = Number(row.implementationGrantExpiresAtEpoch) * 1000
   const exactRequestKeys = "confirmation,idempotencyKey,outcomeKey,projectId,threadId"
   const exactResultKeys = [
     "authorizedAt", "decisionId", "decisionRef", "expiresAt", "grantId", "grantRef",
@@ -334,8 +338,11 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
     || blocksAction(row.implementationGrantBlockedActions, "implement")
     || Number(binding?.queueVersion) !== 1 || !Number.isFinite(Date.parse(binding?.authorizedAt ?? ""))
     || !Number.isFinite(expiresAt) || expiresAt <= Date.now()
-    || Date.parse(row.queueGrantExpiresAt) !== expiresAt
-    || Date.parse(row.implementationGrantExpiresAt) !== expiresAt) {
+    || row.queueGrantExpiresAtEpoch == null || !Number.isFinite(queueGrantExpiresAtMs)
+    || row.implementationGrantExpiresAtEpoch == null
+    || !Number.isFinite(implementationGrantExpiresAtMs)
+    || queueGrantExpiresAtMs !== expiresAt
+    || implementationGrantExpiresAtMs !== expiresAt) {
     wall("Workbench parent authorization graph conflicts", "HERMES_WORKBENCH_PARENT_CONTRACT_WALL")
   }
   return {

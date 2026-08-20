@@ -95,7 +95,7 @@ function runtime(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Hermes durable outcome queue runtime", () => {
-  it("loads the exact registered #911 parent contract from its live Workbench authorization graph", async () => {
+  it("loads the exact registered #911 parent contract across UTC and Los Angeles grant decodes", async () => {
     const command = "record structured #911 reliability remediation without host mutation"
     const outcomeKey = "goal:GOAL-0007"
     const workOrderRef = "WO-HERMES-OUTCOME-7"
@@ -111,6 +111,20 @@ describe("Hermes durable outcome queue runtime", () => {
       contract: "workbench-execution-authorization.v1", ...requestBinding,
     })).digest("hex")
     const expiresAt = "2099-08-23T18:00:00.000Z"
+    const priorTimezone = process.env.TZ
+    let utcDecodedExpiry: Date
+    let losAngelesDecodedExpiry: Date
+    try {
+      process.env.TZ = "UTC"
+      utcDecodedExpiry = new Date("2099-08-23T18:00:00.000")
+      process.env.TZ = "America/Los_Angeles"
+      losAngelesDecodedExpiry = new Date("2099-08-23T18:00:00.000")
+    } finally {
+      if (priorTimezone === undefined) delete process.env.TZ
+      else process.env.TZ = priorTimezone
+    }
+    expect(utcDecodedExpiry.toISOString()).toBe(expiresAt)
+    expect(losAngelesDecodedExpiry.toISOString()).toBe("2099-08-24T01:00:00.000Z")
     const resultBinding = {
       decisionId: 31, decisionRef: "WB-EXEC-DEC-911", grantId: 41,
       grantRef: "WB-EXEC-GRANT-911", implementationGrantId: 42,
@@ -145,14 +159,18 @@ describe("Hermes durable outcome queue runtime", () => {
       ],
       approvalTags: ["workbench", "outcome", "explicit-start-work"],
       queueGrantId: 41, queueGrantRef: resultBinding.grantRef, queueGrantUserId: "primary-user",
-      queueGrantStatus: "active", queueGrantRevokedAt: null, queueGrantExpiresAt: expiresAt,
+      queueGrantStatus: "active", queueGrantRevokedAt: null,
+      queueGrantExpiresAt: utcDecodedExpiry,
+      queueGrantExpiresAtEpoch: "4091191200",
       queueGrantGrantedBy: "primary-user", queueGrantGrantedTo: "operator", queueGrantAuthorityLevel: "A2_WRITE_OWN",
       queueGrantScope: outcomeKey, queueGrantWorkOrderId: null,
       queueGrantAllowedActions: ["outcome:execute"],
       queueGrantBlockedActions: ["production:mutate", "release:create", "secret:access", "spend:increase"],
       implementationGrantId: 42, implementationGrantRef: resultBinding.implementationGrantRef,
       implementationGrantUserId: "primary-user", implementationGrantStatus: "active",
-      implementationGrantRevokedAt: null, implementationGrantExpiresAt: expiresAt,
+      implementationGrantRevokedAt: null,
+      implementationGrantExpiresAt: utcDecodedExpiry,
+      implementationGrantExpiresAtEpoch: "4091191200",
       implementationGrantGrantedBy: "primary-user", implementationGrantGrantedTo: "operator", implementationGrantAuthorityLevel: "A2_WRITE_OWN",
       implementationGrantScope: workOrderRef, implementationGrantWorkOrderId: null,
       implementationGrantAllowedActions: ["implement"],
@@ -170,6 +188,29 @@ describe("Hermes durable outcome queue runtime", () => {
     })
 
     await expect(bridge.selectOutcome()).resolves.toMatchObject({
+      id: 7, lane: "operator-objective", outcomeKey,
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: { operation: "workbench_execution.authorize", outcomeKey, workOrderRef },
+      },
+    })
+
+    const losAngelesDecodedAuthorization = {
+      ...parentAuthorization,
+      queueGrantExpiresAt: losAngelesDecodedExpiry,
+      implementationGrantExpiresAt: losAngelesDecodedExpiry,
+    }
+    const losAngelesQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+      .mockResolvedValueOnce({ rows: [parentGoal] })
+      .mockResolvedValueOnce({ rows: [losAngelesDecodedAuthorization] })
+    const losAngelesBridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "not-used", campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+      createPool: vi.fn(async () => ({ query: losAngelesQuery, end: vi.fn(), on: vi.fn() })),
+      acquire: vi.fn(async () => ({ outcome: parentQueue, acquired: true })),
+    })
+    await expect(losAngelesBridge.selectOutcome()).resolves.toMatchObject({
       id: 7, lane: "operator-objective", outcomeKey,
       verifiedQueueWorkContract: {
         contract,
