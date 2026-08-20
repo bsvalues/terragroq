@@ -90,7 +90,7 @@ async function seedAuthorizedParent(client: import("pg").PoolClient) {
     grantId: 80, grantRef: "WB-EXEC-GRANT-911-E2E",
     implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911-E2E",
     queueVersion: 1, authorizedAt: "2026-08-20T18:00:00.000Z",
-    expiresAt: "2099-01-01T00:00:00.000Z", workContract,
+    expiresAt: "2099-01-01T08:00:00.000Z", workContract,
   }
   const approvalEvidence = [
     "project:7", "thread:thread-911-e2e", `repo:${workContract.repository}`,
@@ -224,7 +224,6 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     expect(recorded.every((row) => Number(row.metadata.sourceCheckpointId) > 0)).toBe(true)
     expect(recorded.every((row) => /^[0-9a-f]{64}$/.test(row.metadata.payloadDigest))).toBe(true)
     expect(new Set(recorded.map((row) => row.metadata.sourceCheckpointDigest)).size).toBe(1)
-
     const consumer = createRuntimeFindingDbConsumer({
       withPool: async (action) => {
         const { Pool } = await import("pg")
@@ -245,11 +244,13 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     const ordinary = settlements.find((row) => row.eventType === "RUNTIME_FINDING_DERIVED")
     const gated = settlements.find((row) => row.eventType === "RUNTIME_FINDING_OWNER_GATED")
     expect(ordinary?.metadata).toMatchObject({
-      sourceFindingEventId: recorded[0].id, sourcePayloadDigest: recorded[0].metadata.payloadDigest,
+      sourceFindingEventId: recorded[0].id,
+      sourceCheckpointDigest: recorded[0].metadata.sourceCheckpointDigest,
       findingId: "FINDING-911-ORDINARY",
     })
     expect(gated?.metadata).toMatchObject({
-      sourceFindingEventId: recorded[1].id, sourcePayloadDigest: recorded[1].metadata.payloadDigest,
+      sourceFindingEventId: recorded[1].id,
+      sourceCheckpointDigest: recorded[1].metadata.sourceCheckpointDigest,
       findingId: "FINDING-911-POLICY-GATE", gate: "POLICY",
     })
 
@@ -260,6 +261,9 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     expect(childRows[0]).toMatchObject({ lifecycleState: "approved" })
     expect(childRows[0].ref).toContain(`-F${recorded[0].id}`)
     expect(childRows[0].outcomeKey).toBe(`runtime-finding:${recorded[0].id}:${recorded[0].metadata.payloadDigest}`)
+    expect((await client.query(`SELECT "requestBinding"->>'sourcePayloadDigest' AS digest
+      FROM outcome_queue_mutation_receipt WHERE operation='runtime_finding.derive'`)).rows)
+      .toEqual([{ digest: recorded[0].metadata.payloadDigest }])
     expect((await client.query(`SELECT count(*)::integer AS count FROM work_order wo
       WHERE wo.ref LIKE $1`, [`%-F${recorded[1].id}`])).rows).toEqual([{ count: 0 }])
   })

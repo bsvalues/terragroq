@@ -52,6 +52,28 @@ function checkpointPayload(metadata) {
   return ordered
 }
 
+function normalizedFindingEffects(effects) {
+  if (!effects || typeof effects !== "object" || Array.isArray(effects)
+    || !Array.isArray(effects.destroys)) return effects
+  return {
+    changesReviewedPolicy: effects.changesReviewedPolicy,
+    competesWithPriority: effects.competesWithPriority,
+    destroys: effects.destroys.map((target) => (
+      target && typeof target === "object" && !Array.isArray(target)
+        ? { path: target.path, verifiedCopyElsewhere: target.verifiedCopyElsewhere }
+        : target
+    )),
+    irreversible: effects.irreversible,
+    mutatesProductionData: effects.mutatesProductionData,
+    outsideObjectiveScope: effects.outsideObjectiveScope,
+    protectedResource: effects.protectedResource,
+    releaseOrCutover: effects.releaseOrCutover,
+    spendsMoney: effects.spendsMoney,
+    touchesCredentials: effects.touchesCredentials,
+    unresolvedLegalPrivacyOrSecurityRisk: effects.unresolvedLegalPrivacyOrSecurityRisk,
+  }
+}
+
 function findingPayload(metadata) {
   const ordered = {}
   for (const key of [
@@ -62,7 +84,7 @@ function findingPayload(metadata) {
     "workContractLane", "projectionIssueNumber", "projectionCompletionOwned", "authorizationDecisionId",
     "executionGrantRef", "implementationGrantId", "implementationGrantRef", "deliveryAuthorityLevel",
     "deliveryAllowedActions", "commitAllowed", "tagAllowed", "pushAllowed", "idempotencyKey",
-  ]) ordered[key] = metadata[key]
+  ]) ordered[key] = key === "effects" ? normalizedFindingEffects(metadata[key]) : metadata[key]
   return ordered
 }
 
@@ -129,7 +151,9 @@ function exactCheckpointFindings(row) {
       summary: metadata.summary,
       task: metadata.task,
       paths: metadata.paths,
-      effects: metadata.effects,
+      // PostgreSQL jsonb does not preserve object key insertion order. Rebuild the
+      // producer's normalized shape before verifying the persisted set digest.
+      effects: normalizedFindingEffects(metadata.effects),
     })
   }
   normalized.sort((left, right) => left.sequence - right.sequence)
@@ -511,10 +535,10 @@ async function insertOrdinary(client, row, finding, order, classification, at) {
   const identity = childIdentity(row, order)
   const existing = await client.query(
     `SELECT child.id AS "workOrderId", goal.id AS "goalId", queue.id AS "queueId",
-            approval.id AS "decisionId", grant.id AS "grantId", queue_grant.id AS "queueGrantId",
+            approval.id AS "decisionId", implementation_grant.id AS "grantId", queue_grant.id AS "queueGrantId",
             receipt.id AS "receiptId",
             child.ref AS "workOrderRef", goal.ref AS "goalRef", queue."outcomeKey",
-            approval.ref AS "decisionRef", grant.ref AS "grantRef",
+            approval.ref AS "decisionRef", implementation_grant.ref AS "grantRef",
             child.goal AS "workOrderGoal", child.lane AS "workOrderLane",
             child."allowedFiles", child.validators, child."authorityGrantId",
             child."authorityLevel" AS "workOrderAuthorityLevel",
@@ -526,14 +550,16 @@ async function insertOrdinary(client, row, finding, order, classification, at) {
        JOIN goal ON goal."userId" = child."userId" AND goal."linkedWorkOrderId" = child.id
        JOIN outcome_queue_item queue ON queue."userId" = child."userId" AND queue."goalId" = goal.id
        JOIN decision approval ON approval.id = queue."approvalDecisionId" AND approval."userId" = child."userId"
-       JOIN authority_grant grant ON grant.id = child."authorityGrantId" AND grant."userId" = child."userId"
+       JOIN authority_grant implementation_grant
+         ON implementation_grant.id = child."authorityGrantId"
+        AND implementation_grant."userId" = child."userId"
        JOIN authority_grant queue_grant ON queue_grant.ref = queue."authorityGrantRef"
          AND queue_grant."userId" = child."userId" AND queue_grant."workOrderId" = child.id
        JOIN outcome_queue_mutation_receipt receipt
          ON receipt."userId" = child."userId" AND receipt."outcomeKey" = queue."outcomeKey"
         AND receipt."idempotencyKey" = $3 AND receipt.operation = 'runtime_finding.derive'
       WHERE child."userId" = $1 AND child.ref = $2
-      FOR UPDATE OF child, goal, queue, approval, grant, queue_grant, receipt`,
+      FOR UPDATE OF child, goal, queue, approval, implementation_grant, queue_grant, receipt`,
     [finding.sourceUserId, identity.workOrderRef, identity.receiptKey],
   )
   if (existing.rows.length > 0) fail("FINDING_CHILD_REPLAY_CARDINALITY_WALL")
@@ -685,7 +711,7 @@ async function replayOrdinary(client, row, finding, order, classification) {
   const identity = childIdentity(row, order)
   const existing = await client.query(
     `SELECT child.id AS "workOrderId", goal.id AS "goalId", queue.id AS "queueId",
-            approval.id AS "decisionId", grant.id AS "grantId", queue_grant.id AS "queueGrantId",
+            approval.id AS "decisionId", implementation_grant.id AS "grantId", queue_grant.id AS "queueGrantId",
             receipt.id AS "receiptId",
             child.ref AS "workOrderRef", child.status AS "workOrderStatus",
             child.title AS "workOrderTitle", child.description AS "workOrderDescription",
@@ -712,11 +738,15 @@ async function replayOrdinary(client, row, finding, order, classification) {
             approval.status AS "decisionStatus", approval.authority AS "decisionAuthority",
             approval.decision AS "decisionChoice", approval.scope AS "decisionScope",
             approval.locked AS "decisionLocked", approval.evidence AS "decisionEvidence",
-            grant.ref AS "grantRef", grant.status AS "grantStatus", grant."revokedAt" AS "grantRevokedAt",
-            grant."authorityLevel" AS "grantAuthorityLevel", grant.scope AS "grantScope",
-            grant."allowedActions" AS "grantAllowedActions", grant."blockedActions" AS "grantBlockedActions",
-            grant."expiresAt" AS "grantExpiresAt", grant."grantedTo" AS "grantGrantedTo",
-            grant."workOrderId" AS "grantWorkOrderId",
+            implementation_grant.ref AS "grantRef", implementation_grant.status AS "grantStatus",
+            implementation_grant."revokedAt" AS "grantRevokedAt",
+            implementation_grant."authorityLevel" AS "grantAuthorityLevel",
+            implementation_grant.scope AS "grantScope",
+            implementation_grant."allowedActions" AS "grantAllowedActions",
+            implementation_grant."blockedActions" AS "grantBlockedActions",
+            implementation_grant."expiresAt" AS "grantExpiresAt",
+            implementation_grant."grantedTo" AS "grantGrantedTo",
+            implementation_grant."workOrderId" AS "grantWorkOrderId",
             queue_grant.ref AS "queueGrantRef", queue_grant.status AS "queueGrantStatus",
             queue_grant."revokedAt" AS "queueGrantRevokedAt",
             queue_grant."expiresAt" AS "queueGrantExpiresAt",
@@ -731,14 +761,16 @@ async function replayOrdinary(client, row, finding, order, classification) {
        JOIN goal ON goal."userId" = child."userId" AND goal."linkedWorkOrderId" = child.id
        JOIN outcome_queue_item queue ON queue."userId" = child."userId" AND queue."goalId" = goal.id
        JOIN decision approval ON approval.id = queue."approvalDecisionId" AND approval."userId" = child."userId"
-       JOIN authority_grant grant ON grant.id = child."authorityGrantId" AND grant."userId" = child."userId"
+       JOIN authority_grant implementation_grant
+         ON implementation_grant.id = child."authorityGrantId"
+        AND implementation_grant."userId" = child."userId"
        JOIN authority_grant queue_grant ON queue_grant.ref = queue."authorityGrantRef"
          AND queue_grant."userId" = child."userId" AND queue_grant."workOrderId" = child.id
        JOIN outcome_queue_mutation_receipt receipt
          ON receipt."userId" = child."userId" AND receipt."outcomeKey" = queue."outcomeKey"
         AND receipt."idempotencyKey" = $3 AND receipt.operation = 'runtime_finding.derive'
       WHERE child."userId" = $1 AND child.ref = $2
-      FOR UPDATE OF child, goal, queue, approval, grant, queue_grant, receipt`,
+      FOR UPDATE OF child, goal, queue, approval, implementation_grant, queue_grant, receipt`,
     [finding.sourceUserId, identity.workOrderRef, identity.receiptKey],
   )
   if (existing.rows.length !== 1) fail("FINDING_CHILD_REPLAY_CARDINALITY_WALL")
@@ -941,13 +973,16 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     approval.authority AS "parentApprovalAuthority", approval.decision AS "parentApprovalDecision",
                     approval.owner AS "parentApprovalOwner", approval.evidence AS "parentApprovalEvidence",
                     approval.tags AS "parentApprovalTags",
-                    grant.id AS "implementationGrantId", grant.ref AS "implementationGrantRef",
-                    grant.status AS "implementationGrantStatus", grant."revokedAt" AS "implementationGrantRevokedAt",
-                    grant."expiresAt" AS "implementationGrantExpiresAt",
-                    grant."authorityLevel" AS "implementationGrantAuthorityLevel",
-                    grant."grantedTo" AS "implementationGrantGrantedTo", grant.scope AS "implementationGrantScope",
-                    grant."allowedActions" AS "implementationGrantAllowedActions",
-                    grant."blockedActions" AS "implementationGrantBlockedActions",
+                    implementation_grant.id AS "implementationGrantId",
+                    implementation_grant.ref AS "implementationGrantRef",
+                    implementation_grant.status AS "implementationGrantStatus",
+                    implementation_grant."revokedAt" AS "implementationGrantRevokedAt",
+                    implementation_grant."expiresAt" AS "implementationGrantExpiresAt",
+                    implementation_grant."authorityLevel" AS "implementationGrantAuthorityLevel",
+                    implementation_grant."grantedTo" AS "implementationGrantGrantedTo",
+                    implementation_grant.scope AS "implementationGrantScope",
+                    implementation_grant."allowedActions" AS "implementationGrantAllowedActions",
+                    implementation_grant."blockedActions" AS "implementationGrantBlockedActions",
                     execution_grant.id AS "parentExecutionGrantId",
                     execution_grant.ref AS "parentExecutionGrantRef",
                     execution_grant.status AS "parentExecutionGrantStatus",
@@ -984,9 +1019,10 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                  AND receipt."resultBinding"->'workContract'->>'digest' = finding.metadata->>'workContractDigest'
                JOIN decision approval ON approval."userId" = parent."userId"
                  AND approval.id::text = finding.metadata->>'authorizationDecisionId'
-               JOIN authority_grant grant ON grant."userId" = parent."userId"
-                 AND grant.id::text = finding.metadata->>'implementationGrantId'
-                 AND grant.ref = finding.metadata->>'implementationGrantRef'
+               JOIN authority_grant implementation_grant
+                 ON implementation_grant."userId" = parent."userId"
+                AND implementation_grant.id::text = finding.metadata->>'implementationGrantId'
+                AND implementation_grant.ref = finding.metadata->>'implementationGrantRef'
                JOIN authority_grant execution_grant ON execution_grant."userId" = parent."userId"
                  AND execution_grant.id::text = receipt."resultBinding"->>'grantId'
                  AND execution_grant.ref = receipt."resultBinding"->>'grantRef'
@@ -1002,7 +1038,8 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
               WHERE finding."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
                 AND finding."entityType" = 'work_order' AND finding.actor = 'hermes'
               ORDER BY (settlement.id IS NULL) DESC, finding.id ASC
-              LIMIT $1 FOR UPDATE OF finding, parent, checkpoint, parent_queue, approval, grant`,
+              LIMIT $1 FOR UPDATE OF finding, parent, checkpoint, parent_queue, approval,
+                implementation_grant`,
             [maxFindings],
           )
           const results = []

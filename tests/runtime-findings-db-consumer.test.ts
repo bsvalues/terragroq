@@ -4,11 +4,10 @@ import { createHash } from "node:crypto"
 import { createRuntimeFindingDbConsumer } from "../scripts/runtime-findings/db-consumer.mjs"
 
 const effects = {
-  spendsMoney: false, irreversible: false, mutatesProductionData: false,
-  releaseOrCutover: false, protectedResource: false,
-  unresolvedLegalPrivacyOrSecurityRisk: false, touchesCredentials: false,
-  changesReviewedPolicy: false, outsideObjectiveScope: false,
-  competesWithPriority: false, destroys: [],
+  changesReviewedPolicy: false, competesWithPriority: false, destroys: [],
+  irreversible: false, mutatesProductionData: false, outsideObjectiveScope: false,
+  protectedResource: false, releaseOrCutover: false, spendsMoney: false,
+  touchesCredentials: false, unresolvedLegalPrivacyOrSecurityRisk: false,
 }
 
 const sha = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex")
@@ -187,6 +186,28 @@ function bindCheckpointFindings(...rows: any[]) {
 }
 
 describe("native runtime finding database consumer", () => {
+  it("verifies producer digests after PostgreSQL jsonb reorders nested finding effects", async () => {
+    const row = sourceRow({ settlementId: null, settlementCount: null,
+      settlementEventType: null, settlementMetadata: null }) as any
+    const jsonbEffects = Object.fromEntries(Object.entries(row.findingMetadata.effects).reverse())
+    row.findingMetadata.effects = jsonbEffects
+    row.checkpointFindings[0].effects = jsonbEffects
+    let nextId = 700
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.startsWith("SELECT child.id")) return { rows: [] }
+      if (sql.includes("INSERT INTO")) return { rows: [{ id: ++nextId }] }
+      if (sql.startsWith("UPDATE work_order")) return { rows: [{ id: nextId }] }
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+
+    await expect(consume()).resolves.toMatchObject({ derived: 1, queuedChildren: 1 })
+  })
+
   it.each([
     ["completed lease-cleared parent", "execution-binding-4", "acquisition-key-4"],
     ["later reacquisition drift", "execution-binding-later", "acquisition-key-later"],
