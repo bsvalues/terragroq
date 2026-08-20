@@ -185,6 +185,9 @@ async function validateAndPublish({ root, checkpoint, authority, adapters }) {
   const published = await adapters.publish({
     issueNumber: checkpoint.issueNumber,
     workOrderId: checkpoint.workOrderId,
+    workOrderRowId: checkpoint.workOrderRowId,
+    userId: checkpoint.userId,
+    projectionCompletionOwned: checkpoint.projectionCompletionOwned,
     workspace: checkpoint.workspace,
     branch: checkpoint.branch,
     existingPr: checkpoint.pr,
@@ -209,6 +212,7 @@ async function mergeAndComplete({ root, checkpoint, registry, adapters }) {
       workOrderRowId: checkpoint.workOrderRowId,
       userId: checkpoint.userId,
       workOrderId: checkpoint.workOrderId,
+      projectionCompletionOwned: checkpoint.projectionCompletionOwned,
     })
     checkpoint = transition(root, checkpoint, "ISSUE_COMPLETED")
   }
@@ -299,6 +303,7 @@ async function runCycle({ root, registry, adapters }) {
       workOrderRowId: authority.workOrderRowId,
       userId: authority.userId,
       issueNumber: entry.issueNumber,
+      projectionCompletionOwned: entry.projectionCompletionOwned,
       baseSha,
       branch: null,
       pr: null,

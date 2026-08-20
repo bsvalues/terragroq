@@ -87,6 +87,13 @@ function validFindingPaths(paths) {
     && !candidate.includes("\\") && !candidate.split("/").includes(".."))
 }
 
+function validFindingMetadata(metadata) {
+  return Number.isSafeInteger(metadata?.sequence) && metadata.sequence > 0
+    && Number.isSafeInteger(metadata?.issueNumber) && metadata.issueNumber > 0
+    && validFindingText(metadata?.summary) && validFindingText(metadata?.task)
+    && validFindingPaths(metadata?.paths) && validFindingEffects(metadata?.effects)
+}
+
 /**
  * WilliamOS-state adapters for the operational kernel (#WO-0027, GRANT-0013).
  *
@@ -148,6 +155,16 @@ export function parseProjectionIssue(description) {
   return explicit ? Number(explicit[1]) : null
 }
 
+export function projectionCompletionOwned(description) {
+  return !/\bprojection\s+completion\s*:\s*parent-owned\b/i.test(String(description ?? ""))
+}
+
+export function projectionIssueDirective(issueNumber, completionOwned) {
+  return completionOwned
+    ? `Closes #${issueNumber}.`
+    : `Tracks #${issueNumber}; completion remains owned by the parent outcome.`
+}
+
 /** An owner grant is linked when the work order names its ref, or the grant's scope names the work order. */
 export function linkGrant(workOrder, grants) {
   if (Number.isInteger(workOrder?.authorityGrantId)) {
@@ -203,6 +220,7 @@ export function buildRegistryRecords(workOrders, grants, adapterId) {
       // revoked mid-objective must stop the next child, not merely the next objective.
       grantStatus: grant.status,
       grantExpiresAt: grant.expiresAt,
+      projectionCompletionOwned: projectionCompletionOwned(workOrder.description),
       agent: workOrder.agent ?? "codex",
     })
   }
@@ -721,7 +739,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
       const sourceEscapes = validFindingPaths(sourcePaths)
         ? sourcePaths.some((candidate) => !pathWithin(candidate, envelope.parentAllowedFiles ?? []))
         : true
-      const sourceEffects = validFindingEffects(source.metadata?.effects)
+      const sourceEffects = validFindingMetadata(source.metadata)
         ? { ...source.metadata.effects, outsideObjectiveScope: Boolean(source.metadata.effects.outsideObjectiveScope) || sourceEscapes }
         : undefined
       const sourceClassification = classifyProposedAction({ effects: sourceEffects })
@@ -754,6 +772,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
         if (existingChild.rows.length > 0) throw new Error("DERIVED_CHILD_IDENTITY_WALL")
         const description = [
           `Projected at GitHub issue ${payload.issueNumber}.`,
+          `Projection completion: parent-owned.`,
           `Authorized under ${payload.grantRef}.`,
           `Derived from ${objectiveWorkOrderId} finding ${payload.findingId}.`,
           String(payload.task ?? "Derived remediation"),
@@ -840,10 +859,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           || typeof metadata.findingId !== "string" || metadata.findingId.trim() === ""
           || typeof row.userId !== "string" || row.userId.trim() === ""
           || typeof metadata.objectiveWorkOrderId !== "string" || metadata.objectiveWorkOrderId.trim() === "") return []
-        const malformed = !Number.isSafeInteger(metadata.sequence) || metadata.sequence <= 0
-          || !Number.isSafeInteger(metadata.issueNumber) || metadata.issueNumber <= 0
-          || !validFindingText(metadata.summary) || !validFindingText(metadata.task)
-          || !validFindingPaths(metadata.paths) || !validFindingEffects(metadata.effects)
+        const malformed = !validFindingMetadata(metadata)
         return [{
           sourceFindingEventId: row.sourceFindingEventId,
           sourceUserId: row.userId,
@@ -902,6 +918,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           workOrderId: workOrder.ref,
           workOrderRowId: workOrder.id,
           userId: workOrder.userId,
+          projectionCompletionOwned: projectionCompletionOwned(workOrder.description),
           state: queueStateFor(workOrder.status),
           createdAt: new Date(workOrder.createdAt).toISOString(),
         })
@@ -979,10 +996,12 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           WHERE "id" = $1 AND "userId" = $2 AND "lane" = 'operator-objective'`,
         [identity.workOrderRowId, identity.userId],
       )
-      try {
-        await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:done"])
-        await ghRemote(["issue", "close", String(issueNumber), "--repo", REPOSITORY, "--comment", "WilliamOS resident kernel verified the merged-main completion evidence."])
-      } catch { /* projection only */ }
+      if (identity.projectionCompletionOwned !== false) {
+        try {
+          await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:done"])
+          await ghRemote(["issue", "close", String(issueNumber), "--repo", REPOSITORY, "--comment", "WilliamOS resident kernel verified the merged-main completion evidence."])
+        } catch { /* projection only */ }
+      }
     },
 
     /**
@@ -1158,14 +1177,16 @@ ${tail}
      * does not care who opened the PR. The kernel knows every fact the receipt needs, so it declares
      * them the same way any other lane must.
      */
-    async publish({ issueNumber, workOrderId, workspace, branch, existingPr, resolvedThreadIds = [] }) {
+    async publish({ issueNumber, workOrderId, workOrderRowId, userId, projectionCompletionOwned: completionOwned = true, workspace, branch, existingPr, resolvedThreadIds = [] }) {
       const { receiptToken } = await import("../../lib/governance/work-context-receipt.ts")
       const { measureDoctrineDigest } = await import("../../lib/governance/work-context-live.ts")
       await run("git", ["fetch", "origin", "main"], { cwd: repositoryPath })
       const mainSha = (await run("git", ["rev-parse", "origin/main"], { cwd: repositoryPath })).stdout.trim()
       const { digest } = await measureDoctrineDigest()
       const registry = await this.buildRegistry()
-      const record = registry.workOrders.find((candidate) => candidate.workOrderId === workOrderId)
+      const record = registry.workOrders.find((candidate) => candidate.workOrderId === workOrderId
+        && (workOrderRowId === undefined || candidate.workOrderRowId === workOrderRowId)
+        && (userId === undefined || candidate.userId === userId))
       if (!record) throw new Error("AUTHORITY_REGISTRY_WALL")
       const facts = {
         mainSha,
@@ -1182,7 +1203,7 @@ ${tail}
       const body = [
         `Bounded WilliamOS resident work order ${workOrderId}, dispatched and validated by the operational kernel under ${record.grantRef}.`,
         ``,
-        `Closes #${issueNumber}.`,
+        projectionIssueDirective(issueNumber, completionOwned),
         ``,
         "```WORK_CONTEXT_RECEIPT",
         JSON.stringify({ ["to" + "ken"]: receiptToken(facts), facts }, null, 2),

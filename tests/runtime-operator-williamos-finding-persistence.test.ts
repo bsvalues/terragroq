@@ -31,6 +31,13 @@ const GATE_METADATA = {
   effects: { changesReviewedPolicy: true },
 }
 const GATE_DIGEST = crypto.createHash("sha256").update(JSON.stringify(GATE_METADATA)).digest("hex")
+const INVALID_ORDER_METADATA = {
+  ...SOURCE_METADATA,
+  findingId: "FINDING-BAD-ORDER",
+  sequence: 0,
+  issueNumber: null,
+}
+const INVALID_ORDER_DIGEST = crypto.createHash("sha256").update(JSON.stringify(INVALID_ORDER_METADATA)).digest("hex")
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
@@ -128,7 +135,9 @@ function transactionalDatabase({
         sourceUserId,
         sourceActor: "hermes",
         sourceEntityId: "31",
-        metadata: Number(params[0]) === 442 ? GATE_METADATA : SOURCE_METADATA,
+        metadata: Number(params[0]) === 442
+          ? GATE_METADATA
+          : Number(params[0]) === 443 ? INVALID_ORDER_METADATA : SOURCE_METADATA,
       }] }
       if (sql.includes("FROM governance_event") && sql.includes("sourceFindingEventId")) {
         const source = String(params[1])
@@ -264,9 +273,8 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
   })
 
   it("marks invalid sequence and issue fields malformed without dropping a valid sibling", async () => {
-    const invalid = { ...SOURCE_METADATA, findingId: "FINDING-BAD-ORDER", sequence: 0, issueNumber: null }
     const database = databaseFor({ findings: [
-      { sourceFindingEventId: 440, userId: "owner-1", actor: "hermes", entityId: "31", metadata: invalid },
+      { sourceFindingEventId: 440, userId: "owner-1", actor: "hermes", entityId: "31", metadata: INVALID_ORDER_METADATA },
       { sourceFindingEventId: 441, userId: "owner-1", actor: "hermes", entityId: "31", metadata: SOURCE_METADATA },
     ] })
     const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
@@ -276,6 +284,44 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
     expect(findings[0]).toMatchObject({ findingId: "FINDING-BAD-ORDER", malformed: true })
     expect(findings[0].effects).toBeUndefined()
     expect(findings[1]).toMatchObject({ findingId: "FINDING-911-COMPOSE", malformed: false })
+  })
+
+  it("settles a malformed source as gated so a valid sibling can continue", async () => {
+    const database = transactionalDatabase()
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+    const malformedGate = {
+      objectiveWorkOrderId: "WO-0031",
+      grantRef: "GRANT-0018",
+      finding: "Malformed structured finding",
+      findingId: "FINDING-BAD-ORDER",
+      sourceFindingEventId: 443,
+      sourceUserId: "owner-1",
+      sourcePayloadDigest: INVALID_ORDER_DIGEST,
+      issueNumber: null,
+      gate: "SCOPE",
+      gates: ["SCOPE"],
+      reason: "the action declared no readable effects, so nothing can be said about it",
+    }
+
+    await expect(adapters.recordOwnerGate(malformedGate)).resolves.toMatchObject({ replayed: false })
+    await expect(adapters.persistDerivedWorkOrder({
+      workOrderId: "WO-0031-R01",
+      derivedFrom: "WO-0031",
+      grantRef: "GRANT-0018",
+      allowedPaths: ["scripts/runtime-operator/williamos-adapters.mjs"],
+      requiredValidation: ["test", "build"],
+      task: "reconcile the repository-owned compose source",
+      findingId: "FINDING-911-COMPOSE",
+      sourceFindingEventId: 441,
+      sourceUserId: "owner-1",
+      sourcePayloadDigest: SOURCE_DIGEST,
+      issueNumber: 911,
+    })).resolves.toMatchObject({ replayed: false })
+    expect(database.state.settlements.map((entry) => entry.eventType)).toEqual([
+      "RUNTIME_FINDING_OWNER_GATED",
+      "RUNTIME_FINDING_DERIVED",
+    ])
+    expect(database.state.children).toHaveLength(1)
   })
 
   it("carries live grant status and expiry into the registry", async () => {
@@ -314,18 +360,18 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
     const database = databaseFor({ workOrders: [
       {
         id: 31, userId: "owner-1", ref: "WO-0031-R01", status: "approved", lane: "operator-objective",
-        description: "Projected at GitHub issue 911.", createdAt: new Date("2026-08-20T13:00:00Z"),
+        description: "Projection: #911. Projection completion: parent-owned.", createdAt: new Date("2026-08-20T13:00:00Z"),
       },
       {
         id: 32, userId: "owner-1", ref: "WO-0031-R02", status: "approved", lane: "operator-objective",
-        description: "Projected at GitHub issue 911.", createdAt: new Date("2026-08-20T13:01:00Z"),
+        description: "Projection: #911. Projection completion: parent-owned.", createdAt: new Date("2026-08-20T13:01:00Z"),
       },
     ] })
     const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
 
     await expect(adapters.listQueue()).resolves.toEqual([
-      expect.objectContaining({ issueNumber: 911, workOrderRowId: 31, workOrderId: "WO-0031-R01" }),
-      expect.objectContaining({ issueNumber: 911, workOrderRowId: 32, workOrderId: "WO-0031-R02" }),
+      expect.objectContaining({ issueNumber: 911, workOrderRowId: 31, workOrderId: "WO-0031-R01", projectionCompletionOwned: false }),
+      expect.objectContaining({ issueNumber: 911, workOrderRowId: 32, workOrderId: "WO-0031-R02", projectionCompletionOwned: false }),
     ])
   })
 })
