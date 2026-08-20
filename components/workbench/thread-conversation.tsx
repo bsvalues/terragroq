@@ -31,11 +31,18 @@ export function ThreadConversation({ threadId, className }: { threadId: string; 
   useEffect(() => {
     let active = true
     setLoaded(false)
-    getThreadConversation(threadId).then((entries) => {
-      if (!active) return
-      setPersisted(entries)
-      setLoaded(true)
-    })
+    getThreadConversation(threadId)
+      .then((entries) => {
+        if (!active) return
+        setPersisted(entries)
+        setLoaded(true)
+      })
+      // A failed history load is an empty conversation, never an unhandled rejection.
+      .catch(() => {
+        if (!active) return
+        setPersisted([])
+        setLoaded(true)
+      })
     return () => {
       active = false
     }

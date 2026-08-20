@@ -69,9 +69,12 @@ export type ThreadConversationEntry = Readonly<{
 
 /** The persisted conversation of one owned Thread, oldest first. Writing goes through the chat API. */
 export async function getThreadConversation(threadId: string): Promise<ThreadConversationEntry[]> {
-  const userId = await getUserId()
-  if (!userId) return []
+  // The whole body fails closed to an empty history -- including session resolution, which throws
+  // outside a real request scope (jsdom renders of the shell). A missing history renders the empty
+  // state; it must never reject into the component as an unhandled rejection.
   try {
+    const userId = await getUserId()
+    if (!userId) return []
     const messages = await listThreadConversation({ repository, userId, threadId })
     return messages.map((message) => ({
       id: message.id,
