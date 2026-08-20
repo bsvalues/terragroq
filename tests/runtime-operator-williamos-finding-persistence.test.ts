@@ -20,6 +20,34 @@ const EMPTY_EFFECTS = {
   competesWithPriority: false,
   destroys: [],
 }
+const CONTRACT_BINDING = {
+  workContractId: "issue-911-runtime-reliability-evidence.v1",
+  workContractDigest: "a".repeat(64),
+  workContractVersion: "hermes-work-contract.v1",
+  workContractRepository: "bsvalues/terragroq",
+  workContractLane: "operator-objective",
+  projectionIssueNumber: 911,
+  projectionCompletionOwned: false,
+  authorizationDecisionId: 74,
+  implementationGrantId: 18,
+  implementationGrantRef: "GRANT-0018",
+}
+const CHECKPOINT_PAYLOAD = {
+  workOrderRef: "WO-0031",
+  ...CONTRACT_BINDING,
+}
+const CHECKPOINT_METADATA = {
+  ...CHECKPOINT_PAYLOAD,
+  payloadDigest: crypto.createHash("sha256").update(JSON.stringify(CHECKPOINT_PAYLOAD)).digest("hex"),
+}
+const SETTLEMENT_BINDING = {
+  contractId: CONTRACT_BINDING.workContractId,
+  contractDigest: CONTRACT_BINDING.workContractDigest,
+  authorizationDecisionId: CONTRACT_BINDING.authorizationDecisionId,
+  implementationGrantId: CONTRACT_BINDING.implementationGrantId,
+  grantRef: CONTRACT_BINDING.implementationGrantRef,
+  projectionCompletionOwned: CONTRACT_BINDING.projectionCompletionOwned,
+}
 const SOURCE_METADATA = {
   schemaVersion: 1,
   findingId: "FINDING-911-COMPOSE",
@@ -29,6 +57,8 @@ const SOURCE_METADATA = {
   task: "reconcile the repository-owned compose source",
   paths: ["scripts/runtime-operator/williamos-adapters.mjs"],
   effects: EMPTY_EFFECTS,
+  ...CONTRACT_BINDING,
+  sourceCheckpointDigest: CHECKPOINT_METADATA.payloadDigest,
 }
 const SOURCE_DIGEST = crypto.createHash("sha256").update(JSON.stringify(SOURCE_METADATA)).digest("hex")
 const GATE_METADATA = {
@@ -40,6 +70,8 @@ const GATE_METADATA = {
   task: "repin service paths",
   paths: ["scripts/runtime-operator/owner-gate-policy.mjs"],
   effects: { ...EMPTY_EFFECTS, changesReviewedPolicy: true },
+  ...CONTRACT_BINDING,
+  sourceCheckpointDigest: CHECKPOINT_METADATA.payloadDigest,
 }
 const GATE_DIGEST = crypto.createHash("sha256").update(JSON.stringify(GATE_METADATA)).digest("hex")
 const INVALID_ORDER_METADATA = {
@@ -62,6 +94,9 @@ function root() {
 function databaseFor({
   findings = [] as Record<string, unknown>[],
   workOrders = null as null | Record<string, unknown>[],
+  checkpointCount = 1,
+  checkpointMetadata = CHECKPOINT_METADATA as Record<string, unknown> | null,
+  parentAssignee = "hermes-codex-bridge",
 } = {}) {
   const state = { updates: [] as { sql: string; params: unknown[] }[] }
   const defaultWorkOrders = [{
@@ -99,6 +134,9 @@ function databaseFor({
       }] }
       if (sql.includes("RUNTIME_OBJECTIVE_FINDING_RECORDED")) return { rows: findings.map((finding) => ({
         parentDescription: "Authorized under GRANT-0018. Projected at GitHub issue 911.",
+        parentAssignee,
+        checkpointCount,
+        checkpointMetadata,
         ...finding,
       })) }
       if (sql.includes("UPDATE work_order")) {
@@ -248,6 +286,7 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
       sourceUserId: "owner-1",
       sourceWorkOrderRowId: "31",
       sourcePayloadDigest: SOURCE_DIGEST,
+      ...SETTLEMENT_BINDING,
       findingId: "FINDING-911-COMPOSE",
       objectiveWorkOrderId: "WO-0031",
       sequence: 1,
@@ -269,6 +308,37 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
       entityId: "31",
       metadata: spoofed,
     }] })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    await expect(adapters.collectFindings()).resolves.toEqual([
+      expect.objectContaining({ issueNumber: 911, malformed: false }),
+    ])
+  })
+
+  it.each([
+    ["missing", 0, null],
+    ["duplicate", 2, CHECKPOINT_METADATA],
+    ["digest drift", 1, { ...CHECKPOINT_METADATA, payloadDigest: "b".repeat(64) }],
+  ])("ignores a Hermes prose projection when canonical checkpoint identity is %s", async (
+    _label, checkpointCount, checkpointMetadata,
+  ) => {
+    const database = databaseFor({
+      findings: [{ sourceFindingEventId: 441, userId: "owner-1", actor: "hermes", entityId: "31", metadata: SOURCE_METADATA }],
+      checkpointCount,
+      checkpointMetadata,
+    })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    await expect(adapters.collectFindings()).resolves.toEqual([
+      expect.objectContaining({ issueNumber: null, malformed: true }),
+    ])
+  })
+
+  it("retains the explicit prose fallback only for a non-Hermes parent discriminator", async () => {
+    const database = databaseFor({
+      findings: [{ sourceFindingEventId: 441, userId: "owner-1", actor: "williamos-runtime-operator", entityId: "31", metadata: SOURCE_METADATA }],
+      checkpointCount: 0, checkpointMetadata: null, parentAssignee: "williamos-runtime-operator",
+    })
     const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
 
     await expect(adapters.collectFindings()).resolves.toEqual([
@@ -335,6 +405,7 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
       sourceFindingEventId: 443,
       sourceUserId: "owner-1",
       sourcePayloadDigest: INVALID_ORDER_DIGEST,
+      ...SETTLEMENT_BINDING,
       issueNumber: null,
       gate: "SCOPE",
       gates: ["SCOPE"],
@@ -353,6 +424,7 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
       sourceFindingEventId: 441,
       sourceUserId: "owner-1",
       sourcePayloadDigest: SOURCE_DIGEST,
+      ...SETTLEMENT_BINDING,
       issueNumber: 911,
     })).resolves.toMatchObject({ replayed: false })
     expect(database.state.settlements.map((entry) => entry.eventType)).toEqual([
@@ -430,6 +502,7 @@ describe("derived work persistence", () => {
     sourceFindingEventId: 441,
     sourceUserId: "owner-1",
     sourcePayloadDigest: SOURCE_DIGEST,
+    ...SETTLEMENT_BINDING,
     issueNumber: 911,
   }
 
@@ -475,6 +548,7 @@ describe("derived work persistence", () => {
       ...derived,
       sourceFindingEventId: 442,
       sourcePayloadDigest: GATE_DIGEST,
+      ...SETTLEMENT_BINDING,
       findingId: "FINDING-911-REPIN",
       task: "repin service paths",
       allowedPaths: ["scripts/runtime-operator/owner-gate-policy.mjs"],
@@ -497,6 +571,7 @@ describe("derived work persistence", () => {
       sourceFindingEventId: 441,
       sourceUserId: "owner-1",
       sourcePayloadDigest: SOURCE_DIGEST,
+      ...SETTLEMENT_BINDING,
       issueNumber: 911,
       gate: "SCOPE",
       gates: ["SCOPE"],
@@ -522,6 +597,7 @@ describe("derived work persistence", () => {
       sourceFindingEventId: 441,
       sourceUserId: "owner-1",
       sourcePayloadDigest: SOURCE_DIGEST,
+      ...SETTLEMENT_BINDING,
       issueNumber: 911,
       gate: "SCOPE",
       gates: ["SCOPE"],
@@ -595,6 +671,7 @@ describe("owner-gate persistence", () => {
       sourceFindingEventId: 442,
       sourceUserId: "owner-1",
       sourcePayloadDigest: GATE_DIGEST,
+      ...SETTLEMENT_BINDING,
       issueNumber: 911,
       gate: "POLICY",
       gates: ["POLICY"],

@@ -654,6 +654,11 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           requiredValidation: payload.requiredValidation,
           task: payload.task,
           grantRef: payload.grantRef,
+          contractId: payload.contractId,
+          contractDigest: payload.contractDigest,
+          authorizationDecisionId: payload.authorizationDecisionId,
+          implementationGrantId: payload.implementationGrantId,
+          projectionCompletionOwned: payload.projectionCompletionOwned,
         }
       : {
           sourceFindingEventId: payload.sourceFindingEventId,
@@ -664,6 +669,12 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           gate: payload.gate,
           gates: payload.gates,
           reason: payload.reason,
+          contractId: payload.contractId,
+          contractDigest: payload.contractDigest,
+          authorizationDecisionId: payload.authorizationDecisionId,
+          implementationGrantId: payload.implementationGrantId,
+          grantRef: payload.grantRef,
+          projectionCompletionOwned: payload.projectionCompletionOwned,
         }
     const payloadDigest = findingDigest(canonical)
     const client = await pool.connect()
@@ -688,6 +699,12 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
         && source.metadata?.findingId === payload.findingId
         && source.metadata?.objectiveWorkOrderId === objectiveWorkOrderId
         && findingDigest(source.metadata) === payload.sourcePayloadDigest
+        && source.metadata?.workContractId === payload.contractId
+        && source.metadata?.workContractDigest === payload.contractDigest
+        && source.metadata?.authorizationDecisionId === payload.authorizationDecisionId
+        && source.metadata?.implementationGrantId === payload.implementationGrantId
+        && source.metadata?.implementationGrantRef === payload.grantRef
+        && source.metadata?.projectionCompletionOwned === payload.projectionCompletionOwned
       if (!sourceBound) throw new Error("FINDING_SOURCE_BINDING_WALL")
       const prior = await client.query(
         `SELECT "eventType", metadata FROM governance_event
@@ -850,11 +867,27 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
 
     async collectFindings() {
       const result = await pool.query(
-        `SELECT finding.id AS "sourceFindingEventId", finding."userId", finding.actor,
-                finding."entityId", finding.metadata, parent.description AS "parentDescription"
+      `SELECT finding.id AS "sourceFindingEventId", finding."userId", finding.actor,
+                finding."entityId", finding.metadata, parent.description AS "parentDescription",
+                parent.assignee AS "parentAssignee", checkpoint."checkpointCount",
+                checkpoint.metadata AS "checkpointMetadata"
            FROM governance_event AS finding
            JOIN work_order AS parent
              ON parent.id::text = finding."entityId" AND parent."userId" = finding."userId"
+           LEFT JOIN LATERAL (
+             SELECT count(*)::integer AS "checkpointCount", max(source.metadata::text)::jsonb AS metadata
+               FROM governance_event AS source
+              WHERE source."userId" = parent."userId"
+                AND source."entityType" = 'work_order'
+                AND source."entityId"::text = parent.id::text
+                AND source."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+                AND source.id::text = finding.metadata->>'sourceCheckpointId'
+                AND source.metadata->>'workOrderRef' = parent.ref
+                AND source.metadata->>'projectionIssueNumber' IS NOT NULL
+                AND source.metadata->>'workContractId' IS NOT NULL
+                AND source.metadata->>'workContractDigest' IS NOT NULL
+                AND source.metadata->>'payloadDigest' IS NOT NULL
+           ) AS checkpoint ON true
           WHERE finding."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
             AND finding."entityType" = 'work_order'
             AND NOT EXISTS (
@@ -874,7 +907,33 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           || typeof metadata.findingId !== "string" || metadata.findingId.trim() === ""
           || typeof row.userId !== "string" || row.userId.trim() === ""
           || typeof metadata.objectiveWorkOrderId !== "string" || metadata.objectiveWorkOrderId.trim() === "") return []
-        const issueNumber = parseProjectionIssue(row.parentDescription)
+        const hermesParent = row.parentAssignee === "hermes-codex-bridge"
+        const checkpoint = row.checkpointMetadata
+        const { payloadDigest: checkpointPayloadDigest, ...checkpointPayload } = checkpoint ?? {}
+        const canonicalCheckpoint = row.checkpointCount === 1
+          && checkpoint && typeof checkpoint === "object" && !Array.isArray(checkpoint)
+          && checkpoint.workOrderRef === metadata.objectiveWorkOrderId
+          && typeof checkpoint.workContractId === "string"
+          && /^[0-9a-f]{64}$/.test(checkpoint.workContractDigest ?? "")
+          && checkpoint.workContractVersion === "hermes-work-contract.v1"
+          && checkpoint.workContractRepository === REPOSITORY
+          && checkpoint.workContractLane === "operator-objective"
+          && Number.isSafeInteger(checkpoint.projectionIssueNumber)
+          && typeof checkpoint.projectionCompletionOwned === "boolean"
+          && typeof checkpoint.implementationGrantRef === "string"
+          && typeof checkpoint.authorizationDecisionId === "number"
+          && checkpointPayloadDigest === findingDigest(checkpointPayload)
+          && metadata.sourceCheckpointDigest === checkpointPayloadDigest
+          && metadata.workContractId === checkpoint.workContractId
+          && metadata.workContractDigest === checkpoint.workContractDigest
+          && metadata.projectionIssueNumber === checkpoint.projectionIssueNumber
+          && metadata.projectionCompletionOwned === checkpoint.projectionCompletionOwned
+          && metadata.authorizationDecisionId === checkpoint.authorizationDecisionId
+          && metadata.implementationGrantId === checkpoint.implementationGrantId
+          && metadata.implementationGrantRef === checkpoint.implementationGrantRef
+        const issueNumber = hermesParent
+          ? (canonicalCheckpoint ? checkpoint.projectionIssueNumber : null)
+          : parseProjectionIssue(row.parentDescription)
         const malformed = !validFindingMetadata(metadata) || issueNumber === null
         return [{
           sourceFindingEventId: row.sourceFindingEventId,
@@ -885,6 +944,14 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           objectiveWorkOrderId: metadata.objectiveWorkOrderId,
           sequence: metadata.sequence,
           issueNumber,
+          projectionCompletionOwned: canonicalCheckpoint
+            ? checkpoint.projectionCompletionOwned
+            : projectionCompletionOwned(row.parentDescription),
+          contractId: canonicalCheckpoint ? checkpoint.workContractId : null,
+          contractDigest: canonicalCheckpoint ? checkpoint.workContractDigest : null,
+          authorizationDecisionId: canonicalCheckpoint ? checkpoint.authorizationDecisionId : null,
+          implementationGrantId: canonicalCheckpoint ? checkpoint.implementationGrantId : null,
+          grantRef: canonicalCheckpoint ? checkpoint.implementationGrantRef : null,
           summary: validFindingText(metadata.summary) ? metadata.summary : "Malformed structured finding",
           task: validFindingText(metadata.task) ? metadata.task : "Malformed structured finding",
           paths: validFindingPaths(metadata.paths) ? metadata.paths : [],

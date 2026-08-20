@@ -4,8 +4,6 @@ import { evaluateOutcomePolicy, PROTECTED_SCOPE_LEXEMES } from "./policy.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
 import { normalizeHermesFindings } from "./state-store.mjs"
 import {
-  HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
-  HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
   HERMES_WORK_CONTRACT_VERSION,
 } from "./work-contract.mjs"
 import {
@@ -2022,11 +2020,31 @@ function normalizeRuntimeWorkContract(value) {
       code: "OUTCOME_WORK_ORDER_CONTRACT_INVALID",
     })
   }
+  const projection = value.projection === undefined ? null : value.projection
+  const delivery = value.delivery === undefined ? null : value.delivery
+  if ((projection !== null && (!Number.isSafeInteger(projection?.issueNumber)
+      || projection.issueNumber <= 0 || typeof projection.completionOwned !== "boolean"))
+    || (delivery !== null && (delivery?.authorityLevel !== "A2_WRITE_OWN"
+      || !Array.isArray(delivery.allowedActions) || delivery.allowedActions.length !== 1
+      || delivery.allowedActions[0] !== "implement"
+      || typeof delivery.commitAllowed !== "boolean" || typeof delivery.tagAllowed !== "boolean"
+      || typeof delivery.pushAllowed !== "boolean"))) {
+    throw Object.assign(new Error("runtime work contract is invalid"), {
+      code: "OUTCOME_WORK_ORDER_CONTRACT_INVALID",
+    })
+  }
   return {
     id: value.id,
     digest: value.digest,
+    version: value.version ?? HERMES_WORK_CONTRACT_VERSION,
+    repository: value.repository ?? "bsvalues/terragroq",
+    lane: value.lane ?? null,
     allowedFiles: [...value.allowedFiles],
     validators: [...value.validators],
+    structuredBinding: value.version !== undefined || value.repository !== undefined
+      || value.lane !== undefined || projection !== null || delivery !== null,
+    ...(projection === null ? {} : { projection: { ...projection } }),
+    ...(delivery === null ? {} : { delivery: { ...delivery, allowedActions: [...delivery.allowedActions] } }),
   }
 }
 
@@ -2106,6 +2124,8 @@ function validatorLabels(commands) {
 
 function exactAuthorizationContract(row, workContract, executionBinding, outcomeId) {
   const receiptContract = row?.workContract
+  const delivery = workContract.delivery
+  const projection = workContract.projection
   return Number(row?.goalId) === outcomeId
     && row?.userId === executionBinding.userId
     && row?.outcomeKey === executionBinding.outcomeKey
@@ -2116,15 +2136,31 @@ function exactAuthorizationContract(row, workContract, executionBinding, outcome
     && Number(row?.fencingToken) === executionBinding.fencingToken
     && typeof row?.acquisitionKey === "string"
     && row.acquisitionKey.trim() !== ""
-    && receiptContract?.id === HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID
-    && receiptContract?.digest === HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST
-    && receiptContract?.version === HERMES_WORK_CONTRACT_VERSION
-    && receiptContract?.repository === "bsvalues/terragroq"
+    && receiptContract?.id === workContract.id
+    && receiptContract?.digest === workContract.digest
+    && receiptContract?.version === workContract.version
+    && receiptContract?.repository === workContract.repository
     && receiptContract?.lane === row?.goalLane
-    && receiptContract.id === workContract.id
-    && receiptContract.digest === workContract.digest
+    && (workContract.lane === null || receiptContract.lane === workContract.lane)
     && exactStringArray(receiptContract.reservations, workContract.allowedFiles)
     && exactStringArray(validatorLabels(receiptContract.validationCommands), workContract.validators)
+    && (projection === undefined || (receiptContract.projection?.issueNumber === projection.issueNumber
+      && receiptContract.projection?.completionOwned === projection.completionOwned))
+    && (delivery === undefined || (receiptContract.delivery?.authorityLevel === delivery.authorityLevel
+      && exactStringArray(receiptContract.delivery?.allowedActions, delivery.allowedActions)
+      && receiptContract.delivery?.commitAllowed === delivery.commitAllowed
+      && receiptContract.delivery?.tagAllowed === delivery.tagAllowed
+      && receiptContract.delivery?.pushAllowed === delivery.pushAllowed
+      && row?.implementationGrantRef === row?.receiptImplementationGrantRef
+      && Number(row?.implementationGrantId) === Number(row?.receiptImplementationGrantId)
+      && row?.implementationGrantStatus === "active"
+      && row?.implementationGrantRevokedAt == null
+      && row?.implementationGrantAuthorityLevel === delivery.authorityLevel
+      && row?.implementationGrantGrantedTo === "operator"
+      && row?.implementationGrantScope === `WO-HERMES-OUTCOME-${outcomeId}`
+      && exactStringArray(row?.implementationGrantAllowedActions, delivery.allowedActions)
+      && Array.isArray(row?.implementationGrantBlockedActions)
+      && !row.implementationGrantBlockedActions.includes("implement")))
 }
 
 function executionEpochDigest(row) {
@@ -2313,7 +2349,21 @@ export async function projectOutcomeRuntimeCheckpoint({
          contract_queue."fencingToken" AS "fencingToken",
          contract_queue."activeWorkOrderId" AS "activeWorkOrderId",
          contract_acquisition."createdAt" AS "executionEpochStartedAt",
-         contract_receipt."resultBinding"->'workContract' AS "workContract"
+         contract_receipt."resultBinding"->'workContract' AS "workContract",
+         contract_receipt."resultBinding"->>'implementationGrantRef' AS "receiptImplementationGrantRef",
+         contract_receipt."resultBinding"->>'implementationGrantId' AS "receiptImplementationGrantId",
+         implementation_grant.id AS "implementationGrantId",
+         implementation_grant.ref AS "implementationGrantRef",
+         implementation_grant.status AS "implementationGrantStatus",
+         implementation_grant."revokedAt" AS "implementationGrantRevokedAt",
+         implementation_grant."expiresAt" AS "implementationGrantExpiresAt",
+         implementation_grant."authorityLevel" AS "implementationGrantAuthorityLevel",
+         implementation_grant."grantedTo" AS "implementationGrantGrantedTo",
+         implementation_grant.scope AS "implementationGrantScope",
+         implementation_grant."allowedActions" AS "implementationGrantAllowedActions",
+         implementation_grant."blockedActions" AS "implementationGrantBlockedActions",
+         contract_queue."approvalDecisionId" AS "approvalDecisionId",
+         contract_queue."authorityGrantRef" AS "executionGrantRef"
        FROM goal AS contract_goal
        JOIN "outcome_queue_item" AS contract_queue
          ON contract_queue."userId" = contract_goal."userId"
@@ -2346,6 +2396,10 @@ export async function projectOutcomeRuntimeCheckpoint({
         AND contract_repo.type = 'repo'
         AND contract_repo.relationship = 'primary-repo'
         AND contract_repo."canonicalIdentity" = 'bsvalues/terragroq'
+       LEFT JOIN authority_grant AS implementation_grant
+         ON implementation_grant."userId" = contract_queue."userId"
+        AND implementation_grant.ref = contract_receipt."resultBinding"->>'implementationGrantRef'
+        AND implementation_grant.id::text = contract_receipt."resultBinding"->>'implementationGrantId'
        WHERE contract_goal.id = $1::integer
          AND contract_queue."userId" = $2
          AND contract_queue."outcomeKey" = $3
@@ -2401,6 +2455,17 @@ export async function projectOutcomeRuntimeCheckpoint({
          AND contract_receipt."resultBinding"->'workContract'->>'version' = $11
          AND contract_receipt."resultBinding"->'workContract'->>'repository' = 'bsvalues/terragroq'
          AND contract_receipt."resultBinding"->'workContract'->>'lane' = contract_goal.lane
+         AND (contract_receipt."resultBinding"->'workContract'->'delivery' IS NULL OR (
+           implementation_grant.status = 'active'
+           AND implementation_grant."revokedAt" IS NULL
+           AND implementation_grant."expiresAt" IS NOT NULL
+           AND implementation_grant."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp()
+           AND implementation_grant."authorityLevel" = contract_receipt."resultBinding"->'workContract'->'delivery'->>'authorityLevel'
+           AND implementation_grant."grantedTo" = 'operator'
+           AND implementation_grant.scope = 'WO-HERMES-OUTCOME-' || contract_goal.id::text
+           AND implementation_grant."allowedActions" = ARRAY['implement']::text[]
+           AND NOT ('implement' = ANY(COALESCE(implementation_grant."blockedActions", ARRAY[]::text[])))
+         ))
          AND (
            SELECT count(*) = 1
            FROM "workbench_thread_source" AS duplicate_contract_root
@@ -2424,9 +2489,9 @@ export async function projectOutcomeRuntimeCheckpoint({
         normalizedExecutionBinding.expectedVersion, normalizedExecutionBinding.executionBinding,
         normalizedExecutionBinding.leaseToken, normalizedExecutionBinding.leaseHolder,
         normalizedExecutionBinding.fencingToken,
-        HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
-        HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
-        HERMES_WORK_CONTRACT_VERSION],
+        normalizedWorkContract.id,
+        normalizedWorkContract.digest,
+        normalizedWorkContract.version],
     )
     if (authorizations?.rows?.length !== 1
       || !exactAuthorizationContract(
@@ -2452,6 +2517,30 @@ export async function projectOutcomeRuntimeCheckpoint({
       ...legacyEventMetadata,
       executionEpochDigest: currentExecutionEpochDigest,
       findingsSetDigest,
+      ...(normalizedWorkContract.structuredBinding ? {
+        workContractId: normalizedWorkContract.id,
+        workContractDigest: normalizedWorkContract.digest,
+        workContractVersion: normalizedWorkContract.version,
+        workContractRepository: normalizedWorkContract.repository,
+        workContractLane: authorization.goalLane,
+        authorizationDecisionId: authorization.approvalDecisionId,
+        executionGrantRef: authorization.executionGrantRef,
+      } : {}),
+      ...(normalizedWorkContract.structuredBinding && authorization.implementationGrantRef != null ? {
+        implementationGrantId: Number(authorization.implementationGrantId),
+        implementationGrantRef: authorization.implementationGrantRef,
+      } : {}),
+      ...(normalizedWorkContract.projection === undefined ? {} : {
+        projectionIssueNumber: normalizedWorkContract.projection.issueNumber,
+        projectionCompletionOwned: normalizedWorkContract.projection.completionOwned,
+      }),
+      ...(normalizedWorkContract.delivery === undefined ? {} : {
+        deliveryAuthorityLevel: normalizedWorkContract.delivery.authorityLevel,
+        deliveryAllowedActions: normalizedWorkContract.delivery.allowedActions,
+        commitAllowed: normalizedWorkContract.delivery.commitAllowed,
+        tagAllowed: normalizedWorkContract.delivery.tagAllowed,
+        pushAllowed: normalizedWorkContract.delivery.pushAllowed,
+      }),
     }
     eventMetadata.payloadDigest = projectionPayloadDigest(eventMetadata)
     const legacyPayloadDigest = projectionPayloadDigest(legacyEventMetadata)
@@ -2459,10 +2548,14 @@ export async function projectOutcomeRuntimeCheckpoint({
     await runQuery(
       `INSERT INTO work_order
          ("userId", ref, title, description, goal, lane, status, assignee, agent,
-           "allowedFiles", validators, "updatedAt")
+           "allowedFiles", validators, "authorityGrantId", "authorityLevel", "authorityGranted",
+           "commitAllowed", "tagAllowed", "pushAllowed", "updatedAt")
        SELECT g."userId", $2, COALESCE(NULLIF(g.command, ''), 'Hermes outcome ' || g.id::text),
-         'Durable runtime projection for ' || COALESCE(g.ref, 'goal-' || g.id::text),
-         g.ref, g.lane, 'active', 'hermes-codex-bridge', 'codex', $3::text[], $4::text[], NOW()
+         'Durable runtime projection for ' || COALESCE(g.ref, 'goal-' || g.id::text)
+           || CASE WHEN $5::integer IS NULL THEN '' ELSE '. Projected at GitHub issue ' || $5::text || '.' END
+           || CASE WHEN $6::boolean = false THEN ' Projection completion: parent-owned.' ELSE '' END,
+         g.ref, g.lane, 'active', 'hermes-codex-bridge', 'codex', $3::text[], $4::text[],
+         $7::integer, $8, $8, $9::boolean, $10::boolean, $11::boolean, NOW()
        FROM goal g
        WHERE g.id = $1::integer
          AND NOT EXISTS (
@@ -2470,11 +2563,20 @@ export async function projectOutcomeRuntimeCheckpoint({
            WHERE existing."userId" = g."userId" AND existing.ref = $2
          )
        RETURNING id`,
-      [outcomeId, ref, normalizedWorkContract.allowedFiles, normalizedWorkContract.validators],
+      [outcomeId, ref, normalizedWorkContract.allowedFiles, normalizedWorkContract.validators,
+        normalizedWorkContract.projection?.issueNumber ?? null,
+        normalizedWorkContract.projection?.completionOwned ?? null,
+        authorization.implementationGrantId == null ? null : Number(authorization.implementationGrantId),
+        normalizedWorkContract.delivery?.authorityLevel ?? null,
+        normalizedWorkContract.delivery?.commitAllowed ?? false,
+        normalizedWorkContract.delivery?.tagAllowed ?? false,
+        normalizedWorkContract.delivery?.pushAllowed ?? false],
     )
     const workOrders = await runQuery(
       `SELECT wo.id, wo."userId" AS "userId", wo.ref, wo.goal, wo.lane, wo.status,
          wo.result, wo."commitRef", wo.assignee, wo.agent, wo."allowedFiles", wo.validators,
+         wo."authorityGrantId", wo."authorityLevel", wo."authorityGranted",
+         wo."commitAllowed", wo."tagAllowed", wo."pushAllowed",
          latest.id AS "latestCheckpointId",
          latest.metadata AS "latestCheckpointMetadata",
          latest.metadata->>'checkpointState' AS "latestCheckpointState",
@@ -2567,6 +2669,17 @@ export async function projectOutcomeRuntimeCheckpoint({
       && workOrder.status !== expectedPersistedStatus
     const repairableCrossAttemptStatusSplit = exactCrossAttemptLegacyReplay
       && workOrder.status !== expectedPersistedStatus
+    const deliveryIdentityMatches = normalizedWorkContract.delivery === undefined || (
+      Number(workOrder.authorityGrantId) === Number(authorization.implementationGrantId)
+      && workOrder.authorityLevel === normalizedWorkContract.delivery.authorityLevel
+      && workOrder.authorityGranted === normalizedWorkContract.delivery.authorityLevel
+      && workOrder.commitAllowed === normalizedWorkContract.delivery.commitAllowed
+      && workOrder.tagAllowed === normalizedWorkContract.delivery.tagAllowed
+      && workOrder.pushAllowed === normalizedWorkContract.delivery.pushAllowed
+    )
+    const deliveryBackfillable = normalizedWorkContract.delivery !== undefined
+      && workOrder.authorityGrantId == null && workOrder.authorityLevel == null
+      && workOrder.authorityGranted == null
     const workOrderIdentityMatches = workOrder.userId === authorization.userId
       && workOrder.ref === ref
       && workOrder.goal === authorization.goalRef
@@ -2576,6 +2689,7 @@ export async function projectOutcomeRuntimeCheckpoint({
         || repairableCrossAttemptStatusSplit)
       && workOrder.assignee === "hermes-codex-bridge"
       && workOrder.agent === "codex"
+      && (deliveryIdentityMatches || deliveryBackfillable)
       && (authorization.activeWorkOrderId === null
         || Number(authorization.activeWorkOrderId) === Number(workOrder.id))
     if (!workOrderIdentityMatches) {
@@ -2587,27 +2701,49 @@ export async function projectOutcomeRuntimeCheckpoint({
       workOrder.allowedFiles,
       normalizedWorkContract.allowedFiles,
     ) && exactStringArray(workOrder.validators, normalizedWorkContract.validators)
-    if (!contractMatches) {
+    if (!contractMatches || !deliveryIdentityMatches) {
       const contractEmpty = Array.isArray(workOrder.allowedFiles) && workOrder.allowedFiles.length === 0
         && Array.isArray(workOrder.validators) && workOrder.validators.length === 0
-      if (!contractEmpty) {
+      if (!contractEmpty && !(contractMatches && deliveryBackfillable)) {
         throw Object.assign(new Error("Hermes outcome Work Order contract conflicts"), {
           code: "OUTCOME_WORK_ORDER_CONTRACT_WALL",
         })
       }
       const backfilled = await runQuery(
         `UPDATE work_order
-         SET "allowedFiles" = $3::text[], validators = $4::text[], "updatedAt" = NOW()
+         SET "allowedFiles" = $3::text[], validators = $4::text[],
+             "authorityGrantId" = COALESCE("authorityGrantId", $5::integer),
+             "authorityLevel" = COALESCE("authorityLevel", $6),
+             "authorityGranted" = COALESCE("authorityGranted", $6),
+             "commitAllowed" = $7::boolean, "tagAllowed" = $8::boolean,
+             "pushAllowed" = $9::boolean, "updatedAt" = NOW()
          WHERE id = $1 AND "userId" = $2
-           AND cardinality(COALESCE("allowedFiles", ARRAY[]::text[])) = 0
-           AND cardinality(COALESCE(validators, ARRAY[]::text[])) = 0
-         RETURNING "allowedFiles", validators`,
+           AND ((cardinality(COALESCE("allowedFiles", ARRAY[]::text[])) = 0
+             AND cardinality(COALESCE(validators, ARRAY[]::text[])) = 0)
+             OR ("allowedFiles" = $3::text[] AND validators = $4::text[]))
+           AND ("authorityGrantId" IS NULL OR "authorityGrantId" = $5::integer)
+           AND ("authorityLevel" IS NULL OR "authorityLevel" = $6)
+           AND ("authorityGranted" IS NULL OR "authorityGranted" = $6)
+         RETURNING "allowedFiles", validators, "authorityGrantId", "authorityLevel", "authorityGranted",
+           "commitAllowed", "tagAllowed", "pushAllowed"`,
         [workOrder.id, workOrder.userId,
-          normalizedWorkContract.allowedFiles, normalizedWorkContract.validators],
+          normalizedWorkContract.allowedFiles, normalizedWorkContract.validators,
+          authorization.implementationGrantId == null ? null : Number(authorization.implementationGrantId),
+          normalizedWorkContract.delivery?.authorityLevel ?? null,
+          normalizedWorkContract.delivery?.commitAllowed ?? false,
+          normalizedWorkContract.delivery?.tagAllowed ?? false,
+          normalizedWorkContract.delivery?.pushAllowed ?? false],
       )
       if (backfilled?.rows?.length !== 1
         || !exactStringArray(backfilled.rows[0].allowedFiles, normalizedWorkContract.allowedFiles)
-        || !exactStringArray(backfilled.rows[0].validators, normalizedWorkContract.validators)) {
+        || !exactStringArray(backfilled.rows[0].validators, normalizedWorkContract.validators)
+        || (normalizedWorkContract.delivery !== undefined && (
+          Number(backfilled.rows[0].authorityGrantId) !== Number(authorization.implementationGrantId)
+          || backfilled.rows[0].authorityLevel !== normalizedWorkContract.delivery.authorityLevel
+          || backfilled.rows[0].authorityGranted !== normalizedWorkContract.delivery.authorityLevel
+          || backfilled.rows[0].commitAllowed !== normalizedWorkContract.delivery.commitAllowed
+          || backfilled.rows[0].tagAllowed !== normalizedWorkContract.delivery.tagAllowed
+          || backfilled.rows[0].pushAllowed !== normalizedWorkContract.delivery.pushAllowed))) {
         throw Object.assign(new Error("Hermes outcome Work Order contract backfill conflicted"), {
           code: "OUTCOME_WORK_ORDER_CONTRACT_WALL",
         })
@@ -2753,6 +2889,16 @@ export async function projectOutcomeRuntimeCheckpoint({
         sourceCheckpointDigest: acceptedPayloadDigest,
         sourceExecutionEpochDigest: currentExecutionEpochDigest,
         findingsSetDigest,
+        workContractId: eventMetadata.workContractId,
+        workContractDigest: eventMetadata.workContractDigest,
+        workContractVersion: eventMetadata.workContractVersion,
+        workContractRepository: eventMetadata.workContractRepository,
+        workContractLane: eventMetadata.workContractLane,
+        projectionIssueNumber: eventMetadata.projectionIssueNumber,
+        projectionCompletionOwned: eventMetadata.projectionCompletionOwned,
+        authorizationDecisionId: eventMetadata.authorizationDecisionId,
+        implementationGrantId: eventMetadata.implementationGrantId,
+        implementationGrantRef: eventMetadata.implementationGrantRef,
         idempotencyKey: findingIdempotencyKey,
       }
       findingMetadata.payloadDigest = projectionPayloadDigest(findingMetadata)

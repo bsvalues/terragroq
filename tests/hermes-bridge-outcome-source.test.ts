@@ -27,10 +27,27 @@ import {
   primaryDecisionRequestDigest,
 } from "@/scripts/hermes-bridge/primary-decision-provenance.mjs"
 import {
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
   HERMES_WORK_CONTRACT_VERSION,
 } from "@/scripts/hermes-bridge/work-contract.mjs"
+
+const issue911RuntimeWorkContract = Object.freeze({
+  version: HERMES_WORK_CONTRACT_VERSION,
+  id: HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
+  digest: HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
+  repository: "bsvalues/terragroq",
+  lane: "operator-objective",
+  allowedFiles: Object.freeze(["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"]),
+  validators: Object.freeze(["git diff --check", "npx vitest run tests/hermes-work-contract.test.ts"]),
+  projection: Object.freeze({ issueNumber: 911, completionOwned: false }),
+  delivery: Object.freeze({
+    authorityLevel: "A2_WRITE_OWN", allowedActions: Object.freeze(["implement"]),
+    commitAllowed: true, tagAllowed: false, pushAllowed: true,
+  }),
+})
 
 const runtimeWorkContract = Object.freeze({
   id: HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
@@ -1021,6 +1038,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[2][0]).toMatch(/"allowedFiles", validators/)
     expect(query.mock.calls[2][1]).toEqual([
       4, "WO-HERMES-OUTCOME-4", runtimeWorkContract.allowedFiles, runtimeWorkContract.validators,
+      null, null, null, null, false, false, false,
     ])
     expect(query.mock.calls[2][0]).toMatch(/NOT EXISTS/)
     expect(query.mock.calls[4][0]).toMatch(/INSERT INTO governance_event/)
@@ -1032,6 +1050,76 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       42, "active", null, "a".repeat(40), ["pull-request:#448", `commit:${"a".repeat(40)}`], 7, false,
       runtimeExecutionEpochDigest,
     ])
+  })
+
+  it("projects the exact registered #911 contract and its implementation grant as typed evidence", async () => {
+    const authorization = {
+      goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "operator-objective",
+      outcomeKey: runtimeExecutionBinding.outcomeKey, version: runtimeExecutionBinding.expectedVersion,
+      executionBinding: runtimeExecutionBinding.executionBinding,
+      leaseToken: runtimeExecutionBinding.leaseToken, leaseHolder: runtimeExecutionBinding.leaseHolder,
+      acquisitionKey: runtimeAcquisitionKey, fencingToken: runtimeExecutionBinding.fencingToken,
+      executionEpochStartedAt: "2026-08-15T00:44:33.761Z", activeWorkOrderId: null,
+      approvalDecisionId: 74, executionGrantRef: "WB-EXEC-GRANT-911",
+      receiptImplementationGrantRef: "WB-EXEC-IMPL-GRANT-911", receiptImplementationGrantId: "81",
+      implementationGrantRef: "WB-EXEC-IMPL-GRANT-911", implementationGrantId: 81,
+      implementationGrantStatus: "active", implementationGrantRevokedAt: null,
+      implementationGrantAuthorityLevel: "A2_WRITE_OWN", implementationGrantGrantedTo: "operator",
+      implementationGrantScope: "WO-HERMES-OUTCOME-4", implementationGrantAllowedActions: ["implement"],
+      implementationGrantBlockedActions: ["host-storage-mutation"],
+      workContract: {
+        version: issue911RuntimeWorkContract.version, id: issue911RuntimeWorkContract.id,
+        digest: issue911RuntimeWorkContract.digest, repository: issue911RuntimeWorkContract.repository,
+        lane: issue911RuntimeWorkContract.lane,
+        reservations: issue911RuntimeWorkContract.allowedFiles,
+        validationCommands: [
+          { command: "git", args: ["diff", "--check"] },
+          { command: "npx", args: ["vitest", "run", "tests/hermes-work-contract.test.ts"] },
+        ],
+        projection: issue911RuntimeWorkContract.projection,
+        delivery: issue911RuntimeWorkContract.delivery,
+      },
+    }
+    const query = vi.fn(async (sql: string) => {
+      if (/FROM goal AS contract_goal/.test(sql)) return { rows: [authorization] }
+      if (/INSERT INTO work_order/.test(sql)) return { rows: [{ id: 42 }] }
+      if (/SELECT wo\.id,[\s\S]+latestCheckpointId/.test(sql)) return { rows: [{
+        id: 42, userId: "owner", ref: "WO-HERMES-OUTCOME-4", goal: "GOAL-0004",
+        lane: "operator-objective", status: "active", result: null, commitRef: null,
+        assignee: "hermes-codex-bridge", agent: "codex",
+        authorityGrantId: 81, authorityLevel: "A2_WRITE_OWN", authorityGranted: "A2_WRITE_OWN",
+        commitAllowed: true, tagAllowed: false, pushAllowed: true,
+        allowedFiles: issue911RuntimeWorkContract.allowedFiles,
+        validators: issue911RuntimeWorkContract.validators,
+        latestCheckpointId: null, latestCheckpointState: null, latestCheckpointKey: null,
+        latestCheckpointDigest: null, latestCheckpointSequence: null,
+        latestExecutionEpochDigest: null, latestCheckpointCreatedAt: null,
+        latestExecutionEpochSequence: null,
+      }] }
+      if (/HERMES_RUNTIME_CHECKPOINT/.test(sql) && /RETURNING id/.test(sql)) return { rows: [{ id: 91 }] }
+      return { rows: [] }
+    })
+
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query, outcomeId: 4, attempt: 1, workContract: issue911RuntimeWorkContract,
+      executionBinding: runtimeExecutionBinding,
+      checkpoint: { sequence: 0, state: "LEASED" },
+    })).resolves.toMatchObject({ workOrderRef: "WO-HERMES-OUTCOME-4" })
+
+    const authorizationCall = query.mock.calls.find(([sql]) => /FROM goal AS contract_goal/.test(sql))!
+    expect(authorizationCall[1]?.slice(-3)).toEqual([
+      HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
+      HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
+      HERMES_WORK_CONTRACT_VERSION,
+    ])
+    const checkpointCall = query.mock.calls.find(([sql]) => /HERMES_RUNTIME_CHECKPOINT/.test(sql) && /RETURNING id/.test(sql))!
+    expect(JSON.parse(String(checkpointCall[1]?.[3]))).toMatchObject({
+      projectionIssueNumber: 911, projectionCompletionOwned: false,
+      workContractId: HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
+      authorizationDecisionId: 74, implementationGrantId: 81,
+      implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
+      commitAllowed: true, tagAllowed: false, pushAllowed: true,
+    })
   })
 
   it("projects closed structured findings inside the authorized checkpoint transaction", async () => {
@@ -1560,6 +1648,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[4][0]).toMatch(/cardinality\(COALESCE\(validators/)
     expect(query.mock.calls[4][1]).toEqual([
       42, "owner", runtimeWorkContract.allowedFiles, runtimeWorkContract.validators,
+      null, null, false, false, false,
     ])
   })
 
