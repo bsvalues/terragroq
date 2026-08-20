@@ -712,13 +712,14 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
         [payload.sourceFindingEventId],
       )
       const source = sourceResult.rows[0]
-      const sourceBound = source
+      const baseSourceBound = source
         && source.sourceUserId === payload.sourceUserId
         && new Set(["hermes", "williamos-runtime-operator"]).has(source.sourceActor)
         && source.metadata?.schemaVersion === 1
         && source.metadata?.findingId === payload.findingId
         && source.metadata?.objectiveWorkOrderId === objectiveWorkOrderId
         && findingDigest(source.metadata) === payload.sourcePayloadDigest
+      const structuredSourceBound = baseSourceBound && source.sourceActor === "hermes"
         && source.metadata?.workContractId === payload.contractId
         && source.metadata?.workContractDigest === payload.contractDigest
         && source.metadata?.authorizationDecisionId === payload.authorizationDecisionId
@@ -735,6 +736,14 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
         && source.metadata?.commitAllowed === payload.commitAllowed
         && source.metadata?.tagAllowed === payload.tagAllowed
         && source.metadata?.pushAllowed === payload.pushAllowed
+      const legacySourceBound = baseSourceBound && source.sourceActor === "williamos-runtime-operator"
+        && [payload.sourceCheckpointId, payload.sourceCheckpointDigest, payload.contractId,
+          payload.contractDigest, payload.contractVersion, payload.contractRepository,
+          payload.contractLane, payload.authorizationDecisionId, payload.implementationGrantId,
+          payload.deliveryAuthorityLevel, payload.deliveryAllowedActions,
+          payload.commitAllowed, payload.tagAllowed, payload.pushAllowed]
+          .every((value) => value === undefined)
+      const sourceBound = structuredSourceBound || legacySourceBound
       if (!sourceBound) throw new Error("FINDING_SOURCE_BINDING_WALL")
       let sourceCheckpoint = null
       if (source.sourceActor === "hermes") {
@@ -1033,22 +1042,24 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           issueNumber,
           projectionCompletionOwned: canonicalCheckpoint
             ? checkpoint.projectionCompletionOwned
-            : projectionCompletionOwned(row.parentDescription),
-          contractId: canonicalCheckpoint ? checkpoint.workContractId : null,
-          contractDigest: canonicalCheckpoint ? checkpoint.workContractDigest : null,
-          contractVersion: canonicalCheckpoint ? checkpoint.workContractVersion : null,
-          contractRepository: canonicalCheckpoint ? checkpoint.workContractRepository : null,
-          contractLane: canonicalCheckpoint ? checkpoint.workContractLane : null,
-          sourceCheckpointId: canonicalCheckpoint ? Number(metadata.sourceCheckpointId) : null,
-          sourceCheckpointDigest: canonicalCheckpoint ? metadata.sourceCheckpointDigest : null,
-          authorizationDecisionId: canonicalCheckpoint ? checkpoint.authorizationDecisionId : null,
-          implementationGrantId: canonicalCheckpoint ? checkpoint.implementationGrantId : null,
-          grantRef: canonicalCheckpoint ? checkpoint.implementationGrantRef : null,
-          deliveryAuthorityLevel: canonicalCheckpoint ? checkpoint.deliveryAuthorityLevel : null,
-          deliveryAllowedActions: canonicalCheckpoint ? checkpoint.deliveryAllowedActions : null,
-          commitAllowed: canonicalCheckpoint ? checkpoint.commitAllowed : null,
-          tagAllowed: canonicalCheckpoint ? checkpoint.tagAllowed : null,
-          pushAllowed: canonicalCheckpoint ? checkpoint.pushAllowed : null,
+            : legacyParent ? projectionCompletionOwned(row.parentDescription) : undefined,
+          ...(canonicalCheckpoint ? {
+            contractId: checkpoint.workContractId,
+            contractDigest: checkpoint.workContractDigest,
+            contractVersion: checkpoint.workContractVersion,
+            contractRepository: checkpoint.workContractRepository,
+            contractLane: checkpoint.workContractLane,
+            sourceCheckpointId: Number(metadata.sourceCheckpointId),
+            sourceCheckpointDigest: metadata.sourceCheckpointDigest,
+            authorizationDecisionId: checkpoint.authorizationDecisionId,
+            implementationGrantId: checkpoint.implementationGrantId,
+            grantRef: checkpoint.implementationGrantRef,
+            deliveryAuthorityLevel: checkpoint.deliveryAuthorityLevel,
+            deliveryAllowedActions: checkpoint.deliveryAllowedActions,
+            commitAllowed: checkpoint.commitAllowed,
+            tagAllowed: checkpoint.tagAllowed,
+            pushAllowed: checkpoint.pushAllowed,
+          } : {}),
           summary: validFindingText(metadata.summary) ? metadata.summary : "Malformed structured finding",
           task: validFindingText(metadata.task) ? metadata.task : "Malformed structured finding",
           paths: validFindingPaths(metadata.paths) ? metadata.paths : [],

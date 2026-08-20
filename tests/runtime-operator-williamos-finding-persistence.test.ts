@@ -180,6 +180,9 @@ function transactionalDatabase({
   existingChild = null as null | Record<string, unknown>,
   collectFindingIds = [] as number[],
   checkpointRows = null as null | Record<string, unknown>[],
+  sourceActor = "hermes",
+  sourceMetadata = null as null | Record<string, unknown>,
+  parentAssignee = sourceActor === "hermes" ? "hermes-codex-bridge" : "williamos-runtime-operator",
 } = {}) {
   const state = {
     children: [] as Record<string, unknown>[],
@@ -212,11 +215,11 @@ function transactionalDatabase({
       if (sql.includes("FROM governance_event AS source")) return { rows: [{
         sourceFindingEventId: Number(params[0]),
         sourceUserId,
-        sourceActor: "hermes",
+        sourceActor,
         sourceEntityId: "31",
-        metadata: Number(params[0]) === 442
+        metadata: sourceMetadata ?? (Number(params[0]) === 442
           ? GATE_METADATA
-          : Number(params[0]) === 443 ? INVALID_ORDER_METADATA : SOURCE_METADATA,
+          : Number(params[0]) === 443 ? INVALID_ORDER_METADATA : SOURCE_METADATA),
       }] }
       if (sql.includes("FROM governance_event AS checkpoint")) return { rows: checkpointRows ?? [{
         id: 91, userId: "owner-1", entityId: "31", metadata: CHECKPOINT_METADATA,
@@ -232,7 +235,7 @@ function transactionalDatabase({
         userId: "owner-1",
         parentRef: "WO-0031",
         parentDescription: "Authorized under GRANT-0018. Projected at GitHub issue 911.",
-        parentAssignee: "hermes-codex-bridge",
+        parentAssignee,
         parentStatus,
         authorityGranted,
         goal: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
@@ -288,9 +291,9 @@ function transactionalDatabase({
     async query(sql: string) {
       if (sql.includes("RUNTIME_OBJECTIVE_FINDING_RECORDED")) return { rows: collectFindingIds.map((id) => ({
         sourceFindingEventId: id, userId: "owner-1", actor: "hermes", entityId: "31",
-        metadata: id === 442 ? GATE_METADATA : SOURCE_METADATA,
-        parentDescription: "Projected at GitHub issue 357.",
-        parentAssignee: "hermes-codex-bridge", checkpointCount: 1,
+        metadata: sourceMetadata ?? (id === 442 ? GATE_METADATA : SOURCE_METADATA),
+        parentDescription: "Projected at GitHub issue 911. Projection completion: parent-owned.",
+        parentAssignee, checkpointCount: sourceActor === "hermes" ? 1 : 0,
         checkpointMetadata: CHECKPOINT_METADATA,
       })) }
       return { rows: [] }
@@ -759,6 +762,24 @@ describe("production collection through derivation and persistence", () => {
     expect(result.gated).toHaveLength(1)
     expect(database.state.children).toEqual([])
     expect(database.state.settlements[0]?.metadata).toMatchObject(SETTLEMENT_BINDING)
+  })
+
+  it("collects, derives, and persists an explicitly discriminated legacy source without structured bindings", async () => {
+    const legacyMetadata = {
+      schemaVersion: 1, findingId: "FINDING-LEGACY", objectiveWorkOrderId: "WO-0031",
+      sequence: 4, summary: "bounded legacy remediation", task: "bounded legacy remediation",
+      paths: ["scripts/runtime-operator/williamos-adapters.mjs"], effects: EMPTY_EFFECTS,
+    }
+    const database = transactionalDatabase({
+      collectFindingIds: [444], sourceActor: "williamos-runtime-operator", sourceMetadata: legacyMetadata,
+    })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    await expect(deriveAndQueueFindings({ registry, adapters })).resolves.toEqual({
+      queued: ["WO-0031-R04-F444"], gated: [],
+    })
+    expect(database.state.children).toHaveLength(1)
+    expect(database.state.settlements).toHaveLength(1)
   })
 })
 
