@@ -57,6 +57,51 @@ function repository(overrides: Partial<WorkbenchThreadRepository> = {}): Workben
 }
 
 describe("loadAuthenticatedWorkbenchThreads", () => {
+  it("binds the canonical runtime finding request only into its owning authenticated Thread", async () => {
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [{
+        threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const,
+      }]),
+      listGovernanceEvents: vi.fn(async () => [{
+        id: 442, userId: "owner", ref: null, entityType: "work_order", entityId: "11",
+        eventType: "RUNTIME_OBJECTIVE_FINDING_RECORDED", reason: null,
+        metadata: { findingId: "FINDING-11", objectiveWorkOrderId: "WO-11", sequence: 1 },
+        createdAt: at("2026-08-20T15:59:00Z"),
+      }, {
+        id: 501, userId: "owner", ref: null, entityType: "work_order", entityId: "11",
+        eventType: "RUNTIME_FINDING_OWNER_GATED", reason: "policy change",
+        metadata: {
+          sourceFindingEventId: 442, sourceUserId: "owner", findingId: "FINDING-11",
+          objectiveWorkOrderId: "WO-11", gate: "POLICY", gates: ["POLICY"],
+          reason: "policy change", payloadDigest: "a".repeat(64),
+        },
+        createdAt: at("2026-08-20T16:00:00Z"),
+      }]),
+    })
+    const readRuntimeFindingDecision = vi.fn(async () => ({
+      sourceKind: "RUNTIME_FINDING", ownerUserId: "owner",
+      parentWorkOrderRowId: 11, parentWorkOrderRef: "WO-11",
+      sourceFindingEventId: 442, gateSettlementEventId: 501,
+      findingId: "FINDING-11", gate: "POLICY", gates: ["POLICY"],
+      allowedChoices: ["APPROVE", "DENY"], recommendation: "DENY",
+      recommendationRationale: "Default deny",
+      decisionPacket: {
+        blockedAction: "Materialize gated work", authorityBoundary: "Owner authority required",
+        approveConsequence: "Record authority only", denyConsequence: "Resolve denied",
+      },
+    }))
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, {
+      authenticate: async () => "owner", repository: repo, readRuntimeFindingDecision,
+    })
+
+    expect(readRuntimeFindingDecision).toHaveBeenCalledOnce()
+    expect(result[0].items.filter((item) => item.kind === "DECISION")).toEqual([
+      expect.objectContaining({ rawState: "ACTIONABLE", summary: "policy change" }),
+    ])
+    expect(result[0].coverage.conflicts).toEqual([])
+  })
+
   it("authenticates, traverses only explicit durable edges in bounded batches, and preserves link conflicts", async () => {
     const repo = repository()
     const authenticate = vi.fn(async () => "owner")

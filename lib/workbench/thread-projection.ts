@@ -105,6 +105,21 @@ export type ThreadItem = Readonly<{
   rawState: string | null
   truth: ThreadTruth
   source: ThreadSourceRef
+  decision?: ThreadDecisionDetail
+}>
+
+export type ThreadDecisionDetail = Readonly<{
+  state: "ACTIONABLE" | "OWNER_DECIDED" | "CONFLICTING"
+  why?: string
+  blockedAction?: string
+  gates?: string[]
+  recommendation?: "APPROVE" | "DENY"
+  recommendationRationale?: string
+  choices?: Array<"APPROVE" | "DENY">
+  consequences?: Readonly<{ APPROVE: string; DENY: string }>
+  choice?: "APPROVE" | "DENY"
+  disposition?: "AUTHORITY_MATERIALIZATION_REQUIRED" | "DENIED_RESOLVED"
+  resumeReleased?: false
 }>
 
 export type ThreadCoverage = Readonly<{
@@ -264,6 +279,7 @@ function item(
   title: string,
   summary: string,
   rawState: string | null = null,
+  decision?: ThreadDecisionDetail,
 ): ThreadItem {
   return {
     id: `${source.kind}:${source.id}:${facet}`,
@@ -275,6 +291,56 @@ function item(
     rawState,
     truth: truth(source.truth),
     source: sourceRef(source, facet),
+    ...(decision ? { decision } : {}),
+  }
+}
+
+function decisionDetail(value: unknown): ThreadDecisionDetail | null {
+  const data = value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+  const state = text(data?.state)
+  if (!data || !["ACTIONABLE", "OWNER_DECIDED", "CONFLICTING"].includes(state ?? "")) return null
+  if (state === "CONFLICTING") return { state }
+  if (state === "OWNER_DECIDED") {
+    const choice = text(data.choice)
+    const disposition = text(data.disposition)
+    if (!(["APPROVE", "DENY"].includes(choice ?? ""))
+      || !(["AUTHORITY_MATERIALIZATION_REQUIRED", "DENIED_RESOLVED"].includes(disposition ?? ""))
+      || data.resumeReleased !== false) return { state: "CONFLICTING" }
+    return {
+      state,
+      choice: choice as "APPROVE" | "DENY",
+      disposition: disposition as "AUTHORITY_MATERIALIZATION_REQUIRED" | "DENIED_RESOLVED",
+      resumeReleased: false,
+    }
+  }
+  const normalizedGates = Array.isArray(data.gates)
+    ? [...new Set(data.gates.map(text).filter((entry): entry is string => entry !== null))]
+    : []
+  const normalizedChoices = Array.isArray(data.choices)
+    ? data.choices.map(text).filter((entry): entry is "APPROVE" | "DENY" => entry === "APPROVE" || entry === "DENY")
+    : []
+  const consequences = data.consequences !== null && typeof data.consequences === "object" && !Array.isArray(data.consequences)
+    ? data.consequences as Record<string, unknown>
+    : {}
+  const recommendation = text(data.recommendation)
+  if (normalizedGates.length === 0 || normalizedChoices.length !== 2
+    || !text(data.why) || !text(data.blockedAction)
+    || !["APPROVE", "DENY"].includes(recommendation ?? "")
+    || !text(consequences.APPROVE) || !text(consequences.DENY)) return { state: "CONFLICTING" }
+  return {
+    state: "ACTIONABLE",
+    why: safeText(data.why, "Owner authority is required."),
+    blockedAction: safeText(data.blockedAction, "Gated runtime work remains blocked."),
+    gates: normalizedGates.map((entry) => safeText(entry, "UNKNOWN")),
+    recommendation: recommendation as "APPROVE" | "DENY",
+    ...(text(data.recommendationRationale) ? { recommendationRationale: safeText(data.recommendationRationale, "") } : {}),
+    choices: normalizedChoices,
+    consequences: {
+      APPROVE: safeText(consequences.APPROVE, "Record authority only."),
+      DENY: safeText(consequences.DENY, "Resolve denied."),
+    },
   }
 }
 
@@ -344,6 +410,26 @@ function projectSource(source: ThreadSourceInput): ThreadItem[] {
       )]
     case "governance_event":
     case "event_log": {
+      const projectedDecision = decisionDetail(data.decision)
+      if (source.kind === "governance_event" && projectedDecision) {
+        return [item(
+          source,
+          "decision",
+          "DECISION",
+          "OWNER",
+          projectedDecision.state === "ACTIONABLE"
+            ? "Runtime finding needs your decision"
+            : projectedDecision.state === "OWNER_DECIDED"
+              ? "Runtime finding decision recorded"
+              : "Runtime finding decision conflict",
+          projectedDecision.why
+            ?? (projectedDecision.state === "OWNER_DECIDED"
+              ? `${projectedDecision.choice}: ${projectedDecision.disposition}`
+              : "Decision receipt conflicts with its gated finding."),
+          projectedDecision.state,
+          projectedDecision,
+        )]
+      }
       const state = text(data.state) ?? text(data.checkpointState) ?? text(data.status)
       const eventType = text(data.eventType) ?? text(data.type)
       const kind = eventKind(state, eventType)

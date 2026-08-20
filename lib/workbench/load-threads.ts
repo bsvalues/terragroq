@@ -5,6 +5,9 @@ import {
   type ThreadSourceInput,
   type ThreadSourceKind,
 } from "@/lib/workbench/thread-projection"
+import { projectRuntimeFindingDecisionSources } from "@/lib/workbench/runtime-finding-decision-projection"
+import { readPendingRuntimeFindingDecisionRequest } from "@/scripts/hermes-bridge/runtime-finding-decision.mjs"
+import { PRIMARY_DECISION_OWNER_EMAIL } from "@/scripts/hermes-bridge/primary-decision-provenance.mjs"
 
 export const WORKBENCH_THREAD_LIMIT = 50
 export const WORKBENCH_SOURCE_LIMIT = 500
@@ -46,9 +49,12 @@ export interface WorkbenchThreadRepository {
   listAuditEvents(userId: string, targets: WorkbenchThreadTargets, limit: number): Promise<AuditEventRow[]>
 }
 
+type RuntimeFindingDecisionReader = (input: Readonly<{ ownerEmail: string }>) => Promise<Record<string, unknown> | null>
+
 type Dependencies = Readonly<{
   authenticate: () => Promise<string>
   repository: WorkbenchThreadRepository
+  readRuntimeFindingDecision?: RuntimeFindingDecisionReader
 }>
 
 function distinct<T>(values: readonly T[]): T[] {
@@ -264,7 +270,21 @@ export async function loadAuthenticatedWorkbenchThreads(
     || (row.register === "outcome-queue" && row.refId !== null && targets.goalIds.includes(row.refId))
   ))
 
+  let actionableRuntimeFinding: Record<string, unknown> | null = null
+  try {
+    const reader = dependencies.readRuntimeFindingDecision
+      ?? readPendingRuntimeFindingDecisionRequest as unknown as RuntimeFindingDecisionReader
+    const candidate = await reader({
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })
+    if (candidate?.ownerUserId === userId) actionableRuntimeFinding = candidate as Record<string, unknown>
+  } catch {
+    // The timeline remains available when the canonical decision reader fails closed. Persisted
+    // receipt conflicts are still projected below; an unverified gate is never called actionable.
+  }
+
   const allBindings: ThreadBindingInput[] = []
+  const runtimeDecisionSources: ThreadSourceInput[] = []
   for (const thread of threads) {
     const persisted = persistedBindings.filter((row) => row.threadId === thread.id)
     for (const row of persisted) {
@@ -295,6 +315,18 @@ export async function loadAuthenticatedWorkbenchThreads(
     for (const row of evidence.filter((candidate) => threadWorkOrderIds.includes(candidate.workOrderId) || threadOutcomes.some((outcome) => outcome.terminalEvidenceId === candidate.id))) allBindings.push(binding(thread.id, userId, projectId, "evidence_record", String(row.id)))
     for (const row of governance.filter((candidate) => (candidate.entityType === "goal" && threadGoalIds.includes(Number(candidate.entityId))) || (candidate.entityType === "work_order" && threadWorkOrderIds.includes(Number(candidate.entityId))) || (candidate.entityType === "outcome_queue_item" && candidate.entityId !== null && threadOutcomes.some((outcome) => outcome.outcomeKey === candidate.entityId)))) allBindings.push(binding(thread.id, userId, projectId, "governance_event", String(row.id)))
     for (const row of audits.filter((candidate) => (candidate.register === "goals" && candidate.refId !== null && threadGoalIds.includes(candidate.refId)) || (candidate.register === "work-orders" && candidate.refId !== null && threadWorkOrderIds.includes(candidate.refId)) || (candidate.register === "outcome-queue" && candidate.refId !== null && threadGoalIds.includes(candidate.refId)))) allBindings.push(binding(thread.id, userId, projectId, "event_log", String(row.id)))
+    for (const workOrder of threadWorkOrders) {
+      const projection = projectRuntimeFindingDecisionSources({
+        userId,
+        projectId,
+        threadId: thread.id,
+        workOrder: { id: workOrder.id, ref: workOrder.ref },
+        events: governance,
+        actionableRequest: actionableRuntimeFinding,
+      })
+      allBindings.push(...projection.bindings)
+      runtimeDecisionSources.push(...projection.sources)
+    }
   }
 
   const sources: ThreadSourceInput[] = [
@@ -320,7 +352,8 @@ export async function loadAuthenticatedWorkbenchThreads(
     ...workOrders.map((row) => ({ kind: "work_order" as const, id: String(row.id), userId, occurredAt: row.updatedAt, ref: row.ref, drilldown: sourceDrilldown("work_order", String(row.id)), data: { title: row.title, description: row.description, status: row.status, result: row.result } })),
     ...decisions.map((row) => ({ kind: "decision" as const, id: String(row.id), userId, occurredAt: row.updatedAt, ref: row.ref, drilldown: sourceDrilldown("decision", String(row.id)), data: { title: row.title, decision: row.decision, status: row.status, authority: row.authority } })),
     ...evidence.map((row) => ({ kind: "evidence_record" as const, id: String(row.id), userId, occurredAt: row.createdAt, ref: row.ref, drilldown: sourceDrilldown("evidence_record", String(row.id)), data: { result: row.result, summary: row.notes, validators: row.validators, contentHash: row.contentHash, artifactLabel: row.contentHash ? "Hashed evidence artifact" : undefined } })),
-    ...governance.map((row) => { const meta = metadata(row.metadata); return { kind: "governance_event" as const, id: String(row.id), userId, occurredAt: row.createdAt, ref: row.ref, mirrorKey: safeString(meta, "mirrorKey") ?? `governance_event:${row.id}`, drilldown: sourceDrilldown("governance_event", String(row.id)), data: { eventType: row.eventType, reason: row.reason, ...eventData(meta) } } }),
+    ...governance.filter((row) => !["RUNTIME_FINDING_OWNER_GATED", "RUNTIME_FINDING_OWNER_DECIDED"].includes(row.eventType)).map((row) => { const meta = metadata(row.metadata); return { kind: "governance_event" as const, id: String(row.id), userId, occurredAt: row.createdAt, ref: row.ref, mirrorKey: safeString(meta, "mirrorKey") ?? `governance_event:${row.id}`, drilldown: sourceDrilldown("governance_event", String(row.id)), data: { eventType: row.eventType, reason: row.reason, ...eventData(meta) } } }),
+    ...runtimeDecisionSources,
     ...audits.map((row) => { const meta = metadata(row.metadata); const governanceEventId = safePositiveInteger(meta, "governanceEventId"); return { kind: "event_log" as const, id: String(row.id), userId, occurredAt: row.createdAt, mirrorKey: safeString(meta, "mirrorKey") ?? (governanceEventId ? `governance_event:${governanceEventId}` : undefined), drilldown: sourceDrilldown("event_log", String(row.id)), data: { type: row.type, summary: row.summary, ...eventData(meta) } } }),
   ]
 
