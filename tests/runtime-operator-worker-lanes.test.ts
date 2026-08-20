@@ -13,6 +13,36 @@ describe("the roster tells the truth", () => {
     const implementers = roster.filter((lane) => lane.capabilities.includes(IMPLEMENTATION))
     expect(implementers.map((lane) => lane.id)).toEqual(["codex", "claude"])
   })
+
+  it("keeps saying so after WO-0030 wired the local lane end to end", () => {
+    // Reachable is not capable. The lane now has an entrypoint, a packet and a worktree; whether
+    // williamos-qwen3-4b:64k clears this kernel's bar is a measurement, and until one is recorded the
+    // truthful answer is the one the roster has always given.
+    const hermes = laneRoster().find((lane) => lane.id === "hermes-local")
+    expect(hermes?.binary).toBe("pwsh")
+    expect(hermes?.capabilities).toEqual([])
+  })
+
+  it("grants the capability only to a measurement that says what proved it", () => {
+    const measured = {
+      "hermes-local": { implementation: "PROVEN", evidence: "wo-0030-lane-probe" },
+    }
+    const hermes = laneRoster({ measured }).find((lane) => lane.id === "hermes-local")
+    expect(hermes?.capabilities).toEqual([IMPLEMENTATION])
+    const choice = selectLane({ assigned: "hermes-local", roster: laneRoster({ measured }), status: {}, now: NOW })
+    expect(choice.lane?.id).toBe("hermes-local")
+  })
+
+  it("refuses a verdict that cites nothing, so promotion costs more than one edited word", () => {
+    for (const record of [
+      { implementation: "PROVEN" },
+      { implementation: "PROVEN", evidence: "  " },
+      { implementation: "MEASURED_INCAPABLE", evidence: "wo-0030-lane-probe" },
+    ]) {
+      const hermes = laneRoster({ measured: { "hermes-local": record } }).find((lane) => lane.id === "hermes-local")
+      expect(hermes?.capabilities).toEqual([])
+    }
+  })
 })
 
 describe("selection policy", () => {
