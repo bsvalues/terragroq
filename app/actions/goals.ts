@@ -11,6 +11,7 @@ import {
   governanceEvent,
   outcomeQueueItem,
   project,
+  projectResource,
   workbenchThread,
   workbenchThreadSource,
   workOrder,
@@ -231,11 +232,30 @@ async function persistGoalOutcome(
     }
     if (startInput) {
       const projects = await transaction
-        .select({ id: project.id, userId: project.userId })
+        .select({ id: project.id, userId: project.userId, lifecycle: project.lifecycle })
         .from(project)
         .where(and(eq(project.userId, userId), eq(project.id, startInput.projectId)))
         .limit(2)
-      if (projects.length !== 1) {
+      const primaryRepositories = projects.length === 1
+        ? await transaction
+            .select({
+              canonicalIdentity: projectResource.canonicalIdentity,
+              relationship: projectResource.relationship,
+              type: projectResource.type,
+            })
+            .from(projectResource)
+            .where(and(
+              eq(projectResource.userId, userId),
+              eq(projectResource.projectId, startInput.projectId),
+              eq(projectResource.type, "repo"),
+              eq(projectResource.relationship, "primary-repo"),
+            ))
+            .limit(2)
+        : []
+      if (projects.length !== 1
+        || projects[0].lifecycle !== "active"
+        || primaryRepositories.length !== 1
+        || primaryRepositories[0].canonicalIdentity !== "bsvalues/terragroq") {
         return {
           goal: null,
           start: unavailableOutcomeStart("PROJECT_NOT_FOUND", "PROJECT_NOT_FOUND", startInput.projectId),

@@ -183,6 +183,23 @@ describe("UniversalIntent shared Workbench contract", () => {
     expect(objectiveCalls()).toHaveLength(1)
   })
 
+  it.each([
+    "Build a useful release dashboard",
+    "Fix the broken Project selector",
+  ])("preserves ordinary objective admission for a generic outcome route in a selected Project: %s", async (intent) => {
+    const user = userEvent.setup()
+    intentReply = async () => reply(OUTCOME)
+    render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)
+
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), intent)
+    await user.keyboard("{Enter}")
+
+    expect(await screen.findByText("Admitted as work")).toBeTruthy()
+    expect(outcomeHarness.start).not.toHaveBeenCalled()
+    expect(objectiveCalls()).toHaveLength(1)
+    expect(JSON.parse(objectiveCalls()[0][1].body)).toEqual({ objective: intent })
+  })
+
   it("keeps a real visible composer and Ctrl+K palette on the same draft and registry", async () => {
     const user = userEvent.setup()
     render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)

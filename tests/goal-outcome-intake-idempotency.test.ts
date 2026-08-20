@@ -8,7 +8,8 @@ const harness = vi.hoisted(() => {
     receipts: [] as Record<string, unknown>[],
     governance: [] as Record<string, unknown>[],
     events: [] as Record<string, unknown>[],
-    projects: [{ id: 7, userId: "owner" }, { id: 8, userId: "owner" }] as Record<string, unknown>[],
+    projects: [{ id: 7, userId: "owner", lifecycle: "active" }, { id: 8, userId: "owner", lifecycle: "active" }] as Record<string, unknown>[],
+    projectResources: [] as Record<string, unknown>[],
     threads: [] as Record<string, unknown>[],
     threadSources: [] as Record<string, unknown>[],
     failAfterCommit: false,
@@ -111,6 +112,8 @@ function tableRows(table: unknown) {
       return harness.state.receipts
     case "project":
       return harness.state.projects
+    case "project_resource":
+      return harness.state.projectResources
     case "workbench_thread":
       return harness.state.threads
     case "workbench_thread_source":
@@ -256,7 +259,14 @@ beforeEach(async () => {
   harness.state.receipts.length = 0
   harness.state.governance.length = 0
   harness.state.events.length = 0
-  harness.state.projects.splice(0, harness.state.projects.length, { id: 7, userId: "owner" }, { id: 8, userId: "owner" })
+  harness.state.projects.splice(0, harness.state.projects.length,
+    { id: 7, userId: "owner", lifecycle: "active" },
+    { id: 8, userId: "owner", lifecycle: "active" },
+  )
+  harness.state.projectResources.splice(0, harness.state.projectResources.length,
+    { id: 1, userId: "owner", projectId: 7, type: "repo", canonicalIdentity: "bsvalues/terragroq", relationship: "primary-repo" },
+    { id: 2, userId: "owner", projectId: 8, type: "repo", canonicalIdentity: "bsvalues/terragroq", relationship: "primary-repo" },
+  )
   harness.state.threads.length = 0
   harness.state.threadSources.length = 0
   harness.state.failAfterCommit = false
@@ -513,6 +523,57 @@ describe("authenticated goal outcome intake idempotency", () => {
     ])
     expect(JSON.stringify({ result, goal: harness.state.goals[0], outcome: harness.state.outcomes[0] }))
       .not.toMatch(/authorityGrantRef":"(?!null)|approvalDecisionId":[0-9]|dispatch/i)
+  })
+
+  it.each(["standby", "archived"])("rejects the exact #911 outcome before effects when the Project is %s", async (lifecycle) => {
+    harness.state.projects[0].lifecycle = lifecycle
+
+    await expect(startWorkbenchOutcome({
+      projectId: 7,
+      intent: "record structured #911 reliability remediation without host mutation",
+      idempotencyKey: `workbench-outcome:issue-911-${lifecycle}`,
+    })).resolves.toMatchObject({ status: "PROJECT_NOT_FOUND", projectId: 7 })
+
+    expect(harness.state.goals).toHaveLength(0)
+    expect(harness.state.outcomes).toHaveLength(0)
+    expect(harness.state.receipts).toHaveLength(0)
+    expect(harness.state.threads).toHaveLength(0)
+    expect(harness.state.threadSources).toHaveLength(0)
+  })
+
+  it("rejects the exact #911 outcome before effects when the primary repository is wrong", async () => {
+    harness.state.projectResources[0].canonicalIdentity = "bsvalues/not-terragroq"
+
+    await expect(startWorkbenchOutcome({
+      projectId: 7,
+      intent: "record structured #911 reliability remediation without host mutation",
+      idempotencyKey: "workbench-outcome:issue-911-wrong-repo",
+    })).resolves.toMatchObject({ status: "PROJECT_NOT_FOUND", projectId: 7 })
+
+    expect(harness.state.goals).toHaveLength(0)
+    expect(harness.state.outcomes).toHaveLength(0)
+    expect(harness.state.receipts).toHaveLength(0)
+    expect(harness.state.threads).toHaveLength(0)
+    expect(harness.state.threadSources).toHaveLength(0)
+  })
+
+  it("rejects the exact #911 outcome before effects when primary repository custody is duplicated", async () => {
+    harness.state.projectResources.push({
+      id: 3, userId: "owner", projectId: 7, type: "repo",
+      canonicalIdentity: "bsvalues/secondary", relationship: "primary-repo",
+    })
+
+    await expect(startWorkbenchOutcome({
+      projectId: 7,
+      intent: "record structured #911 reliability remediation without host mutation",
+      idempotencyKey: "workbench-outcome:issue-911-duplicate-repo",
+    })).resolves.toMatchObject({ status: "PROJECT_NOT_FOUND", projectId: 7 })
+
+    expect(harness.state.goals).toHaveLength(0)
+    expect(harness.state.outcomes).toHaveLength(0)
+    expect(harness.state.receipts).toHaveLength(0)
+    expect(harness.state.threads).toHaveLength(0)
+    expect(harness.state.threadSources).toHaveLength(0)
   })
 
   it("replays the exact accepted graph after response loss", async () => {

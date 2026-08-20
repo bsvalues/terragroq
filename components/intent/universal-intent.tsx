@@ -22,6 +22,7 @@ import {
 import type { UniversalIntentRoute } from "@/lib/intent/router"
 import { MAX_OBJECTIVE_LENGTH } from "@/lib/objective/intake"
 import type { StartWorkbenchOutcomeResult } from "@/lib/workbench/outcome-start"
+import { isIssue911ReliabilityOutcomeIntent } from "@/lib/workbench/registered-outcome-intent"
 
 /**
  * Submit an ordinary-language objective (#891, #871 boundary 1).
@@ -179,7 +180,9 @@ export const UniversalIntent: FC<ShellContext> = ({ selectedProject = null, onOp
         setRouteResult(routed)
         return
       }
-      if (routed?.destination?.action === "start_outcome" && selectedProject) {
+      if (routed?.destination?.action === "start_outcome"
+        && selectedProject
+        && isIssue911ReliabilityOutcomeIntent(intent)) {
         startingOutcome = true
         const signature = `${selectedProject.id}:${intent}`
         const attempt = outcomeAttemptRef.current?.signature === signature
