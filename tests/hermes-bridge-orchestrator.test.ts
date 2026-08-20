@@ -15,6 +15,7 @@ import {
   hermesTurnResultDigest,
   normalizeHermesTurnResult,
 } from "../scripts/hermes-bridge/state-store.mjs"
+import { resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 
 const roots: string[] = []
 const ownerDecisionPacket = {
@@ -288,6 +289,38 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         contract,
         provenance: {
           operation: "runtime_finding.derive", outcomeKey: "runtime-finding:101:digest", workOrderId: 201,
+        },
+      },
+    }, resolver)).toThrow(expect.objectContaining({ code: "HERMES_WORK_CONTRACT_WALL" }))
+  })
+
+  it("accepts the exact verified Workbench parent contract provenance", () => {
+    const command = "record structured #911 reliability remediation without host mutation"
+    const contract = resolveHermesWorkContract({
+      command, title: command, objective: command,
+      lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+    })!
+    const resolver = vi.fn(() => null)
+    expect(requireHermesWorkContract({
+      id: 7, command, outcomeKey: "goal:GOAL-0007",
+      queueBinding: { outcomeKey: "goal:GOAL-0007" },
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: {
+          operation: "workbench_execution.authorize", outcomeKey: "goal:GOAL-0007",
+          workOrderRef: "WO-HERMES-OUTCOME-7",
+        },
+      },
+    }, resolver)).toBe(contract)
+    expect(resolver).not.toHaveBeenCalled()
+    expect(() => requireHermesWorkContract({
+      id: 7, command, outcomeKey: "goal:GOAL-0007",
+      queueBinding: { outcomeKey: "goal:GOAL-0007" },
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: {
+          operation: "workbench_execution.authorize", outcomeKey: "goal:GOAL-OTHER",
+          workOrderRef: "WO-HERMES-OUTCOME-7",
         },
       },
     }, resolver)).toThrow(expect.objectContaining({ code: "HERMES_WORK_CONTRACT_WALL" }))

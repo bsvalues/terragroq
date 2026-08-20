@@ -24,6 +24,7 @@ import {
   terminalizeOutcome as terminalizeGoalOutcome,
 } from "./outcome-source.mjs"
 import { blocksAction } from "../runtime-findings/policy.mjs"
+import { resolveHermesWorkContract } from "./work-contract.mjs"
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
@@ -192,6 +193,165 @@ async function loadDeclaredPrimary(withPool) {
   })
 }
 
+const WORKBENCH_BLOCKED_ACTIONS = Object.freeze([
+  "production:mutate", "release:create", "secret:access", "spend:increase",
+])
+
+async function loadWorkbenchParentContract(pool, queueItem, goal) {
+  const result = await pool.query(
+    `SELECT receipt.operation AS "receiptOperation", receipt."requestHash" AS "requestHash",
+            receipt."requestBinding" AS "requestBinding", receipt."resultBinding" AS "resultBinding",
+            project.id AS "projectId", project."userId" AS "projectUserId",
+            project.lifecycle AS "projectLifecycle",
+            thread.id AS "threadId", thread."userId" AS "threadUserId",
+            thread."projectId" AS "threadProjectId",
+            (SELECT count(*)::integer FROM workbench_thread_source root
+              WHERE root."userId" = receipt."userId" AND root."sourceType" = 'outcome'
+                AND root."sourceId" = receipt."outcomeKey" AND root.role = 'root') AS "rootCount",
+            (SELECT min(root."threadId") FROM workbench_thread_source root
+              WHERE root."userId" = receipt."userId" AND root."sourceType" = 'outcome'
+                AND root."sourceId" = receipt."outcomeKey" AND root.role = 'root') AS "rootThreadId",
+            (SELECT count(*)::integer FROM project_resource repo
+              WHERE repo."userId" = project."userId" AND repo."projectId" = project.id
+                AND repo.type = 'repo' AND repo.relationship = 'primary-repo') AS "primaryRepoCount",
+            (SELECT min(repo."canonicalIdentity") FROM project_resource repo
+              WHERE repo."userId" = project."userId" AND repo."projectId" = project.id
+                AND repo.type = 'repo' AND repo.relationship = 'primary-repo') AS "primaryRepository",
+            approval.id AS "approvalId", approval.ref AS "approvalRef",
+            approval."userId" AS "approvalUserId", approval.status AS "approvalStatus",
+            approval.authority AS "approvalAuthority", approval.owner AS "approvalOwner",
+            approval.scope AS "approvalScope", approval.locked AS "approvalLocked",
+            approval.decision AS "approvalDecision", approval.evidence AS "approvalEvidence",
+            approval.tags AS "approvalTags",
+            queue_grant.id AS "queueGrantId", queue_grant.ref AS "queueGrantRef",
+            queue_grant."userId" AS "queueGrantUserId", queue_grant.status AS "queueGrantStatus",
+            queue_grant."revokedAt" AS "queueGrantRevokedAt",
+            queue_grant."expiresAt" AS "queueGrantExpiresAt",
+            queue_grant."grantedBy" AS "queueGrantGrantedBy",
+            queue_grant."grantedTo" AS "queueGrantGrantedTo",
+            queue_grant."authorityLevel" AS "queueGrantAuthorityLevel",
+            queue_grant.scope AS "queueGrantScope", queue_grant."workOrderId" AS "queueGrantWorkOrderId",
+            queue_grant."allowedActions" AS "queueGrantAllowedActions",
+            queue_grant."blockedActions" AS "queueGrantBlockedActions",
+            implementation_grant.id AS "implementationGrantId",
+            implementation_grant.ref AS "implementationGrantRef",
+            implementation_grant."userId" AS "implementationGrantUserId",
+            implementation_grant.status AS "implementationGrantStatus",
+            implementation_grant."revokedAt" AS "implementationGrantRevokedAt",
+            implementation_grant."expiresAt" AS "implementationGrantExpiresAt",
+            implementation_grant."grantedBy" AS "implementationGrantGrantedBy",
+            implementation_grant."grantedTo" AS "implementationGrantGrantedTo",
+            implementation_grant."authorityLevel" AS "implementationGrantAuthorityLevel",
+            implementation_grant.scope AS "implementationGrantScope",
+            implementation_grant."workOrderId" AS "implementationGrantWorkOrderId",
+            implementation_grant."allowedActions" AS "implementationGrantAllowedActions",
+            implementation_grant."blockedActions" AS "implementationGrantBlockedActions"
+       FROM outcome_queue_mutation_receipt receipt
+       JOIN project ON project."userId" = receipt."userId"
+         AND project.id::text = receipt."requestBinding"->>'projectId'
+       JOIN workbench_thread thread ON thread."userId" = receipt."userId"
+         AND thread.id = receipt."requestBinding"->>'threadId'
+       JOIN decision approval ON approval."userId" = receipt."userId"
+         AND approval.id::text = receipt."resultBinding"->>'decisionId'
+       JOIN authority_grant queue_grant ON queue_grant."userId" = receipt."userId"
+         AND queue_grant.id::text = receipt."resultBinding"->>'grantId'
+         AND queue_grant.ref = receipt."resultBinding"->>'grantRef'
+       JOIN authority_grant implementation_grant ON implementation_grant."userId" = receipt."userId"
+         AND implementation_grant.id::text = receipt."resultBinding"->>'implementationGrantId'
+         AND implementation_grant.ref = receipt."resultBinding"->>'implementationGrantRef'
+      WHERE receipt."userId" = $1 AND receipt."outcomeKey" = $2
+        AND receipt.operation = 'workbench_execution.authorize'
+      ORDER BY receipt.id LIMIT 2`,
+    [queueItem.userId, queueItem.outcomeKey],
+  )
+  if (result.rows.length !== 1) {
+    wall("Workbench parent authorization graph is not unique", "HERMES_WORKBENCH_PARENT_CONTRACT_WALL")
+  }
+  const row = result.rows[0]
+  const request = row.requestBinding
+  const binding = row.resultBinding
+  const contract = binding?.workContract
+  const registered = resolveHermesWorkContract({
+    command: goal.command, title: queueItem.title, objective: queueItem.objective,
+    lane: goal.lane, risk: goal.risk, authority: goal.authority,
+  })
+  const expectedWorkOrderRef = `WO-HERMES-OUTCOME-${Number(goal.id)}`
+  const expectedEvidence = registered && [
+    `project:${request?.projectId}`, `thread:${request?.threadId}`, "repo:bsvalues/terragroq",
+    `work-contract:${registered.id}`, `work-contract-digest:${registered.digest}`,
+    `work-contract-json:${JSON.stringify(registered)}`,
+    ...registered.reservations.map((reservation) => `reservation:${reservation}`),
+    ...registered.validationCommands.map((validator) => `validator:${validator.command}:${validator.args.join(" ")}`),
+  ]
+  const expectedRequestHash = request && createHash("sha256").update(canonicalJson({
+    contract: "workbench-execution-authorization.v1", ...request,
+  })).digest("hex")
+  const expiresAt = Date.parse(binding?.expiresAt ?? "")
+  const exactRequestKeys = "confirmation,idempotencyKey,outcomeKey,projectId,threadId"
+  const exactResultKeys = [
+    "authorizedAt", "decisionId", "decisionRef", "expiresAt", "grantId", "grantRef",
+    "implementationGrantId", "implementationGrantRef", "queueVersion", "workContract",
+  ].sort().join(",")
+  if (row.receiptOperation !== "workbench_execution.authorize"
+    || Object.keys(request ?? {}).sort().join(",") !== exactRequestKeys
+    || Object.keys(binding ?? {}).sort().join(",") !== exactResultKeys
+    || row.requestHash !== expectedRequestHash
+    || request?.confirmation !== "START_WORK" || request?.outcomeKey !== queueItem.outcomeKey
+    || request?.idempotencyKey == null || request.idempotencyKey.trim() === ""
+    || Number(request?.projectId) !== Number(row.projectId) || request?.threadId !== row.threadId
+    || row.projectUserId !== queueItem.userId || row.projectLifecycle !== "active"
+    || row.threadUserId !== queueItem.userId || Number(row.threadProjectId) !== Number(row.projectId)
+    || Number(row.rootCount) !== 1 || row.rootThreadId !== request?.threadId
+    || Number(row.primaryRepoCount) !== 1
+    || row.primaryRepository !== "bsvalues/terragroq"
+    || !registered || canonicalJson(contract) !== canonicalJson(registered)
+    || Number(binding?.decisionId) !== Number(queueItem.approvalDecisionId)
+    || Number(binding?.decisionId) !== Number(row.approvalId)
+    || binding?.decisionRef !== row.approvalRef || row.approvalUserId !== queueItem.userId
+    || row.approvalStatus !== "accepted" || row.approvalAuthority !== "binding"
+    || row.approvalOwner !== queueItem.userId || row.approvalScope !== queueItem.outcomeKey
+    || row.approvalLocked !== true || String(row.approvalDecision).trim().toUpperCase() !== "APPROVE"
+    || JSON.stringify(row.approvalEvidence) !== JSON.stringify(expectedEvidence)
+    || JSON.stringify(row.approvalTags) !== JSON.stringify(["workbench", "outcome", "explicit-start-work"])
+    || Number(binding?.grantId) !== Number(row.queueGrantId)
+    || binding?.grantRef !== queueItem.authorityGrantRef || binding?.grantRef !== row.queueGrantRef
+    || row.queueGrantUserId !== queueItem.userId || row.queueGrantStatus !== "active"
+    || row.queueGrantRevokedAt != null || row.queueGrantGrantedBy !== queueItem.userId
+    || row.queueGrantGrantedTo !== "operator" || row.queueGrantAuthorityLevel !== "A2_WRITE_OWN"
+    || row.queueGrantScope !== queueItem.outcomeKey || row.queueGrantWorkOrderId != null
+    || JSON.stringify(row.queueGrantAllowedActions) !== JSON.stringify(["outcome:execute"])
+    || JSON.stringify(row.queueGrantBlockedActions) !== JSON.stringify(WORKBENCH_BLOCKED_ACTIONS)
+    || blocksAction(row.queueGrantBlockedActions, "outcome:execute")
+    || Number(binding?.implementationGrantId) !== Number(row.implementationGrantId)
+    || binding?.implementationGrantRef !== row.implementationGrantRef
+    || row.implementationGrantUserId !== queueItem.userId || row.implementationGrantStatus !== "active"
+    || row.implementationGrantRevokedAt != null || row.implementationGrantGrantedBy !== queueItem.userId
+    || row.implementationGrantGrantedTo !== "operator"
+    || row.implementationGrantAuthorityLevel !== "A2_WRITE_OWN"
+    || row.implementationGrantScope !== expectedWorkOrderRef || row.implementationGrantWorkOrderId != null
+    || JSON.stringify(row.implementationGrantAllowedActions) !== JSON.stringify(["implement"])
+    || JSON.stringify(row.implementationGrantBlockedActions) !== JSON.stringify(WORKBENCH_BLOCKED_ACTIONS)
+    || blocksAction(row.implementationGrantBlockedActions, "implement")
+    || Number(binding?.queueVersion) !== 1 || !Number.isFinite(Date.parse(binding?.authorizedAt ?? ""))
+    || !Number.isFinite(expiresAt) || expiresAt <= Date.now()
+    || Date.parse(row.queueGrantExpiresAt) !== expiresAt
+    || Date.parse(row.implementationGrantExpiresAt) !== expiresAt) {
+    wall("Workbench parent authorization graph conflicts", "HERMES_WORKBENCH_PARENT_CONTRACT_WALL")
+  }
+  return {
+    ...goal,
+    outcomeKey: queueItem.outcomeKey,
+    verifiedQueueWorkContract: Object.freeze({
+      contract: Object.freeze(contract),
+      provenance: Object.freeze({
+        operation: row.receiptOperation,
+        outcomeKey: queueItem.outcomeKey,
+        workOrderRef: expectedWorkOrderRef,
+      }),
+    }),
+  }
+}
+
 async function loadLinkedGoal(withPool, queueItem) {
   if (!Number.isSafeInteger(Number(queueItem?.goalId)) || Number(queueItem.goalId) <= 0) {
     wall("Acquired queue item is not linked to a governed goal", "HERMES_OUTCOME_QUEUE_GOAL_WALL")
@@ -290,6 +450,9 @@ async function loadLinkedGoal(withPool, queueItem) {
     if (derivedReceiptOperation == null) {
       if (String(queueItem.outcomeKey).startsWith("runtime-finding:")) {
         wall("Derived queue contract receipt is unavailable", "HERMES_RUNTIME_FINDING_CONTRACT_WALL")
+      }
+      if (publicGoal.lane === "operator-objective") {
+        return loadWorkbenchParentContract(pool, queueItem, publicGoal)
       }
       return publicGoal
     }
@@ -784,7 +947,10 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       const item = acquired.outcome
       try {
         const goal = await resolveGoal(item)
-        const governedOutcome = governedQueueOutcome(item, goal)
+        const governedOutcome = {
+          ...governedQueueOutcome(item, goal),
+          queueBinding: persistedBinding(item),
+        }
         const decision = evaluateOutcomePolicy({
           outcome: governedOutcome,
           actor: "bsvalues",
@@ -795,10 +961,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         if (!decision.allowed) {
           wall(decision.reasonCode, `HERMES_OUTCOME_QUEUE_POLICY_${decision.reasonCode}`)
         }
-        return {
-          ...governedOutcome,
-          queueBinding: persistedBinding(item),
-        }
+        return governedOutcome
       } catch (error) {
         if (error?.code !== "HERMES_OUTCOME_QUEUE_GOAL_WALL"
           && !String(error?.code ?? "").startsWith("HERMES_OUTCOME_QUEUE_POLICY_")) {

@@ -9,8 +9,11 @@ import {
 } from "../../lib/outcome-queue/contract.mjs"
 import { isVerifiedPrimaryAuthorization } from "./primary-authorization-provenance.mjs"
 import {
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+  resolveHermesWorkContract,
 } from "./work-contract.mjs"
 import {
   createHermesDatabasePool,
@@ -68,6 +71,27 @@ const LEGACY_GOAL_REFS = Object.freeze([
 ])
 const REVIEWED_WORK_CONTRACT_ID_SQL = HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID.replaceAll("'", "''")
 const REVIEWED_WORK_CONTRACT_DIGEST_SQL = HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST.replaceAll("'", "''")
+const ISSUE_911_WORK_CONTRACT_ID_SQL = HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID.replaceAll("'", "''")
+const ISSUE_911_WORK_CONTRACT_DIGEST_SQL = HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST.replaceAll("'", "''")
+const ISSUE_911_WORK_CONTRACT = resolveHermesWorkContract({
+  command: "record structured #911 reliability remediation without host mutation",
+  title: "record structured #911 reliability remediation without host mutation",
+  objective: "record structured #911 reliability remediation without host mutation",
+  lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+})
+if (!ISSUE_911_WORK_CONTRACT) throw new Error("Registered #911 work contract is unavailable")
+const sqlString = (value) => `'${String(value).replaceAll("'", "''")}'`
+const ISSUE_911_WORK_CONTRACT_JSON_SQL = JSON.stringify(ISSUE_911_WORK_CONTRACT).replaceAll("'", "''")
+const ISSUE_911_APPROVAL_EVIDENCE_SQL = [
+  "repo:bsvalues/terragroq",
+  `work-contract:${ISSUE_911_WORK_CONTRACT.id}`,
+  `work-contract-digest:${ISSUE_911_WORK_CONTRACT.digest}`,
+  `work-contract-json:${JSON.stringify(ISSUE_911_WORK_CONTRACT)}`,
+  ...ISSUE_911_WORK_CONTRACT.reservations.map((reservation) => `reservation:${reservation}`),
+  ...ISSUE_911_WORK_CONTRACT.validationCommands.map((validator) => (
+    `validator:${validator.command}:${validator.args.join(" ")}`
+  )),
+]
 
 const QUEUE_COLUMNS = `
   q."id",
@@ -341,6 +365,8 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
       AND exact_execution_grant."workOrderId" IS NULL
       AND cardinality(exact_execution_grant."allowedActions") = 1
       AND exact_execution_grant."allowedActions"[1] = 'outcome:execute'
+      AND exact_execution_grant."grantedBy" = q."userId"
+      AND exact_execution_grant."blockedActions" = ARRAY['production:mutate', 'release:create', 'secret:access', 'spend:increase']::text[]
   )
   AND EXISTS (
     SELECT 1
@@ -353,6 +379,17 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
     JOIN "workbench_thread" AS execution_thread
       ON execution_thread."userId" = execution_root."userId"
       AND execution_thread.id = execution_root."threadId"
+    JOIN "decision" AS exact_execution_approval
+      ON exact_execution_approval."userId" = execution_receipt."userId"
+      AND exact_execution_approval.id::text = execution_receipt."resultBinding"->>'decisionId'
+    JOIN "authority_grant" AS receipt_execution_grant
+      ON receipt_execution_grant."userId" = execution_receipt."userId"
+      AND receipt_execution_grant.id::text = execution_receipt."resultBinding"->>'grantId'
+      AND receipt_execution_grant.ref = execution_receipt."resultBinding"->>'grantRef'
+    LEFT JOIN "authority_grant" AS exact_implementation_grant
+      ON exact_implementation_grant."userId" = execution_receipt."userId"
+      AND exact_implementation_grant.id::text = execution_receipt."resultBinding"->>'implementationGrantId'
+      AND exact_implementation_grant.ref = execution_receipt."resultBinding"->>'implementationGrantRef'
     WHERE execution_receipt."userId" = q."userId"
       AND execution_receipt."outcomeKey" = q."outcomeKey"
       AND execution_receipt.operation = 'workbench_execution.authorize'
@@ -360,10 +397,63 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
       AND execution_receipt."requestBinding"->>'outcomeKey' = q."outcomeKey"
       AND execution_receipt."requestBinding"->>'threadId' = execution_root."threadId"
       AND execution_receipt."requestBinding"->>'projectId' = execution_thread."projectId"::text
+      AND execution_receipt."requestBinding"->>'idempotencyKey' = execution_receipt."idempotencyKey"
+      AND execution_receipt."requestBinding" = jsonb_build_object(
+        'projectId', execution_thread."projectId",
+        'threadId', execution_root."threadId",
+        'outcomeKey', q."outcomeKey",
+        'idempotencyKey', execution_receipt."idempotencyKey",
+        'confirmation', 'START_WORK'
+      )
       AND execution_receipt."resultBinding"->>'grantRef' = q."authorityGrantRef"
+      AND receipt_execution_grant.ref = q."authorityGrantRef"
+      AND receipt_execution_grant.status = 'active'
+      AND receipt_execution_grant."revokedAt" IS NULL
+      AND receipt_execution_grant."expiresAt" = (execution_receipt."resultBinding"->>'expiresAt')::timestamptz
+      AND receipt_execution_grant."grantedBy" = q."userId"
+      AND receipt_execution_grant."grantedTo" = 'operator'
+      AND receipt_execution_grant."authorityLevel" = 'A2_WRITE_OWN'
+      AND receipt_execution_grant.scope = q."outcomeKey"
+      AND receipt_execution_grant."workOrderId" IS NULL
+      AND receipt_execution_grant."allowedActions" = ARRAY['outcome:execute']::text[]
+      AND receipt_execution_grant."blockedActions" = ARRAY['production:mutate', 'release:create', 'secret:access', 'spend:increase']::text[]
       AND execution_receipt."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
-      AND execution_receipt."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
-      AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}'
+      AND execution_receipt."resultBinding"->>'decisionRef' = exact_execution_approval.ref
+      AND exact_execution_approval.owner = q."userId"
+      AND exact_execution_approval.locked = true
+      AND (
+        (execution_receipt."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
+          AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}')
+        OR
+        (execution_receipt."resultBinding"->'workContract'->>'id' = '${ISSUE_911_WORK_CONTRACT_ID_SQL}'
+          AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_WORK_CONTRACT_DIGEST_SQL}'
+          AND execution_receipt."resultBinding"->'workContract' = '${ISSUE_911_WORK_CONTRACT_JSON_SQL}'::jsonb
+          AND execution_receipt."requestHash" ~ '^[a-f0-9]{64}$'
+          AND (SELECT count(*) FROM jsonb_object_keys(execution_receipt."resultBinding")) = 10
+          AND exact_execution_approval.evidence = ARRAY[
+            'project:' || execution_thread."projectId"::text,
+            'thread:' || execution_root."threadId",
+            ${ISSUE_911_APPROVAL_EVIDENCE_SQL.map(sqlString).join(",\n            ")}
+          ]::text[]
+          AND exact_execution_approval.tags = ARRAY['workbench', 'outcome', 'explicit-start-work']::text[]
+          AND execution_receipt."resultBinding"->>'implementationGrantId' = exact_implementation_grant.id::text
+          AND exact_implementation_grant.status = 'active'
+          AND exact_implementation_grant."revokedAt" IS NULL
+          AND exact_implementation_grant."expiresAt" IS NOT NULL
+          AND exact_implementation_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+          AND exact_implementation_grant."authorityLevel" = 'A2_WRITE_OWN'
+          AND exact_implementation_grant."grantedBy" = q."userId"
+          AND exact_implementation_grant."grantedTo" = 'operator'
+          AND exact_implementation_grant.scope = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+          AND exact_implementation_grant."workOrderId" IS NULL
+          AND exact_implementation_grant."allowedActions" = ARRAY['implement']::text[]
+          AND exact_implementation_grant."blockedActions" = ARRAY['production:mutate', 'release:create', 'secret:access', 'spend:increase']::text[]
+          AND exact_implementation_grant."expiresAt" = (execution_receipt."resultBinding"->>'expiresAt')::timestamptz
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest(exact_implementation_grant."blockedActions") AS blocked(action)
+            WHERE position(lower(blocked.action) IN 'implement') > 0
+          ))
+      )
   )
 `
 
@@ -457,8 +547,10 @@ function exactWorkContractReceiptPredicate(alias) {
         AND ${alias}."requestBinding"->>'outcomeKey' = q."outcomeKey"
         AND ${alias}."resultBinding"->>'grantRef' = q."authorityGrantRef"
         AND ${alias}."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
-        AND ${alias}."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
-        AND ${alias}."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}')
+        AND ((${alias}."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
+          AND ${alias}."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}')
+          OR (${alias}."resultBinding"->'workContract'->>'id' = '${ISSUE_911_WORK_CONTRACT_ID_SQL}'
+            AND ${alias}."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_WORK_CONTRACT_DIGEST_SQL}')))
       OR (${alias}.operation = 'runtime_finding.derive'
         AND ${alias}."requestBinding"->>'operation' = 'runtime_finding.derive'
         AND ${alias}."resultBinding"->>'outcomeKey' = q."outcomeKey"

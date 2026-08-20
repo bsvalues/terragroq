@@ -12,6 +12,7 @@ import {
 import {
   checkpointRecordMatchesAttempt,
 } from "../scripts/hermes-bridge/v1-2-acceptance-campaign.mjs"
+import { resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 
 const canonicalJson = (value: any): string => value && typeof value === "object"
   ? Array.isArray(value)
@@ -94,6 +95,120 @@ function runtime(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Hermes durable outcome queue runtime", () => {
+  it("loads the exact registered #911 parent contract from its live Workbench authorization graph", async () => {
+    const command = "record structured #911 reliability remediation without host mutation"
+    const outcomeKey = "goal:GOAL-0007"
+    const workOrderRef = "WO-HERMES-OUTCOME-7"
+    const contract = resolveHermesWorkContract({
+      command, title: command, objective: command,
+      lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+    })!
+    const requestBinding = {
+      projectId: 7, threadId: "thread-7", outcomeKey,
+      idempotencyKey: "workbench-execution:stable-0007", confirmation: "START_WORK",
+    }
+    const requestHash = createHash("sha256").update(canonicalJson({
+      contract: "workbench-execution-authorization.v1", ...requestBinding,
+    })).digest("hex")
+    const expiresAt = "2099-08-23T18:00:00.000Z"
+    const resultBinding = {
+      decisionId: 31, decisionRef: "WB-EXEC-DEC-911", grantId: 41,
+      grantRef: "WB-EXEC-GRANT-911", implementationGrantId: 42,
+      implementationGrantRef: "WB-EXEC-IMPL-GRANT-911", queueVersion: 1,
+      authorizedAt: "2026-08-20T18:00:00.000Z", expiresAt, workContract: contract,
+    }
+    const parentQueue = {
+      ...queueItem, id: 7, outcomeKey, goalId: 7, goalRef: "GOAL-0007",
+      approvalDecisionId: 31, authorityGrantRef: resultBinding.grantRef,
+      objective: command, title: command, activeWorkOrderId: null,
+    }
+    const parentGoal = {
+      ...goal, id: 7, ref: "GOAL-0007", command, lane: "operator-objective",
+      verdict: "requires_approval", requiresApproval: true,
+    }
+    const parentAuthorization = {
+      receiptOperation: "workbench_execution.authorize", requestHash,
+      requestBinding, resultBinding,
+      projectId: 7, projectUserId: "primary-user", projectLifecycle: "active",
+      threadId: "thread-7", threadUserId: "primary-user", threadProjectId: 7,
+      rootCount: 1, rootThreadId: "thread-7",
+      primaryRepoCount: 1, primaryRepository: "bsvalues/terragroq",
+      approvalId: 31, approvalRef: resultBinding.decisionRef, approvalUserId: "primary-user",
+      approvalStatus: "accepted", approvalAuthority: "binding", approvalOwner: "primary-user",
+      approvalScope: outcomeKey, approvalLocked: true, approvalDecision: "APPROVE",
+      approvalEvidence: [
+        "project:7", "thread:thread-7", "repo:bsvalues/terragroq",
+        `work-contract:${contract.id}`, `work-contract-digest:${contract.digest}`,
+        `work-contract-json:${JSON.stringify(contract)}`,
+        ...contract.reservations.map((value) => `reservation:${value}`),
+        ...contract.validationCommands.map((value) => `validator:${value.command}:${value.args.join(" ")}`),
+      ],
+      approvalTags: ["workbench", "outcome", "explicit-start-work"],
+      queueGrantId: 41, queueGrantRef: resultBinding.grantRef, queueGrantUserId: "primary-user",
+      queueGrantStatus: "active", queueGrantRevokedAt: null, queueGrantExpiresAt: expiresAt,
+      queueGrantGrantedBy: "primary-user", queueGrantGrantedTo: "operator", queueGrantAuthorityLevel: "A2_WRITE_OWN",
+      queueGrantScope: outcomeKey, queueGrantWorkOrderId: null,
+      queueGrantAllowedActions: ["outcome:execute"],
+      queueGrantBlockedActions: ["production:mutate", "release:create", "secret:access", "spend:increase"],
+      implementationGrantId: 42, implementationGrantRef: resultBinding.implementationGrantRef,
+      implementationGrantUserId: "primary-user", implementationGrantStatus: "active",
+      implementationGrantRevokedAt: null, implementationGrantExpiresAt: expiresAt,
+      implementationGrantGrantedBy: "primary-user", implementationGrantGrantedTo: "operator", implementationGrantAuthorityLevel: "A2_WRITE_OWN",
+      implementationGrantScope: workOrderRef, implementationGrantWorkOrderId: null,
+      implementationGrantAllowedActions: ["implement"],
+      implementationGrantBlockedActions: ["production:mutate", "release:create", "secret:access", "spend:increase"],
+    }
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+      .mockResolvedValueOnce({ rows: [parentGoal] })
+      .mockResolvedValueOnce({ rows: [parentAuthorization] })
+    const bridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "not-used", campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+      createPool: vi.fn(async () => ({ query, end: vi.fn(), on: vi.fn() })),
+      acquire: vi.fn(async () => ({ outcome: parentQueue, acquired: true })),
+    })
+
+    await expect(bridge.selectOutcome()).resolves.toMatchObject({
+      id: 7, lane: "operator-objective", outcomeKey,
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: { operation: "workbench_execution.authorize", outcomeKey, workOrderRef },
+      },
+    })
+
+    for (const drifted of [
+      { ...parentAuthorization, requestHash: "0".repeat(64) },
+      { ...parentAuthorization, resultBinding: { ...resultBinding, queueVersion: 2 } },
+      { ...parentAuthorization, projectLifecycle: "archived" },
+      { ...parentAuthorization, threadProjectId: 8 },
+      { ...parentAuthorization, rootCount: 2 },
+      { ...parentAuthorization, rootThreadId: "thread-other" },
+      { ...parentAuthorization, primaryRepository: "bsvalues/other" },
+      { ...parentAuthorization, approvalOwner: "foreign" },
+      { ...parentAuthorization, approvalEvidence: ["work-contract:forged"] },
+      { ...parentAuthorization, approvalTags: ["workbench"] },
+      { ...parentAuthorization, queueGrantRef: "WB-EXEC-GRANT-DRIFTED" },
+      { ...parentAuthorization, queueGrantBlockedActions: ["outcome:execute"] },
+      { ...parentAuthorization, implementationGrantRevokedAt: "2026-08-20T19:00:00.000Z" },
+      { ...parentAuthorization, implementationGrantAllowedActions: ["outcome:execute"] },
+      { ...parentAuthorization, implementationGrantScope: "WO-HERMES-OUTCOME-999" },
+    ]) {
+      const driftQuery = vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+        .mockResolvedValueOnce({ rows: [parentGoal] })
+        .mockResolvedValueOnce({ rows: [drifted] })
+      const driftBridge = createHermesOutcomeQueueRuntime({
+        databaseUrl: "not-used", campaignWindowId: "campaign-v1-2",
+        processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+        createPool: vi.fn(async () => ({ query: driftQuery, end: vi.fn(), on: vi.fn() })),
+        acquire: vi.fn(async () => ({ outcome: parentQueue, acquired: true })),
+      })
+      await expect(driftBridge.selectOutcome())
+        .rejects.toMatchObject({ code: "HERMES_WORKBENCH_PARENT_CONTRACT_WALL" })
+    }
+  })
+
   it("loads an arbitrary derived child contract from its exact receipt", async () => {
     const contractBody = {
       version: "hermes-work-contract.v1",

@@ -19,7 +19,11 @@ import {
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { buildHermesCodexPrompt, HERMES_BLOCKED_SCOPE, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
-import { resolveHermesWorkContract } from "./work-contract.mjs"
+import {
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
+  resolveHermesWorkContract,
+} from "./work-contract.mjs"
 import {
   createHermesStateStore,
   hermesTurnResultDigest,
@@ -298,13 +302,22 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
   let contract
   if (verified !== undefined) {
     const binding = outcome?.queueBinding
-    if (!verified || verified.provenance?.operation !== "runtime_finding.derive"
-      || verified.provenance?.outcomeKey !== outcome?.outcomeKey
-      || verified.provenance?.outcomeKey !== binding?.outcomeKey
-      || Number(verified.provenance?.workOrderId) !== Number(binding?.activeWorkOrderId)
-      || typeof verified.provenance?.workOrderRef !== "string"
-      || verified.provenance.workOrderRef.trim() === "") {
-      throw Object.assign(new Error("Derived queue work contract provenance conflicts"), {
+    const provenance = verified?.provenance
+    const derived = provenance?.operation === "runtime_finding.derive"
+      && provenance?.outcomeKey === outcome?.outcomeKey
+      && provenance?.outcomeKey === binding?.outcomeKey
+      && Number(provenance?.workOrderId) === Number(binding?.activeWorkOrderId)
+      && typeof provenance?.workOrderRef === "string"
+      && provenance.workOrderRef.trim() !== ""
+    const workbenchParent = provenance?.operation === "workbench_execution.authorize"
+      && Object.keys(provenance).sort().join(",") === "operation,outcomeKey,workOrderRef"
+      && provenance?.outcomeKey === outcome?.outcomeKey
+      && provenance?.outcomeKey === binding?.outcomeKey
+      && provenance?.workOrderRef === `WO-HERMES-OUTCOME-${Number(outcome?.id)}`
+      && verified?.contract?.id === HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID
+      && verified?.contract?.digest === HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST
+    if (!verified || (!derived && !workbenchParent)) {
+      throw Object.assign(new Error("Queue work contract provenance conflicts"), {
         code: "HERMES_WORK_CONTRACT_WALL",
       })
     }
