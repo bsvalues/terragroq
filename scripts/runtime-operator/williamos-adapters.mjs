@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process"
+import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { promisify } from "node:util"
@@ -8,6 +9,15 @@ import pg from "pg"
 import { createNativeAdapters } from "./native-adapters.mjs"
 import { IMPLEMENTATION, buildWorkerPrompt, laneRoster, selectLane } from "./worker-lanes.mjs"
 import { brokeredExec } from "../../lib/fabric/broker.mjs"
+import {
+  HERMES_KERNEL_INVOKER_RELATIVE,
+  HERMES_KERNEL_POLICY_RELATIVE,
+  KERNEL_SESSION_ID_PATTERN,
+  KERNEL_STATE_DIR,
+  kernelQuarantinePath,
+  kernelThreadsRoot,
+} from "../hermes-bridge/hermes-kernel-client.mjs"
+import { HERMES_FREE_AGENT_COMPLETE_PATTERN } from "../hermes-bridge/hermes-kernel-output.mjs"
 
 /**
  * GitHub through the broker, on the worker node.
@@ -233,6 +243,211 @@ export async function measureBaselineFailures({ root, repositoryPath, head, runn
   return failing
 }
 
+/**
+ * The #831 work-context receipt, issued against live main.
+ *
+ * The repository carries the #831 PreToolUse hook, so a worker inside it has every edit denied unless
+ * a valid receipt sits at .williamos/work-context.json. The first rerouted dispatch proved it: the
+ * worker designed the fix and could apply none of it. The dispatcher holds the facts, so it equips its
+ * worker -- the same receipt it already composes at publish time. The file is gitignored and the
+ * kernel walls inspect the patch afterwards regardless.
+ *
+ * One issuer for every lane. A lane that mints its own receipt is a lane whose facts drift from the
+ * others', and the drift only shows up as a worker that mysteriously cannot edit.
+ */
+async function issueWorkContext({ repositoryPath, workOrderId, allowedPaths }) {
+  const { receiptToken } = await import("../../lib/governance/work-context-receipt.ts")
+  const { measureDoctrineDigest } = await import("../../lib/governance/work-context-live.ts")
+  await run("git", ["fetch", "origin", "main"], { cwd: repositoryPath })
+  const liveMain = (await run("git", ["rev-parse", "origin/main"], { cwd: repositoryPath })).stdout.trim()
+  const { digest } = await measureDoctrineDigest()
+  const facts = {
+    mainSha: liveMain,
+    workOrderRef: workOrderId,
+    parentOutcome: "OUTCOME-762",
+    reservedPaths: allowedPaths.map((allowed) => allowed.endsWith("/**") ? allowed.slice(0, -2) : allowed),
+    authorityLevel: "A2_WRITE_OWN",
+    doctrineDigest: digest,
+    existingSubsystem: "integrating",
+    topologySource: "canonical-registry",
+    collisions: [],
+    remainingParentAcceptance: "resident continuation delivering an authorized child of #762",
+  }
+  return { token: receiptToken(facts), facts }
+}
+
+/** Write a lane's work-context receipt into the tree that lane will actually edit. */
+function equipWorkContext(target, workContext) {
+  fs.mkdirSync(path.join(target, ".williamos"), { recursive: true })
+  fs.writeFileSync(path.join(target, ".williamos", "work-context.json"), `${JSON.stringify(workContext, null, 2)}\n`, "utf8")
+}
+
+/**
+ * The resident local lane's run id: unique per dispatch, and shaped the way its invoker demands.
+ *
+ * The invoker names the container after this and refuses anything outside [A-Za-z0-9-]{8,64}, so the
+ * work order id is folded into that alphabet rather than assumed to already be in it.
+ */
+export function hermesRunId(workOrderId, unique) {
+  return `${String(workOrderId ?? "")}-${unique}`.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+/, "").slice(0, 64)
+}
+
+/**
+ * The exact packet the Hermes Agent invoker validates in owned-worktree mode.
+ *
+ * The invoker compares the packet's field NAMES against a fixed sorted list and refuses any
+ * difference, so this composes that set and nothing besides. Every value is read from the reviewed
+ * policy rather than restated here: a second copy of a pinned value is a second thing to drift, and
+ * the invoker would refuse the drift as a forged packet rather than as the mistake it was.
+ */
+export function buildHermesPacket({ policy, prompt, runId, workspacePath, statePath, kernelSessionId = null }) {
+  if (!Number.isInteger(policy?.packetSchemaVersion)) throw new Error("PROVIDER_LANE_POLICY_WALL")
+  return {
+    schemaVersion: policy.packetSchemaVersion,
+    workOrderId: policy.workOrderId,
+    model: policy.model.id,
+    prompt,
+    maximumTurns: policy.execution.maximumTurns,
+    toolsets: [...policy.execution.allowedToolsets],
+    workspaceMode: "OWNED_WORKTREE",
+    workspacePath,
+    runId,
+    statePath,
+    kernelSessionId,
+  }
+}
+
+const HERMES_TIMEOUT_MS = 45 * 60 * 1000
+
+/**
+ * Dispatch the resident local lane, reconciling two workspaces that each own themselves.
+ *
+ * The kernel owns a worktree under its own root and collects the patch from it. The provider's v2
+ * mode owns a worktree under the root its policy allows, mounts that into the container, and refuses
+ * to run anywhere else -- correctly, since the mount is its containment. Neither ownership can move,
+ * so the lane runs in a provider-side worktree parked at the kernel workspace's own HEAD, carrying
+ * whatever that workspace already had staged, and the caller collects the patch from there.
+ *
+ * Getting this wrong is silent in both directions: diff the kernel tree and the patch is empty
+ * because nothing touched it; run the provider tree at some other commit and the patch is foreign,
+ * reverting work the kernel had already accepted. Hence the base sha and the carried patch, both read
+ * from the kernel workspace immediately before the run.
+ *
+ * The provider tree is never validated in and never installed into -- validation stays in the kernel
+ * workspace, which is what keeps this worktree clean enough for the invoker to accept.
+ */
+export async function dispatchHermesLocal({
+  root, repositoryPath, workOrderId, workspace, prompt, workContext = null,
+  runner = run, newId = () => crypto.randomUUID(),
+}) {
+  const policyPath = path.resolve(repositoryPath, HERMES_KERNEL_POLICY_RELATIVE)
+  const invokerPath = path.resolve(repositoryPath, HERMES_KERNEL_INVOKER_RELATIVE)
+  let policy
+  try { policy = JSON.parse(fs.readFileSync(policyPath, "utf8")) } catch { throw new Error("PROVIDER_LANE_POLICY_WALL") }
+  if (!fs.existsSync(invokerPath)) throw new Error("PROVIDER_LANE_INVOKER_WALL")
+  const declaredRoot = policy?.placement?.allowedWorkspaceRoots?.[0]
+  if (policy?.placement?.workspaceMode !== "OWNED_WORKTREE" || typeof declaredRoot !== "string" || !path.isAbsolute(declaredRoot)) {
+    throw new Error("PROVIDER_LANE_WORKSPACE_WALL")
+  }
+  // The container's deadline must fit inside ours. Shorter and we kill the invoker before it can stop
+  // its container and clear its marker -- the one failure that leaves the lane quarantined for work
+  // that was never at fault.
+  if (HERMES_TIMEOUT_MS < Number(policy?.execution?.timeoutSeconds ?? 0) * 1000) throw new Error("PROVIDER_LANE_TIMEOUT_WALL")
+
+  const worktreesRoot = path.resolve(declaredRoot)
+  const runtimeRoot = path.dirname(worktreesRoot)
+  // Named for this kernel: the bridge owns worktrees in the same root, and neither may adopt the
+  // other's tree by guessing at a name.
+  const owned = path.join(worktreesRoot, `runtime-operator-${workOrderId.toLowerCase()}`)
+
+  const baseSha = (await runner("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim()
+  const carried = (await runner("git", ["diff", "--cached", "--binary"], { cwd: workspace })).stdout
+  const registered = (await runner("git", ["worktree", "list", "--porcelain"], { cwd: repositoryPath })).stdout
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => path.resolve(line.slice("worktree ".length).trim()))
+  // git prints the path it recorded, which on Windows can differ from ours in case alone. Compared
+  // literally, round two would read its own worktree as a stranger's directory and refuse it.
+  const isOwned = (candidate) => process.platform === "win32"
+    ? candidate.toLowerCase() === owned.toLowerCase()
+    : candidate === owned
+  if (registered.some(isOwned)) {
+    await runner("git", ["reset", "--hard", baseSha], { cwd: owned })
+    // -x deliberately: the invoker refuses a worktree carrying node_modules, and an interrupted cycle
+    // elsewhere is exactly how one arrives.
+    await runner("git", ["clean", "-fdx"], { cwd: owned })
+  } else {
+    if (fs.existsSync(owned)) throw new Error("PROVIDER_WORKSPACE_RECONCILIATION_WALL")
+    fs.mkdirSync(worktreesRoot, { recursive: true })
+    await runner("git", ["worktree", "add", "--detach", owned, baseSha], { cwd: repositoryPath, timeout: 120_000 })
+  }
+  if (carried.trim()) {
+    // Whatever the kernel workspace already had staged is work this dispatch continues, not work it
+    // rediscovers: a remediation round starting from pristine base reverts the round before it.
+    const carriedFile = path.join(root, "state", "requests", `${workOrderId.toLowerCase()}-hermes-carried.patch`)
+    fs.mkdirSync(path.dirname(carriedFile), { recursive: true })
+    fs.writeFileSync(carriedFile, carried, "utf8")
+    try { await runner("git", ["apply", "--whitespace=nowarn", carriedFile], { cwd: owned }) }
+    finally { fs.rmSync(carriedFile, { force: true }) }
+  }
+  if (workContext) equipWorkContext(owned, workContext)
+
+  // One thread per work order, so `hermes chat --resume` continues the same session across
+  // remediation rounds instead of meeting the task cold each round. The state directory is the
+  // thread's, mounted as the kernel's HERMES_HOME, and the invoker refuses any path outside the
+  // runtime's own threads root.
+  const threadsFile = path.join(root, "state", "hermes-threads.json")
+  let threads
+  try { threads = JSON.parse(fs.readFileSync(threadsFile, "utf8")) } catch { /* absent or corrupt: start a thread */ }
+  if (!threads || typeof threads !== "object" || Array.isArray(threads)) threads = {}
+  const threadId = typeof threads[workOrderId]?.threadId === "string" ? threads[workOrderId].threadId : newId()
+  const kernelSessionId = typeof threads[workOrderId]?.kernelSessionId === "string" ? threads[workOrderId].kernelSessionId : null
+  const statePath = path.join(kernelThreadsRoot(runtimeRoot), threadId, KERNEL_STATE_DIR)
+  fs.mkdirSync(statePath, { recursive: true })
+
+  const runId = hermesRunId(workOrderId, newId())
+  const packet = buildHermesPacket({ policy, prompt, runId, workspacePath: owned, statePath, kernelSessionId })
+  const packetPath = path.join(root, "state", "requests", `${workOrderId.toLowerCase()}-hermes-packet.json`)
+  fs.mkdirSync(path.dirname(packetPath), { recursive: true })
+  fs.writeFileSync(packetPath, `${JSON.stringify(packet, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
+
+  const invocation = await runner("pwsh", [
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
+    "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", owned, "-RunId", runId,
+    "-QuarantinePath", kernelQuarantinePath(runtimeRoot), "-StatePath", statePath,
+  ], { cwd: repositoryPath, timeout: HERMES_TIMEOUT_MS })
+
+  const stdout = String(invocation.stdout ?? "")
+  // Believe only a completion line naming THIS run. The invoker relays the model's own output, so a
+  // completion the model echoed, or one left over from another run, must not be read as this one.
+  const completion = stdout.match(HERMES_FREE_AGENT_COMPLETE_PATTERN)
+  if (!completion || completion[1] !== runId) throw new Error("PROVIDER_LANE_COMPLETION_WALL")
+  const session = stdout.match(KERNEL_SESSION_ID_PATTERN)?.[1] ?? kernelSessionId
+  fs.mkdirSync(path.dirname(threadsFile), { recursive: true })
+  threads[workOrderId] = { threadId, kernelSessionId: session, updatedAt: new Date().toISOString() }
+  fs.writeFileSync(threadsFile, `${JSON.stringify(threads, null, 2)}\n`, "utf8")
+  return owned
+}
+
+/**
+ * Collect what the lane produced, and restore every tree the dispatch touched.
+ *
+ * The patch is taken from where the worker actually edited, which is the kernel workspace for the
+ * lanes that run in it and the provider's owned worktree for the lane that cannot. Both are restored
+ * either way: the kernel re-applies this patch through its own walls, and it must land on a pristine
+ * tree to do that.
+ */
+export async function collectPatch({ patchWorkspace, workspace, runner = run }) {
+  await runner("git", ["add", "-A"], { cwd: patchWorkspace })
+  const patch = (await runner("git", ["diff", "--cached", "--binary"], { cwd: patchWorkspace })).stdout
+  for (const tree of new Set([patchWorkspace, workspace])) {
+    await runner("git", ["reset", "--hard", "HEAD"], { cwd: tree })
+    await runner("git", ["clean", "-fd"], { cwd: tree })
+  }
+  if (!patch.trim()) throw new Error("CODEX_PATCH_REQUIRED_WALL")
+  return patch
+}
+
 export function createWilliamOSAdapters({ root, repositoryPath }) {
   const adapterId = "williamos-resident-v1"
   const native = createNativeAdapters({ root, repositoryPath })
@@ -394,17 +609,27 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
      * nothing capable remains does this park, with the soonest declared refill time. Every lane's
      * output goes through the same collection: diff taken, worktree restored to pristine, and the
      * kernel re-applies through its own walls.
+     *
+     * Which tree that diff comes from is the one thing the lanes disagree about (WO-0030). The CLI
+     * lanes edit the kernel workspace directly. The resident local lane cannot -- its provider owns
+     * and mounts its own worktree -- so it returns the tree it actually edited, and the collection
+     * follows the work rather than assuming where it happened.
      */
     async invokeCodex({ workOrderId, workspace, task, allowedPaths, remediation, feedback }) {
       const statusFile = path.join(root, "state", "provider-status.json")
       const status = fs.existsSync(statusFile) ? JSON.parse(fs.readFileSync(statusFile, "utf8")) : {}
+      // Recorded capability measurement, read and never written here: a lane that promotes itself on
+      // the strength of having run is not a lane that was measured.
+      const capabilityFile = path.join(root, "state", "lane-capability.json")
+      let measured = {}
+      try { measured = JSON.parse(fs.readFileSync(capabilityFile, "utf8")) } catch { /* unmeasured is the default */ }
       const registry = await this.buildRegistry()
       const assigned = registry.workOrders.find((record) => record.workOrderId === workOrderId)?.agent ?? "codex"
       const prompt = buildWorkerPrompt({ workOrderId, task, allowedPaths, remediation, feedback })
 
       const attempted = []
       for (;;) {
-        const choice = selectLane({ assigned, roster: laneRoster(), status, capability: IMPLEMENTATION })
+        const choice = selectLane({ assigned, roster: laneRoster({ measured }), status, capability: IMPLEMENTATION })
         if (choice.wait) {
           const retry = choice.retryAfterMs ? Math.floor(choice.retryAfterMs / 1000) : null
           throw new Error(retry ? `PROVIDER_RATE_LIMIT_WALL:retry-${retry}` : "PROVIDER_RATE_LIMIT_WALL")
@@ -412,43 +637,30 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
         const lane = choice.lane
         if (attempted.includes(lane.id)) throw new Error("PROVIDER_ROTATION_WALL")
         attempted.push(lane.id)
+        let patchWorkspace = workspace
         try {
           if (lane.id === "codex") {
             await run("codex", ["exec", "--sandbox", "workspace-write", "-C", workspace, prompt], { timeout: 45 * 60 * 1000 })
           } else if (lane.id === "claude") {
-            // The repository carries the #831 PreToolUse hook, so a Claude worker inside it has every
-            // Edit denied unless a valid work-context receipt sits at .williamos/work-context.json.
-            // The first rerouted dispatch proved it: the worker designed the fix and could apply none
-            // of it. The dispatcher holds the facts, so it equips its worker -- the same receipt it
-            // already composes at publish time, issued against live main. The file is gitignored and
-            // the kernel walls inspect the patch afterwards regardless.
-            const { receiptToken } = await import("../../lib/governance/work-context-receipt.ts")
-            const { measureDoctrineDigest } = await import("../../lib/governance/work-context-live.ts")
-            await run("git", ["fetch", "origin", "main"], { cwd: repositoryPath })
-            const liveMain = (await run("git", ["rev-parse", "origin/main"], { cwd: repositoryPath })).stdout.trim()
-            const { digest } = await measureDoctrineDigest()
-            const facts = {
-              mainSha: liveMain,
-              workOrderRef: workOrderId,
-              parentOutcome: "OUTCOME-762",
-              reservedPaths: allowedPaths.map((allowed) => allowed.endsWith("/**") ? allowed.slice(0, -2) : allowed),
-              authorityLevel: "A2_WRITE_OWN",
-              doctrineDigest: digest,
-              existingSubsystem: "integrating",
-              topologySource: "canonical-registry",
-              collisions: [],
-              remainingParentAcceptance: "resident continuation delivering an authorized child of #762",
-            }
-            fs.mkdirSync(path.join(workspace, ".williamos"), { recursive: true })
-            fs.writeFileSync(
-              path.join(workspace, ".williamos", "work-context.json"),
-              JSON.stringify({ token: receiptToken(facts), facts }, null, 2) + "\n",
-              "utf8",
-            )
+            equipWorkContext(workspace, await issueWorkContext({ repositoryPath, workOrderId, allowedPaths }))
             const environment = { ...process.env }
             delete environment.ANTHROPIC_API_KEY
             delete environment.ANTHROPIC_AUTH_TOKEN
             await run("claude", ["-p", prompt, "--permission-mode", "acceptEdits", "--allowedTools", "Edit Write Read Grep Glob LS"], { cwd: workspace, timeout: 45 * 60 * 1000, env: environment })
+          } else if (lane.id === "hermes-local") {
+            // The resident local lane: SEA's Hermes Agent, invoked through its own packet-driven
+            // invoker. Nothing of its containment, identity pins or inference allowlist is restated
+            // or relaxed here -- the invoker asserts all of it against the reviewed policy, and this
+            // is a client of that contract, not a second copy of it. The tree it edits is its own,
+            // so the patch is collected from there.
+            patchWorkspace = await dispatchHermesLocal({
+              root,
+              repositoryPath,
+              workOrderId,
+              workspace,
+              prompt,
+              workContext: await issueWorkContext({ repositoryPath, workOrderId, allowedPaths }),
+            })
           } else {
             throw new Error("PROVIDER_LANE_WALL")
           }
@@ -485,12 +697,7 @@ ${String(error?.output ?? "").slice(-12000)}
           ...status,
           lastDispatch: { workOrderId, lane: lane.id, rerouted: choice.rerouted, reason: choice.reason, at: new Date().toISOString() },
         }, null, 2) + "\n", "utf8")
-        await run("git", ["add", "-A"], { cwd: workspace })
-        const patch = (await run("git", ["diff", "--cached", "--binary"], { cwd: workspace })).stdout
-        await run("git", ["reset", "--hard", "HEAD"], { cwd: workspace })
-        await run("git", ["clean", "-fd"], { cwd: workspace })
-        if (!patch.trim()) throw new Error("CODEX_PATCH_REQUIRED_WALL")
-        return { result: "PATCH_READY", unifiedPatch: patch }
+        return { result: "PATCH_READY", unifiedPatch: await collectPatch({ patchWorkspace, workspace }) }
       }
     },
 

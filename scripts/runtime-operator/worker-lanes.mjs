@@ -10,17 +10,39 @@
  * The roster is honest about capability. The resident local lane (Hermes Agent + sovereign model) is
  * declared but not yet proven for repository implementation, so it reports itself ineligible for that
  * capability rather than pretending. A roster that lies about capability is a stall with extra steps.
+ *
+ * WO-0030 wired that lane end to end -- packet, owned worktree, work-context receipt, patch
+ * collection -- without granting it anything. Being reachable is not being capable: the lane claims
+ * implementation only when a measurement says it delivered, and the dispatch loop never writes that
+ * measurement. A lane that can promote itself has not been measured, it has been asked.
  */
 
 export const IMPLEMENTATION = "implementation"
+
+/**
+ * What a lane has actually been measured to do.
+ *
+ * The verdict alone is not enough: a capability is granted only when the record also cites what
+ * proved it, so promotion costs a measurement rather than one edited word.
+ */
+function measuredCapabilities(laneId, measured) {
+  const record = measured?.[laneId]
+  const evidence = record?.evidence
+  return record?.[IMPLEMENTATION] === "PROVEN" && typeof evidence === "string" && evidence.trim() !== ""
+    ? [IMPLEMENTATION]
+    : []
+}
 
 /**
  * The approved lanes, in the order policy prefers them when the assigned lane cannot serve.
  *
  * `unavailableUntil` comes from the status the dispatcher persists when a lane declares its own limit;
  * a lane with a future timestamp is skipped without being contacted -- no hammering a known-empty meter.
+ *
+ * `measured` is the recorded capability evidence the operator keeps beside the kernel state. Absent
+ * it -- the default, and the truth today -- hermes-local is registered and not capable.
  */
-export function laneRoster() {
+export function laneRoster({ measured = {} } = {}) {
   return [
     {
       id: "codex",
@@ -33,12 +55,12 @@ export function laneRoster() {
       binary: "claude",
     },
     {
-      // Declared, and honestly not yet eligible for repository implementation: SEA's bounded local
-      // worker has its own acceptance record but has not been proven against this kernel's walls.
+      // Declared, reachable, and eligible for repository implementation only once measured: SEA's
+      // bounded local worker has its own acceptance record, and this kernel's walls are not it.
       // Registered so the roster states the truth -- three lanes, one not yet capable here.
       id: "hermes-local",
-      capabilities: [],
-      binary: null,
+      capabilities: measuredCapabilities("hermes-local", measured),
+      binary: "pwsh",
     },
   ]
 }
