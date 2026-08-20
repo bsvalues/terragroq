@@ -19,18 +19,7 @@ export const dynamic = "force-dynamic"
 // A hardcoded 3100 was wrong the moment the container mapped a different port (review P1).
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 
-/**
- * Only pages the environment actually frames, allowlisted explicitly. A character-class check alone
- * let an unauthenticated caller relay GETs to internal /api/* routes from loopback (review P1) --
- * a public proxy must enumerate what it serves, not describe what characters it accepts. The list
- * grows only when a surface genuinely needs a page.
- */
-const FRAMEABLE_PAGES = new Set(["", "sign-in"])
-export function isFrameablePath(segments: readonly string[]): boolean {
-  if (segments.length > 1) return false
-  const first = segments[0] ?? ""
-  return /^[A-Za-z0-9_-]*$/.test(first) && FRAMEABLE_PAGES.has(first)
-}
+import { isFrameablePath } from "@/lib/environment/frameable"
 
 // Deliberately unauthenticated: this route serves documents to sandboxed, COOKIELESS frames -- the
 // whole point is that the frame carries no session, so it cannot present one here either. Demanding
