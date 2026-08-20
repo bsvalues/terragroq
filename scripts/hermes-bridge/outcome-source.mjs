@@ -2897,8 +2897,14 @@ export async function projectOutcomeRuntimeCheckpoint({
         projectionIssueNumber: eventMetadata.projectionIssueNumber,
         projectionCompletionOwned: eventMetadata.projectionCompletionOwned,
         authorizationDecisionId: eventMetadata.authorizationDecisionId,
+        executionGrantRef: eventMetadata.executionGrantRef,
         implementationGrantId: eventMetadata.implementationGrantId,
         implementationGrantRef: eventMetadata.implementationGrantRef,
+        deliveryAuthorityLevel: eventMetadata.deliveryAuthorityLevel,
+        deliveryAllowedActions: eventMetadata.deliveryAllowedActions,
+        commitAllowed: eventMetadata.commitAllowed,
+        tagAllowed: eventMetadata.tagAllowed,
+        pushAllowed: eventMetadata.pushAllowed,
         idempotencyKey: findingIdempotencyKey,
       }
       findingMetadata.payloadDigest = projectionPayloadDigest(findingMetadata)

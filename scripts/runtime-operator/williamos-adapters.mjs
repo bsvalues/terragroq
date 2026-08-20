@@ -659,6 +659,16 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           authorizationDecisionId: payload.authorizationDecisionId,
           implementationGrantId: payload.implementationGrantId,
           projectionCompletionOwned: payload.projectionCompletionOwned,
+          sourceCheckpointId: payload.sourceCheckpointId,
+          sourceCheckpointDigest: payload.sourceCheckpointDigest,
+          contractVersion: payload.contractVersion,
+          contractRepository: payload.contractRepository,
+          contractLane: payload.contractLane,
+          deliveryAuthorityLevel: payload.deliveryAuthorityLevel,
+          deliveryAllowedActions: payload.deliveryAllowedActions,
+          commitAllowed: payload.commitAllowed,
+          tagAllowed: payload.tagAllowed,
+          pushAllowed: payload.pushAllowed,
         }
       : {
           sourceFindingEventId: payload.sourceFindingEventId,
@@ -675,6 +685,16 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           implementationGrantId: payload.implementationGrantId,
           grantRef: payload.grantRef,
           projectionCompletionOwned: payload.projectionCompletionOwned,
+          sourceCheckpointId: payload.sourceCheckpointId,
+          sourceCheckpointDigest: payload.sourceCheckpointDigest,
+          contractVersion: payload.contractVersion,
+          contractRepository: payload.contractRepository,
+          contractLane: payload.contractLane,
+          deliveryAuthorityLevel: payload.deliveryAuthorityLevel,
+          deliveryAllowedActions: payload.deliveryAllowedActions,
+          commitAllowed: payload.commitAllowed,
+          tagAllowed: payload.tagAllowed,
+          pushAllowed: payload.pushAllowed,
         }
     const payloadDigest = findingDigest(canonical)
     const client = await pool.connect()
@@ -705,7 +725,57 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
         && source.metadata?.implementationGrantId === payload.implementationGrantId
         && source.metadata?.implementationGrantRef === payload.grantRef
         && source.metadata?.projectionCompletionOwned === payload.projectionCompletionOwned
+        && source.metadata?.sourceCheckpointId === payload.sourceCheckpointId
+        && source.metadata?.sourceCheckpointDigest === payload.sourceCheckpointDigest
+        && source.metadata?.workContractVersion === payload.contractVersion
+        && source.metadata?.workContractRepository === payload.contractRepository
+        && source.metadata?.workContractLane === payload.contractLane
+        && source.metadata?.deliveryAuthorityLevel === payload.deliveryAuthorityLevel
+        && JSON.stringify(source.metadata?.deliveryAllowedActions) === JSON.stringify(payload.deliveryAllowedActions)
+        && source.metadata?.commitAllowed === payload.commitAllowed
+        && source.metadata?.tagAllowed === payload.tagAllowed
+        && source.metadata?.pushAllowed === payload.pushAllowed
       if (!sourceBound) throw new Error("FINDING_SOURCE_BINDING_WALL")
+      let sourceCheckpoint = null
+      if (source.sourceActor === "hermes") {
+        const checkpointResult = await client.query(
+          `SELECT checkpoint.id, checkpoint."userId", checkpoint."entityId", checkpoint.metadata
+             FROM governance_event AS checkpoint
+            WHERE checkpoint.id = $1
+              AND checkpoint."userId" = $2
+              AND checkpoint."entityType" = 'work_order'
+              AND checkpoint."entityId"::text = $3::text
+              AND checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+              AND checkpoint.actor = 'hermes-codex-bridge'
+            ORDER BY checkpoint.id
+            LIMIT 2
+            FOR UPDATE OF checkpoint`,
+          [source.metadata.sourceCheckpointId, source.sourceUserId, source.sourceEntityId],
+        )
+        if (checkpointResult.rows.length !== 1) throw new Error("FINDING_CHECKPOINT_BINDING_WALL")
+        sourceCheckpoint = checkpointResult.rows[0].metadata
+        const { payloadDigest, ...checkpointPayload } = sourceCheckpoint ?? {}
+        const exactCheckpoint = sourceCheckpoint
+          && payloadDigest === findingDigest(checkpointPayload)
+          && payloadDigest === source.metadata.sourceCheckpointDigest
+          && sourceCheckpoint.workOrderRef === objectiveWorkOrderId
+          && sourceCheckpoint.workContractId === source.metadata.workContractId
+          && sourceCheckpoint.workContractDigest === source.metadata.workContractDigest
+          && sourceCheckpoint.workContractVersion === source.metadata.workContractVersion
+          && sourceCheckpoint.workContractRepository === source.metadata.workContractRepository
+          && sourceCheckpoint.workContractLane === source.metadata.workContractLane
+          && sourceCheckpoint.projectionIssueNumber === source.metadata.projectionIssueNumber
+          && sourceCheckpoint.projectionCompletionOwned === source.metadata.projectionCompletionOwned
+          && sourceCheckpoint.authorizationDecisionId === source.metadata.authorizationDecisionId
+          && sourceCheckpoint.implementationGrantId === source.metadata.implementationGrantId
+          && sourceCheckpoint.implementationGrantRef === source.metadata.implementationGrantRef
+          && sourceCheckpoint.deliveryAuthorityLevel === source.metadata.deliveryAuthorityLevel
+          && JSON.stringify(sourceCheckpoint.deliveryAllowedActions) === JSON.stringify(source.metadata.deliveryAllowedActions)
+          && sourceCheckpoint.commitAllowed === source.metadata.commitAllowed
+          && sourceCheckpoint.tagAllowed === source.metadata.tagAllowed
+          && sourceCheckpoint.pushAllowed === source.metadata.pushAllowed
+        if (!exactCheckpoint) throw new Error("FINDING_CHECKPOINT_BINDING_WALL")
+      }
       const prior = await client.query(
         `SELECT "eventType", metadata FROM governance_event
           WHERE metadata->>'objectiveWorkOrderId' = $1
@@ -727,6 +797,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
       const authority = await client.query(
         `SELECT parent.id AS "parentId", parent."userId", parent.ref AS "parentRef",
                 parent.status AS "parentStatus", parent."authorityGranted",
+                parent.assignee AS "parentAssignee",
                 parent.description AS "parentDescription",
                 parent.goal, parent.loop, parent.scope, parent."nonGoals",
                 parent."allowedFiles" AS "parentAllowedFiles",
@@ -747,6 +818,11 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
         [objectiveWorkOrderId, payload.grantRef, payload.sourceUserId, source.sourceEntityId],
       )
       const envelope = authority.rows[0]
+      if ((source.sourceActor === "hermes" && envelope?.parentAssignee !== "hermes-codex-bridge")
+        || (source.sourceActor === "williamos-runtime-operator"
+          && envelope?.parentAssignee !== "williamos-runtime-operator")) {
+        throw new Error("FINDING_PARENT_DISCRIMINATOR_WALL")
+      }
       const active = envelope
         && new Set(["approved", "active", "completed", "done"]).has(envelope.parentStatus)
         && envelope.authorityGranted === envelope.authorityLevel
@@ -766,7 +842,11 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
         ? sourcePaths.some((candidate) => !pathWithin(candidate, envelope.parentAllowedFiles ?? [])
           || pathWithin(candidate, envelope.forbiddenFiles ?? []))
         : true
-      const authoritativeIssueNumber = parseProjectionIssue(envelope.parentDescription)
+      const authoritativeIssueNumber = source.sourceActor === "hermes"
+        ? sourceCheckpoint?.projectionIssueNumber
+        : envelope.parentAssignee === "williamos-runtime-operator"
+          ? parseProjectionIssue(envelope.parentDescription)
+          : null
       const deliveryBlocked = envelope.parentCommitAllowed !== true || envelope.parentPushAllowed !== true
       const sourceEffects = validFindingMetadata(source.metadata) && authoritativeIssueNumber !== null
         ? { ...source.metadata.effects, outsideObjectiveScope: Boolean(source.metadata.effects.outsideObjectiveScope) || sourceEscapes || deliveryBlocked }
@@ -881,6 +961,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
                 AND source."entityType" = 'work_order'
                 AND source."entityId"::text = parent.id::text
                 AND source."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+                AND source.actor = 'hermes-codex-bridge'
                 AND source.id::text = finding.metadata->>'sourceCheckpointId'
                 AND source.metadata->>'workOrderRef' = parent.ref
                 AND source.metadata->>'projectionIssueNumber' IS NOT NULL
@@ -931,9 +1012,15 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           && metadata.authorizationDecisionId === checkpoint.authorizationDecisionId
           && metadata.implementationGrantId === checkpoint.implementationGrantId
           && metadata.implementationGrantRef === checkpoint.implementationGrantRef
+          && metadata.deliveryAuthorityLevel === checkpoint.deliveryAuthorityLevel
+          && JSON.stringify(metadata.deliveryAllowedActions) === JSON.stringify(checkpoint.deliveryAllowedActions)
+          && metadata.commitAllowed === checkpoint.commitAllowed
+          && metadata.tagAllowed === checkpoint.tagAllowed
+          && metadata.pushAllowed === checkpoint.pushAllowed
+        const legacyParent = row.parentAssignee === "williamos-runtime-operator"
         const issueNumber = hermesParent
           ? (canonicalCheckpoint ? checkpoint.projectionIssueNumber : null)
-          : parseProjectionIssue(row.parentDescription)
+          : legacyParent ? parseProjectionIssue(row.parentDescription) : null
         const malformed = !validFindingMetadata(metadata) || issueNumber === null
         return [{
           sourceFindingEventId: row.sourceFindingEventId,
@@ -949,9 +1036,19 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
             : projectionCompletionOwned(row.parentDescription),
           contractId: canonicalCheckpoint ? checkpoint.workContractId : null,
           contractDigest: canonicalCheckpoint ? checkpoint.workContractDigest : null,
+          contractVersion: canonicalCheckpoint ? checkpoint.workContractVersion : null,
+          contractRepository: canonicalCheckpoint ? checkpoint.workContractRepository : null,
+          contractLane: canonicalCheckpoint ? checkpoint.workContractLane : null,
+          sourceCheckpointId: canonicalCheckpoint ? Number(metadata.sourceCheckpointId) : null,
+          sourceCheckpointDigest: canonicalCheckpoint ? metadata.sourceCheckpointDigest : null,
           authorizationDecisionId: canonicalCheckpoint ? checkpoint.authorizationDecisionId : null,
           implementationGrantId: canonicalCheckpoint ? checkpoint.implementationGrantId : null,
           grantRef: canonicalCheckpoint ? checkpoint.implementationGrantRef : null,
+          deliveryAuthorityLevel: canonicalCheckpoint ? checkpoint.deliveryAuthorityLevel : null,
+          deliveryAllowedActions: canonicalCheckpoint ? checkpoint.deliveryAllowedActions : null,
+          commitAllowed: canonicalCheckpoint ? checkpoint.commitAllowed : null,
+          tagAllowed: canonicalCheckpoint ? checkpoint.tagAllowed : null,
+          pushAllowed: canonicalCheckpoint ? checkpoint.pushAllowed : null,
           summary: validFindingText(metadata.summary) ? metadata.summary : "Malformed structured finding",
           task: validFindingText(metadata.task) ? metadata.task : "Malformed structured finding",
           paths: validFindingPaths(metadata.paths) ? metadata.paths : [],

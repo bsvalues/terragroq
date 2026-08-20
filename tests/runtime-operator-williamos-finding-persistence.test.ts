@@ -5,6 +5,7 @@ import path from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { createWilliamOSAdapters } from "../scripts/runtime-operator/williamos-adapters.mjs"
+import { deriveAndQueueFindings } from "../scripts/runtime-operator/operational-kernel.mjs"
 
 const roots: string[] = []
 const EMPTY_EFFECTS = {
@@ -31,6 +32,11 @@ const CONTRACT_BINDING = {
   authorizationDecisionId: 74,
   implementationGrantId: 18,
   implementationGrantRef: "GRANT-0018",
+  deliveryAuthorityLevel: "A2_WRITE_OWN",
+  deliveryAllowedActions: ["implement"],
+  commitAllowed: true,
+  tagAllowed: false,
+  pushAllowed: true,
 }
 const CHECKPOINT_PAYLOAD = {
   workOrderRef: "WO-0031",
@@ -47,6 +53,16 @@ const SETTLEMENT_BINDING = {
   implementationGrantId: CONTRACT_BINDING.implementationGrantId,
   grantRef: CONTRACT_BINDING.implementationGrantRef,
   projectionCompletionOwned: CONTRACT_BINDING.projectionCompletionOwned,
+  sourceCheckpointId: 91,
+  sourceCheckpointDigest: CHECKPOINT_METADATA.payloadDigest,
+  contractVersion: CONTRACT_BINDING.workContractVersion,
+  contractRepository: CONTRACT_BINDING.workContractRepository,
+  contractLane: CONTRACT_BINDING.workContractLane,
+  deliveryAuthorityLevel: CONTRACT_BINDING.deliveryAuthorityLevel,
+  deliveryAllowedActions: CONTRACT_BINDING.deliveryAllowedActions,
+  commitAllowed: CONTRACT_BINDING.commitAllowed,
+  tagAllowed: CONTRACT_BINDING.tagAllowed,
+  pushAllowed: CONTRACT_BINDING.pushAllowed,
 }
 const SOURCE_METADATA = {
   schemaVersion: 1,
@@ -58,6 +74,7 @@ const SOURCE_METADATA = {
   paths: ["scripts/runtime-operator/williamos-adapters.mjs"],
   effects: EMPTY_EFFECTS,
   ...CONTRACT_BINDING,
+  sourceCheckpointId: 91,
   sourceCheckpointDigest: CHECKPOINT_METADATA.payloadDigest,
 }
 const SOURCE_DIGEST = crypto.createHash("sha256").update(JSON.stringify(SOURCE_METADATA)).digest("hex")
@@ -71,6 +88,7 @@ const GATE_METADATA = {
   paths: ["scripts/runtime-operator/owner-gate-policy.mjs"],
   effects: { ...EMPTY_EFFECTS, changesReviewedPolicy: true },
   ...CONTRACT_BINDING,
+  sourceCheckpointId: 91,
   sourceCheckpointDigest: CHECKPOINT_METADATA.payloadDigest,
 }
 const GATE_DIGEST = crypto.createHash("sha256").update(JSON.stringify(GATE_METADATA)).digest("hex")
@@ -160,6 +178,8 @@ function transactionalDatabase({
   parentPushAllowed = true,
   parentForbiddenFiles = ["app/**"],
   existingChild = null as null | Record<string, unknown>,
+  collectFindingIds = [] as number[],
+  checkpointRows = null as null | Record<string, unknown>[],
 } = {}) {
   const state = {
     children: [] as Record<string, unknown>[],
@@ -198,6 +218,9 @@ function transactionalDatabase({
           ? GATE_METADATA
           : Number(params[0]) === 443 ? INVALID_ORDER_METADATA : SOURCE_METADATA,
       }] }
+      if (sql.includes("FROM governance_event AS checkpoint")) return { rows: checkpointRows ?? [{
+        id: 91, userId: "owner-1", entityId: "31", metadata: CHECKPOINT_METADATA,
+      }] }
       if (sql.includes("FROM governance_event") && sql.includes("sourceFindingEventId")) {
         const source = String(params[1])
         const found = [...state.settlements, ...stagedSettlements]
@@ -209,6 +232,7 @@ function transactionalDatabase({
         userId: "owner-1",
         parentRef: "WO-0031",
         parentDescription: "Authorized under GRANT-0018. Projected at GitHub issue 911.",
+        parentAssignee: "hermes-codex-bridge",
         parentStatus,
         authorityGranted,
         goal: "GOAL-WOS-MULTI-AGENT-OPERATOR-001",
@@ -261,7 +285,16 @@ function transactionalDatabase({
   }
   return {
     state,
-    async query() { return { rows: [] } },
+    async query(sql: string) {
+      if (sql.includes("RUNTIME_OBJECTIVE_FINDING_RECORDED")) return { rows: collectFindingIds.map((id) => ({
+        sourceFindingEventId: id, userId: "owner-1", actor: "hermes", entityId: "31",
+        metadata: id === 442 ? GATE_METADATA : SOURCE_METADATA,
+        parentDescription: "Projected at GitHub issue 357.",
+        parentAssignee: "hermes-codex-bridge", checkpointCount: 1,
+        checkpointMetadata: CHECKPOINT_METADATA,
+      })) }
+      return { rows: [] }
+    },
     async connect() { return client },
   }
 }
@@ -343,6 +376,18 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
 
     await expect(adapters.collectFindings()).resolves.toEqual([
       expect.objectContaining({ issueNumber: 911, malformed: false }),
+    ])
+  })
+
+  it("never treats an unknown parent assignee as legacy prose authority", async () => {
+    const database = databaseFor({
+      findings: [{ sourceFindingEventId: 441, userId: "owner-1", actor: "hermes", entityId: "31", metadata: SOURCE_METADATA }],
+      parentAssignee: "unknown-worker",
+    })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    await expect(adapters.collectFindings()).resolves.toEqual([
+      expect.objectContaining({ issueNumber: null, malformed: true }),
     ])
   })
 
@@ -656,6 +701,64 @@ describe("derived work persistence", () => {
     await expect(adapters.persistDerivedWorkOrder(derived)).rejects.toThrow("FINDING_SOURCE_BINDING_WALL")
     expect(database.state.children).toEqual([])
     expect(database.state.rollbacks).toBe(1)
+  })
+})
+
+describe("production collection through derivation and persistence", () => {
+  const registry = { workOrders: [{
+    workOrderId: "WO-0031", workOrderRowId: 31, userId: "owner-1",
+    grantRef: "GRANT-0018", grantStatus: "active", authority: "APPROVED",
+    adapterId: "williamos-resident-v1", allowedPaths: ["scripts/runtime-operator/**", "tests/**"],
+    forbiddenPaths: ["app/**"], requiredValidation: ["test", "build"],
+    commitAllowed: true, tagAllowed: false, pushAllowed: true, agent: "codex",
+  }] }
+
+  it("persists an ordinary Hermes finding with the exact canonical bindings intact", async () => {
+    const database = transactionalDatabase({ collectFindingIds: [441] })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    await expect(deriveAndQueueFindings({ registry, adapters })).resolves.toEqual({
+      queued: ["WO-0031-R01-F441"], gated: [],
+    })
+    expect(database.state.children).toHaveLength(1)
+    expect(database.state.settlements[0]?.metadata).toMatchObject(SETTLEMENT_BINDING)
+  })
+
+  it.each([
+    ["missing", []],
+    ["duplicate", [
+      { id: 91, userId: "owner-1", entityId: "31", metadata: CHECKPOINT_METADATA },
+      { id: 91, userId: "owner-1", entityId: "31", metadata: CHECKPOINT_METADATA },
+    ]],
+    ["payload drift", [{
+      id: 91, userId: "owner-1", entityId: "31",
+      metadata: { ...CHECKPOINT_METADATA, projectionIssueNumber: 357 },
+    }]],
+  ])("rolls back when the canonical source checkpoint is %s", async (_label, checkpointRows) => {
+    const database = transactionalDatabase({ checkpointRows })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    await expect(adapters.persistDerivedWorkOrder({
+      workOrderId: "WO-0031-R01-F441", derivedFrom: "WO-0031",
+      allowedPaths: SOURCE_METADATA.paths, requiredValidation: ["test", "build"],
+      task: SOURCE_METADATA.task, findingId: SOURCE_METADATA.findingId,
+      sourceFindingEventId: 441, sourceUserId: "owner-1", sourcePayloadDigest: SOURCE_DIGEST,
+      issueNumber: 911, ...SETTLEMENT_BINDING,
+    })).rejects.toThrow("FINDING_CHECKPOINT_BINDING_WALL")
+    expect(database.state.children).toEqual([])
+    expect(database.state.settlements).toEqual([])
+    expect(database.state.rollbacks).toBe(1)
+  })
+
+  it("settles a gated Hermes sibling without creating a child and retains its bindings", async () => {
+    const database = transactionalDatabase({ collectFindingIds: [442] })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    const result = await deriveAndQueueFindings({ registry, adapters })
+    expect(result.queued).toEqual([])
+    expect(result.gated).toHaveLength(1)
+    expect(database.state.children).toEqual([])
+    expect(database.state.settlements[0]?.metadata).toMatchObject(SETTLEMENT_BINDING)
   })
 })
 

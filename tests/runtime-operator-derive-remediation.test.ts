@@ -25,6 +25,29 @@ const OBJECTIVE = {
 const at = () => "2026-08-20T06:00:00.000Z"
 
 describe("a finding that needs no owner", () => {
+  it("carries canonical checkpoint authority identity through both plan branches", () => {
+    const binding = {
+      sourceCheckpointId: 91, sourceCheckpointDigest: "a".repeat(64),
+      contractId: "issue-911-runtime-reliability-evidence.v1", contractDigest: "b".repeat(64),
+      contractVersion: "hermes-work-contract.v1", contractRepository: "bsvalues/terragroq",
+      contractLane: "operator-objective", authorizationDecisionId: 74,
+      implementationGrantId: 81, projectionCompletionOwned: false,
+      deliveryAuthorityLevel: "A2_WRITE_OWN", deliveryAllowedActions: ["implement"],
+      commitAllowed: true, tagAllowed: false, pushAllowed: true,
+    }
+    const finding = {
+      sequence: 1, summary: "bounded fix", paths: ["scripts/runtime-operator/x.mjs"],
+      effects: { destroys: [] }, ...binding,
+    }
+    expect(deriveRemediationWorkOrder({ objective: OBJECTIVE, finding, now: at }).dispatch)
+      .toMatchObject(binding)
+    expect(deriveRemediationPlan({
+      objective: OBJECTIVE,
+      findings: [{ ...finding, effects: { destroys: [], changesReviewedPolicy: true } }],
+      now: at,
+    }).gated[0]).toMatchObject(binding)
+  })
+
   it("becomes a dispatchable work order under the objective's own grant", () => {
     const { dispatch, gate } = deriveRemediationWorkOrder({
       objective: OBJECTIVE,

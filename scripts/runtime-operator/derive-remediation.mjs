@@ -23,6 +23,16 @@ import { classifyProposedAction } from "./owner-gate-policy.mjs"
 /** Parent authority states a child may descend from. Anything else, including absent, is refused. */
 const VALID_PARENT_AUTHORITY = new Set(["APPROVED"])
 const VALID_GRANT_STATUS = new Set(["active"])
+const SOURCE_BINDING_FIELDS = Object.freeze([
+  "sourceCheckpointId", "sourceCheckpointDigest", "contractId", "contractDigest",
+  "contractVersion", "contractRepository", "contractLane", "authorizationDecisionId",
+  "implementationGrantId", "projectionCompletionOwned", "deliveryAuthorityLevel",
+  "deliveryAllowedActions", "commitAllowed", "tagAllowed", "pushAllowed",
+])
+
+function sourceBindings(finding) {
+  return Object.fromEntries(SOURCE_BINDING_FIELDS.map((field) => [field, finding?.[field]]))
+}
 
 /** A path is inside an exact-file reservation only on equality; only an explicit `/**` grants descendants. */
 export function withinReservation(candidate, reservation) {
@@ -119,6 +129,7 @@ export function deriveRemediationWorkOrder({ objective, finding, now = () => new
       sourcePayloadDigest: finding.sourcePayloadDigest,
       sourceFindingEventId: finding.sourceFindingEventId,
       issueNumber: finding.issueNumber,
+      ...sourceBindings(finding),
       derivedAt: now(),
     },
     gate: null,
@@ -148,6 +159,7 @@ export function deriveRemediationPlan({ objective, findings, now = () => new Dat
       issueNumber: finding?.issueNumber,
       objectiveWorkOrderId: finding?.objectiveWorkOrderId,
       grantRef: objective?.grantRef,
+      ...sourceBindings(finding),
       ...result.gate,
     })
   }
