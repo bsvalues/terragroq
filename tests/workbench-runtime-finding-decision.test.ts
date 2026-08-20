@@ -236,6 +236,27 @@ describe("runtime finding Workbench decision projection", () => {
     }
   })
 
+  it("rejects both choice and disposition cross-pairs even with a valid recomputed receipt digest", () => {
+    const crossPairs = [
+      ["APPROVE", "DENIED_RESOLVED"],
+      ["DENY", "AUTHORITY_MATERIALIZATION_REQUIRED"],
+    ] as const
+    const states = crossPairs.map(([choice, disposition]) => {
+      const receipt = {
+        id: 550, userId: "owner-1", entityType: "work_order", entityId: "31",
+        eventType: "RUNTIME_FINDING_OWNER_DECIDED", createdAt: occurredAt,
+        metadata: receiptMetadata(request, choice, { disposition }),
+      }
+      const result = projectRuntimeFindingDecisionSources({
+        userId: "owner-1", projectId: 7, thread: { id: "thread-31", workOrderId: 31 },
+        workOrder: { id: 31, ref: "WO-0031" }, events: [source, gate, receipt], actionableRequest: request,
+      })
+
+      return (result.sources[0]?.data.decision as { state?: string } | undefined)?.state
+    })
+    expect(states).toEqual(["CONFLICTING", "CONFLICTING"])
+  })
+
   it("walls every repeated request, provenance digest, and persisted identity mismatch", () => {
     const mutations: Array<[string, unknown]> = [
       ["authorityGrantId", 99], ["authorityGrantRef", "GRANT-WRONG"], ["authorityGrantLevel", "A3_INTEGRATE"],

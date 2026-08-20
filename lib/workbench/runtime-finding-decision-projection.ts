@@ -222,6 +222,8 @@ function exactReceipt(
     || digest(metadata.decisionPacketDigest) === null
     || !["APPROVE", "DENY"].includes(choice ?? "")
     || !["AUTHORITY_MATERIALIZATION_REQUIRED", "DENIED_RESOLVED"].includes(disposition ?? "")
+    || (choice === "APPROVE" && disposition !== "AUTHORITY_MATERIALIZATION_REQUIRED")
+    || (choice === "DENY" && disposition !== "DENIED_RESOLVED")
     || metadata.resumeReleased !== false
     || (liveRequest === null
       ? digest(metadata.requestDigest) === null
