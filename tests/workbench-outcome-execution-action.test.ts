@@ -1,7 +1,10 @@
 import { getTableName } from "drizzle-orm"
 import { inspect } from "node:util"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { buildWorkbenchExecutionAuthorizationRequestHash } from "@/lib/workbench/outcome-execution-authorization"
+import {
+  buildWorkbenchExecutionAuthorizationRequestHash,
+  deterministicWorkbenchExecutionRefs,
+} from "@/lib/workbench/outcome-execution-authorization"
 import { resolveHermesWorkContract } from "@/scripts/hermes-bridge/work-contract.mjs"
 
 const harness = vi.hoisted(() => ({
@@ -25,6 +28,68 @@ const input = {
   confirmation: "START_WORK" as const,
 }
 
+const issue911Intent = "record structured #911 reliability remediation without host mutation"
+
+function issue911ReplayOverrides(override: Record<string, unknown[][]> = {}) {
+  const requestHash = buildWorkbenchExecutionAuthorizationRequestHash(input)
+  const refs = deterministicWorkbenchExecutionRefs(requestHash)
+  const authorizedAt = "2026-08-20T18:00:00.000Z"
+  const expiresAt = "2099-08-23T18:00:00.000Z"
+  const workContract = resolveHermesWorkContract({
+    command: issue911Intent, title: issue911Intent, objective: issue911Intent,
+    lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+  })!
+  const resultBinding = {
+    decisionId: 31, decisionRef: refs.decisionRef,
+    grantId: 41, grantRef: refs.grantRef,
+    implementationGrantId: 42, implementationGrantRef: refs.implementationGrantRef,
+    queueVersion: 1, authorizedAt, expiresAt, workContract,
+  }
+  return {
+    outcome_queue_mutation_receipt: [[{
+      operation: "workbench_execution.authorize", requestHash,
+      requestBinding: input, resultBinding,
+    }]],
+    outcome_queue_item: [[{
+      outcomeKey: input.outcomeKey, goalId: 7, title: issue911Intent, objective: issue911Intent, riskClass: "R1",
+      approvalState: "approved", approvalDecisionId: 31, authorityState: "matched",
+      authorityLevel: "A2_WRITE_OWN", authorityGrantRef: refs.grantRef,
+      authoritySubject: "operator", authorityAction: "outcome:execute", lifecycleState: "approved",
+      activeWorkOrderId: null, executionBinding: null, leaseHolder: null, leaseToken: null,
+      leaseExpiresAt: null, acquisitionKey: null, terminalKey: null, version: 1,
+    }]],
+    goal: [[{
+      id: 7, userId: "owner", command: issue911Intent, lane: "operator-objective", risk: "R1",
+      authority: "A2_WRITE_OWN", verdict: "requires_approval", requiresApproval: true,
+      status: "classified", linkedWorkOrderId: null,
+    }]],
+    decision: [[{
+      id: 31, ref: refs.decisionRef, status: "accepted", authority: "binding",
+      scope: input.outcomeKey, decision: "APPROVE",
+      evidence: [
+        `work-contract:${workContract.id}`,
+        `work-contract-digest:${workContract.digest}`,
+        `work-contract-json:${JSON.stringify(workContract)}`,
+      ],
+    }]],
+    authority_grant: [
+      [{
+        id: 41, userId: "owner", ref: refs.grantRef, scope: input.outcomeKey,
+        authorityLevel: "A2_WRITE_OWN", grantedTo: "operator", allowedActions: ["outcome:execute"],
+        blockedActions: ["production:mutate", "release:create", "secret:access", "spend:increase"],
+        workOrderId: null, status: "active", revokedAt: null, expiresAt: new Date(expiresAt),
+      }],
+      [{
+        id: 42, userId: "owner", ref: refs.implementationGrantRef, scope: "WO-HERMES-OUTCOME-7",
+        authorityLevel: "A2_WRITE_OWN", grantedTo: "operator", allowedActions: ["implement"],
+        blockedActions: ["production:mutate", "release:create", "secret:access", "spend:increase"],
+        workOrderId: null, status: "active", revokedAt: null, expiresAt: new Date(expiresAt),
+      }],
+    ],
+    ...override,
+  }
+}
+
 function txAdapter(overrides: Record<string, unknown[][]> = {}) {
   const rows: Record<string, unknown[][]> = {
     outcome_queue_mutation_receipt: [[]],
@@ -41,12 +106,12 @@ function txAdapter(overrides: Record<string, unknown[][]> = {}) {
       activeWorkOrderId: null, executionBinding: null, leaseHolder: null, leaseToken: null,
       leaseExpiresAt: null, acquisitionKey: null, terminalKey: null, version: 0,
     }]],
-    ...overrides,
     goal: [[{
       id: 7, userId: "owner", command: "Add a compact on-screen latest-evidence timestamp to selected Thread work status", lane: "ui", risk: "low",
       authority: "A2_WRITE_OWN", verdict: "requires_approval", requiresApproval: true,
       status: "classified", linkedWorkOrderId: null,
     }]],
+    ...overrides,
   }
   return {
     execute: vi.fn(async (statement: unknown) => {
@@ -77,7 +142,10 @@ function txAdapter(overrides: Record<string, unknown[][]> = {}) {
         returning() {
           harness.effects.push({ table: tableName, value })
           if (tableName === "decision") return Promise.resolve([{ id: 31, ref: value.ref }])
-          if (tableName === "authority_grant") return Promise.resolve([{ id: 41, ref: value.ref }])
+          if (tableName === "authority_grant") {
+            const grantCount = harness.effects.filter((effect) => effect.table === "authority_grant").length
+            return Promise.resolve([{ id: 40 + grantCount, ref: value.ref }])
+          }
           return Promise.resolve([{ id: harness.effects.length }])
         },
         then(resolve: (v: unknown) => unknown) {
@@ -141,6 +209,88 @@ describe("authorizeWorkbenchOutcomeExecution action", () => {
     expect(harness.effects.some((effect) => effect.table === "outcome_queue_mutation_receipt")).toBe(true)
     expect(harness.effects.some((effect) => effect.table === "governance_event")).toBe(true)
     expect(harness.effects.some((effect) => effect.table === "event_log")).toBe(true)
+  })
+
+  it("atomically persists the full #911 contract and a bounded implementation grant without dispatch", async () => {
+    harness.transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback(txAdapter({
+      outcome_queue_item: [[{
+        outcomeKey: input.outcomeKey, goalId: 7, title: issue911Intent, objective: issue911Intent, riskClass: "R1",
+        approvalState: "unapproved", approvalDecisionId: null,
+        authorityState: "unverified", authorityLevel: "A2_WRITE_OWN", authorityGrantRef: null,
+        authoritySubject: "operator", authorityAction: "outcome:execute", lifecycleState: "suggested",
+        activeWorkOrderId: null, executionBinding: null, leaseHolder: null, leaseToken: null,
+        leaseExpiresAt: null, acquisitionKey: null, terminalKey: null, version: 0,
+      }]],
+      goal: [[{
+        id: 7, userId: "owner", command: issue911Intent, lane: "operator-objective", risk: "R1",
+        authority: "A2_WRITE_OWN", verdict: "requires_approval", requiresApproval: true,
+        status: "classified", linkedWorkOrderId: null,
+      }]],
+    })))
+    const { authorizeWorkbenchOutcomeExecution } = await import("@/app/actions/authorize-workbench-outcome-execution")
+
+    await expect(authorizeWorkbenchOutcomeExecution(input)).resolves.toMatchObject({
+      status: "AUTHORIZED_FOR_ACQUISITION", dispatchPerformed: false,
+    })
+    const grants = harness.effects.filter((effect) => effect.table === "authority_grant")
+    expect(grants).toHaveLength(2)
+    expect(grants[1]).toMatchObject({ value: {
+      workOrderId: null,
+      authorityLevel: "A2_WRITE_OWN",
+      scope: "WO-HERMES-OUTCOME-7",
+      allowedActions: ["implement"],
+      blockedActions: ["production:mutate", "release:create", "secret:access", "spend:increase"],
+      status: "active",
+      expiresAt: expect.any(Date),
+    } })
+    const approval = harness.effects.find((effect) => effect.table === "decision")?.value
+    expect(approval).toMatchObject({ locked: true })
+    expect(approval?.evidence).toContainEqual(expect.stringMatching(/^work-contract-json:\{/))
+    const receipt = harness.effects.find((effect) => effect.table === "outcome_queue_mutation_receipt")?.value
+    expect(receipt?.resultBinding).toMatchObject({
+      implementationGrantId: expect.any(Number),
+      implementationGrantRef: expect.stringMatching(/^WB-EXEC-IMPL-GRANT-/),
+      workContract: {
+        id: "issue-911-runtime-reliability-evidence.v1",
+        reservations: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+        projection: { issueNumber: 911, completionOwned: false },
+        delivery: { allowedActions: ["implement"], commitAllowed: true, tagAllowed: false, pushAllowed: true },
+      },
+    })
+    expect(harness.effects.some((effect) => effect.table === "work_order")).toBe(false)
+  })
+
+  it("replays the exact #911 contract and dual-grant graph without creating effects", async () => {
+    harness.transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => (
+      callback(txAdapter(issue911ReplayOverrides()))
+    ))
+    const { authorizeWorkbenchOutcomeExecution } = await import("@/app/actions/authorize-workbench-outcome-execution")
+
+    await expect(authorizeWorkbenchOutcomeExecution(input)).resolves.toMatchObject({
+      status: "ALREADY_AUTHORIZED", queueVersion: 1,
+      executionObserved: false, workOrderObserved: false, leaseObserved: false,
+      dispatchPerformed: false,
+    })
+    expect(harness.effects).toEqual([])
+    expect(harness.revalidatePath).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["tenant", { project: [[{ id: 7, userId: "foreign", lifecycle: "active" }]] }],
+    ["thread", { workbench_thread: [[{ id: "thread-other", userId: "owner", projectId: 7 }]] }],
+    ["repository", { project_resource: [[{ type: "repo", canonicalIdentity: "bsvalues/other", relationship: "primary-repo" }]] }],
+  ] as Array<[string, Record<string, unknown[][]>]>)
+  ("fails closed when an exact #911 replay has a %s mismatch", async (_label, mismatch) => {
+    harness.transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => (
+      callback(txAdapter(issue911ReplayOverrides(mismatch)))
+    ))
+    const { authorizeWorkbenchOutcomeExecution } = await import("@/app/actions/authorize-workbench-outcome-execution")
+
+    await expect(authorizeWorkbenchOutcomeExecution(input)).resolves.toMatchObject({
+      status: "INELIGIBLE", reason: "PERSISTED_BINDING_INVALID",
+      executionObserved: false, dispatchPerformed: false,
+    })
+    expect(harness.effects).toEqual([])
   })
 
   it("requires explicit confirmation before authentication or a transaction", async () => {

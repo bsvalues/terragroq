@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   assessWorkbenchOutcomeExecution,
+  deterministicWorkbenchExecutionRefs,
   normalizeWorkbenchOutcomeExecutionInput,
 } from "@/lib/workbench/outcome-execution-authorization"
 
@@ -58,6 +59,32 @@ describe("Workbench outcome execution authorization", () => {
           "tests/outcome-execution-control-rendered.test.tsx",
         ],
       }),
+    })
+  })
+
+  it("authorizes the exact pre-registered #911 evidence contract and derives both grant refs", () => {
+    const intent = "record structured #911 reliability remediation without host mutation"
+    const issue911Snapshot = {
+      ...snapshot,
+      outcome: { ...snapshot.outcome, title: intent, objective: intent, riskClass: "R1" },
+      goal: { ...snapshot.goal, command: intent, lane: "operator-objective", risk: "R1" },
+    }
+
+    expect(assessWorkbenchOutcomeExecution(input, issue911Snapshot)).toMatchObject({
+      eligible: true,
+      workContract: {
+        id: "issue-911-runtime-reliability-evidence.v1",
+        projection: { issueNumber: 911, completionOwned: false },
+        delivery: {
+          authorityLevel: "A2_WRITE_OWN", allowedActions: ["implement"],
+          commitAllowed: true, tagAllowed: false, pushAllowed: true,
+        },
+      },
+    })
+    expect(deterministicWorkbenchExecutionRefs("a".repeat(64))).toEqual({
+      decisionRef: `WB-EXEC-DEC-${"A".repeat(24)}`,
+      grantRef: `WB-EXEC-GRANT-${"A".repeat(24)}`,
+      implementationGrantRef: `WB-EXEC-IMPL-GRANT-${"A".repeat(24)}`,
     })
   })
 

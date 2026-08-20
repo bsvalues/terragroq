@@ -8,6 +8,8 @@ import {
   HERMES_WORK_CONTRACT_VERSION,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
   resolveHermesWorkContract,
 } from "../scripts/hermes-bridge/work-contract.mjs"
 
@@ -35,6 +37,7 @@ describe("Hermes exact work contract", () => {
       authority: "A2_WRITE_OWN",
     })
 
+    if (!contract) throw new Error("EXPECTED_REGISTERED_WORK_CONTRACT")
     expect(contract).toMatchObject({
       version: HERMES_WORK_CONTRACT_VERSION,
       id: HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
@@ -64,6 +67,55 @@ describe("Hermes exact work contract", () => {
       risk: "R1",
       authority: "A2_WRITE_OWN",
     })?.id).toBe("selected-thread-latest-evidence.v1")
+  })
+
+  it("resolves only the pre-registered #911 evidence outcome without granting host mutation", () => {
+    const issue911Intent = "record structured #911 reliability remediation without host mutation"
+    const contract = resolveHermesWorkContract({
+      command: issue911Intent,
+      title: issue911Intent,
+      objective: issue911Intent,
+      lane: "operator-objective",
+      risk: "R1",
+      authority: "A2_WRITE_OWN",
+    })
+
+    expect(contract).toEqual({
+      version: HERMES_WORK_CONTRACT_VERSION,
+      id: HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
+      repository: "bsvalues/terragroq",
+      lane: "operator-objective",
+      reservations: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      validationCommands: [
+        { command: "git", args: ["diff", "--check"], timeoutMs: 300_000 },
+        { command: "npx", args: ["vitest", "run", "tests/hermes-work-contract.test.ts"], timeoutMs: 300_000 },
+      ],
+      projection: { issueNumber: 911, completionOwned: false },
+      delivery: {
+        authorityLevel: "A2_WRITE_OWN",
+        allowedActions: ["implement"],
+        commitAllowed: true,
+        tagAllowed: false,
+        pushAllowed: true,
+      },
+      digest: HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
+    })
+    expect(contract?.digest).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it.each([
+    "RELIABILITY: D: is a single operational concentration point on HERMES",
+    "Inventory each D: path and classify it",
+    "record structured #911 reliability remediation with host mutation",
+  ])("does not infer the #911 work contract from issue prose: %s", (unregisteredIntent) => {
+    expect(resolveHermesWorkContract({
+      command: unregisteredIntent,
+      title: unregisteredIntent,
+      objective: unregisteredIntent,
+      lane: "operator-objective",
+      risk: "R1",
+      authority: "A2_WRITE_OWN",
+    })).toBeNull()
   })
 
   it.each([
