@@ -359,6 +359,32 @@ const HERMES_TIMEOUT_MS = 45 * 60 * 1000
  * The provider tree is never validated in and never installed into -- validation stays in the kernel
  * workspace, which is what keeps this worktree clean enough for the invoker to accept.
  */
+/**
+ * Paths the provider policy pins, and whether the volumes holding them are actually mounted.
+ *
+ * Returned rather than thrown so a caller can name every missing volume at once instead of surfacing
+ * them one reconnect at a time.
+ */
+export function unmountedPolicyVolumes(policy, exists = fs.existsSync) {
+  const pinned = [
+    policy?.placement?.dockerConfig,
+    policy?.placement?.workspaceRoot,
+    policy?.placement?.baselineWorkspace,
+    ...(policy?.placement?.allowedWorkspaceRoots ?? []),
+  ].filter((entry) => typeof entry === "string" && entry.trim() !== "")
+  const missing = new Map()
+  for (const entry of pinned) {
+    // Derived here rather than via path.parse: the policy names Windows volumes, and a Linux CI runner
+    // reading "D:\..." sees an unrooted relative path and reports nothing missing. The volume a path
+    // names is a property of the path, not of the machine reading it.
+    const drive = /^([A-Za-z]:)[\\/]/.exec(entry)
+    const root = drive ? `${drive[1]}\\` : (/^[\\/]/.test(entry) ? "/" : null)
+    if (!root || exists(root)) continue
+    if (!missing.has(root)) missing.set(root, entry)
+  }
+  return [...missing.entries()].map(([volume, example]) => ({ volume, example }))
+}
+
 export async function dispatchHermesLocal({
   root, repositoryPath, workOrderId, workspace, prompt, workContext = null,
   runner = run, newId = () => crypto.randomUUID(),
@@ -368,6 +394,13 @@ export async function dispatchHermesLocal({
   let policy
   try { policy = JSON.parse(fs.readFileSync(policyPath, "utf8")) } catch { throw new Error("PROVIDER_LANE_POLICY_WALL") }
   if (!fs.existsSync(invokerPath)) throw new Error("PROVIDER_LANE_INVOKER_WALL")
+  // A pinned path on a volume that is not mounted is not a missing deployment, and it is certainly not
+  // a model that cannot code. D: was unplugged once and the lane reported its stack as never installed,
+  // which is a verdict about a cable wearing the costume of a verdict about a lane. Name the volume.
+  const unmounted = unmountedPolicyVolumes(policy)
+  if (unmounted.length > 0) {
+    throw new Error(`PROVIDER_LANE_VOLUME_WALL:${unmounted.map((entry) => entry.volume.replace(/[\\/]+$/, "")).join(",")}`)
+  }
   const declaredRoot = policy?.placement?.allowedWorkspaceRoots?.[0]
   if (policy?.placement?.workspaceMode !== "OWNED_WORKTREE" || typeof declaredRoot !== "string" || !path.isAbsolute(declaredRoot)) {
     throw new Error("PROVIDER_LANE_WORKSPACE_WALL")
