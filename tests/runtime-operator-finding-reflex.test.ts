@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { afterEach, describe, expect, it } from "vitest"
 
-import { deriveAndQueueFindings } from "../scripts/runtime-operator/operational-kernel.mjs"
+import { deriveAndQueueFindings, runOperationalKernelCycle } from "../scripts/runtime-operator/operational-kernel.mjs"
 
 /**
  * The fifth P1: `deriveRemediationWorkOrder` had no production caller. The kernel could reason about a
@@ -41,6 +44,30 @@ function adaptersFor(findings: unknown[]) {
 
 const registry = { workOrders: [OBJECTIVE] }
 
+const roots: string[] = []
+
+afterEach(() => {
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
+})
+
+function dispatchAdapters(overrides: Record<string, unknown> = {}) {
+  return {
+    assertRuntime: async () => undefined,
+    listQueue: async () => [],
+    resolveBaseSha: async () => "a".repeat(40),
+    lease: async () => undefined,
+    prepareWorkspace: async () => "bounded-workspace",
+    invokeCodex: async () => ({ result: "PATCH_READY", unifiedPatch: "bounded patch" }),
+    applyAndInspect: async () => ({
+      changedPaths: ["scripts/runtime-operator/a.mjs"],
+      patchBytes: 64,
+    }),
+    validate: async () => undefined,
+    publish: async () => ({ branch: "runtime/derived", pr: 912 }),
+    ...overrides,
+  }
+}
+
 describe("a finding during an active objective enters derivation automatically", () => {
   it("queues the derived work without anyone being asked", async () => {
     const { adapters, persisted } = adaptersFor([
@@ -66,6 +93,81 @@ describe("a finding during an active objective enters derivation automatically",
     const result = await deriveAndQueueFindings({ registry, adapters })
     expect(result.queued).toEqual([])
     expect(persisted).toEqual([])
+  })
+
+  it("refreshes authority after persistence so the derived order is selected in the same cycle", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-finding-reflex-"))
+    roots.push(root)
+    const queue: Array<Record<string, unknown>> = []
+    let currentRegistry: {
+      schemaVersion: number
+      repository: string
+      workOrders: Array<Record<string, unknown>>
+    } = {
+      schemaVersion: 1,
+      repository: "bsvalues/terragroq",
+      workOrders: [OBJECTIVE],
+    }
+    const adapters = dispatchAdapters({
+      collectFindings: async () => [{
+        objectiveWorkOrderId: "WO-0031",
+        sequence: 1,
+        summary: "reconcile compose",
+        paths: ["scripts/runtime-operator/a.mjs"],
+        effects: {},
+      }],
+      persistDerivedWorkOrder: async (order: Record<string, unknown>) => {
+        currentRegistry = { ...currentRegistry, workOrders: [...currentRegistry.workOrders, order] }
+        queue.push({
+          issueNumber: 912,
+          workOrderId: order.workOrderId,
+          state: "READY",
+          createdAt: "2026-08-20T01:00:00Z",
+        })
+      },
+      buildRegistry: async () => currentRegistry,
+      listQueue: async () => queue,
+    })
+
+    await expect(runOperationalKernelCycle({ root, registry: currentRegistry, adapters })).resolves.toMatchObject({
+      state: "PR_OPEN",
+      workOrderId: "WO-0031-R01",
+      pr: 912,
+    })
+  })
+
+  it("keeps selecting from the supplied registry when an older adapter has no registry builder", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-finding-reflex-legacy-"))
+    roots.push(root)
+    const supplied = {
+      schemaVersion: 1,
+      repository: "bsvalues/terragroq",
+      workOrders: [{
+        ...OBJECTIVE,
+        workOrderId: "WO-LEGACY-READY",
+        riskClass: "R1",
+        dependencies: [],
+        ownerGateRequired: false,
+        protectedScope: false,
+        baseBranch: "main",
+        mergeMode: "AUTO_ELIGIBLE",
+        task: "bounded legacy-adapter task",
+      }],
+    }
+    const adapters = dispatchAdapters({
+      listQueue: async () => [{
+        issueNumber: 913,
+        workOrderId: "WO-LEGACY-READY",
+        state: "READY",
+        createdAt: "2026-08-20T02:00:00Z",
+      }],
+    })
+
+    await expect(runOperationalKernelCycle({ root, registry: supplied, adapters })).resolves.toMatchObject({
+      state: "PR_OPEN",
+      workOrderId: "WO-LEGACY-READY",
+      pr: 912,
+    })
   })
 })
 

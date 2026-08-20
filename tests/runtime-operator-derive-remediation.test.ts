@@ -199,3 +199,57 @@ describe("a gated finding does not stall the ones beside it", () => {
       .toEqual({ dispatch: [], gated: [] })
   })
 })
+
+describe("durable finding identity", () => {
+  it("preserves the source event and projection on a derived work order", () => {
+    const result = deriveRemediationWorkOrder({
+      objective: OBJECTIVE,
+      finding: {
+        findingId: "FINDING-911-COMPOSE",
+        sourceUserId: "owner-1",
+        sourcePayloadDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        sourceFindingEventId: 441,
+        issueNumber: 911,
+        sequence: 1,
+        summary: "reconcile compose with the running container",
+        paths: ["scripts/runtime-operator/williamos-adapters.mjs"],
+        effects: { destroys: [] },
+      },
+      now: at,
+    })
+
+    expect(result.dispatch).toMatchObject({
+      findingId: "FINDING-911-COMPOSE",
+      sourceUserId: "owner-1",
+      sourcePayloadDigest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      sourceFindingEventId: 441,
+      issueNumber: 911,
+    })
+  })
+
+  it("preserves the source event on a gated finding", () => {
+    const plan = deriveRemediationPlan({
+      objective: OBJECTIVE,
+      findings: [{
+        findingId: "FINDING-911-REPIN",
+        sourceUserId: "owner-1",
+        sourcePayloadDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        sourceFindingEventId: 442,
+        sequence: 2,
+        summary: "repin service paths",
+        paths: ["scripts/runtime-operator/owner-gate-policy.mjs"],
+        effects: { changesReviewedPolicy: true },
+      }],
+      now: at,
+    })
+
+    expect(plan.gated[0]).toMatchObject({
+      findingId: "FINDING-911-REPIN",
+      sourceUserId: "owner-1",
+      sourcePayloadDigest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      sourceFindingEventId: 442,
+      grantRef: "GRANT-0018",
+      gate: "POLICY",
+    })
+  })
+})

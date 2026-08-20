@@ -105,6 +105,11 @@ export function deriveRemediationWorkOrder({ objective, finding, now = () => new
       dependencies: [],
       task: finding.task ?? finding.summary,
       agent: objective.agent ?? "codex",
+      findingId: finding.findingId,
+      sourceUserId: finding.sourceUserId,
+      sourcePayloadDigest: finding.sourcePayloadDigest,
+      sourceFindingEventId: finding.sourceFindingEventId,
+      issueNumber: finding.issueNumber,
       derivedAt: now(),
     },
     gate: null,
@@ -124,7 +129,17 @@ export function deriveRemediationPlan({ objective, findings, now = () => new Dat
   for (const finding of Array.isArray(findings) ? findings : []) {
     const result = deriveRemediationWorkOrder({ objective, finding, now })
     if (result.dispatch) dispatch.push(result.dispatch)
-    else gated.push({ finding: finding?.summary ?? "(unnamed finding)", ...result.gate })
+    else gated.push({
+      finding: finding?.summary ?? "(unnamed finding)",
+      findingId: finding?.findingId,
+      sourceUserId: finding?.sourceUserId,
+      sourcePayloadDigest: finding?.sourcePayloadDigest,
+      sourceFindingEventId: finding?.sourceFindingEventId,
+      issueNumber: finding?.issueNumber,
+      objectiveWorkOrderId: finding?.objectiveWorkOrderId,
+      grantRef: objective?.grantRef,
+      ...result.gate,
+    })
   }
   return { dispatch, gated }
 }

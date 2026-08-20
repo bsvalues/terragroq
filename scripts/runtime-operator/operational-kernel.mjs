@@ -121,20 +121,33 @@ export async function assertLegacyAdapterDispatchAllowed(registry, verifyOwnerRe
 
 export function selectEligibleWorkOrder(registry, queue) {
   if (registry.schemaVersion !== 1 || registry.repository !== "bsvalues/terragroq") throw new Error("AUTHORITY_REGISTRY_WALL")
-  const completed = new Set(queue.filter((entry) => entry.state === "COMPLETED").map((entry) => entry.workOrderId))
+  const identity = (entry) => entry.workOrderRowId !== undefined && entry.userId !== undefined
+    ? `row:${entry.userId}:${entry.workOrderRowId}`
+    : `ref:${entry.workOrderId}`
+  const completedIdentities = new Set(queue.filter((entry) => entry.state === "COMPLETED").map(identity))
+  const completedRefs = new Set(queue.filter((entry) => entry.state === "COMPLETED").map((entry) => entry.workOrderId))
   return queue
-    .filter((entry) => entry.state === "READY" && !completed.has(entry.workOrderId))
+    .filter((entry) => entry.state === "READY" && !completedIdentities.has(identity(entry)))
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.issueNumber - right.issueNumber)
-    .map((entry) => ({ entry, authority: registry.workOrders.find((record) => record.workOrderId === entry.workOrderId) }))
+    .map((entry) => ({
+      entry,
+      authority: registry.workOrders.find((record) => record.workOrderId === entry.workOrderId
+        && (entry.workOrderRowId === undefined || record.workOrderRowId === entry.workOrderRowId)
+        && (entry.userId === undefined || record.userId === entry.userId)),
+    }))
     .find(({ authority }) => {
       if (!authority) return false
       validateAuthorityRecord(authority)
-      return authority.dependencies.every((dependency) => completed.has(dependency))
+      return authority.dependencies.every((dependency) => completedRefs.has(dependency))
     }) ?? null
 }
 
-function getAuthority(registry, workOrderId) {
-  const authority = registry.workOrders.find((record) => record.workOrderId === workOrderId)
+function getAuthority(registry, workOrderId, identity = {}) {
+  const matches = registry.workOrders.filter((record) => record.workOrderId === workOrderId
+    && (identity.workOrderRowId === undefined || record.workOrderRowId === identity.workOrderRowId)
+    && (identity.userId === undefined || record.userId === identity.userId))
+  if (matches.length !== 1) throw new Error("AUTHORITY_IDENTITY_WALL")
+  const authority = matches[0]
   validateAuthorityRecord(authority)
   return authority
 }
@@ -192,7 +205,11 @@ async function mergeAndComplete({ root, checkpoint, registry, adapters }) {
     checkpoint = transition(root, checkpoint, "MERGED_VERIFIED")
   }
   if (checkpoint.state === "MERGED_VERIFIED") {
-    await adapters.complete(checkpoint.issueNumber)
+    await adapters.complete(checkpoint.issueNumber, {
+      workOrderRowId: checkpoint.workOrderRowId,
+      userId: checkpoint.userId,
+      workOrderId: checkpoint.workOrderId,
+    })
     checkpoint = transition(root, checkpoint, "ISSUE_COMPLETED")
   }
   if (checkpoint.state === "ISSUE_COMPLETED") checkpoint = transition(root, checkpoint, "COMPLETED")
@@ -262,17 +279,22 @@ async function runCycle({ root, registry, adapters }) {
   if (!checkpoint || TERMINAL_STATES.has(checkpoint.state)) {
     // Findings first: a finding made during an active objective enters derivation automatically, and
     // the queue read below sees anything it produced.
-    await deriveAndQueueFindings({ registry, adapters })
+    const derived = await deriveAndQueueFindings({ registry, adapters })
+    const selectionRegistry = derived.queued.length > 0 && typeof adapters.buildRegistry === "function"
+      ? await adapters.buildRegistry()
+      : registry
     const queue = await adapters.listQueue()
-    const selected = selectEligibleWorkOrder(registry, queue)
+    const selected = selectEligibleWorkOrder(selectionRegistry, queue)
     if (!selected) return { state: "READY", workOrderId: null, nextWorkOrderId: null }
     const { entry, authority } = selected
     const baseSha = await adapters.resolveBaseSha(authority.baseBranch)
     checkpoint = transition(root, {
-      repository: registry.repository,
+      repository: selectionRegistry.repository,
       goal: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
       loop: "LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
       workOrderId: authority.workOrderId,
+      workOrderRowId: authority.workOrderRowId,
+      userId: authority.userId,
       issueNumber: entry.issueNumber,
       baseSha,
       branch: null,
@@ -281,7 +303,7 @@ async function runCycle({ root, registry, adapters }) {
       remediationAttempts: 0,
       queueLeased: false,
     }, "LEASED")
-    await adapters.lease(entry.issueNumber)
+    await adapters.lease(entry.issueNumber, entry)
     checkpoint = { ...checkpoint, queueLeased: true }
     writeCheckpoint(root, checkpoint)
     const workspace = await adapters.prepareWorkspace({ workOrderId: authority.workOrderId, baseSha })
@@ -297,7 +319,7 @@ async function runCycle({ root, registry, adapters }) {
     return preparePatch({ root, checkpoint, authority, adapters, remediation: false })
   }
 
-  const authority = getAuthority(registry, checkpoint.workOrderId)
+  const authority = getAuthority(registry, checkpoint.workOrderId, checkpoint)
   if (checkpoint.state === "FAILED_RECOVERABLE") {
     checkpoint = transition(root, checkpoint, checkpoint.resumeState, { nextAttemptAt: null, resumeState: null })
   }
@@ -307,7 +329,11 @@ async function runCycle({ root, registry, adapters }) {
   if (checkpoint.state === "COMPLETED") return completionResult({ checkpoint, registry, adapters })
   if (checkpoint.state === "LEASED") {
     if (!checkpoint.queueLeased) {
-      await adapters.lease(checkpoint.issueNumber)
+      await adapters.lease(checkpoint.issueNumber, {
+        workOrderRowId: checkpoint.workOrderRowId,
+        userId: checkpoint.userId,
+        workOrderId: checkpoint.workOrderId,
+      })
       checkpoint = { ...checkpoint, queueLeased: true }
       writeCheckpoint(root, checkpoint)
     }
