@@ -19,7 +19,12 @@ describe("security header baseline config", () => {
 
     expect(headers.get("X-Content-Type-Options")).toBe("nosniff")
     expect(headers.get("Referrer-Policy")).toBe("strict-origin-when-cross-origin")
-    expect(headers.get("X-Frame-Options")).toBe("DENY")
+    // DENY -> SAMEORIGIN, deliberately (2026-08-20, #762 Environment slice one). The Environment's
+    // browser surface frames the running application's OWN pages -- a surface is the real thing, and
+    // the real thing here is this app. SAMEORIGIN keeps the entire clickjacking threat model intact:
+    // every foreign origin is still refused; the only new capability is this origin framing itself.
+    // This line moving without a sentence like this one is exactly what this test exists to catch.
+    expect(headers.get("X-Frame-Options")).toBe("SAMEORIGIN")
     expect(headers.get("Permissions-Policy")).toBe("camera=(), microphone=(), geolocation=()")
     expect(headers.has("Content-Security-Policy")).toBe(false)
     expect(headers.has("Strict-Transport-Security")).toBe(false)
