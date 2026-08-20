@@ -71,6 +71,7 @@ describe("Hermes Codex prompt", () => {
       "findingId", "sequence", "summary", "task", "paths", "effects",
     ])
     expect(finding.properties.issueNumber).toBeUndefined()
+    expect(finding.properties.paths.uniqueItems).toBeUndefined()
     expect(finding.properties.effects.additionalProperties).toBe(false)
     expect(finding.properties.effects.required).toEqual([
       "spendsMoney", "irreversible", "mutatesProductionData", "releaseOrCutover",

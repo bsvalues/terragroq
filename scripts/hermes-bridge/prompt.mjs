@@ -120,7 +120,6 @@ const HERMES_FINDING_SCHEMA = Object.freeze({
       type: "array",
       minItems: 1,
       maxItems: 50,
-      uniqueItems: true,
       items: { type: "string", minLength: 1, maxLength: 300 },
     },
     effects: {

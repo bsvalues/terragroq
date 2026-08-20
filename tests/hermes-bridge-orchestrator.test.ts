@@ -2939,6 +2939,21 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
   })
 
+  it("persists bounded sanitized App Server failure detail for governed recovery", async () => {
+    const value = fixture()
+    value.client.runTurn.mockRejectedValueOnce(Object.assign(new Error("failed"), {
+      code: "APP_SERVER_TURN_FAILED",
+      detail: `Invalid schema postgresql://dbuser:dbpassword@db.example/app\n-----BEGIN PRIVATE KEY-----\nprivate-key-body\n-----END PRIVATE KEY----- ${"x".repeat(1_100)}`,
+    }))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "APP_SERVER_TURN_FAILED" })
+    const failed = value.state.read().executions["77"]
+    expect(failed.checkpoint.state).toBe("RETRYABLE_WALL")
+    expect(failed.checkpoint.detail).toMatch(/^APP_SERVER_TURN_FAILED: Invalid schema postgresql:\/\/\[REDACTED\]@db\.example\/app/)
+    expect(failed.checkpoint.detail.length).toBeLessThanOrEqual(1_000)
+    expect(failed.checkpoint.detail).not.toMatch(/dbpassword|private-key-body/)
+  })
+
   it("abandons an App Server timeout for immediate fenced redispatch", async () => {
     const value = fixture()
     value.client.runTurn.mockRejectedValueOnce(Object.assign(new Error("timeout"), {

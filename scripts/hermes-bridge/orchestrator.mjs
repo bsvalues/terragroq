@@ -3,6 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 
+import { sanitizeAppServerText } from "./app-server-client.mjs"
 import { selectExecutionBackend } from "./execution-backend.mjs"
 import {
   completeOutcome,
@@ -39,6 +40,7 @@ const REVIEW_POLL_INTERVAL_MS = 15_000
 const REVIEW_POLL_ATTEMPTS = 80
 const SHA = /^[0-9a-f]{40}$/
 const PROJECTION_RETRY_DELAYS_MS = Object.freeze([1_000, 4_000])
+const MAX_CHECKPOINT_DETAIL_CHARS = 1_000
 const RETRYABLE_PROJECTION_TRANSPORT_CODES = new Set([
   "ENOTFOUND",
   "EAI_AGAIN",
@@ -369,6 +371,12 @@ function projectedWorkContract(outcome, resolver) {
           }),
     },
   }
+}
+
+function retryableWallDetail(error) {
+  const code = typeof error?.code === "string" ? error.code : "HERMES_CYCLE_FAILED"
+  const detail = sanitizeAppServerText(error?.detail).trim()
+  return detail ? `${code}: ${detail}`.slice(0, MAX_CHECKPOINT_DETAIL_CHARS) : code
 }
 
 export function createHermesOrchestrator(options = {}) {
@@ -2066,7 +2074,7 @@ export function createHermesOrchestrator(options = {}) {
         return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState: "DEFERRED_PROVIDER_UNAVAILABLE", retryAfter }
       }
       try {
-        cp = await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED",
+        cp = await checkpoint(lease, sequence, "RETRYABLE_WALL", retryableWallDetail(error),
           externalToolWall ? { externalToolRetryCount, threadId: null, turnId: null } : {})
         sequence = cp.checkpointSequence
       } catch {}

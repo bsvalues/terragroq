@@ -131,6 +131,15 @@ describe("CodexAppServerClient", () => {
     expect(sanitizeAppServerText("Authorization: Bearer opaque-value-123456")).toBe("[REDACTED]")
     expect(sanitizeAppServerText("Authorization: Basic Zm9vOmJhcg==")).toBe("[REDACTED]")
   })
+
+  it("redacts credential-bearing database URLs and private-key blocks", () => {
+    expect(sanitizeAppServerText([
+      "Database postgresql://dbuser:dbpassword@db.example/app",
+      "-----BEGIN PRIVATE KEY-----",
+      "private-key-body",
+      "-----END PRIVATE KEY-----",
+    ].join("\n"))).toBe("Database postgresql://[REDACTED]@db.example/app\n[REDACTED]")
+  })
   it("spawns the stdio App Server and frames initialize as one JSON object per line", async () => {
     const { client, process, spawn } = setup()
     await connect(client, process)
@@ -471,6 +480,110 @@ describe("CodexAppServerClient", () => {
     })
 
     await expect(resultPromise).rejects.toMatchObject({ code: "APP_SERVER_TURN_INTERRUPTED", status: "interrupted" })
+  })
+
+  it("preserves bounded sanitized failure detail when completion precedes waiter installation", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
+    const start = process.messages().at(-1)
+    process.stdout.write([
+      JSON.stringify({ id: start.id, result: { turn: { id: "turn-early-failed", status: "inProgress" } } }),
+      JSON.stringify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-early-failed",
+            status: "failed",
+            error: { message: "x".repeat(1_100) },
+            items: [],
+          },
+        },
+      }),
+      "",
+    ].join("\n"))
+
+    await expect(resultPromise).rejects.toMatchObject({
+      code: "APP_SERVER_TURN_FAILED",
+      status: "failed",
+      detail: "x".repeat(1_000),
+    })
+  })
+
+  it("exposes only bounded sanitized failure detail from terminal notifications", async () => {
+    const notifications: unknown[] = []
+    const { client, process } = setup({ onNotification: (event: unknown) => notifications.push(event) })
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
+    const start = process.messages().at(-1)
+    process.send({ id: start.id, result: { turn: { id: "turn-notified-failed", status: "inProgress" } } })
+    await Promise.resolve()
+    process.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-notified-failed",
+          status: "failed",
+          error: { message: [
+            "Invalid schema postgresql://dbuser:dbpassword@db.example/app",
+            "-----BEGIN PRIVATE KEY-----",
+            "private-key-body",
+            "-----END PRIVATE KEY-----",
+          ].join("\n") },
+          items: [],
+        },
+      },
+    })
+
+    await expect(resultPromise).rejects.toMatchObject({
+      code: "APP_SERVER_TURN_FAILED",
+      status: "failed",
+      detail: "Invalid schema postgresql://[REDACTED]@db.example/app\n[REDACTED]",
+    })
+    expect(notifications).toContainEqual({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-notified-failed",
+        status: "failed",
+        error: { message: "Invalid schema postgresql://[REDACTED]@db.example/app\n[REDACTED]" },
+      },
+    })
+    expect(JSON.stringify(notifications)).not.toMatch(/dbpassword|private-key-body/)
+  })
+
+  it("preserves bounded sanitized failure detail from durable reconciliation", async () => {
+    const { client, process } = setup({ turnPollMs: 60_000 })
+    await connect(client, process)
+    const resultPromise = client.runTurn({ threadId: "thread-1", prompt: "work" })
+    const start = process.messages().at(-1)
+    process.send({ id: start.id, result: { turn: { id: "turn-reconciled-failed", status: "inProgress" } } })
+    await Promise.resolve()
+    await Promise.resolve()
+    process.send({ method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } } })
+    await vi.waitFor(() => expect(process.messages().findLast((message) => message.method === "thread/read")).toBeDefined())
+    const read = process.messages().findLast((message) => message.method === "thread/read")
+    process.send({
+      id: read.id,
+      result: {
+        thread: {
+          turns: [{
+            id: "turn-reconciled-failed",
+            status: "failed",
+            error: { message: "Invalid schema Authorization: Basic Zm9vOmJhcg==" },
+            items: [],
+          }],
+        },
+      },
+    })
+
+    await expect(resultPromise).rejects.toMatchObject({
+      code: "APP_SERVER_TURN_FAILED",
+      status: "failed",
+      detail: "Invalid schema [REDACTED]",
+    })
   })
 
   it("polls durable turn history when no terminal notification arrives", async () => {
