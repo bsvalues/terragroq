@@ -13,6 +13,7 @@ import { selectEligibleWorkOrder } from "../scripts/runtime-operator/operational
 const workOrder = (over: Record<string, unknown> = {}) => ({
   id: 26,
   userId: "owner-1",
+  authorityGrantId: 12,
   ref: "WO-0026",
   title: "Make a work_order-rooted Workbench Thread load its existing content.",
   description:
@@ -27,6 +28,8 @@ const workOrder = (over: Record<string, unknown> = {}) => ({
 })
 
 const grant = (over: Record<string, unknown> = {}) => ({
+  id: 12,
+  workOrderId: 26,
   ref: "GRANT-0012",
   scope: "#890",
   allowedActions: ["implement"],
@@ -49,13 +52,13 @@ describe("projection parsing", () => {
 })
 
 describe("linking an owner grant", () => {
-  it("links when the work order names the grant ref", () => {
+  it("links only through the exact Work Order foreign keys", () => {
     expect(linkGrant(workOrder(), [grant()])?.ref).toBe("GRANT-0012")
   })
 
-  it("links when the grant scope names the work order", () => {
-    const scoped = grant({ ref: "GRANT-0099", scope: "WO-0026" })
-    expect(linkGrant(workOrder({ description: "no refs named" }), [scoped])?.ref).toBe("GRANT-0099")
+  it("does not treat description or scope text as authority linkage", () => {
+    const scoped = grant({ id: 99, ref: "GRANT-0099", scope: "WO-0026" })
+    expect(linkGrant(workOrder({ description: "GRANT-0099" }), [scoped])).toBeNull()
   })
 
   it("requires the implement action, not merely any grant", () => {
@@ -148,8 +151,18 @@ describe("building the registry from state", () => {
     expect(buildRegistryRecords([workOrder({ validators: [] })], [grant()], "a")).toHaveLength(0)
   })
 
-  it("omits a work order with no projection issue, which publish would need", () => {
+  it("omits a work order with neither a GitHub projection nor an exact Environment world binding", () => {
     expect(buildRegistryRecords([workOrder({ description: "GRANT-0012 but no projection" })], [grant()], "a")).toHaveLength(0)
+  })
+
+  it("accepts an exact Environment world binding without inventing a GitHub issue dependency", () => {
+    const records = buildRegistryRecords([
+      workOrder({ description: "GRANT-0012 [environment-world:world-42] [resource:repo:a]" }),
+    ], [grant()], "a")
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({
+      workOrderId: "WO-0026", grantRef: "GRANT-0012", environmentWorldId: "world-42",
+    })
   })
 
   it("drops validators outside the kernel's allowed set instead of passing them through", () => {

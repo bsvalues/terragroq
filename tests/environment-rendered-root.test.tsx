@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
 import { EnvironmentRoot } from "@/components/environment-root/environment-root"
@@ -125,6 +125,33 @@ describe("greenfield Environment rendered root", () => {
     expect(screen.getByText("The observed update is ready.")).toBeTruthy()
   })
 
+  it("learns about runtime progress without losing the owner's draft or focus", async () => {
+    const current = world({ intent: "Waiting for the running copy", status: "waiting_for_execution_endpoint" })
+    const next = world({
+      intent: current.intent,
+      status: "ready",
+      lastUpdatedAt: "2026-08-20T18:01:00.000Z",
+      conversation: [turn("williamos", "The verified running copy is ready.")],
+    })
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ world: next }), { status: 200, headers: { "content-type": "application/json" } }),
+    )
+    const user = userEvent.setup()
+    render(<EnvironmentRoot initialWorld={current} />)
+    const line = screen.getByRole("textbox", { name: "The Line" }) as HTMLTextAreaElement
+    await user.type(line, "Keep this exact thought")
+
+    window.dispatchEvent(new Event("online"))
+
+    await waitFor(() => expect(screen.getByText("The verified running copy is ready.")).toBeTruthy())
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/environment/world?worldId=world-1",
+      expect.objectContaining({ headers: { accept: "application/json" } }),
+    )
+    expect(line.value).toBe("Keep this exact thought")
+    expect(document.activeElement).toBe(line)
+  })
+
   it("labels waiting surfaces honestly when no content or admitted endpoint exists", () => {
     const waiting = world({
       status: "waiting_for_execution_endpoint",
@@ -152,6 +179,9 @@ describe("greenfield Environment rendered root", () => {
     expect(source).not.toMatch(/WorkbenchShell|components\/shell|components\/environment\/|AuthForm|AuthAside|credentialless/)
     expect(readFileSync(join(process.cwd(), "app/environment/page.tsx"), "utf8")).toContain('redirect("/environment/sign-in")')
     expect(readFileSync(join(process.cwd(), "app/environment/page.tsx"), "utf8")).toContain("loadCurrentEnvironmentWorld")
+    expect(readFileSync(join(process.cwd(), "app/env/page.tsx"), "utf8")).toContain('redirect("/environment")')
+    expect(existsSync(join(process.cwd(), "app/api/env/line/route.ts"))).toBe(false)
+    expect(existsSync(join(process.cwd(), "components/environment/environment.tsx"))).toBe(false)
   })
 
   it("opens the Environment directly after greenfield sign-in", async () => {
@@ -175,8 +205,10 @@ function endpoint(id: string, appUrl: string): WorldEndpointIdentity {
     worldId: "world-1",
     resourceIdentity: "resource://example",
     sandboxId: `sandbox-${id}`,
+    probeUrl: appUrl,
     appUrl,
     branch: `sandbox/${id}`,
+    head: `0123456789abcdef-${id}`,
     filesystemRoot: `/isolated/${id}`,
     terminalStreamRef: `stream://terminal/${id}`,
     testStreamRef: `stream://tests/${id}`,
@@ -184,7 +216,12 @@ function endpoint(id: string, appUrl: string): WorldEndpointIdentity {
       source: "execution_receipt",
       evidenceRef: `evidence://${id}`,
       capturedAt: "2026-08-20T18:00:00.000Z",
-      liveness: { status: "reachable", httpStatus: 200, observedAt: "2026-08-20T18:00:00.000Z", evidenceRef: `evidence://live/${id}` },
+      liveness: {
+        status: "reachable", httpStatus: 200, observedAt: "2026-08-20T18:00:00.000Z", evidenceRef: `evidence://live/${id}`,
+        publicRoute: {
+          status: "reachable", httpStatus: 200, observedAt: "2026-08-20T18:00:00.000Z", evidenceRef: `evidence://live/${id}`,
+        },
+      },
     },
   }
 }
@@ -220,7 +257,7 @@ function world(overrides: Partial<EnvironmentWorldDto> = {}): EnvironmentWorldDt
     worldId: "world-1",
     intent: "A restored working world",
     assumption: null,
-    resource: { candidateId: "candidate-1", canonicalIdentity: "resource://example", label: "The selected application" },
+    resource: { recordId: 1, candidateId: "candidate-1", canonicalIdentity: "resource://example", label: "The selected application" },
     conversation: [],
     surfaces: [],
     endpoints: [],

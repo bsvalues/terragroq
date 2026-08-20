@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const boundary = vi.hoisted(() => ({
   getSession: vi.fn(),
+  getRuntimeDevicePrincipal: vi.fn(),
   load: vi.fn(),
   submitLine: vi.fn(),
   compare: vi.fn(),
@@ -12,7 +13,10 @@ const boundary = vi.hoisted(() => ({
   appendGovernanceEvent: vi.fn(),
 }))
 
-vi.mock("@/lib/session", () => ({ getSession: boundary.getSession }))
+vi.mock("@/lib/session", () => ({
+  getSession: boundary.getSession,
+  getRuntimeDevicePrincipal: boundary.getRuntimeDevicePrincipal,
+}))
 vi.mock("@/lib/environment/server", () => ({
   environmentWorldService: {
     load: boundary.load,
@@ -33,6 +37,7 @@ vi.mock("@/lib/governance/events", () => ({ appendGovernanceEvent: boundary.appe
 import { POST as linePost } from "@/app/api/environment/line/route"
 import { GET as worldGet } from "@/app/api/environment/world/route"
 import { POST as runtimePost } from "@/app/api/environment/runtime/route"
+import { GET as previewIdentityGet } from "@/app/api/environment/preview-identity/route"
 
 function lineRequest(body: unknown) {
   return new Request("http://localhost/api/environment/line", {
@@ -46,6 +51,7 @@ describe("Environment authenticated routes", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     boundary.getSession.mockResolvedValue({ user: { id: "owner" } })
+    boundary.getRuntimeDevicePrincipal.mockResolvedValue({ userId: "owner", credentialId: "runtime", sessionId: "session" })
     boundary.requireRuntimeAuthority.mockResolvedValue({ evidence: [{ id: 7, ref: "EV-1" }] })
   })
 
@@ -71,7 +77,7 @@ describe("Environment authenticated routes", () => {
   })
 
   it("requires an enrolled runtime device before publishing a world endpoint", async () => {
-    boundary.getSession.mockResolvedValueOnce({ user: { id: "owner" }, session: { token: "browser-session" } })
+    boundary.getRuntimeDevicePrincipal.mockResolvedValueOnce(null)
 
     const response = await runtimePost(new Request("http://localhost/api/environment/runtime", {
       method: "POST",
@@ -85,10 +91,7 @@ describe("Environment authenticated routes", () => {
   })
 
   it("rejects a null runtime payload as invalid input", async () => {
-    boundary.getSession.mockResolvedValueOnce({
-      user: { id: "owner" },
-      session: { token: "<device-session-redacted>" },
-    })
+    boundary.getRuntimeDevicePrincipal.mockResolvedValueOnce({ userId: "owner", credentialId: "runtime", sessionId: "session" })
 
     const response = await runtimePost(new Request("http://localhost/api/environment/runtime", {
       method: "POST",
@@ -97,14 +100,11 @@ describe("Environment authenticated routes", () => {
     }))
 
     expect(response.status).toBe(400)
-    await expect(response.json()).resolves.toEqual({ error: "INVALID_BODY" })
+    await expect(response.json()).resolves.toEqual({ error: "RUNTIME_PAYLOAD_MALFORMED" })
   })
 
   it("rejects oversized runtime input before authority or projection work", async () => {
-    boundary.getSession.mockResolvedValueOnce({
-      user: { id: "owner" },
-      session: { token: "<device-session-redacted>" },
-    })
+    boundary.getRuntimeDevicePrincipal.mockResolvedValueOnce({ userId: "owner", credentialId: "runtime", sessionId: "session" })
 
     const response = await runtimePost(new Request("http://localhost/api/environment/runtime", {
       method: "POST",
@@ -118,17 +118,16 @@ describe("Environment authenticated routes", () => {
   })
 
   it("admits a live endpoint only after exact authority and evidence checks", async () => {
-    boundary.getSession.mockResolvedValueOnce({
-      user: { id: "owner" },
-      session: { token: "<device-session-redacted>" },
-    })
+    boundary.getRuntimeDevicePrincipal.mockResolvedValueOnce({ userId: "owner", credentialId: "runtime", sessionId: "session" })
     const candidate = {
       id: "endpoint-1",
       worldId: "world-1",
       resourceIdentity: "repo:one",
       sandboxId: "sandbox-1",
+      probeUrl: "http://127.0.0.1:4101",
       appUrl: "http://127.0.0.1:4101",
       branch: "world/one",
+      head: "0123456789abcdef",
       filesystemRoot: "/worktrees/one",
       terminalStreamRef: "terminal://one",
       testStreamRef: "tests://one",
@@ -136,7 +135,15 @@ describe("Environment authenticated routes", () => {
     }
     const verified = {
       ...candidate,
-      provenance: { ...candidate.provenance, liveness: { status: "reachable", httpStatus: 200, observedAt: "2026-08-20T19:00:01.000Z", evidenceRef: "EV-1" } },
+      provenance: {
+        ...candidate.provenance,
+        liveness: {
+          status: "reachable", httpStatus: 200, observedAt: "2026-08-20T19:00:01.000Z", evidenceRef: "EV-1",
+          publicRoute: {
+            status: "reachable", httpStatus: 200, observedAt: "2026-08-20T19:00:01.000Z", evidenceRef: "EV-1",
+          },
+        },
+      },
     }
     boundary.verifyEndpointLiveness.mockResolvedValueOnce(verified)
     boundary.admitEndpoint.mockResolvedValueOnce({ worldId: "world-1" })
@@ -159,5 +166,35 @@ describe("Environment authenticated routes", () => {
     }))
     expect(boundary.admitEndpoint).toHaveBeenCalledWith("owner", "world-1", verified)
     expect(boundary.appendGovernanceEvent).toHaveBeenCalledWith(expect.objectContaining({ entityId: "world-1", eventType: "EVIDENCE_RECORDED" }))
+  })
+})
+
+describe("Environment preview identity", () => {
+  it("exposes only the exact non-secret world, head, and port receipt", async () => {
+    const previous = {
+      world: process.env.WILLIAMOS_PREVIEW_WORLD_ID,
+      head: process.env.WILLIAMOS_PREVIEW_HEAD,
+      port: process.env.WILLIAMOS_PREVIEW_PORT,
+    }
+    process.env.WILLIAMOS_PREVIEW_WORLD_ID = "world-1"
+    process.env.WILLIAMOS_PREVIEW_HEAD = "0123456789abcdef0123456789abcdef01234567"
+    process.env.WILLIAMOS_PREVIEW_PORT = "4101"
+    try {
+      const response = await previewIdentityGet()
+      expect(response.status).toBe(200)
+      expect(response.headers.get("cache-control")).toBe("no-store")
+      await expect(response.json()).resolves.toEqual({
+        worldId: "world-1",
+        head: "0123456789abcdef0123456789abcdef01234567",
+        port: 4101,
+      })
+    } finally {
+      if (previous.world === undefined) delete process.env.WILLIAMOS_PREVIEW_WORLD_ID
+      else process.env.WILLIAMOS_PREVIEW_WORLD_ID = previous.world
+      if (previous.head === undefined) delete process.env.WILLIAMOS_PREVIEW_HEAD
+      else process.env.WILLIAMOS_PREVIEW_HEAD = previous.head
+      if (previous.port === undefined) delete process.env.WILLIAMOS_PREVIEW_PORT
+      else process.env.WILLIAMOS_PREVIEW_PORT = previous.port
+    }
   })
 })

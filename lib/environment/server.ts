@@ -6,7 +6,7 @@ import {
   type EnvironmentEndpointResolver,
 } from "@/lib/environment/world-service"
 import type { EnvironmentWorldDto } from "@/lib/environment/api-contract"
-import { createHttpEnvironmentComparisonPort } from "@/lib/environment/http-comparison-port"
+import { postgresEnvironmentWorkIntake } from "@/lib/environment/postgres-work-intake"
 
 /**
  * Production deliberately starts without an execution or comparison adapter. Runtime integration
@@ -19,7 +19,8 @@ export function createProductionEnvironmentService(options: {
   return createEnvironmentWorldService({
     repository: postgresEnvironmentWorldRepository,
     endpointResolver: options.endpointResolver,
-    comparisonPort: options.comparisonPort ?? createHttpEnvironmentComparisonPort(),
+    comparisonPort: options.comparisonPort,
+    workIntakePort: postgresEnvironmentWorkIntake,
   })
 }
 

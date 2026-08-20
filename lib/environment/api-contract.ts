@@ -64,11 +64,27 @@ export type EnvironmentCompareResponse = Readonly<{
   comparisonSurface?: EnvironmentSurfaceDto
 }>
 
+const ENDPOINT_LIVENESS_TTL_MS = 30_000
+
+function hasFreshEndpointReceipt(endpoint: WorldEndpointIdentity, nowMs: number): boolean {
+  const liveness = endpoint.provenance.liveness
+  const observedAt = Date.parse(liveness.observedAt)
+  const publicObservedAt = Date.parse(liveness.publicRoute.observedAt)
+  return liveness.status === "reachable" && liveness.publicRoute.status === "reachable" &&
+    Number.isFinite(observedAt) && Number.isFinite(publicObservedAt) &&
+    nowMs >= observedAt && nowMs - observedAt <= ENDPOINT_LIVENESS_TTL_MS &&
+    nowMs >= publicObservedAt && nowMs - publicObservedAt <= ENDPOINT_LIVENESS_TTL_MS
+}
+
 export function toEnvironmentWorldDto(
   world: EnvironmentWorldProjection,
   lastUpdatedAt: string,
+  nowMs = Date.now(),
 ): EnvironmentWorldDto {
   const endpoints = new Map(world.endpoints.map((endpoint) => [endpoint.id, endpoint]))
+  const freshEndpointIds = new Set(
+    world.endpoints.filter((endpoint) => hasFreshEndpointReceipt(endpoint, nowMs)).map((endpoint) => endpoint.id),
+  )
   return {
     worldId: world.id,
     intent: world.meaning.intent,
@@ -81,11 +97,16 @@ export function toEnvironmentWorldDto(
     surfaces: world.surfaces.map((surface) => {
       const endpoint = endpoints.get(surface.binding.endpointId)
       const artifact = surface.binding.type === "artifact" ? surface.binding : null
-      const status = surface.kind === "tests" && world.execution.state === "observed_succeeded"
-        ? "passed"
-        : surface.kind === "tests" && world.execution.state === "observed_failed"
-          ? "failed"
-          : "ready"
+      const endpointIsFresh = freshEndpointIds.has(surface.binding.endpointId)
+      const status = !artifact && !endpointIsFresh
+        ? "unavailable"
+        : surface.kind === "tests" && !artifact
+        ? "waiting"
+        : surface.kind === "tests" && world.execution.state === "observed_succeeded"
+          ? "passed"
+          : surface.kind === "tests" && world.execution.state === "observed_failed"
+            ? "failed"
+            : "ready"
       return {
         id: surface.id,
         kind: surface.kind,
@@ -109,7 +130,9 @@ export function toEnvironmentWorldDto(
       }
     }),
     endpoints: world.endpoints,
-    status: world.status,
+    status: world.status === "ready" && freshEndpointIds.size === 0
+      ? "waiting_for_execution_endpoint"
+      : world.status,
     execution: world.execution,
     lastUpdatedAt,
   }

@@ -393,6 +393,62 @@ describe("WilliamOS operational kernel", () => {
     expect(calls).toEqual(["runtime", "validate"])
   })
 
+  it("holds an Environment PR before review while its real runtime endpoint is unavailable", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-kernel-environment-wait-"))
+    roots.push(root)
+    fs.mkdirSync(path.join(root, "state"), { recursive: true })
+    fs.writeFileSync(path.join(root, "state", "kernel-checkpoint.json"), JSON.stringify({
+      schemaVersion: 1,
+      repository: "bsvalues/terragroq",
+      workOrderId: "WO-ENV-001",
+      issueNumber: null,
+      state: "PATCH_PREPARED",
+      baseSha: "a".repeat(40),
+      workspace: path.join(root, "workspace"),
+      branch: null,
+      pr: null,
+      attempt: 1,
+      remediationAttempts: 0,
+      changedPaths: ["app/environment/page.tsx"],
+      patchBytes: 64,
+    }))
+    const registry = {
+      schemaVersion: 1,
+      repository: "bsvalues/terragroq",
+      workOrders: [{
+        workOrderId: "WO-ENV-001",
+        authority: "APPROVED",
+        riskClass: "R0",
+        dependencies: [],
+        ownerGateRequired: false,
+        protectedScope: false,
+        baseBranch: "main",
+        mergeMode: "AUTO_ELIGIBLE",
+        allowedPaths: ["app/environment/page.tsx"],
+        requiredValidation: ["test", "build"],
+        environmentWorldId: "world-env-001",
+        task: "Prepare a real Environment world.",
+      }],
+    }
+    let inspected = false
+    const result = await runOperationalKernelCycle({ root, registry, adapters: {
+      assertRuntime: async () => undefined,
+      listQueue: async () => [{ issueNumber: null, workOrderId: "WO-ENV-001", state: "LEASED", createdAt: "2026-08-20T01:00:00Z" }],
+      validate: async ({ strict }: { strict: boolean }) => expect(strict).toBe(true),
+      publish: async () => ({ branch: "runtime/wo-env-001", pr: 924 }),
+      publishEnvironmentWorld: async () => ({ state: "waiting", reason: "ENVIRONMENT_RUNTIME_CONFIGURATION_WAIT" }),
+      inspectPullRequest: async () => { inspected = true; return { decision: "MERGE" } },
+    } })
+    expect(result).toMatchObject({
+      state: "WAITING_ENVIRONMENT",
+      resumeState: "VALIDATING",
+      failureCode: "ENVIRONMENT_RUNTIME_CONFIGURATION_WAIT",
+      pr: 924,
+      ownerDecisionRequired: false,
+    })
+    expect(inspected).toBe(false)
+  })
+
   it("persists Codex transport failures for unattended backoff instead of owner escalation", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-kernel-retry-"))
     roots.push(root)

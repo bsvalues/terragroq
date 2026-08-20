@@ -128,7 +128,11 @@ function TestsSurface({
   const record = asRecord(surface.content)
   const rows = readRows(record, ["cases", "tests", "results"])
   const summary = readText(record, ["summary", "output"])
-  const evidenceBacked = execution.state !== "not_started" && execution.evidenceRefs.length > 0 && Boolean(surface.provenance.evidenceRef)
+  const evidenceBacked =
+    surface.provenance.source === "execution_evidence" &&
+    execution.state !== "not_started" &&
+    execution.evidenceRefs.length > 0 &&
+    Boolean(surface.provenance.evidenceRef)
 
   if (!evidenceBacked) {
     return <Waiting message="No test run has been observed for this endpoint." subject={surface.subject} />

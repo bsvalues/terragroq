@@ -38,3 +38,27 @@ export function requireAllowedEnvironmentEndpoint(
   if (!loopback && !allowlist.has(url.origin)) throw new Error("ENDPOINT_ORIGIN_NOT_ALLOWED")
   return url
 }
+
+/** Client-visible application URLs must not become mixed content in the HTTPS cockpit. */
+export function requirePublicEnvironmentEndpoint(
+  raw: string,
+  allowedOrigins = process.env.WILLIAMOS_ENVIRONMENT_PUBLIC_ORIGINS ?? "",
+): URL {
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new Error("ENDPOINT_APP_URL_INVALID")
+  }
+  if (!/^https?:$/.test(url.protocol) || url.username || url.password || url.hash) {
+    throw new Error("ENDPOINT_APP_URL_INVALID")
+  }
+  const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase()
+  const loopback = hostname === "::1" || LOOPBACK_IPV4.test(hostname)
+  const allowlist = new Set(allowedOrigins.split(",").map((value) => value.trim()).filter(Boolean).map((value) => {
+    try { return new URL(value).origin } catch { return "" }
+  }).filter(Boolean))
+  if (url.protocol !== "https:" && !loopback) throw new Error("ENDPOINT_PUBLIC_HTTPS_REQUIRED")
+  if (!loopback && !allowlist.has(url.origin)) throw new Error("ENDPOINT_PUBLIC_ORIGIN_NOT_ALLOWED")
+  return url
+}

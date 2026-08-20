@@ -22,6 +22,7 @@ export type ResourceCandidate = ResourceBinding & Readonly<{ weight?: number }>
 export type StoredEnvironmentWorld = Readonly<{
   world: EnvironmentWorldProjection
   updatedAt: string
+  version: number
 }>
 
 export interface EnvironmentWorldRepository {
@@ -29,7 +30,7 @@ export interface EnvironmentWorldRepository {
   loadExact(userId: string, worldId: string): Promise<StoredEnvironmentWorld | null>
   loadLatest(userId: string): Promise<StoredEnvironmentWorld | null>
   insert(userId: string, world: EnvironmentWorldProjection, now: string): Promise<void>
-  update(userId: string, world: EnvironmentWorldProjection, now: string): Promise<boolean>
+  update(userId: string, world: EnvironmentWorldProjection, now: string, expectedVersion: number): Promise<boolean>
 }
 
 export interface EnvironmentEndpointResolver {
@@ -43,6 +44,8 @@ export interface EnvironmentEndpointResolver {
 }
 
 export type ComparisonEvidence = Readonly<{
+  /** The producing port persisted this exact observation in the authority/evidence ledger. */
+  durable: true
   artifactRef: string
   evidenceRef: string
   observedAt: string
@@ -59,25 +62,39 @@ export interface EnvironmentComparisonPort {
   }>): Promise<ComparisonEvidence | null>
 }
 
+export interface EnvironmentWorkIntakePort {
+  createSuggested(input: Readonly<{
+    userId: string
+    worldId: string
+    intent: string
+    resource: ResourceBinding
+  }>): Promise<Readonly<{ workOrderRef: string }>>
+}
+
 export function createEnvironmentWorldService({
   repository,
   endpointResolver,
   comparisonPort,
+  workIntakePort,
   now = () => new Date().toISOString(),
   id = () => crypto.randomUUID(),
 }: {
   repository: EnvironmentWorldRepository
   endpointResolver?: EnvironmentEndpointResolver
   comparisonPort?: EnvironmentComparisonPort
+  workIntakePort?: EnvironmentWorkIntakePort
   now?: () => string
   id?: () => string
 }) {
+  const dto = (world: EnvironmentWorldProjection, updatedAt: string) =>
+    toEnvironmentWorldDto(world, updatedAt, Date.parse(now()))
+
   return {
     async load(userId: string, worldId?: string | null): Promise<EnvironmentWorldDto | null> {
       requireText(userId, "USER_REQUIRED")
       const stored = worldId ? await repository.loadExact(userId, worldId) : await repository.loadLatest(userId)
       if (!stored) return null
-      return toEnvironmentWorldDto(validateEnvironmentWorldProjection(stored.world), stored.updatedAt)
+      return dto(validateEnvironmentWorldProjection(stored.world), stored.updatedAt)
     },
 
     async submitLine(
@@ -108,12 +125,12 @@ export function createEnvironmentWorldService({
         const say = lineContinuation(world)
         world = { ...world, meaning: withTurn(world.meaning, "williamos", say, now) }
         const updatedAt = now()
-        const updated = await repository.update(userId, world, updatedAt)
-        if (!updated) throw new EnvironmentNotFoundError("WORLD_NOT_FOUND")
+        const updated = await repository.update(userId, world, updatedAt, stored.version)
+        if (!updated) throw new EnvironmentConflictError("WORLD_CONCURRENTLY_CHANGED")
         return {
           state: "continued",
           say,
-          world: toEnvironmentWorldDto(world, updatedAt),
+          world: dto(world, updatedAt),
         }
       }
 
@@ -130,13 +147,21 @@ export function createEnvironmentWorldService({
       if (decision.mode === "ASSUME_AND_STATE" && !resource) throw new Error("CHOSEN_RESOURCE_NOT_FOUND")
 
       const worldId = id()
+      const suggestedWork = resource && workIntakePort
+        ? await workIntakePort.createSuggested({ userId, worldId, intent: text, resource })
+        : null
       let meaning = createWorkingWorld({
         intent: text,
         assumption: decision.mode === "ASSUME_AND_STATE" ? decision.statement : null,
         resources: resource ? [resource.canonicalIdentity] : [],
       })
       meaning = withTurn(meaning, "owner", text, now)
-      let world = createEnvironmentWorldProjection({ id: worldId, meaning, resource })
+      let world = createEnvironmentWorldProjection({
+        id: worldId,
+        meaning,
+        resource,
+        workOrderRef: suggestedWork?.workOrderRef ?? null,
+      })
 
       if (resource && endpointResolver) {
         const endpoint = await endpointResolver.resolve({ userId, worldId, intent: text, resource })
@@ -154,7 +179,7 @@ export function createEnvironmentWorldService({
             ? "waiting_for_resource"
             : "waiting_for_execution_endpoint",
         say,
-        world: toEnvironmentWorldDto(world, updatedAt),
+        world: dto(world, updatedAt),
       }
     },
 
@@ -202,8 +227,8 @@ export function createEnvironmentWorldService({
         }
       }
       const updatedAt = now()
-      if (!await repository.update(userId, world, updatedAt)) throw new EnvironmentNotFoundError("WORLD_NOT_FOUND")
-      return toEnvironmentWorldDto(world, updatedAt)
+      if (!await repository.update(userId, world, updatedAt, stored.version)) throw new EnvironmentConflictError("WORLD_CONCURRENTLY_CHANGED")
+      return dto(world, updatedAt)
     },
 
     async observeExecution(
@@ -215,8 +240,8 @@ export function createEnvironmentWorldService({
       if (!stored) throw new EnvironmentNotFoundError("WORLD_NOT_FOUND")
       const world = applyExecutionObservation(validateEnvironmentWorldProjection(stored.world), observation)
       const updatedAt = now()
-      if (!await repository.update(userId, world, updatedAt)) throw new EnvironmentNotFoundError("WORLD_NOT_FOUND")
-      return toEnvironmentWorldDto(world, updatedAt)
+      if (!await repository.update(userId, world, updatedAt, stored.version)) throw new EnvironmentConflictError("WORLD_CONCURRENTLY_CHANGED")
+      return dto(world, updatedAt)
     },
 
     async compare(
@@ -233,8 +258,8 @@ export function createEnvironmentWorldService({
       if (!leftStored || !rightStored) throw new EnvironmentNotFoundError("WORLD_NOT_FOUND")
       const left = validateEnvironmentWorldProjection(leftStored.world)
       const right = validateEnvironmentWorldProjection(rightStored.world)
-      const leftDto = toEnvironmentWorldDto(left, leftStored.updatedAt)
-      const rightDto = toEnvironmentWorldDto(right, rightStored.updatedAt)
+      const leftDto = dto(left, leftStored.updatedAt)
+      const rightDto = dto(right, rightStored.updatedAt)
       const isolationConflicts = distinctEndpointConflicts(left, right)
       const leftEndpoint = left.endpoints[0]
       const rightEndpoint = right.endpoints[0]
@@ -332,8 +357,10 @@ export function endpointPairConflicts(a: WorldEndpointIdentity, b: WorldEndpoint
   if (a.id === b.id) conflicts.push("SAME_ENDPOINT")
   if (a.resourceIdentity !== b.resourceIdentity) conflicts.push("DIFFERENT_RESOURCE")
   if (a.sandboxId === b.sandboxId) conflicts.push("SAME_SANDBOX")
+  if (a.probeUrl === b.probeUrl) conflicts.push("SAME_PROBE_URL")
   if (a.appUrl === b.appUrl) conflicts.push("SAME_APP_URL")
   if (a.branch === b.branch) conflicts.push("SAME_BRANCH")
+  if (a.head === b.head) conflicts.push("SAME_HEAD")
   if (a.filesystemRoot === b.filesystemRoot) conflicts.push("SAME_FILESYSTEM_ROOT")
   if (a.terminalStreamRef === b.terminalStreamRef) conflicts.push("SAME_TERMINAL_STREAM")
   if (a.testStreamRef === b.testStreamRef) conflicts.push("SAME_TEST_STREAM")
@@ -341,6 +368,7 @@ export function endpointPairConflicts(a: WorldEndpointIdentity, b: WorldEndpoint
 }
 
 function requireComparisonEvidence(evidence: ComparisonEvidence): void {
+  if (evidence.durable !== true) throw new Error("COMPARISON_EVIDENCE_NOT_DURABLE")
   requireText(evidence.artifactRef, "COMPARISON_ARTIFACT_REQUIRED")
   requireText(evidence.evidenceRef, "COMPARISON_EVIDENCE_REQUIRED")
   requireText(evidence.subject, "COMPARISON_SUBJECT_REQUIRED")
@@ -354,3 +382,4 @@ function requireText(value: unknown, code: string): asserts value is string {
 
 export class EnvironmentInputError extends Error {}
 export class EnvironmentNotFoundError extends Error {}
+export class EnvironmentConflictError extends Error {}

@@ -392,8 +392,10 @@ export const environmentWorld = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     resourceIdentity: text("resourceIdentity"),
+    workOrderRef: text("workOrderRef"),
     intent: text("intent").notNull(),
     projection: jsonb("projection").notNull(),
+    version: integer("version").default(0).notNull(),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -983,6 +985,7 @@ export const deviceCredential = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     label: text("label").notNull(),
+    kind: text("kind").default("owner").notNull(),
     publicKeySpki: text("publicKeySpki").notNull(),
     publicKeyFingerprintSha256: text("publicKeyFingerprintSha256").notNull(),
     activeAt: timestamp("activeAt", { withTimezone: true }).defaultNow().notNull(),
@@ -998,6 +1001,7 @@ export const deviceCredential = pgTable(
       sql`${table.publicKeyFingerprintSha256} ~ '^[0-9a-f]{64}$'`,
     ),
     check("device_credential_label_check", sql`length(trim(${table.label})) > 0`),
+    check("device_credential_kind_check", sql`${table.kind} IN ('owner', 'runtime')`),
     check("device_credential_spki_check", sql`length(${table.publicKeySpki}) > 0`),
   ],
 )

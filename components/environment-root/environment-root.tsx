@@ -30,6 +30,62 @@ export function EnvironmentRoot({ initialWorld }: { initialWorld: EnvironmentWor
     return () => window.removeEventListener("keydown", focusLine)
   }, [])
 
+  useEffect(() => {
+    const worldId = world?.worldId
+    if (!worldId) return
+    let disposed = false
+    let inFlight = false
+    let queued = false
+
+    async function refreshWorld() {
+      if (disposed) return
+      if (inFlight) {
+        queued = true
+        return
+      }
+      inFlight = true
+      try {
+        const response = await fetch(`/api/environment/world?worldId=${encodeURIComponent(worldId)}`, {
+          headers: { accept: "application/json" },
+        })
+        if (response.status === 401) {
+          router.replace("/environment/sign-in")
+          return
+        }
+        if (!response.ok) return
+        const reply = (await response.json()) as { world?: EnvironmentWorldDto | null }
+        const next = reply.world
+        if (!next || next.worldId !== worldId || !Array.isArray(next.conversation) || !Array.isArray(next.surfaces)) return
+        setWorld((current) => {
+          if (!current || current.worldId !== next.worldId) return current
+          return next.lastUpdatedAt >= current.lastUpdatedAt ? next : current
+        })
+      } catch {
+        // A transient refresh must retain the restored world, draft, and focus.
+      } finally {
+        inFlight = false
+        if (queued && !disposed) {
+          queued = false
+          void refreshWorld()
+        }
+      }
+    }
+
+    const interval = window.setInterval(() => void refreshWorld(), 15_000)
+    const online = () => void refreshWorld()
+    const visible = () => {
+      if (document.visibilityState === "visible") void refreshWorld()
+    }
+    window.addEventListener("online", online)
+    document.addEventListener("visibilitychange", visible)
+    return () => {
+      disposed = true
+      window.clearInterval(interval)
+      window.removeEventListener("online", online)
+      document.removeEventListener("visibilitychange", visible)
+    }
+  }, [router, world?.worldId])
+
   async function send() {
     const text = (lineRef.current?.value ?? draft).trim()
     if (!text || busy) return

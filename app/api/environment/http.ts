@@ -1,4 +1,4 @@
-import { getSession } from "@/lib/session"
+import { getRuntimeDevicePrincipal, getSession } from "@/lib/session"
 
 const MAX_ENVIRONMENT_REQUEST_BYTES = 2_250_000
 
@@ -14,10 +14,7 @@ export async function authenticatedUserId(): Promise<string | null> {
 /** Runtime writers authenticate through the enrolled-device path, never a normal browser session. */
 export async function authenticatedRuntimeUserId(): Promise<string | null> {
   try {
-    const session = await getSession()
-    return session?.user?.id && session.session?.token === "<device-session-redacted>"
-      ? session.user.id
-      : null
+    return (await getRuntimeDevicePrincipal())?.userId ?? null
   } catch {
     return null
   }
@@ -62,11 +59,13 @@ export function environmentError(error: unknown): Response {
   const code = /^[A-Z][A-Z0-9_]*(?::[A-Z0-9_,]+)?$/.test(rawCode) ? rawCode : "ENVIRONMENT_ERROR"
   const status = code === "WORLD_NOT_FOUND"
     ? 404
-    : code.startsWith("RUNTIME_AUTHORITY_") || code === "RUNTIME_WORK_ORDER_NOT_ACTIVE" || code === "RUNTIME_WORK_ORDER_WORLD_MISMATCH"
+    : code === "WORLD_CONCURRENTLY_CHANGED"
+      ? 409
+    : code.startsWith("RUNTIME_AUTHORITY_") || code.startsWith("RUNTIME_RESOURCE_") || code.startsWith("RUNTIME_WORK_ORDER_")
       ? 403
-      : code.startsWith("RUNTIME_EVIDENCE_")
+      : code.startsWith("RUNTIME_EVIDENCE_") || code.startsWith("RUNTIME_ENDPOINT_") || code.startsWith("RUNTIME_SUCCESS_") || code.startsWith("RUNTIME_FAILURE_")
         ? 409
-        : code === "ENDPOINT_NOT_LIVE" || code === "ENDPOINT_NOT_READY" || code === "ENDPOINT_ORIGIN_NOT_ALLOWED"
+        : code === "ENDPOINT_NOT_LIVE" || code === "ENDPOINT_NOT_READY" || code === "ENDPOINT_PUBLIC_NOT_LIVE" || code === "ENDPOINT_PUBLIC_NOT_READY" || code === "ENDPOINT_ORIGIN_NOT_ALLOWED"
           ? 422
           : code === "REQUEST_BODY_TOO_LARGE" || code === "CONTENT_TOO_LARGE" || code === "COMPARISON_RESPONSE_TOO_LARGE" || code.startsWith("TOO_MANY_")
             ? 413

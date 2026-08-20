@@ -128,7 +128,7 @@ export function selectEligibleWorkOrder(registry, queue) {
   const completedRefs = new Set(queue.filter((entry) => entry.state === "COMPLETED").map((entry) => entry.workOrderId))
   return queue
     .filter((entry) => entry.state === "READY" && !completedIdentities.has(identity(entry)))
-    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.issueNumber - right.issueNumber)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || (left.issueNumber ?? 0) - (right.issueNumber ?? 0))
     .map((entry) => ({
       entry,
       authority: registry.workOrders.find((record) => record.workOrderId === entry.workOrderId
@@ -187,7 +187,12 @@ async function preparePatch({ root, checkpoint, authority, adapters, remediation
 async function validateAndPublish({ root, checkpoint, authority, adapters }) {
   if (checkpoint.state !== "VALIDATING") checkpoint = transition(root, checkpoint, "VALIDATING")
   if (authority.commitAllowed === false || authority.pushAllowed === false) throw new Error("AUTHORITY_PUBLISH_WALL")
-  await adapters.validate({ workspace: checkpoint.workspace, requiredValidation: authority.requiredValidation })
+  await adapters.validate({
+    workOrderId: checkpoint.workOrderId,
+    workspace: checkpoint.workspace,
+    requiredValidation: authority.requiredValidation,
+    strict: Boolean(authority.environmentWorldId),
+  })
   const published = await adapters.publish({
     issueNumber: checkpoint.issueNumber,
     workOrderId: checkpoint.workOrderId,
@@ -199,6 +204,25 @@ async function validateAndPublish({ root, checkpoint, authority, adapters }) {
     existingPr: checkpoint.pr,
     resolvedThreadIds: checkpoint.reviewThreadIds ?? [],
   })
+  if (adapters.publishEnvironmentWorld) {
+    const environment = await adapters.publishEnvironmentWorld({
+      workOrderId: checkpoint.workOrderId,
+      workspace: checkpoint.workspace,
+      branch: published.branch,
+      pr: published.pr,
+      environmentWorldId: authority.environmentWorldId ?? null,
+    })
+    if (environment?.state === "waiting") {
+      return transition(root, checkpoint, "WAITING_ENVIRONMENT", {
+        branch: published.branch,
+        pr: published.pr,
+        retryAfter: new Date(Date.now() + 30_000).toISOString(),
+        resumeState: "VALIDATING",
+        failureCode: environment.reason,
+        ownerDecisionRequired: false,
+      })
+    }
+  }
   return transition(root, checkpoint, "PR_OPEN", { branch: published.branch, pr: published.pr, reviewThreadIds: [], reviewThreadPaths: [] })
 }
 
@@ -291,6 +315,9 @@ async function runCycle({ root, registry, adapters }) {
   if (checkpoint?.state === "WAITING_PROVIDER" && Date.parse(checkpoint.retryAfter) > Date.now()) {
     return { ...checkpoint, ownerDecisionRequired: false }
   }
+  if (checkpoint?.state === "WAITING_ENVIRONMENT" && Date.parse(checkpoint.retryAfter) > Date.now()) {
+    return { ...checkpoint, ownerDecisionRequired: false }
+  }
   await adapters.assertRuntime()
 
   if (!checkpoint || TERMINAL_STATES.has(checkpoint.state)) {
@@ -342,6 +369,9 @@ async function runCycle({ root, registry, adapters }) {
     checkpoint = transition(root, checkpoint, checkpoint.resumeState, { nextAttemptAt: null, resumeState: null })
   }
   if (checkpoint.state === "WAITING_PROVIDER") {
+    checkpoint = transition(root, checkpoint, checkpoint.resumeState, { retryAfter: null, resumeState: null, failureCode: null })
+  }
+  if (checkpoint.state === "WAITING_ENVIRONMENT") {
     checkpoint = transition(root, checkpoint, checkpoint.resumeState, { retryAfter: null, resumeState: null, failureCode: null })
   }
   if (checkpoint.state === "COMPLETED") return completionResult({ checkpoint, registry, adapters })

@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from "vitest"
 import fs from "node:fs"
 
 import { verifyEndpointLiveness, type UnverifiedWorldEndpoint } from "@/lib/environment/endpoint-liveness"
+import { toEnvironmentWorldDto } from "@/lib/environment/api-contract"
+import {
+  environmentRuntimePayloadDigest,
+  parseEnvironmentRuntimeRequest,
+  runtimeEvidenceRefs,
+} from "@/lib/environment/runtime-contract"
 import { createWorkingWorld, withSurface } from "@/lib/environment/working-world"
 import {
   createEnvironmentWorldProjection,
@@ -16,7 +22,6 @@ import {
   type ResourceCandidate,
   type StoredEnvironmentWorld,
 } from "@/lib/environment/world-service"
-import { createHttpEnvironmentComparisonPort } from "@/lib/environment/http-comparison-port"
 
 const instant = "2026-08-20T19:00:00.000Z"
 
@@ -37,13 +42,14 @@ class MemoryRepository implements EnvironmentWorldRepository {
   async insert(userId: string, world: EnvironmentWorldProjection, now: string) {
     const owned = this.worlds.get(userId) ?? new Map<string, StoredEnvironmentWorld>()
     if (owned.has(world.id)) throw new Error("WORLD_EXISTS")
-    owned.set(world.id, { world, updatedAt: now })
+    owned.set(world.id, { world, updatedAt: now, version: 0 })
     this.worlds.set(userId, owned)
   }
-  async update(userId: string, world: EnvironmentWorldProjection, now: string) {
+  async update(userId: string, world: EnvironmentWorldProjection, now: string, expectedVersion: number) {
     const owned = this.worlds.get(userId)
-    if (!owned?.has(world.id)) return false
-    owned.set(world.id, { world, updatedAt: now })
+    const existing = owned?.get(world.id)
+    if (!owned || !existing || existing.version !== expectedVersion) return false
+    owned.set(world.id, { world, updatedAt: now, version: expectedVersion + 1 })
     return true
   }
 }
@@ -54,8 +60,10 @@ function endpoint(worldId: string, resourceIdentity: string, suffix = worldId): 
     worldId,
     resourceIdentity,
     sandboxId: `sandbox-${suffix}`,
+    probeUrl: `http://127.0.0.1:${suffix === "one" ? 4101 : 4102}`,
     appUrl: `http://127.0.0.1:${suffix === "one" ? 4101 : 4102}`,
     branch: `environment/${suffix}`,
+    head: `0123456789abcdef${suffix}`,
     filesystemRoot: `/worktrees/${suffix}`,
     terminalStreamRef: `terminal://${suffix}`,
     testStreamRef: `tests://${suffix}`,
@@ -63,7 +71,12 @@ function endpoint(worldId: string, resourceIdentity: string, suffix = worldId): 
       source: "runtime_registry",
       evidenceRef: `registry:${suffix}`,
       capturedAt: instant,
-      liveness: { status: "reachable", httpStatus: 200, observedAt: instant, evidenceRef: `probe:${suffix}` },
+      liveness: {
+        status: "reachable", httpStatus: 200, observedAt: instant, evidenceRef: `probe:${suffix}`,
+        publicRoute: {
+          status: "reachable", httpStatus: 200, observedAt: instant, evidenceRef: `probe:${suffix}`,
+        },
+      },
     },
   }
 }
@@ -72,8 +85,8 @@ describe("Environment world service", () => {
   it("binds the exact resource chosen by S1 instead of a repository constant", async () => {
     const repository = new MemoryRepository()
     repository.candidates.set("owner", [
-      { candidateId: "a", canonicalIdentity: "repo:a", label: "A", weight: 1 },
-      { candidateId: "b", canonicalIdentity: "repo:b", label: "B", weight: 9 },
+      { recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A", weight: 1 },
+      { recordId: 2, candidateId: "b", canonicalIdentity: "repo:b", label: "B", weight: 9 },
     ])
     const resolve = vi.fn(async ({ worldId, resource }: { worldId: string; resource: ResourceCandidate }) =>
       endpoint(worldId, resource.canonicalIdentity, "one"))
@@ -94,7 +107,7 @@ describe("Environment world service", () => {
 
   it("restores the latest or an exact world and fences every lookup by user", async () => {
     const repository = new MemoryRepository()
-    repository.candidates.set("alice", [{ candidateId: "a", canonicalIdentity: "repo:a", label: "A" }])
+    repository.candidates.set("alice", [{ recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A" }])
     let nextId = 0
     let tick = 0
     const service = createEnvironmentWorldService({
@@ -127,7 +140,7 @@ describe("Environment world service", () => {
   it("rejects success-shaped execution truth without admitted endpoint evidence", () => {
     const world = createEnvironmentWorldProjection({
       id: "world",
-      resource: { candidateId: "a", canonicalIdentity: "repo:a", label: "A" },
+      resource: { recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A" },
       meaning: createWorkingWorld({ intent: "work", resources: ["repo:a"] }),
     })
 
@@ -137,9 +150,78 @@ describe("Environment world service", () => {
     })).toThrow(/EXECUTION_ENDPOINT_NOT_ADMITTED|EXECUTION_EVIDENCE_REQUIRED/)
   })
 
+  it("suggests exact world-bound work without granting or claiming execution", async () => {
+    const repository = new MemoryRepository()
+    repository.candidates.set("owner", [{ recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A" }])
+    const createSuggested = vi.fn(async () => ({ workOrderRef: "WO-0042" }))
+    const service = createEnvironmentWorldService({
+      repository,
+      workIntakePort: { createSuggested },
+      id: () => "world-intake",
+      now: () => instant,
+    })
+
+    const reply = await service.submitLine("owner", { text: "Fix the broken sign-in" })
+
+    expect(createSuggested).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner", worldId: "world-intake", intent: "Fix the broken sign-in",
+      resource: expect.objectContaining({ canonicalIdentity: "repo:a" }),
+    }))
+    expect((await repository.loadExact("owner", "world-intake"))?.world.workOrderRef).toBe("WO-0042")
+    expect(reply.world.execution.state).toBe("not_started")
+  })
+
+  it("keeps the endpoint test stream waiting until a test artifact is evidenced", async () => {
+    const repository = new MemoryRepository()
+    repository.candidates.set("owner", [{ recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A" }])
+    const service = createEnvironmentWorldService({
+      repository,
+      id: () => "world-tests",
+      now: () => instant,
+      endpointResolver: { resolve: async ({ worldId, resource }) => endpoint(worldId, resource.canonicalIdentity, "one") },
+    })
+    const created = await service.submitLine("owner", { text: "run it" })
+    await service.observeExecution("owner", {
+      worldId: created.world.worldId,
+      endpointId: created.world.endpoints[0].id,
+      outcome: "succeeded",
+      summary: "generic execution completed",
+      evidenceRefs: ["EV-generic"],
+    })
+
+    const restored = await service.load("owner", created.world.worldId)
+    expect(restored?.surfaces.find((surface) => surface.kind === "tests")?.status).toBe("waiting")
+  })
+
+  it("parses runtime observations closed-schema and binds every artifact evidence ref into the digest", () => {
+    const request = parseEnvironmentRuntimeRequest({
+      action: "observe_execution",
+      worldId: "world-tests",
+      workOrderRef: "WO-0042",
+      grantRef: "GRANT-0042",
+      observation: {
+        worldId: "world-tests",
+        endpointId: "endpoint-one",
+        outcome: "succeeded",
+        summary: "Tests passed",
+        evidenceRefs: ["EV-run"],
+        artifacts: [{
+          artifactRef: "artifact-tests",
+          evidenceRef: "EV-tests",
+          kind: "tests",
+          subject: "Focused tests",
+          content: { passed: 42 },
+        }],
+      },
+    })
+    expect(runtimeEvidenceRefs(request)).toEqual(["EV-run", "EV-tests"])
+    expect(environmentRuntimePayloadDigest(request)).toMatch(/^[0-9a-f]{64}$/)
+    expect(() => parseEnvironmentRuntimeRequest({ ...request, untrusted: true })).toThrow("RUNTIME_PAYLOAD_FIELD_UNKNOWN")
+  })
+
   it("requires genuinely distinct endpoint isolation before Job 4 comparison", async () => {
     const repository = new MemoryRepository()
-    repository.candidates.set("owner", [{ candidateId: "a", canonicalIdentity: "repo:a", label: "A" }])
+    repository.candidates.set("owner", [{ recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A" }])
     let nextId = 0
     const compare = vi.fn()
     const service = createEnvironmentWorldService({
@@ -173,8 +255,9 @@ describe("Environment world service", () => {
 
   it("materializes Job 4 in one world only after two live isolated endpoints are observed", async () => {
     const repository = new MemoryRepository()
-    repository.candidates.set("owner", [{ candidateId: "a", canonicalIdentity: "repo:a", label: "A" }])
+    repository.candidates.set("owner", [{ recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A" }])
     const compare = vi.fn(async () => ({
+      durable: true as const,
       artifactRef: "artifact:compare",
       evidenceRef: "evidence:compare",
       observedAt: instant,
@@ -214,27 +297,67 @@ describe("Environment world service", () => {
 
   it("ships the Environment projection in the fresh sovereign bootstrap", () => {
     const bootstrap = fs.readFileSync("drizzle/0000_williamos_init.sql", "utf8")
-    const migration = fs.readFileSync("drizzle/0013_environment_world.sql", "utf8")
+    const migration = fs.readFileSync("migrations/0013-environment-world.sql", "utf8")
     expect(bootstrap).toContain('CREATE TABLE "environment_world"')
     expect(bootstrap).toContain('CREATE INDEX "environment_world_user_updated_idx"')
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS "environment_world"')
+    expect(bootstrap).toContain('"ratifiedAt" timestamp with time zone')
+    expect(bootstrap).toContain('CREATE TABLE "working_world"')
+    expect(bootstrap).toContain('CREATE TABLE "workbench_thread_message"')
   })
 })
-
 describe("real endpoint liveness seam", () => {
   it("requires a concrete HTTP observation and preserves its evidence", async () => {
     const candidate: UnverifiedWorldEndpoint = {
       ...endpoint("world", "repo:a", "one"),
       provenance: { source: "runtime_registry", evidenceRef: "registry:one", capturedAt: instant },
     }
-    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 })) as unknown as typeof fetch
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        worldId: candidate.worldId,
+        head: candidate.head,
+        port: 4101,
+      }), { status: 200 })) as unknown as typeof fetch
 
     const verified = await verifyEndpointLiveness(candidate, { fetchImpl, evidenceRef: "acceptance:probe", now: () => instant })
 
     expect(verified.provenance.liveness).toEqual({
       status: "reachable", httpStatus: 200, observedAt: instant, evidenceRef: "acceptance:probe",
+      publicRoute: {
+        status: "reachable", httpStatus: 200, observedAt: instant, evidenceRef: "acceptance:probe",
+      },
     })
-    expect(fetchImpl).toHaveBeenCalledWith(new URL(candidate.appUrl), expect.objectContaining({ redirect: "manual" }))
+    expect(fetchImpl).toHaveBeenCalledWith(new URL(candidate.probeUrl), expect.objectContaining({ redirect: "manual" }))
+    expect(fetchImpl).toHaveBeenCalledWith(
+      new URL("http://127.0.0.1:4101/api/environment/preview-identity"),
+      expect.objectContaining({ redirect: "manual" }),
+    )
+  })
+
+  it("expires endpoint readiness instead of restoring a dead preview as ready", () => {
+    const live = endpoint("world", "repo:a", "one")
+    const world = validateEnvironmentWorldProjection({
+      ...createEnvironmentWorldProjection({
+        id: "world",
+        meaning: createWorkingWorld({ intent: "Fix sign-in", resources: ["repo:a"] }),
+        resource: { recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A" },
+      }),
+      status: "ready",
+      endpoints: [live],
+      surfaces: [{
+        id: "browser:world",
+        kind: "browser",
+        subject: live.appUrl,
+        because: "running copy",
+        binding: { type: "endpoint", endpointId: live.id },
+      }],
+    })
+
+    const dto = toEnvironmentWorldDto(world, instant, Date.parse(instant) + 30_001)
+
+    expect(dto.status).toBe("waiting_for_execution_endpoint")
+    expect(dto.surfaces[0]?.status).toBe("unavailable")
   })
 
   it("refuses an erroring listener as a ready application endpoint", async () => {
@@ -262,47 +385,12 @@ describe("real endpoint liveness seam", () => {
       evidenceRef: "acceptance:probe",
     })).rejects.toThrow("ENDPOINT_NOT_READY")
 
-    const publicCandidate = { ...candidate, appUrl: "http://169.254.169.254/latest/meta-data" }
+    const publicCandidate = { ...candidate, probeUrl: "http://169.254.169.254/latest/meta-data" }
     const forbiddenFetch = vi.fn() as unknown as typeof fetch
     await expect(verifyEndpointLiveness(publicCandidate, {
       fetchImpl: forbiddenFetch,
       evidenceRef: "acceptance:probe",
     })).rejects.toThrow("ENDPOINT_ORIGIN_NOT_ALLOWED")
     expect(forbiddenFetch).not.toHaveBeenCalled()
-  })
-})
-
-describe("real Job 4 comparison seam", () => {
-  it("compares two observed application responses and binds a content digest", async () => {
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => new Response(
-      String(input).includes("4101") ? "left implementation" : "right implementation",
-      { status: 200, headers: { "content-type": "text/html" } },
-    )) as unknown as typeof fetch
-    const port = createHttpEnvironmentComparisonPort({ fetchImpl, now: () => instant })
-
-    const evidence = await port.compare({
-      userId: "owner",
-      left: endpoint("left-world", "repo:a", "one"),
-      right: endpoint("right-world", "repo:a", "two"),
-    })
-
-    expect(evidence?.artifactRef).toMatch(/^environment-compare:sha256:/)
-    expect(evidence?.conflicts).toContain("RESPONSE_CONTENT_DIFFERS")
-    expect(evidence?.content).toMatchObject({ summary: "Observed 1 concrete response difference." })
-    expect(fetchImpl).toHaveBeenCalledTimes(2)
-  })
-
-  it("refuses oversized comparison responses before reading the body", async () => {
-    const fetchImpl = vi.fn(async () => new Response("small", {
-      status: 200,
-      headers: { "content-length": "2000001" },
-    })) as unknown as typeof fetch
-    const port = createHttpEnvironmentComparisonPort({ fetchImpl, now: () => instant })
-
-    await expect(port.compare({
-      userId: "owner",
-      left: endpoint("left-world", "repo:a", "one"),
-      right: endpoint("right-world", "repo:a", "two"),
-    })).rejects.toThrow("COMPARISON_RESPONSE_TOO_LARGE")
   })
 })

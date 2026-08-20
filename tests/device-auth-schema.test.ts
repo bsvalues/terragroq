@@ -35,6 +35,7 @@ describe("device authentication schema", () => {
       "id",
       "userId",
       "label",
+      "kind",
       "publicKeySpki",
       "publicKeyFingerprintSha256",
       "activeAt",

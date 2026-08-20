@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, sql } from "drizzle-orm"
 
 import { db } from "@/lib/db"
 import { environmentWorld, project, projectResource } from "@/lib/db/schema"
@@ -13,6 +13,7 @@ export const postgresEnvironmentWorldRepository: EnvironmentWorldRepository = {
   async listResourceCandidates(userId): Promise<readonly ResourceCandidate[]> {
     const rows = await db
       .select({
+        recordId: projectResource.id,
         projectKey: project.key,
         projectName: project.name,
         projectLifecycle: project.lifecycle,
@@ -20,6 +21,7 @@ export const postgresEnvironmentWorldRepository: EnvironmentWorldRepository = {
         canonicalIdentity: projectResource.canonicalIdentity,
         resourceLabel: projectResource.label,
         ratifiedAt: projectResource.ratifiedAt,
+        allowedOperations: projectResource.allowedOperations,
       })
       .from(project)
       .innerJoin(
@@ -29,7 +31,13 @@ export const postgresEnvironmentWorldRepository: EnvironmentWorldRepository = {
       .where(eq(project.userId, userId))
 
     return rows
+      .filter((row) => row.ratifiedAt && (
+        row.allowedOperations.includes("environment:*") ||
+        row.allowedOperations.includes("environment:admit-endpoint") ||
+        row.allowedOperations.includes("environment:observe-execution")
+      ))
       .map((row) => ({
+        recordId: row.recordId,
         candidateId: `${row.projectKey}:${row.type}:${row.canonicalIdentity}`,
         canonicalIdentity: row.canonicalIdentity,
         label: `${row.projectName} — ${row.resourceLabel}`,
@@ -41,7 +49,7 @@ export const postgresEnvironmentWorldRepository: EnvironmentWorldRepository = {
 
   async loadExact(userId, worldId): Promise<StoredEnvironmentWorld | null> {
     const rows = await db
-      .select({ projection: environmentWorld.projection, updatedAt: environmentWorld.updatedAt })
+      .select({ projection: environmentWorld.projection, updatedAt: environmentWorld.updatedAt, version: environmentWorld.version })
       .from(environmentWorld)
       .where(and(eq(environmentWorld.userId, userId), eq(environmentWorld.id, worldId)))
       .limit(1)
@@ -50,7 +58,7 @@ export const postgresEnvironmentWorldRepository: EnvironmentWorldRepository = {
 
   async loadLatest(userId): Promise<StoredEnvironmentWorld | null> {
     const rows = await db
-      .select({ projection: environmentWorld.projection, updatedAt: environmentWorld.updatedAt })
+      .select({ projection: environmentWorld.projection, updatedAt: environmentWorld.updatedAt, version: environmentWorld.version })
       .from(environmentWorld)
       .where(eq(environmentWorld.userId, userId))
       .orderBy(desc(environmentWorld.updatedAt), desc(environmentWorld.id))
@@ -64,6 +72,7 @@ export const postgresEnvironmentWorldRepository: EnvironmentWorldRepository = {
       id: projection.id,
       userId,
       resourceIdentity: projection.resource?.canonicalIdentity ?? null,
+      workOrderRef: projection.workOrderRef,
       intent: projection.meaning.intent,
       projection,
       createdAt: new Date(now),
@@ -71,26 +80,33 @@ export const postgresEnvironmentWorldRepository: EnvironmentWorldRepository = {
     })
   },
 
-  async update(userId, world, now): Promise<boolean> {
+  async update(userId, world, now, expectedVersion): Promise<boolean> {
     const projection = validateEnvironmentWorldProjection(world)
     const rows = await db
       .update(environmentWorld)
       .set({
         resourceIdentity: projection.resource?.canonicalIdentity ?? null,
+        workOrderRef: projection.workOrderRef,
         intent: projection.meaning.intent,
         projection,
         updatedAt: new Date(now),
+        version: sql`${environmentWorld.version} + 1`,
       })
-      .where(and(eq(environmentWorld.userId, userId), eq(environmentWorld.id, projection.id)))
+      .where(and(
+        eq(environmentWorld.userId, userId),
+        eq(environmentWorld.id, projection.id),
+        eq(environmentWorld.version, expectedVersion),
+      ))
       .returning({ id: environmentWorld.id })
     return rows.length === 1
   },
 }
 
-function decode(row: { projection: unknown; updatedAt: Date }): StoredEnvironmentWorld {
+function decode(row: { projection: unknown; updatedAt: Date; version: number }): StoredEnvironmentWorld {
   const raw = typeof row.projection === "string" ? JSON.parse(row.projection) : row.projection
   return {
     world: validateEnvironmentWorldProjection(raw),
     updatedAt: row.updatedAt.toISOString(),
+    version: row.version,
   }
 }

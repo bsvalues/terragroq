@@ -4,6 +4,7 @@ import {
   type SurfaceKind,
   type WorkingWorldSnapshot,
 } from "@/lib/environment/working-world"
+import { requirePublicEnvironmentEndpoint } from "@/lib/environment/endpoint-policy"
 
 const MAX_ENDPOINTS = 8
 const MAX_SURFACES = 48
@@ -11,6 +12,7 @@ const MAX_ARTIFACTS_PER_OBSERVATION = 20
 const MAX_SERIALIZED_CONTENT_BYTES = 2_000_000
 
 export type ResourceBinding = Readonly<{
+  recordId: number
   candidateId: string
   canonicalIdentity: string
   label: string
@@ -25,6 +27,12 @@ export type EndpointProvenance = Readonly<{
     httpStatus: number
     observedAt: string
     evidenceRef: string
+    publicRoute: Readonly<{
+      status: "reachable"
+      httpStatus: number
+      observedAt: string
+      evidenceRef: string
+    }>
   }>
 }>
 
@@ -37,8 +45,12 @@ export type WorldEndpointIdentity = Readonly<{
   worldId: string
   resourceIdentity: string
   sandboxId: string
+  /** Server/HERMES address used only for bounded liveness checks. */
+  probeUrl: string
+  /** Client-safe address rendered in the owner's browser. */
   appUrl: string
   branch: string
+  head: string
   filesystemRoot: string
   terminalStreamRef: string
   testStreamRef: string
@@ -78,6 +90,7 @@ export type EnvironmentWorldProjection = Readonly<{
   schemaVersion: 1
   id: string
   resource: ResourceBinding | null
+  workOrderRef: string | null
   meaning: WorkingWorldSnapshot
   endpoints: readonly WorldEndpointIdentity[]
   surfaces: readonly BoundSurface[]
@@ -104,18 +117,22 @@ export function createEnvironmentWorldProjection({
   id,
   meaning,
   resource,
+  workOrderRef = null,
 }: {
   id: string
   meaning: WorkingWorldSnapshot
   resource: ResourceBinding | null
+  workOrderRef?: string | null
 }): EnvironmentWorldProjection {
   requireText(id, "WORLD_ID_REQUIRED")
   validateWorkingWorld(meaning)
   if (resource) validateResource(resource)
+  if (workOrderRef !== null) requireText(workOrderRef, "WORK_ORDER_REF_REQUIRED")
   return {
     schemaVersion: 1,
     id,
     resource,
+    workOrderRef,
     meaning,
     endpoints: [],
     surfaces: [],
@@ -224,10 +241,11 @@ export function applyExecutionObservation(
   for (const surface of artifactSurfaces) {
     meaning = withSurface(meaning, { kind: surface.kind, subject: surface.subject, because: surface.because })
   }
+  const artifactSurfaceIds = new Set(artifactSurfaces.map((surface) => surface.id))
   return validateEnvironmentWorldProjection({
     ...world,
     meaning,
-    surfaces: [...world.surfaces, ...artifactSurfaces],
+    surfaces: [...world.surfaces.filter((surface) => !artifactSurfaceIds.has(surface.id)), ...artifactSurfaces],
     execution: {
       state: observation.outcome === "succeeded" ? "observed_succeeded" : "observed_failed",
       summary: observation.summary.trim(),
@@ -244,6 +262,7 @@ export function validateEnvironmentWorldProjection(raw: unknown): EnvironmentWor
   requireText(world.id, "WORLD_ID_REQUIRED")
   const meaning = validateWorkingWorld(world.meaning)
   if (world.resource !== null) validateResource(world.resource)
+  if (world.workOrderRef !== null && world.workOrderRef !== undefined) requireText(world.workOrderRef, "WORK_ORDER_REF_REQUIRED")
   if (!Array.isArray(world.endpoints) || !Array.isArray(world.surfaces)) {
     throw new Error("ENVIRONMENT_WORLD_COLLECTIONS_REQUIRED")
   }
@@ -259,12 +278,15 @@ export function validateEnvironmentWorldProjection(raw: unknown): EnvironmentWor
   if (!["waiting_for_resource", "waiting_for_execution_endpoint", "ready", "paused", "settled"].includes(String(world.status))) {
     throw new Error("ENVIRONMENT_WORLD_STATUS_INVALID")
   }
-  return { ...world, meaning } as unknown as EnvironmentWorldProjection
+  return { ...world, workOrderRef: typeof world.workOrderRef === "string" ? world.workOrderRef : null, meaning } as unknown as EnvironmentWorldProjection
 }
 
 function validateResource(raw: unknown): ResourceBinding {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("RESOURCE_BINDING_MALFORMED")
   const resource = raw as Record<string, unknown>
+  if (!Number.isInteger(resource.recordId) || Number(resource.recordId) <= 0) {
+    throw new Error("RESOURCE_RECORD_REQUIRED")
+  }
   requireText(resource.candidateId, "RESOURCE_CANDIDATE_REQUIRED")
   requireText(resource.canonicalIdentity, "RESOURCE_IDENTITY_REQUIRED")
   requireText(resource.label, "RESOURCE_LABEL_REQUIRED")
@@ -279,18 +301,15 @@ function validateEndpoint(raw: unknown): WorldEndpointIdentity {
     ["worldId", "ENDPOINT_WORLD_REQUIRED"],
     ["resourceIdentity", "ENDPOINT_RESOURCE_REQUIRED"],
     ["sandboxId", "ENDPOINT_SANDBOX_REQUIRED"],
+    ["probeUrl", "ENDPOINT_PROBE_URL_REQUIRED"],
     ["appUrl", "ENDPOINT_APP_URL_REQUIRED"],
     ["branch", "ENDPOINT_BRANCH_REQUIRED"],
+    ["head", "ENDPOINT_HEAD_REQUIRED"],
     ["filesystemRoot", "ENDPOINT_FILESYSTEM_REQUIRED"],
     ["terminalStreamRef", "ENDPOINT_TERMINAL_STREAM_REQUIRED"],
     ["testStreamRef", "ENDPOINT_TEST_STREAM_REQUIRED"],
   ] as const) requireText(endpoint[key], code)
-  try {
-    const url = new URL(String(endpoint.appUrl))
-    if (!/^https?:$/.test(url.protocol)) throw new Error()
-  } catch {
-    throw new Error("ENDPOINT_APP_URL_INVALID")
-  }
+  requirePublicEnvironmentEndpoint(String(endpoint.appUrl))
   if (!endpoint.provenance || typeof endpoint.provenance !== "object" || Array.isArray(endpoint.provenance)) {
     throw new Error("ENDPOINT_PROVENANCE_REQUIRED")
   }
@@ -310,6 +329,16 @@ function validateEndpoint(raw: unknown): WorldEndpointIdentity {
   }
   requireIsoInstant(liveness.observedAt, "ENDPOINT_LIVENESS_AT_INVALID")
   requireText(liveness.evidenceRef, "ENDPOINT_LIVENESS_EVIDENCE_REQUIRED")
+  if (!liveness.publicRoute || typeof liveness.publicRoute !== "object" || Array.isArray(liveness.publicRoute)) {
+    throw new Error("ENDPOINT_PUBLIC_LIVENESS_REQUIRED")
+  }
+  const publicRoute = liveness.publicRoute as Record<string, unknown>
+  if (publicRoute.status !== "reachable" || !Number.isInteger(publicRoute.httpStatus) ||
+      Number(publicRoute.httpStatus) < 200 || Number(publicRoute.httpStatus) >= 300) {
+    throw new Error("ENDPOINT_PUBLIC_NOT_READY")
+  }
+  requireIsoInstant(publicRoute.observedAt, "ENDPOINT_PUBLIC_LIVENESS_AT_INVALID")
+  requireText(publicRoute.evidenceRef, "ENDPOINT_PUBLIC_LIVENESS_EVIDENCE_REQUIRED")
   return endpoint as unknown as WorldEndpointIdentity
 }
 
