@@ -214,7 +214,11 @@ async function mergeAndComplete({ root, checkpoint, registry, adapters }) {
       workOrderId: checkpoint.workOrderId,
       projectionCompletionOwned: checkpoint.projectionCompletionOwned,
     })
-    checkpoint = transition(root, checkpoint, "ISSUE_COMPLETED")
+    checkpoint = transition(
+      root,
+      checkpoint,
+      checkpoint.projectionCompletionOwned === false ? "COMPLETED" : "ISSUE_COMPLETED",
+    )
   }
   if (checkpoint.state === "ISSUE_COMPLETED") checkpoint = transition(root, checkpoint, "COMPLETED")
   return completionResult({ checkpoint, registry, adapters })

@@ -234,6 +234,66 @@ describe("WilliamOS operational kernel", () => {
     ])
   })
 
+  it("records parent-owned derived work as completed without claiming the source issue completed", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-kernel-parent-owned-"))
+    roots.push(root)
+    fs.mkdirSync(path.join(root, "state"), { recursive: true })
+    const authority = {
+      workOrderId: "WO-0031-R01",
+      workOrderRowId: 31,
+      userId: "owner-1",
+      authority: "APPROVED",
+      riskClass: "R1",
+      dependencies: [],
+      ownerGateRequired: false,
+      protectedScope: false,
+      baseBranch: "main",
+      mergeMode: "AUTO_ELIGIBLE",
+      allowedPaths: ["scripts/runtime-operator/a.mjs"],
+      requiredValidation: ["test"],
+      task: "Handle one bounded derived finding.",
+    }
+    fs.writeFileSync(path.join(root, "state", "kernel-checkpoint.json"), JSON.stringify({
+      schemaVersion: 1,
+      repository: "bsvalues/terragroq",
+      goal: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
+      loop: "LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
+      workOrderId: authority.workOrderId,
+      workOrderRowId: authority.workOrderRowId,
+      userId: authority.userId,
+      issueNumber: 911,
+      projectionCompletionOwned: false,
+      state: "MERGED_VERIFIED",
+      baseSha: "a".repeat(40),
+      mergeSha: "b".repeat(40),
+      branch: "runtime/wo-0031-r01",
+      pr: 912,
+      attempt: 1,
+      remediationAttempts: 0,
+    }))
+    const calls: string[] = []
+    const result = await runOperationalKernelCycle({
+      root,
+      registry: { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: [authority] },
+      adapters: {
+        assertRuntime: async () => calls.push("runtime:verified"),
+        complete: async () => calls.push("complete:911"),
+        listQueue: async () => [{
+          issueNumber: 911,
+          workOrderId: authority.workOrderId,
+          workOrderRowId: authority.workOrderRowId,
+          userId: authority.userId,
+          state: "COMPLETED",
+        }],
+      },
+    })
+
+    expect(result.state).toBe("COMPLETED")
+    expect(calls).toEqual(["runtime:verified", "complete:911"])
+    const events = fs.readFileSync(path.join(root, "audit", "kernel-events.jsonl"), "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line))
+    expect(events.map((event) => event.state)).toEqual(["COMPLETED"])
+  })
+
   it("reconciles a persisted patch checkpoint without invoking Codex again", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-kernel-resume-"))
     roots.push(root)
