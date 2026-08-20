@@ -23,6 +23,14 @@ import {
   deferProviderOutcome as deferGoalOutcome,
   terminalizeOutcome as terminalizeGoalOutcome,
 } from "./outcome-source.mjs"
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { createRuntimeFindingDbConsumer } from "../runtime-findings/db-consumer.mjs"
 
@@ -207,7 +215,8 @@ async function loadLinkedGoal(withPool, queueItem) {
                 child.status AS "derivedWorkOrderStatus",
                 approval.id AS "derivedApprovalDecisionId", approval.status AS "derivedApprovalStatus",
                 approval.authority AS "derivedApprovalAuthority", approval.scope AS "derivedApprovalScope",
-                approval.locked AS "derivedApprovalLocked",
+                approval.locked AS "derivedApprovalLocked", approval.decision AS "derivedApprovalDecision",
+                approval.evidence AS "derivedApprovalEvidence",
                 queue_grant.id AS "derivedQueueGrantId", queue_grant.ref AS "derivedQueueGrantRef",
                 queue_grant.status AS "derivedQueueGrantStatus",
                 queue_grant."revokedAt" AS "derivedQueueGrantRevokedAt",
@@ -217,6 +226,7 @@ async function loadLinkedGoal(withPool, queueItem) {
                 queue_grant.scope AS "derivedQueueGrantScope",
                 queue_grant."workOrderId" AS "derivedQueueGrantWorkOrderId",
                 queue_grant."allowedActions" AS "derivedQueueGrantAllowedActions",
+                queue_grant."blockedActions" AS "derivedQueueGrantBlockedActions",
                 implementation_grant.id AS "derivedImplementationGrantId",
                 implementation_grant.ref AS "derivedImplementationGrantRef",
                 implementation_grant.status AS "derivedImplementationGrantStatus",
@@ -227,6 +237,7 @@ async function loadLinkedGoal(withPool, queueItem) {
                 implementation_grant.scope AS "derivedImplementationGrantScope",
                 implementation_grant."workOrderId" AS "derivedImplementationGrantWorkOrderId",
                 implementation_grant."allowedActions" AS "derivedImplementationGrantAllowedActions",
+                implementation_grant."blockedActions" AS "derivedImplementationGrantBlockedActions",
                 source.id AS "derivedSourceFindingEventId", source."userId" AS "derivedSourceUserId",
                 source.metadata->>'payloadDigest' AS "derivedSourcePayloadDigest",
                 source.metadata->>'sourceCheckpointId' AS "derivedSourceCheckpointId",
@@ -331,7 +342,7 @@ async function loadLinkedGoal(withPool, queueItem) {
       && typeof contract.projection.completionOwned === "boolean"
     )
     if (receipt.operation !== "runtime_finding.derive"
-      || derivedRequestHash !== createHash("sha256").update(JSON.stringify(receipt.requestBinding)).digest("hex")
+      || derivedRequestHash !== createHash("sha256").update(canonicalJson(receipt.requestBinding)).digest("hex")
       || Object.keys(receipt.requestBinding ?? {}).sort().join(",") !== exactRequestKeys.sort().join(",")
       || Object.keys(receipt.resultBinding ?? {}).sort().join(",") !== exactResultKeys.sort().join(",")
       || receipt.requestBinding?.operation !== "runtime_finding.derive"
@@ -354,6 +365,9 @@ async function loadLinkedGoal(withPool, queueItem) {
       || derivedFields.derivedApprovalAuthority !== "binding"
       || derivedFields.derivedApprovalScope !== queueItem.outcomeKey
       || derivedFields.derivedApprovalLocked !== true
+      || String(derivedFields.derivedApprovalDecision ?? "").trim().toUpperCase() !== "APPROVE"
+      || JSON.stringify(derivedFields.derivedApprovalEvidence)
+        !== JSON.stringify([`runtime-finding:${receipt.requestBinding?.sourceFindingEventId}`])
       || Number(receipt.resultBinding?.queueGrantId) !== Number(derivedFields.derivedQueueGrantId)
       || receipt.resultBinding?.queueGrantRef !== derivedFields.derivedQueueGrantRef
       || Number(receipt.resultBinding?.grantId) !== Number(derivedFields.derivedQueueGrantId)
@@ -364,6 +378,8 @@ async function loadLinkedGoal(withPool, queueItem) {
       || derivedFields.derivedQueueGrantScope !== queueItem.outcomeKey
       || Number(derivedFields.derivedQueueGrantWorkOrderId) !== Number(queueItem.activeWorkOrderId)
       || JSON.stringify(derivedFields.derivedQueueGrantAllowedActions) !== JSON.stringify(["outcome:execute"])
+      || !Array.isArray(derivedFields.derivedQueueGrantBlockedActions)
+      || derivedFields.derivedQueueGrantBlockedActions.includes("outcome:execute")
       || Number(receipt.resultBinding?.implementationGrantId) !== Number(derivedFields.derivedImplementationGrantId)
       || receipt.resultBinding?.implementationGrantRef !== derivedFields.derivedImplementationGrantRef
       || derivedFields.derivedImplementationGrantStatus !== "active"
@@ -373,6 +389,8 @@ async function loadLinkedGoal(withPool, queueItem) {
       || derivedFields.derivedImplementationGrantScope !== receipt.resultBinding?.workOrderRef
       || Number(derivedFields.derivedImplementationGrantWorkOrderId) !== Number(queueItem.activeWorkOrderId)
       || JSON.stringify(derivedFields.derivedImplementationGrantAllowedActions) !== JSON.stringify(["implement"])
+      || !Array.isArray(derivedFields.derivedImplementationGrantBlockedActions)
+      || derivedFields.derivedImplementationGrantBlockedActions.includes("implement")
       || Number(derivedFields.derivedSourceFindingEventId) !== Number(receipt.requestBinding?.sourceFindingEventId)
       || derivedFields.derivedSourceUserId !== queueItem.userId
       || derivedFields.derivedSourcePayloadDigest !== receipt.requestBinding?.sourcePayloadDigest

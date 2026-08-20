@@ -42,7 +42,8 @@ function checkpointPayload(metadata) {
   for (const key of [
     "idempotencyKey", "outcomeId", "workOrderRef", "attempt", "checkpointSequence",
     "checkpointState", "checkpointDetail", "prNumber", "commit", "priorHeadRefOid", "headRefOid",
-    "mergeSha", "terminalCleanupRecoveryProofDigest", "executionEpochDigest", "findingsSetDigest",
+    "mergeSha", "terminalCleanupRecoveryProofDigest", "executionBinding", "acquisitionKey",
+    "acquisitionFencingToken", "executionEpochDigest", "findingsSetDigest",
     "workContractId", "workContractDigest", "workContractVersion", "workContractRepository",
     "workContractLane", "authorizationDecisionId", "executionGrantRef", "implementationGrantId",
     "implementationGrantRef", "projectionIssueNumber", "projectionCompletionOwned",
@@ -198,13 +199,14 @@ function sourceFinding(row, nowMs) {
     || checkpoint.findingsSetDigest !== metadata.findingsSetDigest
     || digest(checkpointFindings) !== checkpoint.findingsSetDigest
     || checkpoint.executionEpochDigest !== metadata.sourceExecutionEpochDigest
-    || !safeText(row.parentQueueExecutionBinding) || !safeText(row.parentQueueAcquisitionKey)
-    || !safeText(row.parentQueueLeaseToken) || !safeText(row.parentQueueLeaseHolder)
-    || !Number.isSafeInteger(Number(row.parentQueueFencingToken)) || Number(row.parentQueueFencingToken) <= 0
-    || row.parentAcquisitionKey !== row.parentQueueAcquisitionKey
-    || Number(row.parentAcquisitionFencingToken) !== Number(row.parentQueueFencingToken)
-    || digest([row.userId, row.parentOutcomeKey, row.parentQueueExecutionBinding,
-      row.parentQueueAcquisitionKey]) !== checkpoint.executionEpochDigest
+    || !safeText(checkpoint.executionBinding) || !safeText(checkpoint.acquisitionKey)
+    || !Number.isSafeInteger(Number(checkpoint.acquisitionFencingToken))
+    || Number(checkpoint.acquisitionFencingToken) <= 0
+    || Number(row.parentAcquisitionCount) !== 1
+    || row.parentAcquisitionKey !== checkpoint.acquisitionKey
+    || Number(row.parentAcquisitionFencingToken) !== Number(checkpoint.acquisitionFencingToken)
+    || digest([row.userId, row.parentOutcomeKey, checkpoint.executionBinding,
+      checkpoint.acquisitionKey]) !== checkpoint.executionEpochDigest
     || metadata.sourceCheckpointState !== "CODEX_TURN_COMPLETED"
     || !/^[0-9a-f]{64}$/.test(metadata.payloadDigest ?? "")
     || !contract || canonicalJson(Object.keys(contract).sort()) !== canonicalJson([
@@ -291,7 +293,6 @@ function sourceFinding(row, nowMs) {
     || normalizeDate(row.parentExecutionGrantExpiresAt).getTime() <= nowMs
     || normalizeDate(parentResult.expiresAt).getTime() !== normalizeDate(row.implementationGrantExpiresAt).getTime()
     || normalizeDate(parentResult.authorizedAt).getTime() > nowMs) fail("FINDING_SOURCE_LINEAGE_WALL")
-  if (normalizeDate(row.parentQueueLeaseExpiresAt).getTime() <= nowMs) fail("FINDING_SOURCE_LINEAGE_WALL")
   return {
     sourceFindingEventId: Number(row.sourceFindingEventId),
     sourceUserId: row.userId,
@@ -606,7 +607,7 @@ async function insertOrdinary(client, row, finding, order, classification, at) {
     implementationGrantId: grantId, implementationGrantRef: identity.grantRef,
     workContract: identity.workContract,
   }
-  const requestHash = digest(requestBinding)
+  const requestHash = canonicalDigest(requestBinding)
   const receipt = await client.query(
     `INSERT INTO outcome_queue_mutation_receipt
       ("userId", "idempotencyKey", operation, "outcomeKey", "requestHash", "requestBinding",
@@ -776,7 +777,7 @@ async function replayOrdinary(client, row, finding, order, classification) {
     implementationGrantId: Number(artifact.grantId),
     implementationGrantRef: identity.grantRef, workContract: identity.workContract,
   }
-  if (artifact.requestHash !== digest(requestBinding)
+  if (artifact.requestHash !== canonicalDigest(requestBinding)
     || canonicalJson(artifact.requestBinding) !== canonicalJson(requestBinding)
     || canonicalJson(artifact.resultBinding) !== canonicalJson(resultBinding)) {
     fail("FINDING_CHILD_REPLAY_RECEIPT_WALL")
@@ -864,6 +865,11 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     parent_queue."fencingToken" AS "parentQueueFencingToken",
                     acquisition."acquisitionKey" AS "parentAcquisitionKey",
                     acquisition."latestFencingToken" AS "parentAcquisitionFencingToken",
+                    (SELECT count(*)::integer FROM outcome_queue_acquisition_receipt duplicate_acquisition
+                      WHERE duplicate_acquisition."userId" = finding."userId"
+                        AND duplicate_acquisition."outcomeKey" = parent_queue."outcomeKey"
+                        AND duplicate_acquisition."acquisitionKey"
+                          = checkpoint.metadata->>'acquisitionKey') AS "parentAcquisitionCount",
                     receipt.operation AS "parentReceiptOperation",
                     receipt."requestHash" AS "parentReceiptRequestHash",
                     receipt."requestBinding" AS "parentReceiptRequestBinding",
@@ -915,8 +921,9 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                JOIN outcome_queue_acquisition_receipt acquisition
                  ON acquisition."userId" = parent_queue."userId"
                 AND acquisition."outcomeKey" = parent_queue."outcomeKey"
-                AND acquisition."acquisitionKey" = parent_queue."acquisitionKey"
-                AND acquisition."latestFencingToken" = parent_queue."fencingToken"
+                AND acquisition."acquisitionKey" = checkpoint.metadata->>'acquisitionKey'
+                AND acquisition."latestFencingToken"::text
+                  = checkpoint.metadata->>'acquisitionFencingToken'
                JOIN outcome_queue_mutation_receipt receipt ON receipt."userId" = parent_queue."userId"
                  AND receipt."outcomeKey" = parent_queue."outcomeKey"
                  AND receipt.operation = 'workbench_execution.authorize'

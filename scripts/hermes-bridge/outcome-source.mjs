@@ -2537,6 +2537,11 @@ export async function projectOutcomeRuntimeCheckpoint({
     }
     const eventMetadata = {
       ...legacyEventMetadata,
+      ...(normalizedWorkContract.structuredBinding ? {
+        executionBinding: authorization.executionBinding,
+        acquisitionKey: authorization.acquisitionKey,
+        acquisitionFencingToken: Number(authorization.fencingToken),
+      } : {}),
       executionEpochDigest: currentExecutionEpochDigest,
       findingsSetDigest,
       ...(normalizedWorkContract.structuredBinding ? {

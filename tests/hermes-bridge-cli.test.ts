@@ -347,18 +347,26 @@ describe("Hermes bridge CLI", () => {
   })
 
   it("aborts before another cycle when post-cycle finding consumption walls, then permits a clean retry", async () => {
+    const parent = { lifecycleState: "active", leaseToken: "lease-parent" as string | null }
     const wall = Object.assign(new Error("consumer wall"), {
       code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL",
     })
     const consumeRuntimeFindings = vi.fn()
       .mockResolvedValueOnce({ queuedChildren: 0 })
       .mockRejectedValueOnce(wall)
-    const cycle = vi.fn(async () => ({ result: "COMPLETE", outcomeId: "parent" }))
+    const cycle = vi.fn(async () => {
+      parent.lifecycleState = "completed"
+      parent.leaseToken = null
+      return { result: "COMPLETE", outcomeId: "parent" }
+    })
     await expect(runHermesQueueDrain({ orchestrator: { cycle, consumeRuntimeFindings } }))
       .rejects.toBe(wall)
     expect(cycle).toHaveBeenCalledOnce()
 
-    const retryConsumer = vi.fn(async () => ({ queuedChildren: 0 }))
+    const retryConsumer = vi.fn(async () => {
+      expect(parent).toEqual({ lifecycleState: "completed", leaseToken: null })
+      return { queuedChildren: 0 }
+    })
     const retryCycle = vi.fn(async () => ({ result: "NO_ELIGIBLE_OUTCOME" }))
     await expect(runHermesQueueDrain({
       orchestrator: { cycle: retryCycle, consumeRuntimeFindings: retryConsumer },

@@ -1118,6 +1118,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       workContractId: HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
       authorizationDecisionId: 74, implementationGrantId: 81,
       implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
+      executionBinding: runtimeExecutionBinding.executionBinding,
+      acquisitionKey: runtimeAcquisitionKey,
+      acquisitionFencingToken: runtimeExecutionBinding.fencingToken,
       commitAllowed: true, tagAllowed: false, pushAllowed: true,
     })
   })

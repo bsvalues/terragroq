@@ -13,6 +13,12 @@ import {
   checkpointRecordMatchesAttempt,
 } from "../scripts/hermes-bridge/v1-2-acceptance-campaign.mjs"
 
+const canonicalJson = (value: any): string => value && typeof value === "object"
+  ? Array.isArray(value)
+    ? `[${value.map(canonicalJson).join(",")}]`
+    : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+  : JSON.stringify(value)
+
 const queueItem = {
   userId: "primary-user",
   outcomeKey: "outcome:home-radar",
@@ -134,20 +140,22 @@ describe("Hermes durable outcome queue runtime", () => {
       ...goal, id: 202, ref: derivedQueue.goalRef, lane: "docs",
       command: "Reconcile compose drift",
       derivedReceiptOperation: "runtime_finding.derive",
-      derivedRequestHash: createHash("sha256").update(JSON.stringify(derivedRequestBinding)).digest("hex"),
+      derivedRequestHash: createHash("sha256").update(canonicalJson(derivedRequestBinding)).digest("hex"),
       derivedRequestBinding, derivedResultBinding,
       derivedWorkOrderId: 201, derivedWorkOrderRef: derivedResultBinding.workOrderRef,
       derivedWorkOrderUserId: "primary-user", derivedWorkOrderGoal: derivedQueue.goalRef,
       derivedWorkOrderAuthorityGrantId: 205, derivedWorkOrderStatus: "approved",
       derivedApprovalDecisionId: 204, derivedApprovalStatus: "accepted",
       derivedApprovalAuthority: "binding", derivedApprovalScope: derivedQueue.outcomeKey,
-      derivedApprovalLocked: true,
+      derivedApprovalLocked: true, derivedApprovalDecision: "APPROVE",
+      derivedApprovalEvidence: ["runtime-finding:101"],
       derivedQueueGrantId: 207, derivedQueueGrantRef: derivedQueue.authorityGrantRef,
       derivedQueueGrantStatus: "active", derivedQueueGrantRevokedAt: null,
       derivedQueueGrantExpiresAt: "2099-01-01T00:00:00.000Z",
       derivedQueueGrantGrantedTo: "operator", derivedQueueGrantAuthorityLevel: "A2_WRITE_OWN",
       derivedQueueGrantScope: derivedQueue.outcomeKey, derivedQueueGrantWorkOrderId: 201,
       derivedQueueGrantAllowedActions: ["outcome:execute"],
+      derivedQueueGrantBlockedActions: ["host-storage-mutation"],
       derivedImplementationGrantId: 205,
       derivedImplementationGrantRef: derivedResultBinding.implementationGrantRef,
       derivedImplementationGrantStatus: "active", derivedImplementationGrantRevokedAt: null,
@@ -157,6 +165,7 @@ describe("Hermes durable outcome queue runtime", () => {
       derivedImplementationGrantScope: derivedResultBinding.workOrderRef,
       derivedImplementationGrantWorkOrderId: 201,
       derivedImplementationGrantAllowedActions: ["implement"],
+      derivedImplementationGrantBlockedActions: ["host-storage-mutation"],
       derivedSourceFindingEventId: 101, derivedSourceUserId: "primary-user",
       derivedSourcePayloadDigest: derivedRequestBinding.sourcePayloadDigest,
       derivedSourceCheckpointId: 91,
@@ -192,8 +201,12 @@ describe("Hermes durable outcome queue runtime", () => {
       { ...derivedGoal, derivedRequestHash: "d".repeat(64) },
       { ...derivedGoal, derivedWorkOrderRef: "WO-DRIFTED" },
       { ...derivedGoal, derivedApprovalDecisionId: 999 },
+      { ...derivedGoal, derivedApprovalDecision: "DENY" },
+      { ...derivedGoal, derivedApprovalEvidence: ["runtime-finding:999"] },
       { ...derivedGoal, derivedQueueGrantId: 999 },
+      { ...derivedGoal, derivedQueueGrantBlockedActions: ["outcome:execute"] },
       { ...derivedGoal, derivedImplementationGrantRef: "IMPL-DRIFTED" },
+      { ...derivedGoal, derivedImplementationGrantBlockedActions: ["implement"] },
       { ...derivedGoal, derivedSourcePayloadDigest: "e".repeat(64) },
       { ...derivedGoal, derivedParentWorkOrderRef: "WO-PARENT-DRIFTED" },
     ]) {
@@ -209,6 +222,20 @@ describe("Hermes durable outcome queue runtime", () => {
       await expect(driftBridge.selectOutcome())
         .rejects.toMatchObject({ code: "HERMES_RUNTIME_FINDING_CONTRACT_WALL" })
     }
+
+    const reorderedQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+      .mockResolvedValueOnce({ rows: [{
+        ...derivedGoal,
+        derivedRequestBinding: Object.fromEntries(Object.entries(derivedRequestBinding).reverse()),
+      }] })
+    const reorderedBridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "postgresql://not-used", campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+      createPool: vi.fn(async () => ({ query: reorderedQuery, end: vi.fn(), on: vi.fn() })),
+      acquire: vi.fn(async () => ({ outcome: derivedQueue, acquired: true })),
+    })
+    await expect(reorderedBridge.selectOutcome()).resolves.toMatchObject({ id: 202 })
   })
 
   it("allows read-only runtime construction without resident proof context", async () => {

@@ -72,6 +72,8 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:7", outcomeId: 4,
     workOrderRef: "WO-HERMES-OUTCOME-4", attempt: 1, checkpointSequence: 7,
     checkpointState: "CODEX_TURN_COMPLETED", checkpointDetail: null,
+    executionBinding: parentExecutionBinding, acquisitionKey: parentAcquisitionKey,
+    acquisitionFencingToken: 2,
     executionEpochDigest, findingsSetDigest: sha([findingCore]),
     workContractId: workContract.id, workContractDigest: workContract.digest,
     workContractVersion: workContract.version, workContractRepository: workContract.repository,
@@ -116,7 +118,7 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     parentQueueExecutionBinding: parentExecutionBinding, parentQueueAcquisitionKey: parentAcquisitionKey,
     parentQueueLeaseToken: "lease-token-4", parentQueueLeaseHolder: "hermes-runtime-4",
     parentQueueLeaseExpiresAt: "2099-01-01T00:00:00.000Z", parentQueueFencingToken: 2,
-    parentAcquisitionKey, parentAcquisitionFencingToken: 2,
+    parentAcquisitionKey, parentAcquisitionFencingToken: 2, parentAcquisitionCount: 1,
     parentReceiptOperation: "workbench_execution.authorize", parentReceiptConfirmation: "START_WORK",
     parentReceiptOutcomeKey: "goal:GOAL-0004",
     parentReceiptCount: 1,
@@ -173,6 +175,31 @@ function bindCheckpointFindings(...rows: any[]) {
 }
 
 describe("native runtime finding database consumer", () => {
+  it.each([
+    ["completed lease-cleared parent", "execution-binding-4", "acquisition-key-4"],
+    ["later reacquisition drift", "execution-binding-later", "acquisition-key-later"],
+  ])("retries backlog from the immutable historical epoch after %s", async (_label, currentExecution, currentAcquisition) => {
+    const row = sourceRow({
+      settlementId: null, settlementCount: null, settlementEventType: null, settlementMetadata: null,
+      parentQueueExecutionBinding: currentExecution, parentQueueAcquisitionKey: currentAcquisition,
+      parentQueueLeaseToken: null, parentQueueLeaseHolder: null, parentQueueLeaseExpiresAt: null,
+      parentQueueFencingToken: currentExecution ? 3 : 2,
+    }) as any
+    let nextId = 600
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.startsWith("SELECT child.id")) return { rows: [] }
+      if (sql.includes("INSERT INTO")) return { rows: [{ id: ++nextId }] }
+      if (sql.startsWith("UPDATE work_order")) return { rows: [{ id: nextId }] }
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+    await expect(consume()).resolves.toMatchObject({ derived: 1, queuedChildren: 1 })
+  })
+
   it("rolls back the whole mixed wave on a settlement failure and recovers on the next invocation", async () => {
     const ordinary = sourceRow({ settlementId: null, settlementCount: null,
       settlementEventType: null, settlementMetadata: null })
@@ -345,6 +372,7 @@ describe("native runtime finding database consumer", () => {
     ["parent receipt result shape", (row: any) => { row.parentReceiptResultBinding.extra = true }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["parent execution grant", (row: any) => { row.parentExecutionGrantId = 999 }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["parent receipt cardinality", (row: any) => { row.parentReceiptCount = 2 }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["historical acquisition cardinality", (row: any) => { row.parentAcquisitionCount = 2 }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["duplicate settlement", (row: any) => { row.settlementId = 501; row.settlementCount = 2 }, "FINDING_SETTLEMENT_CARDINALITY_WALL"],
   ])("walls %s corruption before child creation", async (_label, mutate, reasonCode) => {
     const row = sourceRow({ settlementId: null, settlementCount: null,
@@ -388,7 +416,7 @@ describe("native runtime finding database consumer", () => {
     })
   })
 
-  it("walls a digest-valid execution epoch that does not match the live acquisition fence", async () => {
+  it("walls a digest-valid execution epoch that does not match the historical acquisition fence", async () => {
     const row = sourceRow({ settlementId: null, settlementCount: null,
       settlementEventType: null, settlementMetadata: null }) as any
     row.checkpointMetadata.executionEpochDigest = "e".repeat(64)
@@ -522,7 +550,7 @@ describe("native runtime finding database consumer", () => {
       queueGrantWorkOrderId: 201, queueGrantAllowedActions: ["outcome:execute"],
       queueGrantBlockedActions: ["host-storage-mutation"],
       authoritySubject: "operator", authorityAction: "outcome:execute", queueVersion: 0,
-      requestHash: sha(requestBinding), requestBinding, resultBinding,
+      requestHash: canonicalSha(requestBinding), requestBinding, resultBinding,
     }
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("FROM governance_event finding")) return { rows: [source] }
