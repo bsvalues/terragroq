@@ -59,7 +59,10 @@ export function Environment() {
   }, [])
 
   async function send() {
-    const text = input.trim()
+    // The textarea's live DOM value is the source of truth: rapid type-then-Enter can outrun the
+    // controlled state by a frame, and a send that silently no-ops on that race is the five-goal
+    // lesson wearing a new face. Found by this slice's own abuse pass.
+    const text = (inputRef.current?.value ?? input).trim()
     if (!text || busy) return
     setInput("")
     setFailed(false)

@@ -142,7 +142,11 @@ export async function POST(request: Request) {
   if (!text) return Response.json({ error: "MESSAGE_EMPTY" }, { status: 400 })
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
 
-  const origin = new URL(request.url).origin
+  // The probe targets the runtime's own loopback, deterministically. Deriving the origin from the
+  // request trusts forwarded headers, and the first live run proved where that leads: the probe
+  // chased https://localhost:3100 -- a URL nothing serves -- and reported its own confusion.
+  const origin = "http://127.0.0.1:3100"
+  void request.url
 
   // Existing world: continue it.
   if (requestedWorldId) {
