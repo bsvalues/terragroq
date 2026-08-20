@@ -374,7 +374,11 @@ export function unmountedPolicyVolumes(policy, exists = fs.existsSync) {
   ].filter((entry) => typeof entry === "string" && entry.trim() !== "")
   const missing = new Map()
   for (const entry of pinned) {
-    const root = path.parse(entry).root
+    // Derived here rather than via path.parse: the policy names Windows volumes, and a Linux CI runner
+    // reading "D:\..." sees an unrooted relative path and reports nothing missing. The volume a path
+    // names is a property of the path, not of the machine reading it.
+    const drive = /^([A-Za-z]:)[\\/]/.exec(entry)
+    const root = drive ? `${drive[1]}\\` : (/^[\\/]/.test(entry) ? "/" : null)
     if (!root || exists(root)) continue
     if (!missing.has(root)) missing.set(root, entry)
   }
