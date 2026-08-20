@@ -40,11 +40,23 @@ const HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ])
+const CANONICAL_HTTPS_HOST = `${HERMES_HTTPS_HOST}:${HERMES_HTTPS_PORT}`
+const APPROVED_HTTPS_HOSTS = new Set([
+  "hermes.local:3443",
+  "williamos.lan:3443",
+  CANONICAL_HTTPS_HOST,
+])
 
 export function buildUpstreamHeaders(headers, device = null) {
   const forwarded = {}
+  let inboundHost
+  let inboundHostCount = 0
   for (const [name, value] of Object.entries(headers)) {
     const normalizedName = name.toLowerCase()
+    if (normalizedName === "host") {
+      inboundHost = value
+      inboundHostCount += 1
+    }
     if (
       !HOP_BY_HOP_HEADERS.has(normalizedName)
       && normalizedName !== "forwarded"
@@ -55,8 +67,13 @@ export function buildUpstreamHeaders(headers, device = null) {
       forwarded[normalizedName] = value
     }
   }
-  forwarded.host = "192.168.88.9:3443"
-  forwarded["x-forwarded-host"] = "192.168.88.9:3443"
+  const externalHost = inboundHostCount === 1
+    && typeof inboundHost === "string"
+    && APPROVED_HTTPS_HOSTS.has(inboundHost)
+    ? inboundHost
+    : CANONICAL_HTTPS_HOST
+  forwarded.host = externalHost
+  forwarded["x-forwarded-host"] = externalHost
   forwarded["x-forwarded-port"] = "3443"
   forwarded["x-forwarded-proto"] = "https"
   // Set last, and only from a verified certificate, so it cannot be reached by any inbound value.

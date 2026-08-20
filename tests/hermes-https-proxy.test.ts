@@ -47,6 +47,43 @@ describe("HERMES HTTPS proxy boundary", () => {
     })
   })
 
+  it.each([
+    "hermes.local:3443",
+    "williamos.lan:3443",
+    "192.168.88.9:3443",
+  ])("preserves the approved external Host %s for Server Action origin checks", (host) => {
+    const forwarded = buildUpstreamHeaders({
+      host,
+      "x-forwarded-host": "attacker.example",
+      "x-forwarded-proto": "http",
+    })
+    expect(forwarded.host).toBe(host)
+    expect(forwarded["x-forwarded-host"]).toBe(host)
+    expect(forwarded["x-forwarded-proto"]).toBe("https")
+  })
+
+  it.each([
+    ["untrusted hostname", "evil.example:3443"],
+    ["local setup hostname", "localhost:3443"],
+    ["missing approved port", "hermes.local"],
+    ["comma-delimited values", "hermes.local:3443, evil.example:3443"],
+    ["whitespace-smuggled value", " hermes.local:3443"],
+    ["multiple header values", ["hermes.local:3443", "evil.example:3443"]],
+  ])("canonicalizes %s instead of forwarding caller-controlled Host", (_case, host) => {
+    const forwarded = buildUpstreamHeaders({ host })
+    expect(forwarded.host).toBe("192.168.88.9:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
+  })
+
+  it("canonicalizes duplicate Host fields even when one value is approved", () => {
+    const forwarded = buildUpstreamHeaders({
+      host: "hermes.local:3443",
+      Host: "evil.example:3443",
+    })
+    expect(forwarded.host).toBe("192.168.88.9:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
+  })
+
   it("overwrites a hostile Host, which is what keeps the local setup route unreachable", () => {
     // /api/setup/local-config decides it is being called locally by reading Host, and rewrites
     // DATABASE_URL and BETTER_AUTH_SECRET when it believes that. Preserving the caller's Host here
