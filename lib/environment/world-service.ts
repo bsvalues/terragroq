@@ -13,6 +13,7 @@ import {
   validateEnvironmentWorldProjection,
   type ExecutionObservation,
   type EnvironmentWorldProjection,
+  type EnvironmentWorldStatus,
   type ResourceBinding,
   type WorldEndpointIdentity,
 } from "@/lib/environment/world-projection"
@@ -121,8 +122,9 @@ export function createEnvironmentWorldService({
           })
           if (endpoint) world = admitWorldEndpoint(world, endpoint)
         }
+        const visibleStatus = dto(world, stored.updatedAt).status
         world = { ...world, meaning: withTurn(world.meaning, "owner", text, now) }
-        const say = lineContinuation(world)
+        const say = lineContinuation(world, visibleStatus)
         world = { ...world, meaning: withTurn(world.meaning, "williamos", say, now) }
         const updatedAt = now()
         const updated = await repository.update(userId, world, updatedAt, stored.version)
@@ -330,10 +332,12 @@ function initialLineReply(world: EnvironmentWorldProjection, assumptionOrQuestio
   return `${assumptionOrQuestion} A verified running copy is ready. Nothing has been changed or tested yet.`
 }
 
-function lineContinuation(world: EnvironmentWorldProjection): string {
+function lineContinuation(world: EnvironmentWorldProjection, visibleStatus: EnvironmentWorldStatus): string {
   if (!world.resource) return "I am still finding the right codebase. Your message is kept and nothing has changed."
-  if (world.endpoints.length === 0) {
-    return "I am still preparing a safe running copy. Your message is kept and nothing has changed."
+  if (visibleStatus === "waiting_for_execution_endpoint") {
+    return world.endpoints.length === 0
+      ? "I am still preparing a safe running copy. Your message is kept and nothing has changed."
+      : "The last running copy is no longer proven reachable. I kept your message and am waiting for current runtime evidence."
   }
   if (world.execution.state === "not_started") {
     return "The running copy is ready, but no change or test run has been observed. Your message is kept."

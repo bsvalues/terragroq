@@ -10,6 +10,7 @@ import {
 } from "@/lib/environment/runtime-contract"
 import { createWorkingWorld, withSurface } from "@/lib/environment/working-world"
 import {
+  admitWorldEndpoint,
   createEnvironmentWorldProjection,
   validateEnvironmentWorldProjection,
   type EnvironmentWorldProjection,
@@ -358,6 +359,27 @@ describe("real endpoint liveness seam", () => {
 
     expect(dto.status).toBe("waiting_for_execution_endpoint")
     expect(dto.surfaces[0]?.status).toBe("unavailable")
+  })
+
+  it("does not tell the owner that an expired running copy is ready", async () => {
+    const repository = new MemoryRepository()
+    const resource = { recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A" }
+    const projection = admitWorldEndpoint(createEnvironmentWorldProjection({
+      id: "world",
+      meaning: createWorkingWorld({ intent: "Fix sign-in", resources: [resource.canonicalIdentity] }),
+      resource,
+    }), endpoint("world", resource.canonicalIdentity, "one"))
+    await repository.insert("owner", projection, instant)
+    const service = createEnvironmentWorldService({
+      repository,
+      now: () => "2026-08-20T19:00:31.001Z",
+    })
+
+    const reply = await service.submitLine("owner", { worldId: "world", text: "Continue" })
+
+    expect(reply.world.status).toBe("waiting_for_execution_endpoint")
+    expect(reply.say).toContain("no longer proven reachable")
+    expect(reply.say).not.toContain("copy is ready")
   })
 
   it("refuses an erroring listener as a ready application endpoint", async () => {

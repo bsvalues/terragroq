@@ -1486,7 +1486,7 @@ ${tail}
         changedPaths,
         validators: work.validators ?? [],
         artifactPath: path.join(root, "state", "environment-endpoints.json"),
-        notes: `Live endpoint receipt for ${worldId}`,
+        notes: `Endpoint candidate receipt for ${worldId}; WilliamOS independently verifies internal and public liveness before admission`,
       })
       try {
         await postEnvironmentRuntime(runtimeOrigin, runtimeToken, endpointRequest)
