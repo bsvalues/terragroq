@@ -1122,6 +1122,77 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })
   })
 
+  it("projects the first derived checkpoint onto the receipt-bound precreated child Work Order", async () => {
+    const childRef = "WO-HERMES-OUTCOME-4-R01-F101"
+    const childContractBody = {
+      version: HERMES_WORK_CONTRACT_VERSION,
+      id: "runtime-finding.101.v1",
+      repository: "bsvalues/terragroq", lane: "docs",
+      reservations: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      validationCommands: [{ command: "git", args: ["diff", "--check"] }],
+      projection: { issueNumber: 911, completionOwned: false },
+      delivery: {
+        authorityLevel: "A2_WRITE_OWN", allowedActions: ["implement"],
+        commitAllowed: true, tagAllowed: false, pushAllowed: true,
+      },
+    }
+    const childContract = {
+      ...childContractBody,
+      digest: createHash("sha256").update(JSON.stringify(childContractBody)).digest("hex"),
+    }
+    const projectedContract = {
+      version: childContract.version, id: childContract.id, digest: childContract.digest,
+      repository: childContract.repository, lane: childContract.lane,
+      allowedFiles: childContract.reservations, validators: ["git diff --check"],
+      projection: childContract.projection, delivery: childContract.delivery,
+    }
+    const binding = {
+      userId: "owner", outcomeKey: "runtime-finding:101:source-digest", expectedVersion: 0,
+      executionBinding: "execution-binding-child", leaseToken: "lease-token-child",
+      leaseHolder: "hermes-runtime-child", fencingToken: 1,
+    }
+    const authorization = {
+      goalId: 202, userId: "owner", goalRef: "GOAL-RUNTIME-FINDING-101", goalLane: "docs",
+      outcomeKey: binding.outcomeKey, version: 0, executionBinding: binding.executionBinding,
+      leaseToken: binding.leaseToken, leaseHolder: binding.leaseHolder,
+      acquisitionKey: "acquisition-child", fencingToken: 1,
+      executionEpochStartedAt: "2026-08-20T18:00:00.000Z", activeWorkOrderId: 201,
+      approvalDecisionId: 204, executionGrantRef: "RUNTIME-FINDING-QUEUE-GRANT-101",
+      receiptImplementationGrantRef: "RUNTIME-FINDING-IMPL-GRANT-101",
+      receiptImplementationGrantId: "205", implementationGrantRef: "RUNTIME-FINDING-IMPL-GRANT-101",
+      implementationGrantId: 205, implementationGrantStatus: "active", implementationGrantRevokedAt: null,
+      implementationGrantAuthorityLevel: "A2_WRITE_OWN", implementationGrantGrantedTo: "operator",
+      implementationGrantScope: childRef, implementationGrantAllowedActions: ["implement"],
+      implementationGrantBlockedActions: ["host-storage-mutation"],
+      receiptOperation: "runtime_finding.derive", derivedWorkOrderRef: childRef,
+      workContract: childContract,
+    }
+    const query = vi.fn(async (sql: string) => {
+      if (/FROM goal AS contract_goal/.test(sql)) return { rows: [authorization] }
+      if (/INSERT INTO work_order/.test(sql)) return { rows: [] }
+      if (/SELECT wo\.id,[\s\S]+latestCheckpointId/.test(sql)) return { rows: [{
+        id: 201, userId: "owner", ref: childRef, goal: authorization.goalRef, lane: "docs",
+        status: "approved", result: null, commitRef: null, assignee: "hermes-codex-bridge", agent: "codex",
+        authorityGrantId: 205, authorityLevel: "A2_WRITE_OWN", authorityGranted: "A2_WRITE_OWN",
+        commitAllowed: true, tagAllowed: false, pushAllowed: true,
+        allowedFiles: projectedContract.allowedFiles, validators: projectedContract.validators,
+        latestCheckpointId: null, latestCheckpointState: null, latestCheckpointKey: null,
+        latestCheckpointDigest: null, latestCheckpointSequence: null,
+        latestExecutionEpochDigest: null, latestCheckpointCreatedAt: null,
+        latestExecutionEpochSequence: null,
+      }] }
+      if (/HERMES_RUNTIME_CHECKPOINT/.test(sql) && /RETURNING id/.test(sql)) return { rows: [{ id: 301 }] }
+      return { rows: [] }
+    })
+
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query, outcomeId: 202, attempt: 1, workContract: projectedContract,
+      executionBinding: binding, checkpoint: { sequence: 0, state: "LEASED" },
+    })).resolves.toMatchObject({ workOrderId: 201, workOrderRef: childRef })
+    expect(query.mock.calls.filter(([sql]) => /INSERT INTO work_order/.test(sql))).toHaveLength(1)
+    expect(query.mock.calls.find(([sql]) => /INSERT INTO work_order/.test(sql))?.[1]?.[1]).toBe(childRef)
+  })
+
   it("projects closed structured findings inside the authorized checkpoint transaction", async () => {
     const queries: Array<[string, unknown[] | undefined]> = []
     const query = vi.fn(async (sql: string, values?: unknown[]) => {

@@ -10,6 +10,16 @@ const FINDING_EFFECT_KEYS = Object.freeze([
   "mutatesProductionData", "outsideObjectiveScope", "protectedResource", "releaseOrCutover",
   "spendsMoney", "touchesCredentials", "unresolvedLegalPrivacyOrSecurityRisk",
 ])
+const FINDING_METADATA_KEYS = Object.freeze([
+  "authorizationDecisionId", "commitAllowed", "deliveryAllowedActions", "deliveryAuthorityLevel",
+  "effects", "executionGrantRef", "findingId", "findingsSetDigest", "idempotencyKey", "implementationGrantId",
+  "implementationGrantRef", "objectiveWorkOrderId", "paths", "payloadDigest",
+  "projectionCompletionOwned", "projectionIssueNumber", "pushAllowed", "schemaVersion", "sequence",
+  "sourceCheckpointDigest", "sourceCheckpointId", "sourceCheckpointKey", "sourceCheckpointSequence",
+  "sourceCheckpointState", "sourceExecutionEpochDigest", "summary", "tagAllowed", "task",
+  "workContractDigest", "workContractId", "workContractLane", "workContractRepository",
+  "workContractVersion",
+])
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
@@ -21,6 +31,76 @@ function canonicalJson(value) {
 
 function digest(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex")
+}
+
+function checkpointPayload(metadata) {
+  const ordered = {}
+  for (const key of [
+    "idempotencyKey", "outcomeId", "workOrderRef", "attempt", "checkpointSequence",
+    "checkpointState", "checkpointDetail", "prNumber", "commit", "priorHeadRefOid", "headRefOid",
+    "mergeSha", "terminalCleanupRecoveryProofDigest", "executionEpochDigest", "findingsSetDigest",
+    "workContractId", "workContractDigest", "workContractVersion", "workContractRepository",
+    "workContractLane", "authorizationDecisionId", "executionGrantRef", "implementationGrantId",
+    "implementationGrantRef", "projectionIssueNumber", "projectionCompletionOwned",
+    "deliveryAuthorityLevel", "deliveryAllowedActions", "commitAllowed", "tagAllowed", "pushAllowed",
+  ]) if (Object.hasOwn(metadata, key)) ordered[key] = metadata[key]
+  return ordered
+}
+
+function findingPayload(metadata) {
+  const ordered = {}
+  for (const key of [
+    "schemaVersion", "findingId", "objectiveWorkOrderId", "sequence", "summary", "task", "paths",
+    "effects", "sourceCheckpointId", "sourceCheckpointKey", "sourceCheckpointSequence",
+    "sourceCheckpointState", "sourceCheckpointDigest", "sourceExecutionEpochDigest", "findingsSetDigest",
+    "workContractId", "workContractDigest", "workContractVersion", "workContractRepository",
+    "workContractLane", "projectionIssueNumber", "projectionCompletionOwned", "authorizationDecisionId",
+    "executionGrantRef", "implementationGrantId", "implementationGrantRef", "deliveryAuthorityLevel",
+    "deliveryAllowedActions", "commitAllowed", "tagAllowed", "pushAllowed", "idempotencyKey",
+  ]) ordered[key] = metadata[key]
+  return ordered
+}
+
+function workContractPayload(contract) {
+  const ordered = {
+    version: contract.version,
+    id: contract.id,
+    repository: contract.repository,
+    lane: contract.lane,
+    reservations: contract.reservations,
+    validationCommands: contract.validationCommands,
+  }
+  if (Object.hasOwn(contract, "projection")) ordered.projection = contract.projection
+  if (Object.hasOwn(contract, "delivery")) ordered.delivery = contract.delivery
+  return ordered
+}
+
+function exactCheckpointFindings(row) {
+  const values = row?.checkpointFindings
+  if (!Array.isArray(values) || values.length === 0 || values.length > 20) return null
+  const ids = new Set()
+  const sequences = new Set()
+  const normalized = []
+  for (const metadata of values) {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)
+      || canonicalJson(Object.keys(metadata).sort()) !== canonicalJson(FINDING_METADATA_KEYS)
+      || Number(metadata.sourceCheckpointId) !== Number(row.checkpointId)
+      || metadata.sourceCheckpointDigest !== row.checkpointMetadata?.payloadDigest
+      || digest(findingPayload(metadata)) !== metadata.payloadDigest
+      || ids.has(metadata.findingId) || sequences.has(metadata.sequence)) return null
+    ids.add(metadata.findingId)
+    sequences.add(metadata.sequence)
+    normalized.push({
+      findingId: metadata.findingId,
+      sequence: metadata.sequence,
+      summary: metadata.summary,
+      task: metadata.task,
+      paths: metadata.paths,
+      effects: metadata.effects,
+    })
+  }
+  normalized.sort((left, right) => left.sequence - right.sequence)
+  return normalized
 }
 
 function exactArray(actual, expected) {
@@ -50,8 +130,13 @@ function validatorLabels(commands) {
   if (!Array.isArray(commands) || commands.length === 0) return null
   const labels = []
   for (const command of commands) {
-    if (!command || typeof command.command !== "string" || !Array.isArray(command.args)
-      || !command.args.every((argument) => typeof argument === "string")) return null
+    const expectedKeys = ["args", "command", "timeoutMs", ...(Object.hasOwn(command ?? {}, "env") ? ["env"] : [])]
+    if (!command || canonicalJson(Object.keys(command).sort()) !== canonicalJson(expectedKeys.sort())
+      || typeof command.command !== "string" || !Array.isArray(command.args)
+      || !command.args.every((argument) => typeof argument === "string")
+      || !Number.isSafeInteger(command.timeoutMs) || command.timeoutMs <= 0
+      || (command.env !== undefined && (!command.env || typeof command.env !== "object"
+        || Array.isArray(command.env) || Object.values(command.env).some((value) => typeof value !== "string")))) return null
     labels.push(`${command.command} ${command.args.join(" ")}`)
   }
   return labels
@@ -61,10 +146,12 @@ function sourceFinding(row, nowMs) {
   const metadata = row?.findingMetadata
   const checkpoint = row?.checkpointMetadata
   const contract = row?.workContract
+  const checkpointFindings = exactCheckpointFindings(row)
   if (!Number.isSafeInteger(Number(row?.sourceFindingEventId))
     || !safeText(row?.userId) || !Number.isSafeInteger(Number(row?.parentWorkOrderId))
     || !safeText(row?.parentWorkOrderRef) || row?.parentAssignee !== "hermes-codex-bridge"
-    || !metadata || metadata.schemaVersion !== 1
+    || !metadata || metadata.schemaVersion !== 1 || !checkpointFindings
+    || canonicalJson(Object.keys(metadata).sort()) !== canonicalJson(FINDING_METADATA_KEYS)
     || !/^FINDING-[A-Z0-9][A-Z0-9-]{0,119}$/.test(metadata.findingId ?? "")
     || metadata.objectiveWorkOrderId !== row.parentWorkOrderRef
     || !Number.isSafeInteger(metadata.sequence) || metadata.sequence <= 0
@@ -82,6 +169,9 @@ function sourceFinding(row, nowMs) {
       || typeof target.path !== "string" || typeof target.verifiedCopyElsewhere !== "boolean")
     || Number(metadata.sourceCheckpointId) !== Number(row.checkpointId)
     || !checkpoint || checkpoint.payloadDigest !== metadata.sourceCheckpointDigest
+    || checkpoint.checkpointState !== "CODEX_TURN_COMPLETED"
+    || digest(checkpointPayload(checkpoint)) !== checkpoint.payloadDigest
+    || digest(findingPayload(metadata)) !== metadata.payloadDigest
     || checkpoint.workOrderRef !== row.parentWorkOrderRef
     || checkpoint.workContractId !== metadata.workContractId
     || checkpoint.workContractDigest !== metadata.workContractDigest
@@ -97,11 +187,17 @@ function sourceFinding(row, nowMs) {
     || checkpoint.tagAllowed !== metadata.tagAllowed
     || checkpoint.pushAllowed !== metadata.pushAllowed
     || checkpoint.findingsSetDigest !== metadata.findingsSetDigest
+    || digest(checkpointFindings) !== checkpoint.findingsSetDigest
     || checkpoint.executionEpochDigest !== metadata.sourceExecutionEpochDigest
     || metadata.sourceCheckpointState !== "CODEX_TURN_COMPLETED"
     || !/^[0-9a-f]{64}$/.test(metadata.payloadDigest ?? "")
-    || !contract || contract.id !== metadata.workContractId
+    || !contract || canonicalJson(Object.keys(contract).sort()) !== canonicalJson([
+      "delivery", "digest", "id", "lane", "repository", "reservations", "validationCommands", "version",
+      ...(Object.hasOwn(contract ?? {}, "projection") ? ["projection"] : []),
+    ].sort())
+    || contract.id !== metadata.workContractId
     || contract.digest !== metadata.workContractDigest
+    || digest(workContractPayload(contract)) !== contract.digest
     || contract.version !== CONTRACT_VERSION || contract.repository !== REPOSITORY
     || contract.lane !== metadata.workContractLane
     || !exactArray(contract.reservations, row.parentAllowedFiles)
@@ -111,7 +207,20 @@ function sourceFinding(row, nowMs) {
     || contract.delivery?.commitAllowed !== metadata.commitAllowed
     || contract.delivery?.tagAllowed !== metadata.tagAllowed
     || contract.delivery?.pushAllowed !== metadata.pushAllowed
+    || (contract.projection !== undefined && (
+      Number(contract.projection?.issueNumber) !== Number(metadata.projectionIssueNumber)
+      || contract.projection?.completionOwned !== metadata.projectionCompletionOwned
+    ))
     || Number(row.parentApprovalDecisionId) !== Number(metadata.authorizationDecisionId)
+    || Number(row.parentQueueApprovalDecisionId) !== Number(metadata.authorizationDecisionId)
+    || !safeText(row.parentOutcomeKey) || row.parentApprovalScope !== row.parentOutcomeKey
+    || row.parentApprovalLocked !== true
+    || row.parentReceiptOperation !== "workbench_execution.authorize"
+    || row.parentReceiptConfirmation !== "START_WORK"
+    || row.parentReceiptOutcomeKey !== row.parentOutcomeKey
+    || Number(row.parentReceiptDecisionId) !== Number(metadata.authorizationDecisionId)
+    || Number(row.parentReceiptImplementationGrantId) !== Number(metadata.implementationGrantId)
+    || row.parentReceiptImplementationGrantRef !== metadata.implementationGrantRef
     || row.parentApprovalStatus !== "accepted" || row.parentApprovalAuthority !== "binding"
     || String(row.parentApprovalDecision ?? "").trim().toUpperCase() !== "APPROVE"
     || Number(row.implementationGrantId) !== Number(metadata.implementationGrantId)
@@ -131,13 +240,14 @@ function sourceFinding(row, nowMs) {
     || row.parentPushAllowed !== metadata.pushAllowed) {
     fail("FINDING_SOURCE_LINEAGE_WALL")
   }
-  const expiresAt = row.implementationGrantExpiresAt == null ? null : normalizeDate(row.implementationGrantExpiresAt)
-  if (expiresAt && expiresAt.getTime() <= nowMs) fail("FINDING_AUTHORITY_EXPIRED")
+  if (row.implementationGrantExpiresAt == null) fail("FINDING_AUTHORITY_EXPIRED")
+  const expiresAt = normalizeDate(row.implementationGrantExpiresAt)
+  if (expiresAt.getTime() <= nowMs) fail("FINDING_AUTHORITY_EXPIRED")
   return {
     sourceFindingEventId: Number(row.sourceFindingEventId),
     sourceUserId: row.userId,
     sourceWorkOrderRowId: String(row.parentWorkOrderId),
-    sourcePayloadDigest: digest(metadata),
+    sourcePayloadDigest: metadata.payloadDigest,
     findingId: metadata.findingId,
     objectiveWorkOrderId: row.parentWorkOrderRef,
     sequence: metadata.sequence,
@@ -185,17 +295,22 @@ function parentObjective(row, finding) {
 function childIdentity(row, order) {
   const eventId = order.sourceFindingEventId
   const outcomeKey = `runtime-finding:${eventId}:${order.sourcePayloadDigest}`
+  const lane = order.contractId === "issue-911-runtime-reliability-evidence.v1"
+    && canonicalJson(order.allowedPaths) === canonicalJson([
+      "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md",
+    ]) ? "docs" : order.contractLane
   const contractBody = {
     version: CONTRACT_VERSION,
-    id: `${order.contractId}:finding:${order.findingId}`,
+    id: `runtime-finding.${eventId}.v1`,
     repository: order.contractRepository,
-    lane: order.contractLane,
+    lane,
     reservations: [...order.allowedPaths],
     validationCommands: row.workContract.validationCommands.map((entry) => ({
       ...entry,
       args: [...entry.args],
       ...(entry.env ? { env: { ...entry.env } } : {}),
     })),
+    ...(row.workContract.projection ? { projection: { ...row.workContract.projection } } : {}),
     delivery: {
       authorityLevel: order.deliveryAuthorityLevel,
       allowedActions: [...order.deliveryAllowedActions],
@@ -210,6 +325,7 @@ function childIdentity(row, order) {
     outcomeKey,
     decisionRef: `DEC-RUNTIME-FINDING-${eventId}`,
     grantRef: `RUNTIME-FINDING-IMPL-GRANT-${eventId}`,
+    queueGrantRef: `RUNTIME-FINDING-QUEUE-GRANT-${eventId}`,
     receiptKey: `runtime-finding.derive:${eventId}`,
     workContract: { ...contractBody, digest: digest(contractBody) },
   }
@@ -286,7 +402,7 @@ function settlementMetadata({ finding, classification, identity, artifacts = {} 
 
 function exactSettlement(row, expectedType, expectedMetadata) {
   if (!row.settlementId) return false
-  if (row.settlementCount !== undefined && Number(row.settlementCount) !== 1) return false
+  if (Number(row.settlementCount) !== 1) fail("FINDING_SETTLEMENT_CARDINALITY_WALL")
   if (row.settlementEventType !== expectedType
     || canonicalJson(row.settlementMetadata) !== canonicalJson(expectedMetadata)) {
     fail("FINDING_SETTLEMENT_REPLAY_WALL")
@@ -298,21 +414,29 @@ async function insertOrdinary(client, row, finding, order, classification, at) {
   const identity = childIdentity(row, order)
   const existing = await client.query(
     `SELECT child.id AS "workOrderId", goal.id AS "goalId", queue.id AS "queueId",
-            approval.id AS "decisionId", grant.id AS "grantId", receipt.id AS "receiptId",
+            approval.id AS "decisionId", grant.id AS "grantId", queue_grant.id AS "queueGrantId",
+            receipt.id AS "receiptId",
             child.ref AS "workOrderRef", goal.ref AS "goalRef", queue."outcomeKey",
             approval.ref AS "decisionRef", grant.ref AS "grantRef",
+            child.goal AS "workOrderGoal", child.lane AS "workOrderLane",
             child."allowedFiles", child.validators, child."authorityGrantId",
+            child."authorityLevel" AS "workOrderAuthorityLevel",
+            child."authorityGranted" AS "workOrderAuthorityGranted",
+            child."commitAllowed" AS "workOrderCommitAllowed", child."tagAllowed" AS "workOrderTagAllowed",
+            child."pushAllowed" AS "workOrderPushAllowed",
             receipt."requestBinding", receipt."resultBinding"
        FROM work_order child
        JOIN goal ON goal."userId" = child."userId" AND goal."linkedWorkOrderId" = child.id
        JOIN outcome_queue_item queue ON queue."userId" = child."userId" AND queue."goalId" = goal.id
        JOIN decision approval ON approval.id = queue."approvalDecisionId" AND approval."userId" = child."userId"
        JOIN authority_grant grant ON grant.id = child."authorityGrantId" AND grant."userId" = child."userId"
+       JOIN authority_grant queue_grant ON queue_grant.ref = queue."authorityGrantRef"
+         AND queue_grant."userId" = child."userId" AND queue_grant."workOrderId" = child.id
        JOIN outcome_queue_mutation_receipt receipt
          ON receipt."userId" = child."userId" AND receipt."outcomeKey" = queue."outcomeKey"
         AND receipt."idempotencyKey" = $3 AND receipt.operation = 'runtime_finding.derive'
       WHERE child."userId" = $1 AND child.ref = $2
-      FOR UPDATE OF child, goal, queue, approval, grant, receipt`,
+      FOR UPDATE OF child, goal, queue, approval, grant, queue_grant, receipt`,
     [finding.sourceUserId, identity.workOrderRef, identity.receiptKey],
   )
   if (existing.rows.length > 0) fail("FINDING_CHILD_REPLAY_CARDINALITY_WALL")
@@ -344,9 +468,9 @@ async function insertOrdinary(client, row, finding, order, classification, at) {
        $17,$18,$19,$20,$16,$16) RETURNING id`,
     [finding.sourceUserId, identity.workOrderRef, order.task,
       `Derived from ${finding.objectiveWorkOrderId} finding ${finding.findingId}.`,
-      row.parentGoal, row.parentLoop, row.parentScope, row.parentNonGoals ?? [], order.allowedPaths,
+      identity.goalRef, row.parentLoop, row.parentScope, row.parentNonGoals ?? [], order.allowedPaths,
       row.parentForbiddenFiles ?? [], row.parentValidators, row.parentStopConditions ?? [],
-      finding.contractLane, row.parentPriority ?? "medium", finding.deliveryAuthorityLevel,
+      identity.workContract.lane, row.parentPriority ?? "medium", finding.deliveryAuthorityLevel,
       at, decisionId, finding.commitAllowed, finding.tagAllowed, finding.pushAllowed],
   )
   if (count(child) !== 1) fail("FINDING_CHILD_WORK_ORDER_WALL")
@@ -371,13 +495,27 @@ async function insertOrdinary(client, row, finding, order, classification, at) {
   )
   if (count(bound) !== 1) fail("FINDING_CHILD_GRANT_BINDING_WALL")
 
+  const queueGrant = await client.query(
+    `INSERT INTO authority_grant
+      ("userId", ref, "workOrderId", "grantedBy", "grantedTo", "authorityLevel", scope,
+       "allowedActions", "blockedActions", reason, status, "expiresAt", "createdAt")
+     VALUES ($1,$2,$3,'williamos-runtime-policy','operator',$4,$5,ARRAY['outcome:execute']::text[],
+       $6::text[],$7,'active',$8,$9) RETURNING id`,
+    [finding.sourceUserId, identity.queueGrantRef, workOrderId, finding.deliveryAuthorityLevel,
+      identity.outcomeKey, row.implementationGrantBlockedActions,
+      `Queue-only authority for ${identity.outcomeKey}; finding ${finding.findingId}.`,
+      row.implementationGrantExpiresAt, at],
+  )
+  if (count(queueGrant) !== 1) fail("FINDING_CHILD_QUEUE_GRANT_WALL")
+  const queueGrantId = Number(queueGrant.rows[0].id)
+
   const goal = await client.query(
     `INSERT INTO goal
       ("userId", ref, command, lane, mode, risk, authority, verdict, rationale, "matchedRules",
        "recommendedMove", "requiresApproval", "linkedWorkOrderId", status, "createdAt", "updatedAt")
      VALUES ($1,$2,$3,$4,'implementation',$5,$6,'allow',$7,$8::text[],$9,false,$10,'classified',$11,$11)
      RETURNING id`,
-    [finding.sourceUserId, identity.goalRef, order.task, finding.contractLane, order.riskClass,
+    [finding.sourceUserId, identity.goalRef, order.task, identity.workContract.lane, order.riskClass,
       finding.deliveryAuthorityLevel, "Mechanically derived ordinary finding.",
       ["runtime_finding.derive"], "Execute through the normal HERMES/AEGIS queue.", workOrderId, at],
   )
@@ -394,7 +532,7 @@ async function insertOrdinary(client, row, finding, order, classification, at) {
        $10,'matched',$11,$12,'operator','outcome:execute','approved',$13,0,$9,$9,$9,$9) RETURNING id`,
     [finding.sourceUserId, identity.outcomeKey, goalId, identity.goalRef, order.task, order.task,
       finding.sourceFindingEventId, order.riskClass, at, decisionId, finding.deliveryAuthorityLevel,
-      identity.grantRef, workOrderId],
+      identity.queueGrantRef, workOrderId],
   )
   if (count(queue) !== 1) fail("FINDING_CHILD_QUEUE_WALL")
   const queueId = Number(queue.rows[0].id)
@@ -409,10 +547,13 @@ async function insertOrdinary(client, row, finding, order, classification, at) {
     parentContractDigest: finding.contractDigest,
     parentAuthorizationDecisionId: finding.authorizationDecisionId,
     parentImplementationGrantId: finding.implementationGrantId,
+    operation: "runtime_finding.derive",
   }
   const resultBinding = {
     workOrderId, workOrderRef: identity.workOrderRef, goalId, goalRef: identity.goalRef,
-    queueId, outcomeKey: identity.outcomeKey, approvalDecisionId: decisionId,
+    queueId, outcomeKey: identity.outcomeKey, decisionId, approvalDecisionId: decisionId,
+    grantId: queueGrantId, grantRef: identity.queueGrantRef,
+    queueGrantId, queueGrantRef: identity.queueGrantRef,
     implementationGrantId: grantId, implementationGrantRef: identity.grantRef,
     workContract: identity.workContract,
   }
@@ -426,14 +567,17 @@ async function insertOrdinary(client, row, finding, order, classification, at) {
       JSON.stringify(requestBinding), JSON.stringify(resultBinding), at],
   )
   if (count(receipt) !== 1) fail("FINDING_CHILD_RECEIPT_WALL")
-  const artifacts = { workOrderId, goalId, queueId, decisionId, grantId, receiptId: Number(receipt.rows[0].id) }
+  const artifacts = {
+    workOrderId, goalId, queueId, decisionId, grantId, queueGrantId,
+    receiptId: Number(receipt.rows[0].id),
+  }
   const metadata = settlementMetadata({ finding, classification, identity, artifacts: {
     ...artifacts, task: order.task, parentGrantRef: row.implementationGrantRef,
   } })
   const settled = await client.query(
     `INSERT INTO governance_event
       ("userId", "eventType", "entityType", "entityId", actor, reason, metadata, "createdAt")
-     VALUES ($1,'RUNTIME_FINDING_DERIVED','work_order',$2,'hermes-runtime-finding-consumer',$3,$4::jsonb,$5)
+     VALUES ($1,'RUNTIME_FINDING_DERIVED','work_order',$2,'williamos-runtime-operator',$3,$4::jsonb,$5)
      RETURNING id`, [finding.sourceUserId, String(workOrderId), order.task, JSON.stringify(metadata), at],
   )
   if (count(settled) !== 1) fail("FINDING_SETTLEMENT_WALL")
@@ -444,54 +588,95 @@ async function replayOrdinary(client, row, finding, order, classification) {
   const identity = childIdentity(row, order)
   const existing = await client.query(
     `SELECT child.id AS "workOrderId", goal.id AS "goalId", queue.id AS "queueId",
-            approval.id AS "decisionId", grant.id AS "grantId", receipt.id AS "receiptId",
+            approval.id AS "decisionId", grant.id AS "grantId", queue_grant.id AS "queueGrantId",
+            receipt.id AS "receiptId",
             child.ref AS "workOrderRef", child.status AS "workOrderStatus",
+            child.goal AS "workOrderGoal", child.lane AS "workOrderLane",
             child."allowedFiles", child.validators, child."authorityGrantId",
+            child."authorityLevel" AS "workOrderAuthorityLevel",
+            child."authorityGranted" AS "workOrderAuthorityGranted",
+            child."commitAllowed" AS "workOrderCommitAllowed",
+            child."tagAllowed" AS "workOrderTagAllowed",
+            child."pushAllowed" AS "workOrderPushAllowed",
             goal.ref AS "goalRef", goal.status AS "goalStatus", goal."linkedWorkOrderId",
             queue."outcomeKey", queue."approvalState", queue."authorityState",
             queue."lifecycleState", queue."activeWorkOrderId", queue."approvalDecisionId",
             queue."authorityGrantRef", approval.ref AS "decisionRef",
             approval.status AS "decisionStatus", approval.authority AS "decisionAuthority",
             approval.decision AS "decisionChoice", approval.scope AS "decisionScope",
+            approval.locked AS "decisionLocked", approval.evidence AS "decisionEvidence",
             grant.ref AS "grantRef", grant.status AS "grantStatus", grant."revokedAt" AS "grantRevokedAt",
             grant."authorityLevel" AS "grantAuthorityLevel", grant.scope AS "grantScope",
             grant."allowedActions" AS "grantAllowedActions", grant."blockedActions" AS "grantBlockedActions",
+            grant."expiresAt" AS "grantExpiresAt", grant."grantedTo" AS "grantGrantedTo",
+            grant."workOrderId" AS "grantWorkOrderId",
+            queue_grant.ref AS "queueGrantRef", queue_grant.status AS "queueGrantStatus",
+            queue_grant."revokedAt" AS "queueGrantRevokedAt",
+            queue_grant."expiresAt" AS "queueGrantExpiresAt",
+            queue_grant."authorityLevel" AS "queueGrantAuthorityLevel",
+            queue_grant.scope AS "queueGrantScope", queue_grant."grantedTo" AS "queueGrantGrantedTo",
+            queue_grant."workOrderId" AS "queueGrantWorkOrderId",
+            queue_grant."allowedActions" AS "queueGrantAllowedActions",
+            queue_grant."blockedActions" AS "queueGrantBlockedActions",
+            queue."authoritySubject", queue."authorityAction", queue.version AS "queueVersion",
             receipt."requestHash", receipt."requestBinding", receipt."resultBinding"
        FROM work_order child
        JOIN goal ON goal."userId" = child."userId" AND goal."linkedWorkOrderId" = child.id
        JOIN outcome_queue_item queue ON queue."userId" = child."userId" AND queue."goalId" = goal.id
        JOIN decision approval ON approval.id = queue."approvalDecisionId" AND approval."userId" = child."userId"
        JOIN authority_grant grant ON grant.id = child."authorityGrantId" AND grant."userId" = child."userId"
+       JOIN authority_grant queue_grant ON queue_grant.ref = queue."authorityGrantRef"
+         AND queue_grant."userId" = child."userId" AND queue_grant."workOrderId" = child.id
        JOIN outcome_queue_mutation_receipt receipt
          ON receipt."userId" = child."userId" AND receipt."outcomeKey" = queue."outcomeKey"
         AND receipt."idempotencyKey" = $3 AND receipt.operation = 'runtime_finding.derive'
       WHERE child."userId" = $1 AND child.ref = $2
-      FOR UPDATE OF child, goal, queue, approval, grant, receipt`,
+      FOR UPDATE OF child, goal, queue, approval, grant, queue_grant, receipt`,
     [finding.sourceUserId, identity.workOrderRef, identity.receiptKey],
   )
   if (existing.rows.length !== 1) fail("FINDING_CHILD_REPLAY_CARDINALITY_WALL")
   const artifact = existing.rows[0]
-  const ids = ["workOrderId", "goalId", "queueId", "decisionId", "grantId", "receiptId"]
+  const ids = ["workOrderId", "goalId", "queueId", "decisionId", "grantId", "queueGrantId", "receiptId"]
   if (ids.some((field) => !Number.isSafeInteger(Number(artifact[field])) || Number(artifact[field]) <= 0)
     || artifact.workOrderRef !== identity.workOrderRef || artifact.goalRef !== identity.goalRef
     || artifact.outcomeKey !== identity.outcomeKey || artifact.decisionRef !== identity.decisionRef
-    || artifact.grantRef !== identity.grantRef || artifact.workOrderStatus !== "approved"
+    || artifact.grantRef !== identity.grantRef || artifact.queueGrantRef !== identity.queueGrantRef
+    || artifact.workOrderStatus !== "approved"
+    || artifact.workOrderGoal !== identity.goalRef || artifact.workOrderLane !== identity.workContract.lane
+    || artifact.workOrderAuthorityLevel !== finding.deliveryAuthorityLevel
+    || artifact.workOrderAuthorityGranted !== finding.deliveryAuthorityLevel
+    || artifact.workOrderCommitAllowed !== finding.commitAllowed
+    || artifact.workOrderTagAllowed !== finding.tagAllowed
+    || artifact.workOrderPushAllowed !== finding.pushAllowed
     || artifact.goalStatus !== "classified" || artifact.approvalState !== "approved"
     || artifact.authorityState !== "matched" || artifact.lifecycleState !== "approved"
     || artifact.decisionStatus !== "accepted" || artifact.decisionAuthority !== "binding"
+    || artifact.decisionLocked !== true
+    || !exactArray(artifact.decisionEvidence, [`runtime-finding:${finding.sourceFindingEventId}`])
     || String(artifact.decisionChoice ?? "").trim().toUpperCase() !== "APPROVE"
     || artifact.decisionScope !== identity.outcomeKey || artifact.grantStatus !== "active"
     || artifact.grantRevokedAt != null || artifact.grantAuthorityLevel !== finding.deliveryAuthorityLevel
+    || artifact.grantGrantedTo !== "operator" || Number(artifact.grantWorkOrderId) !== Number(artifact.workOrderId)
+    || normalizeDate(artifact.grantExpiresAt).getTime() !== normalizeDate(row.implementationGrantExpiresAt).getTime()
     || artifact.grantScope !== identity.workOrderRef
     || !exactArray(artifact.allowedFiles, order.allowedPaths)
     || !exactArray(artifact.validators, row.parentValidators)
     || !exactArray(artifact.grantAllowedActions, finding.deliveryAllowedActions)
     || !exactArray(artifact.grantBlockedActions, row.implementationGrantBlockedActions)
+    || artifact.queueGrantStatus !== "active" || artifact.queueGrantRevokedAt != null
+    || artifact.queueGrantAuthorityLevel !== finding.deliveryAuthorityLevel
+    || artifact.queueGrantScope !== identity.outcomeKey || artifact.queueGrantGrantedTo !== "operator"
+    || Number(artifact.queueGrantWorkOrderId) !== Number(artifact.workOrderId)
+    || normalizeDate(artifact.queueGrantExpiresAt).getTime() !== normalizeDate(row.implementationGrantExpiresAt).getTime()
+    || !exactArray(artifact.queueGrantAllowedActions, ["outcome:execute"])
+    || !exactArray(artifact.queueGrantBlockedActions, row.implementationGrantBlockedActions)
     || Number(artifact.authorityGrantId) !== Number(artifact.grantId)
     || Number(artifact.linkedWorkOrderId) !== Number(artifact.workOrderId)
     || Number(artifact.activeWorkOrderId) !== Number(artifact.workOrderId)
     || Number(artifact.approvalDecisionId) !== Number(artifact.decisionId)
-    || artifact.authorityGrantRef !== identity.grantRef) {
+    || artifact.authorityGrantRef !== identity.queueGrantRef
+    || artifact.authoritySubject !== "operator" || artifact.authorityAction !== "outcome:execute"
+    || Number(artifact.queueVersion) !== 0) {
     fail("FINDING_CHILD_REPLAY_ARTIFACT_WALL")
   }
   const requestBinding = {
@@ -505,12 +690,16 @@ async function replayOrdinary(client, row, finding, order, classification) {
     parentContractDigest: finding.contractDigest,
     parentAuthorizationDecisionId: finding.authorizationDecisionId,
     parentImplementationGrantId: finding.implementationGrantId,
+    operation: "runtime_finding.derive",
   }
   const resultBinding = {
     workOrderId: Number(artifact.workOrderId), workOrderRef: identity.workOrderRef,
     goalId: Number(artifact.goalId), goalRef: identity.goalRef,
     queueId: Number(artifact.queueId), outcomeKey: identity.outcomeKey,
-    approvalDecisionId: Number(artifact.decisionId), implementationGrantId: Number(artifact.grantId),
+    decisionId: Number(artifact.decisionId), approvalDecisionId: Number(artifact.decisionId),
+    grantId: Number(artifact.queueGrantId), grantRef: identity.queueGrantRef,
+    queueGrantId: Number(artifact.queueGrantId), queueGrantRef: identity.queueGrantRef,
+    implementationGrantId: Number(artifact.grantId),
     implementationGrantRef: identity.grantRef, workContract: identity.workContract,
   }
   if (artifact.requestHash !== digest(requestBinding)
@@ -521,7 +710,8 @@ async function replayOrdinary(client, row, finding, order, classification) {
   const artifacts = {
     workOrderId: Number(artifact.workOrderId), goalId: Number(artifact.goalId),
     queueId: Number(artifact.queueId), decisionId: Number(artifact.decisionId),
-    grantId: Number(artifact.grantId), receiptId: Number(artifact.receiptId),
+    grantId: Number(artifact.grantId), queueGrantId: Number(artifact.queueGrantId),
+    receiptId: Number(artifact.receiptId),
   }
   const metadata = settlementMetadata({ finding, classification, identity, artifacts: {
     ...artifacts, task: order.task, parentGrantRef: row.implementationGrantRef,
@@ -540,7 +730,7 @@ async function insertGate(client, row, finding, classification, at) {
   const settled = await client.query(
     `INSERT INTO governance_event
       ("userId", "eventType", "entityType", "entityId", actor, reason, metadata, "createdAt")
-     VALUES ($1,'RUNTIME_FINDING_OWNER_GATED','work_order',$2,'hermes-runtime-finding-consumer',$3,$4::jsonb,$5)
+     VALUES ($1,'RUNTIME_FINDING_OWNER_GATED','work_order',$2,'williamos-runtime-operator',$3,$4::jsonb,$5)
      RETURNING id`, [finding.sourceUserId, String(row.parentWorkOrderId), classification.reason,
       JSON.stringify(metadata), at],
   )
@@ -570,6 +760,13 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
           await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", ["hermes-runtime-finding-consumer:v1"])
           const sources = await client.query(
             `SELECT finding.id AS "sourceFindingEventId", finding."userId", finding.metadata AS "findingMetadata",
+                    (SELECT jsonb_agg(sibling.metadata ORDER BY (sibling.metadata->>'sequence')::integer, sibling.id)
+                       FROM governance_event sibling
+                      WHERE sibling."userId" = finding."userId"
+                        AND sibling."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
+                        AND sibling."entityType" = 'work_order' AND sibling."entityId" = finding."entityId"
+                        AND sibling.actor = 'hermes'
+                        AND sibling.metadata->>'sourceCheckpointId' = checkpoint.id::text) AS "checkpointFindings",
                     parent.id AS "parentWorkOrderId", parent.ref AS "parentWorkOrderRef",
                     parent.assignee AS "parentAssignee", parent.status AS "parentStatus",
                     parent.goal AS "parentGoal", parent.loop AS "parentLoop", parent.scope AS "parentScope",
@@ -582,7 +779,16 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     parent."commitAllowed" AS "parentCommitAllowed", parent."tagAllowed" AS "parentTagAllowed",
                     parent."pushAllowed" AS "parentPushAllowed", checkpoint.id AS "checkpointId",
                     checkpoint.metadata AS "checkpointMetadata", receipt."resultBinding"->'workContract' AS "workContract",
+                    parent_queue."outcomeKey" AS "parentOutcomeKey",
+                    parent_queue."approvalDecisionId" AS "parentQueueApprovalDecisionId",
+                    receipt.operation AS "parentReceiptOperation",
+                    receipt."requestBinding"->>'confirmation' AS "parentReceiptConfirmation",
+                    receipt."requestBinding"->>'outcomeKey' AS "parentReceiptOutcomeKey",
+                    receipt."resultBinding"->>'decisionId' AS "parentReceiptDecisionId",
+                    receipt."resultBinding"->>'implementationGrantId' AS "parentReceiptImplementationGrantId",
+                    receipt."resultBinding"->>'implementationGrantRef' AS "parentReceiptImplementationGrantRef",
                     approval.id AS "parentApprovalDecisionId", approval.status AS "parentApprovalStatus",
+                    approval.locked AS "parentApprovalLocked", approval.scope AS "parentApprovalScope",
                     approval.authority AS "parentApprovalAuthority", approval.decision AS "parentApprovalDecision",
                     grant.id AS "implementationGrantId", grant.ref AS "implementationGrantRef",
                     grant.status AS "implementationGrantStatus", grant."revokedAt" AS "implementationGrantRevokedAt",
@@ -604,6 +810,8 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                  AND parent_queue."activeWorkOrderId" = parent.id
                JOIN outcome_queue_mutation_receipt receipt ON receipt."userId" = parent_queue."userId"
                  AND receipt."outcomeKey" = parent_queue."outcomeKey"
+                 AND receipt.operation = 'workbench_execution.authorize'
+                 AND receipt."resultBinding"->>'decisionId' = parent_queue."approvalDecisionId"::text
                  AND receipt."resultBinding"->'workContract'->>'id' = finding.metadata->>'workContractId'
                  AND receipt."resultBinding"->'workContract'->>'digest' = finding.metadata->>'workContractDigest'
                JOIN decision approval ON approval."userId" = parent."userId"
@@ -629,6 +837,9 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
           const results = []
           for (const row of sources.rows) {
             const finding = sourceFinding(row, normalizeDate(now()).getTime())
+            if (row.settlementId && Number(row.settlementCount) !== 1) {
+              fail("FINDING_SETTLEMENT_CARDINALITY_WALL")
+            }
             const result = deriveRemediationWorkOrder({ objective: parentObjective(row, finding), finding,
               now: () => normalizeDate(now()).toISOString() })
             const at = normalizeDate(now())

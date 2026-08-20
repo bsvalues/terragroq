@@ -367,17 +367,107 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
   )
 `
 
+const EXACT_RUNTIME_FINDING_DERIVATION_PREDICATE = `
+  q."authorityLevel" = 'A2_WRITE_OWN'
+  AND q."authorityAction" = 'outcome:execute'
+  AND q."activeWorkOrderId" IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM "outcome_queue_mutation_receipt" AS derived_receipt
+    JOIN work_order AS derived_work
+      ON derived_work."userId" = derived_receipt."userId"
+     AND derived_work.id = (derived_receipt."resultBinding"->>'workOrderId')::integer
+    JOIN authority_grant AS derived_implementation_grant
+      ON derived_implementation_grant."userId" = derived_receipt."userId"
+     AND derived_implementation_grant.id = (derived_receipt."resultBinding"->>'implementationGrantId')::integer
+     AND derived_implementation_grant.ref = derived_receipt."resultBinding"->>'implementationGrantRef'
+    JOIN authority_grant AS derived_queue_grant
+      ON derived_queue_grant."userId" = derived_receipt."userId"
+     AND derived_queue_grant.id = (derived_receipt."resultBinding"->>'grantId')::integer
+     AND derived_queue_grant.ref = derived_receipt."resultBinding"->>'grantRef'
+    JOIN governance_event AS derived_source
+      ON derived_source."userId" = derived_receipt."userId"
+     AND derived_source.id = (derived_receipt."requestBinding"->>'sourceFindingEventId')::integer
+     AND derived_source."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
+     AND derived_source.actor = 'hermes'
+    WHERE derived_receipt."userId" = q."userId"
+      AND derived_receipt."outcomeKey" = q."outcomeKey"
+      AND derived_receipt.operation = 'runtime_finding.derive'
+      AND derived_receipt."requestBinding"->>'operation' = 'runtime_finding.derive'
+      AND derived_receipt."resultBinding"->>'outcomeKey' = q."outcomeKey"
+      AND derived_receipt."resultBinding"->>'goalId' = q."goalId"::text
+      AND derived_receipt."resultBinding"->>'goalRef' = q."goalRef"
+      AND derived_receipt."resultBinding"->>'workOrderId' = q."activeWorkOrderId"::text
+      AND derived_receipt."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
+      AND derived_receipt."resultBinding"->>'approvalDecisionId' = q."approvalDecisionId"::text
+      AND derived_receipt."resultBinding"->>'grantRef' = q."authorityGrantRef"
+      AND derived_receipt."resultBinding"->>'queueGrantId' = derived_queue_grant.id::text
+      AND derived_receipt."resultBinding"->>'queueGrantRef' = derived_queue_grant.ref
+      AND derived_source.metadata->>'payloadDigest'
+        = derived_receipt."requestBinding"->>'sourcePayloadDigest'
+      AND derived_source.metadata->>'sourceCheckpointId'
+        = derived_receipt."requestBinding"->>'sourceCheckpointId'
+      AND derived_source.metadata->>'sourceCheckpointDigest'
+        = derived_receipt."requestBinding"->>'sourceCheckpointDigest'
+      AND derived_queue_grant.ref = q."authorityGrantRef"
+      AND derived_queue_grant.status = 'active'
+      AND derived_queue_grant."revokedAt" IS NULL
+      AND derived_queue_grant."expiresAt" IS NOT NULL
+      AND derived_queue_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+      AND derived_queue_grant."authorityLevel" = 'A2_WRITE_OWN'
+      AND derived_queue_grant."grantedTo" = 'operator'
+      AND derived_queue_grant.scope = q."outcomeKey"
+      AND derived_queue_grant."workOrderId" = q."activeWorkOrderId"
+      AND derived_queue_grant."allowedActions" = ARRAY['outcome:execute']::text[]
+      AND derived_work.id = q."activeWorkOrderId"
+      AND derived_work.ref = derived_receipt."resultBinding"->>'workOrderRef'
+      AND derived_work.goal = q."goalRef"
+      AND derived_work."authorityGrantId" = derived_implementation_grant.id
+      AND derived_implementation_grant.status = 'active'
+      AND derived_implementation_grant."revokedAt" IS NULL
+      AND derived_implementation_grant."expiresAt" IS NOT NULL
+      AND derived_implementation_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+      AND derived_implementation_grant."grantedTo" = 'operator'
+      AND derived_implementation_grant.scope = derived_work.ref
+      AND derived_implementation_grant."workOrderId" = derived_work.id
+      AND derived_implementation_grant."allowedActions" = ARRAY['implement']::text[]
+      AND (SELECT count(*) FROM outcome_queue_mutation_receipt duplicate
+           WHERE duplicate."userId" = q."userId"
+             AND duplicate."outcomeKey" = q."outcomeKey"
+             AND duplicate.operation = 'runtime_finding.derive') = 1
+      AND (SELECT count(*) FROM governance_event settlement
+           WHERE settlement."userId" = q."userId"
+             AND settlement."eventType" = 'RUNTIME_FINDING_DERIVED'
+             AND settlement.actor = 'williamos-runtime-operator'
+             AND settlement.metadata->>'sourceFindingEventId'
+               = derived_receipt."requestBinding"->>'sourceFindingEventId') = 1
+  )
+`
+
+const EXACT_EXECUTION_ORIGIN_PREDICATE = `(
+  ((${WORKBENCH_PROJECT_EXECUTION_PREDICATE}) AND (${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}))
+  OR (${EXACT_RUNTIME_FINDING_DERIVATION_PREDICATE})
+)`
+
 function exactWorkContractReceiptPredicate(alias) {
   return `
-    ${alias}."userId" = q."userId"
-    AND ${alias}."outcomeKey" = q."outcomeKey"
-    AND ${alias}.operation = 'workbench_execution.authorize'
-    AND ${alias}."requestBinding"->>'confirmation' = 'START_WORK'
-    AND ${alias}."requestBinding"->>'outcomeKey' = q."outcomeKey"
-    AND ${alias}."resultBinding"->>'grantRef' = q."authorityGrantRef"
-    AND ${alias}."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
-    AND ${alias}."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
-    AND ${alias}."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}'
+    ${alias}."userId" = q."userId" AND ${alias}."outcomeKey" = q."outcomeKey" AND (
+      (${alias}.operation = 'workbench_execution.authorize'
+        AND ${alias}."requestBinding"->>'confirmation' = 'START_WORK'
+        AND ${alias}."requestBinding"->>'outcomeKey' = q."outcomeKey"
+        AND ${alias}."resultBinding"->>'grantRef' = q."authorityGrantRef"
+        AND ${alias}."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
+        AND ${alias}."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
+        AND ${alias}."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}')
+      OR (${alias}.operation = 'runtime_finding.derive'
+        AND ${alias}."requestBinding"->>'operation' = 'runtime_finding.derive'
+        AND ${alias}."resultBinding"->>'outcomeKey' = q."outcomeKey"
+        AND ${alias}."resultBinding"->>'workOrderId' = q."activeWorkOrderId"::text
+        AND ${alias}."resultBinding"->>'grantRef' = q."authorityGrantRef"
+        AND ${alias}."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
+        AND ${alias}."resultBinding"->'workContract'->>'id' ~ '^[A-Za-z0-9._-]{1,120}$'
+        AND ${alias}."resultBinding"->'workContract'->>'digest' ~ '^[a-f0-9]{64}$')
+    )
   `
 }
 
@@ -425,8 +515,7 @@ const ELIGIBILITY_PREDICATE = `
   q."userId" = $2
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${ACQUISITION_AUTHORITY_PREDICATE}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE}
   AND q."riskClass" IN ('R0', 'R1')
   AND (
     q."lifecycleState" = 'approved'
@@ -1500,8 +1589,7 @@ RETURNING "id"
   revalidateAcquisition: `
 SELECT
   (${LIVE_APPROVAL_PREDICATE}) AS "approvalLive",
-  ((${LIVE_AUTHORITY_PREDICATE}) AND (${WORKBENCH_PROJECT_EXECUTION_PREDICATE})
-    AND (${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}))
+  ((${LIVE_AUTHORITY_PREDICATE}) AND (${EXACT_EXECUTION_ORIGIN_PREDICATE}))
     AS "authorityLive"
 FROM "outcome_queue_item" AS q
 WHERE q."userId" = $2
@@ -1527,8 +1615,7 @@ WHERE q."userId" = $2
   AND ${LIVE_APPROVAL_PREDICATE}
   AND q."riskClass" IN ('R0', 'R1')
   AND ${ACQUISITION_AUTHORITY_PREDICATE}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE}
   AND NOT EXISTS (
     SELECT 1
     FROM unnest(q."dependencyKeys") AS dependency("outcomeKey")
@@ -1665,8 +1752,7 @@ WHERE q."userId" = $1
   AND q."leaseExpiresAt" > $7::timestamptz
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$7::timestamptz")}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$7::timestamptz")}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$7::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   deferLease: `
@@ -1684,8 +1770,7 @@ WHERE q."userId" = $1
   AND q."leaseExpiresAt" > $9::timestamptz
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   bindWorkOrder: `
@@ -1709,12 +1794,13 @@ WHERE q."userId" = $1
       `q."activeWorkOrderId" = live_grant."workOrderId"`,
       `$7 = live_grant."workOrderId"`,
     )}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$8::timestamptz")}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$8::timestamptz")}
   AND ${EXACT_PROJECTED_WORK_CONTRACT_PREDICATE.replaceAll("$EXPECTED_LEASE_HOLDER", "$9")}
   AND projected_work.id = $7
   AND projected_work."userId" = q."userId"
-  AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+  AND projected_work.ref = CASE WHEN work_contract_receipt.operation = 'runtime_finding.derive'
+    THEN work_contract_receipt."resultBinding"->>'workOrderRef'
+    ELSE 'WO-HERMES-OUTCOME-' || q."goalId"::text END
   AND projected_work.goal = q."goalRef"
   AND projected_work.status = 'active'
   AND (q."activeWorkOrderId" IS NULL OR q."activeWorkOrderId" = $7)
@@ -2008,11 +2094,12 @@ WHERE q."userId" = $1
   AND ${ACQUISITION_AUTHORITY_PREDICATE
     .replaceAll("$8", "$7")
     .replaceAll("$1::timestamptz", "$9::timestamptz")}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
   AND ${EXACT_PROJECTED_WORK_CONTRACT_PREDICATE.replaceAll("$EXPECTED_LEASE_HOLDER", "$10")}
   AND projected_work."userId" = q."userId"
-  AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+  AND projected_work.ref = CASE WHEN work_contract_receipt.operation = 'runtime_finding.derive'
+    THEN work_contract_receipt."resultBinding"->>'workOrderRef'
+    ELSE 'WO-HERMES-OUTCOME-' || q."goalId"::text END
   AND projected_work.goal = q."goalRef"
   AND projected_work.status = $8
 `,
@@ -2193,8 +2280,7 @@ WHERE q."userId" = $1
   AND q."acquisitionKey" = $7
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$12::timestamptz")}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$12::timestamptz")}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$12::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   legacyHistory: `

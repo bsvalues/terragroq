@@ -294,7 +294,22 @@ export function assertChangedPathsAllowed(paths, reservations) {
 }
 
 export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkContract) {
-  const contract = resolver(outcome)
+  const verified = outcome?.verifiedQueueWorkContract
+  let contract
+  if (verified !== undefined) {
+    const binding = outcome?.queueBinding
+    if (!verified || verified.provenance?.operation !== "runtime_finding.derive"
+      || verified.provenance?.outcomeKey !== outcome?.outcomeKey
+      || verified.provenance?.outcomeKey !== binding?.outcomeKey
+      || Number(verified.provenance?.workOrderId) !== Number(binding?.activeWorkOrderId)) {
+      throw Object.assign(new Error("Derived queue work contract provenance conflicts"), {
+        code: "HERMES_WORK_CONTRACT_WALL",
+      })
+    }
+    contract = verified.contract
+  } else {
+    contract = resolver(outcome)
+  }
   if (!contract || !Array.isArray(contract.reservations) || contract.reservations.length === 0
     || !Array.isArray(contract.validationCommands) || contract.validationCommands.length === 0) {
     throw Object.assign(new Error("Outcome has no exact reviewed work contract"), {

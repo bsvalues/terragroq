@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import os from "node:os"
 import path from "node:path"
 
@@ -189,19 +189,121 @@ async function loadLinkedGoal(withPool, queueItem) {
   }
   return withPool(async (pool) => {
     const result = await pool.query(
-      `SELECT id, "userId" AS "userId", ref, command, lane, mode, risk,
+      `SELECT goal.id, goal."userId" AS "userId", goal.ref, goal.command, goal.lane, goal.mode, goal.risk,
               authority, verdict, "requiresApproval" AS "requiresApproval",
               "matchedRules" AS "matchedRules", status,
-              "createdAt" AS "createdAt", "updatedAt" AS "updatedAt"
+              goal."createdAt" AS "createdAt", goal."updatedAt" AS "updatedAt",
+              derived.operation AS "derivedReceiptOperation",
+              derived."requestBinding" AS "derivedRequestBinding",
+              derived."resultBinding" AS "derivedResultBinding"
        FROM goal
-       WHERE id = $1 AND "userId" = $2 AND ref = $3 AND status = 'classified'
-       LIMIT 1`,
-      [Number(queueItem.goalId), queueItem.userId, queueItem.goalRef],
+       LEFT JOIN LATERAL (
+         SELECT receipt.operation, receipt."requestBinding", receipt."resultBinding"
+           FROM outcome_queue_mutation_receipt receipt
+          WHERE receipt."userId" = goal."userId" AND receipt."outcomeKey" = $4
+            AND receipt.operation = 'runtime_finding.derive'
+          ORDER BY receipt.id LIMIT 2
+       ) derived ON true
+       WHERE goal.id = $1 AND goal."userId" = $2 AND goal.ref = $3 AND goal.status = 'classified'
+       LIMIT 2`,
+      [Number(queueItem.goalId), queueItem.userId, queueItem.goalRef, queueItem.outcomeKey],
     )
+    if (result.rows.length > 1) {
+      wall("Derived queue contract receipt is not unique", "HERMES_RUNTIME_FINDING_CONTRACT_WALL")
+    }
     if (result.rows.length !== 1) {
       wall("Acquired queue item does not match an executable governed goal", "HERMES_OUTCOME_QUEUE_GOAL_WALL")
     }
-    return result.rows[0]
+    const goal = result.rows[0]
+    const {
+      derivedReceiptOperation, derivedRequestBinding, derivedResultBinding, ...publicGoal
+    } = goal
+    if (derivedReceiptOperation == null) return publicGoal
+    const receipt = {
+      operation: derivedReceiptOperation,
+      requestBinding: derivedRequestBinding,
+      resultBinding: derivedResultBinding,
+    }
+    const contract = receipt.resultBinding?.workContract
+    const contractBody = contract && {
+      version: contract.version, id: contract.id, repository: contract.repository, lane: contract.lane,
+      reservations: contract.reservations, validationCommands: contract.validationCommands,
+      ...(Object.hasOwn(contract, "projection") ? { projection: contract.projection } : {}),
+      delivery: contract.delivery,
+    }
+    const contractDigest = contractBody
+      ? createHash("sha256").update(JSON.stringify(contractBody)).digest("hex")
+      : null
+    const exactRequestKeys = [
+      "operation", "parentAuthorizationDecisionId", "parentContractDigest", "parentContractId",
+      "parentImplementationGrantId", "parentWorkOrderId", "parentWorkOrderRef",
+      "sourceCheckpointDigest", "sourceCheckpointId", "sourceFindingEventId", "sourcePayloadDigest",
+    ]
+    const exactResultKeys = [
+      "approvalDecisionId", "decisionId", "goalId", "goalRef", "grantId", "grantRef",
+      "implementationGrantId", "implementationGrantRef", "outcomeKey", "queueGrantId",
+      "queueGrantRef", "queueId", "workContract", "workOrderId", "workOrderRef",
+    ]
+    const validationsExact = Array.isArray(contract?.validationCommands)
+      && contract.validationCommands.length > 0
+      && contract.validationCommands.every((command) => {
+        const keys = ["args", "command", "timeoutMs", ...(Object.hasOwn(command ?? {}, "env") ? ["env"] : [])]
+        return command && Object.keys(command).sort().join(",") === keys.sort().join(",")
+          && typeof command.command === "string" && command.command !== ""
+          && Array.isArray(command.args) && command.args.every((argument) => typeof argument === "string")
+          && Number.isSafeInteger(command.timeoutMs) && command.timeoutMs > 0
+          && (command.env === undefined || (command.env && typeof command.env === "object"
+            && !Array.isArray(command.env)
+            && Object.values(command.env).every((value) => typeof value === "string")))
+      })
+    const deliveryExact = contract?.delivery
+      && Object.keys(contract.delivery).sort().join(",")
+        === "allowedActions,authorityLevel,commitAllowed,pushAllowed,tagAllowed"
+      && contract.delivery.authorityLevel === "A2_WRITE_OWN"
+      && JSON.stringify(contract.delivery.allowedActions) === JSON.stringify(["implement"])
+      && [contract.delivery.commitAllowed, contract.delivery.tagAllowed, contract.delivery.pushAllowed]
+        .every((value) => typeof value === "boolean")
+    const projectionExact = contract?.projection === undefined || (
+      Object.keys(contract.projection).sort().join(",") === "completionOwned,issueNumber"
+      && Number.isSafeInteger(contract.projection.issueNumber) && contract.projection.issueNumber > 0
+      && typeof contract.projection.completionOwned === "boolean"
+    )
+    if (receipt.operation !== "runtime_finding.derive"
+      || Object.keys(receipt.requestBinding ?? {}).sort().join(",") !== exactRequestKeys.sort().join(",")
+      || Object.keys(receipt.resultBinding ?? {}).sort().join(",") !== exactResultKeys.sort().join(",")
+      || receipt.requestBinding?.operation !== "runtime_finding.derive"
+      || receipt.resultBinding?.outcomeKey !== queueItem.outcomeKey
+      || Number(receipt.resultBinding?.goalId) !== Number(queueItem.goalId)
+      || receipt.resultBinding?.goalRef !== queueItem.goalRef
+      || Number(receipt.resultBinding?.queueId) !== Number(queueItem.id)
+      || Number(receipt.resultBinding?.workOrderId) !== Number(queueItem.activeWorkOrderId)
+      || receipt.resultBinding?.grantRef !== queueItem.authorityGrantRef
+      || Number(receipt.resultBinding?.decisionId) !== Number(queueItem.approvalDecisionId)
+      || !contract || Object.keys(contract).sort().join(",") !== [
+        "delivery", "digest", "id", "lane", "repository", "reservations", "validationCommands", "version",
+        ...(Object.hasOwn(contract ?? {}, "projection") ? ["projection"] : []),
+      ].sort().join(",")
+      || contract.digest !== contractDigest
+      || contract.version !== "hermes-work-contract.v1"
+      || contract.repository !== "bsvalues/terragroq"
+      || !/^[A-Za-z0-9._-]{1,120}$/.test(contract.id ?? "")
+      || typeof contract.lane !== "string" || contract.lane.trim() === ""
+      || !Array.isArray(contract.reservations) || contract.reservations.length === 0
+      || contract.reservations.some((reservation) => typeof reservation !== "string" || reservation === "")
+      || !validationsExact || !deliveryExact || !projectionExact) {
+      wall("Derived queue contract receipt conflicts", "HERMES_RUNTIME_FINDING_CONTRACT_WALL")
+    }
+    return {
+      ...publicGoal,
+      verifiedQueueWorkContract: Object.freeze({
+        contract: Object.freeze(contract),
+        provenance: Object.freeze({
+          operation: receipt.operation,
+          outcomeKey: queueItem.outcomeKey,
+          workOrderId: Number(queueItem.activeWorkOrderId),
+        }),
+      }),
+    }
   })
 }
 

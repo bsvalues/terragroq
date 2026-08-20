@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import fs from "node:fs"
+import { createHash } from "node:crypto"
 import os from "node:os"
 import path from "node:path"
 
@@ -87,6 +88,73 @@ function runtime(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Hermes durable outcome queue runtime", () => {
+  it("loads an arbitrary derived child contract from its exact receipt", async () => {
+    const contractBody = {
+      version: "hermes-work-contract.v1",
+      id: "runtime-finding.101.v1",
+      repository: "bsvalues/terragroq", lane: "docs",
+      reservations: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      validationCommands: [{ command: "git", args: ["diff", "--check"], timeoutMs: 300_000 }],
+      projection: { issueNumber: 911, completionOwned: false },
+      delivery: {
+        authorityLevel: "A2_WRITE_OWN", allowedActions: ["implement"],
+        commitAllowed: true, tagAllowed: false, pushAllowed: true,
+      },
+    }
+    const contract = {
+      ...contractBody,
+      digest: createHash("sha256").update(JSON.stringify(contractBody)).digest("hex"),
+    }
+    const derivedQueue = {
+      ...queueItem, id: 203,
+      outcomeKey: "runtime-finding:101:source-digest", goalId: 202,
+      goalRef: "GOAL-RUNTIME-FINDING-101", activeWorkOrderId: 201,
+      authorityGrantRef: "RUNTIME-FINDING-QUEUE-GRANT-101", approvalDecisionId: 204,
+      objective: "Reconcile compose drift", title: "Reconcile compose drift",
+    }
+    const derivedGoal = {
+      ...goal, id: 202, ref: derivedQueue.goalRef, lane: "docs",
+      command: "Reconcile compose drift",
+      derivedReceiptOperation: "runtime_finding.derive",
+      derivedRequestBinding: {
+        operation: "runtime_finding.derive", sourceFindingEventId: 101,
+        sourcePayloadDigest: "a".repeat(64), sourceCheckpointId: 91,
+        sourceCheckpointDigest: "b".repeat(64), parentWorkOrderId: 4,
+        parentWorkOrderRef: "WO-HERMES-OUTCOME-4", parentContractId: "parent.v1",
+        parentContractDigest: "c".repeat(64), parentAuthorizationDecisionId: 74,
+        parentImplementationGrantId: 81,
+      },
+      derivedResultBinding: {
+        outcomeKey: derivedQueue.outcomeKey, goalId: 202, goalRef: derivedQueue.goalRef,
+        queueId: 203,
+        workOrderId: 201, workOrderRef: "WO-HERMES-OUTCOME-4-R01-F101",
+        decisionId: 204, approvalDecisionId: 204,
+        grantId: 207, grantRef: derivedQueue.authorityGrantRef,
+        queueGrantId: 207, queueGrantRef: derivedQueue.authorityGrantRef,
+        implementationGrantId: 205, implementationGrantRef: "RUNTIME-FINDING-IMPL-GRANT-101",
+        workContract: contract,
+      },
+    }
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+      .mockResolvedValueOnce({ rows: [derivedGoal] })
+    const bridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "postgresql://not-used", campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+      createPool: vi.fn(async () => ({ query, end: vi.fn(), on: vi.fn() })),
+      acquire: vi.fn(async () => ({ outcome: derivedQueue, acquired: true })),
+    })
+
+    await expect(bridge.selectOutcome()).resolves.toMatchObject({
+      id: 202,
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: { operation: "runtime_finding.derive", outcomeKey: derivedQueue.outcomeKey, workOrderId: 201 },
+      },
+      queueBinding: { activeWorkOrderId: 201, outcomeKey: derivedQueue.outcomeKey },
+    })
+  })
+
   it("allows read-only runtime construction without resident proof context", async () => {
     const bridge = createHermesOutcomeQueueRuntime({
       databaseUrl: "postgresql://not-used",

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createHermesOrchestrator,
   isRetryableProjectionTransportError,
+  requireHermesWorkContract,
   retryRuntimeProjection,
 } from "../scripts/hermes-bridge/orchestrator.mjs"
 import {
@@ -260,6 +261,27 @@ function seedGoalStyleRetryableExecution(
 }
 
 describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
+  it("resolves the exact verified derived queue contract without static task inference", () => {
+    const contract = {
+      version: "hermes-work-contract.v1", id: "runtime-finding.101.v1",
+      digest: "a".repeat(64), repository: "bsvalues/terragroq", lane: "docs",
+      reservations: ["docs/reports/child.md"],
+      validationCommands: [{ command: "git", args: ["diff", "--check"] }],
+    }
+    const resolver = vi.fn(() => null)
+    expect(requireHermesWorkContract({
+      outcomeKey: "runtime-finding:101:digest",
+      queueBinding: { outcomeKey: "runtime-finding:101:digest", activeWorkOrderId: 201 },
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: {
+          operation: "runtime_finding.derive", outcomeKey: "runtime-finding:101:digest", workOrderId: 201,
+        },
+      },
+    }, resolver)).toBe(contract)
+    expect(resolver).not.toHaveBeenCalled()
+  })
+
   it("does not reproject a released historical execution without a registered contract", async () => {
     const value = fixture(undefined, { workContractResolver: () => null })
     const outcome = await value.selectOutcome()

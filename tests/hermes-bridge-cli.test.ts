@@ -367,6 +367,26 @@ describe("Hermes bridge CLI", () => {
     expect(retryCycle).toHaveBeenCalledOnce()
   })
 
+  it("re-reads and presents a newly gated backlog Primary request in the same drain", async () => {
+    const pending = {
+      status: "PENDING_PRIMARY_DECISION", sourceKind: "RUNTIME_FINDING",
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:new-gate",
+    }
+    const consumeDecision = vi.fn()
+      .mockResolvedValueOnce({ status: "NO_PENDING_PRIMARY_DECISION" })
+      .mockResolvedValueOnce(pending)
+    const consumeRuntimeFindings = vi.fn()
+      .mockResolvedValueOnce({ gated: 1, queuedChildren: 0 })
+      .mockResolvedValueOnce({ gated: 0, queuedChildren: 0 })
+    const cycle = vi.fn(async () => ({ result: "NO_ELIGIBLE_OUTCOME" }))
+
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle, consumeRuntimeFindings }, consumeDecision,
+    })).resolves.toEqual(pending)
+    expect(consumeDecision).toHaveBeenCalledTimes(2)
+    expect(cycle).toHaveBeenCalledOnce()
+  })
+
   it("returns an exact pending Primary request only after the ordinary queue is empty", async () => {
     const pending = {
       status: "PENDING_PRIMARY_DECISION",

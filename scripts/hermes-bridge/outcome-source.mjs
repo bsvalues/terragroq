@@ -2157,7 +2157,9 @@ function exactAuthorizationContract(row, workContract, executionBinding, outcome
       && row?.implementationGrantRevokedAt == null
       && row?.implementationGrantAuthorityLevel === delivery.authorityLevel
       && row?.implementationGrantGrantedTo === "operator"
-      && row?.implementationGrantScope === `WO-HERMES-OUTCOME-${outcomeId}`
+      && row?.implementationGrantScope === (row?.receiptOperation === "runtime_finding.derive"
+        ? row?.derivedWorkOrderRef
+        : `WO-HERMES-OUTCOME-${outcomeId}`)
       && exactStringArray(row?.implementationGrantAllowedActions, delivery.allowedActions)
       && Array.isArray(row?.implementationGrantBlockedActions)
       && !row.implementationGrantBlockedActions.includes("implement")))
@@ -2308,7 +2310,7 @@ export async function projectOutcomeRuntimeCheckpoint({
       code: "OUTCOME_WORK_ORDER_CONTRACT_INVALID",
     })
   }
-  const ref = outcomeWorkOrderRef(outcomeId)
+  let ref = outcomeWorkOrderRef(outcomeId)
   const idempotencyKey = `hermes-outcome:${outcomeId}:attempt:${attempt}:checkpoint:${checkpoint.sequence}`
   const findingsSetDigest = projectionPayloadDigest(normalizedFindings)
   const evidence = checkpointEvidence(checkpoint.metadata)
@@ -2352,6 +2354,8 @@ export async function projectOutcomeRuntimeCheckpoint({
          contract_receipt."resultBinding"->'workContract' AS "workContract",
          contract_receipt."resultBinding"->>'implementationGrantRef' AS "receiptImplementationGrantRef",
          contract_receipt."resultBinding"->>'implementationGrantId' AS "receiptImplementationGrantId",
+         contract_receipt.operation AS "receiptOperation",
+         contract_receipt."resultBinding"->>'workOrderRef' AS "derivedWorkOrderRef",
          implementation_grant.id AS "implementationGrantId",
          implementation_grant.ref AS "implementationGrantRef",
          implementation_grant.status AS "implementationGrantStatus",
@@ -2376,21 +2380,21 @@ export async function projectOutcomeRuntimeCheckpoint({
         AND contract_acquisition."outcomeKey" = contract_queue."outcomeKey"
         AND contract_acquisition."acquisitionKey" = contract_queue."acquisitionKey"
         AND contract_acquisition."latestFencingToken" = contract_queue."fencingToken"
-       JOIN "workbench_thread_source" AS contract_root
+       LEFT JOIN "workbench_thread_source" AS contract_root
          ON contract_root."userId" = contract_receipt."userId"
         AND contract_root."sourceType" = 'outcome'
         AND contract_root."sourceId" = contract_queue."outcomeKey"
         AND contract_root.role = 'root'
         AND contract_root."threadId" = contract_receipt."requestBinding"->>'threadId'
-       JOIN "workbench_thread" AS contract_thread
+       LEFT JOIN "workbench_thread" AS contract_thread
          ON contract_thread."userId" = contract_root."userId"
         AND contract_thread.id = contract_root."threadId"
         AND contract_thread."projectId"::text = contract_receipt."requestBinding"->>'projectId'
-       JOIN project AS contract_project
+       LEFT JOIN project AS contract_project
          ON contract_project."userId" = contract_thread."userId"
         AND contract_project.id = contract_thread."projectId"
         AND contract_project.lifecycle = 'active'
-       JOIN project_resource AS contract_repo
+       LEFT JOIN project_resource AS contract_repo
          ON contract_repo."userId" = contract_project."userId"
         AND contract_repo."projectId" = contract_project.id
         AND contract_repo.type = 'repo'
@@ -2445,9 +2449,15 @@ export async function projectOutcomeRuntimeCheckpoint({
              AND (contract_grant."workOrderId" IS NULL
                OR contract_grant."workOrderId" = contract_queue."activeWorkOrderId")
          )
-         AND contract_receipt.operation = 'workbench_execution.authorize'
-         AND contract_receipt."requestBinding"->>'confirmation' = 'START_WORK'
-         AND contract_receipt."requestBinding"->>'outcomeKey' = contract_queue."outcomeKey"
+         AND ((contract_receipt.operation = 'workbench_execution.authorize'
+           AND contract_receipt."requestBinding"->>'confirmation' = 'START_WORK'
+           AND contract_receipt."requestBinding"->>'outcomeKey' = contract_queue."outcomeKey"
+           AND contract_root."threadId" IS NOT NULL)
+          OR (contract_receipt.operation = 'runtime_finding.derive'
+           AND contract_receipt."requestBinding"->>'operation' = 'runtime_finding.derive'
+           AND contract_receipt."resultBinding"->>'outcomeKey' = contract_queue."outcomeKey"
+           AND contract_receipt."resultBinding"->>'goalId' = contract_goal.id::text
+           AND contract_receipt."resultBinding"->>'workOrderId' = contract_queue."activeWorkOrderId"::text))
          AND contract_receipt."resultBinding"->>'grantRef' = contract_queue."authorityGrantRef"
          AND contract_receipt."resultBinding"->>'decisionId' = contract_queue."approvalDecisionId"::text
          AND contract_receipt."resultBinding"->'workContract'->>'id' = $9
@@ -2462,26 +2472,28 @@ export async function projectOutcomeRuntimeCheckpoint({
            AND implementation_grant."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp()
            AND implementation_grant."authorityLevel" = contract_receipt."resultBinding"->'workContract'->'delivery'->>'authorityLevel'
            AND implementation_grant."grantedTo" = 'operator'
-           AND implementation_grant.scope = 'WO-HERMES-OUTCOME-' || contract_goal.id::text
+           AND implementation_grant.scope = CASE WHEN contract_receipt.operation = 'runtime_finding.derive'
+             THEN contract_receipt."resultBinding"->>'workOrderRef'
+             ELSE 'WO-HERMES-OUTCOME-' || contract_goal.id::text END
            AND implementation_grant."allowedActions" = ARRAY['implement']::text[]
            AND NOT ('implement' = ANY(COALESCE(implementation_grant."blockedActions", ARRAY[]::text[])))
          ))
-         AND (
+         AND (contract_receipt.operation = 'runtime_finding.derive' OR (
            SELECT count(*) = 1
            FROM "workbench_thread_source" AS duplicate_contract_root
            WHERE duplicate_contract_root."userId" = contract_queue."userId"
              AND duplicate_contract_root."sourceType" = 'outcome'
              AND duplicate_contract_root."sourceId" = contract_queue."outcomeKey"
              AND duplicate_contract_root.role = 'root'
-         )
-         AND (
+         ))
+         AND (contract_receipt.operation = 'runtime_finding.derive' OR (
            SELECT count(*) = 1
            FROM project_resource AS duplicate_primary_repo
            WHERE duplicate_primary_repo."userId" = contract_project."userId"
              AND duplicate_primary_repo."projectId" = contract_project.id
              AND duplicate_primary_repo.type = 'repo'
              AND duplicate_primary_repo.relationship = 'primary-repo'
-         )
+         ))
        ORDER BY contract_receipt.id
        LIMIT 2
        FOR UPDATE OF contract_goal, contract_queue`,
@@ -2502,6 +2514,16 @@ export async function projectOutcomeRuntimeCheckpoint({
       })
     }
     const authorization = authorizations.rows[0]
+    if (authorization.receiptOperation === "runtime_finding.derive") {
+      if (typeof authorization.derivedWorkOrderRef !== "string"
+        || authorization.derivedWorkOrderRef.trim() === "") {
+        throw Object.assign(new Error("Derived Work Order identity is absent"), {
+          code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+        })
+      }
+      ref = authorization.derivedWorkOrderRef
+      await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [ref])
+    }
     const currentExecutionEpochDigest = executionEpochDigest(authorization)
     const legacyEventMetadata = {
       idempotencyKey,
@@ -2685,6 +2707,8 @@ export async function projectOutcomeRuntimeCheckpoint({
       && workOrder.goal === authorization.goalRef
       && workOrder.lane === authorization.goalLane
       && (workOrder.status === expectedPersistedStatus
+        || (authorization.receiptOperation === "runtime_finding.derive"
+          && workOrder.status === "approved" && workOrder.latestCheckpointId == null)
         || repairableReplayStatusSplit
         || repairableCrossAttemptStatusSplit)
       && workOrder.assignee === "hermes-codex-bridge"

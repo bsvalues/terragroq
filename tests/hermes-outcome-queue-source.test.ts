@@ -1216,6 +1216,11 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_execution_grant."workOrderId" IS NULL`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`FROM "outcome_queue_mutation_receipt" AS execution_receipt`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt.operation = 'workbench_execution.authorize'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_receipt.operation = 'runtime_finding.derive'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_receipt."requestBinding"->>'operation' = 'runtime_finding.derive'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_queue_grant."allowedActions" = ARRAY['outcome:execute']::text[]`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_implementation_grant."allowedActions" = ARRAY['implement']::text[]`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`settlement.actor = 'williamos-runtime-operator'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."requestBinding"->>'threadId' = execution_root."threadId"`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding"->>'grantRef' = q."authorityGrantRef"`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding"->'workContract'->>'id' = 'selected-thread-latest-evidence.v1'`)
@@ -1242,6 +1247,11 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_grant."status" = 'active'`)
     expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_grant."expiresAt" AT TIME ZONE 'UTC' > $12::timestamptz`)
+    for (const sql of [OUTCOME_QUEUE_SQL.reclaimAcquisition, OUTCOME_QUEUE_SQL.revalidateAcquisition,
+      OUTCOME_QUEUE_SQL.renewLease, OUTCOME_QUEUE_SQL.bindWorkOrder,
+      OUTCOME_QUEUE_SQL.verifyBoundWorkOrder, OUTCOME_QUEUE_SQL.complete]) {
+      expect(sql).toContain(`runtime_finding.derive`)
+    }
     expect(enqueueOutcome).toBe(persistOutcomeQueueItem)
     expect(listOutcomeQueue).toBe(readOutcomeQueue)
     expect(acquireOutcomeCompatibility).toBe(acquireNextEligibleOutcome)
@@ -2507,7 +2517,11 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`q."leaseExpiresAt" > $8::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`projected_work."userId" = q."userId"`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
-      .toContain(`projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text`)
+      .toContain(`projected_work.ref = CASE WHEN work_contract_receipt.operation = 'runtime_finding.derive'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`THEN work_contract_receipt."resultBinding"->>'workOrderRef'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`ELSE 'WO-HERMES-OUTCOME-' || q."goalId"::text END`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`projected_work.goal = q."goalRef"`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`live_grant."status" = 'active'`)
