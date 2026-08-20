@@ -1293,12 +1293,26 @@ describe("transactional durable outcome queue source", () => {
     expect(mutation).toBeDefined()
     expect(candidate).toContain(`execution_receipt."requestHash" = encode(sha256(convert_to(`)
     expect(candidate).toContain(`execution_receipt."resultBinding" ?& ARRAY[`)
-    expect(candidate).toContain(`execution_receipt."resultBinding"->>'queueVersion' = q.version::text`)
+    expect(candidate).toContain(`execution_receipt."resultBinding"->>'queueVersion' = '1'`)
+    expect(candidate).not.toContain(`execution_receipt."resultBinding"->>'queueVersion' = q.version::text`)
     expect(candidate).toContain(`END = execution_receipt."createdAt"`)
     expect(candidate).toContain(`duplicate_execution_receipt.operation = 'workbench_execution.authorize') = 1`)
     expect(candidate.indexOf(`execution_receipt."requestHash" =`)).toBeLessThan(
       OUTCOME_QUEUE_SQL.acquire.indexOf(`UPDATE "outcome_queue_item" AS q`),
     )
+  })
+
+  it("keeps the immutable #911 authorization baseline valid across acquire, revalidation, completion, and stale reacquisition", () => {
+    for (const sql of [
+      OUTCOME_QUEUE_SQL.acquire,
+      OUTCOME_QUEUE_SQL.revalidateAcquisition,
+      OUTCOME_QUEUE_SQL.renewLease,
+      OUTCOME_QUEUE_SQL.complete,
+      OUTCOME_QUEUE_SQL.reclaimAcquisition,
+    ]) {
+      expect(sql).toContain(`execution_receipt."resultBinding"->>'queueVersion' = '1'`)
+      expect(sql).not.toContain(`execution_receipt."resultBinding"->>'queueVersion' = q.version::text`)
+    }
   })
 
   it("persists and reads all data in one user scope", async () => {

@@ -443,7 +443,6 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
           ]::text[]
           AND (SELECT count(*) FROM jsonb_object_keys(execution_receipt."resultBinding")) = 10
           AND execution_receipt."resultBinding"->>'queueVersion' = '1'
-          AND execution_receipt."resultBinding"->>'queueVersion' = q.version::text
           AND CASE
             WHEN execution_receipt."resultBinding"->>'authorizedAt'
               ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$'
