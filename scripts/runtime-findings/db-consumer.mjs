@@ -33,6 +33,10 @@ function digest(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex")
 }
 
+function canonicalDigest(value) {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex")
+}
+
 function checkpointPayload(metadata) {
   const ordered = {}
   for (const key of [
@@ -147,6 +151,8 @@ function sourceFinding(row, nowMs) {
   const checkpoint = row?.checkpointMetadata
   const contract = row?.workContract
   const checkpointFindings = exactCheckpointFindings(row)
+  const parentRequest = row?.parentReceiptRequestBinding
+  const parentResult = row?.parentReceiptResultBinding
   if (!Number.isSafeInteger(Number(row?.sourceFindingEventId))
     || !safeText(row?.userId) || !Number.isSafeInteger(Number(row?.parentWorkOrderId))
     || !safeText(row?.parentWorkOrderRef) || row?.parentAssignee !== "hermes-codex-bridge"
@@ -169,6 +175,9 @@ function sourceFinding(row, nowMs) {
       || typeof target.path !== "string" || typeof target.verifiedCopyElsewhere !== "boolean")
     || Number(metadata.sourceCheckpointId) !== Number(row.checkpointId)
     || !checkpoint || checkpoint.payloadDigest !== metadata.sourceCheckpointDigest
+    || metadata.sourceCheckpointKey !== checkpoint.idempotencyKey
+    || Number(metadata.sourceCheckpointSequence) !== Number(checkpoint.checkpointSequence)
+    || metadata.executionGrantRef !== checkpoint.executionGrantRef
     || checkpoint.checkpointState !== "CODEX_TURN_COMPLETED"
     || digest(checkpointPayload(checkpoint)) !== checkpoint.payloadDigest
     || digest(findingPayload(metadata)) !== metadata.payloadDigest
@@ -189,6 +198,13 @@ function sourceFinding(row, nowMs) {
     || checkpoint.findingsSetDigest !== metadata.findingsSetDigest
     || digest(checkpointFindings) !== checkpoint.findingsSetDigest
     || checkpoint.executionEpochDigest !== metadata.sourceExecutionEpochDigest
+    || !safeText(row.parentQueueExecutionBinding) || !safeText(row.parentQueueAcquisitionKey)
+    || !safeText(row.parentQueueLeaseToken) || !safeText(row.parentQueueLeaseHolder)
+    || !Number.isSafeInteger(Number(row.parentQueueFencingToken)) || Number(row.parentQueueFencingToken) <= 0
+    || row.parentAcquisitionKey !== row.parentQueueAcquisitionKey
+    || Number(row.parentAcquisitionFencingToken) !== Number(row.parentQueueFencingToken)
+    || digest([row.userId, row.parentOutcomeKey, row.parentQueueExecutionBinding,
+      row.parentQueueAcquisitionKey]) !== checkpoint.executionEpochDigest
     || metadata.sourceCheckpointState !== "CODEX_TURN_COMPLETED"
     || !/^[0-9a-f]{64}$/.test(metadata.payloadDigest ?? "")
     || !contract || canonicalJson(Object.keys(contract).sort()) !== canonicalJson([
@@ -216,9 +232,31 @@ function sourceFinding(row, nowMs) {
     || !safeText(row.parentOutcomeKey) || row.parentApprovalScope !== row.parentOutcomeKey
     || row.parentApprovalLocked !== true
     || row.parentReceiptOperation !== "workbench_execution.authorize"
+    || Number(row.parentReceiptCount) !== 1
+    || !parentRequest || canonicalJson(Object.keys(parentRequest).sort()) !== canonicalJson([
+      "confirmation", "idempotencyKey", "outcomeKey", "projectId", "threadId",
+    ])
+    || parentRequest.confirmation !== "START_WORK"
+    || parentRequest.outcomeKey !== row.parentOutcomeKey
+    || !Number.isSafeInteger(Number(parentRequest.projectId)) || Number(parentRequest.projectId) <= 0
+    || !safeText(parentRequest.threadId) || !safeText(parentRequest.idempotencyKey)
+    || row.parentReceiptRequestHash !== canonicalDigest({
+      contract: "workbench-execution-authorization.v1", ...parentRequest,
+    })
+    || !parentResult || canonicalJson(Object.keys(parentResult).sort()) !== canonicalJson([
+      "authorizedAt", "decisionId", "decisionRef", "expiresAt", "grantId", "grantRef",
+      "implementationGrantId", "implementationGrantRef", "queueVersion", "workContract",
+    ])
     || row.parentReceiptConfirmation !== "START_WORK"
     || row.parentReceiptOutcomeKey !== row.parentOutcomeKey
     || Number(row.parentReceiptDecisionId) !== Number(metadata.authorizationDecisionId)
+    || Number(parentResult.decisionId) !== Number(row.parentApprovalDecisionId)
+    || parentResult.decisionRef !== row.parentApprovalDecisionRef
+    || Number(parentResult.grantId) !== Number(row.parentExecutionGrantId)
+    || parentResult.grantRef !== row.parentExecutionGrantRef
+    || row.parentQueueAuthorityGrantRef !== row.parentExecutionGrantRef
+    || Number(parentResult.queueVersion) !== 1
+    || canonicalJson(parentResult.workContract) !== canonicalJson(contract)
     || Number(row.parentReceiptImplementationGrantId) !== Number(metadata.implementationGrantId)
     || row.parentReceiptImplementationGrantRef !== metadata.implementationGrantRef
     || row.parentApprovalStatus !== "accepted" || row.parentApprovalAuthority !== "binding"
@@ -243,6 +281,17 @@ function sourceFinding(row, nowMs) {
   if (row.implementationGrantExpiresAt == null) fail("FINDING_AUTHORITY_EXPIRED")
   const expiresAt = normalizeDate(row.implementationGrantExpiresAt)
   if (expiresAt.getTime() <= nowMs) fail("FINDING_AUTHORITY_EXPIRED")
+  if (row.parentExecutionGrantStatus !== "active" || row.parentExecutionGrantRevokedAt != null
+    || row.parentExecutionGrantAuthorityLevel !== metadata.deliveryAuthorityLevel
+    || row.parentExecutionGrantGrantedTo !== "operator"
+    || row.parentExecutionGrantScope !== row.parentOutcomeKey
+    || !exactArray(row.parentExecutionGrantAllowedActions, ["outcome:execute"])
+    || row.parentExecutionGrantWorkOrderId != null
+    || row.parentExecutionGrantExpiresAt == null
+    || normalizeDate(row.parentExecutionGrantExpiresAt).getTime() <= nowMs
+    || normalizeDate(parentResult.expiresAt).getTime() !== normalizeDate(row.implementationGrantExpiresAt).getTime()
+    || normalizeDate(parentResult.authorizedAt).getTime() > nowMs) fail("FINDING_SOURCE_LINEAGE_WALL")
+  if (normalizeDate(row.parentQueueLeaseExpiresAt).getTime() <= nowMs) fail("FINDING_SOURCE_LINEAGE_WALL")
   return {
     sourceFindingEventId: Number(row.sourceFindingEventId),
     sourceUserId: row.userId,
@@ -591,7 +640,14 @@ async function replayOrdinary(client, row, finding, order, classification) {
             approval.id AS "decisionId", grant.id AS "grantId", queue_grant.id AS "queueGrantId",
             receipt.id AS "receiptId",
             child.ref AS "workOrderRef", child.status AS "workOrderStatus",
-            child.goal AS "workOrderGoal", child.lane AS "workOrderLane",
+            child.title AS "workOrderTitle", child.description AS "workOrderDescription",
+            child.goal AS "workOrderGoal", child.loop AS "workOrderLoop", child.scope AS "workOrderScope",
+            child."nonGoals" AS "workOrderNonGoals", child.lane AS "workOrderLane",
+            child."forbiddenFiles" AS "workOrderForbiddenFiles",
+            child."stopConditions" AS "workOrderStopConditions", child.priority AS "workOrderPriority",
+            child.assignee AS "workOrderAssignee", child.agent AS "workOrderAgent",
+            child."approvedBy" AS "workOrderApprovedBy",
+            child."linkedDecisionId" AS "workOrderLinkedDecisionId",
             child."allowedFiles", child.validators, child."authorityGrantId",
             child."authorityLevel" AS "workOrderAuthorityLevel",
             child."authorityGranted" AS "workOrderAuthorityGranted",
@@ -599,6 +655,9 @@ async function replayOrdinary(client, row, finding, order, classification) {
             child."tagAllowed" AS "workOrderTagAllowed",
             child."pushAllowed" AS "workOrderPushAllowed",
             goal.ref AS "goalRef", goal.status AS "goalStatus", goal."linkedWorkOrderId",
+            goal.command AS "goalCommand", goal.lane AS "goalLane", goal.mode AS "goalMode",
+            goal.risk AS "goalRisk", goal.authority AS "goalAuthority", goal.verdict AS "goalVerdict",
+            goal."requiresApproval" AS "goalRequiresApproval", goal."matchedRules" AS "goalMatchedRules",
             queue."outcomeKey", queue."approvalState", queue."authorityState",
             queue."lifecycleState", queue."activeWorkOrderId", queue."approvalDecisionId",
             queue."authorityGrantRef", approval.ref AS "decisionRef",
@@ -642,13 +701,28 @@ async function replayOrdinary(client, row, finding, order, classification) {
     || artifact.outcomeKey !== identity.outcomeKey || artifact.decisionRef !== identity.decisionRef
     || artifact.grantRef !== identity.grantRef || artifact.queueGrantRef !== identity.queueGrantRef
     || artifact.workOrderStatus !== "approved"
+    || artifact.workOrderTitle !== order.task
+    || artifact.workOrderDescription !== `Derived from ${finding.objectiveWorkOrderId} finding ${finding.findingId}.`
     || artifact.workOrderGoal !== identity.goalRef || artifact.workOrderLane !== identity.workContract.lane
+    || artifact.workOrderLoop !== row.parentLoop || artifact.workOrderScope !== row.parentScope
+    || !exactArray(artifact.workOrderNonGoals, row.parentNonGoals ?? [])
+    || !exactArray(artifact.workOrderForbiddenFiles, row.parentForbiddenFiles ?? [])
+    || !exactArray(artifact.workOrderStopConditions, row.parentStopConditions ?? [])
+    || artifact.workOrderPriority !== (row.parentPriority ?? "medium")
+    || artifact.workOrderAssignee !== "hermes-codex-bridge" || artifact.workOrderAgent !== "codex"
+    || artifact.workOrderApprovedBy !== "williamos-runtime-policy"
+    || Number(artifact.workOrderLinkedDecisionId) !== Number(artifact.decisionId)
     || artifact.workOrderAuthorityLevel !== finding.deliveryAuthorityLevel
     || artifact.workOrderAuthorityGranted !== finding.deliveryAuthorityLevel
     || artifact.workOrderCommitAllowed !== finding.commitAllowed
     || artifact.workOrderTagAllowed !== finding.tagAllowed
     || artifact.workOrderPushAllowed !== finding.pushAllowed
-    || artifact.goalStatus !== "classified" || artifact.approvalState !== "approved"
+    || artifact.goalStatus !== "classified" || artifact.goalCommand !== order.task
+    || artifact.goalLane !== identity.workContract.lane || artifact.goalMode !== "implementation"
+    || artifact.goalRisk !== order.riskClass || artifact.goalAuthority !== finding.deliveryAuthorityLevel
+    || artifact.goalVerdict !== "allow" || artifact.goalRequiresApproval !== false
+    || !exactArray(artifact.goalMatchedRules, ["runtime_finding.derive"])
+    || artifact.approvalState !== "approved"
     || artifact.authorityState !== "matched" || artifact.lifecycleState !== "approved"
     || artifact.decisionStatus !== "accepted" || artifact.decisionAuthority !== "binding"
     || artifact.decisionLocked !== true
@@ -781,13 +855,33 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     checkpoint.metadata AS "checkpointMetadata", receipt."resultBinding"->'workContract' AS "workContract",
                     parent_queue."outcomeKey" AS "parentOutcomeKey",
                     parent_queue."approvalDecisionId" AS "parentQueueApprovalDecisionId",
+                    parent_queue."authorityGrantRef" AS "parentQueueAuthorityGrantRef",
+                    parent_queue."executionBinding" AS "parentQueueExecutionBinding",
+                    parent_queue."acquisitionKey" AS "parentQueueAcquisitionKey",
+                    parent_queue."leaseToken" AS "parentQueueLeaseToken",
+                    parent_queue."leaseHolder" AS "parentQueueLeaseHolder",
+                    parent_queue."leaseExpiresAt" AS "parentQueueLeaseExpiresAt",
+                    parent_queue."fencingToken" AS "parentQueueFencingToken",
+                    acquisition."acquisitionKey" AS "parentAcquisitionKey",
+                    acquisition."latestFencingToken" AS "parentAcquisitionFencingToken",
                     receipt.operation AS "parentReceiptOperation",
+                    receipt."requestHash" AS "parentReceiptRequestHash",
+                    receipt."requestBinding" AS "parentReceiptRequestBinding",
+                    receipt."resultBinding" AS "parentReceiptResultBinding",
+                    (SELECT count(*)::integer FROM outcome_queue_mutation_receipt duplicate
+                      WHERE duplicate."userId" = receipt."userId"
+                        AND duplicate."outcomeKey" = receipt."outcomeKey"
+                        AND duplicate.operation = receipt.operation
+                        AND duplicate."resultBinding"->>'decisionId' = receipt."resultBinding"->>'decisionId'
+                        AND duplicate."resultBinding"->'workContract'->>'id'
+                          = receipt."resultBinding"->'workContract'->>'id') AS "parentReceiptCount",
                     receipt."requestBinding"->>'confirmation' AS "parentReceiptConfirmation",
                     receipt."requestBinding"->>'outcomeKey' AS "parentReceiptOutcomeKey",
                     receipt."resultBinding"->>'decisionId' AS "parentReceiptDecisionId",
                     receipt."resultBinding"->>'implementationGrantId' AS "parentReceiptImplementationGrantId",
                     receipt."resultBinding"->>'implementationGrantRef' AS "parentReceiptImplementationGrantRef",
-                    approval.id AS "parentApprovalDecisionId", approval.status AS "parentApprovalStatus",
+                    approval.id AS "parentApprovalDecisionId", approval.ref AS "parentApprovalDecisionRef",
+                    approval.status AS "parentApprovalStatus",
                     approval.locked AS "parentApprovalLocked", approval.scope AS "parentApprovalScope",
                     approval.authority AS "parentApprovalAuthority", approval.decision AS "parentApprovalDecision",
                     grant.id AS "implementationGrantId", grant.ref AS "implementationGrantRef",
@@ -797,6 +891,16 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     grant."grantedTo" AS "implementationGrantGrantedTo", grant.scope AS "implementationGrantScope",
                     grant."allowedActions" AS "implementationGrantAllowedActions",
                     grant."blockedActions" AS "implementationGrantBlockedActions",
+                    execution_grant.id AS "parentExecutionGrantId",
+                    execution_grant.ref AS "parentExecutionGrantRef",
+                    execution_grant.status AS "parentExecutionGrantStatus",
+                    execution_grant."revokedAt" AS "parentExecutionGrantRevokedAt",
+                    execution_grant."expiresAt" AS "parentExecutionGrantExpiresAt",
+                    execution_grant."authorityLevel" AS "parentExecutionGrantAuthorityLevel",
+                    execution_grant."grantedTo" AS "parentExecutionGrantGrantedTo",
+                    execution_grant.scope AS "parentExecutionGrantScope",
+                    execution_grant."workOrderId" AS "parentExecutionGrantWorkOrderId",
+                    execution_grant."allowedActions" AS "parentExecutionGrantAllowedActions",
                     settlement.id AS "settlementId", settlement."eventType" AS "settlementEventType",
                     settlement.metadata AS "settlementMetadata", settlement."settlementCount"
                FROM governance_event finding
@@ -808,6 +912,11 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                  AND checkpoint.actor = 'hermes-codex-bridge'
                JOIN outcome_queue_item parent_queue ON parent_queue."userId" = parent."userId"
                  AND parent_queue."activeWorkOrderId" = parent.id
+               JOIN outcome_queue_acquisition_receipt acquisition
+                 ON acquisition."userId" = parent_queue."userId"
+                AND acquisition."outcomeKey" = parent_queue."outcomeKey"
+                AND acquisition."acquisitionKey" = parent_queue."acquisitionKey"
+                AND acquisition."latestFencingToken" = parent_queue."fencingToken"
                JOIN outcome_queue_mutation_receipt receipt ON receipt."userId" = parent_queue."userId"
                  AND receipt."outcomeKey" = parent_queue."outcomeKey"
                  AND receipt.operation = 'workbench_execution.authorize'
@@ -819,6 +928,9 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                JOIN authority_grant grant ON grant."userId" = parent."userId"
                  AND grant.id::text = finding.metadata->>'implementationGrantId'
                  AND grant.ref = finding.metadata->>'implementationGrantRef'
+               JOIN authority_grant execution_grant ON execution_grant."userId" = parent."userId"
+                 AND execution_grant.id::text = receipt."resultBinding"->>'grantId'
+                 AND execution_grant.ref = receipt."resultBinding"->>'grantRef'
                LEFT JOIN LATERAL (
                  SELECT settled.id, settled."eventType", settled.metadata,
                         count(*) OVER ()::integer AS "settlementCount"

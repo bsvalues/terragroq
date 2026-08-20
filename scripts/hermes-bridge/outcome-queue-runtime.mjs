@@ -194,12 +194,68 @@ async function loadLinkedGoal(withPool, queueItem) {
               "matchedRules" AS "matchedRules", status,
               goal."createdAt" AS "createdAt", goal."updatedAt" AS "updatedAt",
               derived.operation AS "derivedReceiptOperation",
+              derived."requestHash" AS "derivedRequestHash",
               derived."requestBinding" AS "derivedRequestBinding",
-              derived."resultBinding" AS "derivedResultBinding"
+              derived."resultBinding" AS "derivedResultBinding",
+              derived.*
        FROM goal
        LEFT JOIN LATERAL (
-         SELECT receipt.operation, receipt."requestBinding", receipt."resultBinding"
+         SELECT receipt.operation, receipt."requestHash", receipt."requestBinding", receipt."resultBinding",
+                child.id AS "derivedWorkOrderId", child.ref AS "derivedWorkOrderRef",
+                child."userId" AS "derivedWorkOrderUserId", child.goal AS "derivedWorkOrderGoal",
+                child."authorityGrantId" AS "derivedWorkOrderAuthorityGrantId",
+                child.status AS "derivedWorkOrderStatus",
+                approval.id AS "derivedApprovalDecisionId", approval.status AS "derivedApprovalStatus",
+                approval.authority AS "derivedApprovalAuthority", approval.scope AS "derivedApprovalScope",
+                approval.locked AS "derivedApprovalLocked",
+                queue_grant.id AS "derivedQueueGrantId", queue_grant.ref AS "derivedQueueGrantRef",
+                queue_grant.status AS "derivedQueueGrantStatus",
+                queue_grant."revokedAt" AS "derivedQueueGrantRevokedAt",
+                queue_grant."expiresAt" AS "derivedQueueGrantExpiresAt",
+                queue_grant."grantedTo" AS "derivedQueueGrantGrantedTo",
+                queue_grant."authorityLevel" AS "derivedQueueGrantAuthorityLevel",
+                queue_grant.scope AS "derivedQueueGrantScope",
+                queue_grant."workOrderId" AS "derivedQueueGrantWorkOrderId",
+                queue_grant."allowedActions" AS "derivedQueueGrantAllowedActions",
+                implementation_grant.id AS "derivedImplementationGrantId",
+                implementation_grant.ref AS "derivedImplementationGrantRef",
+                implementation_grant.status AS "derivedImplementationGrantStatus",
+                implementation_grant."revokedAt" AS "derivedImplementationGrantRevokedAt",
+                implementation_grant."expiresAt" AS "derivedImplementationGrantExpiresAt",
+                implementation_grant."grantedTo" AS "derivedImplementationGrantGrantedTo",
+                implementation_grant."authorityLevel" AS "derivedImplementationGrantAuthorityLevel",
+                implementation_grant.scope AS "derivedImplementationGrantScope",
+                implementation_grant."workOrderId" AS "derivedImplementationGrantWorkOrderId",
+                implementation_grant."allowedActions" AS "derivedImplementationGrantAllowedActions",
+                source.id AS "derivedSourceFindingEventId", source."userId" AS "derivedSourceUserId",
+                source.metadata->>'payloadDigest' AS "derivedSourcePayloadDigest",
+                source.metadata->>'sourceCheckpointId' AS "derivedSourceCheckpointId",
+                source.metadata->>'sourceCheckpointDigest' AS "derivedSourceCheckpointDigest",
+                source.metadata->>'objectiveWorkOrderId' AS "derivedSourceParentWorkOrderRef",
+                source.metadata->>'workContractId' AS "derivedSourceParentContractId",
+                source.metadata->>'workContractDigest' AS "derivedSourceParentContractDigest",
+                source.metadata->>'authorizationDecisionId' AS "derivedSourceAuthorizationDecisionId",
+                source.metadata->>'implementationGrantId' AS "derivedSourceImplementationGrantId",
+                parent.id AS "derivedParentWorkOrderId", parent.ref AS "derivedParentWorkOrderRef",
+                parent."userId" AS "derivedParentWorkOrderUserId"
            FROM outcome_queue_mutation_receipt receipt
+           JOIN work_order child ON child."userId" = receipt."userId"
+             AND child.id::text = receipt."resultBinding"->>'workOrderId'
+             AND child.ref = receipt."resultBinding"->>'workOrderRef'
+           JOIN decision approval ON approval."userId" = receipt."userId"
+             AND approval.id::text = receipt."resultBinding"->>'approvalDecisionId'
+           JOIN authority_grant queue_grant ON queue_grant."userId" = receipt."userId"
+             AND queue_grant.id::text = receipt."resultBinding"->>'queueGrantId'
+             AND queue_grant.ref = receipt."resultBinding"->>'queueGrantRef'
+           JOIN authority_grant implementation_grant ON implementation_grant."userId" = receipt."userId"
+             AND implementation_grant.id::text = receipt."resultBinding"->>'implementationGrantId'
+             AND implementation_grant.ref = receipt."resultBinding"->>'implementationGrantRef'
+           JOIN governance_event source ON source."userId" = receipt."userId"
+             AND source.id::text = receipt."requestBinding"->>'sourceFindingEventId'
+             AND source."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
+           JOIN work_order parent ON parent."userId" = receipt."userId"
+             AND parent.id::text = receipt."requestBinding"->>'parentWorkOrderId'
+             AND parent.ref = receipt."requestBinding"->>'parentWorkOrderRef'
           WHERE receipt."userId" = goal."userId" AND receipt."outcomeKey" = $4
             AND receipt.operation = 'runtime_finding.derive'
           ORDER BY receipt.id LIMIT 2
@@ -215,10 +271,16 @@ async function loadLinkedGoal(withPool, queueItem) {
       wall("Acquired queue item does not match an executable governed goal", "HERMES_OUTCOME_QUEUE_GOAL_WALL")
     }
     const goal = result.rows[0]
-    const {
-      derivedReceiptOperation, derivedRequestBinding, derivedResultBinding, ...publicGoal
-    } = goal
-    if (derivedReceiptOperation == null) return publicGoal
+    const derivedFields = Object.fromEntries(Object.entries(goal).filter(([key]) => key.startsWith("derived")))
+    const publicGoal = Object.fromEntries(Object.entries(goal).filter(([key]) =>
+      !key.startsWith("derived") && !["operation", "requestHash", "requestBinding", "resultBinding"].includes(key)))
+    const { derivedReceiptOperation, derivedRequestHash, derivedRequestBinding, derivedResultBinding } = derivedFields
+    if (derivedReceiptOperation == null) {
+      if (String(queueItem.outcomeKey).startsWith("runtime-finding:")) {
+        wall("Derived queue contract receipt is unavailable", "HERMES_RUNTIME_FINDING_CONTRACT_WALL")
+      }
+      return publicGoal
+    }
     const receipt = {
       operation: derivedReceiptOperation,
       requestBinding: derivedRequestBinding,
@@ -269,6 +331,7 @@ async function loadLinkedGoal(withPool, queueItem) {
       && typeof contract.projection.completionOwned === "boolean"
     )
     if (receipt.operation !== "runtime_finding.derive"
+      || derivedRequestHash !== createHash("sha256").update(JSON.stringify(receipt.requestBinding)).digest("hex")
       || Object.keys(receipt.requestBinding ?? {}).sort().join(",") !== exactRequestKeys.sort().join(",")
       || Object.keys(receipt.resultBinding ?? {}).sort().join(",") !== exactResultKeys.sort().join(",")
       || receipt.requestBinding?.operation !== "runtime_finding.derive"
@@ -277,8 +340,56 @@ async function loadLinkedGoal(withPool, queueItem) {
       || receipt.resultBinding?.goalRef !== queueItem.goalRef
       || Number(receipt.resultBinding?.queueId) !== Number(queueItem.id)
       || Number(receipt.resultBinding?.workOrderId) !== Number(queueItem.activeWorkOrderId)
+      || receipt.resultBinding?.workOrderRef !== derivedFields.derivedWorkOrderRef
+      || Number(derivedFields.derivedWorkOrderId) !== Number(queueItem.activeWorkOrderId)
+      || derivedFields.derivedWorkOrderUserId !== queueItem.userId
+      || derivedFields.derivedWorkOrderGoal !== queueItem.goalRef
+      || Number(derivedFields.derivedWorkOrderAuthorityGrantId) !== Number(receipt.resultBinding?.implementationGrantId)
+      || !["approved", "active"].includes(derivedFields.derivedWorkOrderStatus)
       || receipt.resultBinding?.grantRef !== queueItem.authorityGrantRef
       || Number(receipt.resultBinding?.decisionId) !== Number(queueItem.approvalDecisionId)
+      || Number(receipt.resultBinding?.approvalDecisionId) !== Number(queueItem.approvalDecisionId)
+      || Number(derivedFields.derivedApprovalDecisionId) !== Number(queueItem.approvalDecisionId)
+      || derivedFields.derivedApprovalStatus !== "accepted"
+      || derivedFields.derivedApprovalAuthority !== "binding"
+      || derivedFields.derivedApprovalScope !== queueItem.outcomeKey
+      || derivedFields.derivedApprovalLocked !== true
+      || Number(receipt.resultBinding?.queueGrantId) !== Number(derivedFields.derivedQueueGrantId)
+      || receipt.resultBinding?.queueGrantRef !== derivedFields.derivedQueueGrantRef
+      || Number(receipt.resultBinding?.grantId) !== Number(derivedFields.derivedQueueGrantId)
+      || receipt.resultBinding?.grantRef !== derivedFields.derivedQueueGrantRef
+      || derivedFields.derivedQueueGrantStatus !== "active" || derivedFields.derivedQueueGrantRevokedAt != null
+      || derivedFields.derivedQueueGrantGrantedTo !== "operator"
+      || derivedFields.derivedQueueGrantAuthorityLevel !== "A2_WRITE_OWN"
+      || derivedFields.derivedQueueGrantScope !== queueItem.outcomeKey
+      || Number(derivedFields.derivedQueueGrantWorkOrderId) !== Number(queueItem.activeWorkOrderId)
+      || JSON.stringify(derivedFields.derivedQueueGrantAllowedActions) !== JSON.stringify(["outcome:execute"])
+      || Number(receipt.resultBinding?.implementationGrantId) !== Number(derivedFields.derivedImplementationGrantId)
+      || receipt.resultBinding?.implementationGrantRef !== derivedFields.derivedImplementationGrantRef
+      || derivedFields.derivedImplementationGrantStatus !== "active"
+      || derivedFields.derivedImplementationGrantRevokedAt != null
+      || derivedFields.derivedImplementationGrantGrantedTo !== "operator"
+      || derivedFields.derivedImplementationGrantAuthorityLevel !== "A2_WRITE_OWN"
+      || derivedFields.derivedImplementationGrantScope !== receipt.resultBinding?.workOrderRef
+      || Number(derivedFields.derivedImplementationGrantWorkOrderId) !== Number(queueItem.activeWorkOrderId)
+      || JSON.stringify(derivedFields.derivedImplementationGrantAllowedActions) !== JSON.stringify(["implement"])
+      || Number(derivedFields.derivedSourceFindingEventId) !== Number(receipt.requestBinding?.sourceFindingEventId)
+      || derivedFields.derivedSourceUserId !== queueItem.userId
+      || derivedFields.derivedSourcePayloadDigest !== receipt.requestBinding?.sourcePayloadDigest
+      || Number(derivedFields.derivedSourceCheckpointId) !== Number(receipt.requestBinding?.sourceCheckpointId)
+      || derivedFields.derivedSourceCheckpointDigest !== receipt.requestBinding?.sourceCheckpointDigest
+      || derivedFields.derivedSourceParentWorkOrderRef !== receipt.requestBinding?.parentWorkOrderRef
+      || derivedFields.derivedSourceParentContractId !== receipt.requestBinding?.parentContractId
+      || derivedFields.derivedSourceParentContractDigest !== receipt.requestBinding?.parentContractDigest
+      || Number(derivedFields.derivedSourceAuthorizationDecisionId)
+        !== Number(receipt.requestBinding?.parentAuthorizationDecisionId)
+      || Number(derivedFields.derivedSourceImplementationGrantId)
+        !== Number(receipt.requestBinding?.parentImplementationGrantId)
+      || Number(derivedFields.derivedParentWorkOrderId) !== Number(receipt.requestBinding?.parentWorkOrderId)
+      || derivedFields.derivedParentWorkOrderRef !== receipt.requestBinding?.parentWorkOrderRef
+      || derivedFields.derivedParentWorkOrderUserId !== queueItem.userId
+      || new Date(derivedFields.derivedQueueGrantExpiresAt).getTime() <= Date.now()
+      || new Date(derivedFields.derivedImplementationGrantExpiresAt).getTime() <= Date.now()
       || !contract || Object.keys(contract).sort().join(",") !== [
         "delivery", "digest", "id", "lane", "repository", "reservations", "validationCommands", "version",
         ...(Object.hasOwn(contract ?? {}, "projection") ? ["projection"] : []),

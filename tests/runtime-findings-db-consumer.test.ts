@@ -12,6 +12,12 @@ const effects = {
 }
 
 const sha = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex")
+const canonical = (value: any): string => value && typeof value === "object"
+  ? Array.isArray(value)
+    ? `[${value.map(canonical).join(",")}]`
+    : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`
+  : JSON.stringify(value)
+const canonicalSha = (value: unknown) => createHash("sha256").update(canonical(value)).digest("hex")
 const findingPayload = (value: any) => Object.fromEntries([
   "schemaVersion", "findingId", "objectiveWorkOrderId", "sequence", "summary", "task", "paths",
   "effects", "sourceCheckpointId", "sourceCheckpointKey", "sourceCheckpointSequence",
@@ -26,6 +32,12 @@ const normalizedFinding = (value: any) => Object.fromEntries([
 ].map((key) => [key, value[key]]))
 
 function sourceRow(overrides: Record<string, unknown> = {}) {
+  const parentOutcomeKey = "goal:GOAL-0004"
+  const parentExecutionBinding = "execution-binding-4"
+  const parentAcquisitionKey = "acquisition-key-4"
+  const executionEpochDigest = sha([
+    "owner", parentOutcomeKey, parentExecutionBinding, parentAcquisitionKey,
+  ])
   const workContractBody = {
     version: "hermes-work-contract.v1",
     id: "issue-911-runtime-reliability-evidence.v1",
@@ -40,6 +52,17 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     },
   }
   const workContract = { ...workContractBody, digest: sha(workContractBody) }
+  const parentReceiptRequestBinding = {
+    projectId: 7, threadId: "thread-7", outcomeKey: parentOutcomeKey,
+    idempotencyKey: "workbench-execution:stable-0004", confirmation: "START_WORK",
+  }
+  const parentReceiptResultBinding = {
+    decisionId: 74, decisionRef: "WB-EXEC-DECISION-911", grantId: 80,
+    grantRef: "WB-EXEC-GRANT-911", implementationGrantId: 81,
+    implementationGrantRef: "WB-EXEC-IMPL-GRANT-911", queueVersion: 1,
+    authorizedAt: "2026-08-20T17:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z",
+    workContract,
+  }
   const findingCore = {
     findingId: "FINDING-COMPOSE", sequence: 1, summary: "Reconcile compose drift",
     task: "Reconcile compose drift",
@@ -49,7 +72,7 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     idempotencyKey: "hermes-outcome:4:attempt:1:checkpoint:7", outcomeId: 4,
     workOrderRef: "WO-HERMES-OUTCOME-4", attempt: 1, checkpointSequence: 7,
     checkpointState: "CODEX_TURN_COMPLETED", checkpointDetail: null,
-    executionEpochDigest: "d".repeat(64), findingsSetDigest: sha([findingCore]),
+    executionEpochDigest, findingsSetDigest: sha([findingCore]),
     workContractId: workContract.id, workContractDigest: workContract.digest,
     workContractVersion: workContract.version, workContractRepository: workContract.repository,
     workContractLane: workContract.lane, authorizationDecisionId: 74,
@@ -88,12 +111,23 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     parentAuthorityGranted: "A2_WRITE_OWN", parentAuthorityGrantId: 81,
     parentCommitAllowed: true, parentTagAllowed: false, parentPushAllowed: true,
     checkpointId: 91, checkpointMetadata, checkpointFindings: [findingMetadata], workContract,
-    parentOutcomeKey: "goal:GOAL-0004", parentQueueApprovalDecisionId: 74,
+    parentOutcomeKey, parentQueueApprovalDecisionId: 74,
+    parentQueueAuthorityGrantRef: "WB-EXEC-GRANT-911",
+    parentQueueExecutionBinding: parentExecutionBinding, parentQueueAcquisitionKey: parentAcquisitionKey,
+    parentQueueLeaseToken: "lease-token-4", parentQueueLeaseHolder: "hermes-runtime-4",
+    parentQueueLeaseExpiresAt: "2099-01-01T00:00:00.000Z", parentQueueFencingToken: 2,
+    parentAcquisitionKey, parentAcquisitionFencingToken: 2,
     parentReceiptOperation: "workbench_execution.authorize", parentReceiptConfirmation: "START_WORK",
     parentReceiptOutcomeKey: "goal:GOAL-0004",
+    parentReceiptCount: 1,
+    parentReceiptRequestHash: canonicalSha({
+      contract: "workbench-execution-authorization.v1", ...parentReceiptRequestBinding,
+    }),
+    parentReceiptRequestBinding, parentReceiptResultBinding,
     parentReceiptDecisionId: 74, parentReceiptImplementationGrantId: 81,
     parentReceiptImplementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
-    parentApprovalDecisionId: 74, parentApprovalStatus: "accepted", parentApprovalLocked: true,
+    parentApprovalDecisionId: 74, parentApprovalDecisionRef: "WB-EXEC-DECISION-911",
+    parentApprovalStatus: "accepted", parentApprovalLocked: true,
     parentApprovalScope: "goal:GOAL-0004",
     parentApprovalAuthority: "binding", parentApprovalDecision: "APPROVE",
     implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
@@ -102,6 +136,12 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     implementationGrantAuthorityLevel: "A2_WRITE_OWN", implementationGrantGrantedTo: "operator",
     implementationGrantScope: "WO-HERMES-OUTCOME-4", implementationGrantAllowedActions: ["implement"],
     implementationGrantBlockedActions: ["host-storage-mutation"],
+    parentExecutionGrantId: 80, parentExecutionGrantRef: "WB-EXEC-GRANT-911",
+    parentExecutionGrantStatus: "active", parentExecutionGrantRevokedAt: null,
+    parentExecutionGrantExpiresAt: "2099-01-01T00:00:00.000Z",
+    parentExecutionGrantAuthorityLevel: "A2_WRITE_OWN", parentExecutionGrantGrantedTo: "operator",
+    parentExecutionGrantScope: "goal:GOAL-0004", parentExecutionGrantWorkOrderId: null,
+    parentExecutionGrantAllowedActions: ["outcome:execute"],
     settlementId: 501, settlementCount: 1, settlementEventType: "RUNTIME_FINDING_DERIVED",
     settlementMetadata: {},
     ...overrides,
@@ -300,6 +340,11 @@ describe("native runtime finding database consumer", () => {
     ["receipt decision mismatch", (row: any) => { row.parentReceiptDecisionId = 75 }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["unlocked parent approval", (row: any) => { row.parentApprovalLocked = false }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["contract command timeout drift", (row: any) => { row.workContract.validationCommands[0].timeoutMs = 1 }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent receipt hash", (row: any) => { row.parentReceiptRequestHash = "e".repeat(64) }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent receipt shape", (row: any) => { row.parentReceiptRequestBinding.extra = true }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent receipt result shape", (row: any) => { row.parentReceiptResultBinding.extra = true }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent execution grant", (row: any) => { row.parentExecutionGrantId = 999 }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent receipt cardinality", (row: any) => { row.parentReceiptCount = 2 }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["duplicate settlement", (row: any) => { row.settlementId = 501; row.settlementCount = 2 }, "FINDING_SETTLEMENT_CARDINALITY_WALL"],
   ])("walls %s corruption before child creation", async (_label, mutate, reasonCode) => {
     const row = sourceRow({ settlementId: null, settlementCount: null,
@@ -318,6 +363,52 @@ describe("native runtime finding database consumer", () => {
     await expect(consume()).rejects.toMatchObject({ code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL", reasonCode })
     expect(statements.some((sql) => /INSERT INTO (?:work_order|goal|outcome_queue_item|authority_grant)/.test(sql)))
       .toBe(false)
+  })
+
+  it.each([
+    ["checkpoint key", (row: any) => { row.findingMetadata.sourceCheckpointKey = "drifted-key" }],
+    ["checkpoint sequence", (row: any) => { row.findingMetadata.sourceCheckpointSequence = 99 }],
+    ["execution grant ref", (row: any) => { row.findingMetadata.executionGrantRef = "DRIFTED-GRANT" }],
+  ])("walls a digest-valid %s lineage drift", async (_label, mutate) => {
+    const row = sourceRow({ settlementId: null, settlementCount: null,
+      settlementEventType: null, settlementMetadata: null }) as any
+    mutate(row)
+    delete row.findingMetadata.payloadDigest
+    row.findingMetadata.payloadDigest = sha(findingPayload(row.findingMetadata))
+    row.checkpointFindings = [row.findingMetadata]
+    const query = vi.fn(async (sql: string) => (
+      sql.includes("FROM governance_event finding") ? { rows: [row] } : { rows: [] }
+    ))
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+    await expect(consume()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL", reasonCode: "FINDING_SOURCE_LINEAGE_WALL",
+    })
+  })
+
+  it("walls a digest-valid execution epoch that does not match the live acquisition fence", async () => {
+    const row = sourceRow({ settlementId: null, settlementCount: null,
+      settlementEventType: null, settlementMetadata: null }) as any
+    row.checkpointMetadata.executionEpochDigest = "e".repeat(64)
+    delete row.checkpointMetadata.payloadDigest
+    row.checkpointMetadata.payloadDigest = sha(row.checkpointMetadata)
+    row.findingMetadata.sourceExecutionEpochDigest = row.checkpointMetadata.executionEpochDigest
+    row.findingMetadata.sourceCheckpointDigest = row.checkpointMetadata.payloadDigest
+    delete row.findingMetadata.payloadDigest
+    row.findingMetadata.payloadDigest = sha(findingPayload(row.findingMetadata))
+    row.checkpointFindings = [row.findingMetadata]
+    const query = vi.fn(async (sql: string) => (
+      sql.includes("FROM governance_event finding") ? { rows: [row] } : { rows: [] }
+    ))
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+    await expect(consume()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL", reasonCode: "FINDING_SOURCE_LINEAGE_WALL",
+    })
   })
 
   it("walls when the checkpoint findings-set digest does not cover the exact persisted sibling set", async () => {
@@ -397,35 +488,45 @@ describe("native runtime finding database consumer", () => {
       task: "Reconcile compose drift", parentGrantRef: "WB-EXEC-IMPL-GRANT-911",
     }
     source.settlementMetadata = { ...settlementBase, payloadDigest: sha(settlementCanonical) }
+    const replayArtifact: any = {
+      workOrderId: 201, goalId: 202, queueId: 203, decisionId: 204, grantId: 205,
+      queueGrantId: 207, receiptId: 206,
+      workOrderRef: resultBinding.workOrderRef, workOrderStatus: "approved",
+      workOrderTitle: "Reconcile compose drift",
+      workOrderDescription: "Derived from WO-HERMES-OUTCOME-4 finding FINDING-COMPOSE.",
+      workOrderGoal: resultBinding.goalRef, workOrderLoop: "deliver", workOrderScope: "#911",
+      workOrderNonGoals: [], workOrderLane: "docs", workOrderForbiddenFiles: [],
+      workOrderStopConditions: [], workOrderPriority: "high", workOrderAssignee: "hermes-codex-bridge",
+      workOrderAgent: "codex", workOrderApprovedBy: "williamos-runtime-policy",
+      workOrderLinkedDecisionId: 204,
+      workOrderAuthorityLevel: "A2_WRITE_OWN", workOrderAuthorityGranted: "A2_WRITE_OWN",
+      workOrderCommitAllowed: true, workOrderTagAllowed: false, workOrderPushAllowed: true,
+      allowedFiles: workContract.reservations, validators: ["git diff --check"], authorityGrantId: 205,
+      goalRef: resultBinding.goalRef, goalStatus: "classified", linkedWorkOrderId: 201,
+      goalCommand: "Reconcile compose drift", goalLane: "docs", goalMode: "implementation",
+      goalRisk: "R1", goalAuthority: "A2_WRITE_OWN", goalVerdict: "allow",
+      goalRequiresApproval: false, goalMatchedRules: ["runtime_finding.derive"],
+      outcomeKey: resultBinding.outcomeKey, approvalState: "approved", authorityState: "matched",
+      lifecycleState: "approved", activeWorkOrderId: 201, approvalDecisionId: 204,
+      authorityGrantRef: resultBinding.queueGrantRef,
+      decisionRef: "DEC-RUNTIME-FINDING-101", decisionStatus: "accepted",
+      decisionAuthority: "binding", decisionChoice: "APPROVE", decisionScope: resultBinding.outcomeKey,
+      decisionLocked: true, decisionEvidence: ["runtime-finding:101"],
+      grantRef: resultBinding.implementationGrantRef, grantStatus: "active", grantRevokedAt: null,
+      grantAuthorityLevel: "A2_WRITE_OWN", grantScope: resultBinding.workOrderRef,
+      grantExpiresAt: "2099-01-01T00:00:00.000Z", grantGrantedTo: "operator", grantWorkOrderId: 201,
+      grantAllowedActions: ["implement"], grantBlockedActions: ["host-storage-mutation"],
+      queueGrantRef: resultBinding.queueGrantRef, queueGrantStatus: "active", queueGrantRevokedAt: null,
+      queueGrantExpiresAt: "2099-01-01T00:00:00.000Z", queueGrantAuthorityLevel: "A2_WRITE_OWN",
+      queueGrantScope: resultBinding.outcomeKey, queueGrantGrantedTo: "operator",
+      queueGrantWorkOrderId: 201, queueGrantAllowedActions: ["outcome:execute"],
+      queueGrantBlockedActions: ["host-storage-mutation"],
+      authoritySubject: "operator", authorityAction: "outcome:execute", queueVersion: 0,
+      requestHash: sha(requestBinding), requestBinding, resultBinding,
+    }
     const query = vi.fn(async (sql: string) => {
       if (sql.includes("FROM governance_event finding")) return { rows: [source] }
-      if (sql.startsWith("SELECT child.id")) return { rows: [{
-        workOrderId: 201, goalId: 202, queueId: 203, decisionId: 204, grantId: 205,
-        queueGrantId: 207, receiptId: 206,
-        workOrderRef: resultBinding.workOrderRef, workOrderStatus: "approved",
-        workOrderGoal: resultBinding.goalRef, workOrderLane: "docs",
-        workOrderAuthorityLevel: "A2_WRITE_OWN", workOrderAuthorityGranted: "A2_WRITE_OWN",
-        workOrderCommitAllowed: true, workOrderTagAllowed: false, workOrderPushAllowed: true,
-        allowedFiles: workContract.reservations, validators: ["git diff --check"], authorityGrantId: 205,
-        goalRef: resultBinding.goalRef, goalStatus: "classified", linkedWorkOrderId: 201,
-        outcomeKey: resultBinding.outcomeKey, approvalState: "approved", authorityState: "matched",
-        lifecycleState: "approved", activeWorkOrderId: 201, approvalDecisionId: 204,
-        authorityGrantRef: resultBinding.queueGrantRef,
-        decisionRef: "DEC-RUNTIME-FINDING-101", decisionStatus: "accepted",
-        decisionAuthority: "binding", decisionChoice: "APPROVE", decisionScope: resultBinding.outcomeKey,
-        decisionLocked: true, decisionEvidence: ["runtime-finding:101"],
-        grantRef: resultBinding.implementationGrantRef, grantStatus: "active", grantRevokedAt: null,
-        grantAuthorityLevel: "A2_WRITE_OWN", grantScope: resultBinding.workOrderRef,
-        grantExpiresAt: "2099-01-01T00:00:00.000Z", grantGrantedTo: "operator", grantWorkOrderId: 201,
-        grantAllowedActions: ["implement"], grantBlockedActions: ["host-storage-mutation"],
-        queueGrantRef: resultBinding.queueGrantRef, queueGrantStatus: "active", queueGrantRevokedAt: null,
-        queueGrantExpiresAt: "2099-01-01T00:00:00.000Z", queueGrantAuthorityLevel: "A2_WRITE_OWN",
-        queueGrantScope: resultBinding.outcomeKey, queueGrantGrantedTo: "operator",
-        queueGrantWorkOrderId: 201, queueGrantAllowedActions: ["outcome:execute"],
-        queueGrantBlockedActions: ["host-storage-mutation"],
-        authoritySubject: "operator", authorityAction: "outcome:execute", queueVersion: 0,
-        requestHash: sha(requestBinding), requestBinding, resultBinding,
-      }] }
+      if (sql.startsWith("SELECT child.id")) return { rows: [replayArtifact] }
       return { rows: [] }
     })
     const consume = createRuntimeFindingDbConsumer({
@@ -438,5 +539,10 @@ describe("native runtime finding database consumer", () => {
       results: [{ disposition: "DERIVED", replayed: true }],
     })
     expect(query.mock.calls.some(([sql]) => sql === "ROLLBACK")).toBe(false)
+
+    replayArtifact.goalCommand = "tampered executable command"
+    await expect(consume()).rejects.toMatchObject({
+      code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL", reasonCode: "FINDING_CHILD_REPLAY_ARTIFACT_WALL",
+    })
   })
 })
