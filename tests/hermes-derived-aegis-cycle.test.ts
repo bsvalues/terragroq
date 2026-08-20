@@ -294,15 +294,38 @@ runDatabase("derived finding durable AEGIS cycle", { timeout: 60_000 }, () => {
     const evidence = (await client.query(`SELECT "filesChanged",validators FROM evidence_record WHERE "workOrderId"=201`)).rows
     expect(evidence).toHaveLength(1)
     expect(evidence.every((row) => row.filesChanged.every((entry: string) => entry === reportPath))).toBe(true)
+    await client.query("BEGIN")
+    try {
+      await client.query(`INSERT INTO governance_event
+        (id,"userId",ref,"eventType","entityType","entityId",actor,reason,metadata) VALUES
+        (999,'primary-user','DERIVED-101-DUPLICATE','RUNTIME_FINDING_DERIVED','work_order','201',
+          'williamos-runtime-operator','negative-control',$1::jsonb)`, [
+        JSON.stringify({ sourceFindingEventId: 101, outcomeKey, workOrderRef: childRef }),
+      ])
+      expect((await client.query(`SELECT count(*)::integer AS count FROM governance_event
+        WHERE "userId"='primary-user' AND "eventType"='RUNTIME_FINDING_DERIVED'
+          AND metadata->>'sourceFindingEventId'='101'`)).rows).toEqual([{ count: 2 }])
+    } finally {
+      await client.query("ROLLBACK")
+    }
     const cardinality = (await client.query(`SELECT
-      (SELECT count(*)::integer FROM work_order WHERE id=201 AND ref=$1) AS "childWorkOrders",
-      (SELECT count(*)::integer FROM goal WHERE id=202 AND ref=$2) AS goals,
-      (SELECT count(*)::integer FROM outcome_queue_item WHERE id=203 AND "outcomeKey"=$3) AS queues,
-      (SELECT count(*)::integer FROM decision WHERE id=204 AND scope=$3) AS decisions,
-      (SELECT count(*)::integer FROM authority_grant WHERE id=205 AND ref='RUNTIME-FINDING-IMPL-GRANT-101') AS "implementationGrants",
-      (SELECT count(*)::integer FROM authority_grant WHERE id=207 AND ref='RUNTIME-FINDING-QUEUE-GRANT-101') AS "queueGrants",
-      (SELECT count(*)::integer FROM outcome_queue_mutation_receipt WHERE id=206 AND operation='runtime_finding.derive') AS receipts,
-      (SELECT count(*)::integer FROM governance_event WHERE id=102 AND "eventType"='RUNTIME_FINDING_DERIVED'
+      (SELECT count(*)::integer FROM work_order WHERE "userId"='primary-user' AND ref=$1
+        AND "authorityGrantId"=205) AS "childWorkOrders",
+      (SELECT count(*)::integer FROM goal WHERE "userId"='primary-user' AND ref=$2
+        AND "linkedWorkOrderId"=201) AS goals,
+      (SELECT count(*)::integer FROM outcome_queue_item WHERE "userId"='primary-user'
+        AND "outcomeKey"=$3) AS queues,
+      (SELECT count(*)::integer FROM decision WHERE "userId"='primary-user' AND ref='DEC-CHILD'
+        AND owner='WilliamOS' AND scope=$3) AS decisions,
+      (SELECT count(*)::integer FROM authority_grant WHERE "userId"='primary-user'
+        AND ref='RUNTIME-FINDING-IMPL-GRANT-101' AND "workOrderId"=201 AND scope=$1) AS "implementationGrants",
+      (SELECT count(*)::integer FROM authority_grant WHERE "userId"='primary-user'
+        AND ref='RUNTIME-FINDING-QUEUE-GRANT-101' AND "workOrderId"=201 AND scope=$3) AS "queueGrants",
+      (SELECT count(*)::integer FROM outcome_queue_mutation_receipt WHERE "userId"='primary-user'
+        AND operation='runtime_finding.derive' AND "outcomeKey"=$3
+        AND "idempotencyKey"='derive-101') AS receipts,
+      (SELECT count(*)::integer FROM governance_event WHERE "userId"='primary-user'
+        AND "eventType"='RUNTIME_FINDING_DERIVED'
         AND metadata->>'sourceFindingEventId'='101') AS settlements`, [childRef, goalRef, outcomeKey])).rows
     expect(cardinality).toEqual([{ childWorkOrders: 1, goals: 1, queues: 1, decisions: 1,
       implementationGrants: 1, queueGrants: 1, receipts: 1, settlements: 1 }])
