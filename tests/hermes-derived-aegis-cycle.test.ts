@@ -57,9 +57,14 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
-function scopedDatabaseUrl(url: string, schema: string) {
+function directDatabaseUrl(url: string) {
   const parsed = new URL(url)
   parsed.hostname = parsed.hostname.replace("-pooler.", ".")
+  return parsed.toString()
+}
+
+function scopedDatabaseUrl(url: string, schema: string) {
+  const parsed = new URL(directDatabaseUrl(url))
   parsed.searchParams.set("options", `-csearch_path=${schema}`)
   return parsed.toString()
 }
@@ -220,7 +225,7 @@ runDatabase("derived finding durable AEGIS cycle", { timeout: 60_000 }, () => {
 
   beforeAll(async () => {
     const { Pool } = await import("pg")
-    pool = new Pool({ connectionString: databaseUrl })
+    pool = new Pool({ connectionString: directDatabaseUrl(databaseUrl!) })
     client = await pool.connect()
     schema = `hermes_derived_aegis_${randomUUID().replaceAll("-", "")}`
     await bootstrap(client, schema)
@@ -283,11 +288,24 @@ runDatabase("derived finding durable AEGIS cycle", { timeout: 60_000 }, () => {
     expect(receipt).toMatchObject({ id: 206, operation: "runtime_finding.derive", outcomeKey, resultBinding: { goalId: 202, queueId: 203, workOrderId: 201, workOrderRef: childRef, decisionId: 204, queueGrantId: 207, implementationGrantId: 205, workContract: { id: contract.id, digest: contract.digest, reservations: [reportPath] } } })
     expect((await client.query(`SELECT "outcomeKey","firstFencingToken","latestFencingToken" FROM outcome_queue_acquisition_receipt`)).rows).toEqual([{ outcomeKey, firstFencingToken: 1, latestFencingToken: 1 }])
     const events = (await client.query(`SELECT "eventType",metadata FROM governance_event WHERE "entityId" IN ('201','202') ORDER BY id`)).rows
-    expect(events.some((row) => row.eventType === "HERMES_RUNTIME_CHECKPOINT" && row.metadata.workOrderRef === childRef)).toBe(true)
-    expect(events.some((row) => row.eventType === "HERMES_OUTCOME_COMPLETED")).toBe(true)
+    expect(events.filter((row) => row.eventType === "HERMES_OUTCOME_COMPLETED")).toHaveLength(1)
+    expect(events.filter((row) => row.eventType === "HERMES_RUNTIME_CHECKPOINT"
+      && row.metadata.workOrderRef === childRef && row.metadata.checkpointState === "COMPLETE")).toHaveLength(1)
     const evidence = (await client.query(`SELECT "filesChanged",validators FROM evidence_record WHERE "workOrderId"=201`)).rows
-    expect(evidence.length).toBeGreaterThan(0)
+    expect(evidence).toHaveLength(1)
     expect(evidence.every((row) => row.filesChanged.every((entry: string) => entry === reportPath))).toBe(true)
+    const cardinality = (await client.query(`SELECT
+      (SELECT count(*)::integer FROM work_order WHERE id=201 AND ref=$1) AS "childWorkOrders",
+      (SELECT count(*)::integer FROM goal WHERE id=202 AND ref=$2) AS goals,
+      (SELECT count(*)::integer FROM outcome_queue_item WHERE id=203 AND "outcomeKey"=$3) AS queues,
+      (SELECT count(*)::integer FROM decision WHERE id=204 AND scope=$3) AS decisions,
+      (SELECT count(*)::integer FROM authority_grant WHERE id=205 AND ref='RUNTIME-FINDING-IMPL-GRANT-101') AS "implementationGrants",
+      (SELECT count(*)::integer FROM authority_grant WHERE id=207 AND ref='RUNTIME-FINDING-QUEUE-GRANT-101') AS "queueGrants",
+      (SELECT count(*)::integer FROM outcome_queue_mutation_receipt WHERE id=206 AND operation='runtime_finding.derive') AS receipts,
+      (SELECT count(*)::integer FROM governance_event WHERE id=102 AND "eventType"='RUNTIME_FINDING_DERIVED'
+        AND metadata->>'sourceFindingEventId'='101') AS settlements`, [childRef, goalRef, outcomeKey])).rows
+    expect(cardinality).toEqual([{ childWorkOrders: 1, goals: 1, queues: 1, decisions: 1,
+      implementationGrants: 1, queueGrants: 1, receipts: 1, settlements: 1 }])
     expect(harness.validations).toEqual(["git diff --check"])
     expect(harness.prompts[0]).toContain(childRef)
     expect(harness.state.cleaned).toBe(true)
