@@ -33,6 +33,7 @@ export function EnvironmentRoot({ initialWorld }: { initialWorld: EnvironmentWor
   useEffect(() => {
     const worldId = world?.worldId
     if (!worldId) return
+    const exactWorldId = worldId
     let disposed = false
     let inFlight = false
     let queued = false
@@ -45,7 +46,7 @@ export function EnvironmentRoot({ initialWorld }: { initialWorld: EnvironmentWor
       }
       inFlight = true
       try {
-        const response = await fetch(`/api/environment/world?worldId=${encodeURIComponent(worldId)}`, {
+        const response = await fetch(`/api/environment/world?worldId=${encodeURIComponent(exactWorldId)}`, {
           headers: { accept: "application/json" },
         })
         if (response.status === 401) {
@@ -55,7 +56,7 @@ export function EnvironmentRoot({ initialWorld }: { initialWorld: EnvironmentWor
         if (!response.ok) return
         const reply = (await response.json()) as { world?: EnvironmentWorldDto | null }
         const next = reply.world
-        if (!next || next.worldId !== worldId || !Array.isArray(next.conversation) || !Array.isArray(next.surfaces)) return
+        if (!next || next.worldId !== exactWorldId || !Array.isArray(next.conversation) || !Array.isArray(next.surfaces)) return
         setWorld((current) => {
           if (!current || current.worldId !== next.worldId) return current
           return next.lastUpdatedAt >= current.lastUpdatedAt ? next : current
