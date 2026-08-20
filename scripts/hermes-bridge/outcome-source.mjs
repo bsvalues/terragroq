@@ -17,6 +17,10 @@ import {
   PRIMARY_DECISION_TTL_MS,
   primaryDecisionRequestDigest,
 } from "./primary-decision-provenance.mjs"
+export {
+  readPendingRuntimeFindingDecisionRequest,
+  recordRuntimeFindingDecision,
+} from "./runtime-finding-decision.mjs"
 
 export const OUTCOME_SELECTION_SQL = `
 SELECT

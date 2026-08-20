@@ -71,6 +71,53 @@ export function derivePrimaryDecisionRecommendation({ riskClass, decisionPacket 
 }
 
 export function primaryDecisionRequestSnapshot(request) {
+  if (request?.sourceKind === "RUNTIME_FINDING") {
+    const snapshot = {
+      sourceKind: request.sourceKind,
+      ownerUserId: request.ownerUserId,
+      parentWorkOrderRowId: request.parentWorkOrderRowId,
+      parentWorkOrderRef: request.parentWorkOrderRef,
+      authorityGrantId: request.authorityGrantId,
+      authorityGrantRef: request.authorityGrantRef,
+      authorityGrantLevel: request.authorityGrantLevel,
+      sourceFindingEventId: request.sourceFindingEventId,
+      sourcePayloadDigest: request.sourcePayloadDigest,
+      gateSettlementEventId: request.gateSettlementEventId,
+      gatePayloadDigest: request.gatePayloadDigest,
+      actionableProjectionId: request.actionableProjectionId,
+      actionableProjectionVersion: request.actionableProjectionVersion,
+      actionableProjectionDigest: request.actionableProjectionDigest,
+      findingId: request.findingId,
+      sequence: request.sequence,
+      gate: request.gate,
+      gates: Array.isArray(request.gates) ? [...request.gates] : null,
+      recommendation: request.recommendation,
+      recommendationRationale: request.recommendationRationale,
+      allowedChoices: Array.isArray(request.allowedChoices) ? [...request.allowedChoices] : null,
+    }
+    if (typeof snapshot.ownerUserId !== "string" || snapshot.ownerUserId.trim() === ""
+      || ![snapshot.parentWorkOrderRowId, snapshot.authorityGrantId,
+        snapshot.sourceFindingEventId, snapshot.gateSettlementEventId,
+        snapshot.sequence, snapshot.actionableProjectionVersion]
+        .every((value) => Number.isSafeInteger(value) && value > 0)
+      || [snapshot.parentWorkOrderRef, snapshot.authorityGrantRef, snapshot.authorityGrantLevel,
+        snapshot.findingId, snapshot.gate,
+        snapshot.actionableProjectionId, snapshot.recommendationRationale]
+        .some((value) => typeof value !== "string" || value.trim() === "")
+      || ![snapshot.sourcePayloadDigest, snapshot.gatePayloadDigest, snapshot.actionableProjectionDigest]
+        .every((value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))
+      || !Array.isArray(snapshot.gates) || snapshot.gates.length === 0
+      || snapshot.gates.some((gate) => typeof gate !== "string" || gate.trim() === "")
+      || snapshot.recommendation !== "DENY"
+      || JSON.stringify(snapshot.allowedChoices) !== JSON.stringify(["APPROVE", "DENY"])) {
+      wall("PRIMARY_DECISION_REQUEST_INVALID")
+    }
+    return Object.freeze({
+      ...snapshot,
+      gates: Object.freeze(snapshot.gates),
+      allowedChoices: Object.freeze(snapshot.allowedChoices),
+    })
+  }
   const snapshot = {
     outcomeKey: request?.outcomeKey,
     queueVersion: request?.queueVersion,
@@ -140,6 +187,12 @@ function assertDecisionPacketBinding(request) {
 
 export function primaryDecisionRequestDigest(request) {
   assertDecisionPacketBinding(request)
+  if (request?.sourceKind === "RUNTIME_FINDING") {
+    return createHash("sha256").update(JSON.stringify({
+      decisionPacketDigest: request.decisionPacketDigest,
+      ...primaryDecisionRequestSnapshot(request),
+    })).digest("hex")
+  }
   return createHash("sha256").update(JSON.stringify({
     outcomeId: request.outcomeId,
     queueItemId: request.queueItemId,
@@ -161,6 +214,26 @@ function presentedString(value) {
 
 export function buildPrimaryDecisionRequestPrompt(request) {
   assertDecisionPacketBinding(request)
+  if (request?.sourceKind === "RUNTIME_FINDING") {
+    return `${primaryDecisionRequestMarker(request)}
+
+WilliamOS needs one Primary decision.
+
+- Source: "Runtime finding"
+- Parent Work Order: ${presentedString(request.parentWorkOrderRef)}
+- Finding: ${presentedString(request.findingId)}
+- Sequence: ${request.sequence}
+- Gate: ${presentedString(request.gate)}
+- Allowed choices: Approve or Deny
+- Recommendation: "Deny"
+- Recommendation reason: ${presentedString(request.recommendationRationale)}
+- Decision: ${presentedString(request.decisionPacket.blockedAction)}
+- Why: ${presentedString(request.decisionPacket.authorityBoundary)}
+- Approve: ${presentedString(request.decisionPacket.approveConsequence)}
+- Deny: ${presentedString(request.decisionPacket.denyConsequence)}
+
+Reply only Approve or Deny. This request expires in one hour.`
+  }
   return `${primaryDecisionRequestMarker(request)}
 
 WilliamOS needs one Primary decision.

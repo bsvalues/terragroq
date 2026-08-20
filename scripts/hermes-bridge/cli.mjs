@@ -140,16 +140,27 @@ export async function runHermesQueueDrain({
   }
   const settled = []
   let decision = null
+  let pendingDecision = null
   try {
     if (consumeDecision) {
       const decisionResult = await consumeDecision({ repositoryPath: process.cwd() })
-      if (decisionResult?.status === "PENDING_PRIMARY_DECISION") return decisionResult
+      if (decisionResult?.status === "PENDING_PRIMARY_DECISION") pendingDecision = decisionResult
       if (["PRIMARY_DECISION_RECORDED", "PRIMARY_DECISION_REPLAYED"]
         .includes(decisionResult?.status)) decision = decisionResult
     }
     for (let index = 0; index < maxOutcomes; index += 1) {
       const result = await orchestrator.cycle()
       if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
+        if (result.result === "NO_ELIGIBLE_OUTCOME"
+          && pendingDecision?.sourceKind === "RUNTIME_FINDING") {
+          const refreshedDecision = await consumeDecision({ repositoryPath: process.cwd() })
+          if (refreshedDecision?.status === "PENDING_PRIMARY_DECISION") return refreshedDecision
+          pendingDecision = null
+          if (["PRIMARY_DECISION_RECORDED", "PRIMARY_DECISION_REPLAYED"]
+            .includes(refreshedDecision?.status)) decision = refreshedDecision
+        } else if (result.result === "NO_ELIGIBLE_OUTCOME" && pendingDecision) {
+          return pendingDecision
+        }
         if (settled.length === 0) return decision ? { ...result, decision } : result
         return {
           result: "QUEUE_DRAINED",

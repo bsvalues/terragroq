@@ -322,7 +322,7 @@ describe("Hermes bridge CLI", () => {
     expect(calls).toEqual(["decision", "cycle"])
   })
 
-  it("returns an exact pending Primary request without starting a queue cycle", async () => {
+  it("returns an exact pending Primary request only after the ordinary queue is empty", async () => {
     const pending = {
       status: "PENDING_PRIMARY_DECISION",
       outcomeId: 77,
@@ -330,12 +330,52 @@ describe("Hermes bridge CLI", () => {
       prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact",
     }
     const consumeDecision = vi.fn(async () => pending)
-    const cycle = vi.fn()
+    const cycle = vi.fn(async () => ({ result: "NO_ELIGIBLE_OUTCOME" }))
 
     await expect(runHermesQueueDrain({ orchestrator: { cycle }, consumeDecision }))
       .resolves.toEqual(pending)
     expect(consumeDecision).toHaveBeenCalledOnce()
-    expect(cycle).not.toHaveBeenCalled()
+    expect(cycle).toHaveBeenCalledOnce()
+  })
+
+  it("drains ordinary siblings before presenting a retained Primary request", async () => {
+    const pending = {
+      status: "PENDING_PRIMARY_DECISION",
+      sourceKind: "RUNTIME_FINDING",
+      requestDigest: "a".repeat(64),
+      prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:exact",
+    }
+    const consumeDecision = vi.fn(async () => pending)
+    const cycle = vi.fn()
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "ordinary-sibling" })
+      .mockResolvedValueOnce({ result: "NO_ELIGIBLE_OUTCOME" })
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, consumeDecision }))
+      .resolves.toEqual(pending)
+    expect(cycle).toHaveBeenCalledTimes(2)
+    expect(consumeDecision).toHaveBeenCalledTimes(2)
+  })
+
+  it("suppresses a stale runtime-finding prompt when post-drain revalidation loses actionability", async () => {
+    const consumeDecision = vi.fn()
+      .mockResolvedValueOnce({
+        status: "PENDING_PRIMARY_DECISION",
+        sourceKind: "RUNTIME_FINDING",
+        requestDigest: "a".repeat(64),
+        prompt: "WILLIAMOS_PRIMARY_DECISION_REQUEST:stale",
+      })
+      .mockResolvedValueOnce({ status: "NO_PENDING_PRIMARY_DECISION" })
+    const cycle = vi.fn()
+      .mockResolvedValueOnce({ result: "COMPLETE", outcomeId: "ordinary-sibling" })
+      .mockResolvedValueOnce({ result: "NO_ELIGIBLE_OUTCOME" })
+
+    await expect(runHermesQueueDrain({ orchestrator: { cycle }, consumeDecision }))
+      .resolves.toEqual({
+        result: "QUEUE_DRAINED",
+        settled: [{ result: "COMPLETE", outcomeId: "ordinary-sibling" }],
+        stopReason: "NO_ELIGIBLE_OUTCOME",
+      })
+    expect(consumeDecision).toHaveBeenCalledTimes(2)
   })
 
   it("prints only the canonical prompt for a pending Primary decision", () => {

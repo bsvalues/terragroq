@@ -6,6 +6,10 @@ import {
   recordOwnerAuthorityDecision,
 } from "./outcome-source.mjs"
 import {
+  readPendingRuntimeFindingDecisionRequest,
+  recordRuntimeFindingDecision,
+} from "./runtime-finding-decision.mjs"
+import {
   buildPrimaryDecisionRequestPrompt,
   isVerifiedPrimaryDecisionResponse,
   PRIMARY_DECISION_OWNER_EMAIL,
@@ -15,21 +19,32 @@ import {
 
 export { buildPrimaryDecisionRequestPrompt }
 
+async function readAnyPendingPrimaryDecision(input) {
+  return await readPendingPrimaryDecisionRequest(input)
+    ?? await readPendingRuntimeFindingDecisionRequest(input)
+}
+
 export async function consumePrimaryDecisionIntake({
   repositoryPath = process.cwd(),
   databaseUrl = process.env.DATABASE_URL,
   query,
   environment = process.env,
-  readRequest = readPendingPrimaryDecisionRequest,
+  readRequest = readAnyPendingPrimaryDecision,
   verifyResponse = verifyPrimaryDecisionResponse,
-  recordDecision = recordOwnerAuthorityDecision,
+  recordDecision = null,
 } = {}) {
   const request = await readRequest({ query, databaseUrl, ownerEmail: PRIMARY_DECISION_OWNER_EMAIL })
   if (!request) return { status: "NO_PENDING_PRIMARY_DECISION" }
   const pending = {
     status: "PENDING_PRIMARY_DECISION",
-    outcomeId: request.outcomeId,
-    queueItemId: request.queueItemId,
+    ...(request.sourceKind === "RUNTIME_FINDING" ? {
+      sourceKind: request.sourceKind,
+      findingId: request.findingId,
+      gateSettlementEventId: request.gateSettlementEventId,
+    } : {
+      outcomeId: request.outcomeId,
+      queueItemId: request.queueItemId,
+    }),
     requestDigest: primaryDecisionRequestDigest(request),
     prompt: buildPrimaryDecisionRequestPrompt(request),
   }
@@ -49,22 +64,36 @@ export async function consumePrimaryDecisionIntake({
       code: "PRIMARY_DECISION_PROVENANCE_WALL",
     })
   }
-  const result = await recordDecision({
-    query,
-    databaseUrl,
-    outcomeId: request.outcomeId,
-    queueItemId: request.queueItemId,
-    workOrderId: request.workOrderId,
-    terminalEventId: request.terminalEventId,
-    ownerUserId: request.ownerUserId,
-    choice: response.choice,
-    expectedNextState: request.expectedNextState,
-    primaryDecisionProvenance: response,
-  })
+  const result = request.sourceKind === "RUNTIME_FINDING"
+    ? await (recordDecision ?? recordRuntimeFindingDecision)({
+        query,
+        databaseUrl,
+        request,
+        primaryDecisionProvenance: response,
+      })
+    : await (recordDecision ?? recordOwnerAuthorityDecision)({
+        query,
+        databaseUrl,
+        outcomeId: request.outcomeId,
+        queueItemId: request.queueItemId,
+        workOrderId: request.workOrderId,
+        terminalEventId: request.terminalEventId,
+        ownerUserId: request.ownerUserId,
+        choice: response.choice,
+        expectedNextState: request.expectedNextState,
+        primaryDecisionProvenance: response,
+      })
   return {
     status: result.replayed ? "PRIMARY_DECISION_REPLAYED" : "PRIMARY_DECISION_RECORDED",
-    outcomeId: request.outcomeId,
-    queueItemId: request.queueItemId,
+    ...(request.sourceKind === "RUNTIME_FINDING" ? {
+      sourceKind: request.sourceKind,
+      findingId: request.findingId,
+      gateSettlementEventId: request.gateSettlementEventId,
+      disposition: result.status,
+    } : {
+      outcomeId: request.outcomeId,
+      queueItemId: request.queueItemId,
+    }),
     choice: response.choice,
     resumeReleased: result.resumeReleased,
     decisionRef: result.decisionRef,
