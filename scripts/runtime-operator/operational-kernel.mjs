@@ -318,6 +318,47 @@ async function runCycle({ root, registry, adapters }) {
   return mergeAndComplete({ root, checkpoint, registry, adapters })
 }
 
+/**
+ * Patch walls the worker can answer for by editing its own change.
+ *
+ * These refuse the patch on its content -- a credential-shaped line, a path outside the reservation, an
+ * oversized diff, a symlink -- and every one of them is something the worker introduced and can remove.
+ * Treating them as verdicts threw away whole runs: WO-0030 produced a working lane integration across
+ * four files and was discarded because one test fixture contained "postgres://user:pw@host/db".
+ *
+ * The wall still refuses. It simply says why, once, and lets the worker fix what it wrote. The
+ * remediation cap is unchanged, so a lane that keeps reintroducing the same material still stops.
+ */
+function isRemediablePatchWall(message) {
+  return /^PATCH_(?:SECRET_OR_BINARY|EXACT_PATH|BUDGET|SYMLINK_OR_SUBMODULE|REVIEW_CORRELATION)_WALL$/.test(message)
+}
+
+/**
+ * Tell the worker which rule refused its patch, never what matched.
+ *
+ * The matched text may be a real credential, and writing it into a file inside the worktree -- which the
+ * worker reads and may echo -- would turn a wall that caught a secret into the thing that spread it.
+ */
+function writePatchWallFeedback(workspace, message) {
+  if (!workspace) return
+  const guidance = {
+    PATCH_SECRET_OR_BINARY_WALL:
+      "A line your patch ADDS matches the credential pattern: a private key header, a provider key prefix (sk-, ghp_), a database connection URL, or name = \"value\" where the name is password/token/api_key/client_secret. The matched text is deliberately not repeated here. Find it in your own diff and remove it -- in a test, use an obvious placeholder that is not connection-string shaped.",
+    PATCH_EXACT_PATH_WALL: "Your patch changes a file outside the reservation. Revert those files; change only the reserved paths.",
+    PATCH_BUDGET_WALL: "Your patch is larger than the budget allows, in files or bytes. Make the change smaller.",
+    PATCH_SYMLINK_OR_SUBMODULE_WALL: "Your patch adds a symlink or submodule. Neither is allowed; use an ordinary file.",
+    PATCH_REVIEW_CORRELATION_WALL: "Your patch does not touch the files the review feedback is about.",
+  }[message]
+  try {
+    fs.mkdirSync(path.join(workspace, ".williamos"), { recursive: true })
+    fs.writeFileSync(
+      path.join(workspace, ".williamos", "validation-feedback.txt"),
+      `gate: patch wall\n\n${message}\n${guidance ?? "The patch was refused on its content."}\n`,
+      "utf8",
+    )
+  } catch { /* feedback is best effort; the wall is not */ }
+}
+
 function isRecoverableFailure(message) {
   // A dead worker process is a retry, not a verdict: the resident loop must survive a crashed codex
   // the same way it survives a flaky gh or git, or any worker crash parks the system terminally.
@@ -366,6 +407,17 @@ export async function runOperationalKernelCycle({ root, registry, adapters }) {
     if (/^VALIDATION_[A-Z0-9_]+_WALL$/.test(message)) {
       const remediationAttempts = checkpoint.remediationAttempts ?? 0
       if (remediationAttempts >= 2) return transition(root, checkpoint, "FAILED_TERMINAL", { failureCode: message, ownerDecisionRequired: false })
+      return transition(root, checkpoint, "REVIEW_REMEDIATION", {
+        remediationAttempts: remediationAttempts + 1,
+        remediationSource: "VALIDATION",
+        failureCode: message,
+        ownerDecisionRequired: false,
+      })
+    }
+    if (isRemediablePatchWall(message)) {
+      const remediationAttempts = checkpoint.remediationAttempts ?? 0
+      if (remediationAttempts >= 2) return transition(root, checkpoint, "FAILED_TERMINAL", { failureCode: message, ownerDecisionRequired: false })
+      writePatchWallFeedback(checkpoint.workspace, message)
       return transition(root, checkpoint, "REVIEW_REMEDIATION", {
         remediationAttempts: remediationAttempts + 1,
         remediationSource: "VALIDATION",
