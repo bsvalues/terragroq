@@ -36,8 +36,12 @@ import {
 export const maxDuration = 300
 
 const execFile = promisify(execFileCallback)
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
-const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || "http://127.0.0.1:3100"
+// The standalone runtime directory holds no source; composing a fix REQUIRES a configured source
+// root. Absent one, the fix beat refuses honestly rather than reading whatever cwd holds (review P1).
+const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT?.trim() || null
+// Self-fetches target the standalone listener itself: loopback on the port THIS process serves.
+// A hardcoded 3100 was wrong the moment the container mapped a different port (review P1).
+const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 
 type SurfaceDirective = Readonly<{
   kind: "browser" | "trace" | "source" | "diff" | "tests"
@@ -111,6 +115,13 @@ function describeProbe(steps: readonly Record<string, unknown>[]): string {
 
 /** Compose the real fix in memory and return the real artifacts: sources, unified diff, test output. */
 async function composeSignInFix(): Promise<{ ok: boolean; say: string; surfaces: SurfaceDirective[] }> {
+  if (!PROJECT_ROOT) {
+    return {
+      ok: false,
+      say: "This runtime has no source root configured, so I can't compose the change from here — nothing to pretend about.",
+      surfaces: [],
+    }
+  }
   const files = [...new Set(SIGN_IN_FIX.map((edit) => edit.file))]
   const originals = new Map<string, string>()
   for (const file of files) {
@@ -183,8 +194,9 @@ async function composeSignInFix(): Promise<{ ok: boolean; say: string; surfaces:
 
   const say =
     `Composed. The diff is exactly the three sentences that had no business facing you — nothing else ` +
-    `moves. The copy-contract tests ${testsPassed ? "pass as the code stands" : "are failing — read them beside the diff"}; ` +
-    `applying this travels the governed path from here, and I won't pretend it has been applied.`
+    `moves. The copy contracts ${testsPassed ? "pass against the code as it stands today" : "are failing against today's code — read them beside the diff"} — ` +
+    `running them against the patched tree is what an isolated working world is for, and that arrives with ` +
+    `the sandbox slice. Applying this travels the governed path from here; I won't pretend it has been applied.`
 
   return {
     ok: true,

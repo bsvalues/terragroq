@@ -10,7 +10,16 @@ import { Desk } from "@/components/desk/desk"
  * separately, as compatibility only.
  */
 export default async function EnvironmentRoot() {
-  const userId = await getUserId()
+  // A logged-out request must land at sign-in, never crash: session resolution can throw as well as
+  // return null, and both mean the same thing here (review P1). Destination preservation through
+  // sign-in would require changing the legacy auth flow, which the refusal list forbids -- it arrives
+  // when the environment grows its own entry, and until then the cost is one extra navigation.
+  let userId: string | null = null
+  try {
+    userId = await getUserId()
+  } catch {
+    userId = null
+  }
   if (!userId) redirect("/sign-in")
   return <Desk />
 }

@@ -17,7 +17,9 @@ import { getUserId } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 
-const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || "http://127.0.0.1:3100"
+// Self-fetches target the standalone listener itself: loopback on the port THIS process serves.
+// A hardcoded 3100 was wrong the moment the container mapped a different port (review P1).
+const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 const SAFE_PATH = /^[A-Za-z0-9/_-]*$/
 
 export async function GET(request: Request, { params }: { params: Promise<{ path?: string[] }> }) {
