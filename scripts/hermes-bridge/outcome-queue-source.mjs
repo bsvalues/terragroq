@@ -405,6 +405,15 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
         'idempotencyKey', execution_receipt."idempotencyKey",
         'confirmation', 'START_WORK'
       )
+      AND execution_receipt."requestHash" = encode(sha256(convert_to(
+        '{"confirmation":' || to_jsonb(execution_receipt."requestBinding"->>'confirmation')::text
+        || ',"contract":"workbench-execution-authorization.v1"'
+        || ',"idempotencyKey":' || to_jsonb(execution_receipt."idempotencyKey")::text
+        || ',"outcomeKey":' || to_jsonb(q."outcomeKey")::text
+        || ',"projectId":' || execution_thread."projectId"::text
+        || ',"threadId":' || to_jsonb(execution_root."threadId")::text || '}',
+        'UTF8'
+      )), 'hex')
       AND execution_receipt."resultBinding"->>'grantRef' = q."authorityGrantRef"
       AND receipt_execution_grant.ref = q."authorityGrantRef"
       AND receipt_execution_grant.status = 'active'
@@ -428,8 +437,24 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
         (execution_receipt."resultBinding"->'workContract'->>'id' = '${ISSUE_911_WORK_CONTRACT_ID_SQL}'
           AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_WORK_CONTRACT_DIGEST_SQL}'
           AND execution_receipt."resultBinding"->'workContract' = '${ISSUE_911_WORK_CONTRACT_JSON_SQL}'::jsonb
-          AND execution_receipt."requestHash" ~ '^[a-f0-9]{64}$'
+          AND execution_receipt."resultBinding" ?& ARRAY[
+            'authorizedAt', 'decisionId', 'decisionRef', 'expiresAt', 'grantId', 'grantRef',
+            'implementationGrantId', 'implementationGrantRef', 'queueVersion', 'workContract'
+          ]::text[]
           AND (SELECT count(*) FROM jsonb_object_keys(execution_receipt."resultBinding")) = 10
+          AND execution_receipt."resultBinding"->>'queueVersion' = '1'
+          AND execution_receipt."resultBinding"->>'queueVersion' = q.version::text
+          AND CASE
+            WHEN execution_receipt."resultBinding"->>'authorizedAt'
+              ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$'
+            THEN (execution_receipt."resultBinding"->>'authorizedAt')::timestamptz
+          END = execution_receipt."createdAt"
+          AND (execution_receipt."resultBinding"->>'authorizedAt')::timestamptz = q."approvedAt"
+          AND (SELECT count(*)
+               FROM "outcome_queue_mutation_receipt" AS duplicate_execution_receipt
+               WHERE duplicate_execution_receipt."userId" = q."userId"
+                 AND duplicate_execution_receipt."outcomeKey" = q."outcomeKey"
+                 AND duplicate_execution_receipt.operation = 'workbench_execution.authorize') = 1
           AND exact_execution_approval.evidence = ARRAY[
             'project:' || execution_thread."projectId"::text,
             'thread:' || execution_root."threadId",

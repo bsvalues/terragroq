@@ -335,7 +335,9 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
 }
 
 function workOrderRefFor(outcome) {
-  return outcome?.verifiedQueueWorkContract?.provenance?.operation === "runtime_finding.derive"
+  return ["runtime_finding.derive", "workbench_execution.authorize"].includes(
+    outcome?.verifiedQueueWorkContract?.provenance?.operation,
+  )
     ? outcome.verifiedQueueWorkContract.provenance.workOrderRef
     : `WO-HERMES-${outcome.id}-001`
 }

@@ -326,6 +326,47 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     }, resolver)).toThrow(expect.objectContaining({ code: "HERMES_WORK_CONTRACT_WALL" }))
   })
 
+  it("keeps the exact verified Workbench parent Work Order identity through prompt and result", async () => {
+    const command = "record structured #911 reliability remediation without host mutation"
+    const contract = resolveHermesWorkContract({
+      command, title: command, objective: command,
+      lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+    })!
+    const parent = {
+      ...queueBoundOutcome(),
+      id: 7, userId: "owner-id", ref: "GOAL-0007", command, title: command, objective: command,
+      lane: "operator-objective", mode: "implement", risk: "R1", authority: "A2_WRITE_OWN",
+      verdict: "requires_approval", requiresApproval: true, status: "classified",
+      outcomeKey: "goal:GOAL-0007",
+      queueBinding: { ...queueBoundOutcome().queueBinding, outcomeKey: "goal:GOAL-0007", activeWorkOrderId: 7 },
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: {
+          operation: "workbench_execution.authorize",
+          outcomeKey: "goal:GOAL-0007",
+          workOrderRef: "WO-HERMES-OUTCOME-7",
+        },
+      },
+    }
+    const value = fixture(contract.reservations as string[], {
+      selectOutcome: vi.fn(async () => parent),
+    })
+    value.client.runTurn.mockImplementationOnce(async ({ prompt }: { prompt: string }) => ({
+      threadId: "thread-7", turnId: "turn-7", status: "completed",
+      finalText: JSON.stringify({
+        ...readyTurnResult,
+        workOrder: "WO-HERMES-OUTCOME-7",
+        branch: "codex/hermes-goal-0007-7",
+      }),
+    }))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+
+    expect(value.client.runTurn).toHaveBeenCalledOnce()
+    expect(value.client.runTurn.mock.calls[0][0].prompt).toContain("WO-HERMES-OUTCOME-7")
+    expect(value.client.runTurn.mock.calls[0][0].prompt).not.toContain("WO-HERMES-7-001")
+  })
+
   it("does not reproject a released historical execution without a registered contract", async () => {
     const value = fixture(undefined, { workContractResolver: () => null })
     const outcome = await value.selectOutcome()

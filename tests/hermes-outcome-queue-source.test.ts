@@ -1216,6 +1216,16 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_execution_grant."workOrderId" IS NULL`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`FROM "outcome_queue_mutation_receipt" AS execution_receipt`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt.operation = 'workbench_execution.authorize'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`encode(sha256(convert_to(`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."requestHash" =`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding" ?& ARRAY[`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding"->>'queueVersion' = '1'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toMatch(
+      /authorizedAt'[\s\S]*::timestamptz[\s\S]*END = execution_receipt\."createdAt"/,
+    )
+    expect(OUTCOME_QUEUE_SQL.acquire).toMatch(
+      /SELECT count\(\*\)[\s\S]*duplicate_execution_receipt[\s\S]*workbench_execution\.authorize[\s\S]*= 1/,
+    )
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_receipt.operation = 'runtime_finding.derive'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_receipt."requestBinding"->>'operation' = 'runtime_finding.derive'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_queue_grant."allowedActions" = ARRAY['outcome:execute']::text[]`)
@@ -1274,6 +1284,21 @@ describe("transactional durable outcome queue source", () => {
     expect(transitionOutcomeCompatibility).toBe(transitionOutcomeQueueItem)
     expect(matchOutcomeAuthorityCompatibility).toBe(matchOutcomeAuthorityGrant)
     expect(completeQueuedOutcome).toBe(completeOutcomeQueueItem)
+  })
+
+  it("rejects forged, drifted, or duplicate #911 authorization receipts in the locked candidate before lease mutation", () => {
+    const [candidate, mutation] = OUTCOME_QUEUE_SQL.acquire.split(
+      `UPDATE "outcome_queue_item" AS q`,
+    )
+    expect(mutation).toBeDefined()
+    expect(candidate).toContain(`execution_receipt."requestHash" = encode(sha256(convert_to(`)
+    expect(candidate).toContain(`execution_receipt."resultBinding" ?& ARRAY[`)
+    expect(candidate).toContain(`execution_receipt."resultBinding"->>'queueVersion' = q.version::text`)
+    expect(candidate).toContain(`END = execution_receipt."createdAt"`)
+    expect(candidate).toContain(`duplicate_execution_receipt.operation = 'workbench_execution.authorize') = 1`)
+    expect(candidate.indexOf(`execution_receipt."requestHash" =`)).toBeLessThan(
+      OUTCOME_QUEUE_SQL.acquire.indexOf(`UPDATE "outcome_queue_item" AS q`),
+    )
   })
 
   it("persists and reads all data in one user scope", async () => {
