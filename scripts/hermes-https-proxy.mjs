@@ -115,9 +115,17 @@ export function createHermesHttpsProxy({ pfx, passphrase, clientCa }) {
       path: request.url,
       headers: buildUpstreamHeaders(request.headers, verifiedDeviceName(request.socket)),
     }, (upstreamResponse) => {
+      // Once the application has answered, the guard relaxes: a streaming response (the Thread's
+      // conversation) legitimately goes quiet for longer than any polite request timeout while a
+      // local model evaluates its prompt. The 30s ceiling below exists to fail fast when the app is
+      // DOWN, and it was silently destroying live chat streams mid-thought -- the reply generated,
+      // the socket was already dead, and the owner saw nothing at all. A genuinely hung stream still
+      // dies at ten minutes.
+      upstream.setTimeout(600_000, () => upstream.destroy(new Error("UPSTREAM_TIMEOUT")))
       response.writeHead(upstreamResponse.statusCode ?? 502, buildDownstreamHeaders(upstreamResponse.headers))
       upstreamResponse.pipe(response)
     })
+    // Until the app answers: fail fast. This covers connect and response headers only.
     upstream.setTimeout(30_000, () => upstream.destroy(new Error("UPSTREAM_TIMEOUT")))
     upstream.on("error", () => {
       if (!response.headersSent) response.writeHead(502, { "content-type": "text/plain; charset=utf-8" })
