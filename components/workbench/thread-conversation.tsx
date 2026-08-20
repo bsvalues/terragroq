@@ -42,7 +42,8 @@ export function ThreadConversation({ threadId, className }: { threadId: string; 
   }, [threadId])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
+    // Optional-call: jsdom (the shell contract tests) renders this tree without scrollIntoView.
+    bottomRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" })
   }, [messages, persisted, busy])
 
   function submit() {

@@ -185,15 +185,25 @@ function ProjectExplorer({
   )
 }
 
-function ThreadTimeline({ thread, onSelectItem, workStatus }: { thread: Thread; onSelectItem: (item: ThreadItem) => void; workStatus: React.ReactNode }) {
+function ThreadTimeline({ thread, onSelectItem, workStatus, showHeader = true }: { thread: Thread; onSelectItem: (item: ThreadItem) => void; workStatus: React.ReactNode; showHeader?: boolean }) {
   return (
     <article className="mx-auto w-full max-w-4xl px-5 py-6 md:px-8">
-      <header className="border-b border-[var(--workbench-hairline)] pb-5">
-        <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--workbench-muted)]">{thread.project.name} / Thread</p>
-        <h1 className="mt-2 text-xl font-semibold tracking-tight text-[var(--workbench-text)]">{thread.title}</h1>
-        <p className="mt-2 text-xs text-[var(--workbench-muted)]">Last persisted activity {stamp(thread.lastActivityAt)} UTC</p>
-        {workStatus}
-      </header>
+      {/* CONVERSATION-FIRST: when the timeline is the work record beneath a conversation, the
+          conversation's own header is the thread's single h1; rendering a second one here made the
+          title ambiguous to every reader, assistive or test. */}
+      {showHeader ? (
+        <header className="border-b border-[var(--workbench-hairline)] pb-5">
+          <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--workbench-muted)]">{thread.project.name} / Thread</p>
+          <h1 className="mt-2 text-xl font-semibold tracking-tight text-[var(--workbench-text)]">{thread.title}</h1>
+          <p className="mt-2 text-xs text-[var(--workbench-muted)]">Last persisted activity {stamp(thread.lastActivityAt)} UTC</p>
+          {workStatus}
+        </header>
+      ) : (
+        <div className="border-b border-[var(--workbench-hairline)] pb-4">
+          <p className="text-xs text-[var(--workbench-muted)]">Last persisted activity {stamp(thread.lastActivityAt)} UTC</p>
+          {workStatus}
+        </div>
+      )}
       {thread.items.length === 0 ? (
         <p className="py-8 text-sm text-[var(--workbench-muted)]">This Thread exists, but no durable timeline items are available yet.</p>
       ) : (
@@ -600,7 +610,7 @@ export function WorkbenchShell({
         <details className="border-t border-[var(--workbench-hairline)]">
           <summary className="workbench-focus cursor-pointer px-5 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--workbench-muted)] md:px-8">Work record</summary>
           <div className="workbench-scroll max-h-[45vh] overflow-y-auto">
-            <ThreadTimeline thread={selectedThread} onSelectItem={setSelectedItem} workStatus={workStatus} />
+            <ThreadTimeline thread={selectedThread} onSelectItem={setSelectedItem} workStatus={workStatus} showHeader={false} />
           </div>
         </details>
       </div>
