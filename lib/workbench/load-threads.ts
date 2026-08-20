@@ -278,13 +278,23 @@ export async function loadAuthenticatedWorkbenchThreads(
   const reader = dependencies.readRuntimeFindingDecision
     ?? readPendingRuntimeFindingDecisionRequest as unknown as RuntimeFindingDecisionReader
   const runtimeGateIds = distinct(governance
-    .filter((row) => row.eventType === "RUNTIME_FINDING_OWNER_GATED")
+    .filter((row) => row.eventType === "RUNTIME_FINDING_OWNER_GATED" && !governance.some((candidate) => {
+      if (candidate.eventType !== "RUNTIME_FINDING_OWNER_DECIDED"
+        || candidate.entityType !== row.entityType
+        || candidate.entityId !== row.entityId) return false
+      const gateMetadata = metadata(row.metadata)
+      const receiptMetadata = metadata(candidate.metadata)
+      return safePositiveInteger(receiptMetadata, "gateSettlementEventId") === row.id
+        || safePositiveInteger(receiptMetadata, "sourceFindingEventId") === safePositiveInteger(gateMetadata, "sourceFindingEventId")
+        || (safeString(receiptMetadata, "findingId") !== undefined
+          && safeString(receiptMetadata, "findingId") === safeString(gateMetadata, "findingId"))
+    }))
     .map((row) => row.id)).sort((left, right) => left - right)
   for (const gateSettlementEventId of runtimeGateIds) {
     try {
       const candidate = await reader({
         ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
-        includeDecided: true,
+        includeDecided: false,
         exactGateSettlementEventId: gateSettlementEventId,
       })
       if (candidate?.ownerUserId === userId) runtimeFindingRequests.push(candidate)
@@ -298,7 +308,7 @@ export async function loadAuthenticatedWorkbenchThreads(
   const directOwnersByWorkOrderId = new Map<number, string[]>()
   for (const thread of threads) {
     const directIds = distinct(persistedBindings
-      .filter((row) => row.threadId === thread.id && row.kind === "work_order")
+      .filter((row) => row.threadId === thread.id && row.kind === "work_order" && row.role === "root")
       .map((row) => workOrderIdFor(row.sourceId))
       .filter((id): id is number => id !== null))
     if (directIds.length !== 1) continue

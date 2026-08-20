@@ -152,7 +152,8 @@ function exactReceipt(
   gateEvent: RuntimeFindingEvent,
   gateMetadata: Record<string, unknown>,
   normalizedGates: readonly string[],
-  request: RuntimeFindingRequest,
+  sourceMetadata: Record<string, unknown>,
+  liveRequest: RuntimeFindingRequest | null,
 ): Record<string, unknown> | null {
   if (!boundEvent(event, input) || event.eventType !== "RUNTIME_FINDING_OWNER_DECIDED") return null
   const metadata = record(event.metadata)
@@ -164,16 +165,39 @@ function exactReceipt(
     "gateSettlementEventId", "gatePayloadDigest", "actionableProjectionId", "actionableProjectionVersion",
     "actionableProjectionDigest", "findingId", "sequence", "gate", "gates", "decisionPacketDigest",
   ]
-  const bindingMatches = metadata !== null && bindingKeys.every((key) => canonical(metadata[key]) === canonical(request[key]))
   const allowedReceiptKeys = new Set([
     ...bindingKeys, "choice", "requestDigest", "responseDigest", "accountEmail", "disposition",
     "resumeReleased", "receiptDigest", "decisionId", "evidenceId",
   ])
+  const liveBindingMatches = liveRequest === null
+    || bindingKeys.every((key) => canonical(metadata?.[key]) === canonical(liveRequest[key]))
   const receiptPayload = metadata ? Object.fromEntries(Object.entries(metadata).filter(([key]) => (
     !["receiptDigest", "decisionId", "evidenceId"].includes(key)
   ))) : null
+  const projection = metadata ? projectRuntimeFindingActionability({
+    parentWorkOrderRowId: metadata.parentWorkOrderRowId,
+    parentWorkOrderRef: metadata.parentWorkOrderRef,
+    authorityGrantId: metadata.authorityGrantId,
+    authorityGrantRef: metadata.authorityGrantRef,
+    authorityGrantLevel: metadata.authorityGrantLevel,
+    sourceFindingEventId: metadata.sourceFindingEventId,
+    gateSettlementEventId: metadata.gateSettlementEventId,
+    findingId: metadata.findingId,
+    sequence: metadata.sequence,
+    gates: metadata.gates,
+  }) : null
+  const canonicalGate = {
+    sourceFindingEventId: positiveInteger(gateMetadata.sourceFindingEventId),
+    sourceUserId: gateMetadata.sourceUserId,
+    findingId: gateMetadata.findingId,
+    objectiveWorkOrderId: gateMetadata.objectiveWorkOrderId,
+    issueNumber: gateMetadata.issueNumber,
+    gate: gateMetadata.gate,
+    gates: normalizedGates,
+    reason: gateMetadata.reason,
+  }
   if (!metadata
-    || !bindingMatches
+    || !liveBindingMatches
     || Object.keys(metadata).some((key) => !allowedReceiptKeys.has(key))
     || metadata.sourceKind !== "RUNTIME_FINDING"
     || metadata.ownerUserId !== input.userId
@@ -184,10 +208,24 @@ function exactReceipt(
     || metadata.findingId !== gateMetadata.findingId
     || metadata.gate !== gateMetadata.gate
     || !sameStrings(gates(metadata.gates) ?? [], normalizedGates)
+    || positiveInteger(metadata.authorityGrantId) === null
+    || text(metadata.authorityGrantRef) === null
+    || !["A2_WRITE_OWN", "A3_INTEGRATE"].includes(text(metadata.authorityGrantLevel) ?? "")
+    || positiveInteger(metadata.sequence) !== positiveInteger(sourceMetadata.sequence)
+    || digest(metadata.sourcePayloadDigest) !== sha256(JSON.stringify(sourceMetadata))
+    || digest(gateMetadata.payloadDigest) !== sha256(JSON.stringify(canonicalGate))
+    || metadata.gatePayloadDigest !== gateMetadata.payloadDigest
+    || projection === null
+    || metadata.actionableProjectionId !== projection.id
+    || positiveInteger(metadata.actionableProjectionVersion) !== projection.version
+    || metadata.actionableProjectionDigest !== projection.digest
+    || digest(metadata.decisionPacketDigest) === null
     || !["APPROVE", "DENY"].includes(choice ?? "")
     || !["AUTHORITY_MATERIALIZATION_REQUIRED", "DENIED_RESOLVED"].includes(disposition ?? "")
     || metadata.resumeReleased !== false
-    || digest(metadata.requestDigest) !== primaryDecisionRequestDigest(request)
+    || (liveRequest === null
+      ? digest(metadata.requestDigest) === null
+      : digest(metadata.requestDigest) !== primaryDecisionRequestDigest(liveRequest))
     || digest(metadata.responseDigest) === null
     || text(metadata.accountEmail)?.toLowerCase() !== PRIMARY_DECISION_OWNER_EMAIL
     || digest(metadata.receiptDigest) !== sha256(canonical(receiptPayload))
@@ -197,8 +235,6 @@ function exactReceipt(
     choice,
     disposition,
     resumeReleased: false,
-    decisionId: positiveInteger(metadata.decisionId),
-    evidenceId: positiveInteger(metadata.evidenceId),
   }
 }
 
@@ -278,8 +314,14 @@ export function projectRuntimeFindingDecisionSources(input: ProjectionInput): Pr
         || positiveInteger(receiptMetadata?.sourceFindingEventId) === sourceFindingEventId
         || receiptMetadata?.findingId === gateMetadata?.findingId
     })
-    const receipts = canonicalRequest
-      ? receiptEvents.map((event) => exactReceipt(event, input, gateEvent, gateMetadata ?? {}, normalizedGates ?? [], canonicalRequest!))
+    const receipts = gateMetadata && normalizedGates && sourceMetadata
+      ? receiptEvents.map((event) => {
+        try {
+          return exactReceipt(event, input, gateEvent, gateMetadata, normalizedGates, sourceMetadata, canonicalRequest)
+        } catch {
+          return null
+        }
+      })
       : receiptEvents.map(() => null)
     const receiptConflict = receiptEvents.length > 1 || receipts.some((receipt) => receipt === null)
     const actionable = canonicalRequest !== null

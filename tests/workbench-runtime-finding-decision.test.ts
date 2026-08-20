@@ -195,7 +195,27 @@ describe("runtime finding Workbench decision projection", () => {
     expect(result.sources[0]).toMatchObject({
       id: "550",
       truth: { state: "RECORDED" },
-      data: { decision: { state: "OWNER_DECIDED", choice: "DENY", disposition: "DENIED_RESOLVED", resumeReleased: false, decisionId: 71, evidenceId: 81 } },
+      data: { decision: { state: "OWNER_DECIDED", choice: "DENY", disposition: "DENIED_RESOLVED", resumeReleased: false } },
+    })
+    expect(result.sources[0].data.decision).not.toHaveProperty("decisionId")
+    expect(result.sources[0].data.decision).not.toHaveProperty("evidenceId")
+  })
+
+  it("verifies an exact historical receipt without a live actionable request", () => {
+    const receipt = {
+      id: 550, userId: "owner-1", entityType: "work_order", entityId: "31",
+      eventType: "RUNTIME_FINDING_OWNER_DECIDED", createdAt: new Date("2026-08-20T16:05:00.000Z"),
+      metadata: receiptMetadata(),
+    }
+    const result = projectRuntimeFindingDecisionSources({
+      userId: "owner-1", projectId: 7, thread: { id: "thread-31", workOrderId: 31 },
+      workOrder: { id: 31, ref: "WO-0031" }, events: [source, gate, receipt], actionableRequest: null,
+    })
+
+    expect(result.sources[0]).toMatchObject({
+      id: "550",
+      truth: { state: "RECORDED" },
+      data: { decision: { state: "OWNER_DECIDED", choice: "DENY", disposition: "DENIED_RESOLVED", resumeReleased: false } },
     })
   })
 
@@ -295,5 +315,6 @@ describe("runtime finding Workbench decision projection", () => {
       expect.objectContaining({ state: "OWNER_DECIDED", choice: "DENY" }),
       expect.objectContaining({ state: "OWNER_DECIDED", choice: "APPROVE" }),
     ])
+    expect(JSON.stringify(result.sources.map((entry) => entry.data.decision))).not.toMatch(/decisionId|evidenceId|71|72|81|82/)
   })
 })
