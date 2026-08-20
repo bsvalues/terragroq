@@ -322,6 +322,51 @@ describe("Hermes bridge CLI", () => {
     expect(calls).toEqual(["decision", "cycle"])
   })
 
+  it("consumes finding backlog before cycles and loops when a NO_ELIGIBLE result creates child work", async () => {
+    const calls: string[] = []
+    const consumeRuntimeFindings = vi.fn()
+      .mockImplementationOnce(async () => { calls.push("findings:backlog"); return { queuedChildren: 0 } })
+      .mockImplementationOnce(async () => { calls.push("findings:post-empty"); return { queuedChildren: 1 } })
+      .mockImplementationOnce(async () => { calls.push("findings:post-child"); return { queuedChildren: 0 } })
+      .mockImplementationOnce(async () => { calls.push("findings:post-drain"); return { queuedChildren: 0 } })
+    const cycle = vi.fn()
+      .mockImplementationOnce(async () => { calls.push("cycle:empty"); return { result: "NO_ELIGIBLE_OUTCOME" } })
+      .mockImplementationOnce(async () => { calls.push("cycle:child"); return { result: "COMPLETE", outcomeId: "derived" } })
+      .mockImplementationOnce(async () => { calls.push("cycle:drain"); return { result: "NO_ELIGIBLE_OUTCOME" } })
+
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle, consumeRuntimeFindings }, maxOutcomes: 3,
+    })).resolves.toMatchObject({
+      result: "QUEUE_DRAINED", stopReason: "NO_ELIGIBLE_OUTCOME",
+      settled: [{ result: "COMPLETE", outcomeId: "derived" }],
+    })
+    expect(calls).toEqual([
+      "findings:backlog", "cycle:empty", "findings:post-empty", "cycle:child",
+      "findings:post-child", "cycle:drain", "findings:post-drain",
+    ])
+  })
+
+  it("aborts before another cycle when post-cycle finding consumption walls, then permits a clean retry", async () => {
+    const wall = Object.assign(new Error("consumer wall"), {
+      code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL",
+    })
+    const consumeRuntimeFindings = vi.fn()
+      .mockResolvedValueOnce({ queuedChildren: 0 })
+      .mockRejectedValueOnce(wall)
+    const cycle = vi.fn(async () => ({ result: "COMPLETE", outcomeId: "parent" }))
+    await expect(runHermesQueueDrain({ orchestrator: { cycle, consumeRuntimeFindings } }))
+      .rejects.toBe(wall)
+    expect(cycle).toHaveBeenCalledOnce()
+
+    const retryConsumer = vi.fn(async () => ({ queuedChildren: 0 }))
+    const retryCycle = vi.fn(async () => ({ result: "NO_ELIGIBLE_OUTCOME" }))
+    await expect(runHermesQueueDrain({
+      orchestrator: { cycle: retryCycle, consumeRuntimeFindings: retryConsumer },
+    })).resolves.toEqual({ result: "NO_ELIGIBLE_OUTCOME" })
+    expect(retryConsumer).toHaveBeenCalledTimes(2)
+    expect(retryCycle).toHaveBeenCalledOnce()
+  })
+
   it("returns an exact pending Primary request only after the ordinary queue is empty", async () => {
     const pending = {
       status: "PENDING_PRIMARY_DECISION",

@@ -24,6 +24,7 @@ import {
   terminalizeOutcome as terminalizeGoalOutcome,
 } from "./outcome-source.mjs"
 import { evaluateOutcomePolicy } from "./policy.mjs"
+import { createRuntimeFindingDbConsumer } from "../runtime-findings/db-consumer.mjs"
 
 const DECLARED_PRIMARY_EMAIL = "bsvalues@gmail.com"
 const QUEUE_LEASE_DURATION_MS = 50 * 60 * 1000
@@ -489,6 +490,12 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   const resolvePrimary = options.resolvePrimary ?? (() => loadDeclaredPrimary(database.withPool))
   const resolveGoal = options.resolveGoal ?? ((item) => loadLinkedGoal(database.withPool, item))
   const now = options.now ?? (() => new Date())
+  const createFindingConsumer = options.createRuntimeFindingConsumer ?? createRuntimeFindingDbConsumer
+  const consumeRuntimeFindings = options.consumeRuntimeFindings ?? createFindingConsumer({
+    withPool: database.withPool,
+    now,
+    ...(options.maxRuntimeFindings === undefined ? {} : { maxFindings: options.maxRuntimeFindings }),
+  })
   const holderId = options.holderId ?? `${os.hostname()}:hermes-outcome-queue`
   const runtimeRoot = path.resolve(
     options.runtimeRoot
@@ -955,6 +962,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     resumeAfterOwnerDecision,
     resumeAfterReviewRecovery,
     resumeAfterValidationRecovery,
+    consumeRuntimeFindings,
     close: database.close,
   }
 }

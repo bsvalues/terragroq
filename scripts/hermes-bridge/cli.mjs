@@ -124,6 +124,7 @@ export function createResidentHermesOrchestrator(options = {}) {
   })
   return Object.freeze({
     ...orchestrator,
+    consumeRuntimeFindings: queueRuntime.consumeRuntimeFindings,
     close: queueRuntime.close,
   })
 }
@@ -148,9 +149,13 @@ export async function runHermesQueueDrain({
       if (["PRIMARY_DECISION_RECORDED", "PRIMARY_DECISION_REPLAYED"]
         .includes(decisionResult?.status)) decision = decisionResult
     }
+    await orchestrator.consumeRuntimeFindings?.()
     for (let index = 0; index < maxOutcomes; index += 1) {
       const result = await orchestrator.cycle()
+      const findingResult = await orchestrator.consumeRuntimeFindings?.()
       if (!["COMPLETE", "FAILED_TERMINAL"].includes(result.result)) {
+        if (result.result === "NO_ELIGIBLE_OUTCOME"
+          && Number(findingResult?.queuedChildren) > 0) continue
         if (result.result === "NO_ELIGIBLE_OUTCOME"
           && pendingDecision?.sourceKind === "RUNTIME_FINDING") {
           const refreshedDecision = await consumeDecision({ repositoryPath: process.cwd() })
