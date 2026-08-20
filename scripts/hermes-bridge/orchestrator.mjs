@@ -349,10 +349,24 @@ function projectedWorkContract(outcome, resolver) {
     projection: {
       id: contract.id,
       digest: contract.digest,
+      ...(contract.version === undefined ? {} : { version: contract.version }),
+      ...(contract.repository === undefined ? {} : { repository: contract.repository }),
+      ...(contract.lane === undefined ? {} : { lane: contract.lane }),
       allowedFiles: [...contract.reservations],
       validators: contract.validationCommands.map(({ command, args }) => (
         `${command} ${args.join(" ")}`
       )),
+      ...(contract.projection === undefined
+        ? {}
+        : { projection: { ...contract.projection } }),
+      ...(contract.delivery === undefined
+        ? {}
+        : {
+            delivery: {
+              ...contract.delivery,
+              allowedActions: [...contract.delivery.allowedActions],
+            },
+          }),
     },
   }
 }

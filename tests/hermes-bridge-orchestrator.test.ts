@@ -362,6 +362,26 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
 
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
 
+    expect(value.projectCheckpoint.mock.calls[0][0].workContract).toEqual({
+      version: "hermes-work-contract.v1",
+      id: "issue-911-runtime-reliability-evidence.v1",
+      digest: "fcd932412d48652f2762b218c7881a84ab1ffbac6795f4dccc90c8a8886334ba",
+      repository: "bsvalues/terragroq",
+      lane: "operator-objective",
+      allowedFiles: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      validators: [
+        "git diff --check",
+        "npx vitest run tests/hermes-work-contract.test.ts",
+      ],
+      projection: { issueNumber: 911, completionOwned: false },
+      delivery: {
+        authorityLevel: "A2_WRITE_OWN",
+        allowedActions: ["implement"],
+        commitAllowed: true,
+        tagAllowed: false,
+        pushAllowed: true,
+      },
+    })
     expect(value.client.runTurn).toHaveBeenCalledOnce()
     expect(value.client.runTurn.mock.calls[0][0].prompt).toContain("WO-HERMES-OUTCOME-7")
     expect(value.client.runTurn.mock.calls[0][0].prompt).not.toContain("WO-HERMES-7-001")
@@ -1958,8 +1978,11 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       attempt: lease.fencingToken,
       executionBinding: null,
       workContract: {
+        version: "test.v1",
         id: "orchestrator-fixture",
         digest: "f".repeat(64),
+        repository: "bsvalues/terragroq",
+        lane: "test",
         allowedFiles: [
           "components/hermes/live-status.tsx",
           "tests/hermes-live-status.test.tsx",
