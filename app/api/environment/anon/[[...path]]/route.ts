@@ -54,8 +54,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ path
     // blank white with the full form sitting in the document. The investigation surface shows what
     // the page IS; interactivity inside an anonymous reproduction frame is not its job.
     const scriptFree = html
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-      .replace(/<script[^>]*\/>/gi, "")
+      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<script\b[^>]*\/>/gi, "")
     return new Response(scriptFree, {
       status: response.status,
       headers: { "content-type": response.headers.get("content-type") ?? "text/html; charset=utf-8" },
