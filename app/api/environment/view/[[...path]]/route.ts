@@ -13,6 +13,9 @@
  * page paths, set-cookie stripped from the response.
  */
 
+// Named /view, deliberately: the first name, /anon, matched content-blocker filter lists and the
+// frame died with ERR_BLOCKED_BY_CLIENT before any request left the browser. A URL that ad-blockers
+// eat is a bad URL.
 export const dynamic = "force-dynamic"
 
 // Self-fetches target the standalone listener itself: loopback on the port THIS process serves.

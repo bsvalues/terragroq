@@ -80,6 +80,6 @@ describe("the replacement root refuses the legacy product model", () => {
     // failed in the owner's, letting the legacy shell invade the environment.
     const source = fs.readFileSync(path.join(process.cwd(), "components/desk/desk.tsx"), "utf8")
     expect(source.includes("credentialless")).toBe(false)
-    expect(source.includes("/api/environment/anon")).toBe(true)
+    expect(source.includes("/api/environment/view")).toBe(true)
   })
 })

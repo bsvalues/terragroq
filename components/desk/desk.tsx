@@ -198,7 +198,7 @@ function SurfaceView({ surface }: { surface: Surface }) {
     // truth, styled, in every browser, with no way to carry the session back into the legacy shell.
     return (
       <iframe
-        src={`/api/environment/anon${surface.subject}`}
+        src={`/api/environment/view${surface.subject}`}
         title={surface.subject}
         sandbox=""
         className="h-full min-h-0 w-full bg-white"
