@@ -11,6 +11,8 @@ describe("universal intent router", () => {
     ["Build a useful release dashboard", "outcome", null, "start_outcome"],
     ["Fix the broken Project selector", "outcome", null, "start_outcome"],
     ["Add a compact on-screen latest-evidence timestamp to selected Thread work status.", "outcome", null, "start_outcome"],
+    ["record structured #911 reliability remediation without host mutation", "outcome", null, "start_outcome"],
+    ["  RECORD structured #911 reliability remediation without host mutation...  ", "outcome", null, "start_outcome"],
     ["Do improve the owner handoff", "outcome", null, "start_outcome"],
   ] as const)("routes %s to the %s contract", (input, intent, href, action) => {
     expect(routeUniversalIntent(input)).toMatchObject({
@@ -71,6 +73,19 @@ describe("universal intent router", () => {
     const result = routeUniversalIntent(input)
 
     expect(result).toMatchObject({
+      state: "clarification_required",
+      intent: null,
+      destination: null,
+      executionAuthorized: false,
+    })
+  })
+
+  it.each([
+    "record structured #912 reliability remediation without host mutation",
+    "record structured #911 reliability remediation with host mutation",
+    "record structured #911 reliability remediation without host mutation later",
+  ])("does not elevate a near-match of the registered #911 outcome: %j", (input) => {
+    expect(routeUniversalIntent(input)).toMatchObject({
       state: "clarification_required",
       intent: null,
       destination: null,

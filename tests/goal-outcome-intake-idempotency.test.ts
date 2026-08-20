@@ -40,8 +40,11 @@ vi.mock("@/app/actions/locks", () => ({ getActiveLocks: async () => [] }))
 vi.mock("@/app/actions/doctrine", () => ({
   validateAction: async () => ({ verdict: "allowed", matches: [] }),
 }))
-vi.mock("@/lib/goal/classifier", () => ({
-  classifyGoal: (command: string) => ({
+vi.mock("@/lib/goal/classifier", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/goal/classifier")>("@/lib/goal/classifier")
+  return { classifyGoal: (command: string) => command === "record structured #911 reliability remediation without host mutation"
+    ? actual.classifyGoal(command)
+    : ({
     lane: "BUILD",
     mode: "EXECUTE",
     risk: "low",
@@ -51,8 +54,8 @@ vi.mock("@/lib/goal/classifier", () => ({
     mistakePatterns: [],
     doctrineViolations: [],
     recommendedMove: "Queue bounded delivery",
-  }),
-}))
+    }) }
+})
 vi.mock("@/app/actions/work-orders", () => ({ createWorkOrder: vi.fn() }))
 vi.mock("@/lib/goal/loop", () => ({
   runLoopVerifier: vi.fn(),
@@ -480,6 +483,36 @@ describe("authenticated goal outcome intake idempotency", () => {
     expect(harness.state.governance).toHaveLength(1)
     expect(harness.state.events).toHaveLength(1)
     expect(JSON.stringify({ result, outcome: harness.state.outcomes[0] })).not.toMatch(/workOrder|lease|acquisition|dispatch/i)
+  })
+
+  it("persists the exact registered #911 outcome classification and sole outcome root without minting authority", async () => {
+    const intent = "record structured #911 reliability remediation without host mutation"
+    const result = await startWorkbenchOutcome({
+      projectId: 7,
+      intent,
+      idempotencyKey: "workbench-outcome:issue-911-0001",
+    })
+
+    expect(result).toMatchObject({
+      status: "ACCEPTED",
+      projectId: 7,
+      outcomeKey: "goal:GOAL-0001",
+      root: { sourceType: "outcome", sourceId: "goal:GOAL-0001" },
+      approvalGrantedByIntake: false,
+      authorityGrantedByIntake: false,
+      executionAuthorizedByIntake: false,
+    })
+    expect(harness.state.goals).toEqual([
+      expect.objectContaining({ command: intent, lane: "operator-objective", mode: "implement", risk: "R1", authority: "A2_WRITE_OWN", verdict: "requires_approval" }),
+    ])
+    expect(harness.state.outcomes).toEqual([
+      expect.objectContaining({ title: intent, objective: intent, riskClass: "R1", approvalState: "unapproved", authorityState: "unverified", lifecycleState: "suggested" }),
+    ])
+    expect(harness.state.threadSources).toEqual([
+      expect.objectContaining({ threadId: result.threadId, sourceType: "outcome", sourceId: "goal:GOAL-0001", role: "root" }),
+    ])
+    expect(JSON.stringify({ result, goal: harness.state.goals[0], outcome: harness.state.outcomes[0] }))
+      .not.toMatch(/authorityGrantRef":"(?!null)|approvalDecisionId":[0-9]|dispatch/i)
   })
 
   it("replays the exact accepted graph after response loss", async () => {

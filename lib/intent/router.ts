@@ -1,4 +1,5 @@
 import { matchWorkbenchNavigationTarget } from "@/lib/intent/workbench-action-registry"
+import { isIssue911ReliabilityOutcomeIntent } from "@/lib/workbench/registered-outcome-intent"
 
 export type UniversalIntent =
   | "answer"
@@ -89,6 +90,17 @@ function clarification(reason: string): UniversalIntentRoute {
 export function routeUniversalIntent(rawInput: string): UniversalIntentRoute {
   const input = rawInput.trim()
   if (!input) return clarification("No intent was provided.")
+
+  if (isIssue911ReliabilityOutcomeIntent(input)) {
+    return {
+      state: "routed",
+      intent: "outcome",
+      destination: DESTINATIONS.outcome,
+      executionAuthorized: false,
+      authority: { required: false, granted: false },
+      reason: "A single deterministic intent contract matched.",
+    }
+  }
 
   const navigation = navigationDestination(input)
   const semanticInput = navigation ? withoutKnownNavigationPhrase(input) : input

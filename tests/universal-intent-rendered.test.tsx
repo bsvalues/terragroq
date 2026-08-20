@@ -7,6 +7,14 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import { UniversalIntent } from "@/components/intent/universal-intent"
 
+const outcomeHarness = vi.hoisted(() => ({
+  start: vi.fn(),
+}))
+
+vi.mock("@/app/actions/start-workbench-outcome", () => ({
+  startWorkbenchOutcome: (...args: unknown[]) => outcomeHarness.start(...args),
+}))
+
 /**
  * The composer submits an ordinary-language objective (#891, #871 boundary 1).
  *
@@ -15,6 +23,7 @@ import { UniversalIntent } from "@/components/intent/universal-intent"
  */
 const NEVER_MATCHED = "Verify the deployed PACS state against the recorded completion evidence"
 const ROUTED_TO_A_PAGE = "Determine what the recovered OMEN Benton database is"
+const ISSUE_911 = "record structured #911 reliability remediation without host mutation"
 
 type FakeResponse = { ok: boolean; status: number; json: () => Promise<unknown> }
 
@@ -51,6 +60,29 @@ const NAVIGATION = {
   reason: "A single deterministic intent contract matched.",
 }
 
+const OUTCOME = {
+  state: "routed",
+  intent: "outcome",
+  destination: { href: null, action: "start_outcome" },
+  executionAuthorized: false,
+  authority: { required: false, granted: false },
+  reason: "A single deterministic intent contract matched.",
+}
+
+const acceptedOutcome = {
+  status: "ACCEPTED",
+  projectId: 7,
+  threadId: "thread-outcome-911",
+  goalId: 911,
+  outcomeKey: "goal:GOAL-0911",
+  root: { sourceType: "outcome", sourceId: "goal:GOAL-0911" },
+  intakeTruth: "persisted",
+  ownershipTruth: "project_thread_bound",
+  approvalGrantedByIntake: false,
+  authorityGrantedByIntake: false,
+  executionAuthorizedByIntake: false,
+}
+
 const admission = (over: Record<string, unknown> = {}) => ({
   ok: true,
   status: "admitted",
@@ -84,6 +116,8 @@ beforeAll(() => {
 beforeEach(() => {
   intentReply = async () => reply(CLARIFICATION)
   objectiveReply = async () => reply(admission(), 201)
+  outcomeHarness.start.mockReset()
+  outcomeHarness.start.mockResolvedValue(acceptedOutcome)
   vi.stubGlobal("fetch", vi.fn(async (url: string) => (String(url) === "/api/intent" ? intentReply() : objectiveReply())))
 })
 
@@ -93,6 +127,62 @@ afterEach(() => {
 })
 
 describe("UniversalIntent shared Workbench contract", () => {
+  it("starts an exact outcome in the selected Project and waits for a direct user gesture before opening its Thread", async () => {
+    const user = userEvent.setup()
+    const onOpenThread = vi.fn()
+    intentReply = async () => reply(OUTCOME)
+    render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={onOpenThread} />)
+
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), ISSUE_911)
+    await user.keyboard("{Enter}")
+
+    expect(await screen.findByText("Awaiting authority")).toBeTruthy()
+    expect(outcomeHarness.start).toHaveBeenCalledOnce()
+    expect(outcomeHarness.start).toHaveBeenCalledWith({
+      projectId: 7,
+      intent: ISSUE_911,
+      idempotencyKey: expect.stringMatching(/^workbench-outcome:[0-9a-f-]{36}$/),
+    })
+    expect(objectiveCalls()).toHaveLength(0)
+    expect(onOpenThread).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole("button", { name: "Open Thread" }))
+    expect(onOpenThread).toHaveBeenCalledOnce()
+    expect(onOpenThread).toHaveBeenCalledWith({ projectId: 7, threadId: "thread-outcome-911" })
+  })
+
+  it("reuses the exact outcome intake key after an uncertain response", async () => {
+    const user = userEvent.setup()
+    intentReply = async () => reply(OUTCOME)
+    outcomeHarness.start
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce({ ...acceptedOutcome, status: "ALREADY_ACCEPTED" })
+    render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)
+
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), ISSUE_911)
+    await user.keyboard("{Enter}")
+    expect((await screen.findByRole("alert")).textContent).toContain("Settlement unknown")
+
+    await user.keyboard("{Enter}")
+    expect(await screen.findByText("Awaiting authority")).toBeTruthy()
+    expect(outcomeHarness.start).toHaveBeenCalledTimes(2)
+    expect(outcomeHarness.start.mock.calls[1][0].idempotencyKey)
+      .toBe(outcomeHarness.start.mock.calls[0][0].idempotencyKey)
+  })
+
+  it("preserves ordinary objective admission when an outcome has no selected Project", async () => {
+    const user = userEvent.setup()
+    intentReply = async () => reply(OUTCOME)
+    render(<UniversalIntent selectedProject={null} onOpenThread={vi.fn()} />)
+
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), ISSUE_911)
+    await user.keyboard("{Enter}")
+
+    expect(await screen.findByText("Admitted as work")).toBeTruthy()
+    expect(outcomeHarness.start).not.toHaveBeenCalled()
+    expect(objectiveCalls()).toHaveLength(1)
+  })
+
   it("keeps a real visible composer and Ctrl+K palette on the same draft and registry", async () => {
     const user = userEvent.setup()
     render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)

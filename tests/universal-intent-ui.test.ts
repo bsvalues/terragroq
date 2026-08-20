@@ -19,15 +19,16 @@ describe("global universal intent affordance", () => {
     expect(component).not.toContain("?intent=")
   })
 
-  it("asks the deterministic router for navigation only, and never waits on recognition", () => {
+  it("uses the deterministic router for navigation and registered outcomes while preserving objective fallback", () => {
     expect(component).toContain('fetch("/api/intent"')
     expect(component).toContain("body: JSON.stringify({ intent })")
-    expect(component).toContain('routed.intent === "navigation"')
+    expect(component).toContain('routed?.intent === "navigation"')
+    expect(component).toContain('routed?.destination?.action === "start_outcome"')
     expect(component).toContain("routeResult.destination")
-    // Admission must not depend on the classifier recognising the objective, or on it answering at
-    // all -- that dependency is #871's defect. The classifier-gated outcome-start seam is gone with it.
-    expect(component).not.toContain("startWorkbenchOutcome")
-    expect(component).not.toContain("start_outcome")
+    expect(component).toContain("startWorkbenchOutcome")
+    // Unregistered and classifier-unavailable text still reaches /api/objective; the rendered suite
+    // proves that behavior rather than allowing recognition to become an admission prerequisite.
+    expect(component).toContain("const objective = await admitObjective(intent)")
   })
 
   it("states that admission is not authorisation and executes nothing", () => {
