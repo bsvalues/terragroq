@@ -1,6 +1,26 @@
 import { describe, expect, it } from "vitest"
 
 import { classifyProposedAction, ownerFacingState } from "../scripts/runtime-operator/owner-gate-policy.mjs"
+import { blocksAction } from "../scripts/runtime-findings/policy.mjs"
+
+describe("canonical grant blocking semantics", () => {
+  it.each([
+    [["OUTCOME:EXECUTE"], "outcome:execute"],
+    [["execute"], "outcome:execute"],
+    [["IMPLEMENT"], "implement"],
+    [["plem"], "implement"],
+  ])("blocks case-insensitive exact and substring declarations", (blocked, action) => {
+    expect(blocksAction(blocked, action)).toBe(true)
+  })
+
+  it.each([
+    [[], "implement"],
+    [["host-storage-mutation"], "implement"],
+    [["release"], "outcome:execute"],
+  ])("does not block unrelated controls", (blocked, action) => {
+    expect(blocksAction(blocked, action)).toBe(false)
+  })
+})
 
 /**
  * The cases are #911's actual change set, because that is the issue where the defect was caught: the

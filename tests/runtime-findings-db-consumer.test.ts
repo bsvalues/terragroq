@@ -63,6 +63,15 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     authorizedAt: "2026-08-20T17:00:00.000Z", expiresAt: "2099-01-01T00:00:00.000Z",
     workContract,
   }
+  const parentApprovalEvidence = [
+    "project:7", "thread:thread-7", "repo:bsvalues/terragroq",
+    `work-contract:${workContract.id}`, `work-contract-digest:${workContract.digest}`,
+    `work-contract-json:${JSON.stringify(workContract)}`,
+    ...workContract.reservations.map((reservation) => `reservation:${reservation}`),
+    ...workContract.validationCommands.map((validator) => (
+      `validator:${validator.command}:${validator.args.join(" ")}`
+    )),
+  ]
   const findingCore = {
     findingId: "FINDING-COMPOSE", sequence: 1, summary: "Reconcile compose drift",
     task: "Reconcile compose drift",
@@ -132,6 +141,8 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     parentApprovalStatus: "accepted", parentApprovalLocked: true,
     parentApprovalScope: "goal:GOAL-0004",
     parentApprovalAuthority: "binding", parentApprovalDecision: "APPROVE",
+    parentApprovalOwner: "owner", parentApprovalEvidence,
+    parentApprovalTags: ["workbench", "outcome", "explicit-start-work"],
     implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
     implementationGrantStatus: "active", implementationGrantRevokedAt: null,
     implementationGrantExpiresAt: "2099-01-01T00:00:00.000Z",
@@ -144,6 +155,7 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
     parentExecutionGrantAuthorityLevel: "A2_WRITE_OWN", parentExecutionGrantGrantedTo: "operator",
     parentExecutionGrantScope: "goal:GOAL-0004", parentExecutionGrantWorkOrderId: null,
     parentExecutionGrantAllowedActions: ["outcome:execute"],
+    parentExecutionGrantBlockedActions: ["host-storage-mutation"],
     settlementId: 501, settlementCount: 1, settlementEventType: "RUNTIME_FINDING_DERIVED",
     settlementMetadata: {},
     ...overrides,
@@ -276,6 +288,11 @@ describe("native runtime finding database consumer", () => {
   it("admits an ordinary sibling and records a gated sibling in one atomic bounded wave", async () => {
     const ordinary = sourceRow({ settlementId: null, settlementCount: null,
       settlementEventType: null, settlementMetadata: null })
+    ordinary.workContract = Object.fromEntries(Object.entries(ordinary.workContract).reverse())
+    ordinary.workContract.validationCommands = ordinary.workContract.validationCommands.map(
+      (validator: Record<string, unknown>) => Object.fromEntries(Object.entries(validator).reverse()),
+    )
+    ordinary.parentReceiptResultBinding.workContract = ordinary.workContract
     const gatedMetadata: any = {
       ...ordinary.findingMetadata, findingId: "FINDING-POLICY", sequence: 2,
       summary: "Change reviewed pin", task: "Change reviewed pin",
@@ -366,11 +383,17 @@ describe("native runtime finding database consumer", () => {
     ["approval mismatch", (row: any) => { row.parentQueueApprovalDecisionId = 75 }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["receipt decision mismatch", (row: any) => { row.parentReceiptDecisionId = 75 }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["unlocked parent approval", (row: any) => { row.parentApprovalLocked = false }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent approval owner", (row: any) => { row.parentApprovalOwner = "other" }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent approval evidence order", (row: any) => { row.parentApprovalEvidence.reverse() }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent approval contract JSON", (row: any) => { row.parentApprovalEvidence[5] = "work-contract-json:{}" }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent approval tags", (row: any) => { row.parentApprovalTags = ["workbench", "outcome"] }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["contract command timeout drift", (row: any) => { row.workContract.validationCommands[0].timeoutMs = 1 }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["parent receipt hash", (row: any) => { row.parentReceiptRequestHash = "e".repeat(64) }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["parent receipt shape", (row: any) => { row.parentReceiptRequestBinding.extra = true }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["parent receipt result shape", (row: any) => { row.parentReceiptResultBinding.extra = true }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["parent execution grant", (row: any) => { row.parentExecutionGrantId = 999 }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent queue blocked action", (row: any) => { row.parentExecutionGrantBlockedActions = ["OUTCOME:EXECUTE"] }, "FINDING_SOURCE_LINEAGE_WALL"],
+    ["parent implementation blocked action", (row: any) => { row.implementationGrantBlockedActions = ["IMPLEMENT"] }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["parent receipt cardinality", (row: any) => { row.parentReceiptCount = 2 }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["historical acquisition cardinality", (row: any) => { row.parentAcquisitionCount = 2 }, "FINDING_SOURCE_LINEAGE_WALL"],
     ["duplicate settlement", (row: any) => { row.settlementId = 501; row.settlementCount = 2 }, "FINDING_SETTLEMENT_CARDINALITY_WALL"],

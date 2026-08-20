@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 
-import { classifyProposedAction, deriveRemediationWorkOrder } from "./policy.mjs"
+import { blocksAction, classifyProposedAction, deriveRemediationWorkOrder } from "./policy.mjs"
 
 export const RUNTIME_FINDING_CONSUMER_WALL = "HERMES_RUNTIME_FINDING_CONSUMER_WALL"
 const REPOSITORY = "bsvalues/terragroq"
@@ -67,17 +67,45 @@ function findingPayload(metadata) {
 }
 
 function workContractPayload(contract) {
+  if (!contract || !Array.isArray(contract.validationCommands)) return null
+  const validationCommands = contract.validationCommands.map((command) => ({
+    command: command.command,
+    args: command.args,
+    ...(command && Object.hasOwn(command, "env") && command.env && typeof command.env === "object"
+      && !Array.isArray(command.env) ? {
+      env: Object.fromEntries(Object.keys(command.env).sort().map((key) => [key, command.env[key]])),
+    } : {}),
+    timeoutMs: command.timeoutMs,
+  }))
   const ordered = {
     version: contract.version,
     id: contract.id,
     repository: contract.repository,
     lane: contract.lane,
     reservations: contract.reservations,
-    validationCommands: contract.validationCommands,
+    validationCommands,
   }
-  if (Object.hasOwn(contract, "projection")) ordered.projection = contract.projection
-  if (Object.hasOwn(contract, "delivery")) ordered.delivery = contract.delivery
+  if (Object.hasOwn(contract, "projection")) ordered.projection = {
+    issueNumber: contract.projection.issueNumber,
+    completionOwned: contract.projection.completionOwned,
+  }
+  if (Object.hasOwn(contract, "delivery")) ordered.delivery = {
+    authorityLevel: contract.delivery.authorityLevel,
+    allowedActions: contract.delivery.allowedActions,
+    commitAllowed: contract.delivery.commitAllowed,
+    tagAllowed: contract.delivery.tagAllowed,
+    pushAllowed: contract.delivery.pushAllowed,
+  }
   return ordered
+}
+
+function workContractEvidencePayload(contract) {
+  const payload = workContractPayload(contract)
+  if (!payload) return null
+  return {
+    ...payload,
+    digest: contract.digest,
+  }
 }
 
 function exactCheckpointFindings(row) {
@@ -154,6 +182,20 @@ function sourceFinding(row, nowMs) {
   const checkpointFindings = exactCheckpointFindings(row)
   const parentRequest = row?.parentReceiptRequestBinding
   const parentResult = row?.parentReceiptResultBinding
+  const parentApprovalEvidence = contract && parentRequest
+    && Array.isArray(contract.reservations) && Array.isArray(contract.validationCommands)
+    && contract.validationCommands.every((validator) => Array.isArray(validator?.args)) ? [
+    `project:${parentRequest.projectId}`,
+    `thread:${parentRequest.threadId}`,
+    `repo:${contract.repository}`,
+    `work-contract:${contract.id}`,
+    `work-contract-digest:${contract.digest}`,
+    `work-contract-json:${JSON.stringify(workContractEvidencePayload(contract))}`,
+    ...contract.reservations.map((reservation) => `reservation:${reservation}`),
+    ...contract.validationCommands.map((validator) => (
+      `validator:${validator.command}:${validator.args.join(" ")}`
+    )),
+    ] : null
   if (!Number.isSafeInteger(Number(row?.sourceFindingEventId))
     || !safeText(row?.userId) || !Number.isSafeInteger(Number(row?.parentWorkOrderId))
     || !safeText(row?.parentWorkOrderRef) || row?.parentAssignee !== "hermes-codex-bridge"
@@ -263,6 +305,9 @@ function sourceFinding(row, nowMs) {
     || row.parentReceiptImplementationGrantRef !== metadata.implementationGrantRef
     || row.parentApprovalStatus !== "accepted" || row.parentApprovalAuthority !== "binding"
     || String(row.parentApprovalDecision ?? "").trim().toUpperCase() !== "APPROVE"
+    || row.parentApprovalOwner !== row.userId
+    || !exactArray(row.parentApprovalEvidence, parentApprovalEvidence)
+    || !exactArray(row.parentApprovalTags, ["workbench", "outcome", "explicit-start-work"])
     || Number(row.implementationGrantId) !== Number(metadata.implementationGrantId)
     || row.implementationGrantRef !== metadata.implementationGrantRef
     || row.implementationGrantStatus !== "active" || row.implementationGrantRevokedAt != null
@@ -271,7 +316,7 @@ function sourceFinding(row, nowMs) {
     || row.implementationGrantScope !== row.parentWorkOrderRef
     || !exactArray(row.implementationGrantAllowedActions, metadata.deliveryAllowedActions)
     || !Array.isArray(row.implementationGrantBlockedActions)
-    || row.implementationGrantBlockedActions.includes("implement")
+    || blocksAction(row.implementationGrantBlockedActions, "implement")
     || row.parentStatus === "aborted" || row.parentAuthorityGranted !== metadata.deliveryAuthorityLevel
     || row.parentAuthorityLevel !== metadata.deliveryAuthorityLevel
     || Number(row.parentAuthorityGrantId) !== Number(row.implementationGrantId)
@@ -289,6 +334,8 @@ function sourceFinding(row, nowMs) {
     || row.parentExecutionGrantScope !== row.parentOutcomeKey
     || !exactArray(row.parentExecutionGrantAllowedActions, ["outcome:execute"])
     || row.parentExecutionGrantWorkOrderId != null
+    || !Array.isArray(row.parentExecutionGrantBlockedActions)
+    || blocksAction(row.parentExecutionGrantBlockedActions, "outcome:execute")
     || row.parentExecutionGrantExpiresAt == null
     || normalizeDate(row.parentExecutionGrantExpiresAt).getTime() <= nowMs
     || normalizeDate(parentResult.expiresAt).getTime() !== normalizeDate(row.implementationGrantExpiresAt).getTime()
@@ -738,6 +785,7 @@ async function replayOrdinary(client, row, finding, order, classification) {
     || !exactArray(artifact.validators, row.parentValidators)
     || !exactArray(artifact.grantAllowedActions, finding.deliveryAllowedActions)
     || !exactArray(artifact.grantBlockedActions, row.implementationGrantBlockedActions)
+    || blocksAction(artifact.grantBlockedActions, "implement")
     || artifact.queueGrantStatus !== "active" || artifact.queueGrantRevokedAt != null
     || artifact.queueGrantAuthorityLevel !== finding.deliveryAuthorityLevel
     || artifact.queueGrantScope !== identity.outcomeKey || artifact.queueGrantGrantedTo !== "operator"
@@ -745,6 +793,7 @@ async function replayOrdinary(client, row, finding, order, classification) {
     || normalizeDate(artifact.queueGrantExpiresAt).getTime() !== normalizeDate(row.implementationGrantExpiresAt).getTime()
     || !exactArray(artifact.queueGrantAllowedActions, ["outcome:execute"])
     || !exactArray(artifact.queueGrantBlockedActions, row.implementationGrantBlockedActions)
+    || blocksAction(artifact.queueGrantBlockedActions, "outcome:execute")
     || Number(artifact.authorityGrantId) !== Number(artifact.grantId)
     || Number(artifact.linkedWorkOrderId) !== Number(artifact.workOrderId)
     || Number(artifact.activeWorkOrderId) !== Number(artifact.workOrderId)
@@ -890,6 +939,8 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     approval.status AS "parentApprovalStatus",
                     approval.locked AS "parentApprovalLocked", approval.scope AS "parentApprovalScope",
                     approval.authority AS "parentApprovalAuthority", approval.decision AS "parentApprovalDecision",
+                    approval.owner AS "parentApprovalOwner", approval.evidence AS "parentApprovalEvidence",
+                    approval.tags AS "parentApprovalTags",
                     grant.id AS "implementationGrantId", grant.ref AS "implementationGrantRef",
                     grant.status AS "implementationGrantStatus", grant."revokedAt" AS "implementationGrantRevokedAt",
                     grant."expiresAt" AS "implementationGrantExpiresAt",
@@ -907,6 +958,7 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     execution_grant.scope AS "parentExecutionGrantScope",
                     execution_grant."workOrderId" AS "parentExecutionGrantWorkOrderId",
                     execution_grant."allowedActions" AS "parentExecutionGrantAllowedActions",
+                    execution_grant."blockedActions" AS "parentExecutionGrantBlockedActions",
                     settlement.id AS "settlementId", settlement."eventType" AS "settlementEventType",
                     settlement.metadata AS "settlementMetadata", settlement."settlementCount"
                FROM governance_event finding

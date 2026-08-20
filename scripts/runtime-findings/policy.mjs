@@ -30,6 +30,16 @@ const SOURCE_BINDING_FIELDS = Object.freeze([
   "deliveryAllowedActions", "commitAllowed", "tagAllowed", "pushAllowed",
 ])
 
+export function blocksAction(blockedActions, action) {
+  if (!Array.isArray(blockedActions) || typeof action !== "string") return false
+  const normalizedAction = action.trim().toLowerCase()
+  if (!normalizedAction) return false
+  return blockedActions.some((blocked) => (
+    typeof blocked === "string" && blocked.trim() !== ""
+      && normalizedAction.includes(blocked.trim().toLowerCase())
+  ))
+}
+
 function refuse(gate, reason, extra = {}) {
   return { gated: true, gate, gates: [gate], reason, unclassifiable: false, ...extra }
 }

@@ -204,9 +204,9 @@ describe("Hermes durable outcome queue runtime", () => {
       { ...derivedGoal, derivedApprovalDecision: "DENY" },
       { ...derivedGoal, derivedApprovalEvidence: ["runtime-finding:999"] },
       { ...derivedGoal, derivedQueueGrantId: 999 },
-      { ...derivedGoal, derivedQueueGrantBlockedActions: ["outcome:execute"] },
+      { ...derivedGoal, derivedQueueGrantBlockedActions: ["EXECUTE"] },
       { ...derivedGoal, derivedImplementationGrantRef: "IMPL-DRIFTED" },
-      { ...derivedGoal, derivedImplementationGrantBlockedActions: ["implement"] },
+      { ...derivedGoal, derivedImplementationGrantBlockedActions: ["PLEM"] },
       { ...derivedGoal, derivedSourcePayloadDigest: "e".repeat(64) },
       { ...derivedGoal, derivedParentWorkOrderRef: "WO-PARENT-DRIFTED" },
     ]) {

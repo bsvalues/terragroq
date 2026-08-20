@@ -23,6 +23,7 @@ import {
   deferProviderOutcome as deferGoalOutcome,
   terminalizeOutcome as terminalizeGoalOutcome,
 } from "./outcome-source.mjs"
+import { blocksAction } from "../runtime-findings/policy.mjs"
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
@@ -379,7 +380,7 @@ async function loadLinkedGoal(withPool, queueItem) {
       || Number(derivedFields.derivedQueueGrantWorkOrderId) !== Number(queueItem.activeWorkOrderId)
       || JSON.stringify(derivedFields.derivedQueueGrantAllowedActions) !== JSON.stringify(["outcome:execute"])
       || !Array.isArray(derivedFields.derivedQueueGrantBlockedActions)
-      || derivedFields.derivedQueueGrantBlockedActions.includes("outcome:execute")
+      || blocksAction(derivedFields.derivedQueueGrantBlockedActions, "outcome:execute")
       || Number(receipt.resultBinding?.implementationGrantId) !== Number(derivedFields.derivedImplementationGrantId)
       || receipt.resultBinding?.implementationGrantRef !== derivedFields.derivedImplementationGrantRef
       || derivedFields.derivedImplementationGrantStatus !== "active"
@@ -390,7 +391,7 @@ async function loadLinkedGoal(withPool, queueItem) {
       || Number(derivedFields.derivedImplementationGrantWorkOrderId) !== Number(queueItem.activeWorkOrderId)
       || JSON.stringify(derivedFields.derivedImplementationGrantAllowedActions) !== JSON.stringify(["implement"])
       || !Array.isArray(derivedFields.derivedImplementationGrantBlockedActions)
-      || derivedFields.derivedImplementationGrantBlockedActions.includes("implement")
+      || blocksAction(derivedFields.derivedImplementationGrantBlockedActions, "implement")
       || Number(derivedFields.derivedSourceFindingEventId) !== Number(receipt.requestBinding?.sourceFindingEventId)
       || derivedFields.derivedSourceUserId !== queueItem.userId
       || derivedFields.derivedSourcePayloadDigest !== receipt.requestBinding?.sourcePayloadDigest
