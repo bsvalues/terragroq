@@ -364,6 +364,23 @@ export const workbenchThreadSource = pgTable(
   ],
 )
 
+// The Environment's working world (S6, #762): one row per assembled world; snapshot holds meaning,
+// validated chrome-free at the boundary by lib/environment/working-world.ts.
+export const workingWorld = pgTable(
+  "working_world",
+  {
+    id: text("id").primaryKey(),
+    userId: text("userId").notNull(),
+    intent: text("intent").notNull(),
+    snapshot: text("snapshot").notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("working_world_user_updated_idx").on(table.userId, table.updatedAt, table.id),
+  ],
+)
+
 // A Thread is a conversation (#762 CONVERSATION-FIRST). Messages are its primary content; work
 // objects hang off the conversation, never the other way around. Roles are the projection's two
 // voices; agent/system voices arrive by widening the check, the way 0010 widened source kinds.
