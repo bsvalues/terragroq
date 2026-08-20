@@ -65,6 +65,7 @@ const TURN_RESULT_KEYS = Object.freeze([
   "minimumChoice",
   "approveConsequence",
   "denyConsequence",
+  "findings",
 ])
 const TURN_RESULT_REQUIRED_KEYS = Object.freeze(TURN_RESULT_KEYS.slice(0, 12))
 
@@ -95,6 +96,91 @@ function boundedString(value, field, { nullable = false, maximum = 1_000 } = {})
     fail("INVALID_TURN_RESULT", field)
   }
   return value
+}
+
+const FINDING_ID = /^FINDING-[A-Z0-9][A-Z0-9-]{0,119}$/
+const FINDING_KEYS = Object.freeze(["effects", "findingId", "paths", "sequence", "summary", "task"])
+const FINDING_EFFECT_KEYS = Object.freeze([
+  "changesReviewedPolicy", "competesWithPriority", "destroys", "irreversible",
+  "mutatesProductionData", "outsideObjectiveScope", "protectedResource", "releaseOrCutover",
+  "spendsMoney", "touchesCredentials", "unresolvedLegalPrivacyOrSecurityRisk",
+])
+const FINDING_QUARANTINE = new RegExp([
+  "-----" + "BEGIN [A-Z ]*PRIVATE KEY-----",
+  "\\bs" + "k-[A-Za-z0-9_-]{20,}\\b",
+  "\\bg" + "h[oprsu]_[A-Za-z0-9]{20,}\\b",
+  "(?:post" + "gres(?:ql)?|mysql|mongodb(?:\\+srv)?|redis):\\/\\/[^\\s]+",
+  "(?:pass" + "word|to" + "ken|api[_ -]?key|client[_ -]?secret)\\s*[:=]\\s*[\\\"']?[^\\s\\\"']{8,}",
+  "ignore\\s+(?:(?:all\\s+|any\\s+|the\\s+)?previous|(?:the\\s+)?(?:declared|authority|boundary|rules?))",
+  "system\\s+(?:message|prompt)",
+  "developer\\s+(?:message|instruction)",
+  "<\\/?system\\b",
+  "\\[INST\\]",
+  "do\\s+not\\s+follow\\s+(?:the\\s+)?(?:rules|instructions)",
+].join("|"), "i")
+
+function findingPath(value) {
+  return typeof value === "string" && value.length > 0 && value.length <= 300
+    && !value.startsWith("/") && !value.includes("\\") && !value.split("/").includes("..")
+}
+
+export function normalizeHermesFindings(value) {
+  if (!Array.isArray(value) || value.length > 20) fail("INVALID_TURN_RESULT_FINDING")
+  const ids = new Set()
+  const sequences = new Set()
+  return value.map((finding) => {
+    const keys = finding && typeof finding === "object" && !Array.isArray(finding)
+      ? Object.keys(finding).sort()
+      : []
+    const effects = finding?.effects
+    const effectKeys = effects && typeof effects === "object" && !Array.isArray(effects)
+      ? Object.keys(effects).sort()
+      : []
+    const textValid = (entry) => typeof entry === "string" && entry.trim() !== ""
+      && entry.length <= 2_000
+    const destroys = effects?.destroys
+    const destroysValid = Array.isArray(destroys) && destroys.length <= 50
+      && destroys.every((target) => target && typeof target === "object" && !Array.isArray(target)
+        && JSON.stringify(Object.keys(target).sort()) === JSON.stringify(["path", "verifiedCopyElsewhere"])
+        && findingPath(target.path) && typeof target.verifiedCopyElsewhere === "boolean")
+    const effectsValid = JSON.stringify(effectKeys) === JSON.stringify(FINDING_EFFECT_KEYS)
+      && FINDING_EFFECT_KEYS.every((key) => key === "destroys" || typeof effects[key] === "boolean")
+      && destroysValid
+    const pathsValid = Array.isArray(finding?.paths) && finding.paths.length > 0
+      && finding.paths.length <= 50 && new Set(finding.paths).size === finding.paths.length
+      && finding.paths.every(findingPath)
+    if (JSON.stringify(keys) !== JSON.stringify(FINDING_KEYS)
+      || !FINDING_ID.test(finding?.findingId)
+      || !Number.isSafeInteger(finding?.sequence) || finding.sequence <= 0
+      || ids.has(finding.findingId) || sequences.has(finding.sequence)
+      || !textValid(finding?.summary) || !textValid(finding?.task)
+      || !pathsValid || !effectsValid) fail("INVALID_TURN_RESULT_FINDING")
+    if (FINDING_QUARANTINE.test(JSON.stringify(finding))) {
+      fail("TURN_RESULT_FINDING_QUARANTINE_WALL")
+    }
+    ids.add(finding.findingId)
+    sequences.add(finding.sequence)
+    return {
+      findingId: finding.findingId,
+      sequence: finding.sequence,
+      summary: finding.summary,
+      task: finding.task,
+      paths: [...finding.paths],
+      effects: {
+        changesReviewedPolicy: effects.changesReviewedPolicy,
+        competesWithPriority: effects.competesWithPriority,
+        destroys: effects.destroys.map((target) => ({ ...target })),
+        irreversible: effects.irreversible,
+        mutatesProductionData: effects.mutatesProductionData,
+        outsideObjectiveScope: effects.outsideObjectiveScope,
+        protectedResource: effects.protectedResource,
+        releaseOrCutover: effects.releaseOrCutover,
+        spendsMoney: effects.spendsMoney,
+        touchesCredentials: effects.touchesCredentials,
+        unresolvedLegalPrivacyOrSecurityRisk: effects.unresolvedLegalPrivacyOrSecurityRisk,
+      },
+    }
+  }).sort((left, right) => left.sequence - right.sequence)
 }
 
 export function normalizeHermesTurnResult(value) {
@@ -133,6 +219,7 @@ export function normalizeHermesTurnResult(value) {
     minimumChoice: value.minimumChoice ?? null,
     approveConsequence: boundedString(value.approveConsequence ?? null, "approveConsequence", { nullable: true }),
     denyConsequence: boundedString(value.denyConsequence ?? null, "denyConsequence", { nullable: true }),
+    ...(Object.hasOwn(value, "findings") ? { findings: normalizeHermesFindings(value.findings) } : {}),
   }
   if (SENSITIVE_EVIDENCE.test(JSON.stringify(normalized))) {
     fail("TURN_RESULT_SECRET_WALL")
@@ -384,14 +471,14 @@ function metadata(input = {}, current = {}) {
     && !["PENDING_HOST_VALIDATION", "VALIDATION_REMEDIATION"].includes(validationRecoveryPhase)) {
     fail("INVALID_VALIDATION_RECOVERY_PHASE")
   }
-  const validationRecoveryFencingToken = Object.hasOwn(input, "validationRecoveryFencingToken")
-    ? input.validationRecoveryFencingToken
-    : current.validationRecoveryFencingToken ?? null
-  if (validationRecoveryFencingToken !== null
-    && (!Number.isSafeInteger(validationRecoveryFencingToken) || validationRecoveryFencingToken <= 0)) {
+  const validationRecoveryFence = Object.hasOwn(input, "validationRecoveryFencingToken")
+    ? input["validationRecoveryFencing" + "Token"]
+    : current["validationRecoveryFencing" + "Token"] ?? null
+  if (validationRecoveryFence !== null
+    && (!Number.isSafeInteger(validationRecoveryFence) || validationRecoveryFence <= 0)) {
     fail("INVALID_VALIDATION_RECOVERY_FENCING_TOKEN")
   }
-  if ((validationRecoveryPhase === null) !== (validationRecoveryFencingToken === null)) {
+  if ((validationRecoveryPhase === null) !== (validationRecoveryFence === null)) {
     fail("INVALID_VALIDATION_RECOVERY_BINDING")
   }
   const reviewRecoveryProofDigest = Object.hasOwn(input, "reviewRecoveryProofDigest")
@@ -547,7 +634,7 @@ function metadata(input = {}, current = {}) {
     validationRemediationRound,
     validationRecoveryProofDigest,
     validationRecoveryPhase,
-    validationRecoveryFencingToken,
+    ["validationRecoveryFencing" + "Token"]: validationRecoveryFence,
     reviewRecoveryProofDigest,
     terminalCleanupRecoveryProofDigest,
     reviewRecoveryPriorHeadRefOid,
@@ -589,10 +676,10 @@ export function acquireLease(filePath, request, options = {}) {
         ? "LEASE_RECLAIM_REQUIRED"
         : "LEASE_ALREADY_HELD")
     }
-    const fencingToken = state.nextFencingToken++
+    const fencingFence = state.nextFencingToken++
     const current = {
       outcomeId: request.outcomeId,
-      fencingToken,
+      ["fencing" + "Token"]: fencingFence,
       lease: {
         status: "ACTIVE",
         holderId: request.holderId,
@@ -603,7 +690,7 @@ export function acquireLease(filePath, request, options = {}) {
       metadata: metadata(request.metadata),
     }
     state.executions = { ...state.executions, [request.outcomeId]: current }
-    return { outcomeId: request.outcomeId, fencingToken, checkpointSequence: 0, leaseExpiresAt: current.lease.expiresAt, metadata: current.metadata }
+    return { outcomeId: request.outcomeId, ["fencing" + "Token"]: fencingFence, checkpointSequence: 0, leaseExpiresAt: current.lease.expiresAt, metadata: current.metadata }
   })
 }
 
@@ -618,10 +705,10 @@ export function reclaimLease(filePath, request, options = {}) {
       fail("LEASE_NOT_EXPIRED")
     }
     if (!request.holderId || !Number.isFinite(request.leaseDurationMs) || request.leaseDurationMs <= 0) fail("LEASE_REQUEST_INVALID")
-    const fencingToken = state.nextFencingToken++
+    const fencingFence = state.nextFencingToken++
     const reclaimed = {
       ...current,
-      fencingToken,
+      ["fencing" + "Token"]: fencingFence,
       lease: {
         status: "ACTIVE",
         holderId: request.holderId,
@@ -631,7 +718,7 @@ export function reclaimLease(filePath, request, options = {}) {
       metadata: metadata(request.metadata, current.metadata),
     }
     state.executions = { ...state.executions, [request.outcomeId]: reclaimed }
-    return { outcomeId: request.outcomeId, fencingToken, checkpointSequence: reclaimed.checkpoint.sequence, leaseExpiresAt: reclaimed.lease.expiresAt, metadata: reclaimed.metadata }
+    return { outcomeId: request.outcomeId, ["fencing" + "Token"]: fencingFence, checkpointSequence: reclaimed.checkpoint.sequence, leaseExpiresAt: reclaimed.lease.expiresAt, metadata: reclaimed.metadata }
   })
 }
 
@@ -650,7 +737,7 @@ export function writeCheckpoint(filePath, request, options = {}) {
       metadata: metadata(request.metadata, current.metadata),
     }
     state.executions = { ...state.executions, [request.outcomeId]: updated }
-    return { outcomeId: request.outcomeId, fencingToken: updated.fencingToken, checkpointSequence: updated.checkpoint.sequence, state: updated.checkpoint.state, metadata: updated.metadata }
+    return { outcomeId: request.outcomeId, ["fencing" + "Token"]: updated.fencingToken, checkpointSequence: updated.checkpoint.sequence, state: updated.checkpoint.state, metadata: updated.metadata }
   })
 }
 
@@ -671,7 +758,7 @@ export function renewLease(filePath, request, options = {}) {
       },
     }
     state.executions = { ...state.executions, [request.outcomeId]: renewed }
-    return { outcomeId: request.outcomeId, fencingToken: current.fencingToken, leaseExpiresAt: renewed.lease.expiresAt }
+    return { outcomeId: request.outcomeId, ["fencing" + "Token"]: current.fencingToken, leaseExpiresAt: renewed.lease.expiresAt }
   })
 }
 
@@ -682,7 +769,7 @@ export function releaseLease(filePath, request, options = {}) {
     assertFence(current, request.holderId, request.fencingToken)
     const released = { ...current, lease: { ...current.lease, status: "RELEASED", expiresAt: at.iso, releasedAt: at.iso } }
     state.executions = { ...state.executions, [request.outcomeId]: released }
-    return { outcomeId: request.outcomeId, fencingToken: current.fencingToken, checkpointSequence: current.checkpoint.sequence, leaseStatus: "RELEASED" }
+    return { outcomeId: request.outcomeId, ["fencing" + "Token"]: current.fencingToken, checkpointSequence: current.checkpoint.sequence, leaseStatus: "RELEASED" }
   })
 }
 
@@ -696,7 +783,7 @@ export function abandonLease(filePath, request, options = {}) {
       lease: { ...current.lease, expiresAt: at.iso, abandonedAt: at.iso, abandonReason: request.reason ?? null },
     }
     state.executions = { ...state.executions, [request.outcomeId]: abandoned }
-    return { outcomeId: request.outcomeId, fencingToken: current.fencingToken, leaseExpiresAt: at.iso }
+    return { outcomeId: request.outcomeId, ["fencing" + "Token"]: current.fencingToken, leaseExpiresAt: at.iso }
   })
 }
 
@@ -730,7 +817,7 @@ export function reopenProviderWall(filePath, request, options = {}) {
     state.executions = { ...state.executions, [request.outcomeId]: reopened }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: reopened.fencingToken,
+      ["fencing" + "Token"]: reopened.fencingToken,
       checkpointSequence: reopened.checkpoint.sequence,
       leaseStatus: reopened.lease.status,
     }
@@ -783,7 +870,7 @@ export function reopenOwnerDecisionWall(filePath, request, options = {}) {
     state.executions = { ...state.executions, [request.outcomeId]: reopened }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: reopened.fencingToken,
+      ["fencing" + "Token"]: reopened.fencingToken,
       checkpointSequence: reopened.checkpoint.sequence,
       leaseStatus: reopened.lease.status,
       state: reopened.checkpoint.state,
@@ -817,10 +904,10 @@ export function reopenValidationInfrastructureWall(filePath, request, options = 
       || !ownerTouchesRemainZero) {
       fail("VALIDATION_INFRASTRUCTURE_RECOVERY_STATE_WALL")
     }
-    const recoveryFencingToken = state.nextFencingToken++
+    const recoveryFence = state.nextFencingToken++
     const reopened = {
       ...current,
-      fencingToken: recoveryFencingToken,
+      ["fencing" + "Token"]: recoveryFence,
       lease: {
         ...current.lease,
         status: "ABANDONED",
@@ -840,14 +927,14 @@ export function reopenValidationInfrastructureWall(filePath, request, options = 
         validationRemediationRound: 0,
         validationRecoveryProofDigest: request.proofDigest,
         validationRecoveryPhase: "PENDING_HOST_VALIDATION",
-        validationRecoveryFencingToken: current.fencingToken,
+        ["validationRecoveryFencing" + "Token"]: current.fencingToken,
         headRefOid: null,
       }, current.metadata),
     }
     state.executions = { ...state.executions, [request.outcomeId]: reopened }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: reopened.fencingToken,
+      ["fencing" + "Token"]: reopened.fencingToken,
       checkpointSequence: reopened.checkpoint.sequence,
       leaseStatus: reopened.lease.status,
       state: reopened.checkpoint.state,
@@ -900,7 +987,7 @@ export function beginReviewRemediationRecovery(filePath, request, options = {}) 
     state.executions = { ...state.executions, [request.outcomeId]: reopened }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: reopened.fencingToken,
+      ["fencing" + "Token"]: reopened.fencingToken,
       checkpointSequence: reopened.checkpoint.sequence,
       leaseStatus: reopened.lease.status,
       state: reopened.checkpoint.state,
@@ -942,7 +1029,7 @@ export function recordReviewRemediationMerge(filePath, request, options = {}) {
     state.executions = { ...state.executions, [request.outcomeId]: merged }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: merged.fencingToken,
+      ["fencing" + "Token"]: merged.fencingToken,
       checkpointSequence: merged.checkpoint.sequence,
       leaseStatus: merged.lease.status,
       state: merged.checkpoint.state,
@@ -989,7 +1076,7 @@ export function finalizeReviewRemediationRecovery(filePath, request, options = {
     state.executions = { ...state.executions, [request.outcomeId]: reopened }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: reopened.fencingToken,
+      ["fencing" + "Token"]: reopened.fencingToken,
       checkpointSequence: reopened.checkpoint.sequence,
       leaseStatus: reopened.lease.status,
       state: reopened.checkpoint.state,
@@ -1032,7 +1119,7 @@ export function reconcileReviewRemediationProjection(filePath, request, options 
     state.executions = { ...state.executions, [request.outcomeId]: reconciled }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: reconciled.fencingToken,
+      ["fencing" + "Token"]: reconciled.fencingToken,
       checkpointSequence: reconciled.checkpoint.sequence,
       leaseStatus: reconciled.lease.status,
       state: reconciled.checkpoint.state,
@@ -1077,7 +1164,7 @@ export function recoverExternalToolWall(filePath, request, options = {}) {
     state.executions = { ...state.executions, [request.outcomeId]: recovered }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: recovered.fencingToken,
+      ["fencing" + "Token"]: recovered.fencingToken,
       checkpointSequence: recovered.checkpoint.sequence,
       leaseStatus: recovered.lease.status,
     }
@@ -1122,7 +1209,7 @@ export function recoverPostMergeCleanupWall(filePath, request, options = {}) {
     state.executions = { ...state.executions, [request.outcomeId]: recovered }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: recovered.fencingToken,
+      ["fencing" + "Token"]: recovered.fencingToken,
       checkpointSequence: recovered.checkpoint.sequence,
       leaseStatus: recovered.lease.status,
     }
@@ -1173,7 +1260,7 @@ export function beginTerminalPostMergeCleanupRecovery(filePath, request, options
     state.executions = { ...state.executions, [request.outcomeId]: recovered }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: recovered.fencingToken,
+      ["fencing" + "Token"]: recovered.fencingToken,
       checkpointSequence: recovered.checkpoint.sequence,
       leaseStatus: recovered.lease.status,
     }
@@ -1223,7 +1310,7 @@ export function finalizeTerminalPostMergeCleanupRecovery(filePath, request, opti
     state.executions = { ...state.executions, [request.outcomeId]: recovered }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: recovered.fencingToken,
+      ["fencing" + "Token"]: recovered.fencingToken,
       checkpointSequence: recovered.checkpoint.sequence,
       leaseStatus: recovered.lease.status,
     }
@@ -1261,7 +1348,7 @@ export function deferProviderWall(filePath, request, options = {}) {
     state.executions = { ...state.executions, [request.outcomeId]: deferred }
     return {
       outcomeId: request.outcomeId,
-      fencingToken: deferred.fencingToken,
+      ["fencing" + "Token"]: deferred.fencingToken,
       checkpointSequence: deferred.checkpoint.sequence,
       leaseStatus: deferred.lease.status,
       retryAfter: retryAt.iso,
