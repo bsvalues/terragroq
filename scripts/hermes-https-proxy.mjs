@@ -46,25 +46,30 @@ const APPROVED_HTTPS_HOSTS = new Set([
   "williamos.lan:3443",
   CANONICAL_HTTPS_HOST,
 ])
+const APPROVED_DNS_ORIGIN_HOSTS = new Map([
+  ["https://hermes.local:3443", "hermes.local:3443"],
+  ["https://williamos.lan:3443", "williamos.lan:3443"],
+])
 
-function inboundHostValues(headers, rawHeaders) {
+function inboundHeaderValues(headers, rawHeaders, headerName) {
   if (rawHeaders !== null) {
     if (!Array.isArray(rawHeaders) || rawHeaders.length % 2 !== 0
       || rawHeaders.some((value) => typeof value !== "string")) return []
     const values = []
     for (let index = 0; index < rawHeaders.length; index += 2) {
-      if (rawHeaders[index].toLowerCase() === "host") values.push(rawHeaders[index + 1])
+      if (rawHeaders[index].toLowerCase() === headerName) values.push(rawHeaders[index + 1])
     }
     return values
   }
   return Object.entries(headers)
-    .filter(([name]) => name.toLowerCase() === "host")
+    .filter(([name]) => name.toLowerCase() === headerName)
     .map(([, value]) => value)
 }
 
 export function buildUpstreamHeaders(headers, device = null, rawHeaders = null) {
   const forwarded = {}
-  const inboundHosts = inboundHostValues(headers, rawHeaders)
+  const inboundHosts = inboundHeaderValues(headers, rawHeaders, "host")
+  const inboundOrigins = inboundHeaderValues(headers, rawHeaders, "origin")
   for (const [name, value] of Object.entries(headers)) {
     const normalizedName = name.toLowerCase()
     if (
@@ -80,9 +85,15 @@ export function buildUpstreamHeaders(headers, device = null, rawHeaders = null) 
   const normalizedHost = inboundHosts.length === 1 && typeof inboundHosts[0] === "string"
     ? inboundHosts[0].toLowerCase()
     : null
-  const externalHost = normalizedHost !== null && APPROVED_HTTPS_HOSTS.has(normalizedHost)
+  let externalHost = normalizedHost !== null && APPROVED_HTTPS_HOSTS.has(normalizedHost)
     ? normalizedHost
     : CANONICAL_HTTPS_HOST
+  const approvedOriginHost = inboundOrigins.length === 1 && typeof inboundOrigins[0] === "string"
+    ? APPROVED_DNS_ORIGIN_HOSTS.get(inboundOrigins[0])
+    : null
+  if (normalizedHost === CANONICAL_HTTPS_HOST && approvedOriginHost) {
+    externalHost = approvedOriginHost
+  }
   forwarded.host = externalHost
   forwarded["x-forwarded-host"] = externalHost
   forwarded["x-forwarded-port"] = "3443"
