@@ -82,15 +82,26 @@ try {
     $lanEndpoint = Get-PublicEndpoint
     Note "baseline public endpoint (on LAN): $lanEndpoint"
 
-    # --- failsafe armed BEFORE anything is severed ---
-    $restoreCommand = "Enable-NetAdapter -Name '$EthernetAlias' -Confirm:`$false"
-    Register-ScheduledTask -TaskName $failsafeTask -Force `
-        -Action (New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -Command `"$restoreCommand`"") `
-        -Trigger (New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes($FailsafeMinutes))) `
-        -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest) | Out-Null
-    Note "failsafe armed: '$EthernetAlias' re-enables unconditionally at +$FailsafeMinutes min"
+    # Unplugging the cable is the simplest way to be off the LAN, needs no elevation, and is what
+    # actually produced the first passing run. If the adapter is already down there is nothing to
+    # sever and nothing to restore, so the whole privileged path -- failsafe task, Disable-NetAdapter,
+    # Enable-NetAdapter -- is skipped. Arming a failsafe to re-enable an adapter this script never
+    # disabled would be theatre, and it would fight a cable the operator deliberately pulled.
+    $ethernetState = (Get-NetAdapter -Name $EthernetAlias -ErrorAction SilentlyContinue).Status
+    $mustSeverLan = $ethernetState -eq 'Up'
+    Note "'$EthernetAlias' is '$ethernetState' -> $(if ($mustSeverLan) { 'this script will disable it' } else { 'already off the LAN; no adapter changes needed' })"
 
-    # --- 1. wait for the hotspot, then join it ---
+    if ($mustSeverLan) {
+        # --- failsafe armed BEFORE anything is severed ---
+        $restoreCommand = "Enable-NetAdapter -Name '$EthernetAlias' -Confirm:`$false"
+        Register-ScheduledTask -TaskName $failsafeTask -Force `
+            -Action (New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -Command `"$restoreCommand`"") `
+            -Trigger (New-ScheduledTaskTrigger -Once -At ([datetime]::Now.AddMinutes($FailsafeMinutes))) `
+            -Principal (New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest) | Out-Null
+        Note "failsafe armed: '$EthernetAlias' re-enables unconditionally at +$FailsafeMinutes min"
+    }
+
+    # --- 1. wait for the hotspot, then join it (skipped if a replacement link is already up) ---
     $deadline = [datetime]::Now.AddMinutes($WaitMinutes)
     $visible = $false
     do {
@@ -116,19 +127,27 @@ try {
     Note "joined '$Ssid' -> $($wifiIp.IPAddress)"
 
     # --- 2. sever the LAN, only now that the replacement path holds an address ---
-    Disable-NetAdapter -Name $EthernetAlias -Confirm:$false
-    $ethernetDisabled = $true
-    Note "DISABLED '$EthernetAlias' -- the lab LAN is gone"
-    Start-Sleep -Seconds 20   # let Tailscale notice the interface change and re-path
+    if ($mustSeverLan) {
+        Disable-NetAdapter -Name $EthernetAlias -Confirm:$false
+        $ethernetDisabled = $true
+        Note "DISABLED '$EthernetAlias' -- the lab LAN is gone"
+        Start-Sleep -Seconds 20   # let Tailscale notice the interface change and re-path
+    }
 
     # --- 3. prove the machine really is off the LAN ---
     # Three independent checks. A single one is too easy to satisfy accidentally, and a green
     # overlay result while the LAN is still reachable would prove only that the machine has a
     # network -- not that it left one.
-    $routeVia = (@(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue) |
-        ForEach-Object { (Get-NetAdapter -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue).Name }) -join ','
-    Note "default route now via: $routeVia"
-    if ($routeVia -match [regex]::Escape($EthernetAlias)) { throw "STILL_ON_LAN: default route still uses '$EthernetAlias'" }
+    # A physically unplugged adapter KEEPS its 0.0.0.0/0 entry in the routing table -- observed
+    # directly: Ethernet showed 'Disconnected' while still listing a default route via 192.168.88.1.
+    # So the route table alone cannot answer "am I off the LAN"; the adapter's link state has to be
+    # consulted too, and reachability below is the assertion that actually decides it.
+    $liveRoutes = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+        ForEach-Object { Get-NetAdapter -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue } |
+        Where-Object { $_.Status -eq 'Up' })
+    $routeVia = ($liveRoutes | ForEach-Object { $_.Name }) -join ','
+    Note "default route via LIVE adapters: $routeVia"
+    if ($routeVia -match [regex]::Escape($EthernetAlias)) { throw "STILL_ON_LAN: '$EthernetAlias' is up and still carries a default route" }
 
     $lanReachable = (Test-PeerReachable -Address $LanPeerAddress) -or (Test-PeerReachable -Address $LanPeerAddress)
     Note "lab LAN peer $LanPeerAddress reachable: $lanReachable  (MUST be False)"
@@ -140,6 +159,10 @@ try {
     $path = Get-PeerPath
     Note "tailscale path to hermes: curAddr='$($path.CurAddr)' relay='$($path.Relay)'"
     if ($path.CurAddr -like "$LanPeerAddress*") { throw "STILL_LAN_PATH: tailscale is still using the direct LAN endpoint $($path.CurAddr)" }
+    # An empty CurAddr means no direct connection, which is the relayed case and exactly what an
+    # off-LAN run should look like -- but only if a relay is actually assigned. Empty on BOTH fields
+    # is not evidence of anything, and "not the LAN endpoint" would otherwise pass trivially on it.
+    if (-not $path.CurAddr -and -not $path.Relay) { throw "PATH_INCONCLUSIVE: tailscale reports neither a direct address nor a relay for hermes" }
 
     # --- 4. the actual acceptance: cockpit + device certificate, off-LAN ---
     Note 'running verify-cockpit-transport.ps1 -OffLan'
