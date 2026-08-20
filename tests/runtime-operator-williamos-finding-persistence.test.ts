@@ -42,25 +42,29 @@ function root() {
   return value
 }
 
-function databaseFor({ findings = [] as Record<string, unknown>[] } = {}) {
+function databaseFor({
+  findings = [] as Record<string, unknown>[],
+  workOrders = null as null | Record<string, unknown>[],
+} = {}) {
   const state = { updates: [] as { sql: string; params: unknown[] }[] }
+  const defaultWorkOrders = [{
+    id: 31,
+    userId: "owner-1",
+    ref: "WO-0031",
+    title: "close the finding reflex",
+    description: "Authorized under GRANT-0018. Projected at GitHub issue 912.",
+    status: "approved",
+    lane: "operator-objective",
+    agent: "codex",
+    authorityGrantId: 18,
+    allowedFiles: ["scripts/runtime-operator/**", "tests/**"],
+    validators: ["test", "build"],
+    createdAt: new Date("2026-08-20T13:00:00Z"),
+  }]
   return {
     state,
     async query(sql: string, params: unknown[] = []) {
-      if (sql.includes("FROM work_order")) return { rows: [{
-        id: 31,
-        userId: "owner-1",
-        ref: "WO-0031",
-        title: "close the finding reflex",
-        description: "Authorized under GRANT-0018. Projected at GitHub issue 912.",
-        status: "approved",
-        lane: "operator-objective",
-        agent: "codex",
-        authorityGrantId: 18,
-        allowedFiles: ["scripts/runtime-operator/**", "tests/**"],
-        validators: ["test", "build"],
-        createdAt: new Date("2026-08-20T13:00:00Z"),
-      }] }
+      if (sql.includes("FROM work_order")) return { rows: workOrders ?? defaultWorkOrders }
       if (sql.includes("FROM authority_grant")) return { rows: [{
         id: 18,
         userId: "owner-1",
@@ -259,6 +263,21 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
     ])
   })
 
+  it("marks invalid sequence and issue fields malformed without dropping a valid sibling", async () => {
+    const invalid = { ...SOURCE_METADATA, findingId: "FINDING-BAD-ORDER", sequence: 0, issueNumber: null }
+    const database = databaseFor({ findings: [
+      { sourceFindingEventId: 440, userId: "owner-1", actor: "hermes", entityId: "31", metadata: invalid },
+      { sourceFindingEventId: 441, userId: "owner-1", actor: "hermes", entityId: "31", metadata: SOURCE_METADATA },
+    ] })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    const findings = await adapters.collectFindings()
+    expect(findings).toHaveLength(2)
+    expect(findings[0]).toMatchObject({ findingId: "FINDING-BAD-ORDER", malformed: true })
+    expect(findings[0].effects).toBeUndefined()
+    expect(findings[1]).toMatchObject({ findingId: "FINDING-911-COMPOSE", malformed: false })
+  })
+
   it("carries live grant status and expiry into the registry", async () => {
     const adapters = createWilliamOSAdapters({
       root: root(),
@@ -289,6 +308,25 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
       sql.includes('WHERE "id" = $1 AND "userId" = $2')
       && params[0] === 31 && params[1] === "owner-1",
     )).toBe(true)
+  })
+
+  it("queues multiple exact rows projected to the same source issue", async () => {
+    const database = databaseFor({ workOrders: [
+      {
+        id: 31, userId: "owner-1", ref: "WO-0031-R01", status: "approved", lane: "operator-objective",
+        description: "Projected at GitHub issue 911.", createdAt: new Date("2026-08-20T13:00:00Z"),
+      },
+      {
+        id: 32, userId: "owner-1", ref: "WO-0031-R02", status: "approved", lane: "operator-objective",
+        description: "Projected at GitHub issue 911.", createdAt: new Date("2026-08-20T13:01:00Z"),
+      },
+    ] })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    await expect(adapters.listQueue()).resolves.toEqual([
+      expect.objectContaining({ issueNumber: 911, workOrderRowId: 31, workOrderId: "WO-0031-R01" }),
+      expect.objectContaining({ issueNumber: 911, workOrderRowId: 32, workOrderId: "WO-0031-R02" }),
+    ])
   })
 })
 

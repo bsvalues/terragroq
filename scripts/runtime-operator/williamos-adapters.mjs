@@ -583,7 +583,11 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
   }
 
   async function refForIssue(issueNumber) {
-    if (issueToRef.has(issueNumber)) return issueToRef.get(issueNumber)
+    if (issueToRef.has(issueNumber)) {
+      const identities = issueToRef.get(issueNumber)
+      if (identities.length !== 1) throw new Error("QUEUE_PROJECTION_WALL")
+      return identities[0]
+    }
     const matches = (await loadWorkOrders()).filter((workOrder) =>
       parseProjectionIssue(workOrder.description) === issueNumber)
     if (matches.length !== 1) throw new Error("QUEUE_PROJECTION_WALL")
@@ -836,7 +840,9 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           || typeof metadata.findingId !== "string" || metadata.findingId.trim() === ""
           || typeof row.userId !== "string" || row.userId.trim() === ""
           || typeof metadata.objectiveWorkOrderId !== "string" || metadata.objectiveWorkOrderId.trim() === "") return []
-        const malformed = !validFindingText(metadata.summary) || !validFindingText(metadata.task)
+        const malformed = !Number.isSafeInteger(metadata.sequence) || metadata.sequence <= 0
+          || !Number.isSafeInteger(metadata.issueNumber) || metadata.issueNumber <= 0
+          || !validFindingText(metadata.summary) || !validFindingText(metadata.task)
           || !validFindingPaths(metadata.paths) || !validFindingEffects(metadata.effects)
         return [{
           sourceFindingEventId: row.sourceFindingEventId,
@@ -889,9 +895,8 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
       for (const workOrder of workOrders) {
         const issueNumber = parseProjectionIssue(workOrder.description)
         if (issueNumber === null) continue
-        if (issueToRef.has(issueNumber)) throw new Error("QUEUE_PROJECTION_COLLISION_WALL")
         const identity = { workOrderRowId: workOrder.id, userId: workOrder.userId, workOrderId: workOrder.ref }
-        issueToRef.set(issueNumber, identity)
+        issueToRef.set(issueNumber, [...(issueToRef.get(issueNumber) ?? []), identity])
         entries.push({
           issueNumber,
           workOrderId: workOrder.ref,
