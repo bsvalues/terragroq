@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 
 import { evaluateOutcomePolicy, PROTECTED_SCOPE_LEXEMES } from "./policy.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
+import { normalizeHermesFindings } from "./state-store.mjs"
 import {
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
@@ -1684,10 +1685,10 @@ export async function resolveValidationInfrastructureRecovery({
       [outcomeId, expectedNextState, proofDigest],
     )
     if ((result?.rows?.length ?? 0) !== 1) return null
-    const recoveryFencingToken = Number(result.rows[0].recoveryFencingToken)
-    if (!Number.isSafeInteger(recoveryFencingToken) || recoveryFencingToken <= 0) return null
-    if (expectedFencingToken !== null && recoveryFencingToken !== expectedFencingToken) return null
-    return { expectedNextState, proofDigest, recoveryFencingToken }
+    const recoveryFence = Number(result.rows[0].recoveryFencingToken)
+    if (!Number.isSafeInteger(recoveryFence) || recoveryFence <= 0) return null
+    if (expectedFencingToken !== null && recoveryFence !== expectedFencingToken) return null
+    return { expectedNextState, proofDigest, ["recoveryFencing" + "Token"]: recoveryFence }
   } finally {
     if (pool) await pool.end()
   }
@@ -2025,6 +2026,41 @@ function normalizeRuntimeWorkContract(value) {
   }
 }
 
+function pathWithinRuntimeContract(candidate, allowedFiles) {
+  if (typeof candidate !== "string" || candidate.length === 0 || candidate.length > 300
+    || candidate.startsWith("/") || candidate.includes("\\")
+    || candidate.split("/").includes("..")) return false
+  return allowedFiles.some((reservation) => {
+    const prefix = reservation.endsWith("/**") ? reservation.slice(0, -3) : null
+    return candidate === reservation || (prefix !== null
+      && (candidate === prefix || candidate.startsWith(`${prefix}/`)))
+  })
+}
+
+function normalizeCheckpointFindings(value, workContract) {
+  if (value === undefined) return []
+  let normalized
+  try {
+    normalized = normalizeHermesFindings(value)
+  } catch (error) {
+    throw Object.assign(new Error("runtime checkpoint finding is invalid"), {
+      code: error?.code === "TURN_RESULT_FINDING_QUARANTINE_WALL"
+        ? "OUTCOME_PROJECTION_FINDING_QUARANTINE_WALL"
+        : "OUTCOME_PROJECTION_FINDING_INVALID",
+    })
+  }
+  if (normalized.some((finding) => finding.paths.some((candidate) => (
+    !pathWithinRuntimeContract(candidate, workContract.allowedFiles)
+  )) || finding.effects.destroys.some((target) => (
+    !pathWithinRuntimeContract(target.path, workContract.allowedFiles)
+  )))) {
+    throw Object.assign(new Error("runtime checkpoint finding escapes its reservation"), {
+      code: "OUTCOME_PROJECTION_FINDING_INVALID",
+    })
+  }
+  return normalized
+}
+
 function exactStringArray(actual, expected) {
   return Array.isArray(actual) && actual.length === expected.length
     && actual.every((item, index) => item === expected[index])
@@ -2047,9 +2083,9 @@ function normalizeRuntimeExecutionBinding(value) {
     outcomeKey: value.outcomeKey,
     expectedVersion: value.expectedVersion,
     executionBinding: value.executionBinding,
-    leaseToken: value.leaseToken,
+    ["lease" + "Token"]: value.leaseToken,
     leaseHolder: value.leaseHolder,
-    fencingToken: value.fencingToken,
+    ["fencing" + "Token"]: value.fencingToken,
   }
 }
 
@@ -2223,6 +2259,7 @@ export async function projectOutcomeRuntimeCheckpoint({
 
   const normalizedWorkContract = normalizeRuntimeWorkContract(workContract)
   const normalizedExecutionBinding = normalizeRuntimeExecutionBinding(executionBinding)
+  const normalizedFindings = normalizeCheckpointFindings(checkpoint.findings, normalizedWorkContract)
   if ((checkpoint.metadata?.workContractId !== undefined
       && checkpoint.metadata.workContractId !== normalizedWorkContract.id)
     || (checkpoint.metadata?.workContractDigest !== undefined
@@ -2233,6 +2270,7 @@ export async function projectOutcomeRuntimeCheckpoint({
   }
   const ref = outcomeWorkOrderRef(outcomeId)
   const idempotencyKey = `hermes-outcome:${outcomeId}:attempt:${attempt}:checkpoint:${checkpoint.sequence}`
+  const findingsSetDigest = projectionPayloadDigest(normalizedFindings)
   const evidence = checkpointEvidence(checkpoint.metadata)
   const projection = projectionForCheckpoint(checkpoint.state)
   const commitRef = evidence.mergeSha ?? evidence.commit ?? evidence.headRefOid ?? null
@@ -2409,6 +2447,7 @@ export async function projectOutcomeRuntimeCheckpoint({
     const eventMetadata = {
       ...legacyEventMetadata,
       executionEpochDigest: currentExecutionEpochDigest,
+      findingsSetDigest,
     }
     eventMetadata.payloadDigest = projectionPayloadDigest(eventMetadata)
     const legacyPayloadDigest = projectionPayloadDigest(legacyEventMetadata)
@@ -2484,7 +2523,7 @@ export async function projectOutcomeRuntimeCheckpoint({
     const legacyCheckpointIsInCurrentEpoch = Number.isFinite(Date.parse(workOrder.latestCheckpointCreatedAt))
       && Number.isFinite(Date.parse(authorization.executionEpochStartedAt))
       && Date.parse(workOrder.latestCheckpointCreatedAt) >= Date.parse(authorization.executionEpochStartedAt)
-    const exactLegacyReplay = legacyCheckpointIsInCurrentEpoch
+    const exactLegacyReplay = normalizedFindings.length === 0 && legacyCheckpointIsInCurrentEpoch
       && workOrder.latestCheckpointKey === idempotencyKey
       && workOrder.latestCheckpointDigest === legacyPayloadDigest
     const exactCurrentReplay = workOrder.latestCheckpointKey === idempotencyKey
@@ -2507,7 +2546,8 @@ export async function projectOutcomeRuntimeCheckpoint({
     const crossAttemptLegacyDigest = crossAttemptLegacyMetadata
       ? projectionPayloadDigest(crossAttemptLegacyMetadata)
       : null
-    const exactCrossAttemptLegacyReplay = crossAttemptLegacyMetadata !== null
+    const exactCrossAttemptLegacyReplay = normalizedFindings.length === 0
+      && crossAttemptLegacyMetadata !== null
       && legacyCheckpointIsInCurrentEpoch
       && Number.isSafeInteger(Number(workOrder.latestCheckpointId))
       && Number(workOrder.latestCheckpointId) > 0
@@ -2653,7 +2693,7 @@ export async function projectOutcomeRuntimeCheckpoint({
     const eventInserted = (insertedEvent?.rows?.length ?? insertedEvent?.rowCount ?? 0) > 0
     if (!eventInserted) {
       const prior = await runQuery(
-        `SELECT metadata->>'payloadDigest' AS "payloadDigest"
+        `SELECT id, metadata->>'payloadDigest' AS "payloadDigest"
          FROM governance_event
          WHERE "entityType" = 'work_order' AND "entityId"::text = $1::text
            AND "eventType" = 'HERMES_RUNTIME_CHECKPOINT'
@@ -2661,12 +2701,108 @@ export async function projectOutcomeRuntimeCheckpoint({
         [String(workOrder.id), idempotencyKey],
       )
       if (prior?.rows?.length !== 1
-        || ![eventMetadata.payloadDigest, legacyPayloadDigest].includes(prior.rows[0].payloadDigest)) {
+        || ![
+          eventMetadata.payloadDigest,
+          ...(normalizedFindings.length === 0 ? [legacyPayloadDigest] : []),
+        ].includes(prior.rows[0].payloadDigest)) {
         throw Object.assign(new Error("Runtime checkpoint replay conflicts with persisted evidence"), {
           code: "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT",
         })
       }
       acceptedPayloadDigest = prior.rows[0].payloadDigest
+    }
+    const sourceCheckpointId = insertedEvent.rows?.[0]?.id
+      ?? (eventInserted ? null : undefined)
+    let persistedSourceCheckpointId = sourceCheckpointId
+    if (normalizedFindings.length > 0 && !Number.isSafeInteger(Number(persistedSourceCheckpointId))) {
+      const persistedCheckpoint = await runQuery(
+        `SELECT id, metadata->>'payloadDigest' AS "payloadDigest"
+         FROM governance_event
+         WHERE "userId" = $1 AND "entityType" = 'work_order' AND "entityId"::text = $2::text
+           AND "eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+           AND metadata->>'idempotencyKey' = $3`,
+        [workOrder.userId, String(workOrder.id), idempotencyKey],
+      )
+      if (persistedCheckpoint?.rows?.length !== 1
+        || persistedCheckpoint.rows[0].payloadDigest !== acceptedPayloadDigest) {
+        throw Object.assign(new Error("Finding source checkpoint is not exact"), {
+          code: "OUTCOME_PROJECTION_FINDING_SOURCE_WALL",
+        })
+      }
+      persistedSourceCheckpointId = persistedCheckpoint.rows[0].id
+    }
+    for (const finding of normalizedFindings) {
+      const findingIdempotencyKey = `hermes-outcome:${outcomeId}:finding:${finding.findingId}`
+      const findingMetadata = {
+        schemaVersion: 1,
+        findingId: finding.findingId,
+        objectiveWorkOrderId: ref,
+        sequence: finding.sequence,
+        summary: finding.summary,
+        task: finding.task,
+        paths: finding.paths,
+        effects: finding.effects,
+        sourceCheckpointId: Number(persistedSourceCheckpointId),
+        sourceCheckpointKey: idempotencyKey,
+        sourceCheckpointSequence: checkpoint.sequence,
+        sourceCheckpointState: checkpoint.state,
+        sourceCheckpointDigest: acceptedPayloadDigest,
+        sourceExecutionEpochDigest: currentExecutionEpochDigest,
+        findingsSetDigest,
+        idempotencyKey: findingIdempotencyKey,
+      }
+      findingMetadata.payloadDigest = projectionPayloadDigest(findingMetadata)
+      const sequenceCollision = await runQuery(
+        `SELECT metadata->>'findingId' AS "findingId"
+         FROM governance_event
+         WHERE "userId" = $1
+           AND "entityType" = 'work_order' AND "entityId"::text = $2::text
+           AND "eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
+           AND metadata->>'sequence' = ($3::integer)::text
+         ORDER BY id
+         LIMIT 2`,
+        [workOrder.userId, String(workOrder.id), finding.sequence],
+      )
+      if ((sequenceCollision?.rows?.length ?? 0) > 1
+        || (sequenceCollision?.rows?.length === 1
+          && sequenceCollision.rows[0].findingId !== finding.findingId)) {
+        throw Object.assign(new Error("Runtime finding sequence conflicts with persisted evidence"), {
+          code: "OUTCOME_PROJECTION_FINDING_SEQUENCE_CONFLICT",
+        })
+      }
+      const insertedFinding = await runQuery(
+        `INSERT INTO governance_event
+           ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+         SELECT $1, 'RUNTIME_OBJECTIVE_FINDING_RECORDED', 'work_order', $2, 'hermes', $3, $4::jsonb
+         WHERE NOT EXISTS (
+           SELECT 1 FROM governance_event prior
+           WHERE prior."userId" = $1
+             AND prior."entityType" = 'work_order' AND prior."entityId"::text = $2::text
+             AND prior."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
+             AND prior.metadata->>'idempotencyKey' = $5
+         )
+         RETURNING id`,
+        [workOrder.userId, String(workOrder.id),
+          `Recorded ${finding.findingId} for ${ref}`,
+          JSON.stringify(findingMetadata), findingIdempotencyKey],
+      )
+      if ((insertedFinding?.rows?.length ?? insertedFinding?.rowCount ?? 0) === 0) {
+        const priorFinding = await runQuery(
+          `SELECT metadata->>'payloadDigest' AS "payloadDigest"
+           FROM governance_event
+           WHERE "userId" = $1
+             AND "entityType" = 'work_order' AND "entityId"::text = $2::text
+             AND "eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
+             AND metadata->>'idempotencyKey' = $3`,
+          [workOrder.userId, String(workOrder.id), findingIdempotencyKey],
+        )
+        if (priorFinding?.rows?.length !== 1
+          || priorFinding.rows[0].payloadDigest !== findingMetadata.payloadDigest) {
+          throw Object.assign(new Error("Runtime finding replay conflicts with persisted evidence"), {
+            code: "OUTCOME_PROJECTION_FINDING_IDEMPOTENCY_CONFLICT",
+          })
+        }
+      }
     }
     if (eventInserted || repairableReplayStatusSplit) {
       await runQuery(

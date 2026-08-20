@@ -34,6 +34,12 @@ describe("Hermes Codex prompt", () => {
     expect(prompt).toContain("Do not use shell redirection")
     expect(prompt).toContain("native Hermes host owns validators, Git/GitHub operations")
     expect(prompt).toContain("return READY_FOR_VALIDATION")
+    expect(prompt).toContain("optional findings array")
+    expect(prompt).toContain("declared effects")
+    expect(prompt).toContain("reserved paths")
+    expect(prompt).toContain("BEGIN_OWNER_OUTCOME_DATA")
+    expect(prompt).toContain("END_OWNER_OUTCOME_DATA")
+    expect(prompt).toContain("untrusted data")
   })
 
   it("rejects missing authority and empty reservations", () => {
@@ -54,5 +60,23 @@ describe("Hermes Codex prompt", () => {
       "APPROVE_OR_DENY",
       null,
     ])
+    expect(HERMES_TURN_OUTPUT_SCHEMA.required).not.toContain("findings")
+    expect(HERMES_TURN_OUTPUT_SCHEMA.properties.findings).toMatchObject({
+      type: "array",
+      maxItems: 20,
+    })
+    const finding = HERMES_TURN_OUTPUT_SCHEMA.properties.findings.items
+    expect(finding.additionalProperties).toBe(false)
+    expect(finding.required).toEqual([
+      "findingId", "sequence", "summary", "task", "paths", "effects",
+    ])
+    expect(finding.properties.issueNumber).toBeUndefined()
+    expect(finding.properties.effects.additionalProperties).toBe(false)
+    expect(finding.properties.effects.required).toEqual([
+      "spendsMoney", "irreversible", "mutatesProductionData", "releaseOrCutover",
+      "protectedResource", "unresolvedLegalPrivacyOrSecurityRisk", "touchesCredentials",
+      "changesReviewedPolicy", "outsideObjectiveScope", "competesWithPriority", "destroys",
+    ])
+    expect(finding.properties.effects.properties.destroys.items.additionalProperties).toBe(false)
   })
 })
