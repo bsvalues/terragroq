@@ -660,6 +660,7 @@ describe("Hermes durable outcome queue runtime", () => {
         || sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
       if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt
         || sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot) return { rows: [] }
       if (sql === OUTCOME_QUEUE_SQL.acquire) {
         Object.assign(active, {
           acquisitionKey: values[2],

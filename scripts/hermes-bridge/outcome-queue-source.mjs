@@ -640,6 +640,15 @@ const ELIGIBILITY_PREDICATE = `
       AND q."leaseExpiresAt" <= $1::timestamptz
     )
   )
+  AND (
+    q."lifecycleState" = 'active'
+    OR NOT EXISTS (
+      SELECT 1
+      FROM "outcome_queue_item" AS occupied_slot
+      WHERE occupied_slot."userId" = q."userId"
+        AND occupied_slot."lifecycleState" = 'active'
+    )
+  )
   AND NOT EXISTS (
     SELECT 1
     FROM unnest(q."dependencyKeys") AS dependency("outcomeKey")
@@ -1710,6 +1719,51 @@ SELECT
 FROM "outcome_queue_item" AS q
 WHERE q."userId" = $2
   AND q."outcomeKey" = $3
+`,
+  blockExpiredIneligibleActiveSlot: `
+WITH stale_slot AS MATERIALIZED (
+  SELECT q."id",
+         q."acquisitionKey" AS "priorAcquisitionKey",
+         q."leaseHolder" AS "priorLeaseHolder",
+         q."leaseToken" AS "priorLeaseToken",
+         q."leaseExpiresAt" AS "priorLeaseExpiresAt",
+         q."fencingToken" AS "priorFencingToken",
+         q."version" AS "priorVersion"
+  FROM "outcome_queue_item" AS q
+  WHERE q."userId" = $2
+    AND q."lifecycleState" = 'active'
+    AND q."leaseExpiresAt" <= $1::timestamptz
+    AND q."outcomeKey" NOT IN (${PROTECTED_V1_2_OUTCOME_SQL})
+    AND (
+      NOT (${LIVE_APPROVAL_PREDICATE})
+      OR NOT (
+        (${LIVE_AUTHORITY_PREDICATE})
+        AND (${EXACT_EXECUTION_ORIGIN_PREDICATE})
+      )
+    )
+  FOR UPDATE OF q
+)
+UPDATE "outcome_queue_item" AS q
+SET "lifecycleState" = 'blocked',
+    "lifecycleReason" = 'STALE_LEASE_AUTHORIZATION_INELIGIBLE',
+    "executionBinding" = NULL,
+    "acquisitionKey" = NULL,
+    "leaseHolder" = NULL,
+    "leaseToken" = NULL,
+    "leaseExpiresAt" = NULL,
+    "fencingToken" = q."fencingToken" + 1,
+    "version" = q."version" + 1,
+    "updatedAt" = $1::timestamptz
+FROM stale_slot
+WHERE q."id" = stale_slot."id"
+  AND q."userId" = $2
+RETURNING ${QUEUE_COLUMNS},
+          stale_slot."priorAcquisitionKey",
+          stale_slot."priorLeaseHolder",
+          stale_slot."priorLeaseToken",
+          stale_slot."priorLeaseExpiresAt",
+          stale_slot."priorFencingToken",
+          stale_slot."priorVersion"
 `,
   reclaimAcquisition: `
 UPDATE "outcome_queue_item" AS q
@@ -4144,6 +4198,91 @@ export async function acquireNextEligibleOutcome({
         reclaimed: false,
         reason: "ACQUISITION_KEY_INELIGIBLE",
       }, "REPLAY_INELIGIBLE")
+    }
+    const releasedSlot = await connection.query(
+      OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot,
+      [at, user],
+    )
+    if ((releasedSlot?.rows?.length ?? 0) > 1) {
+      fail("OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_CARDINALITY_WALL")
+    }
+    if (releasedSlot?.rows?.length === 1) {
+      const recovered = releasedSlot.rows[0]
+      const priorAcquisitionKey = nonempty(
+        recovered.priorAcquisitionKey,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+      )
+      const priorLeaseHolder = nonempty(
+        recovered.priorLeaseHolder,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+      )
+      const priorLeaseToken = nonempty(
+        recovered.priorLeaseToken,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+      )
+      const priorLeaseExpiresAt = timestamp(recovered.priorLeaseExpiresAt)
+      const priorFencingToken = integer(
+        recovered.priorFencingToken,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+        { minimum: 1 },
+      )
+      const priorVersion = integer(
+        recovered.priorVersion,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+        { minimum: 0 },
+      )
+      const recoveredFencingToken = integer(
+        recovered.fencingToken,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+        { minimum: priorFencingToken + 1 },
+      )
+      const recoveredVersion = integer(
+        recovered.version,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+        { minimum: priorVersion + 1 },
+      )
+      if (recoveredFencingToken !== priorFencingToken + 1
+        || recoveredVersion !== priorVersion + 1) {
+        fail("OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL")
+      }
+      const recoveryReason = canonicalJson({
+        code: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+        outcomeKey: recovered.outcomeKey,
+        priorFencingToken,
+        priorLeaseExpiresAt,
+        priorVersion,
+        recoveredFencingToken,
+        recoveredVersion,
+      })
+      const priorOutcome = {
+        ...recovered,
+        acquisitionKey: priorAcquisitionKey,
+        executionBinding: recovered.executionBinding,
+        fencingToken: priorFencingToken,
+        leaseExpiresAt: priorLeaseExpiresAt,
+        leaseHolder: priorLeaseHolder,
+        leaseToken: priorLeaseToken,
+        version: priorVersion,
+      }
+      await appendAcquisitionAttempt(
+        connection,
+        {
+          ...attemptContext,
+          leaseHolder: priorLeaseHolder,
+          acquisitionKeyDigest: requestHash({ acquisitionKey: priorAcquisitionKey }),
+          leaseIdentityDigest: requestHash({
+            leaseHolder: priorLeaseHolder,
+            leaseToken: priorLeaseToken,
+          }),
+        },
+        {
+          outcome: priorOutcome,
+          reason: recoveryReason,
+        },
+        "STALE_INELIGIBLE_BLOCKED",
+        at,
+        priorOutcome,
+      )
     }
     const selected = await connection.query(OUTCOME_QUEUE_SQL.acquire, [
       at,

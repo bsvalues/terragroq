@@ -378,6 +378,7 @@ function acquisitionQuery({
   rebound = [],
   resumeAfterRenewal,
   replayResume = [],
+  releasedSlot = [],
 }: {
   receipt?: unknown[]
   receiptOutcome?: unknown[]
@@ -393,6 +394,7 @@ function acquisitionQuery({
   rebound?: unknown[]
   resumeAfterRenewal?: unknown[]
   replayResume?: unknown[]
+  releasedSlot?: unknown[]
 }) {
   let acquireCalls = 0
   let resumeCalls = 0
@@ -410,6 +412,9 @@ function acquisitionQuery({
       return { rows }
     }
     if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: prior }
+    if (sql === OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot) {
+      return { rows: releasedSlot }
+    }
     if (sql === OUTCOME_QUEUE_SQL.revalidateAcquisition) {
       const rows = replayEligibilityReads > 0 && replayEligibilityAfterRenewal !== undefined
         ? replayEligibilityAfterRenewal
@@ -1502,6 +1507,282 @@ describe("transactional durable outcome queue source", () => {
     expect(query).not.toHaveBeenCalled()
   })
 
+  it("releases an expired authorization-ineligible active slot before acquiring new work", async () => {
+    const stale = queueRow({
+      id: 17,
+      outcomeKey: "goal:GOAL-0017",
+      goalId: 17,
+      goalRef: "GOAL-0017",
+      leaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      fencingToken: 4,
+      version: 8,
+      acquisitionKey: "acquire-stale",
+    })
+    const next = queueRow({
+      id: 23,
+      outcomeKey: "goal:GOAL-0023",
+      goalId: 23,
+      goalRef: "GOAL-0023",
+      lifecycleState: "approved",
+      activeWorkOrderId: 23,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 0,
+      version: 1,
+      acquisitionKey: null,
+      activatedAt: null,
+    })
+    const acquired = {
+      ...next,
+      lifecycleState: "active",
+      executionBinding: "execution-next",
+      leaseHolder: "supervisor-next",
+      leaseToken: "lease-next",
+      leaseExpiresAt: "2026-07-28T12:01:00.000Z",
+      fencingToken: 1,
+      version: 2,
+      acquisitionKey: "acquire-next",
+      activatedAt: now,
+    }
+    let staleOwnsActiveSlot = true
+    const run = vi.fn(async (sql: string, values: unknown[] = []) => {
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot) {
+        staleOwnsActiveSlot = false
+        return {
+          rows: [{
+            ...stale,
+            lifecycleState: "blocked",
+            lifecycleReason: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+            leaseHolder: null,
+            leaseToken: null,
+            leaseExpiresAt: null,
+            executionBinding: null,
+            acquisitionKey: null,
+            fencingToken: 5,
+            version: 9,
+            priorAcquisitionKey: stale.acquisitionKey,
+            priorLeaseHolder: stale.leaseHolder,
+            priorLeaseToken: stale.leaseToken,
+            priorLeaseExpiresAt: stale.leaseExpiresAt,
+            priorFencingToken: stale.fencingToken,
+            priorVersion: stale.version,
+          }],
+        }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.acquire) {
+        if (staleOwnsActiveSlot) {
+          throw Object.assign(new Error(
+            "duplicate key value violates unique constraint outcome_queue_item_one_active_per_user_idx",
+          ), { code: "23505" })
+        }
+        return { rows: [acquired] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionReceipt) {
+        return { rows: [{ id: 51, outcomeKey: values[2], firstFencingToken: 1, latestFencingToken: 1 }] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt) return { rows: [{ id: 61 }] }
+      throw new Error(`unexpected query: ${sql}`)
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+      acquisitionKey: "acquire-next",
+      leaseHolder: "supervisor-next",
+      leaseToken: "lease-next",
+      executionBinding: "execution-next",
+      activeWorkOrderId: 23,
+    })).resolves.toMatchObject({
+      acquired: true,
+      outcome: { outcomeKey: "goal:GOAL-0023", fencingToken: 1 },
+    })
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
+      OUTCOME_QUEUE_SQL.readAcquisition,
+      OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot,
+      OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+      OUTCOME_QUEUE_SQL.acquire,
+      OUTCOME_QUEUE_SQL.insertAcquisitionReceipt,
+      OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+      "COMMIT",
+    ])
+    expect(run).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot,
+      [now, userId],
+    )
+    const recoveryProof = run.mock.calls
+      .filter(([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt)[0]
+    expect(recoveryProof?.[1]?.slice(3, 6)).toEqual([
+      stale.leaseHolder,
+      createHash("sha256").update(JSON.stringify({ acquisitionKey: stale.acquisitionKey })).digest("hex"),
+      createHash("sha256").update(JSON.stringify({
+        leaseHolder: stale.leaseHolder,
+        leaseToken: stale.leaseToken,
+      })).digest("hex"),
+    ])
+    expect(recoveryProof?.[1]?.slice(13, 19)).toEqual([
+      "goal:GOAL-0017",
+      4,
+      "2026-07-28T11:59:59.000Z",
+      stale.activeWorkOrderId,
+      "STALE_INELIGIBLE_BLOCKED",
+      JSON.stringify({
+        code: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+        outcomeKey: "goal:GOAL-0017",
+        priorFencingToken: 4,
+        priorLeaseExpiresAt: "2026-07-28T11:59:59.000Z",
+        priorVersion: 8,
+        recoveredFencingToken: 5,
+        recoveredVersion: 9,
+      }),
+    ])
+  })
+
+  it("uses a closed two-parameter fail-closed active-slot recovery statement", () => {
+    const sql = OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot
+    expect(sql).toContain(`q."leaseExpiresAt" <= $1::timestamptz`)
+    expect(sql).toContain(`q."userId" = $2`)
+    expect(sql).not.toMatch(/\$[3-9]/)
+    expect(sql).toContain(`"lifecycleReason" = 'STALE_LEASE_AUTHORIZATION_INELIGIBLE'`)
+    expect(sql).toContain(`"fencingToken" = q."fencingToken" + 1`)
+    expect(sql).toContain(`"version" = q."version" + 1`)
+    expect(sql).toContain(`"executionBinding" = NULL`)
+    expect(sql).toContain(`"acquisitionKey" = NULL`)
+    expect(sql).not.toContain(`"activeWorkOrderId" = NULL`)
+    expect(sql).toContain(`q."outcomeKey" NOT IN (`)
+    expect(sql).toContain(`NOT (`)
+    expect(sql).toContain(`live_approval."status" = 'accepted'`)
+    expect(sql).toContain(`live_grant."status" = 'active'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(
+      `occupied_slot."lifecycleState" = 'active'`,
+    )
+  })
+
+  it("rolls back when active-slot recovery violates exact cardinality", async () => {
+    const released = queueRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 2,
+      version: 2,
+    })
+    const query = acquisitionQuery({ releasedSlot: [released, { ...released, id: 2 }] })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+      acquisitionKey: "acquire-cardinality-wall",
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_CARDINALITY_WALL",
+    })
+    expect(query).not.toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.acquire, expect.anything())
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("walls drifted active-slot recovery fence evidence before acquisition", async () => {
+    const released = queueRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+      executionBinding: null,
+      acquisitionKey: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 7,
+      version: 9,
+      priorAcquisitionKey: "acquire-stale",
+      priorLeaseHolder: "supervisor-stale",
+      priorLeaseToken: "lease-stale",
+      priorLeaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      priorFencingToken: 4,
+      priorVersion: 8,
+    })
+    const query = acquisitionQuery({ releasedSlot: [released] })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+      acquisitionKey: "acquire-after-drift",
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+      expect.anything(),
+    )
+    expect(query).not.toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.acquire, expect.anything())
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("rolls back the recovery row and evidence when the following acquisition fails", async () => {
+    const released = queueRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+      executionBinding: null,
+      acquisitionKey: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 5,
+      version: 9,
+      priorAcquisitionKey: "acquire-stale",
+      priorLeaseHolder: "supervisor-stale",
+      priorLeaseToken: "lease-stale",
+      priorLeaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      priorFencingToken: 4,
+      priorVersion: 8,
+    })
+    let slotState = "active"
+    let recoveryEvidenceRows = 0
+    const run = vi.fn(async (sql: string, values: unknown[] = []) => {
+      if (sql === "BEGIN") return { rows: [] }
+      if (sql === "ROLLBACK") {
+        slotState = "active"
+        recoveryEvidenceRows = 0
+        return { rows: [] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot) {
+        slotState = "blocked"
+        return { rows: [released] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt) {
+        if (values[17] === "STALE_INELIGIBLE_BLOCKED") recoveryEvidenceRows += 1
+        return { rows: [{ id: 61 }] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.acquire) {
+        throw Object.assign(new Error("forced acquisition failure"), {
+          code: "FORCED_NEXT_ACQUISITION_WALL",
+        })
+      }
+      throw new Error(`unexpected query: ${sql}`)
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+      acquisitionKey: "acquire-after-stale",
+    })).rejects.toMatchObject({ code: "FORCED_NEXT_ACQUISITION_WALL" })
+    expect(slotState).toBe("active")
+    expect(recoveryEvidenceRows).toBe(0)
+    expect(run).not.toHaveBeenCalledWith("COMMIT")
+    expect(run.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
   it.each([
     [{ totalCount: 0 }, "EMPTY_QUEUE"],
     [{ totalCount: 3, candidateStateCount: 0 }, "NO_ELIGIBLE_OUTCOME"],
@@ -1539,6 +1820,7 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.acquireLock,
       OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
       OUTCOME_QUEUE_SQL.readAcquisition,
+      OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot,
       OUTCOME_QUEUE_SQL.acquire,
       OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
       OUTCOME_QUEUE_SQL.noSelectionReason,
@@ -1553,7 +1835,8 @@ describe("transactional durable outcome queue source", () => {
     expect(query.mock.calls[1][1]).toEqual([`${userId}:outcome-queue`])
     expect(query.mock.calls[2][1]).toEqual([userId, "acquire-none"])
     expect(query.mock.calls[3][1]).toEqual([userId, "acquire-none"])
-    expect(query.mock.calls[6][1]).toEqual([now, userId])
+    expect(query.mock.calls[4][1]).toEqual([now, userId])
+    expect(query.mock.calls[7][1]).toEqual([now, userId])
     const proofCall = query.mock.calls.find(
       ([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
     )
@@ -1890,6 +2173,10 @@ describe("transactional durable outcome queue source", () => {
       reason: null,
     })
     expect(firstQuery.mock.calls[4]).toEqual([
+      OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot,
+      [now, userId],
+    ])
+    expect(firstQuery.mock.calls[5]).toEqual([
       OUTCOME_QUEUE_SQL.acquire,
       [
         now, userId, "acquire-a", "execution-a", "supervisor-a", "lease-a",
