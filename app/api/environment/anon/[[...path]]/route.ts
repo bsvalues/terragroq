@@ -19,18 +19,7 @@ export const dynamic = "force-dynamic"
 // A hardcoded 3100 was wrong the moment the container mapped a different port (review P1).
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 
-/**
- * Only pages the environment actually frames, allowlisted explicitly. A character-class check alone
- * let an unauthenticated caller relay GETs to internal /api/* routes from loopback (review P1) --
- * a public proxy must enumerate what it serves, not describe what characters it accepts. The list
- * grows only when a surface genuinely needs a page.
- */
-const FRAMEABLE_PAGES = new Set(["", "sign-in"])
-export function isFrameablePath(segments: readonly string[]): boolean {
-  if (segments.length > 1) return false
-  const first = segments[0] ?? ""
-  return /^[A-Za-z0-9_-]*$/.test(first) && FRAMEABLE_PAGES.has(first)
-}
+import { isFrameablePath } from "@/lib/environment/frameable"
 
 // Deliberately unauthenticated: this route serves documents to sandboxed, COOKIELESS frames -- the
 // whole point is that the frame carries no session, so it cannot present one here either. Demanding
@@ -60,7 +49,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ path
       continue
     }
     const html = await response.text()
-    return new Response(html, {
+    // Markup and styles only. Under an opaque-origin sandbox the page's boot scripts throw on
+    // storage access, and a hydration crash tears down the server-rendered markup -- the frame went
+    // blank white with the full form sitting in the document. The investigation surface shows what
+    // the page IS; interactivity inside an anonymous reproduction frame is not its job.
+    const scriptFree = html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<script[^>]*\/>/gi, "")
+    return new Response(scriptFree, {
       status: response.status,
       headers: { "content-type": response.headers.get("content-type") ?? "text/html; charset=utf-8" },
     })
