@@ -29,3 +29,33 @@ describe("the anon proxy serves only frameable pages", () => {
     expect(isFrameablePath(["sign-in%2f..%2fapi"])).toBe(false)
   })
 })
+
+describe("the anon proxy strips scripts for real", () => {
+  // The strip regex shipped once with a literal backspace where  belonged and double-escaped
+  // classes -- a no-op that nothing tested. Review caught it (P2 on #925) AFTER merge, which is its
+  // own recorded failure. This test reads the shipped route source, extracts the exact regexes, and
+  // runs them against real-shaped markup, so broken escaping can never ship silently again.
+  it("removes script tags and keeps content and styles, using the shipped regexes", async () => {
+    const fs = await import("node:fs")
+    const source = fs.readFileSync("app/api/environment/anon/[[...path]]/route.ts", "utf8")
+    const patterns = [...source.matchAll(/\.replace\(\/(.+?)\/gi, ""\)/g)].map((m) => new RegExp(m[1], "gi"))
+    expect(patterns.length).toBeGreaterThanOrEqual(2)
+    const html = `<html><head><script src="/a.js" defer></script><link rel="stylesheet" href="/x.css"></head><body><h1>Primary Operator</h1><script>window.boot()</script><script src="/self.js"/></body></html>`
+    let out = html
+    for (const pattern of patterns) out = out.replace(pattern, "")
+    expect(out.includes("<script")).toBe(false)
+    expect(out).toContain("Primary Operator")
+    expect(out).toContain("stylesheet")
+  })
+
+  it("the self-closing matcher works alone, so its regression cannot hide behind the paired matcher", async () => {
+    const fs = await import("node:fs")
+    const source = fs.readFileSync("app/api/environment/anon/[[...path]]/route.ts", "utf8")
+    const patterns = [...source.matchAll(/\.replace\(\/(.+?)\/gi, ""\)/g)].map((m) => new RegExp(m[1], "gi"))
+    const selfClosing = patterns[1]
+    expect(selfClosing).toBeTruthy()
+    expect(`<script src="/self.js"/>`.replace(selfClosing, "")).toBe("")
+    // And it must not eat non-script content that merely resembles its shape.
+    expect(`<scripture/>text`.replace(selfClosing, "")).toBe("<scripture/>text")
+  })
+})
