@@ -27,6 +27,27 @@ export function ThreadConversation({ threadId, className }: { threadId: string; 
     transport: new DefaultChatTransport({ api: "/api/thread-chat", body: { threadId } }),
   })
   const busy = status === "streaming" || status === "submitted"
+  const [silentTurn, setSilentTurn] = useState(false)
+  const wasBusyRef = useRef(false)
+
+  useEffect(() => {
+    // A turn that ends with no assistant text and no error is the worst outcome this surface can
+    // produce: the owner watched "thinking…" resolve into nothing. It happened live -- a proxy killed
+    // the stream mid-thought and the client returned to idle in silence. Silence is never an answer.
+    if (busy) {
+      wasBusyRef.current = true
+      setSilentTurn(false)
+      return
+    }
+    if (!wasBusyRef.current) return
+    wasBusyRef.current = false
+    const last = messages[messages.length - 1]
+    const lastText = (last?.parts ?? [])
+      .filter((part): part is { type: "text"; text: string } => part.type === "text")
+      .map((part) => part.text)
+      .join("")
+    setSilentTurn(!error && (last?.role !== "assistant" || lastText.trim() === ""))
+  }, [busy, messages, error])
 
   useEffect(() => {
     let active = true
@@ -105,7 +126,7 @@ export function ThreadConversation({ threadId, className }: { threadId: string; 
             WilliamOS is thinking…
           </p>
         ) : null}
-        {error ? (
+        {error || silentTurn ? (
           <p className="mt-3 px-2 text-sm text-red-400" role="alert">
             That reply failed to arrive. Your message is kept — say &ldquo;try again&rdquo; or rephrase.
           </p>
