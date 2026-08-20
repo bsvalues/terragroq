@@ -5,22 +5,19 @@ import { useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 
 /**
- * The Environment (#762). Two rules govern every pixel here, owner-set after slice one's first live
- * run leaked the old shell into a browser surface:
+ * The replacement environment's root (#762). Greenfield: this tree imports nothing from the legacy
+ * shell and reproduces none of its navigation model — see docs/product/environment-refusals.md, and
+ * the acceptance test that enforces it.
  *
- *   If a region needs explanatory text to justify why it exists, remove or redesign the region.
- *   The UI shows work, not descriptions of work.
- *
- * So: no pane headers, no kind labels, no region names. The largest surface is the current subject.
- * The conversation is quiet and persistent along the bottom — one place to talk, ever. The frozen
- * Workbench never appears here, not even framed: browser surfaces are credentialless, so they show
- * what an anonymous visitor sees instead of following the signed-in session back into the old shell.
+ * Two primitives, nothing else: the Line (exactly one conversational input, ever) and Surfaces (real
+ * working things the work materializes). The two rules that govern every pixel: a region that needs
+ * explanatory text to justify existing gets removed, and the UI shows work, not descriptions of work.
  */
 
 type Turn = Readonly<{ id: string; role: "owner" | "williamos"; content: string }>
 type Surface = Readonly<{
   id: string
-  kind: "browser" | "trace"
+  kind: "browser" | "trace" | "source" | "diff" | "tests"
   subject: string
   payload?: unknown
 }>
@@ -33,7 +30,7 @@ type ProbeStep = Readonly<{
   error?: string
 }>
 
-export function Environment() {
+export function Desk() {
   const [worldId, setWorldId] = useState<string | null>(null)
   const [intent, setIntent] = useState<string | null>(null)
   const [turns, setTurns] = useState<readonly Turn[]>([])
@@ -61,9 +58,8 @@ export function Environment() {
   }, [])
 
   async function send() {
-    // The textarea's live DOM value is the source of truth: rapid type-then-Enter can outrun the
-    // controlled state by a frame, and a send that silently no-ops on that race is the five-goal
-    // lesson wearing a new face. Found by this slice's own abuse pass.
+    // The textarea's live DOM value is the source of truth: type-then-Enter can outrun controlled
+    // state by a frame, and a silent no-op on that race is the five-goal lesson in a new face.
     const text = (inputRef.current?.value ?? input).trim()
     if (!text || busy) return
     setInput("")
@@ -72,7 +68,7 @@ export function Environment() {
     if (!intent) setIntent(text)
     setTurns((current) => [...current, { id: crypto.randomUUID(), role: "owner", content: text }])
     try {
-      const response = await fetch("/api/env/line", {
+      const response = await fetch("/api/environment/line", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ worldId, text }),
@@ -86,7 +82,7 @@ export function Environment() {
       if (reply.worldId) setWorldId(reply.worldId)
       setTurns((current) => [...current, { id: crypto.randomUUID(), role: "williamos", content: reply.say }])
       if (reply.surfaces.length > 0) {
-        // Materialize by appending: existing surfaces keep their place. Spatial memory survives.
+        // Materialize by appending: existing surfaces keep their place; spatial memory survives.
         setSurfaces((current) => [
           ...current,
           ...reply.surfaces.map((surface) => ({ ...surface, id: crypto.randomUUID() })),
@@ -119,10 +115,7 @@ export function Environment() {
                         "rounded-md px-4 py-2.5 text-[13.5px]",
                         turn.role === "owner" ? "bg-sky-950/60 text-sky-100" : "bg-neutral-800/70 text-neutral-100",
                       )
-                    : cn(
-                        "px-1 py-0.5 text-[12.5px]",
-                        turn.role === "owner" ? "text-sky-300/90" : "text-neutral-300",
-                      ),
+                    : cn("px-1 py-0.5 text-[12.5px]", turn.role === "owner" ? "text-sky-300/90" : "text-neutral-300"),
                 )}
               >
                 {turn.content}
@@ -172,8 +165,8 @@ export function Environment() {
     return <div className="flex h-dvh flex-col bg-neutral-950 px-6 text-neutral-100">{line}</div>
   }
 
-  // Desk-shape. The first surface is the subject and holds the most space; later surfaces sit
-  // beside it, narrower. Nothing is labeled: the work identifies itself.
+  // Desk-shape: the first surface is the subject and holds the most space; later surfaces stack
+  // beside it. Nothing is labeled — the work identifies itself.
   const [subject, ...rest] = surfaces
 
   return (
@@ -199,34 +192,66 @@ export function Environment() {
 
 function SurfaceView({ surface }: { surface: Surface }) {
   if (surface.kind === "browser") {
-    // credentialless: the frame gets an ephemeral cookie jar, so it shows what an anonymous visitor
-    // sees. Without it, the signed-in session follows the redirect straight back into the frozen
-    // Workbench — which is how the old shell invaded the new environment on the first live run.
+    // Anonymity is a server guarantee: the document comes from the environment's own cookieless
+    // proxy, so every browser shows what an anonymous visitor sees. Scripts are refused in-frame so
+    // the page cannot use the parent's session to navigate itself back into the legacy shell.
     return (
       <iframe
-        src={surface.subject}
+        src={`/api/environment/anon${surface.subject}`}
         title={surface.subject}
+        sandbox=""
         className="h-full min-h-0 w-full bg-white"
-        {...({ credentialless: "true" } as Record<string, string>)}
       />
     )
   }
+  if (surface.kind === "trace") {
+    return (
+      <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed text-neutral-400">
+        {(surface.payload as readonly ProbeStep[] | undefined)?.map((step, index) => (
+          <div key={index} className="mb-1.5">
+            <span className="text-neutral-500">{step.url}</span>{" "}
+            {step.error ? (
+              <span className="text-red-400">{step.error}</span>
+            ) : (
+              <>
+                <span className={cn(step.status && step.status >= 400 ? "text-red-400" : "text-emerald-500")}>{step.status}</span>
+                {step.location ? <span className="text-neutral-600"> → {step.location}</span> : null}
+                {step.setsSessionCookie ? <span className="text-sky-500"> · cookie</span> : null}
+              </>
+            )}
+          </div>
+        )) ?? null}
+      </div>
+    )
+  }
+  if (surface.kind === "diff") {
+    const text = String(surface.payload ?? "")
+    return (
+      <div className="min-h-0 overflow-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
+        {text.split("\n").map((line, index) => (
+          <div
+            key={index}
+            className={cn(
+              "whitespace-pre",
+              line.startsWith("+") && !line.startsWith("+++")
+                ? "bg-emerald-950/40 text-emerald-300"
+                : line.startsWith("-") && !line.startsWith("---")
+                  ? "bg-red-950/40 text-red-300"
+                  : line.startsWith("@@")
+                    ? "text-sky-400"
+                    : "text-neutral-500",
+            )}
+          >
+            {line || " "}
+          </div>
+        ))}
+      </div>
+    )
+  }
+  // source and tests: the real text, monospace, untitled — the content is its own identity.
   return (
-    <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed text-neutral-400">
-      {(surface.payload as readonly ProbeStep[] | undefined)?.map((step, index) => (
-        <div key={index} className="mb-1.5">
-          <span className="text-neutral-500">{step.url}</span>{" "}
-          {step.error ? (
-            <span className="text-red-400">{step.error}</span>
-          ) : (
-            <>
-              <span className={cn(step.status && step.status >= 400 ? "text-red-400" : "text-emerald-500")}>{step.status}</span>
-              {step.location ? <span className="text-neutral-600"> → {step.location}</span> : null}
-              {step.setsSessionCookie ? <span className="text-sky-500"> · cookie</span> : null}
-            </>
-          )}
-        </div>
-      )) ?? null}
-    </div>
+    <pre className="min-h-0 overflow-auto whitespace-pre-wrap bg-neutral-950 p-3 font-mono text-[11.5px] leading-relaxed text-neutral-400">
+      {String(surface.payload ?? "")}
+    </pre>
   )
 }

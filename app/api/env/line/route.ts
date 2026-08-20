@@ -31,7 +31,6 @@ export const maxDuration = 120
 type SurfaceDirective = Readonly<{
   kind: "browser" | "trace"
   subject: string
-  title: string
   payload?: unknown
 }>
 
@@ -69,6 +68,20 @@ async function probeAuthFlow(origin: string): Promise<readonly Record<string, un
     url = location.startsWith("http") ? location : `${origin}${location}`
   }
   return steps
+}
+
+/** The probe's finding as one owner-language sentence. Facts from the chain, never UI narration. */
+function describeProbe(steps: readonly Record<string, unknown>[]): string {
+  const failed = steps.find((step) => step.error)
+  if (failed) return `Reproduced it: the flow dies at ${String(failed.url)} — ${String(failed.error)}.`
+  const chain = steps
+    .map((step) => `${String(step.status ?? "?")}${step.location ? ` → ${String(step.location)}` : ""}`)
+    .join(", ")
+  const cookie = steps.some((step) => step.setsSessionCookie)
+  return (
+    `Just walked it anonymously: ${chain}${cookie ? ", with a session cookie issued" : ", and no session cookie is ever issued"}. ` +
+    `Tell me what it did when it broke for you, and I'll chase that path.`
+  )
 }
 
 async function loadWorld(userId: string, worldId: string): Promise<WorkingWorldSnapshot | null> {
@@ -142,7 +155,11 @@ export async function POST(request: Request) {
   if (!text) return Response.json({ error: "MESSAGE_EMPTY" }, { status: 400 })
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
 
-  const origin = new URL(request.url).origin
+  // The probe targets the runtime's own loopback, deterministically. Deriving the origin from the
+  // request trusts forwarded headers, and the first live run proved where that leads: the probe
+  // chased https://localhost:3100 -- a URL nothing serves -- and reported its own confusion.
+  const origin = "http://127.0.0.1:3100"
+  void request.url
 
   // Existing world: continue it.
   if (requestedWorldId) {
@@ -194,11 +211,9 @@ export async function POST(request: Request) {
       resources: ["bsvalues/terragroq"],
     })
     world = withTurn(world, "owner", text)
-    const say =
-      `${decision.statement} Reproducing it now — the sign-in page is live on the right, and beside it ` +
-      `is the auth probe I just ran against the running app: every hop, its status, and whether a ` +
-      `session cookie was set. Tell me what looks wrong to you, or say "fix it" and I'll tell you ` +
-      `exactly how far the wiring goes today.`
+    // The reply states the assumption and the finding. It never narrates the screen -- the UI shows
+    // work, not descriptions of work, and that applies to sentences about the UI too.
+    const say = `${decision.statement} ${describeProbe(steps)}`
     world = withTurn(world, "williamos", say)
     world = withSurface(world, { kind: "browser", subject: "/sign-in", because: "reproducing the failure" })
     world = withSurface(world, { kind: "trace", subject: "auth-probe", because: "the redirect chain, live" })
@@ -208,8 +223,8 @@ export async function POST(request: Request) {
       worldId,
       say,
       surfaces: [
-        { kind: "browser", subject: "/sign-in", title: "sign-in · live" },
-        { kind: "trace", subject: "auth-probe", title: "auth probe · just now", payload: steps },
+        { kind: "browser", subject: "/sign-in" },
+        { kind: "trace", subject: "auth-probe", payload: steps },
       ],
     } satisfies LineReply)
   }
