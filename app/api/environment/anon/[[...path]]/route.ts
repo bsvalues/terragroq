@@ -49,7 +49,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ path
       continue
     }
     const html = await response.text()
-    return new Response(html, {
+    // Markup and styles only. Under an opaque-origin sandbox the page's boot scripts throw on
+    // storage access, and a hydration crash tears down the server-rendered markup -- the frame went
+    // blank white with the full form sitting in the document. The investigation surface shows what
+    // the page IS; interactivity inside an anonymous reproduction frame is not its job.
+    const scriptFree = html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<script[^>]*\/>/gi, "")
+    return new Response(scriptFree, {
       status: response.status,
       headers: { "content-type": response.headers.get("content-type") ?? "text/html; charset=utf-8" },
     })
