@@ -4,9 +4,24 @@ import {
   createEnvironmentWorldService,
   type EnvironmentComparisonPort,
   type EnvironmentEndpointResolver,
+  type EnvironmentEndpointLivenessPort,
 } from "@/lib/environment/world-service"
 import type { EnvironmentWorldDto } from "@/lib/environment/api-contract"
 import { postgresEnvironmentWorkIntake } from "@/lib/environment/postgres-work-intake"
+import { verifyEndpointLiveness } from "@/lib/environment/endpoint-liveness"
+
+const productionEndpointLiveness: EnvironmentEndpointLivenessPort = {
+  async refresh(endpoint) {
+    return verifyEndpointLiveness({
+      ...endpoint,
+      provenance: {
+        source: endpoint.provenance.source,
+        evidenceRef: endpoint.provenance.evidenceRef,
+        capturedAt: endpoint.provenance.capturedAt,
+      },
+    }, { sourceEvidenceRef: endpoint.provenance.evidenceRef })
+  },
+}
 
 /**
  * Production deliberately starts without an execution or comparison adapter. Runtime integration
@@ -19,6 +34,7 @@ export function createProductionEnvironmentService(options: {
   return createEnvironmentWorldService({
     repository: postgresEnvironmentWorldRepository,
     endpointResolver: options.endpointResolver,
+    endpointLivenessPort: productionEndpointLiveness,
     comparisonPort: options.comparisonPort,
     workIntakePort: postgresEnvironmentWorkIntake,
   })

@@ -76,7 +76,7 @@ function BrowserSurface({
   const admitted =
     surface.status === "ready" &&
     endpoint?.provenance.liveness.status === "reachable" &&
-    Boolean(endpoint.provenance.liveness.evidenceRef)
+    Boolean(endpoint.provenance.liveness.sourceEvidenceRef)
 
   if (!admitted) return <Waiting message="Waiting for an admitted, reachable preview." subject={surface.subject} />
 

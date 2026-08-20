@@ -39,7 +39,7 @@ export async function POST(request: Request) {
         evidenceRefs,
         endpoint: body.endpoint,
       })
-      const endpoint = await verifyEndpointLiveness(body.endpoint, { evidenceRef })
+      const endpoint = await verifyEndpointLiveness(body.endpoint, { sourceEvidenceRef: evidenceRef })
       const world = await environmentWorldService.admitEndpoint(userId, body.worldId, endpoint)
       await appendGovernanceEvent({
         userId,

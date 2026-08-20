@@ -73,9 +73,9 @@ function endpoint(worldId: string, resourceIdentity: string, suffix = worldId): 
       evidenceRef: `registry:${suffix}`,
       capturedAt: instant,
       liveness: {
-        status: "reachable", httpStatus: 200, observedAt: instant, evidenceRef: `probe:${suffix}`,
+        status: "reachable", httpStatus: 200, observedAt: instant, sourceEvidenceRef: `probe:${suffix}`,
         publicRoute: {
-          status: "reachable", httpStatus: 200, observedAt: instant, evidenceRef: `probe:${suffix}`,
+          status: "reachable", httpStatus: 200, observedAt: instant, sourceEvidenceRef: `probe:${suffix}`,
         },
       },
     },
@@ -321,12 +321,12 @@ describe("real endpoint liveness seam", () => {
         port: 4101,
       }), { status: 200 })) as unknown as typeof fetch
 
-    const verified = await verifyEndpointLiveness(candidate, { fetchImpl, evidenceRef: "acceptance:probe", now: () => instant })
+    const verified = await verifyEndpointLiveness(candidate, { fetchImpl, sourceEvidenceRef: "acceptance:probe", now: () => instant })
 
     expect(verified.provenance.liveness).toEqual({
-      status: "reachable", httpStatus: 200, observedAt: instant, evidenceRef: "acceptance:probe",
+      status: "reachable", httpStatus: 200, observedAt: instant, sourceEvidenceRef: "acceptance:probe",
       publicRoute: {
-        status: "reachable", httpStatus: 200, observedAt: instant, evidenceRef: "acceptance:probe",
+        status: "reachable", httpStatus: 200, observedAt: instant, sourceEvidenceRef: "acceptance:probe",
       },
     })
     expect(fetchImpl).toHaveBeenCalledWith(new URL(candidate.probeUrl), expect.objectContaining({ redirect: "manual" }))
@@ -382,6 +382,41 @@ describe("real endpoint liveness seam", () => {
     expect(reply.say).not.toContain("copy is ready")
   })
 
+  it("renews a healthy admitted endpoint during server restoration", async () => {
+    const repository = new MemoryRepository()
+    const resource = { recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A" }
+    const projection = admitWorldEndpoint(createEnvironmentWorldProjection({
+      id: "world",
+      meaning: createWorkingWorld({ intent: "Fix sign-in", resources: [resource.canonicalIdentity] }),
+      resource,
+    }), endpoint("world", resource.canonicalIdentity, "one"))
+    await repository.insert("owner", projection, instant)
+    const refreshedAt = "2026-08-20T19:00:31.001Z"
+    const refresh = vi.fn(async (candidate: WorldEndpointIdentity): Promise<WorldEndpointIdentity> => ({
+      ...candidate,
+      provenance: {
+        ...candidate.provenance,
+        liveness: {
+          ...candidate.provenance.liveness,
+          observedAt: refreshedAt,
+          publicRoute: { ...candidate.provenance.liveness.publicRoute, observedAt: refreshedAt },
+        },
+      },
+    }))
+    const service = createEnvironmentWorldService({
+      repository,
+      endpointLivenessPort: { refresh },
+      now: () => refreshedAt,
+    })
+
+    const restored = await service.load("owner", "world")
+
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(restored?.status).toBe("ready")
+    expect(restored?.surfaces.find((surface) => surface.kind === "browser")?.status).toBe("ready")
+    expect(restored?.endpoints[0]?.provenance.liveness.observedAt).toBe(refreshedAt)
+  })
+
   it("refuses an erroring listener as a ready application endpoint", async () => {
     const candidate: UnverifiedWorldEndpoint = {
       ...endpoint("world", "repo:a", "one"),
@@ -391,7 +426,7 @@ describe("real endpoint liveness seam", () => {
 
     await expect(verifyEndpointLiveness(candidate, {
       fetchImpl,
-      evidenceRef: "acceptance:probe",
+      sourceEvidenceRef: "acceptance:probe",
       now: () => instant,
     })).rejects.toThrow("ENDPOINT_NOT_READY")
   })
@@ -404,14 +439,14 @@ describe("real endpoint liveness seam", () => {
     const redirectingFetch = vi.fn(async () => new Response(null, { status: 302 })) as unknown as typeof fetch
     await expect(verifyEndpointLiveness(candidate, {
       fetchImpl: redirectingFetch,
-      evidenceRef: "acceptance:probe",
+      sourceEvidenceRef: "acceptance:probe",
     })).rejects.toThrow("ENDPOINT_NOT_READY")
 
     const publicCandidate = { ...candidate, probeUrl: "http://169.254.169.254/latest/meta-data" }
     const forbiddenFetch = vi.fn() as unknown as typeof fetch
     await expect(verifyEndpointLiveness(publicCandidate, {
       fetchImpl: forbiddenFetch,
-      evidenceRef: "acceptance:probe",
+      sourceEvidenceRef: "acceptance:probe",
     })).rejects.toThrow("ENDPOINT_ORIGIN_NOT_ALLOWED")
     expect(forbiddenFetch).not.toHaveBeenCalled()
   })

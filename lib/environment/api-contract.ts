@@ -124,7 +124,7 @@ export function toEnvironmentWorldDto(
           : {
               source: endpoint?.provenance.source ?? "unavailable",
               observedAt: endpoint?.provenance.liveness.observedAt,
-              evidenceRef: endpoint?.provenance.liveness.evidenceRef,
+              evidenceRef: endpoint?.provenance.liveness.sourceEvidenceRef,
             },
         content: surface.content,
       }

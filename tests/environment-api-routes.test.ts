@@ -138,9 +138,9 @@ describe("Environment authenticated routes", () => {
       provenance: {
         ...candidate.provenance,
         liveness: {
-          status: "reachable", httpStatus: 200, observedAt: "2026-08-20T19:00:01.000Z", evidenceRef: "EV-1",
+          status: "reachable", httpStatus: 200, observedAt: "2026-08-20T19:00:01.000Z", sourceEvidenceRef: "EV-1",
           publicRoute: {
-            status: "reachable", httpStatus: 200, observedAt: "2026-08-20T19:00:01.000Z", evidenceRef: "EV-1",
+            status: "reachable", httpStatus: 200, observedAt: "2026-08-20T19:00:01.000Z", sourceEvidenceRef: "EV-1",
           },
         },
       },

@@ -26,12 +26,13 @@ export type EndpointProvenance = Readonly<{
     status: "reachable"
     httpStatus: number
     observedAt: string
-    evidenceRef: string
+    /** Durable endpoint/source receipt this volatile server probe is anchored to. */
+    sourceEvidenceRef: string
     publicRoute: Readonly<{
       status: "reachable"
       httpStatus: number
       observedAt: string
-      evidenceRef: string
+      sourceEvidenceRef: string
     }>
   }>
 }>
@@ -328,7 +329,7 @@ function validateEndpoint(raw: unknown): WorldEndpointIdentity {
     throw new Error("ENDPOINT_LIVENESS_STATUS_INVALID")
   }
   requireIsoInstant(liveness.observedAt, "ENDPOINT_LIVENESS_AT_INVALID")
-  requireText(liveness.evidenceRef, "ENDPOINT_LIVENESS_EVIDENCE_REQUIRED")
+  requireText(liveness.sourceEvidenceRef, "ENDPOINT_LIVENESS_SOURCE_EVIDENCE_REQUIRED")
   if (!liveness.publicRoute || typeof liveness.publicRoute !== "object" || Array.isArray(liveness.publicRoute)) {
     throw new Error("ENDPOINT_PUBLIC_LIVENESS_REQUIRED")
   }
@@ -338,7 +339,7 @@ function validateEndpoint(raw: unknown): WorldEndpointIdentity {
     throw new Error("ENDPOINT_PUBLIC_NOT_READY")
   }
   requireIsoInstant(publicRoute.observedAt, "ENDPOINT_PUBLIC_LIVENESS_AT_INVALID")
-  requireText(publicRoute.evidenceRef, "ENDPOINT_PUBLIC_LIVENESS_EVIDENCE_REQUIRED")
+  requireText(publicRoute.sourceEvidenceRef, "ENDPOINT_PUBLIC_LIVENESS_SOURCE_EVIDENCE_REQUIRED")
   return endpoint as unknown as WorldEndpointIdentity
 }
 

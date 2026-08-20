@@ -44,6 +44,11 @@ export interface EnvironmentEndpointResolver {
   }>): Promise<WorldEndpointIdentity | null>
 }
 
+export interface EnvironmentEndpointLivenessPort {
+  /** Re-observe an already admitted endpoint; null means its current reachability was not proven. */
+  refresh(endpoint: WorldEndpointIdentity): Promise<WorldEndpointIdentity | null>
+}
+
 export type ComparisonEvidence = Readonly<{
   /** The producing port persisted this exact observation in the authority/evidence ledger. */
   durable: true
@@ -75,6 +80,7 @@ export interface EnvironmentWorkIntakePort {
 export function createEnvironmentWorldService({
   repository,
   endpointResolver,
+  endpointLivenessPort,
   comparisonPort,
   workIntakePort,
   now = () => new Date().toISOString(),
@@ -82,6 +88,7 @@ export function createEnvironmentWorldService({
 }: {
   repository: EnvironmentWorldRepository
   endpointResolver?: EnvironmentEndpointResolver
+  endpointLivenessPort?: EnvironmentEndpointLivenessPort
   comparisonPort?: EnvironmentComparisonPort
   workIntakePort?: EnvironmentWorkIntakePort
   now?: () => string
@@ -89,13 +96,28 @@ export function createEnvironmentWorldService({
 }) {
   const dto = (world: EnvironmentWorldProjection, updatedAt: string) =>
     toEnvironmentWorldDto(world, updatedAt, Date.parse(now()))
+  const refreshLiveness = async (world: EnvironmentWorldProjection): Promise<EnvironmentWorldProjection> => {
+    if (!endpointLivenessPort || world.endpoints.length === 0) return world
+    const observed = await Promise.all(world.endpoints.map(async (endpoint) => {
+      try {
+        return await endpointLivenessPort.refresh(endpoint)
+      } catch {
+        return null
+      }
+    }))
+    return validateEnvironmentWorldProjection({
+      ...world,
+      endpoints: world.endpoints.map((endpoint, index) => observed[index] ?? endpoint),
+    })
+  }
 
   return {
     async load(userId: string, worldId?: string | null): Promise<EnvironmentWorldDto | null> {
       requireText(userId, "USER_REQUIRED")
       const stored = worldId ? await repository.loadExact(userId, worldId) : await repository.loadLatest(userId)
       if (!stored) return null
-      return dto(validateEnvironmentWorldProjection(stored.world), stored.updatedAt)
+      const world = await refreshLiveness(validateEnvironmentWorldProjection(stored.world))
+      return dto(world, stored.updatedAt)
     },
 
     async submitLine(
@@ -110,7 +132,7 @@ export function createEnvironmentWorldService({
       if (input.worldId) {
         const stored = await repository.loadExact(userId, input.worldId)
         if (!stored) throw new EnvironmentNotFoundError("WORLD_NOT_FOUND")
-        let world = validateEnvironmentWorldProjection(stored.world)
+        let world = await refreshLiveness(validateEnvironmentWorldProjection(stored.world))
         // A previously waiting world may acquire a runtime endpoint later. Re-resolution is safe:
         // the port can return only an already evidenced, live endpoint for this exact world/resource.
         if (world.resource && world.endpoints.length === 0 && endpointResolver) {
@@ -258,8 +280,10 @@ export function createEnvironmentWorldService({
         repository.loadExact(userId, input.rightWorldId),
       ])
       if (!leftStored || !rightStored) throw new EnvironmentNotFoundError("WORLD_NOT_FOUND")
-      const left = validateEnvironmentWorldProjection(leftStored.world)
-      const right = validateEnvironmentWorldProjection(rightStored.world)
+      const [left, right] = await Promise.all([
+        refreshLiveness(validateEnvironmentWorldProjection(leftStored.world)),
+        refreshLiveness(validateEnvironmentWorldProjection(rightStored.world)),
+      ])
       const leftDto = dto(left, leftStored.updatedAt)
       const rightDto = dto(right, rightStored.updatedAt)
       const isolationConflicts = distinctEndpointConflicts(left, right)

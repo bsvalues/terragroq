@@ -8,21 +8,23 @@ export type UnverifiedWorldEndpoint = Omit<WorldEndpointIdentity, "provenance"> 
 /**
  * Real acceptance seam: check the endpoint's declared application URL without starting, changing, or
  * authorizing anything. A caller must persist its own evidence reference; this helper cannot mint a
- * runtime receipt. Redirects stay manual so a shared sign-in shell cannot silently look like success.
+ * runtime receipt. The observation is volatile and remains anchored to an existing durable source
+ * receipt; it does not mint a new evidence record. Redirects stay manual so a shared sign-in shell
+ * cannot silently look like success.
  */
 export async function verifyEndpointLiveness(
   endpoint: UnverifiedWorldEndpoint,
   {
     fetchImpl = fetch,
-    evidenceRef,
+    sourceEvidenceRef,
     now = () => new Date().toISOString(),
   }: {
     fetchImpl?: typeof fetch
-    evidenceRef: string
+    sourceEvidenceRef: string
     now?: () => string
   },
 ): Promise<WorldEndpointIdentity> {
-  if (!evidenceRef.trim()) throw new Error("ENDPOINT_LIVENESS_EVIDENCE_REQUIRED")
+  if (!sourceEvidenceRef.trim()) throw new Error("ENDPOINT_LIVENESS_SOURCE_EVIDENCE_REQUIRED")
   const url = requireAllowedEnvironmentEndpoint(endpoint.probeUrl)
   let response: Response
   try {
@@ -72,12 +74,12 @@ export async function verifyEndpointLiveness(
         status: "reachable",
         httpStatus: response.status,
         observedAt,
-        evidenceRef: evidenceRef.trim(),
+        sourceEvidenceRef: sourceEvidenceRef.trim(),
         publicRoute: {
           status: "reachable",
           httpStatus: publicResponse.status,
           observedAt,
-          evidenceRef: evidenceRef.trim(),
+          sourceEvidenceRef: sourceEvidenceRef.trim(),
         },
       },
     },

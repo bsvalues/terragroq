@@ -217,9 +217,9 @@ function endpoint(id: string, appUrl: string): WorldEndpointIdentity {
       evidenceRef: `evidence://${id}`,
       capturedAt: "2026-08-20T18:00:00.000Z",
       liveness: {
-        status: "reachable", httpStatus: 200, observedAt: "2026-08-20T18:00:00.000Z", evidenceRef: `evidence://live/${id}`,
+        status: "reachable", httpStatus: 200, observedAt: "2026-08-20T18:00:00.000Z", sourceEvidenceRef: `evidence://live/${id}`,
         publicRoute: {
-          status: "reachable", httpStatus: 200, observedAt: "2026-08-20T18:00:00.000Z", evidenceRef: `evidence://live/${id}`,
+          status: "reachable", httpStatus: 200, observedAt: "2026-08-20T18:00:00.000Z", sourceEvidenceRef: `evidence://live/${id}`,
         },
       },
     },

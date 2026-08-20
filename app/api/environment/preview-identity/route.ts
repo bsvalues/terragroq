@@ -1,6 +1,6 @@
-import { NO_STORE_HEADERS } from "@/app/api/environment/http"
-
 export const dynamic = "force-dynamic"
+
+const NO_STORE_HEADERS = { "cache-control": "no-store" }
 
 /** Public, non-secret receipt used to prove that client routing reaches the exact isolated preview. */
 export async function GET() {
