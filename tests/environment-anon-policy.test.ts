@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { isFrameablePath } from "@/app/api/environment/anon/[[...path]]/route"
+import { isFrameablePath } from "@/lib/environment/frameable"
 
 /**
  * The public cookieless proxy enumerates what it serves. A character-class check alone let an
