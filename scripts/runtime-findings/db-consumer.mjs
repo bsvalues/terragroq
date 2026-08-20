@@ -183,6 +183,24 @@ function normalizeDate(value) {
   return date
 }
 
+// authority_grant timestamps are PostgreSQL `timestamp without time zone` values.
+// Decode their wall-clock fields as UTC, matching utcWallTimestamp.fromDriver.
+function normalizeGrantTimestamp(value) {
+  if (value instanceof Date) {
+    const date = new Date(Date.UTC(
+      value.getFullYear(), value.getMonth(), value.getDate(), value.getHours(),
+      value.getMinutes(), value.getSeconds(), value.getMilliseconds(),
+    ))
+    if (!Number.isFinite(date.getTime())) fail("FINDING_TIME_WALL")
+    return date
+  }
+  if (typeof value !== "string") fail("FINDING_TIME_WALL")
+  const normalized = value.trim().replace(" ", "T")
+  return normalizeDate(/[zZ]$|[+-]\d\d(?::?\d\d)?$/.test(normalized)
+    ? normalized
+    : `${normalized}Z`)
+}
+
 function validatorLabels(commands) {
   if (!Array.isArray(commands) || commands.length === 0) return null
   const labels = []
@@ -350,7 +368,7 @@ function sourceFinding(row, nowMs) {
     fail("FINDING_SOURCE_LINEAGE_WALL")
   }
   if (row.implementationGrantExpiresAt == null) fail("FINDING_AUTHORITY_EXPIRED")
-  const expiresAt = normalizeDate(row.implementationGrantExpiresAt)
+  const expiresAt = normalizeGrantTimestamp(row.implementationGrantExpiresAt)
   if (expiresAt.getTime() <= nowMs) fail("FINDING_AUTHORITY_EXPIRED")
   if (row.parentExecutionGrantStatus !== "active" || row.parentExecutionGrantRevokedAt != null
     || row.parentExecutionGrantAuthorityLevel !== metadata.deliveryAuthorityLevel
@@ -361,8 +379,8 @@ function sourceFinding(row, nowMs) {
     || !Array.isArray(row.parentExecutionGrantBlockedActions)
     || blocksAction(row.parentExecutionGrantBlockedActions, "outcome:execute")
     || row.parentExecutionGrantExpiresAt == null
-    || normalizeDate(row.parentExecutionGrantExpiresAt).getTime() <= nowMs
-    || normalizeDate(parentResult.expiresAt).getTime() !== normalizeDate(row.implementationGrantExpiresAt).getTime()
+    || normalizeGrantTimestamp(row.parentExecutionGrantExpiresAt).getTime() <= nowMs
+    || normalizeDate(parentResult.expiresAt).getTime() !== expiresAt.getTime()
     || normalizeDate(parentResult.authorizedAt).getTime() > nowMs) fail("FINDING_SOURCE_LINEAGE_WALL")
   return {
     sourceFindingEventId: Number(row.sourceFindingEventId),
@@ -401,7 +419,7 @@ function parentObjective(row, finding) {
     grantRef: row.implementationGrantRef,
     authority: "APPROVED",
     grantStatus: row.implementationGrantStatus,
-    grantExpiresAt: row.implementationGrantExpiresAt,
+    grantExpiresAt: normalizeGrantTimestamp(row.implementationGrantExpiresAt).toISOString(),
     allowedPaths: row.parentAllowedFiles,
     forbiddenPaths: row.parentForbiddenFiles,
     requiredValidation: row.parentValidators,
@@ -811,7 +829,8 @@ async function replayOrdinary(client, row, finding, order, classification) {
     || artifact.decisionScope !== identity.outcomeKey || artifact.grantStatus !== "active"
     || artifact.grantRevokedAt != null || artifact.grantAuthorityLevel !== finding.deliveryAuthorityLevel
     || artifact.grantGrantedTo !== "operator" || Number(artifact.grantWorkOrderId) !== Number(artifact.workOrderId)
-    || normalizeDate(artifact.grantExpiresAt).getTime() !== normalizeDate(row.implementationGrantExpiresAt).getTime()
+    || normalizeGrantTimestamp(artifact.grantExpiresAt).getTime()
+      !== normalizeGrantTimestamp(row.implementationGrantExpiresAt).getTime()
     || artifact.grantScope !== identity.workOrderRef
     || !exactArray(artifact.allowedFiles, order.allowedPaths)
     || !exactArray(artifact.validators, row.parentValidators)
@@ -822,7 +841,8 @@ async function replayOrdinary(client, row, finding, order, classification) {
     || artifact.queueGrantAuthorityLevel !== finding.deliveryAuthorityLevel
     || artifact.queueGrantScope !== identity.outcomeKey || artifact.queueGrantGrantedTo !== "operator"
     || Number(artifact.queueGrantWorkOrderId) !== Number(artifact.workOrderId)
-    || normalizeDate(artifact.queueGrantExpiresAt).getTime() !== normalizeDate(row.implementationGrantExpiresAt).getTime()
+    || normalizeGrantTimestamp(artifact.queueGrantExpiresAt).getTime()
+      !== normalizeGrantTimestamp(row.implementationGrantExpiresAt).getTime()
     || !exactArray(artifact.queueGrantAllowedActions, ["outcome:execute"])
     || !exactArray(artifact.queueGrantBlockedActions, row.implementationGrantBlockedActions)
     || blocksAction(artifact.queueGrantBlockedActions, "outcome:execute")

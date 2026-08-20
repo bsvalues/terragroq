@@ -90,7 +90,7 @@ async function seedAuthorizedParent(client: import("pg").PoolClient) {
     grantId: 80, grantRef: "WB-EXEC-GRANT-911-E2E",
     implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911-E2E",
     queueVersion: 1, authorizedAt: "2026-08-20T18:00:00.000Z",
-    expiresAt: "2099-01-01T08:00:00.000Z", workContract,
+    expiresAt: "2099-01-01T00:00:00.000Z", workContract,
   }
   const approvalEvidence = [
     "project:7", "thread:thread-911-e2e", `repo:${workContract.repository}`,
