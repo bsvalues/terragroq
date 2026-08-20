@@ -67,10 +67,15 @@ $failures = @()
 # The LAN case flips meaning depending on where the machine is. On the LAN it must succeed; off the
 # LAN it must fail, and a success there means the machine never actually left the network.
 $lan = Invoke-CockpitProbe -Address $lanAddress -WithCertificate
-$lanReachable = $lan.Status -eq '303'
+# ANY completed HTTP response proves the LAN host answered -- 500, 404, an unexpected redirect, all
+# of them mean the machine is still on that network. Treating only the happy-path 303 as "reachable"
+# would let a LAN host in a degraded state read as absent and pass an off-LAN run that never left the
+# LAN, which is a false PASS on the one assertion that makes this whole run meaningful. Reachability
+# and success are separate questions and are now asked separately.
+$lanReachable = [bool]$lan.Status
 if ($OffLan) {
     if ($lanReachable) { $failures += "NOT ACTUALLY OFF-LAN: the direct LAN address $lanAddress still answers, so this run proves nothing about off-site access" }
-} elseif (-not ($lanReachable -and $lan.Location -eq '/' -and $lan.HasCookie)) {
+} elseif (-not ($lan.Status -eq '303' -and $lan.Location -eq '/' -and $lan.HasCookie)) {
     $detail = if ($lan.Error) { $lan.Error } else { "got '$($lan.Status)' -> '$($lan.Location)' cookie=$($lan.HasCookie)" }
     $failures += "LAN + device certificate: expected 303 -> / with session cookie, $detail"
 }

@@ -55,9 +55,15 @@ function Test-PeerReachable {
     # Test-Connection takes -ComputerName on Windows PowerShell 5.1 and -TargetName on PowerShell 7.
     # A scheduled task may launch either host, and guessing wrong throws a parameter-binding error
     # in the middle of a run that has already severed the network. .NET's ping is identical on both.
-    param([string] $Address, [int] $TimeoutMs = 2000)
-    try { return ((New-Object Net.NetworkInformation.Ping).Send($Address, $TimeoutMs)).Status -eq 'Success' }
-    catch { return $false }
+    # Attempts, not a duplicated call. A single dropped packet must not be reported as "the LAN is
+    # gone" -- that is the assertion the whole run rests on, so it gets retried rather than trusted
+    # on one sample.
+    param([string] $Address, [int] $TimeoutMs = 2000, [int] $Attempts = 2)
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try { if (((New-Object Net.NetworkInformation.Ping).Send($Address, $TimeoutMs)).Status -eq 'Success') { return $true } }
+        catch { }
+    }
+    return $false
 }
 
 function Get-PublicEndpoint {
@@ -149,7 +155,7 @@ try {
     Note "default route via LIVE adapters: $routeVia"
     if ($routeVia -match [regex]::Escape($EthernetAlias)) { throw "STILL_ON_LAN: '$EthernetAlias' is up and still carries a default route" }
 
-    $lanReachable = (Test-PeerReachable -Address $LanPeerAddress) -or (Test-PeerReachable -Address $LanPeerAddress)
+    $lanReachable = Test-PeerReachable -Address $LanPeerAddress -Attempts 3
     Note "lab LAN peer $LanPeerAddress reachable: $lanReachable  (MUST be False)"
     if ($lanReachable) { throw "STILL_ON_LAN: $LanPeerAddress still answers on the local network" }
 
