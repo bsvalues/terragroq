@@ -364,6 +364,38 @@ export const workbenchThreadSource = pgTable(
   ],
 )
 
+// A Thread is a conversation (#762 CONVERSATION-FIRST). Messages are its primary content; work
+// objects hang off the conversation, never the other way around. Roles are the projection's two
+// voices; agent/system voices arrive by widening the check, the way 0010 widened source kinds.
+export const workbenchThreadMessage = pgTable(
+  "workbench_thread_message",
+  {
+    id: text("id").primaryKey(),
+    userId: text("userId").notNull(),
+    threadId: text("threadId").notNull(),
+    role: text("role").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.userId, table.threadId],
+      foreignColumns: [workbenchThread.userId, workbenchThread.id],
+      name: "workbench_thread_message_user_thread_fk",
+    }).onDelete("cascade"),
+    index("workbench_thread_message_thread_created_idx").on(
+      table.userId,
+      table.threadId,
+      table.createdAt,
+      table.id,
+    ),
+    check(
+      "workbench_thread_message_role_check",
+      sql`${table.role} IN ('owner', 'williamos')`,
+    ),
+  ],
+)
+
 /* ------------------------------------------------------------------ */
 /* RAG corpus                                                          */
 /* ------------------------------------------------------------------ */
@@ -1165,6 +1197,7 @@ export type NewProject = typeof project.$inferInsert
 export type ProjectResource = typeof projectResource.$inferSelect
 export type NewProjectResource = typeof projectResource.$inferInsert
 export type WorkbenchThread = typeof workbenchThread.$inferSelect
+export type WorkbenchThreadMessage = typeof workbenchThreadMessage.$inferSelect
 export type NewWorkbenchThread = typeof workbenchThread.$inferInsert
 export type WorkbenchThreadSource = typeof workbenchThreadSource.$inferSelect
 export type NewWorkbenchThreadSource = typeof workbenchThreadSource.$inferInsert

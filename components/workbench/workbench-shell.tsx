@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 
 import { getWorkbenchThreads } from "@/app/actions/workbench-threads"
+import { ThreadConversation } from "@/components/workbench/thread-conversation"
 import { getWorkbenchExecution } from "@/app/actions/workbench-execution"
 import { UniversalIntent } from "@/components/intent/universal-intent"
 import { UserMenu } from "@/components/shell/user-menu"
@@ -584,7 +585,26 @@ export function WorkbenchShell({
   const center = useMemo(() => {
     if (routeMode === null) return children
     if (currentMode === "activity" || currentMode === "system") return children
-    if (selectedThread) return <ThreadTimeline thread={selectedThread} onSelectItem={setSelectedItem} workStatus={workStatus} />
+    // CONVERSATION-FIRST (#762): the conversation is the Thread's primary surface. The work record
+    // -- goals, execution state, evidence -- stays fully available underneath it, collapsed, because
+    // work happens inside chat rather than replacing it.
+    if (selectedThread) return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="mx-auto flex w-full max-w-4xl min-h-0 flex-1 flex-col px-5 pt-4 md:px-8">
+          <header className="border-b border-[var(--workbench-hairline)] pb-3">
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--workbench-muted)]">{selectedThread.project.name} / Thread</p>
+            <h1 className="mt-1 truncate text-lg font-semibold tracking-tight text-[var(--workbench-text)]">{selectedThread.title}</h1>
+          </header>
+          <ThreadConversation key={selectedThread.id} threadId={selectedThread.id} className="min-h-0 flex-1" />
+        </div>
+        <details className="border-t border-[var(--workbench-hairline)]">
+          <summary className="workbench-focus cursor-pointer px-5 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--workbench-muted)] md:px-8">Work record</summary>
+          <div className="workbench-scroll max-h-[45vh] overflow-y-auto">
+            <ThreadTimeline thread={selectedThread} onSelectItem={setSelectedItem} workStatus={workStatus} />
+          </div>
+        </details>
+      </div>
+    )
     return <EmptyThread project={selectedProject} />
   }, [children, currentMode, routeMode, selectedProject, selectedThread, workStatus])
 
