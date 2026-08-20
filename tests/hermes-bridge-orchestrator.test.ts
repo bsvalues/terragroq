@@ -45,6 +45,26 @@ const readyTurnResult = {
   approveConsequence: null,
   denyConsequence: null,
 }
+const closedFinding = {
+  findingId: "FINDING-911-CALLER",
+  sequence: 1,
+  summary: "Persist the bounded caller finding",
+  task: "Project the finding through the runtime checkpoint",
+  paths: ["components/hermes/live-status.tsx"],
+  effects: {
+    spendsMoney: false,
+    irreversible: false,
+    mutatesProductionData: false,
+    releaseOrCutover: false,
+    protectedResource: false,
+    unresolvedLegalPrivacyOrSecurityRisk: false,
+    touchesCredentials: false,
+    changesReviewedPolicy: false,
+    outsideObjectiveScope: false,
+    competesWithPriority: false,
+    destroys: [],
+  },
+}
 
 function runtime() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-orchestrator-"))
@@ -3651,7 +3671,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     )
   })
 
-  it("durably consumes an approved resume before a failed runtime projection check", async () => {
+  it("replays durable turn findings after projection failure without attaching them to later checkpoints", async () => {
     const value = fixture()
     const outcome = await value.selectOutcome()
     const first = value.state.acquireLease({
@@ -3674,6 +3694,12 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       workOrderId: 77, terminalEventId: 500,
       decisionPacket: ownerDecisionPacket, decisionPacketDigest: ownerDecisionPacketDigest,
     })
+    value.client.runTurn.mockResolvedValueOnce({
+      threadId: "thread-owner-projection",
+      turnId: "turn-owner-projection",
+      status: "completed",
+      finalText: JSON.stringify({ ...readyTurnResult, findings: [closedFinding] }),
+    })
     let failedProjection = false
     value.projectCheckpoint.mockImplementation(async ({ checkpoint }) => {
       if (checkpoint.state === "CODEX_TURN_COMPLETED" && !failedProjection) {
@@ -3690,7 +3716,10 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(value.state.read().executions["77"]).toMatchObject({
       checkpoint: { state: "CODEX_TURN_COMPLETED" },
-      metadata: { ownerDecisionResumePhase: "CONSUMED" },
+      metadata: {
+        ownerDecisionResumePhase: "CONSUMED",
+        turnResult: { findings: [closedFinding] },
+      },
       lease: {
         status: "ACTIVE",
         abandonReason: "HERMES_RUNTIME_PROJECTION_WALL",
@@ -3703,6 +3732,13 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(value.client.runTurn).toHaveBeenCalledOnce()
     expect(value.client.connect).toHaveBeenCalledOnce()
+    const projectedCheckpoints = value.projectCheckpoint.mock.calls.map(([request]) => request.checkpoint)
+    const turnProjections = projectedCheckpoints.filter((checkpoint) => checkpoint.state === "CODEX_TURN_COMPLETED")
+    expect(turnProjections.length).toBeGreaterThan(1)
+    for (const checkpoint of turnProjections) expect(checkpoint.findings).toEqual([closedFinding])
+    expect(projectedCheckpoints
+      .filter((checkpoint) => checkpoint.state !== "CODEX_TURN_COMPLETED")
+      .every((checkpoint) => checkpoint.findings === undefined)).toBe(true)
   })
 
   it("settles a recovered owner-wall checkpoint before any Codex redispatch", async () => {
