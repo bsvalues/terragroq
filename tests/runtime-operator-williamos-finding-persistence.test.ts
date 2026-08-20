@@ -211,6 +211,7 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
     await expect(adapters.collectFindings()).resolves.toEqual([{
       sourceFindingEventId: 441,
       sourceUserId: "owner-1",
+      sourceWorkOrderRowId: "31",
       sourcePayloadDigest: SOURCE_DIGEST,
       findingId: "FINDING-911-COMPOSE",
       objectiveWorkOrderId: "WO-0031",

@@ -841,6 +841,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
         return [{
           sourceFindingEventId: row.sourceFindingEventId,
           sourceUserId: row.userId,
+          sourceWorkOrderRowId: row.entityId,
           sourcePayloadDigest: findingDigest(metadata),
           findingId: metadata.findingId,
           objectiveWorkOrderId: metadata.objectiveWorkOrderId,

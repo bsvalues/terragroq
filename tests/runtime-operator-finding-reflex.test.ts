@@ -95,6 +95,29 @@ describe("a finding during an active objective enters derivation automatically",
     expect(persisted).toEqual([])
   })
 
+  it("binds a finding to the exact source row and user when objective refs collide", async () => {
+    const collidingRegistry = {
+      workOrders: [
+        { ...OBJECTIVE, userId: "owner-wrong", workOrderRowId: 31, grantRef: "GRANT-WRONG" },
+        { ...OBJECTIVE, userId: "owner-right", workOrderRowId: 99, grantRef: "GRANT-RIGHT" },
+      ],
+    }
+    const { adapters, persisted } = adaptersFor([{
+      objectiveWorkOrderId: "WO-0031",
+      sourceUserId: "owner-right",
+      sourceWorkOrderRowId: "99",
+      sequence: 1,
+      summary: "right tenant finding",
+      paths: ["scripts/runtime-operator/a.mjs"],
+      effects: { destroys: [] },
+    }])
+
+    await deriveAndQueueFindings({ registry: collidingRegistry, adapters })
+
+    expect(persisted).toHaveLength(1)
+    expect(persisted[0]).toMatchObject({ grantRef: "GRANT-RIGHT", sourceUserId: "owner-right" })
+  })
+
   it("refreshes authority after persistence so the derived order is selected in the same cycle", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-finding-reflex-"))
     roots.push(root)

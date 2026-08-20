@@ -244,7 +244,10 @@ export async function deriveAndQueueFindings({ registry, adapters }) {
   const queued = []
   const gated = []
   for (const objective of registry.workOrders ?? []) {
-    const mine = findings.filter((finding) => finding?.objectiveWorkOrderId === objective.workOrderId)
+    const hasStableIdentity = objective?.userId !== undefined && objective?.workOrderRowId !== undefined
+    const mine = findings.filter((finding) => finding?.objectiveWorkOrderId === objective.workOrderId
+      && (!hasStableIdentity || (finding?.sourceUserId === objective.userId
+        && String(finding?.sourceWorkOrderRowId) === String(objective.workOrderRowId))))
     if (mine.length === 0) continue
     const plan = deriveRemediationPlan({ objective, findings: mine })
     for (const order of plan.dispatch) {
