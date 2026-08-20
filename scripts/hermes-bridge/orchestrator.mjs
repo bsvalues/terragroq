@@ -301,7 +301,9 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
     if (!verified || verified.provenance?.operation !== "runtime_finding.derive"
       || verified.provenance?.outcomeKey !== outcome?.outcomeKey
       || verified.provenance?.outcomeKey !== binding?.outcomeKey
-      || Number(verified.provenance?.workOrderId) !== Number(binding?.activeWorkOrderId)) {
+      || Number(verified.provenance?.workOrderId) !== Number(binding?.activeWorkOrderId)
+      || typeof verified.provenance?.workOrderRef !== "string"
+      || verified.provenance.workOrderRef.trim() === "") {
       throw Object.assign(new Error("Derived queue work contract provenance conflicts"), {
         code: "HERMES_WORK_CONTRACT_WALL",
       })
@@ -317,6 +319,12 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
     })
   }
   return contract
+}
+
+function workOrderRefFor(outcome) {
+  return outcome?.verifiedQueueWorkContract?.provenance?.operation === "runtime_finding.derive"
+    ? outcome.verifiedQueueWorkContract.provenance.workOrderRef
+    : `WO-HERMES-${outcome.id}-001`
 }
 
 function projectedWorkContract(outcome, resolver) {
@@ -1367,6 +1375,7 @@ export function createHermesOrchestrator(options = {}) {
       workContractResolver,
     )
     const reservations = workContract.reservations
+    const workOrderRef = workOrderRefFor(outcome)
     const baseSha = lease.metadata?.baseSha ?? await lifecycle.refreshOriginMain()
     const recoveryCheckpointState = current?.checkpoint?.state ?? null
     const worktreePath = lease.metadata?.worktreePath
@@ -1692,17 +1701,17 @@ export function createHermesOrchestrator(options = {}) {
 
       let deliveryPrompt = pendingValidationFailure
         ? buildValidationRemediationPrompt({
-          workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+          workOrderId: workOrderRef, branch,
           outcome: outcome.command, reservations, validation: pendingValidationFailure,
         })
         : pendingFindings.length > 0
           ? buildRemediationPrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+            workOrderId: workOrderRef, branch,
             outcome: outcome.command, reservations, findings: pendingFindings,
           })
         : ownerDecisionResume
           ? buildOwnerDecisionResumePrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`,
+            workOrderId: workOrderRef,
             branch,
             outcome: outcome.command,
             reservations,
@@ -1711,7 +1720,7 @@ export function createHermesOrchestrator(options = {}) {
           })
           : consumedOwnerDecisionResume
             ? buildOwnerDecisionPostResumePrompt({
-              workOrderId: `WO-HERMES-${outcome.id}-001`,
+              workOrderId: workOrderRef,
               branch,
               outcome: outcome.command,
               reservations,
@@ -1719,7 +1728,7 @@ export function createHermesOrchestrator(options = {}) {
           : buildHermesCodexPrompt({
         outcome: outcome.command,
         outcomeRef: outcomeRef(outcome),
-        workOrderId: `WO-HERMES-${outcome.id}-001`,
+        workOrderId: workOrderRef,
         branch,
         baseSha,
         attempt: (cp.metadata.providerRetryCount ?? 0) + 1,
@@ -1867,7 +1876,7 @@ export function createHermesOrchestrator(options = {}) {
           sequence = cp.checkpointSequence
           pendingValidationFailure = detail
           deliveryPrompt = buildValidationRemediationPrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+            workOrderId: workOrderRef, branch,
             outcome: outcome.command, reservations, validation: detail,
           })
           continue
@@ -1898,7 +1907,7 @@ export function createHermesOrchestrator(options = {}) {
           pendingFindings = advanced.findings
           sequence = advanced.sequence
           deliveryPrompt = buildRemediationPrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+            workOrderId: workOrderRef, branch,
             outcome: outcome.command, reservations, findings: pendingFindings,
           })
           continue

@@ -276,10 +276,21 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         contract,
         provenance: {
           operation: "runtime_finding.derive", outcomeKey: "runtime-finding:101:digest", workOrderId: 201,
+          workOrderRef: "WO-HERMES-OUTCOME-4-R01-F101",
         },
       },
     }, resolver)).toBe(contract)
     expect(resolver).not.toHaveBeenCalled()
+    expect(() => requireHermesWorkContract({
+      outcomeKey: "runtime-finding:101:digest",
+      queueBinding: { outcomeKey: "runtime-finding:101:digest", activeWorkOrderId: 201 },
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: {
+          operation: "runtime_finding.derive", outcomeKey: "runtime-finding:101:digest", workOrderId: 201,
+        },
+      },
+    }, resolver)).toThrow(expect.objectContaining({ code: "HERMES_WORK_CONTRACT_WALL" }))
   })
 
   it("does not reproject a released historical execution without a registered contract", async () => {

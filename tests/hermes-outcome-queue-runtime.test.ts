@@ -190,9 +190,13 @@ describe("Hermes durable outcome queue runtime", () => {
 
     await expect(bridge.selectOutcome()).resolves.toMatchObject({
       id: 202,
+      outcomeKey: derivedQueue.outcomeKey,
       verifiedQueueWorkContract: {
         contract,
-        provenance: { operation: "runtime_finding.derive", outcomeKey: derivedQueue.outcomeKey, workOrderId: 201 },
+        provenance: {
+          operation: "runtime_finding.derive", outcomeKey: derivedQueue.outcomeKey,
+          workOrderId: 201, workOrderRef: "WO-HERMES-OUTCOME-4-R01-F101",
+        },
       },
       queueBinding: { activeWorkOrderId: 201, outcomeKey: derivedQueue.outcomeKey },
     })

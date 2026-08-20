@@ -425,12 +425,14 @@ async function loadLinkedGoal(withPool, queueItem) {
     }
     return {
       ...publicGoal,
+      outcomeKey: queueItem.outcomeKey,
       verifiedQueueWorkContract: Object.freeze({
         contract: Object.freeze(contract),
         provenance: Object.freeze({
           operation: receipt.operation,
           outcomeKey: queueItem.outcomeKey,
           workOrderId: Number(queueItem.activeWorkOrderId),
+          workOrderRef: receipt.resultBinding.workOrderRef,
         }),
       }),
     }
