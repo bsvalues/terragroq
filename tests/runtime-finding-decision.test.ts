@@ -274,6 +274,10 @@ describe("runtime finding Primary decisions", () => {
       if (sql.includes("INSERT INTO decision")) {
         storedDecision = {
           id: 701,
+          authority: "binding",
+          owner: params[0],
+          title: params[2],
+          rationale: params[5],
           status: params[6],
           decision: params[4],
           locked: true,
@@ -289,6 +293,7 @@ describe("runtime finding Primary decisions", () => {
           id: 702,
           workOrderId: params[2],
           result: params[3],
+          repo: "bsvalues/terragroq",
           notes: params[4],
           contentHash: params[5],
         }
@@ -308,6 +313,22 @@ describe("runtime finding Primary decisions", () => {
       .resolves.toMatchObject({ replayed: false })
     await expect(recordRuntimeFindingDecision({ query, request, primaryDecisionProvenance: verified }))
       .resolves.toMatchObject({ replayed: true, resumeReleased: false })
+    for (const [field, drift] of [
+      ["authority", "advisory"],
+      ["owner", "other-owner"],
+      ["title", "altered title"],
+      ["rationale", "altered rationale"],
+    ]) {
+      const original = storedDecision?.[field]
+      storedDecision = { ...storedDecision, [field]: drift }
+      await expect(recordRuntimeFindingDecision({ query, request, primaryDecisionProvenance: verified }))
+        .rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_CONFLICT" })
+      storedDecision = { ...storedDecision, [field]: original }
+    }
+    storedEvidence = { ...storedEvidence, repo: "other/repository" }
+    await expect(recordRuntimeFindingDecision({ query, request, primaryDecisionProvenance: verified }))
+      .rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_CONFLICT" })
+    storedEvidence = { ...storedEvidence, repo: "bsvalues/terragroq" }
     storedMetadata = { ...storedMetadata, choice: "DENY" }
     await expect(recordRuntimeFindingDecision({ query, request, primaryDecisionProvenance: verified }))
       .rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_CONFLICT" })

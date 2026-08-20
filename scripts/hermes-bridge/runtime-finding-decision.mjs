@@ -354,12 +354,13 @@ export async function recordRuntimeFindingDecision({
     }
     const receiptDigest = sha256(canonicalJson(receiptPayload))
     const decisionRows = (await runQuery(
-      `SELECT id, status, decision, locked, scope, context, evidence, tags
+      `SELECT id, title, rationale, status, authority, owner, decision, locked, scope, context,
+         evidence, tags
        FROM decision WHERE "userId" = $1 AND ref = $2 ORDER BY id FOR UPDATE`,
       [request.ownerUserId, decisionRef],
     ))?.rows ?? []
     const evidenceRows = (await runQuery(
-      `SELECT id, "workOrderId", result, notes, "contentHash"
+      `SELECT id, "workOrderId", result, repo, notes, "contentHash"
        FROM evidence_record WHERE "userId" = $1 AND ref = $2 ORDER BY id FOR UPDATE`,
       [request.ownerUserId, `EV-${decisionRef}`],
     ))?.rows ?? []
@@ -384,7 +385,13 @@ export async function recordRuntimeFindingDecision({
         || auditRows.length !== 1
         || canonicalJson(prior[0].metadata) !== canonicalJson(expectedMetadata)
         || Number(prior[0].evidenceId) !== Number(evidenceRow?.id)
+        || decisionRow?.title !== `Runtime finding ${request.findingId}`
+        || decisionRow?.rationale !== (choice === "APPROVE"
+          ? "Owner authorized later materialization only."
+          : "Owner denied the gated finding.")
         || decisionRow?.status !== (choice === "APPROVE" ? "accepted" : "rejected")
+        || decisionRow?.authority !== "binding"
+        || decisionRow?.owner !== request.ownerUserId
         || decisionRow?.decision !== choice || decisionRow?.locked !== true
         || decisionRow?.scope !== runtimeFindingDecisionScope(request.gateSettlementEventId)
         || decisionRow?.context !== canonicalJson(binding)
@@ -396,6 +403,7 @@ export async function recordRuntimeFindingDecision({
         || canonicalJson(decisionRow?.tags) !== canonicalJson([RUNTIME_FINDING_DECISION_PROTECTED_TAG, choice])
         || Number(evidenceRow?.workOrderId) !== request.parentWorkOrderRowId
         || evidenceRow?.result !== (choice === "APPROVE" ? "PASS" : "FAIL")
+        || evidenceRow?.repo !== "bsvalues/terragroq"
         || evidenceRow?.notes !== canonicalJson(receiptPayload)
         || evidenceRow?.contentHash !== receiptDigest
         || canonicalJson(auditRows[0].metadata) !== canonicalJson(expectedMetadata)) {
