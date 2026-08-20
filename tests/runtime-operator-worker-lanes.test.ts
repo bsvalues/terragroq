@@ -81,3 +81,30 @@ describe("the worker prompt is lane-independent", () => {
     expect(prompt).toContain("Do not commit")
   })
 })
+
+describe("the worker is warned about the wall that cannot be argued with", () => {
+  it("tells every lane not to write credential-shaped text, placeholders included", () => {
+    const prompt = buildWorkerPrompt({
+      workOrderId: "WO-0030",
+      task: "integrate the lane",
+      allowedPaths: ["scripts/runtime-operator/**"],
+      remediation: false,
+    })
+    expect(prompt).toContain("credential-shaped")
+    expect(prompt).toContain("not even in a test")
+  })
+
+  it("describes the forbidden shapes without containing one", () => {
+    // WO-0030 lost a whole run to `postgres://user:pw@host/db` in a fixture. A warning that
+    // demonstrates the pattern would be copied into a comment and trip the wall it warns about.
+    const prompt = buildWorkerPrompt({
+      workOrderId: "WO-0030",
+      task: "integrate the lane",
+      allowedPaths: ["scripts/runtime-operator/**"],
+      remediation: false,
+    })
+    const SECRET_FIELD =
+      /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{20,}\b|\bgh[oprsu]_[A-Za-z0-9]{20,}\b|(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s]+|(?:password|token|api[_ -]?key|client[_ -]?secret)\s*[:=]\s*["'][^\s"']{12,}["'])/i
+    expect(SECRET_FIELD.test(prompt)).toBe(false)
+  })
+})
