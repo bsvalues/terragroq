@@ -606,6 +606,10 @@ export function createHermesOrchestrator(options = {}) {
           sequence: execution.checkpoint.sequence,
           state: execution.checkpoint.state,
           detail: execution.checkpoint.detail,
+          ...(execution.checkpoint.state === "CODEX_TURN_COMPLETED"
+            && Object.hasOwn(execution.metadata?.turnResult ?? {}, "findings")
+            ? { findings: execution.metadata.turnResult.findings }
+            : {}),
           metadata: {
             ...projectionMetadata(execution.metadata),
             workContractId: workContract.id,
