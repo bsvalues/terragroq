@@ -94,6 +94,17 @@ export function buildWorkerPrompt({ workOrderId, task, allowedPaths, remediation
     ...allowedPaths.map((allowed) => `  - ${allowed}`),
     ``,
     `Rules: edit files in place. Do not commit, stage, branch, push, or touch git config.`,
+    // The patch wall refuses credential-shaped lines and cannot tell a placeholder from a live secret
+    // -- correctly, since guessing is how a scanner misses the real one. It is a verdict, not a review
+    // round, so one such line in a fixture costs the whole run. Cheaper to say so up front than to
+    // relax the wall, which is not on offer.
+    // Deliberately described rather than demonstrated: a worker that copies this warning into a
+    // comment must not thereby trip the wall the warning is about.
+    `Never write credential-shaped text, not even as a placeholder and not even in a test. That means`,
+    `no database connection URLs carrying a user and password, no strings beginning with a provider`,
+    `key prefix, no private key header lines, and no name assigned a quoted value of twelve characters`,
+    `or more where the name is password, token, api key, or client secret. A patch containing one is`,
+    `refused outright. Use an obviously fake short stub instead.`,
     `Do not run shell commands. Do not create files outside the boundary.`,
     `Keep the change minimal and covered by a test.`,
     remediation
