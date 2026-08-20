@@ -5,14 +5,16 @@ import { useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 
 /**
- * The Environment, slice one (#762): the Line is universal input, surfaces are the real thing, the
- * world assembles from intent. This screen starts almost empty — no project selection, no thread
- * list, no navigation — and becomes what the work needs.
+ * The Environment (#762). Two rules govern every pixel here, owner-set after slice one's first live
+ * run leaked the old shell into a browser surface:
  *
- * Breathing, as bound by the owner: surfaces materialize and are appended; nothing reshuffles
- * existing surfaces; nothing recedes without being asked. In dialog-shape the Line is the widest
- * thing on screen; when surfaces exist, it becomes the strip along the bottom and stays one
- * keystroke away — typing anywhere focuses it.
+ *   If a region needs explanatory text to justify why it exists, remove or redesign the region.
+ *   The UI shows work, not descriptions of work.
+ *
+ * So: no pane headers, no kind labels, no region names. The largest surface is the current subject.
+ * The conversation is quiet and persistent along the bottom — one place to talk, ever. The frozen
+ * Workbench never appears here, not even framed: browser surfaces are credentialless, so they show
+ * what an anonymous visitor sees instead of following the signed-in session back into the old shell.
  */
 
 type Turn = Readonly<{ id: string; role: "owner" | "williamos"; content: string }>
@@ -20,7 +22,6 @@ type Surface = Readonly<{
   id: string
   kind: "browser" | "trace"
   subject: string
-  title: string
   payload?: unknown
 }>
 
@@ -34,6 +35,7 @@ type ProbeStep = Readonly<{
 
 export function Environment() {
   const [worldId, setWorldId] = useState<string | null>(null)
+  const [intent, setIntent] = useState<string | null>(null)
   const [turns, setTurns] = useState<readonly Turn[]>([])
   const [surfaces, setSurfaces] = useState<readonly Surface[]>([])
   const [input, setInput] = useState("")
@@ -67,6 +69,7 @@ export function Environment() {
     setInput("")
     setFailed(false)
     setBusy(true)
+    if (!intent) setIntent(text)
     setTurns((current) => [...current, { id: crypto.randomUUID(), role: "owner", content: text }])
     try {
       const response = await fetch("/api/env/line", {
@@ -105,13 +108,21 @@ export function Environment() {
         {turns.length === 0 && dialogShape ? (
           <p className="pb-8 text-center text-lg text-neutral-500">What are we working on?</p>
         ) : null}
-        <ol className="flex flex-col gap-3 px-1 py-2">
+        <ol className={cn("flex flex-col px-1", dialogShape ? "gap-3 py-2" : "gap-1 py-1.5")}>
           {turns.map((turn) => (
             <li key={turn.id} className={cn("flex", turn.role === "owner" ? "justify-end" : "justify-start")}>
               <div
                 className={cn(
-                  "max-w-[92%] whitespace-pre-wrap rounded-md px-4 py-2.5 text-[13.5px] leading-relaxed",
-                  turn.role === "owner" ? "bg-sky-950/60 text-sky-100" : "bg-neutral-800/70 text-neutral-100",
+                  "max-w-[92%] whitespace-pre-wrap leading-relaxed",
+                  dialogShape
+                    ? cn(
+                        "rounded-md px-4 py-2.5 text-[13.5px]",
+                        turn.role === "owner" ? "bg-sky-950/60 text-sky-100" : "bg-neutral-800/70 text-neutral-100",
+                      )
+                    : cn(
+                        "px-1 py-0.5 text-[12.5px]",
+                        turn.role === "owner" ? "text-sky-300/90" : "text-neutral-300",
+                      ),
                 )}
               >
                 {turn.content}
@@ -119,7 +130,7 @@ export function Environment() {
             </li>
           ))}
         </ol>
-        {busy ? <p className="px-2 py-1 text-xs text-neutral-500">working…</p> : null}
+        {busy ? <p className="px-2 py-1 text-xs text-neutral-600">working…</p> : null}
         {failed ? (
           <p className="px-2 py-1 text-xs text-red-400" role="alert">
             That didn&rsquo;t reach me — your words are still yours; send them again.
@@ -132,7 +143,7 @@ export function Environment() {
           event.preventDefault()
           send()
         }}
-        className="pt-2"
+        className="pt-1.5"
       >
         <textarea
           ref={inputRef}
@@ -144,9 +155,12 @@ export function Environment() {
               send()
             }
           }}
-          rows={dialogShape ? 3 : 2}
-          placeholder={dialogShape ? "Say it the way you'd say it out loud…" : "Keep talking — the environment is listening…"}
-          className="w-full resize-none rounded-md border border-neutral-800 bg-neutral-900/90 px-4 py-3 text-[13.5px] leading-relaxed text-neutral-100 outline-none placeholder:text-neutral-600 focus:border-neutral-600"
+          rows={dialogShape ? 3 : 1}
+          placeholder={dialogShape ? "Say it the way you'd say it out loud…" : "Ask or tell WilliamOS anything…"}
+          className={cn(
+            "w-full resize-none rounded-md border border-neutral-800/80 bg-neutral-900/70 text-neutral-100 outline-none placeholder:text-neutral-600 focus:border-neutral-600",
+            dialogShape ? "px-4 py-3 text-[13.5px] leading-relaxed" : "px-3 py-2 text-[12.5px] leading-snug",
+          )}
           aria-label="The Line"
           autoFocus
         />
@@ -158,42 +172,61 @@ export function Environment() {
     return <div className="flex h-dvh flex-col bg-neutral-950 px-6 text-neutral-100">{line}</div>
   }
 
+  // Desk-shape. The first surface is the subject and holds the most space; later surfaces sit
+  // beside it, narrower. Nothing is labeled: the work identifies itself.
+  const [subject, ...rest] = surfaces
+
   return (
-    <div className="grid h-dvh grid-rows-[minmax(0,1fr)_minmax(180px,26dvh)] bg-neutral-950 text-neutral-100">
-      <div className="grid min-h-0 auto-cols-fr grid-flow-col gap-2 p-3">
-        {surfaces.map((surface) => (
-          <section key={surface.id} className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-neutral-800 bg-neutral-925 bg-neutral-900">
-            <header className="flex items-center justify-between border-b border-neutral-800 px-3 py-1.5">
-              <span className="truncate text-xs text-neutral-400">{surface.title}</span>
-              <span className="text-[10px] uppercase tracking-wide text-neutral-600">{surface.kind}</span>
-            </header>
-            {surface.kind === "browser" ? (
-              // The real thing: the running application itself, framed. Not a screenshot, not a card.
-              <iframe src={surface.subject} title={surface.title} className="min-h-0 w-full flex-1 bg-white" />
-            ) : (
-              <div className="min-h-0 flex-1 overflow-y-auto p-3 font-mono text-[12px] leading-relaxed text-neutral-300">
-                {(surface.payload as readonly ProbeStep[] | undefined)?.map((step, index) => (
-                  <div key={index} className="mb-2 rounded border border-neutral-800 bg-neutral-950/60 p-2">
-                    <div className="text-neutral-400">{step.url}</div>
-                    {step.error ? (
-                      <div className="text-red-400">{step.error}</div>
-                    ) : (
-                      <div>
-                        <span className={cn(step.status && step.status >= 400 ? "text-red-400" : "text-emerald-400")}>
-                          {step.status}
-                        </span>
-                        {step.location ? <span className="text-neutral-500"> → {step.location}</span> : null}
-                        {step.setsSessionCookie ? <span className="text-sky-400"> · sets session cookie</span> : null}
-                      </div>
-                    )}
-                  </div>
-                )) ?? <span className="text-neutral-600">no data</span>}
-              </div>
-            )}
-          </section>
-        ))}
+    <div className="grid h-dvh grid-rows-[26px_minmax(0,1fr)_minmax(130px,20dvh)] bg-neutral-950 text-neutral-100">
+      <div className="flex items-center justify-between px-4 text-[11.5px] text-neutral-600">
+        <span className="truncate">{intent}</span>
+        <span>{busy ? "working" : "listening"}</span>
       </div>
-      <div className="border-t border-neutral-800 px-4 pb-3 pt-1">{line}</div>
+      <div className={cn("grid min-h-0 gap-px bg-neutral-900", rest.length > 0 ? "grid-cols-[2fr_1fr]" : "grid-cols-1")}>
+        <SurfaceView surface={subject} />
+        {rest.length > 0 ? (
+          <div className="grid min-h-0 gap-px" style={{ gridTemplateRows: `repeat(${rest.length}, minmax(0, 1fr))` }}>
+            {rest.map((surface) => (
+              <SurfaceView key={surface.id} surface={surface} />
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <div className="border-t border-neutral-900 px-4 pb-2 pt-0.5">{line}</div>
+    </div>
+  )
+}
+
+function SurfaceView({ surface }: { surface: Surface }) {
+  if (surface.kind === "browser") {
+    // credentialless: the frame gets an ephemeral cookie jar, so it shows what an anonymous visitor
+    // sees. Without it, the signed-in session follows the redirect straight back into the frozen
+    // Workbench — which is how the old shell invaded the new environment on the first live run.
+    return (
+      <iframe
+        src={surface.subject}
+        title={surface.subject}
+        className="h-full min-h-0 w-full bg-white"
+        {...({ credentialless: "true" } as Record<string, string>)}
+      />
+    )
+  }
+  return (
+    <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed text-neutral-400">
+      {(surface.payload as readonly ProbeStep[] | undefined)?.map((step, index) => (
+        <div key={index} className="mb-1.5">
+          <span className="text-neutral-500">{step.url}</span>{" "}
+          {step.error ? (
+            <span className="text-red-400">{step.error}</span>
+          ) : (
+            <>
+              <span className={cn(step.status && step.status >= 400 ? "text-red-400" : "text-emerald-500")}>{step.status}</span>
+              {step.location ? <span className="text-neutral-600"> → {step.location}</span> : null}
+              {step.setsSessionCookie ? <span className="text-sky-500"> · cookie</span> : null}
+            </>
+          )}
+        </div>
+      )) ?? null}
     </div>
   )
 }
