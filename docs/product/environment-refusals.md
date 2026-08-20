@@ -1,41 +1,22 @@
-# The replacement root's refusal list
+# Environment refusals
 
-Enumerated before code, per the owner's greenfield order (2026-08-20). The legacy Workbench is a
-compatibility application only: **not a Surface, not the Desk, not the Environment**, and never the
-root, container, import, wrapper, or visual model of the replacement. The replacement is built beside
-it at `/environment` and refuses the following outright.
+The Environment is a working surface, not a rearranged operator shell. Its rendered root enforces
+these refusals:
 
-## Modules the new root will never import, render, wrap, or embed
+- No Project picker, navigation rail, dashboard cards, inspector, or other legacy-shell chrome.
+- No Work Order, Goal, queue, authority, provider, branch, or agent-control vocabulary in the owner
+  conversation. Internal execution records may support the work, but they are not the interaction
+  model.
+- No browser demo, login reproduction, test result, rerun, comparison, or conflict claim without a
+  server-bound artifact and explicit provenance.
+- No ready endpoint without admitted isolation evidence and a successful server-side liveness check.
+- No client-created restoration truth. The server-restored working world is the source of truth;
+  client state only retains the latest complete reply for the current interaction.
+- No optimistic success. A failed Line request preserves the last authoritative world and the
+  owner's unsent words.
+- No embedded legacy WilliamOS route. Runnable browser surfaces must be separately admitted,
+  isolated endpoints and are rendered in a sandbox without same-origin capability.
+- No second universal composer. The Environment contains exactly one Line.
 
-| Refused | Why |
-|---|---|
-| `app/(shell)/**` | the legacy shell layout and every page inside it |
-| `components/workbench/**` | the rejected product model: shell, activity, context, execution, controls, thread conversation |
-| `components/intent/**` | the classify-then-navigate composer and its hooks |
-| `components/chat/**` | the orphaned operator chat — a second composer by construction |
-| `components/loom/workspace.tsx`, `components/loom/agent-thread.tsx` | the Loom shell composition (Loom's bounded APIs remain services) |
-| `components/environment/environment.tsx`, `app/env/**` | the rejected first attempt — new panes composed around the legacy substrate |
-| `lib/workbench/thread-projection`, `lib/workbench/load-threads` (as UI) | Thread-as-product; they remain backend loaders other services may use |
-
-## Product vocabulary that must not appear in normal-work DOM
-
-`HOME` · `PROJECTS` · `ACTIVITY` · `SYSTEM` · `Explorer` · `Inspect` · `Execution` ·
-`Choose a Project` · `CURRENT THREAD` · `WORK RECORD` · project selection · thread lists ·
-status-board composition · any second conversational input.
-
-Enforced by `tests/environment-root.test.tsx`, not by memory: the test renders the root and fails on
-any of these strings, fails on more or fewer than exactly one conversational input, and scans the new
-root's source files for refused import paths.
-
-## What survives as services (the backend IS the product's engine)
-
-`lib/session`, `lib/db`, `lib/ai/*`, `lib/environment/*` (assumption policy, working world),
-`app/api/loom/files|diff|run` (bounded, catalogued), `app/api/environment/*`, authority/Hermes/agents/
-evidence/repositories/recovery underneath everything.
-
-## Two hard invariants carried from live failures
-
-1. **Anonymity is a server guarantee.** A browser surface reproducing an anonymous flow is served by
-   the environment's own cookieless proxy — never by an optional client feature (`credentialless`
-   worked in one browser and silently failed in the owner's, letting the legacy shell invade).
-2. **One Line.** Exactly one conversational input exists in the environment, always.
+When evidence is absent, the surface says it is waiting or unavailable. Empty space is preferred to
+invented proof.

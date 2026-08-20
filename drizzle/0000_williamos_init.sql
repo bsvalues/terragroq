@@ -296,6 +296,17 @@ CREATE TABLE "evidence_record" (
 	"createdAt" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "environment_world" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"resourceIdentity" text,
+	"intent" text NOT NULL,
+	"projection" jsonb NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "environment_world_user_id_unique" UNIQUE("userId","id")
+);
+--> statement-breakpoint
 CREATE TABLE "goal" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"userId" text NOT NULL,
@@ -705,6 +716,7 @@ ALTER TABLE "device_credential" ADD CONSTRAINT "device_credential_userId_user_id
 ALTER TABLE "device_session" ADD CONSTRAINT "device_session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "device_session" ADD CONSTRAINT "device_session_credentialId_device_credential_id_fk" FOREIGN KEY ("credentialId") REFERENCES "public"."device_credential"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "goal_outcome_intake_receipt" ADD CONSTRAINT "goal_outcome_intake_receipt_goalId_goal_id_fk" FOREIGN KEY ("goalId") REFERENCES "public"."goal"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "environment_world" ADD CONSTRAINT "environment_world_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_goalId_goal_id_fk" FOREIGN KEY ("goalId") REFERENCES "public"."goal"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_approvalDecisionId_decision_id_fk" FOREIGN KEY ("approvalDecisionId") REFERENCES "public"."decision"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_activeWorkOrderId_work_order_id_fk" FOREIGN KEY ("activeWorkOrderId") REFERENCES "public"."work_order"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
@@ -725,6 +737,7 @@ CREATE INDEX "device_auth_event_user_created_idx" ON "device_auth_event" USING b
 CREATE INDEX "device_auth_event_credential_created_idx" ON "device_auth_event" USING btree ("credentialId","createdAt");--> statement-breakpoint
 CREATE INDEX "device_auth_event_session_created_idx" ON "device_auth_event" USING btree ("sessionId","createdAt");--> statement-breakpoint
 CREATE INDEX "device_auth_event_type_created_idx" ON "device_auth_event" USING btree ("eventType","createdAt");--> statement-breakpoint
+CREATE INDEX "environment_world_user_updated_idx" ON "environment_world" USING btree ("userId","updatedAt","id");--> statement-breakpoint
 CREATE UNIQUE INDEX "device_challenge_hash_idx" ON "device_challenge" USING btree ("challengeHash");--> statement-breakpoint
 CREATE INDEX "device_challenge_user_purpose_created_idx" ON "device_challenge" USING btree ("userId","purpose","createdAt");--> statement-breakpoint
 CREATE INDEX "device_challenge_credential_purpose_created_idx" ON "device_challenge" USING btree ("credentialId","purpose","createdAt");--> statement-breakpoint

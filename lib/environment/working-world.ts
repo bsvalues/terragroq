@@ -14,6 +14,7 @@
 
 export type SurfaceKind =
   | "browser" | "editor" | "diff" | "tests" | "terminal" | "trace" | "diagram" | "document" | "agent" | "data"
+  | "compare" | "conflict"
 
 export type MeaningfulSurface = Readonly<{
   kind: SurfaceKind
@@ -151,5 +152,16 @@ export function withSurface(world: WorkingWorldSnapshot, surface: MeaningfulSurf
   const rest = world.surfaces.filter(
     (candidate) => !(candidate.kind === surface.kind && candidate.subject === surface.subject),
   )
-  return { ...world, surfaces: [...rest, surface].slice(-12) }
+  const candidates = [...rest, surface]
+  const pinned = candidates.filter((candidate) => candidate.pinned)
+  const unpinnedBudget = Math.max(0, 12 - pinned.length)
+  const retainedUnpinned = new Set(
+    unpinnedBudget === 0 ? [] : candidates.filter((candidate) => !candidate.pinned).slice(-unpinnedBudget),
+  )
+  return {
+    ...world,
+    // A world may exceed the ordinary twelve-surface breathing budget when the owner pinned more
+    // than twelve things. Dropping a pin to preserve an implementation cap would invert authority.
+    surfaces: candidates.filter((candidate) => candidate.pinned || retainedUnpinned.has(candidate)),
+  }
 }
