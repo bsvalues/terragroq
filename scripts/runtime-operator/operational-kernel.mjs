@@ -1,3 +1,4 @@
+import { deriveRemediationPlan } from "./derive-remediation.mjs"
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
@@ -204,6 +205,45 @@ async function completionResult({ checkpoint, registry, adapters }) {
   return { ...checkpoint, nextWorkOrderId: next?.authority.workOrderId ?? null }
 }
 
+/**
+ * Turn findings made during an active objective into queued work, before selecting anything.
+ *
+ * This is the reflex the loop was missing. `deriveRemediationWorkOrder` could reason about a proposed
+ * action for a whole release and never be called by anything running, so every finding still ended at a
+ * message to the owner. Reasoning nobody invokes is not a control plane.
+ *
+ * It runs at the top of an idle cycle so a finding becomes a derived order, is queued, and is selected
+ * by the same cycle that drained it -- discovery and dispatch in one pass, with nobody in between.
+ *
+ * Gated findings are recorded and skipped. They must never hold up the ungated findings beside them,
+ * which is #911's exact shape: repinning service paths is the owner's decision and must not stall the
+ * compose reconciliation next to it.
+ */
+export async function deriveAndQueueFindings({ registry, adapters }) {
+  if (typeof adapters.collectFindings !== "function" || typeof adapters.persistDerivedWorkOrder !== "function") {
+    return { queued: [], gated: [] }
+  }
+  const findings = (await adapters.collectFindings()) ?? []
+  const queued = []
+  const gated = []
+  for (const objective of registry.workOrders ?? []) {
+    const mine = findings.filter((finding) => finding?.objectiveWorkOrderId === objective.workOrderId)
+    if (mine.length === 0) continue
+    const plan = deriveRemediationPlan({ objective, findings: mine })
+    for (const order of plan.dispatch) {
+      // Persisting is what makes the derived order real: the next selection reads the queue, not this
+      // array. A derivation that is never written is another way of asking someone else to do it.
+      await adapters.persistDerivedWorkOrder(order)
+      queued.push(order.workOrderId)
+    }
+    for (const entry of plan.gated) {
+      if (typeof adapters.recordOwnerGate === "function") await adapters.recordOwnerGate(entry)
+      gated.push(entry)
+    }
+  }
+  return { queued, gated }
+}
+
 async function runCycle({ root, registry, adapters }) {
   await assertLegacyAdapterDispatchAllowed(registry, adapters.verifyOwnerRevocationEvent, adapters.adapterId)
   let checkpoint = readJson(path.join(root, "state", "kernel-checkpoint.json"))
@@ -220,6 +260,9 @@ async function runCycle({ root, registry, adapters }) {
   await adapters.assertRuntime()
 
   if (!checkpoint || TERMINAL_STATES.has(checkpoint.state)) {
+    // Findings first: a finding made during an active objective enters derivation automatically, and
+    // the queue read below sees anything it produced.
+    await deriveAndQueueFindings({ registry, adapters })
     const queue = await adapters.listQueue()
     const selected = selectEligibleWorkOrder(registry, queue)
     if (!selected) return { state: "READY", workOrderId: null, nextWorkOrderId: null }

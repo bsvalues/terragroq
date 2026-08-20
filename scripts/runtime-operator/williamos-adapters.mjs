@@ -154,6 +154,9 @@ export function buildRegistryRecords(workOrders, grants, adapterId) {
       dependencies: [],
       task: workOrder.description ?? workOrder.title,
       grantRef: grant.ref,
+      // Carried so a derived child can check its parent is still valid at derivation time. A grant
+      // revoked mid-objective must stop the next child, not merely the next objective.
+      grantStatus: grant.status,
       agent: workOrder.agent ?? "codex",
     })
   }
