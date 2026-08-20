@@ -40,11 +40,22 @@ describe("the anon proxy strips scripts for real", () => {
     const source = fs.readFileSync("app/api/environment/anon/[[...path]]/route.ts", "utf8")
     const patterns = [...source.matchAll(/\.replace\(\/(.+?)\/gi, ""\)/g)].map((m) => new RegExp(m[1], "gi"))
     expect(patterns.length).toBeGreaterThanOrEqual(2)
-    const html = `<html><head><script src="/a.js" defer></script><link rel="stylesheet" href="/x.css"></head><body><h1>Primary Operator</h1><script>window.boot()</script></body></html>`
+    const html = `<html><head><script src="/a.js" defer></script><link rel="stylesheet" href="/x.css"></head><body><h1>Primary Operator</h1><script>window.boot()</script><script src="/self.js"/></body></html>`
     let out = html
     for (const pattern of patterns) out = out.replace(pattern, "")
     expect(out.includes("<script")).toBe(false)
     expect(out).toContain("Primary Operator")
     expect(out).toContain("stylesheet")
+  })
+
+  it("the self-closing matcher works alone, so its regression cannot hide behind the paired matcher", async () => {
+    const fs = await import("node:fs")
+    const source = fs.readFileSync("app/api/environment/anon/[[...path]]/route.ts", "utf8")
+    const patterns = [...source.matchAll(/\.replace\(\/(.+?)\/gi, ""\)/g)].map((m) => new RegExp(m[1], "gi"))
+    const selfClosing = patterns[1]
+    expect(selfClosing).toBeTruthy()
+    expect(`<script src="/self.js"/>`.replace(selfClosing, "")).toBe("")
+    // And it must not eat non-script content that merely resembles its shape.
+    expect(`<scripture/>text`.replace(selfClosing, "")).toBe("<scripture/>text")
   })
 })
