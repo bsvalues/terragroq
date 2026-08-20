@@ -4,11 +4,15 @@ import {
   buildRegistryRecords,
   linkGrant,
   parseProjectionIssue,
+  projectionCompletionOwned,
+  projectionIssueDirective,
   queueStateFor,
 } from "../scripts/runtime-operator/williamos-adapters.mjs"
 import { selectEligibleWorkOrder } from "../scripts/runtime-operator/operational-kernel.mjs"
 
 const workOrder = (over: Record<string, unknown> = {}) => ({
+  id: 26,
+  userId: "owner-1",
   ref: "WO-0026",
   title: "Make a work_order-rooted Workbench Thread load its existing content.",
   description:
@@ -57,6 +61,24 @@ describe("linking an owner grant", () => {
   it("requires the implement action, not merely any grant", () => {
     expect(linkGrant(workOrder(), [grant({ allowedActions: ["relocate-source"] })])).toBeNull()
   })
+
+  it("marks derived projections as parent-owned and never emits an auto-close directive", () => {
+    const description = "Projection: #911. Projection completion: parent-owned."
+    expect(projectionCompletionOwned(description)).toBe(false)
+    expect(projectionIssueDirective(911, false)).toBe("Tracks #911; completion remains owned by the parent outcome.")
+    expect(projectionIssueDirective(912, true)).toBe("Closes #912.")
+  })
+
+  it("prefers the stored grant id over grant-like text in the work description", () => {
+    const linked = linkGrant(
+      workOrder({ authorityGrantId: 18, description: "Authorized under GRANT-ATTACK. Projected at GitHub issue 912." }),
+      [
+        grant({ id: 17, ref: "GRANT-ATTACK" }),
+        grant({ id: 18, ref: "GRANT-0018", scope: "WO-0031" }),
+      ],
+    )
+    expect(linked?.ref).toBe("GRANT-0018")
+  })
 })
 
 describe("building the registry from state", () => {
@@ -65,6 +87,8 @@ describe("building the registry from state", () => {
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({
       workOrderId: "WO-0026",
+      workOrderRowId: 26,
+      userId: "owner-1",
       authority: "APPROVED",
       mergeMode: "AUTO_ELIGIBLE",
       grantRef: "GRANT-0012",
@@ -73,9 +97,46 @@ describe("building the registry from state", () => {
 
     // The kernel's own selector, fed the derived registry: the whole point of deriving it.
     const registry = { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: records }
-    const queue = [{ issueNumber: 890, workOrderId: "WO-0026", state: "READY", createdAt: "2026-08-19T00:00:00Z" }]
+    const queue = [{ issueNumber: 890, workOrderId: "WO-0026", workOrderRowId: 26, userId: "owner-1", state: "READY", createdAt: "2026-08-19T00:00:00Z" }]
     const selected = selectEligibleWorkOrder(registry, queue)
     expect(selected?.authority.workOrderId).toBe("WO-0026")
+  })
+
+  it("selects by stable row identity when human refs collide", () => {
+    const records = buildRegistryRecords(
+      [workOrder({ id: 26, userId: "owner-1" }), workOrder({ id: 99, userId: "owner-2" })],
+      [grant(), grant({ id: 99, userId: "owner-2" })],
+      "williamos-resident-v1",
+    )
+    const registry = { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: records }
+    const queue = [{
+      issueNumber: 890,
+      workOrderId: "WO-0026",
+      workOrderRowId: 99,
+      userId: "owner-2",
+      state: "READY",
+      createdAt: "2026-08-19T00:00:00Z",
+    }]
+
+    expect(selectEligibleWorkOrder(registry, queue)?.authority).toMatchObject({
+      workOrderRowId: 99,
+      userId: "owner-2",
+    })
+  })
+
+  it("does not let a completed colliding ref suppress a different ready row", () => {
+    const records = buildRegistryRecords(
+      [workOrder({ id: 26, userId: "owner-1" }), workOrder({ id: 99, userId: "owner-2" })],
+      [grant(), grant({ id: 99, userId: "owner-2" })],
+      "williamos-resident-v1",
+    )
+    const registry = { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: records }
+    const queue = [
+      { issueNumber: 890, workOrderId: "WO-0026", workOrderRowId: 26, userId: "owner-1", state: "COMPLETED", createdAt: "2026-08-19T00:00:00Z" },
+      { issueNumber: 891, workOrderId: "WO-0026", workOrderRowId: 99, userId: "owner-2", state: "READY", createdAt: "2026-08-19T01:00:00Z" },
+    ]
+
+    expect(selectEligibleWorkOrder(registry, queue)?.authority).toMatchObject({ workOrderRowId: 99, userId: "owner-2" })
   })
 
   it("omits a work order with no linked grant, rather than fabricating authority", () => {
