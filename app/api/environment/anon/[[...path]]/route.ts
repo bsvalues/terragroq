@@ -1,5 +1,3 @@
-import { getUserId } from "@/lib/session"
-
 /**
  * Server-guaranteed anonymous document fetcher for browser surfaces (#762).
  *
@@ -20,15 +18,28 @@ export const dynamic = "force-dynamic"
 // Self-fetches target the standalone listener itself: loopback on the port THIS process serves.
 // A hardcoded 3100 was wrong the moment the container mapped a different port (review P1).
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
-const SAFE_PATH = /^[A-Za-z0-9/_-]*$/
 
+/**
+ * Only pages the environment actually frames, allowlisted explicitly. A character-class check alone
+ * let an unauthenticated caller relay GETs to internal /api/* routes from loopback (review P1) --
+ * a public proxy must enumerate what it serves, not describe what characters it accepts. The list
+ * grows only when a surface genuinely needs a page.
+ */
+const FRAMEABLE_PAGES = new Set(["", "sign-in"])
+export function isFrameablePath(segments: readonly string[]): boolean {
+  if (segments.length > 1) return false
+  const first = segments[0] ?? ""
+  return /^[A-Za-z0-9_-]*$/.test(first) && FRAMEABLE_PAGES.has(first)
+}
+
+// Deliberately unauthenticated: this route serves documents to sandboxed, COOKIELESS frames -- the
+// whole point is that the frame carries no session, so it cannot present one here either. Demanding
+// auth was a catch-22 that blanked every browser surface. Nothing is exposed that an anonymous
+// visitor could not fetch directly: GET only, self-origin only, plain page paths only.
 export async function GET(request: Request, { params }: { params: Promise<{ path?: string[] }> }) {
-  const userId = await getUserId()
-  if (!userId) return new Response("UNAUTHENTICATED", { status: 401 })
-
   const segments = (await params).path ?? []
   const path = `/${segments.join("/")}`
-  if (!SAFE_PATH.test(segments.join("/"))) return new Response("PATH_REFUSED", { status: 400 })
+  if (!isFrameablePath(segments)) return new Response("PATH_REFUSED", { status: 400 })
 
   let url = `${SELF_ORIGIN}${path}`
   for (let hop = 0; hop < 5; hop += 1) {
