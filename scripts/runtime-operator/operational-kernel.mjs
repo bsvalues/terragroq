@@ -168,9 +168,14 @@ async function preparePatch({ root, checkpoint, authority, adapters, remediation
     workspace: checkpoint.workspace,
     unifiedPatch: result.unifiedPatch,
     allowedPaths: authority.allowedPaths,
+    forbiddenPaths: authority.forbiddenPaths ?? [],
     allowExistingStaged,
   })
-  if (diff.changedPaths.length === 0 || diff.changedPaths.some((changed) => FORBIDDEN_PATH.test(changed) || !authority.allowedPaths.some((allowed) => allowed.endsWith("/**") ? changed.startsWith(allowed.slice(0, -2)) : changed === allowed))) {
+  if (diff.changedPaths.length === 0 || diff.changedPaths.some((changed) => FORBIDDEN_PATH.test(changed)
+    || !authority.allowedPaths.some((allowed) => allowed.endsWith("/**") ? changed.startsWith(allowed.slice(0, -2)) : changed === allowed)
+    || (authority.forbiddenPaths ?? []).some((forbidden) => forbidden.endsWith("/**")
+      ? changed.startsWith(forbidden.slice(0, -2))
+      : changed === forbidden))) {
     throw new Error("PATCH_EXACT_PATH_WALL")
   }
   if ((checkpoint.reviewThreadPaths ?? []).some((reviewPath) => reviewPath && !diff.changedPaths.includes(reviewPath))) throw new Error("PATCH_REVIEW_CORRELATION_WALL")
@@ -181,6 +186,7 @@ async function preparePatch({ root, checkpoint, authority, adapters, remediation
 
 async function validateAndPublish({ root, checkpoint, authority, adapters }) {
   if (checkpoint.state !== "VALIDATING") checkpoint = transition(root, checkpoint, "VALIDATING")
+  if (authority.commitAllowed === false || authority.pushAllowed === false) throw new Error("AUTHORITY_PUBLISH_WALL")
   await adapters.validate({ workspace: checkpoint.workspace, requiredValidation: authority.requiredValidation })
   const published = await adapters.publish({
     issueNumber: checkpoint.issueNumber,

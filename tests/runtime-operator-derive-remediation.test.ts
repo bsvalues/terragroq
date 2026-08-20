@@ -106,6 +106,8 @@ describe("discovery cannot widen its own scope", () => {
       [{ authority: "PENDING" }, "not APPROVED"],
       [{ authority: undefined }, "unstated"],
       [{ grantExpiresAt: "2020-01-01T00:00:00.000Z" }, "expired"],
+      [{ commitAllowed: false }, "commit-and-push"],
+      [{ pushAllowed: false }, "commit-and-push"],
     ] as const) {
       const { dispatch, gate } = deriveRemediationWorkOrder({
         objective: { ...OBJECTIVE, ...override }, finding, now: at,
@@ -168,10 +170,25 @@ describe("reservation containment", () => {
   it("treats a reserved file as exactly that file", () => {
     expect(withinReservation("lib/a.ts", ["lib/a.ts"])).toBe(true)
     expect(withinReservation("lib/ab.ts", ["lib/a.ts"])).toBe(false)
+    expect(withinReservation("lib/a.ts/extra", ["lib/a.ts"])).toBe(false)
   })
 
   it("normalises separators so a Windows-shaped path is not a false escape", () => {
     expect(withinReservation("scripts\\runtime-operator\\a.mjs", ["scripts/runtime-operator/**"])).toBe(true)
+  })
+
+  it("lets an inherited exact prohibition narrow a broad reservation", () => {
+    const result = deriveRemediationWorkOrder({
+      objective: { ...OBJECTIVE, forbiddenPaths: ["scripts/runtime-operator/blocked.mjs"] },
+      finding: {
+        sequence: 1,
+        paths: ["scripts/runtime-operator/blocked.mjs"],
+        effects: {},
+      },
+      now: at,
+    })
+    expect(result.dispatch).toBeNull()
+    expect(result.gate).toMatchObject({ gate: "SCOPE" })
   })
 })
 
@@ -225,6 +242,21 @@ describe("durable finding identity", () => {
       sourceFindingEventId: 441,
       issueNumber: 911,
     })
+  })
+
+  it("includes the durable source event in child identity when sequences collide", () => {
+    const first = deriveRemediationWorkOrder({
+      objective: OBJECTIVE,
+      finding: { sequence: 1, sourceFindingEventId: 441, paths: ["scripts/runtime-operator/a.mjs"], effects: {} },
+      now: at,
+    })
+    const second = deriveRemediationWorkOrder({
+      objective: OBJECTIVE,
+      finding: { sequence: 1, sourceFindingEventId: 442, paths: ["scripts/runtime-operator/b.mjs"], effects: {} },
+      now: at,
+    })
+    expect(first.dispatch?.workOrderId).toBe("WO-0031-R01-F441")
+    expect(second.dispatch?.workOrderId).toBe("WO-0031-R01-F442")
   })
 
   it("preserves the source event on a gated finding", () => {

@@ -118,6 +118,32 @@ describe("a finding during an active objective enters derivation automatically",
     expect(persisted[0]).toMatchObject({ grantRef: "GRANT-RIGHT", sourceUserId: "owner-right" })
   })
 
+  it("persists colliding sequences under distinct durable source identities", async () => {
+    const { adapters, persisted } = adaptersFor([
+      {
+        objectiveWorkOrderId: "WO-0031",
+        sourceFindingEventId: 441,
+        sequence: 1,
+        summary: "first finding",
+        paths: ["scripts/runtime-operator/a.mjs"],
+        effects: {},
+      },
+      {
+        objectiveWorkOrderId: "WO-0031",
+        sourceFindingEventId: 442,
+        sequence: 1,
+        summary: "second finding",
+        paths: ["scripts/runtime-operator/b.mjs"],
+        effects: {},
+      },
+    ])
+
+    const result = await deriveAndQueueFindings({ registry, adapters })
+
+    expect(result.queued).toEqual(["WO-0031-R01-F441", "WO-0031-R01-F442"])
+    expect(persisted.map((order) => order.workOrderId)).toEqual(result.queued)
+  })
+
   it("refreshes authority after persistence so the derived order is selected in the same cycle", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-finding-reflex-"))
     roots.push(root)

@@ -24,13 +24,15 @@ import { classifyProposedAction } from "./owner-gate-policy.mjs"
 const VALID_PARENT_AUTHORITY = new Set(["APPROVED"])
 const VALID_GRANT_STATUS = new Set(["active"])
 
-/** A path is inside the reservation when the reservation names it or a directory containing it. */
+/** A path is inside an exact-file reservation only on equality; only an explicit `/**` grants descendants. */
 export function withinReservation(candidate, reservation) {
   const target = String(candidate).replaceAll("\\", "/")
   return (reservation ?? []).some((entry) => {
-    const normalized = String(entry).replaceAll("\\", "/").replace(/\/\*\*$/, "")
+    const declared = String(entry).replaceAll("\\", "/")
+    const subtree = declared.endsWith("/**")
+    const normalized = subtree ? declared.slice(0, -3) : declared
     if (!normalized) return false
-    return target === normalized || target.startsWith(`${normalized}/`)
+    return target === normalized || (subtree && target.startsWith(`${normalized}/`))
   })
 }
 
@@ -54,6 +56,9 @@ export function parentAuthorityValid(objective) {
   if (objective.grantExpiresAt && Date.parse(objective.grantExpiresAt) <= Date.now()) {
     return { valid: false, reason: `the parent grant ${objective.grantRef} expired at ${objective.grantExpiresAt}` }
   }
+  if (objective.commitAllowed === false || objective.pushAllowed === false) {
+    return { valid: false, reason: `the parent objective does not authorize the commit-and-push delivery path` }
+  }
   return { valid: true, reason: null }
 }
 
@@ -70,7 +75,8 @@ export function deriveRemediationWorkOrder({ objective, finding, now = () => new
   }
 
   const paths = Array.isArray(finding?.paths) ? finding.paths.filter(Boolean) : []
-  const escaping = paths.filter((candidate) => !withinReservation(candidate, objective.allowedPaths))
+  const escaping = paths.filter((candidate) => !withinReservation(candidate, objective.allowedPaths)
+    || withinReservation(candidate, objective.forbiddenPaths))
 
   // Effects are forwarded exactly as declared. If the finding declared none, the classifier fails closed
   // on its own, which is the whole point of it doing so.
@@ -89,7 +95,9 @@ export function deriveRemediationWorkOrder({ objective, finding, now = () => new
 
   return {
     dispatch: {
-      workOrderId: `${objective.workOrderId}-R${String(finding.sequence ?? 1).padStart(2, "0")}`,
+      workOrderId: `${objective.workOrderId}-R${String(finding.sequence ?? 1).padStart(2, "0")}${
+        Number.isSafeInteger(finding.sourceFindingEventId) ? `-F${finding.sourceFindingEventId}` : ""
+      }`,
       derivedFrom: objective.workOrderId,
       grantRef: objective.grantRef,
       adapterId: objective.adapterId,

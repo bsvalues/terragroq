@@ -75,7 +75,11 @@ function databaseFor({
     agent: "codex",
     authorityGrantId: 18,
     allowedFiles: ["scripts/runtime-operator/**", "tests/**"],
+    forbiddenFiles: ["scripts/runtime-operator/blocked.mjs"],
     validators: ["test", "build"],
+    commitAllowed: true,
+    tagAllowed: false,
+    pushAllowed: true,
     createdAt: new Date("2026-08-20T13:00:00Z"),
   }]
   return {
@@ -113,6 +117,10 @@ function transactionalDatabase({
   authorityGranted = "A2_WRITE_OWN",
   grantScope = "WO-0031",
   grantBlockedActions = ["host-storage-mutation"],
+  parentCommitAllowed = true,
+  parentTagAllowed = false,
+  parentPushAllowed = true,
+  parentForbiddenFiles = ["app/**"],
   existingChild = null as null | Record<string, unknown>,
 } = {}) {
   const state = {
@@ -169,12 +177,12 @@ function transactionalDatabase({
         loop: "LOOP-WOS-MULTI-AGENT-OPERATOR-001",
         scope: "scripts/runtime-operator/** and tests/**",
         nonGoals: ["host mutation"],
-        forbiddenFiles: ["app/**"],
+        forbiddenFiles: parentForbiddenFiles,
         stopConditions: ["authority revoked"],
         authorityLevel: "A2_WRITE_OWN",
-        parentCommitAllowed: false,
-        parentTagAllowed: false,
-        parentPushAllowed: false,
+        parentCommitAllowed,
+        parentTagAllowed,
+        parentPushAllowed,
         parentAllowedFiles: ["scripts/runtime-operator/**", "tests/**"],
         parentValidators: ["test", "build"],
         grantId: 18,
@@ -367,6 +375,10 @@ describe("the production WilliamOS adapter exposes structured findings", () => {
       grantRef: "GRANT-0018",
       grantStatus: "active",
       grantExpiresAt: new Date("2026-09-20T13:00:00Z"),
+      forbiddenPaths: ["scripts/runtime-operator/blocked.mjs"],
+      commitAllowed: true,
+      tagAllowed: false,
+      pushAllowed: true,
     })
   })
 
@@ -434,9 +446,9 @@ describe("derived work persistence", () => {
       description: expect.stringContaining("Projected at GitHub issue 911"),
       allowedFiles: ["scripts/runtime-operator/williamos-adapters.mjs"],
       authorityGrantId: 18,
-      commitAllowed: false,
+      commitAllowed: true,
       tagAllowed: false,
-      pushAllowed: false,
+      pushAllowed: true,
     })])
     expect(database.state.settlements).toEqual([expect.objectContaining({
       eventType: "RUNTIME_FINDING_DERIVED",
@@ -467,6 +479,54 @@ describe("derived work persistence", () => {
       task: "repin service paths",
       allowedPaths: ["scripts/runtime-operator/owner-gate-policy.mjs"],
     })).rejects.toThrow("DERIVED_OWNER_GATE_WALL")
+    expect(database.state.children).toEqual([])
+  })
+
+  it("settles a source targeting an inherited forbidden path instead of creating a child", async () => {
+    const database = transactionalDatabase({
+      parentForbiddenFiles: ["scripts/runtime-operator/williamos-adapters.mjs"],
+    })
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    await expect(adapters.persistDerivedWorkOrder(derived)).rejects.toThrow("DERIVED_OWNER_GATE_WALL")
+    await expect(adapters.recordOwnerGate({
+      objectiveWorkOrderId: "WO-0031",
+      grantRef: "GRANT-0018",
+      finding: SOURCE_METADATA.summary,
+      findingId: SOURCE_METADATA.findingId,
+      sourceFindingEventId: 441,
+      sourceUserId: "owner-1",
+      sourcePayloadDigest: SOURCE_DIGEST,
+      issueNumber: 911,
+      gate: "SCOPE",
+      gates: ["SCOPE"],
+      reason: "the path is forbidden by the parent contract",
+    })).resolves.toMatchObject({ replayed: false })
+    expect(database.state.children).toEqual([])
+    expect(database.state.settlements).toHaveLength(1)
+  })
+
+  it.each([
+    [{ parentCommitAllowed: false }, "commit"],
+    [{ parentPushAllowed: false }, "push"],
+  ])("settles a source when the parent %s gate is closed", async (options) => {
+    const database = transactionalDatabase(options)
+    const adapters = createWilliamOSAdapters({ root: root(), repositoryPath: process.cwd(), database })
+
+    await expect(adapters.persistDerivedWorkOrder(derived)).rejects.toThrow("DERIVED_OWNER_GATE_WALL")
+    await expect(adapters.recordOwnerGate({
+      objectiveWorkOrderId: "WO-0031",
+      grantRef: "GRANT-0018",
+      finding: SOURCE_METADATA.summary,
+      findingId: SOURCE_METADATA.findingId,
+      sourceFindingEventId: 441,
+      sourceUserId: "owner-1",
+      sourcePayloadDigest: SOURCE_DIGEST,
+      issueNumber: 911,
+      gate: "SCOPE",
+      gates: ["SCOPE"],
+      reason: "the delivery path is not authorized",
+    })).resolves.toMatchObject({ replayed: false })
     expect(database.state.children).toEqual([])
   })
 

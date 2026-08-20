@@ -294,6 +294,55 @@ describe("WilliamOS operational kernel", () => {
     expect(events.map((event) => event.state)).toEqual(["COMPLETED"])
   })
 
+  it("refuses publication when inherited commit or push authority is closed", async () => {
+    for (const closed of ["commitAllowed", "pushAllowed"] as const) {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), `williamos-kernel-${closed}-`))
+      roots.push(root)
+      fs.mkdirSync(path.join(root, "state"), { recursive: true })
+      const authority = {
+        workOrderId: `WO-${closed.toUpperCase()}-CLOSED`,
+        authority: "APPROVED",
+        riskClass: "R1",
+        dependencies: [],
+        ownerGateRequired: false,
+        protectedScope: false,
+        baseBranch: "main",
+        mergeMode: "AUTO_ELIGIBLE",
+        allowedPaths: ["scripts/runtime-operator/a.mjs"],
+        requiredValidation: ["test"],
+        task: "bounded work",
+        commitAllowed: true,
+        pushAllowed: true,
+        [closed]: false,
+      }
+      fs.writeFileSync(path.join(root, "state", "kernel-checkpoint.json"), JSON.stringify({
+        schemaVersion: 1,
+        repository: "bsvalues/terragroq",
+        workOrderId: authority.workOrderId,
+        issueNumber: 911,
+        state: "VALIDATING",
+        baseSha: "a".repeat(40),
+        workspace: "bounded-workspace",
+        branch: null,
+        pr: null,
+        attempt: 1,
+        remediationAttempts: 0,
+      }))
+      const calls: string[] = []
+
+      await expect(runOperationalKernelCycle({
+        root,
+        registry: { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: [authority] },
+        adapters: {
+          assertRuntime: async () => calls.push("runtime"),
+          validate: async () => calls.push("validate"),
+          publish: async () => { calls.push("publish"); return { branch: "never", pr: 0 } },
+        },
+      })).resolves.toMatchObject({ state: "FAILED_TERMINAL", failureCode: "AUTHORITY_PUBLISH_WALL" })
+      expect(calls).toEqual(["runtime"])
+    }
+  })
+
   it("reconciles a persisted patch checkpoint without invoking Codex again", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "williamos-kernel-resume-"))
     roots.push(root)

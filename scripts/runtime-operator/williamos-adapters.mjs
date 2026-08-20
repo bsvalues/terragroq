@@ -213,6 +213,7 @@ export function buildRegistryRecords(workOrders, grants, adapterId) {
       baseBranch: "main",
       mergeMode: "AUTO_ELIGIBLE",
       allowedPaths,
+      forbiddenPaths: (workOrder.forbiddenFiles ?? []).filter(Boolean),
       requiredValidation,
       dependencies: [],
       task: workOrder.description ?? workOrder.title,
@@ -222,6 +223,9 @@ export function buildRegistryRecords(workOrders, grants, adapterId) {
       grantStatus: grant.status,
       grantExpiresAt: grant.expiresAt,
       projectionCompletionOwned: projectionCompletionOwned(workOrder.description),
+      commitAllowed: workOrder.commitAllowed,
+      tagAllowed: workOrder.tagAllowed,
+      pushAllowed: workOrder.pushAllowed,
       agent: workOrder.agent ?? "codex",
     })
   }
@@ -584,7 +588,8 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
   async function loadWorkOrders() {
     const result = await pool.query(
       `SELECT "id", "userId", "ref", "title", "description", "status", "lane", "agent",
-              "authorityGrantId", "allowedFiles", "validators", "createdAt"
+              "authorityGrantId", "allowedFiles", "forbiddenFiles", "validators",
+              "commitAllowed", "tagAllowed", "pushAllowed", "createdAt"
          FROM work_order WHERE "lane" = 'operator-objective' AND "ref" IS NOT NULL`,
     )
     return result.rows
@@ -621,8 +626,10 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
   function pathWithin(candidate, reservations) {
     const target = String(candidate).replaceAll("\\", "/")
     return reservations.some((entry) => {
-      const normalized = String(entry).replaceAll("\\", "/").replace(/\/\*\*$/, "")
-      return target === normalized || target.startsWith(`${normalized}/`)
+      const declared = String(entry).replaceAll("\\", "/")
+      const subtree = declared.endsWith("/**")
+      const normalized = subtree ? declared.slice(0, -3) : declared
+      return target === normalized || (subtree && target.startsWith(`${normalized}/`))
     })
   }
 
@@ -739,11 +746,13 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
 
       const sourcePaths = source.metadata?.paths
       const sourceEscapes = validFindingPaths(sourcePaths)
-        ? sourcePaths.some((candidate) => !pathWithin(candidate, envelope.parentAllowedFiles ?? []))
+        ? sourcePaths.some((candidate) => !pathWithin(candidate, envelope.parentAllowedFiles ?? [])
+          || pathWithin(candidate, envelope.forbiddenFiles ?? []))
         : true
       const authoritativeIssueNumber = parseProjectionIssue(envelope.parentDescription)
+      const deliveryBlocked = envelope.parentCommitAllowed !== true || envelope.parentPushAllowed !== true
       const sourceEffects = validFindingMetadata(source.metadata) && authoritativeIssueNumber !== null
-        ? { ...source.metadata.effects, outsideObjectiveScope: Boolean(source.metadata.effects.outsideObjectiveScope) || sourceEscapes }
+        ? { ...source.metadata.effects, outsideObjectiveScope: Boolean(source.metadata.effects.outsideObjectiveScope) || sourceEscapes || deliveryBlocked }
         : undefined
       const sourceClassification = classifyProposedAction({ effects: sourceEffects })
 
@@ -757,7 +766,8 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           || !Array.isArray(payload.allowedPaths) || payload.allowedPaths.length === 0
           || JSON.stringify(payload.allowedPaths) !== JSON.stringify(sourcePaths)
           || payload.allowedPaths.some((candidate) => typeof candidate !== "string"
-            || !pathWithin(candidate, envelope.parentAllowedFiles ?? []))
+            || !pathWithin(candidate, envelope.parentAllowedFiles ?? [])
+            || pathWithin(candidate, envelope.forbiddenFiles ?? []))
           || !Array.isArray(payload.requiredValidation) || payload.requiredValidation.length === 0
           || payload.requiredValidation.some((gate) => !(envelope.parentValidators ?? []).includes(gate))) {
           throw new Error("DERIVED_ENVELOPE_WALL")
