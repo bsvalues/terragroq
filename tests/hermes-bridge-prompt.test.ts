@@ -34,7 +34,7 @@ describe("Hermes Codex prompt", () => {
     expect(prompt).toContain("Do not use shell redirection")
     expect(prompt).toContain("native Hermes host owns validators, Git/GitHub operations")
     expect(prompt).toContain("return READY_FOR_VALIDATION")
-    expect(prompt).toContain("optional findings array")
+    expect(prompt).toContain("always include the findings array; use [] when there are no findings")
     expect(prompt).toContain("declared effects")
     expect(prompt).toContain("reserved paths")
     expect(prompt).toContain("BEGIN_OWNER_OUTCOME_DATA")
@@ -60,7 +60,10 @@ describe("Hermes Codex prompt", () => {
       "APPROVE_OR_DENY",
       null,
     ])
-    expect(HERMES_TURN_OUTPUT_SCHEMA.required).not.toContain("findings")
+    expect(new Set(HERMES_TURN_OUTPUT_SCHEMA.required)).toEqual(
+      new Set(Object.keys(HERMES_TURN_OUTPUT_SCHEMA.properties)),
+    )
+    expect(HERMES_TURN_OUTPUT_SCHEMA.required).toContain("findings")
     expect(HERMES_TURN_OUTPUT_SCHEMA.properties.findings).toMatchObject({
       type: "array",
       maxItems: 20,

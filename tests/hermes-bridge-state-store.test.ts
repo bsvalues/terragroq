@@ -127,6 +127,15 @@ describe("Hermes bridge durable state store", () => {
     expect(hermesTurnResultDigest(withFindings)).not.toBe(hermesTurnResultDigest(turnResult))
   })
 
+  it("preserves the pre-schema legacy shape and digest when findings were omitted", () => {
+    const normalized = normalizeHermesTurnResult(turnResult)
+    expect(Object.hasOwn(normalized, "findings")).toBe(false)
+    expect(normalized).toEqual(turnResult)
+    expect(hermesTurnResultDigest(turnResult)).toBe(
+      "1555149adebc48cec5472afb0f9b60180a061abd468f2fb37f5ec9dd26497377",
+    )
+  })
+
   it("canonicalizes a finding set by sequence before digesting it", () => {
     const second = {
       ...finding,

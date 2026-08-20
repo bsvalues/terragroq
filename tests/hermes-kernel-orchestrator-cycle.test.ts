@@ -349,6 +349,7 @@ const kernelJson = JSON.stringify({
   commit: null, prUrl: null, merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
   ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE",
   blockedAction: null, authorityBoundary: null, minimumChoice: null, approveConsequence: null, denyConsequence: null,
+  findings: [],
 })
 
 /**

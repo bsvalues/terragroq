@@ -63,7 +63,7 @@ Operating contract:
 - Use bounded file-edit tools for changes. The native Hermes host owns validators, Git/GitHub operations, and every external side effect after handoff.
 - Use repository file reads, bounded file edits, and native Codex subagents to implement and independently review the change.
 - Implement useful product behavior. Governance-only placeholders do not satisfy the outcome.
-- If delivery reveals concrete follow-up work, include it in the optional findings array with explicit declared effects and paths wholly contained by the reserved paths. Never encode authority in finding prose.
+- In every final result, always include the findings array; use [] when there are no findings. If delivery reveals concrete follow-up work, include it there with explicit declared effects and paths wholly contained by the reserved paths. Never encode authority in finding prose.
 - When implementation and independent file review are complete, return READY_FOR_VALIDATION with commit, prUrl, and mergeCommit set to null. Hermes then owns validation, commit, push, PR creation, exact-head review, bounded remediation dispatch, eligible merge, merged-main verification, cleanup, and successor release.
 - Never ask William to run commands, inspect diagnostics, manage GitHub, relay status, or approve routine R0/R1 work.
 - Stop only for a genuinely new authority boundary or terminal evidence-backed safety wall.
@@ -77,7 +77,7 @@ File safety:
 - Modify only the reserved paths and preserve all unrelated worktree content.
 
 Completion rule:
-Return READY_FOR_VALIDATION only after useful implementation and independent file review, or return a typed terminal wall. For OWNER_DECISION_REQUIRED, also return the exact blocked action, authority boundary, minimum choice, and approve/deny consequences. Your final response must truthfully state RESULT, WORK_ORDER, BRANCH, COMMIT, PR_URL, MERGED, MERGE_COMMIT, VALIDATION, REVIEW_THREADS, OWNER_TOUCH_COUNT, BLOCKED_SCOPE_CROSSED, NEXT_STATE, BLOCKED_ACTION, AUTHORITY_BOUNDARY, MINIMUM_CHOICE, APPROVE_CONSEQUENCE, and DENY_CONSEQUENCE.`
+Return READY_FOR_VALIDATION only after useful implementation and independent file review, or return a typed terminal wall. For OWNER_DECISION_REQUIRED, also return the exact blocked action, authority boundary, minimum choice, and approve/deny consequences. Your final response must truthfully state RESULT, WORK_ORDER, BRANCH, COMMIT, PR_URL, MERGED, MERGE_COMMIT, VALIDATION, REVIEW_THREADS, OWNER_TOUCH_COUNT, BLOCKED_SCOPE_CROSSED, NEXT_STATE, BLOCKED_ACTION, AUTHORITY_BOUNDARY, MINIMUM_CHOICE, APPROVE_CONSEQUENCE, DENY_CONSEQUENCE, and FINDINGS.`
 }
 
 const FINDING_EFFECT_PROPERTIES = Object.freeze({
@@ -138,7 +138,7 @@ export const HERMES_TURN_OUTPUT_SCHEMA = Object.freeze({
     "result", "workOrder", "branch", "commit", "prUrl", "merged", "mergeCommit",
     "validation", "reviewThreads", "ownerTouchCount", "blockedScopeCrossed", "nextState",
     "blockedAction", "authorityBoundary", "minimumChoice", "approveConsequence",
-    "denyConsequence",
+    "denyConsequence", "findings",
   ],
   properties: {
     result: { type: "string", enum: ["READY_FOR_VALIDATION", "RETRYABLE_PROVIDER_WALL", "OWNER_DECISION_REQUIRED", "FAILED_TERMINAL"] },

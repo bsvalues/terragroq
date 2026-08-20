@@ -158,7 +158,8 @@ function typeMatches(value, type) {
 // than skipped: silently ignoring an unimplemented constraint would make a tightened schema look
 // enforced while doing nothing.
 const SUPPORTED_KEYWORDS = new Set([
-  "type", "enum", "pattern", "minimum", "items", "properties", "required", "additionalProperties",
+  "type", "enum", "pattern", "minimum", "minItems", "maxItems", "minLength", "maxLength",
+  "items", "properties", "required", "additionalProperties",
 ])
 
 function unsupportedKeyword(spec) {
@@ -171,11 +172,19 @@ function checkValue(value, spec, label) {
   if (!spec || typeof spec !== "object") return null
   const unsupported = unsupportedKeyword(spec)
   if (unsupported) return `${label}:UNSUPPORTED:${unsupported}`
+  for (const keyword of ["minItems", "maxItems", "minLength", "maxLength"]) {
+    if (spec[keyword] !== undefined
+      && (!Number.isInteger(spec[keyword]) || spec[keyword] < 0)) return `${label}:INVALID:${keyword}`
+  }
   if (spec.type !== undefined) {
     const types = Array.isArray(spec.type) ? spec.type : [spec.type]
     if (!types.some((type) => typeMatches(value, type))) return `${label}:TYPE`
   }
   if (Array.isArray(spec.enum) && !spec.enum.includes(value)) return `${label}:ENUM`
+  if (Array.isArray(value) && typeof spec.minItems === "number" && value.length < spec.minItems) return `${label}:MIN_ITEMS`
+  if (Array.isArray(value) && typeof spec.maxItems === "number" && value.length > spec.maxItems) return `${label}:MAX_ITEMS`
+  if (typeof value === "string" && typeof spec.minLength === "number" && value.length < spec.minLength) return `${label}:MIN_LENGTH`
+  if (typeof value === "string" && typeof spec.maxLength === "number" && value.length > spec.maxLength) return `${label}:MAX_LENGTH`
   // A nullable member may legitimately be null; the pattern then does not apply.
   if (typeof spec.pattern === "string" && value !== null) {
     if (typeof value !== "string" || !new RegExp(spec.pattern).test(value)) return `${label}:PATTERN`
