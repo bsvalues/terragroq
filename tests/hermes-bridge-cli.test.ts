@@ -1223,9 +1223,11 @@ describe("Hermes bridge CLI", () => {
     }
     const remediationHead = "d".repeat(40)
     const remediationMerge = "e".repeat(40)
-    const remediationPath = "scripts/hermes-bridge/outcome-source.mjs"
-    const filesDigest = createHash("sha256").update(JSON.stringify([remediationPath])).digest("hex")
-    const remediationFiles = vi.fn(async () => ["scripts/hermes-bridge/outcome-source.mjs"])
+    const remediationPath = "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"
+    const digestFor = (files: string[]) => createHash("sha256")
+      .update(JSON.stringify([...files].sort())).digest("hex")
+    let filesDigest = digestFor([remediationPath])
+    const remediationFiles = vi.fn(async () => [remediationPath])
     const lifecycle = {
       inspectPullRequest: vi.fn(async () => ({
         state: "MERGED", baseRefName: "main",
@@ -1250,12 +1252,29 @@ describe("Hermes bridge CLI", () => {
     const projectCheckpoint = vi.fn(async () => ({ workOrderId: 99 }))
     const recoverOutcome = vi.fn(async () => true)
 
-    remediationFiles.mockResolvedValueOnce(["package.json"])
+    for (const blockedPath of [
+      "docs/governance/runtime-policy.md",
+      "docs/reports/nested/runtime-reliability.md",
+      "docs/report/WO-OUTCOME-762-911-runtime-reliability.md",
+      ".github/workflows/receipt.yml",
+      "package.json",
+      "docs/reports/../governance/runtime-policy.md",
+    ]) {
+      filesDigest = digestFor([blockedPath])
+      remediationFiles.mockResolvedValueOnce([blockedPath])
+      await expect(recoverReviewedMerge({
+        orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+      })).rejects.toMatchObject({ code: "HERMES_REVIEW_RECOVERY_PROOF_WALL" })
+    }
+
+    filesDigest = digestFor(["docs/reports/different-report.md"])
+    remediationFiles.mockResolvedValueOnce([remediationPath])
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
     })).rejects.toMatchObject({ code: "HERMES_REVIEW_RECOVERY_PROOF_WALL" })
     expect(beginRecovery).not.toHaveBeenCalled()
 
+    filesDigest = digestFor([remediationPath])
     cycle.mockRejectedValueOnce(new Error("simulated chained cycle crash"))
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome,

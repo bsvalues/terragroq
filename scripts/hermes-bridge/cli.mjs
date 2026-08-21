@@ -41,7 +41,7 @@ function flushStdout() {
 
 function boundedReviewRemediationFiles(files, expectedDigest) {
   if (!Array.isArray(files) || files.length === 0 || files.length > 20) return false
-  const allowed = /^(?:app\/|components\/|lib\/|scripts\/hermes-bridge\/|tests\/)/
+  const allowed = /^(?:app\/|components\/|lib\/|scripts\/hermes-bridge\/|tests\/|docs\/reports\/[A-Za-z0-9][A-Za-z0-9._-]*\.md$)/
   const blocked = /(?:^|\/)(?:\.github|prisma|migrations?|runtime-operator|multi-agent-operator|terraform|terrafusion|pacs|county)(?:\/|$)|(?:^|\/)(?:package(?:-lock)?\.json|vercel\.json|\.env(?:\.|$))/i
   const normalized = [...files].sort()
   return typeof expectedDigest === "string"
