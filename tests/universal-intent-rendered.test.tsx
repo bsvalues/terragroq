@@ -170,7 +170,7 @@ describe("UniversalIntent shared Workbench contract", () => {
       .toBe(outcomeHarness.start.mock.calls[0][0].idempotencyKey)
   })
 
-  it("preserves ordinary objective admission when an outcome has no selected Project", async () => {
+  it("refuses to record the registered #911 outcome when no Project is selected", async () => {
     const user = userEvent.setup()
     intentReply = async () => reply(OUTCOME)
     render(<UniversalIntent selectedProject={null} onOpenThread={vi.fn()} />)
@@ -178,9 +178,32 @@ describe("UniversalIntent shared Workbench contract", () => {
     await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), ISSUE_911)
     await user.keyboard("{Enter}")
 
-    expect(await screen.findByText("Admitted as work")).toBeTruthy()
+    expect((await screen.findByRole("alert")).textContent).toContain("Select a Project")
+    expect(screen.queryByText("Admitted as work")).toBeNull()
     expect(outcomeHarness.start).not.toHaveBeenCalled()
-    expect(objectiveCalls()).toHaveLength(1)
+    expect(objectiveCalls()).toHaveLength(0)
+  })
+
+  it.each([
+    ["a stale clarification", async () => reply(CLARIFICATION)],
+    ["a stale non-outcome route", async () => reply(ANSWER)],
+    ["a classifier outage", async () => { throw new Error("classifier down") }],
+  ])("starts the registered #911 outcome instead of generic admission after %s", async (_case, routedReply) => {
+    const user = userEvent.setup()
+    intentReply = routedReply
+    render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)
+
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), ISSUE_911)
+    await user.keyboard("{Enter}")
+
+    expect(await screen.findByText("Awaiting authority")).toBeTruthy()
+    expect(outcomeHarness.start).toHaveBeenCalledOnce()
+    expect(outcomeHarness.start).toHaveBeenCalledWith({
+      projectId: 7,
+      intent: ISSUE_911,
+      idempotencyKey: expect.stringMatching(/^workbench-outcome:[0-9a-f-]{36}$/),
+    })
+    expect(objectiveCalls()).toHaveLength(0)
   })
 
   it.each([

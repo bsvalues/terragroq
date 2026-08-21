@@ -19,11 +19,15 @@ describe("global universal intent affordance", () => {
     expect(component).not.toContain("?intent=")
   })
 
-  it("uses the deterministic router for navigation and registered outcomes while preserving objective fallback", () => {
+  it("handles registered outcomes before generic routing while preserving navigation and objective fallback", () => {
     expect(component).toContain('fetch("/api/intent"')
     expect(component).toContain("body: JSON.stringify({ intent })")
     expect(component).toContain('routed?.intent === "navigation"')
-    expect(component).toContain('routed?.destination?.action === "start_outcome"')
+    const registered = component.indexOf("if (isIssue911ReliabilityOutcomeIntent(intent))")
+    const routed = component.indexOf("const routed = await deterministicRoute(intent)")
+    expect(registered).toBeGreaterThan(-1)
+    expect(routed).toBeGreaterThan(registered)
+    expect(component).toContain("if (!selectedProject)")
     expect(component).toContain("routeResult.destination")
     expect(component).toContain("startWorkbenchOutcome")
     // Unregistered and classifier-unavailable text still reaches /api/objective; the rendered suite
