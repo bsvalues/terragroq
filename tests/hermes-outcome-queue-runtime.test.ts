@@ -1883,13 +1883,17 @@ describe("Hermes durable outcome queue runtime", () => {
       .mockResolvedValueOnce({
         outcome: reacquired, acquired: true, replayed: true, reclaimed: false, reason: null,
       })
+      .mockResolvedValueOnce({
+        outcome: reacquired, acquired: true, replayed: true, reclaimed: false, reason: null,
+      })
     const bridge = runtime({ acquire })
     const outcome = { ...goal, queueBinding: prior }
 
     await expect(bridge.refreshOutcome(outcome)).resolves.toMatchObject({
       queueBinding: { expectedVersion: 7, fencingToken: 5 },
     })
-    await expect(bridge.refreshOutcome(outcome)).resolves.toMatchObject({
+    const replayed = await bridge.refreshOutcome(outcome)
+    expect(replayed).toMatchObject({
       queueBinding: {
         expectedVersion: 7,
         fencingToken: 5,
@@ -1898,9 +1902,54 @@ describe("Hermes durable outcome queue runtime", () => {
         reviewRecoverySourceExpectedVersion: 4,
         reviewRecoverySourceFencingToken: 2,
         reviewRecoverySourceRuntimeAttempt: 5,
+        reviewRecoveryStaleReacquisition: {
+          lifecycleReason: "STALE_LEASE_RECOVERED",
+          disposition: "REPLAY_WINNER",
+          priorExpectedVersion: 6,
+          priorFencingToken: 4,
+          expectedVersion: 7,
+          fencingToken: 5,
+          receiptLatestFencingToken: 5,
+          leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+        },
       },
     })
-    expect(acquire).toHaveBeenCalledTimes(2)
+    await expect(bridge.refreshOutcome(replayed)).resolves.toMatchObject({ queueBinding: {
+      reviewRecoveryStaleReacquisition: {
+        disposition: "REPLAY_WINNER", expectedVersion: 7, fencingToken: 5,
+      },
+    } })
+    expect(acquire).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([
+    ["wrong logical state", { reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" }],
+    ["binding version drift", { expectedVersion: 8 }],
+    ["marker fence drift", { reviewRecoveryStaleReacquisition: {
+      disposition: "REPLAY_WINNER", expectedVersion: 7, fencingToken: 6,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 5, receiptLatestFencingToken: 6,
+    } }],
+  ])("walls a stale review-reacquisition marker with %s before acquisition", async (_name, drift) => {
+    const acquire = vi.fn()
+    const bridge = runtime({ acquire })
+    const marker = {
+      disposition: "REPLAY_WINNER", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+    }
+    const queueBinding = {
+      ...queueItem, expectedVersion: 7, fencingToken: 5,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701, reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReacquisition: marker,
+      ...drift,
+    }
+    await expect(bridge.refreshOutcome({ ...goal, queueBinding })).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_BINDING_WALL",
+    })
+    expect(acquire).not.toHaveBeenCalled()
   })
 
   it.each([

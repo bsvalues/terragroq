@@ -303,6 +303,51 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
   })
 
+  it("carries only a closed stale review-reacquisition projection marker", () => {
+    const command = "record structured #911 reliability remediation without host mutation"
+    const contract = resolveHermesWorkContract({ command, title: command, objective: command,
+      lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN" })!
+    const marker = {
+      disposition: "REPLAY_WINNER", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2098-01-02T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+    }
+    const outcome = {
+      id: 23,
+      outcomeKey: "goal:GOAL-0023",
+      verifiedQueueWorkContract: { contract, provenance: { operation: "workbench_execution.authorize",
+        outcomeKey: "goal:GOAL-0023", workOrderRef: "WO-HERMES-OUTCOME-23" } },
+      queueBinding: {
+        userId: "owner", outcomeKey: "goal:GOAL-0023", expectedVersion: 7,
+        executionBinding: "execution-27", leaseToken: "lease-27", leaseHolder: "hermes-27",
+        fencingToken: 5, acquisitionKey: "acquisition-27",
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+        reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+        reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryReclaimEventId: 961,
+        reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+        reviewRecoveryStaleReacquisition: marker,
+      },
+    }
+    expect(deriveHermesRuntimeProjectionBindings(outcome, { requireVerified: true })).toMatchObject({
+      executionBinding: { reviewRecoveryStaleReacquisition: marker },
+    })
+    expect(() => deriveHermesRuntimeProjectionBindings({ ...outcome, queueBinding: {
+      ...outcome.queueBinding, reviewRecoveryStaleReacquisition: { ...marker, extra: true },
+    } }, { requireVerified: true })).toThrow(expect.objectContaining({
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    }))
+    for (const queueBinding of [
+      { ...outcome.queueBinding, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" },
+      { ...outcome.queueBinding, expectedVersion: 8 },
+      { ...outcome.queueBinding, reviewRecoveryStaleReacquisition: {
+        ...marker, priorFencingToken: 5, fencingToken: 6, receiptLatestFencingToken: 6,
+      } },
+    ]) for (const options of [{ requireVerified: true }, { requireVerified: false }]) {
+      expect(() => deriveHermesRuntimeProjectionBindings({ ...outcome, queueBinding }, options))
+        .toThrow(expect.objectContaining({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" }))
+    }
+  })
+
   it("resolves the exact verified derived queue contract without static task inference", () => {
     const contract = {
       version: "hermes-work-contract.v1", id: "runtime-finding.101.v1",

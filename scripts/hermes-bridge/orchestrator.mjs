@@ -402,6 +402,32 @@ export function deriveHermesRuntimeProjectionBindings(
   if (binding === undefined || binding === null) {
     return { workContract, executionBinding: null }
   }
+  const staleReacquisition = binding.reviewRecoveryStaleReacquisition
+  const staleKeys = ["disposition", "expectedVersion", "fencingToken", "leaseExpiresAt",
+    "lifecycleReason", "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken"]
+  const staleExpiry = typeof staleReacquisition?.leaseExpiresAt === "string"
+    ? Date.parse(staleReacquisition.leaseExpiresAt) : Number.NaN
+  const invalidStaleReacquisition = staleReacquisition !== undefined && (
+    !staleReacquisition || typeof staleReacquisition !== "object" || Array.isArray(staleReacquisition)
+    || Object.keys(staleReacquisition).length !== staleKeys.length
+    || !staleKeys.every((key) => Object.hasOwn(staleReacquisition, key))
+    || binding.reviewRecoveryResumeState !== "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    || staleReacquisition.lifecycleReason !== "STALE_LEASE_RECOVERED"
+    || !["RECLAIMED", "REPLAY_WINNER"].includes(staleReacquisition.disposition)
+    || staleReacquisition.priorExpectedVersion !== binding.reviewRecoverySourceExpectedVersion + 2
+    || staleReacquisition.priorFencingToken !== binding.reviewRecoverySourceFencingToken + 2
+    || staleReacquisition.expectedVersion !== staleReacquisition.priorExpectedVersion + 1
+    || staleReacquisition.fencingToken !== staleReacquisition.priorFencingToken + 1
+    || staleReacquisition.expectedVersion !== binding.expectedVersion
+    || staleReacquisition.fencingToken !== binding.fencingToken
+    || staleReacquisition.receiptLatestFencingToken !== staleReacquisition.fencingToken
+    || !Number.isFinite(staleExpiry)
+    || new Date(staleExpiry).toISOString() !== staleReacquisition.leaseExpiresAt)
+  if (invalidStaleReacquisition) {
+    throw Object.assign(new Error("Runtime stale reacquisition binding is invalid"), {
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    })
+  }
   if (requireVerified && (typeof binding.userId !== "string" || binding.userId.trim() === ""
     || typeof binding.outcomeKey !== "string" || binding.outcomeKey.trim() === ""
     || binding.outcomeKey !== outcome?.outcomeKey
@@ -452,6 +478,9 @@ export function deriveHermesRuntimeProjectionBindings(
         ...(binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" ? {
           reviewRecoveryReclaimEventId: binding.reviewRecoveryReclaimEventId,
           reviewRecoveryReclaimPayloadDigest: binding.reviewRecoveryReclaimPayloadDigest,
+          ...(staleReacquisition === undefined ? {} : {
+            reviewRecoveryStaleReacquisition: { ...staleReacquisition },
+          }),
         } : {}),
       } : {}),
     },

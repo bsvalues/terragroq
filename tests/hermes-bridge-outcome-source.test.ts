@@ -1494,7 +1494,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
         reviewRecoveryProofDigest: "d".repeat(64) } } })).resolves.toMatchObject({ workOrderId: 42 })
     const authorizationCall = query.mock.calls.find(([sql]) => /FROM goal AS contract_goal/.test(sql))!
-    expect(authorizationCall[1]?.slice(22)).toEqual([true, 2, 4, 5, false, false])
+    expect(authorizationCall[1]?.slice(22)).toEqual([true, 2, 4, 5, false, false, false, null])
     authorization.activeRecoveryCheckpoint.metadata.checkpointDetail = "DRIFTED"
     const { payloadDigest: _digest, ...drifted } = authorization.activeRecoveryCheckpoint.metadata
     authorization.activeRecoveryCheckpoint.metadata.payloadDigest = createHash("sha256")
@@ -3688,7 +3688,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         expect(acquisitionShapedRow).not.toHaveProperty("reviewRecoveryReclaimEventId")
         expect(acquisitionShapedRow).not.toHaveProperty("reviewRecoveryReclaimPayloadDigest")
         const acquireRuntimeRecovery = vi.fn(async () => ({
-          outcome: acquisitionShapedRow, acquired: true, replayed: true,
+          outcome: acquisitionShapedRow, acquired: true, replayed: true, reclaimed: false,
         }))
         const runtime = createHermesOutcomeQueueRuntime({
           databaseUrl: "postgresql://not-used",
@@ -3754,6 +3754,66 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           checkpoint: { sequence: 46, state: "LEASED", metadata: { prNumber: 929,
             headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
             reviewRecoveryProofDigest: "d".repeat(64) } } })).resolves.toMatchObject({ workOrderId: 42 })
+        const staleLeaseExpiresAt = "2098-01-02T12:50:00.000Z"
+        await client.query(`UPDATE outcome_queue_item SET version=7,"fencingToken"=5,
+          "lifecycleReason"='STALE_LEASE_RECOVERED',"leaseExpiresAt"=$1`, [staleLeaseExpiresAt])
+        await client.query(`UPDATE outcome_queue_acquisition_receipt SET "latestFencingToken"=5`)
+        const staleReacquisition = {
+          disposition: "REPLAY_WINNER", expectedVersion: 7, fencingToken: 5,
+          leaseExpiresAt: staleLeaseExpiresAt, lifecycleReason: "STALE_LEASE_RECOVERED",
+          priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+        }
+        const staleActive = { ...reclaimedActive, expectedVersion: 7, fencingToken: 5,
+          reviewRecoveryStaleReacquisition: staleReacquisition }
+        const projectStale = (binding: Record<string, unknown> = staleActive) =>
+          projectOutcomeRuntimeCheckpointRaw({ query, outcomeId: 4, attempt: 7,
+            workContract: issue911RuntimeWorkContract, executionBinding: binding,
+            checkpoint: { sequence: 47, state: "LEASED", metadata: { prNumber: 929,
+              headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+              reviewRecoveryProofDigest: "d".repeat(64) } } })
+        await expect(projectStale()).resolves.toMatchObject({ workOrderId: 42 })
+        await expect(projectStale({ ...staleActive,
+          reviewRecoveryStaleReacquisition: undefined })).rejects.toMatchObject({
+          code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+        })
+        const partialStale = { ...staleReacquisition } as any
+        delete partialStale.receiptLatestFencingToken
+        await expect(projectStale({ ...staleActive,
+          reviewRecoveryStaleReacquisition: partialStale })).rejects.toMatchObject({
+          code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+        })
+        await expect(projectStale({ ...staleActive, expectedVersion: 8, fencingToken: 6,
+          reviewRecoveryStaleReacquisition: { ...staleReacquisition,
+            expectedVersion: 8, fencingToken: 6, priorExpectedVersion: 7,
+            priorFencingToken: 5, receiptLatestFencingToken: 6 } })).rejects.toMatchObject({
+          code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+        })
+        await client.query(`INSERT INTO work_order (id,"userId",ref,goal,lane,status)
+          VALUES (43,'owner','WO-HERMES-OUTCOME-OTHER','GOAL-OTHER','operator-objective','review')`)
+        for (const [column, drift, restore] of [
+          ["lifecycleReason", "REVIEW_REMEDIATION_RECOVERY_RECLAIMED", "STALE_LEASE_RECOVERED"],
+          ["executionBinding", "execution-other", "execution-binding-4"],
+          ["leaseToken", "lease-other", "lease-token-4"],
+          ["leaseHolder", "hermes-other", "hermes-runtime-4"],
+          ["activeWorkOrderId", 43, 42],
+          ["authorityGrantRef", "grant-other", "WB-EXEC-GRANT-911"],
+        ] as const) {
+          await client.query(`UPDATE outcome_queue_item SET "${column}"=$1`, [drift])
+          await expect(projectStale()).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+          await client.query(`UPDATE outcome_queue_item SET "${column}"=$1`, [restore])
+        }
+        await client.query(`UPDATE outcome_queue_acquisition_receipt SET "latestFencingToken"=4`)
+        await expect(projectStale()).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query(`UPDATE outcome_queue_acquisition_receipt SET "latestFencingToken"=5`)
+        await expect(projectStale({ ...staleActive, reviewRecoveryStaleReacquisition: {
+          ...staleReacquisition, leaseExpiresAt: "2098-01-03T12:50:00.000Z",
+        } })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query(`UPDATE outcome_queue_item SET "leaseExpiresAt"='2020-01-01'`)
+        await expect(projectStale()).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query(`UPDATE outcome_queue_item SET version=6,"fencingToken"=4,
+          "lifecycleReason"='REVIEW_REMEDIATION_RECOVERY_RECLAIMED',"leaseExpiresAt"=$1`,
+        [reclaimMetadata.leaseExpiresAt])
+        await client.query(`UPDATE outcome_queue_acquisition_receipt SET "latestFencingToken"=2`)
         const projectReclaimed = (sequence: number) => projectOutcomeRuntimeCheckpointRaw({ query,
           outcomeId: 4, attempt: 6, workContract: issue911RuntimeWorkContract,
           executionBinding: reclaimedActive, checkpoint: { sequence, state: "LEASED", metadata: {

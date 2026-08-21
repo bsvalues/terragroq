@@ -2095,8 +2095,30 @@ function normalizeRuntimeExecutionBinding(value) {
     || value?.reviewRecoverySourceRuntimeAttempt !== undefined
     || value?.reviewRecoveryReclaimEventId !== undefined
     || value?.reviewRecoveryReclaimPayloadDigest !== undefined
+    || value?.reviewRecoveryStaleReacquisition !== undefined
   const reclaimedReviewRecovery = value?.reviewRecoveryResumeState
     === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+  const staleReacquisition = value?.reviewRecoveryStaleReacquisition
+  const staleKeys = ["disposition", "expectedVersion", "fencingToken", "leaseExpiresAt",
+    "lifecycleReason", "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken"]
+  const staleExpiry = typeof staleReacquisition?.leaseExpiresAt === "string"
+    ? Date.parse(staleReacquisition.leaseExpiresAt) : Number.NaN
+  const invalidStaleReacquisition = staleReacquisition !== undefined && (
+    !staleReacquisition || typeof staleReacquisition !== "object" || Array.isArray(staleReacquisition)
+    || Object.keys(staleReacquisition).length !== staleKeys.length
+    || !staleKeys.every((key) => Object.hasOwn(staleReacquisition, key))
+    || !reclaimedReviewRecovery
+    || staleReacquisition.lifecycleReason !== "STALE_LEASE_RECOVERED"
+    || !["RECLAIMED", "REPLAY_WINNER"].includes(staleReacquisition.disposition)
+    || staleReacquisition.priorExpectedVersion !== value.reviewRecoverySourceExpectedVersion + 2
+    || staleReacquisition.priorFencingToken !== value.reviewRecoverySourceFencingToken + 2
+    || staleReacquisition.expectedVersion !== staleReacquisition.priorExpectedVersion + 1
+    || staleReacquisition.fencingToken !== staleReacquisition.priorFencingToken + 1
+    || staleReacquisition.expectedVersion !== value.expectedVersion
+    || staleReacquisition.fencingToken !== value.fencingToken
+    || staleReacquisition.receiptLatestFencingToken !== staleReacquisition.fencingToken
+    || !Number.isFinite(staleExpiry)
+    || new Date(staleExpiry).toISOString() !== staleReacquisition.leaseExpiresAt)
   const invalidReviewRecovery = hasReviewRecovery && (
     !["REVIEW_REMEDIATION_RECOVERED", "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"]
       .includes(value.reviewRecoveryResumeState)
@@ -2107,15 +2129,16 @@ function normalizeRuntimeExecutionBinding(value) {
     || !Number.isSafeInteger(value.reviewRecoverySourceRuntimeAttempt)
     || value.reviewRecoverySourceRuntimeAttempt <= 0
     || value.expectedVersion !== value.reviewRecoverySourceExpectedVersion
-      + (reclaimedReviewRecovery ? 2 : 1)
+      + (staleReacquisition ? 3 : reclaimedReviewRecovery ? 2 : 1)
     || value.fencingToken !== value.reviewRecoverySourceFencingToken
-      + (reclaimedReviewRecovery ? 2 : 1)
+      + (staleReacquisition ? 3 : reclaimedReviewRecovery ? 2 : 1)
     || (reclaimedReviewRecovery && (!Number.isSafeInteger(value.reviewRecoveryReclaimEventId)
       || value.reviewRecoveryReclaimEventId <= 0
       || typeof value.reviewRecoveryReclaimPayloadDigest !== "string"
       || !/^[0-9a-f]{64}$/.test(value.reviewRecoveryReclaimPayloadDigest)))
     || (!reclaimedReviewRecovery && (value.reviewRecoveryReclaimEventId !== undefined
       || value.reviewRecoveryReclaimPayloadDigest !== undefined))
+    || invalidStaleReacquisition
   )
   if (!value || typeof value.userId !== "string" || value.userId.trim() === ""
     || typeof value.outcomeKey !== "string" || value.outcomeKey.trim() === ""
@@ -2148,6 +2171,9 @@ function normalizeRuntimeExecutionBinding(value) {
       ...(reclaimedReviewRecovery ? {
         reviewRecoveryReclaimEventId: value.reviewRecoveryReclaimEventId,
         reviewRecoveryReclaimPayloadDigest: value.reviewRecoveryReclaimPayloadDigest,
+        ...(staleReacquisition === undefined ? {} : {
+          reviewRecoveryStaleReacquisition: { ...staleReacquisition },
+        }),
       } : {}),
     } : {}),
   }
@@ -2495,6 +2521,11 @@ function exactAuthorizationContract(
   const receiptContract = row?.workContract
   const delivery = workContract.delivery
   const projection = workContract.projection
+  const staleReacquisition = activeReviewRecovery
+    ? executionBinding.reviewRecoveryStaleReacquisition : undefined
+  const activeRecoveryDelta = staleReacquisition ? 3
+    : executionBinding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" ? 2 : 1
+  const rowLeaseExpiry = Date.parse(String(row?.leaseExpiresAt ?? ""))
   return Number(row?.goalId) === outcomeId
     && row?.userId === executionBinding.userId
     && row?.outcomeKey === executionBinding.outcomeKey
@@ -2517,11 +2548,16 @@ function exactAuthorizationContract(
         && row?.leaseHolder === executionBinding.leaseHolder
         && (!activeReviewRecovery
           || (row.lifecycleState === "active"
-            && row.lifecycleReason === executionBinding.reviewRecoveryResumeState
+            && row.lifecycleReason === (staleReacquisition
+              ? "STALE_LEASE_RECOVERED" : executionBinding.reviewRecoveryResumeState)
             && executionBinding.expectedVersion === executionBinding.reviewRecoverySourceExpectedVersion
-              + (executionBinding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" ? 2 : 1)
+              + activeRecoveryDelta
             && executionBinding.fencingToken === executionBinding.reviewRecoverySourceFencingToken
-              + (executionBinding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" ? 2 : 1))))
+              + activeRecoveryDelta
+            && (!staleReacquisition || (Number(row?.executionEpochLatestFencingToken)
+              === staleReacquisition.receiptLatestFencingToken
+              && Number.isFinite(rowLeaseExpiry)
+              && new Date(rowLeaseExpiry).toISOString() === staleReacquisition.leaseExpiresAt)))))
     && receiptContract?.id === workContract.id
     && receiptContract?.digest === workContract.digest
     && receiptContract?.version === workContract.version
@@ -2759,7 +2795,8 @@ function exactActiveReviewRecoveryReclaim(row, executionBinding, outcomeId, proo
     && typeof metadata.processIdentity === "string" && metadata.processIdentity.trim() !== ""
     && Number.isFinite(priorExpiry) && Number.isFinite(reclaimedAt) && Number.isFinite(leaseExpiry)
     && priorExpiry <= reclaimedAt && reclaimedAt < leaseExpiry
-    && new Date(row.leaseExpiresAt).toISOString() === new Date(leaseExpiry).toISOString()
+    && (executionBinding.reviewRecoveryStaleReacquisition !== undefined
+      || new Date(row.leaseExpiresAt).toISOString() === new Date(leaseExpiry).toISOString())
     && canonicalJson(body) === canonicalJson(expected)
     && payloadDigest === createHash("sha256").update(canonicalJson(body)).digest("hex")
     && Number(event.id) > Number(row?.activeRecoveryCheckpoint?.id)
@@ -2988,8 +3025,9 @@ export async function projectOutcomeRuntimeCheckpoint({
          contract_queue."leaseExpiresAt" AS "leaseExpiresAt",
          contract_queue."acquisitionKey" AS "acquisitionKey",
          contract_queue."fencingToken" AS "fencingToken",
-         contract_queue."activeWorkOrderId" AS "activeWorkOrderId",
-         contract_acquisition."createdAt" AS "executionEpochStartedAt",
+          contract_queue."activeWorkOrderId" AS "activeWorkOrderId",
+          contract_acquisition."createdAt" AS "executionEpochStartedAt",
+          contract_acquisition."latestFencingToken" AS "executionEpochLatestFencingToken",
          contract_receipt."resultBinding"->'workContract' AS "workContract",
          contract_receipt."resultBinding"->>'implementationGrantRef' AS "receiptImplementationGrantRef",
          contract_receipt."resultBinding"->>'implementationGrantId' AS "receiptImplementationGrantId",
@@ -3080,10 +3118,11 @@ export async function projectOutcomeRuntimeCheckpoint({
          ON contract_acquisition."userId" = contract_queue."userId"
         AND contract_acquisition."outcomeKey" = contract_queue."outcomeKey"
         AND contract_acquisition."acquisitionKey" = contract_queue."acquisitionKey"
-        AND ((NOT $23::boolean
-          AND contract_acquisition."latestFencingToken" = contract_queue."fencingToken")
-         OR ($23::boolean
-          AND contract_acquisition."latestFencingToken" = $24::integer))
+         AND ((NOT $23::boolean
+           AND contract_acquisition."latestFencingToken" = contract_queue."fencingToken")
+          OR ($23::boolean
+           AND contract_acquisition."latestFencingToken" = CASE WHEN $29::boolean
+             THEN $8::integer ELSE $24::integer END))
        LEFT JOIN "workbench_thread_source" AS contract_root
          ON contract_root."userId" = contract_receipt."userId"
         AND contract_root."sourceType" = 'outcome'
@@ -3122,13 +3161,14 @@ export async function projectOutcomeRuntimeCheckpoint({
            AND contract_queue."leaseExpiresAt" > clock_timestamp())
           OR ($23::boolean
            AND contract_queue."lifecycleState" = 'active'
-           AND contract_queue."lifecycleReason" = CASE WHEN $28::boolean
-             THEN 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
-             ELSE 'REVIEW_REMEDIATION_RECOVERED' END
-           AND contract_queue.version = $25::integer + CASE WHEN $28::boolean THEN 2 ELSE 1 END
-           AND contract_queue."fencingToken" = $24::integer + CASE WHEN $28::boolean THEN 2 ELSE 1 END
+           AND contract_queue."lifecycleReason" = CASE WHEN $29::boolean
+             THEN 'STALE_LEASE_RECOVERED' WHEN $28::boolean
+             THEN 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED' ELSE 'REVIEW_REMEDIATION_RECOVERED' END
+           AND contract_queue.version = $25::integer + CASE WHEN $29::boolean THEN 3 WHEN $28::boolean THEN 2 ELSE 1 END
+           AND contract_queue."fencingToken" = $24::integer + CASE WHEN $29::boolean THEN 3 WHEN $28::boolean THEN 2 ELSE 1 END
            AND contract_queue."leaseToken" = $6
            AND contract_queue."leaseHolder" = $7
+           AND (NOT $29::boolean OR contract_queue."leaseExpiresAt" = $30::timestamptz)
            AND ($27::boolean OR contract_queue."leaseExpiresAt" > clock_timestamp()))
           OR ($13::boolean
            AND contract_queue."lifecycleState" = 'blocked'
@@ -3457,7 +3497,9 @@ export async function projectOutcomeRuntimeCheckpoint({
         normalizedExecutionBinding.reviewRecoverySourceExpectedVersion ?? null,
         normalizedExecutionBinding.reviewRecoverySourceRuntimeAttempt ?? null,
         activeReviewRecoveryProvenanceOnly,
-        reclaimedActiveReviewRecovery],
+         reclaimedActiveReviewRecovery,
+         Boolean(normalizedExecutionBinding.reviewRecoveryStaleReacquisition),
+         normalizedExecutionBinding.reviewRecoveryStaleReacquisition?.leaseExpiresAt ?? null],
     )
     if (authorizations?.rows?.length !== 1
       || !exactAuthorizationContract(
