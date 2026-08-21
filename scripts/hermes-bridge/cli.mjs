@@ -947,6 +947,8 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
     workContract,
     proof,
     checkpointProof,
+    activeCleanupExpiredContinuation: true,
+    now: currentTime,
   })
   const executionBinding = resolved?.binding ?? {
     ...resolverBinding,

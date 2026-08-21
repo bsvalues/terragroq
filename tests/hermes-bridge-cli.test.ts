@@ -1155,6 +1155,10 @@ describe("Hermes bridge CLI", () => {
         queueVersion: 9, fencingToken: 6,
       })
       expect(calls).toEqual(["resolve", "verify", "authorize", "cleanup", "confirm", "settle", "local-complete"])
+      expect(resolveProvenance).toHaveBeenLastCalledWith(expect.objectContaining({
+        activeCleanupExpiredContinuation: true,
+        now: new Date("2026-08-21T07:00:00.000Z"),
+      }))
       expect(settleCleanup).toHaveBeenCalledWith(expect.objectContaining({
         expectedVersion: 8, fencingToken: 6, checkpointSequence: 47,
       }))

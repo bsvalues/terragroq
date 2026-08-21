@@ -4100,6 +4100,78 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           reviewRecoveryStaleReacquisition: baseHop,
           reviewRecoveryStaleContinuation: staleContinuation,
         })
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: legacyStaleUnmarked, workContract: issue911RuntimeWorkContract,
+          checkpointProof: legacyCheckpointProof, proof: recoveryProof,
+          activeCleanupExpiredContinuation: true,
+          now: new Date("2026-08-21T07:00:00.000Z") })).rejects.toMatchObject({
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: { ...legacyStaleUnmarked, expectedVersion: 8, fencingToken: 6 },
+          workContract: issue911RuntimeWorkContract,
+          checkpointProof: { ...legacyCheckpointProof, fencingToken: 6 }, proof: recoveryProof,
+          activeCleanupExpiredContinuation: true,
+          now: new Date("2026-08-21T07:00:00.000Z") })).rejects.toMatchObject({
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+        const beforeExpiredResolution = (await client.query(`SELECT version,"fencingToken",
+          "leaseExpiresAt" FROM outcome_queue_item`)).rows
+        const beforeExpiredEvents = (await client.query(`SELECT count(*)::integer AS count
+          FROM governance_event`)).rows
+        const expiredBaseLease = "2020-01-02T12:50:00.000Z"
+        const expiredContinuationLease = "2020-01-02T13:50:00.000Z"
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "leaseExpiresAt"=$1,"attemptedAt"=CASE WHEN id=220 THEN '2020-01-02T12:00:00Z'::timestamptz
+            WHEN id=221 THEN '2020-01-02T12:01:00Z'::timestamptz
+            WHEN id=222 THEN '2020-01-02T12:02:00Z'::timestamptz
+            ELSE '2020-01-02T13:00:00Z'::timestamptz END
+          WHERE "fencingToken"=5`, [expiredBaseLease])
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "leaseExpiresAt"=$1,"attemptedAt"='2020-01-02T13:00:00Z'::timestamptz
+          WHERE "fencingToken"=6`, [expiredContinuationLease])
+        await client.query(`UPDATE outcome_queue_item SET "leaseExpiresAt"=$1`, [expiredContinuationLease])
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: legacyStaleUnmarked, workContract: issue911RuntimeWorkContract,
+          checkpointProof: legacyCheckpointProof, proof: recoveryProof,
+          now: new Date("2020-01-03T00:00:00.000Z") })).rejects.toMatchObject({
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+        expect((await client.query(`SELECT version,"fencingToken" FROM outcome_queue_item`)).rows)
+          .toEqual(beforeExpiredResolution.map(({ version, fencingToken }) => ({ version, fencingToken })))
+        expect((await client.query(`SELECT count(*)::integer AS count FROM governance_event`)).rows)
+          .toEqual(beforeExpiredEvents)
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: legacyStaleUnmarked, workContract: issue911RuntimeWorkContract,
+          checkpointProof: legacyCheckpointProof, proof: recoveryProof,
+          activeCleanupExpiredContinuation: true,
+          now: new Date("2020-01-03T00:00:00.000Z") })).resolves.toMatchObject({
+          alreadyStaleReacquired: true,
+          reviewRecoveryExpectedVersion: 8,
+          reviewRecoveryFencingToken: 6,
+          reviewRecoveryStaleReacquisition: expect.objectContaining({
+            leaseExpiresAt: expiredBaseLease,
+          }),
+          reviewRecoveryStaleContinuation: expect.objectContaining({
+            leaseExpiresAt: expiredContinuationLease,
+          }),
+        })
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: legacyStaleUnmarked, workContract: issue911RuntimeWorkContract,
+          checkpointProof: { ...legacyCheckpointProof, sequence: 45 }, proof: recoveryProof,
+          activeCleanupExpiredContinuation: true,
+          now: new Date("2020-01-03T00:00:00.000Z") })).rejects.toMatchObject({
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "leaseExpiresAt"=$1,"attemptedAt"=CASE WHEN id=220 THEN '2098-01-02T12:00:00Z'::timestamptz
+            WHEN id=221 THEN '2098-01-02T12:01:00Z'::timestamptz
+            ELSE '2098-01-02T12:02:00Z'::timestamptz END
+          WHERE "fencingToken"=5`, [staleLeaseExpiresAt])
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "leaseExpiresAt"=$1,"attemptedAt"='2098-01-02T13:00:00Z'::timestamptz
+          + (id - 223) * interval '1 second' WHERE "fencingToken"=6`, [continuedLeaseExpiresAt])
+        await client.query(`UPDATE outcome_queue_item SET "leaseExpiresAt"=$1`, [continuedLeaseExpiresAt])
         const projectStale = (binding: Record<string, unknown> = continuedActive) =>
           projectOutcomeRuntimeCheckpointRaw({ query, outcomeId: 4, attempt: 7,
             workContract: issue911RuntimeWorkContract, executionBinding: binding,

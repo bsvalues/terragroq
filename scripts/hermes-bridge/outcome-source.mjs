@@ -4343,6 +4343,8 @@ export async function resolveActiveReviewRecoveryProvenance({
   workContract,
   proof,
   checkpointProof,
+  activeCleanupExpiredContinuation = false,
+  now = () => new Date(),
 } = {}) {
   if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
     || !executionBinding || typeof executionBinding.userId !== "string"
@@ -4380,6 +4382,14 @@ export async function resolveActiveReviewRecoveryProvenance({
       ? localContinuation === undefined
       : localBaseHop !== undefined && localContinuation !== undefined)
   const legacyStaleReacquired = staleRecoveryBinding && localBaseHop === undefined
+  if (typeof activeCleanupExpiredContinuation !== "boolean") {
+    throw Object.assign(new Error("Active cleanup expired continuation mode is invalid"), {
+      code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+    })
+  }
+  const currentTime = activeCleanupExpiredContinuation
+    ? (typeof now === "function" ? now() : now) : null
+  const nowMs = currentTime instanceof Date ? currentTime.getTime() : Number(currentTime)
   let exactCheckpointProof = null
   if (staleRecoveryBinding) {
     try {
@@ -4397,6 +4407,15 @@ export async function resolveActiveReviewRecoveryProvenance({
         code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
       })
     }
+  }
+  if (activeCleanupExpiredContinuation
+    && (!legacyStaleReacquired || localStaleDelta !== 3
+      || exactCheckpointProof?.sequence !== 46
+      || exactCheckpointProof?.state !== "POST_MERGE_CLEANUP_RETRY"
+      || !Number.isFinite(nowMs))) {
+    throw Object.assign(new Error("Expired active cleanup continuation is invalid"), {
+      code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+    })
   }
   let runQuery = normalizeQuery(query)
   let pool
@@ -4525,6 +4544,7 @@ export async function resolveActiveReviewRecoveryProvenance({
     }
     let staleReacquisition = null
     let staleContinuation = null
+    let exactExpiredActiveCleanupContinuation = false
     if (staleRecoveryBinding) {
       const acquisitionKeyDigest = createHash("sha256").update(canonicalJson({
         acquisitionKey: executionBinding.acquisitionKey,
@@ -4625,6 +4645,13 @@ export async function resolveActiveReviewRecoveryProvenance({
           code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
         })
       }
+      exactExpiredActiveCleanupContinuation = activeCleanupExpiredContinuation
+        && hasContinuation && queueExpiry <= nowMs
+      if (activeCleanupExpiredContinuation && !exactExpiredActiveCleanupContinuation) {
+        throw Object.assign(new Error("Active cleanup continuation lease is not durably expired"), {
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+      }
       staleReacquisition = {
         disposition: "RECLAIMED",
         expectedVersion: provenance.reviewRecoverySourceExpectedVersion + 3,
@@ -4688,7 +4715,8 @@ export async function resolveActiveReviewRecoveryProvenance({
       executionBinding: verifiedExecutionBinding,
       workContract,
       proof: { ...proof, runtimeAttempt: sourceRuntimeAttempt },
-      provenanceOnly: !forwardReclaimed && !staleContinuation,
+      provenanceOnly: exactExpiredActiveCleanupContinuation
+        || (!forwardReclaimed && !staleContinuation),
     })
     return { ...provenance, ...(staleReacquisition ? {
       alreadyStaleReacquired: true,
