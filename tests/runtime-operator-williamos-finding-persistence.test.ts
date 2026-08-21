@@ -142,6 +142,7 @@ function databaseFor({
       if (sql.includes("FROM authority_grant")) return { rows: [{
         id: 18,
         userId: "owner-1",
+        workOrderId: 31,
         ref: "GRANT-0018",
         scope: "WO-0031",
         allowedActions: ["implement"],
