@@ -11,6 +11,7 @@ import { project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
+import { exceedsLineCap, guardLineRequest } from "@/lib/environment/line-guard"
 import {
   createWorkingWorld,
   validateWorkingWorld,
@@ -271,6 +272,10 @@ async function converse(world: WorkingWorldSnapshot, text: string): Promise<stri
 }
 
 export async function POST(request: Request) {
+  // A cookie-authenticated, state-changing, model-fanning endpoint: refuse the cross-site CSRF
+  // shape and oversized bodies before doing any work. See lib/environment/line-guard.ts.
+  const rejection = guardLineRequest(request)
+  if (rejection) return Response.json({ error: rejection.error }, { status: rejection.status })
   // Session resolution THROWS on a cookieless request rather than returning null; both spell
   // unauthenticated, and neither may spell 500.
   let userId: string | null = null
@@ -289,6 +294,7 @@ export async function POST(request: Request) {
   }
   const text = typeof body.text === "string" ? body.text.trim() : ""
   if (!text) return Response.json({ error: "MESSAGE_EMPTY" }, { status: 400 })
+  if (exceedsLineCap(text)) return Response.json({ error: "MESSAGE_TOO_LARGE" }, { status: 413 })
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
 
   if (requestedWorldId) {
