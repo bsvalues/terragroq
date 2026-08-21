@@ -77,6 +77,131 @@ export function isExactReviewRecoveredAbandonedLease(execution, now = Date.now()
   return Number.isFinite(abandonedAt) && Number.isFinite(currentTime) && abandonedAt <= currentTime
 }
 
+export function isExactReviewRecoveryCleanupRetryAbandonedLease(execution, now = Date.now()) {
+  if (execution?.checkpoint?.sequence !== 46
+    || execution?.checkpoint?.state !== "POST_MERGE_CLEANUP_RETRY"
+    || execution?.checkpoint?.detail !== "HERMES_POST_MERGE_CLEANUP_WALL"
+    || execution?.lease?.status !== "ACTIVE"
+    || execution?.lease?.abandonReason !== "HERMES_RUNTIME_PROJECTION_WALL"
+    || typeof execution.lease.abandonedAt !== "string"
+    || execution.lease.abandonedAt === ""
+    || typeof execution.lease.expiresAt !== "string"
+    || execution.lease.abandonedAt !== execution.lease.expiresAt) return false
+  const abandonedAt = Date.parse(execution.lease.abandonedAt)
+  const acquiredAt = Date.parse(String(execution.lease.acquiredAt ?? ""))
+  const renewedAt = execution.lease.renewedAt == null
+    ? null : Date.parse(String(execution.lease.renewedAt))
+  const checkpointRecordedAt = Date.parse(String(execution?.checkpoint?.recordedAt ?? ""))
+  const currentTime = now instanceof Date ? now.getTime() : Number(now)
+  const metadata = execution?.metadata
+  const binding = metadata?.outcome?.queueBinding
+  return Number.isFinite(abandonedAt) && Number.isFinite(currentTime) && abandonedAt <= currentTime
+    && new Date(abandonedAt).toISOString() === execution.lease.abandonedAt
+    && Number.isFinite(acquiredAt) && acquiredAt <= abandonedAt
+    && new Date(acquiredAt).toISOString() === execution.lease.acquiredAt
+    && (renewedAt === null || (Number.isFinite(renewedAt) && renewedAt <= abandonedAt
+      && new Date(renewedAt).toISOString() === execution.lease.renewedAt))
+    && Number.isFinite(checkpointRecordedAt) && checkpointRecordedAt <= abandonedAt
+    && new Date(checkpointRecordedAt).toISOString() === execution.checkpoint.recordedAt
+    && Number.isSafeInteger(metadata?.postMergeCleanupRetryCount)
+    && metadata.postMergeCleanupRetryCount === 1
+    && Object.hasOwn(metadata, "postMergeCleanupCauseCode")
+    && metadata.postMergeCleanupCauseCode === null
+    && /^[0-9a-f]{64}$/.test(String(metadata?.reviewRecoveryProofDigest ?? ""))
+    && Number.isSafeInteger(metadata?.prNumber) && metadata.prNumber > 0
+    && /^[0-9a-f]{40}$/.test(String(metadata?.headRefOid ?? ""))
+    && /^[0-9a-f]{40}$/.test(String(metadata?.mergeSha ?? ""))
+    && metadata?.outcome !== null && typeof metadata?.outcome === "object"
+    && String(metadata.outcome.id) === String(execution?.outcomeId)
+    && binding?.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    && Number.isSafeInteger(binding?.reviewRecoverySourceExpectedVersion)
+    && binding.reviewRecoverySourceExpectedVersion >= 0
+    && Number.isSafeInteger(binding?.reviewRecoverySourceFencingToken)
+    && binding.reviewRecoverySourceFencingToken > 0
+    && Number.isSafeInteger(binding?.reviewRecoverySourceRuntimeAttempt)
+    && binding.reviewRecoverySourceRuntimeAttempt > 0
+    && Number.isSafeInteger(binding?.reviewRecoveryReclaimEventId)
+    && binding.reviewRecoveryReclaimEventId > 0
+    && /^[0-9a-f]{64}$/.test(String(binding?.reviewRecoveryReclaimPayloadDigest ?? ""))
+    && binding.reviewRecoveryStaleReacquisition === undefined
+    && binding.reviewRecoveryStaleContinuation === undefined
+    && binding.expectedVersion === binding.reviewRecoverySourceExpectedVersion + 3
+    && binding.fencingToken === binding.reviewRecoverySourceFencingToken + 3
+    && [binding.userId, binding.outcomeKey, binding.executionBinding, binding.acquisitionKey,
+      binding.leaseHolder, binding.leaseToken].every(
+      (value) => typeof value === "string" && value.trim() !== "",
+    )
+    && Number.isSafeInteger(binding.activeWorkOrderId) && binding.activeWorkOrderId > 0
+}
+
+function hasRetainedReviewRecoverySignal(execution) {
+  const metadata = execution?.metadata
+  const binding = metadata?.outcome?.queueBinding
+  return (Object.hasOwn(metadata ?? {}, "reviewRecoveryProofDigest")
+      && metadata.reviewRecoveryProofDigest !== null
+      && metadata.reviewRecoveryProofDigest !== undefined)
+    || [
+      "reviewRecoveryResumeState",
+      "reviewRecoverySourceExpectedVersion",
+      "reviewRecoverySourceFencingToken",
+      "reviewRecoverySourceRuntimeAttempt",
+      "reviewRecoveryReclaimEventId",
+      "reviewRecoveryReclaimPayloadDigest",
+      "reviewRecoveryStaleReacquisition",
+      "reviewRecoveryStaleContinuation",
+    ].some((key) => Object.hasOwn(binding ?? {}, key))
+}
+
+function hasReviewRecoveryCleanupRetryIdentity(execution) {
+  const metadata = execution?.metadata
+  return execution?.checkpoint?.state === "POST_MERGE_CLEANUP_RETRY"
+    || execution?.checkpoint?.detail === "HERMES_POST_MERGE_CLEANUP_WALL"
+    || (execution?.lease?.status === "ACTIVE"
+      && ((Object.hasOwn(metadata ?? {}, "postMergeCleanupRetryCount")
+          && Number(metadata.postMergeCleanupRetryCount) > 0)
+        || (Object.hasOwn(metadata ?? {}, "postMergeCleanupCauseCode")
+          && metadata.postMergeCleanupCauseCode !== null
+          && metadata.postMergeCleanupCauseCode !== undefined)))
+}
+
+function isExactMarkedReviewRecoveryCleanupRetry(execution, now = Date.now()) {
+  const binding = execution?.metadata?.outcome?.queueBinding
+  const staleReacquisition = binding?.reviewRecoveryStaleReacquisition
+  const staleContinuation = binding?.reviewRecoveryStaleContinuation
+  if (staleReacquisition === null || typeof staleReacquisition !== "object"
+    || (staleContinuation !== undefined
+      && (staleContinuation === null || typeof staleContinuation !== "object"))) return false
+  const delta = staleContinuation === undefined ? 0 : 1
+  const markerlessBinding = { ...binding,
+    expectedVersion: binding.expectedVersion - delta,
+    fencingToken: binding.fencingToken - delta }
+  delete markerlessBinding.reviewRecoveryStaleReacquisition
+  delete markerlessBinding.reviewRecoveryStaleContinuation
+  if (!isExactReviewRecoveryCleanupRetryAbandonedLease({
+    ...execution,
+    metadata: {
+      ...execution.metadata,
+      outcome: { ...execution.metadata.outcome, queueBinding: markerlessBinding },
+    },
+  }, now)) return false
+  try {
+    const { executionBinding } = deriveHermesRuntimeProjectionBindings(
+      execution.metadata.outcome, { requireVerified: true },
+    )
+    return executionBinding?.reviewRecoveryStaleReacquisition !== undefined
+      && (staleContinuation === undefined
+        ? executionBinding.reviewRecoveryStaleContinuation === undefined
+        : executionBinding.reviewRecoveryStaleContinuation !== undefined)
+  } catch {
+    return false
+  }
+}
+
+function isExactReviewRecoveryCleanupRetryCandidate(execution, now = Date.now()) {
+  return isExactReviewRecoveryCleanupRetryAbandonedLease(execution, now)
+    || isExactMarkedReviewRecoveryCleanupRetry(execution, now)
+}
+
 export function isRetryableProjectionTransportError(error) {
   if (!error || typeof error !== "object") return false
   if (Array.isArray(error.errors)) {
@@ -1199,10 +1324,20 @@ export function createHermesOrchestrator(options = {}) {
           code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
         })
       }
+      const hasReviewRecoveryCleanupRetry = execution?.lease?.status !== "RELEASED"
+        && hasRetainedReviewRecoverySignal(execution)
+        && hasReviewRecoveryCleanupRetryIdentity(execution)
+      if (hasReviewRecoveryCleanupRetry
+        && !isExactReviewRecoveryCleanupRetryCandidate(execution, now())) {
+        throw Object.assign(new Error("Persisted review recovery cleanup retry is invalid"), {
+          code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+        })
+      }
     }
     const unfinished = Object.values(initialized.executions).filter((execution) => (
       execution?.lease?.status === "ACTIVE"
       && !isExactReviewRecoveredAbandonedLease(execution, now())
+      && !isExactReviewRecoveryCleanupRetryCandidate(execution, now())
     ))
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
@@ -1292,7 +1427,8 @@ export function createHermesOrchestrator(options = {}) {
     }
     const verifiedReviewRecoveries = new Map()
     for (const execution of Object.values(initialized.executions)) {
-      if (!isExactReviewRecoveredAbandonedLease(execution, now())) continue
+      if (!isExactReviewRecoveredAbandonedLease(execution, now())
+        && !isExactReviewRecoveryCleanupRetryCandidate(execution, now())) continue
       const prNumber = Number(execution?.metadata?.prNumber)
       const reviewedHeadSha = execution?.metadata?.headRefOid
       const mergeSha = execution?.metadata?.mergeSha
@@ -1402,7 +1538,8 @@ export function createHermesOrchestrator(options = {}) {
     }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (
       (execution?.lease?.status === "ABANDONED"
-        || isExactReviewRecoveredAbandonedLease(execution, now()))
+        || isExactReviewRecoveredAbandonedLease(execution, now())
+        || isExactReviewRecoveryCleanupRetryCandidate(execution, now()))
       && (
         (execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
           && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
@@ -1412,6 +1549,7 @@ export function createHermesOrchestrator(options = {}) {
           && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED")
         || (execution?.checkpoint?.state === "POST_MERGE_CLEANUP_RECOVERED"
           && /^PR #\d+$/.test(execution?.checkpoint?.detail ?? ""))
+        || isExactReviewRecoveryCleanupRetryCandidate(execution, now())
         || OWNER_DECISION_RESUME_STATES.has(execution?.checkpoint?.state)
         || matchesRecoverableValidationState(execution, initialized)
         || hasOwnerDecisionResume(execution?.metadata)

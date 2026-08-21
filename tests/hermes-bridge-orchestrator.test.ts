@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createHermesOrchestrator,
   deriveHermesRuntimeProjectionBindings,
+  isExactReviewRecoveryCleanupRetryAbandonedLease,
   isExactReviewRecoveredAbandonedLease,
   isRetryableProjectionTransportError,
   requireHermesWorkContract,
@@ -40,6 +41,114 @@ describe("exact review-recovered abandoned lease", () => {
   ])("classifies %s", (_name, lease, persistedCheckpoint, expected) => {
     expect(isExactReviewRecoveredAbandonedLease({ lease, checkpoint: persistedCheckpoint }, now))
       .toBe(expected)
+  })
+})
+
+describe("exact review-recovery cleanup-retry abandoned lease", () => {
+  const now = Date.parse("2026-08-21T09:00:00.000Z")
+  const binding = {
+    userId: "owner-id", outcomeKey: "goal:GOAL-0023", expectedVersion: 7,
+    executionBinding: "execution-binding", acquisitionKey: "acquisition-key",
+    leaseHolder: "resident-hermes", leaseToken: "lease-token", fencingToken: 5,
+    activeWorkOrderId: 51,
+    reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+    reviewRecoverySourceExpectedVersion: 4,
+    reviewRecoverySourceFencingToken: 2,
+    reviewRecoverySourceRuntimeAttempt: 5,
+    reviewRecoveryReclaimEventId: 961,
+    reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+  }
+  const exact = {
+    outcomeId: "27",
+    lease: { status: "ACTIVE", abandonedAt: "2026-08-21T06:43:06.064Z",
+      expiresAt: "2026-08-21T06:43:06.064Z", acquiredAt: "2026-08-21T06:43:06.038Z",
+      abandonReason: "HERMES_RUNTIME_PROJECTION_WALL" },
+    checkpoint: { sequence: 46, state: "POST_MERGE_CLEANUP_RETRY",
+      detail: "HERMES_POST_MERGE_CLEANUP_WALL", recordedAt: "2026-08-21T05:52:01.251Z" },
+    metadata: { reviewRecoveryProofDigest: "d".repeat(64), prNumber: 929,
+      headRefOid: "a".repeat(40), mergeSha: "b".repeat(40), postMergeCleanupRetryCount: 1,
+      postMergeCleanupCauseCode: null, outcome: { id: 27, queueBinding: binding } },
+  }
+  it("admits only the exact retained seq46 recovery cleanup retry", () => {
+    expect(isExactReviewRecoveryCleanupRetryAbandonedLease(exact, now)).toBe(true)
+    expect(isExactReviewRecoveryCleanupRetryAbandonedLease(exact, Number.NaN)).toBe(false)
+  })
+  it.each([
+    ["checkpoint state", { checkpoint: { ...exact.checkpoint, state: "RETRYABLE_WALL" } }],
+    ["checkpoint sequence", { checkpoint: { ...exact.checkpoint, sequence: 45 } }],
+    ["checkpoint sequence 47", { checkpoint: { ...exact.checkpoint, sequence: 47 } }],
+    ["checkpoint chronology", { checkpoint: { ...exact.checkpoint,
+      recordedAt: "2026-08-21T06:43:07.000Z" } }],
+    ["checkpoint time", { checkpoint: { ...exact.checkpoint, recordedAt: "invalid" } }],
+    ["checkpoint noncanonical time", { checkpoint: { ...exact.checkpoint,
+      recordedAt: "2026-08-21T05:52:01.251+00:00" } }],
+    ["checkpoint detail", { checkpoint: { ...exact.checkpoint, detail: "OTHER" } }],
+    ["lease status", { lease: { ...exact.lease, status: "ABANDONED" } }],
+    ["lease reason", { lease: { ...exact.lease, abandonReason: "PROCESS_CRASH" } }],
+    ["lease missing marker", { lease: { ...exact.lease, abandonedAt: undefined } }],
+    ["lease marker", { lease: { ...exact.lease, abandonedAt: "2026-08-21T06:43:05.000Z" } }],
+    ["lease not expired", { lease: { ...exact.lease,
+      abandonedAt: "2026-08-21T10:00:00.000Z", expiresAt: "2026-08-21T10:00:00.000Z" } }],
+    ["lease noncanonical marker", { lease: { ...exact.lease,
+      abandonedAt: "2026-08-21T06:43:06.064+00:00",
+      expiresAt: "2026-08-21T06:43:06.064+00:00" } }],
+    ["lease chronology", { lease: { ...exact.lease, acquiredAt: "2026-08-21T06:43:07.000Z" } }],
+    ["lease noncanonical acquisition", { lease: { ...exact.lease,
+      acquiredAt: "2026-08-21T06:43:06.038+00:00" } }],
+    ["renewal chronology", { lease: { ...exact.lease, renewedAt: "2026-08-21T06:43:07.000Z" } }],
+    ["renewal noncanonical time", { lease: { ...exact.lease,
+      renewedAt: "2026-08-21T06:43:06.040+00:00" } }],
+    ["lease time", { lease: { ...exact.lease, acquiredAt: "invalid" } }],
+    ["retry count", { metadata: { ...exact.metadata, postMergeCleanupRetryCount: 0 } }],
+    ["retry count 2", { metadata: { ...exact.metadata, postMergeCleanupRetryCount: 2 } }],
+    ["retry fractional", { metadata: { ...exact.metadata, postMergeCleanupRetryCount: 1.5 } }],
+    ["retry oversized", { metadata: { ...exact.metadata, postMergeCleanupRetryCount: 99 } }],
+    ["cause code", { metadata: { ...exact.metadata, postMergeCleanupCauseCode: "bad" } }],
+    ["typed cause code", { metadata: { ...exact.metadata,
+      postMergeCleanupCauseCode: "HERMES_REPOSITORY_COMMAND_FAILED" } }],
+    ["proof digest", { metadata: { ...exact.metadata, reviewRecoveryProofDigest: null } }],
+    ["PR", { metadata: { ...exact.metadata, prNumber: 0 } }],
+    ["head", { metadata: { ...exact.metadata, headRefOid: "bad" } }],
+    ["merge", { metadata: { ...exact.metadata, mergeSha: "bad" } }],
+    ["outcome identity", { metadata: { ...exact.metadata, outcome: {
+      ...exact.metadata.outcome, id: 28,
+    } } }],
+    ["outcome missing", { metadata: { ...exact.metadata, outcome: undefined } }],
+    ["resume state", { metadata: { ...exact.metadata, outcome: {
+      ...exact.metadata.outcome, queueBinding: { ...binding,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" },
+    } } }],
+    ["version delta", { metadata: { ...exact.metadata, outcome: {
+      ...exact.metadata.outcome, queueBinding: { ...binding, expectedVersion: 8 },
+    } } }],
+    ["version delta plus 2", { metadata: { ...exact.metadata, outcome: {
+      ...exact.metadata.outcome, queueBinding: { ...binding, expectedVersion: 6 },
+    } } }],
+    ["fence delta", { metadata: { ...exact.metadata, outcome: {
+      ...exact.metadata.outcome, queueBinding: { ...binding, fencingToken: 6 },
+    } } }],
+    ["unexpected base marker", { metadata: { ...exact.metadata, outcome: {
+      ...exact.metadata.outcome, queueBinding: { ...binding,
+        reviewRecoveryStaleReacquisition: { disposition: "RECLAIMED" } },
+    } } }],
+    ["source chain", { metadata: { ...exact.metadata, outcome: { queueBinding: {
+      ...binding, reviewRecoverySourceRuntimeAttempt: undefined,
+    } } } }],
+    ["event chain", { metadata: { ...exact.metadata, outcome: { queueBinding: {
+      ...binding, reviewRecoveryReclaimEventId: undefined,
+    } } } }],
+    ["event digest", { metadata: { ...exact.metadata, outcome: { queueBinding: {
+      ...binding, reviewRecoveryReclaimPayloadDigest: "bad",
+    } } } }],
+    ["work order", { metadata: { ...exact.metadata, outcome: { queueBinding: {
+      ...binding, activeWorkOrderId: 0,
+    } } } }],
+    ["unexpected continuation marker", { metadata: { ...exact.metadata, outcome: {
+      ...exact.metadata.outcome, queueBinding: { ...binding,
+        reviewRecoveryStaleContinuation: { disposition: "REPLAY_WINNER" } },
+    } } }],
+  ])("rejects %s drift", (_name, drift) => {
+    expect(isExactReviewRecoveryCleanupRetryAbandonedLease({ ...exact, ...drift }, now)).toBe(false)
   })
 })
 const ownerDecisionPacket = {
@@ -2195,6 +2304,169 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       reviewRecoveryStaleReacquisition: durableBaseHop,
       reviewRecoveryStaleContinuation: durableContinuation,
     }
+    const cleanupRetryState = structuredClone(legacyStaleState)
+    const cleanupRetryExecution = cleanupRetryState.executions["77"]
+    cleanupRetryExecution.checkpoint = {
+      sequence: 46,
+      state: "POST_MERGE_CLEANUP_RETRY",
+      detail: "HERMES_POST_MERGE_CLEANUP_WALL",
+      recordedAt: "2026-07-21T00:30:00.000Z",
+    }
+    Object.assign(cleanupRetryExecution.lease, {
+      status: "ACTIVE",
+      acquiredAt: "2026-07-21T00:00:00.000Z",
+      expiresAt: "2026-07-21T00:45:00.000Z",
+      abandonedAt: "2026-07-21T00:45:00.000Z",
+      abandonReason: "HERMES_RUNTIME_PROJECTION_WALL",
+    })
+    Object.assign(cleanupRetryExecution.metadata, {
+      postMergeCleanupRetryCount: 1,
+      postMergeCleanupCauseCode: null,
+    })
+    fs.writeFileSync(statePath, `${JSON.stringify(cleanupRetryState, null, 2)}\n`)
+    resumeQueueAfterReviewRecovery.mockClear()
+    refreshQueueOutcome.mockClear()
+    resolveActiveReviewRecoveryProvenance.mockClear()
+    verifyActiveReviewRecoveryContinuation.mockClear()
+    boundedAcquire.mockClear()
+    value.projectLease.mockClear()
+    value.lifecycle.cleanupOwnedWorktree.mockClear()
+    const cleanupRetryRevision = cleanupRetryState.revision
+    resolveActiveReviewRecoveryProvenance.mockResolvedValueOnce(resolvedForward)
+    refreshQueueOutcome.mockImplementationOnce((candidate) => composedRuntime.refreshOutcome(candidate))
+    verifyActiveReviewRecoveryContinuation.mockRejectedValueOnce(Object.assign(
+      new Error("seq46 recovery cleanup retry verified before effects"),
+      { code: "SEQ46_CLEANUP_RETRY_VERIFIER_SENTINEL" },
+    ))
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "SEQ46_CLEANUP_RETRY_VERIFIER_SENTINEL",
+    })
+    expect(resolveActiveReviewRecoveryProvenance).toHaveBeenCalledWith(expect.objectContaining({
+      executionBinding: expect.objectContaining({ expectedVersion: 7, fencingToken: 5 }),
+      checkpointProof: expect.objectContaining({
+        sequence: 46,
+        state: "POST_MERGE_CLEANUP_RETRY",
+        workOrderId: 77,
+      }),
+      proof: expect.objectContaining({
+        proofDigest: "d".repeat(64), prNumber: 500,
+        reviewedHeadSha: "c".repeat(40), mergeSha: "b".repeat(40),
+      }),
+    }))
+    expect(resumeQueueAfterReviewRecovery).not.toHaveBeenCalled()
+    expect(boundedAcquire).toHaveBeenCalledWith(expect.objectContaining({
+      activeWorkOrderId: 77,
+      reviewRecoveryContinuationEnvelope: expect.objectContaining({
+        mode: "REPLAY_ONLY", sourceExpectedVersion: 4,
+        sourceFencingToken: 2, sourceRuntimeAttempt: 5,
+      }),
+    }))
+    expect(resolveActiveReviewRecoveryProvenance.mock.invocationCallOrder[0])
+      .toBeLessThan(refreshQueueOutcome.mock.invocationCallOrder[0])
+    expect(refreshQueueOutcome.mock.invocationCallOrder[0])
+      .toBeLessThan(verifyActiveReviewRecoveryContinuation.mock.invocationCallOrder[0])
+    expect(value.projectLease).not.toHaveBeenCalled()
+    expect(value.lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
+    expect(value.state.read().revision).toBe(cleanupRetryRevision)
+
+    const markedCleanupRetryState = structuredClone(cleanupRetryState)
+    markedCleanupRetryState.executions["77"].metadata.outcome.queueBinding
+      .reviewRecoveryStaleReacquisition = durableBaseHop
+    fs.writeFileSync(statePath, `${JSON.stringify(markedCleanupRetryState, null, 2)}\n`)
+    resumeQueueAfterReviewRecovery.mockClear()
+    refreshQueueOutcome.mockClear()
+    resolveActiveReviewRecoveryProvenance.mockClear()
+    verifyActiveReviewRecoveryContinuation.mockClear()
+    boundedAcquire.mockClear()
+    value.projectLease.mockClear()
+    value.lifecycle.cleanupOwnedWorktree.mockClear()
+    resolveActiveReviewRecoveryProvenance.mockResolvedValueOnce(resolvedForward)
+    refreshQueueOutcome.mockImplementationOnce((candidate) => composedRuntime.refreshOutcome(candidate))
+    verifyActiveReviewRecoveryContinuation.mockRejectedValueOnce(Object.assign(
+      new Error("marked seq46 recovery cleanup retry verified before effects"),
+      { code: "MARKED_SEQ46_CLEANUP_RETRY_VERIFIER_SENTINEL" },
+    ))
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "MARKED_SEQ46_CLEANUP_RETRY_VERIFIER_SENTINEL",
+    })
+    expect(resolveActiveReviewRecoveryProvenance).toHaveBeenCalledWith(expect.objectContaining({
+      executionBinding: expect.objectContaining({
+        expectedVersion: 7, fencingToken: 5,
+        reviewRecoveryStaleReacquisition: durableBaseHop,
+      }),
+      checkpointProof: expect.objectContaining({ sequence: 46, workOrderId: 77 }),
+    }))
+    expect(resumeQueueAfterReviewRecovery).not.toHaveBeenCalled()
+    expect(boundedAcquire).toHaveBeenCalledWith(expect.objectContaining({
+      reviewRecoveryContinuationEnvelope: expect.objectContaining({ mode: "REPLAY_ONLY" }),
+    }))
+    expect(value.projectLease).not.toHaveBeenCalled()
+    expect(value.lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
+    expect(value.state.read().revision).toBe(cleanupRetryRevision)
+
+    const closedContinuationCleanupRetryState = structuredClone(markedCleanupRetryState)
+    Object.assign(
+      closedContinuationCleanupRetryState.executions["77"].metadata.outcome.queueBinding,
+      { expectedVersion: 8, fencingToken: 6,
+        reviewRecoveryStaleContinuation: durableContinuation },
+    )
+    fs.writeFileSync(statePath, `${JSON.stringify(closedContinuationCleanupRetryState, null, 2)}\n`)
+    resumeQueueAfterReviewRecovery.mockClear()
+    refreshQueueOutcome.mockClear()
+    resolveActiveReviewRecoveryProvenance.mockClear()
+    verifyActiveReviewRecoveryContinuation.mockClear()
+    boundedAcquire.mockClear()
+    value.projectLease.mockClear()
+    value.lifecycle.cleanupOwnedWorktree.mockClear()
+    resolveActiveReviewRecoveryProvenance.mockResolvedValueOnce(resolvedForward)
+    refreshQueueOutcome.mockImplementationOnce((candidate) => composedRuntime.refreshOutcome(candidate))
+    verifyActiveReviewRecoveryContinuation.mockRejectedValueOnce(Object.assign(
+      new Error("closed seq46 continuation verified before effects"),
+      { code: "CLOSED_SEQ46_CONTINUATION_VERIFIER_SENTINEL" },
+    ))
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "CLOSED_SEQ46_CONTINUATION_VERIFIER_SENTINEL",
+    })
+    expect(resolveActiveReviewRecoveryProvenance).toHaveBeenCalledWith(expect.objectContaining({
+      executionBinding: expect.objectContaining({
+        expectedVersion: 8, fencingToken: 6,
+        reviewRecoveryStaleReacquisition: durableBaseHop,
+        reviewRecoveryStaleContinuation: durableContinuation,
+      }),
+      checkpointProof: expect.objectContaining({ sequence: 46, fencingToken: 6 }),
+    }))
+    expect(resumeQueueAfterReviewRecovery).not.toHaveBeenCalled()
+    expect(boundedAcquire).toHaveBeenCalledWith(expect.objectContaining({
+      reviewRecoveryContinuationEnvelope: expect.objectContaining({
+        mode: "REPLAY_ONLY",
+        baseHop: expect.objectContaining({ expectedVersion: 7, fencingToken: 5 }),
+        continuation: expect.objectContaining({ expectedVersion: 8, fencingToken: 6 }),
+      }),
+    }))
+    expect(boundedAcquire).not.toHaveBeenCalledWith(expect.objectContaining({
+      expectedVersion: 9, fencingToken: 7,
+    }))
+    expect(value.projectLease).not.toHaveBeenCalled()
+    expect(value.lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
+    expect(value.state.read().revision).toBe(cleanupRetryRevision)
+
+    const malformedMarkedCleanupRetryState = structuredClone(cleanupRetryState)
+    malformedMarkedCleanupRetryState.executions["77"].metadata.outcome.queueBinding
+      .reviewRecoveryStaleReacquisition = {}
+    fs.writeFileSync(statePath, `${JSON.stringify(malformedMarkedCleanupRetryState, null, 2)}\n`)
+    resolveActiveReviewRecoveryProvenance.mockClear()
+    refreshQueueOutcome.mockClear()
+    value.projectLease.mockClear()
+    value.lifecycle.cleanupOwnedWorktree.mockClear()
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+    })
+    expect(resolveActiveReviewRecoveryProvenance).not.toHaveBeenCalled()
+    expect(refreshQueueOutcome).not.toHaveBeenCalled()
+    expect(value.projectLease).not.toHaveBeenCalled()
+    expect(value.lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
+    expect(value.state.read().revision).toBe(cleanupRetryRevision)
+
     for (const [name, expectedFence, queuePatch] of [
       ["base-marked", 5, { reviewRecoveryStaleReacquisition: durableBaseHop }],
       ["closed-continuation", 6, { expectedVersion: 8, fencingToken: 6,
@@ -2332,11 +2604,35 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       lease: { status: "RELEASED" },
       checkpoint: { state: "COMPLETE" },
     })
+    const releasedRecoveryState = value.state.read()
+    releasedRecoveryState.executions["77"].metadata.postMergeCleanupRetryCount = 1
+    releasedRecoveryState.executions["77"].metadata.postMergeCleanupCauseCode = null
+    fs.writeFileSync(statePath, `${JSON.stringify(releasedRecoveryState, null, 2)}\n`)
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "ALREADY_FINALIZED", outcomeId: "77",
+    })
   })
 
   it("adopts a durable terminal cleanup recovery before queue selection after restart", async () => {
-    const value = fixture()
+    const resolveActiveReviewRecoveryProvenance = vi.fn(async () => null)
+    const refreshQueueOutcome = vi.fn(async (selected) => selected)
+    const value = fixture(undefined, {
+      resolveActiveReviewRecoveryProvenance,
+      refreshQueueOutcome,
+    })
     const outcome = await value.selectOutcome()
+    outcome.queueBinding = {
+      userId: "owner-id", outcomeKey: "goal:GOAL-0077", expectedVersion: 6,
+      executionBinding: "execution-binding-77", acquisitionKey: "acquisition-key-77",
+      leaseHolder: "resident-hermes", leaseToken: "lease-token-77", fencingToken: 4,
+      activeWorkOrderId: 77,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+      reviewRecoveryReclaimEventId: 961,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+    }
     value.selectOutcome.mockClear()
     value.state.initialize()
     const branch = "codex/hermes-goal-77-77"
@@ -2355,6 +2651,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         mergeSha: "b".repeat(40),
         prNumber: 500,
         postMergeCleanupRetryCount: 3,
+        reviewRecoveryProofDigest: "d".repeat(64),
       },
     })
     value.state.checkpoint({
@@ -2398,6 +2695,13 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       mergeSha: "b".repeat(40),
       proofDigest: "d".repeat(64),
     })
+    const retainedRecoveredState = value.state.read()
+    retainedRecoveredState.executions["77"].metadata.postMergeCleanupRetryCount = 0
+    retainedRecoveredState.executions["77"].metadata.postMergeCleanupCauseCode =
+      "HERMES_REPOSITORY_COMMAND_FAILED"
+    retainedRecoveredState.executions["77"].metadata.reviewRecoveryProofDigest = "d".repeat(64)
+    fs.writeFileSync(path.join(value.root, "state", "state.json"),
+      `${JSON.stringify(retainedRecoveredState, null, 2)}\n`)
     value.lifecycle.inspectPullRequest.mockResolvedValue({
       state: "MERGED",
       baseRefName: "main",
@@ -2414,10 +2718,17 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(value.selectOutcome).not.toHaveBeenCalled()
     expect(value.client.connect).not.toHaveBeenCalled()
-    expect(value.projectCheckpoint).toHaveBeenCalledWith({
+    expect(resolveActiveReviewRecoveryProvenance).not.toHaveBeenCalled()
+    expect(value.projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
       outcomeId: 77,
-      attempt: lease.fencingToken,
-      executionBinding: null,
+      attempt: lease.fencingToken + 1,
+      executionBinding: expect.objectContaining({
+        expectedVersion: 6,
+        fencingToken: 4,
+        reviewRecoverySourceExpectedVersion: 4,
+        reviewRecoverySourceFencingToken: 2,
+        reviewRecoverySourceRuntimeAttempt: 5,
+      }),
       workContract: {
         version: "test.v1",
         id: "orchestrator-fixture",
@@ -2435,20 +2746,20 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
           "npm run build",
         ],
       },
-      checkpoint: {
+      checkpoint: expect.objectContaining({
         sequence: 3,
         state: "POST_MERGE_CLEANUP_RECOVERED",
         detail: "PR #500",
-        metadata: {
+        metadata: expect.objectContaining({
           prNumber: 500,
           headRefOid: "c".repeat(40),
           mergeSha: "b".repeat(40),
           terminalCleanupRecoveryProofDigest: "d".repeat(64),
           workContractId: "orchestrator-fixture",
           workContractDigest: "f".repeat(64),
-        },
-      },
-    })
+        }),
+      }),
+    }))
     expect(value.state.read().executions["77"]).toMatchObject({
       fencingToken: lease.fencingToken + 1,
       lease: { status: "RELEASED" },
@@ -2999,6 +3310,84 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(value.state.read().executions["77"].fencingToken).toBeGreaterThan(firstFence)
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+  })
+
+  it("keeps an ordinary zero-signal cleanup retry on the generic recovery path", async () => {
+    const value = fixture()
+    value.lifecycle.cleanupOwnedWorktree.mockRejectedValueOnce(Object.assign(
+      new Error("ordinary cleanup retry"),
+      { code: "HERMES_REPOSITORY_COMMAND_FAILED" },
+    ))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_POST_MERGE_CLEANUP_WALL",
+    })
+    const statePath = path.join(value.root, "state", "state.json")
+    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    const execution = persisted.executions["77"]
+    execution.lease.abandonReason = "HERMES_RUNTIME_PROJECTION_WALL"
+    execution.lease.abandonedAt = execution.lease.expiresAt
+    fs.writeFileSync(statePath, `${JSON.stringify(persisted, null, 2)}\n`)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE", prNumber: 500,
+    })
+  })
+
+  it("walls a retained review-recovery cleanup retry before generic effects when its lease marker is missing", async () => {
+    const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
+    const resolveActiveReviewRecoveryProvenance = vi.fn(async () => null)
+    const value = fixture(undefined, {
+      refreshQueueOutcome,
+      resolveActiveReviewRecoveryProvenance,
+    })
+    value.lifecycle.cleanupOwnedWorktree.mockRejectedValueOnce(Object.assign(
+      new Error("cleanup retry with retained recovery signal"),
+      { code: "HERMES_REPOSITORY_COMMAND_FAILED" },
+    ))
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_POST_MERGE_CLEANUP_WALL",
+    })
+    const statePath = path.join(value.root, "state", "state.json")
+    const basePersisted = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    const stateRevision = basePersisted.revision
+    for (const [name, patch] of [
+      ["missing lease marker", (execution) => { delete execution.lease.abandonedAt }],
+      ["checkpoint state drift", (execution) => {
+        execution.checkpoint.state = "RETRYABLE_WALL"
+      }],
+      ["checkpoint detail drift", (execution) => {
+        execution.checkpoint.detail = "OTHER"
+      }],
+      ["present-null queue recovery signal", (execution) => {
+        execution.metadata.reviewRecoveryProofDigest = null
+        execution.metadata.outcome.queueBinding = { reviewRecoverySourceRuntimeAttempt: null }
+      }],
+    ] as const) {
+      const persisted = structuredClone(basePersisted)
+      const execution = persisted.executions["77"]
+      execution.metadata.reviewRecoveryProofDigest = "d".repeat(64)
+      execution.lease.abandonReason = "HERMES_RUNTIME_PROJECTION_WALL"
+      execution.lease.abandonedAt = execution.lease.expiresAt
+      patch(execution)
+      fs.writeFileSync(statePath, `${JSON.stringify(persisted, null, 2)}\n`)
+      value.selectOutcome.mockClear()
+      refreshQueueOutcome.mockClear()
+      resolveActiveReviewRecoveryProvenance.mockClear()
+      value.lifecycle.cleanupOwnedWorktree.mockClear()
+      value.projectLease.mockClear()
+
+      await expect(value.orchestrator.cycle(), name).rejects.toMatchObject({
+        code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+      })
+      expect(value.state.read().revision, name).toBe(stateRevision)
+      expect(value.selectOutcome, name).not.toHaveBeenCalled()
+      expect(resolveActiveReviewRecoveryProvenance, name).not.toHaveBeenCalled()
+      expect(refreshQueueOutcome, name).not.toHaveBeenCalled()
+      expect(value.projectLease, name).not.toHaveBeenCalled()
+      expect(value.lifecycle.cleanupOwnedWorktree, name).not.toHaveBeenCalled()
+    }
   })
 
   it("terminalizes post-merge cleanup after the bounded retry budget", async () => {
