@@ -303,8 +303,9 @@ export async function readPendingPrimaryDecisionRequest({
   }
 }
 
-function timestampMilliseconds(value) {
-  return value instanceof Date ? value.getTime() : Date.parse(String(value ?? ""))
+export function timestampMilliseconds(value) {
+  if (value instanceof Date) return value.getTime()
+  return typeof value === "string" ? Date.parse(value) : Number.NaN
 }
 
 function normalizedTimestamp(value) {

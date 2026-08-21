@@ -25,6 +25,7 @@ import {
   recoverValidationInfrastructureOutcome,
   selectNextOutcome,
   settleActivePostMergeCleanupOutcome,
+  timestampMilliseconds,
   terminalizeOutcome,
   verifyReviewRecoveryProjectionCollision,
   verifyActivePostMergeCleanupSettlement,
@@ -303,6 +304,28 @@ function ownerDecisionReceipt(
 }
 
 describe("Hermes bridge PostgreSQL outcome source", () => {
+  it.each([
+    ["queue expiry", 0],
+    ["queue expiry", 1],
+    ["queue expiry", 2020],
+    ["queue expiry", {}],
+    ["queue expiry", []],
+    ["attempt time", 0],
+    ["attempt time", 1],
+    ["attempt time", 2020],
+    ["attempt time", {}],
+    ["attempt time", []],
+  ])("rejects a non-Date/non-string %s value", (_field, value) => {
+    expect(timestampMilliseconds(value)).toBeNaN()
+  })
+
+  it.each([
+    ["2026-08-21T09:37:02.646Z", Date.parse("2026-08-21T09:37:02.646Z")],
+    [new Date("2026-08-21T09:37:02.646Z"), Date.parse("2026-08-21T09:37:02.646Z")],
+  ])("preserves canonical string and PostgreSQL Date timestamp precision", (value, expected) => {
+    expect(timestampMilliseconds(value)).toBe(expected)
+  })
+
   it("preserves primary projection errors while still attempting all cleanup", async () => {
     const primary = new Error("primary")
     const release = vi.fn(() => { throw new Error("release") })
