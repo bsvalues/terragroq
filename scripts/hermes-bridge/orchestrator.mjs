@@ -426,6 +426,9 @@ export function deriveHermesRuntimeProjectionBindings(
   const reviewRecoveryDelta = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
     ? 1 : binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
       ? (staleReacquisition === undefined ? 2 : 3) : null
+  const validReclaimEvidence = Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
+    && binding.reviewRecoveryReclaimEventId > 0
+    && /^[0-9a-f]{64}$/.test(String(binding.reviewRecoveryReclaimPayloadDigest ?? ""))
   const invalidReviewRecoveryDelta = hasReviewRecovery && !legacyResumeOnlyRecovery && (
     reviewRecoveryDelta === null
     || !Number.isSafeInteger(binding.reviewRecoverySourceExpectedVersion)
@@ -434,6 +437,11 @@ export function deriveHermesRuntimeProjectionBindings(
     || binding.reviewRecoverySourceFencingToken <= 0
     || !Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
     || binding.reviewRecoverySourceRuntimeAttempt <= 0
+    || (binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
+      && (binding.reviewRecoveryReclaimEventId !== undefined
+        || binding.reviewRecoveryReclaimPayloadDigest !== undefined))
+    || (binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+      && !validReclaimEvidence)
     || binding.expectedVersion !== binding.reviewRecoverySourceExpectedVersion + reviewRecoveryDelta
     || binding.fencingToken !== binding.reviewRecoverySourceFencingToken + reviewRecoveryDelta)
   const invalidStaleReacquisition = staleReacquisition !== undefined && (

@@ -360,6 +360,13 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     for (const queueBinding of [
       { ...legacyResumeOnly, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" },
       { ...legacyResumeOnly, reviewRecoveryResumeState: "UNKNOWN_RECOVERY_STATE" },
+      { ...outcome.queueBinding, expectedVersion: 5, fencingToken: 3,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+        reviewRecoveryStaleReacquisition: undefined },
+      { ...outcome.queueBinding, expectedVersion: 6, fencingToken: 4,
+        reviewRecoveryReclaimEventId: undefined, reviewRecoveryStaleReacquisition: undefined },
+      { ...outcome.queueBinding, expectedVersion: 6, fencingToken: 4,
+        reviewRecoveryReclaimPayloadDigest: undefined, reviewRecoveryStaleReacquisition: undefined },
       { ...outcome.queueBinding, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" },
       { ...outcome.queueBinding, expectedVersion: 8 },
       { ...outcome.queueBinding, reviewRecoveryStaleReacquisition: undefined },
