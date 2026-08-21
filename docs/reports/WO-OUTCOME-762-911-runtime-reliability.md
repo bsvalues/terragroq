@@ -35,6 +35,16 @@ ISSUE_CLOSURE_CLAIMED: false
 CURRENT_RUNTIME_HEALTH_CLAIMED: false
 VALIDATION_STATE: PENDING_HERMES_HOST
 INDEPENDENT_REVIEW_STATE: COMPLETE_FINDINGS_REMEDIATED
+PR_WORK_CONTEXT_CHECK: work context receipt (#831)
+PR_CONTEXT_GATE_STATE: AWAITING_HERMES_PR_BODY_REMEDIATION
+CHECK_CONCLUSIONS_RECEIVED: FAILURE, FAILURE, CANCELLED
+DISTINCT_VALID_FINDINGS: 1
+DUPLICATE_FAILURE_CONCLUSIONS_COLLAPSED: true
+CANCELLED_RUN_DISPOSITION: NON_ACTIONABLE_CHECK_EXECUTION_STATE
+CANCELLED_RUN_CAUSE_CLAIMED: false
+RECEIPT_TOKEN_FABRICATED: false
+WORK_CONTEXT_EXEMPTION_USED: false
+REPORT_EMBEDDED_RECEIPT_WOULD_SATISFY_GATE: false
 OWNER_TOUCH_COUNT: 0
 BLOCKED_SCOPE_CROSSED: false
 ```
@@ -141,7 +151,7 @@ REPOSITORY_WRITE_LIMITED_TO_RESERVED_REPORT: true
 READ_ONLY_REPOSITORY_COMMANDS_EXECUTED: rg
 HOST_MUTATING_COMMAND_EXECUTED: false
 VALIDATOR_EXECUTED_BY_CODEX: false
-GIT_OR_GITHUB_OPERATION_PERFORMED: false
+GIT_OR_GITHUB_OPERATION_PERFORMED_BY_CODEX: false
 HOST_RUNTIME_PROCESS_STARTED_OR_STOPPED: false
 SERVICE_OR_SCHEDULER_CHANGED: false
 OLLAMA_PROBED_STARTED_STOPPED_OR_CONFIGURED: false
@@ -181,22 +191,81 @@ possibility of a final post-deadline success, and explicitly denies a strict 30-
 claim. Direct file review confirmed both corrections remain
 inside the reserved report and preserve the historical evidence verbatim.
 
+A later pull-request check report contained two `FAILURE` conclusions and one `CANCELLED` conclusion
+for the same required `work context receipt (#831)` check. Direct contract inspection reduced those
+status entries to one actionable PR-admission defect and one non-actionable cancelled execution. The
+remediation below does not invent a receipt, copy one from another head, or claim the gate is green.
+
+## PR work-context gate remediation
+
+The required check reads a fenced `WORK_CONTEXT_RECEIPT` JSON block from the pull-request body and
+validates its token and facts against the current base, doctrine, changed paths, authority, topology,
+and collision state. It does not read this report for that receipt. The Hermes PR creation path uses a
+fixed prose body that does not include the block, so adding a token here would neither admit the PR nor
+be truthful.
+
+```text
+CHECK_NAME: work context receipt (#831)
+CHECK_CONCLUSIONS_RECEIVED: FAILURE, FAILURE, CANCELLED
+DETAILED_FAILURE_CODE_SUPPLIED_TO_THIS_LANE: false
+DISTINCT_ACTIONABLE_DEFECTS: 1
+ACTIONABLE_DEFECT: REQUIRED_RECEIPT_ABSENT_OR_UNPROVEN_IN_PR_BODY
+DUPLICATE_FAILURE_CONCLUSIONS_COLLAPSED: true
+WORKFLOW_CANCEL_IN_PROGRESS_CONFIGURED: true
+CANCELLED_RUN_DISPOSITION: NON_ACTIONABLE_CHECK_EXECUTION_STATE
+CANCELLED_RUN_CAUSE_CLAIMED: false
+RECEIPT_CONSUMER: PULL_REQUEST_BODY
+RECEIPT_TOKEN_FABRICATED: false
+STALE_OR_FOREIGN_RECEIPT_REUSED: false
+WORK_CONTEXT_EXEMPTION_USED: false
+REPORT_EMBEDDED_RECEIPT_WOULD_SATISFY_GATE: false
+OWNER_TOUCH_REQUIRED: false
+RECOVERY_OWNER: HERMES_HOST
+RECOVERY_STATE: PENDING_HERMES_HOST
+```
+
+The two identical failure summaries are not treated as two independent product defects. The cancelled
+summary is not promoted to another defect: it contains no failure diagnosis, and the workflow permits
+an in-progress run to be cancelled when a newer event for the same pull request starts. Detailed run
+logs were not supplied to this lane, so no narrower failure code or cancellation cause is claimed.
+
+Hermes can recover the existing pull request without an empty commit or owner contact:
+
+1. Re-establish the work context against current `main`, the current doctrine digest, and the exact
+   changed-file set at the remediation head.
+2. Issue a fresh receipt for `WO-HERMES-OUTCOME-27`, parent outcome `OUTCOME-762`, and the sole reserved
+   path `docs/reports/WO-OUTCOME-762-911-runtime-reliability.md`, using the authority, subsystem,
+   topology, collision, and remaining-parent-acceptance facts measured by the issuer. No value that is
+   not measured may be copied or inferred from this report.
+3. Add the issued token and its exact facts as a fenced `WORK_CONTEXT_RECEIPT` JSON block in the pull-
+   request body. Do not use `WORK_CONTEXT_EXEMPT` as a substitute.
+4. Edit the existing pull-request body so the workflow's `edited` trigger evaluates the fresh event
+   payload; do not rely on replaying an earlier event payload.
+5. Require `work context receipt (#831)` to pass for the exact remediation head before merge.
+
+This is routine Hermes repository-lifecycle recovery inside the existing authority. It neither needs
+an owner decision nor authorizes runtime, production, release, tag, credential, or blocked-scope work.
+Direct post-edit file review confirmed that the structured and narrative fields agree: one actionable
+gate defect is recorded, no receipt or exemption is fabricated, no cancellation cause is asserted,
+and exact PR-body recovery remains pending with Hermes.
+
 ## Hermes host validation handoff
 
 Codex did not run validators, Git, GitHub, interpreters, package managers, or runtime commands. Hermes
 owns the following exact post-remediation validation and repository lifecycle. Each
 `REPORT_VALIDATOR_ARG_*` value is one separated process argument; the multiline expression requires
-the report identity, no-runtime-host-mutation posture, review state, corrected readiness fields, and
-all substantive sections in their recorded order.
+the report identity, no-runtime-host-mutation posture, review state, corrected readiness fields, PR
+work-context remediation, and all substantive sections in their recorded order.
 
 ```text
 git diff --check: PENDING_HERMES_HOST
 REPORT_VALIDATOR_COMMAND: rg
 REPORT_VALIDATOR_ARG_1: --quiet
 REPORT_VALIDATOR_ARG_2: -U
-REPORT_VALIDATOR_ARG_3: (?ms)^# WO-OUTCOME-762-911 — Runtime Reliability Remediation Record$.*^RECORD_FORMAT: WILLIAMOS_RUNTIME_RELIABILITY_REMEDIATION_V1$.*^RECORD_ID: WO-OUTCOME-762-911$.*^DISPATCH_WORK_ORDER: WO-HERMES-OUTCOME-27$.*^TRACKED_ISSUE: 911$.*^HOST_RUNTIME_MUTATION_PERFORMED: false$.*^VALIDATION_STATE: PENDING_HERMES_HOST$.*^INDEPENDENT_REVIEW_STATE: COMPLETE_FINDINGS_REMEDIATED$.*^OWNER_TOUCH_COUNT: 0$.*^BLOCKED_SCOPE_CROSSED: false$.*^## Owner outcome$.*^## Repository-backed remediation$.*^READINESS_POLLING_DEADLINE_SECONDS: 30$.*^SETUP_TAGS_PROBE_TIMEOUT_SECONDS: 5$.*^CONTROL_CENTER_TAGS_PROBE_TIMEOUT_SECONDS: 10$.*^STRICT_READINESS_WALL_CLOCK_CEILING_ENFORCED: false$.*^POST_DEADLINE_IN_FLIGHT_PROBE_CAN_SUCCEED: true$.*^UNREADY_RESULT_AFTER_POLLING_LOOP: EXPLICIT_FAILURE$.*^## Historical proof retained, not rerun$.*^## Reliability acceptance contract$.*^## Truth boundary$.*^## No-runtime-host-mutation ledger$.*^## Independent file review$.*^## Hermes host validation handoff$
+REPORT_VALIDATOR_ARG_3: (?ms)^# WO-OUTCOME-762-911 — Runtime Reliability Remediation Record$.*^RECORD_FORMAT: WILLIAMOS_RUNTIME_RELIABILITY_REMEDIATION_V1$.*^RECORD_ID: WO-OUTCOME-762-911$.*^DISPATCH_WORK_ORDER: WO-HERMES-OUTCOME-27$.*^TRACKED_ISSUE: 911$.*^HOST_RUNTIME_MUTATION_PERFORMED: false$.*^VALIDATION_STATE: PENDING_HERMES_HOST$.*^INDEPENDENT_REVIEW_STATE: COMPLETE_FINDINGS_REMEDIATED$.*^PR_CONTEXT_GATE_STATE: AWAITING_HERMES_PR_BODY_REMEDIATION$.*^DISTINCT_VALID_FINDINGS: 1$.*^CANCELLED_RUN_DISPOSITION: NON_ACTIONABLE_CHECK_EXECUTION_STATE$.*^CANCELLED_RUN_CAUSE_CLAIMED: false$.*^RECEIPT_TOKEN_FABRICATED: false$.*^WORK_CONTEXT_EXEMPTION_USED: false$.*^OWNER_TOUCH_COUNT: 0$.*^BLOCKED_SCOPE_CROSSED: false$.*^## Owner outcome$.*^## Repository-backed remediation$.*^READINESS_POLLING_DEADLINE_SECONDS: 30$.*^SETUP_TAGS_PROBE_TIMEOUT_SECONDS: 5$.*^CONTROL_CENTER_TAGS_PROBE_TIMEOUT_SECONDS: 10$.*^STRICT_READINESS_WALL_CLOCK_CEILING_ENFORCED: false$.*^POST_DEADLINE_IN_FLIGHT_PROBE_CAN_SUCCEED: true$.*^UNREADY_RESULT_AFTER_POLLING_LOOP: EXPLICIT_FAILURE$.*^## Historical proof retained, not rerun$.*^## Reliability acceptance contract$.*^## Truth boundary$.*^## No-runtime-host-mutation ledger$.*^## Independent file review$.*^## PR work-context gate remediation$.*^ACTIONABLE_DEFECT: REQUIRED_RECEIPT_ABSENT_OR_UNPROVEN_IN_PR_BODY$.*^RECOVERY_STATE: PENDING_HERMES_HOST$.*^## Hermes host validation handoff$
 REPORT_VALIDATOR_ARG_4: docs/reports/WO-OUTCOME-762-911-runtime-reliability.md
 REPORT_VALIDATOR_STATE: PENDING_HERMES_HOST
+work context receipt (#831): PENDING_HERMES_HOST_PR_BODY_REMEDIATION
 commit: null
 pr_url: null
 merged: false
@@ -215,3 +284,5 @@ revert of this single report is the complete rollback; no host rollback is neede
 - The report records evidence without upgrading historical proof into current runtime truth.
 - Independent file review completed and its truth-scope findings were remediated in this record.
 - Both exact-head P2 findings were remediated without leaving the reserved report path.
+- The repeated #831 results are classified without fabricating a receipt or exemption; exact PR-body
+  recovery remains a routine Hermes host action and does not require owner contact.
