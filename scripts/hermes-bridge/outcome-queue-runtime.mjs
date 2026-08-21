@@ -720,7 +720,8 @@ function persistedBinding(item) {
   }
 }
 
-function withPersistedBinding(outcome, item, recoverySource = null) {
+function withPersistedBinding(outcome, item, recoverySource = null, acquisitionResult = null) {
+  const rawLifecycleReason = item?.lifecycleReason
   const binding = persistedBinding(item)
   const priorRecoveryState = outcome?.queueBinding?.validationRecoveryResumeState
   if (priorRecoveryState && item.lifecycleReason === "STALE_LEASE_RECOVERED") {
@@ -742,15 +743,43 @@ function withPersistedBinding(outcome, item, recoverySource = null) {
       && source.reviewRecoveryReclaimEventId > 0
       && typeof source?.reviewRecoveryReclaimPayloadDigest === "string"
       && /^[0-9a-f]{64}$/.test(source.reviewRecoveryReclaimPayloadDigest)
+    const rawHasAnyEvidence = item?.reviewRecoveryReclaimEventId !== undefined
+      || item?.reviewRecoveryReclaimPayloadDigest !== undefined
+    const rawHasExactEvidence = Number.isSafeInteger(Number(item?.reviewRecoveryReclaimEventId))
+      && Number(item.reviewRecoveryReclaimEventId) > 0
+      && typeof item?.reviewRecoveryReclaimPayloadDigest === "string"
+      && /^[0-9a-f]{64}$/.test(item.reviewRecoveryReclaimPayloadDigest)
+    const rawSourceTriple = [
+      item?.reviewRecoverySourceExpectedVersion,
+      item?.reviewRecoverySourceFencingToken,
+      item?.reviewRecoverySourceRuntimeAttempt,
+    ]
+    const rawHasAnySourceTriple = rawSourceTriple.some((value) => value !== undefined)
+    const rawHasExactSourceTriple = Number.isSafeInteger(item?.reviewRecoverySourceExpectedVersion)
+      && item.reviewRecoverySourceExpectedVersion >= 0
+      && Number.isSafeInteger(item?.reviewRecoverySourceFencingToken)
+      && item.reviewRecoverySourceFencingToken > 0
+      && Number.isSafeInteger(item?.reviewRecoverySourceRuntimeAttempt)
+      && item.reviewRecoverySourceRuntimeAttempt > 0
     if (sourceIsReclaimed) {
-      const exactRefreshIdentity = source.userId === binding.userId
+      const exactStableIdentity = source.userId === binding.userId
         && source.outcomeKey === binding.outcomeKey
-        && source.expectedVersion === binding.expectedVersion
         && source.executionBinding === binding.executionBinding
         && source.acquisitionKey === binding.acquisitionKey
         && source.leaseHolder === binding.leaseHolder
         && source.leaseToken === binding.leaseToken
+        && source.activeWorkOrderId === binding.activeWorkOrderId
+        && source.authorityGrantRef === binding.authorityGrantRef
+      const exactSameFence = source.expectedVersion === binding.expectedVersion
         && source.fencingToken === binding.fencingToken
+      const exactGovernedStaleReclaim = acquisitionResult?.acquired === true
+        && acquisitionResult?.reclaimed === true
+        && acquisitionResult?.replayed === false
+        && rawLifecycleReason === "STALE_LEASE_RECOVERED"
+        && binding.expectedVersion === source.expectedVersion + 1
+        && binding.fencingToken === source.fencingToken + 1
+      const exactRefreshIdentity = exactStableIdentity
+        && (exactSameFence || exactGovernedStaleReclaim)
         && Number.isSafeInteger(source.reviewRecoverySourceExpectedVersion)
         && source.reviewRecoverySourceExpectedVersion >= 0
         && source.expectedVersion === source.reviewRecoverySourceExpectedVersion + 2
@@ -760,6 +789,19 @@ function withPersistedBinding(outcome, item, recoverySource = null) {
         && Number.isSafeInteger(source.reviewRecoverySourceRuntimeAttempt)
         && source.reviewRecoverySourceRuntimeAttempt > 0
       if (!exactRefreshIdentity || !sourceHasEvidence
+        || (rawHasAnyEvidence
+          && (!rawHasExactEvidence
+            || Number(item.reviewRecoveryReclaimEventId) !== source.reviewRecoveryReclaimEventId
+            || item.reviewRecoveryReclaimPayloadDigest
+              !== source.reviewRecoveryReclaimPayloadDigest))
+        || (rawLifecycleReason === "STALE_LEASE_RECOVERED" && rawHasAnySourceTriple
+          && (!rawHasExactSourceTriple
+            || item.reviewRecoverySourceExpectedVersion
+              !== source.reviewRecoverySourceExpectedVersion
+            || item.reviewRecoverySourceFencingToken
+              !== source.reviewRecoverySourceFencingToken
+            || item.reviewRecoverySourceRuntimeAttempt
+              !== source.reviewRecoverySourceRuntimeAttempt))
         || (bindingHasEvidence
           && (binding.reviewRecoveryReclaimEventId !== source.reviewRecoveryReclaimEventId
             || binding.reviewRecoveryReclaimPayloadDigest
@@ -1303,7 +1345,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         })
         wall(decision.reasonCode, `HERMES_OUTCOME_QUEUE_POLICY_${decision.reasonCode}`)
       }
-      return withPersistedBinding(governedOutcome, refreshed.outcome)
+      return withPersistedBinding(governedOutcome, refreshed.outcome, null, refreshed)
     }
     const current = refreshed?.outcome ?? (await readQueue({
       databaseUrl,

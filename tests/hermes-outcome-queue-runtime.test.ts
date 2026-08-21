@@ -1779,6 +1779,171 @@ describe("Hermes durable outcome queue runtime", () => {
   })
 
   it.each([
+    ["absent", {}],
+    ["exact", {
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+    }],
+    ["exact event and source triple", {
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }],
+  ])("preserves verified reclaim evidence through one exact governed stale-lease reacquisition with %s supplied evidence", async (_name, suppliedEvidence) => {
+    const prior = {
+      ...queueItem,
+      expectedVersion: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }
+    const reacquired = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      ...suppliedEvidence,
+    }
+    const acquire = vi.fn(async () => ({
+      outcome: reacquired,
+      acquired: true,
+      replayed: false,
+      reclaimed: true,
+      reason: null,
+    }))
+    const bridge = runtime({ acquire })
+    const outcome = { ...goal, queueBinding: prior }
+
+    await expect(bridge.refreshOutcome(outcome)).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 7,
+        fencingToken: 5,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+        reviewRecoveryReclaimEventId: 701,
+        reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+        reviewRecoverySourceExpectedVersion: 4,
+        reviewRecoverySourceFencingToken: 2,
+        reviewRecoverySourceRuntimeAttempt: 5,
+      },
+    })
+  })
+
+  it.each([
+    ["acquired false", { result: { acquired: false } }],
+    ["missing reclaimed disposition", { result: { reclaimed: false } }],
+    ["replayed disposition", { result: { replayed: true } }],
+    ["non-stale lifecycle reason", { item: { lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" } }],
+    ["version delta", { item: { version: 8 } }],
+    ["fence delta", { item: { fencingToken: 6 } }],
+    ["Work Order drift", { item: { activeWorkOrderId: 78 } }],
+    ["grant drift", { item: { authorityGrantRef: "grant-other" } }],
+    ["user drift", { item: { userId: "other-user" } }],
+    ["outcome drift", { item: { outcomeKey: "goal:OTHER" } }],
+    ["execution drift", { item: { executionBinding: "execution-other" } }],
+    ["acquisition drift", { item: { acquisitionKey: "acquisition-other" } }],
+    ["holder drift", { item: { leaseHolder: "other-hermes" } }],
+    ["lease token drift", { item: { leaseToken: "lease-other" } }],
+    ["missing source event ID", { prior: { reviewRecoveryReclaimEventId: undefined } }],
+    ["missing source event digest", { prior: { reviewRecoveryReclaimPayloadDigest: undefined } }],
+    ["source version drift", { prior: { reviewRecoverySourceExpectedVersion: 5 } }],
+    ["source fence drift", { prior: { reviewRecoverySourceFencingToken: 3 } }],
+    ["source attempt drift", {
+      prior: { reviewRecoverySourceRuntimeAttempt: 6 },
+      item: {
+        reviewRecoverySourceExpectedVersion: 4,
+        reviewRecoverySourceFencingToken: 2,
+        reviewRecoverySourceRuntimeAttempt: 5,
+      },
+    }],
+    ["partial raw source triple", { item: { reviewRecoverySourceExpectedVersion: 4 } }],
+    ["raw source version mismatch", { item: {
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    } }],
+    ["raw source fence mismatch", { item: {
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    } }],
+    ["raw source attempt mismatch", { item: {
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 6,
+    } }],
+    ["partial supplied evidence", { item: { reviewRecoveryReclaimEventId: 701 } }],
+    ["mismatched supplied evidence", { item: {
+      reviewRecoveryReclaimEventId: 702,
+      reviewRecoveryReclaimPayloadDigest: "f".repeat(64),
+    } }],
+  ])("walls governed stale-lease evidence carry-forward for %s", async (_name, drift) => {
+    const prior = {
+      ...queueItem,
+      expectedVersion: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+      ...(drift.prior ?? {}),
+    }
+    const item = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      ...(drift.item ?? {}),
+    }
+    const result = {
+      outcome: item,
+      acquired: true,
+      replayed: false,
+      reclaimed: true,
+      reason: null,
+      ...(drift.result ?? {}),
+    }
+    const transitionQueue = vi.fn(async () => true)
+    const bridge = runtime({ acquire: vi.fn(async () => result), transitionQueue })
+
+    await expect(bridge.refreshOutcome({ ...goal, queueBinding: prior })).rejects.toMatchObject({
+      code: expect.stringMatching(/^HERMES_OUTCOME_QUEUE_(?:REVIEW_RECOVERY_PROOF|BINDING|REFRESH)_WALL$/),
+    })
+    expect(transitionQueue).not.toHaveBeenCalled()
+  })
+
+  it.each([
     ["partial evidence", { reviewRecoveryReclaimEventId: 701 }],
     ["mismatched evidence", {
       reviewRecoveryReclaimEventId: 702,
