@@ -435,11 +435,15 @@ describe("WorkbenchShell rendered interaction contract", () => {
 
     const compactViews = screen.getByRole("navigation", { name: "Compact Workbench views" })
     expect(Array.from(compactViews.querySelectorAll("a")).map((link) => link.textContent?.trim())).toEqual([
+      // The Environment doorway leads the nav — a link OUT to the Desk (real-operator acceptance).
+      "Environment",
       "Home",
       "Projects",
       "Activity",
       "System",
     ])
+    // And that first link goes to /environment, not an internal shell view.
+    expect(compactViews.querySelector("a")?.getAttribute("href")).toBe("/environment")
   })
 
   it("keeps compact Execution truthful when no Thread is selected", async () => {
