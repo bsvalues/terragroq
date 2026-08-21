@@ -63,6 +63,22 @@ export type WorkingWorldSnapshot = Readonly<{
   conversation: readonly Readonly<{ role: "owner" | "williamos"; content: string; at: string }>[]
   /** Whether Hermes should continue this work unattended, and where it stands. */
   continuation: "active" | "paused" | "settled"
+  /**
+   * The governed outcome the last current-work read named "next startable" — retained verbatim so
+   * "continue it" starts THIS exact item, never a re-selected one. Null when nothing was selectable
+   * (no startable outcome, or the read was incomplete). Meaning, not chrome.
+   */
+  pendingStartWork: RetainedStartWork | null
+}>
+
+/** The exact selection to hand to authorizeWorkbenchOutcomeExecution — no re-resolution, no re-read. */
+export type RetainedStartWork = Readonly<{
+  projectId: number
+  projectName: string
+  threadId: string
+  outcomeKey: string
+  outcomeTitle: string
+  activeWorkOrderId: number | null
 }>
 
 /**
@@ -99,6 +115,7 @@ export function createWorkingWorld({
     lastRedValidation: null,
     conversation: [],
     continuation: "active",
+    pendingStartWork: null,
   }
 }
 
@@ -112,7 +129,7 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
   const allowed = new Set([
     "schemaVersion", "intent", "assumption", "resources", "branchHeads", "artifacts", "agentWork",
     "surfaces", "openConcerns", "unresolvedFailures", "pendingDecisions", "lastGreenValidation",
-    "lastRedValidation", "conversation", "continuation",
+    "lastRedValidation", "conversation", "continuation", "pendingStartWork",
   ])
   for (const key of Object.keys(snapshot)) {
     if (!allowed.has(key)) throw new Error(`WORLD_UNKNOWN_KEY:${key}`)

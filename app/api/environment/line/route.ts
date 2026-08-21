@@ -12,7 +12,9 @@ import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
 import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
-import { answerCurrentWork } from "@/lib/environment/current-work-db"
+import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
+import { isContinueIntent } from "@/lib/environment/start-work"
+import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
 import {
   createWorkingWorld,
@@ -252,14 +254,20 @@ async function loadProjects(userId: string): Promise<ProjectRow[]> {
   return db.select({ name: project.name, lifecycle: project.lifecycle }).from(project).where(eq(project.userId, userId))
 }
 
-async function groundedAnswer(text: string, userId: string): Promise<string | null> {
+// Returns null when the sentence is not a grounded question (fall through to converse). For
+// current-work it also carries `retained`: the exact selection to keep for a later "continue it".
+async function groundedAnswer(
+  text: string,
+  userId: string,
+): Promise<{ say: string; retained?: RetainedStartWork | null } | null> {
   const kind = classifyGrounded(text)
   if (!kind) return null
-  if (kind === "identity") return groundedIdentity()
+  if (kind === "identity") return { say: groundedIdentity() }
   const projects = await loadProjects(userId)
-  if (kind === "projects") return composeProjectsAnswer(projects)
+  if (kind === "projects") return { say: composeProjectsAnswer(projects) }
   // current-work: read through the canonical project → thread → outcome → evidence relationship.
-  return (await answerCurrentWork(text, userId)).say
+  const cw = await answerCurrentWork(text, userId)
+  return { say: cw.say, retained: cw.retained }
 }
 
 async function converse(world: WorkingWorldSnapshot, text: string, facts: string): Promise<string> {
@@ -333,7 +341,17 @@ export async function POST(request: Request) {
     let updated = withTurn(world, "owner", text)
     let say: string
     let surfaces: SurfaceDirective[] = []
-    if (FIX_INTENT.test(text) && LOGIN_WORK.test(world.intent)) {
+    if (isContinueIntent(text) && world.pendingStartWork) {
+      // The transition: start the EXACT retained selection — no re-resolve, no re-read. The
+      // authorization is an atomic revalidate-and-act; a stale selection fails closed. Clear the
+      // retention on a real start so a second "continue" can't re-fire it.
+      const outcome = await startRetainedWork(world.pendingStartWork)
+      say = outcome.say
+      surfaces = [{ kind: "trace", subject: "start-work", payload: outcome.trace }]
+      updated = { ...updated, pendingStartWork: outcome.started ? null : world.pendingStartWork }
+    } else if (isContinueIntent(text)) {
+      say = "There's no selected work to continue yet. Ask what we're doing on a project first, and I'll name the next startable outcome — then \"continue\" starts that exact one."
+    } else if (FIX_INTENT.test(text) && LOGIN_WORK.test(world.intent)) {
       const fix = await composeSignInFix()
       say = fix.say
       surfaces = fix.surfaces
@@ -343,7 +361,14 @@ export async function POST(request: Request) {
         updated = withSurface(updated, { kind: "tests", subject: "auth copy contracts", because: "the governing contract" })
       }
     } else {
-      say = (await groundedAnswer(text, userId)) ?? (await converse(updated, text, groundingFacts(await loadProjects(userId))))
+      const grounded = await groundedAnswer(text, userId)
+      if (grounded) {
+        say = grounded.say
+        // A current-work read retains its exact selection for a later "continue it".
+        if ("retained" in grounded) updated = { ...updated, pendingStartWork: grounded.retained ?? null }
+      } else {
+        say = await converse(updated, text, groundingFacts(await loadProjects(userId)))
+      }
     }
     updated = withTurn(updated, "williamos", say)
     await saveWorld(userId, requestedWorldId, updated, false)
@@ -386,10 +411,13 @@ export async function POST(request: Request) {
   }
 
   const scratch = createWorkingWorld({ intent: text })
-  const say = (await groundedAnswer(text, userId)) ?? (await converse(scratch, text, groundingFacts(await loadProjects(userId))))
+  const grounded = await groundedAnswer(text, userId)
+  const say = grounded?.say ?? (await converse(scratch, text, groundingFacts(await loadProjects(userId))))
   const worldId = crypto.randomUUID()
   let world = withTurn(scratch, "owner", text)
   world = withTurn(world, "williamos", say)
+  // A first-message current-work read retains its selection so the next "continue it" starts it.
+  if (grounded && "retained" in grounded) world = { ...world, pendingStartWork: grounded.retained ?? null }
   await saveWorld(userId, worldId, world, true)
   return Response.json({ worldId, say, surfaces: [] } satisfies LineReply)
 }

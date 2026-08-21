@@ -1,8 +1,11 @@
 import { and, eq, inArray } from "drizzle-orm"
 
+import { authorizeWorkbenchOutcomeExecution } from "@/app/actions/authorize-workbench-outcome-execution"
 import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
 import { db } from "@/lib/db"
 import { evidenceRecord, project, workOrder, workbenchThread, workbenchThreadSource } from "@/lib/db/schema"
+import { composeStartWorkResult, startWorkIdempotencyKey, type StartWorkOutcome } from "@/lib/environment/start-work"
+import type { RetainedStartWork } from "@/lib/environment/working-world"
 
 import {
   aggregateCurrentWork,
@@ -28,6 +31,8 @@ import {
 export type CurrentWorkAnswer = Readonly<{
   say: string
   selection: ReturnType<typeof startWorkSelection>
+  /** The exact selection retained for a later "continue it" — null when nothing is startable/complete. */
+  retained: RetainedStartWork | null
 }>
 
 function distinct<T>(values: readonly T[]): T[] {
@@ -42,7 +47,7 @@ export async function answerCurrentWork(text: string, userId: string): Promise<C
 
   const resolution = resolveProject(text, projects)
   if (resolution.kind !== "resolved") {
-    return { say: composeCurrentWorkAnswer(resolution, null), selection: null }
+    return { say: composeCurrentWorkAnswer(resolution, null), selection: null, retained: null }
   }
   const identity = resolution.project
 
@@ -78,6 +83,7 @@ export async function answerCurrentWork(text: string, userId: string): Promise<C
         `I couldn't read the governed execution state for ${identity.name} right now, so I won't guess ` +
         `at its current work — the canonical readers are the only source I'll answer from. Try again.`,
       selection: null,
+      retained: null,
     }
   }
 
@@ -138,8 +144,55 @@ export async function answerCurrentWork(text: string, userId: string): Promise<C
 
   const joined = joinCanonicalWork(joinThreads, surfaceByKey, workOrdersById, evidenceByWorkOrder)
   const work = aggregateCurrentWork(identity, joined.threads)
+  const selection = startWorkSelection(work)
+  // Retain the EXACT named item for a later "continue it" — only when selection is valid (complete
+  // read + a suggested top). Built from the same object shown to the owner; no re-resolution later.
+  const retained: RetainedStartWork | null =
+    selection && work.topStartable
+      ? {
+          projectId: identity.id,
+          projectName: identity.name,
+          threadId: work.topStartable.threadId,
+          outcomeKey: work.topStartable.outcomeKey,
+          outcomeTitle: work.topStartable.outcomeTitle,
+          activeWorkOrderId: work.topStartable.activeWorkOrderId,
+        }
+      : null
   return {
     say: composeCurrentWorkAnswer(resolution, work, { conflicts: joined.conflicts, unresolved: joined.unresolved }),
-    selection: startWorkSelection(work),
+    selection,
+    retained,
   }
+}
+
+/**
+ * Start the retained selection through the governed authorization contract. Consumes the retained
+ * tuple verbatim — no re-resolution, no re-read, no re-prioritisation. The authorization is an atomic
+ * revalidate-and-act on (version 0, suggested), so a stale selection fails closed here.
+ */
+export async function startRetainedWork(retained: RetainedStartWork): Promise<StartWorkOutcome> {
+  const idempotencyKey = startWorkIdempotencyKey(retained)
+  let result: Awaited<ReturnType<typeof authorizeWorkbenchOutcomeExecution>>
+  try {
+    result = await authorizeWorkbenchOutcomeExecution({
+      projectId: retained.projectId,
+      threadId: retained.threadId,
+      outcomeKey: retained.outcomeKey,
+      idempotencyKey,
+      confirmation: "START_WORK",
+    })
+  } catch (error) {
+    return composeStartWorkResult(retained, {
+      status: "UNAVAILABLE",
+      reason: error instanceof Error ? error.message : "AUTHORIZATION_UNREACHABLE",
+    })
+  }
+  if (result.status === "AUTHORIZED_FOR_ACQUISITION" || result.status === "ALREADY_AUTHORIZED") {
+    return composeStartWorkResult(retained, {
+      status: result.status,
+      queueVersion: result.queueVersion,
+      authorization: result.authorization,
+    })
+  }
+  return composeStartWorkResult(retained, { status: result.status, reason: result.reason ?? "UNSPECIFIED" })
 }
