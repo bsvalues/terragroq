@@ -69,6 +69,9 @@ function exactIssue911Outcome(id: number, ref: string) {
 
 describe("Hermes bridge CLI", () => {
   it("runs the retired-acquisition command through only the reconciliation-only surface", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-retired-cli-positive-"))
+    fs.mkdirSync(path.join(root, "control"), { recursive: true })
+    fs.writeFileSync(path.join(root, "control", "activation"), "disabled\n")
     const resolveRetiredAcquisition = vi.fn()
     const forbidden = vi.fn(() => { throw new Error("forbidden queue capability") })
     const close = vi.fn(async () => {})
@@ -98,21 +101,26 @@ describe("Hermes bridge CLI", () => {
       return { reconcileRetiredAcquisition: reconcile }
     })
 
-    await expect(reconcileRetiredAcquisition({
-      expectedOutcomeId: "21",
-      expectedOutcomeKey: "goal:GOAL-0017",
-      queueRuntime,
-      createOrchestrator,
-    })).resolves.toMatchObject({
-      result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
-      outcomeId: "21",
-    })
-    expect(reconcile).toHaveBeenCalledWith({
-      expectedOutcomeId: "21",
-      expectedOutcomeKey: "goal:GOAL-0017",
-    })
-    expect(forbidden).not.toHaveBeenCalled()
-    expect(close).toHaveBeenCalledOnce()
+    try {
+      await expect(reconcileRetiredAcquisition({
+        runtimeRoot: root,
+        expectedOutcomeId: "21",
+        expectedOutcomeKey: "goal:GOAL-0017",
+        queueRuntime,
+        createOrchestrator,
+      })).resolves.toMatchObject({
+        result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+        outcomeId: "21",
+      })
+      expect(reconcile).toHaveBeenCalledWith({
+        expectedOutcomeId: "21",
+        expectedOutcomeKey: "goal:GOAL-0017",
+      })
+      expect(forbidden).not.toHaveBeenCalled()
+      expect(close).toHaveBeenCalledOnce()
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it("parses the supported retired-acquisition command without constructing a resident cycle", async () => {
