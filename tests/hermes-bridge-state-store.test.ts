@@ -75,6 +75,181 @@ function fixture() {
 }
 
 describe("Hermes bridge durable state store", () => {
+  it("retires one expired local execution only from an exact durable acquisition-retirement proof", () => {
+    const { store, advance } = fixture()
+    const acquired = store.acquireLease({
+      outcomeId: "21", holderId: "resident-process", leaseDurationMs: 1_000,
+      metadata: { outcome: { id: 21, queueBinding: {
+        userId: "owner-id", outcomeKey: "goal:GOAL-0017", expectedVersion: 2,
+        executionBinding: "execution-17", acquisitionKey: "acquisition-17",
+        leaseHolder: "Hermes:hermes-outcome-queue", leaseToken: "queue-lease-17",
+        fencingToken: 1, authorityGrantRef: "GRANT-17", activeWorkOrderId: 18,
+      } } },
+      idempotencyKey: "acquire-retired-local",
+    })
+    for (const [state, idempotencyKey] of [
+      ["QUEUE_WORK_ORDER_BOUND", "retired-checkpoint-1"],
+      ["WORKTREE_INTENT", "retired-checkpoint-2"],
+      ["WORKTREE_READY", "retired-checkpoint-3"],
+      ["CODEX_THREAD_READY", "retired-checkpoint-4"],
+    ] as const) {
+      store.checkpoint({
+        outcomeId: "21", holderId: "resident-process", fencingToken: acquired.fencingToken,
+        expectedCheckpointSequence: store.read().executions["21"].checkpoint.sequence,
+        state, idempotencyKey,
+      })
+    }
+    advance(1_001)
+    const before = store.read()
+    const proofBody = {
+      schemaVersion: 1,
+      kind: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId: 21,
+      userId: "owner-id",
+      outcomeKey: "goal:GOAL-0017",
+      activeWorkOrderId: 18,
+      runtimeAttempt: acquired.fencingToken,
+      priorVersion: 2,
+      recoveredVersion: 3,
+      priorFencingToken: 1,
+      recoveredFencingToken: 2,
+      receiptId: 7,
+      blockedAttemptId: 207,
+      replayAttemptIds: [224],
+      acquisitionKeyDigest: createHash("sha256")
+        .update(JSON.stringify({ acquisitionKey: "acquisition-17" })).digest("hex"),
+      leaseIdentityDigest: createHash("sha256")
+        .update(JSON.stringify({
+          leaseHolder: "Hermes:hermes-outcome-queue",
+          leaseToken: "queue-lease-17",
+        })).digest("hex"),
+      executionEpochDigest: createHash("sha256").update(JSON.stringify([
+        "owner-id", "goal:GOAL-0017", "execution-17", "acquisition-17",
+      ])).digest("hex"),
+      blockedAt: "2026-07-21T00:00:00.500Z",
+    }
+    const proof = {
+      ...proofBody,
+      proofDigest: createHash("sha256").update(JSON.stringify(proofBody)).digest("hex"),
+    }
+
+    expect(store.retireDurableQueueAcquisition({
+      idempotencyKey: "retire-durable-acquisition:21:207",
+      outcomeId: "21",
+      expectedStoreRevision: before.revision,
+      expectedFencingToken: acquired.fencingToken,
+      expectedHolderId: "resident-process",
+      expectedLeaseExpiresAt: before.executions["21"].lease.expiresAt,
+      expectedCheckpointSequence: 4,
+      expectedCheckpointState: "CODEX_THREAD_READY",
+      expectedQueueBinding: before.executions["21"].metadata.outcome.queueBinding,
+      proof,
+    })).toMatchObject({
+      outcomeId: "21",
+      leaseStatus: "RELEASED",
+      checkpointSequence: 5,
+      state: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      proofDigest: proof.proofDigest,
+      idempotent: false,
+    })
+    const retired = store.read().executions["21"]
+    expect(retired.lease).toMatchObject({
+      status: "RELEASED",
+      releaseReason: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+    })
+    expect(retired.checkpoint).toMatchObject({
+      sequence: 5,
+      state: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      detail: "goal:GOAL-0017",
+    })
+    expect(retired.metadata.durableQueueAcquisitionRetirementEvents).toEqual([
+      expect.objectContaining({
+        eventType: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+        proofDigest: proof.proofDigest,
+        priorLease: {
+          holderId: "resident-process",
+          expiresAt: before.executions["21"].lease.expiresAt,
+          fencingToken: acquired.fencingToken,
+        },
+        priorCheckpoint: before.executions["21"].checkpoint,
+        priorCheckpointDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      }),
+    ])
+    expect(store.retireDurableQueueAcquisition({
+      idempotencyKey: "retire-durable-acquisition:21:207",
+      outcomeId: "21",
+      expectedStoreRevision: before.revision,
+      expectedFencingToken: acquired.fencingToken,
+      expectedHolderId: "resident-process",
+      expectedLeaseExpiresAt: before.executions["21"].lease.expiresAt,
+      expectedCheckpointSequence: 4,
+      expectedCheckpointState: "CODEX_THREAD_READY",
+      expectedQueueBinding: before.executions["21"].metadata.outcome.queueBinding,
+      proof,
+    })).toMatchObject({ idempotent: true, checkpointSequence: 5 })
+    expect(store.read().metadata).toBeUndefined()
+    expect(store.read().executions["21"].metadata.durableQueueAcquisitionRetirementEvents)
+      .toHaveLength(1)
+  })
+
+  it.each([
+    ["store revision", (request: any) => { request.expectedStoreRevision += 1 }],
+    ["fencing token", (request: any) => { request.expectedFencingToken += 1 }],
+    ["holder", (request: any) => { request.expectedHolderId = "other-holder" }],
+    ["expiry", (request: any) => { request.expectedLeaseExpiresAt = "2026-07-21T00:00:02.000Z" }],
+    ["checkpoint", (request: any) => { request.expectedCheckpointSequence = 3 }],
+    ["queue binding", (request: any) => { request.expectedQueueBinding = {
+      ...request.expectedQueueBinding, activeWorkOrderId: 19 } }],
+    ["proof identity", (request: any) => {
+      const body = { ...request.proof, activeWorkOrderId: 19 }; delete body.proofDigest
+      request.proof = { ...body, proofDigest: createHash("sha256")
+        .update(JSON.stringify(body)).digest("hex") }
+    }],
+  ])("walls local retirement on %s drift without changing the state file", (_name, drift) => {
+    const { dir, store, advance } = fixture()
+    const binding = { userId: "owner-id", outcomeKey: "goal:GOAL-0017", expectedVersion: 2,
+      executionBinding: "execution-17", acquisitionKey: "acquisition-17",
+      leaseHolder: "Hermes:hermes-outcome-queue", leaseToken: "queue-lease-17",
+      fencingToken: 1, authorityGrantRef: "GRANT-17", activeWorkOrderId: 18 }
+    const acquired = store.acquireLease({ outcomeId: "21", holderId: "resident-process",
+      leaseDurationMs: 1_000, metadata: { outcome: { id: 21, queueBinding: binding } },
+      idempotencyKey: `retired-drift-acquire-${_name}` })
+    for (const [state, suffix] of [["QUEUE_WORK_ORDER_BOUND", 1], ["WORKTREE_INTENT", 2],
+      ["WORKTREE_READY", 3], ["CODEX_THREAD_READY", 4]] as const) {
+      store.checkpoint({ outcomeId: "21", holderId: "resident-process",
+        fencingToken: acquired.fencingToken,
+        expectedCheckpointSequence: store.read().executions["21"].checkpoint.sequence,
+        state, idempotencyKey: `retired-drift-${_name}-${suffix}` })
+    }
+    advance(1_001)
+    const before = store.read()
+    const proofBody = { schemaVersion: 1, kind: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId: 21, userId: "owner-id", outcomeKey: binding.outcomeKey, activeWorkOrderId: 18,
+      runtimeAttempt: acquired.fencingToken,
+      priorVersion: 2, recoveredVersion: 3, priorFencingToken: 1, recoveredFencingToken: 2,
+      receiptId: 7, blockedAttemptId: 207, replayAttemptIds: [224],
+      acquisitionKeyDigest: createHash("sha256").update(JSON.stringify({ acquisitionKey:
+        binding.acquisitionKey })).digest("hex"),
+      leaseIdentityDigest: createHash("sha256").update(JSON.stringify({ leaseHolder:
+        binding.leaseHolder, leaseToken: binding.leaseToken })).digest("hex"),
+      executionEpochDigest: createHash("sha256").update(JSON.stringify([
+        "owner-id", binding.outcomeKey, binding.executionBinding, binding.acquisitionKey,
+      ])).digest("hex"), blockedAt: "2026-07-21T00:00:00.500Z" }
+    const request: any = { idempotencyKey: `retired-drift-request-${_name}`, outcomeId: "21",
+      expectedStoreRevision: before.revision, expectedFencingToken: acquired.fencingToken,
+      expectedHolderId: "resident-process",
+      expectedLeaseExpiresAt: before.executions["21"].lease.expiresAt,
+      expectedCheckpointSequence: 4, expectedCheckpointState: "CODEX_THREAD_READY",
+      expectedQueueBinding: binding,
+      proof: { ...proofBody, proofDigest: createHash("sha256")
+        .update(JSON.stringify(proofBody)).digest("hex") } }
+    drift(request)
+    const statePath = join(dir, "state.json")
+    const bytes = readFileSync(statePath, "utf8")
+    expect(() => store.retireDurableQueueAcquisition(request)).toThrow()
+    expect(readFileSync(statePath, "utf8")).toBe(bytes)
+  })
+
   it("persists a canonical secret-screened turn result only with its exact digest", () => {
     const { store } = fixture()
     const first = store.acquireLease({

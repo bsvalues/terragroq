@@ -2654,6 +2654,367 @@ function executionEpochDigest(row) {
   ])).digest("hex")
 }
 
+function exactLegacyRuntimeCheckpoint(event, {
+  outcomeId, workOrderId, sequence, state, executionEpoch, runtimeAttempt,
+}) {
+  const metadata = event?.metadata
+  const body = {
+    idempotencyKey: `hermes-outcome:${outcomeId}:attempt:${metadata?.attempt}:checkpoint:${sequence}`,
+    outcomeId,
+    workOrderRef: `WO-HERMES-OUTCOME-${outcomeId}`,
+    attempt: Number(metadata?.attempt),
+    checkpointSequence: sequence,
+    checkpointState: state,
+    checkpointDetail: null,
+    executionEpochDigest: executionEpoch,
+  }
+  return Number.isSafeInteger(Number(event?.id)) && Number(event.id) > 0
+    && event?.actor === "hermes-codex-bridge"
+    && metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    && Object.keys(metadata).length === Object.keys(body).length + 1
+    && Object.keys(body).every((key) => Object.hasOwn(metadata, key)
+      && metadata[key] === body[key])
+    && Number(metadata.outcomeId) === outcomeId
+    && Number(metadata.checkpointSequence) === sequence
+    && metadata.checkpointState === state
+    && Number.isSafeInteger(Number(metadata.attempt)) && Number(metadata.attempt) > 0
+    && Number(metadata.attempt) === runtimeAttempt
+    && metadata.executionEpochDigest === executionEpoch
+    && metadata.payloadDigest === projectionPayloadDigest(body)
+    && workOrderId > 0
+}
+
+export async function resolveRetiredOutcomeAcquisition({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  executionBinding,
+  checkpoint,
+  lease,
+  runtimeAttempt,
+  now = new Date(),
+} = {}) {
+  const observedAt = now instanceof Date ? now.getTime()
+    : typeof now === "string" ? Date.parse(now) : Number.NaN
+  const leaseExpiresAt = typeof lease?.expiresAt === "string"
+    ? Date.parse(lease.expiresAt) : Number.NaN
+  const leaseAcquiredAt = typeof lease?.acquiredAt === "string"
+    ? Date.parse(lease.acquiredAt) : Number.NaN
+  const leaseRenewedAt = lease?.renewedAt == null ? null
+    : typeof lease.renewedAt === "string" ? Date.parse(lease.renewedAt) : Number.NaN
+  const checkpointRecordedAt = typeof checkpoint?.recordedAt === "string"
+    ? Date.parse(checkpoint.recordedAt) : Number.NaN
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
+    || !Number.isSafeInteger(runtimeAttempt) || runtimeAttempt <= 0
+    || !executionBinding || typeof executionBinding !== "object" || Array.isArray(executionBinding)
+    || typeof executionBinding.userId !== "string" || executionBinding.userId.trim() === ""
+    || typeof executionBinding.outcomeKey !== "string" || executionBinding.outcomeKey.trim() === ""
+    || !Number.isSafeInteger(executionBinding.expectedVersion) || executionBinding.expectedVersion < 0
+    || typeof executionBinding.executionBinding !== "string"
+      || executionBinding.executionBinding.trim() === ""
+    || typeof executionBinding.acquisitionKey !== "string"
+      || executionBinding.acquisitionKey.trim() === ""
+    || typeof executionBinding.leaseHolder !== "string" || executionBinding.leaseHolder.trim() === ""
+    || typeof executionBinding.leaseToken !== "string" || executionBinding.leaseToken.trim() === ""
+    || !Number.isSafeInteger(executionBinding.fencingToken) || executionBinding.fencingToken <= 0
+    || !Number.isSafeInteger(executionBinding.activeWorkOrderId)
+      || executionBinding.activeWorkOrderId <= 0
+    || checkpoint?.sequence !== 4 || checkpoint?.state !== "CODEX_THREAD_READY"
+    || checkpoint?.detail !== null
+    || !Number.isFinite(checkpointRecordedAt)
+      || new Date(checkpointRecordedAt).toISOString() !== checkpoint.recordedAt
+    || lease?.status !== "ACTIVE" || lease?.abandonedAt
+    || typeof lease?.holderId !== "string" || lease.holderId.trim() === ""
+    || !Number.isFinite(leaseExpiresAt)
+      || new Date(leaseExpiresAt).toISOString() !== lease.expiresAt
+    || !Number.isFinite(leaseAcquiredAt)
+      || new Date(leaseAcquiredAt).toISOString() !== lease.acquiredAt
+    || (leaseRenewedAt !== null && (!Number.isFinite(leaseRenewedAt)
+      || new Date(leaseRenewedAt).toISOString() !== lease.renewedAt))
+    || leaseAcquiredAt > (leaseRenewedAt ?? leaseExpiresAt)
+    || (leaseRenewedAt ?? leaseAcquiredAt) > leaseExpiresAt
+    || !Number.isFinite(observedAt) || leaseExpiresAt > observedAt
+    || checkpointRecordedAt > leaseExpiresAt) {
+    throw Object.assign(new Error("Retired acquisition local identity is invalid"), {
+      code: "OUTCOME_RETIRED_ACQUISITION_PROOF_WALL",
+    })
+  }
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  let begun = false
+  let primaryError
+  try {
+    if (!runQuery) {
+      if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+        throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+      }
+      const { Pool } = await import("pg")
+      pool = createHermesDatabasePool(Pool, databaseUrl)
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
+    await runQuery("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+    begun = true
+    await runQuery(
+      "SELECT pg_advisory_xact_lock(hashtext($1))",
+      [`${executionBinding.userId}:outcome-queue`],
+    )
+    const graphResult = await runQuery(
+      `/* retired-acquisition-graph */
+       SELECT q.id AS "queueId", q."userId" AS "queueUserId",
+          q."outcomeKey" AS "queueOutcomeKey", q."goalId" AS "queueGoalId",
+          q.version AS "queueVersion", q."fencingToken" AS "queueFencingToken",
+          q."lifecycleState" AS "queueLifecycleState",
+          q."lifecycleReason" AS "queueLifecycleReason",
+          q."executionBinding" AS "queueExecutionBinding",
+          q."acquisitionKey" AS "queueAcquisitionKey",
+          q."leaseHolder" AS "queueLeaseHolder", q."leaseToken" AS "queueLeaseToken",
+          q."leaseExpiresAt" AS "queueLeaseExpiresAt",
+          q."activeWorkOrderId" AS "queueActiveWorkOrderId",
+          q."updatedAt" AS "queueUpdatedAt",
+          receipt.id AS "receiptId", receipt."outcomeKey" AS "receiptOutcomeKey",
+          receipt."firstFencingToken" AS "receiptFirstFencingToken",
+          receipt."latestFencingToken" AS "receiptLatestFencingToken",
+          latest_checkpoint.id AS "latestCheckpointId"
+       FROM outcome_queue_acquisition_receipt AS receipt
+       JOIN outcome_queue_item AS q
+         ON q."userId" = receipt."userId" AND q."outcomeKey" = receipt."outcomeKey"
+       LEFT JOIN LATERAL (
+         SELECT event.id
+         FROM governance_event AS event
+         WHERE event."userId" = q."userId"
+           AND event."entityType" = 'work_order'
+           AND event."entityId" = q."activeWorkOrderId"::text
+           AND event."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+         ORDER BY event.id DESC LIMIT 1
+       ) AS latest_checkpoint ON true
+       WHERE receipt."userId" = $1 AND receipt."acquisitionKey" = $2
+         AND receipt."outcomeKey" = $3 AND q."goalId" = $4::integer
+       ORDER BY receipt.id LIMIT 2`,
+      [executionBinding.userId, executionBinding.acquisitionKey,
+        executionBinding.outcomeKey, outcomeId],
+    )
+    const graphRows = graphResult?.rows ?? []
+    if (graphRows.length === 0) {
+      await runQuery("COMMIT")
+      begun = false
+      return null
+    }
+    const graph = graphRows[0]
+    if (graphRows.length !== 1) throw new Error("retired graph cardinality")
+    const exactActiveGraph = graph.queueUserId === executionBinding.userId
+      && graph.queueOutcomeKey === executionBinding.outcomeKey
+      && Number(graph.queueGoalId) === outcomeId
+      && graph.queueLifecycleState === "active"
+      && Number(graph.receiptId) > 0
+      && graph.receiptOutcomeKey === executionBinding.outcomeKey
+    if (exactActiveGraph) {
+      await runQuery("COMMIT")
+      begun = false
+      return null
+    }
+    const acquisitionKeyDigest = projectionPayloadDigest({
+      acquisitionKey: executionBinding.acquisitionKey,
+    })
+    const leaseIdentityDigest = projectionPayloadDigest({
+      leaseHolder: executionBinding.leaseHolder,
+      leaseToken: executionBinding.leaseToken,
+    })
+    const attemptResult = await runQuery(
+      `/* retired-acquisition-attempts */
+       SELECT id,"campaignWindowId","processIdentity","leaseHolder","acquisitionKeyDigest",
+          "leaseIdentityDigest","checkpointDigest","checkpointOutcomeId","checkpointSequence",
+          "checkpointState","checkpointHeadSha","checkpointMergeSha","checkpointPrNumber",
+          "outcomeKey","fencingToken","leaseExpiresAt","activeWorkOrderId",disposition,reason,
+          "attemptedAt"
+       FROM outcome_queue_acquisition_attempt
+       WHERE "userId" = $1 AND "outcomeKey" = $2 AND "acquisitionKeyDigest" = $3
+       ORDER BY id LIMIT 67`,
+      [executionBinding.userId, executionBinding.outcomeKey, acquisitionKeyDigest],
+    )
+    const attempts = attemptResult?.rows ?? []
+    if (attempts.length > 66) throw new Error("retired attempt bound")
+    const blockedAttempts = attempts.filter(
+      (attempt) => attempt.disposition === "STALE_INELIGIBLE_BLOCKED",
+    )
+    const replayAttempts = attempts.filter((attempt) => attempt.disposition === "REPLAY_RETIRED")
+    if (blockedAttempts.length !== 1 || replayAttempts.length < 1 || replayAttempts.length > 32) {
+      throw new Error("retired attempt cardinality")
+    }
+    const blocked = blockedAttempts[0]
+    const checkpointResult = await runQuery(
+      `/* retired-acquisition-checkpoints */
+       SELECT id,actor,metadata
+       FROM governance_event
+       WHERE "userId" = $1 AND "entityType" = 'work_order'
+         AND "entityId" = $2::integer::text AND "eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+         AND (metadata->>'checkpointSequence')::integer IN ($3::integer,$4::integer)
+       ORDER BY id LIMIT 66`,
+      [executionBinding.userId, executionBinding.activeWorkOrderId,
+        Number(blocked.checkpointSequence), checkpoint.sequence],
+    )
+    const checkpointRows = checkpointResult?.rows ?? []
+    const transitionCheckpoints = checkpointRows.filter((event) => (
+      Number(event?.metadata?.checkpointSequence) === Number(blocked.checkpointSequence)
+      && event?.metadata?.checkpointState === blocked.checkpointState
+    ))
+    const currentCheckpoints = checkpointRows.filter((event) => (
+      Number(event?.metadata?.checkpointSequence) === checkpoint.sequence
+      && event?.metadata?.checkpointState === checkpoint.state
+    ))
+    const epochDigest = executionEpochDigest(executionBinding)
+    const blockedAt = timestampMilliseconds(blocked.attemptedAt)
+    const priorQueueExpiry = timestampMilliseconds(blocked.leaseExpiresAt)
+    const queueUpdatedAt = timestampMilliseconds(graph.queueUpdatedAt)
+    const reason = {
+      code: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+      outcomeKey: executionBinding.outcomeKey,
+      priorFencingToken: executionBinding.fencingToken,
+      priorLeaseExpiresAt: new Date(priorQueueExpiry).toISOString(),
+      priorVersion: executionBinding.expectedVersion,
+      recoveredFencingToken: executionBinding.fencingToken + 1,
+      recoveredVersion: executionBinding.expectedVersion + 1,
+    }
+    const exactAttemptCheckpoint = (attempt, expectedFence, expectedSequence, expectedState) => {
+      let checkpointDigest
+      try {
+        checkpointDigest = digestOutcomeQueueCheckpointProof({
+          outcomeId: String(attempt?.checkpointOutcomeId ?? ""),
+          outcomeKey: attempt?.outcomeKey,
+          workOrderId: Number(attempt?.activeWorkOrderId),
+          fencingToken: Number(attempt?.fencingToken),
+          sequence: Number(attempt?.checkpointSequence),
+          state: attempt?.checkpointState,
+          commit: {
+            headSha: attempt?.checkpointHeadSha ?? null,
+            mergeSha: attempt?.checkpointMergeSha ?? null,
+            prNumber: attempt?.checkpointPrNumber == null
+              ? null : Number(attempt.checkpointPrNumber),
+          },
+        })
+      } catch { return false }
+      return attempt?.leaseHolder === executionBinding.leaseHolder
+        && attempt?.acquisitionKeyDigest === acquisitionKeyDigest
+        && attempt?.leaseIdentityDigest === leaseIdentityDigest
+        && attempt?.checkpointDigest === checkpointDigest
+        && String(attempt?.checkpointOutcomeId) === String(outcomeId)
+        && attempt?.outcomeKey === executionBinding.outcomeKey
+        && Number(attempt?.fencingToken) === expectedFence
+        && Number(attempt?.activeWorkOrderId) === executionBinding.activeWorkOrderId
+        && Number(attempt?.checkpointSequence) === expectedSequence
+        && attempt?.checkpointState === expectedState
+        && typeof attempt?.campaignWindowId === "string" && attempt.campaignWindowId.trim() !== ""
+        && typeof attempt?.processIdentity === "string" && attempt.processIdentity.trim() !== ""
+    }
+    const preBlockedAttempts = attempts.filter((attempt) => Number(attempt.id) < Number(blocked.id))
+    const winnerAttempts = preBlockedAttempts.filter((attempt) => attempt.disposition === "WINNER")
+    const winnerReplays = preBlockedAttempts.filter(
+      (attempt) => attempt.disposition === "REPLAY_WINNER",
+    )
+    const exactPreBlockedAttempts = winnerAttempts.length === 1
+      && winnerReplays.length <= 32
+      && preBlockedAttempts.length === winnerAttempts.length + winnerReplays.length
+      && preBlockedAttempts.every((attempt, index) => {
+        const attemptedAt = timestampMilliseconds(attempt.attemptedAt)
+        const sequence = Number(attempt.checkpointSequence)
+        const state = attempt.checkpointState
+        return Number.isFinite(attemptedAt) && attemptedAt <= blockedAt
+          && (index === 0 || Number(attempt.id) > Number(preBlockedAttempts[index - 1].id))
+          && attempt.reason == null
+          && timestampMilliseconds(attempt.leaseExpiresAt) === priorQueueExpiry
+          && ((sequence === 0 && state === "LEASED")
+            || (sequence === checkpoint.sequence && state === checkpoint.state))
+          && exactAttemptCheckpoint(attempt, executionBinding.fencingToken, sequence, state)
+      })
+    const exactReplays = replayAttempts.every((attempt, index) => (
+      Number(attempt.id) > Number(blocked.id)
+      && (index === 0 || Number(attempt.id) > Number(replayAttempts[index - 1].id))
+      && attempt.disposition === "REPLAY_RETIRED"
+      && attempt.reason === "ACQUISITION_KEY_RETIRED"
+      && attempt.leaseExpiresAt == null
+      && Number.isFinite(timestampMilliseconds(attempt.attemptedAt))
+      && timestampMilliseconds(attempt.attemptedAt) >= blockedAt
+      && exactAttemptCheckpoint(
+        attempt, executionBinding.fencingToken + 1, checkpoint.sequence, checkpoint.state,
+      )
+    ))
+    const transitionCheckpoint = transitionCheckpoints[0]
+    const currentCheckpoint = currentCheckpoints[0]
+    const exact = graph.queueUserId === executionBinding.userId
+      && graph.queueOutcomeKey === executionBinding.outcomeKey
+      && Number(graph.queueGoalId) === outcomeId
+      && Number(graph.queueVersion) === executionBinding.expectedVersion + 1
+      && Number(graph.queueFencingToken) === executionBinding.fencingToken + 1
+      && graph.queueLifecycleState === "blocked"
+      && graph.queueLifecycleReason === "STALE_LEASE_AUTHORIZATION_INELIGIBLE"
+      && graph.queueExecutionBinding == null && graph.queueAcquisitionKey == null
+      && graph.queueLeaseHolder == null && graph.queueLeaseToken == null
+      && graph.queueLeaseExpiresAt == null
+      && Number(graph.queueActiveWorkOrderId) === executionBinding.activeWorkOrderId
+      && Number(graph.receiptId) > 0 && graph.receiptOutcomeKey === executionBinding.outcomeKey
+      && Number(graph.receiptFirstFencingToken) === executionBinding.fencingToken
+      && Number(graph.receiptLatestFencingToken) === executionBinding.fencingToken
+      && Number(blocked.id) > 0
+      && blocked.disposition === "STALE_INELIGIBLE_BLOCKED"
+      && blocked.reason === JSON.stringify(reason)
+      && Number.isFinite(priorQueueExpiry) && priorQueueExpiry < blockedAt
+      && Number.isFinite(queueUpdatedAt) && queueUpdatedAt === blockedAt
+      && exactAttemptCheckpoint(blocked, executionBinding.fencingToken, 0, "LEASED")
+      && transitionCheckpoints.length === 1 && currentCheckpoints.length === 1
+      && exactLegacyRuntimeCheckpoint(transitionCheckpoint, {
+        outcomeId, workOrderId: executionBinding.activeWorkOrderId,
+        sequence: 0, state: "LEASED", executionEpoch: epochDigest,
+        runtimeAttempt,
+      })
+      && exactLegacyRuntimeCheckpoint(currentCheckpoint, {
+        outcomeId, workOrderId: executionBinding.activeWorkOrderId,
+        sequence: checkpoint.sequence, state: checkpoint.state, executionEpoch: epochDigest,
+        runtimeAttempt,
+      })
+      && Number(transitionCheckpoint.id) < Number(currentCheckpoint.id)
+      && Number(currentCheckpoint.id) === Number(graph.latestCheckpointId)
+      && attempts.length === preBlockedAttempts.length + 1 + replayAttempts.length
+      && exactPreBlockedAttempts
+      && exactReplays
+    if (!exact) throw new Error("retired acquisition evidence conflict")
+    const proofBody = {
+      schemaVersion: 1,
+      kind: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId,
+      userId: executionBinding.userId,
+      outcomeKey: executionBinding.outcomeKey,
+      activeWorkOrderId: executionBinding.activeWorkOrderId,
+      runtimeAttempt,
+      priorVersion: executionBinding.expectedVersion,
+      recoveredVersion: executionBinding.expectedVersion + 1,
+      priorFencingToken: executionBinding.fencingToken,
+      recoveredFencingToken: executionBinding.fencingToken + 1,
+      receiptId: Number(graph.receiptId),
+      blockedAttemptId: Number(blocked.id),
+      replayAttemptIds: replayAttempts.map((attempt) => Number(attempt.id)),
+      acquisitionKeyDigest,
+      leaseIdentityDigest,
+      executionEpochDigest: epochDigest,
+      blockedAt: new Date(blockedAt).toISOString(),
+    }
+    await runQuery("COMMIT")
+    begun = false
+    return { ...proofBody, proofDigest: projectionPayloadDigest(proofBody) }
+  } catch (error) {
+    primaryError = error
+    if (begun) {
+      try { await runQuery?.("ROLLBACK") } catch {}
+    }
+    throw Object.assign(new Error("Retired acquisition evidence is invalid"), {
+      code: "OUTCOME_RETIRED_ACQUISITION_PROOF_WALL",
+      cause: error,
+    })
+  } finally {
+    await closeProjectionResources({ client, pool, primaryError })
+  }
+}
+
 function exactHistoricalRecoveryAuthorization(
   row,
   executionBinding,

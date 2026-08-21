@@ -753,6 +753,7 @@ export function createHermesOrchestrator(options = {}) {
   const renewQueueLease = options.renewQueueLease ?? (async () => null)
   const bindQueueWorkOrder = options.bindQueueWorkOrder ?? (async () => null)
   const refreshQueueOutcome = options.refreshQueueOutcome ?? (async (outcome) => outcome)
+  const resolveRetiredAcquisition = options.resolveRetiredAcquisition ?? (async () => null)
   const resumeQueueAfterDecision = options.resumeQueueAfterDecision ?? (async (outcome) => outcome)
   const resumeQueueAfterValidationRecovery = options.resumeQueueAfterValidationRecovery
     ?? (async (outcome) => outcome)
@@ -1353,6 +1354,54 @@ export function createHermesOrchestrator(options = {}) {
     ))
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
+    const retirementObservedAt = now()
+    if (pendingExecution?.checkpoint?.sequence === 4
+      && pendingExecution.checkpoint.state === "CODEX_THREAD_READY"
+      && pendingExecution.checkpoint.detail === null
+      && pendingExecution.lease?.status === "ACTIVE"
+      && !pendingExecution.lease.abandonedAt
+      && typeof pendingExecution.lease.expiresAt === "string"
+      && Number.isFinite(Date.parse(pendingExecution.lease.expiresAt))
+      && Date.parse(pendingExecution.lease.expiresAt) <= retirementObservedAt.getTime()
+      && pendingExecution.metadata?.outcome?.queueBinding !== undefined) {
+      const retiredOutcome = pendingExecution.metadata.outcome
+      if (!retiredOutcome || String(retiredOutcome.id) !== String(pendingExecution.outcomeId)) {
+        throw Object.assign(new Error("Retired acquisition candidate is missing its exact outcome"), {
+          code: "HERMES_RETIRED_ACQUISITION_PROOF_WALL",
+        })
+      }
+      const proof = await resolveRetiredAcquisition(retiredOutcome, {
+        checkpoint: pendingExecution.checkpoint,
+        lease: pendingExecution.lease,
+        observedAt: retirementObservedAt,
+        runtimeAttempt: pendingExecution.fencingToken,
+      })
+      if (proof !== null && proof.kind !== "DURABLE_QUEUE_ACQUISITION_RETIRED") {
+        throw Object.assign(new Error("Retired acquisition proof is incomplete"), {
+          code: "HERMES_RETIRED_ACQUISITION_PROOF_WALL",
+        })
+      }
+      if (proof !== null) {
+        const retired = state.retireDurableQueueAcquisition({
+        idempotencyKey: `${pendingExecution.outcomeId}:retire-durable-acquisition:${proof.blockedAttemptId}:${proof.proofDigest}`,
+        outcomeId: String(pendingExecution.outcomeId),
+        expectedStoreRevision: initialized.revision,
+        expectedFencingToken: pendingExecution.fencingToken,
+        expectedHolderId: pendingExecution.lease.holderId,
+        expectedLeaseExpiresAt: pendingExecution.lease.expiresAt,
+        expectedCheckpointSequence: pendingExecution.checkpoint.sequence,
+        expectedCheckpointState: pendingExecution.checkpoint.state,
+        expectedQueueBinding: pendingExecution.metadata.outcome.queueBinding,
+        proof,
+      })
+        return {
+          result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+          outcomeId: retired.outcomeId,
+          checkpointSequence: retired.checkpointSequence,
+          proofDigest: retired.proofDigest,
+        }
+      }
+    }
     const approvedReleasedExecutions = []
     const releasedDecisionProofs = new Map()
     for (const execution of Object.values(initialized.executions)) {

@@ -86,6 +86,68 @@ function digest(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex")
 }
 
+const RETIRED_ACQUISITION_PROOF_KEYS = Object.freeze([
+  "schemaVersion", "kind", "outcomeId", "userId", "outcomeKey", "activeWorkOrderId", "runtimeAttempt",
+  "priorVersion", "recoveredVersion", "priorFencingToken", "recoveredFencingToken",
+  "receiptId", "blockedAttemptId", "replayAttemptIds", "acquisitionKeyDigest",
+  "leaseIdentityDigest", "executionEpochDigest", "blockedAt",
+])
+
+function normalizeRetiredAcquisitionProof(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).length !== RETIRED_ACQUISITION_PROOF_KEYS.length + 1
+    || !RETIRED_ACQUISITION_PROOF_KEYS.every((key) => Object.hasOwn(value, key))
+    || !Object.hasOwn(value, "proofDigest")) fail("RETIRED_ACQUISITION_PROOF_INVALID")
+  const normalized = {
+    schemaVersion: value.schemaVersion,
+    kind: value.kind,
+    outcomeId: value.outcomeId,
+    userId: value.userId,
+    outcomeKey: value.outcomeKey,
+    activeWorkOrderId: value.activeWorkOrderId,
+    runtimeAttempt: value.runtimeAttempt,
+    priorVersion: value.priorVersion,
+    recoveredVersion: value.recoveredVersion,
+    priorFencingToken: value.priorFencingToken,
+    recoveredFencingToken: value.recoveredFencingToken,
+    receiptId: value.receiptId,
+    blockedAttemptId: value.blockedAttemptId,
+    replayAttemptIds: Array.isArray(value.replayAttemptIds) ? [...value.replayAttemptIds] : null,
+    acquisitionKeyDigest: value.acquisitionKeyDigest,
+    leaseIdentityDigest: value.leaseIdentityDigest,
+    executionEpochDigest: value.executionEpochDigest,
+    blockedAt: value.blockedAt,
+  }
+  const blockedAt = typeof normalized.blockedAt === "string"
+    ? Date.parse(normalized.blockedAt) : Number.NaN
+  if (normalized.schemaVersion !== 1
+    || normalized.kind !== "DURABLE_QUEUE_ACQUISITION_RETIRED"
+    || !Number.isSafeInteger(normalized.outcomeId) || normalized.outcomeId <= 0
+    || typeof normalized.userId !== "string" || normalized.userId.trim() === ""
+    || typeof normalized.outcomeKey !== "string" || normalized.outcomeKey.trim() === ""
+    || !Number.isSafeInteger(normalized.activeWorkOrderId) || normalized.activeWorkOrderId <= 0
+    || !Number.isSafeInteger(normalized.runtimeAttempt) || normalized.runtimeAttempt <= 0
+    || !Number.isSafeInteger(normalized.priorVersion) || normalized.priorVersion < 0
+    || normalized.recoveredVersion !== normalized.priorVersion + 1
+    || !Number.isSafeInteger(normalized.priorFencingToken) || normalized.priorFencingToken <= 0
+    || normalized.recoveredFencingToken !== normalized.priorFencingToken + 1
+    || !Number.isSafeInteger(normalized.receiptId) || normalized.receiptId <= 0
+    || !Number.isSafeInteger(normalized.blockedAttemptId) || normalized.blockedAttemptId <= 0
+    || !Array.isArray(normalized.replayAttemptIds) || normalized.replayAttemptIds.length < 1
+    || normalized.replayAttemptIds.length > 32
+    || normalized.replayAttemptIds.some((id, index, ids) => !Number.isSafeInteger(id)
+      || id <= normalized.blockedAttemptId || (index > 0 && id <= ids[index - 1]))
+    || !SHA256.test(String(normalized.acquisitionKeyDigest ?? ""))
+    || !SHA256.test(String(normalized.leaseIdentityDigest ?? ""))
+    || !SHA256.test(String(normalized.executionEpochDigest ?? ""))
+    || !Number.isFinite(blockedAt) || new Date(blockedAt).toISOString() !== normalized.blockedAt
+    || !SHA256.test(String(value.proofDigest ?? ""))
+    || digest(normalized) !== value.proofDigest) {
+    fail("RETIRED_ACQUISITION_PROOF_INVALID")
+  }
+  return { ...normalized, proofDigest: value.proofDigest }
+}
+
 function textDigest(value) {
   return createHash("sha256").update(value).digest("hex")
 }
@@ -601,6 +663,59 @@ function metadata(input = {}, current = {}) {
     fail("INVALID_TURN_RESULT_DIGEST")
   }
   const validationEvidence = normalizedValidationEvidence(input, current)
+  const durableQueueAcquisitionRetirementEvents = Object.hasOwn(
+    input, "durableQueueAcquisitionRetirementEvents",
+  ) ? input.durableQueueAcquisitionRetirementEvents
+    : current.durableQueueAcquisitionRetirementEvents ?? []
+  if (!Array.isArray(durableQueueAcquisitionRetirementEvents)
+    || durableQueueAcquisitionRetirementEvents.length > 1) {
+    fail("INVALID_DURABLE_QUEUE_ACQUISITION_RETIREMENT_EVENT")
+  }
+  const normalizedRetirementEvents = durableQueueAcquisitionRetirementEvents.map((event) => {
+    const keys = ["eventType", "priorLease", "proofDigest", "priorCheckpoint", "priorCheckpointDigest", "recordedAt"]
+    const priorCheckpointKeys = ["detail", "recordedAt", "sequence", "state"]
+    const priorLeaseKeys = ["expiresAt", "fencingToken", "holderId"]
+    const recordedAt = typeof event?.recordedAt === "string" ? Date.parse(event.recordedAt) : Number.NaN
+    const priorRecordedAt = typeof event?.priorCheckpoint?.recordedAt === "string"
+      ? Date.parse(event.priorCheckpoint.recordedAt) : Number.NaN
+    const priorLeaseExpiresAt = typeof event?.priorLease?.expiresAt === "string"
+      ? Date.parse(event.priorLease.expiresAt) : Number.NaN
+    if (!event || typeof event !== "object" || Array.isArray(event)
+      || Object.keys(event).length !== keys.length || !keys.every((key) => Object.hasOwn(event, key))
+      || event.eventType !== "DURABLE_QUEUE_ACQUISITION_RETIRED"
+      || !event.priorLease || typeof event.priorLease !== "object"
+      || Array.isArray(event.priorLease)
+      || Object.keys(event.priorLease).length !== priorLeaseKeys.length
+      || !priorLeaseKeys.every((key) => Object.hasOwn(event.priorLease, key))
+      || typeof event.priorLease.holderId !== "string" || event.priorLease.holderId.trim() === ""
+      || typeof event.priorLease.expiresAt !== "string"
+      || !Number.isFinite(priorLeaseExpiresAt)
+      || new Date(priorLeaseExpiresAt).toISOString() !== event.priorLease.expiresAt
+      || !Number.isSafeInteger(event.priorLease.fencingToken) || event.priorLease.fencingToken <= 0
+      || !SHA256.test(String(event.proofDigest ?? ""))
+      || !event.priorCheckpoint || typeof event.priorCheckpoint !== "object"
+      || Array.isArray(event.priorCheckpoint)
+      || Object.keys(event.priorCheckpoint).length !== priorCheckpointKeys.length
+      || !priorCheckpointKeys.every((key) => Object.hasOwn(event.priorCheckpoint, key))
+      || event.priorCheckpoint.sequence !== 4
+      || event.priorCheckpoint.state !== "CODEX_THREAD_READY"
+      || event.priorCheckpoint.detail !== null
+      || !Number.isFinite(priorRecordedAt)
+      || new Date(priorRecordedAt).toISOString() !== event.priorCheckpoint.recordedAt
+      || !SHA256.test(String(event.priorCheckpointDigest ?? ""))
+      || digest(event.priorCheckpoint) !== event.priorCheckpointDigest
+      || !Number.isFinite(recordedAt) || new Date(recordedAt).toISOString() !== event.recordedAt) {
+      fail("INVALID_DURABLE_QUEUE_ACQUISITION_RETIREMENT_EVENT")
+    }
+    return {
+      eventType: event.eventType,
+      priorLease: { ...event.priorLease },
+      proofDigest: event.proofDigest,
+      priorCheckpoint: { ...event.priorCheckpoint },
+      priorCheckpointDigest: event.priorCheckpointDigest,
+      recordedAt: event.recordedAt,
+    }
+  })
   const ownerDecisionNextState = Object.hasOwn(input, "ownerDecisionNextState")
     ? input.ownerDecisionNextState
     : current.ownerDecisionNextState ?? null
@@ -696,6 +811,9 @@ function metadata(input = {}, current = {}) {
     turnResult: normalizedTurnResult,
     turnResultDigest,
     validationEvidence,
+    ...(normalizedRetirementEvents.length > 0
+      ? { durableQueueAcquisitionRetirementEvents: normalizedRetirementEvents }
+      : {}),
     runtimeEvidenceRef,
     outcome,
   }
@@ -815,6 +933,81 @@ export function releaseLease(filePath, request, options = {}) {
     const released = { ...current, lease: { ...current.lease, status: "RELEASED", expiresAt: at.iso, releasedAt: at.iso } }
     state.executions = { ...state.executions, [request.outcomeId]: released }
     return { outcomeId: request.outcomeId, ["fencing" + "Token"]: current.fencingToken, checkpointSequence: current.checkpoint.sequence, leaseStatus: "RELEASED" }
+  })
+}
+
+export function retireDurableQueueAcquisition(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at, requestedAt) => {
+    const current = execution(state, request.outcomeId)
+    const proof = normalizeRetiredAcquisitionProof(request.proof)
+    const binding = current.metadata?.outcome?.queueBinding
+    if (state.revision !== request.expectedStoreRevision
+      || current.fencingToken !== request.expectedFencingToken
+      || current.fencingToken !== proof.runtimeAttempt
+      || current.lease?.status !== "ACTIVE" || current.lease?.abandonedAt
+      || current.lease?.holderId !== request.expectedHolderId
+      || current.lease?.expiresAt !== request.expectedLeaseExpiresAt
+      || Date.parse(current.lease.expiresAt) > requestedAt.milliseconds
+      || current.checkpoint?.sequence !== request.expectedCheckpointSequence
+      || current.checkpoint?.state !== "CODEX_THREAD_READY"
+      || current.checkpoint?.detail !== null
+      || request.expectedCheckpointState !== "CODEX_THREAD_READY"
+      || digest(binding) !== digest(request.expectedQueueBinding)
+      || String(current.outcomeId) !== String(proof.outcomeId)
+      || binding?.userId !== proof.userId || binding?.outcomeKey !== proof.outcomeKey
+      || binding?.expectedVersion !== proof.priorVersion
+      || binding?.fencingToken !== proof.priorFencingToken
+      || binding?.activeWorkOrderId !== proof.activeWorkOrderId
+      || digest({ acquisitionKey: binding?.acquisitionKey }) !== proof.acquisitionKeyDigest
+      || digest({ leaseHolder: binding?.leaseHolder, leaseToken: binding?.leaseToken })
+        !== proof.leaseIdentityDigest
+      || digest([binding?.userId, binding?.outcomeKey, binding?.executionBinding,
+        binding?.acquisitionKey]) !== proof.executionEpochDigest
+      || (current.metadata?.durableQueueAcquisitionRetirementEvents?.length ?? 0) !== 0) {
+      fail("DURABLE_QUEUE_ACQUISITION_RETIREMENT_STATE_WALL")
+    }
+    const priorCheckpoint = { ...current.checkpoint }
+    const event = {
+      eventType: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      priorLease: {
+        holderId: current.lease.holderId,
+        expiresAt: current.lease.expiresAt,
+        fencingToken: current.fencingToken,
+      },
+      proofDigest: proof.proofDigest,
+      priorCheckpoint,
+      priorCheckpointDigest: digest(priorCheckpoint),
+      recordedAt: at.iso,
+    }
+    const retired = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "RELEASED",
+        expiresAt: at.iso,
+        releasedAt: at.iso,
+        releaseReason: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+        detail: proof.outcomeKey,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({
+        durableQueueAcquisitionRetirementEvents: [event],
+      }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: retired }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: retired.fencingToken,
+      checkpointSequence: retired.checkpoint.sequence,
+      leaseStatus: retired.lease.status,
+      state: retired.checkpoint.state,
+      proofDigest: proof.proofDigest,
+    }
   })
 }
 
@@ -1545,6 +1738,7 @@ export function createHermesStateStore(filePath, options = {}) {
     renewLease: (request) => renewLease(filePath, request, options),
     abandonLease: (request) => abandonLease(filePath, request, options),
     releaseLease: (request) => releaseLease(filePath, request, options),
+    retireDurableQueueAcquisition: (request) => retireDurableQueueAcquisition(filePath, request, options),
     reopenProviderWall: (request) => reopenProviderWall(filePath, request, options),
     reopenOwnerDecisionWall: (request) => reopenOwnerDecisionWall(filePath, request, options),
     reopenValidationInfrastructureWall: (request) => reopenValidationInfrastructureWall(filePath, request, options),

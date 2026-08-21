@@ -15,6 +15,7 @@ import {
   readApprovedOwnerDecision,
   readValidationInfrastructureRecovery,
   resolveValidationInfrastructureRecovery,
+  resolveRetiredOutcomeAcquisition,
   resolveActiveReviewRecoveryProvenance,
   resolveActivePostMergeCleanupSettlement,
   recordOwnerAuthorityDecision,
@@ -325,6 +326,437 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
   ])("preserves canonical string and PostgreSQL Date timestamp precision", (value, expected) => {
     expect(timestampMilliseconds(value)).toBe(expected)
   })
+
+  it("resolves one exact retired acquisition graph without mutating durable state", async () => {
+    const executionBinding = {
+      userId: "owner-id",
+      outcomeKey: "goal:GOAL-0017",
+      expectedVersion: 2,
+      executionBinding: "execution-17",
+      acquisitionKey: "acquisition-17",
+      leaseHolder: "Hermes:hermes-outcome-queue",
+      leaseToken: "queue-lease-17",
+      fencingToken: 1,
+      activeWorkOrderId: 18,
+    }
+    const executionEpochDigest = createHash("sha256").update(JSON.stringify([
+      executionBinding.userId,
+      executionBinding.outcomeKey,
+      executionBinding.executionBinding,
+      executionBinding.acquisitionKey,
+    ])).digest("hex")
+    const checkpointMetadata = (sequence: number, state: string) => {
+      const body = {
+        idempotencyKey: `hermes-outcome:21:attempt:7:checkpoint:${sequence}`,
+        outcomeId: 21,
+        workOrderRef: "WO-HERMES-OUTCOME-21",
+        attempt: 7,
+        checkpointSequence: sequence,
+        checkpointState: state,
+        checkpointDetail: null,
+        executionEpochDigest,
+      }
+      return {
+        ...body,
+        payloadDigest: createHash("sha256").update(JSON.stringify(body)).digest("hex"),
+      }
+    }
+    const blockedReason = JSON.stringify({
+      code: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+      outcomeKey: "goal:GOAL-0017",
+      priorFencingToken: 1,
+      priorLeaseExpiresAt: "2026-08-17T15:38:36.349Z",
+      priorVersion: 2,
+      recoveredFencingToken: 2,
+      recoveredVersion: 3,
+    })
+    const acquisitionKeyDigest = createHash("sha256")
+      .update(JSON.stringify({ acquisitionKey: executionBinding.acquisitionKey })).digest("hex")
+    const leaseIdentityDigest = createHash("sha256").update(JSON.stringify({
+      leaseHolder: executionBinding.leaseHolder,
+      leaseToken: executionBinding.leaseToken,
+    })).digest("hex")
+    const transitionCheckpointDigest = digestOutcomeQueueCheckpointProof({
+      outcomeId: "21", outcomeKey: executionBinding.outcomeKey,
+      workOrderId: 18, fencingToken: 1, sequence: 0, state: "LEASED",
+      commit: { headSha: null, mergeSha: null, prNumber: null },
+    })
+    const replayCheckpointDigest = digestOutcomeQueueCheckpointProof({
+      outcomeId: "21", outcomeKey: executionBinding.outcomeKey,
+      workOrderId: 18, fencingToken: 2, sequence: 4, state: "CODEX_THREAD_READY",
+      commit: { headSha: null, mergeSha: null, prNumber: null },
+    })
+    let graphDrift: Record<string, unknown> = {}
+    let attemptTransform = (rows: any[]) => rows
+    let checkpointTransform = (rows: any[]) => rows
+    const query = vi.fn(async (sql: string) => {
+      if (sql === "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+        || sql === "COMMIT" || sql === "ROLLBACK"
+        || sql.includes("pg_advisory_xact_lock")) return { rows: [] }
+      if (sql.includes("/* retired-acquisition-graph */")) return { rows: [{
+        queueId: 14,
+        queueUserId: executionBinding.userId,
+        queueOutcomeKey: executionBinding.outcomeKey,
+        queueGoalId: 21,
+        queueVersion: 3,
+        queueFencingToken: 2,
+        queueLifecycleState: "blocked",
+        queueLifecycleReason: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+        queueExecutionBinding: null,
+        queueAcquisitionKey: null,
+        queueLeaseHolder: null,
+        queueLeaseToken: null,
+        queueLeaseExpiresAt: null,
+        queueActiveWorkOrderId: 18,
+        queueUpdatedAt: "2026-08-20T22:09:43.594Z",
+        receiptId: 7,
+        receiptOutcomeKey: executionBinding.outcomeKey,
+        receiptFirstFencingToken: 1,
+        receiptLatestFencingToken: 1,
+        latestCheckpointId: 829,
+        ...graphDrift,
+      }] }
+      if (sql.includes("/* retired-acquisition-attempts */")) return { rows: attemptTransform([{
+        id: 205,
+        campaignWindowId: "campaign-original",
+        processIdentity: "process-original",
+        leaseHolder: executionBinding.leaseHolder,
+        acquisitionKeyDigest,
+        leaseIdentityDigest,
+        checkpointDigest: transitionCheckpointDigest,
+        checkpointOutcomeId: "21",
+        checkpointSequence: 0,
+        checkpointState: "LEASED",
+        checkpointHeadSha: null,
+        checkpointMergeSha: null,
+        checkpointPrNumber: null,
+        outcomeKey: executionBinding.outcomeKey,
+        fencingToken: 1,
+        leaseExpiresAt: "2026-08-17T15:38:36.349Z",
+        activeWorkOrderId: 18,
+        disposition: "WINNER",
+        reason: null,
+        attemptedAt: "2026-08-17T14:38:36.349Z",
+      }, {
+        id: 206,
+        campaignWindowId: "campaign-original",
+        processIdentity: "process-original",
+        leaseHolder: executionBinding.leaseHolder,
+        acquisitionKeyDigest,
+        leaseIdentityDigest,
+        checkpointDigest: transitionCheckpointDigest,
+        checkpointOutcomeId: "21",
+        checkpointSequence: 0,
+        checkpointState: "LEASED",
+        checkpointHeadSha: null,
+        checkpointMergeSha: null,
+        checkpointPrNumber: null,
+        outcomeKey: executionBinding.outcomeKey,
+        fencingToken: 1,
+        leaseExpiresAt: "2026-08-17T15:38:36.349Z",
+        activeWorkOrderId: 18,
+        disposition: "REPLAY_WINNER",
+        reason: null,
+        attemptedAt: "2026-08-17T14:39:36.349Z",
+      }, {
+        id: 207,
+        campaignWindowId: "campaign-old",
+        processIdentity: "process-old",
+        leaseHolder: executionBinding.leaseHolder,
+        acquisitionKeyDigest,
+        leaseIdentityDigest,
+        checkpointDigest: transitionCheckpointDigest,
+        checkpointOutcomeId: "21",
+        checkpointSequence: 0,
+        checkpointState: "LEASED",
+        checkpointHeadSha: null,
+        checkpointMergeSha: null,
+        checkpointPrNumber: null,
+        outcomeKey: executionBinding.outcomeKey,
+        fencingToken: 1,
+        leaseExpiresAt: "2026-08-17T15:38:36.349Z",
+        activeWorkOrderId: 18,
+        disposition: "STALE_INELIGIBLE_BLOCKED",
+        reason: blockedReason,
+        attemptedAt: "2026-08-20T22:09:43.594Z",
+      }, {
+        id: 224,
+        campaignWindowId: "campaign-current",
+        processIdentity: "process-current",
+        leaseHolder: executionBinding.leaseHolder,
+        acquisitionKeyDigest,
+        leaseIdentityDigest,
+        checkpointDigest: replayCheckpointDigest,
+        checkpointOutcomeId: "21",
+        checkpointSequence: 4,
+        checkpointState: "CODEX_THREAD_READY",
+        checkpointHeadSha: null,
+        checkpointMergeSha: null,
+        checkpointPrNumber: null,
+        outcomeKey: executionBinding.outcomeKey,
+        fencingToken: 2,
+        leaseExpiresAt: null,
+        activeWorkOrderId: 18,
+        disposition: "REPLAY_RETIRED",
+        reason: "ACQUISITION_KEY_RETIRED",
+        attemptedAt: "2026-08-21T18:51:54.759Z",
+      }]) }
+      if (sql.includes("/* retired-acquisition-checkpoints */")) return { rows: checkpointTransform([{
+        id: 824, actor: "hermes-codex-bridge", metadata: checkpointMetadata(0, "LEASED"),
+      }, {
+        id: 829, actor: "hermes-codex-bridge",
+        metadata: checkpointMetadata(4, "CODEX_THREAD_READY"),
+      }]) }
+      throw new Error(`unexpected query ${sql}`)
+    })
+    const resolveInput = {
+      query,
+      outcomeId: 21,
+      runtimeAttempt: 7,
+      executionBinding,
+      checkpoint: {
+        sequence: 4, state: "CODEX_THREAD_READY", detail: null,
+        recordedAt: "2026-08-17T14:48:40.291Z",
+      },
+      lease: {
+        status: "ACTIVE", holderId: "resident-process",
+        acquiredAt: "2026-08-17T14:38:36.491Z",
+        expiresAt: "2026-08-17T15:38:36.491Z",
+      },
+      now: new Date("2026-08-21T18:52:00.000Z"),
+    }
+    const proof = await resolveRetiredOutcomeAcquisition(resolveInput)
+
+    expect(proof).toMatchObject({
+      kind: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId: 21,
+      outcomeKey: "goal:GOAL-0017",
+      receiptId: 7,
+      blockedAttemptId: 207,
+      replayAttemptIds: [224],
+      priorVersion: 2,
+      recoveredVersion: 3,
+      priorFencingToken: 1,
+      recoveredFencingToken: 2,
+      executionEpochDigest,
+      proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+    })
+    expect(query.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      "SELECT pg_advisory_xact_lock(hashtext($1))",
+      expect.stringContaining("/* retired-acquisition-graph */"),
+      expect.stringContaining("/* retired-acquisition-attempts */"),
+      expect.stringContaining("/* retired-acquisition-checkpoints */"),
+      "COMMIT",
+    ])
+    expect(query.mock.calls.some(([sql]) => /\b(?:INSERT|UPDATE|DELETE)\b/i.test(sql))).toBe(false)
+
+    const driftCases: Array<[string, () => void]> = [
+      ["a duplicate blocked attempt", () => { attemptTransform = (rows) => [...rows.slice(0, 3), rows[2], rows[3]] }],
+      ["a missing retired replay", () => { attemptTransform = (rows) => rows.slice(0, 3) }],
+      ["an unknown attempt disposition", () => { attemptTransform = (rows) => [
+        { ...rows[0], disposition: "OTHER" }, ...rows.slice(1),
+      ] }],
+      ["a live durable acquisition key", () => { graphDrift = { queueAcquisitionKey: "still-live" } }],
+      ["a later unenumerated queue version", () => { graphDrift = { queueVersion: 4 } }],
+      ["a drifted receipt fence", () => { graphDrift = { receiptLatestFencingToken: 2 } }],
+      ["a nonlatest local checkpoint", () => { graphDrift = { latestCheckpointId: 830 } }],
+      ["a duplicate current checkpoint", () => { checkpointTransform = (rows) => [...rows, rows[1]] }],
+      ["a coherently rehashed checkpoint identity drift", () => { checkpointTransform = (rows) => {
+        const metadata = { ...rows[1].metadata, workOrderRef: "WO-HERMES-OUTCOME-OTHER" }
+        const { payloadDigest: _prior, ...body } = metadata
+        return [rows[0], { ...rows[1], metadata: { ...body, payloadDigest: createHash("sha256")
+          .update(JSON.stringify(body)).digest("hex") } }]
+      } }],
+      ["a coherently rehashed runtime attempt drift", () => { checkpointTransform = (rows) => {
+        const metadata = { ...rows[1].metadata, attempt: 8,
+          idempotencyKey: `hermes-outcome:21:attempt:8:checkpoint:4` }
+        const { payloadDigest: _prior, ...body } = metadata
+        return [rows[0], { ...rows[1], metadata: { ...body, payloadDigest: createHash("sha256")
+          .update(JSON.stringify(body)).digest("hex") } }]
+      } }],
+      ["an attempt history beyond the bounded read", () => { attemptTransform = (rows) =>
+        Array.from({ length: 67 }, (_, index) => ({ ...rows[0], id: 100 + index })) }],
+    ]
+    for (const [, applyDrift] of driftCases) {
+      graphDrift = {}; attemptTransform = (rows) => rows; checkpointTransform = (rows) => rows
+      applyDrift(); query.mockClear()
+      await expect(resolveRetiredOutcomeAcquisition(resolveInput)).rejects.toMatchObject({
+        code: "OUTCOME_RETIRED_ACQUISITION_PROOF_WALL",
+      })
+      expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+      expect(query.mock.calls.some(([sql]) => /\b(?:INSERT|UPDATE|DELETE)\b/i.test(sql))).toBe(false)
+    }
+    graphDrift = {
+      queueVersion: 2, queueFencingToken: 1, queueLifecycleState: "active",
+      queueLifecycleReason: null, queueExecutionBinding: executionBinding.executionBinding,
+      queueAcquisitionKey: executionBinding.acquisitionKey,
+      queueLeaseHolder: executionBinding.leaseHolder, queueLeaseToken: executionBinding.leaseToken,
+      queueLeaseExpiresAt: "2026-08-17T15:38:36.491Z",
+    }
+    attemptTransform = (rows) => rows; checkpointTransform = (rows) => rows; query.mockClear()
+    await expect(resolveRetiredOutcomeAcquisition(resolveInput)).resolves.toBeNull()
+    expect(query.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+      "SELECT pg_advisory_xact_lock(hashtext($1))",
+      expect.stringContaining("/* retired-acquisition-graph */"),
+      "COMMIT",
+    ])
+    graphDrift = {
+      queueVersion: 3, queueFencingToken: 2, queueLifecycleState: "active",
+      queueLifecycleReason: "STALE_LEASE_RECOVERED",
+      queueExecutionBinding: "supported-advanced-binding",
+      queueAcquisitionKey: "supported-advanced-key",
+      queueLeaseHolder: "supported-advanced-holder", queueLeaseToken: "supported-advanced-token",
+      queueLeaseExpiresAt: "2026-08-21T19:52:00.000Z", receiptLatestFencingToken: 1,
+    }
+    query.mockClear()
+    await expect(resolveRetiredOutcomeAcquisition(resolveInput)).resolves.toBeNull()
+    expect(query.mock.calls.some(([sql]) => sql.includes("retired-acquisition-attempts"))).toBe(false)
+  })
+
+  it.each([
+    ["live lease", { expiresAt: "2026-08-22T00:00:00.000Z" }, {}],
+    ["wrong checkpoint", {}, { state: "WORKTREE_READY" }],
+    ["missing acquiredAt", { acquiredAt: undefined }, {}],
+    ["holder drift", { holderId: "" }, {}],
+  ])("walls %s before opening a retired-acquisition transaction", async (_name, leaseDrift, checkpointDrift) => {
+    const query = vi.fn()
+    await expect(resolveRetiredOutcomeAcquisition({ query, outcomeId: 21, runtimeAttempt: 7,
+      executionBinding: { userId: "owner", outcomeKey: "goal:GOAL-0017", expectedVersion: 2,
+        executionBinding: "execution", acquisitionKey: "acquisition", leaseHolder: "queue-holder",
+        leaseToken: "queue-token", fencingToken: 1, activeWorkOrderId: 18 },
+      checkpoint: { sequence: 4, state: "CODEX_THREAD_READY", detail: null,
+        recordedAt: "2026-08-17T14:48:40.291Z", ...checkpointDrift },
+      lease: { status: "ACTIVE", holderId: "resident", acquiredAt: "2026-08-17T14:38:36.491Z",
+        expiresAt: "2026-08-17T15:38:36.491Z", ...leaseDrift },
+      now: "2026-08-21T18:52:00.000Z" })).rejects.toMatchObject({
+      code: "OUTCOME_RETIRED_ACQUISITION_PROOF_WALL",
+    })
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it.runIf(Boolean(process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL))(
+    "proves a retired acquisition from real PostgreSQL without changing any durable row",
+    async () => {
+      const { Pool } = await import("pg")
+      const pool = new Pool({ connectionString:
+        process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL?.replace("-pooler.", ".") })
+      const client = await pool.connect()
+      const schema = `hermes_retired_acquisition_${randomUUID().replaceAll("-", "")}`
+      const binding = { userId: "owner", outcomeKey: "goal:GOAL-0017", expectedVersion: 2,
+        executionBinding: "execution-17", acquisitionKey: "acquisition-17",
+        leaseHolder: "Hermes:hermes-outcome-queue", leaseToken: "queue-lease-17",
+        fencingToken: 1, activeWorkOrderId: 18 }
+      const keyDigest = createHash("sha256").update(JSON.stringify({ acquisitionKey:
+        binding.acquisitionKey })).digest("hex")
+      const leaseDigest = createHash("sha256").update(JSON.stringify({ leaseHolder:
+        binding.leaseHolder, leaseToken: binding.leaseToken })).digest("hex")
+      const epochDigest = createHash("sha256").update(JSON.stringify([binding.userId,
+        binding.outcomeKey, binding.executionBinding, binding.acquisitionKey])).digest("hex")
+      const checkpointMetadata = (sequence: number, state: string) => {
+        const body = { idempotencyKey: `hermes-outcome:21:attempt:7:checkpoint:${sequence}`,
+          outcomeId: 21, workOrderRef: "WO-HERMES-OUTCOME-21", attempt: 7,
+          checkpointSequence: sequence, checkpointState: state, checkpointDetail: null,
+          executionEpochDigest: epochDigest }
+        return { ...body, payloadDigest: createHash("sha256")
+          .update(JSON.stringify(body)).digest("hex") }
+      }
+      const attemptDigest = (fencingToken: number, sequence: number, state: string) =>
+        digestOutcomeQueueCheckpointProof({ outcomeId: "21", outcomeKey: binding.outcomeKey,
+          workOrderId: 18, fencingToken, sequence, state,
+          commit: { headSha: null, mergeSha: null, prNumber: null } })
+      try {
+        await client.query(`CREATE SCHEMA "${schema}"`)
+        await client.query(`SET search_path TO "${schema}"`)
+        await client.query(`
+          CREATE TABLE outcome_queue_item (id bigint PRIMARY KEY,"userId" text,"outcomeKey" text,
+            "goalId" integer,version integer,"fencingToken" integer,"lifecycleState" text,
+            "lifecycleReason" text,"executionBinding" text,"acquisitionKey" text,
+            "leaseHolder" text,"leaseToken" text,"leaseExpiresAt" timestamptz,
+            "activeWorkOrderId" integer,"updatedAt" timestamptz);
+          CREATE TABLE outcome_queue_acquisition_receipt (id bigint PRIMARY KEY,"userId" text,
+            "outcomeKey" text,"acquisitionKey" text,"firstFencingToken" integer,
+            "latestFencingToken" integer);
+          CREATE TABLE outcome_queue_acquisition_attempt (id bigint PRIMARY KEY,"userId" text,
+            "campaignWindowId" text,"processIdentity" text,"leaseHolder" text,
+            "acquisitionKeyDigest" text,"leaseIdentityDigest" text,"checkpointDigest" text,
+            "checkpointOutcomeId" text,"checkpointSequence" integer,"checkpointState" text,
+            "checkpointHeadSha" text,"checkpointMergeSha" text,"checkpointPrNumber" integer,
+            "outcomeKey" text,"fencingToken" integer,"leaseExpiresAt" timestamptz,
+            "activeWorkOrderId" integer,disposition text,reason text,"attemptedAt" timestamptz);
+          CREATE TABLE governance_event (id bigint PRIMARY KEY,"userId" text,"eventType" text,
+            "entityType" text,"entityId" text,actor text,metadata jsonb);
+        `)
+        const reason = JSON.stringify({ code: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+          outcomeKey: binding.outcomeKey, priorFencingToken: 1,
+          priorLeaseExpiresAt: "2026-08-17T15:38:36.349Z", priorVersion: 2,
+          recoveredFencingToken: 2, recoveredVersion: 3 })
+        await client.query(`INSERT INTO outcome_queue_item VALUES
+          (14,$1,$2,21,3,2,'blocked','STALE_LEASE_AUTHORIZATION_INELIGIBLE',NULL,NULL,NULL,NULL,NULL,18,$3)`,
+        [binding.userId, binding.outcomeKey, "2026-08-20T22:09:43.594Z"])
+        await client.query(`INSERT INTO outcome_queue_acquisition_receipt
+          VALUES (7,$1,$2,$3,1,1)`,
+        [binding.userId, binding.outcomeKey, binding.acquisitionKey])
+        await client.query(`INSERT INTO outcome_queue_acquisition_attempt VALUES
+          (205,$1,'campaign-original','process-original',$2,$3,$4,$5,'21',0,'LEASED',NULL,NULL,NULL,$6,1,$7,18,
+           'WINNER',NULL,'2026-08-17T14:38:36.349Z'),
+          (206,$1,'campaign-original','process-original',$2,$3,$4,$5,'21',0,'LEASED',NULL,NULL,NULL,$6,1,$7,18,
+           'REPLAY_WINNER',NULL,'2026-08-17T14:39:36.349Z'),
+          (207,$1,'campaign-old','process-old',$2,$3,$4,$5,'21',0,'LEASED',NULL,NULL,NULL,$6,1,$7,18,
+           'STALE_INELIGIBLE_BLOCKED',$8,$9),
+          (224,$1,'campaign-current','process-current',$2,$3,$4,$10,'21',4,'CODEX_THREAD_READY',NULL,NULL,NULL,$6,2,NULL,18,
+           'REPLAY_RETIRED','ACQUISITION_KEY_RETIRED',$11)`,
+        [binding.userId, binding.leaseHolder, keyDigest, leaseDigest, attemptDigest(1, 0, "LEASED"),
+          binding.outcomeKey, "2026-08-17T15:38:36.349Z", reason,
+          "2026-08-20T22:09:43.594Z", attemptDigest(2, 4, "CODEX_THREAD_READY"),
+          "2026-08-21T18:51:54.759Z"])
+        await client.query(`INSERT INTO governance_event VALUES
+          (824,$1,'HERMES_RUNTIME_CHECKPOINT','work_order','18','hermes-codex-bridge',$2),
+          (829,$1,'HERMES_RUNTIME_CHECKPOINT','work_order','18','hermes-codex-bridge',$3)`,
+        [binding.userId, checkpointMetadata(0, "LEASED"), checkpointMetadata(4, "CODEX_THREAD_READY")])
+        const before = await client.query(`SELECT
+          (SELECT count(*)::integer FROM outcome_queue_item) q,
+          (SELECT count(*)::integer FROM outcome_queue_acquisition_receipt) r,
+          (SELECT count(*)::integer FROM outcome_queue_acquisition_attempt) a,
+          (SELECT count(*)::integer FROM governance_event) e,
+          (SELECT md5(row_to_json(x)::text) FROM outcome_queue_item x WHERE id=14) digest`)
+        const blocker = await pool.connect()
+        await blocker.query("BEGIN")
+        await blocker.query("SELECT pg_advisory_xact_lock(hashtext($1))",
+          [`${binding.userId}:outcome-queue`])
+        let resolverSettled = false
+        const pendingProof = resolveRetiredOutcomeAcquisition({ query: client.query.bind(client),
+          outcomeId: 21, runtimeAttempt: 7, executionBinding: binding,
+          checkpoint: { sequence: 4, state: "CODEX_THREAD_READY", detail: null,
+            recordedAt: "2026-08-17T14:48:40.291Z" },
+          lease: { status: "ACTIVE", holderId: "resident-process",
+            acquiredAt: "2026-08-17T14:38:36.491Z",
+            expiresAt: "2026-08-17T15:38:36.491Z" },
+          now: "2026-08-21T18:52:00.000Z" }).finally(() => { resolverSettled = true })
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        const settledWhileCanonicalLockHeld = resolverSettled
+        await blocker.query("ROLLBACK")
+        blocker.release()
+        expect(settledWhileCanonicalLockHeld).toBe(false)
+        const proof = await pendingProof
+        expect(proof).toMatchObject({ blockedAttemptId: 207, replayAttemptIds: [224],
+          recoveredVersion: 3, recoveredFencingToken: 2 })
+        expect((await client.query(`SELECT
+          (SELECT count(*)::integer FROM outcome_queue_item) q,
+          (SELECT count(*)::integer FROM outcome_queue_acquisition_receipt) r,
+          (SELECT count(*)::integer FROM outcome_queue_acquisition_attempt) a,
+          (SELECT count(*)::integer FROM governance_event) e,
+          (SELECT md5(row_to_json(x)::text) FROM outcome_queue_item x WHERE id=14) digest`)).rows)
+          .toEqual(before.rows)
+      } finally {
+        try { await client.query("ROLLBACK") } catch {}
+        try { await client.query("SET search_path TO public") } catch {}
+        try { await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`) } catch {}
+        client.release(); await pool.end()
+      }
+    }, 30_000,
+  )
 
   it("preserves primary projection errors while still attempting all cleanup", async () => {
     const primary = new Error("primary")
