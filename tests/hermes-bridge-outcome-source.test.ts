@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 
 import {
@@ -3229,4 +3229,91 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })).resolves.toBe(false)
     expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
   })
+
+  it.runIf(Boolean(process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL))(
+    "executes historical recovery authorization through the real PostgreSQL JSONB parser",
+    async () => {
+      const { Pool } = await import("pg")
+      const pool = new Pool({ connectionString: process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL })
+      const client = await pool.connect()
+      const schema = `hermes_historical_${randomUUID().replaceAll("-", "")}`
+      try {
+        await client.query(`CREATE SCHEMA "${schema}"`)
+        await client.query(`SET search_path TO "${schema}"`)
+        await client.query(`
+          CREATE TABLE goal (
+            id integer PRIMARY KEY, "userId" text NOT NULL, status text NOT NULL
+          );
+          CREATE TABLE outcome_queue_item (
+            "userId" text NOT NULL, "goalId" integer NOT NULL, "outcomeKey" text NOT NULL,
+            "lifecycleState" text NOT NULL, "lifecycleReason" text, version integer NOT NULL,
+            "executionBinding" text NOT NULL, "leaseToken" text, "leaseHolder" text,
+            "leaseExpiresAt" timestamptz, "acquisitionKey" text NOT NULL,
+            "fencingToken" integer NOT NULL, "activeWorkOrderId" integer NOT NULL
+          );
+          CREATE TABLE work_order (
+            id integer PRIMARY KEY, "userId" text NOT NULL, ref text NOT NULL,
+            status text NOT NULL, result text
+          );
+          CREATE TABLE outcome_queue_acquisition_receipt (
+            "userId" text NOT NULL, "outcomeKey" text NOT NULL,
+            "acquisitionKey" text NOT NULL, "latestFencingToken" integer NOT NULL
+          );
+          CREATE TABLE governance_event (
+            id bigserial PRIMARY KEY, "userId" text NOT NULL, "eventType" text NOT NULL,
+            "entityType" text NOT NULL, "entityId" text NOT NULL, actor text,
+            reason text, metadata jsonb NOT NULL, "createdAt" timestamptz NOT NULL DEFAULT now()
+          );
+        `)
+        await client.query("INSERT INTO goal VALUES (4, 'owner', 'dismissed')")
+        await client.query("INSERT INTO work_order VALUES (42, 'owner', 'WO-HERMES-OUTCOME-4', 'blocked', 'FAIL')")
+        await client.query(`INSERT INTO outcome_queue_item VALUES (
+          'owner', 4, 'goal:GOAL-0004', 'blocked', 'REVIEW_REMEDIATION_EXHAUSTED', 4,
+          'execution-binding-4', NULL, NULL, NULL, 'acquisition-key-4', 2, 42
+        )`)
+        await client.query(`INSERT INTO outcome_queue_acquisition_receipt VALUES (
+          'owner', 'goal:GOAL-0004', 'acquisition-key-4', 2
+        )`)
+        const runtime = failedHistoricalCheckpointMetadata()
+        await client.query(`INSERT INTO governance_event
+          ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+          VALUES ('owner', 'HERMES_RUNTIME_CHECKPOINT', 'work_order', '42',
+            'hermes-codex-bridge', 'terminal checkpoint', $1::jsonb)`, [JSON.stringify(runtime)])
+        await client.query(`INSERT INTO governance_event
+          ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+          VALUES ('owner', 'HERMES_OUTCOME_TERMINAL', 'goal', '4',
+            'hermes-codex-bridge', 'terminal outcome', $1::jsonb)`,
+        [JSON.stringify(failedGoalTerminalMetadata())])
+
+        const exactAuthorization = {
+          query: client.query.bind(client), outcomeId: 4, recoveryKind: "review-remediation",
+          executionBinding: {
+            ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
+          },
+          prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+          proofDigest: "d".repeat(64),
+        }
+        await expect(authorizeHistoricalRecoveryProjection(exactAuthorization))
+          .resolves.toMatchObject({ replayed: false })
+        await expect(authorizeHistoricalRecoveryProjection(exactAuthorization))
+          .resolves.toMatchObject({ replayed: true })
+        await expect(authorizeHistoricalRecoveryProjection({
+          ...exactAuthorization,
+          prNumber: 930,
+          reviewedHeadSha: "e".repeat(40),
+          mergeSha: "f".repeat(40),
+          proofDigest: "a".repeat(64),
+        })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
+        const authorizationCount = await client.query(`SELECT count(*)::integer AS count
+          FROM governance_event
+          WHERE "eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED'`)
+        expect(authorizationCount.rows).toEqual([{ count: 1 }])
+      } finally {
+        try { await client.query("SET search_path TO public") } catch {}
+        try { await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`) } catch {}
+        client.release()
+        await pool.end()
+      }
+    },
+  )
 })

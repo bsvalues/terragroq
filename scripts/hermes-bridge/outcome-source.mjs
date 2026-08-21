@@ -2320,7 +2320,7 @@ export async function authorizeHistoricalRecoveryProjection({
          AND recovery_runtime.metadata->>'executionEpochDigest' = $10
          AND recovery_runtime.metadata->>'idempotencyKey' = 'hermes-outcome:' || recovery_goal.id::text
            || ':attempt:' || recovery_queue."fencingToken"::text
-           || ':checkpoint:' || recovery_runtime.metadata->>'checkpointSequence'
+           || ':checkpoint:' || (recovery_runtime.metadata->>'checkpointSequence')
        ORDER BY recovery_goal.id
        LIMIT 2
        FOR UPDATE OF recovery_goal, recovery_queue, recovery_work_order`,
