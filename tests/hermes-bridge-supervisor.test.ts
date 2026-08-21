@@ -7,6 +7,13 @@ import { afterEach, describe, expect, it } from "vitest"
 const repoRoot = process.cwd()
 const supervisorScript = path.join(repoRoot, "scripts", "hermes-bridge", "supervisor.ps1")
 const installScript = path.join(repoRoot, "scripts", "hermes-bridge", "install-supervisor.ps1")
+const windowsPowerShell = path.join(
+  process.env.SystemRoot ?? "C:\\Windows",
+  "System32",
+  "WindowsPowerShell",
+  "v1.0",
+  "powershell.exe",
+)
 const isolatedRoots: string[] = []
 
 afterEach(() => {
@@ -187,6 +194,172 @@ describe("Hermes interactive-user supervisor", () => {
     expect(cycles[1].processIdentity).not.toBe(cycles[0].processIdentity)
     expect(fs.existsSync(path.join(runtimeRoot, "state", "supervisor.json"))).toBe(false)
   })
+
+  it.skipIf(hostOnly || !fs.existsSync(windowsPowerShell))(
+    "launches the exact resident cycle argv and identity from Windows PowerShell 5.1",
+    () => {
+      const launchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes ps51 launch "))
+      isolatedRoots.push(launchRoot)
+      const workspace = path.join(launchRoot, "workspace with spaces", "nested")
+      const runtimeRoot = path.join(launchRoot, "runtime with spaces", "nested")
+      const activationPath = path.join(runtimeRoot, "control", "activation")
+      const cliPath = path.join(workspace, "scripts", "hermes-bridge", "cli.mjs")
+      fs.mkdirSync(path.dirname(activationPath), { recursive: true })
+      fs.mkdirSync(path.dirname(cliPath), { recursive: true })
+      fs.writeFileSync(activationPath, "enabled\n")
+      fs.writeFileSync(path.join(workspace, ".env.local"), "HERMES_PS51_FIXTURE=fixture-ok\n")
+      fs.writeFileSync(
+        cliPath,
+        [
+          "process.stdout.write(JSON.stringify({",
+          "  result: 'PASS',",
+          "  argv: process.argv.slice(1),",
+          "  fixture: process.env.HERMES_PS51_FIXTURE,",
+          "  runtimeRoot: process.env.WILLIAMOS_HERMES_RUNTIME_ROOT,",
+          "  campaign: process.env.HERMES_CAMPAIGN_WINDOW_ID,",
+          "  processIdentity: process.env.HERMES_PROCESS_IDENTITY,",
+          "}) + '\\n')",
+        ].join("\n"),
+      )
+
+      const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
+      const command = [
+        `& ${quote(supervisorScript)}`,
+        `-Workspace ${quote(workspace)}`,
+        `-RuntimeRoot ${quote(runtimeRoot)}`,
+        "-RunOnce",
+      ].join(" ")
+      const result = spawnSync(
+        windowsPowerShell,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        { encoding: "utf8", timeout: 15_000 },
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      const cycleLog = fs.readdirSync(path.join(runtimeRoot, "logs"))
+        .find((name) => /^cycle-\d{8}\.log$/.test(name))
+      expect(cycleLog).toBeDefined()
+      const evidence = JSON.parse(
+        fs.readFileSync(path.join(runtimeRoot, "logs", cycleLog!), "utf8").trim(),
+      )
+      expect(evidence).toEqual({
+        result: "PASS",
+        argv: [cliPath, "cycle"],
+        fixture: "fixture-ok",
+        runtimeRoot,
+        campaign: expect.stringMatching(/^campaign:[0-9a-f]{32}$/),
+        processIdentity: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      })
+    },
+  )
+
+  it.skipIf(hostOnly || !fs.existsSync(windowsPowerShell))(
+    "round-trips spaces quotes and backslashes through the PS5.1 command line encoder",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes argv encoder "))
+      isolatedRoots.push(root)
+      const fixture = path.join(root, "fixture with spaces.mjs")
+      const harness = path.join(root, "encoder-harness.ps1")
+      const values = [
+        "",
+        "plain",
+        "with spaces",
+        'quote"inside',
+        "backslash\\plain",
+        'slashes\\\\before"quote',
+        "trailing\\",
+        "two-trailing\\\\",
+        "space trailing\\",
+      ]
+      fs.writeFileSync(fixture, "process.stdout.write(JSON.stringify(process.argv.slice(2)))\n")
+      const psQuote = (value: string) => `'${value.replaceAll("'", "''")}'`
+      fs.writeFileSync(
+        harness,
+        [
+          "$ErrorActionPreference = 'Stop'",
+          "$tokens = $null",
+          "$errors = $null",
+          `$ast = [Management.Automation.Language.Parser]::ParseFile(${psQuote(supervisorScript)}, [ref]$tokens, [ref]$errors)`,
+          "if ($errors.Count -ne 0) { throw 'SUPERVISOR_PARSE_FAILED' }",
+          "$wanted = @('ConvertTo-WindowsCommandLineArgument', 'Join-WindowsCommandLineArguments')",
+          "$functions = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $wanted -ccontains $node.Name }, $true))",
+          "if ($functions.Count -ne 2) { throw 'SUPERVISOR_ENCODER_MISSING' }",
+          "foreach ($function in $functions) { . ([ScriptBlock]::Create($function.Extent.Text)) }",
+          `$values = @(${values.map(psQuote).join(", ")})`,
+          "$startInfo = [Diagnostics.ProcessStartInfo]::new()",
+          `$startInfo.FileName = ${psQuote(process.execPath)}`,
+          `$startInfo.WorkingDirectory = ${psQuote(root)}`,
+          "$startInfo.UseShellExecute = $false",
+          "$startInfo.RedirectStandardOutput = $true",
+          "$startInfo.RedirectStandardError = $true",
+          `$allValues = @(${psQuote(fixture)}) + $values`,
+          "$startInfo.Arguments = Join-WindowsCommandLineArguments -Values $allValues",
+          "$process = [Diagnostics.Process]::Start($startInfo)",
+          "$stdout = $process.StandardOutput.ReadToEnd()",
+          "$stderr = $process.StandardError.ReadToEnd()",
+          "$process.WaitForExit()",
+          "if ($process.ExitCode -ne 0) { throw $stderr }",
+          "[PSCustomObject]@{ Arguments = $startInfo.Arguments; ExitCode = $process.ExitCode; Stdout = $stdout; Stderr = $stderr } | ConvertTo-Json -Compress",
+        ].join("\r\n"),
+      )
+
+      const result = spawnSync(
+        windowsPowerShell,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", harness],
+        { encoding: "utf8", timeout: 15_000 },
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      const execution = JSON.parse(result.stdout)
+      expect(execution.ExitCode, execution.Stderr).toBe(0)
+      expect(execution.Stdout, JSON.stringify(execution)).not.toBe("")
+      expect(JSON.parse(execution.Stdout)).toEqual(values)
+    },
+  )
+
+  it.skipIf(hostOnly || !fs.existsSync(windowsPowerShell))(
+    "rejects NUL and control characters before building a Windows command line",
+    () => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes argv controls "))
+      isolatedRoots.push(root)
+      const harness = path.join(root, "control-harness.ps1")
+      const psQuote = (value: string) => `'${value.replaceAll("'", "''")}'`
+      fs.writeFileSync(
+        harness,
+        [
+          "$ErrorActionPreference = 'Stop'",
+          "$tokens = $null",
+          "$errors = $null",
+          `$ast = [Management.Automation.Language.Parser]::ParseFile(${psQuote(supervisorScript)}, [ref]$tokens, [ref]$errors)`,
+          "if ($errors.Count -ne 0) { throw 'SUPERVISOR_PARSE_FAILED' }",
+          "$wanted = @('ConvertTo-WindowsCommandLineArgument', 'Join-WindowsCommandLineArguments')",
+          "$functions = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $wanted -ccontains $node.Name }, $true))",
+          "foreach ($function in $functions) { . ([ScriptBlock]::Create($function.Extent.Text)) }",
+          "$controls = @(0, 9, 10, 13, 31, 127)",
+          "$walls = foreach ($code in $controls) {",
+          "  try {",
+          "    $null = Join-WindowsCommandLineArguments -Values @('safe', ('unsafe' + [char]$code))",
+          "    'ACCEPTED'",
+          "  } catch {",
+          "    $_.Exception.Message",
+          "  }",
+          "}",
+          "$walls | ConvertTo-Json -Compress",
+        ].join("\r\n"),
+      )
+
+      const result = spawnSync(
+        windowsPowerShell,
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", harness],
+        { encoding: "utf8", timeout: 15_000 },
+      )
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(JSON.parse(result.stdout)).toEqual(
+        Array.from({ length: 6 }, () => "HERMES_SUPERVISOR_ARGUMENT_CONTROL_CHARACTER_WALL"),
+      )
+    },
+  )
 
   it.skipIf(hostOnly)(
     "does not require Node for a custom resident cycle",
@@ -422,8 +595,8 @@ describe("Hermes interactive-user supervisor", () => {
     expect(supervisor).toContain("HERMES_SUPERVISOR_NODE_EXECUTABLE_WALL")
     expect(supervisor).toContain("$startInfo.FileName = $OwnedNodePath")
     expect(supervisor).not.toContain('$startInfo.FileName = "node"')
-    expect(supervisor).toContain('$startInfo.ArgumentList.Add($OwnedCliPath)')
-    expect(supervisor).toContain('$startInfo.ArgumentList.Add("cycle")')
+    expect(supervisor).toContain("$startInfo.Arguments = Join-WindowsCommandLineArguments")
+    expect(supervisor).not.toContain("$startInfo.ArgumentList")
     expect(supervisor).not.toContain("& pwsh.exe")
     expect(supervisor).toContain("Global\\WilliamOSHermesCodexBridgeSupervisor")
     expect(supervisor).not.toContain("[string]$MutexName")
