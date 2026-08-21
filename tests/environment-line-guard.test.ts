@@ -78,3 +78,40 @@ describe("exceedsLineCap", () => {
     expect(exceedsLineCap(euros)).toBe(true)
   })
 })
+
+import { readBoundedJson } from "@/lib/environment/line-guard"
+
+/** Build a POST Request whose body streams the given bytes (optionally lying about Content-Length). */
+function streamingReq(payload: string, headers: Record<string, string> = {}): Request {
+  return new Request("https://192.168.88.9:3443/api/environment/line", {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: payload,
+    // @ts-expect-error Node's undici needs duplex to send a body stream
+    duplex: "half",
+  })
+}
+
+describe("readBoundedJson bounds the actual bytes", () => {
+  it("parses a normal JSON body", async () => {
+    const r = await readBoundedJson(streamingReq(JSON.stringify({ text: "hi", worldId: "w1" })))
+    expect(r).toEqual({ ok: true, value: { text: "hi", worldId: "w1" } })
+  })
+
+  it("rejects a small text beside a huge ignored field — the P2 bypass — while streaming, not after buffering", async () => {
+    const payload = JSON.stringify({ text: "hi", junk: "x".repeat(MAX_LINE_BYTES * 2) })
+    const r = await readBoundedJson(streamingReq(payload))
+    expect(r).toEqual({ ok: false, status: 413, error: "MESSAGE_TOO_LARGE" })
+  })
+
+  it("rejects an oversized body even when Content-Length lies about being small", async () => {
+    const payload = JSON.stringify({ text: "x".repeat(MAX_LINE_BYTES * 2) })
+    const r = await readBoundedJson(streamingReq(payload, { "content-length": "10" }))
+    expect(r).toEqual({ ok: false, status: 413, error: "MESSAGE_TOO_LARGE" })
+  })
+
+  it("returns INVALID_BODY on malformed JSON within the cap", async () => {
+    const r = await readBoundedJson(streamingReq("{ not json"))
+    expect(r).toEqual({ ok: false, status: 400, error: "INVALID_BODY" })
+  })
+})

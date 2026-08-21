@@ -65,3 +65,55 @@ export function exceedsLineCap(text: string): boolean {
   // Byte length, not code units: the cap is about payload size, not character count.
   return Buffer.byteLength(text, "utf8") > MAX_LINE_BYTES
 }
+
+export type BoundedBody =
+  | Readonly<{ ok: true; value: unknown }>
+  | Readonly<{ ok: false; status: number; error: string }>
+
+/**
+ * Reads and JSON-parses the request body while counting bytes as they arrive, aborting the moment
+ * the running total exceeds the cap. The `Content-Length` guard above is only a fast reject: it is
+ * absent under chunked transfer-encoding and can understate the real size, and a small `text` beside
+ * a huge ignored property would otherwise buffer entirely in memory before any per-field check
+ * (Codex P2). This bounds the ACTUAL bytes, so nothing larger than the cap is ever fully held.
+ */
+export async function readBoundedJson(request: Request, max: number = MAX_LINE_BYTES): Promise<BoundedBody> {
+  const body = request.body
+  if (!body) {
+    // No stream: fall back to text(), still bounded by byte length before parsing.
+    const raw = await request.text()
+    if (Buffer.byteLength(raw, "utf8") > max) return { ok: false, status: 413, error: "MESSAGE_TOO_LARGE" }
+    try {
+      return { ok: true, value: raw ? JSON.parse(raw) : {} }
+    } catch {
+      return { ok: false, status: 400, error: "INVALID_BODY" }
+    }
+  }
+
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        total += value.byteLength
+        if (total > max) {
+          await reader.cancel().catch(() => {})
+          return { ok: false, status: 413, error: "MESSAGE_TOO_LARGE" }
+        }
+        chunks.push(value)
+      }
+    }
+  } catch {
+    return { ok: false, status: 400, error: "INVALID_BODY" }
+  }
+
+  const raw = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8")
+  try {
+    return { ok: true, value: raw ? JSON.parse(raw) : {} }
+  } catch {
+    return { ok: false, status: 400, error: "INVALID_BODY" }
+  }
+}

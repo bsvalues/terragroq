@@ -11,7 +11,7 @@ import { project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
-import { exceedsLineCap, guardLineRequest } from "@/lib/environment/line-guard"
+import { exceedsLineCap, guardLineRequest, readBoundedJson } from "@/lib/environment/line-guard"
 import {
   createWorkingWorld,
   validateWorkingWorld,
@@ -286,12 +286,12 @@ export async function POST(request: Request) {
   }
   if (!userId) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  let body: { worldId?: unknown; text?: unknown }
-  try {
-    body = (await request.json()) as { worldId?: unknown; text?: unknown }
-  } catch {
-    return Response.json({ error: "INVALID_BODY" }, { status: 400 })
-  }
+  // Read the body with the byte cap enforced AS IT STREAMS: the Content-Length reject in
+  // guardLineRequest is only a fast path (absent under chunked encoding, and a small text beside a
+  // huge ignored field would still buffer fully) -- this bounds the actual bytes.
+  const parsed = await readBoundedJson(request)
+  if (!parsed.ok) return Response.json({ error: parsed.error }, { status: parsed.status })
+  const body = parsed.value as { worldId?: unknown; text?: unknown }
   const text = typeof body.text === "string" ? body.text.trim() : ""
   if (!text) return Response.json({ error: "MESSAGE_EMPTY" }, { status: 400 })
   if (exceedsLineCap(text)) return Response.json({ error: "MESSAGE_TOO_LARGE" }, { status: 413 })
