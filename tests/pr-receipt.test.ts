@@ -56,6 +56,39 @@ describe("reviewing a pull request", () => {
     expect(reviewPullRequestReceipt({ body: valid(), ...green })).toEqual({ ok: true })
   })
 
+  it("admits an exact reserved markdown file without treating the extension as doctrine", () => {
+    const markdownFacts = {
+      ...facts,
+      reservedPaths: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+    }
+    expect(reviewPullRequestReceipt({
+      body: body(receiptToken(markdownFacts), markdownFacts),
+      changedFiles: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      mainMovedFiles: [],
+      liveDoctrineDigest: DOCTRINE,
+    })).toEqual({ ok: true })
+  })
+
+  it.each([
+    "docs/reports/WO-OUTCOME-762-911-runtime-reliability-notes.md",
+    "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md.bak",
+    "docs/governance/multi-agent-operator-playbook.md",
+  ])("does not widen an exact markdown reservation to %s", (changedFile) => {
+    const markdownFacts = {
+      ...facts,
+      reservedPaths: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+    }
+    const verdict = reviewPullRequestReceipt({
+      body: body(receiptToken(markdownFacts), markdownFacts),
+      changedFiles: [changedFile],
+      mainMovedFiles: [],
+      liveDoctrineDigest: DOCTRINE,
+    })
+    expect(verdict.ok).toBe(false)
+    expect(verdict.failure).toBe("FAILED_SCOPE_ESCAPE")
+    expect(verdict.detail).toContain(changedFile)
+  })
+
   it("rejects a pull request with no receipt, however green it is", () => {
     // This is acceptance criterion 8 of #831, and the entire point: tests passing is not a premise.
     const verdict = reviewPullRequestReceipt({ body: "Looks good, all tests pass.", ...green })

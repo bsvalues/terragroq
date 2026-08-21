@@ -118,9 +118,8 @@ export function reviewPullRequestReceipt(input: ReviewInputs): PrReceiptVerdict 
   }
 
   // Scope escape is checked here because the reservation is the only claim whose violation is visible
-  // from the diff alone.
-  const reserved = closure.filter((entry) => !entry.endsWith(".md"))
-  const escaped = input.changedFiles.filter((file) => !within(file, reserved))
+  // from the diff alone. Doctrine belongs to the stale-main closure, not to the lane's writable scope.
+  const escaped = input.changedFiles.filter((file) => !within(file, facts.reservedPaths))
   if (escaped.length > 0) {
     return {
       ok: false,
