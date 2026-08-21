@@ -18,6 +18,7 @@ describe("resident-model P2 probe driver", () => {
       merged: false, mergeCommit: null, validation: [], reviewThreads: 0, ownerTouchCount: 0, blockedScopeCrossed: false,
       nextState: "READY_FOR_VALIDATION", blockedAction: null, authorityBoundary: null, minimumChoice: null,
       approveConsequence: null, denyConsequence: null,
+      findings: [],
     }
     expect(validateAgainstTurnSchema(expected, HERMES_TURN_OUTPUT_SCHEMA)).toEqual({ ok: true })
   })
