@@ -61,9 +61,17 @@ export async function GET(request: Request, { params }: { params: Promise<{ path
     // But streamed suspense content only reaches its place via those same inline scripts, so the
     // stripped document would show its loading fallback forever. Complete the stream server-side
     // first (the $RS/$RC swaps as a pure transform), then strip.
+    //
+    // The strip's contract, stated exactly (independent review, 2026-08-20): remove everything that
+    // can EXECUTE script -- <script> elements (paired and self-closing) AND the link relations that
+    // fetch script for execution (preload as=script, modulepreload). It does NOT touch stylesheet or
+    // icon links. Nothing here runs regardless, because the frame is sandbox="" (opaque origin, no
+    // scripts); this is defense in depth so the "script-free" name is literally true.
     const scriptFree = resolveStreamedSuspense(html)
       .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
       .replace(/<script\b[^>]*\/>/gi, "")
+      .replace(/<link\b[^>]*\brel=["']?modulepreload["']?[^>]*>/gi, "")
+      .replace(/<link\b[^>]*\bas=["']?script["']?[^>]*>/gi, "")
     return new Response(scriptFree, {
       status: response.status,
       headers: { "content-type": response.headers.get("content-type") ?? "text/html; charset=utf-8" },

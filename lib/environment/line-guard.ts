@@ -66,6 +66,16 @@ export function exceedsLineCap(text: string): boolean {
   return Buffer.byteLength(text, "utf8") > MAX_LINE_BYTES
 }
 
+/**
+ * True only for a `worldId` that is PRESENT and not a usable id. Absence spells "new world" — and
+ * the Desk client spells absence as an explicit `null` on the first message — so both `undefined`
+ * and `null` are valid, and only a present, non-null, non-string value is malformed. (Codex P1:
+ * rejecting `null` here 400s every first message, so no world can ever be created.)
+ */
+export function isMalformedWorldId(value: unknown): boolean {
+  return value !== undefined && value !== null && typeof value !== "string"
+}
+
 export type BoundedBody =
   | Readonly<{ ok: true; value: unknown }>
   | Readonly<{ ok: false; status: number; error: string }>
