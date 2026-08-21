@@ -2310,6 +2310,7 @@ export async function authorizeHistoricalRecoveryProjection({
          AND recovery_terminal.metadata->>'nextState' = $8
          AND recovery_runtime.id < recovery_terminal.id
          AND recovery_runtime.metadata->>'checkpointState' = 'FAILED_TERMINAL'
+         AND recovery_runtime.metadata->>'checkpointDetail' = $8
          AND recovery_runtime.metadata->>'outcomeId' = recovery_goal.id::text
          AND recovery_runtime.metadata->>'workOrderRef' = recovery_work_order.ref
          AND recovery_runtime.metadata->>'attempt' = recovery_queue."fencingToken"::text
@@ -2360,6 +2361,7 @@ export async function authorizeHistoricalRecoveryProjection({
     if (typeof runtimeCheckpointPayloadDigest !== "string"
       || !/^[0-9a-f]{64}$/.test(runtimeCheckpointPayloadDigest)
       || runtimeCheckpointMetadata.checkpointState !== "FAILED_TERMINAL"
+      || runtimeCheckpointMetadata.checkpointDetail !== lifecycleReason
       || Number(runtimeCheckpointMetadata.outcomeId) !== outcomeId
       || runtimeCheckpointMetadata.workOrderRef !== workOrderRef
       || Number(runtimeCheckpointMetadata.attempt) !== binding.fencingToken
@@ -2566,6 +2568,7 @@ function exactHistoricalRecoveryAuthorization(
     && Number.isSafeInteger(authorizationEventId) && authorizationEventId > terminalEventId
     && typeof runtimePayloadDigest === "string" && /^[0-9a-f]{64}$/.test(runtimePayloadDigest)
     && runtimeMetadata?.checkpointState === "FAILED_TERMINAL"
+    && runtimeMetadata?.checkpointDetail === lifecycleReason
     && Number(runtimeMetadata?.outcomeId) === outcomeId
     && runtimeMetadata?.workOrderRef === workOrderRef
     && Number(runtimeMetadata?.attempt) === executionBinding.fencingToken
