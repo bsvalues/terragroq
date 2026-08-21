@@ -4041,6 +4041,7 @@ async function appendAcquisitionAttempt(
     )) {
     fail("OUTCOME_QUEUE_CHECKPOINT_BINDING_WALL")
   }
+  const checkpointDigest = digestOutcomeQueueCheckpointProof(checkpointProof)
   const inserted = await connection.query(OUTCOME_QUEUE_SQL.insertAcquisitionAttempt, [
     context.user,
     context.campaignWindowId,
@@ -4048,7 +4049,7 @@ async function appendAcquisitionAttempt(
     context.leaseHolder,
     context.acquisitionKeyDigest,
     context.leaseIdentityDigest,
-    digestOutcomeQueueCheckpointProof(checkpointProof),
+    checkpointDigest,
     checkpointProof.outcomeId,
     checkpointProof.sequence,
     checkpointProof.state,
@@ -4072,11 +4073,12 @@ async function appendAcquisitionAttempt(
   if (inserted?.rows?.length !== 1) {
     fail("OUTCOME_QUEUE_ACQUISITION_ATTEMPT_WRITE_WALL")
   }
+  return { checkpointDigest, checkpointState: checkpointProof.state }
 }
 
 const REVIEW_RECOVERY_BASE_HOP_KEYS = Object.freeze([
   "disposition", "expectedVersion", "fencingToken", "leaseExpiresAt", "lifecycleReason",
-  "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken",
+  "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken", "checkpointDigest",
 ])
 
 function exactReviewRecoveryContinuationEnvelope(value) {
@@ -4100,6 +4102,7 @@ function exactReviewRecoveryContinuationEnvelope(value) {
     && continued.expectedVersion === continued.priorExpectedVersion + 1
     && continued.fencingToken === continued.priorFencingToken + 1
     && continued.receiptLatestFencingToken === continued.fencingToken
+    && /^[0-9a-f]{64}$/.test(String(continued.checkpointDigest ?? ""))
     && Number.isFinite(continuedExpiry)
     && new Date(continuedExpiry).toISOString() === continued.leaseExpiresAt
   if (!value || typeof value !== "object" || Array.isArray(value)
@@ -4118,6 +4121,7 @@ function exactReviewRecoveryContinuationEnvelope(value) {
     || hop.expectedVersion !== hop.priorExpectedVersion + 1
     || hop.fencingToken !== hop.priorFencingToken + 1
     || hop.receiptLatestFencingToken !== hop.fencingToken
+    || !/^[0-9a-f]{64}$/.test(String(hop.checkpointDigest ?? ""))
     || !Number.isFinite(hopExpiry) || new Date(hopExpiry).toISOString() !== hop.leaseExpiresAt
     || !((value.mode === "ADVANCE_OR_REPLAY" && continued === null)
       || (value.mode === "REPLAY_ONLY" && exactContinued))) {
@@ -4184,7 +4188,7 @@ export async function acquireNextEligibleOutcome({
     begun = true
     await connection.query(OUTCOME_QUEUE_SQL.acquireLock, [`${user}:outcome-queue`])
     const finish = async (result, disposition, proofOutcome = result?.outcome ?? null) => {
-      await appendAcquisitionAttempt(
+      const attemptEvidence = await appendAcquisitionAttempt(
         connection,
         attemptContext,
         result,
@@ -4192,9 +4196,18 @@ export async function acquireNextEligibleOutcome({
         at,
         proofOutcome,
       )
+      if (continuation?.mode === "REPLAY_ONLY"
+        && attemptEvidence?.checkpointDigest !== continuation.continuation.checkpointDigest) {
+        fail("OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL")
+      }
       await connection.query("COMMIT")
       begun = false
-      return result
+      const exposesReviewRecoveryAnchor = continuation
+        || ["REVIEW_REMEDIATION_RECOVERED", "POST_MERGE_CLEANUP_RETRY"]
+          .includes(attemptEvidence?.checkpointState)
+      return exposesReviewRecoveryAnchor && attemptEvidence
+        ? { ...result, reviewRecoveryContinuationCheckpointDigest: attemptEvidence.checkpointDigest }
+        : result
     }
     const receiptResult = await connection.query(
       OUTCOME_QUEUE_SQL.readAcquisitionReceipt,

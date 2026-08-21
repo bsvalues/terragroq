@@ -1447,6 +1447,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       executionBinding: activeBinding.executionBinding, leaseToken: activeBinding.leaseToken,
       leaseHolder: activeBinding.leaseHolder, leaseExpiresAt: "2099-01-01T00:00:00.000Z",
       acquisitionKey: activeBinding.acquisitionKey, fencingToken: 3, activeWorkOrderId: 42,
+      executionEpochFirstFencingToken: 2, executionEpochLatestFencingToken: 3,
       approvalDecisionId: 74, executionGrantRef: "WB-EXEC-GRANT-911",
       receiptOperation: "workbench_execution.authorize",
       receiptImplementationGrantRef: "WB-EXEC-IMPL-GRANT-911", receiptImplementationGrantId: "81",
@@ -3839,11 +3840,14 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           alreadyStaleReacquired: true,
           reviewRecoveryStaleReacquisition: { ...staleReacquisition, disposition: "RECLAIMED" },
         })
-        const baseHop = { ...staleReacquisition, disposition: "RECLAIMED" }
+        const baseHop = { ...staleReacquisition, disposition: "RECLAIMED",
+          checkpointDigest: digestOutcomeQueueCheckpointProof(legacyCheckpointProof) }
         const continuationEnvelope = { sourceExpectedVersion: 4, sourceFencingToken: 2,
           sourceRuntimeAttempt: 5, reclaimEventId, reclaimPayloadDigest: reclaimMetadata.payloadDigest,
           baseHop, mode: "ADVANCE_OR_REPLAY", continuation: null }
-        const projectBaseStale = (binding: Record<string, unknown> = staleActive) =>
+        const projectBaseStale = (binding: Record<string, unknown> = {
+          ...staleActive, reviewRecoveryStaleReacquisition: baseHop,
+        }) =>
           projectOutcomeRuntimeCheckpointRaw({ query, outcomeId: 4, attempt: 7,
             workContract: issue911RuntimeWorkContract, executionBinding: binding,
             checkpoint: { sequence: 47, state: "LEASED", metadata: { prNumber: 929,
@@ -3892,7 +3896,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           fencingToken: 6, leaseExpiresAt: continuedLeaseExpiresAt,
           lifecycleReason: "STALE_LEASE_RECOVERED", priorExpectedVersion: 7,
           priorFencingToken: 5, priorLeaseExpiresAt: staleLeaseExpiresAt,
-          receiptLatestFencingToken: 6 }
+          receiptLatestFencingToken: 6,
+          checkpointDigest: digestOutcomeQueueCheckpointProof({ ...legacyCheckpointProof, fencingToken: 6 }) }
         const continuedActive = { ...staleActive, expectedVersion: 8, fencingToken: 6,
           reviewRecoveryStaleReacquisition: baseHop,
           reviewRecoveryStaleContinuation: staleContinuation }
@@ -3922,8 +3927,28 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
               headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
               reviewRecoveryProofDigest: "d".repeat(64) } } })
         await expect(projectStale()).resolves.toMatchObject({ workOrderId: 42 })
+        await client.query(`UPDATE outcome_queue_acquisition_receipt SET "firstFencingToken"=3`)
+        await expect(projectStale()).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query(`UPDATE outcome_queue_acquisition_receipt SET "firstFencingToken"=2`)
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "checkpointState"='DRIFTED_CHECKPOINT',"checkpointDigest"=$1 WHERE id=220`,
+        [digestOutcomeQueueCheckpointProof({ ...legacyCheckpointProof, state: "DRIFTED_CHECKPOINT" })])
+        await expect(projectStale()).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "checkpointState"=$1,"checkpointDigest"=$2 WHERE id=220`,
+        [legacyCheckpointProof.state, digestOutcomeQueueCheckpointProof(legacyCheckpointProof)])
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "attemptedAt"='2098-01-02T11:59:00Z' WHERE id=221`)
+        await expect(projectStale()).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "attemptedAt"='2098-01-02T12:01:00Z' WHERE id=221`)
         const hop2First = (await client.query(`SELECT min(id)::integer AS id
           FROM outcome_queue_acquisition_attempt WHERE "fencingToken"=6`)).rows[0].id
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "attemptedAt"='2098-01-02T12:49:59Z' WHERE id=$1`, [hop2First])
+        await expect(projectStale()).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "attemptedAt"='2098-01-02T13:00:00Z' WHERE id=$1`, [hop2First])
         await client.query(`UPDATE outcome_queue_acquisition_attempt SET "checkpointDigest"=$1 WHERE id=$2`,
         ["0".repeat(64), hop2First])
         await expect(projectStale()).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })

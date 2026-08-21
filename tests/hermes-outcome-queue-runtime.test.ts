@@ -1828,6 +1828,7 @@ describe("Hermes durable outcome queue runtime", () => {
       replayed: false,
       reclaimed: true,
       reason: null,
+      reviewRecoveryContinuationCheckpointDigest: "a".repeat(64),
     }))
     const bridge = runtime({ acquire })
     const outcome = { ...goal, queueBinding: prior }
@@ -1879,12 +1880,15 @@ describe("Hermes durable outcome queue runtime", () => {
     const acquire = vi.fn()
       .mockResolvedValueOnce({
         outcome: reacquired, acquired: true, replayed: false, reclaimed: true, reason: null,
+        reviewRecoveryContinuationCheckpointDigest: "a".repeat(64),
       })
       .mockResolvedValueOnce({
         outcome: reacquired, acquired: true, replayed: true, reclaimed: false, reason: null,
+        reviewRecoveryContinuationCheckpointDigest: "a".repeat(64),
       })
       .mockResolvedValueOnce({
         outcome: reacquired, acquired: true, replayed: true, reclaimed: false, reason: null,
+        reviewRecoveryContinuationCheckpointDigest: "a".repeat(64),
       })
     const bridge = runtime({ acquire })
     const outcome = { ...goal, queueBinding: prior }
@@ -1927,6 +1931,7 @@ describe("Hermes durable outcome queue runtime", () => {
       disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
       leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
       priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+      checkpointDigest: "b".repeat(64),
     }
     const prior = { ...queueItem, expectedVersion: 7, fencingToken: 5,
       leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
@@ -1940,9 +1945,11 @@ describe("Hermes durable outcome queue runtime", () => {
       activeWorkOrderId: 77, leaseExpiresAt: "2026-07-28T13:50:00.000Z" }
     const acquire = vi.fn()
       .mockResolvedValueOnce({ outcome: continued, acquired: true, replayed: false,
-        reclaimed: true, reason: null, reviewRecoveryContinuationDisposition: "RECLAIMED" })
+        reclaimed: true, reason: null, reviewRecoveryContinuationDisposition: "RECLAIMED",
+        reviewRecoveryContinuationCheckpointDigest: "c".repeat(64) })
       .mockResolvedValueOnce({ outcome: continued, acquired: true, replayed: true,
-        reclaimed: false, reason: null, reviewRecoveryContinuationDisposition: "REPLAY_WINNER" })
+        reclaimed: false, reason: null, reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+        reviewRecoveryContinuationCheckpointDigest: "c".repeat(64) })
     const bridge = runtime({ acquire })
     const advanced = await bridge.refreshOutcome({ ...goal, queueBinding: prior })
     expect(advanced).toMatchObject({
@@ -1978,6 +1985,41 @@ describe("Hermes durable outcome queue runtime", () => {
         continuation: expect.objectContaining({ expectedVersion: 8, fencingToken: 6 }),
       }),
     }))
+  })
+
+  it.each([
+    ["missing", undefined],
+    ["drifted", "0".repeat(64)],
+  ])("walls a persisted stale-continuation replay with %s checkpoint evidence", async (_name, digest) => {
+    const baseHop = {
+      disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+      checkpointDigest: "b".repeat(64),
+    }
+    const continuation = {
+      disposition: "RECLAIMED", expectedVersion: 8, fencingToken: 6,
+      leaseExpiresAt: "2026-07-28T13:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 7, priorFencingToken: 5,
+      priorLeaseExpiresAt: baseHop.leaseExpiresAt, receiptLatestFencingToken: 6,
+      checkpointDigest: "c".repeat(64),
+    }
+    const binding = { ...queueItem, expectedVersion: 8, fencingToken: 6,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701, reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReacquisition: baseHop,
+      reviewRecoveryStaleContinuation: continuation }
+    const item = { ...queueItem, lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 8, fencingToken: 6,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, leaseExpiresAt: continuation.leaseExpiresAt }
+    const acquire = vi.fn(async () => ({ outcome: item, acquired: true, replayed: true,
+      reclaimed: false, reason: null,
+      ...(digest === undefined ? {} : { reviewRecoveryContinuationCheckpointDigest: digest }) }))
+    await expect(runtime({ acquire }).refreshOutcome({ ...goal, queueBinding: binding }))
+      .rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
   })
 
   it.each([

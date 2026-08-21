@@ -312,12 +312,14 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       disposition: "REPLAY_WINNER", expectedVersion: 7, fencingToken: 5,
       leaseExpiresAt: "2098-01-02T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
       priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+      checkpointDigest: "e".repeat(64),
     }
     const continuation = {
       disposition: "RECLAIMED", expectedVersion: 8, fencingToken: 6,
       leaseExpiresAt: "2098-01-02T13:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
       priorExpectedVersion: 7, priorFencingToken: 5,
       priorLeaseExpiresAt: marker.leaseExpiresAt, receiptLatestFencingToken: 6,
+      checkpointDigest: "f".repeat(64),
     }
     const outcome = {
       id: 23,
@@ -2100,6 +2102,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         fencingToken: 5,
         receiptLatestFencingToken: 5,
         leaseExpiresAt: "2026-07-21T00:00:00.000Z",
+        checkpointDigest: "e".repeat(64),
       },
       reviewRecoveryStaleContinuation: {
         disposition: "RECLAIMED",
@@ -2111,6 +2114,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         receiptLatestFencingToken: 6,
         leaseExpiresAt: "2026-07-21T03:00:00.000Z",
         lifecycleReason: "STALE_LEASE_RECOVERED",
+        checkpointDigest: "f".repeat(64),
       },
     })
     const boundedAcquire = vi.fn(async () => ({
@@ -2125,6 +2129,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       },
       acquired: true, replayed: true, reclaimed: false, reason: null,
       reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+      reviewRecoveryContinuationCheckpointDigest: "f".repeat(64),
     }))
     const composedRuntime = createHermesOutcomeQueueRuntime({
       databaseUrl: "postgresql://not-used", holderId: "resident-hermes",
@@ -2165,12 +2170,14 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
       leaseExpiresAt: "2026-07-21T00:00:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
       priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+      checkpointDigest: "e".repeat(64),
     }
     const durableContinuation = {
       disposition: "RECLAIMED", priorExpectedVersion: 7, priorFencingToken: 5,
       priorLeaseExpiresAt: durableBaseHop.leaseExpiresAt, expectedVersion: 8, fencingToken: 6,
       receiptLatestFencingToken: 6, leaseExpiresAt: "2026-07-21T03:00:00.000Z",
       lifecycleReason: "STALE_LEASE_RECOVERED",
+      checkpointDigest: "f".repeat(64),
     }
     const resolvedForward = {
       reviewRecoverySourceExpectedVersion: 4,

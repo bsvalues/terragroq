@@ -3244,6 +3244,7 @@ describe("transactional durable outcome queue source", () => {
         priorExpectedVersion: 6,
         priorFencingToken: 4,
         receiptLatestFencingToken: 5,
+        checkpointDigest: "a".repeat(64),
       },
     }
     const firstQuery = acquisitionQuery({
@@ -3295,6 +3296,12 @@ describe("transactional durable outcome queue source", () => {
       expect.anything(),
     )
 
+    const replayCheckpointDigest = digestOutcomeQueueCheckpointProof({
+      outcomeId: String(continued.goalId), outcomeKey: continued.outcomeKey,
+      workOrderId: continued.activeWorkOrderId, fencingToken: 6, sequence: 4,
+      state: "HOST_VALIDATION_PASSED",
+      commit: { headSha: "a".repeat(40), mergeSha: null, prNumber: null },
+    })
     const replayOnlyEnvelope = {
       ...envelope,
       mode: "REPLAY_ONLY",
@@ -3308,6 +3315,7 @@ describe("transactional durable outcome queue source", () => {
         receiptLatestFencingToken: 6,
         leaseExpiresAt: continued.leaseExpiresAt,
         lifecycleReason: "STALE_LEASE_RECOVERED",
+        checkpointDigest: replayCheckpointDigest,
       },
     }
     const replayOnlyQuery = acquisitionQuery({
@@ -3325,6 +3333,20 @@ describe("transactional durable outcome queue source", () => {
       replayed: true,
       reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
     })
+    const driftedReplayQuery = acquisitionQuery({
+      receipt: [{ outcomeKey: continued.outcomeKey, firstFencingToken: 2, latestFencingToken: 6 }],
+      receiptOutcome: [continued],
+    })
+    await expect(acquireNextEligibleOutcome({
+      query: driftedReplayQuery,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: {
+        ...replayOnlyEnvelope,
+        continuation: { ...replayOnlyEnvelope.continuation, checkpointDigest: "0".repeat(64) },
+      },
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL" })
+    expect(driftedReplayQuery).not.toHaveBeenCalledWith("COMMIT")
+    expect(driftedReplayQuery.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
     const expiredContinuation = { ...continued, leaseExpiresAt: "2026-07-28T11:59:59.999Z" }
     const expiryRaceQuery = acquisitionQuery({
       receipt: [{ outcomeKey: continued.outcomeKey, firstFencingToken: 2, latestFencingToken: 6 }],
@@ -3366,6 +3388,7 @@ describe("transactional durable outcome queue source", () => {
         priorExpectedVersion: 6,
         priorFencingToken: 4,
         receiptLatestFencingToken: 5,
+        checkpointDigest: "a".repeat(64),
       },
     }
     const query = acquisitionQuery({

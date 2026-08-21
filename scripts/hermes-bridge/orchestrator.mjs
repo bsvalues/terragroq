@@ -407,9 +407,11 @@ export function deriveHermesRuntimeProjectionBindings(
   const staleContinuation = binding.reviewRecoveryStaleContinuation
   const staleKeys = ["disposition", "expectedVersion", "fencingToken", "leaseExpiresAt",
     "lifecycleReason", "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken"]
+  const anchoredStaleKeys = [...staleKeys, "checkpointDigest"]
   const staleExpiry = typeof staleReacquisition?.leaseExpiresAt === "string"
     ? Date.parse(staleReacquisition.leaseExpiresAt) : Number.NaN
   const continuationKeys = [...staleKeys, "priorLeaseExpiresAt"]
+  const anchoredContinuationKeys = [...continuationKeys, "checkpointDigest"]
   const continuationExpiry = typeof staleContinuation?.leaseExpiresAt === "string"
     ? Date.parse(staleContinuation.leaseExpiresAt) : Number.NaN
   // A legacy local RECOVERED checkpoint can carry only the resume state until its durable
@@ -452,8 +454,8 @@ export function deriveHermesRuntimeProjectionBindings(
     || binding.fencingToken !== binding.reviewRecoverySourceFencingToken + reviewRecoveryDelta)
   const invalidStaleReacquisition = staleReacquisition !== undefined && (
     !staleReacquisition || typeof staleReacquisition !== "object" || Array.isArray(staleReacquisition)
-    || Object.keys(staleReacquisition).length !== staleKeys.length
-    || !staleKeys.every((key) => Object.hasOwn(staleReacquisition, key))
+    || ![staleKeys, anchoredStaleKeys].some((keys) => Object.keys(staleReacquisition).length === keys.length
+      && keys.every((key) => Object.hasOwn(staleReacquisition, key)))
     || binding.reviewRecoveryResumeState !== "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
     || staleReacquisition.lifecycleReason !== "STALE_LEASE_RECOVERED"
     || !["RECLAIMED", "REPLAY_WINNER"].includes(staleReacquisition.disposition)
@@ -466,12 +468,14 @@ export function deriveHermesRuntimeProjectionBindings(
         || staleReacquisition.fencingToken !== binding.fencingToken))
     || staleReacquisition.receiptLatestFencingToken !== staleReacquisition.fencingToken
     || !Number.isFinite(staleExpiry)
-    || new Date(staleExpiry).toISOString() !== staleReacquisition.leaseExpiresAt)
+    || new Date(staleExpiry).toISOString() !== staleReacquisition.leaseExpiresAt
+    || (staleReacquisition.checkpointDigest !== undefined
+      && !/^[0-9a-f]{64}$/.test(String(staleReacquisition.checkpointDigest))))
   const invalidStaleContinuation = staleContinuation !== undefined && (
     staleReacquisition === undefined || !staleContinuation
     || typeof staleContinuation !== "object" || Array.isArray(staleContinuation)
-    || Object.keys(staleContinuation).length !== continuationKeys.length
-    || !continuationKeys.every((key) => Object.hasOwn(staleContinuation, key))
+    || ![continuationKeys, anchoredContinuationKeys].some((keys) => Object.keys(staleContinuation).length === keys.length
+      && keys.every((key) => Object.hasOwn(staleContinuation, key)))
     || staleContinuation.lifecycleReason !== "STALE_LEASE_RECOVERED"
     || !["RECLAIMED", "REPLAY_WINNER"].includes(staleContinuation.disposition)
     || staleContinuation.priorExpectedVersion !== staleReacquisition.expectedVersion
@@ -483,7 +487,9 @@ export function deriveHermesRuntimeProjectionBindings(
     || staleContinuation.fencingToken !== binding.fencingToken
     || staleContinuation.receiptLatestFencingToken !== staleContinuation.fencingToken
     || !Number.isFinite(continuationExpiry)
-    || new Date(continuationExpiry).toISOString() !== staleContinuation.leaseExpiresAt)
+    || new Date(continuationExpiry).toISOString() !== staleContinuation.leaseExpiresAt
+    || (staleContinuation.checkpointDigest !== undefined
+      && !/^[0-9a-f]{64}$/.test(String(staleContinuation.checkpointDigest))))
   if (invalidReviewRecoveryDelta || invalidStaleReacquisition || invalidStaleContinuation) {
     throw Object.assign(new Error("Runtime stale reacquisition binding is invalid"), {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
@@ -498,6 +504,10 @@ export function deriveHermesRuntimeProjectionBindings(
     || typeof binding.leaseHolder !== "string" || binding.leaseHolder.trim() === ""
     || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === ""
     || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0
+    || (staleReacquisition !== undefined
+      && !/^[0-9a-f]{64}$/.test(String(staleReacquisition.checkpointDigest ?? "")))
+    || (staleContinuation !== undefined
+      && !/^[0-9a-f]{64}$/.test(String(staleContinuation.checkpointDigest ?? "")))
     || ([binding.reviewRecoverySourceExpectedVersion,
       binding.reviewRecoverySourceFencingToken,
       binding.reviewRecoverySourceRuntimeAttempt].some((value) => value !== undefined)

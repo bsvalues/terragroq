@@ -177,11 +177,15 @@ const STALE_REVIEW_RECOVERY_KEYS = Object.freeze([
   "disposition", "expectedVersion", "fencingToken", "leaseExpiresAt", "lifecycleReason",
   "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken",
 ])
+const STALE_REVIEW_RECOVERY_ANCHORED_KEYS = Object.freeze([
+  ...STALE_REVIEW_RECOVERY_KEYS, "checkpointDigest",
+])
 
 function exactStaleReviewRecoveryReacquisition(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value).length !== STALE_REVIEW_RECOVERY_KEYS.length
-    || !STALE_REVIEW_RECOVERY_KEYS.every((key) => Object.hasOwn(value, key))) return false
+    || ![STALE_REVIEW_RECOVERY_KEYS, STALE_REVIEW_RECOVERY_ANCHORED_KEYS].some((keys) => (
+      Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+    ))) return false
   const expiry = typeof value.leaseExpiresAt === "string" ? Date.parse(value.leaseExpiresAt) : Number.NaN
   return value.lifecycleReason === "STALE_LEASE_RECOVERED"
     && ["RECLAIMED", "REPLAY_WINNER"].includes(value.disposition)
@@ -190,6 +194,8 @@ function exactStaleReviewRecoveryReacquisition(value) {
     && value.expectedVersion === value.priorExpectedVersion + 1
     && value.fencingToken === value.priorFencingToken + 1
     && value.receiptLatestFencingToken === value.fencingToken
+    && (value.checkpointDigest === undefined
+      || /^[0-9a-f]{64}$/.test(String(value.checkpointDigest)))
     && Number.isFinite(expiry) && new Date(expiry).toISOString() === value.leaseExpiresAt
   }
 
@@ -197,11 +203,16 @@ const STALE_REVIEW_RECOVERY_CONTINUATION_KEYS = Object.freeze([
   "disposition", "expectedVersion", "fencingToken", "leaseExpiresAt", "lifecycleReason",
   "priorExpectedVersion", "priorFencingToken", "priorLeaseExpiresAt", "receiptLatestFencingToken",
 ])
+const STALE_REVIEW_RECOVERY_CONTINUATION_ANCHORED_KEYS = Object.freeze([
+  ...STALE_REVIEW_RECOVERY_CONTINUATION_KEYS, "checkpointDigest",
+])
 
 function exactStaleReviewRecoveryContinuation(value, baseHop) {
   if (!value || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value).length !== STALE_REVIEW_RECOVERY_CONTINUATION_KEYS.length
-    || !STALE_REVIEW_RECOVERY_CONTINUATION_KEYS.every((key) => Object.hasOwn(value, key))
+    || ![STALE_REVIEW_RECOVERY_CONTINUATION_KEYS,
+      STALE_REVIEW_RECOVERY_CONTINUATION_ANCHORED_KEYS].some((keys) => (
+      Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+    ))
     || !exactStaleReviewRecoveryReacquisition(baseHop)) return false
   const expiry = typeof value.leaseExpiresAt === "string" ? Date.parse(value.leaseExpiresAt) : Number.NaN
   return value.lifecycleReason === "STALE_LEASE_RECOVERED"
@@ -212,6 +223,8 @@ function exactStaleReviewRecoveryContinuation(value, baseHop) {
     && value.expectedVersion === value.priorExpectedVersion + 1
     && value.fencingToken === value.priorFencingToken + 1
     && value.receiptLatestFencingToken === value.fencingToken
+    && (value.checkpointDigest === undefined
+      || /^[0-9a-f]{64}$/.test(String(value.checkpointDigest)))
     && Number.isFinite(expiry) && new Date(expiry).toISOString() === value.leaseExpiresAt
 }
 
@@ -869,6 +882,13 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
         && sourceHasStaleReacquisition
         && binding.expectedVersion === source.expectedVersion
         && binding.fencingToken === source.fencingToken
+        && /^[0-9a-f]{64}$/.test(String(
+          acquisitionResult?.reviewRecoveryContinuationCheckpointDigest ?? "",
+        ))
+        && acquisitionResult.reviewRecoveryContinuationCheckpointDigest
+          === (sourceHasStaleContinuation
+            ? sourceStaleContinuation.checkpointDigest
+            : sourceStaleReacquisition.checkpointDigest)
       const exactRefreshIdentity = exactStableIdentity
         && (exactSameFence || exactGovernedStaleReclaim || exactGovernedStaleReplay
           || exactPersistedStaleReplay)
@@ -907,7 +927,9 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
       binding.reviewRecoveryReclaimPayloadDigest = source.reviewRecoveryReclaimPayloadDigest
       if (exactGovernedStaleReclaim || exactGovernedStaleReplay) {
         const leaseExpiry = Date.parse(String(item?.leaseExpiresAt ?? ""))
-        if (!Number.isFinite(leaseExpiry)) {
+        const checkpointDigest = acquisitionResult?.reviewRecoveryContinuationCheckpointDigest
+        if (!Number.isFinite(leaseExpiry)
+          || !/^[0-9a-f]{64}$/.test(String(checkpointDigest ?? ""))) {
           wall("Review recovery stale reacquisition lease is invalid",
             "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
         }
@@ -917,6 +939,7 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
           leaseExpiresAt: new Date(leaseExpiry).toISOString(),
           lifecycleReason: "STALE_LEASE_RECOVERED", priorExpectedVersion: source.expectedVersion,
           priorFencingToken: source.fencingToken, receiptLatestFencingToken: binding.fencingToken,
+          checkpointDigest,
         }
         if (sourceHasStaleReacquisition) {
           binding.reviewRecoveryStaleReacquisition = { ...sourceStaleReacquisition }

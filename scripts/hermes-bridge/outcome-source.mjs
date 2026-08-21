@@ -2107,15 +2107,17 @@ function normalizeRuntimeExecutionBinding(value) {
   const staleContinuation = value?.reviewRecoveryStaleContinuation
   const staleKeys = ["disposition", "expectedVersion", "fencingToken", "leaseExpiresAt",
     "lifecycleReason", "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken"]
+  const anchoredStaleKeys = [...staleKeys, "checkpointDigest"]
   const staleExpiry = typeof staleReacquisition?.leaseExpiresAt === "string"
     ? Date.parse(staleReacquisition.leaseExpiresAt) : Number.NaN
   const continuationKeys = [...staleKeys, "priorLeaseExpiresAt"]
+  const anchoredContinuationKeys = [...continuationKeys, "checkpointDigest"]
   const continuationExpiry = typeof staleContinuation?.leaseExpiresAt === "string"
     ? Date.parse(staleContinuation.leaseExpiresAt) : Number.NaN
   const invalidStaleReacquisition = staleReacquisition !== undefined && (
     !staleReacquisition || typeof staleReacquisition !== "object" || Array.isArray(staleReacquisition)
-    || Object.keys(staleReacquisition).length !== staleKeys.length
-    || !staleKeys.every((key) => Object.hasOwn(staleReacquisition, key))
+    || ![staleKeys, anchoredStaleKeys].some((keys) => Object.keys(staleReacquisition).length === keys.length
+      && keys.every((key) => Object.hasOwn(staleReacquisition, key)))
     || !reclaimedReviewRecovery
     || staleReacquisition.lifecycleReason !== "STALE_LEASE_RECOVERED"
     || !["RECLAIMED", "REPLAY_WINNER"].includes(staleReacquisition.disposition)
@@ -2128,12 +2130,14 @@ function normalizeRuntimeExecutionBinding(value) {
         || staleReacquisition.fencingToken !== value.fencingToken))
     || staleReacquisition.receiptLatestFencingToken !== staleReacquisition.fencingToken
     || !Number.isFinite(staleExpiry)
-    || new Date(staleExpiry).toISOString() !== staleReacquisition.leaseExpiresAt)
+    || new Date(staleExpiry).toISOString() !== staleReacquisition.leaseExpiresAt
+    || (staleReacquisition.checkpointDigest !== undefined
+      && !/^[0-9a-f]{64}$/.test(String(staleReacquisition.checkpointDigest))))
   const invalidStaleContinuation = staleContinuation !== undefined && (
     staleReacquisition === undefined || !staleContinuation
     || typeof staleContinuation !== "object" || Array.isArray(staleContinuation)
-    || Object.keys(staleContinuation).length !== continuationKeys.length
-    || !continuationKeys.every((key) => Object.hasOwn(staleContinuation, key))
+    || ![continuationKeys, anchoredContinuationKeys].some((keys) => Object.keys(staleContinuation).length === keys.length
+      && keys.every((key) => Object.hasOwn(staleContinuation, key)))
     || staleContinuation.lifecycleReason !== "STALE_LEASE_RECOVERED"
     || !["RECLAIMED", "REPLAY_WINNER"].includes(staleContinuation.disposition)
     || staleContinuation.priorExpectedVersion !== staleReacquisition.expectedVersion
@@ -2145,7 +2149,9 @@ function normalizeRuntimeExecutionBinding(value) {
     || staleContinuation.fencingToken !== value.fencingToken
     || staleContinuation.receiptLatestFencingToken !== staleContinuation.fencingToken
     || !Number.isFinite(continuationExpiry)
-    || new Date(continuationExpiry).toISOString() !== staleContinuation.leaseExpiresAt)
+    || new Date(continuationExpiry).toISOString() !== staleContinuation.leaseExpiresAt
+    || (staleContinuation.checkpointDigest !== undefined
+      && !/^[0-9a-f]{64}$/.test(String(staleContinuation.checkpointDigest))))
   const invalidReviewRecovery = hasReviewRecovery && (
     !["REVIEW_REMEDIATION_RECOVERED", "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"]
       .includes(value.reviewRecoveryResumeState)
@@ -2587,6 +2593,8 @@ function exactAuthorizationContract(
               + activeRecoveryDelta
             && executionBinding.fencingToken === executionBinding.reviewRecoverySourceFencingToken
               + activeRecoveryDelta
+            && Number(row?.executionEpochFirstFencingToken)
+              === executionBinding.reviewRecoverySourceFencingToken
             && (!staleReacquisition || (Number(row?.executionEpochLatestFencingToken)
               === (staleContinuation?.receiptLatestFencingToken
                 ?? staleReacquisition.receiptLatestFencingToken)
@@ -2850,8 +2858,10 @@ function exactActiveReviewRecoveryAcquisitionHops(row, executionBinding, outcome
     leaseHolder: executionBinding.leaseHolder,
     leaseToken: executionBinding.leaseToken,
   })
-  const exactHop = (hop, rows) => {
-    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 32) return false
+  const exactHop = (hop, rows, priorLeaseExpiry = null) => {
+    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 32
+      || !/^[0-9a-f]{64}$/.test(String(hop?.checkpointDigest ?? ""))) return false
+    let priorAttemptedAt = priorLeaseExpiry
     return rows.every((attempt, index) => {
       const attemptedAt = Date.parse(String(attempt?.attemptedAt ?? ""))
       const leaseExpiresAt = Date.parse(String(attempt?.leaseExpiresAt ?? ""))
@@ -2882,7 +2892,8 @@ function exactActiveReviewRecoveryAcquisitionHops(row, executionBinding, outcome
         && attempt?.leaseHolder === executionBinding.leaseHolder
         && attempt?.acquisitionKeyDigest === acquisitionKeyDigest
         && attempt?.leaseIdentityDigest === leaseIdentityDigest
-        && attempt?.checkpointDigest === checkpointDigest
+        && checkpointDigest === hop.checkpointDigest
+        && attempt?.checkpointDigest === hop.checkpointDigest
         && String(attempt?.checkpointOutcomeId) === String(outcomeId)
         && Number.isSafeInteger(checkpointSequence) && checkpointSequence >= 0
         && attempt?.outcomeKey === executionBinding.outcomeKey
@@ -2893,6 +2904,9 @@ function exactActiveReviewRecoveryAcquisitionHops(row, executionBinding, outcome
         && attempt?.disposition === (index === 0 ? "RECLAIMED" : "REPLAY_WINNER")
         && attempt?.reason == null
         && Number.isFinite(attemptedAt)
+        && attemptedAt >= (priorAttemptedAt ?? Number.NEGATIVE_INFINITY)
+        && attemptedAt <= leaseExpiresAt
+        && ((priorAttemptedAt = attemptedAt) >= 0)
     })
   }
   const baseRows = attempts.filter((attempt) => Number(attempt?.fencingToken) === base.fencingToken)
@@ -2901,7 +2915,7 @@ function exactActiveReviewRecoveryAcquisitionHops(row, executionBinding, outcome
   return exactHop(base, baseRows)
     && (continuation === undefined
       ? attempts.length === baseRows.length
-      : exactHop(continuation, continuationRows)
+      : exactHop(continuation, continuationRows, Date.parse(continuation.priorLeaseExpiresAt))
         && attempts.length === baseRows.length + continuationRows.length
         && Number(baseRows.at(-1)?.id) < Number(continuationRows[0]?.id))
 }
@@ -3131,6 +3145,7 @@ export async function projectOutcomeRuntimeCheckpoint({
          contract_queue."fencingToken" AS "fencingToken",
           contract_queue."activeWorkOrderId" AS "activeWorkOrderId",
           contract_acquisition."createdAt" AS "executionEpochStartedAt",
+          contract_acquisition."firstFencingToken" AS "executionEpochFirstFencingToken",
           contract_acquisition."latestFencingToken" AS "executionEpochLatestFencingToken",
          contract_receipt."resultBinding"->'workContract' AS "workContract",
          contract_receipt."resultBinding"->>'implementationGrantRef' AS "receiptImplementationGrantRef",
@@ -4526,9 +4541,11 @@ export async function resolveActiveReviewRecoveryProvenance({
       )
       const attempts = observed?.rows ?? []
       const queueExpiry = Date.parse(String(row.queueLeaseExpiresAt ?? ""))
+      const checkpointDigestForFence = (fence) => digestOutcomeQueueCheckpointProof({
+        ...exactCheckpointProof, fencingToken: fence,
+      })
       const exactAttempt = (attempt, disposition, fence, groupExpiry) => {
-        const fenceCheckpoint = { ...exactCheckpointProof, fencingToken: fence }
-        const expectedCheckpointDigest = digestOutcomeQueueCheckpointProof(fenceCheckpoint)
+        const expectedCheckpointDigest = checkpointDigestForFence(fence)
         return Number.isSafeInteger(Number(attempt?.id))
         && Number(attempt.id) > 0
         && attempt.disposition === disposition
@@ -4609,6 +4626,7 @@ export async function resolveActiveReviewRecoveryProvenance({
         priorExpectedVersion: provenance.reviewRecoverySourceExpectedVersion + 2,
         priorFencingToken: provenance.reviewRecoverySourceFencingToken + 2,
         receiptLatestFencingToken: baseFence,
+        checkpointDigest: checkpointDigestForFence(baseFence),
       }
       if (hasContinuation) {
         staleContinuation = {
@@ -4621,12 +4639,20 @@ export async function resolveActiveReviewRecoveryProvenance({
           priorFencingToken: staleReacquisition.fencingToken,
           priorLeaseExpiresAt: staleReacquisition.leaseExpiresAt,
           receiptLatestFencingToken: queueFence,
+          checkpointDigest: checkpointDigestForFence(queueFence),
         }
       }
+      const withoutCheckpointAnchor = (hop) => {
+        if (!hop) return hop
+        const { checkpointDigest: _checkpointDigest, ...legacy } = hop
+        return legacy
+      }
       if ((localBaseHop !== undefined
-          && canonicalJson(localBaseHop) !== canonicalJson(staleReacquisition))
+          && canonicalJson(localBaseHop) !== canonicalJson(staleReacquisition)
+          && canonicalJson(localBaseHop) !== canonicalJson(withoutCheckpointAnchor(staleReacquisition)))
         || (localContinuation !== undefined
-          && canonicalJson(localContinuation) !== canonicalJson(staleContinuation))) {
+          && canonicalJson(localContinuation) !== canonicalJson(staleContinuation)
+          && canonicalJson(localContinuation) !== canonicalJson(withoutCheckpointAnchor(staleContinuation)))) {
         throw Object.assign(new Error("Local stale recovery chain conflicts with durable evidence"), {
           code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
         })
