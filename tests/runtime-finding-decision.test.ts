@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 
 import {
+  exactDerivedWorkContract,
   isProtectedRuntimeFindingDecision,
   readPendingRuntimeFindingDecisionRequest,
   recordRuntimeFindingDecision,
@@ -15,6 +16,11 @@ import {
 import { consumePrimaryDecisionIntake } from "@/scripts/hermes-bridge/primary-decision-intake.mjs"
 
 const issuedAt = "2026-08-20T16:00:00.000Z"
+const canonicalJson = (value: any): string => value && typeof value === "object"
+  ? Array.isArray(value) ? `[${value.map(canonicalJson).join(",")}]`
+    : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+  : JSON.stringify(value)
+const canonicalDigest = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex")
 const sourceMetadata = {
   schemaVersion: 1,
   findingId: "FINDING-911-REPIN",
@@ -23,9 +29,101 @@ const sourceMetadata = {
   summary: "repin service paths",
   task: "repin service paths",
   paths: ["scripts/runtime-operator/owner-gate-policy.mjs"],
-  effects: { changesReviewedPolicy: true },
+  effects: {
+    changesReviewedPolicy: true, competesWithPriority: false, destroys: [], irreversible: false,
+    mutatesProductionData: false, outsideObjectiveScope: false, protectedResource: false,
+    releaseOrCutover: false, spendsMoney: false, touchesCredentials: false,
+    unresolvedLegalPrivacyOrSecurityRisk: false,
+  },
+  sourceCheckpointId: 400,
+  sourceCheckpointKey: "hermes-outcome:31:attempt:1:checkpoint:7",
+  sourceCheckpointSequence: 7,
+  sourceCheckpointState: "CODEX_TURN_COMPLETED",
+  sourceExecutionEpochDigest: "e".repeat(64),
+  findingsSetDigest: "f".repeat(64),
+  workContractId: "issue-911-runtime-reliability-evidence.v1",
+  workContractDigest: "c".repeat(64),
+  workContractVersion: "hermes-work-contract.v1",
+  authorizationDecisionId: 17,
+  executionGrantRef: "EXEC-GRANT-17",
+  implementationGrantId: 18,
+  implementationGrantRef: "GRANT-0018",
+  sourceCheckpointDigest: "",
+  workContractRepository: "bsvalues/terragroq",
+  workContractLane: "operator-objective",
+  projectionIssueNumber: 911,
+  projectionCompletionOwned: false,
+  deliveryAuthorityLevel: "A2_WRITE_OWN",
+  deliveryAllowedActions: ["implement"],
+  commitAllowed: true,
+  tagAllowed: false,
+  pushAllowed: true,
+  idempotencyKey: "hermes-outcome:31:finding:FINDING-911-REPIN",
+  payloadDigest: "",
 }
-const gateMetadata = {
+const sourceCheckpointPayload = {
+  idempotencyKey: sourceMetadata.sourceCheckpointKey,
+  outcomeId: 31,
+  workOrderRef: "WO-0031",
+  attempt: 1,
+  checkpointSequence: 7,
+  checkpointState: "CODEX_TURN_COMPLETED",
+  checkpointDetail: "recorded findings",
+  executionBinding: "execution-binding-31",
+  acquisitionKey: "acquisition-key-31",
+  acquisitionFencingToken: 1,
+  executionEpochDigest: sourceMetadata.sourceExecutionEpochDigest,
+  findingsSetDigest: "f".repeat(64),
+  workContractId: sourceMetadata.workContractId,
+  workContractDigest: sourceMetadata.workContractDigest,
+  workContractVersion: sourceMetadata.workContractVersion,
+  workContractRepository: "bsvalues/terragroq",
+  workContractLane: "operator-objective",
+  authorizationDecisionId: sourceMetadata.authorizationDecisionId,
+  executionGrantRef: sourceMetadata.executionGrantRef,
+  implementationGrantId: sourceMetadata.implementationGrantId,
+  implementationGrantRef: sourceMetadata.implementationGrantRef,
+}
+const sourceCheckpointMetadata = {
+  ...sourceCheckpointPayload,
+  payloadDigest: createHash("sha256").update(JSON.stringify(sourceCheckpointPayload)).digest("hex"),
+}
+sourceMetadata.sourceCheckpointDigest = sourceCheckpointMetadata.payloadDigest
+sourceMetadata.payloadDigest = createHash("sha256").update(JSON.stringify({
+  schemaVersion: sourceMetadata.schemaVersion,
+  findingId: sourceMetadata.findingId,
+  objectiveWorkOrderId: sourceMetadata.objectiveWorkOrderId,
+  sequence: sourceMetadata.sequence,
+  summary: sourceMetadata.summary,
+  task: sourceMetadata.task,
+  paths: sourceMetadata.paths,
+  effects: sourceMetadata.effects,
+  sourceCheckpointId: sourceMetadata.sourceCheckpointId,
+  sourceCheckpointKey: sourceMetadata.sourceCheckpointKey,
+  sourceCheckpointSequence: sourceMetadata.sourceCheckpointSequence,
+  sourceCheckpointState: sourceMetadata.sourceCheckpointState,
+  sourceCheckpointDigest: sourceMetadata.sourceCheckpointDigest,
+  sourceExecutionEpochDigest: sourceMetadata.sourceExecutionEpochDigest,
+  findingsSetDigest: sourceMetadata.findingsSetDigest,
+  workContractId: sourceMetadata.workContractId,
+  workContractDigest: sourceMetadata.workContractDigest,
+  workContractVersion: sourceMetadata.workContractVersion,
+  workContractRepository: sourceMetadata.workContractRepository,
+  workContractLane: sourceMetadata.workContractLane,
+  projectionIssueNumber: sourceMetadata.projectionIssueNumber,
+  projectionCompletionOwned: sourceMetadata.projectionCompletionOwned,
+  authorizationDecisionId: sourceMetadata.authorizationDecisionId,
+  executionGrantRef: sourceMetadata.executionGrantRef,
+  implementationGrantId: sourceMetadata.implementationGrantId,
+  implementationGrantRef: sourceMetadata.implementationGrantRef,
+  deliveryAuthorityLevel: sourceMetadata.deliveryAuthorityLevel,
+  deliveryAllowedActions: sourceMetadata.deliveryAllowedActions,
+  commitAllowed: sourceMetadata.commitAllowed,
+  tagAllowed: sourceMetadata.tagAllowed,
+  pushAllowed: sourceMetadata.pushAllowed,
+  idempotencyKey: sourceMetadata.idempotencyKey,
+})).digest("hex")
+const gateCanonicalMetadata = {
   sourceFindingEventId: 442,
   sourceUserId: "owner-1",
   findingId: sourceMetadata.findingId,
@@ -34,24 +132,98 @@ const gateMetadata = {
   gate: "POLICY",
   gates: ["POLICY"],
   reason: "changes reviewed policy",
+  contractId: sourceMetadata.workContractId,
+  contractDigest: sourceMetadata.workContractDigest,
+  authorizationDecisionId: sourceMetadata.authorizationDecisionId,
+  implementationGrantId: sourceMetadata.implementationGrantId,
+  grantRef: sourceMetadata.implementationGrantRef,
+  projectionCompletionOwned: false,
+  sourceCheckpointId: sourceMetadata.sourceCheckpointId,
+  sourceCheckpointDigest: sourceMetadata.sourceCheckpointDigest,
+  contractVersion: sourceMetadata.workContractVersion,
+  contractRepository: "bsvalues/terragroq",
+  contractLane: "operator-objective",
+  deliveryAuthorityLevel: "A2_WRITE_OWN",
+  deliveryAllowedActions: ["implement"],
+  commitAllowed: true,
+  tagAllowed: false,
+  pushAllowed: true,
+}
+const gatePayloadDigest = createHash("sha256").update(JSON.stringify(gateCanonicalMetadata)).digest("hex")
+const gateMetadata = {
+  ...gateCanonicalMetadata,
+  parentGrantRef: gateCanonicalMetadata.grantRef,
+  payloadDigest: gatePayloadDigest,
 }
 const candidate = {
   gateSettlementEventId: 501,
   issuedAt,
   ownerUserId: "owner-1",
   gateMetadata,
-  gatePayloadDigest: createHash("sha256").update(JSON.stringify(gateMetadata)).digest("hex"),
+  gatePayloadDigest,
   findingId: sourceMetadata.findingId,
   gate: "POLICY",
   gates: ["POLICY"],
   sourceFindingEventId: 442,
   sourceMetadata,
+  sourceCheckpointId: sourceMetadata.sourceCheckpointId,
+  sourceCheckpointDigest: sourceMetadata.sourceCheckpointDigest,
+  sourceCheckpointMetadata,
+  parentStatus: "active",
+  parentCompletionCheckpointId: null,
+  parentCompletionCheckpointDigest: null,
+  parentCompleteMetadata: null,
+  childCompleteMetadata: [],
   parentWorkOrderRowId: 31,
   parentWorkOrderRef: "WO-0031",
   authorityGrantId: 18,
   authorityGrantRef: "GRANT-0018",
   authorityGrantLevel: "A2_WRITE_OWN",
   sequence: 2,
+}
+
+function findingPayloadForTest(metadata: Record<string, unknown>) {
+  return Object.fromEntries([
+    "schemaVersion", "findingId", "objectiveWorkOrderId", "sequence", "summary", "task", "paths",
+    "effects", "sourceCheckpointId", "sourceCheckpointKey", "sourceCheckpointSequence",
+    "sourceCheckpointState", "sourceCheckpointDigest", "sourceExecutionEpochDigest", "findingsSetDigest",
+    "workContractId", "workContractDigest", "workContractVersion", "workContractRepository",
+    "workContractLane", "projectionIssueNumber", "projectionCompletionOwned", "authorizationDecisionId",
+    "executionGrantRef", "implementationGrantId", "implementationGrantRef", "deliveryAuthorityLevel",
+    "deliveryAllowedActions", "commitAllowed", "tagAllowed", "pushAllowed", "idempotencyKey",
+  ].map((key) => [key, metadata[key]]))
+}
+
+function candidateVariant() {
+  const variantSource = {
+    ...sourceMetadata,
+    findingId: "FINDING-911-B",
+    sequence: 3,
+    idempotencyKey: "hermes-outcome:31:finding:FINDING-911-B",
+  }
+  variantSource.payloadDigest = createHash("sha256")
+    .update(JSON.stringify(findingPayloadForTest(variantSource))).digest("hex")
+  const variantGateCanonical = {
+    ...gateCanonicalMetadata,
+    sourceFindingEventId: 443,
+    findingId: "FINDING-911-B",
+  }
+  const variantGateDigest = createHash("sha256")
+    .update(JSON.stringify(variantGateCanonical)).digest("hex")
+  return {
+    ...candidate,
+    gateSettlementEventId: 502,
+    findingId: "FINDING-911-B",
+    sourceFindingEventId: 443,
+    sequence: 3,
+    sourceMetadata: variantSource,
+    gateMetadata: {
+      ...variantGateCanonical,
+      parentGrantRef: variantGateCanonical.grantRef,
+      payloadDigest: variantGateDigest,
+    },
+    gatePayloadDigest: variantGateDigest,
+  }
 }
 
 async function requestFrom(row = candidate) {
@@ -103,6 +275,28 @@ async function provenance(request: NonNullable<Awaited<ReturnType<typeof request
 }
 
 describe("runtime finding Primary decisions", () => {
+  it("accepts an exact derived work contract with optional projection omitted", () => {
+    const body = {
+      version: "hermes-work-contract.v1",
+      id: "runtime-finding.442.v1",
+      repository: "bsvalues/terragroq",
+      lane: "docs",
+      reservations: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      validationCommands: [{
+        args: ["diff", "--check"], command: "git", timeoutMs: 60_000,
+      }],
+      delivery: {
+        authorityLevel: "A2_WRITE_OWN", allowedActions: ["implement"],
+        commitAllowed: true, tagAllowed: false, pushAllowed: true,
+      },
+    }
+    const withoutProjection = {
+      ...body, digest: createHash("sha256").update(JSON.stringify(body)).digest("hex"),
+    }
+    expect(exactDerivedWorkContract(withoutProjection)).toBe(true)
+    expect(exactDerivedWorkContract({ ...withoutProjection, projection: undefined })).toBe(false)
+  })
+
   it("exposes the exact protected Decision row contract for the separate action guard", () => {
     expect(RUNTIME_FINDING_DECISION_PROTECTED_TAG).toBe("RUNTIME_FINDING_OWNER_DECISION")
     expect(isProtectedRuntimeFindingDecision({
@@ -136,9 +330,9 @@ describe("runtime finding Primary decisions", () => {
       authorityGrantRef: "GRANT-0018",
       authorityGrantLevel: "A2_WRITE_OWN",
       sourceFindingEventId: 442,
-      sourcePayloadDigest: createHash("sha256").update(JSON.stringify(sourceMetadata)).digest("hex"),
+      sourcePayloadDigest: sourceMetadata.payloadDigest,
       gateSettlementEventId: 501,
-      gatePayloadDigest: createHash("sha256").update(JSON.stringify(gateMetadata)).digest("hex"),
+      gatePayloadDigest,
       actionableProjectionId: "RUNTIME_FINDING_ACTIONABILITY_V1",
       actionableProjectionVersion: 1,
       actionableProjectionDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
@@ -153,7 +347,9 @@ describe("runtime finding Primary decisions", () => {
     expect(sql).toContain("source.actor IN ('hermes', 'williamos-runtime-operator')")
     expect(sql).toContain("gate.actor = 'williamos-runtime-operator'")
     expect(sql).toContain("RUNTIME_FINDING_DERIVED")
-    expect(sql).toContain("child.status <> 'completed'")
+    expect(sql).toContain("child.status = 'closed' AND child.result = 'PASS'")
+    expect(sql).toContain("child_queue.\"lifecycleState\" = 'completed'")
+    expect(sql).toContain("child_queue.\"terminalResult\" = 'COMPLETE'")
     expect(sql).toContain('JOIN authority_grant grant_row')
     expect(sql).toContain("grant_row.status = 'active'")
     expect(sql).toContain('grant_row."revokedAt" IS NULL')
@@ -344,46 +540,17 @@ describe("runtime finding Primary decisions", () => {
       return { rows: [] }
     })
     await expect(recordRuntimeFindingDecision({ query, request, primaryDecisionProvenance: verified }))
-      .rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_REVALIDATION_WALL" })
+      .rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_SOURCE_WALL" })
     expect(query.mock.calls.map(([sql]) => sql).join("\n")).toContain("FOR UPDATE")
   })
 
   it("revalidates the exact requested gate while independently enforcing oldest actionable order", async () => {
-    const requestB = await requestFrom({
-      ...candidate,
-      gateSettlementEventId: 502,
-      findingId: "FINDING-911-B",
-      sourceFindingEventId: 443,
-      sequence: 3,
-      sourceMetadata: { ...sourceMetadata, findingId: "FINDING-911-B", sequence: 3 },
-      gateMetadata: {
-        ...gateMetadata,
-        sourceFindingEventId: 443,
-        findingId: "FINDING-911-B",
-      },
-      gatePayloadDigest: createHash("sha256").update(JSON.stringify({
-        ...gateMetadata,
-        sourceFindingEventId: 443,
-        findingId: "FINDING-911-B",
-      })).digest("hex"),
-    })
+    const variant = candidateVariant()
+    const requestB = await requestFrom(variant)
     const verified = await provenance(requestB)
     const query = vi.fn(async (sql: string, params: unknown[] = []) => {
       if (sql.includes("SELECT gate.id")) {
-        return { rows: [params.includes(502) ? {
-          ...candidate,
-          gateSettlementEventId: 502,
-          findingId: "FINDING-911-B",
-          sourceFindingEventId: 443,
-          sequence: 3,
-          sourceMetadata: { ...sourceMetadata, findingId: "FINDING-911-B", sequence: 3 },
-          gateMetadata: {
-            ...gateMetadata,
-            sourceFindingEventId: 443,
-            findingId: "FINDING-911-B",
-          },
-          gatePayloadDigest: requestB.gatePayloadDigest,
-        } : candidate] }
+        return { rows: [params.includes(502) ? variant : candidate] }
       }
       return { rows: [] }
     })

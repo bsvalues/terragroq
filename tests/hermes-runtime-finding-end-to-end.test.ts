@@ -3,8 +3,16 @@ import fs from "node:fs"
 import path from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
-import { OUTCOME_QUEUE_SQL } from "../scripts/hermes-bridge/outcome-queue-source.mjs"
-import { projectOutcomeRuntimeCheckpoint } from "../scripts/hermes-bridge/outcome-source.mjs"
+import {
+  acquireNextEligibleOutcome,
+  completeOutcomeQueueItem,
+  OUTCOME_QUEUE_SQL,
+} from "../scripts/hermes-bridge/outcome-queue-source.mjs"
+import {
+  completeOutcome,
+  projectOutcomeRuntimeCheckpoint,
+} from "../scripts/hermes-bridge/outcome-source.mjs"
+import { readPendingRuntimeFindingDecisionRequest } from "../scripts/hermes-bridge/runtime-finding-decision.mjs"
 import { resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 import { createRuntimeFindingDbConsumer } from "../scripts/runtime-findings/db-consumer.mjs"
 
@@ -26,6 +34,22 @@ const canonicalJson = (value: any): string => value && typeof value === "object"
 
 const canonicalDigest = (value: unknown) => createHash("sha256")
   .update(canonicalJson(value)).digest("hex")
+
+const runtimeCheckpointPayloadKeys = [
+  "idempotencyKey", "outcomeId", "workOrderRef", "attempt", "checkpointSequence",
+  "checkpointState", "checkpointDetail", "prNumber", "commit", "priorHeadRefOid", "headRefOid",
+  "mergeSha", "terminalCleanupRecoveryProofDigest", "executionBinding", "acquisitionKey",
+  "acquisitionFencingToken", "executionEpochDigest", "findingsSetDigest",
+  "workContractId", "workContractDigest", "workContractVersion", "workContractRepository",
+  "workContractLane", "authorizationDecisionId", "executionGrantRef", "implementationGrantId",
+  "implementationGrantRef", "projectionIssueNumber", "projectionCompletionOwned",
+  "deliveryAuthorityLevel", "deliveryAllowedActions", "commitAllowed", "tagAllowed", "pushAllowed",
+]
+
+function checkpointPayload(metadata: Record<string, unknown>) {
+  return Object.fromEntries(runtimeCheckpointPayloadKeys
+    .filter((key) => Object.hasOwn(metadata, key)).map((key) => [key, metadata[key]]))
+}
 
 function directDatabaseUrl(url: string) {
   const parsed = new URL(url)
@@ -91,7 +115,7 @@ async function seedAuthorizedParent(client: import("pg").PoolClient) {
     decisionId: 74, decisionRef: "WB-EXEC-DECISION-911-E2E",
     grantId: 80, grantRef: "WB-EXEC-GRANT-911-E2E",
     implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911-E2E",
-    queueVersion: 1, authorizedAt: "2026-08-20T18:00:00.000Z",
+    queueVersion: 1, authorizedAt: now.toISOString(),
     expiresAt: "2099-01-01T00:00:00.000Z", workContract,
   }
   const approvalEvidence = [
@@ -117,17 +141,19 @@ async function seedAuthorizedParent(client: import("pg").PoolClient) {
     await client.query(`INSERT INTO workbench_thread_source ("userId","threadId","sourceType","sourceId",role)
       VALUES ($1,'thread-911-e2e','outcome',$2,'root')`, [userId, outcomeKey])
     await client.query(`INSERT INTO goal
-      (id,"userId",ref,command,lane,mode,risk,authority,verdict,"matchedRules","requiresApproval",status)
+      (id,"userId",ref,command,lane,mode,risk,authority,verdict,"matchedRules","requiresApproval",status,"linkedWorkOrderId")
       VALUES (4,$1,'GOAL-911-E2E',$2,'operator-objective','implementation','R1','A2_WRITE_OWN','allow',
-        ARRAY['issue-911-runtime-reliability-evidence.v1'],false,'converted')`, [userId, intent])
+        ARRAY['issue-911-runtime-reliability-evidence.v1'],false,'classified',4)`, [userId, intent])
     await client.query(`INSERT INTO decision
       (id,"userId",ref,title,decision,status,authority,owner,scope,evidence,tags,locked)
       VALUES (74,$1,'WB-EXEC-DECISION-911-E2E','Start #911 work','APPROVE','accepted','binding',$1,$2,$3,
         ARRAY['workbench','outcome','explicit-start-work'],true)`, [userId, outcomeKey, approvalEvidence])
     await client.query(`INSERT INTO authority_grant
       (id,"userId",ref,"workOrderId","grantedBy","grantedTo","authorityLevel",scope,"allowedActions","blockedActions",status,"expiresAt") VALUES
-      (80,$1,'WB-EXEC-GRANT-911-E2E',NULL,$1,'operator','A2_WRITE_OWN',$2,ARRAY['outcome:execute'],ARRAY['host-storage-mutation'],'active','2099-01-01'),
-      (81,$1,'WB-EXEC-IMPL-GRANT-911-E2E',4,$1,'operator','A2_WRITE_OWN','WO-HERMES-OUTCOME-4',ARRAY['implement'],ARRAY['host-storage-mutation'],'active','2099-01-01')`, [userId, outcomeKey])
+      (80,$1,'WB-EXEC-GRANT-911-E2E',NULL,$1,'operator','A2_WRITE_OWN',$2,ARRAY['outcome:execute'],
+        ARRAY['production:mutate','release:create','secret:access','spend:increase'],'active','2099-01-01'),
+      (81,$1,'WB-EXEC-IMPL-GRANT-911-E2E',NULL,$1,'operator','A2_WRITE_OWN','WO-HERMES-OUTCOME-4',ARRAY['implement'],
+        ARRAY['production:mutate','release:create','secret:access','spend:increase'],'active','2099-01-01')`, [userId, outcomeKey])
     await client.query(`INSERT INTO work_order
       (id,"userId",ref,title,goal,scope,"allowedFiles",validators,lane,status,priority,assignee,
        "authorityLevel","authorityGranted","authorityGrantId","acceptanceCriteria",agent,"approvedBy",
@@ -145,10 +171,10 @@ async function seedAuthorizedParent(client: import("pg").PoolClient) {
        'WB-EXEC-GRANT-911-E2E','operator','outcome:execute','active',4,$5,'resident-hermes',$6,'2099-01-01',2,1,$7)`,
     [userId, outcomeKey, intent, now.toISOString(), executionBinding, leaseToken, acquisitionKey])
     await client.query(`INSERT INTO outcome_queue_mutation_receipt
-      ("userId","idempotencyKey",operation,"outcomeKey","requestHash","requestBinding","resultBinding")
-      VALUES ($1,'workbench-execution:911-e2e','workbench_execution.authorize',$2,$3,$4::jsonb,$5::jsonb)`,
+      ("userId","idempotencyKey",operation,"outcomeKey","requestHash","requestBinding","resultBinding","createdAt")
+      VALUES ($1,'workbench-execution:911-e2e','workbench_execution.authorize',$2,$3,$4::jsonb,$5::jsonb,$6)`,
     [userId, outcomeKey, canonicalDigest({ contract: "workbench-execution-authorization.v1", ...requestBinding }),
-      JSON.stringify(requestBinding), JSON.stringify(resultBinding)])
+      JSON.stringify(requestBinding), JSON.stringify(resultBinding), now])
     await client.query(`INSERT INTO outcome_queue_acquisition_receipt
       ("userId","acquisitionKey","outcomeKey","firstFencingToken","latestFencingToken")
       VALUES ($1,$2,$3,2,2)`, [userId, acquisitionKey, outcomeKey])
@@ -185,6 +211,7 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
 
   afterAll(async () => {
     if (client && schema) {
+      try { await client.query("ROLLBACK") } catch {}
       await client.query("SET search_path TO public")
       await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
     }
@@ -192,7 +219,7 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     await pool?.end()
   })
 
-  it("persists a completed turn's ordinary and gated siblings before independently settling both", async () => {
+  it("keeps a completed parent's gated finding actionable only after its ordinary sibling durably completes", async () => {
     const checkpoint = await projectOutcomeRuntimeCheckpoint({
       databaseUrl: scopedUrl, outcomeId: 4, attempt: 1, workContract: runtimeWorkContract,
       executionBinding: {
@@ -226,6 +253,38 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     expect(recorded.every((row) => Number(row.metadata.sourceCheckpointId) > 0)).toBe(true)
     expect(recorded.every((row) => /^[0-9a-f]{64}$/.test(row.metadata.payloadDigest))).toBe(true)
     expect(new Set(recorded.map((row) => row.metadata.sourceCheckpointDigest)).size).toBe(1)
+
+    const parentMergeSha = "9".repeat(40)
+    const parentEvidenceRef = "EV-HERMES-4-1-8"
+    await projectOutcomeRuntimeCheckpoint({
+      databaseUrl: scopedUrl, outcomeId: 4, attempt: 1, workContract: runtimeWorkContract,
+      executionBinding: {
+        userId, outcomeKey, expectedVersion: 1, executionBinding,
+        leaseToken, leaseHolder: "resident-hermes", fencingToken: 2,
+      },
+      checkpoint: {
+        sequence: 8, state: "COMPLETE", detail: "PR #929 merged and verified",
+        metadata: {
+          prNumber: 929, branch: "codex/runtime-finding-parent", mergeSha: parentMergeSha,
+          headRefOid: "8".repeat(40), runtimeEvidenceRef: parentEvidenceRef,
+        },
+      },
+    })
+    await completeOutcomeQueueItem({
+      databaseUrl: scopedUrl, userId, outcomeKey, expectedVersion: 1, executionBinding,
+      leaseToken, fencingToken: 2, acquisitionKey,
+      terminalKey: `hermes:${outcomeKey}:2:${parentMergeSha}`,
+      terminalResult: "COMPLETE",
+      terminalEvidenceRefs: [parentEvidenceRef, "pr:929", `merge:${parentMergeSha}`], now,
+    })
+    await completeOutcome({
+      databaseUrl: scopedUrl, outcomeId: 4,
+      evidence: {
+        prNumber: 929, mergeSha: parentMergeSha, branch: "codex/runtime-finding-parent",
+        runtimeEvidenceRef: parentEvidenceRef, ownerTouchCount: 0, blockedScopeCrossed: false,
+      },
+    })
+
     const consumer = createRuntimeFindingDbConsumer({
       withPool: async (action) => {
         const { Pool } = await import("pg")
@@ -268,5 +327,233 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
       .toEqual([{ digest: recorded[0].metadata.payloadDigest }])
     expect((await client.query(`SELECT count(*)::integer AS count FROM work_order wo
       WHERE wo.ref LIKE $1`, [`%-F${recorded[1].id}`])).rows).toEqual([{ count: 0 }])
+
+    await expect(readPendingRuntimeFindingDecisionRequest({
+      databaseUrl: scopedUrl, ownerEmail: "runtime-finding-e2e@example.test",
+    })).resolves.toBeNull()
+
+    const child = (await client.query(`SELECT wo.id AS "workOrderId", g.id AS "goalId",
+        q."outcomeKey", receipt."resultBinding"->'workContract' AS "workContract"
+      FROM work_order wo
+      JOIN goal g ON g."linkedWorkOrderId"=wo.id
+      JOIN outcome_queue_item q ON q."activeWorkOrderId"=wo.id
+      JOIN outcome_queue_mutation_receipt receipt ON receipt."outcomeKey"=q."outcomeKey"
+        AND receipt.operation='runtime_finding.derive'
+      WHERE wo.id <> 4`)).rows[0]
+    const childExecutionBinding = "execution-binding-911-child"
+    const childLeaseToken = "lease-token-911-child"
+    const childAcquisitionKey = "acquisition-key-911-child"
+    const childNow = new Date()
+    const acquiredChild = await acquireNextEligibleOutcome({
+      databaseUrl: scopedUrl, userId, acquisitionKey: childAcquisitionKey,
+      leaseHolder: "resident-hermes", leaseToken: childLeaseToken,
+      executionBinding: childExecutionBinding, leaseDurationMs: 60_000,
+      activeWorkOrderId: Number(child.workOrderId), campaignWindowId: "campaign-911-child",
+      processIdentity: "process-911-child", now: childNow,
+      checkpointProofProvider: async ({ outcome }) => ({
+        outcomeId: String(outcome.goalId), outcomeKey: outcome.outcomeKey,
+        workOrderId: outcome.activeWorkOrderId, fencingToken: outcome.fencingToken,
+        sequence: 0, state: "LEASED",
+        commit: { headSha: null, mergeSha: null, prNumber: null },
+      }),
+    })
+    expect(acquiredChild).toMatchObject({ acquired: true, replayed: false })
+    const childQueue = acquiredChild.outcome
+    const childRuntimeContract = {
+      version: child.workContract.version, id: child.workContract.id, digest: child.workContract.digest,
+      repository: child.workContract.repository, lane: child.workContract.lane,
+      allowedFiles: child.workContract.reservations,
+      validators: child.workContract.validationCommands.map((validator: { command: string; args: string[] }) => (
+        `${validator.command} ${validator.args.join(" ")}`
+      )),
+      projection: child.workContract.projection, delivery: child.workContract.delivery,
+    }
+    const childMergeSha = "7".repeat(40)
+    const childEvidenceRef = `EV-HERMES-${child.goalId}-1-1`
+    await projectOutcomeRuntimeCheckpoint({
+      databaseUrl: scopedUrl, outcomeId: Number(child.goalId), attempt: 1,
+      workContract: childRuntimeContract,
+      executionBinding: {
+        userId, outcomeKey: child.outcomeKey, expectedVersion: Number(childQueue.version),
+        executionBinding: childExecutionBinding, leaseToken: childLeaseToken,
+        leaseHolder: "resident-hermes", fencingToken: Number(childQueue.fencingToken),
+        acquisitionKey: childAcquisitionKey,
+      },
+      checkpoint: {
+        sequence: 1, state: "COMPLETE", detail: "PR #930 merged and verified",
+        metadata: {
+          prNumber: 930, branch: "codex/runtime-finding-child", mergeSha: childMergeSha,
+          headRefOid: "6".repeat(40), runtimeEvidenceRef: childEvidenceRef,
+        },
+      },
+    })
+    await completeOutcomeQueueItem({
+      databaseUrl: scopedUrl, userId, outcomeKey: child.outcomeKey,
+      expectedVersion: Number(childQueue.version), executionBinding: childExecutionBinding,
+      leaseToken: childLeaseToken, fencingToken: Number(childQueue.fencingToken),
+      acquisitionKey: childAcquisitionKey,
+      terminalKey: `hermes:${child.outcomeKey}:${childQueue.fencingToken}:${childMergeSha}`,
+      terminalResult: "COMPLETE",
+      terminalEvidenceRefs: [childEvidenceRef, "pr:930", `merge:${childMergeSha}`], now: childNow,
+    })
+    await completeOutcome({
+      databaseUrl: scopedUrl, outcomeId: Number(child.goalId),
+      evidence: {
+        prNumber: 930, mergeSha: childMergeSha, branch: "codex/runtime-finding-child",
+        runtimeEvidenceRef: childEvidenceRef, ownerTouchCount: 0, blockedScopeCrossed: false,
+      },
+    })
+
+    const actionable = await readPendingRuntimeFindingDecisionRequest({
+      databaseUrl: scopedUrl, ownerEmail: "runtime-finding-e2e@example.test",
+    })
+    expect(actionable).toMatchObject({
+      sourceKind: "RUNTIME_FINDING",
+      findingId: "FINDING-911-POLICY-GATE",
+      parentWorkOrderRowId: 4,
+      gateSettlementEventId: expect.any(Number),
+    })
+
+    const terminalEvents = (await client.query(`SELECT id,"eventType","entityType","entityId"
+      FROM governance_event WHERE "eventType" IN ('HERMES_RUNTIME_CHECKPOINT','HERMES_OUTCOME_COMPLETED',
+        'RUNTIME_FINDING_OWNER_GATED') ORDER BY id`)).rows
+    const parentComplete = terminalEvents.filter((event) => event.eventType === "HERMES_RUNTIME_CHECKPOINT"
+      && event.entityType === "work_order" && event.entityId === "4").at(-1)
+    const parentCompletion = terminalEvents.filter((event) => event.eventType === "HERMES_OUTCOME_COMPLETED"
+      && event.entityType === "goal" && event.entityId === "4")
+    const gateEvent = terminalEvents.find((event) => event.eventType === "RUNTIME_FINDING_OWNER_GATED")
+    const childComplete = terminalEvents.find((event) => event.eventType === "HERMES_RUNTIME_CHECKPOINT"
+      && event.entityType === "work_order" && event.entityId === String(child.workOrderId))
+    const childCompletion = terminalEvents.filter((event) => event.eventType === "HERMES_OUTCOME_COMPLETED"
+      && event.entityType === "goal" && event.entityId === String(child.goalId))
+    expect(parentCompletion).toHaveLength(1)
+    expect(childCompletion).toHaveLength(1)
+    expect(Number(parentComplete.id)).toBeLessThan(Number(parentCompletion[0].id))
+    expect(Number(parentCompletion[0].id)).toBeLessThan(Number(gateEvent.id))
+    expect(Number(gateEvent.id)).toBeLessThan(Number(childComplete.id))
+    expect(Number(childComplete.id)).toBeLessThan(Number(childCompletion[0].id))
+
+    const readInTransaction = () => readPendingRuntimeFindingDecisionRequest({
+      query: client.query.bind(client), ownerEmail: "runtime-finding-e2e@example.test",
+    })
+    await client.query("BEGIN")
+    await client.query(`UPDATE authority_grant SET "revokedAt"=NOW() WHERE id=81`)
+    await expect(readInTransaction()).resolves.toBeNull()
+    await client.query("ROLLBACK")
+
+    await client.query("BEGIN")
+    await client.query(`UPDATE outcome_queue_item SET "terminalEvidenceRefs"=ARRAY[]::text[] WHERE "goalId"=4`)
+    await expect(readInTransaction()).resolves.toBeNull()
+    await client.query("ROLLBACK")
+
+    await client.query("BEGIN")
+    await client.query(`INSERT INTO outcome_queue_mutation_receipt
+      ("userId","idempotencyKey",operation,"outcomeKey","requestHash","requestBinding","resultBinding","createdAt")
+      SELECT "userId",'runtime-finding.derive:gated-adversarial',operation,'runtime-finding:gated-adversarial',
+        "requestHash",jsonb_set("requestBinding",'{sourceFindingEventId}',to_jsonb($1::text)),"resultBinding","createdAt"
+      FROM outcome_queue_mutation_receipt WHERE operation='runtime_finding.derive'`,
+    [String(recorded[1].id)])
+    await expect(readInTransaction()).resolves.toBeNull()
+    await client.query("ROLLBACK")
+
+    await client.query("BEGIN")
+    await client.query(`UPDATE governance_event SET metadata=metadata-'workOrderId'
+      WHERE "eventType"='RUNTIME_FINDING_DERIVED'`)
+    await expect(readInTransaction()).rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_SOURCE_WALL" })
+    await client.query("ROLLBACK")
+
+    await client.query("BEGIN")
+    await client.query(`INSERT INTO governance_event
+      ("userId","eventType","entityType","entityId",actor,reason,metadata)
+      SELECT "userId","eventType","entityType","entityId",actor,reason,
+        jsonb_set(metadata,'{idempotencyKey}',to_jsonb('duplicate-complete'::text))
+      FROM governance_event WHERE id=$1`, [Number(parentComplete.id)])
+    await expect(readInTransaction()).resolves.toBeNull()
+    await client.query("ROLLBACK")
+
+    await client.query("BEGIN")
+    await client.query(`INSERT INTO evidence_record
+      ("userId",ref,"workOrderId",result,repo,head,notes,"contentHash")
+      SELECT "userId",ref,"workOrderId",result,repo,head,notes,"contentHash"
+      FROM evidence_record WHERE "workOrderId"=4`)
+    await expect(readInTransaction()).resolves.toBeNull()
+    await client.query("ROLLBACK")
+
+    await client.query("BEGIN")
+    await client.query(`UPDATE outcome_queue_mutation_receipt SET "requestHash"=$1
+      WHERE operation='runtime_finding.derive'`, ["0".repeat(64)])
+    await expect(readInTransaction()).rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_SOURCE_WALL" })
+    await client.query("ROLLBACK")
+
+    await client.query("BEGIN")
+    const derivedRow = (await client.query(`SELECT id,metadata FROM governance_event
+      WHERE "eventType"='RUNTIME_FINDING_DERIVED'`)).rows[0]
+    const childCheckpointRow = (await client.query(`SELECT id,metadata FROM governance_event
+      WHERE "eventType"='HERMES_RUNTIME_CHECKPOINT' AND "entityId"=$1`,
+    [String(child.workOrderId)])).rows[0]
+    const originalContract = derivedRow.metadata.childWorkContract
+    const driftedContractBody = {
+      version: originalContract.version,
+      id: originalContract.id,
+      repository: "bsvalues/another-repository",
+      lane: originalContract.lane,
+      reservations: originalContract.reservations,
+      validationCommands: originalContract.validationCommands.map((command: any) => ({
+        args: command.args,
+        command: command.command,
+        ...(command.env ? { env: Object.fromEntries(Object.keys(command.env).sort()
+          .map((key) => [key, command.env[key]])) } : {}),
+        timeoutMs: command.timeoutMs,
+      })),
+      ...(Object.hasOwn(originalContract, "projection") ? {
+        projection: {
+          issueNumber: originalContract.projection.issueNumber,
+          completionOwned: originalContract.projection.completionOwned,
+        },
+      } : {}),
+      delivery: {
+        authorityLevel: originalContract.delivery.authorityLevel,
+        allowedActions: originalContract.delivery.allowedActions,
+        commitAllowed: originalContract.delivery.commitAllowed,
+        tagAllowed: originalContract.delivery.tagAllowed,
+        pushAllowed: originalContract.delivery.pushAllowed,
+      },
+    }
+    const driftedContract = { ...driftedContractBody, digest: createHash("sha256")
+      .update(JSON.stringify(driftedContractBody)).digest("hex") }
+    const driftedCheckpoint = {
+      ...childCheckpointRow.metadata,
+      workContractDigest: driftedContract.digest,
+      workContractRepository: driftedContract.repository,
+    }
+    driftedCheckpoint.payloadDigest = createHash("sha256")
+      .update(JSON.stringify(checkpointPayload(driftedCheckpoint))).digest("hex")
+    await client.query(`UPDATE governance_event SET metadata=jsonb_set(metadata,
+      '{childWorkContract}',$1::jsonb) WHERE id=$2`, [JSON.stringify(driftedContract), derivedRow.id])
+    await client.query(`UPDATE outcome_queue_mutation_receipt SET "resultBinding"=jsonb_set(
+      "resultBinding",'{workContract}',$1::jsonb) WHERE operation='runtime_finding.derive'`,
+    [JSON.stringify(driftedContract)])
+    await client.query(`UPDATE governance_event SET metadata=$1::jsonb WHERE id=$2`,
+    [JSON.stringify(driftedCheckpoint), childCheckpointRow.id])
+    await client.query(`UPDATE evidence_record SET "contentHash"=$1 WHERE "workOrderId"=$2`,
+    [driftedCheckpoint.payloadDigest, Number(child.workOrderId)])
+    await expect(readInTransaction()).rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_SOURCE_WALL" })
+    await client.query("ROLLBACK")
+
+    await client.query("BEGIN")
+    await client.query(`INSERT INTO governance_event
+      ("userId","eventType","entityType","entityId",actor,reason,metadata)
+      SELECT "userId","eventType","entityType","entityId",actor,reason,metadata
+      FROM governance_event WHERE "eventType"='HERMES_OUTCOME_COMPLETED' AND "entityId"=$1`,
+    [String(child.goalId)])
+    await expect(readInTransaction()).resolves.toBeNull()
+    await client.query("ROLLBACK")
+
+    await client.query("BEGIN")
+    await client.query(`UPDATE governance_event SET metadata=jsonb_set(metadata,'{payloadDigest}',to_jsonb($1::text))
+      WHERE id=$2`, ["d".repeat(64), Number(parentComplete.id)])
+    await client.query(`UPDATE evidence_record SET "contentHash"=$1 WHERE "workOrderId"=4`, ["d".repeat(64)])
+    await expect(readInTransaction()).rejects.toMatchObject({ code: "RUNTIME_FINDING_DECISION_SOURCE_WALL" })
+    await client.query("ROLLBACK")
   })
 })
