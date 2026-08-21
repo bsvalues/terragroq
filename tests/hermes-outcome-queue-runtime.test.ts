@@ -1641,10 +1641,12 @@ describe("Hermes durable outcome queue runtime", () => {
       fencingToken: 4,
       leaseHolder: "resident-hermes",
       leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5,
     }
     const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
     const acquire = vi.fn(async () => ({ outcome: recovered, acquired: true, replayed: true }))
-    const bridge = runtime({ resumeReviewRecoveryQueue, acquire })
+    const verifyActiveReviewRecovery = vi.fn(async () => true)
+    const bridge = runtime({ resumeReviewRecoveryQueue, acquire, verifyActiveReviewRecovery })
     const outcome = {
       ...goal,
       queueBinding: {
@@ -1661,7 +1663,7 @@ describe("Hermes durable outcome queue runtime", () => {
       prNumber: 523,
       reviewedHeadSha: "a".repeat(40),
       mergeSha: "b".repeat(40),
-      runtimeAttempt: 5,
+      runtimeAttempt: 6,
     })).resolves.toMatchObject({ queueBinding: {
       expectedVersion: 6, fencingToken: 4,
       reviewRecoverySourceExpectedVersion: 5,
@@ -1674,6 +1676,10 @@ describe("Hermes durable outcome queue runtime", () => {
       proofDigest: "d".repeat(64),
       persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
     }))
+    expect(verifyActiveReviewRecovery).toHaveBeenCalledWith(expect.objectContaining({
+      executionBinding: expect.objectContaining({ reviewRecoverySourceRuntimeAttempt: 5 }),
+      proof: expect.objectContaining({ runtimeAttempt: 5 }),
+    }))
     expect(acquire).toHaveBeenCalledOnce()
   })
 
@@ -1682,6 +1688,7 @@ describe("Hermes durable outcome queue runtime", () => {
       ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
       approvalState: "approved", authorityState: "matched", version: 6, fencingToken: 4,
       leaseHolder: "resident-hermes", leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5,
     }
     const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
     const acquire = vi.fn()
@@ -1713,6 +1720,7 @@ describe("Hermes durable outcome queue runtime", () => {
       fencingToken: 5,
       leaseHolder: "resident-hermes",
       leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5,
     }
     const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
     const acquire = vi.fn(async () => ({ outcome: recovered, acquired: true, replayed: true }))

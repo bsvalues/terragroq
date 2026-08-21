@@ -1797,9 +1797,15 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
   it("adopts a durable reviewed-merge recovery before queue selection after restart", async () => {
     const resumeQueueAfterReviewRecovery = vi.fn(async (outcome) => outcome)
     const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
+    const resolveActiveReviewRecoveryProvenance = vi.fn(async () => ({
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }))
     const value = fixture(undefined, {
       resumeQueueAfterReviewRecovery,
       refreshQueueOutcome,
+      resolveActiveReviewRecoveryProvenance,
     })
     const outcome = await value.selectOutcome()
     value.selectOutcome.mockClear()
@@ -1863,6 +1869,22 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       proofDigest: "d".repeat(64),
       mergeDetail: "Recovered reviewed PR #500",
     })
+    for (let fencingToken = lease.fencingToken; fencingToken < 6; fencingToken += 1) {
+      const reclaimed = value.state.reclaimLease({
+        idempotencyKey: `review-recovery-local-reclaim-${fencingToken + 1}`,
+        outcomeId: "77",
+        expectedFencingToken: fencingToken,
+        holderId: "crashed-holder",
+        leaseDurationMs: 1000,
+      })
+      value.state.abandonLease({
+        idempotencyKey: `review-recovery-local-abandon-${fencingToken + 1}`,
+        outcomeId: "77",
+        holderId: "crashed-holder",
+        fencingToken: reclaimed.fencingToken,
+        reason: "TEST_CRASH_WINDOW",
+      })
+    }
     value.lifecycle.inspectPullRequest.mockResolvedValue({
       state: "MERGED",
       baseRefName: "main",
@@ -1874,7 +1896,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       mergeCommit: { oid: "b".repeat(40) },
     })
 
-    resumeQueueAfterReviewRecovery.mockRejectedValueOnce(Object.assign(
+    resolveActiveReviewRecoveryProvenance.mockRejectedValueOnce(Object.assign(
       new Error("active recovery authorization drifted"),
       { code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL" },
     ))
@@ -1882,7 +1904,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
     })
     expect(value.state.read().executions["77"]).toMatchObject({
-      lease: { status: "ABANDONED" },
+      fencingToken: 6,
+      lease: { status: "ACTIVE", abandonedAt: expect.any(String) },
       checkpoint: {
         state: "REVIEW_REMEDIATION_RECOVERED",
         detail: "REVIEW_REMEDIATION_EXHAUSTED",
@@ -1892,6 +1915,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
     expect(value.client.runTurn).not.toHaveBeenCalled()
     expect(value.projectLease).not.toHaveBeenCalled()
+    expect(resumeQueueAfterReviewRecovery).not.toHaveBeenCalled()
 
     value.projectCheckpoint.mockClear()
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
@@ -1907,12 +1931,12 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       prNumber: 500,
       reviewedHeadSha: "c".repeat(40),
       mergeSha: "b".repeat(40),
-      runtimeAttempt: lease.fencingToken,
+      runtimeAttempt: 5,
     })
     expect(resumeQueueAfterReviewRecovery.mock.invocationCallOrder[0])
       .toBeLessThan(refreshQueueOutcome.mock.invocationCallOrder[0])
     expect(value.state.read().executions["77"]).toMatchObject({
-      fencingToken: lease.fencingToken + 1,
+      fencingToken: 7,
       lease: { status: "RELEASED" },
       checkpoint: { state: "COMPLETE" },
     })

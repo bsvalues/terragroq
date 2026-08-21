@@ -2168,7 +2168,23 @@ WHERE q."userId" = $1
 FOR UPDATE OF q
 `,
   verifyPersistedReviewRecovery: `
-SELECT ${QUEUE_COLUMNS}
+SELECT ${QUEUE_COLUMNS},
+  (SELECT (recovery_authorization.metadata->>'runtimeAttempt')::integer
+   FROM governance_event AS recovery_authorization
+   WHERE recovery_authorization."userId" = q."userId"
+     AND recovery_authorization."entityType" = 'goal'
+     AND recovery_authorization."entityId"::text = q."goalId"::text
+     AND recovery_authorization."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED'
+     AND recovery_authorization.actor = 'hermes-codex-bridge'
+     AND recovery_authorization.metadata->>'recoveryKind' = 'review-remediation'
+     AND recovery_authorization.metadata->>'executionBinding' = q."executionBinding"
+     AND recovery_authorization.metadata->>'acquisitionKey' = q."acquisitionKey"
+     AND recovery_authorization.metadata->>'fencingToken' = (q."fencingToken" - 1)::text
+     AND recovery_authorization.metadata->>'proofDigest' = $10
+     AND recovery_authorization.metadata->>'prNumber' = $7::text
+     AND recovery_authorization.metadata->>'reviewedHeadSha' = $8
+     AND recovery_authorization.metadata->>'mergeSha' = $9
+  ) AS "reviewRecoverySourceRuntimeAttempt"
 FROM "outcome_queue_item" AS q
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2

@@ -4023,6 +4023,126 @@ export async function verifyActiveReviewRecoveryContinuation({
   }
 }
 
+export async function resolveActiveReviewRecoveryProvenance({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  executionBinding,
+  workContract,
+  proof,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
+    || !executionBinding || typeof executionBinding.userId !== "string"
+    || typeof executionBinding.outcomeKey !== "string"
+    || !Number.isSafeInteger(executionBinding.expectedVersion) || executionBinding.expectedVersion <= 0
+    || typeof executionBinding.executionBinding !== "string"
+    || typeof executionBinding.acquisitionKey !== "string"
+    || typeof executionBinding.leaseHolder !== "string"
+    || typeof executionBinding.leaseToken !== "string"
+    || !Number.isSafeInteger(executionBinding.fencingToken) || executionBinding.fencingToken <= 1) {
+    throw Object.assign(new Error("Active review recovery binding is invalid"), {
+      code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+    })
+  }
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  let primaryError
+  try {
+    if (!runQuery) {
+      if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+        throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+      }
+      const { Pool } = await import("pg")
+      pool = createHermesDatabasePool(Pool, databaseUrl)
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
+    const resolved = await runQuery(
+      `SELECT (recovery_authorization.metadata->>'runtimeAttempt')::integer AS "sourceRuntimeAttempt"
+       FROM outcome_queue_item AS queue
+       JOIN governance_event AS recovery_authorization
+         ON recovery_authorization."userId" = queue."userId"
+        AND recovery_authorization."entityType" = 'goal'
+        AND recovery_authorization."entityId"::text = queue."goalId"::text
+        AND recovery_authorization."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED'
+        AND recovery_authorization.actor = 'hermes-codex-bridge'
+        AND recovery_authorization.metadata->>'recoveryKind' = 'review-remediation'
+        AND recovery_authorization.metadata->>'outcomeId' = queue."goalId"::text
+        AND recovery_authorization.metadata->>'userId' = queue."userId"
+        AND recovery_authorization.metadata->>'outcomeKey' = queue."outcomeKey"
+        AND recovery_authorization.metadata->>'workOrderId' = queue."activeWorkOrderId"::text
+        AND recovery_authorization.metadata->>'workOrderRef' = 'WO-HERMES-OUTCOME-' || queue."goalId"::text
+        AND recovery_authorization.metadata->>'executionBinding' = queue."executionBinding"
+        AND recovery_authorization.metadata->>'acquisitionKey' = queue."acquisitionKey"
+        AND recovery_authorization.metadata->>'fencingToken' = (queue."fencingToken" - 1)::text
+        AND recovery_authorization.metadata->>'proofDigest' = $10
+        AND recovery_authorization.metadata->>'prNumber' = ($11::integer)::text
+        AND recovery_authorization.metadata->>'reviewedHeadSha' = $12
+        AND recovery_authorization.metadata->>'mergeSha' = $13
+       WHERE queue."goalId" = $1::integer
+         AND queue."userId" = $2
+         AND queue."outcomeKey" = $3
+         AND queue.version = $4::integer
+         AND queue."executionBinding" = $5
+         AND queue."acquisitionKey" = $6
+         AND queue."leaseHolder" = $7
+         AND queue."leaseToken" = $8
+         AND queue."fencingToken" = $9::integer
+         AND queue."lifecycleState" = 'active'
+         AND queue."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERED'
+       ORDER BY recovery_authorization.id
+       LIMIT 2`,
+      [outcomeId, executionBinding.userId, executionBinding.outcomeKey,
+        executionBinding.expectedVersion, executionBinding.executionBinding,
+        executionBinding.acquisitionKey, executionBinding.leaseHolder,
+        executionBinding.leaseToken, executionBinding.fencingToken,
+        proof?.proofDigest, proof?.prNumber, proof?.reviewedHeadSha, proof?.mergeSha],
+    )
+    const sourceRuntimeAttempt = Number(resolved?.rows?.[0]?.sourceRuntimeAttempt)
+    if (resolved?.rows?.length !== 1 || !Number.isSafeInteger(sourceRuntimeAttempt)
+      || sourceRuntimeAttempt <= 0) {
+      throw Object.assign(new Error("Active review recovery provenance is not unique"), {
+        code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+      })
+    }
+    const provenance = {
+      reviewRecoverySourceExpectedVersion: executionBinding.expectedVersion - 1,
+      reviewRecoverySourceFencingToken: executionBinding.fencingToken - 1,
+      reviewRecoverySourceRuntimeAttempt: sourceRuntimeAttempt,
+    }
+    const local = [executionBinding.reviewRecoverySourceExpectedVersion,
+      executionBinding.reviewRecoverySourceFencingToken,
+      executionBinding.reviewRecoverySourceRuntimeAttempt]
+    if (local.some((value) => value !== undefined)
+      && (local.some((value) => value === undefined)
+        || local[0] !== provenance.reviewRecoverySourceExpectedVersion
+        || local[1] !== provenance.reviewRecoverySourceFencingToken
+        || local[2] !== provenance.reviewRecoverySourceRuntimeAttempt)) {
+      throw Object.assign(new Error("Active review recovery provenance conflicts with local state"), {
+        code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+      })
+    }
+    await verifyActiveReviewRecoveryContinuation({
+      query: runQuery,
+      outcomeId,
+      executionBinding: { ...executionBinding, ...provenance },
+      workContract,
+      proof: { ...proof, runtimeAttempt: sourceRuntimeAttempt },
+    })
+    return provenance
+  } catch (error) {
+    primaryError = error
+    if (error?.code === "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL") throw error
+    throw Object.assign(new Error("Active review recovery provenance is invalid"), {
+      code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+      cause: error,
+    })
+  } finally {
+    await closeProjectionResources({ client, pool, primaryError })
+  }
+}
+
 export async function verifyReviewRecoveryProjectionCollision({
   query,
   databaseUrl = process.env.DATABASE_URL,

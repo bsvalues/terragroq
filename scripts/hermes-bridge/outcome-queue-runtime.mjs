@@ -1378,14 +1378,20 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
         reviewRecoverySourceExpectedVersion: binding.expectedVersion - 1,
         reviewRecoverySourceFencingToken: binding.fencingToken - 1,
-        reviewRecoverySourceRuntimeAttempt: proof.runtimeAttempt,
+        reviewRecoverySourceRuntimeAttempt: Number(verified.reviewRecoverySourceRuntimeAttempt),
       }
+      if (!Number.isSafeInteger(sourceBinding.reviewRecoverySourceRuntimeAttempt)
+        || sourceBinding.reviewRecoverySourceRuntimeAttempt <= 0) {
+        wall("Persisted review recovery source attempt is absent",
+          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      }
+      const sourceProof = { ...proof, runtimeAttempt: sourceBinding.reviewRecoverySourceRuntimeAttempt }
       await verifyActiveReviewRecovery({
         databaseUrl,
         outcomeId: Number(outcome.id),
         executionBinding: sourceBinding,
         workContract: activeReviewRecoveryWorkContract(outcome),
-        proof,
+        proof: sourceProof,
       })
       const refreshed = await refreshOutcome(outcome)
       const needsExactSourceBackfill = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
@@ -1400,7 +1406,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
           ...refreshed.queueBinding,
           reviewRecoverySourceExpectedVersion: sourceBinding.reviewRecoverySourceExpectedVersion,
           reviewRecoverySourceFencingToken: sourceBinding.reviewRecoverySourceFencingToken,
-          reviewRecoverySourceRuntimeAttempt: proof.runtimeAttempt,
+          reviewRecoverySourceRuntimeAttempt: sourceBinding.reviewRecoverySourceRuntimeAttempt,
         },
       }
     }

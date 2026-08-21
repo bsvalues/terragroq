@@ -13,6 +13,7 @@ import {
   readApprovedOwnerDecision,
   readValidationInfrastructureRecovery,
   resolveValidationInfrastructureRecovery,
+  resolveActiveReviewRecoveryProvenance,
   recordOwnerAuthorityDecision,
   recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
@@ -3563,6 +3564,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         const real = client.query.bind(client)
         const query = vi.fn(async (sql: string, values?: unknown[]) => {
           if (/FROM goal AS contract_goal/.test(sql)) return real(sql, values)
+          if (/FROM outcome_queue_item AS queue[\s\S]+JOIN governance_event AS recovery_authorization/.test(sql)) {
+            return real(sql, values)
+          }
           if (/^(BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return real(sql, values)
           if (/INSERT INTO work_order/.test(sql)) return { rows: [] }
           if (/SELECT wo\.id,[\s\S]+latestCheckpointId/.test(sql)) return { rows: [{ id: 42, userId: "owner",
@@ -3586,6 +3590,29 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           executionBinding: active, workContract: issue911RuntimeWorkContract,
           proof: { expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
             prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40) } })
+        const recoveryProof = { expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
+          proofDigest: "d".repeat(64), prNumber: 929, reviewedHeadSha: "b".repeat(40),
+          mergeSha: "c".repeat(40) }
+        const unresolvedActive = { ...active }
+        delete (unresolvedActive as any).reviewRecoverySourceExpectedVersion
+        delete (unresolvedActive as any).reviewRecoverySourceFencingToken
+        delete (unresolvedActive as any).reviewRecoverySourceRuntimeAttempt
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: unresolvedActive, workContract: issue911RuntimeWorkContract,
+          proof: recoveryProof })).resolves.toEqual({
+          reviewRecoverySourceExpectedVersion: 4,
+          reviewRecoverySourceFencingToken: 2,
+          reviewRecoverySourceRuntimeAttempt: 5,
+        })
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: { ...unresolvedActive, reviewRecoverySourceExpectedVersion: 4,
+            reviewRecoverySourceFencingToken: 2, reviewRecoverySourceRuntimeAttempt: 6 },
+          workContract: issue911RuntimeWorkContract, proof: recoveryProof }))
+          .rejects.toMatchObject({ code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL" })
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: { ...unresolvedActive, reviewRecoverySourceExpectedVersion: 4 },
+          workContract: issue911RuntimeWorkContract, proof: recoveryProof }))
+          .rejects.toMatchObject({ code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL" })
         await expect(verifyContinuation()).resolves.toBe(true)
         expect((await client.query("SELECT count(*)::integer AS count FROM governance_event")).rows)
           .toEqual([{ count: 7 }])
@@ -3609,12 +3636,26 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         await client.query("UPDATE governance_event SET metadata=jsonb_set(metadata,'{recoveryIdempotencyKey}','\"wrong\"') WHERE id=94")
         await expect(projectNext(51)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
         await client.query("UPDATE governance_event SET metadata=$1::jsonb WHERE id=94", [JSON.stringify(events[5][4])])
+        await client.query(`INSERT INTO governance_event (id,"userId","eventType","entityType","entityId",actor,metadata)
+          VALUES (99,'owner','HERMES_RUNTIME_CHECKPOINT','work_order','42','hermes-codex-bridge',$1::jsonb)`,
+        [JSON.stringify(events[6][4])])
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: unresolvedActive, workContract: issue911RuntimeWorkContract,
+          proof: recoveryProof })).rejects.toMatchObject({
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+        await client.query("DELETE FROM governance_event WHERE id=99")
         await client.query("UPDATE governance_event SET metadata=jsonb_set(metadata,'{workOrderRef}','\"WO-WRONG\"') WHERE id=94")
         await expect(projectNext(52)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
         await client.query("UPDATE governance_event SET metadata=$1::jsonb WHERE id=94", [JSON.stringify(events[5][4])])
         await client.query(`INSERT INTO governance_event (id,"userId","eventType","entityType","entityId",actor,metadata)
           VALUES (96,'owner','HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED','goal','4','hermes-codex-bridge',$1::jsonb)`,
         [JSON.stringify(events[2][4])])
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: unresolvedActive, workContract: issue911RuntimeWorkContract,
+          proof: recoveryProof })).rejects.toMatchObject({
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
         await expect(projectNext(53)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
         await client.query("DELETE FROM governance_event WHERE id=96")
         await client.query("DELETE FROM governance_event WHERE id=94")

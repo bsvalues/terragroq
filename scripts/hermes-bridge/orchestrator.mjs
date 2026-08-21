@@ -12,6 +12,7 @@ import {
   projectOutcomeRuntimeCheckpoint,
   projectOutcomeRuntimeLease,
   readValidationInfrastructureRecovery,
+  resolveActiveReviewRecoveryProvenance,
   resolveValidationInfrastructureRecovery,
   selectNextOutcome,
   terminalizeOutcome,
@@ -490,6 +491,8 @@ export function createHermesOrchestrator(options = {}) {
             }
           : null)
       : resolveValidationInfrastructureRecovery)
+  const resolveReviewRecoveryProvenance = options.resolveActiveReviewRecoveryProvenance
+    ?? resolveActiveReviewRecoveryProvenance
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const projectLease = options.projectLease ?? projectOutcomeRuntimeLease
   const leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? 5 * 60 * 1000
@@ -1033,7 +1036,12 @@ export function createHermesOrchestrator(options = {}) {
     const initialized = state.initialize()
     if (initialized.killSwitch.active) return { result: "KILL_SWITCH_ACTIVE" }
     assertOwnerTouchCountersZero(initialized)
-    const unfinished = Object.values(initialized.executions).filter((execution) => execution?.lease?.status === "ACTIVE")
+    const unfinished = Object.values(initialized.executions).filter((execution) => (
+      execution?.lease?.status === "ACTIVE"
+      && !(execution?.lease?.abandonedAt
+        && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
+        && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED")
+    ))
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
     const approvedReleasedExecutions = []
@@ -1122,7 +1130,7 @@ export function createHermesOrchestrator(options = {}) {
     }
     const verifiedReviewRecoveries = new Map()
     for (const execution of Object.values(initialized.executions)) {
-      if (execution?.lease?.status !== "ABANDONED"
+      if (!(execution?.lease?.status === "ABANDONED" || execution?.lease?.abandonedAt)
         || execution?.checkpoint?.state !== "REVIEW_REMEDIATION_RECOVERED"
         || execution?.checkpoint?.detail !== "REVIEW_REMEDIATION_EXHAUSTED") continue
       const prNumber = Number(execution?.metadata?.prNumber)
@@ -1137,17 +1145,31 @@ export function createHermesOrchestrator(options = {}) {
           code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
         })
       }
+      const { workContract, executionBinding } = deriveHermesRuntimeProjectionBindings(
+        execution.metadata?.outcome,
+        { resolver: workContractResolver },
+      )
+      const resolvedProvenance = await resolveReviewRecoveryProvenance({
+        outcomeId: Number(execution.outcomeId),
+        executionBinding,
+        workContract,
+        proof: { expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest,
+          prNumber, reviewedHeadSha, mergeSha },
+      })
       verifiedReviewRecoveries.set(String(execution.outcomeId), {
         expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
         proofDigest,
         prNumber,
         reviewedHeadSha,
         mergeSha,
-        runtimeAttempt: execution.fencingToken,
+        runtimeAttempt: resolvedProvenance.reviewRecoverySourceRuntimeAttempt,
       })
     }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (
-      execution?.lease?.status === "ABANDONED"
+      (execution?.lease?.status === "ABANDONED"
+        || (execution?.lease?.status === "ACTIVE" && Boolean(execution?.lease?.abandonedAt)
+          && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
+          && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED"))
       && (
         (execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
           && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
