@@ -101,10 +101,13 @@ export function composeStartWorkResult(selection: RetainedStartWork, result: Sta
   // outcome's state changed, or its binding no longer matches — the Line names the possibilities
   // honestly rather than asserting one.
   const reason = "reason" in result ? result.reason : "UNSPECIFIED"
-  const gloss =
-    reason === "PROJECT_THREAD_OUTCOME_UNAVAILABLE"
-      ? ` This usually means ${selection.projectName} isn't in an active state that permits starting work (a standby or archived project can't), or the outcome's governed state changed since I read it.`
-      : ""
+  const GLOSS: Record<string, string> = {
+    PROJECT_THREAD_OUTCOME_UNAVAILABLE:
+      ` This usually means ${selection.projectName} isn't in an active state that permits starting work (a standby or archived project can't), or the outcome's governed state changed since I read it.`,
+    WORK_CONTRACT_UNAVAILABLE:
+      ` This means the runtime lane has no registered work contract for this outcome yet — it isn't dispatchable work, even though it's queued. That's the runtime lane's to provide, not something I'll fake.`,
+  }
+  const gloss = GLOSS[reason] ?? ""
   return {
     authorized: false,
     say:
