@@ -7,7 +7,7 @@
 ```text
 RECORD_FORMAT: WILLIAMOS_RUNTIME_RELIABILITY_REMEDIATION_V1
 RECORD_ID: WO-OUTCOME-762-911
-RECORD_REVISION: 4
+RECORD_REVISION: 5
 DISPATCH_WORK_ORDER: WO-HERMES-OUTCOME-28
 AUTHORITY_SOURCE: GOAL-0024
 PARENT_OUTCOME: OUTCOME-762
@@ -33,18 +33,24 @@ CURRENT_RUNTIME_HEALTH_CLAIMED: false
 CURRENT_HOST_INVENTORY_CLAIMED: false
 ISSUE_CLOSURE_CLAIMED: false
 TAG_OR_RELEASE_ACTION_AUTHORIZED: false
-VALIDATION_STATE: FILE_REMEDIATION_COMPLETE_HERMES_RECHECK_PENDING
-INDEPENDENT_FILE_REVIEW_STATE: COMPLETE_FINDINGS_REMEDIATED
-DIRECT_REMEDIATION_FILE_REVIEW_STATE: COMPLETE
+VALIDATION_STATE: FILE_REMEDIATION_COMPLETE_LIFECYCLE_CAPABILITY_PENDING
+INDEPENDENT_FILE_REVIEW_STATE: FINDINGS_REMEDIATED_PENDING_HERMES_RECHECK
+DIRECT_REMEDIATION_FILE_REVIEW_STATE: COMPLETE_P1_FINDINGS_REMEDIATED
 CURRENT_PR_WORK_CONTEXT_CHECK: work context receipt (#831)
 CURRENT_PR_WORK_CONTEXT_CHECK_STATE: FAILURE_REPORTED_AGAIN_AFTER_REVISION_3
 CURRENT_PR_WORK_CONTEXT_FAILURE_CODE: NOT_SUPPLIED
 CURRENT_PR_WORK_CONTEXT_CAUSE: NOT_ASSERTED
-CURRENT_PR_WORK_CONTEXT_REMEDIATION_STATE: FILE_RECORD_COMPLETE_PR_BODY_RECOVERY_PENDING_HERMES
+CURRENT_PR_WORK_CONTEXT_REMEDIATION_STATE: FILE_RECORD_COMPLETE_LIFECYCLE_CAPABILITY_REQUIRED
 CURRENT_PR_WORK_CONTEXT_RECEIPT_LOCATION: PULL_REQUEST_BODY
 CURRENT_PR_WORK_CONTEXT_EXEMPTION_USED: false
 FILE_ONLY_CHANGE_CAN_SATISFY_PR_BODY_CHECK: false
-HERMES_EXACT_HEAD_REVIEW_STATE: REMEDIATION_RECHECK_REQUIRED
+LEDGER_BACKED_RECEIPT_REQUIRED: true
+LOCAL_RECEIPT_PROVENANCE_ALLOWED: false
+ESTABLISH_WORK_CONTEXT_REQUIRED_FLAG: --require-ledger
+HERMES_OWNED_RECEIPT_ISSUANCE_OPERATION_PRESENT: false
+HERMES_OWNED_PR_BODY_UPDATE_OPERATION_PRESENT: false
+CHECK_RETRY_ALLOWED_BEFORE_BOTH_OPERATIONS_EXIST: false
+HERMES_EXACT_HEAD_REVIEW_STATE: RECHECK_DEFERRED_UNTIL_LIFECYCLE_CAPABILITY
 OWNER_TOUCH_COUNT: 0
 BLOCKED_SCOPE_CROSSED: false
 ```
@@ -241,15 +247,20 @@ DETAILED_FAILURE_CODE_SUPPLIED_TO_REMEDIATION_LANE: false
 PULL_REQUEST_BODY_OR_EVENT_PAYLOAD_INSPECTED_BY_CODEX: false
 EXACT_CANDIDATE_HEAD_SUPPLIED_TO_REMEDIATION_LANE: false
 EXACT_FAILURE_CAUSE_CLAIMED: false
-DISTINCT_ACTIONABLE_FINDINGS_RECORDED: 1
-FINDING_DISPOSITION: VALID_REMEDIATION_HANDOFF_RECORDED
+DISTINCT_CHECK_FAILURE_FINDINGS_RECORDED: 1
+REVIEW_FINDINGS_REMEDIATED_THIS_REVISION: 2
+FINDING_DISPOSITION: VALID_FAIL_CLOSED_REMEDIATION_CONTRACT_RECORDED
 RECEIPT_CONSUMER: PULL_REQUEST_BODY
 REPORT_EMBEDDED_RECEIPT_WOULD_SATISFY_CHECK: false
 ADDITIONAL_REPORT_ONLY_COMMIT_WOULD_CORRECT_GATE_INPUT: false
 CURRENT_PR_RECEIPT_OR_CLAIMS_FABRICATED_OR_REUSED: false
 WORK_CONTEXT_EXEMPTION_USED: false
-RECOVERY_OWNER: HERMES_HOST
-RECOVERY_STATE: PENDING_HERMES_HOST
+LEDGER_BACKED_ISSUANCE_REQUIRED: true
+LOCAL_FALLBACK_ALLOWED: false
+REQUIRED_ISSUANCE_FLAG: --require-ledger
+OWNED_PR_BODY_UPDATE_REQUIRED: true
+RECOVERY_OWNER: HERMES_LIFECYCLE_IMPLEMENTATION
+RECOVERY_STATE: CAPABILITY_REQUIRED_BEFORE_CHECK_RETRY
 OWNER_TOUCH_REQUIRED: false
 ```
 
@@ -260,6 +271,8 @@ The repository-side gate is precise about the recovery boundary:
 | `.github/workflows/work-context.yml:1-15`, `.github/workflows/work-context.yml:24-42` | The required check reads the receipt from the pull-request body and accepts a fresh `edited` event, so a corrected body can be checked without an empty commit or replaying a stale event payload. |
 | `lib/governance/pr-receipt.ts:19-60`, `lib/governance/pr-receipt.ts:75-128` | A named fenced JSON block is required. Missing/malformed proof, token/claim mismatch, stale doctrine or main dependencies, and reservation escape remain distinct fail-closed outcomes with explicit recovery routes. |
 | `scripts/verify-pr-work-context.mjs:15-21`, `scripts/verify-pr-work-context.mjs:47-89` | The reviewer measures live doctrine and changed files, while authority is enforced when the receipt is issued. An exemption is only a recorded claim, not verified proof, and is not used here. |
+| `scripts/governance/establish-work-context.mjs:15-27`, `scripts/governance/establish-work-context.mjs:48-68`, `scripts/governance/establish-work-context.mjs:104-132` | Cockpit issuance is ledger-backed and checks authority. Without `--require-ledger`, cockpit failure falls back to local provenance, which explicitly does not check authority or record the claim. This remediation therefore requires `--require-ledger` and fails closed when ledger issuance is unavailable. |
+| `lib/governance/pr-receipt.ts:40-60`, `lib/governance/pr-receipt.ts:75-132` | The PR parser retains only the declared receipt value and facts; it does not consume or verify a provenance field. A recomputed green verdict is therefore not, by itself, evidence that issuance was ledger-backed. |
 | `scripts/hermes-bridge/orchestrator.mjs:1380-1384` | The inspected default Hermes pull-request creation body contains bounded-delivery prose but no `WORK_CONTEXT_RECEIPT` block. That is a concrete creation-path risk, not proof of the body or failure code carried by the reported check event. |
 | `scripts/hermes-bridge/repository-lifecycle.mjs:1375-1383` | The lifecycle creates a body only for a new pull request and returns an existing open pull request unchanged. A later report commit and push can trigger `synchronize`, but that code path does not repair the body consumed by the gate. |
 
@@ -268,17 +281,31 @@ could not change the gate's pull-request-body input. They establish that another
 not a corrective mechanism for this check; they do not establish the current body contents or select
 one of the four possible failure codes.
 
-The report is not a substitute receipt: the check does not read this Markdown file for proof. Hermes
-must use the supported issuer to re-establish context against current main, the current doctrine, this
-Work Order, its active parent authority, and the exact pull-request changed-file set. It must then add
-the returned token and unedited claims to the existing pull-request body in a fenced
-`WORK_CONTEXT_RECEIPT` block. It must not invent a token, alter claims to fit a token, reuse the stale
-receipt from the earlier dispatch, or add `WORK_CONTEXT_EXEMPT`.
+The report is not a substitute receipt: the check does not read this Markdown file for proof. The
+currently inspected Hermes lifecycle also has neither an owned receipt-issuance operation nor an
+existing-PR body-update operation, so this record does not instruct Hermes to perform a capability it
+does not have and does not claim the pull-request gate remediated.
 
-After the body is corrected, Hermes must obtain a fresh check event—preferably the workflow's
-purpose-built `edited` event, or a later `synchronize` whose payload carries the corrected body—and
-require `work context receipt (#831)` to pass on the exact candidate before merge. Re-running only an
-already-failed event or dispatching another report-only edit would not prove the remediation.
+Before requesting another check, the Hermes lifecycle requires one bounded, repository-owned recovery
+operation that satisfies all of these preconditions:
+
+1. Establish context against current main, current doctrine, this Work Order, its active parent
+   authority, and the exact pull-request changed-file set through ledger-backed issuance. If the
+   existing establishment tool is used, `--require-ledger` is mandatory; cockpit or ledger
+   unavailability must fail closed, never fall back to local provenance.
+2. Create the fenced `WORK_CONTEXT_RECEIPT` body block from the ledger-issued value and its unedited
+   claims. Do not invent a value, alter claims to fit one, reuse an earlier dispatch's receipt, or add
+   `WORK_CONTEXT_EXEMPT`.
+3. Add an owned, validated lifecycle operation that writes that block into a newly created PR body or
+   updates the existing open PR body before check monitoring. The current `createPullRequest` reuse
+   path is not that operation.
+4. Obtain a fresh check event—preferably the workflow's purpose-built `edited` event, or a later
+   `synchronize` whose payload carries the corrected body—and require `work context receipt (#831)`
+   to pass on the exact candidate before merge.
+
+Until both ledger-backed issuance and the PR-body update operation exist, the safe state is fail
+closed: no green authority-proof claim, no repeated check request, and no merge. Re-running an
+already-failed event or dispatching another report-only edit would not remediate the gate.
 
 ## No-runtime-host-mutation ledger
 
@@ -292,6 +319,8 @@ PULL_REQUEST_BODY_EDITED_BY_CODEX: false
 WORK_CONTEXT_RECEIPT_ISSUED_BY_CODEX: false
 CURRENT_PR_WORK_CONTEXT_RECEIPT_TOKEN_OR_CLAIMS_INSPECTED_BY_CODEX: false
 WORK_CONTEXT_EXEMPTION_USED: false
+LOCAL_RECEIPT_FALLBACK_USED_BY_CODEX: false
+LEDGER_RECEIPT_ISSUANCE_ATTEMPTED_BY_CODEX: false
 HOST_MUTATING_COMMAND_EXECUTED: false
 HOST_RUNTIME_PROCESS_STARTED_OR_STOPPED: false
 SERVICE_CONTAINER_SCHEDULER_OR_DATABASE_CHANGED: false
@@ -331,8 +360,15 @@ recheck confirmed both findings resolved and reported no new finding.
 For these bounded follow-ups, the dispatch expressly prohibited another subagent lane. Codex directly
 reviewed revision 4 against the repeated bare check conclusion, the pull-request workflow, the receipt
 verifier, the default PR creation and existing-PR reuse paths, and the exact reserved-path boundary.
-The review preserves the prior independent assurance, does not relabel this follow-up as independent,
-and found no remaining in-file contradiction or unsupported claim.
+That direct pass did not relabel the follow-up as independent; the subsequent independent review then
+identified the two P1 omissions recorded below.
+
+Independent review of revision 4 identified two valid P1 defects in that handoff: it did not require
+ledger provenance, and it assigned a PR-body update to a Hermes lifecycle that exposes no such
+operation. Revision 5 requires `--require-ledger`, forbids local fallback, records the missing owned
+issuance and body-update operations, and prevents another check request until both exist. Codex then
+directly reviewed those corrections against the cited issuer, verifier, orchestrator, and lifecycle
+sources.
 
 ## Hermes host validation handoff
 
@@ -343,7 +379,7 @@ Work Order:
 ```text
 git diff --check: PENDING_HERMES_HOST
 npx vitest run tests/hermes-work-contract.test.ts: PENDING_HERMES_HOST
-work context receipt (#831): FAILURE_REPORTED_AGAIN; PR_BODY_RECOVERY_AND_EXACT_HEAD_RECHECK_PENDING_HERMES_HOST
+work context receipt (#831): FAILURE_REPORTED_AGAIN; LEDGER_ISSUANCE_AND_OWNED_PR_BODY_UPDATE_REQUIRED_BEFORE_RECHECK
 commit: null
 prUrl: null
 merged: false
@@ -362,7 +398,10 @@ this single report is the complete rollback; no host rollback is needed.
 - Historical Ollama release evidence is preserved as separate context and is not upgraded into current
   runtime truth.
 - The repeated required-check failure is recorded without fabricating a receipt, asserting an
-  unavailable failure code or candidate head, editing the pull-request body, or using an exemption.
+  unavailable failure code or candidate head, using local receipt fallback, editing the pull-request
+  body, or using an exemption.
 - No blocked scope was crossed, no new authority was inferred, and no owner touch occurred.
-- Remediation validation, commit and push, pull-request-body context recovery, fresh exact-head
-  review, merge, verification, and cleanup remain owned by Hermes after this file handoff.
+- The missing routine lifecycle capability, remediation validation, commit and push, later
+  pull-request-body context recovery, fresh exact-head review, merge, verification, and cleanup remain
+  Hermes-owned after this file handoff; this record does not claim the missing operation already
+  exists.
