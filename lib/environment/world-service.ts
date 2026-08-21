@@ -1,5 +1,13 @@
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
 import {
+  classifyGrounded,
+  composeProjectsAnswer,
+  groundedCurrentWork,
+  groundedIdentity,
+  type GroundedKind,
+  type ProjectRow,
+} from "@/lib/environment/grounding"
+import {
   toEnvironmentWorldDto,
   type EnvironmentCompareResponse,
   type EnvironmentLineResponse,
@@ -27,6 +35,7 @@ export type StoredEnvironmentWorld = Readonly<{
 }>
 
 export interface EnvironmentWorldRepository {
+  listGroundedProjects(userId: string): Promise<readonly ProjectRow[]>
   listResourceCandidates(userId: string): Promise<readonly ResourceCandidate[]>
   loadExact(userId: string, worldId: string): Promise<StoredEnvironmentWorld | null>
   loadLatest(userId: string): Promise<StoredEnvironmentWorld | null>
@@ -112,6 +121,11 @@ export function createEnvironmentWorldService({
       endpoints: observed.map((endpoint, index) => endpoint ?? invalidateEndpoint(world.endpoints[index], now())),
     })
   }
+  const groundedReply = async (userId: string, kind: GroundedKind): Promise<string> => {
+    if (kind === "identity") return groundedIdentity()
+    const projects = await repository.listGroundedProjects(userId)
+    return kind === "projects" ? composeProjectsAnswer(projects) : groundedCurrentWork(projects)
+  }
 
   return {
     async load(userId: string, worldId?: string | null): Promise<EnvironmentWorldDto | null> {
@@ -130,6 +144,7 @@ export function createEnvironmentWorldService({
       const text = input.text.trim()
       if (!text) throw new EnvironmentInputError("MESSAGE_EMPTY")
       if (text.length > 4_000) throw new EnvironmentInputError("MESSAGE_TOO_LONG")
+      const groundedKind = classifyGrounded(text)
 
       if (input.worldId) {
         const stored = await repository.loadExact(userId, input.worldId)
@@ -148,13 +163,33 @@ export function createEnvironmentWorldService({
         }
         const visibleStatus = dto(world, stored.updatedAt).status
         world = { ...world, meaning: withTurn(world.meaning, "owner", text, now) }
-        const say = lineContinuation(world, visibleStatus)
+        const say = groundedKind
+          ? await groundedReply(userId, groundedKind)
+          : lineContinuation(world, visibleStatus)
         world = { ...world, meaning: withTurn(world.meaning, "williamos", say, now) }
         const updatedAt = now()
         const updated = await repository.update(userId, world, updatedAt, stored.version)
         if (!updated) throw new EnvironmentConflictError("WORLD_CONCURRENTLY_CHANGED")
         return {
           state: "continued",
+          say,
+          world: dto(world, updatedAt),
+        }
+      }
+
+      // Identity, project-register, and current-work questions never enter resource selection or a
+      // free-form model. They are durable conversation turns answered from WilliamOS + ledger state.
+      if (groundedKind) {
+        const worldId = id()
+        let meaning = createWorkingWorld({ intent: text })
+        meaning = withTurn(meaning, "owner", text, now)
+        const say = await groundedReply(userId, groundedKind)
+        meaning = withTurn(meaning, "williamos", say, now)
+        const world = createEnvironmentWorldProjection({ id: worldId, meaning, resource: null })
+        const updatedAt = now()
+        await repository.insert(userId, world, updatedAt)
+        return {
+          state: "waiting_for_resource",
           say,
           world: dto(world, updatedAt),
         }

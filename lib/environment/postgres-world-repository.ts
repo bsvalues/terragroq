@@ -10,6 +10,13 @@ import type {
 } from "@/lib/environment/world-service"
 
 export const postgresEnvironmentWorldRepository: EnvironmentWorldRepository = {
+  async listGroundedProjects(userId) {
+    return db
+      .select({ name: project.name, lifecycle: project.lifecycle })
+      .from(project)
+      .where(eq(project.userId, userId))
+  },
+
   async listResourceCandidates(userId): Promise<readonly ResourceCandidate[]> {
     const rows = await db
       .select({

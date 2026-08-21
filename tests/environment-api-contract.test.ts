@@ -28,8 +28,12 @@ const instant = "2026-08-20T19:00:00.000Z"
 
 class MemoryRepository implements EnvironmentWorldRepository {
   candidates = new Map<string, readonly ResourceCandidate[]>()
+  projects = new Map<string, readonly { name: string; lifecycle: string }[]>()
   worlds = new Map<string, Map<string, StoredEnvironmentWorld>>()
 
+  async listGroundedProjects(userId: string) {
+    return this.projects.get(userId) ?? []
+  }
   async listResourceCandidates(userId: string) {
     return this.candidates.get(userId) ?? []
   }
@@ -136,6 +140,34 @@ describe("Environment world service", () => {
     expect(reply.say).not.toMatch(/resource binding|execution endpoint|work order|queue/i)
     expect((await service.load("owner", "waiting"))?.intent).toBe("Investigate the failure")
     expect(reply.world.execution).toEqual({ state: "not_started", evidenceRefs: [] })
+  })
+
+  it("answers identity and project-awareness turns from grounded WilliamOS state", async () => {
+    const repository = new MemoryRepository()
+    repository.projects.set("owner", [
+      { name: "TerraFusion", lifecycle: "active" },
+      { name: "Old Experiment", lifecycle: "archived" },
+    ])
+    const service = createEnvironmentWorldService({ repository, id: () => "grounded", now: () => instant })
+
+    const projects = await service.submitLine("owner", {
+      text: "tell me more about the projects we are currently working on",
+    })
+    const identity = await service.submitLine("owner", {
+      worldId: projects.world.worldId,
+      text: "who are you?",
+    })
+
+    expect(projects.say).toContain("Currently active: TerraFusion")
+    expect(projects.say).not.toContain("Old Experiment")
+    expect(identity.say).toContain("WilliamOS")
+    expect(identity.say.toLowerCase()).toContain("not a general chat assistant")
+    expect(identity.world.conversation.map((turn) => turn.content)).toEqual([
+      "tell me more about the projects we are currently working on",
+      projects.say,
+      "who are you?",
+      identity.say,
+    ])
   })
 
   it("rejects success-shaped execution truth without admitted endpoint evidence", () => {
