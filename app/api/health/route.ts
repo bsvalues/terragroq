@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { getAuthReadiness } from "@/lib/auth-readiness"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
+import { getBuildProvenance } from "@/lib/build-provenance"
 
 export const dynamic = "force-dynamic"
 
@@ -39,6 +40,9 @@ export async function GET() {
     {
       status: healthy ? "ok" : "degraded",
       timestamp: new Date().toISOString(),
+      // The commit this running artifact was built from. The deploy verifies this equals the commit
+      // it built, so a stale standalone can never pass as a fresh deploy (#762 deploy doctrine).
+      build: getBuildProvenance(),
       checks: {
         database,
         auth,

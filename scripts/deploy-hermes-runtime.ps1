@@ -54,6 +54,33 @@ function Test-Cockpit {
   return $false
 }
 
+# The SHA this artifact was built FROM, read from the standalone bundle being shipped. "development"
+# (the committed placeholder) or "unknown" means the build never stamped a real commit -- treated as
+# UNPROVEN, never a match. See scripts/write-build-provenance.mjs and the #762 deploy doctrine.
+function Get-BuiltSha {
+  param([string]$StandaloneRoot)
+  $file = Join-Path $StandaloneRoot "lib\generated\build-provenance.json"
+  if (-not (Test-Path $file)) { return $null }
+  try { return (Get-Content $file -Raw | ConvertFrom-Json).sha } catch { return $null }
+}
+
+# The SHA the RUNNING instance reports at /api/health. Liveness (a 200 on /sign-in) is not provenance;
+# this is what proves the process is serving the artifact we just built, not a stale one.
+function Get-RunningSha {
+  param([int]$Port, [int]$TimeoutSeconds = 60)
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    try {
+      $health = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/health" -UseBasicParsing -TimeoutSec 10
+      $sha = ($health.Content | ConvertFrom-Json).build.sha
+      if ($sha) { return $sha }
+    } catch {
+      Start-Sleep -Seconds 3
+    }
+  }
+  return $null
+}
+
 if ($VerifyOnly) {
   if (Test-Cockpit -Port $Port) { Write-Output "healthy: /sign-in answered 200 on port $Port"; exit 0 }
   Write-Error "unhealthy: /sign-in did not answer 200 on port $Port"
@@ -63,6 +90,17 @@ if ($VerifyOnly) {
 $standalone = Join-Path $Source ".next\standalone"
 if (-not (Test-Path (Join-Path $standalone "server.js"))) {
   throw "No standalone build at $standalone. Run 'pnpm build' first."
+}
+
+# Fresh-build provenance (#762 deploy doctrine): the artifact must carry a real commit SHA. A
+# placeholder/unknown SHA means the build never stamped HEAD -- refuse rather than ship an artifact we
+# cannot tie to a commit. The equality against the running instance is checked after start, below.
+$builtSha = Get-BuiltSha -StandaloneRoot $standalone
+if (-not $builtSha -or $builtSha -eq "development" -or $builtSha -eq "unknown") {
+  throw "The standalone at $standalone carries no real build SHA (got '$builtSha'). Rebuild with 'pnpm build' from a clean tree so provenance is stamped; a deploy that cannot prove its commit is not allowed."
+}
+if ($builtSha -like "*-dirty") {
+  Write-Warning "The build SHA is $builtSha -- built over uncommitted changes. Proceeding, but the running commit will not exactly match any pushed commit."
 }
 
 # The runtime's .env.local is the one file here that cannot be rebuilt, and the standalone output
@@ -125,4 +163,17 @@ if (-not (Test-Cockpit -Port $Port)) {
   exit 1
 }
 
-Write-Output "deployed and healthy: /sign-in answered 200 on port $Port"
+# Provenance, not just liveness: the running process must report the exact commit we built and
+# shipped. A mismatch means the task is serving a stale artifact (the failure this whole doctrine
+# exists to catch) -- fail loudly rather than report a green deploy of old code.
+$runningSha = Get-RunningSha -Port $Port
+if (-not $runningSha) {
+  Write-Error "Deployed and live, but /api/health did not report a build SHA on port $Port -- cannot prove the running artifact is the one just built. Treating as a failed deploy."
+  exit 1
+}
+if ($runningSha -ne $builtSha) {
+  Write-Error "STALE ARTIFACT: built $builtSha but the running instance reports $runningSha. The task is serving old code. Investigate the copy/restart before trusting this deploy."
+  exit 1
+}
+
+Write-Output "deployed and verified: running $runningSha, /sign-in 200 on port $Port"
