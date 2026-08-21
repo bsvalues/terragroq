@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { evaluateOutcomePolicy } from "@/scripts/hermes-bridge/policy.mjs"
+import { resolveHermesWorkContract } from "@/scripts/hermes-bridge/work-contract.mjs"
 
 const outcome = { command: "Build a WilliamOS status UI", lane: "ui", risk: "low", authority: "A2_WRITE_OWN", verdict: "allow", requiresApproval: false, status: "classified" }
 const evaluate = (value = outcome, override = {}) => evaluateOutcomePolicy({ outcome: value, actor: "bsvalues", repository: "bsvalues/terragroq", ...override })
@@ -35,5 +36,37 @@ describe("Hermes bridge outcome policy", () => {
     expect(evaluate(classified, { standingAuthority: true })).toMatchObject({
       allowed: true, reasonCode: "POLICY_ALLOWED",
     })
+  })
+
+  it("allows operator-objective only through the exact verified #911 Workbench contract", () => {
+    const command = "record structured #911 reliability remediation without host mutation"
+    const contract = resolveHermesWorkContract({
+      command, title: command, objective: command,
+      lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+    })
+    const parent = {
+      ...outcome, id: 7, outcomeKey: "goal:GOAL-0007", command, title: command,
+      objective: command, lane: "operator-objective", risk: "R1",
+      queueBinding: { outcomeKey: "goal:GOAL-0007" },
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: {
+          operation: "workbench_execution.authorize", outcomeKey: "goal:GOAL-0007",
+          workOrderRef: "WO-HERMES-OUTCOME-7",
+        },
+      },
+    }
+    expect(evaluate(parent, { standingAuthority: true })).toMatchObject({
+      allowed: true, reasonCode: "POLICY_ALLOWED",
+    })
+    expect(evaluate({ ...parent, verifiedQueueWorkContract: undefined }, { standingAuthority: true }))
+      .toMatchObject({ allowed: false, reasonCode: "LANE_NOT_ALLOWED" })
+    expect(evaluate({
+      ...parent,
+      verifiedQueueWorkContract: {
+        ...parent.verifiedQueueWorkContract,
+        contract: { ...contract!, digest: "0".repeat(64) },
+      },
+    }, { standingAuthority: true })).toMatchObject({ allowed: false, reasonCode: "LANE_NOT_ALLOWED" })
   })
 })

@@ -264,7 +264,11 @@ function normalizeValidation(command, index) {
   }
   assertSafeInvocation(normalized.command, normalized.args)
   const executable = path.basename(normalized.command).toLowerCase().replace(/\.(cmd|exe)$/i, "")
-  if (!VALIDATION_EXECUTABLES.has(executable)) {
+  const exactReadOnlyGitDiffCheck = executable === "git"
+    && normalized.args.length === 2
+    && normalized.args[0] === "diff"
+    && normalized.args[1] === "--check"
+  if (!VALIDATION_EXECUTABLES.has(executable) && !exactReadOnlyGitDiffCheck) {
     wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}] executable is not allowed`)
   }
   if (!normalized.env || typeof normalized.env !== "object" || Array.isArray(normalized.env)
@@ -372,6 +376,35 @@ function checkState(check) {
 
 function checkName(check) {
   return String(check?.name ?? check?.context ?? "")
+}
+
+function latestCheckContexts(checks) {
+  const groups = new Map()
+  checks.forEach((check, index) => {
+    const name = checkName(check)
+    const workflowName = typeof check?.workflowName === "string" ? check.workflowName : ""
+    const key = check?.__typename === "CheckRun" && name.trim() && workflowName.trim()
+      ? JSON.stringify(["CheckRun", workflowName, name])
+      : check?.__typename === "StatusContext" && name.trim()
+        ? JSON.stringify(["StatusContext", name])
+        : `unscoped:${index}`
+    groups.set(key, [...(groups.get(key) ?? []), check])
+  })
+  return [...groups.values()].map((group) => {
+    if (group.length === 1) return group[0]
+    const ordered = group.map((check) => {
+      const value = check?.startedAt
+      const timestamp = typeof value === "string" ? Date.parse(value) : Number.NaN
+      if (!Number.isFinite(timestamp)) {
+        wall("HERMES_REPOSITORY_GITHUB_WALL", "duplicate check ordering is unavailable")
+      }
+      return { check, timestamp }
+    }).sort((left, right) => right.timestamp - left.timestamp)
+    if (ordered[0].timestamp === ordered[1].timestamp) {
+      wall("HERMES_REPOSITORY_GITHUB_WALL", "duplicate check ordering is ambiguous")
+    }
+    return ordered[0].check
+  })
 }
 
 function exactHeadApprovedReview(pr) {
@@ -1120,7 +1153,9 @@ export function createRepositoryLifecycle(options) {
     if (!SHA.test(pr.headRefOid ?? "")) wall("HERMES_REPOSITORY_GITHUB_WALL", "PR head SHA required")
     const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}} comments(last:100){nodes{author{login} body createdAt updatedAt} pageInfo{hasPreviousPage hasNextPage}}}}}"
     const threadResult = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
-    const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : []
+    const checks = latestCheckContexts(
+      Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [],
+    )
     const reviewState = parseJson(threadResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     const unresolved = unresolvedThreadCount(reviewState)
     const requestTimes = exactHeadCodexRequestTimes(reviewState, pr.headRefOid)
@@ -1277,13 +1312,55 @@ export function createRepositoryLifecycle(options) {
   async function inspectPullRequestFiles(number) {
     if (!Number.isSafeInteger(number) || number <= 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
     await verifyOrigin()
-    const result = await run("gh", ["api", "--paginate", "--slurp", `repos/${repository}/pulls/${number}/files?per_page=100`])
-    const pages = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
-    if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
-      wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request files response missing")
+    const pageSize = 100
+    const maxFiles = 3_000
+    const metadataEndpoint = `repos/${repository}/pulls/${number}`
+    const readMetadata = async () => {
+      const result = await run("gh", ["api", metadataEndpoint])
+      const metadata = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
+      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)
+        || !Number.isSafeInteger(metadata.changed_files) || metadata.changed_files <= 0
+        || metadata.changed_files > maxFiles || !/^[0-9a-f]{40}$/.test(metadata.head?.sha ?? "")) {
+        wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request file metadata is invalid")
+      }
+      return { changedFiles: metadata.changed_files, headSha: metadata.head.sha }
     }
-    const files = [...new Set(pages.flatMap((page) => page.flatMap((file) =>
-      [file?.filename, file?.previous_filename].filter(Boolean).map(safeRelativePath))))].sort()
+    const before = await readMetadata()
+    const paths = []
+    const currentFiles = new Set()
+    const pageCount = Math.ceil(before.changedFiles / pageSize)
+    for (let page = 1; page <= pageCount; page += 1) {
+      const result = await run("gh", [
+        "api", `repos/${repository}/pulls/${number}/files?per_page=${pageSize}&page=${page}`,
+      ])
+      const files = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
+      const expectedLength = page === pageCount
+        ? before.changedFiles - ((page - 1) * pageSize)
+        : pageSize
+      if (!Array.isArray(files) || files.length !== expectedLength) {
+        wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request files response missing")
+      }
+      for (const file of files) {
+        if (!file || typeof file !== "object" || Array.isArray(file)
+          || typeof file.filename !== "string" || file.filename.length === 0
+          || (file.previous_filename !== undefined && file.previous_filename !== null
+            && (typeof file.previous_filename !== "string" || file.previous_filename.length === 0))) {
+          wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request files response missing")
+        }
+        const filename = safeRelativePath(file.filename)
+        if (currentFiles.has(filename)) {
+          wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request file list contains duplicates")
+        }
+        currentFiles.add(filename)
+        paths.push(filename)
+        if (typeof file.previous_filename === "string") paths.push(safeRelativePath(file.previous_filename))
+      }
+    }
+    const after = await readMetadata()
+    if (after.changedFiles !== before.changedFiles || after.headSha !== before.headSha) {
+      wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request file metadata changed during inspection")
+    }
+    const files = [...new Set(paths)].sort()
     if (files.length === 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request file list is empty")
     return files
   }
@@ -1396,6 +1473,47 @@ export function createRepositoryLifecycle(options) {
     return result.code === 0
   }
 
+  async function authoritativeRemoteBranchHead(safeBranch) {
+    const ref = `refs/heads/${safeBranch}`
+    const result = await run("git", ["-C", repositoryRoot, "ls-remote", "--heads", "origin", ref])
+    if (result.stdout === "") return null
+    const lines = result.stdout.endsWith("\n")
+      ? result.stdout.slice(0, -1).split("\n")
+      : result.stdout.split("\n")
+    if (lines.length !== 1) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "authoritative cleanup branch cardinality mismatch")
+    const match = /^([0-9a-f]{40})\t(refs\/heads\/[^\r\n\0]+)$/.exec(lines[0])
+    if (!match || match[2] !== ref) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "authoritative cleanup branch response is invalid")
+    }
+    return match[1]
+  }
+
+  async function proveCleanupBranchHead({ safeBranch, expectedHeadSha, observedHeadSha }) {
+    if (!SHA.test(observedHeadSha ?? "")) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup branch head is invalid")
+    }
+    const authoritativeHead = await authoritativeRemoteBranchHead(safeBranch)
+    if (authoritativeHead !== expectedHeadSha) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "authoritative cleanup branch head mismatch")
+    }
+    if (observedHeadSha === expectedHeadSha) return observedHeadSha
+    await run("git", ["-C", repositoryRoot, "fetch", "--no-tags", "origin", `refs/heads/${safeBranch}`])
+    const fetched = await run("git", ["-C", repositoryRoot, "rev-parse", "FETCH_HEAD"])
+    if (fetched.stdout.trim() !== expectedHeadSha) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "fetched cleanup branch head mismatch")
+    }
+    const ancestor = await run(
+      "git",
+      ["-C", repositoryRoot, "merge-base", "--is-ancestor", observedHeadSha, expectedHeadSha],
+      { allowFailure: true },
+    )
+    if (ancestor.code !== 0) {
+      if (ancestor.code !== 1) wall("HERMES_REPOSITORY_COMMAND_FAILED", "git merge-base failed")
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup branch diverged from reviewed head")
+    }
+    return observedHeadSha
+  }
+
   async function cleanupOwnedWorktree({ worktreePath, branch, mergeCommitSha, expectedHeadSha } = {}) {
     const safeBranch = branchName(branch)
     const absoluteWorktree = workspacePath(worktreePath)
@@ -1422,20 +1540,40 @@ export function createRepositoryLifecycle(options) {
         if (![0, 1].includes(branchResult.code)) wall("HERMES_REPOSITORY_COMMAND_FAILED", "git show-ref failed")
         if (branchResult.code === 0) {
           const branchHead = await run("git", ["-C", repositoryRoot, "rev-parse", `refs/heads/${safeBranch}`])
-          if (branchHead.stdout.trim() !== expectedHeadSha) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup branch head mismatch")
-          await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, expectedHeadSha])
+          const observedHeadSha = await proveCleanupBranchHead({
+            safeBranch,
+            expectedHeadSha,
+            observedHeadSha: branchHead.stdout.trim(),
+          })
+          const replayListing = await run("git", ["-C", repositoryRoot, "worktree", "list", "--porcelain"])
+          const replayEntries = worktreeEntries(replayListing.stdout)
+          if (replayEntries.some((entry) => entry.branch === safeBranch
+            || (entry.worktreePath && sameWorkspace(entry.worktreePath, absoluteWorktree)))) {
+            wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup worktree reappeared")
+          }
+          await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, observedHeadSha])
         }
         records.set(safeBranch, Object.freeze({ repository, branch: safeBranch, worktreePath: absoluteWorktree, ownedWorktreeRoot, cleaned: true }))
         return { branch: safeBranch, worktreePath: absoluteWorktree, cleaned: true, alreadyCleaned: true }
       }
     }
     ownedRecord(absoluteWorktree, safeBranch)
+    const worktreeHead = await run("git", ["-C", absoluteWorktree, "rev-parse", "HEAD"])
+    const observedHeadSha = await proveCleanupBranchHead({
+      safeBranch,
+      expectedHeadSha,
+      observedHeadSha: worktreeHead.stdout.trim(),
+    })
+    const branchHead = await run("git", ["-C", repositoryRoot, "rev-parse", `refs/heads/${safeBranch}`])
+    if (branchHead.stdout.trim() !== observedHeadSha) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "registered cleanup branch and worktree head conflict")
+    }
     await removeValidationArtifacts(record)
     const status = await run("git", ["-C", absoluteWorktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
     if (status.stdout.length > 0) wall("HERMES_REPOSITORY_CLEANUP_WALL", "owned worktree is dirty")
     if (executionBackend) await executionBackend.cleanup({ workspacePath: absoluteWorktree })
     else await run("git", ["-C", repositoryRoot, "worktree", "remove", absoluteWorktree])
-    await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, expectedHeadSha])
+    await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, observedHeadSha])
     records.set(safeBranch, Object.freeze({ ...record, cleaned: true }))
     return { branch: safeBranch, worktreePath: absoluteWorktree, cleaned: true, alreadyCleaned: false }
   }
@@ -1445,6 +1583,7 @@ export function createRepositoryLifecycle(options) {
     workspaceRoot,
     repositoryRoot,
     ownedWorktreeRoot,
+    verifyRepositoryOrigin: verifyOrigin,
     refreshOriginMain,
     createWorktree,
     ensureOwnedWorktree,

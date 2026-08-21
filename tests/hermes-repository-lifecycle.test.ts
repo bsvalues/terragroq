@@ -39,6 +39,12 @@ function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
     if (override) return override(call)
     if (key.includes("remote get-url origin")) return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
     if (key.includes("rev-parse refs/remotes/origin/main")) return { code: 0, stdout: `${sha}\n` }
+    if (key.includes("ls-remote --heads origin refs/heads/")) {
+      return { code: 0, stdout: `${sha}\t${call.args.at(-1)}\n` }
+    }
+    if (key.includes("rev-parse FETCH_HEAD")) return { code: 0, stdout: `${sha}\n` }
+    if (key.includes("rev-parse refs/heads/")) return { code: 0, stdout: `${sha}\n` }
+    if (key.includes("rev-parse HEAD")) return { code: 0, stdout: `${sha}\n` }
     if (key.includes("show-ref --verify --quiet")) return { code: 1 }
     if (key.includes("gh api repos/bsvalues/terragroq/commits/")) {
       return { code: 0, stdout: JSON.stringify({ statuses: [] }) }
@@ -591,6 +597,41 @@ describe("Hermes repository lifecycle", () => {
     })).toThrow(HermesRepositoryLifecycleError)
   })
 
+  it("allows only the exact read-only git diff check validator", async () => {
+    const calls: Call[] = []
+    const lifecycle = createRepositoryLifecycle({
+      workspaceRoot: root,
+      ownedWorktreeRoot: ownedRoot,
+      validationCommands: [{ command: "git", args: ["diff", "--check"] }],
+      runner: async (call: Call) => {
+        calls.push(call)
+        if (call.args.includes("remote") && call.args.includes("get-url")) {
+          return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
+        }
+        if (call.args.includes("show-ref")) return { code: 1, stdout: "" }
+        return { code: 0, stdout: "" }
+      },
+    })
+    const record = await lifecycle.createWorktree({ branch })
+    calls.length = 0
+    await lifecycle.runValidationCommands(record)
+    expect(calls.at(-1)).toMatchObject({
+      command: "git", args: ["diff", "--check"], credentialAccess: false,
+    })
+
+    for (const args of [
+      ["status"], ["diff"], ["diff", "--cached", "--check"],
+      ["diff", "--check", "docs/report.md"], ["-C", root, "diff", "--check"],
+    ]) {
+      expect(() => createRepositoryLifecycle({
+        workspaceRoot: root,
+        ownedWorktreeRoot: ownedRoot,
+        validationCommands: [{ command: "git", args }],
+        runner: async () => ({ code: 0 }),
+      })).toThrow(HermesRepositoryLifecycleError)
+    }
+  })
+
   it("removes only owned generated Next output immediately before a build", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-next-validation-"))
     const workspaceRoot = path.join(tempRoot, "repository")
@@ -916,17 +957,118 @@ describe("Hermes repository lifecycle", () => {
     })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_OWNERSHIP_WALL" })
   })
 
-  it("reads immutable PR file names for post-merge scope verification", async () => {
+  it("reads bounded immutable PR file pages without requiring gh --slurp", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      filename: `components/hermes/file-${String(index).padStart(3, "0")}.tsx`,
+      ...(index === 0 ? { previous_filename: "lib/auth/old-status.tsx" } : {}),
+    }))
     const { lifecycle, calls } = fixture({
-      "gh api --paginate --slurp repos/bsvalues/terragroq/pulls/77/files": () => ({ code: 0, stdout: JSON.stringify([[
-        { filename: "components/hermes/status.tsx", previous_filename: "lib/auth/old-status.tsx" },
-        { filename: "tests/hermes-status.test.tsx" },
-      ]]) }),
+      "gh api --paginate --slurp": () => ({ code: 1, stderr: "unknown flag: --slurp" }),
+      "gh api repos/bsvalues/terragroq/pulls/77": (call) => {
+        const endpoint = call.args.at(-1) ?? ""
+        return { code: 0, stdout: JSON.stringify(endpoint.includes("/files?")
+          ? endpoint.endsWith("page=1") ? firstPage : [{ filename: "tests/hermes-status.test.tsx" }]
+          : { changed_files: 101, head: { sha } }) }
+      },
     })
-    await expect(lifecycle.inspectPullRequestFiles(77)).resolves.toEqual([
-      "components/hermes/status.tsx", "lib/auth/old-status.tsx", "tests/hermes-status.test.tsx",
+    const files = await lifecycle.inspectPullRequestFiles(77)
+    expect(files).toHaveLength(102)
+    expect(files).toEqual(expect.arrayContaining([
+      "components/hermes/file-000.tsx", "lib/auth/old-status.tsx", "tests/hermes-status.test.tsx",
+    ]))
+    const fileCalls = calls.filter(({ args }) => args.at(-1)?.includes("/pulls/77/files?"))
+    expect(fileCalls.map(({ args }) => args)).toEqual([
+      ["api", "repos/bsvalues/terragroq/pulls/77/files?per_page=100&page=1"],
+      ["api", "repos/bsvalues/terragroq/pulls/77/files?per_page=100&page=2"],
     ])
-    expect(calls.at(-1)?.args).toEqual(["api", "--paginate", "--slurp", "repos/bsvalues/terragroq/pulls/77/files?per_page=100"])
+    expect(calls.some(({ args }) => args.includes("--slurp"))).toBe(false)
+    expect(calls.filter(({ args }) => args.at(-1) === "repos/bsvalues/terragroq/pulls/77")).toHaveLength(2)
+  })
+
+  it("fails closed on malformed, short, oversized, or duplicate PR file pages", async () => {
+    for (const { changedFiles, response } of [
+      { changedFiles: 1, response: { files: "not-an-array" } },
+      { changedFiles: 2, response: [{ filename: "components/valid.tsx" }, null] },
+      { changedFiles: 1, response: [{ previous_filename: "components/old.tsx" }] },
+      { changedFiles: 100, response: Array.from({ length: 99 }, (_, index) => ({ filename: `components/short-${index}.tsx` })) },
+      { changedFiles: 100, response: Array.from({ length: 101 }, (_, index) => ({ filename: `components/long-${index}.tsx` })) },
+      { changedFiles: 2, response: [{ filename: "components/duplicate.tsx" }, { filename: "components/duplicate.tsx" }] },
+    ]) {
+      const { lifecycle } = fixture({
+        "gh api repos/bsvalues/terragroq/pulls/77": (call) => ({ code: 0, stdout: JSON.stringify(
+          call.args.at(-1)?.includes("/files?") ? response : { changed_files: changedFiles, head: { sha } },
+        ) }),
+      })
+      await expect(lifecycle.inspectPullRequestFiles(77)).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_GITHUB_WALL",
+      })
+    }
+  })
+
+  it("rejects invalid PR file metadata before reading pages", async () => {
+    for (const metadata of [
+      { changed_files: 0, head: { sha } },
+      { changed_files: 3_001, head: { sha } },
+      { changed_files: 1.5, head: { sha } },
+      { changed_files: 1, head: { sha: "not-a-commit" } },
+      { changed_files: 1 },
+    ]) {
+      const { lifecycle, calls } = fixture({
+        "gh api repos/bsvalues/terragroq/pulls/77": () => ({
+          code: 0, stdout: JSON.stringify(metadata),
+        }),
+      })
+      await expect(lifecycle.inspectPullRequestFiles(77)).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_GITHUB_WALL",
+      })
+      expect(calls.some(({ args }) => args.at(-1)?.includes("/files?"))).toBe(false)
+    }
+  })
+
+  it("rejects PR file metadata head or count drift", async () => {
+    for (const postMetadata of [
+      { changed_files: 1, head: { sha: "b".repeat(40) } },
+      { changed_files: 2, head: { sha } },
+    ]) {
+      let metadataReads = 0
+      const { lifecycle } = fixture({
+        "gh api repos/bsvalues/terragroq/pulls/77": (call) => {
+          if (call.args.at(-1)?.includes("/files?")) {
+            return { code: 0, stdout: JSON.stringify([{ filename: "components/stable.tsx" }]) }
+          }
+          metadataReads += 1
+          return { code: 0, stdout: JSON.stringify(metadataReads === 1
+            ? { changed_files: 1, head: { sha } }
+            : postMetadata) }
+        },
+      })
+      await expect(lifecycle.inspectPullRequestFiles(77)).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_GITHUB_WALL",
+      })
+    }
+  })
+
+  it("accepts exactly three thousand PR files in thirty pages with no page thirty-one", async () => {
+    const { lifecycle, calls } = fixture({
+      "gh api repos/bsvalues/terragroq/pulls/77": (call) => {
+        const endpoint = call.args.at(-1) ?? ""
+        if (!endpoint.includes("/files?")) {
+          return { code: 0, stdout: JSON.stringify({ changed_files: 3_000, head: { sha } }) }
+        }
+        const page = Number(new URL(`https://github.invalid/${endpoint}`).searchParams.get("page"))
+        return {
+          code: 0,
+          stdout: JSON.stringify(Array.from({ length: 100 }, (_, index) => ({
+            filename: `components/page-${page}-file-${index}.tsx`,
+          }))),
+        }
+      },
+    })
+    await expect(lifecycle.inspectPullRequestFiles(77)).resolves.toHaveLength(3_000)
+    const fileCalls = calls.filter(({ args }) => args.at(-1)?.includes("/pulls/77/files?"))
+    expect(fileCalls).toHaveLength(30)
+    expect(fileCalls.at(-1)?.args.at(-1)).toContain("page=30")
+    expect(fileCalls.some(({ args }) => args.at(-1)?.includes("page=31"))).toBe(false)
   })
 
   it("pushes an exact refspec and merges only an approved green PR with no unresolved threads", async () => {
@@ -989,6 +1131,165 @@ describe("Hermes repository lifecycle", () => {
       checksGreen: false,
       checksComplete: true,
       failedChecks: [{ name: "Vercel", state: "FAILURE" }],
+    })
+  })
+
+  it("uses the latest completed run for one named check context", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "MERGED", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          {
+            __typename: "CheckRun", name: "work context receipt (#831)", status: "COMPLETED",
+            workflowName: "work context receipt (#831)", conclusion: "CANCELLED",
+            startedAt: "2026-08-21T00:10:00Z", completedAt: "2026-08-21T00:30:00Z",
+          },
+          {
+            __typename: "CheckRun", name: "work context receipt (#831)", status: "COMPLETED",
+            workflowName: "work context receipt (#831)", conclusion: "SUCCESS",
+            startedAt: "2026-08-21T00:20:00Z", completedAt: "2026-08-21T00:21:00Z",
+          },
+        ],
+        reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: sha } }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: true, checksComplete: true, failedChecks: [], pendingChecks: [],
+    })
+  })
+
+  it("preserves a genuine latest cancellation and a distinct failing context", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "MERGED", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "SUCCESS", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "CANCELLED", startedAt: "2026-08-21T00:21:00Z" },
+          { __typename: "CheckRun", workflowName: "test workflow", name: "unit tests", conclusion: "FAILURE", startedAt: "2026-08-21T00:22:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false,
+      failedChecks: [
+        { name: "receipt", state: "CANCELLED" },
+        { name: "unit tests", state: "FAILURE" },
+      ],
+    })
+  })
+
+  it("keeps same-named checks from different workflows distinct", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "verify", conclusion: "FAILURE", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", workflowName: "unit workflow", name: "verify", conclusion: "SUCCESS", startedAt: "2026-08-21T00:21:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false,
+      failedChecks: [{ name: "verify", state: "FAILURE" }],
+      pendingChecks: [],
+    })
+  })
+
+  it("does not collapse checks whose exact workflow identity differs only by whitespace", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "verify", status: "IN_PROGRESS", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", workflowName: "receipt workflow ", name: "verify", conclusion: "SUCCESS", startedAt: "2026-08-21T00:21:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false, checksComplete: false,
+      failedChecks: [], pendingChecks: [{ name: "verify", state: "IN_PROGRESS" }],
+    })
+  })
+
+  it("fails closed without a CheckRun workflow identity", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "verify", conclusion: "CANCELLED", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", name: "verify", conclusion: "SUCCESS", startedAt: "2026-08-21T00:21:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false,
+      failedChecks: [{ name: "verify", state: "CANCELLED" }],
+    })
+  })
+
+  it("preserves the latest pending run and StatusContext ordering", async () => {
+    const pending = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "SUCCESS", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", status: "IN_PROGRESS", startedAt: "2026-08-21T00:21:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(pending.lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false, checksComplete: false,
+      failedChecks: [], pendingChecks: [{ name: "receipt", state: "IN_PROGRESS" }],
+    })
+
+    const statusContext = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "StatusContext", context: "Vercel", state: "FAILURE", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "StatusContext", context: "Vercel", state: "SUCCESS", startedAt: "2026-08-21T00:21:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(statusContext.lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: true, failedChecks: [], pendingChecks: [],
+    })
+  })
+
+  it("fails closed when duplicate check ordering is unavailable or ambiguous", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "MERGED", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "CANCELLED" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "SUCCESS" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_GITHUB_WALL",
+    })
+
+    const tied = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "MERGED", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "CANCELLED", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "SUCCESS", startedAt: "2026-08-21T00:11:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(tied.lifecycle.inspectPullRequest(77)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_GITHUB_WALL",
     })
   })
 
@@ -1230,6 +1531,166 @@ describe("Hermes repository lifecycle", () => {
     expect(second).toMatchObject({ cleaned: true, alreadyCleaned: true })
     expect(calls.filter(({ args }) => args.includes("remove"))).toHaveLength(1)
     expect(calls.filter(({ args }) => args.includes("update-ref"))).toHaveLength(1)
+  })
+
+  it("cleans a reviewed branch whose authoritative remote head fast-forwards the clean owned worktree head", async () => {
+    const reviewedHead = "c".repeat(40)
+    const { lifecycle, calls, record } = await ownedFixture({
+      [`${rootGit} ls-remote --heads origin refs/heads/${branch}`]: () => ({
+        code: 0,
+        stdout: `${reviewedHead}\trefs/heads/${branch}\n`,
+      }),
+      [`${ownedGit} rev-parse HEAD`]: () => ({ code: 0, stdout: `${sha}\n` }),
+      [`${rootGit} fetch --no-tags origin refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse FETCH_HEAD`]: () => ({ code: 0, stdout: `${reviewedHead}\n` }),
+      [`${rootGit} merge-base --is-ancestor ${sha} ${reviewedHead}`]: () => ({ code: 0 }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+      [`${ownedGit} status`]: () => ({ code: 0, stdout: "" }),
+    })
+
+    await expect(lifecycle.cleanupOwnedWorktree({
+      ...record,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: reviewedHead,
+    })).resolves.toMatchObject({ cleaned: true, alreadyCleaned: false })
+
+    const cleanupCalls = calls.map(({ command, args }) => `${command} ${args.join(" ")}`)
+    const remoteIndex = cleanupCalls.indexOf(`${rootGit} ls-remote --heads origin refs/heads/${branch}`)
+    const statusIndex = cleanupCalls.indexOf(`${ownedGit} status --porcelain=v1 -z --untracked-files=all`)
+    const removeIndex = cleanupCalls.indexOf(`${rootGit} worktree remove ${ownedWorktree}`)
+    const deleteIndex = cleanupCalls.indexOf(`${rootGit} update-ref -d refs/heads/${branch} ${sha}`)
+    expect(remoteIndex).toBeGreaterThanOrEqual(0)
+    expect(statusIndex).toBeGreaterThan(remoteIndex)
+    expect(removeIndex).toBeGreaterThan(statusIndex)
+    expect(deleteIndex).toBeGreaterThan(removeIndex)
+    expect(cleanupCalls).not.toContain(`${rootGit} update-ref -d refs/heads/${branch} ${reviewedHead}`)
+  })
+
+  it("replays partial cleanup by deleting only the observed ancestor branch ref", async () => {
+    const reviewedHead = "c".repeat(40)
+    let worktreeReads = 0
+    const { lifecycle, calls } = fixture({
+      [`${rootGit} worktree list --porcelain`]: () => {
+        worktreeReads += 1
+        return { code: 0, stdout: "" }
+      },
+      [`${rootGit} show-ref --verify --quiet refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse refs/heads/${branch}`]: () => ({ code: 0, stdout: `${sha}\n` }),
+      [`${rootGit} ls-remote --heads origin refs/heads/${branch}`]: () => ({
+        code: 0,
+        stdout: `${reviewedHead}\trefs/heads/${branch}\n`,
+      }),
+      [`${rootGit} fetch --no-tags origin refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse FETCH_HEAD`]: () => ({ code: 0, stdout: `${reviewedHead}\n` }),
+      [`${rootGit} merge-base --is-ancestor ${sha} ${reviewedHead}`]: () => ({ code: 0 }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+    })
+
+    await expect(lifecycle.cleanupOwnedWorktree({
+      branch,
+      worktreePath: ownedWorktree,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: reviewedHead,
+    })).resolves.toMatchObject({ cleaned: true, alreadyCleaned: true })
+
+    expect(worktreeReads).toBe(2)
+    expect(calls).toContainEqual(expect.objectContaining({
+      command: "git",
+      args: ["-C", root, "update-ref", "-d", `refs/heads/${branch}`, sha],
+    }))
+    expect(calls.some(({ args }) => args.includes("remove"))).toBe(false)
+  })
+
+  it.each([
+    ["a mismatched authoritative remote", `${"d".repeat(40)}\trefs/heads/${branch}\n`, 0],
+    ["duplicate authoritative remote rows", `${sha}\trefs/heads/${branch}\n${sha}\trefs/heads/${branch}\n`, 0],
+    ["a divergent local branch", `${"c".repeat(40)}\trefs/heads/${branch}\n`, 1],
+  ])("walls before cleanup effects for %s", async (_label, remoteRows, ancestorCode) => {
+    const reviewedHead = "c".repeat(40)
+    const { lifecycle, calls, record } = await ownedFixture({
+      [`${rootGit} ls-remote --heads origin refs/heads/${branch}`]: () => ({ code: 0, stdout: remoteRows }),
+      [`${ownedGit} rev-parse HEAD`]: () => ({ code: 0, stdout: `${sha}\n` }),
+      [`${rootGit} fetch --no-tags origin refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse FETCH_HEAD`]: () => ({ code: 0, stdout: `${reviewedHead}\n` }),
+      [`${rootGit} merge-base --is-ancestor ${sha} ${reviewedHead}`]: () => ({ code: ancestorCode }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+      [`${ownedGit} status`]: () => ({ code: 0, stdout: "" }),
+    })
+
+    await expect(lifecycle.cleanupOwnedWorktree({
+      ...record,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: reviewedHead,
+    })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_OWNERSHIP_WALL" })
+    expect(calls.some(({ args }) => args.includes("remove") || args.includes("update-ref"))).toBe(false)
+  })
+
+  it("walls partial-cleanup replay if the owned worktree reappears before branch deletion", async () => {
+    const reviewedHead = "c".repeat(40)
+    let worktreeReads = 0
+    const { lifecycle, calls } = fixture({
+      [`${rootGit} worktree list --porcelain`]: () => {
+        worktreeReads += 1
+        return {
+          code: 0,
+          stdout: worktreeReads === 1 ? "" : `worktree ${ownedWorktree}\nHEAD ${sha}\nbranch refs/heads/${branch}\n\n`,
+        }
+      },
+      [`${rootGit} show-ref --verify --quiet refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse refs/heads/${branch}`]: () => ({ code: 0, stdout: `${sha}\n` }),
+      [`${rootGit} ls-remote --heads origin refs/heads/${branch}`]: () => ({
+        code: 0,
+        stdout: `${reviewedHead}\trefs/heads/${branch}\n`,
+      }),
+      [`${rootGit} fetch --no-tags origin refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse FETCH_HEAD`]: () => ({ code: 0, stdout: `${reviewedHead}\n` }),
+      [`${rootGit} merge-base --is-ancestor ${sha} ${reviewedHead}`]: () => ({ code: 0 }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+    })
+
+    await expect(lifecycle.cleanupOwnedWorktree({
+      branch,
+      worktreePath: ownedWorktree,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: reviewedHead,
+    })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_OWNERSHIP_WALL" })
+    expect(calls.some(({ args }) => args.includes("update-ref"))).toBe(false)
+  })
+
+  it("walls before worktree removal when the registered branch ref drifts from the owned worktree head", async () => {
+    const driftedBranchHead = "d".repeat(40)
+    const { lifecycle, calls, record } = await ownedFixture({
+      [`${rootGit} ls-remote --heads origin refs/heads/${branch}`]: () => ({
+        code: 0,
+        stdout: `${sha}\trefs/heads/${branch}\n`,
+      }),
+      [`${ownedGit} rev-parse HEAD`]: () => ({ code: 0, stdout: `${sha}\n` }),
+      [`${rootGit} rev-parse refs/heads/${branch}`]: () => ({ code: 0, stdout: `${driftedBranchHead}\n` }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+      [`${ownedGit} status`]: () => ({ code: 0, stdout: "" }),
+    })
+
+    await expect(lifecycle.cleanupOwnedWorktree({
+      ...record,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: sha,
+    })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_OWNERSHIP_WALL" })
+    expect(calls.some(({ args }) => args.includes("remove") || args.includes("update-ref"))).toBe(false)
+  })
+
+  it("treats an absent owned worktree and absent local branch as idempotently cleaned", async () => {
+    const { lifecycle, calls } = fixture({
+      [`${rootGit} worktree list --porcelain`]: () => ({ code: 0, stdout: "" }),
+      [`${rootGit} show-ref --verify --quiet refs/heads/${branch}`]: () => ({ code: 1 }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+    })
+    await expect(lifecycle.cleanupOwnedWorktree({
+      branch,
+      worktreePath: ownedWorktree,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: sha,
+    })).resolves.toMatchObject({ cleaned: true, alreadyCleaned: true })
+    expect(calls.some(({ args }) => args.includes("ls-remote") || args.includes("update-ref"))).toBe(false)
   })
 
   it("removes only an ignored ordinary dependency directory during terminal cleanup recovery", async () => {

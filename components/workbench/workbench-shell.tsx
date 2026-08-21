@@ -247,6 +247,47 @@ function EmptyThread({ project }: { project: ProjectView | null }) {
   )
 }
 
+function DecisionInspectorItem({ item }: { item: ThreadItem }) {
+  const detail = item.decision
+  if (!detail) return (
+    <li className="border-l border-[var(--workbench-hairline)] pl-3">
+      <span className="block text-xs font-medium">{item.title}</span>
+      <span className="mt-1 block text-xs leading-5 text-[var(--workbench-muted)]">{item.summary}</span>
+    </li>
+  )
+  return (
+    <li className="space-y-3 border-l border-[var(--workbench-hairline)] pl-3">
+      <div>
+        <span className="block text-xs font-medium">{item.title}</span>
+        <span className="mt-1 block text-xs leading-5 text-[var(--workbench-muted)]">{item.summary}</span>
+      </div>
+      {detail.state === "ACTIONABLE" ? (
+        <dl className="space-y-2 text-xs">
+          <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Blocked action</dt><dd className="mt-1 leading-5">{detail.blockedAction}</dd></div>
+          <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Gates</dt><dd className="mt-1">{detail.gates?.join(", ")}</dd></div>
+          <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Recommendation</dt><dd className="mt-1">{detail.recommendation}</dd></div>
+          {detail.recommendationRationale ? <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Why</dt><dd className="mt-1 leading-5">{detail.recommendationRationale}</dd></div> : null}
+          <div>
+            <dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Choices and consequences</dt>
+            <dd className="mt-1 space-y-1">
+              <span className="block">APPROVE — {detail.consequences?.APPROVE}</span>
+              <span className="block">DENY — {detail.consequences?.DENY}</span>
+            </dd>
+          </div>
+        </dl>
+      ) : detail.state === "OWNER_DECIDED" ? (
+        <dl className="space-y-2 text-xs">
+          <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Choice</dt><dd className="mt-1">{detail.choice}</dd></div>
+          <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Disposition</dt><dd className="mt-1">{detail.disposition}</dd></div>
+          <div><dt className="font-mono uppercase tracking-wider text-[var(--workbench-muted)]">Execution released</dt><dd className="mt-1">No</dd></div>
+        </dl>
+      ) : (
+        <p role="status" className="text-xs leading-5 text-[var(--workbench-fault)]">The persisted decision receipt conflicts with its gated finding. No action is available.</p>
+      )}
+    </li>
+  )
+}
+
 function Inspector({
   tab,
   project,
@@ -357,7 +398,9 @@ function Inspector({
           </div>
         ) : relevantItems.length ? (
           <ul className="space-y-3">
-            {relevantItems.map((candidate) => <li key={candidate.id} className="border-l border-[var(--workbench-hairline)] pl-3"><span className="block text-xs font-medium">{candidate.title}</span><span className="mt-1 block text-xs leading-5 text-[var(--workbench-muted)]">{candidate.summary}</span></li>)}
+            {relevantItems.map((candidate) => tab === "decision"
+              ? <DecisionInspectorItem key={candidate.id} item={candidate} />
+              : <li key={candidate.id} className="border-l border-[var(--workbench-hairline)] pl-3"><span className="block text-xs font-medium">{candidate.title}</span><span className="mt-1 block text-xs leading-5 text-[var(--workbench-muted)]">{candidate.summary}</span></li>)}
           </ul>
         ) : (
           <p className="text-xs leading-5 text-[var(--workbench-muted)]">No {tab} records are explicitly bound to this Thread.</p>

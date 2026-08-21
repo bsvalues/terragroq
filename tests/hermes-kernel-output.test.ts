@@ -41,6 +41,7 @@ const complete = (overrides: Record<string, unknown> = {}) => ({
   merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0, ownerTouchCount: 0,
   blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE", blockedAction: null,
   authorityBoundary: null, minimumChoice: null, approveConsequence: null, denyConsequence: null,
+  findings: [],
   ...overrides,
 })
 
@@ -73,12 +74,15 @@ describe("Hermes turn output schema check", () => {
 
 describe("Hermes kernel output harvester — rendered (unfenced) kernel output", () => {
   const fixture = () => fs.readFileSync(path.join(import.meta.dirname, "fixtures", "hermes-kernel", "p2-run-aacd3931-stdout.txt"), "utf8")
-  it("harvests the answer object from real Hermes CLI output where the fence was rendered as a box", () => {
+  it("harvests a legacy answer without auto-filling fields required by the current schema", () => {
     const harvested = harvestTurnOutput(fixture())
     expect(harvested.ok).toBe(true)
     const parsed = JSON.parse((harvested as { finalText: string }).finalText)
     expect(parsed).toMatchObject({ result: "READY_FOR_VALIDATION", workOrder: "WO-HERMES-P2-PROBE-001", branch: "p2/resident-probe", nextState: "READY_FOR_VALIDATION" })
-    expect(validateAgainstTurnSchema(parsed, HERMES_TURN_OUTPUT_SCHEMA)).toEqual({ ok: true })
+    expect(validateAgainstTurnSchema(parsed, HERMES_TURN_OUTPUT_SCHEMA)).toEqual({
+      ok: false,
+      reason: "SCHEMA:MISSING:findings",
+    })
   })
   it("filters echoed non-answer objects by contract instead of trusting position", () => {
     const echoed = "prompt echo: " + JSON.stringify({ type: "object", required: ["result"], properties: {} }) + "\n"
@@ -135,9 +139,52 @@ describe("Hermes kernel turn-output integrity (issue #806)", () => {
 })
 
 describe("Hermes turn schema checker fails closed (issue #806)", () => {
+  it("enforces declared array and string bounds before descending into item or pattern checks", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        values: { type: "array", minItems: 1, maxItems: 2, items: { type: "string" } },
+        label: { type: "string", minLength: 2, maxLength: 4, pattern: "^[A-Z]+$" },
+      },
+    }
+    expect(validateAgainstTurnSchema({ values: [] }, schema)).toEqual({
+      ok: false,
+      reason: "SCHEMA:values:MIN_ITEMS",
+    })
+    expect(validateAgainstTurnSchema({ values: ["a", "b", "c"] }, schema)).toEqual({
+      ok: false,
+      reason: "SCHEMA:values:MAX_ITEMS",
+    })
+    expect(validateAgainstTurnSchema({ values: [7, 8, 9] }, schema)).toEqual({
+      ok: false,
+      reason: "SCHEMA:values:MAX_ITEMS",
+    })
+    expect(validateAgainstTurnSchema({ values: ["a"], label: "a" }, schema)).toEqual({
+      ok: false,
+      reason: "SCHEMA:label:MIN_LENGTH",
+    })
+    expect(validateAgainstTurnSchema({ values: ["a"], label: "ABCDE" }, schema)).toEqual({
+      ok: false,
+      reason: "SCHEMA:label:MAX_LENGTH",
+    })
+    expect(validateAgainstTurnSchema({ values: ["a", "b"], label: "AB" }, schema)).toEqual({ ok: true })
+  })
+
+  it("fails closed on malformed bound declarations", () => {
+    for (const [keyword, value] of [
+      ["minItems", -1], ["maxItems", 1.5], ["minLength", "1"], ["maxLength", -1],
+    ] as const) {
+      const schema = { type: "object", properties: { value: { type: "array", [keyword]: value } } }
+      expect(validateAgainstTurnSchema({ value: [] }, schema)).toEqual({
+        ok: false,
+        reason: `SCHEMA:value:INVALID:${keyword}`,
+      })
+    }
+  })
+
   it("refuses a schema keyword it does not implement instead of ignoring it", () => {
-    const schema = { type: "object", properties: { a: { type: "string", maxLength: 2 } } }
-    expect(validateAgainstTurnSchema({ a: "toolong" }, schema)).toEqual({ ok: false, reason: "SCHEMA:a:UNSUPPORTED:maxLength" })
+    const schema = { type: "object", properties: { a: { type: "string", format: "email" } } }
+    expect(validateAgainstTurnSchema({ a: "owner@example.test" }, schema)).toEqual({ ok: false, reason: "SCHEMA:a:UNSUPPORTED:format" })
     expect(validateAgainstTurnSchema({ a: "ok" }, { type: "object", oneOf: [] })).toEqual({ ok: false, reason: "SCHEMA:UNSUPPORTED:oneOf" })
   })
   it("enforces constraints inside a nested object", () => {

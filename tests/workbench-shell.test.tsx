@@ -2,7 +2,7 @@
 
 import React from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { WorkbenchShell } from "@/components/workbench/workbench-shell"
@@ -210,6 +210,55 @@ describe("WorkbenchShell rendered interaction contract", () => {
 
     await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
     await waitFor(() => expect(actions.getWorkbenchThreads).toHaveBeenCalledTimes(2))
+  })
+
+  it("shows runtime finding decision detail read-only without changing route, focus, selection, or tab", async () => {
+    const decisionThread: Thread = {
+      ...thread,
+      items: [...thread.items, {
+        id: "governance_event:501:decision",
+        kind: "DECISION",
+        occurredAt: new Date("2026-08-20T16:00:00.000Z"),
+        actorRole: "OWNER",
+        title: "Runtime finding needs your decision",
+        summary: "changes reviewed policy",
+        rawState: "ACTIONABLE",
+        truth: { basis: "PERSISTED", state: "CURRENT", detail: "Canonical request" },
+        source: { kind: "governance_event", id: "501", ref: null, facet: "decision", mirrorKey: null, drilldown: { mode: "UNAVAILABLE", href: null } },
+        decision: {
+          state: "ACTIONABLE",
+          why: "changes reviewed policy",
+          blockedAction: "Materialize gated work",
+          gates: ["POLICY"],
+          recommendation: "DENY",
+          recommendationRationale: "Default deny",
+          choices: ["APPROVE", "DENY"],
+          consequences: { APPROVE: "Record authority only", DENY: "Resolve denied" },
+        },
+      }],
+    }
+    actions.getWorkbenchThreads.mockResolvedValue([decisionThread])
+    const user = userEvent.setup()
+    renderShell()
+
+    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
+    await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe("true")
+    expect(navigation.replace).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole("tab", { name: "Decision" }))
+
+    const panel = within(screen.getByRole("tabpanel"))
+    expect(panel.getByText("changes reviewed policy")).toBeTruthy()
+    expect(panel.getByText("Materialize gated work")).toBeTruthy()
+    expect(panel.getByText("POLICY")).toBeTruthy()
+    expect(panel.getByText("DENY", { selector: "dd" })).toBeTruthy()
+    expect(panel.getByText("APPROVE — Record authority only")).toBeTruthy()
+    expect(panel.getByText("DENY — Resolve denied")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /approve|deny/i })).toBeNull()
+    expect(screen.queryByRole("link", { name: /decisions/i })).toBeNull()
+    expect(navigation.replace).not.toHaveBeenCalled()
+    expect(screen.getByRole("option", { name: /Ship the cockpit/ }).getAttribute("aria-selected")).toBe("true")
   })
 
   it("keeps explicit Activity and System mode content reachable after a Thread is selected", async () => {

@@ -11,6 +11,7 @@ import {
   governanceEvent,
   outcomeQueueItem,
   project,
+  projectResource,
   workbenchThread,
   workbenchThreadSource,
   workOrder,
@@ -40,6 +41,7 @@ import {
   type StartWorkbenchOutcomeInput,
   type StartWorkbenchOutcomeResult,
 } from "@/lib/workbench/outcome-start"
+import { isIssue911ReliabilityOutcomeIntent } from "@/lib/workbench/registered-outcome-intent"
 
 /* ------------------------------------------------------------------ */
 /* Reads                                                              */
@@ -229,19 +231,6 @@ async function persistGoalOutcome(
       }
       throw new Error("GOAL_INTAKE_IDEMPOTENCY_CONFLICT")
     }
-    if (startInput) {
-      const projects = await transaction
-        .select({ id: project.id, userId: project.userId })
-        .from(project)
-        .where(and(eq(project.userId, userId), eq(project.id, startInput.projectId)))
-        .limit(2)
-      if (projects.length !== 1) {
-        return {
-          goal: null,
-          start: unavailableOutcomeStart("PROJECT_NOT_FOUND", "PROJECT_NOT_FOUND", startInput.projectId),
-        }
-      }
-    }
     if (existingReceipt) {
       const [existingGoal] = await transaction
         .select()
@@ -369,6 +358,40 @@ async function persistGoalOutcome(
         .returning({ id: goalOutcomeIntakeReceipt.id })
       if (!replayedReceipt) throw new Error("GOAL_INTAKE_REPLAY_WRITE_WALL")
       return { goal: existingGoal, start }
+    }
+
+    if (startInput) {
+      const projects = await transaction
+        .select({ id: project.id, userId: project.userId, lifecycle: project.lifecycle })
+        .from(project)
+        .where(and(eq(project.userId, userId), eq(project.id, startInput.projectId)))
+        .limit(2)
+      let registeredProjectEligible = true
+      if (projects.length === 1 && isIssue911ReliabilityOutcomeIntent(startInput.intent)) {
+        const primaryRepositories = await transaction
+          .select({
+            canonicalIdentity: projectResource.canonicalIdentity,
+            relationship: projectResource.relationship,
+            type: projectResource.type,
+          })
+          .from(projectResource)
+          .where(and(
+            eq(projectResource.userId, userId),
+            eq(projectResource.projectId, startInput.projectId),
+            eq(projectResource.type, "repo"),
+            eq(projectResource.relationship, "primary-repo"),
+          ))
+          .limit(2)
+        registeredProjectEligible = projects[0].lifecycle === "active"
+          && primaryRepositories.length === 1
+          && primaryRepositories[0].canonicalIdentity === "bsvalues/terragroq"
+      }
+      if (projects.length !== 1 || !registeredProjectEligible) {
+        return {
+          goal: null,
+          start: unavailableOutcomeStart("PROJECT_NOT_FOUND", "PROJECT_NOT_FOUND", startInput.projectId),
+        }
+      }
     }
 
     const refs = await transaction

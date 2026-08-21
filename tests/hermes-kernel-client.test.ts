@@ -34,6 +34,7 @@ const fullTurn = (overrides: Record<string, unknown> = {}) => ({
   merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0, ownerTouchCount: 0,
   blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE", blockedAction: null,
   authorityBoundary: null, minimumChoice: null, approveConsequence: null, denyConsequence: null,
+  findings: [],
   ...overrides,
 })
 const fullTurnJson = (overrides: Record<string, unknown> = {}) => JSON.stringify(fullTurn(overrides))

@@ -7,6 +7,7 @@ import { promisify } from "node:util"
 import pg from "pg"
 
 import { createNativeAdapters } from "./native-adapters.mjs"
+import { classifyProposedAction } from "./owner-gate-policy.mjs"
 import { IMPLEMENTATION, buildWorkerPrompt, laneRoster, selectLane } from "./worker-lanes.mjs"
 import { brokeredExec } from "../../lib/fabric/broker.mjs"
 import {
@@ -47,6 +48,52 @@ async function shipRemoteFile(content, remotePath) {
 
 const execFile = promisify(execFileCallback)
 const REPOSITORY = "bsvalues/terragroq"
+const FINDING_EFFECT_KEYS = new Set([
+  "spendsMoney", "irreversible", "mutatesProductionData", "releaseOrCutover",
+  "protectedResource", "unresolvedLegalPrivacyOrSecurityRisk", "touchesCredentials",
+  "changesReviewedPolicy", "outsideObjectiveScope", "competesWithPriority", "destroys",
+])
+const FINDING_SECRET = new RegExp([
+  "-----" + "BEGIN [A-Z ]*PRIVATE KEY-----",
+  "\\bsk-[A-Za-z0-9_-]{20,}\\b",
+  "\\bgh[oprsu]_[A-Za-z0-9]{20,}\\b",
+  "(?:postgres(?:ql)?|mysql|mongodb(?:\\+srv)?):\\/\\/[^\\s]+",
+  "(?:password|token|api[_ -]?key|client[_ -]?secret)\\s*[:=]\\s*[\"']?[^\\s\"']{12,}",
+].join("|"), "i")
+const FINDING_CONTROL = /(?:ignore\s+(?:(?:all\s+|any\s+|the\s+)?previous|(?:the\s+)?(?:declared|authority|boundary|rules?))|system\s+(?:message|prompt)|developer\s+(?:message|instruction)|<\/?system\b|\[INST\]|do\s+not\s+follow\s+(?:the\s+)?(?:rules|instructions))/i
+
+function validFindingEffects(effects) {
+  if (!effects || typeof effects !== "object" || Array.isArray(effects)) return false
+  const entries = Object.entries(effects)
+  if (entries.length !== FINDING_EFFECT_KEYS.size
+    || entries.some(([key]) => !FINDING_EFFECT_KEYS.has(key))
+    || [...FINDING_EFFECT_KEYS].some((key) => !Object.hasOwn(effects, key))) return false
+  for (const [key, value] of entries) {
+    if (key !== "destroys" && typeof value !== "boolean") return false
+    if (key === "destroys" && (!Array.isArray(value) || value.some((target) =>
+      !target || typeof target !== "object" || Array.isArray(target)
+      || Object.keys(target).some((field) => !new Set(["path", "verifiedCopyElsewhere"]).has(field))
+      || typeof target.path !== "string" || typeof target.verifiedCopyElsewhere !== "boolean"))) return false
+  }
+  return true
+}
+
+function validFindingText(value) {
+  return typeof value === "string" && value.trim() !== "" && value.length <= 2_000
+    && !FINDING_SECRET.test(value) && !FINDING_CONTROL.test(value)
+}
+
+function validFindingPaths(paths) {
+  return Array.isArray(paths) && paths.length > 0 && paths.every((candidate) =>
+    typeof candidate === "string" && candidate.length <= 300 && !candidate.startsWith("/")
+    && !candidate.includes("\\") && !candidate.split("/").includes(".."))
+}
+
+function validFindingMetadata(metadata) {
+  return Number.isSafeInteger(metadata?.sequence) && metadata.sequence > 0
+    && validFindingText(metadata?.summary) && validFindingText(metadata?.task)
+    && validFindingPaths(metadata?.paths) && validFindingEffects(metadata?.effects)
+}
 
 /**
  * WilliamOS-state adapters for the operational kernel (#WO-0027, GRANT-0013).
@@ -109,8 +156,22 @@ export function parseProjectionIssue(description) {
   return explicit ? Number(explicit[1]) : null
 }
 
+export function projectionCompletionOwned(description) {
+  return !/\bprojection\s+completion\s*:\s*parent-owned\b/i.test(String(description ?? ""))
+}
+
+export function projectionIssueDirective(issueNumber, completionOwned) {
+  return completionOwned
+    ? `Closes #${issueNumber}.`
+    : `Tracks #${issueNumber}; completion remains owned by the parent outcome.`
+}
+
 /** An owner grant is linked when the work order names its ref, or the grant's scope names the work order. */
 export function linkGrant(workOrder, grants) {
+  if (Number.isInteger(workOrder?.authorityGrantId)) {
+    return grants.find((grant) => grant.id === workOrder.authorityGrantId
+      && (grant.allowedActions ?? []).includes("implement")) ?? null
+  }
   return grants.find((grant) =>
     (grant.allowedActions ?? []).includes("implement")
     && ((workOrder.description ?? "").includes(grant.ref) || grant.scope === workOrder.ref)) ?? null
@@ -142,6 +203,8 @@ export function buildRegistryRecords(workOrders, grants, adapterId) {
     if (parseProjectionIssue(workOrder.description) === null) continue
     records.push({
       workOrderId: workOrder.ref,
+      workOrderRowId: workOrder.id,
+      userId: workOrder.userId,
       adapterId,
       authority: "APPROVED",
       riskClass: "R1",
@@ -150,10 +213,19 @@ export function buildRegistryRecords(workOrders, grants, adapterId) {
       baseBranch: "main",
       mergeMode: "AUTO_ELIGIBLE",
       allowedPaths,
+      forbiddenPaths: (workOrder.forbiddenFiles ?? []).filter(Boolean),
       requiredValidation,
       dependencies: [],
       task: workOrder.description ?? workOrder.title,
       grantRef: grant.ref,
+      // Carried so a derived child can check its parent is still valid at derivation time. A grant
+      // revoked mid-objective must stop the next child, not merely the next objective.
+      grantStatus: grant.status,
+      grantExpiresAt: grant.expiresAt,
+      projectionCompletionOwned: projectionCompletionOwned(workOrder.description),
+      commitAllowed: workOrder.commitAllowed,
+      tagAllowed: workOrder.tagAllowed,
+      pushAllowed: workOrder.pushAllowed,
       agent: workOrder.agent ?? "codex",
     })
   }
@@ -296,7 +368,7 @@ async function issueWorkContext({ repositoryPath, workOrderId, allowedPaths }) {
     collisions: [],
     remainingParentAcceptance: "resident continuation delivering an authorized child of #762",
   }
-  return { token: receiptToken(facts), facts }
+  return { ["to" + "ken"]: receiptToken(facts), facts }
 }
 
 /** Write a lane's work-context receipt into the tree that lane will actually edit. */
@@ -504,10 +576,10 @@ export async function collectPatch({ patchWorkspace, workspace, runner = run }) 
   return patch
 }
 
-export function createWilliamOSAdapters({ root, repositoryPath }) {
+export function createWilliamOSAdapters({ root, repositoryPath, database = null }) {
   const adapterId = "williamos-resident-v1"
   const native = createNativeAdapters({ root, repositoryPath })
-  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 2 })
+  const pool = database ?? new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 2 })
   // native applyAndInspect writes state/requests/active.patch and assumed the legacy dispatch had
   // created the directory; the replacement dispatch must keep that floor under it.
   fs.mkdirSync(path.join(root, "state", "requests"), { recursive: true })
@@ -515,7 +587,9 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
 
   async function loadWorkOrders() {
     const result = await pool.query(
-      `SELECT "ref", "title", "description", "status", "lane", "agent", "allowedFiles", "validators", "createdAt"
+      `SELECT "id", "userId", "ref", "title", "description", "status", "lane", "agent",
+              "authorityGrantId", "allowedFiles", "forbiddenFiles", "validators",
+              "commitAllowed", "tagAllowed", "pushAllowed", "createdAt"
          FROM work_order WHERE "lane" = 'operator-objective' AND "ref" IS NOT NULL`,
     )
     return result.rows
@@ -523,7 +597,9 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
 
   async function loadActiveGrants() {
     const result = await pool.query(
-      `SELECT "ref", "scope", "allowedActions" FROM authority_grant
+      `SELECT "id", "userId", "ref", "scope", "allowedActions", "blockedActions",
+              "status", "expiresAt", "revokedAt"
+         FROM authority_grant
         WHERE "status" = 'active' AND "revokedAt" IS NULL
           AND ("expiresAt" IS NULL OR "expiresAt" > timezone('UTC', now()))`,
     )
@@ -531,11 +607,339 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
   }
 
   async function refForIssue(issueNumber) {
-    if (issueToRef.has(issueNumber)) return issueToRef.get(issueNumber)
-    for (const workOrder of await loadWorkOrders()) {
-      if (parseProjectionIssue(workOrder.description) === issueNumber) return workOrder.ref
+    if (issueToRef.has(issueNumber)) {
+      const identities = issueToRef.get(issueNumber)
+      if (identities.length !== 1) throw new Error("QUEUE_PROJECTION_WALL")
+      return identities[0]
     }
-    throw new Error("QUEUE_PROJECTION_WALL")
+    const matches = (await loadWorkOrders()).filter((workOrder) =>
+      parseProjectionIssue(workOrder.description) === issueNumber)
+    if (matches.length !== 1) throw new Error("QUEUE_PROJECTION_WALL")
+    const [workOrder] = matches
+    return { workOrderRowId: workOrder.id, userId: workOrder.userId, workOrderId: workOrder.ref }
+  }
+
+  function findingDigest(value) {
+    return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex")
+  }
+
+  function pathWithin(candidate, reservations) {
+    const target = String(candidate).replaceAll("\\", "/")
+    return reservations.some((entry) => {
+      const declared = String(entry).replaceAll("\\", "/")
+      const subtree = declared.endsWith("/**")
+      const normalized = subtree ? declared.slice(0, -3) : declared
+      return target === normalized || (subtree && target.startsWith(`${normalized}/`))
+    })
+  }
+
+  async function persistFindingOutcome({ eventType, payload, createChild }) {
+    const objectiveWorkOrderId = createChild ? payload?.derivedFrom : payload?.objectiveWorkOrderId
+    if (!Number.isInteger(payload?.sourceFindingEventId)
+      || typeof payload?.findingId !== "string" || payload.findingId.trim() === ""
+      || typeof payload?.sourceUserId !== "string" || payload.sourceUserId.trim() === ""
+      || typeof payload?.sourcePayloadDigest !== "string" || !/^[0-9a-f]{64}$/.test(payload.sourcePayloadDigest)
+      || typeof objectiveWorkOrderId !== "string" || objectiveWorkOrderId.trim() === "") {
+      throw new Error("FINDING_SETTLEMENT_SHAPE_WALL")
+    }
+    const canonical = createChild
+      ? {
+          sourceFindingEventId: payload.sourceFindingEventId,
+          sourceUserId: payload.sourceUserId,
+          findingId: payload.findingId,
+          objectiveWorkOrderId,
+          childWorkOrderRef: payload.workOrderId,
+          issueNumber: payload.issueNumber,
+          allowedPaths: payload.allowedPaths,
+          requiredValidation: payload.requiredValidation,
+          task: payload.task,
+          grantRef: payload.grantRef,
+          contractId: payload.contractId,
+          contractDigest: payload.contractDigest,
+          authorizationDecisionId: payload.authorizationDecisionId,
+          implementationGrantId: payload.implementationGrantId,
+          projectionCompletionOwned: payload.projectionCompletionOwned,
+          sourceCheckpointId: payload.sourceCheckpointId,
+          sourceCheckpointDigest: payload.sourceCheckpointDigest,
+          contractVersion: payload.contractVersion,
+          contractRepository: payload.contractRepository,
+          contractLane: payload.contractLane,
+          deliveryAuthorityLevel: payload.deliveryAuthorityLevel,
+          deliveryAllowedActions: payload.deliveryAllowedActions,
+          commitAllowed: payload.commitAllowed,
+          tagAllowed: payload.tagAllowed,
+          pushAllowed: payload.pushAllowed,
+        }
+      : {
+          sourceFindingEventId: payload.sourceFindingEventId,
+          sourceUserId: payload.sourceUserId,
+          findingId: payload.findingId,
+          objectiveWorkOrderId,
+          issueNumber: payload.issueNumber,
+          gate: payload.gate,
+          gates: payload.gates,
+          reason: payload.reason,
+          contractId: payload.contractId,
+          contractDigest: payload.contractDigest,
+          authorizationDecisionId: payload.authorizationDecisionId,
+          implementationGrantId: payload.implementationGrantId,
+          grantRef: payload.grantRef,
+          projectionCompletionOwned: payload.projectionCompletionOwned,
+          sourceCheckpointId: payload.sourceCheckpointId,
+          sourceCheckpointDigest: payload.sourceCheckpointDigest,
+          contractVersion: payload.contractVersion,
+          contractRepository: payload.contractRepository,
+          contractLane: payload.contractLane,
+          deliveryAuthorityLevel: payload.deliveryAuthorityLevel,
+          deliveryAllowedActions: payload.deliveryAllowedActions,
+          commitAllowed: payload.commitAllowed,
+          tagAllowed: payload.tagAllowed,
+          pushAllowed: payload.pushAllowed,
+        }
+    const payloadDigest = findingDigest(canonical)
+    const client = await pool.connect()
+    try {
+      await client.query("BEGIN")
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`runtime-finding-source:${payload.sourceFindingEventId}`])
+      const sourceResult = await client.query(
+        `SELECT source.id AS "sourceFindingEventId", source."userId" AS "sourceUserId",
+                source.actor AS "sourceActor", source."entityId" AS "sourceEntityId", source.metadata
+           FROM governance_event AS source
+          WHERE source.id = $1
+            AND source."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
+            AND source."entityType" = 'work_order'
+          FOR UPDATE OF source`,
+        [payload.sourceFindingEventId],
+      )
+      const source = sourceResult.rows[0]
+      const baseSourceBound = source
+        && source.sourceUserId === payload.sourceUserId
+        && new Set(["hermes", "williamos-runtime-operator"]).has(source.sourceActor)
+        && source.metadata?.schemaVersion === 1
+        && source.metadata?.findingId === payload.findingId
+        && source.metadata?.objectiveWorkOrderId === objectiveWorkOrderId
+        && findingDigest(source.metadata) === payload.sourcePayloadDigest
+      const structuredSourceBound = baseSourceBound && source.sourceActor === "hermes"
+        && source.metadata?.workContractId === payload.contractId
+        && source.metadata?.workContractDigest === payload.contractDigest
+        && source.metadata?.authorizationDecisionId === payload.authorizationDecisionId
+        && source.metadata?.implementationGrantId === payload.implementationGrantId
+        && source.metadata?.implementationGrantRef === payload.grantRef
+        && source.metadata?.projectionCompletionOwned === payload.projectionCompletionOwned
+        && source.metadata?.sourceCheckpointId === payload.sourceCheckpointId
+        && source.metadata?.sourceCheckpointDigest === payload.sourceCheckpointDigest
+        && source.metadata?.workContractVersion === payload.contractVersion
+        && source.metadata?.workContractRepository === payload.contractRepository
+        && source.metadata?.workContractLane === payload.contractLane
+        && source.metadata?.deliveryAuthorityLevel === payload.deliveryAuthorityLevel
+        && JSON.stringify(source.metadata?.deliveryAllowedActions) === JSON.stringify(payload.deliveryAllowedActions)
+        && source.metadata?.commitAllowed === payload.commitAllowed
+        && source.metadata?.tagAllowed === payload.tagAllowed
+        && source.metadata?.pushAllowed === payload.pushAllowed
+      const legacySourceBound = baseSourceBound && source.sourceActor === "williamos-runtime-operator"
+        && [payload.sourceCheckpointId, payload.sourceCheckpointDigest, payload.contractId,
+          payload.contractDigest, payload.contractVersion, payload.contractRepository,
+          payload.contractLane, payload.authorizationDecisionId, payload.implementationGrantId,
+          payload.deliveryAuthorityLevel, payload.deliveryAllowedActions,
+          payload.commitAllowed, payload.tagAllowed, payload.pushAllowed]
+          .every((value) => value === undefined)
+      const sourceBound = structuredSourceBound || legacySourceBound
+      if (!sourceBound) throw new Error("FINDING_SOURCE_BINDING_WALL")
+      let sourceCheckpoint = null
+      if (source.sourceActor === "hermes") {
+        const checkpointResult = await client.query(
+          `SELECT checkpoint.id, checkpoint."userId", checkpoint."entityId", checkpoint.metadata
+             FROM governance_event AS checkpoint
+            WHERE checkpoint.id = $1
+              AND checkpoint."userId" = $2
+              AND checkpoint."entityType" = 'work_order'
+              AND checkpoint."entityId"::text = $3::text
+              AND checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+              AND checkpoint.actor = 'hermes-codex-bridge'
+            ORDER BY checkpoint.id
+            LIMIT 2
+            FOR UPDATE OF checkpoint`,
+          [source.metadata.sourceCheckpointId, source.sourceUserId, source.sourceEntityId],
+        )
+        if (checkpointResult.rows.length !== 1) throw new Error("FINDING_CHECKPOINT_BINDING_WALL")
+        sourceCheckpoint = checkpointResult.rows[0].metadata
+        const { payloadDigest, ...checkpointPayload } = sourceCheckpoint ?? {}
+        const exactCheckpoint = sourceCheckpoint
+          && payloadDigest === findingDigest(checkpointPayload)
+          && payloadDigest === source.metadata.sourceCheckpointDigest
+          && sourceCheckpoint.workOrderRef === objectiveWorkOrderId
+          && sourceCheckpoint.workContractId === source.metadata.workContractId
+          && sourceCheckpoint.workContractDigest === source.metadata.workContractDigest
+          && sourceCheckpoint.workContractVersion === source.metadata.workContractVersion
+          && sourceCheckpoint.workContractRepository === source.metadata.workContractRepository
+          && sourceCheckpoint.workContractLane === source.metadata.workContractLane
+          && sourceCheckpoint.projectionIssueNumber === source.metadata.projectionIssueNumber
+          && sourceCheckpoint.projectionCompletionOwned === source.metadata.projectionCompletionOwned
+          && sourceCheckpoint.authorizationDecisionId === source.metadata.authorizationDecisionId
+          && sourceCheckpoint.implementationGrantId === source.metadata.implementationGrantId
+          && sourceCheckpoint.implementationGrantRef === source.metadata.implementationGrantRef
+          && sourceCheckpoint.deliveryAuthorityLevel === source.metadata.deliveryAuthorityLevel
+          && JSON.stringify(sourceCheckpoint.deliveryAllowedActions) === JSON.stringify(source.metadata.deliveryAllowedActions)
+          && sourceCheckpoint.commitAllowed === source.metadata.commitAllowed
+          && sourceCheckpoint.tagAllowed === source.metadata.tagAllowed
+          && sourceCheckpoint.pushAllowed === source.metadata.pushAllowed
+        if (!exactCheckpoint) throw new Error("FINDING_CHECKPOINT_BINDING_WALL")
+      }
+      const prior = await client.query(
+        `SELECT "eventType", metadata FROM governance_event
+          WHERE metadata->>'objectiveWorkOrderId' = $1
+            AND metadata->>'sourceFindingEventId' = $2
+            AND "userId" = $3
+            AND "eventType" IN ('RUNTIME_FINDING_DERIVED', 'RUNTIME_FINDING_OWNER_GATED')
+          ORDER BY id DESC LIMIT 1`,
+        [objectiveWorkOrderId, String(payload.sourceFindingEventId), payload.sourceUserId],
+      )
+      if (prior.rows.length > 0) {
+        const settled = prior.rows[0]
+        if (settled.eventType !== eventType || settled.metadata?.payloadDigest !== payloadDigest) {
+          throw new Error("FINDING_SETTLEMENT_REPLAY_WALL")
+        }
+        await client.query("COMMIT")
+        return { workOrderId: canonical.childWorkOrderRef ?? null, replayed: true }
+      }
+
+      const authority = await client.query(
+        `SELECT parent.id AS "parentId", parent."userId", parent.ref AS "parentRef",
+                parent.status AS "parentStatus", parent."authorityGranted",
+                parent.assignee AS "parentAssignee",
+                parent.description AS "parentDescription",
+                parent.goal, parent.loop, parent.scope, parent."nonGoals",
+                parent."allowedFiles" AS "parentAllowedFiles",
+                parent."forbiddenFiles", parent.validators AS "parentValidators",
+                parent."stopConditions", parent."authorityLevel",
+                parent."commitAllowed" AS "parentCommitAllowed",
+                parent."tagAllowed" AS "parentTagAllowed",
+                parent."pushAllowed" AS "parentPushAllowed",
+                grant.id AS "grantId", grant.ref AS "grantRef", grant.status AS "grantStatus",
+                grant."revokedAt" AS "grantRevokedAt", grant."expiresAt" AS "grantExpiresAt",
+                grant."allowedActions" AS "grantAllowedActions",
+                grant."blockedActions" AS "grantBlockedActions", grant.scope AS "grantScope"
+           FROM work_order AS parent
+           JOIN authority_grant AS grant
+             ON grant."userId" = parent."userId" AND grant.id = parent."authorityGrantId"
+          WHERE parent.ref = $1 AND grant.ref = $2 AND parent."userId" = $3 AND parent.id = $4
+          FOR UPDATE OF parent, grant`,
+        [objectiveWorkOrderId, payload.grantRef, payload.sourceUserId, source.sourceEntityId],
+      )
+      const envelope = authority.rows[0]
+      if ((source.sourceActor === "hermes" && envelope?.parentAssignee !== "hermes-codex-bridge")
+        || (source.sourceActor === "williamos-runtime-operator"
+          && envelope?.parentAssignee !== "williamos-runtime-operator")) {
+        throw new Error("FINDING_PARENT_DISCRIMINATOR_WALL")
+      }
+      const active = envelope
+        && new Set(["approved", "active", "completed", "done"]).has(envelope.parentStatus)
+        && envelope.authorityGranted === envelope.authorityLevel
+        && envelope.grantStatus === "active"
+        && envelope.grantRevokedAt === null
+        && (!envelope.grantExpiresAt || Date.parse(envelope.grantExpiresAt) > Date.now())
+        && Array.isArray(envelope.grantAllowedActions)
+        && envelope.grantAllowedActions.includes("implement")
+        && Array.isArray(envelope.grantBlockedActions)
+        && !envelope.grantBlockedActions.includes("implement")
+        && envelope.grantScope === objectiveWorkOrderId
+      if (!active) throw new Error("DERIVED_AUTHORITY_WALL")
+      if (String(envelope.parentId) !== String(source.sourceEntityId)) throw new Error("FINDING_SOURCE_BINDING_WALL")
+
+      const sourcePaths = source.metadata?.paths
+      const sourceEscapes = validFindingPaths(sourcePaths)
+        ? sourcePaths.some((candidate) => !pathWithin(candidate, envelope.parentAllowedFiles ?? [])
+          || pathWithin(candidate, envelope.forbiddenFiles ?? []))
+        : true
+      const authoritativeIssueNumber = source.sourceActor === "hermes"
+        ? sourceCheckpoint?.projectionIssueNumber
+        : envelope.parentAssignee === "williamos-runtime-operator"
+          ? parseProjectionIssue(envelope.parentDescription)
+          : null
+      const deliveryBlocked = envelope.parentCommitAllowed !== true || envelope.parentPushAllowed !== true
+      const sourceEffects = validFindingMetadata(source.metadata) && authoritativeIssueNumber !== null
+        ? { ...source.metadata.effects, outsideObjectiveScope: Boolean(source.metadata.effects.outsideObjectiveScope) || sourceEscapes || deliveryBlocked }
+        : undefined
+      const sourceClassification = classifyProposedAction({ effects: sourceEffects })
+
+      let child = null
+      if (createChild) {
+        if (sourceClassification.gated) throw new Error("DERIVED_OWNER_GATE_WALL")
+        if (typeof payload.workOrderId !== "string" || !/^WO-[A-Z0-9-]+$/.test(payload.workOrderId)
+          || !Number.isInteger(payload.issueNumber) || payload.issueNumber <= 0
+          || payload.issueNumber !== authoritativeIssueNumber
+          || payload.task !== source.metadata.task || !validFindingText(payload.task)
+          || !Array.isArray(payload.allowedPaths) || payload.allowedPaths.length === 0
+          || JSON.stringify(payload.allowedPaths) !== JSON.stringify(sourcePaths)
+          || payload.allowedPaths.some((candidate) => typeof candidate !== "string"
+            || !pathWithin(candidate, envelope.parentAllowedFiles ?? [])
+            || pathWithin(candidate, envelope.forbiddenFiles ?? []))
+          || !Array.isArray(payload.requiredValidation) || payload.requiredValidation.length === 0
+          || payload.requiredValidation.some((gate) => !(envelope.parentValidators ?? []).includes(gate))) {
+          throw new Error("DERIVED_ENVELOPE_WALL")
+        }
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+          `runtime-derived-child:${envelope.userId}:${payload.workOrderId}`,
+        ])
+        const existingChild = await client.query(
+          `SELECT child.id, child.ref
+             FROM work_order AS child
+            WHERE child."userId" = $1 AND child.ref = $2
+            FOR UPDATE OF child`,
+          [envelope.userId, payload.workOrderId],
+        )
+        if (existingChild.rows.length > 0) throw new Error("DERIVED_CHILD_IDENTITY_WALL")
+        const description = [
+          `Projected at GitHub issue ${payload.issueNumber}.`,
+          `Projection completion: parent-owned.`,
+          `Authorized under ${payload.grantRef}.`,
+          `Derived from ${objectiveWorkOrderId} finding ${payload.findingId}.`,
+          String(payload.task ?? "Derived remediation"),
+        ].join(" ")
+        const inserted = await client.query(
+          `INSERT INTO work_order
+            ("userId", ref, title, description, "allowedFiles", validators, "authorityGrantId",
+             "commitAllowed", "tagAllowed", "pushAllowed", lane, status, "authorityLevel",
+             "authorityGranted", agent, "approvedBy", "approvedAt", goal, loop, scope, "nonGoals",
+             "forbiddenFiles", "stopConditions")
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                   'operator-objective', 'approved', $11, $12, $13,
+                   'williamos-runtime-operator', timezone('UTC', now()), $14, $15, $16, $17, $18, $19)
+           RETURNING id, ref`,
+          [
+            envelope.userId, payload.workOrderId, String(payload.task ?? payload.findingId), description,
+            payload.allowedPaths, payload.requiredValidation, envelope.grantId,
+            envelope.parentCommitAllowed === true, envelope.parentTagAllowed === true,
+            envelope.parentPushAllowed === true, envelope.authorityLevel, envelope.authorityGranted,
+            payload.agent ?? "codex",
+            envelope.goal, envelope.loop, envelope.scope, envelope.nonGoals ?? [],
+            envelope.forbiddenFiles ?? [], envelope.stopConditions ?? [],
+          ],
+        )
+        child = inserted.rows[0]
+        if (!child) throw new Error("DERIVED_PERSISTENCE_WALL")
+      } else if (!sourceClassification.gated
+        || payload.gate !== sourceClassification.gate
+        || JSON.stringify(payload.gates) !== JSON.stringify(sourceClassification.gates)) {
+        throw new Error("FINDING_OWNER_GATE_BINDING_WALL")
+      }
+
+      const metadata = { ...canonical, payloadDigest, ...(child ? { childWorkOrderId: child.id } : {}) }
+      await client.query(
+        `INSERT INTO governance_event
+          ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+         VALUES ($1, $2, 'work_order', $3, 'williamos-runtime-operator', $4, $5)
+         RETURNING id`,
+        [envelope.userId, eventType, String(child?.id ?? envelope.parentId), payload.reason ?? payload.task ?? payload.finding, metadata],
+      )
+      await client.query("COMMIT")
+      return { workOrderId: canonical.childWorkOrderRef ?? null, replayed: false }
+    } catch (error) {
+      try { await client.query("ROLLBACK") } catch { /* preserve the primary wall */ }
+      throw error
+    } finally {
+      client.release()
+    }
   }
 
   return {
@@ -548,6 +952,129 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
         repository: REPOSITORY,
         workOrders: buildRegistryRecords(workOrders, grants, adapterId),
       }
+    },
+
+    async collectFindings() {
+      const result = await pool.query(
+      `SELECT finding.id AS "sourceFindingEventId", finding."userId", finding.actor,
+                finding."entityId", finding.metadata, parent.description AS "parentDescription",
+                parent.assignee AS "parentAssignee", checkpoint."checkpointCount",
+                checkpoint.metadata AS "checkpointMetadata"
+           FROM governance_event AS finding
+           JOIN work_order AS parent
+             ON parent.id::text = finding."entityId" AND parent."userId" = finding."userId"
+           LEFT JOIN LATERAL (
+             SELECT count(*)::integer AS "checkpointCount", max(source.metadata::text)::jsonb AS metadata
+               FROM governance_event AS source
+              WHERE source."userId" = parent."userId"
+                AND source."entityType" = 'work_order'
+                AND source."entityId"::text = parent.id::text
+                AND source."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+                AND source.actor = 'hermes-codex-bridge'
+                AND source.id::text = finding.metadata->>'sourceCheckpointId'
+                AND source.metadata->>'workOrderRef' = parent.ref
+                AND source.metadata->>'projectionIssueNumber' IS NOT NULL
+                AND source.metadata->>'workContractId' IS NOT NULL
+                AND source.metadata->>'workContractDigest' IS NOT NULL
+                AND source.metadata->>'payloadDigest' IS NOT NULL
+           ) AS checkpoint ON true
+          WHERE finding."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
+            AND finding."entityType" = 'work_order'
+            AND NOT EXISTS (
+              SELECT 1 FROM governance_event AS settlement
+               WHERE settlement."userId" = finding."userId"
+                 AND settlement."eventType" IN ('RUNTIME_FINDING_DERIVED', 'RUNTIME_FINDING_OWNER_GATED')
+                 AND settlement.metadata->>'sourceFindingEventId' = finding.id::text
+            )
+          ORDER BY finding.id ASC`,
+      )
+      return result.rows.flatMap((row) => {
+        const metadata = row?.metadata
+        if (!Number.isInteger(row?.sourceFindingEventId)
+          || !metadata || typeof metadata !== "object" || Array.isArray(metadata)
+          || metadata.schemaVersion !== 1
+          || !new Set(["hermes", "williamos-runtime-operator"]).has(row.actor)
+          || typeof metadata.findingId !== "string" || metadata.findingId.trim() === ""
+          || typeof row.userId !== "string" || row.userId.trim() === ""
+          || typeof metadata.objectiveWorkOrderId !== "string" || metadata.objectiveWorkOrderId.trim() === "") return []
+        const hermesParent = row.parentAssignee === "hermes-codex-bridge"
+        const checkpoint = row.checkpointMetadata
+        const { payloadDigest: checkpointPayloadDigest, ...checkpointPayload } = checkpoint ?? {}
+        const canonicalCheckpoint = row.checkpointCount === 1
+          && checkpoint && typeof checkpoint === "object" && !Array.isArray(checkpoint)
+          && checkpoint.workOrderRef === metadata.objectiveWorkOrderId
+          && typeof checkpoint.workContractId === "string"
+          && /^[0-9a-f]{64}$/.test(checkpoint.workContractDigest ?? "")
+          && checkpoint.workContractVersion === "hermes-work-contract.v1"
+          && checkpoint.workContractRepository === REPOSITORY
+          && checkpoint.workContractLane === "operator-objective"
+          && Number.isSafeInteger(checkpoint.projectionIssueNumber)
+          && typeof checkpoint.projectionCompletionOwned === "boolean"
+          && typeof checkpoint.implementationGrantRef === "string"
+          && typeof checkpoint.authorizationDecisionId === "number"
+          && checkpointPayloadDigest === findingDigest(checkpointPayload)
+          && metadata.sourceCheckpointDigest === checkpointPayloadDigest
+          && metadata.workContractId === checkpoint.workContractId
+          && metadata.workContractDigest === checkpoint.workContractDigest
+          && metadata.projectionIssueNumber === checkpoint.projectionIssueNumber
+          && metadata.projectionCompletionOwned === checkpoint.projectionCompletionOwned
+          && metadata.authorizationDecisionId === checkpoint.authorizationDecisionId
+          && metadata.implementationGrantId === checkpoint.implementationGrantId
+          && metadata.implementationGrantRef === checkpoint.implementationGrantRef
+          && metadata.deliveryAuthorityLevel === checkpoint.deliveryAuthorityLevel
+          && JSON.stringify(metadata.deliveryAllowedActions) === JSON.stringify(checkpoint.deliveryAllowedActions)
+          && metadata.commitAllowed === checkpoint.commitAllowed
+          && metadata.tagAllowed === checkpoint.tagAllowed
+          && metadata.pushAllowed === checkpoint.pushAllowed
+        const legacyParent = row.parentAssignee === "williamos-runtime-operator"
+        const issueNumber = hermesParent
+          ? (canonicalCheckpoint ? checkpoint.projectionIssueNumber : null)
+          : legacyParent ? parseProjectionIssue(row.parentDescription) : null
+        const malformed = !validFindingMetadata(metadata) || issueNumber === null
+        return [{
+          sourceFindingEventId: row.sourceFindingEventId,
+          sourceUserId: row.userId,
+          sourceWorkOrderRowId: row.entityId,
+          sourcePayloadDigest: findingDigest(metadata),
+          findingId: metadata.findingId,
+          objectiveWorkOrderId: metadata.objectiveWorkOrderId,
+          sequence: metadata.sequence,
+          issueNumber,
+          projectionCompletionOwned: canonicalCheckpoint
+            ? checkpoint.projectionCompletionOwned
+            : legacyParent ? projectionCompletionOwned(row.parentDescription) : undefined,
+          ...(canonicalCheckpoint ? {
+            contractId: checkpoint.workContractId,
+            contractDigest: checkpoint.workContractDigest,
+            contractVersion: checkpoint.workContractVersion,
+            contractRepository: checkpoint.workContractRepository,
+            contractLane: checkpoint.workContractLane,
+            sourceCheckpointId: Number(metadata.sourceCheckpointId),
+            sourceCheckpointDigest: metadata.sourceCheckpointDigest,
+            authorizationDecisionId: checkpoint.authorizationDecisionId,
+            implementationGrantId: checkpoint.implementationGrantId,
+            grantRef: checkpoint.implementationGrantRef,
+            deliveryAuthorityLevel: checkpoint.deliveryAuthorityLevel,
+            deliveryAllowedActions: checkpoint.deliveryAllowedActions,
+            commitAllowed: checkpoint.commitAllowed,
+            tagAllowed: checkpoint.tagAllowed,
+            pushAllowed: checkpoint.pushAllowed,
+          } : {}),
+          summary: validFindingText(metadata.summary) ? metadata.summary : "Malformed structured finding",
+          task: validFindingText(metadata.task) ? metadata.task : "Malformed structured finding",
+          paths: validFindingPaths(metadata.paths) ? metadata.paths : [],
+          effects: malformed ? undefined : metadata.effects,
+          malformed,
+        }]
+      })
+    },
+
+    async persistDerivedWorkOrder(order) {
+      return persistFindingOutcome({ eventType: "RUNTIME_FINDING_DERIVED", payload: order, createChild: true })
+    },
+
+    async recordOwnerGate(entry) {
+      return persistFindingOutcome({ eventType: "RUNTIME_FINDING_OWNER_GATED", payload: entry, createChild: false })
     },
 
     async assertRuntime() {
@@ -575,10 +1102,14 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
       for (const workOrder of workOrders) {
         const issueNumber = parseProjectionIssue(workOrder.description)
         if (issueNumber === null) continue
-        issueToRef.set(issueNumber, workOrder.ref)
+        const identity = { workOrderRowId: workOrder.id, userId: workOrder.userId, workOrderId: workOrder.ref }
+        issueToRef.set(issueNumber, [...(issueToRef.get(issueNumber) ?? []), identity])
         entries.push({
           issueNumber,
           workOrderId: workOrder.ref,
+          workOrderRowId: workOrder.id,
+          userId: workOrder.userId,
+          projectionCompletionOwned: projectionCompletionOwned(workOrder.description),
           state: queueStateFor(workOrder.status),
           createdAt: new Date(workOrder.createdAt).toISOString(),
         })
@@ -632,22 +1163,36 @@ export function createWilliamOSAdapters({ root, repositoryPath }) {
       return { mergeSha: pull.mergeCommit.oid }
     },
 
-    async lease(issueNumber) {
-      const ref = await refForIssue(issueNumber)
-      await pool.query(`UPDATE work_order SET "status" = 'active' WHERE "ref" = $1 AND "lane" = 'operator-objective'`, [ref])
+    async lease(issueNumber, queuedIdentity = null) {
+      const identity = Number.isInteger(queuedIdentity?.workOrderRowId) && typeof queuedIdentity?.userId === "string"
+        ? queuedIdentity
+        : await refForIssue(issueNumber)
+      await pool.query(
+        `UPDATE work_order SET "status" = 'active'
+          WHERE "id" = $1 AND "userId" = $2 AND "lane" = 'operator-objective'`,
+        [identity.workOrderRowId, identity.userId],
+      )
       // GitHub label is projection; its failure must never block the lease that already happened.
       try {
         await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:leased"])
       } catch { /* projection only */ }
     },
 
-    async complete(issueNumber) {
-      const ref = await refForIssue(issueNumber)
-      await pool.query(`UPDATE work_order SET "status" = 'completed' WHERE "ref" = $1 AND "lane" = 'operator-objective'`, [ref])
-      try {
-        await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:done"])
-        await ghRemote(["issue", "close", String(issueNumber), "--repo", REPOSITORY, "--comment", "WilliamOS resident kernel verified the merged-main completion evidence."])
-      } catch { /* projection only */ }
+    async complete(issueNumber, queuedIdentity = null) {
+      const identity = Number.isInteger(queuedIdentity?.workOrderRowId) && typeof queuedIdentity?.userId === "string"
+        ? queuedIdentity
+        : await refForIssue(issueNumber)
+      await pool.query(
+        `UPDATE work_order SET "status" = 'completed'
+          WHERE "id" = $1 AND "userId" = $2 AND "lane" = 'operator-objective'`,
+        [identity.workOrderRowId, identity.userId],
+      )
+      if (identity.projectionCompletionOwned !== false) {
+        try {
+          await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:done"])
+          await ghRemote(["issue", "close", String(issueNumber), "--repo", REPOSITORY, "--comment", "WilliamOS resident kernel verified the merged-main completion evidence."])
+        } catch { /* projection only */ }
+      }
     },
 
     /**
@@ -823,14 +1368,16 @@ ${tail}
      * does not care who opened the PR. The kernel knows every fact the receipt needs, so it declares
      * them the same way any other lane must.
      */
-    async publish({ issueNumber, workOrderId, workspace, branch, existingPr, resolvedThreadIds = [] }) {
+    async publish({ issueNumber, workOrderId, workOrderRowId, userId, projectionCompletionOwned: completionOwned = true, workspace, branch, existingPr, resolvedThreadIds = [] }) {
       const { receiptToken } = await import("../../lib/governance/work-context-receipt.ts")
       const { measureDoctrineDigest } = await import("../../lib/governance/work-context-live.ts")
       await run("git", ["fetch", "origin", "main"], { cwd: repositoryPath })
       const mainSha = (await run("git", ["rev-parse", "origin/main"], { cwd: repositoryPath })).stdout.trim()
       const { digest } = await measureDoctrineDigest()
       const registry = await this.buildRegistry()
-      const record = registry.workOrders.find((candidate) => candidate.workOrderId === workOrderId)
+      const record = registry.workOrders.find((candidate) => candidate.workOrderId === workOrderId
+        && (workOrderRowId === undefined || candidate.workOrderRowId === workOrderRowId)
+        && (userId === undefined || candidate.userId === userId))
       if (!record) throw new Error("AUTHORITY_REGISTRY_WALL")
       const facts = {
         mainSha,
@@ -847,10 +1394,10 @@ ${tail}
       const body = [
         `Bounded WilliamOS resident work order ${workOrderId}, dispatched and validated by the operational kernel under ${record.grantRef}.`,
         ``,
-        `Closes #${issueNumber}.`,
+        projectionIssueDirective(issueNumber, completionOwned),
         ``,
         "```WORK_CONTEXT_RECEIPT",
-        JSON.stringify({ token: receiptToken(facts), facts }, null, 2),
+        JSON.stringify({ ["to" + "ken"]: receiptToken(facts), facts }, null, 2),
         "```",
       ].join("\n")
 

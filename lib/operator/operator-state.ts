@@ -14,6 +14,8 @@ import {
 import { getUserId } from "@/lib/session"
 import { getActiveGoalAuthorityRequestTimelines } from "@/app/(shell)/goal-console/authority-request-timelines"
 import { loadProjects } from "@/lib/projects/load-projects"
+import { readPendingRuntimeFindingDecisionRequest } from "@/scripts/hermes-bridge/runtime-finding-decision.mjs"
+import { PRIMARY_DECISION_OWNER_EMAIL } from "@/scripts/hermes-bridge/primary-decision-provenance.mjs"
 
 /*
  * Operator State — the single read-model every operator surface projects from.
@@ -101,6 +103,52 @@ export interface OwnerDecision {
   expectedNextState: string | null
 }
 
+type RuntimeFindingDecisionReader = (input: Readonly<{ ownerEmail: string }>) => Promise<Record<string, unknown> | null>
+
+type NeedsWilliamDependencies = Readonly<{
+  readAuthorityTimelines?: typeof getActiveGoalAuthorityRequestTimelines
+  readRuntimeFindingDecision?: RuntimeFindingDecisionReader
+}>
+
+export async function loadNeedsWilliamDecisions(
+  userId: string,
+  dependencies: NeedsWilliamDependencies = {},
+): Promise<OwnerDecision[]> {
+  const authorityTimelines = await (dependencies.readAuthorityTimelines ?? getActiveGoalAuthorityRequestTimelines)()
+  const ownerDecisions: OwnerDecision[] = authorityTimelines
+    .filter((timeline) => timeline.truth.state === "CURRENT" && timeline.decisionRequest.status === "ACTIONABLE")
+    .map((timeline) => ({
+      timelineId: timeline.id,
+      goalRef: timeline.decisionRequest.goalRef,
+      workOrderRef: timeline.decisionRequest.workOrderRef,
+      expectedNextState: timeline.decisionRequest.expectedNextState,
+    }))
+  try {
+    const reader = dependencies.readRuntimeFindingDecision
+      ?? readPendingRuntimeFindingDecisionRequest as unknown as RuntimeFindingDecisionReader
+    const request = await reader({
+      ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+    })
+    const gateSettlementEventId = Number(request?.gateSettlementEventId)
+    if (request?.sourceKind === "RUNTIME_FINDING"
+      && request.ownerUserId === userId
+      && typeof request.parentWorkOrderRef === "string"
+      && Number.isSafeInteger(gateSettlementEventId)
+      && gateSettlementEventId > 0) {
+      ownerDecisions.push({
+        timelineId: `runtime-finding:${gateSettlementEventId}`,
+        goalRef: request.parentWorkOrderRef,
+        workOrderRef: request.parentWorkOrderRef,
+        expectedNextState: null,
+      })
+    }
+  } catch {
+    // A runtime finding that cannot pass the canonical reader is not actionable. Existing Goal
+    // Console authority requests remain visible; this read model never writes either source.
+  }
+  return ownerDecisions
+}
+
 export interface OperatorState {
   installation: string
   now: TruthEnvelope<{ activeExecutions: number; queueDepth: number }>
@@ -157,15 +205,7 @@ export async function getOperatorState(): Promise<OperatorState> {
   }
 
   // --- owner decisions actually waiting on William (reuse the goal-console authority engine) ---
-  const authorityTimelines = await getActiveGoalAuthorityRequestTimelines()
-  const ownerDecisions: OwnerDecision[] = authorityTimelines
-    .filter((t) => t.truth.state === "CURRENT" && t.decisionRequest.status === "ACTIONABLE")
-    .map((t) => ({
-      timelineId: t.id,
-      goalRef: t.decisionRequest.goalRef,
-      workOrderRef: t.decisionRequest.workOrderRef,
-      expectedNextState: t.decisionRequest.expectedNextState,
-    }))
+  const ownerDecisions = await loadNeedsWilliamDecisions(userId)
 
   const intakeByGoal = new Map(intake.map((r) => [r.goalId, r.outcomeKey]))
 
@@ -330,7 +370,7 @@ export async function getOperatorState(): Promise<OperatorState> {
     recentActivity: envelope(recent, "governance_event", recent.length ? "live" : "idle-empty"),
     needsWilliam: envelope(
       ownerDecisions,
-      "active goal authority-request timelines (ACTIONABLE, truth CURRENT)",
+      "canonical active authority requests (Goal Console timelines + runtime finding reader)",
       ownerDecisions.length ? "live" : "idle-empty",
     ),
     governance: envelope({ foundingADRs }, "decision (scope projection)", "live"),

@@ -3,6 +3,7 @@ import os from "node:os"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
 
+import { sanitizeAppServerText } from "./app-server-client.mjs"
 import { selectExecutionBackend } from "./execution-backend.mjs"
 import {
   completeOutcome,
@@ -11,6 +12,8 @@ import {
   projectOutcomeRuntimeCheckpoint,
   projectOutcomeRuntimeLease,
   readValidationInfrastructureRecovery,
+  resolveActiveReviewRecoveryProvenance,
+  verifyActiveReviewRecoveryContinuation,
   resolveValidationInfrastructureRecovery,
   selectNextOutcome,
   terminalizeOutcome,
@@ -19,7 +22,11 @@ import {
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { buildHermesCodexPrompt, HERMES_BLOCKED_SCOPE, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
-import { resolveHermesWorkContract } from "./work-contract.mjs"
+import {
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
+  resolveHermesWorkContract,
+} from "./work-contract.mjs"
 import {
   createHermesStateStore,
   hermesTurnResultDigest,
@@ -35,6 +42,7 @@ const REVIEW_POLL_INTERVAL_MS = 15_000
 const REVIEW_POLL_ATTEMPTS = 80
 const SHA = /^[0-9a-f]{40}$/
 const PROJECTION_RETRY_DELAYS_MS = Object.freeze([1_000, 4_000])
+const MAX_CHECKPOINT_DETAIL_CHARS = 1_000
 const RETRYABLE_PROJECTION_TRANSPORT_CODES = new Set([
   "ENOTFOUND",
   "EAI_AGAIN",
@@ -54,6 +62,145 @@ const RECOVERABLE_DELIVERY_WALLS = new Set([
   "HERMES_REPOSITORY_RUNNER_WALL",
   "HERMES_REVIEW_CONTINUITY_WALL",
 ])
+
+export function isExactReviewRecoveredAbandonedLease(execution, now = Date.now()) {
+  if (execution?.checkpoint?.state !== "REVIEW_REMEDIATION_RECOVERED"
+    || execution?.checkpoint?.detail !== "REVIEW_REMEDIATION_EXHAUSTED") return false
+  if (execution?.lease?.status === "ABANDONED") return true
+  if (execution?.lease?.status !== "ACTIVE"
+    || typeof execution.lease.abandonedAt !== "string"
+    || execution.lease.abandonedAt === ""
+    || typeof execution.lease.expiresAt !== "string"
+    || execution.lease.abandonedAt !== execution.lease.expiresAt) return false
+  const abandonedAt = Date.parse(execution.lease.abandonedAt)
+  const currentTime = now instanceof Date ? now.getTime() : Number(now)
+  return Number.isFinite(abandonedAt) && Number.isFinite(currentTime) && abandonedAt <= currentTime
+}
+
+export function isExactReviewRecoveryCleanupRetryAbandonedLease(execution, now = Date.now()) {
+  if (execution?.checkpoint?.sequence !== 46
+    || execution?.checkpoint?.state !== "POST_MERGE_CLEANUP_RETRY"
+    || execution?.checkpoint?.detail !== "HERMES_POST_MERGE_CLEANUP_WALL"
+    || execution?.lease?.status !== "ACTIVE"
+    || execution?.lease?.abandonReason !== "HERMES_RUNTIME_PROJECTION_WALL"
+    || typeof execution.lease.abandonedAt !== "string"
+    || execution.lease.abandonedAt === ""
+    || typeof execution.lease.expiresAt !== "string"
+    || execution.lease.abandonedAt !== execution.lease.expiresAt) return false
+  const abandonedAt = Date.parse(execution.lease.abandonedAt)
+  const acquiredAt = Date.parse(String(execution.lease.acquiredAt ?? ""))
+  const renewedAt = execution.lease.renewedAt == null
+    ? null : Date.parse(String(execution.lease.renewedAt))
+  const checkpointRecordedAt = Date.parse(String(execution?.checkpoint?.recordedAt ?? ""))
+  const currentTime = now instanceof Date ? now.getTime() : Number(now)
+  const metadata = execution?.metadata
+  const binding = metadata?.outcome?.queueBinding
+  return Number.isFinite(abandonedAt) && Number.isFinite(currentTime) && abandonedAt <= currentTime
+    && new Date(abandonedAt).toISOString() === execution.lease.abandonedAt
+    && Number.isFinite(acquiredAt) && acquiredAt <= abandonedAt
+    && new Date(acquiredAt).toISOString() === execution.lease.acquiredAt
+    && (renewedAt === null || (Number.isFinite(renewedAt) && renewedAt <= abandonedAt
+      && new Date(renewedAt).toISOString() === execution.lease.renewedAt))
+    && Number.isFinite(checkpointRecordedAt) && checkpointRecordedAt <= abandonedAt
+    && new Date(checkpointRecordedAt).toISOString() === execution.checkpoint.recordedAt
+    && Number.isSafeInteger(metadata?.postMergeCleanupRetryCount)
+    && metadata.postMergeCleanupRetryCount === 1
+    && Object.hasOwn(metadata, "postMergeCleanupCauseCode")
+    && metadata.postMergeCleanupCauseCode === null
+    && /^[0-9a-f]{64}$/.test(String(metadata?.reviewRecoveryProofDigest ?? ""))
+    && Number.isSafeInteger(metadata?.prNumber) && metadata.prNumber > 0
+    && /^[0-9a-f]{40}$/.test(String(metadata?.headRefOid ?? ""))
+    && /^[0-9a-f]{40}$/.test(String(metadata?.mergeSha ?? ""))
+    && metadata?.outcome !== null && typeof metadata?.outcome === "object"
+    && String(metadata.outcome.id) === String(execution?.outcomeId)
+    && binding?.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    && Number.isSafeInteger(binding?.reviewRecoverySourceExpectedVersion)
+    && binding.reviewRecoverySourceExpectedVersion >= 0
+    && Number.isSafeInteger(binding?.reviewRecoverySourceFencingToken)
+    && binding.reviewRecoverySourceFencingToken > 0
+    && Number.isSafeInteger(binding?.reviewRecoverySourceRuntimeAttempt)
+    && binding.reviewRecoverySourceRuntimeAttempt > 0
+    && Number.isSafeInteger(binding?.reviewRecoveryReclaimEventId)
+    && binding.reviewRecoveryReclaimEventId > 0
+    && /^[0-9a-f]{64}$/.test(String(binding?.reviewRecoveryReclaimPayloadDigest ?? ""))
+    && binding.reviewRecoveryStaleReacquisition === undefined
+    && binding.reviewRecoveryStaleContinuation === undefined
+    && binding.expectedVersion === binding.reviewRecoverySourceExpectedVersion + 3
+    && binding.fencingToken === binding.reviewRecoverySourceFencingToken + 3
+    && [binding.userId, binding.outcomeKey, binding.executionBinding, binding.acquisitionKey,
+      binding.leaseHolder, binding.leaseToken].every(
+      (value) => typeof value === "string" && value.trim() !== "",
+    )
+    && Number.isSafeInteger(binding.activeWorkOrderId) && binding.activeWorkOrderId > 0
+}
+
+function hasRetainedReviewRecoverySignal(execution) {
+  const metadata = execution?.metadata
+  const binding = metadata?.outcome?.queueBinding
+  return (Object.hasOwn(metadata ?? {}, "reviewRecoveryProofDigest")
+      && metadata.reviewRecoveryProofDigest !== null
+      && metadata.reviewRecoveryProofDigest !== undefined)
+    || [
+      "reviewRecoveryResumeState",
+      "reviewRecoverySourceExpectedVersion",
+      "reviewRecoverySourceFencingToken",
+      "reviewRecoverySourceRuntimeAttempt",
+      "reviewRecoveryReclaimEventId",
+      "reviewRecoveryReclaimPayloadDigest",
+      "reviewRecoveryStaleReacquisition",
+      "reviewRecoveryStaleContinuation",
+    ].some((key) => Object.hasOwn(binding ?? {}, key))
+}
+
+function hasReviewRecoveryCleanupRetryIdentity(execution) {
+  const metadata = execution?.metadata
+  return execution?.checkpoint?.state === "POST_MERGE_CLEANUP_RETRY"
+    || execution?.checkpoint?.detail === "HERMES_POST_MERGE_CLEANUP_WALL"
+    || (execution?.lease?.status === "ACTIVE"
+      && ((Object.hasOwn(metadata ?? {}, "postMergeCleanupRetryCount")
+          && Number(metadata.postMergeCleanupRetryCount) > 0)
+        || (Object.hasOwn(metadata ?? {}, "postMergeCleanupCauseCode")
+          && metadata.postMergeCleanupCauseCode !== null
+          && metadata.postMergeCleanupCauseCode !== undefined)))
+}
+
+function isExactMarkedReviewRecoveryCleanupRetry(execution, now = Date.now()) {
+  const binding = execution?.metadata?.outcome?.queueBinding
+  const staleReacquisition = binding?.reviewRecoveryStaleReacquisition
+  const staleContinuation = binding?.reviewRecoveryStaleContinuation
+  if (staleReacquisition === null || typeof staleReacquisition !== "object"
+    || (staleContinuation !== undefined
+      && (staleContinuation === null || typeof staleContinuation !== "object"))) return false
+  const delta = staleContinuation === undefined ? 0 : 1
+  const markerlessBinding = { ...binding,
+    expectedVersion: binding.expectedVersion - delta,
+    fencingToken: binding.fencingToken - delta }
+  delete markerlessBinding.reviewRecoveryStaleReacquisition
+  delete markerlessBinding.reviewRecoveryStaleContinuation
+  if (!isExactReviewRecoveryCleanupRetryAbandonedLease({
+    ...execution,
+    metadata: {
+      ...execution.metadata,
+      outcome: { ...execution.metadata.outcome, queueBinding: markerlessBinding },
+    },
+  }, now)) return false
+  try {
+    const { executionBinding } = deriveHermesRuntimeProjectionBindings(
+      execution.metadata.outcome, { requireVerified: true },
+    )
+    return executionBinding?.reviewRecoveryStaleReacquisition !== undefined
+      && (staleContinuation === undefined
+        ? executionBinding.reviewRecoveryStaleContinuation === undefined
+        : executionBinding.reviewRecoveryStaleContinuation !== undefined)
+  } catch {
+    return false
+  }
+}
+
+export function isExactReviewRecoveryCleanupRetryCandidate(execution, now = Date.now()) {
+  return isExactReviewRecoveryCleanupRetryAbandonedLease(execution, now)
+    || isExactMarkedReviewRecoveryCleanupRetry(execution, now)
+}
 
 export function isRetryableProjectionTransportError(error) {
   if (!error || typeof error !== "object") return false
@@ -294,7 +441,33 @@ export function assertChangedPathsAllowed(paths, reservations) {
 }
 
 export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkContract) {
-  const contract = resolver(outcome)
+  const verified = outcome?.verifiedQueueWorkContract
+  let contract
+  if (verified !== undefined) {
+    const binding = outcome?.queueBinding
+    const provenance = verified?.provenance
+    const derived = provenance?.operation === "runtime_finding.derive"
+      && provenance?.outcomeKey === outcome?.outcomeKey
+      && provenance?.outcomeKey === binding?.outcomeKey
+      && Number(provenance?.workOrderId) === Number(binding?.activeWorkOrderId)
+      && typeof provenance?.workOrderRef === "string"
+      && provenance.workOrderRef.trim() !== ""
+    const workbenchParent = provenance?.operation === "workbench_execution.authorize"
+      && Object.keys(provenance).sort().join(",") === "operation,outcomeKey,workOrderRef"
+      && provenance?.outcomeKey === outcome?.outcomeKey
+      && provenance?.outcomeKey === binding?.outcomeKey
+      && provenance?.workOrderRef === `WO-HERMES-OUTCOME-${Number(outcome?.id)}`
+      && verified?.contract?.id === HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID
+      && verified?.contract?.digest === HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST
+    if (!verified || (!derived && !workbenchParent)) {
+      throw Object.assign(new Error("Queue work contract provenance conflicts"), {
+        code: "HERMES_WORK_CONTRACT_WALL",
+      })
+    }
+    contract = verified.contract
+  } else {
+    contract = resolver(outcome)
+  }
   if (!contract || !Array.isArray(contract.reservations) || contract.reservations.length === 0
     || !Array.isArray(contract.validationCommands) || contract.validationCommands.length === 0) {
     throw Object.assign(new Error("Outcome has no exact reviewed work contract"), {
@@ -304,6 +477,14 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
   return contract
 }
 
+function workOrderRefFor(outcome) {
+  return ["runtime_finding.derive", "workbench_execution.authorize"].includes(
+    outcome?.verifiedQueueWorkContract?.provenance?.operation,
+  )
+    ? outcome.verifiedQueueWorkContract.provenance.workOrderRef
+    : `WO-HERMES-${outcome.id}-001`
+}
+
 function projectedWorkContract(outcome, resolver) {
   const contract = requireHermesWorkContract(outcome, resolver)
   return {
@@ -311,12 +492,232 @@ function projectedWorkContract(outcome, resolver) {
     projection: {
       id: contract.id,
       digest: contract.digest,
+      ...(contract.version === undefined ? {} : { version: contract.version }),
+      ...(contract.repository === undefined ? {} : { repository: contract.repository }),
+      ...(contract.lane === undefined ? {} : { lane: contract.lane }),
       allowedFiles: [...contract.reservations],
       validators: contract.validationCommands.map(({ command, args }) => (
         `${command} ${args.join(" ")}`
       )),
+      ...(contract.projection === undefined
+        ? {}
+        : { projection: { ...contract.projection } }),
+      ...(contract.delivery === undefined
+        ? {}
+        : {
+            delivery: {
+              ...contract.delivery,
+              allowedActions: [...contract.delivery.allowedActions],
+            },
+          }),
     },
   }
+}
+
+export function deriveHermesRuntimeProjectionBindings(
+  outcome,
+  { resolver = resolveHermesWorkContract, requireVerified = false } = {},
+) {
+  if (requireVerified && outcome?.verifiedQueueWorkContract === undefined) {
+    throw Object.assign(new Error("Queue work contract authority is missing"), {
+      code: "HERMES_WORK_CONTRACT_WALL",
+    })
+  }
+  const { projection: workContract } = projectedWorkContract(outcome, resolver)
+  const binding = outcome?.queueBinding
+  if (binding === undefined || binding === null) {
+    return { workContract, executionBinding: null }
+  }
+  const staleReacquisition = binding.reviewRecoveryStaleReacquisition
+  const staleContinuation = binding.reviewRecoveryStaleContinuation
+  const staleKeys = ["disposition", "expectedVersion", "fencingToken", "leaseExpiresAt",
+    "lifecycleReason", "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken"]
+  const anchoredStaleKeys = [...staleKeys, "checkpointDigest"]
+  const staleExpiry = typeof staleReacquisition?.leaseExpiresAt === "string"
+    ? Date.parse(staleReacquisition.leaseExpiresAt) : Number.NaN
+  const continuationKeys = [...staleKeys, "priorLeaseExpiresAt"]
+  const anchoredContinuationKeys = [...continuationKeys, "checkpointDigest"]
+  const continuationExpiry = typeof staleContinuation?.leaseExpiresAt === "string"
+    ? Date.parse(staleContinuation.leaseExpiresAt) : Number.NaN
+  // A legacy local RECOVERED checkpoint can carry only the resume state until its durable
+  // provenance resolver backfills the source triple. Every other recovery shape is closed.
+  const legacyResumeOnlyRecovery = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
+    && binding.reviewRecoverySourceExpectedVersion === undefined
+    && binding.reviewRecoverySourceFencingToken === undefined
+    && binding.reviewRecoverySourceRuntimeAttempt === undefined
+    && binding.reviewRecoveryReclaimEventId === undefined
+    && binding.reviewRecoveryReclaimPayloadDigest === undefined
+    && staleReacquisition === undefined
+  const hasReviewRecovery = binding.reviewRecoveryResumeState !== undefined
+    || binding.reviewRecoverySourceExpectedVersion !== undefined
+    || binding.reviewRecoverySourceFencingToken !== undefined
+    || binding.reviewRecoverySourceRuntimeAttempt !== undefined
+    || binding.reviewRecoveryReclaimEventId !== undefined
+    || binding.reviewRecoveryReclaimPayloadDigest !== undefined
+    || staleReacquisition !== undefined
+    || staleContinuation !== undefined
+  const reviewRecoveryDelta = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
+    ? 1 : binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+      ? (staleContinuation !== undefined ? 4 : staleReacquisition === undefined ? 2 : 3) : null
+  const validReclaimEvidence = Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
+    && binding.reviewRecoveryReclaimEventId > 0
+    && /^[0-9a-f]{64}$/.test(String(binding.reviewRecoveryReclaimPayloadDigest ?? ""))
+  const invalidReviewRecoveryDelta = hasReviewRecovery && !legacyResumeOnlyRecovery && (
+    reviewRecoveryDelta === null
+    || !Number.isSafeInteger(binding.reviewRecoverySourceExpectedVersion)
+    || binding.reviewRecoverySourceExpectedVersion < 0
+    || !Number.isSafeInteger(binding.reviewRecoverySourceFencingToken)
+    || binding.reviewRecoverySourceFencingToken <= 0
+    || !Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
+    || binding.reviewRecoverySourceRuntimeAttempt <= 0
+    || (binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
+      && (binding.reviewRecoveryReclaimEventId !== undefined
+        || binding.reviewRecoveryReclaimPayloadDigest !== undefined))
+    || (binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+      && !validReclaimEvidence)
+    || binding.expectedVersion !== binding.reviewRecoverySourceExpectedVersion + reviewRecoveryDelta
+    || binding.fencingToken !== binding.reviewRecoverySourceFencingToken + reviewRecoveryDelta)
+  const invalidStaleReacquisition = staleReacquisition !== undefined && (
+    !staleReacquisition || typeof staleReacquisition !== "object" || Array.isArray(staleReacquisition)
+    || ![staleKeys, anchoredStaleKeys].some((keys) => Object.keys(staleReacquisition).length === keys.length
+      && keys.every((key) => Object.hasOwn(staleReacquisition, key)))
+    || binding.reviewRecoveryResumeState !== "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    || staleReacquisition.lifecycleReason !== "STALE_LEASE_RECOVERED"
+    || !["RECLAIMED", "REPLAY_WINNER"].includes(staleReacquisition.disposition)
+    || staleReacquisition.priorExpectedVersion !== binding.reviewRecoverySourceExpectedVersion + 2
+    || staleReacquisition.priorFencingToken !== binding.reviewRecoverySourceFencingToken + 2
+    || staleReacquisition.expectedVersion !== staleReacquisition.priorExpectedVersion + 1
+    || staleReacquisition.fencingToken !== staleReacquisition.priorFencingToken + 1
+    || (staleContinuation === undefined
+      && (staleReacquisition.expectedVersion !== binding.expectedVersion
+        || staleReacquisition.fencingToken !== binding.fencingToken))
+    || staleReacquisition.receiptLatestFencingToken !== staleReacquisition.fencingToken
+    || !Number.isFinite(staleExpiry)
+    || new Date(staleExpiry).toISOString() !== staleReacquisition.leaseExpiresAt
+    || (staleReacquisition.checkpointDigest !== undefined
+      && !/^[0-9a-f]{64}$/.test(String(staleReacquisition.checkpointDigest))))
+  const invalidStaleContinuation = staleContinuation !== undefined && (
+    staleReacquisition === undefined || !staleContinuation
+    || typeof staleContinuation !== "object" || Array.isArray(staleContinuation)
+    || ![continuationKeys, anchoredContinuationKeys].some((keys) => Object.keys(staleContinuation).length === keys.length
+      && keys.every((key) => Object.hasOwn(staleContinuation, key)))
+    || staleContinuation.lifecycleReason !== "STALE_LEASE_RECOVERED"
+    || !["RECLAIMED", "REPLAY_WINNER"].includes(staleContinuation.disposition)
+    || staleContinuation.priorExpectedVersion !== staleReacquisition.expectedVersion
+    || staleContinuation.priorFencingToken !== staleReacquisition.fencingToken
+    || staleContinuation.priorLeaseExpiresAt !== staleReacquisition.leaseExpiresAt
+    || staleContinuation.expectedVersion !== staleContinuation.priorExpectedVersion + 1
+    || staleContinuation.fencingToken !== staleContinuation.priorFencingToken + 1
+    || staleContinuation.expectedVersion !== binding.expectedVersion
+    || staleContinuation.fencingToken !== binding.fencingToken
+    || staleContinuation.receiptLatestFencingToken !== staleContinuation.fencingToken
+    || !Number.isFinite(continuationExpiry)
+    || new Date(continuationExpiry).toISOString() !== staleContinuation.leaseExpiresAt
+    || (staleContinuation.checkpointDigest !== undefined
+      && !/^[0-9a-f]{64}$/.test(String(staleContinuation.checkpointDigest))))
+  if (invalidReviewRecoveryDelta || invalidStaleReacquisition || invalidStaleContinuation) {
+    throw Object.assign(new Error("Runtime stale reacquisition binding is invalid"), {
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    })
+  }
+  if (requireVerified && (typeof binding.userId !== "string" || binding.userId.trim() === ""
+    || typeof binding.outcomeKey !== "string" || binding.outcomeKey.trim() === ""
+    || binding.outcomeKey !== outcome?.outcomeKey
+    || !Number.isSafeInteger(binding.expectedVersion) || binding.expectedVersion < 0
+    || typeof binding.executionBinding !== "string" || binding.executionBinding.trim() === ""
+    || typeof binding.leaseToken !== "string" || binding.leaseToken.trim() === ""
+    || typeof binding.leaseHolder !== "string" || binding.leaseHolder.trim() === ""
+    || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === ""
+    || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0
+    || (staleReacquisition !== undefined
+      && !/^[0-9a-f]{64}$/.test(String(staleReacquisition.checkpointDigest ?? "")))
+    || (staleContinuation !== undefined
+      && !/^[0-9a-f]{64}$/.test(String(staleContinuation.checkpointDigest ?? "")))
+    || ([binding.reviewRecoverySourceExpectedVersion,
+      binding.reviewRecoverySourceFencingToken,
+      binding.reviewRecoverySourceRuntimeAttempt].some((value) => value !== undefined)
+      && (!Number.isSafeInteger(binding.reviewRecoverySourceExpectedVersion)
+        || binding.reviewRecoverySourceExpectedVersion < 0
+        || !Number.isSafeInteger(binding.reviewRecoverySourceFencingToken)
+        || binding.reviewRecoverySourceFencingToken <= 0
+        || !Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
+        || binding.reviewRecoverySourceRuntimeAttempt <= 0
+        || !["REVIEW_REMEDIATION_RECOVERED", "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"]
+          .includes(binding.reviewRecoveryResumeState)
+        || (binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+          && (!Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
+            || binding.reviewRecoveryReclaimEventId <= 0
+            || !/^[0-9a-f]{64}$/.test(String(binding.reviewRecoveryReclaimPayloadDigest ?? "")))))))) {
+    throw Object.assign(new Error("Runtime execution binding is invalid"), {
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    })
+  }
+  return {
+    workContract,
+    executionBinding: {
+      userId: binding.userId,
+      outcomeKey: binding.outcomeKey,
+      expectedVersion: binding.expectedVersion,
+      executionBinding: binding.executionBinding,
+      leaseToken: binding.leaseToken,
+      leaseHolder: binding.leaseHolder,
+      ...(typeof binding.acquisitionKey === "string" && binding.acquisitionKey.trim() !== ""
+        ? { acquisitionKey: binding.acquisitionKey }
+        : {}),
+      fencingToken: binding.fencingToken,
+      ...(["REVIEW_REMEDIATION_RECOVERED", "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"]
+        .includes(binding.reviewRecoveryResumeState) ? {
+        reviewRecoveryResumeState: binding.reviewRecoveryResumeState,
+        reviewRecoverySourceExpectedVersion: binding.reviewRecoverySourceExpectedVersion,
+        reviewRecoverySourceFencingToken: binding.reviewRecoverySourceFencingToken,
+        reviewRecoverySourceRuntimeAttempt: binding.reviewRecoverySourceRuntimeAttempt,
+        ...(binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" ? {
+          reviewRecoveryReclaimEventId: binding.reviewRecoveryReclaimEventId,
+          reviewRecoveryReclaimPayloadDigest: binding.reviewRecoveryReclaimPayloadDigest,
+          ...(staleReacquisition === undefined ? {} : {
+            reviewRecoveryStaleReacquisition: { ...staleReacquisition },
+            ...(staleContinuation === undefined ? {} : {
+              reviewRecoveryStaleContinuation: { ...staleContinuation },
+            }),
+          }),
+        } : {}),
+      } : {}),
+    },
+  }
+}
+
+export function deriveHermesRuntimeWorkContract(
+  outcome,
+  { resolver = resolveHermesWorkContract, requireVerified = false } = {},
+) {
+  if (requireVerified && outcome?.verifiedQueueWorkContract === undefined) {
+    throw Object.assign(new Error("Queue work contract authority is missing"), {
+      code: "HERMES_WORK_CONTRACT_WALL",
+    })
+  }
+  return projectedWorkContract(outcome, resolver).projection
+}
+
+function isLegacyUnmarkedStaleReviewRecovery(binding) {
+  return binding?.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    && binding.reviewRecoveryStaleReacquisition === undefined
+    && Number.isSafeInteger(binding.reviewRecoverySourceExpectedVersion)
+    && binding.reviewRecoverySourceExpectedVersion >= 0
+    && Number.isSafeInteger(binding.reviewRecoverySourceFencingToken)
+    && binding.reviewRecoverySourceFencingToken > 0
+    && Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
+    && binding.reviewRecoverySourceRuntimeAttempt > 0
+    && binding.expectedVersion === binding.reviewRecoverySourceExpectedVersion + 3
+    && binding.fencingToken === binding.reviewRecoverySourceFencingToken + 3
+    && Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
+    && binding.reviewRecoveryReclaimEventId > 0
+    && /^[0-9a-f]{64}$/.test(String(binding.reviewRecoveryReclaimPayloadDigest ?? ""))
+}
+
+function retryableWallDetail(error) {
+  const code = typeof error?.code === "string" ? error.code : "HERMES_CYCLE_FAILED"
+  const detail = sanitizeAppServerText(error?.detail).trim()
+  return detail ? `${code}: ${detail}`.slice(0, MAX_CHECKPOINT_DETAIL_CHARS) : code
 }
 
 export function createHermesOrchestrator(options = {}) {
@@ -370,6 +771,10 @@ export function createHermesOrchestrator(options = {}) {
             }
           : null)
       : resolveValidationInfrastructureRecovery)
+  const resolveReviewRecoveryProvenance = options.resolveActiveReviewRecoveryProvenance
+    ?? resolveActiveReviewRecoveryProvenance
+  const verifyReviewRecoveryContinuation = options.verifyActiveReviewRecoveryContinuation
+    ?? verifyActiveReviewRecoveryContinuation
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const projectLease = options.projectLease ?? projectOutcomeRuntimeLease
   const leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? 5 * 60 * 1000
@@ -567,6 +972,7 @@ export function createHermesOrchestrator(options = {}) {
       ["headRefOid", value.headRefOid],
       ["mergeSha", value.mergeSha],
       ["terminalCleanupRecoveryProofDigest", value.terminalCleanupRecoveryProofDigest],
+      ["reviewRecoveryProofDigest", value.reviewRecoveryProofDigest],
     ].filter(([field, fieldValue]) => (
       field === "headRefOid"
         ? fieldValue !== undefined && (fieldValue !== null
@@ -582,30 +988,24 @@ export function createHermesOrchestrator(options = {}) {
         code: "HERMES_RUNTIME_PROJECTION_STATE_WALL",
       })
     }
-    const { projection: workContract } = projectedWorkContract(
+    const { workContract, executionBinding } = deriveHermesRuntimeProjectionBindings(
       execution.metadata?.outcome,
-      workContractResolver,
+      { resolver: workContractResolver },
     )
     try {
       return await retryRuntimeProjection(() => projectCheckpoint({
         outcomeId: Number(outcomeId),
         attempt: execution.fencingToken,
         workContract,
-        executionBinding: execution.metadata?.outcome?.queueBinding
-          ? {
-              userId: execution.metadata.outcome.queueBinding.userId,
-              outcomeKey: execution.metadata.outcome.queueBinding.outcomeKey,
-              expectedVersion: execution.metadata.outcome.queueBinding.expectedVersion,
-              executionBinding: execution.metadata.outcome.queueBinding.executionBinding,
-              leaseToken: execution.metadata.outcome.queueBinding.leaseToken,
-              leaseHolder: execution.metadata.outcome.queueBinding.leaseHolder,
-              fencingToken: execution.metadata.outcome.queueBinding.fencingToken,
-            }
-          : null,
+        executionBinding,
         checkpoint: {
           sequence: execution.checkpoint.sequence,
           state: execution.checkpoint.state,
           detail: execution.checkpoint.detail,
+          ...(execution.checkpoint.state === "CODEX_TURN_COMPLETED"
+            && Object.hasOwn(execution.metadata?.turnResult ?? {}, "findings")
+            ? { findings: execution.metadata.turnResult.findings }
+            : {}),
           metadata: {
             ...projectionMetadata(execution.metadata),
             workContractId: workContract.id,
@@ -775,13 +1175,19 @@ export function createHermesOrchestrator(options = {}) {
       const nextState = "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
       return finalizeTerminal({
         lease, sequence: current.checkpoint.sequence, outcome, nextState,
-        metadata: { postMergeCleanupRetryCount: retryCount },
+        metadata: {
+          postMergeCleanupRetryCount: retryCount,
+          postMergeCleanupCauseCode: error?.causeCode ?? "HERMES_REPOSITORY_CLEANUP_WALL",
+        },
       })
     }
     const retry = await checkpoint(
       lease, current.checkpoint.sequence, "POST_MERGE_CLEANUP_RETRY",
       error?.code ?? "HERMES_POST_MERGE_CLEANUP_WALL",
-      { postMergeCleanupRetryCount: retryCount },
+      {
+        postMergeCleanupRetryCount: retryCount,
+        postMergeCleanupCauseCode: error?.causeCode ?? "HERMES_REPOSITORY_CLEANUP_WALL",
+      },
     )
     await abandonLease({
       idempotencyKey: `${lease.outcomeId}:abandon-post-merge:${lease.fencingToken}:${retry.checkpointSequence}`,
@@ -918,7 +1324,33 @@ export function createHermesOrchestrator(options = {}) {
     const initialized = state.initialize()
     if (initialized.killSwitch.active) return { result: "KILL_SWITCH_ACTIVE" }
     assertOwnerTouchCountersZero(initialized)
-    const unfinished = Object.values(initialized.executions).filter((execution) => execution?.lease?.status === "ACTIVE")
+    for (const execution of Object.values(initialized.executions)) {
+      const hasReviewRecoveryCheckpoint = execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
+        && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED"
+      const hasAbandonedMarker = Object.hasOwn(execution?.lease ?? {}, "abandonedAt")
+        && execution?.lease?.abandonedAt !== null
+      if (hasReviewRecoveryCheckpoint && execution?.lease?.status === "ACTIVE"
+        && hasAbandonedMarker
+        && !isExactReviewRecoveredAbandonedLease(execution, now())) {
+        throw Object.assign(new Error("Persisted review recovery abandoned lease is invalid"), {
+          code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+        })
+      }
+      const hasReviewRecoveryCleanupRetry = execution?.lease?.status !== "RELEASED"
+        && hasRetainedReviewRecoverySignal(execution)
+        && hasReviewRecoveryCleanupRetryIdentity(execution)
+      if (hasReviewRecoveryCleanupRetry
+        && !isExactReviewRecoveryCleanupRetryCandidate(execution, now())) {
+        throw Object.assign(new Error("Persisted review recovery cleanup retry is invalid"), {
+          code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+        })
+      }
+    }
+    const unfinished = Object.values(initialized.executions).filter((execution) => (
+      execution?.lease?.status === "ACTIVE"
+      && !isExactReviewRecoveredAbandonedLease(execution, now())
+      && !isExactReviewRecoveryCleanupRetryCandidate(execution, now())
+    ))
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
     const approvedReleasedExecutions = []
@@ -1007,9 +1439,8 @@ export function createHermesOrchestrator(options = {}) {
     }
     const verifiedReviewRecoveries = new Map()
     for (const execution of Object.values(initialized.executions)) {
-      if (execution?.lease?.status !== "ABANDONED"
-        || execution?.checkpoint?.state !== "REVIEW_REMEDIATION_RECOVERED"
-        || execution?.checkpoint?.detail !== "REVIEW_REMEDIATION_EXHAUSTED") continue
+      if (!isExactReviewRecoveredAbandonedLease(execution, now())
+        && !isExactReviewRecoveryCleanupRetryCandidate(execution, now())) continue
       const prNumber = Number(execution?.metadata?.prNumber)
       const reviewedHeadSha = execution?.metadata?.headRefOid
       const mergeSha = execution?.metadata?.mergeSha
@@ -1022,16 +1453,105 @@ export function createHermesOrchestrator(options = {}) {
           code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
         })
       }
+      const persistedOutcome = execution.metadata?.outcome
+      const persistedBinding = persistedOutcome?.queueBinding
+      const legacyStaleReacquired = isLegacyUnmarkedStaleReviewRecovery(persistedBinding)
+      const recoveryProof = { expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest,
+        prNumber, reviewedHeadSha, mergeSha }
+      let workContract
+      let executionBinding
+      let resolvedProvenance
+      if (legacyStaleReacquired) {
+        workContract = projectedWorkContract(persistedOutcome, workContractResolver).projection
+        const checkpointProof = {
+          outcomeId: String(execution.outcomeId),
+          outcomeKey: persistedBinding.outcomeKey,
+          fencingToken: persistedBinding.fencingToken,
+          sequence: execution.checkpoint.sequence,
+          state: execution.checkpoint.state,
+          workOrderId: persistedBinding.activeWorkOrderId ?? null,
+          commit: { headSha: reviewedHeadSha, mergeSha, prNumber },
+        }
+        resolvedProvenance = await resolveReviewRecoveryProvenance({
+          outcomeId: Number(execution.outcomeId),
+          executionBinding: persistedBinding,
+          workContract,
+          proof: recoveryProof,
+          checkpointProof,
+        })
+        const patchedOutcome = { ...persistedOutcome, queueBinding: { ...persistedBinding,
+          expectedVersion: resolvedProvenance.reviewRecoveryExpectedVersion,
+          fencingToken: resolvedProvenance.reviewRecoveryFencingToken,
+          reviewRecoveryStaleReacquisition: resolvedProvenance.reviewRecoveryStaleReacquisition,
+          ...(resolvedProvenance.reviewRecoveryStaleContinuation ? {
+            reviewRecoveryStaleContinuation: resolvedProvenance.reviewRecoveryStaleContinuation,
+          } : {}) } }
+        ;({ workContract, executionBinding } = deriveHermesRuntimeProjectionBindings(
+          patchedOutcome, { resolver: workContractResolver },
+        ))
+      } else {
+        ;({ workContract, executionBinding } = deriveHermesRuntimeProjectionBindings(
+          persistedOutcome, { resolver: workContractResolver },
+        ))
+        const staleResolverBinding = executionBinding.reviewRecoveryStaleReacquisition === undefined
+          ? executionBinding
+          : (() => {
+              if (!Number.isSafeInteger(persistedBinding.activeWorkOrderId)
+                || persistedBinding.activeWorkOrderId <= 0) {
+                throw Object.assign(new Error("Stale recovery Work Order identity is invalid"), {
+                  code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+                })
+              }
+              return { ...executionBinding, activeWorkOrderId: persistedBinding.activeWorkOrderId }
+            })()
+        const checkpointProof = {
+          outcomeId: String(execution.outcomeId),
+          outcomeKey: staleResolverBinding.outcomeKey,
+          fencingToken: staleResolverBinding.fencingToken,
+          sequence: execution.checkpoint.sequence,
+          state: execution.checkpoint.state,
+          workOrderId: staleResolverBinding.activeWorkOrderId ?? null,
+          commit: { headSha: reviewedHeadSha, mergeSha, prNumber },
+        }
+        resolvedProvenance = await resolveReviewRecoveryProvenance({
+          outcomeId: Number(execution.outcomeId),
+          executionBinding: staleResolverBinding,
+          workContract,
+          proof: recoveryProof,
+          checkpointProof,
+        })
+      }
+      if (legacyStaleReacquired && (resolvedProvenance.alreadyStaleReacquired !== true
+        || !resolvedProvenance.reviewRecoveryStaleReacquisition)) {
+        throw Object.assign(new Error("Legacy stale recovery provenance is incomplete"), {
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+      }
       verifiedReviewRecoveries.set(String(execution.outcomeId), {
         expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
         proofDigest,
         prNumber,
         reviewedHeadSha,
         mergeSha,
+        runtimeAttempt: resolvedProvenance.reviewRecoverySourceRuntimeAttempt,
+        reviewRecoverySourceExpectedVersion: resolvedProvenance.reviewRecoverySourceExpectedVersion,
+        reviewRecoverySourceFencingToken: resolvedProvenance.reviewRecoverySourceFencingToken,
+        reviewRecoverySourceRuntimeAttempt: resolvedProvenance.reviewRecoverySourceRuntimeAttempt,
+        ...(resolvedProvenance.alreadyStaleReacquired === true ? {
+          alreadyStaleReacquired: true,
+          reviewRecoveryExpectedVersion: resolvedProvenance.reviewRecoveryExpectedVersion,
+          reviewRecoveryFencingToken: resolvedProvenance.reviewRecoveryFencingToken,
+          reviewRecoveryStaleReacquisition: resolvedProvenance.reviewRecoveryStaleReacquisition,
+          ...(resolvedProvenance.reviewRecoveryStaleContinuation ? {
+            reviewRecoveryStaleContinuation: resolvedProvenance.reviewRecoveryStaleContinuation,
+          } : {}),
+        } : {}),
       })
     }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (
-      execution?.lease?.status === "ABANDONED"
+      (execution?.lease?.status === "ABANDONED"
+        || isExactReviewRecoveredAbandonedLease(execution, now())
+        || isExactReviewRecoveryCleanupRetryCandidate(execution, now()))
       && (
         (execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
           && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE
@@ -1041,6 +1561,7 @@ export function createHermesOrchestrator(options = {}) {
           && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED")
         || (execution?.checkpoint?.state === "POST_MERGE_CLEANUP_RECOVERED"
           && /^PR #\d+$/.test(execution?.checkpoint?.detail ?? ""))
+        || isExactReviewRecoveryCleanupRetryCandidate(execution, now())
         || OWNER_DECISION_RESUME_STATES.has(execution?.checkpoint?.state)
         || matchesRecoverableValidationState(execution, initialized)
         || hasOwnerDecisionResume(execution?.metadata)
@@ -1088,6 +1609,7 @@ export function createHermesOrchestrator(options = {}) {
         && String(execution.metadata.outcome.id) === String(execution.outcomeId)
         && execution?.lease?.status !== "RELEASED") {
         if (shouldRefreshExpiredBindingBeforeProjection(execution, initialProjectionObservedAt)) continue
+        if (verifiedReviewRecoveries.has(String(execution.outcomeId))) continue
         await projectCurrentExecution(execution.outcomeId)
         await projectCurrentLease(execution.outcomeId)
       }
@@ -1168,11 +1690,46 @@ export function createHermesOrchestrator(options = {}) {
     }
     const reviewRecoveryProof = verifiedReviewRecoveries.get(outcomeId)
     if (reviewRecoveryProof) {
-      outcome = await resumeQueueAfterReviewRecovery(outcome, reviewRecoveryProof)
+      if (!outcome?.queueBinding) {
+        throw Object.assign(new Error("Review recovery queue binding is missing"), {
+          code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+        })
+      }
+      outcome = {
+        ...outcome,
+        queueBinding: {
+          ...outcome.queueBinding,
+          reviewRecoverySourceExpectedVersion: reviewRecoveryProof.reviewRecoverySourceExpectedVersion,
+          reviewRecoverySourceFencingToken: reviewRecoveryProof.reviewRecoverySourceFencingToken,
+          reviewRecoverySourceRuntimeAttempt: reviewRecoveryProof.runtimeAttempt,
+          ...(reviewRecoveryProof.alreadyStaleReacquired === true ? {
+            expectedVersion: reviewRecoveryProof.reviewRecoveryExpectedVersion,
+            fencingToken: reviewRecoveryProof.reviewRecoveryFencingToken,
+            reviewRecoveryStaleReacquisition: reviewRecoveryProof.reviewRecoveryStaleReacquisition,
+            ...(reviewRecoveryProof.reviewRecoveryStaleContinuation ? {
+              reviewRecoveryStaleContinuation: reviewRecoveryProof.reviewRecoveryStaleContinuation,
+            } : {}),
+          } : {}),
+        },
+      }
+      if (reviewRecoveryProof.alreadyStaleReacquired !== true) {
+        outcome = await resumeQueueAfterReviewRecovery(outcome, reviewRecoveryProof)
+      }
     }
     outcome = terminalReplay
       ? await refreshQueueOutcome(outcome, terminalReplay)
       : await refreshQueueOutcome(outcome)
+    if (reviewRecoveryProof) {
+      const projectionBindings = deriveHermesRuntimeProjectionBindings(
+        outcome, { resolver: workContractResolver, requireVerified: true },
+      )
+      await verifyReviewRecoveryContinuation({
+        outcomeId: Number(outcome.id),
+        executionBinding: projectionBindings.executionBinding,
+        workContract: projectionBindings.workContract,
+        proof: reviewRecoveryProof,
+      })
+    }
 
     let lease
     if (current) {
@@ -1202,7 +1759,12 @@ export function createHermesOrchestrator(options = {}) {
     }
     let sequence = lease.checkpointSequence
     try {
-      const projection = await projectCurrentExecution(outcomeId)
+      // The durable review-recovery checkpoint was already projected before the
+      // queue was resumed. Re-projecting it with the newly reclaimed local
+      // attempt would falsely bind old recovery evidence to a new runtime epoch.
+      const projection = reviewRecoveryProof
+        ? null
+        : await projectCurrentExecution(outcomeId)
       if (!terminalReplay && projection?.workOrderId) {
         const needsDurableBinding = Boolean(outcome?.queueBinding)
           && outcome.queueBinding.activeWorkOrderId === undefined
@@ -1348,6 +1910,7 @@ export function createHermesOrchestrator(options = {}) {
       workContractResolver,
     )
     const reservations = workContract.reservations
+    const workOrderRef = workOrderRefFor(outcome)
     const baseSha = lease.metadata?.baseSha ?? await lifecycle.refreshOriginMain()
     const recoveryCheckpointState = current?.checkpoint?.state ?? null
     const worktreePath = lease.metadata?.worktreePath
@@ -1673,17 +2236,17 @@ export function createHermesOrchestrator(options = {}) {
 
       let deliveryPrompt = pendingValidationFailure
         ? buildValidationRemediationPrompt({
-          workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+          workOrderId: workOrderRef, branch,
           outcome: outcome.command, reservations, validation: pendingValidationFailure,
         })
         : pendingFindings.length > 0
           ? buildRemediationPrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+            workOrderId: workOrderRef, branch,
             outcome: outcome.command, reservations, findings: pendingFindings,
           })
         : ownerDecisionResume
           ? buildOwnerDecisionResumePrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`,
+            workOrderId: workOrderRef,
             branch,
             outcome: outcome.command,
             reservations,
@@ -1692,7 +2255,7 @@ export function createHermesOrchestrator(options = {}) {
           })
           : consumedOwnerDecisionResume
             ? buildOwnerDecisionPostResumePrompt({
-              workOrderId: `WO-HERMES-${outcome.id}-001`,
+              workOrderId: workOrderRef,
               branch,
               outcome: outcome.command,
               reservations,
@@ -1700,7 +2263,7 @@ export function createHermesOrchestrator(options = {}) {
           : buildHermesCodexPrompt({
         outcome: outcome.command,
         outcomeRef: outcomeRef(outcome),
-        workOrderId: `WO-HERMES-${outcome.id}-001`,
+        workOrderId: workOrderRef,
         branch,
         baseSha,
         attempt: (cp.metadata.providerRetryCount ?? 0) + 1,
@@ -1848,7 +2411,7 @@ export function createHermesOrchestrator(options = {}) {
           sequence = cp.checkpointSequence
           pendingValidationFailure = detail
           deliveryPrompt = buildValidationRemediationPrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+            workOrderId: workOrderRef, branch,
             outcome: outcome.command, reservations, validation: detail,
           })
           continue
@@ -1879,7 +2442,7 @@ export function createHermesOrchestrator(options = {}) {
           pendingFindings = advanced.findings
           sequence = advanced.sequence
           deliveryPrompt = buildRemediationPrompt({
-            workOrderId: `WO-HERMES-${outcome.id}-001`, branch,
+            workOrderId: workOrderRef, branch,
             outcome: outcome.command, reservations, findings: pendingFindings,
           })
           continue
@@ -2009,7 +2572,7 @@ export function createHermesOrchestrator(options = {}) {
         return { result: "PROVIDER_UNAVAILABLE", outcomeId, nextState: "DEFERRED_PROVIDER_UNAVAILABLE", retryAfter }
       }
       try {
-        cp = await checkpoint(lease, sequence, "RETRYABLE_WALL", error?.code ?? "HERMES_CYCLE_FAILED",
+        cp = await checkpoint(lease, sequence, "RETRYABLE_WALL", retryableWallDetail(error),
           externalToolWall ? { externalToolRetryCount, threadId: null, turnId: null } : {})
         sequence = cp.checkpointSequence
       } catch {}

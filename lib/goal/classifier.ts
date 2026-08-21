@@ -17,6 +17,7 @@ import {
 } from "./taxonomy"
 import { matchMistakePatterns, type MistakeMatch } from "./mistake-patterns"
 import { checkDoctrineRules, type DoctrineViolation } from "@/lib/governance/doctrine-rules"
+import { isIssue911ReliabilityOutcomeIntent } from "@/lib/workbench/registered-outcome-intent"
 
 export interface ClassifyContext {
   activeLocks?: { kind: string; scope?: string | null }[]
@@ -25,9 +26,9 @@ export interface ClassifyContext {
 
 export interface Classification {
   command: string
-  lane: LaneId
+  lane: LaneId | "operator-objective"
   mode: ModeId
-  risk: RiskLevel
+  risk: RiskLevel | "R1"
   authority: AuthorityId
   verdict: Verdict
   rationale: string
@@ -98,6 +99,34 @@ function escalateRisk(base: RiskLevel, by: number): RiskLevel {
 
 export function classifyGoal(command: string, ctx?: ClassifyContext): Classification {
   const text = command.toLowerCase().trim()
+  if (isIssue911ReliabilityOutcomeIntent(command)) {
+    const mistakePatterns = matchMistakePatterns(command)
+    const doctrine = checkDoctrineRules({
+      intent: command,
+      authority: "A2_WRITE_OWN",
+      activeLocks: ctx?.activeLocks,
+      phase6Authorized: ctx?.phase6Authorized,
+    })
+    const refused = mistakePatterns.some((match) => match.severity === "block")
+      || doctrine.verdict === "forbidden"
+    return {
+      command,
+      lane: "operator-objective",
+      mode: "implement",
+      risk: refused ? "critical" : "R1",
+      authority: "A2_WRITE_OWN",
+      verdict: refused ? "refuse" : "requires_approval",
+      rationale: refused
+        ? "The registered operator objective crossed a blocking safety rule and was refused."
+        : "Matched the exact registered #911 operator objective; explicit approval is required before acquisition.",
+      recommendedMove: doctrine.violations[0]?.safeAlternative
+        ?? mistakePatterns.find((match) => match.severity === "block")?.guidance
+        ?? "Persist the bounded outcome, then request explicit Start work authority.",
+      requiresApproval: !refused,
+      mistakePatterns,
+      doctrineViolations: doctrine.violations,
+    }
+  }
   const laneId = detectLane(text)
   const modeId = detectMode(text)
   const laneDef = findLane(laneId)!

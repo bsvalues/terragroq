@@ -9,8 +9,11 @@ import {
 } from "../../lib/outcome-queue/contract.mjs"
 import { isVerifiedPrimaryAuthorization } from "./primary-authorization-provenance.mjs"
 import {
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
+  HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+  resolveHermesWorkContract,
 } from "./work-contract.mjs"
 import {
   createHermesDatabasePool,
@@ -68,6 +71,27 @@ const LEGACY_GOAL_REFS = Object.freeze([
 ])
 const REVIEWED_WORK_CONTRACT_ID_SQL = HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID.replaceAll("'", "''")
 const REVIEWED_WORK_CONTRACT_DIGEST_SQL = HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST.replaceAll("'", "''")
+const ISSUE_911_WORK_CONTRACT_ID_SQL = HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID.replaceAll("'", "''")
+const ISSUE_911_WORK_CONTRACT_DIGEST_SQL = HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST.replaceAll("'", "''")
+const ISSUE_911_WORK_CONTRACT = resolveHermesWorkContract({
+  command: "record structured #911 reliability remediation without host mutation",
+  title: "record structured #911 reliability remediation without host mutation",
+  objective: "record structured #911 reliability remediation without host mutation",
+  lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+})
+if (!ISSUE_911_WORK_CONTRACT) throw new Error("Registered #911 work contract is unavailable")
+const sqlString = (value) => `'${String(value).replaceAll("'", "''")}'`
+const ISSUE_911_WORK_CONTRACT_JSON_SQL = JSON.stringify(ISSUE_911_WORK_CONTRACT).replaceAll("'", "''")
+const ISSUE_911_APPROVAL_EVIDENCE_SQL = [
+  "repo:bsvalues/terragroq",
+  `work-contract:${ISSUE_911_WORK_CONTRACT.id}`,
+  `work-contract-digest:${ISSUE_911_WORK_CONTRACT.digest}`,
+  `work-contract-json:${JSON.stringify(ISSUE_911_WORK_CONTRACT)}`,
+  ...ISSUE_911_WORK_CONTRACT.reservations.map((reservation) => `reservation:${reservation}`),
+  ...ISSUE_911_WORK_CONTRACT.validationCommands.map((validator) => (
+    `validator:${validator.command}:${validator.args.join(" ")}`
+  )),
+]
 
 const QUEUE_COLUMNS = `
   q."id",
@@ -341,6 +365,8 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
       AND exact_execution_grant."workOrderId" IS NULL
       AND cardinality(exact_execution_grant."allowedActions") = 1
       AND exact_execution_grant."allowedActions"[1] = 'outcome:execute'
+      AND exact_execution_grant."grantedBy" = q."userId"
+      AND exact_execution_grant."blockedActions" = ARRAY['production:mutate', 'release:create', 'secret:access', 'spend:increase']::text[]
   )
   AND EXISTS (
     SELECT 1
@@ -353,6 +379,17 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
     JOIN "workbench_thread" AS execution_thread
       ON execution_thread."userId" = execution_root."userId"
       AND execution_thread.id = execution_root."threadId"
+    JOIN "decision" AS exact_execution_approval
+      ON exact_execution_approval."userId" = execution_receipt."userId"
+      AND exact_execution_approval.id::text = execution_receipt."resultBinding"->>'decisionId'
+    JOIN "authority_grant" AS receipt_execution_grant
+      ON receipt_execution_grant."userId" = execution_receipt."userId"
+      AND receipt_execution_grant.id::text = execution_receipt."resultBinding"->>'grantId'
+      AND receipt_execution_grant.ref = execution_receipt."resultBinding"->>'grantRef'
+    LEFT JOIN "authority_grant" AS exact_implementation_grant
+      ON exact_implementation_grant."userId" = execution_receipt."userId"
+      AND exact_implementation_grant.id::text = execution_receipt."resultBinding"->>'implementationGrantId'
+      AND exact_implementation_grant.ref = execution_receipt."resultBinding"->>'implementationGrantRef'
     WHERE execution_receipt."userId" = q."userId"
       AND execution_receipt."outcomeKey" = q."outcomeKey"
       AND execution_receipt.operation = 'workbench_execution.authorize'
@@ -360,24 +397,193 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
       AND execution_receipt."requestBinding"->>'outcomeKey' = q."outcomeKey"
       AND execution_receipt."requestBinding"->>'threadId' = execution_root."threadId"
       AND execution_receipt."requestBinding"->>'projectId' = execution_thread."projectId"::text
+      AND execution_receipt."requestBinding"->>'idempotencyKey' = execution_receipt."idempotencyKey"
+      AND execution_receipt."requestBinding" = jsonb_build_object(
+        'projectId', execution_thread."projectId",
+        'threadId', execution_root."threadId",
+        'outcomeKey', q."outcomeKey",
+        'idempotencyKey', execution_receipt."idempotencyKey",
+        'confirmation', 'START_WORK'
+      )
+      AND execution_receipt."requestHash" = encode(sha256(convert_to(
+        '{"confirmation":' || to_jsonb(execution_receipt."requestBinding"->>'confirmation')::text
+        || ',"contract":"workbench-execution-authorization.v1"'
+        || ',"idempotencyKey":' || to_jsonb(execution_receipt."idempotencyKey")::text
+        || ',"outcomeKey":' || to_jsonb(q."outcomeKey")::text
+        || ',"projectId":' || execution_thread."projectId"::text
+        || ',"threadId":' || to_jsonb(execution_root."threadId")::text || '}',
+        'UTF8'
+      )), 'hex')
       AND execution_receipt."resultBinding"->>'grantRef' = q."authorityGrantRef"
+      AND receipt_execution_grant.ref = q."authorityGrantRef"
+      AND receipt_execution_grant.status = 'active'
+      AND receipt_execution_grant."revokedAt" IS NULL
+      AND receipt_execution_grant."expiresAt" = (execution_receipt."resultBinding"->>'expiresAt')::timestamptz
+      AND receipt_execution_grant."grantedBy" = q."userId"
+      AND receipt_execution_grant."grantedTo" = 'operator'
+      AND receipt_execution_grant."authorityLevel" = 'A2_WRITE_OWN'
+      AND receipt_execution_grant.scope = q."outcomeKey"
+      AND receipt_execution_grant."workOrderId" IS NULL
+      AND receipt_execution_grant."allowedActions" = ARRAY['outcome:execute']::text[]
+      AND receipt_execution_grant."blockedActions" = ARRAY['production:mutate', 'release:create', 'secret:access', 'spend:increase']::text[]
       AND execution_receipt."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
-      AND execution_receipt."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
-      AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}'
+      AND execution_receipt."resultBinding"->>'decisionRef' = exact_execution_approval.ref
+      AND exact_execution_approval.owner = q."userId"
+      AND exact_execution_approval.locked = true
+      AND (
+        (execution_receipt."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
+          AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}')
+        OR
+        (execution_receipt."resultBinding"->'workContract'->>'id' = '${ISSUE_911_WORK_CONTRACT_ID_SQL}'
+          AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_WORK_CONTRACT_DIGEST_SQL}'
+          AND execution_receipt."resultBinding"->'workContract' = '${ISSUE_911_WORK_CONTRACT_JSON_SQL}'::jsonb
+          AND execution_receipt."resultBinding" ?& ARRAY[
+            'authorizedAt', 'decisionId', 'decisionRef', 'expiresAt', 'grantId', 'grantRef',
+            'implementationGrantId', 'implementationGrantRef', 'queueVersion', 'workContract'
+          ]::text[]
+          AND (SELECT count(*) FROM jsonb_object_keys(execution_receipt."resultBinding")) = 10
+          AND execution_receipt."resultBinding"->>'queueVersion' = '1'
+          AND CASE
+            WHEN execution_receipt."resultBinding"->>'authorizedAt'
+              ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$'
+            THEN (execution_receipt."resultBinding"->>'authorizedAt')::timestamptz
+          END = execution_receipt."createdAt"
+          AND (execution_receipt."resultBinding"->>'authorizedAt')::timestamptz = q."approvedAt"
+          AND (SELECT count(*)
+               FROM "outcome_queue_mutation_receipt" AS duplicate_execution_receipt
+               WHERE duplicate_execution_receipt."userId" = q."userId"
+                 AND duplicate_execution_receipt."outcomeKey" = q."outcomeKey"
+                 AND duplicate_execution_receipt.operation = 'workbench_execution.authorize') = 1
+          AND exact_execution_approval.evidence = ARRAY[
+            'project:' || execution_thread."projectId"::text,
+            'thread:' || execution_root."threadId",
+            ${ISSUE_911_APPROVAL_EVIDENCE_SQL.map(sqlString).join(",\n            ")}
+          ]::text[]
+          AND exact_execution_approval.tags = ARRAY['workbench', 'outcome', 'explicit-start-work']::text[]
+          AND execution_receipt."resultBinding"->>'implementationGrantId' = exact_implementation_grant.id::text
+          AND exact_implementation_grant.status = 'active'
+          AND exact_implementation_grant."revokedAt" IS NULL
+          AND exact_implementation_grant."expiresAt" IS NOT NULL
+          AND exact_implementation_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+          AND exact_implementation_grant."authorityLevel" = 'A2_WRITE_OWN'
+          AND exact_implementation_grant."grantedBy" = q."userId"
+          AND exact_implementation_grant."grantedTo" = 'operator'
+          AND exact_implementation_grant.scope = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+          AND exact_implementation_grant."workOrderId" IS NULL
+          AND exact_implementation_grant."allowedActions" = ARRAY['implement']::text[]
+          AND exact_implementation_grant."blockedActions" = ARRAY['production:mutate', 'release:create', 'secret:access', 'spend:increase']::text[]
+          AND exact_implementation_grant."expiresAt" = (execution_receipt."resultBinding"->>'expiresAt')::timestamptz
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest(exact_implementation_grant."blockedActions") AS blocked(action)
+            WHERE position(lower(blocked.action) IN 'implement') > 0
+          ))
+      )
   )
 `
 
+const EXACT_RUNTIME_FINDING_DERIVATION_PREDICATE = `
+  q."authorityLevel" = 'A2_WRITE_OWN'
+  AND q."authorityAction" = 'outcome:execute'
+  AND q."activeWorkOrderId" IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM "outcome_queue_mutation_receipt" AS derived_receipt
+    JOIN work_order AS derived_work
+      ON derived_work."userId" = derived_receipt."userId"
+     AND derived_work.id = (derived_receipt."resultBinding"->>'workOrderId')::integer
+    JOIN authority_grant AS derived_implementation_grant
+      ON derived_implementation_grant."userId" = derived_receipt."userId"
+     AND derived_implementation_grant.id = (derived_receipt."resultBinding"->>'implementationGrantId')::integer
+     AND derived_implementation_grant.ref = derived_receipt."resultBinding"->>'implementationGrantRef'
+    JOIN authority_grant AS derived_queue_grant
+      ON derived_queue_grant."userId" = derived_receipt."userId"
+     AND derived_queue_grant.id = (derived_receipt."resultBinding"->>'grantId')::integer
+     AND derived_queue_grant.ref = derived_receipt."resultBinding"->>'grantRef'
+    JOIN governance_event AS derived_source
+      ON derived_source."userId" = derived_receipt."userId"
+     AND derived_source.id = (derived_receipt."requestBinding"->>'sourceFindingEventId')::integer
+     AND derived_source."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
+     AND derived_source.actor = 'hermes'
+    WHERE derived_receipt."userId" = q."userId"
+      AND derived_receipt."outcomeKey" = q."outcomeKey"
+      AND derived_receipt.operation = 'runtime_finding.derive'
+      AND derived_receipt."requestBinding"->>'operation' = 'runtime_finding.derive'
+      AND derived_receipt."resultBinding"->>'outcomeKey' = q."outcomeKey"
+      AND derived_receipt."resultBinding"->>'goalId' = q."goalId"::text
+      AND derived_receipt."resultBinding"->>'goalRef' = q."goalRef"
+      AND derived_receipt."resultBinding"->>'workOrderId' = q."activeWorkOrderId"::text
+      AND derived_receipt."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
+      AND derived_receipt."resultBinding"->>'approvalDecisionId' = q."approvalDecisionId"::text
+      AND derived_receipt."resultBinding"->>'grantRef' = q."authorityGrantRef"
+      AND derived_receipt."resultBinding"->>'queueGrantId' = derived_queue_grant.id::text
+      AND derived_receipt."resultBinding"->>'queueGrantRef' = derived_queue_grant.ref
+      AND derived_source.metadata->>'payloadDigest'
+        = derived_receipt."requestBinding"->>'sourcePayloadDigest'
+      AND derived_source.metadata->>'sourceCheckpointId'
+        = derived_receipt."requestBinding"->>'sourceCheckpointId'
+      AND derived_source.metadata->>'sourceCheckpointDigest'
+        = derived_receipt."requestBinding"->>'sourceCheckpointDigest'
+      AND derived_queue_grant.ref = q."authorityGrantRef"
+      AND derived_queue_grant.status = 'active'
+      AND derived_queue_grant."revokedAt" IS NULL
+      AND derived_queue_grant."expiresAt" IS NOT NULL
+      AND derived_queue_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+      AND derived_queue_grant."authorityLevel" = 'A2_WRITE_OWN'
+      AND derived_queue_grant."grantedTo" = 'operator'
+      AND derived_queue_grant.scope = q."outcomeKey"
+      AND derived_queue_grant."workOrderId" = q."activeWorkOrderId"
+      AND derived_queue_grant."allowedActions" = ARRAY['outcome:execute']::text[]
+      AND derived_work.id = q."activeWorkOrderId"
+      AND derived_work.ref = derived_receipt."resultBinding"->>'workOrderRef'
+      AND derived_work.goal = q."goalRef"
+      AND derived_work."authorityGrantId" = derived_implementation_grant.id
+      AND derived_implementation_grant.status = 'active'
+      AND derived_implementation_grant."revokedAt" IS NULL
+      AND derived_implementation_grant."expiresAt" IS NOT NULL
+      AND derived_implementation_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+      AND derived_implementation_grant."grantedTo" = 'operator'
+      AND derived_implementation_grant.scope = derived_work.ref
+      AND derived_implementation_grant."workOrderId" = derived_work.id
+      AND derived_implementation_grant."allowedActions" = ARRAY['implement']::text[]
+      AND (SELECT count(*) FROM outcome_queue_mutation_receipt duplicate
+           WHERE duplicate."userId" = q."userId"
+             AND duplicate."outcomeKey" = q."outcomeKey"
+             AND duplicate.operation = 'runtime_finding.derive') = 1
+      AND (SELECT count(*) FROM governance_event settlement
+           WHERE settlement."userId" = q."userId"
+             AND settlement."eventType" = 'RUNTIME_FINDING_DERIVED'
+             AND settlement.actor = 'williamos-runtime-operator'
+             AND settlement.metadata->>'sourceFindingEventId'
+               = derived_receipt."requestBinding"->>'sourceFindingEventId') = 1
+  )
+`
+
+const EXACT_EXECUTION_ORIGIN_PREDICATE = `(
+  ((${WORKBENCH_PROJECT_EXECUTION_PREDICATE}) AND (${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}))
+  OR (${EXACT_RUNTIME_FINDING_DERIVATION_PREDICATE})
+)`
+
 function exactWorkContractReceiptPredicate(alias) {
   return `
-    ${alias}."userId" = q."userId"
-    AND ${alias}."outcomeKey" = q."outcomeKey"
-    AND ${alias}.operation = 'workbench_execution.authorize'
-    AND ${alias}."requestBinding"->>'confirmation' = 'START_WORK'
-    AND ${alias}."requestBinding"->>'outcomeKey' = q."outcomeKey"
-    AND ${alias}."resultBinding"->>'grantRef' = q."authorityGrantRef"
-    AND ${alias}."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
-    AND ${alias}."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
-    AND ${alias}."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}'
+    ${alias}."userId" = q."userId" AND ${alias}."outcomeKey" = q."outcomeKey" AND (
+      (${alias}.operation = 'workbench_execution.authorize'
+        AND ${alias}."requestBinding"->>'confirmation' = 'START_WORK'
+        AND ${alias}."requestBinding"->>'outcomeKey' = q."outcomeKey"
+        AND ${alias}."resultBinding"->>'grantRef' = q."authorityGrantRef"
+        AND ${alias}."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
+        AND ((${alias}."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
+          AND ${alias}."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}')
+          OR (${alias}."resultBinding"->'workContract'->>'id' = '${ISSUE_911_WORK_CONTRACT_ID_SQL}'
+            AND ${alias}."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_WORK_CONTRACT_DIGEST_SQL}')))
+      OR (${alias}.operation = 'runtime_finding.derive'
+        AND ${alias}."requestBinding"->>'operation' = 'runtime_finding.derive'
+        AND ${alias}."resultBinding"->>'outcomeKey' = q."outcomeKey"
+        AND ${alias}."resultBinding"->>'workOrderId' = q."activeWorkOrderId"::text
+        AND ${alias}."resultBinding"->>'grantRef' = q."authorityGrantRef"
+        AND ${alias}."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
+        AND ${alias}."resultBinding"->'workContract'->>'id' ~ '^[A-Za-z0-9._-]{1,120}$'
+        AND ${alias}."resultBinding"->'workContract'->>'digest' ~ '^[a-f0-9]{64}$')
+    )
   `
 }
 
@@ -425,14 +631,22 @@ const ELIGIBILITY_PREDICATE = `
   q."userId" = $2
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${ACQUISITION_AUTHORITY_PREDICATE}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE}
   AND q."riskClass" IN ('R0', 'R1')
   AND (
     q."lifecycleState" = 'approved'
     OR (
       q."lifecycleState" = 'active'
       AND q."leaseExpiresAt" <= $1::timestamptz
+    )
+  )
+  AND (
+    q."lifecycleState" = 'active'
+    OR NOT EXISTS (
+      SELECT 1
+      FROM "outcome_queue_item" AS occupied_slot
+      WHERE occupied_slot."userId" = q."userId"
+        AND occupied_slot."lifecycleState" = 'active'
     )
   )
   AND NOT EXISTS (
@@ -1500,12 +1714,56 @@ RETURNING "id"
   revalidateAcquisition: `
 SELECT
   (${LIVE_APPROVAL_PREDICATE}) AS "approvalLive",
-  ((${LIVE_AUTHORITY_PREDICATE}) AND (${WORKBENCH_PROJECT_EXECUTION_PREDICATE})
-    AND (${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}))
+  ((${LIVE_AUTHORITY_PREDICATE}) AND (${EXACT_EXECUTION_ORIGIN_PREDICATE}))
     AS "authorityLive"
 FROM "outcome_queue_item" AS q
 WHERE q."userId" = $2
   AND q."outcomeKey" = $3
+`,
+  blockExpiredIneligibleActiveSlot: `
+WITH stale_slot AS MATERIALIZED (
+  SELECT q."id",
+         q."acquisitionKey" AS "priorAcquisitionKey",
+         q."leaseHolder" AS "priorLeaseHolder",
+         q."leaseToken" AS "priorLeaseToken",
+         q."leaseExpiresAt" AS "priorLeaseExpiresAt",
+         q."fencingToken" AS "priorFencingToken",
+         q."version" AS "priorVersion"
+  FROM "outcome_queue_item" AS q
+  WHERE q."userId" = $2
+    AND q."lifecycleState" = 'active'
+    AND q."leaseExpiresAt" <= $1::timestamptz
+    AND q."outcomeKey" NOT IN (${PROTECTED_V1_2_OUTCOME_SQL})
+    AND (
+      NOT (${LIVE_APPROVAL_PREDICATE})
+      OR NOT (
+        (${LIVE_AUTHORITY_PREDICATE})
+        AND (${EXACT_EXECUTION_ORIGIN_PREDICATE})
+      )
+    )
+  FOR UPDATE OF q
+)
+UPDATE "outcome_queue_item" AS q
+SET "lifecycleState" = 'blocked',
+    "lifecycleReason" = 'STALE_LEASE_AUTHORIZATION_INELIGIBLE',
+    "executionBinding" = NULL,
+    "acquisitionKey" = NULL,
+    "leaseHolder" = NULL,
+    "leaseToken" = NULL,
+    "leaseExpiresAt" = NULL,
+    "fencingToken" = q."fencingToken" + 1,
+    "version" = q."version" + 1,
+    "updatedAt" = $1::timestamptz
+FROM stale_slot
+WHERE q."id" = stale_slot."id"
+  AND q."userId" = $2
+RETURNING ${QUEUE_COLUMNS},
+          stale_slot."priorAcquisitionKey",
+          stale_slot."priorLeaseHolder",
+          stale_slot."priorLeaseToken",
+          stale_slot."priorLeaseExpiresAt",
+          stale_slot."priorFencingToken",
+          stale_slot."priorVersion"
 `,
   reclaimAcquisition: `
 UPDATE "outcome_queue_item" AS q
@@ -1527,8 +1785,7 @@ WHERE q."userId" = $2
   AND ${LIVE_APPROVAL_PREDICATE}
   AND q."riskClass" IN ('R0', 'R1')
   AND ${ACQUISITION_AUTHORITY_PREDICATE}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE}
   AND NOT EXISTS (
     SELECT 1
     FROM unnest(q."dependencyKeys") AS dependency("outcomeKey")
@@ -1665,8 +1922,7 @@ WHERE q."userId" = $1
   AND q."leaseExpiresAt" > $7::timestamptz
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$7::timestamptz")}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$7::timestamptz")}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$7::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   deferLease: `
@@ -1684,8 +1940,7 @@ WHERE q."userId" = $1
   AND q."leaseExpiresAt" > $9::timestamptz
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   bindWorkOrder: `
@@ -1709,12 +1964,13 @@ WHERE q."userId" = $1
       `q."activeWorkOrderId" = live_grant."workOrderId"`,
       `$7 = live_grant."workOrderId"`,
     )}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$8::timestamptz")}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$8::timestamptz")}
   AND ${EXACT_PROJECTED_WORK_CONTRACT_PREDICATE.replaceAll("$EXPECTED_LEASE_HOLDER", "$9")}
   AND projected_work.id = $7
   AND projected_work."userId" = q."userId"
-  AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+  AND projected_work.ref = CASE WHEN work_contract_receipt.operation = 'runtime_finding.derive'
+    THEN work_contract_receipt."resultBinding"->>'workOrderRef'
+    ELSE 'WO-HERMES-OUTCOME-' || q."goalId"::text END
   AND projected_work.goal = q."goalRef"
   AND projected_work.status = 'active'
   AND (q."activeWorkOrderId" IS NULL OR q."activeWorkOrderId" = $7)
@@ -1852,13 +2108,11 @@ SET "lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED',
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
   AND q."lifecycleState" = 'active'
-  AND q."lifecycleReason" IN (
-    'REVIEW_REMEDIATION_RECOVERED',
-    'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
-  )
-  AND q."fencingToken" > $6::integer
-  AND q."version" - $3::integer
-    = q."fencingToken" - $6::integer + ${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL}
+  AND q."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERED'
+  AND $3::integer IS NOT NULL
+  AND $6::integer IS NOT NULL
+  AND q."fencingToken" = $17::integer + 1
+  AND q."version" = $16::integer + 1
   AND q."executionBinding" = $4
   AND q."acquisitionKey" = $5
   AND q."leaseExpiresAt" <= $14::timestamptz
@@ -1884,8 +2138,39 @@ WHERE q."userId" = $1
 RETURNING ${QUEUE_COLUMNS},
   (${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL} > 0) AS "authorityRenewalApplied",
   ${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL} AS "authorityRenewalCount",
-  (q."fencingToken" - $6::integer - 1) AS "reviewRecoveryReclaimCount",
+  1 AS "reviewRecoveryReclaimCount",
   TRUE AS "reviewRecoveryStaleReclaimApplied"
+`,
+  insertReviewRecoveryReclaimEvidence: `
+INSERT INTO governance_event
+  ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+SELECT q."userId", 'HERMES_OUTCOME_REVIEW_RECOVERY_RECLAIMED', 'goal', q."goalId"::text,
+  'hermes-codex-bridge', 'expired reviewed recovery lease reclaimed', $3::jsonb
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
+  AND NOT EXISTS (
+    SELECT 1 FROM governance_event AS duplicate
+    WHERE duplicate."userId" = q."userId"
+      AND duplicate."entityType" = 'goal'
+      AND duplicate."entityId"::text = q."goalId"::text
+      AND duplicate."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_RECLAIMED'
+      AND duplicate.metadata->>'idempotencyKey' = $3::jsonb->>'idempotencyKey'
+  )
+RETURNING id
+`,
+  readReviewRecoveryReclaimEvidence: `
+SELECT id, actor, metadata
+FROM governance_event
+WHERE "userId" = $1
+  AND "entityType" = 'goal'
+  AND "entityId" = $2
+  AND "eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_RECLAIMED'
+  AND metadata->>'idempotencyKey' = $3
+ORDER BY id
+LIMIT 2
 `,
   readReviewRecoveryCandidate: `
 SELECT ${QUEUE_COLUMNS}
@@ -1893,36 +2178,92 @@ FROM "outcome_queue_item" AS q
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
   AND q."lifecycleState" = 'active'
-  AND q."lifecycleReason" IN (
-    'REVIEW_REMEDIATION_RECOVERED',
-    'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
-  )
+  AND q."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERED'
+  AND $3::integer IS NOT NULL
+  AND $6::integer IS NOT NULL
   AND q."executionBinding" = $4
   AND q."acquisitionKey" = $5
-  AND q."fencingToken" > $6::integer
+  AND q."fencingToken" = $17::integer + 1
+  AND q."version" = $16::integer + 1
   AND $11::text IS NOT NULL
   AND $12::text IS NOT NULL
   AND $13::timestamptz IS NOT NULL
   AND $14::timestamptz IS NOT NULL
-  AND q."version" - $3::integer
-    = q."fencingToken" - $6::integer + ${VALIDATION_RECOVERY_RENEWAL_COUNT_SQL}
   AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
   AND ${LIVE_APPROVAL_PREDICATE}
   AND q."riskClass" IN ('R0', 'R1')
 FOR UPDATE OF q
 `,
   verifyPersistedReviewRecovery: `
-SELECT ${QUEUE_COLUMNS}
+SELECT ${QUEUE_COLUMNS},
+  (SELECT (recovery_authorization.metadata->>'runtimeAttempt')::integer
+   FROM governance_event AS recovery_authorization
+   WHERE recovery_authorization."userId" = q."userId"
+     AND recovery_authorization."entityType" = 'goal'
+     AND recovery_authorization."entityId"::text = q."goalId"::text
+     AND recovery_authorization."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED'
+     AND recovery_authorization.actor = 'hermes-codex-bridge'
+     AND recovery_authorization.metadata->>'recoveryKind' = 'review-remediation'
+     AND recovery_authorization.metadata->>'executionBinding' = q."executionBinding"
+     AND recovery_authorization.metadata->>'acquisitionKey' = q."acquisitionKey"
+     AND recovery_authorization.metadata->>'fencingToken' = $17::text
+     AND recovery_authorization.metadata->>'proofDigest' = $10
+     AND recovery_authorization.metadata->>'prNumber' = $7::text
+     AND recovery_authorization.metadata->>'reviewedHeadSha' = $8
+     AND recovery_authorization.metadata->>'mergeSha' = $9
+  ) AS "reviewRecoverySourceRuntimeAttempt"
 FROM "outcome_queue_item" AS q
 WHERE q."userId" = $1
   AND q."outcomeKey" = $2
   AND q."lifecycleState" = 'active'
-  AND q."lifecycleReason" IN ($16, 'STALE_LEASE_RECOVERED')
+  AND q."lifecycleReason" = $18
   AND q."version" = $3
   AND q."executionBinding" = $4
   AND q."acquisitionKey" = $5
   AND q."fencingToken" = $6
+  AND $11::text IS NOT NULL
   AND q."leaseToken" = $12
+  AND $13::timestamptz IS NOT NULL
+  AND $16::integer IS NOT NULL
+  AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$14::timestamptz")}
+  AND q."riskClass" IN ('R0', 'R1')
+FOR UPDATE OF q
+`,
+  readForwardReviewRecoveryReclaim: `
+SELECT ${QUEUE_COLUMNS},
+  (SELECT (recovery_authorization.metadata->>'runtimeAttempt')::integer
+   FROM governance_event AS recovery_authorization
+   WHERE recovery_authorization."userId" = q."userId"
+     AND recovery_authorization."entityType" = 'goal'
+     AND recovery_authorization."entityId"::text = q."goalId"::text
+     AND recovery_authorization."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED'
+     AND recovery_authorization.actor = 'hermes-codex-bridge'
+     AND recovery_authorization.metadata->>'recoveryKind' = 'review-remediation'
+     AND recovery_authorization.metadata->>'executionBinding' = q."executionBinding"
+     AND recovery_authorization.metadata->>'acquisitionKey' = q."acquisitionKey"
+     AND recovery_authorization.metadata->>'fencingToken' = $17::text
+     AND recovery_authorization.metadata->>'proofDigest' = $10
+     AND recovery_authorization.metadata->>'prNumber' = $7::text
+     AND recovery_authorization.metadata->>'reviewedHeadSha' = $8
+     AND recovery_authorization.metadata->>'mergeSha' = $9
+  ) AS "reviewRecoverySourceRuntimeAttempt"
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
+  AND $3::integer = $16::integer + 1
+  AND q."version" = $16::integer + 2
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND $6::integer = $17::integer + 1
+  AND q."fencingToken" = $17::integer + 2
+  AND q."leaseHolder" = $11
+  AND q."leaseToken" = $12
+  AND $13::timestamptz IS NOT NULL
+  AND q."leaseExpiresAt" > $14::timestamptz
   AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$14::timestamptz")}
@@ -2008,11 +2349,12 @@ WHERE q."userId" = $1
   AND ${ACQUISITION_AUTHORITY_PREDICATE
     .replaceAll("$8", "$7")
     .replaceAll("$1::timestamptz", "$9::timestamptz")}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$9::timestamptz")}
   AND ${EXACT_PROJECTED_WORK_CONTRACT_PREDICATE.replaceAll("$EXPECTED_LEASE_HOLDER", "$10")}
   AND projected_work."userId" = q."userId"
-  AND projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+  AND projected_work.ref = CASE WHEN work_contract_receipt.operation = 'runtime_finding.derive'
+    THEN work_contract_receipt."resultBinding"->>'workOrderRef'
+    ELSE 'WO-HERMES-OUTCOME-' || q."goalId"::text END
   AND projected_work.goal = q."goalRef"
   AND projected_work.status = $8
 `,
@@ -2097,6 +2439,7 @@ WHERE q."userId" = $1
   AND q."fencingToken" > $6::integer
   AND q."leaseHolder" = $11
   AND q."leaseToken" = $12
+  AND $13::timestamptz IS NOT NULL
   AND q."leaseExpiresAt" > $14::timestamptz
   AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
   AND ${LIVE_APPROVAL_PREDICATE}
@@ -2193,8 +2536,7 @@ WHERE q."userId" = $1
   AND q."acquisitionKey" = $7
   AND ${LIVE_APPROVAL_PREDICATE}
   AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$12::timestamptz")}
-  AND ${WORKBENCH_PROJECT_EXECUTION_PREDICATE}
-  AND ${EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE.replaceAll("$1::timestamptz", "$12::timestamptz")}
+  AND ${EXACT_EXECUTION_ORIGIN_PREDICATE.replaceAll("$1::timestamptz", "$12::timestamptz")}
 RETURNING ${QUEUE_COLUMNS}
 `,
   legacyHistory: `
@@ -3699,6 +4041,7 @@ async function appendAcquisitionAttempt(
     )) {
     fail("OUTCOME_QUEUE_CHECKPOINT_BINDING_WALL")
   }
+  const checkpointDigest = digestOutcomeQueueCheckpointProof(checkpointProof)
   const inserted = await connection.query(OUTCOME_QUEUE_SQL.insertAcquisitionAttempt, [
     context.user,
     context.campaignWindowId,
@@ -3706,7 +4049,7 @@ async function appendAcquisitionAttempt(
     context.leaseHolder,
     context.acquisitionKeyDigest,
     context.leaseIdentityDigest,
-    digestOutcomeQueueCheckpointProof(checkpointProof),
+    checkpointDigest,
     checkpointProof.outcomeId,
     checkpointProof.sequence,
     checkpointProof.state,
@@ -3730,6 +4073,62 @@ async function appendAcquisitionAttempt(
   if (inserted?.rows?.length !== 1) {
     fail("OUTCOME_QUEUE_ACQUISITION_ATTEMPT_WRITE_WALL")
   }
+  return { checkpointDigest, checkpointState: checkpointProof.state }
+}
+
+const REVIEW_RECOVERY_BASE_HOP_KEYS = Object.freeze([
+  "disposition", "expectedVersion", "fencingToken", "leaseExpiresAt", "lifecycleReason",
+  "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken", "checkpointDigest",
+])
+
+function exactReviewRecoveryContinuationEnvelope(value) {
+  if (value === undefined || value === null) return null
+  const keys = ["sourceExpectedVersion", "sourceFencingToken", "sourceRuntimeAttempt",
+    "reclaimEventId", "reclaimPayloadDigest", "baseHop", "mode", "continuation"]
+  const hop = value?.baseHop
+  const continued = value?.continuation
+  const hopExpiry = typeof hop?.leaseExpiresAt === "string" ? Date.parse(hop.leaseExpiresAt) : Number.NaN
+  const continuationKeys = [...REVIEW_RECOVERY_BASE_HOP_KEYS, "priorLeaseExpiresAt"]
+  const continuedExpiry = typeof continued?.leaseExpiresAt === "string"
+    ? Date.parse(continued.leaseExpiresAt) : Number.NaN
+  const exactContinued = continued && typeof continued === "object" && !Array.isArray(continued)
+    && Object.keys(continued).length === continuationKeys.length
+    && continuationKeys.every((key) => Object.hasOwn(continued, key))
+    && continued.disposition === "RECLAIMED"
+    && continued.lifecycleReason === "STALE_LEASE_RECOVERED"
+    && continued.priorExpectedVersion === hop?.expectedVersion
+    && continued.priorFencingToken === hop?.fencingToken
+    && continued.priorLeaseExpiresAt === hop?.leaseExpiresAt
+    && continued.expectedVersion === continued.priorExpectedVersion + 1
+    && continued.fencingToken === continued.priorFencingToken + 1
+    && continued.receiptLatestFencingToken === continued.fencingToken
+    && /^[0-9a-f]{64}$/.test(String(continued.checkpointDigest ?? ""))
+    && Number.isFinite(continuedExpiry)
+    && new Date(continuedExpiry).toISOString() === continued.leaseExpiresAt
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).length !== keys.length || !keys.every((key) => Object.hasOwn(value, key))
+    || !hop || typeof hop !== "object" || Array.isArray(hop)
+    || Object.keys(hop).length !== REVIEW_RECOVERY_BASE_HOP_KEYS.length
+    || !REVIEW_RECOVERY_BASE_HOP_KEYS.every((key) => Object.hasOwn(hop, key))
+    || !Number.isSafeInteger(value.sourceExpectedVersion) || value.sourceExpectedVersion < 0
+    || !Number.isSafeInteger(value.sourceFencingToken) || value.sourceFencingToken <= 0
+    || !Number.isSafeInteger(value.sourceRuntimeAttempt) || value.sourceRuntimeAttempt <= 0
+    || !Number.isSafeInteger(value.reclaimEventId) || value.reclaimEventId <= 0
+    || !/^[0-9a-f]{64}$/.test(String(value.reclaimPayloadDigest ?? ""))
+    || hop.disposition !== "RECLAIMED" || hop.lifecycleReason !== "STALE_LEASE_RECOVERED"
+    || hop.priorExpectedVersion !== value.sourceExpectedVersion + 2
+    || hop.priorFencingToken !== value.sourceFencingToken + 2
+    || hop.expectedVersion !== hop.priorExpectedVersion + 1
+    || hop.fencingToken !== hop.priorFencingToken + 1
+    || hop.receiptLatestFencingToken !== hop.fencingToken
+    || !/^[0-9a-f]{64}$/.test(String(hop.checkpointDigest ?? ""))
+    || !Number.isFinite(hopExpiry) || new Date(hopExpiry).toISOString() !== hop.leaseExpiresAt
+    || !((value.mode === "ADVANCE_OR_REPLAY" && continued === null)
+      || (value.mode === "REPLAY_ONLY" && exactContinued))) {
+    fail("OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL")
+  }
+  return { ...value, baseHop: { ...hop },
+    continuation: continued ? { ...continued } : null }
 }
 
 export async function acquireNextEligibleOutcome({
@@ -3745,6 +4144,7 @@ export async function acquireNextEligibleOutcome({
   campaignWindowId,
   processIdentity,
   checkpointProofProvider,
+  reviewRecoveryContinuationEnvelope: continuationInput = null,
   now = new Date(),
 } = {}) {
   const user = userScope(userId)
@@ -3771,6 +4171,7 @@ export async function acquireNextEligibleOutcome({
   )
   const at = timestamp(now)
   const expiresAt = timestamp(new Date(Date.parse(at) + leaseDurationMs))
+  const continuation = exactReviewRecoveryContinuationEnvelope(continuationInput)
   const attemptContext = {
     user,
     campaignWindowId: campaign,
@@ -3787,7 +4188,7 @@ export async function acquireNextEligibleOutcome({
     begun = true
     await connection.query(OUTCOME_QUEUE_SQL.acquireLock, [`${user}:outcome-queue`])
     const finish = async (result, disposition, proofOutcome = result?.outcome ?? null) => {
-      await appendAcquisitionAttempt(
+      const attemptEvidence = await appendAcquisitionAttempt(
         connection,
         attemptContext,
         result,
@@ -3795,9 +4196,38 @@ export async function acquireNextEligibleOutcome({
         at,
         proofOutcome,
       )
+      if (continuation?.mode === "REPLAY_ONLY"
+        && attemptEvidence?.checkpointDigest !== continuation.continuation.checkpointDigest) {
+        fail("OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL")
+      }
       await connection.query("COMMIT")
       begun = false
-      return result
+      const exposesReviewRecoveryAnchor = continuation
+        || ["REVIEW_REMEDIATION_RECOVERED", "POST_MERGE_CLEANUP_RETRY"]
+          .includes(attemptEvidence?.checkpointState)
+      if (!exposesReviewRecoveryAnchor || !attemptEvidence) return result
+      const continuationDisposition = continuation && ["RECLAIMED", "REPLAY_WINNER"].includes(disposition)
+        ? disposition
+        : null
+      const continuationEvidence = continuationDisposition ? {
+        disposition: continuationDisposition,
+        sourceExpectedVersion: continuation.sourceExpectedVersion,
+        sourceFencingToken: continuation.sourceFencingToken,
+        sourceRuntimeAttempt: continuation.sourceRuntimeAttempt,
+        reclaimEventId: continuation.reclaimEventId,
+        reclaimPayloadDigest: continuation.reclaimPayloadDigest,
+        expectedVersion: Number(result?.outcome?.version),
+        fencingToken: Number(result?.outcome?.fencingToken),
+        checkpointDigest: attemptEvidence.checkpointDigest,
+      } : null
+      return {
+        ...result,
+        reviewRecoveryContinuationCheckpointDigest: attemptEvidence.checkpointDigest,
+        ...(continuationDisposition ? {
+          reviewRecoveryContinuationDisposition: continuationDisposition,
+          reviewRecoveryContinuationEvidence: continuationEvidence,
+        } : {}),
+      }
     }
     const receiptResult = await connection.query(
       OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
@@ -3817,6 +4247,35 @@ export async function acquireNextEligibleOutcome({
     }
     if (prior?.rows?.length === 1) {
       let row = prior.rows[0]
+      let continuationMode = null
+      if (continuation) {
+        const base = continuation.baseHop
+        const leaseExpiry = Date.parse(String(row.leaseExpiresAt ?? ""))
+        const sameIdentity = row.acquisitionKey === key && row.executionBinding === binding
+          && row.leaseHolder === holder && row.leaseToken === token
+          && Number(row.activeWorkOrderId) === Number(workOrderId)
+        const baseRow = Number(row.version) === base.expectedVersion
+          && Number(row.fencingToken) === base.fencingToken
+        const continuedRow = Number(row.version) === base.expectedVersion + 1
+          && Number(row.fencingToken) === base.fencingToken + 1
+        const replayOnly = continuation.mode === "REPLAY_ONLY"
+        if (!receipt || receipt.outcomeKey !== row.outcomeKey
+          || Number(receipt.firstFencingToken) !== continuation.sourceFencingToken
+          || row.lifecycleState !== "active" || row.lifecycleReason !== "STALE_LEASE_RECOVERED"
+          || !sameIdentity || !Number.isFinite(leaseExpiry)
+          || (baseRow && (replayOnly
+            || Number(receipt.latestFencingToken) !== base.fencingToken
+            || leaseExpiry > Date.parse(at)))
+          || (continuedRow && (Number(receipt.latestFencingToken) !== base.fencingToken + 1
+            || leaseExpiry <= Date.parse(at)
+            || (replayOnly && (continuation.continuation.expectedVersion !== Number(row.version)
+              || continuation.continuation.fencingToken !== Number(row.fencingToken)
+              || continuation.continuation.leaseExpiresAt !== new Date(leaseExpiry).toISOString()))))
+          || (!baseRow && !continuedRow)) {
+          fail("OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL")
+        }
+        continuationMode = baseRow ? "ADVANCE" : "REPLAY"
+      }
       if (!receipt) {
         await ensureAcquisitionReceipt(connection, user, key, row, at)
         receiptEstablished = true
@@ -3895,8 +4354,13 @@ export async function acquireNextEligibleOutcome({
       }
       if (live) {
         if (sameLiveIdentity) {
+          if (continuation && continuationMode !== "REPLAY") {
+            fail("OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL")
+          }
           return await finish(
-            acquisitionResult(row, { replayed: true }),
+            {
+              ...acquisitionResult(row, { replayed: true }),
+            },
             "REPLAY_WINNER",
           )
         }
@@ -3929,8 +4393,16 @@ export async function acquireNextEligibleOutcome({
             at,
             receiptEstablished,
           )
+          if (continuation && (continuationMode !== "ADVANCE"
+            || Number(reclaimed.rows[0].version) !== continuation.baseHop.expectedVersion + 1
+            || Number(reclaimed.rows[0].fencingToken) !== continuation.baseHop.fencingToken + 1
+            || reclaimed.rows[0].lifecycleReason !== "STALE_LEASE_RECOVERED")) {
+            fail("OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL")
+          }
           return await finish(
-            acquisitionResult(reclaimed.rows[0], { reclaimed: true }),
+            {
+              ...acquisitionResult(reclaimed.rows[0], { reclaimed: true }),
+            },
             "RECLAIMED",
           )
         }
@@ -3942,6 +4414,91 @@ export async function acquireNextEligibleOutcome({
         reclaimed: false,
         reason: "ACQUISITION_KEY_INELIGIBLE",
       }, "REPLAY_INELIGIBLE")
+    }
+    const releasedSlot = await connection.query(
+      OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot,
+      [at, user],
+    )
+    if ((releasedSlot?.rows?.length ?? 0) > 1) {
+      fail("OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_CARDINALITY_WALL")
+    }
+    if (releasedSlot?.rows?.length === 1) {
+      const recovered = releasedSlot.rows[0]
+      const priorAcquisitionKey = nonempty(
+        recovered.priorAcquisitionKey,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+      )
+      const priorLeaseHolder = nonempty(
+        recovered.priorLeaseHolder,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+      )
+      const priorLeaseToken = nonempty(
+        recovered.priorLeaseToken,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+      )
+      const priorLeaseExpiresAt = timestamp(recovered.priorLeaseExpiresAt)
+      const priorFencingToken = integer(
+        recovered.priorFencingToken,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+        { minimum: 1 },
+      )
+      const priorVersion = integer(
+        recovered.priorVersion,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+        { minimum: 0 },
+      )
+      const recoveredFencingToken = integer(
+        recovered.fencingToken,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+        { minimum: priorFencingToken + 1 },
+      )
+      const recoveredVersion = integer(
+        recovered.version,
+        "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+        { minimum: priorVersion + 1 },
+      )
+      if (recoveredFencingToken !== priorFencingToken + 1
+        || recoveredVersion !== priorVersion + 1) {
+        fail("OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL")
+      }
+      const recoveryReason = canonicalJson({
+        code: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+        outcomeKey: recovered.outcomeKey,
+        priorFencingToken,
+        priorLeaseExpiresAt,
+        priorVersion,
+        recoveredFencingToken,
+        recoveredVersion,
+      })
+      const priorOutcome = {
+        ...recovered,
+        acquisitionKey: priorAcquisitionKey,
+        executionBinding: recovered.executionBinding,
+        fencingToken: priorFencingToken,
+        leaseExpiresAt: priorLeaseExpiresAt,
+        leaseHolder: priorLeaseHolder,
+        leaseToken: priorLeaseToken,
+        version: priorVersion,
+      }
+      await appendAcquisitionAttempt(
+        connection,
+        {
+          ...attemptContext,
+          leaseHolder: priorLeaseHolder,
+          acquisitionKeyDigest: requestHash({ acquisitionKey: priorAcquisitionKey }),
+          leaseIdentityDigest: requestHash({
+            leaseHolder: priorLeaseHolder,
+            leaseToken: priorLeaseToken,
+          }),
+        },
+        {
+          outcome: priorOutcome,
+          reason: recoveryReason,
+        },
+        "STALE_INELIGIBLE_BLOCKED",
+        at,
+        priorOutcome,
+      )
     }
     const selected = await connection.query(OUTCOME_QUEUE_SQL.acquire, [
       at,
@@ -4566,6 +5123,11 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
   leaseToken,
   leaseDurationMs,
   persistedLifecycleReason = null,
+  sourceExpectedVersion = null,
+  sourceFencingToken = null,
+  sourceRuntimeAttempt = null,
+  campaignWindowId = null,
+  processIdentity = null,
   now = new Date(),
 } = {}) {
   const user = userScope(userId)
@@ -4601,38 +5163,158 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
   integer(leaseDurationMs, "OUTCOME_QUEUE_LEASE_DURATION_INVALID", { minimum: 1 })
   const at = timestamp(now)
   const expiresAt = timestamp(new Date(Date.parse(at) + leaseDurationMs))
+  const sourceVersion = sourceExpectedVersion === null
+    ? version
+    : integer(sourceExpectedVersion, "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID")
+  const sourceFence = sourceFencingToken === null
+    ? fence
+    : integer(sourceFencingToken, "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID", { minimum: 1 })
   const values = [
     user, key, version, binding, acquisition, fence, pr, head, merge, digest,
-    holder, token, expiresAt, at, lifecycleReason,
+    holder, token, expiresAt, at, lifecycleReason, sourceVersion, sourceFence,
   ]
+  const legacyValues = values.slice(0, 15)
+  const reclaimIdempotencyKey = (goalId) => (
+    `hermes-outcome:${goalId}:review-recovery-reclaim:acquisition:${acquisition}:fence:${sourceFence + 2}`
+  )
+  const exactPersistedReclaimEvidence = (item, rows) => {
+    if (!Array.isArray(rows) || rows.length !== 1) return null
+    const event = rows[0]
+    const metadata = event?.metadata
+    if (!metadata || event.actor !== "hermes-codex-bridge") return null
+    const { payloadDigest, ...body } = metadata
+    const expected = canonicalValue({
+      acquisitionKey: acquisition,
+      campaignWindowId: metadata.campaignWindowId,
+      executionBinding: binding,
+      fencingToken: sourceFence + 2,
+      idempotencyKey: reclaimIdempotencyKey(item.goalId),
+      leaseExpiresAt: timestamp(item.leaseExpiresAt),
+      leaseHolder: item.leaseHolder,
+      leaseToken: item.leaseToken,
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      mergeSha: merge,
+      outcomeId: Number(item.goalId),
+      outcomeKey: key,
+      prNumber: pr,
+      priorFencingToken: sourceFence + 1,
+      priorLeaseExpiresAt: metadata.priorLeaseExpiresAt,
+      priorLeaseHolder: item.leaseHolder,
+      priorLeaseToken: item.leaseToken,
+      priorLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      priorVersion: sourceVersion + 1,
+      processIdentity: metadata.processIdentity,
+      proofDigest: digest,
+      reclaimedAt: metadata.reclaimedAt,
+      recoveryKind: "review-remediation",
+      reviewedHeadSha: head,
+      sourceExpectedVersion: sourceVersion,
+      sourceFencingToken: sourceFence,
+      sourceRuntimeAttempt: Number(sourceRuntimeAttempt),
+      userId: user,
+      version: sourceVersion + 2,
+      workOrderId: Number(item.activeWorkOrderId),
+      workOrderRef: `WO-HERMES-OUTCOME-${item.goalId}`,
+    })
+    const priorExpiry = Date.parse(String(metadata.priorLeaseExpiresAt ?? ""))
+    const reclaimedAt = Date.parse(String(metadata.reclaimedAt ?? ""))
+    const currentExpiry = Date.parse(String(item.leaseExpiresAt ?? ""))
+    if (!Number.isSafeInteger(Number(sourceRuntimeAttempt)) || Number(sourceRuntimeAttempt) <= 0
+      || typeof metadata.campaignWindowId !== "string" || metadata.campaignWindowId.trim() === ""
+      || typeof metadata.processIdentity !== "string" || metadata.processIdentity.trim() === ""
+      || !Number.isFinite(priorExpiry) || !Number.isFinite(reclaimedAt)
+      || !Number.isFinite(currentExpiry) || priorExpiry > reclaimedAt || reclaimedAt >= currentExpiry
+      || canonicalJson(body) !== canonicalJson(expected)
+      || payloadDigest !== requestHash(body)) return null
+    return { id: Number(event.id), payloadDigest }
+  }
   const connection = await openQuery(query, databaseUrl, true)
   let begun = false
   try {
     await connection.query("BEGIN")
     begun = true
     await connection.query(OUTCOME_QUEUE_SQL.acquireLock, [`${user}:outcome-queue`])
+    let activeCandidate = null
     if (persistedLifecycleReason !== null) {
       const verified = await connection.query(
         OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
         [...values, persistedLifecycleReason],
       )
+      if ((verified?.rows?.length ?? 0) === 0
+        && persistedLifecycleReason === "REVIEW_REMEDIATION_RECOVERED") {
+        const forward = await connection.query(
+          OUTCOME_QUEUE_SQL.readForwardReviewRecoveryReclaim,
+          values,
+        )
+        if (forward?.rows?.length !== 1) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+        const advanced = forward.rows[0]
+        if (advanced.userId !== user || advanced.outcomeKey !== key
+          || advanced.lifecycleState !== "active"
+          || advanced.lifecycleReason !== "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+          || Number(advanced.version) !== sourceVersion + 2
+          || Number(advanced.fencingToken) !== sourceFence + 2
+          || advanced.executionBinding !== binding || advanced.acquisitionKey !== acquisition
+          || advanced.leaseHolder !== holder || advanced.leaseToken !== token
+          || Number(advanced.reviewRecoverySourceRuntimeAttempt) !== Number(sourceRuntimeAttempt)) {
+          fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+        }
+        const evidence = await connection.query(OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence,
+          [user, String(advanced.goalId), reclaimIdempotencyKey(advanced.goalId)])
+        const exact = exactPersistedReclaimEvidence(advanced, evidence?.rows)
+        if (!exact) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+        await connection.query("COMMIT")
+        begun = false
+        return { ...advanced, reviewRecoveryReclaimCount: 1,
+          reviewRecoveryStaleReclaimApplied: true,
+          reviewRecoveryReclaimEventId: exact.id,
+          reviewRecoveryReclaimPayloadDigest: exact.payloadDigest }
+      }
       if (verified?.rows?.length !== 1) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
-      await connection.query("COMMIT")
-      begun = false
-      return verified.rows[0]
+      const persisted = verified.rows[0]
+      if (persisted.userId !== user || persisted.outcomeKey !== key
+        || persisted.lifecycleState !== "active"
+        || persisted.lifecycleReason !== persistedLifecycleReason
+        || Number(persisted.version) !== version || Number(persisted.fencingToken) !== fence
+        || persisted.executionBinding !== binding || persisted.acquisitionKey !== acquisition
+        || persisted.leaseHolder !== holder || persisted.leaseToken !== token) {
+        fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      }
+      if (persistedLifecycleReason === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED") {
+        const evidence = await connection.query(OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence,
+          [user, String(verified.rows[0].goalId), reclaimIdempotencyKey(verified.rows[0].goalId)])
+        const exact = exactPersistedReclaimEvidence(verified.rows[0], evidence?.rows)
+        if (!exact || Number(verified.rows[0].version) !== sourceVersion + 2
+          || Number(verified.rows[0].fencingToken) !== sourceFence + 2) {
+          fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+        }
+        await connection.query("COMMIT")
+        begun = false
+        return { ...verified.rows[0], reviewRecoveryReclaimCount: 1,
+          reviewRecoveryStaleReclaimApplied: true,
+          reviewRecoveryReclaimEventId: exact.id,
+          reviewRecoveryReclaimPayloadDigest: exact.payloadDigest }
+      }
+      if (persistedLifecycleReason !== "REVIEW_REMEDIATION_RECOVERED"
+        || Date.parse(String(verified.rows[0].leaseExpiresAt)) > Date.parse(at)) {
+        await connection.query("COMMIT")
+        begun = false
+        return verified.rows[0]
+      }
+      activeCandidate = verified.rows[0]
     }
-    let result = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery, values)
+    let result = persistedLifecycleReason === null
+      ? await connection.query(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery, legacyValues)
+      : { rows: [] }
     if (result?.rows?.length === 1) {
       await connection.query("COMMIT")
       begun = false
       return result.rows[0]
     }
-    const activeCandidate = await connection.query(
-      OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate,
-      values,
-    )
+    const activeCandidateResult = activeCandidate
+      ? { rows: [activeCandidate] }
+      : await connection.query(OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate, values)
     const renewed = new Map()
-    if ((result?.rows?.length ?? 0) === 0 && (activeCandidate?.rows?.length ?? 0) === 0) {
+    if ((result?.rows?.length ?? 0) === 0 && (activeCandidateResult?.rows?.length ?? 0) === 0) {
       const renewal = await renewExpiredV12CampaignAuthorities(
         connection,
         user,
@@ -4643,11 +5325,11 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
       )
       for (const entry of renewal) renewed.set(...entry)
       if (renewed.has(key)) {
-        const renewedValues = [...values]
+        const renewedValues = [...legacyValues]
         renewedValues[2] = renewed.get(key)
         result = await connection.query(OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery, renewedValues)
       }
-    } else if ((activeCandidate?.rows?.length ?? 0) > 1) {
+    } else if ((activeCandidateResult?.rows?.length ?? 0) > 1) {
       fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
     }
     if (result?.rows?.length === 1) {
@@ -4656,13 +5338,13 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
       return { ...result.rows[0], authorityRenewalApplied: true, authorityRenewalCount: 1 }
     }
     let reclaimed = await connection.query(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, values)
-    if ((reclaimed?.rows?.length ?? 0) === 0 && activeCandidate?.rows?.length === 1) {
+    if ((reclaimed?.rows?.length ?? 0) === 0 && activeCandidateResult?.rows?.length === 1) {
       const activeRenewal = await renewExpiredV12CampaignAuthorities(
         connection,
         user,
         at,
         key,
-        Number(activeCandidate.rows[0].version),
+        Number(activeCandidateResult.rows[0].version),
         null,
       )
       for (const entry of activeRenewal) renewed.set(...entry)
@@ -4671,11 +5353,74 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
       }
     }
     if (reclaimed?.rows?.length === 1) {
+      const prior = activeCandidateResult?.rows?.[0]
+      const runtimeAttempt = integer(
+        sourceRuntimeAttempt,
+        "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID",
+        { minimum: 1 },
+      )
+      const campaign = nonempty(campaignWindowId, "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID")
+      const process = nonempty(processIdentity, "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_INVALID")
+      if (!prior || prior.lifecycleReason !== "REVIEW_REMEDIATION_RECOVERED"
+        || Number(prior.version) !== sourceVersion + 1
+        || Number(prior.fencingToken) !== sourceFence + 1
+        || prior.leaseHolder !== holder || prior.leaseToken !== token
+        || Date.parse(String(prior.leaseExpiresAt)) > Date.parse(at)
+        || Number(reclaimed.rows[0].version) !== sourceVersion + 2
+        || Number(reclaimed.rows[0].fencingToken) !== sourceFence + 2) {
+        fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
+      }
+      const evidenceBody = canonicalValue({
+        acquisitionKey: acquisition,
+        campaignWindowId: campaign,
+        executionBinding: binding,
+        fencingToken: sourceFence + 2,
+        idempotencyKey: reclaimIdempotencyKey(prior.goalId),
+        leaseExpiresAt: expiresAt,
+        leaseHolder: holder,
+        leaseToken: token,
+        lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+        mergeSha: merge,
+        outcomeId: Number(prior.goalId),
+        outcomeKey: key,
+        prNumber: pr,
+        priorFencingToken: sourceFence + 1,
+        priorLeaseExpiresAt: timestamp(prior.leaseExpiresAt),
+        priorLeaseHolder: prior.leaseHolder,
+        priorLeaseToken: prior.leaseToken,
+        priorLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+        priorVersion: sourceVersion + 1,
+        processIdentity: process,
+        proofDigest: digest,
+        reclaimedAt: at,
+        recoveryKind: "review-remediation",
+        reviewedHeadSha: head,
+        sourceExpectedVersion: sourceVersion,
+        sourceFencingToken: sourceFence,
+        sourceRuntimeAttempt: runtimeAttempt,
+        userId: user,
+        version: sourceVersion + 2,
+        workOrderId: Number(prior.activeWorkOrderId),
+        workOrderRef: `WO-HERMES-OUTCOME-${prior.goalId}`,
+      })
+      const metadata = canonicalValue({ ...evidenceBody, payloadDigest: requestHash(evidenceBody) })
+      const inserted = await connection.query(OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence,
+        [user, key, canonicalJson(metadata)])
+      if (inserted?.rows?.length !== 1) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
+      const evidence = await connection.query(OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence,
+        [user, String(prior.goalId), metadata.idempotencyKey])
+      if (evidence?.rows?.length !== 1 || evidence.rows[0].actor !== "hermes-codex-bridge"
+        || canonicalJson(evidence.rows[0].metadata) !== canonicalJson(metadata)) {
+        fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
+      }
       await connection.query("COMMIT")
       begun = false
-      return reclaimed.rows[0]
+      return { ...reclaimed.rows[0], reviewRecoveryReclaimCount: 1,
+        reviewRecoveryStaleReclaimApplied: true,
+        reviewRecoveryReclaimEventId: Number(evidence.rows[0].id),
+        reviewRecoveryReclaimPayloadDigest: metadata.payloadDigest }
     }
-    const replay = await connection.query(OUTCOME_QUEUE_SQL.replayResumeAfterReviewRecovery, values)
+    const replay = await connection.query(OUTCOME_QUEUE_SQL.replayResumeAfterReviewRecovery, legacyValues)
     if (replay?.rows?.length !== 1) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
     const {
       authorityRenewalApplied: replayRenewalApplied,
@@ -4693,6 +5438,20 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
       || Number(replayedOutcome.version) !== version + 1 + renewalCount + reclaimCount) {
       fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
     }
+    let exactReclaim = null
+    if (replayedOutcome.lifecycleReason === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED") {
+      if (renewalCount !== 0 || reclaimCount !== 1 || staleReclaimApplied !== true
+        || Number(replayedOutcome.version) !== sourceVersion + 2
+        || Number(replayedOutcome.fencingToken) !== sourceFence + 2) {
+        fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
+      }
+      const evidence = await connection.query(OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence,
+        [user, String(replayedOutcome.goalId), reclaimIdempotencyKey(replayedOutcome.goalId)])
+      exactReclaim = exactPersistedReclaimEvidence(replayedOutcome, evidence?.rows)
+      if (!exactReclaim) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
+    } else if (reclaimCount !== 0 || staleReclaimApplied !== false) {
+      fail("OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL")
+    }
     await connection.query("COMMIT")
     begun = false
     return {
@@ -4703,6 +5462,10 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
       authorityRenewalCount: renewalCount,
       ...(staleReclaimApplied === true ? { reviewRecoveryStaleReclaimApplied: true } : {}),
       reviewRecoveryReclaimCount: reclaimCount,
+      ...(exactReclaim ? {
+        reviewRecoveryReclaimEventId: exactReclaim.id,
+        reviewRecoveryReclaimPayloadDigest: exactReclaim.payloadDigest,
+      } : {}),
     }
   } catch (error) {
     if (begun) {

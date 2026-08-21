@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import os from "node:os"
 import path from "node:path"
 
@@ -22,8 +22,39 @@ import {
   completeOutcome as completeGoalOutcome,
   deferProviderOutcome as deferGoalOutcome,
   terminalizeOutcome as terminalizeGoalOutcome,
+  verifyActiveReviewRecoveryContinuation,
 } from "./outcome-source.mjs"
+import { blocksAction } from "../runtime-findings/policy.mjs"
+import { resolveHermesWorkContract } from "./work-contract.mjs"
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
+
+function activeRecoveryProjectionContract(outcome) {
+  const contract = outcome?.verifiedQueueWorkContract?.contract
+  if (!contract || !Array.isArray(contract.reservations)
+    || !Array.isArray(contract.validationCommands)) {
+    wall("Active review recovery contract is absent", "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL")
+  }
+  return {
+    version: contract.version,
+    id: contract.id,
+    digest: contract.digest,
+    repository: contract.repository,
+    lane: contract.lane,
+    allowedFiles: [...contract.reservations],
+    validators: contract.validationCommands.map(({ command, args }) => `${command} ${args.join(" ")}`),
+    projection: contract.projection,
+    delivery: contract.delivery,
+  }
+}
 import { evaluateOutcomePolicy } from "./policy.mjs"
+import { createRuntimeFindingDbConsumer } from "../runtime-findings/db-consumer.mjs"
 
 const DECLARED_PRIMARY_EMAIL = "bsvalues@gmail.com"
 const QUEUE_LEASE_DURATION_MS = 50 * 60 * 1000
@@ -84,6 +115,20 @@ function residentCheckpointProvider({ runtimeRoot, readState = readHermesState }
 
 function queueBinding(outcome) {
   const binding = outcome?.queueBinding
+  const staleReacquisition = binding?.reviewRecoveryStaleReacquisition
+  const staleContinuation = binding?.reviewRecoveryStaleContinuation
+  const invalidStaleReacquisition = staleReacquisition !== undefined && (
+    !exactStaleReviewRecoveryReacquisition(staleReacquisition)
+    || binding.reviewRecoveryResumeState !== "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    || staleReacquisition.priorExpectedVersion !== binding.reviewRecoverySourceExpectedVersion + 2
+    || staleReacquisition.priorFencingToken !== binding.reviewRecoverySourceFencingToken + 2
+    || (staleContinuation === undefined
+      && (staleReacquisition.expectedVersion !== binding.expectedVersion
+        || staleReacquisition.fencingToken !== binding.fencingToken)))
+  const invalidStaleContinuation = staleContinuation !== undefined && (
+    !exactStaleReviewRecoveryContinuation(staleContinuation, staleReacquisition)
+    || staleContinuation.expectedVersion !== binding.expectedVersion
+    || staleContinuation.fencingToken !== binding.fencingToken)
   if (!binding || typeof binding !== "object"
     || typeof binding.userId !== "string" || binding.userId.trim() === ""
     || typeof binding.outcomeKey !== "string" || binding.outcomeKey.trim() === ""
@@ -105,11 +150,102 @@ function queueBinding(outcome) {
         "REVIEW_REMEDIATION_RECOVERED",
         "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
       ].includes(binding.reviewRecoveryResumeState))
+    || ([binding.reviewRecoverySourceExpectedVersion,
+      binding.reviewRecoverySourceFencingToken,
+      binding.reviewRecoverySourceRuntimeAttempt].some((value) => value !== undefined)
+      && (!Number.isSafeInteger(binding.reviewRecoverySourceExpectedVersion)
+        || binding.reviewRecoverySourceExpectedVersion < 0
+        || !Number.isSafeInteger(binding.reviewRecoverySourceFencingToken)
+        || binding.reviewRecoverySourceFencingToken <= 0
+        || !Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
+        || binding.reviewRecoverySourceRuntimeAttempt <= 0))
+    || (binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+      && (!Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
+        || binding.reviewRecoveryReclaimEventId <= 0
+        || typeof binding.reviewRecoveryReclaimPayloadDigest !== "string"
+        || !/^[0-9a-f]{64}$/.test(binding.reviewRecoveryReclaimPayloadDigest)))
+    || invalidStaleReacquisition
+    || invalidStaleContinuation
     || (binding.activeWorkOrderId !== undefined
       && (!Number.isSafeInteger(binding.activeWorkOrderId) || binding.activeWorkOrderId <= 0))) {
     wall("Hermes outcome is missing its durable queue binding", "HERMES_OUTCOME_QUEUE_BINDING_WALL")
   }
   return binding
+}
+
+const STALE_REVIEW_RECOVERY_KEYS = Object.freeze([
+  "disposition", "expectedVersion", "fencingToken", "leaseExpiresAt", "lifecycleReason",
+  "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken",
+])
+const STALE_REVIEW_RECOVERY_ANCHORED_KEYS = Object.freeze([
+  ...STALE_REVIEW_RECOVERY_KEYS, "checkpointDigest",
+])
+
+function exactStaleReviewRecoveryReacquisition(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || ![STALE_REVIEW_RECOVERY_KEYS, STALE_REVIEW_RECOVERY_ANCHORED_KEYS].some((keys) => (
+      Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+    ))) return false
+  const expiry = typeof value.leaseExpiresAt === "string" ? Date.parse(value.leaseExpiresAt) : Number.NaN
+  return value.lifecycleReason === "STALE_LEASE_RECOVERED"
+    && ["RECLAIMED", "REPLAY_WINNER"].includes(value.disposition)
+    && Number.isSafeInteger(value.priorExpectedVersion) && value.priorExpectedVersion >= 0
+    && Number.isSafeInteger(value.priorFencingToken) && value.priorFencingToken > 0
+    && value.expectedVersion === value.priorExpectedVersion + 1
+    && value.fencingToken === value.priorFencingToken + 1
+    && value.receiptLatestFencingToken === value.fencingToken
+    && (value.checkpointDigest === undefined
+      || /^[0-9a-f]{64}$/.test(String(value.checkpointDigest)))
+    && Number.isFinite(expiry) && new Date(expiry).toISOString() === value.leaseExpiresAt
+  }
+
+const STALE_REVIEW_RECOVERY_CONTINUATION_KEYS = Object.freeze([
+  "disposition", "expectedVersion", "fencingToken", "leaseExpiresAt", "lifecycleReason",
+  "priorExpectedVersion", "priorFencingToken", "priorLeaseExpiresAt", "receiptLatestFencingToken",
+])
+const STALE_REVIEW_RECOVERY_CONTINUATION_ANCHORED_KEYS = Object.freeze([
+  ...STALE_REVIEW_RECOVERY_CONTINUATION_KEYS, "checkpointDigest",
+])
+
+function exactStaleReviewRecoveryContinuation(value, baseHop) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || ![STALE_REVIEW_RECOVERY_CONTINUATION_KEYS,
+      STALE_REVIEW_RECOVERY_CONTINUATION_ANCHORED_KEYS].some((keys) => (
+      Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+    ))
+    || !exactStaleReviewRecoveryReacquisition(baseHop)) return false
+  const expiry = typeof value.leaseExpiresAt === "string" ? Date.parse(value.leaseExpiresAt) : Number.NaN
+  return value.lifecycleReason === "STALE_LEASE_RECOVERED"
+    && ["RECLAIMED", "REPLAY_WINNER"].includes(value.disposition)
+    && value.priorExpectedVersion === baseHop.expectedVersion
+    && value.priorFencingToken === baseHop.fencingToken
+    && value.priorLeaseExpiresAt === baseHop.leaseExpiresAt
+    && value.expectedVersion === value.priorExpectedVersion + 1
+    && value.fencingToken === value.priorFencingToken + 1
+    && value.receiptLatestFencingToken === value.fencingToken
+    && (value.checkpointDigest === undefined
+      || /^[0-9a-f]{64}$/.test(String(value.checkpointDigest)))
+    && Number.isFinite(expiry) && new Date(expiry).toISOString() === value.leaseExpiresAt
+}
+
+const REVIEW_RECOVERY_CONTINUATION_EVIDENCE_KEYS = Object.freeze([
+  "checkpointDigest", "disposition", "expectedVersion", "fencingToken", "reclaimEventId",
+  "reclaimPayloadDigest", "sourceExpectedVersion", "sourceFencingToken", "sourceRuntimeAttempt",
+])
+
+function exactReviewRecoveryContinuationEvidence(value, source, binding, disposition) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length === REVIEW_RECOVERY_CONTINUATION_EVIDENCE_KEYS.length
+    && REVIEW_RECOVERY_CONTINUATION_EVIDENCE_KEYS.every((key) => Object.hasOwn(value, key))
+    && value.disposition === disposition
+    && value.sourceExpectedVersion === source?.reviewRecoverySourceExpectedVersion
+    && value.sourceFencingToken === source?.reviewRecoverySourceFencingToken
+    && value.sourceRuntimeAttempt === source?.reviewRecoverySourceRuntimeAttempt
+    && value.reclaimEventId === source?.reviewRecoveryReclaimEventId
+    && value.reclaimPayloadDigest === source?.reviewRecoveryReclaimPayloadDigest
+    && value.expectedVersion === binding?.expectedVersion
+    && value.fencingToken === binding?.fencingToken
+    && /^[0-9a-f]{64}$/.test(String(value.checkpointDigest ?? ""))
 }
 
 function createLazyPool(databaseUrl, createPool) {
@@ -182,25 +318,419 @@ async function loadDeclaredPrimary(withPool) {
   })
 }
 
+const WORKBENCH_BLOCKED_ACTIONS = Object.freeze([
+  "production:mutate", "release:create", "secret:access", "spend:increase",
+])
+
+async function loadWorkbenchParentContract(pool, queueItem, goal) {
+  const result = await pool.query(
+    `SELECT receipt.operation AS "receiptOperation", receipt."requestHash" AS "requestHash",
+            receipt."requestBinding" AS "requestBinding", receipt."resultBinding" AS "resultBinding",
+            project.id AS "projectId", project."userId" AS "projectUserId",
+            project.lifecycle AS "projectLifecycle",
+            thread.id AS "threadId", thread."userId" AS "threadUserId",
+            thread."projectId" AS "threadProjectId",
+            (SELECT count(*)::integer FROM workbench_thread_source root
+              WHERE root."userId" = receipt."userId" AND root."sourceType" = 'outcome'
+                AND root."sourceId" = receipt."outcomeKey" AND root.role = 'root') AS "rootCount",
+            (SELECT min(root."threadId") FROM workbench_thread_source root
+              WHERE root."userId" = receipt."userId" AND root."sourceType" = 'outcome'
+                AND root."sourceId" = receipt."outcomeKey" AND root.role = 'root') AS "rootThreadId",
+            (SELECT count(*)::integer FROM project_resource repo
+              WHERE repo."userId" = project."userId" AND repo."projectId" = project.id
+                AND repo.type = 'repo' AND repo.relationship = 'primary-repo') AS "primaryRepoCount",
+            (SELECT min(repo."canonicalIdentity") FROM project_resource repo
+              WHERE repo."userId" = project."userId" AND repo."projectId" = project.id
+                AND repo.type = 'repo' AND repo.relationship = 'primary-repo') AS "primaryRepository",
+            approval.id AS "approvalId", approval.ref AS "approvalRef",
+            approval."userId" AS "approvalUserId", approval.status AS "approvalStatus",
+            approval.authority AS "approvalAuthority", approval.owner AS "approvalOwner",
+            approval.scope AS "approvalScope", approval.locked AS "approvalLocked",
+            approval.decision AS "approvalDecision", approval.evidence AS "approvalEvidence",
+            approval.tags AS "approvalTags",
+            queue_grant.id AS "queueGrantId", queue_grant.ref AS "queueGrantRef",
+            queue_grant."userId" AS "queueGrantUserId", queue_grant.status AS "queueGrantStatus",
+            queue_grant."revokedAt" AS "queueGrantRevokedAt",
+            EXTRACT(EPOCH FROM (queue_grant."expiresAt" AT TIME ZONE 'UTC'))
+              AS "queueGrantExpiresAtEpoch",
+            queue_grant."grantedBy" AS "queueGrantGrantedBy",
+            queue_grant."grantedTo" AS "queueGrantGrantedTo",
+            queue_grant."authorityLevel" AS "queueGrantAuthorityLevel",
+            queue_grant.scope AS "queueGrantScope", queue_grant."workOrderId" AS "queueGrantWorkOrderId",
+            queue_grant."allowedActions" AS "queueGrantAllowedActions",
+            queue_grant."blockedActions" AS "queueGrantBlockedActions",
+            implementation_grant.id AS "implementationGrantId",
+            implementation_grant.ref AS "implementationGrantRef",
+            implementation_grant."userId" AS "implementationGrantUserId",
+            implementation_grant.status AS "implementationGrantStatus",
+            implementation_grant."revokedAt" AS "implementationGrantRevokedAt",
+            EXTRACT(EPOCH FROM (implementation_grant."expiresAt" AT TIME ZONE 'UTC'))
+              AS "implementationGrantExpiresAtEpoch",
+            implementation_grant."grantedBy" AS "implementationGrantGrantedBy",
+            implementation_grant."grantedTo" AS "implementationGrantGrantedTo",
+            implementation_grant."authorityLevel" AS "implementationGrantAuthorityLevel",
+            implementation_grant.scope AS "implementationGrantScope",
+            implementation_grant."workOrderId" AS "implementationGrantWorkOrderId",
+            implementation_grant."allowedActions" AS "implementationGrantAllowedActions",
+            implementation_grant."blockedActions" AS "implementationGrantBlockedActions"
+       FROM outcome_queue_mutation_receipt receipt
+       JOIN project ON project."userId" = receipt."userId"
+         AND project.id::text = receipt."requestBinding"->>'projectId'
+       JOIN workbench_thread thread ON thread."userId" = receipt."userId"
+         AND thread.id = receipt."requestBinding"->>'threadId'
+       JOIN decision approval ON approval."userId" = receipt."userId"
+         AND approval.id::text = receipt."resultBinding"->>'decisionId'
+       JOIN authority_grant queue_grant ON queue_grant."userId" = receipt."userId"
+         AND queue_grant.id::text = receipt."resultBinding"->>'grantId'
+         AND queue_grant.ref = receipt."resultBinding"->>'grantRef'
+       JOIN authority_grant implementation_grant ON implementation_grant."userId" = receipt."userId"
+         AND implementation_grant.id::text = receipt."resultBinding"->>'implementationGrantId'
+         AND implementation_grant.ref = receipt."resultBinding"->>'implementationGrantRef'
+      WHERE receipt."userId" = $1 AND receipt."outcomeKey" = $2
+        AND receipt.operation = 'workbench_execution.authorize'
+      ORDER BY receipt.id LIMIT 2`,
+    [queueItem.userId, queueItem.outcomeKey],
+  )
+  if (result.rows.length !== 1) {
+    wall("Workbench parent authorization graph is not unique", "HERMES_WORKBENCH_PARENT_CONTRACT_WALL")
+  }
+  const row = result.rows[0]
+  const request = row.requestBinding
+  const binding = row.resultBinding
+  const contract = binding?.workContract
+  const registered = resolveHermesWorkContract({
+    command: goal.command, title: queueItem.title, objective: queueItem.objective,
+    lane: goal.lane, risk: goal.risk, authority: goal.authority,
+  })
+  const expectedWorkOrderRef = `WO-HERMES-OUTCOME-${Number(goal.id)}`
+  const expectedEvidence = registered && [
+    `project:${request?.projectId}`, `thread:${request?.threadId}`, "repo:bsvalues/terragroq",
+    `work-contract:${registered.id}`, `work-contract-digest:${registered.digest}`,
+    `work-contract-json:${JSON.stringify(registered)}`,
+    ...registered.reservations.map((reservation) => `reservation:${reservation}`),
+    ...registered.validationCommands.map((validator) => `validator:${validator.command}:${validator.args.join(" ")}`),
+  ]
+  const expectedRequestHash = request && createHash("sha256").update(canonicalJson({
+    contract: "workbench-execution-authorization.v1", ...request,
+  })).digest("hex")
+  const expiresAt = Date.parse(binding?.expiresAt ?? "")
+  const queueGrantExpiresAtMs = Number(row.queueGrantExpiresAtEpoch) * 1000
+  const implementationGrantExpiresAtMs = Number(row.implementationGrantExpiresAtEpoch) * 1000
+  const exactRequestKeys = "confirmation,idempotencyKey,outcomeKey,projectId,threadId"
+  const exactResultKeys = [
+    "authorizedAt", "decisionId", "decisionRef", "expiresAt", "grantId", "grantRef",
+    "implementationGrantId", "implementationGrantRef", "queueVersion", "workContract",
+  ].sort().join(",")
+  if (row.receiptOperation !== "workbench_execution.authorize"
+    || Object.keys(request ?? {}).sort().join(",") !== exactRequestKeys
+    || Object.keys(binding ?? {}).sort().join(",") !== exactResultKeys
+    || row.requestHash !== expectedRequestHash
+    || request?.confirmation !== "START_WORK" || request?.outcomeKey !== queueItem.outcomeKey
+    || request?.idempotencyKey == null || request.idempotencyKey.trim() === ""
+    || Number(request?.projectId) !== Number(row.projectId) || request?.threadId !== row.threadId
+    || row.projectUserId !== queueItem.userId || row.projectLifecycle !== "active"
+    || row.threadUserId !== queueItem.userId || Number(row.threadProjectId) !== Number(row.projectId)
+    || Number(row.rootCount) !== 1 || row.rootThreadId !== request?.threadId
+    || Number(row.primaryRepoCount) !== 1
+    || row.primaryRepository !== "bsvalues/terragroq"
+    || !registered || canonicalJson(contract) !== canonicalJson(registered)
+    || Number(binding?.decisionId) !== Number(queueItem.approvalDecisionId)
+    || Number(binding?.decisionId) !== Number(row.approvalId)
+    || binding?.decisionRef !== row.approvalRef || row.approvalUserId !== queueItem.userId
+    || row.approvalStatus !== "accepted" || row.approvalAuthority !== "binding"
+    || row.approvalOwner !== queueItem.userId || row.approvalScope !== queueItem.outcomeKey
+    || row.approvalLocked !== true || String(row.approvalDecision).trim().toUpperCase() !== "APPROVE"
+    || JSON.stringify(row.approvalEvidence) !== JSON.stringify(expectedEvidence)
+    || JSON.stringify(row.approvalTags) !== JSON.stringify(["workbench", "outcome", "explicit-start-work"])
+    || Number(binding?.grantId) !== Number(row.queueGrantId)
+    || binding?.grantRef !== queueItem.authorityGrantRef || binding?.grantRef !== row.queueGrantRef
+    || row.queueGrantUserId !== queueItem.userId || row.queueGrantStatus !== "active"
+    || row.queueGrantRevokedAt != null || row.queueGrantGrantedBy !== queueItem.userId
+    || row.queueGrantGrantedTo !== "operator" || row.queueGrantAuthorityLevel !== "A2_WRITE_OWN"
+    || row.queueGrantScope !== queueItem.outcomeKey || row.queueGrantWorkOrderId != null
+    || JSON.stringify(row.queueGrantAllowedActions) !== JSON.stringify(["outcome:execute"])
+    || JSON.stringify(row.queueGrantBlockedActions) !== JSON.stringify(WORKBENCH_BLOCKED_ACTIONS)
+    || blocksAction(row.queueGrantBlockedActions, "outcome:execute")
+    || Number(binding?.implementationGrantId) !== Number(row.implementationGrantId)
+    || binding?.implementationGrantRef !== row.implementationGrantRef
+    || row.implementationGrantUserId !== queueItem.userId || row.implementationGrantStatus !== "active"
+    || row.implementationGrantRevokedAt != null || row.implementationGrantGrantedBy !== queueItem.userId
+    || row.implementationGrantGrantedTo !== "operator"
+    || row.implementationGrantAuthorityLevel !== "A2_WRITE_OWN"
+    || row.implementationGrantScope !== expectedWorkOrderRef || row.implementationGrantWorkOrderId != null
+    || JSON.stringify(row.implementationGrantAllowedActions) !== JSON.stringify(["implement"])
+    || JSON.stringify(row.implementationGrantBlockedActions) !== JSON.stringify(WORKBENCH_BLOCKED_ACTIONS)
+    || blocksAction(row.implementationGrantBlockedActions, "implement")
+    || Number(binding?.queueVersion) !== 1 || !Number.isFinite(Date.parse(binding?.authorizedAt ?? ""))
+    || !Number.isFinite(expiresAt) || expiresAt <= Date.now()
+    || row.queueGrantExpiresAtEpoch == null || !Number.isFinite(queueGrantExpiresAtMs)
+    || row.implementationGrantExpiresAtEpoch == null
+    || !Number.isFinite(implementationGrantExpiresAtMs)
+    || queueGrantExpiresAtMs !== expiresAt
+    || implementationGrantExpiresAtMs !== expiresAt) {
+    wall("Workbench parent authorization graph conflicts", "HERMES_WORKBENCH_PARENT_CONTRACT_WALL")
+  }
+  return {
+    ...goal,
+    outcomeKey: queueItem.outcomeKey,
+    verifiedQueueWorkContract: Object.freeze({
+      contract: Object.freeze(contract),
+      provenance: Object.freeze({
+        operation: row.receiptOperation,
+        outcomeKey: queueItem.outcomeKey,
+        workOrderRef: expectedWorkOrderRef,
+      }),
+    }),
+  }
+}
+
 async function loadLinkedGoal(withPool, queueItem) {
   if (!Number.isSafeInteger(Number(queueItem?.goalId)) || Number(queueItem.goalId) <= 0) {
     wall("Acquired queue item is not linked to a governed goal", "HERMES_OUTCOME_QUEUE_GOAL_WALL")
   }
   return withPool(async (pool) => {
     const result = await pool.query(
-      `SELECT id, "userId" AS "userId", ref, command, lane, mode, risk,
+      `SELECT goal.id, goal."userId" AS "userId", goal.ref, goal.command, goal.lane, goal.mode, goal.risk,
               authority, verdict, "requiresApproval" AS "requiresApproval",
               "matchedRules" AS "matchedRules", status,
-              "createdAt" AS "createdAt", "updatedAt" AS "updatedAt"
+              goal."createdAt" AS "createdAt", goal."updatedAt" AS "updatedAt",
+              derived.operation AS "derivedReceiptOperation",
+              derived."requestHash" AS "derivedRequestHash",
+              derived."requestBinding" AS "derivedRequestBinding",
+              derived."resultBinding" AS "derivedResultBinding",
+              derived.*
        FROM goal
-       WHERE id = $1 AND "userId" = $2 AND ref = $3 AND status = 'classified'
-       LIMIT 1`,
-      [Number(queueItem.goalId), queueItem.userId, queueItem.goalRef],
+       LEFT JOIN LATERAL (
+         SELECT receipt.operation, receipt."requestHash", receipt."requestBinding", receipt."resultBinding",
+                child.id AS "derivedWorkOrderId", child.ref AS "derivedWorkOrderRef",
+                child."userId" AS "derivedWorkOrderUserId", child.goal AS "derivedWorkOrderGoal",
+                child."authorityGrantId" AS "derivedWorkOrderAuthorityGrantId",
+                child.status AS "derivedWorkOrderStatus",
+                approval.id AS "derivedApprovalDecisionId", approval.status AS "derivedApprovalStatus",
+                approval.authority AS "derivedApprovalAuthority", approval.scope AS "derivedApprovalScope",
+                approval.locked AS "derivedApprovalLocked", approval.decision AS "derivedApprovalDecision",
+                approval.evidence AS "derivedApprovalEvidence",
+                queue_grant.id AS "derivedQueueGrantId", queue_grant.ref AS "derivedQueueGrantRef",
+                queue_grant.status AS "derivedQueueGrantStatus",
+                queue_grant."revokedAt" AS "derivedQueueGrantRevokedAt",
+                queue_grant."expiresAt" AS "derivedQueueGrantExpiresAt",
+                queue_grant."grantedTo" AS "derivedQueueGrantGrantedTo",
+                queue_grant."authorityLevel" AS "derivedQueueGrantAuthorityLevel",
+                queue_grant.scope AS "derivedQueueGrantScope",
+                queue_grant."workOrderId" AS "derivedQueueGrantWorkOrderId",
+                queue_grant."allowedActions" AS "derivedQueueGrantAllowedActions",
+                queue_grant."blockedActions" AS "derivedQueueGrantBlockedActions",
+                implementation_grant.id AS "derivedImplementationGrantId",
+                implementation_grant.ref AS "derivedImplementationGrantRef",
+                implementation_grant.status AS "derivedImplementationGrantStatus",
+                implementation_grant."revokedAt" AS "derivedImplementationGrantRevokedAt",
+                implementation_grant."expiresAt" AS "derivedImplementationGrantExpiresAt",
+                implementation_grant."grantedTo" AS "derivedImplementationGrantGrantedTo",
+                implementation_grant."authorityLevel" AS "derivedImplementationGrantAuthorityLevel",
+                implementation_grant.scope AS "derivedImplementationGrantScope",
+                implementation_grant."workOrderId" AS "derivedImplementationGrantWorkOrderId",
+                implementation_grant."allowedActions" AS "derivedImplementationGrantAllowedActions",
+                implementation_grant."blockedActions" AS "derivedImplementationGrantBlockedActions",
+                source.id AS "derivedSourceFindingEventId", source."userId" AS "derivedSourceUserId",
+                source.metadata->>'payloadDigest' AS "derivedSourcePayloadDigest",
+                source.metadata->>'sourceCheckpointId' AS "derivedSourceCheckpointId",
+                source.metadata->>'sourceCheckpointDigest' AS "derivedSourceCheckpointDigest",
+                source.metadata->>'objectiveWorkOrderId' AS "derivedSourceParentWorkOrderRef",
+                source.metadata->>'workContractId' AS "derivedSourceParentContractId",
+                source.metadata->>'workContractDigest' AS "derivedSourceParentContractDigest",
+                source.metadata->>'authorizationDecisionId' AS "derivedSourceAuthorizationDecisionId",
+                source.metadata->>'implementationGrantId' AS "derivedSourceImplementationGrantId",
+                parent.id AS "derivedParentWorkOrderId", parent.ref AS "derivedParentWorkOrderRef",
+                parent."userId" AS "derivedParentWorkOrderUserId"
+           FROM outcome_queue_mutation_receipt receipt
+           JOIN work_order child ON child."userId" = receipt."userId"
+             AND child.id::text = receipt."resultBinding"->>'workOrderId'
+             AND child.ref = receipt."resultBinding"->>'workOrderRef'
+           JOIN decision approval ON approval."userId" = receipt."userId"
+             AND approval.id::text = receipt."resultBinding"->>'approvalDecisionId'
+           JOIN authority_grant queue_grant ON queue_grant."userId" = receipt."userId"
+             AND queue_grant.id::text = receipt."resultBinding"->>'queueGrantId'
+             AND queue_grant.ref = receipt."resultBinding"->>'queueGrantRef'
+           JOIN authority_grant implementation_grant ON implementation_grant."userId" = receipt."userId"
+             AND implementation_grant.id::text = receipt."resultBinding"->>'implementationGrantId'
+             AND implementation_grant.ref = receipt."resultBinding"->>'implementationGrantRef'
+           JOIN governance_event source ON source."userId" = receipt."userId"
+             AND source.id::text = receipt."requestBinding"->>'sourceFindingEventId'
+             AND source."eventType" = 'RUNTIME_OBJECTIVE_FINDING_RECORDED'
+           JOIN work_order parent ON parent."userId" = receipt."userId"
+             AND parent.id::text = receipt."requestBinding"->>'parentWorkOrderId'
+             AND parent.ref = receipt."requestBinding"->>'parentWorkOrderRef'
+          WHERE receipt."userId" = goal."userId" AND receipt."outcomeKey" = $4
+            AND receipt.operation = 'runtime_finding.derive'
+          ORDER BY receipt.id LIMIT 2
+       ) derived ON true
+       WHERE goal.id = $1 AND goal."userId" = $2 AND goal.ref = $3 AND goal.status = 'classified'
+       LIMIT 2`,
+      [Number(queueItem.goalId), queueItem.userId, queueItem.goalRef, queueItem.outcomeKey],
     )
+    if (result.rows.length > 1) {
+      wall("Derived queue contract receipt is not unique", "HERMES_RUNTIME_FINDING_CONTRACT_WALL")
+    }
     if (result.rows.length !== 1) {
       wall("Acquired queue item does not match an executable governed goal", "HERMES_OUTCOME_QUEUE_GOAL_WALL")
     }
-    return result.rows[0]
+    const goal = result.rows[0]
+    const derivedFields = Object.fromEntries(Object.entries(goal).filter(([key]) => key.startsWith("derived")))
+    const publicGoal = Object.fromEntries(Object.entries(goal).filter(([key]) =>
+      !key.startsWith("derived") && !["operation", "requestHash", "requestBinding", "resultBinding"].includes(key)))
+    const { derivedReceiptOperation, derivedRequestHash, derivedRequestBinding, derivedResultBinding } = derivedFields
+    if (derivedReceiptOperation == null) {
+      if (String(queueItem.outcomeKey).startsWith("runtime-finding:")) {
+        wall("Derived queue contract receipt is unavailable", "HERMES_RUNTIME_FINDING_CONTRACT_WALL")
+      }
+      if (publicGoal.lane === "operator-objective") {
+        return loadWorkbenchParentContract(pool, queueItem, publicGoal)
+      }
+      return publicGoal
+    }
+    const receipt = {
+      operation: derivedReceiptOperation,
+      requestBinding: derivedRequestBinding,
+      resultBinding: derivedResultBinding,
+    }
+    const contract = receipt.resultBinding?.workContract
+    const contractBody = contract && {
+      version: contract.version, id: contract.id, repository: contract.repository, lane: contract.lane,
+      reservations: contract.reservations, validationCommands: contract.validationCommands,
+      ...(Object.hasOwn(contract, "projection") ? { projection: contract.projection } : {}),
+      delivery: contract.delivery,
+    }
+    const contractDigest = contractBody
+      ? createHash("sha256").update(canonicalJson(contractBody)).digest("hex")
+      : null
+    const exactRequestKeys = [
+      "operation", "parentAuthorizationDecisionId", "parentContractDigest", "parentContractId",
+      "parentImplementationGrantId", "parentWorkOrderId", "parentWorkOrderRef",
+      "sourceCheckpointDigest", "sourceCheckpointId", "sourceFindingEventId", "sourcePayloadDigest",
+    ]
+    const exactResultKeys = [
+      "approvalDecisionId", "decisionId", "goalId", "goalRef", "grantId", "grantRef",
+      "implementationGrantId", "implementationGrantRef", "outcomeKey", "queueGrantId",
+      "queueGrantRef", "queueId", "workContract", "workOrderId", "workOrderRef",
+    ]
+    const validationsExact = Array.isArray(contract?.validationCommands)
+      && contract.validationCommands.length > 0
+      && contract.validationCommands.every((command) => {
+        const keys = ["args", "command", "timeoutMs", ...(Object.hasOwn(command ?? {}, "env") ? ["env"] : [])]
+        return command && Object.keys(command).sort().join(",") === keys.sort().join(",")
+          && typeof command.command === "string" && command.command !== ""
+          && Array.isArray(command.args) && command.args.every((argument) => typeof argument === "string")
+          && Number.isSafeInteger(command.timeoutMs) && command.timeoutMs > 0
+          && (command.env === undefined || (command.env && typeof command.env === "object"
+            && !Array.isArray(command.env)
+            && Object.values(command.env).every((value) => typeof value === "string")))
+      })
+    const deliveryExact = contract?.delivery
+      && Object.keys(contract.delivery).sort().join(",")
+        === "allowedActions,authorityLevel,commitAllowed,pushAllowed,tagAllowed"
+      && contract.delivery.authorityLevel === "A2_WRITE_OWN"
+      && JSON.stringify(contract.delivery.allowedActions) === JSON.stringify(["implement"])
+      && [contract.delivery.commitAllowed, contract.delivery.tagAllowed, contract.delivery.pushAllowed]
+        .every((value) => typeof value === "boolean")
+    const projectionExact = contract?.projection === undefined || (
+      Object.keys(contract.projection).sort().join(",") === "completionOwned,issueNumber"
+      && Number.isSafeInteger(contract.projection.issueNumber) && contract.projection.issueNumber > 0
+      && typeof contract.projection.completionOwned === "boolean"
+    )
+    if (receipt.operation !== "runtime_finding.derive"
+      || derivedRequestHash !== createHash("sha256").update(canonicalJson(receipt.requestBinding)).digest("hex")
+      || Object.keys(receipt.requestBinding ?? {}).sort().join(",") !== exactRequestKeys.sort().join(",")
+      || Object.keys(receipt.resultBinding ?? {}).sort().join(",") !== exactResultKeys.sort().join(",")
+      || receipt.requestBinding?.operation !== "runtime_finding.derive"
+      || receipt.resultBinding?.outcomeKey !== queueItem.outcomeKey
+      || Number(receipt.resultBinding?.goalId) !== Number(queueItem.goalId)
+      || receipt.resultBinding?.goalRef !== queueItem.goalRef
+      || Number(receipt.resultBinding?.queueId) !== Number(queueItem.id)
+      || Number(receipt.resultBinding?.workOrderId) !== Number(queueItem.activeWorkOrderId)
+      || receipt.resultBinding?.workOrderRef !== derivedFields.derivedWorkOrderRef
+      || Number(derivedFields.derivedWorkOrderId) !== Number(queueItem.activeWorkOrderId)
+      || derivedFields.derivedWorkOrderUserId !== queueItem.userId
+      || derivedFields.derivedWorkOrderGoal !== queueItem.goalRef
+      || Number(derivedFields.derivedWorkOrderAuthorityGrantId) !== Number(receipt.resultBinding?.implementationGrantId)
+      || !["approved", "active"].includes(derivedFields.derivedWorkOrderStatus)
+      || receipt.resultBinding?.grantRef !== queueItem.authorityGrantRef
+      || Number(receipt.resultBinding?.decisionId) !== Number(queueItem.approvalDecisionId)
+      || Number(receipt.resultBinding?.approvalDecisionId) !== Number(queueItem.approvalDecisionId)
+      || Number(derivedFields.derivedApprovalDecisionId) !== Number(queueItem.approvalDecisionId)
+      || derivedFields.derivedApprovalStatus !== "accepted"
+      || derivedFields.derivedApprovalAuthority !== "binding"
+      || derivedFields.derivedApprovalScope !== queueItem.outcomeKey
+      || derivedFields.derivedApprovalLocked !== true
+      || String(derivedFields.derivedApprovalDecision ?? "").trim().toUpperCase() !== "APPROVE"
+      || JSON.stringify(derivedFields.derivedApprovalEvidence)
+        !== JSON.stringify([`runtime-finding:${receipt.requestBinding?.sourceFindingEventId}`])
+      || Number(receipt.resultBinding?.queueGrantId) !== Number(derivedFields.derivedQueueGrantId)
+      || receipt.resultBinding?.queueGrantRef !== derivedFields.derivedQueueGrantRef
+      || Number(receipt.resultBinding?.grantId) !== Number(derivedFields.derivedQueueGrantId)
+      || receipt.resultBinding?.grantRef !== derivedFields.derivedQueueGrantRef
+      || derivedFields.derivedQueueGrantStatus !== "active" || derivedFields.derivedQueueGrantRevokedAt != null
+      || derivedFields.derivedQueueGrantGrantedTo !== "operator"
+      || derivedFields.derivedQueueGrantAuthorityLevel !== "A2_WRITE_OWN"
+      || derivedFields.derivedQueueGrantScope !== queueItem.outcomeKey
+      || Number(derivedFields.derivedQueueGrantWorkOrderId) !== Number(queueItem.activeWorkOrderId)
+      || JSON.stringify(derivedFields.derivedQueueGrantAllowedActions) !== JSON.stringify(["outcome:execute"])
+      || !Array.isArray(derivedFields.derivedQueueGrantBlockedActions)
+      || blocksAction(derivedFields.derivedQueueGrantBlockedActions, "outcome:execute")
+      || Number(receipt.resultBinding?.implementationGrantId) !== Number(derivedFields.derivedImplementationGrantId)
+      || receipt.resultBinding?.implementationGrantRef !== derivedFields.derivedImplementationGrantRef
+      || derivedFields.derivedImplementationGrantStatus !== "active"
+      || derivedFields.derivedImplementationGrantRevokedAt != null
+      || derivedFields.derivedImplementationGrantGrantedTo !== "operator"
+      || derivedFields.derivedImplementationGrantAuthorityLevel !== "A2_WRITE_OWN"
+      || derivedFields.derivedImplementationGrantScope !== receipt.resultBinding?.workOrderRef
+      || Number(derivedFields.derivedImplementationGrantWorkOrderId) !== Number(queueItem.activeWorkOrderId)
+      || JSON.stringify(derivedFields.derivedImplementationGrantAllowedActions) !== JSON.stringify(["implement"])
+      || !Array.isArray(derivedFields.derivedImplementationGrantBlockedActions)
+      || blocksAction(derivedFields.derivedImplementationGrantBlockedActions, "implement")
+      || Number(derivedFields.derivedSourceFindingEventId) !== Number(receipt.requestBinding?.sourceFindingEventId)
+      || derivedFields.derivedSourceUserId !== queueItem.userId
+      || derivedFields.derivedSourcePayloadDigest !== receipt.requestBinding?.sourcePayloadDigest
+      || Number(derivedFields.derivedSourceCheckpointId) !== Number(receipt.requestBinding?.sourceCheckpointId)
+      || derivedFields.derivedSourceCheckpointDigest !== receipt.requestBinding?.sourceCheckpointDigest
+      || derivedFields.derivedSourceParentWorkOrderRef !== receipt.requestBinding?.parentWorkOrderRef
+      || derivedFields.derivedSourceParentContractId !== receipt.requestBinding?.parentContractId
+      || derivedFields.derivedSourceParentContractDigest !== receipt.requestBinding?.parentContractDigest
+      || Number(derivedFields.derivedSourceAuthorizationDecisionId)
+        !== Number(receipt.requestBinding?.parentAuthorizationDecisionId)
+      || Number(derivedFields.derivedSourceImplementationGrantId)
+        !== Number(receipt.requestBinding?.parentImplementationGrantId)
+      || Number(derivedFields.derivedParentWorkOrderId) !== Number(receipt.requestBinding?.parentWorkOrderId)
+      || derivedFields.derivedParentWorkOrderRef !== receipt.requestBinding?.parentWorkOrderRef
+      || derivedFields.derivedParentWorkOrderUserId !== queueItem.userId
+      || new Date(derivedFields.derivedQueueGrantExpiresAt).getTime() <= Date.now()
+      || new Date(derivedFields.derivedImplementationGrantExpiresAt).getTime() <= Date.now()
+      || !contract || Object.keys(contract).sort().join(",") !== [
+        "delivery", "digest", "id", "lane", "repository", "reservations", "validationCommands", "version",
+        ...(Object.hasOwn(contract ?? {}, "projection") ? ["projection"] : []),
+      ].sort().join(",")
+      || contract.digest !== contractDigest
+      || contract.version !== "hermes-work-contract.v1"
+      || contract.repository !== "bsvalues/terragroq"
+      || !/^[A-Za-z0-9._-]{1,120}$/.test(contract.id ?? "")
+      || typeof contract.lane !== "string" || contract.lane.trim() === ""
+      || !Array.isArray(contract.reservations) || contract.reservations.length === 0
+      || contract.reservations.some((reservation) => typeof reservation !== "string" || reservation === "")
+      || !validationsExact || !deliveryExact || !projectionExact) {
+      wall("Derived queue contract receipt conflicts", "HERMES_RUNTIME_FINDING_CONTRACT_WALL")
+    }
+    return {
+      ...publicGoal,
+      outcomeKey: queueItem.outcomeKey,
+      verifiedQueueWorkContract: Object.freeze({
+        contract: Object.freeze(contract),
+        provenance: Object.freeze({
+          operation: receipt.operation,
+          outcomeKey: queueItem.outcomeKey,
+          workOrderId: Number(queueItem.activeWorkOrderId),
+          workOrderRef: receipt.resultBinding.workOrderRef,
+        }),
+      }),
+    }
   })
 }
 
@@ -243,6 +773,19 @@ function persistedBinding(item) {
   ].includes(item.lifecycleReason)
     ? item.lifecycleReason
     : null
+  const reclaimEventId = item?.reviewRecoveryReclaimEventId
+  const reclaimPayloadDigest = item?.reviewRecoveryReclaimPayloadDigest
+  const hasAnyReclaimEvidence = reclaimEventId !== undefined
+    || reclaimPayloadDigest !== undefined
+  const hasExactReclaimEvidence = Number.isSafeInteger(Number(reclaimEventId))
+    && Number(reclaimEventId) > 0
+    && typeof reclaimPayloadDigest === "string"
+    && /^[0-9a-f]{64}$/.test(reclaimPayloadDigest)
+  if (reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    && hasAnyReclaimEvidence && !hasExactReclaimEvidence) {
+    wall("Review recovery reclaim evidence is incomplete",
+      "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+  }
   return {
     userId: item.userId,
     outcomeKey: item.outcomeKey,
@@ -257,13 +800,19 @@ function persistedBinding(item) {
       : {}),
     ...(validationRecoveryResumeState ? { validationRecoveryResumeState } : {}),
     ...(reviewRecoveryResumeState ? { reviewRecoveryResumeState } : {}),
+    ...(reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+      && hasExactReclaimEvidence ? {
+      reviewRecoveryReclaimEventId: Number(reclaimEventId),
+      reviewRecoveryReclaimPayloadDigest: reclaimPayloadDigest,
+    } : {}),
     ...(Number.isSafeInteger(activeWorkOrderId) && activeWorkOrderId > 0
       ? { activeWorkOrderId }
       : {}),
   }
 }
 
-function withPersistedBinding(outcome, item) {
+function withPersistedBinding(outcome, item, recoverySource = null, acquisitionResult = null) {
+  const rawLifecycleReason = item?.lifecycleReason
   const binding = persistedBinding(item)
   const priorRecoveryState = outcome?.queueBinding?.validationRecoveryResumeState
   if (priorRecoveryState && item.lifecycleReason === "STALE_LEASE_RECOVERED") {
@@ -272,6 +821,191 @@ function withPersistedBinding(outcome, item) {
   const priorReviewRecoveryState = outcome?.queueBinding?.reviewRecoveryResumeState
   if (priorReviewRecoveryState && item.lifecycleReason === "STALE_LEASE_RECOVERED") {
     binding.reviewRecoveryResumeState = priorReviewRecoveryState
+  }
+  const source = recoverySource ?? outcome?.queueBinding
+  if (binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED") {
+    const sourceIsReclaimed = source?.reviewRecoveryResumeState
+      === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    const bindingHasEvidence = Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
+      && binding.reviewRecoveryReclaimEventId > 0
+      && typeof binding.reviewRecoveryReclaimPayloadDigest === "string"
+      && /^[0-9a-f]{64}$/.test(binding.reviewRecoveryReclaimPayloadDigest)
+    const sourceHasEvidence = Number.isSafeInteger(source?.reviewRecoveryReclaimEventId)
+      && source.reviewRecoveryReclaimEventId > 0
+      && typeof source?.reviewRecoveryReclaimPayloadDigest === "string"
+      && /^[0-9a-f]{64}$/.test(source.reviewRecoveryReclaimPayloadDigest)
+    const rawHasAnyEvidence = item?.reviewRecoveryReclaimEventId !== undefined
+      || item?.reviewRecoveryReclaimPayloadDigest !== undefined
+    const rawHasExactEvidence = Number.isSafeInteger(Number(item?.reviewRecoveryReclaimEventId))
+      && Number(item.reviewRecoveryReclaimEventId) > 0
+      && typeof item?.reviewRecoveryReclaimPayloadDigest === "string"
+      && /^[0-9a-f]{64}$/.test(item.reviewRecoveryReclaimPayloadDigest)
+    const rawSourceTriple = [
+      item?.reviewRecoverySourceExpectedVersion,
+      item?.reviewRecoverySourceFencingToken,
+      item?.reviewRecoverySourceRuntimeAttempt,
+    ]
+    const rawHasAnySourceTriple = rawSourceTriple.some((value) => value !== undefined)
+    const rawHasExactSourceTriple = Number.isSafeInteger(item?.reviewRecoverySourceExpectedVersion)
+      && item.reviewRecoverySourceExpectedVersion >= 0
+      && Number.isSafeInteger(item?.reviewRecoverySourceFencingToken)
+      && item.reviewRecoverySourceFencingToken > 0
+      && Number.isSafeInteger(item?.reviewRecoverySourceRuntimeAttempt)
+      && item.reviewRecoverySourceRuntimeAttempt > 0
+    if (sourceIsReclaimed) {
+      const sourceStaleReacquisition = source?.reviewRecoveryStaleReacquisition
+      const sourceHasStaleReacquisition = exactStaleReviewRecoveryReacquisition(sourceStaleReacquisition)
+        && sourceStaleReacquisition.expectedVersion === source.reviewRecoverySourceExpectedVersion + 3
+        && sourceStaleReacquisition.fencingToken === source.reviewRecoverySourceFencingToken + 3
+      const sourceStaleContinuation = source?.reviewRecoveryStaleContinuation
+      const sourceHasStaleContinuation = exactStaleReviewRecoveryContinuation(
+        sourceStaleContinuation, sourceStaleReacquisition,
+      ) && sourceStaleContinuation.expectedVersion === source.expectedVersion
+        && sourceStaleContinuation.fencingToken === source.fencingToken
+      const exactStableIdentity = source.userId === binding.userId
+        && source.outcomeKey === binding.outcomeKey
+        && source.executionBinding === binding.executionBinding
+        && source.acquisitionKey === binding.acquisitionKey
+        && source.leaseHolder === binding.leaseHolder
+        && source.leaseToken === binding.leaseToken
+        && source.activeWorkOrderId === binding.activeWorkOrderId
+        && source.authorityGrantRef === binding.authorityGrantRef
+      const exactStableAcquisition = acquisitionResult === null
+        || (acquisitionResult?.acquired === true
+          && acquisitionResult?.replayed === true
+          && acquisitionResult?.reclaimed === false)
+      const committedContinuationEvidence = acquisitionResult?.reviewRecoveryContinuationEvidence
+      const exactCommittedReclaimEvidence = exactReviewRecoveryContinuationEvidence(
+        committedContinuationEvidence, source, binding, "RECLAIMED",
+      ) && committedContinuationEvidence.checkpointDigest
+        === acquisitionResult?.reviewRecoveryContinuationCheckpointDigest
+      const exactCommittedReplayEvidence = exactReviewRecoveryContinuationEvidence(
+        committedContinuationEvidence, source, binding, "REPLAY_WINNER",
+      ) && committedContinuationEvidence.checkpointDigest
+        === acquisitionResult?.reviewRecoveryContinuationCheckpointDigest
+      const exactSameFence = rawLifecycleReason === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+        && exactStableAcquisition
+        && !sourceHasStaleReacquisition
+        && source.expectedVersion === binding.expectedVersion
+        && source.fencingToken === binding.fencingToken
+      const exactGovernedStaleReclaim = acquisitionResult?.acquired === true
+        && acquisitionResult?.reclaimed === true
+        && acquisitionResult?.replayed === false
+        && rawLifecycleReason === "STALE_LEASE_RECOVERED"
+        && binding.expectedVersion === source.expectedVersion + 1
+        && binding.fencingToken === source.fencingToken + 1
+        && (!sourceHasStaleReacquisition
+          || (acquisitionResult?.reviewRecoveryContinuationDisposition === "RECLAIMED"
+            && exactCommittedReclaimEvidence))
+      const exactGovernedStaleReplay = acquisitionResult?.acquired === true
+        && acquisitionResult?.reclaimed === false
+        && acquisitionResult?.replayed === true
+        && rawLifecycleReason === "STALE_LEASE_RECOVERED"
+        && binding.expectedVersion === source.expectedVersion + 1
+        && binding.fencingToken === source.fencingToken + 1
+        && (!sourceHasStaleReacquisition
+          || (acquisitionResult?.reviewRecoveryContinuationDisposition === "REPLAY_WINNER"
+            && exactCommittedReplayEvidence))
+      const exactPersistedStaleReplay = acquisitionResult?.acquired === true
+        && acquisitionResult?.reclaimed === false
+        && acquisitionResult?.replayed === true
+        && rawLifecycleReason === "STALE_LEASE_RECOVERED"
+        && sourceHasStaleReacquisition
+        && binding.expectedVersion === source.expectedVersion
+        && binding.fencingToken === source.fencingToken
+        && exactCommittedReplayEvidence
+        && /^[0-9a-f]{64}$/.test(String(
+          acquisitionResult?.reviewRecoveryContinuationCheckpointDigest ?? "",
+        ))
+        && acquisitionResult.reviewRecoveryContinuationCheckpointDigest
+          === (sourceHasStaleContinuation
+            ? sourceStaleContinuation.checkpointDigest
+            : sourceStaleReacquisition.checkpointDigest)
+      const exactRefreshIdentity = exactStableIdentity
+        && (exactSameFence || exactGovernedStaleReclaim || exactGovernedStaleReplay
+          || exactPersistedStaleReplay)
+        && Number.isSafeInteger(source.reviewRecoverySourceExpectedVersion)
+        && source.reviewRecoverySourceExpectedVersion >= 0
+        && source.expectedVersion === source.reviewRecoverySourceExpectedVersion
+          + (sourceHasStaleContinuation ? 4 : sourceHasStaleReacquisition ? 3 : 2)
+        && Number.isSafeInteger(source.reviewRecoverySourceFencingToken)
+        && source.reviewRecoverySourceFencingToken > 0
+        && source.fencingToken === source.reviewRecoverySourceFencingToken
+          + (sourceHasStaleContinuation ? 4 : sourceHasStaleReacquisition ? 3 : 2)
+        && Number.isSafeInteger(source.reviewRecoverySourceRuntimeAttempt)
+        && source.reviewRecoverySourceRuntimeAttempt > 0
+      if (!exactRefreshIdentity || !sourceHasEvidence
+        || (rawHasAnyEvidence
+          && (!rawHasExactEvidence
+            || Number(item.reviewRecoveryReclaimEventId) !== source.reviewRecoveryReclaimEventId
+            || item.reviewRecoveryReclaimPayloadDigest
+              !== source.reviewRecoveryReclaimPayloadDigest))
+        || (rawLifecycleReason === "STALE_LEASE_RECOVERED" && rawHasAnySourceTriple
+          && (!rawHasExactSourceTriple
+            || item.reviewRecoverySourceExpectedVersion
+              !== source.reviewRecoverySourceExpectedVersion
+            || item.reviewRecoverySourceFencingToken
+              !== source.reviewRecoverySourceFencingToken
+            || item.reviewRecoverySourceRuntimeAttempt
+              !== source.reviewRecoverySourceRuntimeAttempt))
+        || (bindingHasEvidence
+          && (binding.reviewRecoveryReclaimEventId !== source.reviewRecoveryReclaimEventId
+            || binding.reviewRecoveryReclaimPayloadDigest
+              !== source.reviewRecoveryReclaimPayloadDigest))) {
+        wall("Review recovery reclaim refresh evidence conflicts",
+          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      }
+      binding.reviewRecoveryReclaimEventId = source.reviewRecoveryReclaimEventId
+      binding.reviewRecoveryReclaimPayloadDigest = source.reviewRecoveryReclaimPayloadDigest
+      if (exactGovernedStaleReclaim || exactGovernedStaleReplay) {
+        const leaseExpiry = Date.parse(String(item?.leaseExpiresAt ?? ""))
+        const checkpointDigest = acquisitionResult?.reviewRecoveryContinuationCheckpointDigest
+        if (!Number.isFinite(leaseExpiry)
+          || !/^[0-9a-f]{64}$/.test(String(checkpointDigest ?? ""))) {
+          wall("Review recovery stale reacquisition lease is invalid",
+            "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+        }
+        const hop = {
+          disposition: exactGovernedStaleReclaim ? "RECLAIMED" : "REPLAY_WINNER",
+          expectedVersion: binding.expectedVersion, fencingToken: binding.fencingToken,
+          leaseExpiresAt: new Date(leaseExpiry).toISOString(),
+          lifecycleReason: "STALE_LEASE_RECOVERED", priorExpectedVersion: source.expectedVersion,
+          priorFencingToken: source.fencingToken, receiptLatestFencingToken: binding.fencingToken,
+          checkpointDigest,
+        }
+        if (sourceHasStaleReacquisition) {
+          binding.reviewRecoveryStaleReacquisition = { ...sourceStaleReacquisition }
+          binding.reviewRecoveryStaleContinuation = {
+            ...hop, priorLeaseExpiresAt: sourceStaleReacquisition.leaseExpiresAt,
+          }
+        } else binding.reviewRecoveryStaleReacquisition = hop
+      } else if (sourceHasStaleReacquisition) {
+        const itemExpiry = Date.parse(String(item?.leaseExpiresAt ?? ""))
+        const expectedExpiry = sourceHasStaleContinuation
+          ? sourceStaleContinuation.leaseExpiresAt : sourceStaleReacquisition.leaseExpiresAt
+        if (!Number.isFinite(itemExpiry)
+          || new Date(itemExpiry).toISOString() !== expectedExpiry) {
+          wall("Review recovery stale reacquisition lease conflicts",
+            "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+        }
+        binding.reviewRecoveryStaleReacquisition = { ...sourceStaleReacquisition }
+        if (sourceHasStaleContinuation) {
+          binding.reviewRecoveryStaleContinuation = { ...sourceStaleContinuation }
+        }
+      }
+    } else if (!bindingHasEvidence) {
+      wall("Review recovery reclaim evidence is unavailable",
+        "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+    }
+  }
+  if (binding.reviewRecoveryResumeState || priorReviewRecoveryState) {
+    for (const field of [
+      "reviewRecoverySourceExpectedVersion",
+      "reviewRecoverySourceFencingToken",
+      "reviewRecoverySourceRuntimeAttempt",
+    ]) {
+      if (source?.[field] !== undefined) binding[field] = source[field]
+    }
   }
   return { ...outcome, queueBinding: binding }
 }
@@ -385,7 +1119,10 @@ function isExactReviewRecoveryResume(item, binding, holderId, at) {
     ?? (item?.authorityRenewalApplied === true ? 1 : 0))
   const reclaimCount = Number(item?.reviewRecoveryReclaimCount ?? 0)
   if (!Number.isSafeInteger(renewalCount) || renewalCount < 0
-    || !Number.isSafeInteger(reclaimCount) || reclaimCount < 0) return false
+    || !Number.isSafeInteger(reclaimCount) || ![0, 1].includes(reclaimCount)
+    || (reclaimCount === 1 && (!Number.isSafeInteger(Number(item?.reviewRecoveryReclaimEventId))
+      || Number(item.reviewRecoveryReclaimEventId) <= 0
+      || !/^[0-9a-f]{64}$/.test(String(item?.reviewRecoveryReclaimPayloadDigest ?? ""))))) return false
   return item?.userId === binding.userId
     && item.outcomeKey === binding.outcomeKey
     && item.lifecycleState === "active"
@@ -416,12 +1153,16 @@ function isExactPersistedReviewRecovery(item, binding, outcome) {
   const exactRecovery = fenceDelta === 0
     && versionDelta === authorityRenewalDelta
     && item?.lifecycleReason === binding.reviewRecoveryResumeState
-  const recoveredAcquisitionReclaim = Number.isSafeInteger(versionDelta)
-    && Number.isSafeInteger(fenceDelta)
-    && fenceDelta >= 0
-    && versionDelta === fenceDelta + authorityRenewalDelta
-    && item?.lifecycleReason === "STALE_LEASE_RECOVERED"
-  return (exactRecovery || recoveredAcquisitionReclaim)
+  const exactGovernedReclaim = fenceDelta === 1
+    && versionDelta === 1
+    && binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
+    && item?.lifecycleReason === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    && item?.reviewRecoveryReclaimCount === 1
+    && item?.reviewRecoveryStaleReclaimApplied === true
+    && Number.isSafeInteger(Number(item?.reviewRecoveryReclaimEventId))
+    && Number(item.reviewRecoveryReclaimEventId) > 0
+    && /^[0-9a-f]{64}$/.test(String(item?.reviewRecoveryReclaimPayloadDigest ?? ""))
+  return (exactRecovery || exactGovernedReclaim)
     && item?.userId === binding.userId
     && item.outcomeKey === binding.outcomeKey
     && item.lifecycleState === "active"
@@ -481,6 +1222,13 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     ?? resumeOutcomeQueueAfterValidationRecovery
   const resumeReviewRecoveryQueue = options.resumeReviewRecoveryQueue
     ?? resumeOutcomeQueueAfterReviewRecovery
+  const verifyActiveReviewRecovery = options.verifyActiveReviewRecovery
+    ?? verifyActiveReviewRecoveryContinuation
+  const activeReviewRecoveryWorkContract = (outcome) => (
+    options.verifyActiveReviewRecovery
+      ? undefined
+      : activeRecoveryProjectionContract(outcome)
+  )
   const readQueue = options.readQueue ?? readOutcomeQueue
   const transitionQueue = options.transitionQueue ?? transitionOutcomeQueueItem
   const completeGoal = options.completeGoal ?? completeGoalOutcome
@@ -489,6 +1237,12 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   const resolvePrimary = options.resolvePrimary ?? (() => loadDeclaredPrimary(database.withPool))
   const resolveGoal = options.resolveGoal ?? ((item) => loadLinkedGoal(database.withPool, item))
   const now = options.now ?? (() => new Date())
+  const createFindingConsumer = options.createRuntimeFindingConsumer ?? createRuntimeFindingDbConsumer
+  const consumeRuntimeFindings = options.consumeRuntimeFindings ?? createFindingConsumer({
+    withPool: database.withPool,
+    now,
+    ...(options.maxRuntimeFindings === undefined ? {} : { maxFindings: options.maxRuntimeFindings }),
+  })
   const holderId = options.holderId ?? `${os.hostname()}:hermes-outcome-queue`
   const runtimeRoot = path.resolve(
     options.runtimeRoot
@@ -543,7 +1297,10 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       const item = acquired.outcome
       try {
         const goal = await resolveGoal(item)
-        const governedOutcome = governedQueueOutcome(item, goal)
+        const governedOutcome = {
+          ...governedQueueOutcome(item, goal),
+          queueBinding: persistedBinding(item),
+        }
         const decision = evaluateOutcomePolicy({
           outcome: governedOutcome,
           actor: "bsvalues",
@@ -554,10 +1311,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         if (!decision.allowed) {
           wall(decision.reasonCode, `HERMES_OUTCOME_QUEUE_POLICY_${decision.reasonCode}`)
         }
-        return {
-          ...governedOutcome,
-          queueBinding: persistedBinding(item),
-        }
+        return governedOutcome
       } catch (error) {
         if (error?.code !== "HERMES_OUTCOME_QUEUE_GOAL_WALL"
           && !String(error?.code ?? "").startsWith("HERMES_OUTCOME_QUEUE_POLICY_")) {
@@ -735,6 +1489,27 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     requireExecutionProofContext()
     if (!outcome?.queueBinding) return outcome
     const binding = queueBinding(outcome)
+    const baseHop = binding.reviewRecoveryStaleReacquisition
+    const continuation = binding.reviewRecoveryStaleContinuation
+    if (continuation && Date.parse(continuation.leaseExpiresAt) <= now().getTime()) {
+      wall("Review recovery stale continuation depth is exhausted",
+        "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+    }
+    const reviewRecoveryContinuationEnvelope = baseHop ? {
+      sourceExpectedVersion: binding.reviewRecoverySourceExpectedVersion,
+      sourceFencingToken: binding.reviewRecoverySourceFencingToken,
+      sourceRuntimeAttempt: binding.reviewRecoverySourceRuntimeAttempt,
+      reclaimEventId: binding.reviewRecoveryReclaimEventId,
+      reclaimPayloadDigest: binding.reviewRecoveryReclaimPayloadDigest,
+      baseHop: { ...baseHop },
+      mode: continuation ? "REPLAY_ONLY" : "ADVANCE_OR_REPLAY",
+      continuation: continuation ? { ...continuation } : null,
+    } : undefined
+    if (reviewRecoveryContinuationEnvelope
+      && (!Number.isSafeInteger(binding.activeWorkOrderId) || binding.activeWorkOrderId <= 0)) {
+      wall("Review recovery continuation Work Order binding is missing",
+        "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+    }
     const refreshed = await acquire({
       databaseUrl,
       userId: binding.userId,
@@ -747,6 +1522,10 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       processIdentity,
       checkpointProofProvider,
       now: now(),
+      ...(reviewRecoveryContinuationEnvelope ? {
+        reviewRecoveryContinuationEnvelope,
+        activeWorkOrderId: binding.activeWorkOrderId,
+      } : {}),
     })
     if (refreshed?.outcome && refreshed.acquired) {
       const governedOutcome = governedQueueOutcome(refreshed.outcome, outcome)
@@ -773,7 +1552,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         })
         wall(decision.reasonCode, `HERMES_OUTCOME_QUEUE_POLICY_${decision.reasonCode}`)
       }
-      return withPersistedBinding(governedOutcome, refreshed.outcome)
+      return withPersistedBinding(governedOutcome, refreshed.outcome, null, refreshed)
     }
     const current = refreshed?.outcome ?? (await readQueue({
       databaseUrl,
@@ -882,7 +1661,8 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       || typeof proof?.proofDigest !== "string" || !/^[0-9a-f]{64}$/.test(proof.proofDigest)
       || !Number.isSafeInteger(proof?.prNumber) || proof.prNumber <= 0
       || typeof proof?.reviewedHeadSha !== "string" || !/^[0-9a-f]{40}$/.test(proof.reviewedHeadSha)
-      || typeof proof?.mergeSha !== "string" || !/^[0-9a-f]{40}$/.test(proof.mergeSha)) {
+      || typeof proof?.mergeSha !== "string" || !/^[0-9a-f]{40}$/.test(proof.mergeSha)
+      || !Number.isSafeInteger(proof?.runtimeAttempt) || proof.runtimeAttempt <= 0) {
       wall(
         "Review recovery proof did not preserve its exact merged boundary",
         "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL",
@@ -890,6 +1670,32 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     }
     const resumeAt = now()
     if (binding.reviewRecoveryResumeState) {
+      const resolvedSource = {
+        expectedVersion: proof?.reviewRecoverySourceExpectedVersion,
+        fencingToken: proof?.reviewRecoverySourceFencingToken,
+        runtimeAttempt: proof?.reviewRecoverySourceRuntimeAttempt,
+      }
+      if (!Number.isSafeInteger(resolvedSource.expectedVersion) || resolvedSource.expectedVersion < 0
+        || !Number.isSafeInteger(resolvedSource.fencingToken) || resolvedSource.fencingToken <= 0
+        || !Number.isSafeInteger(resolvedSource.runtimeAttempt) || resolvedSource.runtimeAttempt <= 0) {
+        wall("Resolved review recovery source triple is incomplete",
+          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      }
+      const localSourceFields = [
+        binding.reviewRecoverySourceExpectedVersion,
+        binding.reviewRecoverySourceFencingToken,
+        binding.reviewRecoverySourceRuntimeAttempt,
+      ]
+      const localSourceAbsent = localSourceFields.every((value) => value === undefined)
+      if (!localSourceAbsent
+        && (binding.reviewRecoverySourceExpectedVersion !== resolvedSource.expectedVersion
+          || binding.reviewRecoverySourceFencingToken !== resolvedSource.fencingToken
+          || binding.reviewRecoverySourceRuntimeAttempt !== resolvedSource.runtimeAttempt)) {
+        wall("Persisted review recovery source triple conflicts",
+          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      }
+      const sourceExpectedVersion = resolvedSource.expectedVersion
+      const sourceFencingToken = resolvedSource.fencingToken
       const verified = await resumeReviewRecoveryQueue({
         databaseUrl,
         userId: binding.userId,
@@ -907,6 +1713,11 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         leaseToken: binding.leaseToken,
         leaseDurationMs: QUEUE_LEASE_DURATION_MS,
         persistedLifecycleReason: binding.reviewRecoveryResumeState,
+        sourceExpectedVersion,
+        sourceFencingToken,
+        sourceRuntimeAttempt: resolvedSource.runtimeAttempt,
+        campaignWindowId,
+        processIdentity,
         now: resumeAt,
       })
       if (!isExactPersistedReviewRecovery(verified, binding, outcome)) {
@@ -915,7 +1726,36 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
           "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL",
         )
       }
-      return refreshOutcome(outcome)
+      const verifiedSourceRuntimeAttempt = Number(verified.reviewRecoverySourceRuntimeAttempt)
+      if (!Number.isSafeInteger(verifiedSourceRuntimeAttempt)
+        || verifiedSourceRuntimeAttempt <= 0
+        || verifiedSourceRuntimeAttempt !== resolvedSource.runtimeAttempt) {
+        wall("Persisted review recovery source attempt conflicts",
+          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      }
+      const sourceBinding = { ...binding,
+        reviewRecoverySourceExpectedVersion: sourceExpectedVersion,
+        reviewRecoverySourceFencingToken: sourceFencingToken,
+        reviewRecoverySourceRuntimeAttempt: verifiedSourceRuntimeAttempt }
+      const sourceProof = { ...proof, runtimeAttempt: sourceBinding.reviewRecoverySourceRuntimeAttempt }
+      const verifiedOutcome = withPersistedBinding(outcome, verified, sourceBinding)
+      await verifyActiveReviewRecovery({
+        databaseUrl,
+        outcomeId: Number(outcome.id),
+        executionBinding: verifiedOutcome.queueBinding,
+        workContract: activeReviewRecoveryWorkContract(verifiedOutcome),
+        proof: sourceProof,
+      })
+      const refreshed = await refreshOutcome(verifiedOutcome)
+      return {
+        ...refreshed,
+        queueBinding: {
+          ...refreshed.queueBinding,
+          reviewRecoverySourceExpectedVersion: sourceBinding.reviewRecoverySourceExpectedVersion,
+          reviewRecoverySourceFencingToken: sourceBinding.reviewRecoverySourceFencingToken,
+          reviewRecoverySourceRuntimeAttempt: sourceBinding.reviewRecoverySourceRuntimeAttempt,
+        },
+      }
     }
     const resumed = await resumeReviewRecoveryQueue({
       databaseUrl,
@@ -933,6 +1773,11 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       leaseHolder: holderId,
       leaseToken: binding.leaseToken,
       leaseDurationMs: QUEUE_LEASE_DURATION_MS,
+      sourceExpectedVersion: binding.expectedVersion + 1,
+      sourceFencingToken: binding.fencingToken,
+      sourceRuntimeAttempt: proof.runtimeAttempt,
+      campaignWindowId,
+      processIdentity,
       now: resumeAt,
     })
     if (!isExactReviewRecoveryResume(resumed, binding, holderId, resumeAt)) {
@@ -941,7 +1786,19 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL",
       )
     }
-    return withPersistedBinding(outcome, resumed)
+    const recoveredOutcome = withPersistedBinding(outcome, resumed, {
+      reviewRecoverySourceExpectedVersion: binding.expectedVersion + 1,
+      reviewRecoverySourceFencingToken: binding.fencingToken,
+      reviewRecoverySourceRuntimeAttempt: proof.runtimeAttempt,
+    })
+    await verifyActiveReviewRecovery({
+      databaseUrl,
+      outcomeId: Number(outcome.id),
+      executionBinding: recoveredOutcome.queueBinding,
+      workContract: activeReviewRecoveryWorkContract(recoveredOutcome),
+      proof,
+    })
+    return recoveredOutcome
   }
 
   return {
@@ -955,6 +1812,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     resumeAfterOwnerDecision,
     resumeAfterReviewRecovery,
     resumeAfterValidationRecovery,
+    consumeRuntimeFindings,
     close: database.close,
   }
 }

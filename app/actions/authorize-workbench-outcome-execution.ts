@@ -37,6 +37,10 @@ const BLOCKED_ACTIONS = [
   "production:mutate", "release:create", "secret:access", "spend:increase",
 ] as const
 
+function hasExactStrings(actual: readonly string[], expected: readonly string[]) {
+  return actual.length === expected.length && actual.every((value, index) => value === expected[index])
+}
+
 function unavailable(
   input: AuthorizeWorkbenchOutcomeExecutionInput,
   observedAt: string,
@@ -163,6 +167,7 @@ export async function authorizeWorkbenchOutcomeExecution(
         evidence: decision.evidence,
       }).from(decision).where(and(eq(decision.userId, userId), eq(decision.id, Number(binding.decisionId)))).limit(2)
       const grants = await transaction.select({
+        id: authorityGrant.id, userId: authorityGrant.userId,
         ref: authorityGrant.ref, status: authorityGrant.status, scope: authorityGrant.scope,
         authorityLevel: authorityGrant.authorityLevel, grantedTo: authorityGrant.grantedTo,
         allowedActions: authorityGrant.allowedActions, blockedActions: authorityGrant.blockedActions,
@@ -171,7 +176,21 @@ export async function authorizeWorkbenchOutcomeExecution(
       }).from(authorityGrant).where(and(
         eq(authorityGrant.userId, userId), eq(authorityGrant.ref, String(binding.grantRef)),
       )).limit(2)
+      const implementationGrants = typeof binding.implementationGrantRef === "string"
+        ? await transaction.select({
+            id: authorityGrant.id, userId: authorityGrant.userId,
+            ref: authorityGrant.ref, status: authorityGrant.status, scope: authorityGrant.scope,
+            authorityLevel: authorityGrant.authorityLevel, grantedTo: authorityGrant.grantedTo,
+            allowedActions: authorityGrant.allowedActions, blockedActions: authorityGrant.blockedActions,
+            workOrderId: authorityGrant.workOrderId, revokedAt: authorityGrant.revokedAt,
+            expiresAt: authorityGrant.expiresAt,
+          }).from(authorityGrant).where(and(
+            eq(authorityGrant.userId, userId),
+            eq(authorityGrant.ref, String(binding.implementationGrantRef)),
+          )).limit(2)
+        : []
       const grant = grants[0]
+      const implementationGrant = implementationGrants[0]
       const approval = decisions[0]
       const expiresAt = grant?.expiresAt ? new Date(grant.expiresAt) : null
       const workContract = snapshot.goal && snapshot.outcome
@@ -185,13 +204,41 @@ export async function authorizeWorkbenchOutcomeExecution(
           })
         : null
       const storedWorkContract = binding.workContract as Record<string, unknown> | null
-      const exactGraph = snapshot.project?.userId === userId && snapshot.thread?.userId === userId
-        && snapshot.thread.projectId === input.projectId && snapshot.roots.length === 1
+      const delivery = workContract && "delivery" in workContract ? workContract.delivery : null
+      const implementationExpiry = implementationGrant?.expiresAt
+        ? new Date(implementationGrant.expiresAt)
+        : null
+      const implementationGraphExact = delivery
+        ? implementationGrants.length === 1
+          && implementationGrant?.id === binding.implementationGrantId
+          && implementationGrant.userId === userId
+          && implementationGrant.ref === binding.implementationGrantRef
+          && implementationGrant.workOrderId === null
+          && implementationGrant.scope === `WO-HERMES-OUTCOME-${snapshot.goal?.id}`
+          && implementationGrant.authorityLevel === delivery.authorityLevel
+          && implementationGrant.grantedTo === "operator"
+          && hasExactStrings(implementationGrant.allowedActions, delivery.allowedActions)
+          && hasExactStrings(implementationGrant.blockedActions, BLOCKED_ACTIONS)
+          && implementationGrant.status === "active" && implementationGrant.revokedAt === null
+          && implementationExpiry?.toISOString() === binding.expiresAt
+        : binding.implementationGrantId === undefined
+          && binding.implementationGrantRef === undefined
+          && implementationGrants.length === 0
+      const projectRow = snapshot.project
+      const threadRow = snapshot.thread
+      const goalRow = snapshot.goal
+      const exactGraph = projectRow !== null && projectRow !== undefined
+        && projectRow.userId === userId && projectRow.id === input.projectId
+        && threadRow !== null && threadRow !== undefined
+        && threadRow.userId === userId && threadRow.id === input.threadId
+        && threadRow.projectId === input.projectId && snapshot.roots.length === 1
         && snapshot.roots[0].threadId === input.threadId
         && snapshot.roots[0].sourceType === "outcome" && snapshot.roots[0].sourceId === input.outcomeKey
         && snapshot.resources.filter((resource) => resource.type === "repo" && resource.relationship === "primary-repo").length === 1
         && snapshot.resources.some((resource) => resource.type === "repo" && resource.relationship === "primary-repo" && resource.canonicalIdentity === "bsvalues/terragroq")
-        && outcome !== null && outcome !== undefined
+        && outcome !== null && outcome !== undefined && outcome.outcomeKey === input.outcomeKey
+        && goalRow !== null && goalRow !== undefined
+        && goalRow.userId === userId && outcome.goalId === goalRow.id
         && outcome.approvalDecisionId === binding.decisionId
         && ["approved", "active", "blocked", "completed"].includes(outcome.lifecycleState)
         && approval?.id === binding.decisionId && approval.status === "accepted"
@@ -204,6 +251,9 @@ export async function authorizeWorkbenchOutcomeExecution(
         && hashRecord(workContract) === hashRecord(storedWorkContract)
         && approval.evidence.includes(`work-contract:${workContract.id}`)
         && approval.evidence.includes(`work-contract-digest:${workContract.digest}`)
+        && (!delivery
+          || approval.evidence.includes(`work-contract-json:${JSON.stringify(workContract)}`))
+        && implementationGraphExact
       if (!exactGraph || typeof binding.authorizedAt !== "string" || typeof binding.expiresAt !== "string"
         || expiresAt?.toISOString() !== binding.expiresAt) {
         return unavailable(input, observedAt, "INELIGIBLE", "PERSISTED_BINDING_INVALID")
@@ -249,6 +299,7 @@ export async function authorizeWorkbenchOutcomeExecution(
         `project:${input.projectId}`, `thread:${input.threadId}`, "repo:bsvalues/terragroq",
         `work-contract:${assessment.workContract.id}`,
         `work-contract-digest:${assessment.workContract.digest}`,
+        `work-contract-json:${JSON.stringify(assessment.workContract)}`,
         ...assessment.workContract.reservations.map((reservation) => `reservation:${reservation}`),
         ...assessment.workContract.validationCommands.map((validator) => (
           `validator:${validator.command}:${validator.args.join(" ")}`
@@ -272,6 +323,30 @@ export async function authorizeWorkbenchOutcomeExecution(
     }).returning({ id: authorityGrant.id, ref: authorityGrant.ref })
     if (!grant?.id || grant.ref !== refs.grantRef) throw new Error("WORKBENCH_EXECUTION_GRANT_WRITE_WALL")
 
+    let implementationGrant: { id: number; ref: string } | null = null
+    if (assessment.workContract.delivery) {
+      const implementationGrantPayload = {
+        userId, ref: refs.implementationGrantRef, workOrderId: null,
+        grantedBy: userId, grantedTo: "operator",
+        authorityLevel: assessment.workContract.delivery.authorityLevel,
+        scope: `WO-HERMES-OUTCOME-${assessment.goalId}`,
+        allowedActions: [...assessment.workContract.delivery.allowedActions],
+        blockedActions: [...BLOCKED_ACTIONS],
+        reason: `Pre-registered implementation authority for ${assessment.workContract.id} (${assessment.workContract.digest}).`,
+        status: "active", expiresAt, revokedAt: null, revokedBy: null, revokeReason: null,
+        createdAt: authorizedAt,
+      }
+      const [writtenImplementationGrant] = await transaction.insert(authorityGrant).values({
+        ...implementationGrantPayload,
+        contentHash: hashRecord(implementationGrantPayload),
+      }).returning({ id: authorityGrant.id, ref: authorityGrant.ref })
+      if (!writtenImplementationGrant?.id
+        || writtenImplementationGrant.ref !== refs.implementationGrantRef) {
+        throw new Error("WORKBENCH_EXECUTION_IMPLEMENTATION_GRANT_WRITE_WALL")
+      }
+      implementationGrant = { id: writtenImplementationGrant.id, ref: refs.implementationGrantRef }
+    }
+
     const [updated] = await transaction.update(outcomeQueueItem).set({
       approvalState: "approved", approvedBy: userId, approvedAt: authorizedAt,
       approvalDecisionId: approval.id, authorityState: "matched", authorityGrantRef: refs.grantRef,
@@ -288,6 +363,10 @@ export async function authorizeWorkbenchOutcomeExecution(
       decisionId: approval.id, decisionRef: refs.decisionRef, grantId: grant.id,
       grantRef: refs.grantRef, queueVersion: 1, authorizedAt: authorizedAt.toISOString(),
       expiresAt: expiresAt.toISOString(),
+      ...(implementationGrant ? {
+        implementationGrantId: implementationGrant.id,
+        implementationGrantRef: implementationGrant.ref,
+      } : {}),
       workContract: {
         version: assessment.workContract.version,
         id: assessment.workContract.id,
@@ -296,6 +375,12 @@ export async function authorizeWorkbenchOutcomeExecution(
         lane: assessment.workContract.lane,
         reservations: assessment.workContract.reservations,
         validationCommands: assessment.workContract.validationCommands,
+        ...(assessment.workContract.projection
+          ? { projection: assessment.workContract.projection }
+          : {}),
+        ...(assessment.workContract.delivery
+          ? { delivery: assessment.workContract.delivery }
+          : {}),
       },
     }
     await transaction.insert(outcomeQueueMutationReceipt).values({

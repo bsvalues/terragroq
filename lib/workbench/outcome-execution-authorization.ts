@@ -109,6 +109,14 @@ export type WorkbenchOutcomeExecutionAssessment =
           env?: Readonly<Record<string, string>>
           timeoutMs: number
         }>[]
+        projection?: Readonly<{ issueNumber: number; completionOwned: boolean }>
+        delivery?: Readonly<{
+          authorityLevel: "A2_WRITE_OWN"
+          allowedActions: readonly string[]
+          commitAllowed: boolean
+          tagAllowed: boolean
+          pushAllowed: boolean
+        }>
       }>
     }>
   | Readonly<{ eligible: false; reason: WorkbenchExecutionUnavailableReason }>
@@ -182,12 +190,22 @@ export function assessWorkbenchOutcomeExecution(
   if (INJECTION_PATTERN.test(text)) return { eligible: false, reason: "UNTRUSTED_INTENT" }
   if (STRICT_PROTECTED_PATTERN.test(text)) return { eligible: false, reason: "POLICY_INELIGIBLE" }
 
+  const workContract = resolveHermesWorkContract({
+    command: goal.command,
+    title: outcome.title,
+    objective: outcome.objective,
+    lane: goal.lane,
+    risk: goal.risk,
+    authority: goal.authority,
+  })
   const policy = evaluateCanonicalOutcomePolicy({
     outcome: {
       command: goal.command,
       title: outcome.title,
       description: outcome.objective,
-      lane: goal.lane,
+      // The pre-registered operator-objective contract is evidence-only. The legacy
+      // policy has no such lane, so evaluate its bounded repository effect as docs.
+      lane: workContract?.lane === "operator-objective" ? "docs" : goal.lane,
       risk: goal.risk,
       riskClass: outcome.riskClass,
       authority: goal.authority,
@@ -200,14 +218,6 @@ export function assessWorkbenchOutcomeExecution(
     standingAuthority: true,
   })
   if (!policy.allowed) return { eligible: false, reason: "POLICY_INELIGIBLE" }
-  const workContract = resolveHermesWorkContract({
-    command: goal.command,
-    title: outcome.title,
-    objective: outcome.objective,
-    lane: goal.lane,
-    risk: goal.risk,
-    authority: goal.authority,
-  })
   if (!workContract) return { eligible: false, reason: "WORK_CONTRACT_UNAVAILABLE" }
   return {
     eligible: true, reason: "ELIGIBLE", goalId: goal.id,
@@ -220,5 +230,6 @@ export function deterministicWorkbenchExecutionRefs(requestHash: string) {
   return {
     decisionRef: `WB-EXEC-DEC-${suffix}`,
     grantRef: `WB-EXEC-GRANT-${suffix}`,
+    implementationGrantRef: `WB-EXEC-IMPL-GRANT-${suffix}`,
   }
 }

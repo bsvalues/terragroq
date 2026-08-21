@@ -1,11 +1,82 @@
+import { createHash } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 
 import {
   loadAuthenticatedWorkbenchThreads,
   type WorkbenchThreadRepository,
 } from "@/lib/workbench/load-threads"
+import { primaryDecisionRequestDigest } from "@/scripts/hermes-bridge/primary-decision-provenance.mjs"
 
 const at = (value: string) => new Date(value)
+const sha256 = (value: string) => createHash("sha256").update(value).digest("hex")
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+  if (value && typeof value === "object") {
+    const row = value as Record<string, unknown>
+    return `{${Object.keys(row).sort().map((key) => `${JSON.stringify(key)}:${canonical(row[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
+function runtimeFindingFixture() {
+  const sourceMetadata = { findingId: "FINDING-11", objectiveWorkOrderId: "WO-11", sequence: 1 }
+  const gateBinding = {
+    sourceFindingEventId: 442, sourceUserId: "owner", findingId: "FINDING-11", objectiveWorkOrderId: "WO-11",
+    issueNumber: 911, gate: "POLICY", gates: ["POLICY"], reason: "policy change",
+  }
+  const gateMetadata = { ...gateBinding, payloadDigest: sha256(JSON.stringify(gateBinding)) }
+  const decisionPacket = {
+    blockedAction: "Materialize gated work", authorityBoundary: "Owner authority required",
+    approveConsequence: "Record authority only", denyConsequence: "Resolve denied",
+    minimumChoice: "APPROVE_OR_DENY",
+  }
+  const projection = {
+    id: "RUNTIME_FINDING_ACTIONABILITY_V1", version: 1, parentWorkOrderRowId: 11, parentWorkOrderRef: "WO-11",
+    authorityGrantId: 18, authorityGrantRef: "GRANT-0018", sourceFindingEventId: 442,
+    authorityGrantLevel: "A2_WRITE_OWN",
+    gateSettlementEventId: 501, findingId: "FINDING-11", sequence: 1, gates: ["POLICY"], routineSiblingState: "SETTLED",
+  }
+  const request = {
+    sourceKind: "RUNTIME_FINDING", ownerUserId: "owner", parentWorkOrderRowId: 11, parentWorkOrderRef: "WO-11",
+    authorityGrantId: 18, authorityGrantRef: "GRANT-0018", authorityGrantLevel: "A2_WRITE_OWN",
+    sourceFindingEventId: 442, sourcePayloadDigest: sha256(JSON.stringify(sourceMetadata)),
+    gateSettlementEventId: 501, gatePayloadDigest: gateMetadata.payloadDigest,
+    actionableProjectionId: projection.id, actionableProjectionVersion: projection.version,
+    actionableProjectionDigest: sha256(canonical(projection)), findingId: "FINDING-11", sequence: 1,
+    gate: "POLICY", gates: ["POLICY"], allowedChoices: ["APPROVE", "DENY"], recommendation: "DENY",
+    recommendationRationale: "Default deny", decisionPacket, decisionPacketDigest: sha256(JSON.stringify(decisionPacket)),
+  }
+  const receiptPayload = {
+    sourceKind: request.sourceKind, ownerUserId: request.ownerUserId,
+    parentWorkOrderRowId: request.parentWorkOrderRowId, parentWorkOrderRef: request.parentWorkOrderRef,
+    authorityGrantId: request.authorityGrantId, authorityGrantRef: request.authorityGrantRef,
+    authorityGrantLevel: request.authorityGrantLevel, sourceFindingEventId: request.sourceFindingEventId,
+    sourcePayloadDigest: request.sourcePayloadDigest, gateSettlementEventId: request.gateSettlementEventId,
+    gatePayloadDigest: request.gatePayloadDigest, actionableProjectionId: request.actionableProjectionId,
+    actionableProjectionVersion: request.actionableProjectionVersion,
+    actionableProjectionDigest: request.actionableProjectionDigest, findingId: request.findingId,
+    sequence: request.sequence, gate: request.gate, gates: request.gates,
+    decisionPacketDigest: request.decisionPacketDigest, choice: "DENY",
+    requestDigest: primaryDecisionRequestDigest(request), responseDigest: "e".repeat(64),
+    accountEmail: "bsvalues@gmail.com", disposition: "DENIED_RESOLVED", resumeReleased: false,
+  }
+  return {
+    events: [{
+      id: 442, userId: "owner", ref: null, entityType: "work_order", entityId: "11",
+      eventType: "RUNTIME_OBJECTIVE_FINDING_RECORDED", reason: null, metadata: sourceMetadata,
+      createdAt: at("2026-08-20T15:59:00Z"),
+    }, {
+      id: 501, userId: "owner", ref: null, entityType: "work_order", entityId: "11",
+      eventType: "RUNTIME_FINDING_OWNER_GATED", reason: "policy change", metadata: gateMetadata,
+      createdAt: at("2026-08-20T16:00:00Z"),
+    }],
+    request,
+    receipt: {
+      id: 550, userId: "owner", ref: null, entityType: "work_order", entityId: "11",
+      eventType: "RUNTIME_FINDING_OWNER_DECIDED", reason: "Owner denied", createdAt: at("2026-08-20T16:05:00Z"),
+      metadata: { ...receiptPayload, receiptDigest: sha256(canonical(receiptPayload)), decisionId: 71, evidenceId: 81 },
+    },
+  }
+}
 
 function repository(overrides: Partial<WorkbenchThreadRepository> = {}): WorkbenchThreadRepository {
   return {
@@ -57,6 +128,131 @@ function repository(overrides: Partial<WorkbenchThreadRepository> = {}): Workben
 }
 
 describe("loadAuthenticatedWorkbenchThreads", () => {
+  it("binds the canonical runtime finding request only into its owning authenticated Thread", async () => {
+    const runtime = runtimeFindingFixture()
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [{
+        threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const,
+      }]),
+      listGovernanceEvents: vi.fn(async () => runtime.events),
+    })
+    const readRuntimeFindingDecision = vi.fn(async () => runtime.request)
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, {
+      authenticate: async () => "owner", repository: repo, readRuntimeFindingDecision,
+    })
+
+    expect(readRuntimeFindingDecision).toHaveBeenCalledOnce()
+    expect(result[0].items.filter((item) => item.kind === "DECISION")).toEqual([
+      expect.objectContaining({ rawState: "ACTIONABLE", summary: "policy change" }),
+    ])
+    expect(result[0].coverage.conflicts).toEqual([])
+  })
+
+  it("projects a runtime finding only into the single direct work-order Thread, never a transitive goal Thread", async () => {
+    const runtime = runtimeFindingFixture()
+    const repo = repository({
+      listThreads: vi.fn(async () => [{
+        id: "thread-goal", userId: "owner", projectId: 7, title: "Goal Thread",
+        createdAt: at("2026-08-01T00:00:00Z"), updatedAt: at("2026-08-10T00:00:00Z"),
+      }, {
+        id: "thread-work-order", userId: "owner", projectId: 7, title: "Work Order Thread",
+        createdAt: at("2026-08-02T00:00:00Z"), updatedAt: at("2026-08-11T00:00:00Z"),
+      }]),
+      listRootBindings: vi.fn(async () => [{
+        threadId: "thread-goal", userId: "owner", sourceType: "goal" as const, sourceId: "4", role: "root" as const,
+      }, {
+        threadId: "thread-work-order", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const,
+      }]),
+      listGovernanceEvents: vi.fn(async () => runtime.events),
+    })
+    const readRuntimeFindingDecision = vi.fn(async () => runtime.request)
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo, readRuntimeFindingDecision })
+    const goal = result.find((thread) => thread.id === "thread-goal")!
+    const direct = result.find((thread) => thread.id === "thread-work-order")!
+
+    expect(goal.items.some((item) => item.source.kind === "governance_event" && item.source.id === "501")).toBe(false)
+    expect(direct.items.filter((item) => item.source.kind === "governance_event" && item.source.id === "501")).toHaveLength(1)
+  })
+
+  it("fails closed when more than one Thread directly claims the same work order", async () => {
+    const runtime = runtimeFindingFixture()
+    const repo = repository({
+      listThreads: vi.fn(async () => ["a", "b"].map((suffix) => ({
+        id: `thread-${suffix}`, userId: "owner", projectId: 7, title: `Thread ${suffix}`,
+        createdAt: at("2026-08-01T00:00:00Z"), updatedAt: at("2026-08-10T00:00:00Z"),
+      }))),
+      listRootBindings: vi.fn(async () => ["a", "b"].map((suffix) => ({
+        threadId: `thread-${suffix}`, userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const,
+      }))),
+      listGovernanceEvents: vi.fn(async () => runtime.events),
+    })
+    const readRuntimeFindingDecision = vi.fn(async () => runtime.request)
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, { authenticate: async () => "owner", repository: repo, readRuntimeFindingDecision })
+
+    expect(result.flatMap((thread) => thread.items).some((item) => (
+      item.source.kind === "governance_event" && item.source.id === "501"
+    ))).toBe(false)
+  })
+
+  it("keeps a historical owner receipt after the parent completed and the live grant is unavailable", async () => {
+    const runtime = runtimeFindingFixture()
+    const repo = repository({
+      listRootBindings: vi.fn(async () => [{
+        threadId: "thread-a", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const,
+      }]),
+      listWorkOrders: vi.fn(async () => [{
+        id: 11, userId: "owner", ref: "WO-11", title: "Implementation", description: "Build it",
+        status: "complete", result: "Delivered", linkedDecisionId: null,
+        createdAt: at("2026-08-03T00:00:00Z"), updatedAt: at("2026-08-20T17:00:00Z"),
+      }]),
+      listGovernanceEvents: vi.fn(async () => [...runtime.events, runtime.receipt]),
+    })
+    const readRuntimeFindingDecision = vi.fn(async () => {
+      throw new Error("grant expired")
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, {
+      authenticate: async () => "owner", repository: repo, readRuntimeFindingDecision,
+    })
+
+    expect(readRuntimeFindingDecision).not.toHaveBeenCalled()
+    expect(result[0].items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rawState: "OWNER_DECIDED", source: expect.objectContaining({ id: "550" }) }),
+    ]))
+  })
+
+  it("uses only a unique work-order root; a work-order member neither receives nor vetoes it", async () => {
+    const runtime = runtimeFindingFixture()
+    const repo = repository({
+      listThreads: vi.fn(async () => ["goal", "member", "root"].map((suffix) => ({
+        id: `thread-${suffix}`, userId: "owner", projectId: 7, title: `Thread ${suffix}`,
+        createdAt: at("2026-08-01T00:00:00Z"), updatedAt: at("2026-08-10T00:00:00Z"),
+      }))),
+      listRootBindings: vi.fn(async () => [{
+        threadId: "thread-goal", userId: "owner", sourceType: "goal" as const, sourceId: "4", role: "root" as const,
+      }, {
+        threadId: "thread-root", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "root" as const,
+      }]),
+      listMemberBindings: vi.fn(async () => [{
+        threadId: "thread-member", userId: "owner", sourceType: "work_order" as const, sourceId: "11", role: "member" as const,
+      }]),
+      listGovernanceEvents: vi.fn(async () => runtime.events),
+    })
+
+    const result = await loadAuthenticatedWorkbenchThreads(7, {
+      authenticate: async () => "owner", repository: repo, readRuntimeFindingDecision: vi.fn(async () => runtime.request),
+    })
+    const runtimeItems = (threadId: string) => result.find((thread) => thread.id === threadId)!.items
+      .filter((item) => item.source.kind === "governance_event" && item.source.id === "501")
+
+    expect(runtimeItems("thread-goal")).toHaveLength(0)
+    expect(runtimeItems("thread-member")).toHaveLength(0)
+    expect(runtimeItems("thread-root")).toHaveLength(1)
+  })
+
   it("authenticates, traverses only explicit durable edges in bounded batches, and preserves link conflicts", async () => {
     const repo = repository()
     const authenticate = vi.fn(async () => "owner")

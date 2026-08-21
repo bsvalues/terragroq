@@ -5,6 +5,9 @@ import {
   type ThreadSourceInput,
   type ThreadSourceKind,
 } from "@/lib/workbench/thread-projection"
+import { projectRuntimeFindingDecisionSources } from "@/lib/workbench/runtime-finding-decision-projection"
+import { readPendingRuntimeFindingDecisionRequest } from "@/scripts/hermes-bridge/runtime-finding-decision.mjs"
+import { PRIMARY_DECISION_OWNER_EMAIL } from "@/scripts/hermes-bridge/primary-decision-provenance.mjs"
 
 export const WORKBENCH_THREAD_LIMIT = 50
 export const WORKBENCH_SOURCE_LIMIT = 500
@@ -46,9 +49,16 @@ export interface WorkbenchThreadRepository {
   listAuditEvents(userId: string, targets: WorkbenchThreadTargets, limit: number): Promise<AuditEventRow[]>
 }
 
+type RuntimeFindingDecisionReader = (input: Readonly<{
+  ownerEmail: string
+  includeDecided?: boolean
+  exactGateSettlementEventId?: number
+}>) => Promise<Record<string, unknown> | null>
+
 type Dependencies = Readonly<{
   authenticate: () => Promise<string>
   repository: WorkbenchThreadRepository
+  readRuntimeFindingDecision?: RuntimeFindingDecisionReader
 }>
 
 function distinct<T>(values: readonly T[]): T[] {
@@ -264,7 +274,50 @@ export async function loadAuthenticatedWorkbenchThreads(
     || (row.register === "outcome-queue" && row.refId !== null && targets.goalIds.includes(row.refId))
   ))
 
+  const runtimeFindingRequests: Record<string, unknown>[] = []
+  const reader = dependencies.readRuntimeFindingDecision
+    ?? readPendingRuntimeFindingDecisionRequest as unknown as RuntimeFindingDecisionReader
+  const runtimeGateIds = distinct(governance
+    .filter((row) => row.eventType === "RUNTIME_FINDING_OWNER_GATED" && !governance.some((candidate) => {
+      if (candidate.eventType !== "RUNTIME_FINDING_OWNER_DECIDED"
+        || candidate.entityType !== row.entityType
+        || candidate.entityId !== row.entityId) return false
+      const gateMetadata = metadata(row.metadata)
+      const receiptMetadata = metadata(candidate.metadata)
+      return safePositiveInteger(receiptMetadata, "gateSettlementEventId") === row.id
+        || safePositiveInteger(receiptMetadata, "sourceFindingEventId") === safePositiveInteger(gateMetadata, "sourceFindingEventId")
+        || (safeString(receiptMetadata, "findingId") !== undefined
+          && safeString(receiptMetadata, "findingId") === safeString(gateMetadata, "findingId"))
+    }))
+    .map((row) => row.id)).sort((left, right) => left - right)
+  for (const gateSettlementEventId of runtimeGateIds) {
+    try {
+      const candidate = await reader({
+        ownerEmail: PRIMARY_DECISION_OWNER_EMAIL,
+        includeDecided: false,
+        exactGateSettlementEventId: gateSettlementEventId,
+      })
+      if (candidate?.ownerUserId === userId) runtimeFindingRequests.push(candidate)
+    } catch {
+      // A gate that cannot pass the canonical exact reader is never projected as actionable or
+      // owner-decided. Other Thread history remains available.
+    }
+  }
+
+  const directWorkOrderIdByThread = new Map<string, number>()
+  const directOwnersByWorkOrderId = new Map<number, string[]>()
+  for (const thread of threads) {
+    const directIds = distinct(persistedBindings
+      .filter((row) => row.threadId === thread.id && row.kind === "work_order" && row.role === "root")
+      .map((row) => workOrderIdFor(row.sourceId))
+      .filter((id): id is number => id !== null))
+    if (directIds.length !== 1) continue
+    directWorkOrderIdByThread.set(thread.id, directIds[0])
+    directOwnersByWorkOrderId.set(directIds[0], [...(directOwnersByWorkOrderId.get(directIds[0]) ?? []), thread.id])
+  }
+
   const allBindings: ThreadBindingInput[] = []
+  const runtimeDecisionSources: ThreadSourceInput[] = []
   for (const thread of threads) {
     const persisted = persistedBindings.filter((row) => row.threadId === thread.id)
     for (const row of persisted) {
@@ -293,8 +346,22 @@ export async function loadAuthenticatedWorkbenchThreads(
     for (const id of threadWorkOrderIds) allBindings.push(binding(thread.id, userId, projectId, "work_order", String(id)))
     for (const id of threadDecisionIds) allBindings.push(binding(thread.id, userId, projectId, "decision", String(id)))
     for (const row of evidence.filter((candidate) => threadWorkOrderIds.includes(candidate.workOrderId) || threadOutcomes.some((outcome) => outcome.terminalEvidenceId === candidate.id))) allBindings.push(binding(thread.id, userId, projectId, "evidence_record", String(row.id)))
-    for (const row of governance.filter((candidate) => (candidate.entityType === "goal" && threadGoalIds.includes(Number(candidate.entityId))) || (candidate.entityType === "work_order" && threadWorkOrderIds.includes(Number(candidate.entityId))) || (candidate.entityType === "outcome_queue_item" && candidate.entityId !== null && threadOutcomes.some((outcome) => outcome.outcomeKey === candidate.entityId)))) allBindings.push(binding(thread.id, userId, projectId, "governance_event", String(row.id)))
+    for (const row of governance.filter((candidate) => !["RUNTIME_FINDING_OWNER_GATED", "RUNTIME_FINDING_OWNER_DECIDED"].includes(candidate.eventType) && ((candidate.entityType === "goal" && threadGoalIds.includes(Number(candidate.entityId))) || (candidate.entityType === "work_order" && threadWorkOrderIds.includes(Number(candidate.entityId))) || (candidate.entityType === "outcome_queue_item" && candidate.entityId !== null && threadOutcomes.some((outcome) => outcome.outcomeKey === candidate.entityId))))) allBindings.push(binding(thread.id, userId, projectId, "governance_event", String(row.id)))
     for (const row of audits.filter((candidate) => (candidate.register === "goals" && candidate.refId !== null && threadGoalIds.includes(candidate.refId)) || (candidate.register === "work-orders" && candidate.refId !== null && threadWorkOrderIds.includes(candidate.refId)) || (candidate.register === "outcome-queue" && candidate.refId !== null && threadGoalIds.includes(candidate.refId)))) allBindings.push(binding(thread.id, userId, projectId, "event_log", String(row.id)))
+    const directWorkOrderId = directWorkOrderIdByThread.get(thread.id)
+    const directWorkOrder = directWorkOrderId === undefined ? null : workOrders.find((row) => row.id === directWorkOrderId) ?? null
+    if (directWorkOrder && directOwnersByWorkOrderId.get(directWorkOrder.id)?.length === 1) {
+      const projection = projectRuntimeFindingDecisionSources({
+        userId,
+        projectId,
+        thread: { id: thread.id, workOrderId: directWorkOrder.id },
+        workOrder: { id: directWorkOrder.id, ref: directWorkOrder.ref },
+        events: governance,
+        actionableRequest: runtimeFindingRequests,
+      })
+      allBindings.push(...projection.bindings)
+      runtimeDecisionSources.push(...projection.sources)
+    }
   }
 
   const sources: ThreadSourceInput[] = [
@@ -320,7 +387,8 @@ export async function loadAuthenticatedWorkbenchThreads(
     ...workOrders.map((row) => ({ kind: "work_order" as const, id: String(row.id), userId, occurredAt: row.updatedAt, ref: row.ref, drilldown: sourceDrilldown("work_order", String(row.id)), data: { title: row.title, description: row.description, status: row.status, result: row.result } })),
     ...decisions.map((row) => ({ kind: "decision" as const, id: String(row.id), userId, occurredAt: row.updatedAt, ref: row.ref, drilldown: sourceDrilldown("decision", String(row.id)), data: { title: row.title, decision: row.decision, status: row.status, authority: row.authority } })),
     ...evidence.map((row) => ({ kind: "evidence_record" as const, id: String(row.id), userId, occurredAt: row.createdAt, ref: row.ref, drilldown: sourceDrilldown("evidence_record", String(row.id)), data: { result: row.result, summary: row.notes, validators: row.validators, contentHash: row.contentHash, artifactLabel: row.contentHash ? "Hashed evidence artifact" : undefined } })),
-    ...governance.map((row) => { const meta = metadata(row.metadata); return { kind: "governance_event" as const, id: String(row.id), userId, occurredAt: row.createdAt, ref: row.ref, mirrorKey: safeString(meta, "mirrorKey") ?? `governance_event:${row.id}`, drilldown: sourceDrilldown("governance_event", String(row.id)), data: { eventType: row.eventType, reason: row.reason, ...eventData(meta) } } }),
+    ...governance.filter((row) => !["RUNTIME_FINDING_OWNER_GATED", "RUNTIME_FINDING_OWNER_DECIDED"].includes(row.eventType)).map((row) => { const meta = metadata(row.metadata); return { kind: "governance_event" as const, id: String(row.id), userId, occurredAt: row.createdAt, ref: row.ref, mirrorKey: safeString(meta, "mirrorKey") ?? `governance_event:${row.id}`, drilldown: sourceDrilldown("governance_event", String(row.id)), data: { eventType: row.eventType, reason: row.reason, ...eventData(meta) } } }),
+    ...runtimeDecisionSources,
     ...audits.map((row) => { const meta = metadata(row.metadata); const governanceEventId = safePositiveInteger(meta, "governanceEventId"); return { kind: "event_log" as const, id: String(row.id), userId, occurredAt: row.createdAt, mirrorKey: safeString(meta, "mirrorKey") ?? (governanceEventId ? `governance_event:${governanceEventId}` : undefined), drilldown: sourceDrilldown("event_log", String(row.id)), data: { type: row.type, summary: row.summary, ...eventData(meta) } } }),
   ]
 

@@ -17,6 +17,7 @@ const USER_INPUT_METHODS = new Set([
 ])
 
 const FORBIDDEN_ITEM_TYPES = new Set(["mcpToolCall", "dynamicToolCall", "webSearch"])
+const MAX_TURN_ERROR_DETAIL_CHARS = 1_000
 
 const CODEX_ENVIRONMENT_KEYS = new Set([
   "APPDATA", "CODEX_HOME", "COLORTERM", "COMSPEC", "HOME", "HOMEDRIVE", "HOMEPATH",
@@ -26,6 +27,7 @@ const CODEX_ENVIRONMENT_KEYS = new Set([
 ])
 
 const SECRET_PATTERNS = [
+  /-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g,
   /\b(?:sk|sess|key|token)-[A-Za-z0-9._-]{8,}\b/gi,
   /\bauthorization\s*:\s*(?:bearer|basic)\s+[^\s,;]+/gi,
   /\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}\b/gi,
@@ -70,18 +72,29 @@ export class AppServerFrameLimitError extends Error {
 }
 
 export class AppServerTurnEndedError extends Error {
-  constructor(status) {
+  constructor(status, detail = null) {
     super(`Codex App Server turn ended with ${status}`)
     this.name = "AppServerTurnEndedError"
     this.code = status === "failed" ? "APP_SERVER_TURN_FAILED" : "APP_SERVER_TURN_INTERRUPTED"
     this.status = status
+    const sanitizedDetail = sanitizeAppServerText(detail).slice(0, MAX_TURN_ERROR_DETAIL_CHARS)
+    this.detail = sanitizedDetail || null
   }
 }
 
 export function sanitizeAppServerText(value) {
   let text = typeof value === "string" ? value : ""
+  text = text.replace(
+    /(\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss):\/\/)[^\s:@/]+:[^\s@/]+(?=@)/gi,
+    "$1[REDACTED]",
+  )
   for (const pattern of SECRET_PATTERNS) text = text.replace(pattern, "[REDACTED]")
   return text
+}
+
+function sanitizeTurnError(error) {
+  const message = sanitizeAppServerText(error?.message).slice(0, MAX_TURN_ERROR_DETAIL_CHARS)
+  return message ? { message } : null
 }
 
 export function createCodexChildEnvironment(source = process.env, {
@@ -427,7 +440,7 @@ export class CodexAppServerClient {
       if (completed) {
         this.completedTurns.delete(`${threadId}:${turnId}`)
         if (completed.status === "completed") this.turnWaiter.resolve(completed)
-        else this.turnWaiter.reject(new AppServerTurnEndedError(completed.status))
+        else this.turnWaiter.reject(new AppServerTurnEndedError(completed.status, completed.error?.message))
         return
       }
       if (deadline !== null) {
@@ -578,12 +591,12 @@ export class CodexAppServerClient {
           turnId: turn.id,
           status: turn.status,
           finalText: itemText,
-          error: turn.error ? { message: sanitizeAppServerText(turn.error.message) } : null,
+          error: sanitizeTurnError(turn.error),
         }
         this.turnText.delete(`${threadId}:${turn.id}`)
         if (this.turnWaiter && threadId === this.turnWaiter.threadId && turn.id === this.turnWaiter.turnId) {
           if (turn.status === "completed") this.turnWaiter.resolve(result)
-          else this.turnWaiter.reject(new AppServerTurnEndedError(turn.status))
+          else this.turnWaiter.reject(new AppServerTurnEndedError(turn.status, result.error?.message))
         } else {
           this.completedTurns.clear()
           this.completedTurns.set(`${threadId}:${turn.id}`, result)
@@ -642,14 +655,14 @@ export class CodexAppServerClient {
         turnId,
         status: turn.status,
         finalText: this.#finalText(turn.items) || bufferedText,
-        error: turn.error ? { message: sanitizeAppServerText(turn.error.message) } : null,
+        error: sanitizeTurnError(turn.error),
       }
       this.completedNotifications.delete(key)
       this.turnText.delete(key)
       const waiterMatches = this.turnWaiter
         && this.turnWaiter.threadId === threadId && this.turnWaiter.turnId === turnId
       if (turn.status !== "completed") {
-        if (waiterMatches) this.turnWaiter.reject(new AppServerTurnEndedError(turn.status))
+        if (waiterMatches) this.turnWaiter.reject(new AppServerTurnEndedError(turn.status, result.error?.message))
         else {
           this.completedTurns.clear()
           this.completedTurns.set(key, result)
@@ -676,7 +689,14 @@ export class CodexAppServerClient {
       return { threadId: message.params?.threadId, status: message.params?.status?.type ?? null }
     }
     if (message.method === "turn/started" || message.method === "turn/completed") {
-      return { threadId: message.params?.threadId, turnId: message.params?.turn?.id, status: message.params?.turn?.status }
+      return {
+        threadId: message.params?.threadId,
+        turnId: message.params?.turn?.id,
+        status: message.params?.turn?.status,
+        ...(message.method === "turn/completed"
+          ? { error: sanitizeTurnError(message.params?.turn?.error) }
+          : {}),
+      }
     }
     return undefined
   }

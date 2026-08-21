@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { getTableName } from "drizzle-orm"
 import { getTableConfig } from "drizzle-orm/pg-core"
 
@@ -378,6 +378,7 @@ function acquisitionQuery({
   rebound = [],
   resumeAfterRenewal,
   replayResume = [],
+  releasedSlot = [],
 }: {
   receipt?: unknown[]
   receiptOutcome?: unknown[]
@@ -393,6 +394,7 @@ function acquisitionQuery({
   rebound?: unknown[]
   resumeAfterRenewal?: unknown[]
   replayResume?: unknown[]
+  releasedSlot?: unknown[]
 }) {
   let acquireCalls = 0
   let resumeCalls = 0
@@ -410,6 +412,9 @@ function acquisitionQuery({
       return { rows }
     }
     if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: prior }
+    if (sql === OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot) {
+      return { rows: releasedSlot }
+    }
     if (sql === OUTCOME_QUEUE_SQL.revalidateAcquisition) {
       const rows = replayEligibilityReads > 0 && replayEligibilityAfterRenewal !== undefined
         ? replayEligibilityAfterRenewal
@@ -1216,10 +1221,40 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_execution_grant."workOrderId" IS NULL`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`FROM "outcome_queue_mutation_receipt" AS execution_receipt`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt.operation = 'workbench_execution.authorize'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`encode(sha256(convert_to(`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."requestHash" =`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding" ?& ARRAY[`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding"->>'queueVersion' = '1'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toMatch(
+      /authorizedAt'[\s\S]*::timestamptz[\s\S]*END = execution_receipt\."createdAt"/,
+    )
+    expect(OUTCOME_QUEUE_SQL.acquire).toMatch(
+      /SELECT count\(\*\)[\s\S]*duplicate_execution_receipt[\s\S]*workbench_execution\.authorize[\s\S]*= 1/,
+    )
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_receipt.operation = 'runtime_finding.derive'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_receipt."requestBinding"->>'operation' = 'runtime_finding.derive'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_queue_grant."allowedActions" = ARRAY['outcome:execute']::text[]`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`derived_implementation_grant."allowedActions" = ARRAY['implement']::text[]`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`settlement.actor = 'williamos-runtime-operator'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."requestBinding"->>'threadId' = execution_root."threadId"`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding"->>'grantRef' = q."authorityGrantRef"`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding"->'workContract'->>'id' = 'selected-thread-latest-evidence.v1'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toMatch(/execution_receipt\."resultBinding"->'workContract'->>'digest' = '[a-f0-9]{64}'/)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding"->'workContract'->>'id' = 'issue-911-runtime-reliability-evidence.v1'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_implementation_grant.ref = execution_receipt."resultBinding"->>'implementationGrantRef'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_implementation_grant."allowedActions" = ARRAY['implement']::text[]`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_implementation_grant.scope = 'WO-HERMES-OUTCOME-' || q."goalId"::text`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_execution_approval.owner = q."userId"`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding"->>'decisionRef' = exact_execution_approval.ref`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."requestBinding"->>'idempotencyKey' = execution_receipt."idempotencyKey"`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`jsonb_build_object(`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_execution_approval.evidence = ARRAY[`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_execution_approval.tags = ARRAY['workbench', 'outcome', 'explicit-start-work']::text[]`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`receipt_execution_grant.id::text = execution_receipt."resultBinding"->>'grantId'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_execution_grant."blockedActions" = ARRAY['production:mutate', 'release:create', 'secret:access', 'spend:increase']::text[]`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`exact_implementation_grant."blockedActions" = ARRAY['production:mutate', 'release:create', 'secret:access', 'spend:increase']::text[]`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_receipt."resultBinding"->'workContract' =`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(`FROM jsonb_object_keys(execution_receipt."resultBinding")`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`FROM "workbench_thread_source" AS execution_root`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_root."sourceType" = 'outcome'`)
     expect(OUTCOME_QUEUE_SQL.acquire).toContain(`execution_root."sourceId" = q."outcomeKey"`)
@@ -1242,6 +1277,11 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_grant."status" = 'active'`)
     expect(OUTCOME_QUEUE_SQL.complete).toContain(`live_grant."expiresAt" AT TIME ZONE 'UTC' > $12::timestamptz`)
+    for (const sql of [OUTCOME_QUEUE_SQL.reclaimAcquisition, OUTCOME_QUEUE_SQL.revalidateAcquisition,
+      OUTCOME_QUEUE_SQL.renewLease, OUTCOME_QUEUE_SQL.bindWorkOrder,
+      OUTCOME_QUEUE_SQL.verifyBoundWorkOrder, OUTCOME_QUEUE_SQL.complete]) {
+      expect(sql).toContain(`runtime_finding.derive`)
+    }
     expect(enqueueOutcome).toBe(persistOutcomeQueueItem)
     expect(listOutcomeQueue).toBe(readOutcomeQueue)
     expect(acquireOutcomeCompatibility).toBe(acquireNextEligibleOutcome)
@@ -1249,6 +1289,35 @@ describe("transactional durable outcome queue source", () => {
     expect(transitionOutcomeCompatibility).toBe(transitionOutcomeQueueItem)
     expect(matchOutcomeAuthorityCompatibility).toBe(matchOutcomeAuthorityGrant)
     expect(completeQueuedOutcome).toBe(completeOutcomeQueueItem)
+  })
+
+  it("rejects forged, drifted, or duplicate #911 authorization receipts in the locked candidate before lease mutation", () => {
+    const [candidate, mutation] = OUTCOME_QUEUE_SQL.acquire.split(
+      `UPDATE "outcome_queue_item" AS q`,
+    )
+    expect(mutation).toBeDefined()
+    expect(candidate).toContain(`execution_receipt."requestHash" = encode(sha256(convert_to(`)
+    expect(candidate).toContain(`execution_receipt."resultBinding" ?& ARRAY[`)
+    expect(candidate).toContain(`execution_receipt."resultBinding"->>'queueVersion' = '1'`)
+    expect(candidate).not.toContain(`execution_receipt."resultBinding"->>'queueVersion' = q.version::text`)
+    expect(candidate).toContain(`END = execution_receipt."createdAt"`)
+    expect(candidate).toContain(`duplicate_execution_receipt.operation = 'workbench_execution.authorize') = 1`)
+    expect(candidate.indexOf(`execution_receipt."requestHash" =`)).toBeLessThan(
+      OUTCOME_QUEUE_SQL.acquire.indexOf(`UPDATE "outcome_queue_item" AS q`),
+    )
+  })
+
+  it("keeps the immutable #911 authorization baseline valid across acquire, revalidation, completion, and stale reacquisition", () => {
+    for (const sql of [
+      OUTCOME_QUEUE_SQL.acquire,
+      OUTCOME_QUEUE_SQL.revalidateAcquisition,
+      OUTCOME_QUEUE_SQL.renewLease,
+      OUTCOME_QUEUE_SQL.complete,
+      OUTCOME_QUEUE_SQL.reclaimAcquisition,
+    ]) {
+      expect(sql).toContain(`execution_receipt."resultBinding"->>'queueVersion' = '1'`)
+      expect(sql).not.toContain(`execution_receipt."resultBinding"->>'queueVersion' = q.version::text`)
+    }
   })
 
   it("persists and reads all data in one user scope", async () => {
@@ -1438,6 +1507,282 @@ describe("transactional durable outcome queue source", () => {
     expect(query).not.toHaveBeenCalled()
   })
 
+  it("releases an expired authorization-ineligible active slot before acquiring new work", async () => {
+    const stale = queueRow({
+      id: 17,
+      outcomeKey: "goal:GOAL-0017",
+      goalId: 17,
+      goalRef: "GOAL-0017",
+      leaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      fencingToken: 4,
+      version: 8,
+      acquisitionKey: "acquire-stale",
+    })
+    const next = queueRow({
+      id: 23,
+      outcomeKey: "goal:GOAL-0023",
+      goalId: 23,
+      goalRef: "GOAL-0023",
+      lifecycleState: "approved",
+      activeWorkOrderId: 23,
+      executionBinding: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 0,
+      version: 1,
+      acquisitionKey: null,
+      activatedAt: null,
+    })
+    const acquired = {
+      ...next,
+      lifecycleState: "active",
+      executionBinding: "execution-next",
+      leaseHolder: "supervisor-next",
+      leaseToken: "lease-next",
+      leaseExpiresAt: "2026-07-28T12:01:00.000Z",
+      fencingToken: 1,
+      version: 2,
+      acquisitionKey: "acquire-next",
+      activatedAt: now,
+    }
+    let staleOwnsActiveSlot = true
+    const run = vi.fn(async (sql: string, values: unknown[] = []) => {
+      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot) {
+        staleOwnsActiveSlot = false
+        return {
+          rows: [{
+            ...stale,
+            lifecycleState: "blocked",
+            lifecycleReason: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+            leaseHolder: null,
+            leaseToken: null,
+            leaseExpiresAt: null,
+            executionBinding: null,
+            acquisitionKey: null,
+            fencingToken: 5,
+            version: 9,
+            priorAcquisitionKey: stale.acquisitionKey,
+            priorLeaseHolder: stale.leaseHolder,
+            priorLeaseToken: stale.leaseToken,
+            priorLeaseExpiresAt: stale.leaseExpiresAt,
+            priorFencingToken: stale.fencingToken,
+            priorVersion: stale.version,
+          }],
+        }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.acquire) {
+        if (staleOwnsActiveSlot) {
+          throw Object.assign(new Error(
+            "duplicate key value violates unique constraint outcome_queue_item_one_active_per_user_idx",
+          ), { code: "23505" })
+        }
+        return { rows: [acquired] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionReceipt) {
+        return { rows: [{ id: 51, outcomeKey: values[2], firstFencingToken: 1, latestFencingToken: 1 }] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt) return { rows: [{ id: 61 }] }
+      throw new Error(`unexpected query: ${sql}`)
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+      acquisitionKey: "acquire-next",
+      leaseHolder: "supervisor-next",
+      leaseToken: "lease-next",
+      executionBinding: "execution-next",
+      activeWorkOrderId: 23,
+    })).resolves.toMatchObject({
+      acquired: true,
+      outcome: { outcomeKey: "goal:GOAL-0023", fencingToken: 1 },
+    })
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN",
+      OUTCOME_QUEUE_SQL.acquireLock,
+      OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
+      OUTCOME_QUEUE_SQL.readAcquisition,
+      OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot,
+      OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+      OUTCOME_QUEUE_SQL.acquire,
+      OUTCOME_QUEUE_SQL.insertAcquisitionReceipt,
+      OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+      "COMMIT",
+    ])
+    expect(run).toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot,
+      [now, userId],
+    )
+    const recoveryProof = run.mock.calls
+      .filter(([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt)[0]
+    expect(recoveryProof?.[1]?.slice(3, 6)).toEqual([
+      stale.leaseHolder,
+      createHash("sha256").update(JSON.stringify({ acquisitionKey: stale.acquisitionKey })).digest("hex"),
+      createHash("sha256").update(JSON.stringify({
+        leaseHolder: stale.leaseHolder,
+        leaseToken: stale.leaseToken,
+      })).digest("hex"),
+    ])
+    expect(recoveryProof?.[1]?.slice(13, 19)).toEqual([
+      "goal:GOAL-0017",
+      4,
+      "2026-07-28T11:59:59.000Z",
+      stale.activeWorkOrderId,
+      "STALE_INELIGIBLE_BLOCKED",
+      JSON.stringify({
+        code: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+        outcomeKey: "goal:GOAL-0017",
+        priorFencingToken: 4,
+        priorLeaseExpiresAt: "2026-07-28T11:59:59.000Z",
+        priorVersion: 8,
+        recoveredFencingToken: 5,
+        recoveredVersion: 9,
+      }),
+    ])
+  })
+
+  it("uses a closed two-parameter fail-closed active-slot recovery statement", () => {
+    const sql = OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot
+    expect(sql).toContain(`q."leaseExpiresAt" <= $1::timestamptz`)
+    expect(sql).toContain(`q."userId" = $2`)
+    expect(sql).not.toMatch(/\$[3-9]/)
+    expect(sql).toContain(`"lifecycleReason" = 'STALE_LEASE_AUTHORIZATION_INELIGIBLE'`)
+    expect(sql).toContain(`"fencingToken" = q."fencingToken" + 1`)
+    expect(sql).toContain(`"version" = q."version" + 1`)
+    expect(sql).toContain(`"executionBinding" = NULL`)
+    expect(sql).toContain(`"acquisitionKey" = NULL`)
+    expect(sql).not.toContain(`"activeWorkOrderId" = NULL`)
+    expect(sql).toContain(`q."outcomeKey" NOT IN (`)
+    expect(sql).toContain(`NOT (`)
+    expect(sql).toContain(`live_approval."status" = 'accepted'`)
+    expect(sql).toContain(`live_grant."status" = 'active'`)
+    expect(OUTCOME_QUEUE_SQL.acquire).toContain(
+      `occupied_slot."lifecycleState" = 'active'`,
+    )
+  })
+
+  it("rolls back when active-slot recovery violates exact cardinality", async () => {
+    const released = queueRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 2,
+      version: 2,
+    })
+    const query = acquisitionQuery({ releasedSlot: [released, { ...released, id: 2 }] })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+      acquisitionKey: "acquire-cardinality-wall",
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_CARDINALITY_WALL",
+    })
+    expect(query).not.toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.acquire, expect.anything())
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("walls drifted active-slot recovery fence evidence before acquisition", async () => {
+    const released = queueRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+      executionBinding: null,
+      acquisitionKey: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 7,
+      version: 9,
+      priorAcquisitionKey: "acquire-stale",
+      priorLeaseHolder: "supervisor-stale",
+      priorLeaseToken: "lease-stale",
+      priorLeaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      priorFencingToken: 4,
+      priorVersion: 8,
+    })
+    const query = acquisitionQuery({ releasedSlot: [released] })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+      acquisitionKey: "acquire-after-drift",
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_ACTIVE_SLOT_RECOVERY_EVIDENCE_WALL",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
+      expect.anything(),
+    )
+    expect(query).not.toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.acquire, expect.anything())
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("rolls back the recovery row and evidence when the following acquisition fails", async () => {
+    const released = queueRow({
+      lifecycleState: "blocked",
+      lifecycleReason: "STALE_LEASE_AUTHORIZATION_INELIGIBLE",
+      executionBinding: null,
+      acquisitionKey: null,
+      leaseHolder: null,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      fencingToken: 5,
+      version: 9,
+      priorAcquisitionKey: "acquire-stale",
+      priorLeaseHolder: "supervisor-stale",
+      priorLeaseToken: "lease-stale",
+      priorLeaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      priorFencingToken: 4,
+      priorVersion: 8,
+    })
+    let slotState = "active"
+    let recoveryEvidenceRows = 0
+    const run = vi.fn(async (sql: string, values: unknown[] = []) => {
+      if (sql === "BEGIN") return { rows: [] }
+      if (sql === "ROLLBACK") {
+        slotState = "active"
+        recoveryEvidenceRows = 0
+        return { rows: [] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot) {
+        slotState = "blocked"
+        return { rows: [released] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt) {
+        if (values[17] === "STALE_INELIGIBLE_BLOCKED") recoveryEvidenceRows += 1
+        return { rows: [{ id: 61 }] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.acquire) {
+        throw Object.assign(new Error("forced acquisition failure"), {
+          code: "FORCED_NEXT_ACQUISITION_WALL",
+        })
+      }
+      throw new Error(`unexpected query: ${sql}`)
+    })
+    const query = dedicatedQuery(run)
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+      acquisitionKey: "acquire-after-stale",
+    })).rejects.toMatchObject({ code: "FORCED_NEXT_ACQUISITION_WALL" })
+    expect(slotState).toBe("active")
+    expect(recoveryEvidenceRows).toBe(0)
+    expect(run).not.toHaveBeenCalledWith("COMMIT")
+    expect(run.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
   it.each([
     [{ totalCount: 0 }, "EMPTY_QUEUE"],
     [{ totalCount: 3, candidateStateCount: 0 }, "NO_ELIGIBLE_OUTCOME"],
@@ -1475,6 +1820,7 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.acquireLock,
       OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
       OUTCOME_QUEUE_SQL.readAcquisition,
+      OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot,
       OUTCOME_QUEUE_SQL.acquire,
       OUTCOME_QUEUE_SQL.readRenewableV12CampaignAuthorities,
       OUTCOME_QUEUE_SQL.noSelectionReason,
@@ -1489,7 +1835,8 @@ describe("transactional durable outcome queue source", () => {
     expect(query.mock.calls[1][1]).toEqual([`${userId}:outcome-queue`])
     expect(query.mock.calls[2][1]).toEqual([userId, "acquire-none"])
     expect(query.mock.calls[3][1]).toEqual([userId, "acquire-none"])
-    expect(query.mock.calls[6][1]).toEqual([now, userId])
+    expect(query.mock.calls[4][1]).toEqual([now, userId])
+    expect(query.mock.calls[7][1]).toEqual([now, userId])
     const proofCall = query.mock.calls.find(
       ([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt,
     )
@@ -1826,6 +2173,10 @@ describe("transactional durable outcome queue source", () => {
       reason: null,
     })
     expect(firstQuery.mock.calls[4]).toEqual([
+      OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot,
+      [now, userId],
+    ])
+    expect(firstQuery.mock.calls[5]).toEqual([
       OUTCOME_QUEUE_SQL.acquire,
       [
         now, userId, "acquire-a", "execution-a", "supervisor-a", "lease-a",
@@ -2507,7 +2858,11 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`q."leaseExpiresAt" > $8::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`projected_work."userId" = q."userId"`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
-      .toContain(`projected_work.ref = 'WO-HERMES-OUTCOME-' || q."goalId"::text`)
+      .toContain(`projected_work.ref = CASE WHEN work_contract_receipt.operation = 'runtime_finding.derive'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`THEN work_contract_receipt."resultBinding"->>'workOrderRef'`)
+    expect(OUTCOME_QUEUE_SQL.bindWorkOrder)
+      .toContain(`ELSE 'WO-HERMES-OUTCOME-' || q."goalId"::text END`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`projected_work.goal = q."goalRef"`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`live_approval."status" = 'accepted'`)
     expect(OUTCOME_QUEUE_SQL.bindWorkOrder).toContain(`live_grant."status" = 'active'`)
@@ -2805,12 +3160,20 @@ describe("transactional durable outcome queue source", () => {
       reviewRecoveryStaleReclaimApplied: true,
       reviewRecoveryReclaimCount: 1,
     })
-    const active = { ...reclaimed, version: 6, fencingToken: 4 }
-    const run = vi.fn(async (sql: string) => ({
-      rows: sql === OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate ? [active]
+    const active = { ...reclaimed, lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      version: 6, fencingToken: 4, leaseExpiresAt: "2026-07-28T11:59:00.000Z" }
+    let insertedMetadata: unknown = null
+    const run = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql === OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence) {
+        insertedMetadata = JSON.parse(String(values?.[2]))
+        return { rows: [{ id: 701 }] }
+      }
+      return { rows: sql === OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate ? [active]
         : sql === OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery ? [reclaimed]
-          : [],
-    }))
+          : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence
+            ? [{ id: 701, actor: "hermes-codex-bridge", metadata: insertedMetadata }]
+            : [] }
+    })
 
     await expect(resumeOutcomeQueueAfterReviewRecovery({
       query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
@@ -2820,7 +3183,9 @@ describe("transactional durable outcome queue source", () => {
       expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
       leaseHolder: "resident-hermes", leaseToken: "lease-a",
       leaseDurationMs: 50 * 60 * 1000, now,
-    })).resolves.toEqual(reclaimed)
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+      campaignWindowId: "campaign-1", processIdentity: "process-1",
+    })).resolves.toMatchObject({ ...reclaimed, reviewRecoveryReclaimEventId: 701 })
     expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
       .toContain(`q."leaseExpiresAt" <= $14::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
@@ -2834,7 +3199,407 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
       .not.toContain(`live."leaseExpiresAt"`)
     expect(run).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, expect.any(Array))
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN", OUTCOME_QUEUE_SQL.acquireLock, OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery,
+      OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate, OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery,
+      OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence,
+      OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence, "COMMIT",
+    ])
+    const inserted = run.mock.calls.find(([sql]) => sql === OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence)
+    expect(inserted?.[1]?.slice(0, 2)).toEqual(["owner", "goal:GOAL-1000"])
+    expect(insertedMetadata).toMatchObject({
+      campaignWindowId: "campaign-1", processIdentity: "process-1",
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+      priorVersion: 6, priorFencingToken: 4, version: 7, fencingToken: 5,
+    })
   })
+
+  it("advances one authenticated legacy stale-recovery hop and replays it without a second fence", async () => {
+    const base = queueRow({
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      leaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      fencingToken: 5,
+      version: 7,
+    })
+    const continued = queueRow({
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      leaseExpiresAt: "2026-07-28T12:01:00.000Z",
+      fencingToken: 6,
+      version: 8,
+    })
+    const envelope = {
+      sourceExpectedVersion: 4,
+      sourceFencingToken: 2,
+      sourceRuntimeAttempt: 5,
+      reclaimEventId: 961,
+      reclaimPayloadDigest: "9".repeat(64),
+      mode: "ADVANCE_OR_REPLAY",
+      continuation: null,
+      baseHop: {
+        disposition: "RECLAIMED",
+        expectedVersion: 7,
+        fencingToken: 5,
+        leaseExpiresAt: base.leaseExpiresAt,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        priorExpectedVersion: 6,
+        priorFencingToken: 4,
+        receiptLatestFencingToken: 5,
+        checkpointDigest: "a".repeat(64),
+      },
+    }
+    const firstQuery = acquisitionQuery({
+      receipt: [{
+        outcomeKey: base.outcomeKey,
+        firstFencingToken: 2,
+        latestFencingToken: 5,
+      }],
+      receiptOutcome: [base],
+      reclaimed: [continued],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query: firstQuery,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: envelope,
+    })).resolves.toMatchObject({
+      outcome: continued,
+      acquired: true,
+      reclaimed: true,
+      replayed: false,
+      reviewRecoveryContinuationDisposition: "RECLAIMED",
+      reviewRecoveryContinuationEvidence: {
+        disposition: "RECLAIMED",
+        sourceExpectedVersion: 4,
+        sourceFencingToken: 2,
+        sourceRuntimeAttempt: 5,
+        reclaimEventId: 961,
+        reclaimPayloadDigest: "9".repeat(64),
+        expectedVersion: 8,
+        fencingToken: 6,
+        checkpointDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+    })
+    expect(firstQuery.mock.calls.filter(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.reclaimAcquisition,
+    )).toHaveLength(1)
+
+    const replayQuery = acquisitionQuery({
+      receipt: [{
+        outcomeKey: continued.outcomeKey,
+        firstFencingToken: 2,
+        latestFencingToken: 6,
+      }],
+      receiptOutcome: [continued],
+    })
+    await expect(acquireNextEligibleOutcome({
+      query: replayQuery,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: envelope,
+    })).resolves.toMatchObject({
+      outcome: continued,
+      acquired: true,
+      reclaimed: false,
+      replayed: true,
+      reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+      reviewRecoveryContinuationEvidence: {
+        disposition: "REPLAY_WINNER",
+        sourceExpectedVersion: 4,
+        sourceFencingToken: 2,
+        sourceRuntimeAttempt: 5,
+        reclaimEventId: 961,
+        reclaimPayloadDigest: "9".repeat(64),
+        expectedVersion: 8,
+        fencingToken: 6,
+        checkpointDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+    })
+    expect(replayQuery).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.reclaimAcquisition,
+      expect.anything(),
+    )
+
+    const replayCheckpointDigest = digestOutcomeQueueCheckpointProof({
+      outcomeId: String(continued.goalId), outcomeKey: continued.outcomeKey,
+      workOrderId: continued.activeWorkOrderId, fencingToken: 6, sequence: 4,
+      state: "HOST_VALIDATION_PASSED",
+      commit: { headSha: "a".repeat(40), mergeSha: null, prNumber: null },
+    })
+    const replayOnlyEnvelope = {
+      ...envelope,
+      mode: "REPLAY_ONLY",
+      continuation: {
+        disposition: "RECLAIMED",
+        priorExpectedVersion: 7,
+        priorFencingToken: 5,
+        priorLeaseExpiresAt: base.leaseExpiresAt,
+        expectedVersion: 8,
+        fencingToken: 6,
+        receiptLatestFencingToken: 6,
+        leaseExpiresAt: continued.leaseExpiresAt,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        checkpointDigest: replayCheckpointDigest,
+      },
+    }
+    const replayOnlyQuery = acquisitionQuery({
+      receipt: [{ outcomeKey: continued.outcomeKey, firstFencingToken: 2, latestFencingToken: 6 }],
+      receiptOutcome: [continued],
+    })
+    await expect(acquireNextEligibleOutcome({
+      query: replayOnlyQuery,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: replayOnlyEnvelope,
+    })).resolves.toMatchObject({
+      outcome: continued,
+      acquired: true,
+      reclaimed: false,
+      replayed: true,
+      reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+      reviewRecoveryContinuationEvidence: {
+        disposition: "REPLAY_WINNER", sourceExpectedVersion: 4, sourceFencingToken: 2,
+        sourceRuntimeAttempt: 5, reclaimEventId: 961,
+        reclaimPayloadDigest: "9".repeat(64), expectedVersion: 8, fencingToken: 6,
+        checkpointDigest: replayCheckpointDigest,
+      },
+    })
+    const driftedReplayQuery = acquisitionQuery({
+      receipt: [{ outcomeKey: continued.outcomeKey, firstFencingToken: 2, latestFencingToken: 6 }],
+      receiptOutcome: [continued],
+    })
+    await expect(acquireNextEligibleOutcome({
+      query: driftedReplayQuery,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: {
+        ...replayOnlyEnvelope,
+        continuation: { ...replayOnlyEnvelope.continuation, checkpointDigest: "0".repeat(64) },
+      },
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL" })
+    expect(driftedReplayQuery).not.toHaveBeenCalledWith("COMMIT")
+    expect(driftedReplayQuery.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+    const expiredContinuation = { ...continued, leaseExpiresAt: "2026-07-28T11:59:59.999Z" }
+    const expiryRaceQuery = acquisitionQuery({
+      receipt: [{ outcomeKey: continued.outcomeKey, firstFencingToken: 2, latestFencingToken: 6 }],
+      receiptOutcome: [expiredContinuation],
+    })
+    await expect(acquireNextEligibleOutcome({
+      query: expiryRaceQuery,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: replayOnlyEnvelope,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL" })
+    expect(expiryRaceQuery).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.reclaimAcquisition,
+      expect.anything(),
+    )
+    expect(expiryRaceQuery.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("rolls back bounded stale continuation drift before changing the fence", async () => {
+    const base = queueRow({
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      leaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      fencingToken: 5,
+      version: 7,
+    })
+    const envelope = {
+      sourceExpectedVersion: 4,
+      sourceFencingToken: 2,
+      sourceRuntimeAttempt: 5,
+      reclaimEventId: 961,
+      reclaimPayloadDigest: "9".repeat(64),
+      mode: "ADVANCE_OR_REPLAY",
+      continuation: null,
+      baseHop: {
+        disposition: "RECLAIMED",
+        expectedVersion: 7,
+        fencingToken: 5,
+        leaseExpiresAt: base.leaseExpiresAt,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        priorExpectedVersion: 6,
+        priorFencingToken: 4,
+        receiptLatestFencingToken: 5,
+        checkpointDigest: "a".repeat(64),
+      },
+    }
+    const query = acquisitionQuery({
+      receipt: [{
+        outcomeKey: base.outcomeKey,
+        firstFencingToken: 2,
+        latestFencingToken: 6,
+      }],
+      receiptOutcome: [base],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: envelope,
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.reclaimAcquisition,
+      expect.anything(),
+    )
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it.each([
+    ["missing insertion", { insertRows: [], evidenceRows: [] }],
+    ["duplicate evidence", { insertRows: [{ id: 701 }], evidenceRows: [
+      { id: 701, actor: "hermes-codex-bridge", metadata: {} },
+      { id: 702, actor: "hermes-codex-bridge", metadata: {} },
+    ] }],
+  ])("rolls back an atomic review-recovery reclaim on %s", async (_name, fault) => {
+    const reclaimed = queueRow({ lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z" })
+    const active = { ...reclaimed, lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      version: 6, fencingToken: 4, leaseExpiresAt: "2026-07-28T11:59:00.000Z" }
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate ? [active]
+        : sql === OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery ? [reclaimed]
+          : sql === OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence ? fault.insertRows
+            : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence ? fault.evidenceRows : [],
+    }))
+    await expect(resumeOutcomeQueueAfterReviewRecovery({
+      query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5, executionBinding: "execution-a", acquisitionKey: "acquire-a",
+      fencingToken: 3, prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40),
+      proofDigest: "d".repeat(64), expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes", leaseToken: "lease-a", leaseDurationMs: 50 * 60 * 1000,
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+      campaignWindowId: "campaign-1", processIdentity: "process-1", now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL" })
+    expect(run).toHaveBeenCalledWith("ROLLBACK")
+    expect(run).not.toHaveBeenCalledWith("COMMIT")
+  })
+
+  it("replays exactly one canonical review-recovery reclaim event without another fence", async () => {
+    const reclaimed = queueRow({ lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", reviewRecoverySourceRuntimeAttempt: 5 })
+    const active = { ...reclaimed, lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      version: 6, fencingToken: 4, leaseExpiresAt: "2026-07-28T11:59:00.000Z" }
+    let metadata: any
+    const run = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql === OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence) {
+        metadata = JSON.parse(String(values?.[2])); return { rows: [{ id: 701 }] }
+      }
+      return { rows: sql === OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate ? [active]
+        : sql === OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery ? [reclaimed]
+          : sql === OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery ? [reclaimed]
+            : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence
+              ? [{ id: 701, actor: "hermes-codex-bridge", metadata }] : [] }
+    })
+    const base = { query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      executionBinding: "execution-a", acquisitionKey: "acquire-a", prNumber: 523,
+      reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), proofDigest: "d".repeat(64),
+      expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED", leaseHolder: "resident-hermes",
+      leaseToken: "lease-a", leaseDurationMs: 50 * 60 * 1000,
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+      campaignWindowId: "campaign-1", processIdentity: "process-1", now }
+    await expect(resumeOutcomeQueueAfterReviewRecovery({ ...base, expectedVersion: 5, fencingToken: 3 }))
+      .resolves.toMatchObject({ reviewRecoveryReclaimEventId: 701 })
+    run.mockClear()
+    run.mockImplementation(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.readForwardReviewRecoveryReclaim ? [reclaimed]
+        : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence
+          ? [{ id: 701, actor: "hermes-codex-bridge", metadata }] : [],
+    }))
+    await expect(resumeOutcomeQueueAfterReviewRecovery({ ...base, expectedVersion: 6, fencingToken: 4,
+      persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED" }))
+      .resolves.toMatchObject({ version: 7, fencingToken: 5, reviewRecoveryReclaimEventId: 701 })
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN", OUTCOME_QUEUE_SQL.acquireLock, OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
+      OUTCOME_QUEUE_SQL.readForwardReviewRecoveryReclaim,
+      OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence, "COMMIT",
+    ])
+    for (const fault of ["missing", "duplicate", "drift"] as const) {
+      run.mockClear()
+      run.mockImplementation(async (sql: string) => ({
+        rows: sql === OUTCOME_QUEUE_SQL.readForwardReviewRecoveryReclaim
+          ? (fault === "missing" ? [] : [{ ...reclaimed,
+            ...(fault === "drift" ? { leaseToken: "drifted" } : {}) }])
+          : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence
+            ? (fault === "duplicate" ? [
+              { id: 701, actor: "hermes-codex-bridge", metadata },
+              { id: 702, actor: "hermes-codex-bridge", metadata },
+            ] : [{ id: 701, actor: "hermes-codex-bridge", metadata }]) : [],
+      }))
+      await expect(resumeOutcomeQueueAfterReviewRecovery({ ...base, expectedVersion: 6, fencingToken: 4,
+        persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED" }))
+        .rejects.toMatchObject({ code: "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
+      expect(run).toHaveBeenCalledWith("ROLLBACK")
+      expect(run).not.toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, expect.anything())
+    }
+    run.mockClear()
+    run.mockImplementation(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery ? [reclaimed]
+        : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence
+          ? [{ id: 701, actor: "hermes-codex-bridge", metadata }] : [],
+    }))
+    await expect(resumeOutcomeQueueAfterReviewRecovery({ ...base, expectedVersion: 7, fencingToken: 5,
+      persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      campaignWindowId: "campaign-2", processIdentity: "process-2" }))
+      .resolves.toMatchObject({ version: 7, fencingToken: 5, reviewRecoveryReclaimEventId: 701 })
+    expect(run).not.toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, expect.anything())
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN", OUTCOME_QUEUE_SQL.acquireLock, OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
+      OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence, "COMMIT",
+    ])
+  })
+
+  it.runIf(Boolean(process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL))(
+    "parses the exact atomic review-recovery reclaim queries in an isolated real PostgreSQL schema",
+    async () => {
+      const { Pool } = await import("pg")
+      const pool = new Pool({
+        connectionString: process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL?.replace("-pooler.", "."),
+      })
+      const client = await pool.connect()
+      const schema = `hermes_reclaim_parse_${randomUUID().replaceAll("-", "")}`
+      const values = ["__none__", "goal:__none__", 5, "binding", "acquisition", 3, 929,
+        "b".repeat(40), "c".repeat(40), "d".repeat(64), "holder", "token",
+        "2099-01-01T00:00:00.000Z", "2026-08-20T00:00:00.000Z",
+        "REVIEW_REMEDIATION_EXHAUSTED", 4, 2]
+      try {
+        await client.query(`CREATE SCHEMA "${schema}"`)
+        await client.query(`SET search_path TO "${schema}"`)
+        await client.query(`
+          CREATE TABLE goal (id integer PRIMARY KEY,"userId" text,status text);
+          CREATE TABLE decision (id integer PRIMARY KEY,"userId" text,status text,authority text,decision text,scope text,
+            ref text,owner text,locked boolean,evidence text[],tags text[]);
+          CREATE TABLE work_order (id integer PRIMARY KEY);
+          CREATE TABLE governance_event (id bigserial PRIMARY KEY,"userId" text,"eventType" text,"entityType" text,
+            "entityId" text,actor text,reason text,metadata jsonb,"createdAt" timestamptz,"afterHash" text);
+          CREATE TABLE authority_grant (id integer PRIMARY KEY,"userId" text,ref text,status text,"revokedAt" timestamp,
+            "expiresAt" timestamp,"authorityLevel" text,"grantedTo" text,"grantedBy" text,scope text,
+            "workOrderId" integer,"allowedActions" text[],"blockedActions" text[],"contentHash" text,"createdAt" timestamptz);
+        `)
+        await client.query(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemTable)
+        await client.query("BEGIN READ ONLY")
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate}`, values))
+          .resolves.toMatchObject({ rows: expect.any(Array) })
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery}`, values))
+          .resolves.toMatchObject({ rows: expect.any(Array) })
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.readForwardReviewRecoveryReclaim}`, values))
+          .resolves.toMatchObject({ rows: expect.any(Array) })
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence}`,
+          ["__none__", "goal:__none__", JSON.stringify({ idempotencyKey: "none" })]))
+          .resolves.toMatchObject({ rows: expect.any(Array) })
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence}`,
+          ["__none__", "0", "none"])).resolves.toMatchObject({ rows: expect.any(Array) })
+        await client.query("ROLLBACK")
+      } finally {
+        try { await client.query("ROLLBACK") } catch {}
+        try { await client.query("SET search_path TO public") } catch {}
+        try { await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`) } catch {}
+        client.release(); await pool.end()
+      }
+    },
+    30_000,
+  )
 
   it("revalidates an adopted review recovery against the exact durable proof identity", async () => {
     const persisted = queueRow({
@@ -2844,7 +3609,7 @@ describe("transactional durable outcome queue source", () => {
       fencingToken: 4,
       leaseHolder: "resident-hermes",
       leaseToken: "lease-a",
-      leaseExpiresAt: "2026-07-28T12:00:00.000Z",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
     })
     const run = vi.fn(async (sql: string) => ({
       rows: sql === OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery ? [persisted] : [],
@@ -2871,7 +3636,7 @@ describe("transactional durable outcome queue source", () => {
       .toContain("confirmed.metadata->>'proofDigest' = $10")
   })
 
-  it("revalidates an identity-preserving stale acquisition against the original review proof", async () => {
+  it("rejects a generic stale acquisition without a dedicated recovery delta proof", async () => {
     const persisted = queueRow({
       lifecycleState: "active",
       lifecycleReason: "STALE_LEASE_RECOVERED",
@@ -2895,9 +3660,9 @@ describe("transactional durable outcome queue source", () => {
       leaseDurationMs: 50 * 60 * 1000,
       persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
       now,
-    })).resolves.toEqual(persisted)
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
     expect(OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery)
-      .toContain(`q."lifecycleReason" IN ($16, 'STALE_LEASE_RECOVERED')`)
+      .toContain(`q."lifecycleReason" = $18`)
     expect(run).toHaveBeenCalledWith(
       OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
       expect.arrayContaining(["REVIEW_REMEDIATION_RECOVERED"]),

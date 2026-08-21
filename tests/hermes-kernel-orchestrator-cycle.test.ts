@@ -116,6 +116,12 @@ class PersistedRuntimeLedger {
       || sql.startsWith("INSERT INTO work_order")) {
       return { rows: [], rowCount: 0 }
     }
+    if (sql.startsWith(`SELECT receipt."resultBinding"->>'workOrderRef' AS "workOrderRef"`)
+      && sql.includes("receipt.operation = 'runtime_finding.derive'")
+      && sql.endsWith("FOR UPDATE OF queue, child")) {
+      // This legacy parent fixture has no runtime_finding.derive receipt.
+      return { rows: [], rowCount: 0 }
+    }
     if (sql.startsWith('SELECT contract_goal.id AS "goalId"')) {
       return {
         rows: [{
@@ -343,6 +349,7 @@ const kernelJson = JSON.stringify({
   commit: null, prUrl: null, merged: false, mergeCommit: null, validation: ["pass"], reviewThreads: 0,
   ownerTouchCount: 0, blockedScopeCrossed: false, nextState: "READY_FOR_HERMES_MERGE",
   blockedAction: null, authorityBoundary: null, minimumChoice: null, approveConsequence: null, denyConsequence: null,
+  findings: [],
 })
 
 /**

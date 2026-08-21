@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest"
+import http from "node:http"
+import net from "node:net"
 
 import { DEVICE_AUTH_HEADER, validateDeviceMutationOrigin } from "@/lib/device-auth/contract"
 import {
@@ -16,6 +18,26 @@ import {
 /** A socket stub shaped like the parts of tls.TLSSocket this proxy actually reads. */
 function socketWith({ authorized, CN }: { authorized: boolean; CN?: unknown }) {
   return { authorized, getPeerCertificate: () => (CN === undefined ? {} : { subject: { CN } }) }
+}
+
+async function parseRawRequestHeaders(requestText: string) {
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
+    const server = http.createServer((request, response) => {
+      resolve(buildUpstreamHeaders(request.headers, null, request.rawHeaders))
+      response.end("ok")
+      server.close()
+    })
+    server.on("clientError", (error) => {
+      reject(error)
+      server.close()
+    })
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      if (!address || typeof address === "string") return reject(new Error("TEST_SERVER_ADDRESS_WALL"))
+      const socket = net.createConnection(address.port, "127.0.0.1", () => socket.end(requestText))
+      socket.on("error", reject)
+    })
+  })
 }
 
 describe("HERMES HTTPS proxy boundary", () => {
@@ -45,6 +67,125 @@ describe("HERMES HTTPS proxy boundary", () => {
       "x-forwarded-proto": "https",
       "x-request-id": "request-1",
     })
+  })
+
+  it.each([
+    "hermes.local:3443",
+    "williamos.lan:3443",
+    "192.168.88.9:3443",
+  ])("preserves the approved external Host %s for Server Action origin checks", (host) => {
+    const forwarded = buildUpstreamHeaders({
+      host,
+      "x-forwarded-host": "attacker.example",
+      "x-forwarded-proto": "http",
+    })
+    expect(forwarded.host).toBe(host)
+    expect(forwarded["x-forwarded-host"]).toBe(host)
+    expect(forwarded["x-forwarded-proto"]).toBe("https")
+  })
+
+  it("canonicalizes an approved DNS Host to the lowercase Server Action origin", () => {
+    const forwarded = buildUpstreamHeaders({ host: "Hermes.Local:3443" })
+    expect(forwarded.host).toBe("hermes.local:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("hermes.local:3443")
+  })
+
+  it.each([
+    ["https://hermes.local:3443", "hermes.local:3443"],
+    ["https://williamos.lan:3443", "williamos.lan:3443"],
+  ])("reconciles canonical IP Host with approved DNS Origin %s", (origin, expectedHost) => {
+    const forwarded = buildUpstreamHeaders({
+      host: "192.168.88.9:3443",
+      origin,
+    })
+    expect(forwarded.host).toBe(expectedHost)
+    expect(forwarded["x-forwarded-host"]).toBe(expectedHost)
+    expect(forwarded.origin).toBe(origin)
+  })
+
+  it.each([
+    ["untrusted", "https://evil.example:3443"],
+    ["joined values", "https://hermes.local:3443, https://evil.example:3443"],
+    ["multiple values", ["https://hermes.local:3443", "https://evil.example:3443"]],
+    ["leading whitespace", " https://hermes.local:3443"],
+    ["wrong scheme", "http://hermes.local:3443"],
+    ["wrong port", "https://hermes.local:443"],
+    ["trailing slash", "https://hermes.local:3443/"],
+  ])("keeps canonical IP Host for %s Origin", (_case, origin) => {
+    const forwarded = buildUpstreamHeaders({ host: "192.168.88.9:3443", origin })
+    expect(forwarded.host).toBe("192.168.88.9:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
+  })
+
+  it("does not let an approved Origin rehabilitate an untrusted Host", () => {
+    const forwarded = buildUpstreamHeaders({
+      host: "evil.example:3443",
+      origin: "https://hermes.local:3443",
+    })
+    expect(forwarded.host).toBe("192.168.88.9:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
+  })
+
+  it.each([
+    ["untrusted hostname", "evil.example:3443"],
+    ["local setup hostname", "localhost:3443"],
+    ["missing approved port", "hermes.local"],
+    ["comma-delimited values", "hermes.local:3443, evil.example:3443"],
+    ["whitespace-smuggled value", " hermes.local:3443"],
+    ["multiple header values", ["hermes.local:3443", "evil.example:3443"]],
+  ])("canonicalizes %s instead of forwarding caller-controlled Host", (_case, host) => {
+    const forwarded = buildUpstreamHeaders({ host })
+    expect(forwarded.host).toBe("192.168.88.9:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
+  })
+
+  it("canonicalizes duplicate Host fields even when one value is approved", () => {
+    const forwarded = buildUpstreamHeaders({
+      host: "hermes.local:3443",
+      Host: "evil.example:3443",
+    })
+    expect(forwarded.host).toBe("192.168.88.9:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
+  })
+
+  it("detects duplicate Host lines through the real IncomingMessage parser", async () => {
+    const forwarded = await parseRawRequestHeaders([
+      "GET / HTTP/1.1",
+      "Host: hermes.local:3443",
+      "Host: evil.example:3443",
+      "Connection: close",
+      "",
+      "",
+    ].join("\r\n"))
+    expect(forwarded.host).toBe("192.168.88.9:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
+  })
+
+  it("reconciles canonical IP Host through the real parser only for one approved Origin", async () => {
+    const forwarded = await parseRawRequestHeaders([
+      "GET / HTTP/1.1",
+      "Host: 192.168.88.9:3443",
+      "Origin: https://hermes.local:3443",
+      "Connection: close",
+      "",
+      "",
+    ].join("\r\n"))
+    expect(forwarded.host).toBe("hermes.local:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("hermes.local:3443")
+  })
+
+  it("keeps canonical IP Host when the real parser sees duplicate Origin lines", async () => {
+    const forwarded = await parseRawRequestHeaders([
+      "GET / HTTP/1.1",
+      "Host: 192.168.88.9:3443",
+      "Origin: https://hermes.local:3443",
+      "Origin: https://williamos.lan:3443",
+      "Connection: close",
+      "",
+      "",
+    ].join("\r\n"))
+    expect(forwarded.host).toBe("192.168.88.9:3443")
+    expect(forwarded["x-forwarded-host"]).toBe("192.168.88.9:3443")
   })
 
   it("overwrites a hostile Host, which is what keeps the local setup route unreachable", () => {

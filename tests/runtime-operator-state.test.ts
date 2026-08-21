@@ -7,6 +7,7 @@ import {
   isLeaseExpired,
   evaluatePullRequestGate,
 } from "@/scripts/runtime-operator/state.mjs"
+import { loadNeedsWilliamDecisions } from "@/lib/operator/operator-state"
 
 describe("runtime operator durable state", () => {
   const issues = [
@@ -49,5 +50,37 @@ describe("runtime operator durable state", () => {
       checkRuns: [{ status: "in_progress", conclusion: null }],
       unresolvedThreads: 0,
     })).toEqual({ decision: "WAIT" })
+  })
+})
+
+describe("operator Needs you runtime finding projection", () => {
+  it("counts only the exact owner request returned by the canonical runtime-finding reader", async () => {
+    const readRuntimeFindingDecision = async () => ({
+      sourceKind: "RUNTIME_FINDING",
+      ownerUserId: "owner-1",
+      parentWorkOrderRef: "WO-0031",
+      gateSettlementEventId: 501,
+    })
+    const decisions = await loadNeedsWilliamDecisions("owner-1", {
+      readAuthorityTimelines: async () => [],
+      readRuntimeFindingDecision,
+    })
+
+    expect(decisions).toEqual([{
+      timelineId: "runtime-finding:501",
+      goalRef: "WO-0031",
+      workOrderRef: "WO-0031",
+      expectedNextState: null,
+    }])
+    await expect(loadNeedsWilliamDecisions("other-owner", {
+      readAuthorityTimelines: async () => [], readRuntimeFindingDecision,
+    })).resolves.toEqual([])
+  })
+
+  it("removes the count when the canonical reader no longer returns a pending request", async () => {
+    await expect(loadNeedsWilliamDecisions("owner-1", {
+      readAuthorityTimelines: async () => [],
+      readRuntimeFindingDecision: async () => null,
+    })).resolves.toEqual([])
   })
 })

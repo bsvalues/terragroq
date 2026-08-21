@@ -1,3 +1,5 @@
+import { resolveHermesWorkContract } from "./work-contract.mjs"
+
 const ALLOWED_REPOSITORY = "bsvalues/terragroq"
 const ALLOWED_ACTORS = new Set(["bsvalues"])
 const ALLOWED_LANES = new Set(["docs", "ui", "read_model"])
@@ -35,6 +37,30 @@ function deny(reasonCode, details = []) {
   return { allowed: false, eligible: false, reasonCode, details }
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
+
+function exactVerifiedOperatorObjective(outcome) {
+  if (outcome?.lane !== "operator-objective") return false
+  const verified = outcome.verifiedQueueWorkContract
+  const registered = resolveHermesWorkContract(outcome)
+  const provenance = verified?.provenance
+  return registered != null
+    && verified?.contract != null
+    && canonicalJson(verified.contract) === canonicalJson(registered)
+    && provenance != null
+    && Object.keys(provenance).sort().join(",") === "operation,outcomeKey,workOrderRef"
+    && provenance.operation === "workbench_execution.authorize"
+    && provenance.outcomeKey === outcome.outcomeKey
+    && provenance.outcomeKey === outcome.queueBinding?.outcomeKey
+    && provenance.workOrderRef === `WO-HERMES-OUTCOME-${Number(outcome.id)}`
+}
+
 export function blockedOutcomeReasons(outcome) {
   const text = [outcome?.command, outcome?.title, outcome?.task, outcome?.description]
     .filter((value) => typeof value === "string")
@@ -54,7 +80,9 @@ export function evaluateOutcomePolicy({
   if (repository !== ALLOWED_REPOSITORY) return deny("REPOSITORY_NOT_ALLOWED")
   if (!ALLOWED_ACTORS.has(actor)) return deny("ACTOR_NOT_ALLOWED")
   if (!outcome || typeof outcome !== "object") return deny("OUTCOME_INVALID")
-  if (!ALLOWED_LANES.has(outcome.lane)) return deny("LANE_NOT_ALLOWED")
+  if (!ALLOWED_LANES.has(outcome.lane) && !exactVerifiedOperatorObjective(outcome)) {
+    return deny("LANE_NOT_ALLOWED")
+  }
   if (!ALLOWED_RISKS.has(outcome.riskClass ?? outcome.risk)) return deny("RISK_NOT_ALLOWED")
   if (!ALLOWED_AUTHORITIES.has(outcome.authority)) return deny("AUTHORITY_NOT_ALLOWED")
   if (outcome.verdict !== undefined && outcome.verdict !== "allow"

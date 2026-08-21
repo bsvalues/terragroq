@@ -50,6 +50,43 @@ function baseInput(): ThreadProjectionInput {
 }
 
 describe("projectWorkbenchThreads", () => {
+  it("projects runtime finding decisions as typed read-only decision items", () => {
+    const input = baseInput()
+    input.bindings.push({
+      threadId: "thread-alpha", userId: "owner-1", projectId: 7,
+      sourceKind: "governance_event", sourceId: "501", role: "member",
+    })
+    input.sources.push({
+      kind: "governance_event", id: "501", userId: "owner-1",
+      occurredAt: at("2026-08-20T16:00:00.000Z"),
+      truth: { basis: "PERSISTED", state: "CURRENT", detail: "Canonical request" },
+      data: {
+        eventType: "RUNTIME_FINDING_OWNER_GATED",
+        decision: {
+          state: "ACTIONABLE",
+          why: "changes reviewed policy",
+          blockedAction: "Gated work remains blocked.",
+          gates: ["POLICY"], recommendation: "DENY", choices: ["APPROVE", "DENY"],
+          consequences: { APPROVE: "Record authority only.", DENY: "Resolve denied." },
+        },
+      },
+    })
+
+    const decision = projectWorkbenchThreads(input)[0].items.find((item) => item.kind === "DECISION")
+
+    expect(decision).toMatchObject({
+      title: "Runtime finding needs your decision",
+      summary: "changes reviewed policy",
+      rawState: "ACTIONABLE",
+      actorRole: "OWNER",
+      decision: {
+        state: "ACTIONABLE", blockedAction: "Gated work remains blocked.", gates: ["POLICY"],
+        recommendation: "DENY", choices: ["APPROVE", "DENY"],
+      },
+    })
+    expect(decision?.source.drilldown).toEqual({ mode: "UNAVAILABLE", href: null })
+  })
+
   it("projects a stable explicitly bound root into typed owner and WilliamOS facets", () => {
     const [thread] = projectWorkbenchThreads(baseInput())
 

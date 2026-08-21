@@ -62,6 +62,52 @@ function ConvertTo-SupervisorToken {
     return $Fallback
 }
 
+function ConvertTo-WindowsCommandLineArgument {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
+
+    if ($Value -cmatch '\p{Cc}') {
+        throw "HERMES_SUPERVISOR_ARGUMENT_CONTROL_CHARACTER_WALL"
+    }
+    if ($Value.Length -gt 0 -and $Value -cnotmatch '[\s"]') {
+        return $Value
+    }
+
+    $encoded = [Text.StringBuilder]::new()
+    [void]$encoded.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -ceq '\') {
+            $backslashes++
+            continue
+        }
+        if ($character -ceq '"') {
+            [void]$encoded.Append(('\' * (($backslashes * 2) + 1)))
+            [void]$encoded.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$encoded.Append(('\' * $backslashes))
+            $backslashes = 0
+        }
+        [void]$encoded.Append($character)
+    }
+    if ($backslashes -gt 0) {
+        [void]$encoded.Append(('\' * ($backslashes * 2)))
+    }
+    [void]$encoded.Append('"')
+    return $encoded.ToString()
+}
+
+function Join-WindowsCommandLineArguments {
+    param([Parameter(Mandatory)][AllowEmptyString()][string[]]$Values)
+
+    $encoded = foreach ($value in $Values) {
+        ConvertTo-WindowsCommandLineArgument -Value $value
+    }
+    return [string]::Join(' ', [string[]]$encoded)
+}
+
 function Write-SupervisorState {
     param(
         [Parameter(Mandatory)][System.Collections.IDictionary]$Record,
@@ -202,9 +248,11 @@ function Invoke-OwnedNodeCycle {
         $startInfo.Environment["WILLIAMOS_HERMES_RUNTIME_ROOT"] = $OwnedRuntimeRoot
         $startInfo.Environment["HERMES_CAMPAIGN_WINDOW_ID"] = $CampaignWindowId
         $startInfo.Environment["HERMES_PROCESS_IDENTITY"] = $ProcessIdentity
-        $startInfo.ArgumentList.Add("--env-file=$OwnedEnvPath")
-        $startInfo.ArgumentList.Add($OwnedCliPath)
-        $startInfo.ArgumentList.Add("cycle")
+        $startInfo.Arguments = Join-WindowsCommandLineArguments -Values @(
+            "--env-file=$OwnedEnvPath",
+            $OwnedCliPath,
+            "cycle"
+        )
         $process = [Diagnostics.Process]::new()
         $process.StartInfo = $startInfo
         if (-not $process.Start()) { throw "HERMES_SUPERVISOR_CYCLE_START_FAILED" }

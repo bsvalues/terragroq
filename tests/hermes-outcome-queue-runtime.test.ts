@@ -1,16 +1,25 @@
 import { describe, expect, it, vi } from "vitest"
 import fs from "node:fs"
+import { createHash } from "node:crypto"
 import os from "node:os"
 import path from "node:path"
 
 import { createHermesOutcomeQueueRuntime } from "../scripts/hermes-bridge/outcome-queue-runtime.mjs"
 import {
   acquireNextEligibleOutcome,
+  digestOutcomeQueueCheckpointProof,
   OUTCOME_QUEUE_SQL,
 } from "../scripts/hermes-bridge/outcome-queue-source.mjs"
 import {
   checkpointRecordMatchesAttempt,
 } from "../scripts/hermes-bridge/v1-2-acceptance-campaign.mjs"
+import { resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
+
+const canonicalJson = (value: any): string => value && typeof value === "object"
+  ? Array.isArray(value)
+    ? `[${value.map(canonicalJson).join(",")}]`
+    : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+  : JSON.stringify(value)
 
 const queueItem = {
   userId: "primary-user",
@@ -80,6 +89,7 @@ function runtime(overrides: Record<string, unknown> = {}) {
     deferGoal: vi.fn(async () => true),
     deferQueue: vi.fn(async () => queueItem),
     readQueue: vi.fn(async () => []),
+    verifyActiveReviewRecovery: vi.fn(async () => true),
     resumeQueue: vi.fn(async () => ({ ...queueItem, version: 5, fencingToken: 4 })),
     renewQueue: vi.fn(async () => queueItem),
     ...overrides,
@@ -87,6 +97,309 @@ function runtime(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Hermes durable outcome queue runtime", () => {
+  it("loads the exact registered #911 parent contract across UTC and Los Angeles grant decodes", async () => {
+    const command = "record structured #911 reliability remediation without host mutation"
+    const outcomeKey = "goal:GOAL-0007"
+    const workOrderRef = "WO-HERMES-OUTCOME-7"
+    const contract = resolveHermesWorkContract({
+      command, title: command, objective: command,
+      lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+    })!
+    const requestBinding = {
+      projectId: 7, threadId: "thread-7", outcomeKey,
+      idempotencyKey: "workbench-execution:stable-0007", confirmation: "START_WORK",
+    }
+    const requestHash = createHash("sha256").update(canonicalJson({
+      contract: "workbench-execution-authorization.v1", ...requestBinding,
+    })).digest("hex")
+    const expiresAt = "2099-08-23T18:00:00.000Z"
+    const priorTimezone = process.env.TZ
+    let utcDecodedExpiry: Date
+    let losAngelesDecodedExpiry: Date
+    try {
+      process.env.TZ = "UTC"
+      utcDecodedExpiry = new Date("2099-08-23T18:00:00.000")
+      process.env.TZ = "America/Los_Angeles"
+      losAngelesDecodedExpiry = new Date("2099-08-23T18:00:00.000")
+    } finally {
+      if (priorTimezone === undefined) delete process.env.TZ
+      else process.env.TZ = priorTimezone
+    }
+    expect(utcDecodedExpiry.toISOString()).toBe(expiresAt)
+    expect(losAngelesDecodedExpiry.toISOString()).toBe("2099-08-24T01:00:00.000Z")
+    const resultBinding = {
+      decisionId: 31, decisionRef: "WB-EXEC-DEC-911", grantId: 41,
+      grantRef: "WB-EXEC-GRANT-911", implementationGrantId: 42,
+      implementationGrantRef: "WB-EXEC-IMPL-GRANT-911", queueVersion: 1,
+      authorizedAt: "2026-08-20T18:00:00.000Z", expiresAt, workContract: contract,
+    }
+    const parentQueue = {
+      ...queueItem, id: 7, outcomeKey, goalId: 7, goalRef: "GOAL-0007",
+      approvalDecisionId: 31, authorityGrantRef: resultBinding.grantRef,
+      objective: command, title: command, activeWorkOrderId: null,
+    }
+    const parentGoal = {
+      ...goal, id: 7, ref: "GOAL-0007", command, lane: "operator-objective",
+      verdict: "requires_approval", requiresApproval: true,
+    }
+    const parentAuthorization = {
+      receiptOperation: "workbench_execution.authorize", requestHash,
+      requestBinding, resultBinding,
+      projectId: 7, projectUserId: "primary-user", projectLifecycle: "active",
+      threadId: "thread-7", threadUserId: "primary-user", threadProjectId: 7,
+      rootCount: 1, rootThreadId: "thread-7",
+      primaryRepoCount: 1, primaryRepository: "bsvalues/terragroq",
+      approvalId: 31, approvalRef: resultBinding.decisionRef, approvalUserId: "primary-user",
+      approvalStatus: "accepted", approvalAuthority: "binding", approvalOwner: "primary-user",
+      approvalScope: outcomeKey, approvalLocked: true, approvalDecision: "APPROVE",
+      approvalEvidence: [
+        "project:7", "thread:thread-7", "repo:bsvalues/terragroq",
+        `work-contract:${contract.id}`, `work-contract-digest:${contract.digest}`,
+        `work-contract-json:${JSON.stringify(contract)}`,
+        ...contract.reservations.map((value) => `reservation:${value}`),
+        ...contract.validationCommands.map((value) => `validator:${value.command}:${value.args.join(" ")}`),
+      ],
+      approvalTags: ["workbench", "outcome", "explicit-start-work"],
+      queueGrantId: 41, queueGrantRef: resultBinding.grantRef, queueGrantUserId: "primary-user",
+      queueGrantStatus: "active", queueGrantRevokedAt: null,
+      queueGrantExpiresAt: utcDecodedExpiry,
+      queueGrantExpiresAtEpoch: "4091191200",
+      queueGrantGrantedBy: "primary-user", queueGrantGrantedTo: "operator", queueGrantAuthorityLevel: "A2_WRITE_OWN",
+      queueGrantScope: outcomeKey, queueGrantWorkOrderId: null,
+      queueGrantAllowedActions: ["outcome:execute"],
+      queueGrantBlockedActions: ["production:mutate", "release:create", "secret:access", "spend:increase"],
+      implementationGrantId: 42, implementationGrantRef: resultBinding.implementationGrantRef,
+      implementationGrantUserId: "primary-user", implementationGrantStatus: "active",
+      implementationGrantRevokedAt: null,
+      implementationGrantExpiresAt: utcDecodedExpiry,
+      implementationGrantExpiresAtEpoch: "4091191200",
+      implementationGrantGrantedBy: "primary-user", implementationGrantGrantedTo: "operator", implementationGrantAuthorityLevel: "A2_WRITE_OWN",
+      implementationGrantScope: workOrderRef, implementationGrantWorkOrderId: null,
+      implementationGrantAllowedActions: ["implement"],
+      implementationGrantBlockedActions: ["production:mutate", "release:create", "secret:access", "spend:increase"],
+    }
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+      .mockResolvedValueOnce({ rows: [parentGoal] })
+      .mockResolvedValueOnce({ rows: [parentAuthorization] })
+    const bridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "not-used", campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+      createPool: vi.fn(async () => ({ query, end: vi.fn(), on: vi.fn() })),
+      acquire: vi.fn(async () => ({ outcome: parentQueue, acquired: true })),
+    })
+
+    await expect(bridge.selectOutcome()).resolves.toMatchObject({
+      id: 7, lane: "operator-objective", outcomeKey,
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: { operation: "workbench_execution.authorize", outcomeKey, workOrderRef },
+      },
+    })
+
+    const losAngelesDecodedAuthorization = {
+      ...parentAuthorization,
+      queueGrantExpiresAt: losAngelesDecodedExpiry,
+      implementationGrantExpiresAt: losAngelesDecodedExpiry,
+    }
+    const losAngelesQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+      .mockResolvedValueOnce({ rows: [parentGoal] })
+      .mockResolvedValueOnce({ rows: [losAngelesDecodedAuthorization] })
+    const losAngelesBridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "not-used", campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+      createPool: vi.fn(async () => ({ query: losAngelesQuery, end: vi.fn(), on: vi.fn() })),
+      acquire: vi.fn(async () => ({ outcome: parentQueue, acquired: true })),
+    })
+    await expect(losAngelesBridge.selectOutcome()).resolves.toMatchObject({
+      id: 7, lane: "operator-objective", outcomeKey,
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: { operation: "workbench_execution.authorize", outcomeKey, workOrderRef },
+      },
+    })
+
+    for (const drifted of [
+      { ...parentAuthorization, requestHash: "0".repeat(64) },
+      { ...parentAuthorization, resultBinding: { ...resultBinding, queueVersion: 2 } },
+      { ...parentAuthorization, projectLifecycle: "archived" },
+      { ...parentAuthorization, threadProjectId: 8 },
+      { ...parentAuthorization, rootCount: 2 },
+      { ...parentAuthorization, rootThreadId: "thread-other" },
+      { ...parentAuthorization, primaryRepository: "bsvalues/other" },
+      { ...parentAuthorization, approvalOwner: "foreign" },
+      { ...parentAuthorization, approvalEvidence: ["work-contract:forged"] },
+      { ...parentAuthorization, approvalTags: ["workbench"] },
+      { ...parentAuthorization, queueGrantRef: "WB-EXEC-GRANT-DRIFTED" },
+      { ...parentAuthorization, queueGrantBlockedActions: ["outcome:execute"] },
+      { ...parentAuthorization, implementationGrantRevokedAt: "2026-08-20T19:00:00.000Z" },
+      { ...parentAuthorization, implementationGrantAllowedActions: ["outcome:execute"] },
+      { ...parentAuthorization, implementationGrantScope: "WO-HERMES-OUTCOME-999" },
+    ]) {
+      const driftQuery = vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+        .mockResolvedValueOnce({ rows: [parentGoal] })
+        .mockResolvedValueOnce({ rows: [drifted] })
+      const driftBridge = createHermesOutcomeQueueRuntime({
+        databaseUrl: "not-used", campaignWindowId: "campaign-v1-2",
+        processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+        createPool: vi.fn(async () => ({ query: driftQuery, end: vi.fn(), on: vi.fn() })),
+        acquire: vi.fn(async () => ({ outcome: parentQueue, acquired: true })),
+      })
+      await expect(driftBridge.selectOutcome())
+        .rejects.toMatchObject({ code: "HERMES_WORKBENCH_PARENT_CONTRACT_WALL" })
+    }
+  })
+
+  it("loads an arbitrary derived child contract from its exact receipt", async () => {
+    const contractBody = {
+      version: "hermes-work-contract.v1",
+      id: "runtime-finding.101.v1",
+      repository: "bsvalues/terragroq", lane: "docs",
+      reservations: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      validationCommands: [{ command: "git", args: ["diff", "--check"], timeoutMs: 300_000 }],
+      projection: { issueNumber: 911, completionOwned: false },
+      delivery: {
+        authorityLevel: "A2_WRITE_OWN", allowedActions: ["implement"],
+        commitAllowed: true, tagAllowed: false, pushAllowed: true,
+      },
+    }
+    const contract = {
+      ...contractBody,
+      digest: createHash("sha256").update(canonicalJson(contractBody)).digest("hex"),
+    }
+    const derivedQueue = {
+      ...queueItem, id: 203,
+      outcomeKey: "runtime-finding:101:source-digest", goalId: 202,
+      goalRef: "GOAL-RUNTIME-FINDING-101", activeWorkOrderId: 201,
+      authorityGrantRef: "RUNTIME-FINDING-QUEUE-GRANT-101", approvalDecisionId: 204,
+      objective: "Reconcile compose drift", title: "Reconcile compose drift",
+    }
+    const derivedRequestBinding = {
+      operation: "runtime_finding.derive", sourceFindingEventId: 101,
+      sourcePayloadDigest: "a".repeat(64), sourceCheckpointId: 91,
+      sourceCheckpointDigest: "b".repeat(64), parentWorkOrderId: 4,
+      parentWorkOrderRef: "WO-HERMES-OUTCOME-4", parentContractId: "parent.v1",
+      parentContractDigest: "c".repeat(64), parentAuthorizationDecisionId: 74,
+      parentImplementationGrantId: 81,
+    }
+    const derivedResultBinding = {
+      outcomeKey: derivedQueue.outcomeKey, goalId: 202, goalRef: derivedQueue.goalRef,
+      queueId: 203,
+      workOrderId: 201, workOrderRef: "WO-HERMES-OUTCOME-4-R01-F101",
+      decisionId: 204, approvalDecisionId: 204,
+      grantId: 207, grantRef: derivedQueue.authorityGrantRef,
+      queueGrantId: 207, queueGrantRef: derivedQueue.authorityGrantRef,
+      implementationGrantId: 205, implementationGrantRef: "RUNTIME-FINDING-IMPL-GRANT-101",
+      workContract: contract,
+    }
+    const derivedGoal = {
+      ...goal, id: 202, ref: derivedQueue.goalRef, lane: "docs",
+      command: "Reconcile compose drift",
+      derivedReceiptOperation: "runtime_finding.derive",
+      derivedRequestHash: createHash("sha256").update(canonicalJson(derivedRequestBinding)).digest("hex"),
+      derivedRequestBinding, derivedResultBinding,
+      derivedWorkOrderId: 201, derivedWorkOrderRef: derivedResultBinding.workOrderRef,
+      derivedWorkOrderUserId: "primary-user", derivedWorkOrderGoal: derivedQueue.goalRef,
+      derivedWorkOrderAuthorityGrantId: 205, derivedWorkOrderStatus: "approved",
+      derivedApprovalDecisionId: 204, derivedApprovalStatus: "accepted",
+      derivedApprovalAuthority: "binding", derivedApprovalScope: derivedQueue.outcomeKey,
+      derivedApprovalLocked: true, derivedApprovalDecision: "APPROVE",
+      derivedApprovalEvidence: ["runtime-finding:101"],
+      derivedQueueGrantId: 207, derivedQueueGrantRef: derivedQueue.authorityGrantRef,
+      derivedQueueGrantStatus: "active", derivedQueueGrantRevokedAt: null,
+      derivedQueueGrantExpiresAt: "2099-01-01T00:00:00.000Z",
+      derivedQueueGrantGrantedTo: "operator", derivedQueueGrantAuthorityLevel: "A2_WRITE_OWN",
+      derivedQueueGrantScope: derivedQueue.outcomeKey, derivedQueueGrantWorkOrderId: 201,
+      derivedQueueGrantAllowedActions: ["outcome:execute"],
+      derivedQueueGrantBlockedActions: ["host-storage-mutation"],
+      derivedImplementationGrantId: 205,
+      derivedImplementationGrantRef: derivedResultBinding.implementationGrantRef,
+      derivedImplementationGrantStatus: "active", derivedImplementationGrantRevokedAt: null,
+      derivedImplementationGrantExpiresAt: "2099-01-01T00:00:00.000Z",
+      derivedImplementationGrantGrantedTo: "operator",
+      derivedImplementationGrantAuthorityLevel: "A2_WRITE_OWN",
+      derivedImplementationGrantScope: derivedResultBinding.workOrderRef,
+      derivedImplementationGrantWorkOrderId: 201,
+      derivedImplementationGrantAllowedActions: ["implement"],
+      derivedImplementationGrantBlockedActions: ["host-storage-mutation"],
+      derivedSourceFindingEventId: 101, derivedSourceUserId: "primary-user",
+      derivedSourcePayloadDigest: derivedRequestBinding.sourcePayloadDigest,
+      derivedSourceCheckpointId: 91,
+      derivedSourceCheckpointDigest: derivedRequestBinding.sourceCheckpointDigest,
+      derivedSourceParentWorkOrderRef: derivedRequestBinding.parentWorkOrderRef,
+      derivedSourceParentContractId: derivedRequestBinding.parentContractId,
+      derivedSourceParentContractDigest: derivedRequestBinding.parentContractDigest,
+      derivedSourceAuthorizationDecisionId: 74,
+      derivedSourceImplementationGrantId: 81,
+      derivedParentWorkOrderId: 4, derivedParentWorkOrderRef: "WO-HERMES-OUTCOME-4",
+      derivedParentWorkOrderUserId: "primary-user",
+    }
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+      .mockResolvedValueOnce({ rows: [derivedGoal] })
+    const bridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "postgresql://not-used", campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+      createPool: vi.fn(async () => ({ query, end: vi.fn(), on: vi.fn() })),
+      acquire: vi.fn(async () => ({ outcome: derivedQueue, acquired: true })),
+    })
+
+    await expect(bridge.selectOutcome()).resolves.toMatchObject({
+      id: 202,
+      outcomeKey: derivedQueue.outcomeKey,
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: {
+          operation: "runtime_finding.derive", outcomeKey: derivedQueue.outcomeKey,
+          workOrderId: 201, workOrderRef: "WO-HERMES-OUTCOME-4-R01-F101",
+        },
+      },
+      queueBinding: { activeWorkOrderId: 201, outcomeKey: derivedQueue.outcomeKey },
+    })
+
+    for (const drifted of [
+      { ...derivedGoal, derivedRequestHash: "d".repeat(64) },
+      { ...derivedGoal, derivedWorkOrderRef: "WO-DRIFTED" },
+      { ...derivedGoal, derivedApprovalDecisionId: 999 },
+      { ...derivedGoal, derivedApprovalDecision: "DENY" },
+      { ...derivedGoal, derivedApprovalEvidence: ["runtime-finding:999"] },
+      { ...derivedGoal, derivedQueueGrantId: 999 },
+      { ...derivedGoal, derivedQueueGrantBlockedActions: ["EXECUTE"] },
+      { ...derivedGoal, derivedImplementationGrantRef: "IMPL-DRIFTED" },
+      { ...derivedGoal, derivedImplementationGrantBlockedActions: ["PLEM"] },
+      { ...derivedGoal, derivedSourcePayloadDigest: "e".repeat(64) },
+      { ...derivedGoal, derivedParentWorkOrderRef: "WO-PARENT-DRIFTED" },
+    ]) {
+      const driftQuery = vi.fn()
+        .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+        .mockResolvedValueOnce({ rows: [drifted] })
+      const driftBridge = createHermesOutcomeQueueRuntime({
+        databaseUrl: "postgresql://not-used", campaignWindowId: "campaign-v1-2",
+        processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+        createPool: vi.fn(async () => ({ query: driftQuery, end: vi.fn(), on: vi.fn() })),
+        acquire: vi.fn(async () => ({ outcome: derivedQueue, acquired: true })),
+      })
+      await expect(driftBridge.selectOutcome())
+        .rejects.toMatchObject({ code: "HERMES_RUNTIME_FINDING_CONTRACT_WALL" })
+    }
+
+    const reorderedQuery = vi.fn()
+      .mockResolvedValueOnce({ rows: [{ id: "primary-user", email: "bsvalues@gmail.com" }] })
+      .mockResolvedValueOnce({ rows: [{
+        ...derivedGoal,
+        derivedRequestBinding: Object.fromEntries(Object.entries(derivedRequestBinding).reverse()),
+      }] })
+    const reorderedBridge = createHermesOutcomeQueueRuntime({
+      databaseUrl: "postgresql://not-used", campaignWindowId: "campaign-v1-2",
+      processIdentity: "supervisor-nonce-1", checkpointProofProvider: vi.fn(),
+      createPool: vi.fn(async () => ({ query: reorderedQuery, end: vi.fn(), on: vi.fn() })),
+      acquire: vi.fn(async () => ({ outcome: derivedQueue, acquired: true })),
+    })
+    await expect(reorderedBridge.selectOutcome()).resolves.toMatchObject({ id: 202 })
+  })
+
   it("allows read-only runtime construction without resident proof context", async () => {
     const bridge = createHermesOutcomeQueueRuntime({
       databaseUrl: "postgresql://not-used",
@@ -390,6 +703,7 @@ describe("Hermes durable outcome queue runtime", () => {
         || sql === OUTCOME_QUEUE_SQL.acquireLock) return { rows: [] }
       if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt
         || sql === OUTCOME_QUEUE_SQL.readAcquisition) return { rows: [] }
+      if (sql === OUTCOME_QUEUE_SQL.blockExpiredIneligibleActiveSlot) return { rows: [] }
       if (sql === OUTCOME_QUEUE_SQL.acquire) {
         Object.assign(active, {
           acquisitionKey: values[2],
@@ -1245,11 +1559,18 @@ describe("Hermes durable outcome queue runtime", () => {
       prNumber: 523,
       reviewedHeadSha: "a".repeat(40),
       mergeSha: "b".repeat(40),
+      runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
     })).resolves.toMatchObject({
       queueBinding: {
         expectedVersion: 6,
         fencingToken: 4,
         reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+        reviewRecoverySourceExpectedVersion: 5,
+        reviewRecoverySourceFencingToken: 3,
+        reviewRecoverySourceRuntimeAttempt: 5,
       },
     })
     expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
@@ -1278,6 +1599,8 @@ describe("Hermes durable outcome queue runtime", () => {
       leaseExpiresAt: "2026-07-28T12:50:00.000Z",
       reviewRecoveryStaleReclaimApplied: true,
       reviewRecoveryReclaimCount: 1,
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
     }))
     const bridge = runtime({ resumeReviewRecoveryQueue })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: queueItem.version } }
@@ -1285,7 +1608,7 @@ describe("Hermes durable outcome queue runtime", () => {
     await expect(bridge.resumeAfterReviewRecovery(outcome, {
       expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
       proofDigest: "d".repeat(64), prNumber: 523,
-      reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40),
+      reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
     })).resolves.toMatchObject({
       queueBinding: {
         expectedVersion: 7,
@@ -1307,6 +1630,7 @@ describe("Hermes durable outcome queue runtime", () => {
 
     await expect(bridge.resumeAfterReviewRecovery(outcome, {
       expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
+      runtimeAttempt: 5,
       ...proof,
     })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
     expect(resumeReviewRecoveryQueue).not.toHaveBeenCalled()
@@ -1323,10 +1647,12 @@ describe("Hermes durable outcome queue runtime", () => {
       fencingToken: 4,
       leaseHolder: "resident-hermes",
       leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5,
     }
     const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
     const acquire = vi.fn(async () => ({ outcome: recovered, acquired: true, replayed: true }))
-    const bridge = runtime({ resumeReviewRecoveryQueue, acquire })
+    const verifyActiveReviewRecovery = vi.fn(async () => true)
+    const bridge = runtime({ resumeReviewRecoveryQueue, acquire, verifyActiveReviewRecovery })
     const outcome = {
       ...goal,
       queueBinding: {
@@ -1343,17 +1669,882 @@ describe("Hermes durable outcome queue runtime", () => {
       prNumber: 523,
       reviewedHeadSha: "a".repeat(40),
       mergeSha: "b".repeat(40),
-    })).resolves.toMatchObject({ queueBinding: { expectedVersion: 6, fencingToken: 4 } })
+      runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).resolves.toMatchObject({ queueBinding: {
+      expectedVersion: 6, fencingToken: 4,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    } })
     expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
       expectedVersion: 6,
       fencingToken: 4,
       proofDigest: "d".repeat(64),
       persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
     }))
+    expect(verifyActiveReviewRecovery).toHaveBeenCalledWith(expect.objectContaining({
+      executionBinding: expect.objectContaining({ reviewRecoverySourceRuntimeAttempt: 5 }),
+      proof: expect.objectContaining({ runtimeAttempt: 5 }),
+    }))
     expect(acquire).toHaveBeenCalledOnce()
   })
 
-  it("revalidates and refreshes a stale acquisition that preserves review recovery identity", async () => {
+  it("backfills a wholly absent legacy source triple from independently resolved recovery proof", async () => {
+    const reclaimed = {
+      ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      approvalState: "approved", authorityState: "matched", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReclaimApplied: true,
+      reviewRecoveryReclaimCount: 1, reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+    }
+    const resumeReviewRecoveryQueue = vi.fn(async () => reclaimed)
+    const verifyActiveReviewRecovery = vi.fn(async () => true)
+    const acquire = vi.fn(async () => ({ outcome: reclaimed, acquired: true, replayed: true, reclaimed: false }))
+    const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40),
+      runtimeAttempt: 7,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).resolves.toMatchObject({ queueBinding: {
+      expectedVersion: 7, fencingToken: 5,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    } })
+    expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+    }))
+    expect(verifyActiveReviewRecovery).toHaveBeenCalledWith(expect.objectContaining({
+      executionBinding: expect.objectContaining({ reviewRecoverySourceRuntimeAttempt: 5 }),
+      proof: expect.objectContaining({ runtimeAttempt: 5 }),
+    }))
+  })
+
+  it("preserves verified reclaim evidence through acquisition-shaped refreshes", async () => {
+    const reclaimed = {
+      ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      approvalState: "approved", authorityState: "matched", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReclaimApplied: true,
+      reviewRecoveryReclaimCount: 1, reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+    }
+    const acquisitionRow = { ...reclaimed }
+    delete (acquisitionRow as any).reviewRecoverySourceRuntimeAttempt
+    delete (acquisitionRow as any).reviewRecoveryStaleReclaimApplied
+    delete (acquisitionRow as any).reviewRecoveryReclaimCount
+    delete (acquisitionRow as any).reviewRecoveryReclaimEventId
+    delete (acquisitionRow as any).reviewRecoveryReclaimPayloadDigest
+    const resumeReviewRecoveryQueue = vi.fn(async () => reclaimed)
+    const verifyActiveReviewRecovery = vi.fn(async () => true)
+    const acquire = vi.fn(async () => ({ outcome: acquisitionRow, acquired: true, replayed: true, reclaimed: false }))
+    const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
+    const proof = {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 7,
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }
+
+    const resumed = await bridge.resumeAfterReviewRecovery(outcome, proof)
+    expect(resumed.queueBinding).toMatchObject({
+      expectedVersion: 7, fencingToken: 5,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })
+    await expect(bridge.refreshOutcome(resumed)).resolves.toMatchObject({ queueBinding: {
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+    } })
+    expect(verifyActiveReviewRecovery.mock.invocationCallOrder[0])
+      .toBeLessThan(acquire.mock.invocationCallOrder[0])
+    expect(acquire).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ["absent", {}],
+    ["exact", {
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+    }],
+    ["exact event and source triple", {
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }],
+  ])("preserves verified reclaim evidence through one exact governed stale-lease reacquisition with %s supplied evidence", async (_name, suppliedEvidence) => {
+    const prior = {
+      ...queueItem,
+      expectedVersion: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }
+    const reacquired = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      ...suppliedEvidence,
+    }
+    const acquire = vi.fn(async () => ({
+      outcome: reacquired,
+      acquired: true,
+      replayed: false,
+      reclaimed: true,
+      reason: null,
+      reviewRecoveryContinuationCheckpointDigest: "a".repeat(64),
+    }))
+    const bridge = runtime({ acquire })
+    const outcome = { ...goal, queueBinding: prior }
+
+    await expect(bridge.refreshOutcome(outcome)).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 7,
+        fencingToken: 5,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+        reviewRecoveryReclaimEventId: 701,
+        reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+        reviewRecoverySourceExpectedVersion: 4,
+        reviewRecoverySourceFencingToken: 2,
+        reviewRecoverySourceRuntimeAttempt: 5,
+      },
+    })
+  })
+
+  it("adopts the exact governed stale-lease replay after a reclaim crash before local persistence", async () => {
+    const prior = {
+      ...queueItem,
+      expectedVersion: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }
+    const reacquired = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const acquire = vi.fn()
+      .mockResolvedValueOnce({
+        outcome: reacquired, acquired: true, replayed: false, reclaimed: true, reason: null,
+        reviewRecoveryContinuationCheckpointDigest: "a".repeat(64),
+      })
+      .mockResolvedValueOnce({
+        outcome: reacquired, acquired: true, replayed: true, reclaimed: false, reason: null,
+        reviewRecoveryContinuationCheckpointDigest: "a".repeat(64),
+        reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+        reviewRecoveryContinuationEvidence: {
+          disposition: "REPLAY_WINNER", sourceExpectedVersion: 4, sourceFencingToken: 2,
+          sourceRuntimeAttempt: 5, reclaimEventId: 701,
+          reclaimPayloadDigest: "e".repeat(64), expectedVersion: 7, fencingToken: 5,
+          checkpointDigest: "a".repeat(64),
+        },
+      })
+      .mockResolvedValueOnce({
+        outcome: reacquired, acquired: true, replayed: true, reclaimed: false, reason: null,
+        reviewRecoveryContinuationCheckpointDigest: "a".repeat(64),
+        reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+        reviewRecoveryContinuationEvidence: {
+          disposition: "REPLAY_WINNER", sourceExpectedVersion: 4, sourceFencingToken: 2,
+          sourceRuntimeAttempt: 5, reclaimEventId: 701,
+          reclaimPayloadDigest: "e".repeat(64), expectedVersion: 7, fencingToken: 5,
+          checkpointDigest: "a".repeat(64),
+        },
+      })
+    const bridge = runtime({ acquire })
+    const outcome = { ...goal, queueBinding: prior }
+
+    await expect(bridge.refreshOutcome(outcome)).resolves.toMatchObject({
+      queueBinding: { expectedVersion: 7, fencingToken: 5 },
+    })
+    const replayed = await bridge.refreshOutcome(outcome)
+    expect(replayed).toMatchObject({
+      queueBinding: {
+        expectedVersion: 7,
+        fencingToken: 5,
+        reviewRecoveryReclaimEventId: 701,
+        reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+        reviewRecoverySourceExpectedVersion: 4,
+        reviewRecoverySourceFencingToken: 2,
+        reviewRecoverySourceRuntimeAttempt: 5,
+        reviewRecoveryStaleReacquisition: {
+          lifecycleReason: "STALE_LEASE_RECOVERED",
+          disposition: "REPLAY_WINNER",
+          priorExpectedVersion: 6,
+          priorFencingToken: 4,
+          expectedVersion: 7,
+          fencingToken: 5,
+          receiptLatestFencingToken: 5,
+          leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+        },
+      },
+    })
+    await expect(bridge.refreshOutcome(replayed)).resolves.toMatchObject({ queueBinding: {
+      reviewRecoveryStaleReacquisition: {
+        disposition: "REPLAY_WINNER", expectedVersion: 7, fencingToken: 5,
+      },
+    } })
+    expect(acquire).toHaveBeenCalledTimes(3)
+  })
+
+  it("preserves the authenticated base hop while admitting one bounded stale continuation", async () => {
+    const baseHop = {
+      disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+      checkpointDigest: "b".repeat(64),
+    }
+    const prior = { ...queueItem, expectedVersion: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701, reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReacquisition: baseHop }
+    const continued = { ...queueItem, lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 8, fencingToken: 6,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, leaseExpiresAt: "2026-07-28T13:50:00.000Z" }
+    const acquire = vi.fn()
+      .mockResolvedValueOnce({ outcome: continued, acquired: true, replayed: false,
+        reclaimed: true, reason: null, reviewRecoveryContinuationDisposition: "RECLAIMED",
+        reviewRecoveryContinuationCheckpointDigest: "c".repeat(64),
+        reviewRecoveryContinuationEvidence: {
+          disposition: "RECLAIMED", sourceExpectedVersion: 4, sourceFencingToken: 2,
+          sourceRuntimeAttempt: 5, reclaimEventId: 701,
+          reclaimPayloadDigest: "e".repeat(64), expectedVersion: 8, fencingToken: 6,
+          checkpointDigest: "c".repeat(64),
+        } })
+      .mockResolvedValueOnce({ outcome: continued, acquired: true, replayed: true,
+        reclaimed: false, reason: null, reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+        reviewRecoveryContinuationCheckpointDigest: "c".repeat(64),
+        reviewRecoveryContinuationEvidence: {
+          disposition: "REPLAY_WINNER", sourceExpectedVersion: 4, sourceFencingToken: 2,
+          sourceRuntimeAttempt: 5, reclaimEventId: 701,
+          reclaimPayloadDigest: "e".repeat(64), expectedVersion: 8, fencingToken: 6,
+          checkpointDigest: "c".repeat(64),
+        } })
+    const bridge = runtime({ acquire })
+    const advanced = await bridge.refreshOutcome({ ...goal, queueBinding: prior })
+    expect(advanced).toMatchObject({
+      queueBinding: {
+        expectedVersion: 8, fencingToken: 6,
+        reviewRecoveryStaleReacquisition: baseHop,
+        reviewRecoveryStaleContinuation: {
+          disposition: "RECLAIMED", priorExpectedVersion: 7, priorFencingToken: 5,
+          priorLeaseExpiresAt: baseHop.leaseExpiresAt, expectedVersion: 8, fencingToken: 6,
+          receiptLatestFencingToken: 6, leaseExpiresAt: continued.leaseExpiresAt,
+          lifecycleReason: "STALE_LEASE_RECOVERED",
+        },
+      },
+    })
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({
+      activeWorkOrderId: 77,
+      reviewRecoveryContinuationEnvelope: expect.objectContaining({
+        sourceExpectedVersion: 4, sourceFencingToken: 2, sourceRuntimeAttempt: 5,
+        reclaimEventId: 701, baseHop,
+      }),
+    }))
+    await expect(bridge.refreshOutcome(advanced)).resolves.toMatchObject({ queueBinding: {
+      expectedVersion: 8, fencingToken: 6, reviewRecoveryStaleReacquisition: baseHop,
+      reviewRecoveryStaleContinuation: expect.objectContaining({
+        disposition: "RECLAIMED", expectedVersion: 8, fencingToken: 6,
+      }),
+    } })
+    expect(acquire).toHaveBeenLastCalledWith(expect.objectContaining({
+      activeWorkOrderId: 77,
+      reviewRecoveryContinuationEnvelope: expect.objectContaining({
+        mode: "REPLAY_ONLY",
+        baseHop,
+        continuation: expect.objectContaining({ expectedVersion: 8, fencingToken: 6 }),
+      }),
+    }))
+  })
+
+  it("composes the production queue source through commit and crash replay without losing recovery evidence", async () => {
+    const baseDigest = digestOutcomeQueueCheckpointProof({
+      outcomeId: "77", outcomeKey: queueItem.outcomeKey, workOrderId: 77,
+      fencingToken: 5, sequence: 0, state: "LEASED",
+      commit: { headSha: null, mergeSha: null, prNumber: null },
+    })
+    const baseHop = {
+      disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T11:59:59.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+      checkpointDigest: baseDigest,
+    }
+    const prior = { ...queueItem, expectedVersion: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701, reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReacquisition: baseHop }
+    let persisted = { ...queueItem, lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, leaseExpiresAt: baseHop.leaseExpiresAt }
+    let attemptId = 220
+    const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+      if (["BEGIN", "COMMIT", "ROLLBACK", OUTCOME_QUEUE_SQL.acquireLock].includes(sql)) {
+        return { rows: [] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt) return { rows: [{
+        outcomeKey: persisted.outcomeKey, firstFencingToken: 2,
+        latestFencingToken: persisted.fencingToken,
+      }] }
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptOutcome) return { rows: [{ ...persisted }] }
+      if (sql === OUTCOME_QUEUE_SQL.revalidateAcquisition) {
+        return { rows: [{ approvalLive: true, authorityLive: true }] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.reclaimAcquisition) {
+        persisted = { ...persisted, version: Number(values[8]) + 1,
+          fencingToken: persisted.fencingToken + 1, leaseExpiresAt: values[6] as string }
+        return { rows: [{ ...persisted }] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.advanceAcquisitionReceipt) return { rows: [{ id: 9 }] }
+      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt) return { rows: [{ id: ++attemptId }] }
+      throw new Error(`unexpected query: ${sql}`)
+    })
+    const bridge = runtime({
+      acquire: (input: Record<string, unknown>) => acquireNextEligibleOutcome({
+        ...input,
+        query: Object.assign(query, { connect: async () => ({ query, release: vi.fn() }) }),
+      }),
+    })
+    const outcome = { ...goal, queueBinding: prior }
+    const committed = await bridge.refreshOutcome(outcome)
+    expect(committed.queueBinding).toMatchObject({
+      expectedVersion: 8, fencingToken: 6,
+      reviewRecoveryStaleContinuation: expect.objectContaining({
+        disposition: "RECLAIMED", expectedVersion: 8, fencingToken: 6,
+      }),
+    })
+    const replayed = await bridge.refreshOutcome(outcome)
+    expect(replayed.queueBinding).toMatchObject({
+      expectedVersion: 8, fencingToken: 6,
+      reviewRecoveryStaleContinuation: expect.objectContaining({
+        disposition: "REPLAY_WINNER", expectedVersion: 8, fencingToken: 6,
+      }),
+    })
+    expect(query.mock.calls.filter(([sql]) => sql === OUTCOME_QUEUE_SQL.reclaimAcquisition))
+      .toHaveLength(1)
+    expect(query.mock.calls.filter(([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt))
+      .toHaveLength(2)
+  })
+
+  it.each([
+    ["missing", () => undefined],
+    ["extra field", (evidence: Record<string, unknown>) => ({ ...evidence, extra: true })],
+    ["event drift", (evidence: Record<string, unknown>) => ({ ...evidence, reclaimEventId: 702 })],
+    ["source-attempt drift", (evidence: Record<string, unknown>) => ({
+      ...evidence, sourceRuntimeAttempt: 6,
+    })],
+    ["checkpoint drift", (evidence: Record<string, unknown>) => ({
+      ...evidence, checkpointDigest: "0".repeat(64),
+    })],
+  ])("walls bounded continuation result evidence with %s", async (_name, mutate) => {
+    const baseHop = {
+      disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+      checkpointDigest: "b".repeat(64),
+    }
+    const prior = { ...queueItem, expectedVersion: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701, reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReacquisition: baseHop }
+    const continued = { ...queueItem, lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 8, fencingToken: 6,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, leaseExpiresAt: "2026-07-28T13:50:00.000Z" }
+    const evidence = {
+      disposition: "RECLAIMED", sourceExpectedVersion: 4, sourceFencingToken: 2,
+      sourceRuntimeAttempt: 5, reclaimEventId: 701, reclaimPayloadDigest: "e".repeat(64),
+      expectedVersion: 8, fencingToken: 6, checkpointDigest: "c".repeat(64),
+    }
+    const acquire = vi.fn(async () => ({
+      outcome: continued, acquired: true, replayed: false, reclaimed: true, reason: null,
+      reviewRecoveryContinuationDisposition: "RECLAIMED",
+      reviewRecoveryContinuationCheckpointDigest: "c".repeat(64),
+      ...(mutate(evidence) === undefined ? {} : {
+        reviewRecoveryContinuationEvidence: mutate(evidence),
+      }),
+    }))
+    await expect(runtime({ acquire }).refreshOutcome({ ...goal, queueBinding: prior }))
+      .rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
+  })
+
+  it.each([
+    ["missing", undefined],
+    ["drifted", "0".repeat(64)],
+  ])("walls a persisted stale-continuation replay with %s checkpoint evidence", async (_name, digest) => {
+    const baseHop = {
+      disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+      checkpointDigest: "b".repeat(64),
+    }
+    const continuation = {
+      disposition: "RECLAIMED", expectedVersion: 8, fencingToken: 6,
+      leaseExpiresAt: "2026-07-28T13:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 7, priorFencingToken: 5,
+      priorLeaseExpiresAt: baseHop.leaseExpiresAt, receiptLatestFencingToken: 6,
+      checkpointDigest: "c".repeat(64),
+    }
+    const binding = { ...queueItem, expectedVersion: 8, fencingToken: 6,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701, reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReacquisition: baseHop,
+      reviewRecoveryStaleContinuation: continuation }
+    const item = { ...queueItem, lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 8, fencingToken: 6,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, leaseExpiresAt: continuation.leaseExpiresAt }
+    const acquire = vi.fn(async () => ({ outcome: item, acquired: true, replayed: true,
+      reclaimed: false, reason: null,
+      ...(digest === undefined ? {} : { reviewRecoveryContinuationCheckpointDigest: digest }) }))
+    await expect(runtime({ acquire }).refreshOutcome({ ...goal, queueBinding: binding }))
+      .rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
+  })
+
+  it.each([
+    ["wrong logical state", { reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" }],
+    ["binding version drift", { expectedVersion: 8 }],
+    ["marker fence drift", { reviewRecoveryStaleReacquisition: {
+      disposition: "REPLAY_WINNER", expectedVersion: 7, fencingToken: 6,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 5, receiptLatestFencingToken: 6,
+    } }],
+  ])("walls a stale review-reacquisition marker with %s before acquisition", async (_name, drift) => {
+    const acquire = vi.fn()
+    const bridge = runtime({ acquire })
+    const marker = {
+      disposition: "REPLAY_WINNER", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+    }
+    const queueBinding = {
+      ...queueItem, expectedVersion: 7, fencingToken: 5,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701, reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReacquisition: marker,
+      ...drift,
+    }
+    await expect(bridge.refreshOutcome({ ...goal, queueBinding })).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_BINDING_WALL",
+    })
+    expect(acquire).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["same fence", { item: { version: 6, fencingToken: 4 } }],
+    ["plus two fences", { item: { version: 8, fencingToken: 6 } }],
+    ["combined disposition", { result: { reclaimed: true } }],
+    ["missing replay disposition", { result: { replayed: false } }],
+    ["identity drift", { item: { executionBinding: "execution-other" } }],
+  ])("walls governed stale-lease replay carry-forward for %s", async (_name, drift) => {
+    const prior = {
+      ...queueItem,
+      expectedVersion: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }
+    const item = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      ...(drift.item ?? {}),
+    }
+    const result = {
+      outcome: item,
+      acquired: true,
+      replayed: true,
+      reclaimed: false,
+      reason: null,
+      ...(drift.result ?? {}),
+    }
+    const bridge = runtime({ acquire: vi.fn(async () => result) })
+
+    await expect(bridge.refreshOutcome({ ...goal, queueBinding: prior })).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL",
+    })
+  })
+
+  it.each([
+    ["acquired false", { result: { acquired: false } }],
+    ["same-fence stale reclaim", { item: { version: 6, fencingToken: 4 } }],
+    ["same-fence stale combined disposition", {
+      item: { version: 6, fencingToken: 4 },
+      result: { replayed: true, reclaimed: true },
+    }],
+    ["same-fence stale replay disposition", {
+      item: { version: 6, fencingToken: 4 },
+      result: { replayed: true, reclaimed: false },
+    }],
+    ["missing reclaimed disposition", { result: { reclaimed: false } }],
+    ["replayed disposition", { result: { replayed: true } }],
+    ["non-stale lifecycle reason", { item: { lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" } }],
+    ["version delta", { item: { version: 8 } }],
+    ["fence delta", { item: { fencingToken: 6 } }],
+    ["Work Order drift", { item: { activeWorkOrderId: 78 } }],
+    ["grant drift", { item: { authorityGrantRef: "grant-other" } }],
+    ["user drift", { item: { userId: "other-user" } }],
+    ["outcome drift", { item: { outcomeKey: "goal:OTHER" } }],
+    ["execution drift", { item: { executionBinding: "execution-other" } }],
+    ["acquisition drift", { item: { acquisitionKey: "acquisition-other" } }],
+    ["holder drift", { item: { leaseHolder: "other-hermes" } }],
+    ["lease token drift", { item: { leaseToken: "lease-other" } }],
+    ["missing source event ID", { prior: { reviewRecoveryReclaimEventId: undefined } }],
+    ["missing source event digest", { prior: { reviewRecoveryReclaimPayloadDigest: undefined } }],
+    ["source version drift", { prior: { reviewRecoverySourceExpectedVersion: 5 } }],
+    ["source fence drift", { prior: { reviewRecoverySourceFencingToken: 3 } }],
+    ["source attempt drift", {
+      prior: { reviewRecoverySourceRuntimeAttempt: 6 },
+      item: {
+        reviewRecoverySourceExpectedVersion: 4,
+        reviewRecoverySourceFencingToken: 2,
+        reviewRecoverySourceRuntimeAttempt: 5,
+      },
+    }],
+    ["partial raw source triple", { item: { reviewRecoverySourceExpectedVersion: 4 } }],
+    ["raw source version mismatch", { item: {
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    } }],
+    ["raw source fence mismatch", { item: {
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    } }],
+    ["raw source attempt mismatch", { item: {
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 6,
+    } }],
+    ["partial supplied evidence", { item: { reviewRecoveryReclaimEventId: 701 } }],
+    ["mismatched supplied evidence", { item: {
+      reviewRecoveryReclaimEventId: 702,
+      reviewRecoveryReclaimPayloadDigest: "f".repeat(64),
+    } }],
+  ])("walls governed stale-lease evidence carry-forward for %s", async (_name, drift) => {
+    const prior = {
+      ...queueItem,
+      expectedVersion: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+      ...(drift.prior ?? {}),
+    }
+    const item = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      ...(drift.item ?? {}),
+    }
+    const result = {
+      outcome: item,
+      acquired: true,
+      replayed: false,
+      reclaimed: true,
+      reason: null,
+      ...(drift.result ?? {}),
+    }
+    const transitionQueue = vi.fn(async () => true)
+    const bridge = runtime({ acquire: vi.fn(async () => result), transitionQueue })
+
+    await expect(bridge.refreshOutcome({ ...goal, queueBinding: prior })).rejects.toMatchObject({
+      code: expect.stringMatching(/^HERMES_OUTCOME_QUEUE_(?:REVIEW_RECOVERY_PROOF|BINDING|REFRESH)_WALL$/),
+    })
+    expect(transitionQueue).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["partial evidence", { reviewRecoveryReclaimEventId: 701 }],
+    ["mismatched evidence", {
+      reviewRecoveryReclaimEventId: 702,
+      reviewRecoveryReclaimPayloadDigest: "f".repeat(64),
+    }],
+    ["identity drift", { outcomeKey: "goal:OTHER" }],
+  ])("walls acquisition-shaped refresh with %s before return", async (_name, drift) => {
+    const reclaimed = {
+      ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      approvalState: "approved", authorityState: "matched", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReclaimApplied: true,
+      reviewRecoveryReclaimCount: 1, reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+    }
+    const acquisitionRow: any = { ...reclaimed }
+    for (const field of ["reviewRecoverySourceRuntimeAttempt", "reviewRecoveryStaleReclaimApplied",
+      "reviewRecoveryReclaimCount", "reviewRecoveryReclaimEventId",
+      "reviewRecoveryReclaimPayloadDigest"]) delete acquisitionRow[field]
+    Object.assign(acquisitionRow, drift)
+    const acquire = vi.fn(async () => ({ outcome: acquisitionRow, acquired: true, replayed: true }))
+    const bridge = runtime({
+      resumeReviewRecoveryQueue: vi.fn(async () => reclaimed),
+      verifyActiveReviewRecovery: vi.fn(async () => true),
+      acquire,
+    })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 7,
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
+    expect(acquire).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ["null", { reviewRecoverySourceExpectedVersion: null }, "HERMES_OUTCOME_QUEUE_BINDING_WALL"],
+    ["partial", { reviewRecoverySourceExpectedVersion: 5 }, "HERMES_OUTCOME_QUEUE_BINDING_WALL"],
+    ["drifted", {
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 6,
+    }, "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL"],
+  ])("walls a %s local recovery source triple before queue access", async (_name, sourceFields, code) => {
+    const resumeReviewRecoveryQueue = vi.fn()
+    const verifyActiveReviewRecovery = vi.fn()
+    const acquire = vi.fn()
+    const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED", ...sourceFields } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40),
+      runtimeAttempt: 7,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).rejects.toMatchObject({ code })
+    expect(resumeReviewRecoveryQueue).not.toHaveBeenCalled()
+    expect(verifyActiveReviewRecovery).not.toHaveBeenCalled()
+    expect(acquire).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { userId: "other" },
+    { outcomeKey: "goal:OTHER" },
+    { executionBinding: "other-binding" },
+    { acquisitionKey: "other-acquisition" },
+    { leaseToken: "other-token" },
+  ])("rejects an exact-delta persisted recovery with drifted durable identity", async (drift) => {
+    const recovered = {
+      ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 6, fencingToken: 4,
+      leaseHolder: "resident-hermes", leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5, ...drift,
+    }
+    const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
+    const verifyActiveReviewRecovery = vi.fn(async () => true)
+    const acquire = vi.fn()
+    const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
+    expect(verifyActiveReviewRecovery).not.toHaveBeenCalled()
+    expect(acquire).not.toHaveBeenCalled()
+  })
+
+  it("reclaims an expired persisted review recovery only after immutable provenance and revalidates before refresh", async () => {
+    const reclaimed = {
+      ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      approvalState: "approved", authorityState: "matched", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReclaimApplied: true,
+      reviewRecoveryReclaimCount: 1, reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+    }
+    const resumeReviewRecoveryQueue = vi.fn(async () => reclaimed)
+    const verifyActiveReviewRecovery = vi.fn(async () => true)
+    const acquire = vi.fn(async () => ({ outcome: reclaimed, acquired: true, replayed: true, reclaimed: false }))
+    const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5 } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).resolves.toMatchObject({ queueBinding: {
+      expectedVersion: 7, fencingToken: 5,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryReclaimEventId: 701,
+    } })
+    expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+      campaignWindowId: "campaign-v1-2", processIdentity: "supervisor-nonce-1",
+    }))
+    expect(verifyActiveReviewRecovery.mock.invocationCallOrder[0])
+      .toBeLessThan(acquire.mock.invocationCallOrder[0])
+  })
+
+  it.each([
+    ["drifted to current attempt", 6],
+    ["drifted to later attempt", 7],
+    ["missing", undefined],
+  ])("walls a %s persisted source attempt before verification or refresh", async (_name, sourceAttempt) => {
+    const recovered = {
+      ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 6, fencingToken: 4,
+      leaseHolder: "resident-hermes", leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      ...(sourceAttempt === undefined ? {} : { reviewRecoverySourceRuntimeAttempt: sourceAttempt }),
+    }
+    const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
+    const verifyActiveReviewRecovery = vi.fn(async () => true)
+    const acquire = vi.fn()
+    const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
+    expect(verifyActiveReviewRecovery).not.toHaveBeenCalled()
+    expect(acquire).not.toHaveBeenCalled()
+  })
+
+  it("walls malformed persisted review recovery before refresh or provenance backfill", async () => {
+    const recovered = {
+      ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 6, fencingToken: 4,
+      leaseHolder: "resident-hermes", leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }
+    const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
+    const acquire = vi.fn()
+    const verifyActiveReviewRecovery = vi.fn(async () => {
+      throw Object.assign(new Error("drifted recovery chain"), {
+        code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+      })
+    })
+    const bridge = runtime({ resumeReviewRecoveryQueue, acquire, verifyActiveReviewRecovery })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL" })
+    expect(acquire).not.toHaveBeenCalled()
+    expect(outcome.queueBinding).not.toHaveProperty("reviewRecoverySourceExpectedVersion")
+  })
+
+  it("rejects a generic stale acquisition without dedicated review-recovery evidence", async () => {
     const recovered = {
       ...queueItem,
       lifecycleState: "active",
@@ -1364,6 +2555,7 @@ describe("Hermes durable outcome queue runtime", () => {
       fencingToken: 5,
       leaseHolder: "resident-hermes",
       leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5,
     }
     const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
     const acquire = vi.fn(async () => ({ outcome: recovered, acquired: true, replayed: true }))
@@ -1384,13 +2576,17 @@ describe("Hermes durable outcome queue runtime", () => {
       prNumber: 523,
       reviewedHeadSha: "a".repeat(40),
       mergeSha: "b".repeat(40),
-    })).resolves.toMatchObject({ queueBinding: { expectedVersion: 7, fencingToken: 5 } })
+      runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
     expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
       expectedVersion: 7,
       fencingToken: 5,
       persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
     }))
-    expect(acquire).toHaveBeenCalledOnce()
+    expect(acquire).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -1414,7 +2610,7 @@ describe("Hermes durable outcome queue runtime", () => {
     await expect(bridge.resumeAfterReviewRecovery(outcome, {
       expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
       proofDigest: "d".repeat(64), prNumber: 523,
-      reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40),
+      reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
     })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL" })
   })
 

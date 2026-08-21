@@ -1,3 +1,4 @@
+import { deriveRemediationPlan } from "./derive-remediation.mjs"
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
@@ -120,20 +121,33 @@ export async function assertLegacyAdapterDispatchAllowed(registry, verifyOwnerRe
 
 export function selectEligibleWorkOrder(registry, queue) {
   if (registry.schemaVersion !== 1 || registry.repository !== "bsvalues/terragroq") throw new Error("AUTHORITY_REGISTRY_WALL")
-  const completed = new Set(queue.filter((entry) => entry.state === "COMPLETED").map((entry) => entry.workOrderId))
+  const identity = (entry) => entry.workOrderRowId !== undefined && entry.userId !== undefined
+    ? `row:${entry.userId}:${entry.workOrderRowId}`
+    : `ref:${entry.workOrderId}`
+  const completedIdentities = new Set(queue.filter((entry) => entry.state === "COMPLETED").map(identity))
+  const completedRefs = new Set(queue.filter((entry) => entry.state === "COMPLETED").map((entry) => entry.workOrderId))
   return queue
-    .filter((entry) => entry.state === "READY" && !completed.has(entry.workOrderId))
+    .filter((entry) => entry.state === "READY" && !completedIdentities.has(identity(entry)))
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.issueNumber - right.issueNumber)
-    .map((entry) => ({ entry, authority: registry.workOrders.find((record) => record.workOrderId === entry.workOrderId) }))
+    .map((entry) => ({
+      entry,
+      authority: registry.workOrders.find((record) => record.workOrderId === entry.workOrderId
+        && (entry.workOrderRowId === undefined || record.workOrderRowId === entry.workOrderRowId)
+        && (entry.userId === undefined || record.userId === entry.userId)),
+    }))
     .find(({ authority }) => {
       if (!authority) return false
       validateAuthorityRecord(authority)
-      return authority.dependencies.every((dependency) => completed.has(dependency))
+      return authority.dependencies.every((dependency) => completedRefs.has(dependency))
     }) ?? null
 }
 
-function getAuthority(registry, workOrderId) {
-  const authority = registry.workOrders.find((record) => record.workOrderId === workOrderId)
+function getAuthority(registry, workOrderId, identity = {}) {
+  const matches = registry.workOrders.filter((record) => record.workOrderId === workOrderId
+    && (identity.workOrderRowId === undefined || record.workOrderRowId === identity.workOrderRowId)
+    && (identity.userId === undefined || record.userId === identity.userId))
+  if (matches.length !== 1) throw new Error("AUTHORITY_IDENTITY_WALL")
+  const authority = matches[0]
   validateAuthorityRecord(authority)
   return authority
 }
@@ -154,9 +168,14 @@ async function preparePatch({ root, checkpoint, authority, adapters, remediation
     workspace: checkpoint.workspace,
     unifiedPatch: result.unifiedPatch,
     allowedPaths: authority.allowedPaths,
+    forbiddenPaths: authority.forbiddenPaths ?? [],
     allowExistingStaged,
   })
-  if (diff.changedPaths.length === 0 || diff.changedPaths.some((changed) => FORBIDDEN_PATH.test(changed) || !authority.allowedPaths.some((allowed) => allowed.endsWith("/**") ? changed.startsWith(allowed.slice(0, -2)) : changed === allowed))) {
+  if (diff.changedPaths.length === 0 || diff.changedPaths.some((changed) => FORBIDDEN_PATH.test(changed)
+    || !authority.allowedPaths.some((allowed) => allowed.endsWith("/**") ? changed.startsWith(allowed.slice(0, -2)) : changed === allowed)
+    || (authority.forbiddenPaths ?? []).some((forbidden) => forbidden.endsWith("/**")
+      ? changed.startsWith(forbidden.slice(0, -2))
+      : changed === forbidden))) {
     throw new Error("PATCH_EXACT_PATH_WALL")
   }
   if ((checkpoint.reviewThreadPaths ?? []).some((reviewPath) => reviewPath && !diff.changedPaths.includes(reviewPath))) throw new Error("PATCH_REVIEW_CORRELATION_WALL")
@@ -167,10 +186,14 @@ async function preparePatch({ root, checkpoint, authority, adapters, remediation
 
 async function validateAndPublish({ root, checkpoint, authority, adapters }) {
   if (checkpoint.state !== "VALIDATING") checkpoint = transition(root, checkpoint, "VALIDATING")
+  if (authority.commitAllowed === false || authority.pushAllowed === false) throw new Error("AUTHORITY_PUBLISH_WALL")
   await adapters.validate({ workspace: checkpoint.workspace, requiredValidation: authority.requiredValidation })
   const published = await adapters.publish({
     issueNumber: checkpoint.issueNumber,
     workOrderId: checkpoint.workOrderId,
+    workOrderRowId: checkpoint.workOrderRowId,
+    userId: checkpoint.userId,
+    projectionCompletionOwned: checkpoint.projectionCompletionOwned,
     workspace: checkpoint.workspace,
     branch: checkpoint.branch,
     existingPr: checkpoint.pr,
@@ -191,8 +214,17 @@ async function mergeAndComplete({ root, checkpoint, registry, adapters }) {
     checkpoint = transition(root, checkpoint, "MERGED_VERIFIED")
   }
   if (checkpoint.state === "MERGED_VERIFIED") {
-    await adapters.complete(checkpoint.issueNumber)
-    checkpoint = transition(root, checkpoint, "ISSUE_COMPLETED")
+    await adapters.complete(checkpoint.issueNumber, {
+      workOrderRowId: checkpoint.workOrderRowId,
+      userId: checkpoint.userId,
+      workOrderId: checkpoint.workOrderId,
+      projectionCompletionOwned: checkpoint.projectionCompletionOwned,
+    })
+    checkpoint = transition(
+      root,
+      checkpoint,
+      checkpoint.projectionCompletionOwned === false ? "COMPLETED" : "ISSUE_COMPLETED",
+    )
   }
   if (checkpoint.state === "ISSUE_COMPLETED") checkpoint = transition(root, checkpoint, "COMPLETED")
   return completionResult({ checkpoint, registry, adapters })
@@ -202,6 +234,48 @@ async function completionResult({ checkpoint, registry, adapters }) {
   const refreshedQueue = await adapters.listQueue()
   const next = selectEligibleWorkOrder(registry, refreshedQueue)
   return { ...checkpoint, nextWorkOrderId: next?.authority.workOrderId ?? null }
+}
+
+/**
+ * Turn findings made during an active objective into queued work, before selecting anything.
+ *
+ * This is the reflex the loop was missing. `deriveRemediationWorkOrder` could reason about a proposed
+ * action for a whole release and never be called by anything running, so every finding still ended at a
+ * message to the owner. Reasoning nobody invokes is not a control plane.
+ *
+ * It runs at the top of an idle cycle so a finding becomes a derived order, is queued, and is selected
+ * by the same cycle that drained it -- discovery and dispatch in one pass, with nobody in between.
+ *
+ * Gated findings are recorded and skipped. They must never hold up the ungated findings beside them,
+ * which is #911's exact shape: repinning service paths is the owner's decision and must not stall the
+ * compose reconciliation next to it.
+ */
+export async function deriveAndQueueFindings({ registry, adapters }) {
+  if (typeof adapters.collectFindings !== "function" || typeof adapters.persistDerivedWorkOrder !== "function") {
+    return { queued: [], gated: [] }
+  }
+  const findings = (await adapters.collectFindings()) ?? []
+  const queued = []
+  const gated = []
+  for (const objective of registry.workOrders ?? []) {
+    const hasStableIdentity = objective?.userId !== undefined && objective?.workOrderRowId !== undefined
+    const mine = findings.filter((finding) => finding?.objectiveWorkOrderId === objective.workOrderId
+      && (!hasStableIdentity || (finding?.sourceUserId === objective.userId
+        && String(finding?.sourceWorkOrderRowId) === String(objective.workOrderRowId))))
+    if (mine.length === 0) continue
+    const plan = deriveRemediationPlan({ objective, findings: mine })
+    for (const order of plan.dispatch) {
+      // Persisting is what makes the derived order real: the next selection reads the queue, not this
+      // array. A derivation that is never written is another way of asking someone else to do it.
+      await adapters.persistDerivedWorkOrder(order)
+      queued.push(order.workOrderId)
+    }
+    for (const entry of plan.gated) {
+      if (typeof adapters.recordOwnerGate === "function") await adapters.recordOwnerGate(entry)
+      gated.push(entry)
+    }
+  }
+  return { queued, gated }
 }
 
 async function runCycle({ root, registry, adapters }) {
@@ -220,17 +294,26 @@ async function runCycle({ root, registry, adapters }) {
   await adapters.assertRuntime()
 
   if (!checkpoint || TERMINAL_STATES.has(checkpoint.state)) {
+    // Findings first: a finding made during an active objective enters derivation automatically, and
+    // the queue read below sees anything it produced.
+    const derived = await deriveAndQueueFindings({ registry, adapters })
+    const selectionRegistry = derived.queued.length > 0 && typeof adapters.buildRegistry === "function"
+      ? await adapters.buildRegistry()
+      : registry
     const queue = await adapters.listQueue()
-    const selected = selectEligibleWorkOrder(registry, queue)
+    const selected = selectEligibleWorkOrder(selectionRegistry, queue)
     if (!selected) return { state: "READY", workOrderId: null, nextWorkOrderId: null }
     const { entry, authority } = selected
     const baseSha = await adapters.resolveBaseSha(authority.baseBranch)
     checkpoint = transition(root, {
-      repository: registry.repository,
+      repository: selectionRegistry.repository,
       goal: "GOAL-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
       loop: "LOOP-RUNTIME-OPERATOR-LOCAL-IDENTITY-001",
       workOrderId: authority.workOrderId,
+      workOrderRowId: authority.workOrderRowId,
+      userId: authority.userId,
       issueNumber: entry.issueNumber,
+      projectionCompletionOwned: entry.projectionCompletionOwned,
       baseSha,
       branch: null,
       pr: null,
@@ -238,7 +321,7 @@ async function runCycle({ root, registry, adapters }) {
       remediationAttempts: 0,
       queueLeased: false,
     }, "LEASED")
-    await adapters.lease(entry.issueNumber)
+    await adapters.lease(entry.issueNumber, entry)
     checkpoint = { ...checkpoint, queueLeased: true }
     writeCheckpoint(root, checkpoint)
     const workspace = await adapters.prepareWorkspace({ workOrderId: authority.workOrderId, baseSha })
@@ -254,7 +337,7 @@ async function runCycle({ root, registry, adapters }) {
     return preparePatch({ root, checkpoint, authority, adapters, remediation: false })
   }
 
-  const authority = getAuthority(registry, checkpoint.workOrderId)
+  const authority = getAuthority(registry, checkpoint.workOrderId, checkpoint)
   if (checkpoint.state === "FAILED_RECOVERABLE") {
     checkpoint = transition(root, checkpoint, checkpoint.resumeState, { nextAttemptAt: null, resumeState: null })
   }
@@ -264,7 +347,11 @@ async function runCycle({ root, registry, adapters }) {
   if (checkpoint.state === "COMPLETED") return completionResult({ checkpoint, registry, adapters })
   if (checkpoint.state === "LEASED") {
     if (!checkpoint.queueLeased) {
-      await adapters.lease(checkpoint.issueNumber)
+      await adapters.lease(checkpoint.issueNumber, {
+        workOrderRowId: checkpoint.workOrderRowId,
+        userId: checkpoint.userId,
+        workOrderId: checkpoint.workOrderId,
+      })
       checkpoint = { ...checkpoint, queueLeased: true }
       writeCheckpoint(root, checkpoint)
     }
