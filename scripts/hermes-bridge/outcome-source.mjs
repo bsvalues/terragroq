@@ -2905,7 +2905,7 @@ function exactActiveReviewRecoveryAcquisitionHops(row, executionBinding, outcome
         && attempt?.reason == null
         && Number.isFinite(attemptedAt)
         && attemptedAt >= (priorAttemptedAt ?? Number.NEGATIVE_INFINITY)
-        && attemptedAt <= leaseExpiresAt
+        && attemptedAt < leaseExpiresAt
         && ((priorAttemptedAt = attemptedAt) >= 0)
     })
   }

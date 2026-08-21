@@ -3942,6 +3942,11 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         await expect(projectStale()).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
         await client.query(`UPDATE outcome_queue_acquisition_attempt
           SET "attemptedAt"='2098-01-02T12:01:00Z' WHERE id=221`)
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "attemptedAt"=$1 WHERE id=222`, [staleLeaseExpiresAt])
+        await expect(projectStale()).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query(`UPDATE outcome_queue_acquisition_attempt
+          SET "attemptedAt"='2098-01-02T12:02:00Z' WHERE id=222`)
         const hop2First = (await client.query(`SELECT min(id)::integer AS id
           FROM outcome_queue_acquisition_attempt WHERE "fencingToken"=6`)).rows[0].id
         await client.query(`UPDATE outcome_queue_acquisition_attempt
