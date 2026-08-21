@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  activateEnvironmentPreview,
   buildRegistryRecords,
   linkGrant,
   parseProjectionIssue,
   projectionCompletionOwned,
   projectionIssueDirective,
   queueStateFor,
+  recordStartingEnvironmentPreview,
 } from "../scripts/runtime-operator/williamos-adapters.mjs"
 import { selectEligibleWorkOrder } from "../scripts/runtime-operator/operational-kernel.mjs"
 
 const workOrder = (over: Record<string, unknown> = {}) => ({
   id: 26,
   userId: "owner-1",
+  authorityGrantId: 12,
   ref: "WO-0026",
   title: "Make a work_order-rooted Workbench Thread load its existing content.",
   description:
@@ -27,6 +30,8 @@ const workOrder = (over: Record<string, unknown> = {}) => ({
 })
 
 const grant = (over: Record<string, unknown> = {}) => ({
+  id: 12,
+  workOrderId: 26,
   ref: "GRANT-0012",
   scope: "#890",
   allowedActions: ["implement"],
@@ -49,13 +54,13 @@ describe("projection parsing", () => {
 })
 
 describe("linking an owner grant", () => {
-  it("links when the work order names the grant ref", () => {
+  it("links only through the exact Work Order foreign keys", () => {
     expect(linkGrant(workOrder(), [grant()])?.ref).toBe("GRANT-0012")
   })
 
-  it("links when the grant scope names the work order", () => {
-    const scoped = grant({ ref: "GRANT-0099", scope: "WO-0026" })
-    expect(linkGrant(workOrder({ description: "no refs named" }), [scoped])?.ref).toBe("GRANT-0099")
+  it("does not treat description or scope text as authority linkage", () => {
+    const scoped = grant({ id: 99, ref: "GRANT-0099", scope: "WO-0026" })
+    expect(linkGrant(workOrder({ description: "GRANT-0099" }), [scoped])).toBeNull()
   })
 
   it("requires the implement action, not merely any grant", () => {
@@ -104,8 +109,8 @@ describe("building the registry from state", () => {
 
   it("selects by stable row identity when human refs collide", () => {
     const records = buildRegistryRecords(
-      [workOrder({ id: 26, userId: "owner-1" }), workOrder({ id: 99, userId: "owner-2" })],
-      [grant(), grant({ id: 99, userId: "owner-2" })],
+      [workOrder({ id: 26, userId: "owner-1" }), workOrder({ id: 99, userId: "owner-2", authorityGrantId: 99 })],
+      [grant(), grant({ id: 99, userId: "owner-2", workOrderId: 99 })],
       "williamos-resident-v1",
     )
     const registry = { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: records }
@@ -126,8 +131,8 @@ describe("building the registry from state", () => {
 
   it("does not let a completed colliding ref suppress a different ready row", () => {
     const records = buildRegistryRecords(
-      [workOrder({ id: 26, userId: "owner-1" }), workOrder({ id: 99, userId: "owner-2" })],
-      [grant(), grant({ id: 99, userId: "owner-2" })],
+      [workOrder({ id: 26, userId: "owner-1" }), workOrder({ id: 99, userId: "owner-2", authorityGrantId: 99 })],
+      [grant(), grant({ id: 99, userId: "owner-2", workOrderId: 99 })],
       "williamos-resident-v1",
     )
     const registry = { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: records }
@@ -148,8 +153,18 @@ describe("building the registry from state", () => {
     expect(buildRegistryRecords([workOrder({ validators: [] })], [grant()], "a")).toHaveLength(0)
   })
 
-  it("omits a work order with no projection issue, which publish would need", () => {
+  it("omits a work order with neither a GitHub projection nor an exact Environment world binding", () => {
     expect(buildRegistryRecords([workOrder({ description: "GRANT-0012 but no projection" })], [grant()], "a")).toHaveLength(0)
+  })
+
+  it("accepts an exact Environment world binding without inventing a GitHub issue dependency", () => {
+    const records = buildRegistryRecords([
+      workOrder({ description: "GRANT-0012 [environment-world:world-42] [resource:repo:a]" }),
+    ], [grant()], "a")
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({
+      workOrderId: "WO-0026", grantRef: "GRANT-0012", environmentWorldId: "world-42",
+    })
   })
 
   it("drops validators outside the kernel's allowed set instead of passing them through", () => {
@@ -164,5 +179,30 @@ describe("queue state mapping", () => {
     expect(queueStateFor("active")).toBe("LEASED")
     expect(queueStateFor("draft")).toBe("READY")
     expect(queueStateFor("approved")).toBe("READY")
+  })
+})
+
+describe("Environment preview lifecycle state", () => {
+  const oldHead = {
+    worldId: "world-42", head: "old-head", port: 4101, pid: 111,
+    workspace: "/work/old", logPath: "/logs/old", startedAt: "2026-08-20T19:00:00.000Z", status: "ready",
+  }
+  const nextHead = {
+    worldId: "world-42", head: "new-head", port: 4102, pid: 222,
+    workspace: "/work/new", logPath: "/logs/new", startedAt: "2026-08-20T19:00:01.000Z",
+  }
+
+  it("records a detached child before a slow startup can cross the polling deadline", () => {
+    const state = recordStartingEnvironmentPreview({ endpoints: [oldHead] }, nextHead)
+
+    expect(state.endpoints).toEqual([oldHead, { ...nextHead, status: "starting" }])
+  })
+
+  it("retains the superseded process handle until activation explicitly cleans it up", () => {
+    const starting = recordStartingEnvironmentPreview({ endpoints: [oldHead] }, nextHead)
+    const activation = activateEnvironmentPreview(starting, nextHead)
+
+    expect(activation.retired).toEqual([oldHead])
+    expect(activation.state.endpoints).toEqual([{ ...nextHead, status: "ready" }])
   })
 })

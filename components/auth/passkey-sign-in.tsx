@@ -22,9 +22,11 @@ import { Button } from "@/components/ui/button"
 export function PasskeySignIn({
   available,
   unavailableReason,
+  returnTo = "/",
 }: {
   available: boolean
   unavailableReason?: string | null
+  returnTo?: string
 }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
@@ -41,14 +43,14 @@ export function PasskeySignIn({
       try {
         const result = await authClient.signIn.passkey({ autoFill: true })
         if (result && !result.error) {
-          router.push("/")
+          router.push(returnTo)
           router.refresh()
         }
       } catch {
         // Conditional mediation is best-effort; the explicit button remains the reliable path.
       }
     })()
-  }, [available, router])
+  }, [available, returnTo, router])
 
   useEffect(() => {
     const api = typeof window === "undefined" ? undefined : window.PublicKeyCredential
@@ -73,7 +75,7 @@ export function PasskeySignIn({
     try {
       const result = await authClient.signIn.passkey()
       if (result?.error) throw new Error(result.error.message ?? "Device sign-in failed.")
-      router.push("/")
+      router.push(returnTo)
       router.refresh()
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "Device sign-in failed."

@@ -16,7 +16,10 @@ const ddl = readFileSync(ddlPath, "utf8")
 
 describe("sovereign schema bootstrap DDL", () => {
   it("installs the full WilliamOS table set", () => {
-    expect((ddl.match(/CREATE TABLE/g) ?? []).length).toBe(38)
+    expect((ddl.match(/CREATE TABLE/g) ?? []).length).toBe(41)
+    for (const table of ["environment_world", "working_world", "workbench_thread_message"]) {
+      expect(ddl).toContain(`CREATE TABLE "${table}"`)
+    }
   })
 
   it("bootstraps device authentication separately from access grants", () => {

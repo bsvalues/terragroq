@@ -191,6 +191,7 @@ CREATE TABLE "device_credential" (
 	"id" text PRIMARY KEY NOT NULL,
 	"userId" text NOT NULL,
 	"label" text NOT NULL,
+	"kind" text DEFAULT 'owner' NOT NULL,
 	"publicKeySpki" text NOT NULL,
 	"publicKeyFingerprintSha256" text NOT NULL,
 	"activeAt" timestamp with time zone DEFAULT now() NOT NULL,
@@ -199,6 +200,7 @@ CREATE TABLE "device_credential" (
 	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "device_credential_fingerprint_check" CHECK ("device_credential"."publicKeyFingerprintSha256" ~ '^[0-9a-f]{64}$'),
 	CONSTRAINT "device_credential_label_check" CHECK (length(trim("device_credential"."label")) > 0),
+	CONSTRAINT "device_credential_kind_check" CHECK ("device_credential"."kind" IN ('owner', 'runtime')),
 	CONSTRAINT "device_credential_spki_check" CHECK (length("device_credential"."publicKeySpki") > 0)
 );
 --> statement-breakpoint
@@ -294,6 +296,19 @@ CREATE TABLE "evidence_record" (
 	"contentHash" text,
 	"artifactPath" text,
 	"createdAt" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "environment_world" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"resourceIdentity" text,
+	"workOrderRef" text,
+	"intent" text NOT NULL,
+	"projection" jsonb NOT NULL,
+	"version" integer DEFAULT 0 NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "environment_world_user_id_unique" UNIQUE("userId","id")
 );
 --> statement-breakpoint
 CREATE TABLE "goal" (
@@ -571,6 +586,10 @@ CREATE TABLE "project_resource" (
 	"canonicalIdentity" text NOT NULL,
 	"label" text NOT NULL,
 	"relationship" text NOT NULL,
+	"allowedOperations" text[] DEFAULT '{}' NOT NULL,
+	"ratifiedAt" timestamp with time zone,
+	"ratifiedBy" text,
+	"resourceKey" text,
 	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
 	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "project_resource_identity_unique" UNIQUE("projectId","type","canonicalIdentity","relationship"),
@@ -650,6 +669,25 @@ CREATE TABLE "workbench_thread_source" (
 	CONSTRAINT "workbench_thread_source_role_check" CHECK ("workbench_thread_source"."role" IN ('root', 'member'))
 );
 --> statement-breakpoint
+CREATE TABLE "working_world" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"intent" text NOT NULL,
+	"snapshot" text NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	"updatedAt" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "workbench_thread_message" (
+	"id" text PRIMARY KEY NOT NULL,
+	"userId" text NOT NULL,
+	"threadId" text NOT NULL,
+	"role" text NOT NULL,
+	"content" text NOT NULL,
+	"createdAt" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "workbench_thread_message_role_check" CHECK ("workbench_thread_message"."role" IN ('owner', 'williamos'))
+);
+--> statement-breakpoint
 CREATE TABLE "work_order" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"userId" text NOT NULL,
@@ -705,6 +743,7 @@ ALTER TABLE "device_credential" ADD CONSTRAINT "device_credential_userId_user_id
 ALTER TABLE "device_session" ADD CONSTRAINT "device_session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "device_session" ADD CONSTRAINT "device_session_credentialId_device_credential_id_fk" FOREIGN KEY ("credentialId") REFERENCES "public"."device_credential"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "goal_outcome_intake_receipt" ADD CONSTRAINT "goal_outcome_intake_receipt_goalId_goal_id_fk" FOREIGN KEY ("goalId") REFERENCES "public"."goal"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "environment_world" ADD CONSTRAINT "environment_world_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_goalId_goal_id_fk" FOREIGN KEY ("goalId") REFERENCES "public"."goal"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_approvalDecisionId_decision_id_fk" FOREIGN KEY ("approvalDecisionId") REFERENCES "public"."decision"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "outcome_queue_item" ADD CONSTRAINT "outcome_queue_item_activeWorkOrderId_work_order_id_fk" FOREIGN KEY ("activeWorkOrderId") REFERENCES "public"."work_order"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
@@ -712,6 +751,7 @@ ALTER TABLE "project_resource" ADD CONSTRAINT "project_resource_projectId_projec
 ALTER TABLE "session" ADD CONSTRAINT "session_userId_user_id_fk" FOREIGN KEY ("userId") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "workbench_thread" ADD CONSTRAINT "workbench_thread_user_project_fk" FOREIGN KEY ("userId","projectId") REFERENCES "public"."project"("userId","id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "workbench_thread_source" ADD CONSTRAINT "workbench_thread_source_user_thread_fk" FOREIGN KEY ("userId","threadId") REFERENCES "public"."workbench_thread"("userId","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "workbench_thread_message" ADD CONSTRAINT "workbench_thread_message_user_thread_fk" FOREIGN KEY ("userId","threadId") REFERENCES "public"."workbench_thread"("userId","id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "access_grant_public_token_hash_idx" ON "access_grant" USING btree ("publicTokenHash");--> statement-breakpoint
 CREATE INDEX "access_grant_user_status_expires_idx" ON "access_grant" USING btree ("userId","status","expiresAt");--> statement-breakpoint
 CREATE INDEX "access_grant_target_idx" ON "access_grant" USING btree ("targetResourceType","targetResourceId");--> statement-breakpoint
@@ -725,6 +765,7 @@ CREATE INDEX "device_auth_event_user_created_idx" ON "device_auth_event" USING b
 CREATE INDEX "device_auth_event_credential_created_idx" ON "device_auth_event" USING btree ("credentialId","createdAt");--> statement-breakpoint
 CREATE INDEX "device_auth_event_session_created_idx" ON "device_auth_event" USING btree ("sessionId","createdAt");--> statement-breakpoint
 CREATE INDEX "device_auth_event_type_created_idx" ON "device_auth_event" USING btree ("eventType","createdAt");--> statement-breakpoint
+CREATE INDEX "environment_world_user_updated_idx" ON "environment_world" USING btree ("userId","updatedAt","id");--> statement-breakpoint
 CREATE UNIQUE INDEX "device_challenge_hash_idx" ON "device_challenge" USING btree ("challengeHash");--> statement-breakpoint
 CREATE INDEX "device_challenge_user_purpose_created_idx" ON "device_challenge" USING btree ("userId","purpose","createdAt");--> statement-breakpoint
 CREATE INDEX "device_challenge_credential_purpose_created_idx" ON "device_challenge" USING btree ("credentialId","purpose","createdAt");--> statement-breakpoint
@@ -753,6 +794,12 @@ CREATE INDEX "outcome_queue_mutation_receipt_user_outcome_idx" ON "outcome_queue
 CREATE INDEX "project_resource_user_project_idx" ON "project_resource" USING btree ("userId","projectId");--> statement-breakpoint
 CREATE INDEX "project_resource_user_identity_idx" ON "project_resource" USING btree ("userId","type","canonicalIdentity");
 --> statement-breakpoint
+CREATE INDEX "project_resource_resource_key_idx" ON "project_resource" USING btree ("userId","resourceKey");
+--> statement-breakpoint
 CREATE INDEX "workbench_thread_user_project_updated_idx" ON "workbench_thread" USING btree ("userId","projectId","updatedAt","id");--> statement-breakpoint
 CREATE UNIQUE INDEX "workbench_thread_source_root_unique_idx" ON "workbench_thread_source" USING btree ("userId","sourceType","sourceId") WHERE "workbench_thread_source"."role" = 'root';--> statement-breakpoint
 CREATE UNIQUE INDEX "workbench_thread_source_thread_root_unique_idx" ON "workbench_thread_source" USING btree ("userId","threadId") WHERE "workbench_thread_source"."role" = 'root';
+--> statement-breakpoint
+CREATE INDEX "working_world_user_updated_idx" ON "working_world" USING btree ("userId","updatedAt","id");
+--> statement-breakpoint
+CREATE INDEX "workbench_thread_message_thread_created_idx" ON "workbench_thread_message" USING btree ("userId","threadId","createdAt","id");

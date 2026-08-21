@@ -1,4 +1,4 @@
-import { execFile as execFileCallback } from "node:child_process"
+import { execFile as execFileCallback, spawn } from "node:child_process"
 import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
@@ -19,6 +19,17 @@ import {
   kernelThreadsRoot,
 } from "../hermes-bridge/hermes-kernel-client.mjs"
 import { HERMES_FREE_AGENT_COMPLETE_PATTERN } from "../hermes-bridge/hermes-kernel-output.mjs"
+import {
+  buildEndpointRuntimeRequest,
+  buildObservationRuntimeRequest,
+  buildValidationReceipt,
+  environmentPort,
+  environmentPublicUrl,
+  environmentRuntimeResponseIsRetryable,
+  environmentRuntimePayloadDigest,
+  environmentWorldId,
+  requireEnvironmentValidationReceipt,
+} from "./environment-publisher.mjs"
 
 /**
  * GitHub through the broker, on the worker node.
@@ -144,9 +155,9 @@ export function parseCodexRetryAfter(text) {
  * before naming its own #891, so the kernel delivered correct work, wrote "Closes #871" into its pull
  * request, and left the issue it was actually for untouched and open.
  *
- * A description with no explicit projection returns null, which omits the work order from the registry.
- * That is the intended failure: a work order whose projection cannot be read is not dispatched, rather
- * than dispatched at a guess. Omitting beats fabricating.
+ * A description with no explicit GitHub projection returns null. Environment worlds are the one
+ * deliberate exception: their exact `[environment-world:<id>]` binding is itself the durable queue
+ * identity, so GitHub remains an optional projection rather than a hidden trigger.
  */
 export function parseProjectionIssue(description) {
   const text = String(description ?? "")
@@ -166,15 +177,13 @@ export function projectionIssueDirective(issueNumber, completionOwned) {
     : `Tracks #${issueNumber}; completion remains owned by the parent outcome.`
 }
 
-/** An owner grant is linked when the work order names its ref, or the grant's scope names the work order. */
+/** Authority linkage is the durable foreign-key pair; free text is never an authority join. */
 export function linkGrant(workOrder, grants) {
-  if (Number.isInteger(workOrder?.authorityGrantId)) {
-    return grants.find((grant) => grant.id === workOrder.authorityGrantId
-      && (grant.allowedActions ?? []).includes("implement")) ?? null
-  }
+  if (!Number.isInteger(workOrder?.id) || !Number.isInteger(workOrder?.authorityGrantId)) return null
   return grants.find((grant) =>
     (grant.allowedActions ?? []).includes("implement")
-    && ((workOrder.description ?? "").includes(grant.ref) || grant.scope === workOrder.ref)) ?? null
+    && grant.id === workOrder.authorityGrantId
+    && grant.workOrderId === workOrder.id) ?? null
 }
 
 /** Kernel queue states from work order status. The registry decides real eligibility; this only gates. */
@@ -188,7 +197,7 @@ export function queueStateFor(status) {
  * Registry records for the kernel, derived from state rather than a checked-in JSON.
  *
  * A record exists only when the work order has an ACTIVE linked grant, a non-empty reservation, a
- * validation plan, and a projection issue. Anything less is omitted rather than filled in: fabricating
+ * validation plan, and either a projection issue or exact Environment world marker. Anything less is omitted rather than filled in: fabricating
  * an envelope the owner never froze is how an agent grants itself authority with extra steps.
  */
 export function buildRegistryRecords(workOrders, grants, adapterId) {
@@ -200,7 +209,8 @@ export function buildRegistryRecords(workOrders, grants, adapterId) {
     const requiredValidation = (workOrder.validators ?? []).filter((gate) =>
       ["diff-check", "lint", "test", "build"].includes(gate))
     if (allowedPaths.length === 0 || requiredValidation.length === 0) continue
-    if (parseProjectionIssue(workOrder.description) === null) continue
+    const environmentWorld = /\[environment-world:([^\]\s]+)\]/.exec(workOrder.description ?? "")?.[1] ?? null
+    if (parseProjectionIssue(workOrder.description) === null && !environmentWorld) continue
     records.push({
       workOrderId: workOrder.ref,
       workOrderRowId: workOrder.id,
@@ -227,6 +237,7 @@ export function buildRegistryRecords(workOrders, grants, adapterId) {
       tagAllowed: workOrder.tagAllowed,
       pushAllowed: workOrder.pushAllowed,
       agent: workOrder.agent ?? "codex",
+      environmentWorldId: environmentWorld,
     })
   }
   return records
@@ -597,7 +608,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
 
   async function loadActiveGrants() {
     const result = await pool.query(
-      `SELECT "id", "userId", "ref", "scope", "allowedActions", "blockedActions",
+      `SELECT "id", "userId", "workOrderId", "ref", "scope", "allowedActions", "blockedActions",
               "status", "expiresAt", "revokedAt"
          FROM authority_grant
         WHERE "status" = 'active' AND "revokedAt" IS NULL
@@ -1101,9 +1112,12 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
       const entries = []
       for (const workOrder of workOrders) {
         const issueNumber = parseProjectionIssue(workOrder.description)
-        if (issueNumber === null) continue
+        const environmentBound = /\[environment-world:[^\]\s]+\]/.test(workOrder.description ?? "")
+        if (issueNumber === null && !environmentBound) continue
         const identity = { workOrderRowId: workOrder.id, userId: workOrder.userId, workOrderId: workOrder.ref }
-        issueToRef.set(issueNumber, [...(issueToRef.get(issueNumber) ?? []), identity])
+        if (issueNumber !== null) {
+          issueToRef.set(issueNumber, [...(issueToRef.get(issueNumber) ?? []), identity])
+        }
         entries.push({
           issueNumber,
           workOrderId: workOrder.ref,
@@ -1174,7 +1188,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
       )
       // GitHub label is projection; its failure must never block the lease that already happened.
       try {
-        await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:leased"])
+        if (issueNumber !== null) await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:leased"])
       } catch { /* projection only */ }
     },
 
@@ -1187,7 +1201,7 @@ export function createWilliamOSAdapters({ root, repositoryPath, database = null 
           WHERE "id" = $1 AND "userId" = $2 AND "lane" = 'operator-objective'`,
         [identity.workOrderRowId, identity.userId],
       )
-      if (identity.projectionCompletionOwned !== false) {
+      if (identity.projectionCompletionOwned !== false && issueNumber !== null) {
         try {
           await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--add-label", "williamos:done"])
           await ghRemote(["issue", "close", String(issueNumber), "--repo", REPOSITORY, "--comment", "WilliamOS resident kernel verified the merged-main completion evidence."])
@@ -1302,7 +1316,10 @@ ${String(error?.output ?? "").slice(-12000)}
       }
     },
 
-    async validate({ workspace, requiredValidation }) {
+    async validate({ workspace, requiredValidation, strict = false }) {
+      if (strict && (!requiredValidation.includes("test") || !requiredValidation.includes("build"))) {
+        throw new Error("VALIDATION_ENVIRONMENT_PLAN_WALL")
+      }
       // A fresh worktree has no dependencies; the store makes this cheap and deterministic.
       try {
         // Node refuses to spawn .cmd shims without a shell; cmd.exe /c is the explicit, safe form.
@@ -1323,6 +1340,7 @@ ${String(error?.output ?? "").slice(-12000)}
             try {
               await run("cmd.exe", ["/c", "pnpm", "exec", "vitest", "run", "--config", "vitest.ci.config.ts"], { cwd: workspace, timeout: SUITE_TIMEOUT_MS })
             } catch (failure) {
+              if (strict) throw failure
               // Judge the patch against this host, not an ideal one. The baseline is measured once per base
               // commit on a pristine tree and cached; whatever fails there is the machine's, not the worker's.
               const failing = parseFailingTestFiles(failure?.output)
@@ -1359,6 +1377,155 @@ ${tail}
           throw new Error(`VALIDATION_${gate.replaceAll("-", "_").toUpperCase()}_WALL`)
         }
       }
+      const tree = (await run("git", ["write-tree"], { cwd: workspace })).stdout.trim()
+      const buildIdFile = path.join(workspace, ".next", "BUILD_ID")
+      const receipt = buildValidationReceipt({
+        tree,
+        gates: [...requiredValidation].sort(),
+        buildId: fs.existsSync(buildIdFile) ? fs.readFileSync(buildIdFile, "utf8").trim() : null,
+        strict,
+        recordedAt: new Date().toISOString(),
+      })
+      fs.mkdirSync(path.join(workspace, ".williamos"), { recursive: true })
+      fs.writeFileSync(path.join(workspace, ".williamos", "validation-receipt.json"), `${JSON.stringify(receipt, null, 2)}\n`, "utf8")
+    },
+
+    /**
+     * Project a governed Environment worktree only after validation, a real listener, durable
+     * evidence, and the exact runtime credential all exist. Missing deployment configuration is a
+     * waiting condition; it never fabricates a demo endpoint or lets the PR advance to merge review.
+     */
+    async publishEnvironmentWorld({ workOrderId, workspace, branch, environmentWorldId: frozenWorldId = null }) {
+      const workResult = await pool.query(
+        `SELECT wo.id, wo."userId", wo."description", wo."validators", ag."ref" AS "grantRef"
+           FROM work_order wo
+           JOIN authority_grant ag ON ag.id = wo."authorityGrantId" AND ag."workOrderId" = wo.id
+          WHERE wo."ref" = $1 AND wo."status" IN ('active','review')
+            AND ag."status" = 'active' AND ag."revokedAt" IS NULL
+            AND (ag."expiresAt" IS NULL OR ag."expiresAt" > timezone('UTC', now()))`,
+        [workOrderId],
+      )
+      const work = workResult.rows[0]
+      if (!work) throw new Error("ENVIRONMENT_RUNTIME_AUTHORITY_WALL")
+      const worldId = environmentWorldId(work.description)
+      if (worldId !== frozenWorldId) throw new Error("ENVIRONMENT_RUNTIME_WORLD_MARKER_CHANGED_WALL")
+      if (!worldId) return { state: "not_applicable" }
+
+      const runtimeOrigin = process.env.WILLIAMOS_ENVIRONMENT_RUNTIME_ORIGIN
+      const publicTemplate = process.env.WILLIAMOS_ENVIRONMENT_PUBLIC_URL_TEMPLATE
+      const portRange = process.env.WILLIAMOS_ENVIRONMENT_PORT_RANGE
+      const tokenFile = process.env.WILLIAMOS_RUNTIME_DEVICE_TOKEN_FILE
+      if (!runtimeOrigin || !publicTemplate || !portRange || !tokenFile) {
+        return { state: "waiting", reason: "ENVIRONMENT_RUNTIME_CONFIGURATION_WAIT" }
+      }
+      if (!path.isAbsolute(tokenFile) || !fs.existsSync(tokenFile)) {
+        return { state: "waiting", reason: "ENVIRONMENT_RUNTIME_CREDENTIAL_WAIT" }
+      }
+      if (process.platform !== "win32" && (fs.statSync(tokenFile).mode & 0o077) !== 0) {
+        throw new Error("ENVIRONMENT_RUNTIME_CREDENTIAL_PERMISSIONS_WALL")
+      }
+      const runtimeToken = fs.readFileSync(tokenFile, "utf8").trim()
+      if (!/^wds_[A-Za-z0-9_-]{43}$/.test(runtimeToken)) throw new Error("ENVIRONMENT_RUNTIME_CREDENTIAL_WALL")
+      if (!(work.validators ?? []).includes("test") || !(work.validators ?? []).includes("build")) {
+        throw new Error("ENVIRONMENT_RUNTIME_VALIDATION_PLAN_WALL")
+      }
+
+      const worldResult = await pool.query(
+        `SELECT "projection" FROM environment_world WHERE "id" = $1 AND "userId" = $2`,
+        [worldId, work.userId],
+      )
+      const projection = decodeJson(worldResult.rows[0]?.projection)
+      if (!projection || projection.workOrderRef !== workOrderId || !projection.resource?.canonicalIdentity) {
+        throw new Error("ENVIRONMENT_RUNTIME_WORLD_BINDING_WALL")
+      }
+
+      const effectiveBranch = branch || (await run("git", ["branch", "--show-current"], { cwd: workspace })).stdout.trim()
+      const head = (await run("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim()
+      const tree = (await run("git", ["rev-parse", "HEAD^{tree}"], { cwd: workspace })).stdout.trim()
+      const buildIdFile = path.join(workspace, ".next", "BUILD_ID")
+      const validation = decodeJsonFile(path.join(workspace, ".williamos", "validation-receipt.json"))
+      if (!fs.existsSync(buildIdFile) || !validation) {
+        return { state: "waiting", reason: "ENVIRONMENT_RUNTIME_BUILD_WAIT" }
+      }
+      requireEnvironmentValidationReceipt({
+        receipt: validation,
+        tree,
+        buildId: fs.readFileSync(buildIdFile, "utf8").trim(),
+        validators: work.validators ?? [],
+      })
+      const capturedAt = new Date((await run("git", ["show", "-s", "--format=%cI", "HEAD"], { cwd: workspace })).stdout.trim()).toISOString()
+      const changedOutput = (await run("git", ["diff", "--name-only", "origin/main...HEAD"], { cwd: workspace })).stdout
+      const changedPaths = changedOutput.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)
+      const port = environmentPort(`${worldId}:${head}`, portRange)
+      const publicUrl = environmentPublicUrl(publicTemplate, { port, worldId })
+      const processState = await ensureEnvironmentPreview({ root, workspace, worldId, head, port })
+      if (processState !== "ready") return { state: "waiting", reason: processState }
+
+      const endpointEvidenceRef = `EV-ENV-${safeRef(worldId)}-${head.slice(0, 12)}-ENDPOINT`
+      const endpointRequest = buildEndpointRuntimeRequest({
+        worldId,
+        workOrderRef: workOrderId,
+        grantRef: work.grantRef,
+        resourceIdentity: projection.resource.canonicalIdentity,
+        workspace,
+        branch: effectiveBranch,
+        head,
+        port,
+        publicUrl,
+        evidenceRef: endpointEvidenceRef,
+        capturedAt,
+      })
+      await recordEnvironmentEvidence(pool, {
+        userId: work.userId,
+        workOrderDbId: work.id,
+        ref: endpointEvidenceRef,
+        digest: environmentRuntimePayloadDigest(endpointRequest),
+        repo: projection.resource.canonicalIdentity,
+        branch: effectiveBranch,
+        head,
+        changedPaths,
+        validators: work.validators ?? [],
+        artifactPath: path.join(root, "state", "environment-endpoints.json"),
+        notes: `Endpoint candidate receipt for ${worldId}; WilliamOS independently verifies internal and public liveness before admission`,
+      })
+      try {
+        await postEnvironmentRuntime(runtimeOrigin, runtimeToken, endpointRequest)
+      } catch (error) {
+        if (String(error?.message ?? error) === "ENVIRONMENT_RUNTIME_NETWORK_WAIT") {
+          return { state: "waiting", reason: "ENVIRONMENT_RUNTIME_NETWORK_WAIT" }
+        }
+        throw error
+      }
+
+      const observationEvidenceRef = `EV-ENV-${safeRef(worldId)}-${head.slice(0, 12)}-EXECUTION`
+      const observationRequest = buildObservationRuntimeRequest({
+        endpointRequest,
+        evidenceRef: observationEvidenceRef,
+        validators: work.validators ?? [],
+        changedPaths,
+      })
+      await recordEnvironmentEvidence(pool, {
+        userId: work.userId,
+        workOrderDbId: work.id,
+        ref: observationEvidenceRef,
+        digest: environmentRuntimePayloadDigest(observationRequest),
+        repo: projection.resource.canonicalIdentity,
+        branch: effectiveBranch,
+        head,
+        changedPaths,
+        validators: work.validators ?? [],
+        artifactPath: workspace,
+        notes: `Validated isolated execution for ${worldId}`,
+      })
+      try {
+        await postEnvironmentRuntime(runtimeOrigin, runtimeToken, observationRequest)
+      } catch (error) {
+        if (String(error?.message ?? error) === "ENVIRONMENT_RUNTIME_NETWORK_WAIT") {
+          return { state: "waiting", reason: "ENVIRONMENT_RUNTIME_NETWORK_WAIT" }
+        }
+        throw error
+      }
+      return { state: "published", worldId, endpointId: endpointRequest.endpoint.id }
     },
 
     /**
@@ -1394,8 +1561,7 @@ ${tail}
       const body = [
         `Bounded WilliamOS resident work order ${workOrderId}, dispatched and validated by the operational kernel under ${record.grantRef}.`,
         ``,
-        projectionIssueDirective(issueNumber, completionOwned),
-        ``,
+        ...(issueNumber === null ? [] : [projectionIssueDirective(issueNumber, completionOwned), ``]),
         "```WORK_CONTEXT_RECEIPT",
         JSON.stringify({ ["to" + "ken"]: receiptToken(facts), facts }, null, 2),
         "```",
@@ -1424,9 +1590,255 @@ ${tail}
       }
       if (!Number.isInteger(pr) || !pr) throw new Error("PR_RECONCILIATION_WALL")
       try {
-        await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--remove-label", "williamos:leased", "--add-label", "williamos:monitoring"])
+        if (issueNumber !== null) await ghRemote(["issue", "edit", String(issueNumber), "--repo", REPOSITORY, "--remove-label", "williamos:leased", "--add-label", "williamos:monitoring"])
       } catch { /* projection only */ }
       return { branch: effectiveBranch, pr }
     },
   }
+}
+
+const ENVIRONMENT_PREVIEW_START_GRACE_MS = 60_000
+
+function environmentPreviewEntries(state) {
+  return Array.isArray(state?.endpoints) ? state.endpoints : []
+}
+
+function sameEnvironmentPreview(entry, candidate) {
+  return entry.worldId === candidate.worldId && entry.head === candidate.head && entry.port === candidate.port
+}
+
+/** Persist the detached child before polling can time out, so a slow start remains reconcilable. */
+export function recordStartingEnvironmentPreview(state, candidate) {
+  return {
+    endpoints: [
+      ...environmentPreviewEntries(state).filter((entry) => !sameEnvironmentPreview(entry, candidate)),
+      { ...candidate, status: "starting" },
+    ],
+  }
+}
+
+/** Select the now-ready head and return every superseded same-world process for explicit cleanup. */
+export function activateEnvironmentPreview(state, candidate) {
+  const entries = environmentPreviewEntries(state)
+  return {
+    state: {
+      endpoints: [
+        ...entries.filter((entry) => entry.worldId !== candidate.worldId),
+        { ...candidate, status: "ready" },
+      ],
+    },
+    retired: entries.filter((entry) => entry.worldId === candidate.worldId && !sameEnvironmentPreview(entry, candidate)),
+  }
+}
+
+function withoutEnvironmentPreview(state, candidate) {
+  return {
+    endpoints: environmentPreviewEntries(state).filter((entry) => !sameEnvironmentPreview(entry, candidate)),
+  }
+}
+
+function environmentPreviewProcessIsAlive(entry) {
+  const pid = Number(entry?.pid)
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function stopEnvironmentPreview(entry) {
+  const pid = Number(entry?.pid)
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  if (!environmentPreviewProcessIsAlive(entry)) return true
+  try {
+    if (process.platform === "win32") {
+      await execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 10_000 })
+    } else {
+      try { process.kill(-pid, "SIGTERM") } catch { process.kill(pid, "SIGTERM") }
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      if (environmentPreviewProcessIsAlive(entry)) {
+        try { process.kill(-pid, "SIGKILL") } catch { process.kill(pid, "SIGKILL") }
+      }
+    }
+  } catch { /* absence after a recorded PID is an already-clean result */ }
+  return !environmentPreviewProcessIsAlive(entry)
+}
+
+async function persistActivatedEnvironmentPreview(stateFile, state, candidate) {
+  const activation = activateEnvironmentPreview(state, candidate)
+  const retained = []
+  for (const entry of activation.retired) {
+    if (!(await stopEnvironmentPreview(entry))) retained.push({ ...entry, status: "retire_pending" })
+  }
+  const next = { endpoints: [...activation.state.endpoints, ...retained] }
+  atomicJson(stateFile, next)
+  return next
+}
+
+async function ensureEnvironmentPreview({ root, workspace, worldId, head, port }) {
+  const stateFile = path.join(root, "state", "environment-endpoints.json")
+  let state = { endpoints: [] }
+  try { state = JSON.parse(fs.readFileSync(stateFile, "utf8")) } catch { /* first endpoint */ }
+  const candidateIdentity = { worldId, head, port }
+  const existing = environmentPreviewEntries(state).find((entry) => sameEnvironmentPreview(entry, candidateIdentity)) ?? null
+  const probe = `http://127.0.0.1:${port}`
+  if (await endpointResponds(probe)) {
+    if (!existing) return "ENVIRONMENT_RUNTIME_PORT_COLLISION_WAIT"
+    await persistActivatedEnvironmentPreview(stateFile, state, { ...existing, ...candidateIdentity })
+    return "ready"
+  }
+
+  if (existing) {
+    const startedAt = Date.parse(String(existing.startedAt ?? ""))
+    const withinStartGrace = Number.isFinite(startedAt) && Date.now() - startedAt < ENVIRONMENT_PREVIEW_START_GRACE_MS
+    if (environmentPreviewProcessIsAlive(existing) && withinStartGrace) {
+      return "ENVIRONMENT_RUNTIME_PREVIEW_START_WAIT"
+    }
+    if (!(await stopEnvironmentPreview(existing))) {
+      state = recordStartingEnvironmentPreview(state, { ...existing, status: "cleanup_pending" })
+      atomicJson(stateFile, state)
+      return "ENVIRONMENT_RUNTIME_PREVIEW_CLEANUP_WAIT"
+    }
+    state = withoutEnvironmentPreview(state, existing)
+    atomicJson(stateFile, state)
+  }
+
+  const logDirectory = path.join(root, "state", "environment-logs")
+  fs.mkdirSync(logDirectory, { recursive: true })
+  const logPath = path.join(logDirectory, `${safeRef(worldId)}-${head.slice(0, 12)}.log`)
+  const log = fs.openSync(logPath, "a")
+  const child = process.platform === "win32"
+    ? spawn("cmd.exe", ["/c", "pnpm", "exec", "next", "start", "-H", "127.0.0.1", "-p", String(port)], {
+        cwd: workspace, detached: true, stdio: ["ignore", log, log], env: previewEnvironment(worldId, head, port),
+      })
+    : spawn("pnpm", ["exec", "next", "start", "-H", "127.0.0.1", "-p", String(port)], {
+        cwd: workspace, detached: true, stdio: ["ignore", log, log], env: previewEnvironment(worldId, head, port),
+      })
+  child.on("error", () => {})
+  child.unref()
+  fs.closeSync(log)
+  const startedAt = new Date().toISOString()
+  const starting = { worldId, head, port, pid: child.pid, workspace, logPath, startedAt }
+  state = recordStartingEnvironmentPreview(state, starting)
+  atomicJson(stateFile, state)
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (await endpointResponds(probe)) {
+      await persistActivatedEnvironmentPreview(stateFile, state, starting)
+      return "ready"
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  return "ENVIRONMENT_RUNTIME_PREVIEW_START_WAIT"
+}
+
+async function endpointResponds(url) {
+  try {
+    const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(1_000) })
+    return response.status >= 200 && response.status < 300
+  } catch {
+    return false
+  }
+}
+
+function previewEnvironment(worldId, head, port) {
+  return {
+    ...process.env,
+    PORT: String(port),
+    WILLIAMOS_PREVIEW_WORLD_ID: worldId,
+    WILLIAMOS_PREVIEW_HEAD: head,
+    WILLIAMOS_PREVIEW_PORT: String(port),
+  }
+}
+
+async function recordEnvironmentEvidence(pool, evidence) {
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${evidence.userId}:${evidence.ref}`])
+    const prior = await client.query(
+      `SELECT "contentHash" FROM evidence_record WHERE "userId" = $1 AND "workOrderId" = $2 AND "ref" = $3`,
+      [evidence.userId, evidence.workOrderDbId, evidence.ref],
+    )
+    if (prior.rows[0]) {
+      if (prior.rows[0].contentHash !== evidence.digest) throw new Error("ENVIRONMENT_RUNTIME_EVIDENCE_REPLAY_WALL")
+    } else {
+      await client.query(
+        `INSERT INTO evidence_record
+          ("userId", "ref", "workOrderId", "result", "repo", "branch", "head", "worktreeStatus",
+           "filesChanged", "validators", "knownFailures", "outOfScopeChanges", "deferredItems",
+           "nextValidMove", "notes", "contentHash", "artifactPath")
+         VALUES ($1,$2,$3,'PASS',$4,$5,$6,'isolated-runtime',$7,$8,'{}','{}','{}',$9,$10,$11,$12)`,
+        [
+          evidence.userId, evidence.ref, evidence.workOrderDbId, evidence.repo, evidence.branch,
+          evidence.head, evidence.changedPaths, evidence.validators, "Continue through PR review; do not infer merge",
+          evidence.notes, evidence.digest, evidence.artifactPath,
+        ],
+      )
+    }
+    await client.query("COMMIT")
+  } catch (error) {
+    await client.query("ROLLBACK")
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+async function postEnvironmentRuntime(origin, runtimeToken, body) {
+  let endpoint
+  try { endpoint = new URL("/api/environment/runtime", origin) } catch { throw new Error("ENVIRONMENT_RUNTIME_ORIGIN_WALL") }
+  const hostname = endpoint.hostname.replace(/^\[|\]$/g, "").toLowerCase()
+  if (!(hostname === "::1" || /^127(?:\.\d{1,3}){3}$/.test(hostname)) || !/^https?:$/.test(endpoint.protocol) || endpoint.username || endpoint.password) {
+    throw new Error("ENVIRONMENT_RUNTIME_ORIGIN_WALL")
+  }
+  let response
+  try {
+    response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        cookie: `__Host-williamos-device=${encodeURIComponent(runtimeToken)}`,
+      },
+      body: JSON.stringify(body),
+      redirect: "manual",
+      signal: AbortSignal.timeout(15_000),
+    })
+  } catch {
+    throw new Error("ENVIRONMENT_RUNTIME_NETWORK_WAIT")
+  }
+  if (response.status === 429 || response.status >= 500) throw new Error("ENVIRONMENT_RUNTIME_NETWORK_WAIT")
+  if (!response.ok) {
+    let code = "UNKNOWN"
+    try { code = String((await response.json())?.error ?? "UNKNOWN") } catch { /* response is untrusted */ }
+    if (!/^[A-Z][A-Z0-9_]*$/.test(code)) code = "UNKNOWN"
+    if (environmentRuntimeResponseIsRetryable(response.status, code)) {
+      throw new Error("ENVIRONMENT_RUNTIME_NETWORK_WAIT")
+    }
+    throw new Error(`ENVIRONMENT_RUNTIME_INGRESS_WALL:${code}`)
+  }
+}
+
+function decodeJson(value) {
+  if (!value) return null
+  if (typeof value === "string") {
+    try { return JSON.parse(value) } catch { return null }
+  }
+  return typeof value === "object" ? value : null
+}
+
+function decodeJsonFile(file) {
+  try { return decodeJson(fs.readFileSync(file, "utf8")) } catch { return null }
+}
+
+function safeRef(value) {
+  return String(value).toUpperCase().replace(/[^A-Z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48)
+}
+
+function atomicJson(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", flag: "wx" })
+  fs.renameSync(temporary, file)
 }

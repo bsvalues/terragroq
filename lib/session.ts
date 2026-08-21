@@ -21,7 +21,7 @@ export async function getSession() {
     return null
   }
   const device = await resolveDeviceSession(decodedDeviceToken)
-  if (!device) return null
+  if (!device || device.credentialKind !== "owner") return null
 
   return {
     user: {
@@ -44,6 +44,27 @@ export async function getSession() {
       userAgent: null,
     },
   }
+}
+
+/** Runtime ingress accepts only a credential enrolled explicitly as a resident runtime identity. */
+export async function getRuntimeDevicePrincipal() {
+  const requestHeaders = await headers()
+  const cookieHeader = requestHeaders.get("cookie") ?? ""
+  const rawDeviceToken = cookieHeader
+    .split(";")
+    .map((part) => part.trim().split("="))
+    .find(([name]) => name === DEVICE_SESSION_COOKIE)?.slice(1).join("=")
+  if (!rawDeviceToken) return null
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(rawDeviceToken)
+  } catch {
+    return null
+  }
+  const device = await resolveDeviceSession(decoded)
+  return device?.credentialKind === "runtime"
+    ? { userId: device.userId, credentialId: device.credentialId, sessionId: device.sessionId }
+    : null
 }
 
 export async function getUserId() {

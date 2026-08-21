@@ -303,12 +303,13 @@ export async function resolveDeviceSession(rawToken: string, now = new Date()) {
     sessionId: string
     userId: string
     credentialId: string
+    credentialKind: "owner" | "runtime"
     expiresAt: Date
     name: string
     email: string
     image: string | null
   }>(
-    `select ds.id as "sessionId", ds."userId", ds."credentialId", ds."expiresAt",
+    `select ds.id as "sessionId", ds."userId", ds."credentialId", dc."kind" as "credentialKind", ds."expiresAt",
             u.name, u.email, u.image
        from device_session ds
        join device_credential dc on dc.id = ds."credentialId" and dc."userId" = ds."userId"
@@ -324,11 +325,12 @@ export async function listDeviceCredentials(userId: string) {
   const result = await pool.query<{
     id: string
     label: string
+    kind: "owner" | "runtime"
     activeAt: Date
     lastUsedAt: Date | null
     revokedAt: Date | null
   }>(
-    `select id, label, "activeAt", "lastUsedAt", "revokedAt"
+    `select id, label, kind, "activeAt", "lastUsedAt", "revokedAt"
        from device_credential where "userId" = $1 order by "createdAt" desc, id desc`,
     [userId],
   )
