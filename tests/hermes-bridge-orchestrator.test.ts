@@ -2130,6 +2130,12 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       acquired: true, replayed: true, reclaimed: false, reason: null,
       reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
       reviewRecoveryContinuationCheckpointDigest: "f".repeat(64),
+      reviewRecoveryContinuationEvidence: {
+        disposition: "REPLAY_WINNER", sourceExpectedVersion: 4, sourceFencingToken: 2,
+        sourceRuntimeAttempt: 5, reclaimEventId: 701,
+        reclaimPayloadDigest: "e".repeat(64), expectedVersion: 8, fencingToken: 6,
+        checkpointDigest: "f".repeat(64),
+      },
     }))
     const composedRuntime = createHermesOutcomeQueueRuntime({
       databaseUrl: "postgresql://not-used", holderId: "resident-hermes",

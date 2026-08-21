@@ -3267,6 +3267,17 @@ describe("transactional durable outcome queue source", () => {
       reclaimed: true,
       replayed: false,
       reviewRecoveryContinuationDisposition: "RECLAIMED",
+      reviewRecoveryContinuationEvidence: {
+        disposition: "RECLAIMED",
+        sourceExpectedVersion: 4,
+        sourceFencingToken: 2,
+        sourceRuntimeAttempt: 5,
+        reclaimEventId: 961,
+        reclaimPayloadDigest: "9".repeat(64),
+        expectedVersion: 8,
+        fencingToken: 6,
+        checkpointDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
     })
     expect(firstQuery.mock.calls.filter(
       ([sql]) => sql === OUTCOME_QUEUE_SQL.reclaimAcquisition,
@@ -3290,6 +3301,17 @@ describe("transactional durable outcome queue source", () => {
       reclaimed: false,
       replayed: true,
       reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+      reviewRecoveryContinuationEvidence: {
+        disposition: "REPLAY_WINNER",
+        sourceExpectedVersion: 4,
+        sourceFencingToken: 2,
+        sourceRuntimeAttempt: 5,
+        reclaimEventId: 961,
+        reclaimPayloadDigest: "9".repeat(64),
+        expectedVersion: 8,
+        fencingToken: 6,
+        checkpointDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
     })
     expect(replayQuery).not.toHaveBeenCalledWith(
       OUTCOME_QUEUE_SQL.reclaimAcquisition,
@@ -3332,6 +3354,12 @@ describe("transactional durable outcome queue source", () => {
       reclaimed: false,
       replayed: true,
       reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+      reviewRecoveryContinuationEvidence: {
+        disposition: "REPLAY_WINNER", sourceExpectedVersion: 4, sourceFencingToken: 2,
+        sourceRuntimeAttempt: 5, reclaimEventId: 961,
+        reclaimPayloadDigest: "9".repeat(64), expectedVersion: 8, fencingToken: 6,
+        checkpointDigest: replayCheckpointDigest,
+      },
     })
     const driftedReplayQuery = acquisitionQuery({
       receipt: [{ outcomeKey: continued.outcomeKey, firstFencingToken: 2, latestFencingToken: 6 }],

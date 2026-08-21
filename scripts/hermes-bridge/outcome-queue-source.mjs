@@ -4205,9 +4205,29 @@ export async function acquireNextEligibleOutcome({
       const exposesReviewRecoveryAnchor = continuation
         || ["REVIEW_REMEDIATION_RECOVERED", "POST_MERGE_CLEANUP_RETRY"]
           .includes(attemptEvidence?.checkpointState)
-      return exposesReviewRecoveryAnchor && attemptEvidence
-        ? { ...result, reviewRecoveryContinuationCheckpointDigest: attemptEvidence.checkpointDigest }
-        : result
+      if (!exposesReviewRecoveryAnchor || !attemptEvidence) return result
+      const continuationDisposition = continuation && ["RECLAIMED", "REPLAY_WINNER"].includes(disposition)
+        ? disposition
+        : null
+      const continuationEvidence = continuationDisposition ? {
+        disposition: continuationDisposition,
+        sourceExpectedVersion: continuation.sourceExpectedVersion,
+        sourceFencingToken: continuation.sourceFencingToken,
+        sourceRuntimeAttempt: continuation.sourceRuntimeAttempt,
+        reclaimEventId: continuation.reclaimEventId,
+        reclaimPayloadDigest: continuation.reclaimPayloadDigest,
+        expectedVersion: Number(result?.outcome?.version),
+        fencingToken: Number(result?.outcome?.fencingToken),
+        checkpointDigest: attemptEvidence.checkpointDigest,
+      } : null
+      return {
+        ...result,
+        reviewRecoveryContinuationCheckpointDigest: attemptEvidence.checkpointDigest,
+        ...(continuationDisposition ? {
+          reviewRecoveryContinuationDisposition: continuationDisposition,
+          reviewRecoveryContinuationEvidence: continuationEvidence,
+        } : {}),
+      }
     }
     const receiptResult = await connection.query(
       OUTCOME_QUEUE_SQL.readAcquisitionReceipt,
@@ -4340,9 +4360,6 @@ export async function acquireNextEligibleOutcome({
           return await finish(
             {
               ...acquisitionResult(row, { replayed: true }),
-              ...(continuation ? {
-                reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
-              } : {}),
             },
             "REPLAY_WINNER",
           )
@@ -4385,9 +4402,6 @@ export async function acquireNextEligibleOutcome({
           return await finish(
             {
               ...acquisitionResult(reclaimed.rows[0], { reclaimed: true }),
-              ...(continuation ? {
-                reviewRecoveryContinuationDisposition: "RECLAIMED",
-              } : {}),
             },
             "RECLAIMED",
           )

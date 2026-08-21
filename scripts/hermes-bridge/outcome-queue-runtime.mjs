@@ -228,6 +228,26 @@ function exactStaleReviewRecoveryContinuation(value, baseHop) {
     && Number.isFinite(expiry) && new Date(expiry).toISOString() === value.leaseExpiresAt
 }
 
+const REVIEW_RECOVERY_CONTINUATION_EVIDENCE_KEYS = Object.freeze([
+  "checkpointDigest", "disposition", "expectedVersion", "fencingToken", "reclaimEventId",
+  "reclaimPayloadDigest", "sourceExpectedVersion", "sourceFencingToken", "sourceRuntimeAttempt",
+])
+
+function exactReviewRecoveryContinuationEvidence(value, source, binding, disposition) {
+  return value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length === REVIEW_RECOVERY_CONTINUATION_EVIDENCE_KEYS.length
+    && REVIEW_RECOVERY_CONTINUATION_EVIDENCE_KEYS.every((key) => Object.hasOwn(value, key))
+    && value.disposition === disposition
+    && value.sourceExpectedVersion === source?.reviewRecoverySourceExpectedVersion
+    && value.sourceFencingToken === source?.reviewRecoverySourceFencingToken
+    && value.sourceRuntimeAttempt === source?.reviewRecoverySourceRuntimeAttempt
+    && value.reclaimEventId === source?.reviewRecoveryReclaimEventId
+    && value.reclaimPayloadDigest === source?.reviewRecoveryReclaimPayloadDigest
+    && value.expectedVersion === binding?.expectedVersion
+    && value.fencingToken === binding?.fencingToken
+    && /^[0-9a-f]{64}$/.test(String(value.checkpointDigest ?? ""))
+}
+
 function createLazyPool(databaseUrl, createPool) {
   let poolPromise = null
   let closed = false
@@ -854,6 +874,15 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
         || (acquisitionResult?.acquired === true
           && acquisitionResult?.replayed === true
           && acquisitionResult?.reclaimed === false)
+      const committedContinuationEvidence = acquisitionResult?.reviewRecoveryContinuationEvidence
+      const exactCommittedReclaimEvidence = exactReviewRecoveryContinuationEvidence(
+        committedContinuationEvidence, source, binding, "RECLAIMED",
+      ) && committedContinuationEvidence.checkpointDigest
+        === acquisitionResult?.reviewRecoveryContinuationCheckpointDigest
+      const exactCommittedReplayEvidence = exactReviewRecoveryContinuationEvidence(
+        committedContinuationEvidence, source, binding, "REPLAY_WINNER",
+      ) && committedContinuationEvidence.checkpointDigest
+        === acquisitionResult?.reviewRecoveryContinuationCheckpointDigest
       const exactSameFence = rawLifecycleReason === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
         && exactStableAcquisition
         && !sourceHasStaleReacquisition
@@ -866,7 +895,8 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
         && binding.expectedVersion === source.expectedVersion + 1
         && binding.fencingToken === source.fencingToken + 1
         && (!sourceHasStaleReacquisition
-          || acquisitionResult?.reviewRecoveryContinuationDisposition === "RECLAIMED")
+          || (acquisitionResult?.reviewRecoveryContinuationDisposition === "RECLAIMED"
+            && exactCommittedReclaimEvidence))
       const exactGovernedStaleReplay = acquisitionResult?.acquired === true
         && acquisitionResult?.reclaimed === false
         && acquisitionResult?.replayed === true
@@ -874,7 +904,8 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
         && binding.expectedVersion === source.expectedVersion + 1
         && binding.fencingToken === source.fencingToken + 1
         && (!sourceHasStaleReacquisition
-          || acquisitionResult?.reviewRecoveryContinuationDisposition === "REPLAY_WINNER")
+          || (acquisitionResult?.reviewRecoveryContinuationDisposition === "REPLAY_WINNER"
+            && exactCommittedReplayEvidence))
       const exactPersistedStaleReplay = acquisitionResult?.acquired === true
         && acquisitionResult?.reclaimed === false
         && acquisitionResult?.replayed === true
@@ -882,6 +913,7 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
         && sourceHasStaleReacquisition
         && binding.expectedVersion === source.expectedVersion
         && binding.fencingToken === source.fencingToken
+        && exactCommittedReplayEvidence
         && /^[0-9a-f]{64}$/.test(String(
           acquisitionResult?.reviewRecoveryContinuationCheckpointDigest ?? "",
         ))

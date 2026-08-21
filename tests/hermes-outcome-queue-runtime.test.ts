@@ -7,6 +7,7 @@ import path from "node:path"
 import { createHermesOutcomeQueueRuntime } from "../scripts/hermes-bridge/outcome-queue-runtime.mjs"
 import {
   acquireNextEligibleOutcome,
+  digestOutcomeQueueCheckpointProof,
   OUTCOME_QUEUE_SQL,
 } from "../scripts/hermes-bridge/outcome-queue-source.mjs"
 import {
@@ -1885,10 +1886,24 @@ describe("Hermes durable outcome queue runtime", () => {
       .mockResolvedValueOnce({
         outcome: reacquired, acquired: true, replayed: true, reclaimed: false, reason: null,
         reviewRecoveryContinuationCheckpointDigest: "a".repeat(64),
+        reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+        reviewRecoveryContinuationEvidence: {
+          disposition: "REPLAY_WINNER", sourceExpectedVersion: 4, sourceFencingToken: 2,
+          sourceRuntimeAttempt: 5, reclaimEventId: 701,
+          reclaimPayloadDigest: "e".repeat(64), expectedVersion: 7, fencingToken: 5,
+          checkpointDigest: "a".repeat(64),
+        },
       })
       .mockResolvedValueOnce({
         outcome: reacquired, acquired: true, replayed: true, reclaimed: false, reason: null,
         reviewRecoveryContinuationCheckpointDigest: "a".repeat(64),
+        reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+        reviewRecoveryContinuationEvidence: {
+          disposition: "REPLAY_WINNER", sourceExpectedVersion: 4, sourceFencingToken: 2,
+          sourceRuntimeAttempt: 5, reclaimEventId: 701,
+          reclaimPayloadDigest: "e".repeat(64), expectedVersion: 7, fencingToken: 5,
+          checkpointDigest: "a".repeat(64),
+        },
       })
     const bridge = runtime({ acquire })
     const outcome = { ...goal, queueBinding: prior }
@@ -1946,10 +1961,22 @@ describe("Hermes durable outcome queue runtime", () => {
     const acquire = vi.fn()
       .mockResolvedValueOnce({ outcome: continued, acquired: true, replayed: false,
         reclaimed: true, reason: null, reviewRecoveryContinuationDisposition: "RECLAIMED",
-        reviewRecoveryContinuationCheckpointDigest: "c".repeat(64) })
+        reviewRecoveryContinuationCheckpointDigest: "c".repeat(64),
+        reviewRecoveryContinuationEvidence: {
+          disposition: "RECLAIMED", sourceExpectedVersion: 4, sourceFencingToken: 2,
+          sourceRuntimeAttempt: 5, reclaimEventId: 701,
+          reclaimPayloadDigest: "e".repeat(64), expectedVersion: 8, fencingToken: 6,
+          checkpointDigest: "c".repeat(64),
+        } })
       .mockResolvedValueOnce({ outcome: continued, acquired: true, replayed: true,
         reclaimed: false, reason: null, reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
-        reviewRecoveryContinuationCheckpointDigest: "c".repeat(64) })
+        reviewRecoveryContinuationCheckpointDigest: "c".repeat(64),
+        reviewRecoveryContinuationEvidence: {
+          disposition: "REPLAY_WINNER", sourceExpectedVersion: 4, sourceFencingToken: 2,
+          sourceRuntimeAttempt: 5, reclaimEventId: 701,
+          reclaimPayloadDigest: "e".repeat(64), expectedVersion: 8, fencingToken: 6,
+          checkpointDigest: "c".repeat(64),
+        } })
     const bridge = runtime({ acquire })
     const advanced = await bridge.refreshOutcome({ ...goal, queueBinding: prior })
     expect(advanced).toMatchObject({
@@ -1985,6 +2012,121 @@ describe("Hermes durable outcome queue runtime", () => {
         continuation: expect.objectContaining({ expectedVersion: 8, fencingToken: 6 }),
       }),
     }))
+  })
+
+  it("composes the production queue source through commit and crash replay without losing recovery evidence", async () => {
+    const baseDigest = digestOutcomeQueueCheckpointProof({
+      outcomeId: "77", outcomeKey: queueItem.outcomeKey, workOrderId: 77,
+      fencingToken: 5, sequence: 0, state: "LEASED",
+      commit: { headSha: null, mergeSha: null, prNumber: null },
+    })
+    const baseHop = {
+      disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T11:59:59.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+      checkpointDigest: baseDigest,
+    }
+    const prior = { ...queueItem, expectedVersion: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701, reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReacquisition: baseHop }
+    let persisted = { ...queueItem, lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, leaseExpiresAt: baseHop.leaseExpiresAt }
+    let attemptId = 220
+    const query = vi.fn(async (sql: string, values: unknown[] = []) => {
+      if (["BEGIN", "COMMIT", "ROLLBACK", OUTCOME_QUEUE_SQL.acquireLock].includes(sql)) {
+        return { rows: [] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.readAcquisitionReceipt) return { rows: [{
+        outcomeKey: persisted.outcomeKey, firstFencingToken: 2,
+        latestFencingToken: persisted.fencingToken,
+      }] }
+      if (sql === OUTCOME_QUEUE_SQL.readReceiptOutcome) return { rows: [{ ...persisted }] }
+      if (sql === OUTCOME_QUEUE_SQL.revalidateAcquisition) {
+        return { rows: [{ approvalLive: true, authorityLive: true }] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.reclaimAcquisition) {
+        persisted = { ...persisted, version: Number(values[8]) + 1,
+          fencingToken: persisted.fencingToken + 1, leaseExpiresAt: values[6] as string }
+        return { rows: [{ ...persisted }] }
+      }
+      if (sql === OUTCOME_QUEUE_SQL.advanceAcquisitionReceipt) return { rows: [{ id: 9 }] }
+      if (sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt) return { rows: [{ id: ++attemptId }] }
+      throw new Error(`unexpected query: ${sql}`)
+    })
+    const bridge = runtime({
+      acquire: (input: Record<string, unknown>) => acquireNextEligibleOutcome({
+        ...input,
+        query: Object.assign(query, { connect: async () => ({ query, release: vi.fn() }) }),
+      }),
+    })
+    const outcome = { ...goal, queueBinding: prior }
+    const committed = await bridge.refreshOutcome(outcome)
+    expect(committed.queueBinding).toMatchObject({
+      expectedVersion: 8, fencingToken: 6,
+      reviewRecoveryStaleContinuation: expect.objectContaining({
+        disposition: "RECLAIMED", expectedVersion: 8, fencingToken: 6,
+      }),
+    })
+    const replayed = await bridge.refreshOutcome(outcome)
+    expect(replayed.queueBinding).toMatchObject({
+      expectedVersion: 8, fencingToken: 6,
+      reviewRecoveryStaleContinuation: expect.objectContaining({
+        disposition: "REPLAY_WINNER", expectedVersion: 8, fencingToken: 6,
+      }),
+    })
+    expect(query.mock.calls.filter(([sql]) => sql === OUTCOME_QUEUE_SQL.reclaimAcquisition))
+      .toHaveLength(1)
+    expect(query.mock.calls.filter(([sql]) => sql === OUTCOME_QUEUE_SQL.insertAcquisitionAttempt))
+      .toHaveLength(2)
+  })
+
+  it.each([
+    ["missing", () => undefined],
+    ["extra field", (evidence: Record<string, unknown>) => ({ ...evidence, extra: true })],
+    ["event drift", (evidence: Record<string, unknown>) => ({ ...evidence, reclaimEventId: 702 })],
+    ["source-attempt drift", (evidence: Record<string, unknown>) => ({
+      ...evidence, sourceRuntimeAttempt: 6,
+    })],
+    ["checkpoint drift", (evidence: Record<string, unknown>) => ({
+      ...evidence, checkpointDigest: "0".repeat(64),
+    })],
+  ])("walls bounded continuation result evidence with %s", async (_name, mutate) => {
+    const baseHop = {
+      disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+      checkpointDigest: "b".repeat(64),
+    }
+    const prior = { ...queueItem, expectedVersion: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701, reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReacquisition: baseHop }
+    const continued = { ...queueItem, lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 8, fencingToken: 6,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, leaseExpiresAt: "2026-07-28T13:50:00.000Z" }
+    const evidence = {
+      disposition: "RECLAIMED", sourceExpectedVersion: 4, sourceFencingToken: 2,
+      sourceRuntimeAttempt: 5, reclaimEventId: 701, reclaimPayloadDigest: "e".repeat(64),
+      expectedVersion: 8, fencingToken: 6, checkpointDigest: "c".repeat(64),
+    }
+    const acquire = vi.fn(async () => ({
+      outcome: continued, acquired: true, replayed: false, reclaimed: true, reason: null,
+      reviewRecoveryContinuationDisposition: "RECLAIMED",
+      reviewRecoveryContinuationCheckpointDigest: "c".repeat(64),
+      ...(mutate(evidence) === undefined ? {} : {
+        reviewRecoveryContinuationEvidence: mutate(evidence),
+      }),
+    }))
+    await expect(runtime({ acquire }).refreshOutcome({ ...goal, queueBinding: prior }))
+      .rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
   })
 
   it.each([
