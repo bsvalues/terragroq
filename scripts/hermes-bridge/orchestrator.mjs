@@ -395,7 +395,17 @@ export function deriveHermesRuntimeProjectionBindings(
     || typeof binding.leaseToken !== "string" || binding.leaseToken.trim() === ""
     || typeof binding.leaseHolder !== "string" || binding.leaseHolder.trim() === ""
     || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === ""
-    || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0)) {
+    || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0
+    || ([binding.reviewRecoverySourceExpectedVersion,
+      binding.reviewRecoverySourceFencingToken,
+      binding.reviewRecoverySourceRuntimeAttempt].some((value) => value !== undefined)
+      && (!Number.isSafeInteger(binding.reviewRecoverySourceExpectedVersion)
+        || binding.reviewRecoverySourceExpectedVersion < 0
+        || !Number.isSafeInteger(binding.reviewRecoverySourceFencingToken)
+        || binding.reviewRecoverySourceFencingToken <= 0
+        || !Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
+        || binding.reviewRecoverySourceRuntimeAttempt <= 0
+        || binding.reviewRecoveryResumeState !== "REVIEW_REMEDIATION_RECOVERED")))) {
     throw Object.assign(new Error("Runtime execution binding is invalid"), {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
     })
@@ -413,6 +423,12 @@ export function deriveHermesRuntimeProjectionBindings(
         ? { acquisitionKey: binding.acquisitionKey }
         : {}),
       fencingToken: binding.fencingToken,
+      ...(binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED" ? {
+        reviewRecoveryResumeState: binding.reviewRecoveryResumeState,
+        reviewRecoverySourceExpectedVersion: binding.reviewRecoverySourceExpectedVersion,
+        reviewRecoverySourceFencingToken: binding.reviewRecoverySourceFencingToken,
+        reviewRecoverySourceRuntimeAttempt: binding.reviewRecoverySourceRuntimeAttempt,
+      } : {}),
     },
   }
 }
@@ -671,6 +687,7 @@ export function createHermesOrchestrator(options = {}) {
       ["headRefOid", value.headRefOid],
       ["mergeSha", value.mergeSha],
       ["terminalCleanupRecoveryProofDigest", value.terminalCleanupRecoveryProofDigest],
+      ["reviewRecoveryProofDigest", value.reviewRecoveryProofDigest],
     ].filter(([field, fieldValue]) => (
       field === "headRefOid"
         ? fieldValue !== undefined && (fieldValue !== null
@@ -1126,6 +1143,7 @@ export function createHermesOrchestrator(options = {}) {
         prNumber,
         reviewedHeadSha,
         mergeSha,
+        runtimeAttempt: execution.fencingToken,
       })
     }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (
@@ -1186,6 +1204,7 @@ export function createHermesOrchestrator(options = {}) {
         && String(execution.metadata.outcome.id) === String(execution.outcomeId)
         && execution?.lease?.status !== "RELEASED") {
         if (shouldRefreshExpiredBindingBeforeProjection(execution, initialProjectionObservedAt)) continue
+        if (verifiedReviewRecoveries.has(String(execution.outcomeId))) continue
         await projectCurrentExecution(execution.outcomeId)
         await projectCurrentLease(execution.outcomeId)
       }
@@ -1300,7 +1319,12 @@ export function createHermesOrchestrator(options = {}) {
     }
     let sequence = lease.checkpointSequence
     try {
-      const projection = await projectCurrentExecution(outcomeId)
+      // The durable review-recovery checkpoint was already projected before the
+      // queue was resumed. Re-projecting it with the newly reclaimed local
+      // attempt would falsely bind old recovery evidence to a new runtime epoch.
+      const projection = reviewRecoveryProof
+        ? null
+        : await projectCurrentExecution(outcomeId)
       if (!terminalReplay && projection?.workOrderId) {
         const needsDurableBinding = Boolean(outcome?.queueBinding)
           && outcome.queueBinding.activeWorkOrderId === undefined

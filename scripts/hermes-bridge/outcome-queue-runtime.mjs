@@ -116,6 +116,15 @@ function queueBinding(outcome) {
         "REVIEW_REMEDIATION_RECOVERED",
         "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
       ].includes(binding.reviewRecoveryResumeState))
+    || ([binding.reviewRecoverySourceExpectedVersion,
+      binding.reviewRecoverySourceFencingToken,
+      binding.reviewRecoverySourceRuntimeAttempt].some((value) => value !== undefined)
+      && (!Number.isSafeInteger(binding.reviewRecoverySourceExpectedVersion)
+        || binding.reviewRecoverySourceExpectedVersion < 0
+        || !Number.isSafeInteger(binding.reviewRecoverySourceFencingToken)
+        || binding.reviewRecoverySourceFencingToken <= 0
+        || !Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
+        || binding.reviewRecoverySourceRuntimeAttempt <= 0))
     || (binding.activeWorkOrderId !== undefined
       && (!Number.isSafeInteger(binding.activeWorkOrderId) || binding.activeWorkOrderId <= 0))) {
     wall("Hermes outcome is missing its durable queue binding", "HERMES_OUTCOME_QUEUE_BINDING_WALL")
@@ -668,7 +677,7 @@ function persistedBinding(item) {
   }
 }
 
-function withPersistedBinding(outcome, item) {
+function withPersistedBinding(outcome, item, recoverySource = null) {
   const binding = persistedBinding(item)
   const priorRecoveryState = outcome?.queueBinding?.validationRecoveryResumeState
   if (priorRecoveryState && item.lifecycleReason === "STALE_LEASE_RECOVERED") {
@@ -677,6 +686,16 @@ function withPersistedBinding(outcome, item) {
   const priorReviewRecoveryState = outcome?.queueBinding?.reviewRecoveryResumeState
   if (priorReviewRecoveryState && item.lifecycleReason === "STALE_LEASE_RECOVERED") {
     binding.reviewRecoveryResumeState = priorReviewRecoveryState
+  }
+  const source = recoverySource ?? outcome?.queueBinding
+  if (binding.reviewRecoveryResumeState || priorReviewRecoveryState) {
+    for (const field of [
+      "reviewRecoverySourceExpectedVersion",
+      "reviewRecoverySourceFencingToken",
+      "reviewRecoverySourceRuntimeAttempt",
+    ]) {
+      if (source?.[field] !== undefined) binding[field] = source[field]
+    }
   }
   return { ...outcome, queueBinding: binding }
 }
@@ -1293,7 +1312,8 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       || typeof proof?.proofDigest !== "string" || !/^[0-9a-f]{64}$/.test(proof.proofDigest)
       || !Number.isSafeInteger(proof?.prNumber) || proof.prNumber <= 0
       || typeof proof?.reviewedHeadSha !== "string" || !/^[0-9a-f]{40}$/.test(proof.reviewedHeadSha)
-      || typeof proof?.mergeSha !== "string" || !/^[0-9a-f]{40}$/.test(proof.mergeSha)) {
+      || typeof proof?.mergeSha !== "string" || !/^[0-9a-f]{40}$/.test(proof.mergeSha)
+      || !Number.isSafeInteger(proof?.runtimeAttempt) || proof.runtimeAttempt <= 0) {
       wall(
         "Review recovery proof did not preserve its exact merged boundary",
         "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL",
@@ -1352,7 +1372,11 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL",
       )
     }
-    return withPersistedBinding(outcome, resumed)
+    return withPersistedBinding(outcome, resumed, {
+      reviewRecoverySourceExpectedVersion: binding.expectedVersion + 1,
+      reviewRecoverySourceFencingToken: binding.fencingToken,
+      reviewRecoverySourceRuntimeAttempt: proof.runtimeAttempt,
+    })
   }
 
   return {

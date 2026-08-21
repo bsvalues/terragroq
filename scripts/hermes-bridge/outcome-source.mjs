@@ -2089,6 +2089,10 @@ function exactStringArray(actual, expected) {
 }
 
 function normalizeRuntimeExecutionBinding(value) {
+  const hasReviewRecovery = value?.reviewRecoveryResumeState !== undefined
+    || value?.reviewRecoverySourceExpectedVersion !== undefined
+    || value?.reviewRecoverySourceFencingToken !== undefined
+    || value?.reviewRecoverySourceRuntimeAttempt !== undefined
   if (!value || typeof value.userId !== "string" || value.userId.trim() === ""
     || typeof value.outcomeKey !== "string" || value.outcomeKey.trim() === ""
     || !Number.isSafeInteger(value.expectedVersion) || value.expectedVersion < 0
@@ -2097,7 +2101,16 @@ function normalizeRuntimeExecutionBinding(value) {
     || typeof value.leaseHolder !== "string" || value.leaseHolder.trim() === ""
     || (value.acquisitionKey !== undefined
       && (typeof value.acquisitionKey !== "string" || value.acquisitionKey.trim() === ""))
-    || !Number.isSafeInteger(value.fencingToken) || value.fencingToken <= 0) {
+    || !Number.isSafeInteger(value.fencingToken) || value.fencingToken <= 0
+    || (hasReviewRecovery && (value.reviewRecoveryResumeState !== "REVIEW_REMEDIATION_RECOVERED"
+      || !Number.isSafeInteger(value.reviewRecoverySourceExpectedVersion)
+      || value.reviewRecoverySourceExpectedVersion < 0
+      || !Number.isSafeInteger(value.reviewRecoverySourceFencingToken)
+      || value.reviewRecoverySourceFencingToken <= 0
+      || !Number.isSafeInteger(value.reviewRecoverySourceRuntimeAttempt)
+      || value.reviewRecoverySourceRuntimeAttempt <= 0
+      || value.expectedVersion !== value.reviewRecoverySourceExpectedVersion + 1
+      || value.fencingToken !== value.reviewRecoverySourceFencingToken + 1))) {
     throw Object.assign(new Error("runtime execution binding is invalid"), {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
     })
@@ -2111,6 +2124,12 @@ function normalizeRuntimeExecutionBinding(value) {
     leaseHolder: value.leaseHolder,
     ...(value.acquisitionKey === undefined ? {} : { acquisitionKey: value.acquisitionKey }),
     ["fencing" + "Token"]: value.fencingToken,
+    ...(hasReviewRecovery ? {
+      reviewRecoveryResumeState: value.reviewRecoveryResumeState,
+      reviewRecoverySourceExpectedVersion: value.reviewRecoverySourceExpectedVersion,
+      reviewRecoverySourceFencingToken: value.reviewRecoverySourceFencingToken,
+      reviewRecoverySourceRuntimeAttempt: value.reviewRecoverySourceRuntimeAttempt,
+    } : {}),
   }
 }
 
@@ -2451,6 +2470,7 @@ function exactAuthorizationContract(
   outcomeId,
   historicalRecovery,
   checkpointState,
+  activeReviewRecovery = false,
 ) {
   const receiptContract = row?.workContract
   const delivery = workContract.delivery
@@ -2474,7 +2494,12 @@ function exactAuthorizationContract(
         && row.acquisitionKey === executionBinding.acquisitionKey
       : Number(row?.version) === executionBinding.expectedVersion
         && row?.leaseToken === executionBinding.leaseToken
-        && row?.leaseHolder === executionBinding.leaseHolder)
+        && row?.leaseHolder === executionBinding.leaseHolder
+        && (!activeReviewRecovery
+          || (row.lifecycleState === "active"
+            && row.lifecycleReason === "REVIEW_REMEDIATION_RECOVERED"
+            && executionBinding.expectedVersion === executionBinding.reviewRecoverySourceExpectedVersion + 1
+            && executionBinding.fencingToken === executionBinding.reviewRecoverySourceFencingToken + 1)))
     && receiptContract?.id === workContract.id
     && receiptContract?.digest === workContract.digest
     && receiptContract?.version === workContract.version
@@ -2587,6 +2612,50 @@ function exactHistoricalRecoveryAuthorization(
     && runtimeMetadata?.executionEpochDigest === expectedEpochDigest
     && canonicalJson(terminal?.metadata) === canonicalJson(expectedTerminal)
     && canonicalJson(authorizationMetadata) === canonicalJson(expectedAuthorization)
+}
+
+function exactActiveReviewRecoveryCheckpoint(row, executionBinding, outcomeId, proofDigest, evidence) {
+  const checkpoint = row?.activeRecoveryCheckpoint
+  const eventId = Number(checkpoint?.id)
+  const metadata = checkpoint?.metadata
+  if (!Number.isSafeInteger(eventId) || eventId <= 0 || !metadata || typeof metadata !== "object") return false
+  const expected = {
+    idempotencyKey: `hermes-outcome:${outcomeId}:attempt:${executionBinding.reviewRecoverySourceRuntimeAttempt}:checkpoint:${metadata?.checkpointSequence}`,
+    outcomeId,
+    workOrderRef: outcomeWorkOrderRef(outcomeId),
+    attempt: executionBinding.reviewRecoverySourceRuntimeAttempt,
+    checkpointSequence: Number(metadata?.checkpointSequence),
+    checkpointState: "REVIEW_REMEDIATION_RECOVERED",
+    checkpointDetail: "REVIEW_REMEDIATION_EXHAUSTED",
+    prNumber: evidence.prNumber,
+    headRefOid: evidence.headRefOid,
+    mergeSha: evidence.mergeSha,
+    reviewRecoveryProofDigest: proofDigest,
+    executionBinding: executionBinding.executionBinding,
+    acquisitionKey: executionBinding.acquisitionKey,
+    acquisitionFencingToken: executionBinding.reviewRecoverySourceFencingToken,
+    executionEpochDigest: executionEpochDigest(executionBinding),
+    findingsSetDigest: projectionPayloadDigest([]),
+    workContractId: row?.workContract?.id,
+    workContractDigest: row?.workContract?.digest,
+    workContractVersion: row?.workContract?.version,
+    workContractRepository: row?.workContract?.repository,
+    workContractLane: row?.goalLane,
+    authorizationDecisionId: Number(row?.approvalDecisionId),
+    executionGrantRef: row?.executionGrantRef,
+    implementationGrantId: Number(row?.implementationGrantId),
+    implementationGrantRef: row?.implementationGrantRef,
+    projectionIssueNumber: row?.workContract?.projection?.issueNumber,
+    projectionCompletionOwned: row?.workContract?.projection?.completionOwned,
+    deliveryAuthorityLevel: row?.workContract?.delivery?.authorityLevel,
+    deliveryAllowedActions: row?.workContract?.delivery?.allowedActions,
+    commitAllowed: row?.workContract?.delivery?.commitAllowed,
+    tagAllowed: row?.workContract?.delivery?.tagAllowed,
+    pushAllowed: row?.workContract?.delivery?.pushAllowed,
+  }
+  expected.payloadDigest = projectionPayloadDigest(expected)
+  return Number.isSafeInteger(expected.checkpointSequence) && expected.checkpointSequence >= 0
+    && canonicalJson(metadata) === canonicalJson(expected)
 }
 
 function outcomeWorkOrderRef(outcomeId) {
@@ -2730,6 +2799,8 @@ export async function projectOutcomeRuntimeCheckpoint({
     || (checkpoint.state === "PR_MERGED"
       && /^Recovered (?:reviewed )?PR #\d+(?: through reviewed remediation chain)?$/
         .test(checkpoint.detail ?? ""))
+  const activeReviewRecovery = !historicalRecovery
+    && normalizedExecutionBinding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
   if (historicalRecovery && normalizedExecutionBinding.acquisitionKey === undefined) {
     throw Object.assign(new Error("Historical recovery acquisition epoch is missing"), {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
@@ -2751,7 +2822,7 @@ export async function projectOutcomeRuntimeCheckpoint({
   const historicalRecoveryProofDigest = checkpoint.state === "POST_MERGE_CLEANUP_RECOVERED"
     ? evidence.terminalCleanupRecoveryProofDigest
     : evidence.reviewRecoveryProofDigest
-  if (historicalRecovery && (
+  if ((historicalRecovery || activeReviewRecovery) && (
     historicalRecoveryProofDigest === undefined
     || evidence.prNumber === undefined
     || evidence.headRefOid === undefined
@@ -2847,6 +2918,16 @@ export async function projectOutcomeRuntimeCheckpoint({
             AND recovery_authorization.metadata->>'mergeSha' = $17
           ORDER BY recovery_authorization.id
           LIMIT 1) AS "recoveryAuthorization"
+         ,(SELECT jsonb_build_object('id', recovery_checkpoint.id, 'metadata', recovery_checkpoint.metadata)
+          FROM governance_event AS recovery_checkpoint
+          WHERE recovery_checkpoint."userId" = contract_queue."userId"
+            AND recovery_checkpoint."entityType" = 'work_order'
+            AND recovery_checkpoint."entityId"::text = contract_queue."activeWorkOrderId"::text
+            AND recovery_checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+            AND recovery_checkpoint.metadata->>'checkpointState' = 'REVIEW_REMEDIATION_RECOVERED'
+            AND recovery_checkpoint.metadata->>'reviewRecoveryProofDigest' = $14
+          ORDER BY recovery_checkpoint.id
+          LIMIT 1) AS "activeRecoveryCheckpoint"
        FROM goal AS contract_goal
        JOIN "outcome_queue_item" AS contract_queue
          ON contract_queue."userId" = contract_goal."userId"
@@ -2858,7 +2939,10 @@ export async function projectOutcomeRuntimeCheckpoint({
          ON contract_acquisition."userId" = contract_queue."userId"
         AND contract_acquisition."outcomeKey" = contract_queue."outcomeKey"
         AND contract_acquisition."acquisitionKey" = contract_queue."acquisitionKey"
-        AND contract_acquisition."latestFencingToken" = contract_queue."fencingToken"
+        AND ((NOT $23::boolean
+          AND contract_acquisition."latestFencingToken" = contract_queue."fencingToken")
+         OR ($23::boolean
+          AND contract_acquisition."latestFencingToken" = $24::integer))
        LEFT JOIN "workbench_thread_source" AS contract_root
          ON contract_root."userId" = contract_receipt."userId"
         AND contract_root."sourceType" = 'outcome'
@@ -2889,9 +2973,17 @@ export async function projectOutcomeRuntimeCheckpoint({
          AND contract_queue."executionBinding" = $5
          AND btrim(contract_queue."acquisitionKey") <> ''
          AND contract_queue."fencingToken" = $8::integer
-         AND ((NOT $13::boolean
+         AND ((NOT $13::boolean AND NOT $23::boolean
            AND contract_queue."lifecycleState" = 'active'
            AND contract_queue.version = $4::integer
+           AND contract_queue."leaseToken" = $6
+           AND contract_queue."leaseHolder" = $7
+           AND contract_queue."leaseExpiresAt" > clock_timestamp())
+          OR ($23::boolean
+           AND contract_queue."lifecycleState" = 'active'
+           AND contract_queue."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERED'
+           AND contract_queue.version = $25::integer + 1
+           AND contract_queue."fencingToken" = $24::integer + 1
            AND contract_queue."leaseToken" = $6
            AND contract_queue."leaseHolder" = $7
            AND contract_queue."leaseExpiresAt" > clock_timestamp())
@@ -2990,7 +3082,7 @@ export async function projectOutcomeRuntimeCheckpoint({
              AND duplicate_primary_repo.type = 'repo'
              AND duplicate_primary_repo.relationship = 'primary-repo'
          ))
-         AND (NOT $13::boolean OR EXISTS (
+         AND (NOT ($13::boolean OR $23::boolean) OR EXISTS (
            SELECT 1
            FROM governance_event AS latest_terminal
            WHERE latest_terminal."userId" = contract_queue."userId"
@@ -3009,6 +3101,23 @@ export async function projectOutcomeRuntimeCheckpoint({
                ORDER BY terminal_candidate."createdAt" DESC, terminal_candidate.id DESC
                LIMIT 1
              )
+         ))
+         AND (NOT $23::boolean OR (
+           SELECT count(*) = 1
+           FROM governance_event AS exact_recovery_authorization
+           WHERE exact_recovery_authorization."userId" = contract_queue."userId"
+             AND exact_recovery_authorization."entityType" = 'goal'
+             AND exact_recovery_authorization."entityId"::text = contract_goal.id::text
+             AND exact_recovery_authorization."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED'
+             AND exact_recovery_authorization.metadata->>'recoveryKind' = 'review-remediation'
+             AND exact_recovery_authorization.metadata->>'executionBinding' = contract_queue."executionBinding"
+             AND exact_recovery_authorization.metadata->>'acquisitionKey' = contract_queue."acquisitionKey"
+             AND exact_recovery_authorization.metadata->>'fencingToken' = ($24::integer)::text
+             AND exact_recovery_authorization.metadata->>'runtimeAttempt' = ($26::integer)::text
+             AND exact_recovery_authorization.metadata->>'proofDigest' = $14
+             AND exact_recovery_authorization.metadata->>'prNumber' = ($15::integer)::text
+             AND exact_recovery_authorization.metadata->>'reviewedHeadSha' = $16
+             AND exact_recovery_authorization.metadata->>'mergeSha' = $17
          ))
          AND (NOT $13::boolean OR (
            SELECT count(*) = 1
@@ -3037,9 +3146,11 @@ export async function projectOutcomeRuntimeCheckpoint({
              )
              AND recovery_authorization.metadata->>'executionBinding' = contract_queue."executionBinding"
              AND recovery_authorization.metadata->>'acquisitionKey' = contract_queue."acquisitionKey"
-             AND recovery_authorization.metadata->>'fencingToken' = contract_queue."fencingToken"::text
+             AND recovery_authorization.metadata->>'fencingToken' = (CASE WHEN $23::boolean
+               THEN $24::integer ELSE contract_queue."fencingToken" END)::text
              AND recovery_authorization.metadata->>'executionEpochDigest' = $21
-             AND recovery_authorization.metadata->>'runtimeAttempt' = ($22::integer)::text
+             AND recovery_authorization.metadata->>'runtimeAttempt' = (CASE WHEN $23::boolean
+               THEN $26::integer ELSE $22::integer END)::text
              AND recovery_authorization.metadata->>'runtimeCheckpointEventId' = (
                SELECT runtime_checkpoint.id::text
                FROM governance_event AS runtime_checkpoint
@@ -3077,7 +3188,7 @@ export async function projectOutcomeRuntimeCheckpoint({
                LIMIT 1
              )
          ))
-         AND ($18 <> 'REVIEW_REMEDIATION_RECOVERED' OR (
+         AND (($18 <> 'REVIEW_REMEDIATION_RECOVERED' AND NOT $23::boolean) OR (
            SELECT count(*) = 1
            FROM governance_event AS recovery_authorization
            JOIN governance_event AS recovered
@@ -3090,6 +3201,18 @@ export async function projectOutcomeRuntimeCheckpoint({
             AND recovered.metadata->>'reviewedHeadSha' = recovery_authorization.metadata->>'reviewedHeadSha'
             AND recovered.metadata->>'mergeSha' = recovery_authorization.metadata->>'mergeSha'
             AND recovered.id > recovery_authorization.id
+           JOIN governance_event AS merged_checkpoint
+             ON merged_checkpoint."userId" = recovered."userId"
+            AND merged_checkpoint."entityType" = 'work_order'
+            AND merged_checkpoint."entityId"::text = contract_queue."activeWorkOrderId"::text
+            AND merged_checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+            AND merged_checkpoint.metadata->>'checkpointState' = 'PR_MERGED'
+            AND merged_checkpoint.metadata->>'reviewRecoveryProofDigest' = recovered.metadata->>'proofDigest'
+            AND merged_checkpoint.metadata->>'prNumber' = recovered.metadata->>'prNumber'
+            AND merged_checkpoint.metadata->>'headRefOid' = recovered.metadata->>'reviewedHeadSha'
+            AND merged_checkpoint.metadata->>'mergeSha' = recovered.metadata->>'mergeSha'
+            AND merged_checkpoint.id > recovery_authorization.id
+            AND merged_checkpoint.id < recovered.id
            JOIN governance_event AS recovery_confirmation
              ON recovery_confirmation."userId" = recovered."userId"
             AND recovery_confirmation."entityType" = 'goal'
@@ -3100,6 +3223,18 @@ export async function projectOutcomeRuntimeCheckpoint({
             AND recovery_confirmation.metadata->>'reviewedHeadSha' = recovered.metadata->>'reviewedHeadSha'
             AND recovery_confirmation.metadata->>'mergeSha' = recovered.metadata->>'mergeSha'
             AND recovery_confirmation.id > recovered.id
+           JOIN governance_event AS persisted_recovery_checkpoint
+             ON persisted_recovery_checkpoint."userId" = recovered."userId"
+            AND persisted_recovery_checkpoint."entityType" = 'work_order'
+            AND persisted_recovery_checkpoint."entityId"::text = contract_queue."activeWorkOrderId"::text
+            AND persisted_recovery_checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+            AND persisted_recovery_checkpoint.metadata->>'checkpointState' = 'REVIEW_REMEDIATION_RECOVERED'
+            AND persisted_recovery_checkpoint.metadata->>'checkpointDetail' = 'REVIEW_REMEDIATION_EXHAUSTED'
+            AND persisted_recovery_checkpoint.metadata->>'reviewRecoveryProofDigest' = recovered.metadata->>'proofDigest'
+            AND persisted_recovery_checkpoint.metadata->>'prNumber' = recovered.metadata->>'prNumber'
+            AND persisted_recovery_checkpoint.metadata->>'headRefOid' = recovered.metadata->>'reviewedHeadSha'
+            AND persisted_recovery_checkpoint.metadata->>'mergeSha' = recovered.metadata->>'mergeSha'
+            AND persisted_recovery_checkpoint.id > recovery_confirmation.id
            WHERE recovery_authorization."userId" = contract_queue."userId"
              AND recovery_authorization."entityType" = 'goal'
              AND recovery_authorization."entityId"::text = contract_goal.id::text
@@ -3133,12 +3268,16 @@ export async function projectOutcomeRuntimeCheckpoint({
         checkpoint.state === "POST_MERGE_CLEANUP_RECOVERED"
           ? "HERMES_OUTCOME_TERMINAL_CLEANUP_RECOVERY_AUTHORIZED"
           : "HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED",
-        executionEpochDigest(normalizedExecutionBinding), attempt],
+        executionEpochDigest(normalizedExecutionBinding), attempt,
+        activeReviewRecovery,
+        normalizedExecutionBinding.reviewRecoverySourceFencingToken ?? null,
+        normalizedExecutionBinding.reviewRecoverySourceExpectedVersion ?? null,
+        normalizedExecutionBinding.reviewRecoverySourceRuntimeAttempt ?? null],
     )
     if (authorizations?.rows?.length !== 1
       || !exactAuthorizationContract(
         authorizations.rows[0], normalizedWorkContract, normalizedExecutionBinding, outcomeId,
-        historicalRecovery, checkpoint.state,
+        historicalRecovery, checkpoint.state, activeReviewRecovery,
       )
       || (historicalRecovery && !exactHistoricalRecoveryAuthorization(
         authorizations.rows[0], normalizedExecutionBinding, outcomeId, checkpoint.state,
@@ -3147,6 +3286,25 @@ export async function projectOutcomeRuntimeCheckpoint({
       throw Object.assign(new Error("Canonical Workbench execution authorization is invalid"), {
         code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
       })
+    }
+    if (activeReviewRecovery) {
+      const sourceBinding = {
+        ...normalizedExecutionBinding,
+        expectedVersion: normalizedExecutionBinding.reviewRecoverySourceExpectedVersion,
+        fencingToken: normalizedExecutionBinding.reviewRecoverySourceFencingToken,
+      }
+      if (!exactHistoricalRecoveryAuthorization(
+        authorizations.rows[0], sourceBinding, outcomeId, "REVIEW_REMEDIATION_RECOVERED",
+        normalizedExecutionBinding.reviewRecoverySourceRuntimeAttempt,
+        historicalRecoveryProofDigest, evidence,
+      ) || !exactActiveReviewRecoveryCheckpoint(
+        authorizations.rows[0], normalizedExecutionBinding, outcomeId,
+        historicalRecoveryProofDigest, evidence,
+      )) {
+        throw Object.assign(new Error("Active review recovery authorization is invalid"), {
+          code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+        })
+      }
     }
     const authorization = authorizations.rows[0]
     if (authorization.receiptOperation === "runtime_finding.derive") {

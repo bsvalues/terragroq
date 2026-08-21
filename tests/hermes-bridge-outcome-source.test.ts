@@ -1386,6 +1386,114 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
   })
 
+  it("projects the next active checkpoint from the exact recovered review epoch", async () => {
+    const sourceBinding = { ...runtimeExecutionBinding, expectedVersion: 4, fencingToken: 2,
+      acquisitionKey: runtimeAcquisitionKey }
+    const activeBinding = { ...sourceBinding, expectedVersion: 5, fencingToken: 3,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5 }
+    const runtimeMetadata = failedHistoricalCheckpointMetadata(42, "REVIEW_REMEDIATION_EXHAUSTED", 5)
+    const terminalMetadata = failedGoalTerminalMetadata("REVIEW_REMEDIATION_EXHAUSTED")
+    const authorizationPayload = {
+      idempotencyKey: `hermes-outcome:4:review-remediation:projection-authorization:terminal:90:epoch:${runtimeExecutionEpochDigest}`,
+      recoveryKind: "review-remediation", outcomeId: 4, userId: "owner",
+      outcomeKey: activeBinding.outcomeKey, workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4",
+      runtimeCheckpointEventId: 89, runtimeCheckpointPayloadDigest: runtimeMetadata.payloadDigest,
+      terminalEventId: 90,
+      terminalPayloadDigest: createHash("sha256").update(JSON.stringify(terminalMetadata)).digest("hex"),
+      runtimeAttempt: 5, executionBinding: activeBinding.executionBinding,
+      acquisitionKey: activeBinding.acquisitionKey, fencingToken: 2,
+      executionEpochDigest: runtimeExecutionEpochDigest, prNumber: 929,
+      reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40), proofDigest: "d".repeat(64),
+    }
+    const recoveryPayload = {
+      idempotencyKey: "hermes-outcome:4:attempt:5:checkpoint:45", outcomeId: 4,
+      workOrderRef: "WO-HERMES-OUTCOME-4", attempt: 5, checkpointSequence: 45,
+      checkpointState: "REVIEW_REMEDIATION_RECOVERED", checkpointDetail: "REVIEW_REMEDIATION_EXHAUSTED",
+      prNumber: 929, headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+      reviewRecoveryProofDigest: "d".repeat(64), executionBinding: activeBinding.executionBinding,
+      acquisitionKey: activeBinding.acquisitionKey, acquisitionFencingToken: 2,
+      executionEpochDigest: runtimeExecutionEpochDigest,
+      findingsSetDigest: emptyFindingsSetDigest,
+      workContractId: issue911RuntimeWorkContract.id, workContractDigest: issue911RuntimeWorkContract.digest,
+      workContractVersion: issue911RuntimeWorkContract.version,
+      workContractRepository: issue911RuntimeWorkContract.repository,
+      workContractLane: issue911RuntimeWorkContract.lane,
+      authorizationDecisionId: 74, executionGrantRef: "WB-EXEC-GRANT-911",
+      implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
+      projectionIssueNumber: 911, projectionCompletionOwned: false,
+      deliveryAuthorityLevel: "A2_WRITE_OWN", deliveryAllowedActions: ["implement"],
+      commitAllowed: true, tagAllowed: false, pushAllowed: true,
+    }
+    const authorization: Record<string, any> = {
+      goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "operator-objective",
+      outcomeKey: activeBinding.outcomeKey, lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERED", version: 5,
+      executionBinding: activeBinding.executionBinding, leaseToken: activeBinding.leaseToken,
+      leaseHolder: activeBinding.leaseHolder, leaseExpiresAt: "2099-01-01T00:00:00.000Z",
+      acquisitionKey: activeBinding.acquisitionKey, fencingToken: 3, activeWorkOrderId: 42,
+      approvalDecisionId: 74, executionGrantRef: "WB-EXEC-GRANT-911",
+      receiptOperation: "workbench_execution.authorize",
+      receiptImplementationGrantRef: "WB-EXEC-IMPL-GRANT-911", receiptImplementationGrantId: "81",
+      implementationGrantRef: "WB-EXEC-IMPL-GRANT-911", implementationGrantId: 81,
+      implementationGrantStatus: "active", implementationGrantRevokedAt: null,
+      implementationGrantAuthorityLevel: "A2_WRITE_OWN", implementationGrantGrantedTo: "operator",
+      implementationGrantScope: "WO-HERMES-OUTCOME-4", implementationGrantAllowedActions: ["implement"],
+      implementationGrantBlockedActions: ["host-storage-mutation"],
+      workContract: { version: issue911RuntimeWorkContract.version, id: issue911RuntimeWorkContract.id,
+        digest: issue911RuntimeWorkContract.digest, repository: issue911RuntimeWorkContract.repository,
+        lane: issue911RuntimeWorkContract.lane, reservations: issue911RuntimeWorkContract.allowedFiles,
+        validationCommands: [{ command: "git", args: ["diff", "--check"] },
+          { command: "npx", args: ["vitest", "run", "tests/hermes-work-contract.test.ts"] }],
+        projection: issue911RuntimeWorkContract.projection, delivery: issue911RuntimeWorkContract.delivery },
+      historicalRuntimeCheckpoint: { id: 89, metadata: runtimeMetadata },
+      historicalGoalTerminal: { id: 90, metadata: terminalMetadata },
+      recoveryAuthorization: { id: 91, metadata: { ...authorizationPayload,
+        payloadDigest: createHash("sha256").update(JSON.stringify(authorizationPayload)).digest("hex") } },
+      activeRecoveryCheckpoint: { id: 94, metadata: { ...recoveryPayload,
+        payloadDigest: createHash("sha256").update(JSON.stringify(recoveryPayload)).digest("hex") } },
+    }
+    const query = vi.fn(async (sql: string) => {
+      if (/FROM goal AS contract_goal/.test(sql)) return { rows: [authorization] }
+      if (/INSERT INTO work_order/.test(sql)) return { rows: [] }
+      if (/SELECT wo\.id,[\s\S]+latestCheckpointId/.test(sql)) return { rows: [{
+        id: 42, userId: "owner", ref: "WO-HERMES-OUTCOME-4", goal: "GOAL-0004",
+        lane: "operator-objective", status: "review", result: null, commitRef: null,
+        assignee: "hermes-codex-bridge", agent: "codex", authorityGrantId: 81,
+        authorityLevel: "A2_WRITE_OWN", authorityGranted: "A2_WRITE_OWN",
+        commitAllowed: true, tagAllowed: false, pushAllowed: true,
+        allowedFiles: issue911RuntimeWorkContract.allowedFiles, validators: issue911RuntimeWorkContract.validators,
+        latestCheckpointId: 94, latestCheckpointMetadata: authorization.activeRecoveryCheckpoint.metadata,
+        latestCheckpointState: "REVIEW_REMEDIATION_RECOVERED",
+        latestCheckpointKey: recoveryPayload.idempotencyKey,
+        latestCheckpointDigest: authorization.activeRecoveryCheckpoint.metadata.payloadDigest,
+        latestCheckpointSequence: "45", latestExecutionEpochDigest: runtimeExecutionEpochDigest,
+        latestCheckpointCreatedAt: "2026-08-20T00:00:00.000Z", latestExecutionEpochSequence: "45",
+      }] }
+      if (/HERMES_RUNTIME_CHECKPOINT/.test(sql) && /RETURNING id/.test(sql)) return { rows: [{ id: 95 }] }
+      return { rows: [] }
+    })
+    await expect(projectOutcomeRuntimeCheckpointRaw({ query, outcomeId: 4, attempt: 6,
+      workContract: issue911RuntimeWorkContract, executionBinding: activeBinding,
+      checkpoint: { sequence: 46, state: "LEASED", metadata: { prNumber: 929,
+        headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+        reviewRecoveryProofDigest: "d".repeat(64) } } })).resolves.toMatchObject({ workOrderId: 42 })
+    const authorizationCall = query.mock.calls.find(([sql]) => /FROM goal AS contract_goal/.test(sql))!
+    expect(authorizationCall[1]?.slice(22)).toEqual([true, 2, 4, 5])
+    authorization.activeRecoveryCheckpoint.metadata.checkpointDetail = "DRIFTED"
+    const { payloadDigest: _digest, ...drifted } = authorization.activeRecoveryCheckpoint.metadata
+    authorization.activeRecoveryCheckpoint.metadata.payloadDigest = createHash("sha256")
+      .update(JSON.stringify(drifted)).digest("hex")
+    await expect(projectOutcomeRuntimeCheckpointRaw({ query, outcomeId: 4, attempt: 6,
+      workContract: issue911RuntimeWorkContract, executionBinding: activeBinding,
+      checkpoint: { sequence: 47, state: "LEASED", metadata: { prNumber: 929,
+        headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+        reviewRecoveryProofDigest: "d".repeat(64) } } })).rejects.toMatchObject({
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    })
+  })
+
   it("rejects historical recovery without its exact reviewed proof before database mutation", async () => {
     const query = vi.fn()
     await expect(projectOutcomeRuntimeCheckpointRaw({
@@ -3318,6 +3426,158 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         try { await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`) } catch {}
         client.release()
         await pool.end()
+      }
+    },
+  )
+
+  it.runIf(Boolean(process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL))(
+    "executes the active review recovery authorization chain in real PostgreSQL",
+    async () => {
+      const { Pool } = await import("pg")
+      const pool = new Pool({ connectionString: process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL })
+      const client = await pool.connect()
+      const schema = `hermes_active_recovery_${randomUUID().replaceAll("-", "")}`
+      const source = { ...runtimeExecutionBinding, expectedVersion: 4, fencingToken: 2,
+        acquisitionKey: runtimeAcquisitionKey }
+      const active = { ...source, expectedVersion: 5, fencingToken: 3,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+        reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+        reviewRecoverySourceRuntimeAttempt: 5 }
+      try {
+        await client.query(`CREATE SCHEMA "${schema}"`)
+        await client.query(`SET search_path TO "${schema}"`)
+        await client.query(`
+          CREATE TABLE goal (id integer PRIMARY KEY,"userId" text,ref text,command text,lane text,status text);
+          CREATE TABLE outcome_queue_item ("userId" text,"goalId" integer,"outcomeKey" text,
+            "lifecycleState" text,"lifecycleReason" text,version integer,"executionBinding" text,
+            "leaseToken" text,"leaseHolder" text,"leaseExpiresAt" timestamptz,"acquisitionKey" text,
+            "fencingToken" integer,"activeWorkOrderId" integer,"approvalState" text,
+            "approvalDecisionId" integer,"authorityState" text,"authorityLevel" text,
+            "authorityGrantRef" text,"authoritySubject" text,"authorityAction" text);
+          CREATE TABLE outcome_queue_mutation_receipt (id serial,"userId" text,"outcomeKey" text,
+            operation text,"requestBinding" jsonb,"resultBinding" jsonb,"createdAt" timestamptz DEFAULT now());
+          CREATE TABLE outcome_queue_acquisition_receipt ("userId" text,"outcomeKey" text,
+            "acquisitionKey" text,"latestFencingToken" integer,"createdAt" timestamptz DEFAULT now());
+          CREATE TABLE decision (id integer,"userId" text,status text,authority text,decision text,scope text);
+          CREATE TABLE authority_grant (id integer,"userId" text,ref text,status text,"revokedAt" timestamp,
+            "expiresAt" timestamp,"authorityLevel" text,"grantedTo" text,scope text,"workOrderId" integer,
+            "allowedActions" text[],"blockedActions" text[]);
+          CREATE TABLE workbench_thread_source ("userId" text,"threadId" text,"sourceType" text,"sourceId" text,role text);
+          CREATE TABLE workbench_thread (id text,"userId" text,"projectId" integer);
+          CREATE TABLE project (id integer,"userId" text,lifecycle text);
+          CREATE TABLE project_resource ("userId" text,"projectId" integer,type text,relationship text,"canonicalIdentity" text);
+          CREATE TABLE work_order (id integer PRIMARY KEY,"userId" text,ref text,goal text,lane text,status text,result text,
+            "commitRef" text,assignee text,agent text,"allowedFiles" text[],validators text[],"authorityGrantId" integer,
+            "authorityLevel" text,"authorityGranted" text,"commitAllowed" boolean,"tagAllowed" boolean,"pushAllowed" boolean);
+          CREATE TABLE governance_event (id bigint PRIMARY KEY,"userId" text,"eventType" text,"entityType" text,
+            "entityId" text,metadata jsonb,"createdAt" timestamptz DEFAULT now());
+        `)
+        const receiptContract = { version: issue911RuntimeWorkContract.version,
+          id: issue911RuntimeWorkContract.id, digest: issue911RuntimeWorkContract.digest,
+          repository: issue911RuntimeWorkContract.repository, lane: issue911RuntimeWorkContract.lane,
+          reservations: issue911RuntimeWorkContract.allowedFiles,
+          validationCommands: [{ command: "git", args: ["diff", "--check"] },
+            { command: "npx", args: ["vitest", "run", "tests/hermes-work-contract.test.ts"] }],
+          projection: issue911RuntimeWorkContract.projection, delivery: issue911RuntimeWorkContract.delivery }
+        await client.query(`INSERT INTO goal VALUES (4,'owner','GOAL-0004','reliability','operator-objective','classified');
+          INSERT INTO outcome_queue_item VALUES ('owner',4,'goal:GOAL-0004','active','REVIEW_REMEDIATION_RECOVERED',5,
+            'execution-binding-4','lease-token-4','hermes-runtime-4','2099-01-01','acquisition-key-4',3,42,
+            'approved',74,'matched','A2_WRITE_OWN','WB-EXEC-GRANT-911','operator','outcome:execute');
+          INSERT INTO decision VALUES (74,'owner','accepted','binding','APPROVE','goal:GOAL-0004');
+          INSERT INTO authority_grant VALUES
+            (80,'owner','WB-EXEC-GRANT-911','active',NULL,'2099-01-01','A2_WRITE_OWN','operator','goal:GOAL-0004',42,ARRAY['outcome:execute'],ARRAY['host-storage-mutation']),
+            (81,'owner','WB-EXEC-IMPL-GRANT-911','active',NULL,'2099-01-01','A2_WRITE_OWN','operator','WO-HERMES-OUTCOME-4',42,ARRAY['implement'],ARRAY['host-storage-mutation']);
+          INSERT INTO project VALUES (7,'owner','active');
+          INSERT INTO workbench_thread VALUES ('thread-4','owner',7);
+          INSERT INTO workbench_thread_source VALUES ('owner','thread-4','outcome','goal:GOAL-0004','root');
+          INSERT INTO project_resource VALUES ('owner',7,'repo','primary-repo','bsvalues/terragroq');
+          INSERT INTO outcome_queue_acquisition_receipt ("userId","outcomeKey","acquisitionKey","latestFencingToken")
+            VALUES ('owner','goal:GOAL-0004','acquisition-key-4',2);`)
+        await client.query(`INSERT INTO work_order VALUES (42,'owner','WO-HERMES-OUTCOME-4','GOAL-0004','operator-objective','review',NULL,NULL,
+            'hermes-codex-bridge','codex',$1,$2,81,'A2_WRITE_OWN','A2_WRITE_OWN',true,false,true)`,
+        [issue911RuntimeWorkContract.allowedFiles, issue911RuntimeWorkContract.validators])
+        await client.query(`INSERT INTO outcome_queue_mutation_receipt
+          ("userId","outcomeKey",operation,"requestBinding","resultBinding") VALUES
+          ('owner','goal:GOAL-0004','workbench_execution.authorize',$1::jsonb,$2::jsonb)`, [
+          JSON.stringify({ confirmation: "START_WORK", outcomeKey: "goal:GOAL-0004", threadId: "thread-4", projectId: "7" }),
+          JSON.stringify({ grantRef: "WB-EXEC-GRANT-911", decisionId: "74", implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
+            implementationGrantId: "81", workContract: receiptContract }),
+        ])
+        const failed = failedHistoricalCheckpointMetadata(42, "REVIEW_REMEDIATION_EXHAUSTED", 5)
+        const terminal = failedGoalTerminalMetadata("REVIEW_REMEDIATION_EXHAUSTED")
+        const authorizationPayload = { idempotencyKey: `hermes-outcome:4:review-remediation:projection-authorization:terminal:90:epoch:${runtimeExecutionEpochDigest}`,
+          recoveryKind: "review-remediation", outcomeId: 4, userId: "owner", outcomeKey: "goal:GOAL-0004",
+          workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4", runtimeCheckpointEventId: 89,
+          runtimeCheckpointPayloadDigest: failed.payloadDigest, terminalEventId: 90,
+          terminalPayloadDigest: createHash("sha256").update(JSON.stringify(terminal)).digest("hex"), runtimeAttempt: 5,
+          executionBinding: "execution-binding-4", acquisitionKey: "acquisition-key-4", fencingToken: 2,
+          executionEpochDigest: runtimeExecutionEpochDigest, prNumber: 929, reviewedHeadSha: "b".repeat(40),
+          mergeSha: "c".repeat(40), proofDigest: "d".repeat(64) }
+        const recoveredPayload = { idempotencyKey: "hermes-outcome:4:attempt:5:checkpoint:45", outcomeId: 4,
+          workOrderRef: "WO-HERMES-OUTCOME-4", attempt: 5, checkpointSequence: 45,
+          checkpointState: "REVIEW_REMEDIATION_RECOVERED", checkpointDetail: "REVIEW_REMEDIATION_EXHAUSTED",
+          prNumber: 929, headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+          reviewRecoveryProofDigest: "d".repeat(64), executionBinding: "execution-binding-4",
+          acquisitionKey: "acquisition-key-4", acquisitionFencingToken: 2,
+          executionEpochDigest: runtimeExecutionEpochDigest, findingsSetDigest: emptyFindingsSetDigest,
+          workContractId: issue911RuntimeWorkContract.id, workContractDigest: issue911RuntimeWorkContract.digest,
+          workContractVersion: issue911RuntimeWorkContract.version,
+          workContractRepository: issue911RuntimeWorkContract.repository,
+          workContractLane: issue911RuntimeWorkContract.lane,
+          authorizationDecisionId: 74, executionGrantRef: "WB-EXEC-GRANT-911",
+          implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
+          projectionIssueNumber: 911, projectionCompletionOwned: false,
+          deliveryAuthorityLevel: "A2_WRITE_OWN", deliveryAllowedActions: ["implement"],
+          commitAllowed: true, tagAllowed: false, pushAllowed: true }
+        const events = [
+          [89,"HERMES_RUNTIME_CHECKPOINT","work_order","42",failed], [90,"HERMES_OUTCOME_TERMINAL","goal","4",terminal],
+          [91,"HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED","goal","4",{ ...authorizationPayload,
+            payloadDigest: createHash("sha256").update(JSON.stringify(authorizationPayload)).digest("hex") }],
+          [92,"HERMES_RUNTIME_CHECKPOINT","work_order","42",{ checkpointState: "PR_MERGED", reviewRecoveryProofDigest: "d".repeat(64), prNumber: 929, headRefOid: "b".repeat(40), mergeSha: "c".repeat(40) }],
+          [93,"HERMES_OUTCOME_REVIEW_RECOVERED","goal","4",{ proofDigest: "d".repeat(64), prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40) }],
+          [94,"HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED","goal","4",{ proofDigest: "d".repeat(64), prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40) }],
+          [95,"HERMES_RUNTIME_CHECKPOINT","work_order","42",{ ...recoveredPayload,
+            payloadDigest: createHash("sha256").update(JSON.stringify(recoveredPayload)).digest("hex") }],
+        ]
+        for (const [id,eventType,entityType,entityId,metadata] of events) await client.query(
+          `INSERT INTO governance_event (id,"userId","eventType","entityType","entityId",metadata)
+           VALUES ($1,'owner',$2,$3,$4,$5::jsonb)`, [id,eventType,entityType,entityId,JSON.stringify(metadata)],
+        )
+        const real = client.query.bind(client)
+        const query = vi.fn(async (sql: string, values?: unknown[]) => {
+          if (/FROM goal AS contract_goal/.test(sql)) return real(sql, values)
+          if (/^(BEGIN|COMMIT|ROLLBACK)/.test(sql) || /pg_advisory_xact_lock/.test(sql)) return real(sql, values)
+          if (/INSERT INTO work_order/.test(sql)) return { rows: [] }
+          if (/SELECT wo\.id,[\s\S]+latestCheckpointId/.test(sql)) return { rows: [{ id: 42, userId: "owner",
+            ref: "WO-HERMES-OUTCOME-4", goal: "GOAL-0004", lane: "operator-objective", status: "review", result: null,
+            commitRef: null, assignee: "hermes-codex-bridge", agent: "codex", allowedFiles: issue911RuntimeWorkContract.allowedFiles,
+            validators: issue911RuntimeWorkContract.validators, authorityGrantId: 81, authorityLevel: "A2_WRITE_OWN",
+            authorityGranted: "A2_WRITE_OWN", commitAllowed: true, tagAllowed: false, pushAllowed: true,
+            latestCheckpointId: 95, latestCheckpointMetadata: events[6][4], latestCheckpointState: "REVIEW_REMEDIATION_RECOVERED",
+            latestCheckpointKey: recoveredPayload.idempotencyKey, latestCheckpointDigest: (events[6][4] as any).payloadDigest,
+            latestCheckpointSequence: "45", latestExecutionEpochDigest: runtimeExecutionEpochDigest,
+            latestCheckpointCreatedAt: "2026-08-20T00:00:00Z", latestExecutionEpochSequence: "45" }] }
+          if (/HERMES_RUNTIME_CHECKPOINT/.test(sql) && /RETURNING id/.test(sql)) return { rows: [{ id: 96 }] }
+          return { rows: [] }
+        })
+        const projectNext = (sequence: number) => projectOutcomeRuntimeCheckpointRaw({ query, outcomeId: 4, attempt: 6,
+          workContract: issue911RuntimeWorkContract, executionBinding: active,
+          checkpoint: { sequence, state: "LEASED", metadata: { prNumber: 929,
+            headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+            reviewRecoveryProofDigest: "d".repeat(64) } } })
+        await expect(projectNext(46)).resolves.toMatchObject({ workOrderId: 42 })
+        await client.query(`INSERT INTO governance_event (id,"userId","eventType","entityType","entityId",metadata)
+          VALUES (96,'owner','HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED','goal','4',$1::jsonb)`,
+        [JSON.stringify(events[2][4])])
+        await expect(projectNext(47)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query("DELETE FROM governance_event WHERE id=96")
+        await client.query("DELETE FROM governance_event WHERE id=94")
+        await expect(projectNext(48)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+      } finally {
+        try { await client.query("ROLLBACK") } catch {}
+        try { await client.query("SET search_path TO public") } catch {}
+        try { await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`) } catch {}
+        client.release(); await pool.end()
       }
     },
   )

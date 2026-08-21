@@ -1892,9 +1892,13 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
     expect(value.client.runTurn).not.toHaveBeenCalled()
 
+    value.projectCheckpoint.mockClear()
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
       result: "COMPLETE", outcomeId: "77", prNumber: 500,
     })
+    expect(value.projectCheckpoint.mock.calls.some(([request]) => (
+      request.checkpoint.state === "REVIEW_REMEDIATION_RECOVERED"
+    ))).toBe(false)
     expect(value.selectOutcome).not.toHaveBeenCalled()
     expect(resumeQueueAfterReviewRecovery).toHaveBeenCalledWith(outcome, {
       expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
@@ -1902,6 +1906,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       prNumber: 500,
       reviewedHeadSha: "c".repeat(40),
       mergeSha: "b".repeat(40),
+      runtimeAttempt: lease.fencingToken,
     })
     expect(resumeQueueAfterReviewRecovery.mock.invocationCallOrder[0])
       .toBeLessThan(refreshQueueOutcome.mock.invocationCallOrder[0])
