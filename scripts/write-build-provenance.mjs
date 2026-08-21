@@ -26,7 +26,14 @@ function resolveSha() {
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim()
     let dirty = ""
     try {
-      const status = execFileSync("git", ["status", "--porcelain"], { cwd: root, encoding: "utf8" }).trim()
+      // Exclude our OWN output from the dirtiness check: this file is tracked (so the health route can
+      // import it) and rewritten on every build, so a plain `git status` would always see it modified
+      // and stamp "-dirty" even on a clean source tree (Codex P2). Real source changes still count.
+      const status = execFileSync(
+        "git",
+        ["status", "--porcelain", "--", ".", ":(exclude)lib/generated/build-provenance.json"],
+        { cwd: root, encoding: "utf8" },
+      ).trim()
       if (status) dirty = "-dirty"
     } catch {
       // status is best-effort; absence of it does not invalidate the HEAD SHA.

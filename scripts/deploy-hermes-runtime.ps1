@@ -74,6 +74,9 @@ function Get-RunningSha {
       $health = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/health" -UseBasicParsing -TimeoutSec 10
       $sha = ($health.Content | ConvertFrom-Json).build.sha
       if ($sha) { return $sha }
+      # 200 but no build.sha (an older artifact predating provenance): wait before retrying so this
+      # does not hammer /api/health and its database probe in a tight loop for the whole timeout.
+      Start-Sleep -Seconds 3
     } catch {
       Start-Sleep -Seconds 3
     }
@@ -101,6 +104,22 @@ if (-not $builtSha -or $builtSha -eq "development" -or $builtSha -eq "unknown") 
 }
 if ($builtSha -like "*-dirty") {
   Write-Warning "The build SHA is $builtSha -- built over uncommitted changes. Proceeding, but the running commit will not exactly match any pushed commit."
+}
+
+# Provenance is about the CURRENT commit, not merely a self-consistent artifact. Comparing the built
+# stamp only against the running instance compares the artifact to itself: build commit A, let the
+# repo advance to B without rebuilding, and both the stamp and the running SHA still read A, so a
+# stale build would pass. So independently resolve what HEAD *should* be and require the stamp to
+# match it, here, before the copy (Codex P1).
+$builtBase = $builtSha -replace '-dirty$', ''
+$expectedSha = $null
+try { $expectedSha = (& git -C $Source rev-parse HEAD 2>$null).Trim() } catch { $expectedSha = $null }
+if ($expectedSha) {
+  if ($builtBase -ne $expectedSha) {
+    throw "STALE BUILD: the standalone was built from $builtSha but $Source is now at $expectedSha. Rebuild from HEAD ('pnpm build') before deploying -- a deploy must serve the current commit, not a self-consistent old one."
+  }
+} else {
+  Write-Warning "Could not resolve HEAD in $Source to independently verify the build commit; proceeding on the artifact stamp and the running-instance check alone."
 }
 
 # The runtime's .env.local is the one file here that cannot be rebuilt, and the standalone output
