@@ -7,164 +7,223 @@
 ```text
 RECORD_FORMAT: WILLIAMOS_RUNTIME_RELIABILITY_REMEDIATION_V1
 RECORD_ID: WO-OUTCOME-762-911
-DISPATCH_WORK_ORDER: WO-HERMES-OUTCOME-27
-AUTHORITY_SOURCE: GOAL-0023
+RECORD_REVISION: 2
+DISPATCH_WORK_ORDER: WO-HERMES-OUTCOME-28
+AUTHORITY_SOURCE: GOAL-0024
 PARENT_OUTCOME: OUTCOME-762
 TRACKED_ISSUE: 911
-ISSUE_BINDING_SOURCE: HERMES_DISPATCH_PACKET
+ISSUE_BINDING_SOURCE: HERMES_DISPATCH_PACKET_AND_REPOSITORY_REGRESSION_SPECIFICATIONS
 REPOSITORY: bsvalues/terragroq
-BASE_COMMIT: 15d20969c0d90f09bf17225d641a16e749c21852
-BRANCH: codex/hermes-goal-0023-27
+BASE_COMMIT: 6e21e4dc280e77d0db6afb5d78787fe53b1d0ff0
+BRANCH: codex/hermes-goal-0024-28
 RESERVED_PATH: docs/reports/WO-OUTCOME-762-911-runtime-reliability.md
-RECORD_KIND: RELIABILITY_REMEDIATION_EVIDENCE
-RECORD_STATE: COMPLETE
-SOURCE_DECISION_ID: DEC-WILLIAMOS-V131-RUNTIME-HARDENING
-SOURCE_DECISION_RECORDED_STATUS: active
-SOURCE_DECISION_CREATED_AT: 2026-06-26
-SOURCE_DECISION_REVIEW_AT: 2026-07-26
-SOURCE_DECISION_FRESHNESS: HISTORICAL_NOT_REVALIDATED
-HISTORICAL_RELEASE: v1.3.1
-PRESERVED_BASELINE: v1.3.0
+WORK_CONTRACT_ID: issue-911-runtime-reliability-evidence.v1
+WORK_CONTRACT_VERSION: hermes-work-contract.v1
+PROJECTION_COMPLETION_OWNED: false
+RECORD_KIND: CONTROL_PLANE_RELIABILITY_REMEDIATION_EVIDENCE
+RECORD_STATE: IMPLEMENTED_PENDING_HERMES_VALIDATION
+REMEDIATION_DOMAIN: HERMES_RUNTIME_FINDING_CONTROL_PLANE
+DEFECT_CLASS: ROUTINE_FINDING_MISROUTED_TO_OWNER
 IMPLEMENTATION_MODE: REPOSITORY_EVIDENCE_RECONCILIATION_ONLY
-RUNTIME_CHANGE_STATE: NOT_REQUESTED
-HOST_RUNTIME_OBSERVATION_STATE: NOT_PERFORMED
+HOST_RUNTIME_MUTATION_AUTHORIZED: false
 HOST_RUNTIME_MUTATION_PERFORMED: false
-RUNTIME_ACTIVATION_PERFORMED: false
-RUNTIME_OR_EXTERNAL_PRODUCT_API_PROVIDER_CALL_PERFORMED: false
-ISSUE_CLOSURE_CLAIMED: false
+RUNTIME_OPERATOR_EXECUTION_PATH_USED: false
+REJECTED_ISSUE_357_ADAPTER_USED: false
 CURRENT_RUNTIME_HEALTH_CLAIMED: false
+CURRENT_HOST_INVENTORY_CLAIMED: false
+ISSUE_CLOSURE_CLAIMED: false
+TAG_OR_RELEASE_ACTION_AUTHORIZED: false
 VALIDATION_STATE: PENDING_HERMES_HOST
-INDEPENDENT_REVIEW_STATE: REMEDIATION_APPLIED_RECHECK_REQUIRED
-PR_WORK_CONTEXT_CHECK: work context receipt (#831)
-PR_CONTEXT_GATE_STATE: RECEIPT_ATTACHED_AND_VERIFIER_FIXED
-PR_CONTEXT_GATE_LAST_OBSERVED_HEAD: 03c1621292015f874cf02621f1aed3a27c655f89
-PR_CONTEXT_GATE_LAST_OBSERVED_RESULT: SUCCESS
-CURRENT_REPORT_HEAD_RECHECK_REQUIRED: true
-CHECK_CONCLUSIONS_RECEIVED: FAILURE, FAILURE, CANCELLED
-DISTINCT_VALID_FINDINGS: 1
-DUPLICATE_FAILURE_CONCLUSIONS_COLLAPSED: true
-CANCELLED_RUN_DISPOSITION: NON_ACTIONABLE_CHECK_EXECUTION_STATE
-CANCELLED_RUN_CAUSE_CLAIMED: false
-RECEIPT_TOKEN_FABRICATED: false
-WORK_CONTEXT_EXEMPTION_USED: false
-REPORT_EMBEDDED_RECEIPT_WOULD_SATISFY_GATE: false
+INDEPENDENT_FILE_REVIEW_STATE: COMPLETE_FINDINGS_REMEDIATED
+HERMES_EXACT_HEAD_REVIEW_STATE: PENDING_HERMES_HOST
 OWNER_TOUCH_COUNT: 0
 BLOCKED_SCOPE_CROSSED: false
 ```
 
-## Owner outcome
+## Owner outcome and exact boundary
 
-The dispatched outcome asks for a structured record of the reliability remediation associated with
-issue `#911`, while limiting mutation to the reserved repository artifact. This report completes that
-record by reconciling the existing WilliamOS v1.3.1 runtime-hardening decision, its implementation
-anchors, and its retained historical proof. It does not operate, repair, start, stop, probe, or
-reconfigure a runtime host.
+The dispatched outcome requests a structured record of issue `#911` reliability remediation and
+expressly excludes host mutation. The registered contract confines implementation to this report,
+projects issue `911` without transferring issue-completion ownership, permits ordinary repository
+implementation, and forbids tag operations. The near-match that asks for host mutation is rejected by
+the contract regression.
+
+This revision corrects the prior record's domain. Repository specifications identify `#911` as a
+control-plane reliability defect in the handling of findings discovered during an authorized outcome.
+The earlier record instead centered a June 2026 Ollama release-hardening decision that no inspected
+source independently binds to `#911`. That material is retained below only as separate historical
+context. Stale pull-request receipt and head state from the previous dispatch is not current state for
+this Work Order and has been removed.
+
+## #911 defect statement
+
+The defect was not a missing inventory or an unanswered implementation choice. The system could find
+and order the next work, but still stopped at an owner-facing “awaiting your direction” message for
+work whose active authority and policy classification already allowed it. A derivation function that
+is never consumed does not close that loop: the finding must be classified, durably settled, and—when
+ordinary—materialized as eligible child work without making the owner a dispatcher.
+
+The required behavior is therefore:
+
+```text
+FINDING_DISCOVERED: CLASSIFY_EACH_FINDING_INDEPENDENTLY
+ORDINARY_AUTHORIZED_FINDING: DERIVE_AND_QUEUE_WITHOUT_OWNER_CONTACT
+GENUINE_NEW_AUTHORITY_BOUNDARY: RECORD_TYPED_OWNER_GATE
+GATED_SIBLING_EFFECT_ON_ORDINARY_WORK: NONE
+MALFORMED_OR_UNBOUND_FINDING: FAIL_CLOSED
+DERIVED_AUTHORITY_ROOT: VERIFIED_ACTIVE_PARENT_AUTHORITY_ONLY
+CHILD_GRANT_SCOPE: MECHANICALLY_NARROWED_AND_PARENT_BOUND
+RESERVATION_ESCAPE: REFUSED
+DURABLE_SETTLEMENT_REQUIRED: true
+OWNER_AS_DISPATCHER: false
+```
+
+## Encoded #911 change set
+
+The repository's regression specification records five cases. These are evidence classifications,
+not actions performed by this Work Order.
+
+| Sequence | Recorded case | Required disposition | This lane |
+| ---: | --- | --- | --- |
+| 1 | Reconcile the declared compose/Ollama arrangement under reversible, in-scope effects. | Ordinary engineering proceeds under the active objective without an owner gate. | Recorded only; no compose, container, service, model, or host state was changed. |
+| 2 | Determine whether another copy of `williamos-sea` exists. | Read-only investigation proceeds without an owner gate. | Recorded only; no host or storage inventory was performed. |
+| 3 | Relocate service paths that are pinned by reviewed policy. | Stop at a typed `POLICY` boundary. | Recorded only; no path or policy was changed. |
+| 4 | Retire a stale duplicate. | `DESTRUCTIVE` while no other copy is verified; ordinary cleanup only after the declared copy is verified and every other control passes. | Recorded only; no file, directory, or copy was inspected, moved, or deleted. |
+| 5 | Leave `pilot0` unchanged. | No action and no owner decision. | Recorded only; the named system was not touched. |
+
+The case descriptions come from regression fixtures. They do not establish current host facts, make a
+host action safe, or widen this report-only reservation.
 
 ## Repository-backed remediation
 
-The source decision `DEC-WILLIAMOS-V131-RUNTIME-HARDENING` records v1.3.1 as the Ollama
-startup/runtime reliability hardening baseline while preserving v1.3.0. The remediation is defined by
-the following recorded behavior:
+The current sovereign remediation is represented by the neutral runtime-finding policy, its durable
+database consumer, and the HERMES queue integration—not by activating the retired
+`scripts/runtime-operator/**` execution path.
+
+| Reliability control | Repository evidence | Recorded behavior |
+| --- | --- | --- |
+| Canonical owner gates | `scripts/runtime-findings/policy.mjs:1-24` | Only financial, destructive, production, protected, unresolved legal/privacy/security, credential, reviewed-policy, scope, and competing-priority effects create owner gates. |
+| Fail-closed effect classification | `scripts/runtime-findings/policy.mjs:47-95` | Missing, non-object, or malformed effects do not silently become ordinary work. Unverified destruction remains gated. |
+| Parent authority and reservation confinement | `scripts/runtime-findings/policy.mjs:104-183`, `scripts/runtime-findings/db-consumer.mjs:552-649` | An exact consumer child derives only from verified approved, active, unexpired parent authority and paths wholly inside allowed and outside forbidden reservations; explicit commit/push denial blocks derivation. The durable consumer then creates child implementation and queue grants mechanically narrowed to that child and bound to the verified parent evidence, without creating broader authority. |
+| Independent sibling progress | `scripts/runtime-findings/policy.mjs:186-206` | Every finding is classified separately into `dispatch` or `gated`; one genuine gate does not stall an ordinary sibling. |
+| Durable serialized consumption | `scripts/runtime-findings/db-consumer.mjs:924-936`, `scripts/runtime-findings/db-consumer.mjs:1065-1091` | The consumer runs in a serializable transaction with an advisory transaction lock, derives ordinary children, persists typed owner gates, and commits one result set. |
+| Active HERMES integration | `scripts/hermes-bridge/outcome-queue-runtime.mjs:1243-1248`, `scripts/hermes-bridge/cli.mjs:211-220` | The outcome queue owns the runtime-finding consumer. Queue drain consumes backlog before cycling and consumes newly recorded findings after each cycle; a queued child keeps the healthy drain moving. |
+| Source and replay integrity | `tests/runtime-findings-db-consumer.test.ts:398-438`, `tests/runtime-findings-db-consumer.test.ts:508-618` | Regression cases reject corrupt lineage or duplicate settlement and require exact replay rather than duplicate child creation. |
+
+Compatibility modules under `scripts/runtime-operator/**` re-export the neutral policy for retired
+callers. Tests bearing the old directory name remain useful specifications, but neither those modules
+nor the rejected issue `#357` adapter are represented here as an active execution surface.
+
+## Canonical classification contract
 
 ```text
-MANAGED_AUTOSTART_ENDPOINT_SCOPE: LOOPBACK_ONLY
-AUTO_START_ELIGIBILITY: INSTALLED_LOCAL_OLLAMA_ONLY
-NON_LOCAL_AUTO_START: REFUSED
-READINESS_POLLING_DEADLINE_SECONDS: 30
-SETUP_TAGS_PROBE_CONFIGURED_IO_TIMEOUT_SECONDS: 5
-CONTROL_CENTER_TAGS_PROBE_CONFIGURED_IO_TIMEOUT_SECONDS: 10
-PROBE_TIMEOUT_SEMANTICS: BLOCKING_IO_NOT_TOTAL_DURATION
-IN_FLIGHT_PROBE_TOTAL_DURATION_BOUND: NONE_ESTABLISHED
-STRICT_READINESS_WALL_CLOCK_CEILING_ENFORCED: false
-POST_DEADLINE_IN_FLIGHT_PROBE_CAN_SUCCEED: true
-UNREADY_RESULT_AFTER_POLLING_LOOP: EXPLICIT_FAILURE
-UNREADY_RESULT_REQUIRES_PROBE_RETURN: true
-DEFAULT_RUNTIME: ollama
-DEFAULT_CHAT_MODEL: qwen2.5:14b-instruct-q4_K_M
-DEVELOPMENT_MODEL_OVERRIDE: WILLIAMOS_LLM_MODEL
-AUTOMATIC_RUNTIME_SWITCHING: false
-AUTOMATIC_CLOUD_FALLBACK: false
-SELECTED_RUNTIME_FAILURE_VISIBILITY: EXPLICIT_OFFLINE_STATE
-CONTROL_CENTER_WITHOUT_SELECTED_RUNTIME: STARTS_WITH_CONVERSATIONAL_ROUTING_UNAVAILABLE
-V130_BASELINE_MOVEMENT: PROHIBITED
+spendsMoney: FINANCIAL
+irreversible: DESTRUCTIVE
+mutatesProductionData: PRODUCTION
+releaseOrCutover: PRODUCTION
+protectedResource: PROTECTED
+unresolvedLegalPrivacyOrSecurityRisk: LEGAL
+touchesCredentials: CREDENTIALS
+changesReviewedPolicy: POLICY
+outsideObjectiveScope: SCOPE
+competesWithPriority: PRIORITY
+destroys[].verifiedCopyElsewhere != true: DESTRUCTIVE
+missing_null_nonobject_or_array_effects: SCOPE_UNCLASSIFIABLE
+malformed_destroys_declaration: DESTRUCTIVE_UNCLASSIFIABLE
+direct_effect_flag_other_than_false_or_undefined: ASSOCIATED_CANONICAL_GATE
+path_outside_parent_reservation: SCOPE
+path_inside_parent_forbidden_reservation: SCOPE
+inactive_revoked_expired_or_unapproved_parent: SCOPE_UNCLASSIFIABLE
+ordinary_bounded_engineering: PROCEED_WITH_REVIEW_AND_VALIDATION
 ```
 
-| Reliability behavior | Repository evidence | Recorded conclusion |
-| --- | --- | --- |
-| Structured, searchable hardening decision | `control-center/backend/decision_register.py`; `control-center/backend/tests/test_decision_register.py` | The v1.3.1 hardening record has an ID, status, decision, reason, scope, evidence, review date, and authority category. The seed register is read-only and does not itself enforce or mutate runtime state. |
-| Local-only startup | `scripts/setup_copilot.py`; `scripts/williamos_control_center.py` | Startup is attempted only for an installed Ollama endpoint on `127.0.0.1` or `localhost`; a non-local host is refused. |
-| Readiness polling and probe duration | `scripts/setup_copilot.py`; `scripts/williamos_control_center.py` | Both startup paths use a 30-second polling deadline after pre-window health work. The configured 5-second setup and 10-second Control Center values constrain blocking I/O inactivity, not total request duration. An endpoint that continues making I/O progress can keep an admitted probe in flight beyond the polling deadline with no finite total-duration bound established by these paths. If the probe returns without readiness, the paths return an explicit failure after the loop regains control. |
-| Stable model selection | `control-center/backend/copilot/llm.py`; `control-center/backend/decision_register.py` | Ollama and `qwen2.5:14b-instruct-q4_K_M` remain defaults; a lighter model requires an explicit environment override. |
-| No silent failover | `control-center/backend/copilot/llm.py`; `scripts/williamos_control_center.py` | Runtime evidence exposes `fallback: false`; an unavailable selected runtime is reported, and no fallback runtime is selected automatically. |
-| Baseline preservation | `WilliamOS/95_ReleaseGovernance/reports/Release Notes - v1.3.1 - 2026-06-26.md`; `control-center/backend/decision_register.py` | The hardening is recorded as a patch baseline without moving the accepted v1.3.0 baseline. This lane did not inspect or change tags. |
-
-## Historical proof retained, not rerun
-
-The v1.3.1 release note records two cold-start exercises from 2026-06-26: `setup_copilot.py` brought
-local Ollama online and restored the required models, and Control Center startup brought Ollama online
-before `/api/copilot/health` reported the 14B model available. It also records a passing frontend
-build, `158/158` backend tests, `28/28` runtime smoke, and a `9/9` production-readiness summary.
-
-The linked generated reports independently retain:
-
-| Evidence source | Source-reported result |
-| --- | --- |
-| `WilliamOS/105_RuntimeSmoke/reports/Runtime Smoke - 2026-06-26.md` | `28` core commands passed, `0` failed, `0` critical failures; copilot health was informational `ok`. |
-| `WilliamOS/106_ProductionReadiness/reports/Production Readiness - 2026-06-26.md` | `10/10` checks passed. |
-
-The release note's `9/9` summary and the generated readiness report's `10/10` detail are preserved as
-source-specific historical statements. This record does not silently normalize the differing counts
-or present either historical run as a current host check.
+The contract is deliberately effect-driven. Finding prose cannot authorize itself, declare an
+escaping path in scope, bypass a blocked action, turn an inactive grant into authority, or convert an
+unverified destructive target into routine cleanup.
 
 ## Reliability acceptance contract
 
-The remediation remains correctly represented only while all of these invariants hold:
+This remediation is correctly represented only while all of these invariants hold:
 
-1. Automatic startup is limited to an installed loopback Ollama endpoint.
-2. Startup readiness uses a 30-second polling deadline for admitting polling work, not a completion
-   deadline. The configured 5-second setup and 10-second Control Center values are blocking-I/O
-   inactivity timeouts, not total probe-duration caps; continued response progress can keep an
-   admitted probe in flight without an established finite wall-clock bound. If control returns, the
-   final probe may still succeed or the path can expose failure. No end-to-end completion or
-   deadline-to-failure ceiling is claimed.
-3. Ollama and the 14B chat model remain the defaults unless an explicit runtime or model override is
-   supplied.
-4. Runtime failure remains visible and never causes an automatic provider, runtime, or cloud switch.
-5. Runtime and model provenance remain present in health/evidence output with fallback reported as
-   disabled.
-6. v1.3.0 remains the preserved stable baseline; this record does not move, create, push, or release
-   a tag.
-7. Historical cold-start and gate evidence stays labelled with its original date and is never
-   upgraded into current runtime health without a new, authorized observation.
+1. Every finding carries stable source identity, sequence, task, exact paths, and readable declared
+   effects before it can become child work.
+2. Ordinary work derives only from verified approved, active, unexpired parent authority. Explicit
+   commit/push denial blocks derivation; durable child grants are mechanically narrowed and bound to
+   the parent evidence, while the child contract preserves the applicable risk, reservation,
+   validation, and delivery constraints.
+3. Path confinement is mechanical; an exact file reservation is not a prefix, subtree reservations
+   do not admit near-miss directories, and inherited forbidden paths remain forbidden.
+4. Every genuine owner boundary is persisted as a typed gate. It does not create a child and it does
+   not hold ordinary siblings behind it.
+5. Missing or malformed effects, authority, lineage, settlement, or replay evidence fail closed before
+   child creation.
+6. Ordinary child creation and gate settlement are durable and idempotent; replay validates the exact
+   existing graph instead of duplicating work.
+7. The owner decision is surfaced only when the bounded ordinary sibling work has completed and the
+   true gated finding remains actionable.
+8. Issue projection remains non-owning. Completing this report or a derived child does not close
+   issue `#911`.
+9. The rejected `#357` nested adapter and the retired `scripts/runtime-operator/**` execution path
+   remain unused.
+10. No statement in this record grants host, production, protected-resource, credential, release,
+    destructive, financial, legal-risk, policy-change, or out-of-scope authority.
+
+## Regression evidence retained, not rerun
+
+Repository tests encode the behavior at three levels:
+
+| Evidence | Source-encoded assertion | Current-run status |
+| --- | --- | --- |
+| #911 policy cases | `tests/runtime-operator-owner-gate-policy.test.ts:25-92` distinguishes routine cases, true policy/destructive gates, and no-action cases. | Inspected only; not executed by Codex. |
+| Derivation and sibling isolation | `tests/runtime-operator-derive-remediation.test.ts:9-13`, `tests/runtime-operator-derive-remediation.test.ts:218-235` identifies the owner-routing defect and requires ungated siblings to dispatch beside a gated finding. | Inspected only; not executed by Codex. |
+| Durable consumer | `tests/runtime-findings-db-consumer.test.ts:343-365` expects one derived child and one owner-gated settlement in the same consumption pass. | Inspected only; not executed by Codex. |
+| Supported HERMES end to end | `tests/hermes-runtime-finding-end-to-end.test.ts:222-245`, `tests/hermes-runtime-finding-end-to-end.test.ts:296-333`, `tests/hermes-runtime-finding-end-to-end.test.ts:399-415` specifies one durable ordinary child, one policy gate, no premature owner decision, and a decision only after the ordinary child completes. | Inspected only; database-backed test was not executed by Codex. |
+| Exact dispatch confinement | `tests/hermes-work-contract.test.ts:72-119` verifies the one reserved report, two host validators, non-owning issue projection, tag prohibition, and rejection of host-mutation near matches. | Pending the exact Hermes host command below. |
+
+These tests are repository evidence of the intended and implemented control-plane contract. With the
+exception of the focused work-contract command assigned to Hermes, this Work Order does not claim a
+fresh test run or live runtime observation.
+
+## Separate historical v1.3.1 context
+
+`DEC-WILLIAMOS-V131-RUNTIME-HARDENING` and the 2026-06-26 v1.3.1 release artifacts record Ollama
+startup hardening, the 14B default model, disabled cloud fallback, and dated cold-start and gate
+results. They remain valid historical evidence for that release record. No inspected source other than
+the prior revision of this report binds those artifacts to issue `#911`, so this revision does not use
+them as the #911 defect statement, remediation, current health evidence, or issue-closure evidence.
+
+No June 2026 command, health response, tag check, cold start, smoke suite, or production-readiness gate
+was rerun in this lane.
 
 ## Truth boundary
 
-- The Hermes dispatch packet binds this report to issue `#911`. The repository contains no separate
-  substantive `#911` incident narrative, so this record does not invent an incident date, symptom,
-  root cause, affected host, or issue-closure state.
-- The source decision's stored review date is historical. This report reconciles evidence; it does
-  not renew, supersede, or mint runtime or release authority.
-- Static source inspection establishes the intended reliability contract, not the current condition
-  of Ollama, its models, Control Center, a tag, or any machine.
-- No historical command, count, health response, or cold-start result was re-executed in this lane.
-- The existing "within 30 seconds" failure text describes the polling window. It is not evidence of
-  a measured 30-second end-to-end wall-clock ceiling.
-- The configured 5-second and 10-second probe timeouts constrain blocking I/O inactivity. They do not
-  establish total request-duration bounds, because continued response progress can keep a probe in
-  flight.
-- The named Hermes work-contract test is an unrelated selected-Thread UI regression test; it does not
-  validate this report, prove live runtime reliability, or establish issue closure.
+- The dispatch packet supplies the current `GOAL-0024`, `WO-HERMES-OUTCOME-28`, base commit, branch,
+  and issue projection. Those current identifiers are not inferred from older repository fixtures.
+- The repository contains regression specifications for the #911 control-plane defect, but no
+  canonical issue body, issue date, current host inventory, or issue-closure evidence.
+- Test fixtures establish expected classification behavior. They do not establish that any named host,
+  path, service, container, model, or copy currently exists or is safe to mutate.
+- Static source inspection establishes intended code behavior, not current database state, queue
+  health, host health, or production condition.
+- The database-backed end-to-end regression is environment-dependent and was not run in this lane.
+- The focused Hermes work-contract test validates dispatch confinement. It does not parse this report,
+  prove its substantive claims, establish live runtime reliability, or close issue `#911`.
+- Prior `#831` pull-request receipt and head results belong to an earlier dispatch. They are not
+  carried forward as current PR, validation, or review state.
 
 ## No-runtime-host-mutation ledger
 
 ```text
 REPOSITORY_WRITE_LIMITED_TO_RESERVED_REPORT: true
 READ_ONLY_REPOSITORY_COMMANDS_EXECUTED: rg
-HOST_MUTATING_COMMAND_EXECUTED: false
+BOUNDED_FILE_EDIT_TOOL_USED: apply_patch
 VALIDATOR_EXECUTED_BY_CODEX: false
 GIT_OR_GITHUB_OPERATION_PERFORMED_BY_CODEX: false
+HOST_MUTATING_COMMAND_EXECUTED: false
 HOST_RUNTIME_PROCESS_STARTED_OR_STOPPED: false
-SERVICE_OR_SCHEDULER_CHANGED: false
+SERVICE_CONTAINER_SCHEDULER_OR_DATABASE_CHANGED: false
+HOST_OR_STORAGE_INVENTORY_PERFORMED: false
+FILE_DIRECTORY_OR_COPY_MOVED_OR_DELETED: false
 OLLAMA_PROBED_STARTED_STOPPED_OR_CONFIGURED: false
 MODEL_PULLED_OR_SELECTED: false
 RUNTIME_OR_PROVIDER_STATE_CHANGED: false
@@ -178,146 +237,50 @@ RELEASE_OR_TAG_CREATED_MOVED_PUSHED_OR_DELETED: false
 PROPERTY_WORKBENCH_TERRAPILOT_TERRAFUSION_COUNTY_OR_PACS_TOUCHED: false
 REJECTED_ISSUE_357_ADAPTER_USED: false
 SCRIPTS_RUNTIME_OPERATOR_EXECUTION_PATH_USED: false
+SCRIPTS_RUNTIME_OPERATOR_PATH_MODIFIED: false
 OBSIDIAN_CHANGED: false
 OWNER_OPERATION_OR_CONTACT_REQUIRED: false
 ```
 
-This ledger describes actions initiated by this bounded delivery lane. It is not a claim about
+This ledger describes actions initiated by this bounded delivery lane. It makes no claim about
 unobserved activity elsewhere on the host.
 
 ## Independent file review
 
-A separate read-only assurance context checked the record against the dispatch, cited repository
-sources, and safety boundary. Its first pass found two Important truth-scope issues: the pending review
-label conflicted with the handoff result, and several non-effect labels were broad enough to include
-the permitted repository write or native delivery context. This revision records review completion and
-narrows those labels to runtime-host mutation, external product/provider calls, and runtime-operator
-execution. No product, runtime, authority, or historical-evidence claim was widened.
-
-Hermes exact-head review then identified two additional P2 acceptance defects. The unrelated
-selected-Thread work-contract test is no longer represented as acceptance evidence for this report;
-the handoff below defines report-specific validation. The readiness contract also records the
-30-second value as a polling deadline and denies a strict 30-second wall-clock claim. Direct file
-review confirmed both corrections remain inside the reserved report and preserve the historical
-evidence verbatim.
-
-A later pull-request check report contained two `FAILURE` conclusions and one `CANCELLED` conclusion
-for the same required `work context receipt (#831)` check. Direct contract inspection reduced those
-status entries to one actionable PR-admission defect and one non-actionable cancelled execution. The
-remediation below does not invent a receipt, copy one from another head, or claim the gate is green.
-
-The current exact-head review found two further P2 defects. First, the 5-second and 10-second I/O
-timeout settings had been described as bounded additions to wall-clock completion even though
-continued response progress can leave an admitted probe in flight without a total-duration limit. The
-record now states the I/O-inactivity semantics and claims no finite probe or readiness-completion
-bound. Second, the report validator checked only selected readiness fields and headings. The handoff
-now adds a separate validator that requires every substantive reliability invariant as one exact
-contiguous sequence, including loopback-only startup, stable runtime/model defaults, no automatic
-switching or cloud fallback, visible failure, and v1.3.0 baseline preservation.
-
-## PR work-context gate remediation
-
-The required check reads a fenced `WORK_CONTEXT_RECEIPT` JSON block from the pull-request body. Receipt
-issuance establishes the authority, subsystem, topology, collision, and remaining-parent premises; the
-token binds the claims included by the issuer. CI re-derives that token and live-remeasures the doctrine,
-the pull-request diff, and movement on `main`. CI cannot independently query the authority ledger, and
-collision claims are issuance evidence rather than token-covered live state. It does not read this
-report for the receipt. The Hermes PR creation path used a fixed prose body without the block, so adding
-a token here would neither have admitted the PR nor been truthful.
-
-```text
-CHECK_NAME: work context receipt (#831)
-CHECK_CONCLUSIONS_RECEIVED: FAILURE, FAILURE, CANCELLED
-DETAILED_FAILURE_CODE_SUPPLIED_TO_THIS_LANE: false
-DISTINCT_ACTIONABLE_DEFECTS: 1
-ACTIONABLE_DEFECT: REQUIRED_RECEIPT_ABSENT_OR_UNPROVEN_IN_PR_BODY
-DUPLICATE_FAILURE_CONCLUSIONS_COLLAPSED: true
-WORKFLOW_CANCEL_IN_PROGRESS_CONFIGURED: true
-CANCELLED_RUN_DISPOSITION: NON_ACTIONABLE_CHECK_EXECUTION_STATE
-CANCELLED_RUN_CAUSE_CLAIMED: false
-RECEIPT_CONSUMER: PULL_REQUEST_BODY
-RECEIPT_TOKEN_FABRICATED: false
-STALE_OR_FOREIGN_RECEIPT_REUSED: false
-WORK_CONTEXT_EXEMPTION_USED: false
-REPORT_EMBEDDED_RECEIPT_WOULD_SATISFY_GATE: false
-OWNER_TOUCH_REQUIRED: false
-RECOVERY_OWNER: HERMES_HOST
-RECOVERY_STATE: COMPLETE_AT_HEAD_03C1621292015F874CF02621F1AED3A27C655F89
-VERIFIER_FIX_MAIN_SHA: 50c826dabfe6f207f0f740f3b62fc6eeda28afe9
-```
-
-The two identical failure summaries are not treated as two independent product defects. The cancelled
-summary is not promoted to another defect: it contains no failure diagnosis, and the workflow permits
-an in-progress run to be cancelled when a newer event for the same pull request starts. Detailed run
-logs were not supplied to this lane, so no narrower failure code or cancellation cause is claimed.
-
-Hermes can recover the existing pull request without an empty commit or owner contact:
-
-1. Re-establish the work context against current `main`, the current doctrine digest, and the exact
-   changed-file set at the remediation head.
-2. Issue a fresh receipt for `WO-HERMES-OUTCOME-27`, parent outcome `OUTCOME-762`, and the sole reserved
-   path `docs/reports/WO-OUTCOME-762-911-runtime-reliability.md`, using the authority, subsystem,
-   topology, collision, and remaining-parent-acceptance facts measured by the issuer. No value that is
-   not measured may be copied or inferred from this report.
-3. Add the issued token and its exact facts as a fenced `WORK_CONTEXT_RECEIPT` JSON block in the pull-
-   request body. Do not use `WORK_CONTEXT_EXEMPT` as a substitute.
-4. Edit the existing pull-request body so the workflow's `edited` trigger evaluates the fresh event
-   payload; do not rely on replaying an earlier event payload.
-5. Require `work context receipt (#831)` to pass for the exact remediation head before merge.
-
-This is routine Hermes repository-lifecycle recovery inside the existing authority. It neither needs
-an owner decision nor authorizes runtime, production, release, tag, credential, or blocked-scope work.
-Direct post-edit file review confirmed that the structured and narrative fields agree: one actionable
-gate defect is recorded, no receipt or exemption is fabricated, no cancellation cause is asserted,
-and PR-body recovery passed at the recorded head after the Markdown-reservation verifier fix reached
-`main`. The report remediation head still requires its own external receipt-check rerun.
+Two separate read-only evidence lanes checked the #911 source binding and the exact report/work-
+contract boundary before implementation. A separate assurance context then reviewed the revised file
+against the dispatch, cited sources, current contract, truth boundary, and no-host-mutation ledger. It
+found one Medium overstatement of authority inheritance and one Low review-state contradiction. The
+record now distinguishes verified parent authority from mechanically narrowed child implementation
+and queue grants, and its structured review state agrees with the READY handoff. Exact-candidate
+recheck confirmed both findings resolved and reported no new finding.
 
 ## Hermes host validation handoff
 
-Codex did not run validators, Git, GitHub, interpreters, package managers, or runtime commands. Hermes
-owns the following exact post-remediation validation and repository lifecycle. Each
-validator `*_ARG_*` value is one separated process argument. The structure expression requires report
-identity, no-runtime-host-mutation posture, review state, PR work-context remediation, every
-substantive section in order, runtime/model provenance, and historical-evidence labelling. The independent reliability expression requires the complete invariant
-block as an exact contiguous sequence, so removing, inserting, or changing a recorded invariant fails
-that gate. Both commands must exit zero.
+Codex did not run validators, Git, GitHub, interpreters, package managers, runtime commands, or host
+operations. Hermes owns the exact post-handoff validation and repository lifecycle declared by this
+Work Order:
 
 ```text
 git diff --check: PENDING_HERMES_HOST
-REPORT_VALIDATOR_COMMAND: rg
-REPORT_VALIDATOR_ARG_1: --quiet
-REPORT_VALIDATOR_ARG_2: -U
-REPORT_VALIDATOR_ARG_3: (?ms)^# WO-OUTCOME-762-911 — Runtime Reliability Remediation Record$.*^RECORD_FORMAT: WILLIAMOS_RUNTIME_RELIABILITY_REMEDIATION_V1$.*^RECORD_ID: WO-OUTCOME-762-911$.*^DISPATCH_WORK_ORDER: WO-HERMES-OUTCOME-27$.*^TRACKED_ISSUE: 911$.*^SOURCE_DECISION_ID: DEC-WILLIAMOS-V131-RUNTIME-HARDENING$.*^HISTORICAL_RELEASE: v1\.3\.1$.*^PRESERVED_BASELINE: v1\.3\.0$.*^HOST_RUNTIME_MUTATION_PERFORMED: false$.*^VALIDATION_STATE: PENDING_HERMES_HOST$.*^INDEPENDENT_REVIEW_STATE: REMEDIATION_APPLIED_RECHECK_REQUIRED$.*^PR_CONTEXT_GATE_STATE: RECEIPT_ATTACHED_AND_VERIFIER_FIXED$.*^DISTINCT_VALID_FINDINGS: 1$.*^CANCELLED_RUN_DISPOSITION: NON_ACTIONABLE_CHECK_EXECUTION_STATE$.*^CANCELLED_RUN_CAUSE_CLAIMED: false$.*^RECEIPT_TOKEN_FABRICATED: false$.*^WORK_CONTEXT_EXEMPTION_USED: false$.*^OWNER_TOUCH_COUNT: 0$.*^BLOCKED_SCOPE_CROSSED: false$.*^## Owner outcome$.*^## Repository-backed remediation$.*^## Historical proof retained, not rerun$.*^## Reliability acceptance contract$.*^5\. Runtime and model provenance remain present in health/evidence output with fallback reported as$\n^   disabled\.$\n^6\. v1\.3\.0 remains the preserved stable baseline; this record does not move, create, push, or release$\n^   a tag\.$\n^7\. Historical cold-start and gate evidence stays labelled with its original date and is never$\n^   upgraded into current runtime health without a new, authorized observation\.$\n\n^## Truth boundary$.*^## No-runtime-host-mutation ledger$.*^## Independent file review$.*^## PR work-context gate remediation$.*^ACTIONABLE_DEFECT: REQUIRED_RECEIPT_ABSENT_OR_UNPROVEN_IN_PR_BODY$.*^RECOVERY_STATE: COMPLETE_AT_HEAD_03C1621292015F874CF02621F1AED3A27C655F89$.*^## Hermes host validation handoff$
-REPORT_VALIDATOR_ARG_4: docs/reports/WO-OUTCOME-762-911-runtime-reliability.md
-REPORT_VALIDATOR_STATE: PENDING_HERMES_HOST
-RELIABILITY_INVARIANT_VALIDATOR_COMMAND: rg
-RELIABILITY_INVARIANT_VALIDATOR_ARG_1: --quiet
-RELIABILITY_INVARIANT_VALIDATOR_ARG_2: -U
-RELIABILITY_INVARIANT_VALIDATOR_ARG_3: (?m)^MANAGED_AUTOSTART_ENDPOINT_SCOPE: LOOPBACK_ONLY$\n^AUTO_START_ELIGIBILITY: INSTALLED_LOCAL_OLLAMA_ONLY$\n^NON_LOCAL_AUTO_START: REFUSED$\n^READINESS_POLLING_DEADLINE_SECONDS: 30$\n^SETUP_TAGS_PROBE_CONFIGURED_IO_TIMEOUT_SECONDS: 5$\n^CONTROL_CENTER_TAGS_PROBE_CONFIGURED_IO_TIMEOUT_SECONDS: 10$\n^PROBE_TIMEOUT_SEMANTICS: BLOCKING_IO_NOT_TOTAL_DURATION$\n^IN_FLIGHT_PROBE_TOTAL_DURATION_BOUND: NONE_ESTABLISHED$\n^STRICT_READINESS_WALL_CLOCK_CEILING_ENFORCED: false$\n^POST_DEADLINE_IN_FLIGHT_PROBE_CAN_SUCCEED: true$\n^UNREADY_RESULT_AFTER_POLLING_LOOP: EXPLICIT_FAILURE$\n^UNREADY_RESULT_REQUIRES_PROBE_RETURN: true$\n^DEFAULT_RUNTIME: ollama$\n^DEFAULT_CHAT_MODEL: qwen2\.5:14b-instruct-q4_K_M$\n^DEVELOPMENT_MODEL_OVERRIDE: WILLIAMOS_LLM_MODEL$\n^AUTOMATIC_RUNTIME_SWITCHING: false$\n^AUTOMATIC_CLOUD_FALLBACK: false$\n^SELECTED_RUNTIME_FAILURE_VISIBILITY: EXPLICIT_OFFLINE_STATE$\n^CONTROL_CENTER_WITHOUT_SELECTED_RUNTIME: STARTS_WITH_CONVERSATIONAL_ROUTING_UNAVAILABLE$\n^V130_BASELINE_MOVEMENT: PROHIBITED$
-RELIABILITY_INVARIANT_VALIDATOR_ARG_4: docs/reports/WO-OUTCOME-762-911-runtime-reliability.md
-RELIABILITY_INVARIANT_VALIDATOR_STATE: PENDING_HERMES_HOST
-VALIDATION_AGGREGATION: ALL_COMMANDS_MUST_EXIT_ZERO
-work context receipt (#831): LAST_OBSERVED_SUCCESS_RECHECK_CURRENT_HEAD
+npx vitest run tests/hermes-work-contract.test.ts: PENDING_HERMES_HOST
 commit: null
-pr_url: null
+prUrl: null
 merged: false
-merge_commit: null
+mergeCommit: null
 ```
 
-`tests/hermes-work-contract.test.ts` exercises the selected-Thread latest-evidence UI contract and is
-not acceptance evidence for this report. The report-specific validators and `git diff --check`
-authorize no runtime, service, provider, production, release, or tag mutation. A normal repository
-revert of this single report is the complete rollback; no host rollback is needed.
+The Vitest command verifies the exact registered #911 contract and its no-host-mutation confinement;
+it does not parse the Markdown body. Substantive assurance is supplied by independent file review.
+A normal repository revert of this single report is the complete rollback; no host rollback is
+needed.
 
 ## Safety
 
-- The change is confined to the exact reserved report path.
-- No blocked scope was crossed and no owner touch occurred.
-- The report records evidence without upgrading historical proof into current runtime truth.
-- Independent file review findings have been remediated in this record; the remediation head still
-  requires external independent re-review before merge.
-- The earlier exact-head findings were remediated without leaving the reserved report path.
-- The repeated #831 results are classified without fabricating a receipt or exemption; PR-body
-  recovery passed at the recorded head and the remediation head requires the normal CI recheck.
-- The latest two P2 findings were remediated by removing the false probe-duration bound and requiring
-  the full contiguous reliability invariant block in host validation.
+- The only modified path is the exact reserved report.
+- The report records the #911 control-plane remediation without executing the cases it describes.
+- Historical Ollama release evidence is preserved as separate context and is not upgraded into current
+  runtime truth.
+- No blocked scope was crossed, no new authority was inferred, and no owner touch occurred.
+- Host validation, exact-head review, commit, pull request, merge, verification, and cleanup remain
+  owned by Hermes after this file handoff.
