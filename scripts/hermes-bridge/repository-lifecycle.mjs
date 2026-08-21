@@ -1312,13 +1312,55 @@ export function createRepositoryLifecycle(options) {
   async function inspectPullRequestFiles(number) {
     if (!Number.isSafeInteger(number) || number <= 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "positive PR number required")
     await verifyOrigin()
-    const result = await run("gh", ["api", "--paginate", "--slurp", `repos/${repository}/pulls/${number}/files?per_page=100`])
-    const pages = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
-    if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page))) {
-      wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request files response missing")
+    const pageSize = 100
+    const maxFiles = 3_000
+    const metadataEndpoint = `repos/${repository}/pulls/${number}`
+    const readMetadata = async () => {
+      const result = await run("gh", ["api", metadataEndpoint])
+      const metadata = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
+      if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)
+        || !Number.isSafeInteger(metadata.changed_files) || metadata.changed_files <= 0
+        || metadata.changed_files > maxFiles || !/^[0-9a-f]{40}$/.test(metadata.head?.sha ?? "")) {
+        wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request file metadata is invalid")
+      }
+      return { changedFiles: metadata.changed_files, headSha: metadata.head.sha }
     }
-    const files = [...new Set(pages.flatMap((page) => page.flatMap((file) =>
-      [file?.filename, file?.previous_filename].filter(Boolean).map(safeRelativePath))))].sort()
+    const before = await readMetadata()
+    const paths = []
+    const currentFiles = new Set()
+    const pageCount = Math.ceil(before.changedFiles / pageSize)
+    for (let page = 1; page <= pageCount; page += 1) {
+      const result = await run("gh", [
+        "api", `repos/${repository}/pulls/${number}/files?per_page=${pageSize}&page=${page}`,
+      ])
+      const files = parseJson(result.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
+      const expectedLength = page === pageCount
+        ? before.changedFiles - ((page - 1) * pageSize)
+        : pageSize
+      if (!Array.isArray(files) || files.length !== expectedLength) {
+        wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request files response missing")
+      }
+      for (const file of files) {
+        if (!file || typeof file !== "object" || Array.isArray(file)
+          || typeof file.filename !== "string" || file.filename.length === 0
+          || (file.previous_filename !== undefined && file.previous_filename !== null
+            && (typeof file.previous_filename !== "string" || file.previous_filename.length === 0))) {
+          wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request files response missing")
+        }
+        const filename = safeRelativePath(file.filename)
+        if (currentFiles.has(filename)) {
+          wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request file list contains duplicates")
+        }
+        currentFiles.add(filename)
+        paths.push(filename)
+        if (typeof file.previous_filename === "string") paths.push(safeRelativePath(file.previous_filename))
+      }
+    }
+    const after = await readMetadata()
+    if (after.changedFiles !== before.changedFiles || after.headSha !== before.headSha) {
+      wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request file metadata changed during inspection")
+    }
+    const files = [...new Set(paths)].sort()
     if (files.length === 0) wall("HERMES_REPOSITORY_GITHUB_WALL", "pull request file list is empty")
     return files
   }

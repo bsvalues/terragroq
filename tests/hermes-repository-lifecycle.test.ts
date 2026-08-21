@@ -951,17 +951,118 @@ describe("Hermes repository lifecycle", () => {
     })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_OWNERSHIP_WALL" })
   })
 
-  it("reads immutable PR file names for post-merge scope verification", async () => {
+  it("reads bounded immutable PR file pages without requiring gh --slurp", async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      filename: `components/hermes/file-${String(index).padStart(3, "0")}.tsx`,
+      ...(index === 0 ? { previous_filename: "lib/auth/old-status.tsx" } : {}),
+    }))
     const { lifecycle, calls } = fixture({
-      "gh api --paginate --slurp repos/bsvalues/terragroq/pulls/77/files": () => ({ code: 0, stdout: JSON.stringify([[
-        { filename: "components/hermes/status.tsx", previous_filename: "lib/auth/old-status.tsx" },
-        { filename: "tests/hermes-status.test.tsx" },
-      ]]) }),
+      "gh api --paginate --slurp": () => ({ code: 1, stderr: "unknown flag: --slurp" }),
+      "gh api repos/bsvalues/terragroq/pulls/77": (call) => {
+        const endpoint = call.args.at(-1) ?? ""
+        return { code: 0, stdout: JSON.stringify(endpoint.includes("/files?")
+          ? endpoint.endsWith("page=1") ? firstPage : [{ filename: "tests/hermes-status.test.tsx" }]
+          : { changed_files: 101, head: { sha } }) }
+      },
     })
-    await expect(lifecycle.inspectPullRequestFiles(77)).resolves.toEqual([
-      "components/hermes/status.tsx", "lib/auth/old-status.tsx", "tests/hermes-status.test.tsx",
+    const files = await lifecycle.inspectPullRequestFiles(77)
+    expect(files).toHaveLength(102)
+    expect(files).toEqual(expect.arrayContaining([
+      "components/hermes/file-000.tsx", "lib/auth/old-status.tsx", "tests/hermes-status.test.tsx",
+    ]))
+    const fileCalls = calls.filter(({ args }) => args.at(-1)?.includes("/pulls/77/files?"))
+    expect(fileCalls.map(({ args }) => args)).toEqual([
+      ["api", "repos/bsvalues/terragroq/pulls/77/files?per_page=100&page=1"],
+      ["api", "repos/bsvalues/terragroq/pulls/77/files?per_page=100&page=2"],
     ])
-    expect(calls.at(-1)?.args).toEqual(["api", "--paginate", "--slurp", "repos/bsvalues/terragroq/pulls/77/files?per_page=100"])
+    expect(calls.some(({ args }) => args.includes("--slurp"))).toBe(false)
+    expect(calls.filter(({ args }) => args.at(-1) === "repos/bsvalues/terragroq/pulls/77")).toHaveLength(2)
+  })
+
+  it("fails closed on malformed, short, oversized, or duplicate PR file pages", async () => {
+    for (const { changedFiles, response } of [
+      { changedFiles: 1, response: { files: "not-an-array" } },
+      { changedFiles: 2, response: [{ filename: "components/valid.tsx" }, null] },
+      { changedFiles: 1, response: [{ previous_filename: "components/old.tsx" }] },
+      { changedFiles: 100, response: Array.from({ length: 99 }, (_, index) => ({ filename: `components/short-${index}.tsx` })) },
+      { changedFiles: 100, response: Array.from({ length: 101 }, (_, index) => ({ filename: `components/long-${index}.tsx` })) },
+      { changedFiles: 2, response: [{ filename: "components/duplicate.tsx" }, { filename: "components/duplicate.tsx" }] },
+    ]) {
+      const { lifecycle } = fixture({
+        "gh api repos/bsvalues/terragroq/pulls/77": (call) => ({ code: 0, stdout: JSON.stringify(
+          call.args.at(-1)?.includes("/files?") ? response : { changed_files: changedFiles, head: { sha } },
+        ) }),
+      })
+      await expect(lifecycle.inspectPullRequestFiles(77)).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_GITHUB_WALL",
+      })
+    }
+  })
+
+  it("rejects invalid PR file metadata before reading pages", async () => {
+    for (const metadata of [
+      { changed_files: 0, head: { sha } },
+      { changed_files: 3_001, head: { sha } },
+      { changed_files: 1.5, head: { sha } },
+      { changed_files: 1, head: { sha: "not-a-commit" } },
+      { changed_files: 1 },
+    ]) {
+      const { lifecycle, calls } = fixture({
+        "gh api repos/bsvalues/terragroq/pulls/77": () => ({
+          code: 0, stdout: JSON.stringify(metadata),
+        }),
+      })
+      await expect(lifecycle.inspectPullRequestFiles(77)).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_GITHUB_WALL",
+      })
+      expect(calls.some(({ args }) => args.at(-1)?.includes("/files?"))).toBe(false)
+    }
+  })
+
+  it("rejects PR file metadata head or count drift", async () => {
+    for (const postMetadata of [
+      { changed_files: 1, head: { sha: "b".repeat(40) } },
+      { changed_files: 2, head: { sha } },
+    ]) {
+      let metadataReads = 0
+      const { lifecycle } = fixture({
+        "gh api repos/bsvalues/terragroq/pulls/77": (call) => {
+          if (call.args.at(-1)?.includes("/files?")) {
+            return { code: 0, stdout: JSON.stringify([{ filename: "components/stable.tsx" }]) }
+          }
+          metadataReads += 1
+          return { code: 0, stdout: JSON.stringify(metadataReads === 1
+            ? { changed_files: 1, head: { sha } }
+            : postMetadata) }
+        },
+      })
+      await expect(lifecycle.inspectPullRequestFiles(77)).rejects.toMatchObject({
+        code: "HERMES_REPOSITORY_GITHUB_WALL",
+      })
+    }
+  })
+
+  it("accepts exactly three thousand PR files in thirty pages with no page thirty-one", async () => {
+    const { lifecycle, calls } = fixture({
+      "gh api repos/bsvalues/terragroq/pulls/77": (call) => {
+        const endpoint = call.args.at(-1) ?? ""
+        if (!endpoint.includes("/files?")) {
+          return { code: 0, stdout: JSON.stringify({ changed_files: 3_000, head: { sha } }) }
+        }
+        const page = Number(new URL(`https://github.invalid/${endpoint}`).searchParams.get("page"))
+        return {
+          code: 0,
+          stdout: JSON.stringify(Array.from({ length: 100 }, (_, index) => ({
+            filename: `components/page-${page}-file-${index}.tsx`,
+          }))),
+        }
+      },
+    })
+    await expect(lifecycle.inspectPullRequestFiles(77)).resolves.toHaveLength(3_000)
+    const fileCalls = calls.filter(({ args }) => args.at(-1)?.includes("/pulls/77/files?"))
+    expect(fileCalls).toHaveLength(30)
+    expect(fileCalls.at(-1)?.args.at(-1)).toContain("page=30")
+    expect(fileCalls.some(({ args }) => args.at(-1)?.includes("page=31"))).toBe(false)
   })
 
   it("pushes an exact refspec and merges only an approved green PR with no unresolved threads", async () => {
