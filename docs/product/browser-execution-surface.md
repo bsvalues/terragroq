@@ -119,3 +119,49 @@ own privacy policy states that agent requests can send prompts, screenshots, pag
 conversation history, and tool output to its backend and model providers. It therefore sits **outside
 the sovereign/trusted boundary** and is admitted, if ever, only by a deliberate provider-doctrine
 decision — never by default. We study its interaction model; we do not run our work through it.
+
+## First slice: the pieces to join (verified against the codebase)
+
+The claim "most of the hard pieces already exist" is checked, not assumed. The browser surface is a
+**sibling of `app/api/loom/run`**, not a new subsystem. What it joins:
+
+| Concern | Existing piece to reuse | New work |
+|---|---|---|
+| Bounded, evidenced execution | `app/api/loom/run` — authenticated, work-context-gated, streams a real process, records receipts. *"Safety comes from the catalogue, not from parsing."* | A sibling route in the same mold |
+| Authority | `requireWorkContext` / `workContextRefusal` gate + access-grant scopes (`lib/access-grants`) | Two bounded scopes: **observe** (navigate/read/screenshot) and **act** (click/type/submit), the latter requiring an explicit `confirmed` step like `loom/run`'s state-changing ops |
+| Evidence | `lib/loom/receipts` (`recordLoomStart`/`recordLoomEnd`), `lib/governance/artifacts` | Emit screenshot · DOM snapshot · network receipt · trace as artifacts on every act |
+| Session as work identity | `lib/environment/working-world` persistence pattern | A `BrowserSession` row tied to a Work Order, holding page context + observe/propose/act log |
+| Rendering surface | The Desk already frames live pages via the `view` proxy (`app/api/environment/view`) | An observe/act overlay on that surface |
+| Engine | — (no in-repo automation today) | A Node adapter driving **WebView2 via CDP** on the runtime host — the same "real process on this machine" pattern `loom/run` already establishes |
+
+Two genuinely new contracts, everything else composed:
+
+```ts
+// The catalogue — safety is the enumeration, not parsed operator text (loom/run's rule).
+type BrowserOp =
+  | { kind: "navigate"; url: string }                    // observe
+  | { kind: "readPage" }                                 // observe
+  | { kind: "screenshot" }                               // observe
+  | { kind: "clickRef"; ref: string }                    // act  — requires confirmed + act scope
+  | { kind: "typeInto"; ref: string; text: string }      // act  — requires confirmed + act scope
+  | { kind: "submit"; ref: string }                      // act  — requires confirmed + act scope
+
+// The record — the deliverable is this, not the click.
+type BrowserAction = {
+  workOrderId: string
+  observed: string            // what the page showed
+  proposed: BrowserOp         // what the agent intends
+  authority: "observe" | "act"
+  permitted: boolean
+  actual?: BrowserOp          // what actually ran
+  evidence: { screenshot: string; dom: string; network: string; trace: string }
+  result: string              // UI/API state consistency
+  status: "PASS" | "FAIL" | "REFUSED"
+}
+```
+
+The build is therefore: **one bounded route + a catalogue + a session record + a WebView2/CDP adapter
++ the two scopes** — reusing the gate, receipts, artifacts, persistence, and rendering that already
+ship. That is why this is a requirement of the architecture being finished, not a separate product:
+it is the join, not a rebuild. Sequenced after the current environment deploy unblocks; it does not
+touch the critical path.
