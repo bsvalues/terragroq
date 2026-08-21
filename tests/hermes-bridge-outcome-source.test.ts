@@ -381,6 +381,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       workOrderId: 18, fencingToken: 1, sequence: 0, state: "LEASED",
       commit: { headSha: null, mergeSha: null, prNumber: null },
     })
+    const preWorkOrderCheckpointDigest =
+      "29d73bbd5db031e0a291117dc5b4ac2404c10f4816e131522c642cd7a5d0220a"
     const replayCheckpointDigest = digestOutcomeQueueCheckpointProof({
       outcomeId: "21", outcomeKey: executionBinding.outcomeKey,
       workOrderId: 18, fencingToken: 2, sequence: 4, state: "CODEX_THREAD_READY",
@@ -423,7 +425,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         leaseHolder: executionBinding.leaseHolder,
         acquisitionKeyDigest,
         leaseIdentityDigest,
-        checkpointDigest: transitionCheckpointDigest,
+        checkpointDigest: preWorkOrderCheckpointDigest,
         checkpointOutcomeId: "21",
         checkpointSequence: 0,
         checkpointState: "LEASED",
@@ -433,7 +435,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         outcomeKey: executionBinding.outcomeKey,
         fencingToken: 1,
         leaseExpiresAt: "2026-08-17T15:38:36.349Z",
-        activeWorkOrderId: 18,
+        activeWorkOrderId: null,
         disposition: "WINNER",
         reason: null,
         attemptedAt: "2026-08-17T14:38:36.349Z",
@@ -444,7 +446,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         leaseHolder: executionBinding.leaseHolder,
         acquisitionKeyDigest,
         leaseIdentityDigest,
-        checkpointDigest: transitionCheckpointDigest,
+        checkpointDigest: preWorkOrderCheckpointDigest,
         checkpointOutcomeId: "21",
         checkpointSequence: 0,
         checkpointState: "LEASED",
@@ -454,7 +456,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         outcomeKey: executionBinding.outcomeKey,
         fencingToken: 1,
         leaseExpiresAt: "2026-08-17T15:38:36.349Z",
-        activeWorkOrderId: 18,
+        activeWorkOrderId: null,
         disposition: "REPLAY_WINNER",
         reason: null,
         attemptedAt: "2026-08-17T14:39:36.349Z",
@@ -551,7 +553,55 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     ])
     expect(query.mock.calls.some(([sql]) => /\b(?:INSERT|UPDATE|DELETE)\b/i.test(sql))).toBe(false)
 
+    attemptTransform = (rows) => rows.map((row, index) => index < 2 ? {
+      ...row, activeWorkOrderId: 18, checkpointDigest: transitionCheckpointDigest,
+    } : row)
+    query.mockClear()
+    await expect(resolveRetiredOutcomeAcquisition(resolveInput)).resolves.toMatchObject({
+      blockedAttemptId: 207, replayAttemptIds: [224],
+    })
+
     const driftCases: Array<[string, () => void]> = [
+      ["a duplicate pre-block winner", () => { attemptTransform = (rows) => [
+        rows[0], { ...rows[0], id: 204 }, ...rows.slice(1),
+      ] }],
+      ["more than 32 pre-block winner replays", () => { attemptTransform = (rows) => [
+        { ...rows[0], id: 100 },
+        ...Array.from({ length: 33 }, (_, index) => ({ ...rows[1], id: 101 + index })),
+        ...rows.slice(2),
+      ] }],
+      ["a coherently rehashed wrong pre-block Work Order", () => {
+        const wrongDigest = digestOutcomeQueueCheckpointProof({
+          outcomeId: "21", outcomeKey: executionBinding.outcomeKey,
+          workOrderId: 19, fencingToken: 1, sequence: 0, state: "LEASED",
+          commit: { headSha: null, mergeSha: null, prNumber: null },
+        })
+        attemptTransform = (rows) => rows.map((row, index) => index < 2 ? {
+          ...row, activeWorkOrderId: 19, checkpointDigest: wrongDigest,
+        } : row)
+      }],
+      ["a partial pre-block Work Order binding", () => { attemptTransform = (rows) => rows.map(
+        (row, index) => index === 1 ? {
+          ...row, activeWorkOrderId: 18, checkpointDigest: transitionCheckpointDigest,
+        } : row,
+      ) }],
+      ["a missing pre-block Work Order field", () => { attemptTransform = (rows) => [
+        { ...rows[0], activeWorkOrderId: undefined }, ...rows.slice(1),
+      ] }],
+      ["a coherently rehashed null Work Order at the current checkpoint", () => {
+        const wrongSequenceDigest = digestOutcomeQueueCheckpointProof({
+          outcomeId: "21", outcomeKey: executionBinding.outcomeKey,
+          workOrderId: null, fencingToken: 1, sequence: 4, state: "CODEX_THREAD_READY",
+          commit: { headSha: null, mergeSha: null, prNumber: null },
+        })
+        attemptTransform = (rows) => rows.map((row, index) => index < 2 ? {
+          ...row, checkpointSequence: 4, checkpointState: "CODEX_THREAD_READY",
+          checkpointDigest: wrongSequenceDigest,
+        } : row)
+      }],
+      ["a drifted pre-block checkpoint digest", () => { attemptTransform = (rows) => [
+        { ...rows[0], checkpointDigest: "0".repeat(64) }, ...rows.slice(1),
+      ] }],
       ["a duplicate blocked attempt", () => { attemptTransform = (rows) => [...rows.slice(0, 3), rows[2], rows[3]] }],
       ["a missing retired replay", () => { attemptTransform = (rows) => rows.slice(0, 3) }],
       ["an unknown attempt disposition", () => { attemptTransform = (rows) => [
@@ -662,9 +712,10 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         return { ...body, payloadDigest: createHash("sha256")
           .update(JSON.stringify(body)).digest("hex") }
       }
-      const attemptDigest = (fencingToken: number, sequence: number, state: string) =>
+      const attemptDigest = (fencingToken: number, sequence: number, state: string,
+        workOrderId: number | null = 18) =>
         digestOutcomeQueueCheckpointProof({ outcomeId: "21", outcomeKey: binding.outcomeKey,
-          workOrderId: 18, fencingToken, sequence, state,
+          workOrderId, fencingToken, sequence, state,
           commit: { headSha: null, mergeSha: null, prNumber: null } })
       try {
         await client.query(`CREATE SCHEMA "${schema}"`)
@@ -699,16 +750,17 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           VALUES (7,$1,$2,$3,1,1)`,
         [binding.userId, binding.outcomeKey, binding.acquisitionKey])
         await client.query(`INSERT INTO outcome_queue_acquisition_attempt VALUES
-          (205,$1,'campaign-original','process-original',$2,$3,$4,$5,'21',0,'LEASED',NULL,NULL,NULL,$6,1,$7,18,
+          (205,$1,'campaign-original','process-original',$2,$3,$4,$5,'21',0,'LEASED',NULL,NULL,NULL,$6,1,$7,NULL,
            'WINNER',NULL,'2026-08-17T14:38:36.349Z'),
-          (206,$1,'campaign-original','process-original',$2,$3,$4,$5,'21',0,'LEASED',NULL,NULL,NULL,$6,1,$7,18,
+          (206,$1,'campaign-original','process-original',$2,$3,$4,$5,'21',0,'LEASED',NULL,NULL,NULL,$6,1,$7,NULL,
            'REPLAY_WINNER',NULL,'2026-08-17T14:39:36.349Z'),
-          (207,$1,'campaign-old','process-old',$2,$3,$4,$5,'21',0,'LEASED',NULL,NULL,NULL,$6,1,$7,18,
-           'STALE_INELIGIBLE_BLOCKED',$8,$9),
-          (224,$1,'campaign-current','process-current',$2,$3,$4,$10,'21',4,'CODEX_THREAD_READY',NULL,NULL,NULL,$6,2,NULL,18,
-           'REPLAY_RETIRED','ACQUISITION_KEY_RETIRED',$11)`,
-        [binding.userId, binding.leaseHolder, keyDigest, leaseDigest, attemptDigest(1, 0, "LEASED"),
-          binding.outcomeKey, "2026-08-17T15:38:36.349Z", reason,
+          (207,$1,'campaign-old','process-old',$2,$3,$4,$8,'21',0,'LEASED',NULL,NULL,NULL,$6,1,$7,18,
+           'STALE_INELIGIBLE_BLOCKED',$9,$10),
+          (224,$1,'campaign-current','process-current',$2,$3,$4,$11,'21',4,'CODEX_THREAD_READY',NULL,NULL,NULL,$6,2,NULL,18,
+           'REPLAY_RETIRED','ACQUISITION_KEY_RETIRED',$12)`,
+        [binding.userId, binding.leaseHolder, keyDigest, leaseDigest,
+          attemptDigest(1, 0, "LEASED", null), binding.outcomeKey,
+          "2026-08-17T15:38:36.349Z", attemptDigest(1, 0, "LEASED"), reason,
           "2026-08-20T22:09:43.594Z", attemptDigest(2, 4, "CODEX_THREAD_READY"),
           "2026-08-21T18:51:54.759Z"])
         await client.query(`INSERT INTO governance_event VALUES

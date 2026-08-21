@@ -2876,13 +2876,19 @@ export async function resolveRetiredOutcomeAcquisition({
       recoveredFencingToken: executionBinding.fencingToken + 1,
       recoveredVersion: executionBinding.expectedVersion + 1,
     }
-    const exactAttemptCheckpoint = (attempt, expectedFence, expectedSequence, expectedState) => {
+    const exactAttemptCheckpoint = (
+      attempt, expectedFence, expectedSequence, expectedState, expectedWorkOrderId,
+    ) => {
       let checkpointDigest
+      const attemptWorkOrderId = attempt?.activeWorkOrderId === null
+        ? null : Number.isSafeInteger(attempt?.activeWorkOrderId)
+          && attempt.activeWorkOrderId > 0 ? attempt.activeWorkOrderId : undefined
+      if (attemptWorkOrderId === undefined) return false
       try {
         checkpointDigest = digestOutcomeQueueCheckpointProof({
           outcomeId: String(attempt?.checkpointOutcomeId ?? ""),
           outcomeKey: attempt?.outcomeKey,
-          workOrderId: Number(attempt?.activeWorkOrderId),
+          workOrderId: attemptWorkOrderId,
           fencingToken: Number(attempt?.fencingToken),
           sequence: Number(attempt?.checkpointSequence),
           state: attempt?.checkpointState,
@@ -2901,7 +2907,7 @@ export async function resolveRetiredOutcomeAcquisition({
         && String(attempt?.checkpointOutcomeId) === String(outcomeId)
         && attempt?.outcomeKey === executionBinding.outcomeKey
         && Number(attempt?.fencingToken) === expectedFence
-        && Number(attempt?.activeWorkOrderId) === executionBinding.activeWorkOrderId
+        && attemptWorkOrderId === expectedWorkOrderId
         && Number(attempt?.checkpointSequence) === expectedSequence
         && attempt?.checkpointState === expectedState
         && typeof attempt?.campaignWindowId === "string" && attempt.campaignWindowId.trim() !== ""
@@ -2912,9 +2918,15 @@ export async function resolveRetiredOutcomeAcquisition({
     const winnerReplays = preBlockedAttempts.filter(
       (attempt) => attempt.disposition === "REPLAY_WINNER",
     )
+    const preBlockedWorkOrderId = preBlockedAttempts.every(
+      (attempt) => attempt.activeWorkOrderId === null,
+    ) ? null : preBlockedAttempts.every(
+      (attempt) => attempt.activeWorkOrderId === executionBinding.activeWorkOrderId,
+    ) ? executionBinding.activeWorkOrderId : undefined
     const exactPreBlockedAttempts = winnerAttempts.length === 1
       && winnerReplays.length <= 32
       && preBlockedAttempts.length === winnerAttempts.length + winnerReplays.length
+      && preBlockedWorkOrderId !== undefined
       && preBlockedAttempts.every((attempt, index) => {
         const attemptedAt = timestampMilliseconds(attempt.attemptedAt)
         const sequence = Number(attempt.checkpointSequence)
@@ -2923,9 +2935,13 @@ export async function resolveRetiredOutcomeAcquisition({
           && (index === 0 || Number(attempt.id) > Number(preBlockedAttempts[index - 1].id))
           && attempt.reason == null
           && timestampMilliseconds(attempt.leaseExpiresAt) === priorQueueExpiry
-          && ((sequence === 0 && state === "LEASED")
-            || (sequence === checkpoint.sequence && state === checkpoint.state))
-          && exactAttemptCheckpoint(attempt, executionBinding.fencingToken, sequence, state)
+          && (preBlockedWorkOrderId === null
+            ? sequence === 0 && state === "LEASED"
+            : ((sequence === 0 && state === "LEASED")
+              || (sequence === checkpoint.sequence && state === checkpoint.state)))
+          && exactAttemptCheckpoint(
+            attempt, executionBinding.fencingToken, sequence, state, preBlockedWorkOrderId,
+          )
       })
     const exactReplays = replayAttempts.every((attempt, index) => (
       Number(attempt.id) > Number(blocked.id)
@@ -2937,6 +2953,7 @@ export async function resolveRetiredOutcomeAcquisition({
       && timestampMilliseconds(attempt.attemptedAt) >= blockedAt
       && exactAttemptCheckpoint(
         attempt, executionBinding.fencingToken + 1, checkpoint.sequence, checkpoint.state,
+        executionBinding.activeWorkOrderId,
       )
     ))
     const transitionCheckpoint = transitionCheckpoints[0]
@@ -2960,7 +2977,10 @@ export async function resolveRetiredOutcomeAcquisition({
       && blocked.reason === JSON.stringify(reason)
       && Number.isFinite(priorQueueExpiry) && priorQueueExpiry < blockedAt
       && Number.isFinite(queueUpdatedAt) && queueUpdatedAt === blockedAt
-      && exactAttemptCheckpoint(blocked, executionBinding.fencingToken, 0, "LEASED")
+      && exactAttemptCheckpoint(
+        blocked, executionBinding.fencingToken, 0, "LEASED",
+        executionBinding.activeWorkOrderId,
+      )
       && transitionCheckpoints.length === 1 && currentCheckpoints.length === 1
       && exactLegacyRuntimeCheckpoint(transitionCheckpoint, {
         outcomeId, workOrderId: executionBinding.activeWorkOrderId,
