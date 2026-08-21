@@ -720,6 +720,19 @@ function retryableWallDetail(error) {
   return detail ? `${code}: ${detail}`.slice(0, MAX_CHECKPOINT_DETAIL_CHARS) : code
 }
 
+export function assertRetiredAcquisitionRecoveryIdentity(expectedOutcomeId, expectedOutcomeKey) {
+  const numericOutcomeId = typeof expectedOutcomeId === "string"
+    ? Number(expectedOutcomeId) : Number.NaN
+  if (!Number.isSafeInteger(numericOutcomeId) || numericOutcomeId <= 0
+    || String(numericOutcomeId) !== expectedOutcomeId
+    || typeof expectedOutcomeKey !== "string" || expectedOutcomeKey.length > 200
+    || !/^goal:GOAL-[0-9]{4,}$/.test(expectedOutcomeKey)) {
+    throw Object.assign(new Error("Retired acquisition recovery identity is invalid"), {
+      code: "HERMES_RETIRED_ACQUISITION_RECOVERY_INPUT_WALL",
+    })
+  }
+}
+
 export function createHermesOrchestrator(options = {}) {
   const workspace = path.resolve(options.workspace ?? process.cwd())
   const runtimeRoot = path.resolve(options.runtimeRoot ?? process.env.WILLIAMOS_HERMES_RUNTIME_ROOT
@@ -730,7 +743,9 @@ export function createHermesOrchestrator(options = {}) {
   const state = options.state ?? createHermesStateStore(statePath)
   const workContractResolver = options.workContractResolver ?? resolveHermesWorkContract
   const backendEnvironment = options.env ?? process.env
-  const executionBackend = options.executionBackend ?? selectExecutionBackend(
+  const reconciliationOnly = options.reconciliationOnly === true
+  const selectBackend = options.selectExecutionBackend ?? selectExecutionBackend
+  const executionBackend = reconciliationOnly ? null : options.executionBackend ?? selectBackend(
     typeof backendEnvironment.WILLIAMOS_CODEX_EXEC_NODE === "string"
       && backendEnvironment.WILLIAMOS_CODEX_EXEC_NODE.trim().length > 0
       ? backendEnvironment
@@ -740,7 +755,8 @@ export function createHermesOrchestrator(options = {}) {
           WILLIAMOS_REPOSITORY_ROOT: workspace,
         },
   )
-  const lifecycle = options.lifecycle ?? createRepositoryLifecycle({
+  const createLifecycle = options.createLifecycle ?? createRepositoryLifecycle
+  const lifecycle = reconciliationOnly ? null : options.lifecycle ?? createLifecycle({
     workspaceRoot: workspace,
     ownedWorktreeRoot: path.join(runtimeRoot, "worktrees"),
     validationCommands: DEFAULT_VALIDATION_COMMANDS,
@@ -862,6 +878,158 @@ export function createHermesOrchestrator(options = {}) {
       reason: "HERMES_CYCLE_PROCESS_EXIT",
     })
     return { abandoned: true, outcomeId: execution.outcomeId }
+  }
+
+  function assertRetiredAcquisitionRecoveryContainment() {
+    const supervisorPath = path.join(runtimeRoot, "state", "supervisor.json")
+    let recoveryActivation = null
+    try {
+      recoveryActivation = fs.readFileSync(activationPath, "utf8").trim()
+    } catch {}
+    if (recoveryActivation !== "disabled" || fs.existsSync(supervisorPath)) {
+      throw Object.assign(new Error("Retired acquisition recovery requires disabled activation and absent supervisor evidence"), {
+        code: "HERMES_RETIRED_ACQUISITION_RECOVERY_CONTAINMENT_WALL",
+      })
+    }
+  }
+
+  async function resolveAndRetireDurableAcquisition(execution, persisted, observedAt, {
+    requireProof = false,
+    beforeCas = async () => {},
+  } = {}) {
+    const proof = await resolveRetiredAcquisition(execution.metadata.outcome, {
+      checkpoint: execution.checkpoint,
+      lease: execution.lease,
+      observedAt,
+      runtimeAttempt: execution.fencingToken,
+    })
+    if (proof !== null && proof.kind !== "DURABLE_QUEUE_ACQUISITION_RETIRED") {
+      throw Object.assign(new Error("Retired acquisition proof is incomplete"), {
+        code: "HERMES_RETIRED_ACQUISITION_PROOF_WALL",
+      })
+    }
+    if (proof === null) {
+      if (requireProof) {
+        throw Object.assign(new Error("Durable retired acquisition proof is required"), {
+          code: "HERMES_RETIRED_ACQUISITION_RECOVERY_PROOF_WALL",
+        })
+      }
+      return null
+    }
+    await beforeCas()
+    const retired = state.retireDurableQueueAcquisition({
+      idempotencyKey: `${execution.outcomeId}:retire-durable-acquisition:${proof.blockedAttemptId}:${proof.proofDigest}`,
+      outcomeId: String(execution.outcomeId),
+      expectedStoreRevision: persisted.revision,
+      expectedFencingToken: execution.fencingToken,
+      expectedHolderId: execution.lease.holderId,
+      expectedLeaseExpiresAt: execution.lease.expiresAt,
+      expectedCheckpointSequence: execution.checkpoint.sequence,
+      expectedCheckpointState: execution.checkpoint.state,
+      expectedQueueBinding: execution.metadata.outcome.queueBinding,
+      proof,
+    })
+    return {
+      result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId: retired.outcomeId,
+      checkpointSequence: retired.checkpointSequence,
+      proofDigest: retired.proofDigest,
+    }
+  }
+
+  async function reconcileRetiredAcquisition({ expectedOutcomeId, expectedOutcomeKey } = {}) {
+    assertRetiredAcquisitionRecoveryIdentity(expectedOutcomeId, expectedOutcomeKey)
+    assertRetiredAcquisitionRecoveryContainment()
+    const persisted = state.read()
+    if (persisted.killSwitch.active) {
+      throw Object.assign(new Error("Kill switch is active"), { code: "KILL_SWITCH_ACTIVE" })
+    }
+    assertOwnerTouchCountersZero(persisted)
+    const matching = persisted.executions?.[expectedOutcomeId]
+    if (matching?.lease?.status === "RELEASED"
+      && matching.checkpoint?.sequence === 5
+      && matching.checkpoint?.state === "DURABLE_QUEUE_ACQUISITION_RETIRED"
+      && matching.checkpoint?.detail === expectedOutcomeKey
+      && String(matching.outcomeId) === expectedOutcomeId
+      && String(matching.metadata?.outcome?.id) === expectedOutcomeId
+      && matching.metadata?.outcome?.queueBinding?.outcomeKey === expectedOutcomeKey
+      && matching.lease?.releaseReason === "DURABLE_QUEUE_ACQUISITION_RETIRED"
+      && matching.lease?.releasedAt === matching.lease?.expiresAt
+      && matching.lease?.releasedAt === matching.checkpoint?.recordedAt
+      && Array.isArray(matching.metadata?.durableQueueAcquisitionRetirementEvents)
+      && matching.metadata.durableQueueAcquisitionRetirementEvents.length === 1) {
+      const event = matching.metadata.durableQueueAcquisitionRetirementEvents[0]
+      const retirementPrefix = `${expectedOutcomeId}:retire-durable-acquisition:`
+      const retirementEntries = Object.entries(persisted.idempotency ?? {})
+        .filter(([key]) => key.startsWith(retirementPrefix))
+      const [replayKey, replayEntry] = retirementEntries[0] ?? []
+      const replayResult = replayEntry?.result
+      const priorCheckpointAt = Date.parse(event.priorCheckpoint?.recordedAt ?? "")
+      const priorLeaseExpiry = Date.parse(event.priorLease?.expiresAt ?? "")
+      const retiredAt = Date.parse(event.recordedAt ?? "")
+      if (event.eventType !== "DURABLE_QUEUE_ACQUISITION_RETIRED"
+        || event.priorCheckpoint?.sequence !== 4
+        || event.priorCheckpoint?.state !== "CODEX_THREAD_READY"
+        || event.priorCheckpoint?.detail !== null
+        || event.priorLease?.fencingToken !== matching.fencingToken
+        || event.priorLease?.holderId !== matching.lease?.holderId
+        || event.recordedAt !== matching.checkpoint.recordedAt
+        || !Number.isFinite(priorCheckpointAt) || !Number.isFinite(priorLeaseExpiry)
+        || !Number.isFinite(retiredAt) || priorCheckpointAt > priorLeaseExpiry
+        || priorLeaseExpiry > retiredAt
+        || retirementEntries.length !== 1
+        || !new RegExp(`^${expectedOutcomeId}:retire-durable-acquisition:[1-9][0-9]*:${event.proofDigest}$`).test(replayKey ?? "")
+        || !replayResult || Object.keys(replayResult).length !== 6
+        || replayResult.outcomeId !== expectedOutcomeId
+        || replayResult.proofDigest !== event.proofDigest
+        || replayResult.fencingToken !== matching.fencingToken
+        || replayResult.checkpointSequence !== 5
+        || replayResult.leaseStatus !== "RELEASED"
+        || replayResult.state !== "DURABLE_QUEUE_ACQUISITION_RETIRED") {
+        throw Object.assign(new Error("Retired acquisition replay evidence is invalid"), {
+          code: "HERMES_RETIRED_ACQUISITION_RECOVERY_CANDIDATE_WALL",
+        })
+      }
+      return {
+        result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+        outcomeId: expectedOutcomeId,
+        checkpointSequence: matching.checkpoint.sequence,
+        proofDigest: event.proofDigest,
+        replayed: true,
+      }
+    }
+    const active = Object.values(persisted.executions ?? {}).filter((execution) => (
+      execution?.lease?.status === "ACTIVE"
+    ))
+    const observedAt = now()
+    if (active.length !== 1 || active[0] !== matching
+      || matching?.checkpoint?.sequence !== 4
+      || matching.checkpoint?.state !== "CODEX_THREAD_READY"
+      || matching.checkpoint?.detail !== null
+      || matching.lease?.abandonedAt
+      || typeof matching.lease?.expiresAt !== "string"
+      || !Number.isFinite(Date.parse(matching.lease.expiresAt))
+      || Date.parse(matching.lease.expiresAt) > observedAt.getTime()
+      || String(matching.outcomeId) !== expectedOutcomeId
+      || String(matching.metadata?.outcome?.id) !== expectedOutcomeId
+      || matching.metadata?.outcome?.queueBinding?.outcomeKey !== expectedOutcomeKey) {
+      throw Object.assign(new Error("Exactly one explicit retired acquisition candidate is required"), {
+        code: "HERMES_RETIRED_ACQUISITION_RECOVERY_CANDIDATE_WALL",
+      })
+    }
+    const retired = await resolveAndRetireDurableAcquisition(matching, persisted, observedAt, {
+      requireProof: true,
+      beforeCas: async () => {
+        assertRetiredAcquisitionRecoveryContainment()
+        if (state.read().killSwitch.active) {
+          throw Object.assign(new Error("Kill switch is active"), { code: "KILL_SWITCH_ACTIVE" })
+        }
+      },
+    })
+    return {
+      ...retired,
+      replayed: false,
+    }
   }
 
   async function recoverOrphanedValidationCycleLease() {
@@ -1370,37 +1538,10 @@ export function createHermesOrchestrator(options = {}) {
           code: "HERMES_RETIRED_ACQUISITION_PROOF_WALL",
         })
       }
-      const proof = await resolveRetiredAcquisition(retiredOutcome, {
-        checkpoint: pendingExecution.checkpoint,
-        lease: pendingExecution.lease,
-        observedAt: retirementObservedAt,
-        runtimeAttempt: pendingExecution.fencingToken,
-      })
-      if (proof !== null && proof.kind !== "DURABLE_QUEUE_ACQUISITION_RETIRED") {
-        throw Object.assign(new Error("Retired acquisition proof is incomplete"), {
-          code: "HERMES_RETIRED_ACQUISITION_PROOF_WALL",
-        })
-      }
-      if (proof !== null) {
-        const retired = state.retireDurableQueueAcquisition({
-        idempotencyKey: `${pendingExecution.outcomeId}:retire-durable-acquisition:${proof.blockedAttemptId}:${proof.proofDigest}`,
-        outcomeId: String(pendingExecution.outcomeId),
-        expectedStoreRevision: initialized.revision,
-        expectedFencingToken: pendingExecution.fencingToken,
-        expectedHolderId: pendingExecution.lease.holderId,
-        expectedLeaseExpiresAt: pendingExecution.lease.expiresAt,
-        expectedCheckpointSequence: pendingExecution.checkpoint.sequence,
-        expectedCheckpointState: pendingExecution.checkpoint.state,
-        expectedQueueBinding: pendingExecution.metadata.outcome.queueBinding,
-        proof,
-      })
-        return {
-          result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
-          outcomeId: retired.outcomeId,
-          checkpointSequence: retired.checkpointSequence,
-          proofDigest: retired.proofDigest,
-        }
-      }
+      const retired = await resolveAndRetireDurableAcquisition(
+        pendingExecution, initialized, retirementObservedAt,
+      )
+      if (retired !== null) return retired
     }
     const approvedReleasedExecutions = []
     const releasedDecisionProofs = new Map()
@@ -2646,8 +2787,13 @@ export function createHermesOrchestrator(options = {}) {
     }
   }
 
+  if (reconciliationOnly) {
+    return Object.freeze({
+      runtimeRoot, statePath, activationPath, reconcileRetiredAcquisition,
+    })
+  }
   return Object.freeze({
     cycle, state, runtimeRoot, statePath, activationPath, notBeforePath,
-    abandonOwnedCycleLease, recoverOrphanedValidationCycleLease,
+    abandonOwnedCycleLease, recoverOrphanedValidationCycleLease, reconcileRetiredAcquisition,
   })
 }

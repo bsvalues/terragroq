@@ -328,6 +328,230 @@ afterEach(() => {
 })
 
 describe("retired durable queue acquisition reconciliation", () => {
+  it("reconciles one explicit retired acquisition while disabled and replays without another event", async () => {
+    const resolveRetiredAcquisition = vi.fn()
+    const value = fixture(undefined, { resolveRetiredAcquisition })
+    const outcome = queueBoundOutcome()
+    const acquired = prepareRetiredExecution(value, outcome, "dedicated")
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+    resolveRetiredAcquisition.mockResolvedValue(retiredAcquisitionProof(outcome, acquired.fencingToken))
+
+    await expect(value.orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })).resolves.toMatchObject({
+      result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId: "77",
+      checkpointSequence: 5,
+      replayed: false,
+    })
+    const afterFirst = value.state.read()
+    await expect(value.orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })).resolves.toMatchObject({
+      result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId: "77",
+      checkpointSequence: 5,
+      replayed: true,
+    })
+
+    expect(resolveRetiredAcquisition).toHaveBeenCalledOnce()
+    expect(value.state.read()).toEqual(afterFirst)
+    expect(value.state.read().executions["77"].metadata.durableQueueAcquisitionRetirementEvents)
+      .toHaveLength(1)
+    expect(value.projectCheckpoint).not.toHaveBeenCalled()
+    expect(value.projectLease).not.toHaveBeenCalled()
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.lifecycle.refreshOriginMain).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+  })
+
+  it("constructs the dedicated recovery surface without backend or lifecycle construction", () => {
+    const root = runtime()
+    fs.writeFileSync(path.join(root, "control", "activation"), "disabled\n")
+    const selectBackend = vi.fn(() => { throw new Error("backend must not be constructed") })
+    const createLifecycle = vi.fn(() => { throw new Error("lifecycle must not be constructed") })
+
+    const orchestrator = createHermesOrchestrator({
+      runtimeRoot: root,
+      reconciliationOnly: true,
+      selectExecutionBackend: selectBackend,
+      createLifecycle,
+    })
+
+    expect(orchestrator.reconcileRetiredAcquisition).toBeTypeOf("function")
+    expect(orchestrator).not.toHaveProperty("cycle")
+    expect(orchestrator).not.toHaveProperty("abandonOwnedCycleLease")
+    expect(orchestrator).not.toHaveProperty("state")
+    expect(selectBackend).not.toHaveBeenCalled()
+    expect(createLifecycle).not.toHaveBeenCalled()
+  })
+
+  it("walls an active kill switch before durable proof resolution", async () => {
+    const resolveRetiredAcquisition = vi.fn()
+    const value = fixture(undefined, { resolveRetiredAcquisition })
+    prepareRetiredExecution(value, queueBoundOutcome(), "kill-switch")
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+    value.state.setKillSwitch({ idempotencyKey: "retired-kill-switch", active: true, reason: "contained" })
+    const before = value.state.read()
+
+    await expect(value.orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })).rejects.toMatchObject({ code: "KILL_SWITCH_ACTIVE" })
+    expect(resolveRetiredAcquisition).not.toHaveBeenCalled()
+    expect(value.state.read()).toEqual(before)
+  })
+
+  it("rechecks containment after durable proof resolution and before local CAS", async () => {
+    const value = fixture()
+    const outcome = queueBoundOutcome()
+    const acquired = prepareRetiredExecution(value, outcome, "containment-race")
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+    const resolveRetiredAcquisition = vi.fn(async () => {
+      fs.writeFileSync(path.join(value.root, "control", "activation"), "enabled\n")
+      return retiredAcquisitionProof(outcome, acquired.fencingToken)
+    })
+    const dedicated = createHermesOrchestrator({
+      runtimeRoot: value.root,
+      state: value.state,
+      lifecycle: value.lifecycle,
+      resolveRetiredAcquisition,
+      now: () => new Date("2026-07-21T01:00:01.001Z"),
+    })
+    const before = value.state.read()
+
+    await expect(dedicated.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })).rejects.toMatchObject({ code: "HERMES_RETIRED_ACQUISITION_RECOVERY_CONTAINMENT_WALL" })
+    expect(resolveRetiredAcquisition).toHaveBeenCalledOnce()
+    expect(value.state.read()).toEqual(before)
+  })
+
+  it("walls a missing durable retirement proof without local mutation", async () => {
+    const resolveRetiredAcquisition = vi.fn(async () => null)
+    const value = fixture(undefined, { resolveRetiredAcquisition })
+    prepareRetiredExecution(value, queueBoundOutcome(), "missing-proof")
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+    const before = value.state.read()
+
+    await expect(value.orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })).rejects.toMatchObject({ code: "HERMES_RETIRED_ACQUISITION_RECOVERY_PROOF_WALL" })
+    expect(value.state.read()).toEqual(before)
+    expect(value.projectCheckpoint).not.toHaveBeenCalled()
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+  })
+
+  it("walls a second active execution before durable proof resolution", async () => {
+    const resolveRetiredAcquisition = vi.fn()
+    const value = fixture(undefined, { resolveRetiredAcquisition })
+    prepareRetiredExecution(value, queueBoundOutcome(), "multiple")
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+    value.state.acquireLease({
+      idempotencyKey: "retired-second-active",
+      outcomeId: "78",
+      holderId: "other-holder",
+      leaseDurationMs: 60_000,
+      metadata: { outcome: { id: 78 } },
+    })
+    const before = value.state.read()
+
+    await expect(value.orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })).rejects.toMatchObject({ code: "HERMES_RETIRED_ACQUISITION_RECOVERY_CANDIDATE_WALL" })
+    expect(resolveRetiredAcquisition).not.toHaveBeenCalled()
+    expect(value.state.read()).toEqual(before)
+  })
+
+  it("walls duplicate local replay settlement evidence", async () => {
+    const resolveRetiredAcquisition = vi.fn()
+    const value = fixture(undefined, { resolveRetiredAcquisition })
+    const outcome = queueBoundOutcome()
+    const acquired = prepareRetiredExecution(value, outcome, "duplicate-replay")
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+    resolveRetiredAcquisition.mockResolvedValue(retiredAcquisitionProof(outcome, acquired.fencingToken))
+    await value.orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })
+    const statePath = path.join(value.root, "state", "state.json")
+    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    const [retirementKey, retirementEntry] = Object.entries(persisted.idempotency)
+      .find(([key]) => key.startsWith("77:retire-durable-acquisition:"))!
+    persisted.idempotency[`${retirementKey}:duplicate`] = retirementEntry
+    fs.writeFileSync(statePath, `${JSON.stringify(persisted, null, 2)}\n`)
+
+    await expect(value.orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })).rejects.toMatchObject({ code: "HERMES_RETIRED_ACQUISITION_RECOVERY_CANDIDATE_WALL" })
+    expect(resolveRetiredAcquisition).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ["idempotency key", (persisted: any) => {
+      const key = Object.keys(persisted.idempotency)
+        .find((candidate) => candidate.startsWith("77:retire-durable-acquisition:"))!
+      persisted.idempotency[`${key}:drift`] = persisted.idempotency[key]
+      delete persisted.idempotency[key]
+    }],
+    ["idempotency result", (persisted: any) => {
+      const key = Object.keys(persisted.idempotency)
+        .find((candidate) => candidate.startsWith("77:retire-durable-acquisition:"))!
+      persisted.idempotency[key].result.checkpointSequence = 6
+    }],
+    ["prior lease chronology", (persisted: any) => {
+      const event = persisted.executions["77"].metadata.durableQueueAcquisitionRetirementEvents[0]
+      event.priorLease.expiresAt = new Date(Date.parse(event.recordedAt) + 1).toISOString()
+    }],
+  ])("walls coherent replay drift in %s", async (_name, mutatePersisted) => {
+    const resolveRetiredAcquisition = vi.fn()
+    const value = fixture(undefined, { resolveRetiredAcquisition })
+    const outcome = queueBoundOutcome()
+    const acquired = prepareRetiredExecution(value, outcome, `replay-${_name}`)
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+    resolveRetiredAcquisition.mockResolvedValue(retiredAcquisitionProof(outcome, acquired.fencingToken))
+    await value.orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })
+    const statePath = path.join(value.root, "state", "state.json")
+    const persisted = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    mutatePersisted(persisted)
+    fs.writeFileSync(statePath, `${JSON.stringify(persisted, null, 2)}\n`)
+
+    await expect(value.orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })).rejects.toMatchObject({ code: "HERMES_RETIRED_ACQUISITION_RECOVERY_CANDIDATE_WALL" })
+    expect(resolveRetiredAcquisition).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ["enabled activation", ({ root }) => fs.writeFileSync(path.join(root, "control", "activation"), "enabled\n")],
+    ["missing activation", ({ root }) => fs.rmSync(path.join(root, "control", "activation"))],
+    ["supervisor evidence", ({ root }) => fs.writeFileSync(path.join(root, "state", "supervisor.json"), "{}\n")],
+  ])("walls %s before resolving or mutating local state", async (_name, arrange) => {
+    const resolveRetiredAcquisition = vi.fn()
+    const value = fixture(undefined, { resolveRetiredAcquisition })
+    prepareRetiredExecution(value, queueBoundOutcome(), `wall-${_name}`)
+    fs.writeFileSync(path.join(value.root, "control", "activation"), "disabled\n")
+    arrange(value)
+    const before = value.state.read()
+
+    await expect(value.orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: "77",
+      expectedOutcomeKey: "goal:GOAL-0011",
+    })).rejects.toMatchObject({ code: "HERMES_RETIRED_ACQUISITION_RECOVERY_CONTAINMENT_WALL" })
+    expect(resolveRetiredAcquisition).not.toHaveBeenCalled()
+    expect(value.state.read()).toEqual(before)
+  })
+
   it("retires the exact expired local execution before projection, refresh, selection, or host effects", async () => {
     const resolveRetiredAcquisition = vi.fn()
     const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
@@ -421,6 +645,7 @@ describe("retired durable queue acquisition reconciliation", () => {
 })
 
 function prepareRetiredExecution(value: ReturnType<typeof fixture>, outcome: any, suffix: string) {
+  value.state.initialize()
   const acquired = value.state.acquireLease({ idempotencyKey: `retired-orchestrator-acquire-${suffix}`,
     outcomeId: "77", holderId: "crashed-holder", leaseDurationMs: 1_000,
     metadata: { outcome } })
@@ -459,6 +684,40 @@ function queueBoundOutcome() {
       acquisitionKey: "acquisition-goal-0011",
       activeWorkOrderId: 77,
     },
+  }
+}
+
+function retiredAcquisitionProof(outcome: ReturnType<typeof queueBoundOutcome>, runtimeAttempt: number) {
+  const binding = outcome.queueBinding
+  const body = {
+    schemaVersion: 1,
+    kind: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+    outcomeId: outcome.id,
+    userId: binding.userId,
+    outcomeKey: binding.outcomeKey,
+    activeWorkOrderId: binding.activeWorkOrderId,
+    runtimeAttempt,
+    priorVersion: binding.expectedVersion,
+    recoveredVersion: binding.expectedVersion + 1,
+    priorFencingToken: binding.fencingToken,
+    recoveredFencingToken: binding.fencingToken + 1,
+    receiptId: 7,
+    blockedAttemptId: 207,
+    replayAttemptIds: [224],
+    acquisitionKeyDigest: createHash("sha256")
+      .update(JSON.stringify({ acquisitionKey: binding.acquisitionKey })).digest("hex"),
+    leaseIdentityDigest: createHash("sha256").update(JSON.stringify({
+      leaseHolder: binding.leaseHolder,
+      leaseToken: binding.leaseToken,
+    })).digest("hex"),
+    executionEpochDigest: createHash("sha256").update(JSON.stringify([
+      binding.userId, binding.outcomeKey, binding.executionBinding, binding.acquisitionKey,
+    ])).digest("hex"),
+    blockedAt: "2026-07-21T01:00:00.500Z",
+  }
+  return {
+    ...body,
+    proofDigest: createHash("sha256").update(JSON.stringify(body)).digest("hex"),
   }
 }
 
