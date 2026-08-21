@@ -146,18 +146,40 @@ export async function answerCurrentWork(text: string, userId: string): Promise<C
   const work = aggregateCurrentWork(identity, joined.threads)
   const selection = startWorkSelection(work)
   // Retain the EXACT named item for a later "continue it" — only when selection is valid (complete
-  // read + a suggested top). Built from the same object shown to the owner; no re-resolution later.
-  const retained: RetainedStartWork | null =
-    selection && work.topStartable
-      ? {
-          projectId: identity.id,
-          projectName: identity.name,
-          threadId: work.topStartable.threadId,
-          outcomeKey: work.topStartable.outcomeKey,
-          outcomeTitle: work.topStartable.outcomeTitle,
-          activeWorkOrderId: work.topStartable.activeWorkOrderId,
-        }
-      : null
+  // read + a suggested top). The retained threadId must be the one authorizeWorkbenchOutcomeExecution
+  // accepts: the SOLE root binding with sourceType "outcome" and sourceId = outcomeKey (not the
+  // display binding, which may be an outcome_queue_item/member binding). If there isn't exactly one
+  // such root thread, the outcome isn't startable through the contract → retain null (fail closed),
+  // never a mismatched threadId that would authorize the wrong thread or 500.
+  let retained: RetainedStartWork | null = null
+  if (selection && work.topStartable) {
+    const startable = work.topStartable
+    const rootThreads = await db
+      .select({ threadId: workbenchThreadSource.threadId })
+      .from(workbenchThreadSource)
+      .innerJoin(
+        workbenchThread,
+        and(eq(workbenchThread.userId, workbenchThreadSource.userId), eq(workbenchThread.id, workbenchThreadSource.threadId)),
+      )
+      .where(and(
+        eq(workbenchThreadSource.userId, userId),
+        eq(workbenchThread.projectId, identity.id),
+        eq(workbenchThreadSource.role, "root"),
+        eq(workbenchThreadSource.sourceType, "outcome"),
+        eq(workbenchThreadSource.sourceId, startable.outcomeKey),
+      ))
+      .limit(2)
+    if (rootThreads.length === 1) {
+      retained = {
+        projectId: identity.id,
+        projectName: identity.name,
+        threadId: rootThreads[0].threadId,
+        outcomeKey: startable.outcomeKey,
+        outcomeTitle: startable.outcomeTitle,
+        activeWorkOrderId: startable.activeWorkOrderId,
+      }
+    }
+  }
   return {
     say: composeCurrentWorkAnswer(resolution, work, { conflicts: joined.conflicts, unresolved: joined.unresolved }),
     selection,

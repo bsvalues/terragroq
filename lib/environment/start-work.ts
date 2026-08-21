@@ -14,9 +14,14 @@ import type { RetainedStartWork } from "@/lib/environment/working-world"
 
 // "continue the highest-priority TerraFusion OS work" / "continue it" / a bare "continue".
 const CONTINUE = /\bcontinue\b(?:\s+it\b|[^?]*\bwork\b|[^?]*\b(?:highest|priority|outcome)\b|\s*[.!]?\s*$)/i
+// Anything that makes the sentence non-affirmative: a negation, a question, or a hypothetical. Starting
+// real governed work is a committing action, so it fires ONLY on an unambiguous affirmative command.
+const NOT_AFFIRMATIVE = /\b(don'?t|do not|never|no need|cannot|can'?t|won'?t|not)\b|\?|\b(should|would|could|can|will|may|might|if|whether|what|why|how|explain|suppose)\b/i
 
 export function isContinueIntent(text: string): boolean {
-  return CONTINUE.test(text.trim())
+  const t = text.trim()
+  if (NOT_AFFIRMATIVE.test(t)) return false
+  return CONTINUE.test(t)
 }
 
 /**
@@ -25,8 +30,12 @@ export function isContinueIntent(text: string): boolean {
  * the authorization contract's key shape: /^[A-Za-z0-9][A-Za-z0-9._:-]{7,199}$/.
  */
 export function startWorkIdempotencyKey(selection: Pick<RetainedStartWork, "outcomeKey">): string {
-  const safe = selection.outcomeKey.replace(/[^A-Za-z0-9._:-]/g, "-").slice(0, 180)
-  return `startwork.${safe || "outcome"}`
+  // A readable prefix PLUS a hash of the FULL key, so distinct outcome keys that sanitise or truncate
+  // identically ("foo/bar" vs "foo?bar", or keys differing only past char 150) never collide.
+  const safe = selection.outcomeKey.replace(/[^A-Za-z0-9._:-]/g, "-").slice(0, 150)
+  let hash = 5381
+  for (let i = 0; i < selection.outcomeKey.length; i += 1) hash = ((hash << 5) + hash + selection.outcomeKey.charCodeAt(i)) >>> 0
+  return `startwork.${safe || "outcome"}.${hash.toString(36)}`
 }
 
 /** The authorization result, narrowed to what the Line renders (the real shape has more). */
@@ -40,8 +49,8 @@ export type StartWorkAuthorization =
 
 export type StartWorkOutcome = Readonly<{
   say: string
-  /** True only when the governed authorization actually transitioned the outcome into work. */
-  started: boolean
+  /** True when the governed AUTHORIZATION succeeded (authorized for acquisition). Not 'dispatched'. */
+  authorized: boolean
   /** A trace of what happened, for an activity surface. */
   trace: readonly Readonly<{ step: string; detail: string }>[]
 }>
@@ -57,25 +66,29 @@ export function composeStartWorkResult(selection: RetainedStartWork, result: Sta
   if (result.status === "AUTHORIZED_FOR_ACQUISITION" || result.status === "ALREADY_AUTHORIZED") {
     if (result.status === "AUTHORIZED_FOR_ACQUISITION") {
       return {
-        started: true,
+        // Authorized, NOT dispatched: this action creates no work order, lease, process, or dispatch
+        // (dispatchPerformed: false). It grants authority and moves the outcome to approved; the
+        // runtime lane picks up acquisition. Say exactly that, never "work has begun".
+        authorized: true,
         say:
-          `Started ${item} on ${selection.projectName}. It's authorized for acquisition ` +
+          `Authorized ${item} on ${selection.projectName} for acquisition ` +
           `(${result.authorization.authorityLevel}, ${result.authorization.allowedAction}, ` +
-          `expires ${result.authorization.expiresAt}) and has moved out of the queue into governed work. ` +
+          `expires ${result.authorization.expiresAt}). It's out of the queue and cleared to run — the ` +
+          `runtime lane picks up dispatch from here. I won't claim work is executing until it is. ` +
           `That's the exact outcome I named — no re-selection.`,
         trace: [
           { step: "selection", detail: provenance },
           { step: "authorize", detail: `START_WORK → ${result.status} (queue v${result.queueVersion})` },
           { step: "authority", detail: `${result.authorization.authorityLevel} · ${result.authorization.scope}` },
-          { step: "state", detail: "outcome authorized for acquisition; work order acquisition proceeds under the runtime lane" },
+          { step: "dispatch", detail: "not dispatched by this action (dispatchPerformed: false); runtime lane acquires" },
         ],
       }
     }
     return {
-      started: true,
+      authorized: true,
       say:
-        `${item} was already started — the authorization is in place (queue v${result.queueVersion}), so nothing was ` +
-        `dispatched twice. It's the same outcome I named.`,
+        `${item} was already authorized for acquisition (queue v${result.queueVersion}), so nothing was ` +
+        `re-authorized or dispatched twice. It's the same outcome I named.`,
       trace: [
         { step: "selection", detail: provenance },
         { step: "authorize", detail: `START_WORK → ALREADY_AUTHORIZED (idempotent; no double dispatch)` },
@@ -85,7 +98,7 @@ export function composeStartWorkResult(selection: RetainedStartWork, result: Sta
   // Fail closed: the selection went stale or is unavailable. Do NOT reselect.
   const reason = "reason" in result ? result.reason : "UNSPECIFIED"
   return {
-    started: false,
+    authorized: false,
     say:
       `I couldn't start ${item}: ${reason}. The item I selected has changed state since I read it, so I ` +
       `won't quietly start a different one. Ask "what are we doing on ${selection.projectName}?" again and I'll ` +

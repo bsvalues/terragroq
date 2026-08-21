@@ -348,7 +348,7 @@ export async function POST(request: Request) {
       const outcome = await startRetainedWork(world.pendingStartWork)
       say = outcome.say
       surfaces = [{ kind: "trace", subject: "start-work", payload: outcome.trace }]
-      updated = { ...updated, pendingStartWork: outcome.started ? null : world.pendingStartWork }
+      updated = { ...updated, pendingStartWork: outcome.authorized ? null : world.pendingStartWork }
     } else if (isContinueIntent(text)) {
       say = "There's no selected work to continue yet. Ask what we're doing on a project first, and I'll name the next startable outcome — then \"continue\" starts that exact one."
     } else if (FIX_INTENT.test(text) && LOGIN_WORK.test(world.intent)) {
