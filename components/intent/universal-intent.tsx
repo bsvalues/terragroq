@@ -33,16 +33,18 @@ import { isIssue911ReliabilityOutcomeIntent } from "@/lib/workbench/registered-o
  * OMEN Benton database is...") became a link to /chat rather than work. Either way nothing was
  * recorded, which is how the same investigation was rediscovered and nearly redone.
  *
- * The deterministic router selects navigation and pre-registered outcome starts. Everything else is
- * submitted to /api/objective, including when the route comes back as clarification_required and when
- * /api/intent is unreachable. Recognition therefore cannot become a prerequisite for ordinary work.
+ * Exact registered outcomes are recognized locally and fail closed before generic routing, so a stale
+ * classifier cannot turn them into ordinary draft work. The deterministic router selects navigation;
+ * everything else is submitted to /api/objective, including when the route comes back as
+ * clarification_required and when /api/intent is unreachable. Recognition therefore cannot become a
+ * prerequisite for ordinary work.
  *
  * Admission is not authorisation. What comes back is a draft carrying the operator's own text and a
  * reference to find it by, and the panel says in the response's own words that nothing was permitted.
  */
 
 /**
- * A selected Project scopes only a deterministically routed outcome. Ordinary objective admission
+ * A selected Project scopes only an exact registered outcome. Ordinary objective admission
  * remains operator-scoped and lets its API resolve the durable work-order Thread.
  */
 type ShellContext = {
@@ -70,7 +72,7 @@ const ADMISSION_FAILURES: Readonly<Record<string, string>> = {
 
 const ADMISSION_UNAVAILABLE = "WilliamOS could not admit that objective."
 
-/** Routes navigation and registered outcomes; failure still falls through to ordinary admission. */
+/** Routes navigation for unregistered text; failure still falls through to ordinary admission. */
 async function deterministicRoute(intent: string): Promise<UniversalIntentRoute | null> {
   try {
     const response = await fetch("/api/intent", {
@@ -174,15 +176,11 @@ export const UniversalIntent: FC<ShellContext> = ({ selectedProject = null, onOp
     setSubmitting(true)
     clearResult()
     try {
-      const routed = await deterministicRoute(intent)
-      if (requestRef.current !== token) return
-      if (routed?.intent === "navigation" && routed.destination?.href) {
-        setRouteResult(routed)
-        return
-      }
-      if (routed?.destination?.action === "start_outcome"
-        && selectedProject
-        && isIssue911ReliabilityOutcomeIntent(intent)) {
+      if (isIssue911ReliabilityOutcomeIntent(intent)) {
+        if (!selectedProject) {
+          setError("Select a Project before starting this registered outcome. Nothing was recorded.")
+          return
+        }
         startingOutcome = true
         const signature = `${selectedProject.id}:${intent}`
         const attempt = outcomeAttemptRef.current?.signature === signature
@@ -199,6 +197,12 @@ export const UniversalIntent: FC<ShellContext> = ({ selectedProject = null, onOp
         })
         if (requestRef.current !== token) return
         setStartedOutcome(outcome)
+        return
+      }
+      const routed = await deterministicRoute(intent)
+      if (requestRef.current !== token) return
+      if (routed?.intent === "navigation" && routed.destination?.href) {
+        setRouteResult(routed)
         return
       }
       const objective = await admitObjective(intent)
