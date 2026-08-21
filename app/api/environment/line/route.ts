@@ -11,7 +11,8 @@ import { project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
-import { classifyGrounded, composeProjectsAnswer, groundedCurrentWork, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
+import { classifyGrounded, composeCurrentWork, composeProjectsAnswer, groundedIdentity, groundingFacts, matchKnownProject, type ProjectRow, type WorkOrderRow } from "@/lib/environment/grounding"
+import { getWorkOrders } from "@/app/actions/work-orders"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
 import {
   createWorkingWorld,
@@ -257,7 +258,14 @@ async function groundedAnswer(text: string, userId: string): Promise<string | nu
   if (kind === "identity") return groundedIdentity()
   const projects = await loadProjects(userId)
   if (kind === "projects") return composeProjectsAnswer(projects)
-  return groundedCurrentWork(projects)
+  // current-work: read the REAL work orders and report what's in flight (criterion 4). getUserId
+  // inside the action resolves the same session; scope to the named project when the text names one.
+  const rows = (await getWorkOrders()) as unknown as WorkOrderRow[]
+  const workOrders: WorkOrderRow[] = rows.map((w) => ({
+    ref: w.ref, title: w.title, status: w.status, priority: w.priority,
+    scope: w.scope, lane: w.lane, evidence: w.evidence ?? [],
+  }))
+  return composeCurrentWork(workOrders, matchKnownProject(text, projects) ?? undefined)
 }
 
 async function converse(world: WorkingWorldSnapshot, text: string, facts: string): Promise<string> {

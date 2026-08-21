@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest"
 
 import {
   classifyGrounded,
+  composeCurrentWork,
   composeProjectsAnswer,
-  groundedCurrentWork,
   groundedIdentity,
   groundingFacts,
+  matchKnownProject,
   type ProjectRow,
+  type WorkOrderRow,
 } from "@/lib/environment/grounding"
 
 /**
@@ -80,12 +82,59 @@ describe("composeProjectsAnswer is lifecycle-aware and never fabricates", () => 
   })
 })
 
-describe("groundedCurrentWork is honest about the unwired seam", () => {
-  it("names active projects but refuses to invent live task state", () => {
-    const said = groundedCurrentWork(rows([["TerraFusion", "active"], ["Old", "archived"]]))
+const wos = (spec: Array<[string, string, string, string, string[]]>): WorkOrderRow[] =>
+  spec.map(([ref, title, status, priority, evidence]) => ({ ref, title, status, priority, scope: null, lane: null, evidence }))
+
+describe("composeCurrentWork reads real work orders (criterion 4)", () => {
+  it("reports in-flight work highest priority first, with status and latest evidence", () => {
+    const said = composeCurrentWork(wos([
+      ["WO-10", "Parcel search", "in progress", "medium", ["screenshot-1"]],
+      ["WO-11", "Permit intake", "active", "critical", ["diff-a", "tests-pass"]],
+    ]))
+    // critical sorts above medium
+    expect(said.indexOf("Permit intake")).toBeLessThan(said.indexOf("Parcel search"))
+    expect(said).toContain("WO-11")
+    expect(said).toContain("tests-pass") // latest evidence, not the first
+    expect(said.toLowerCase()).toContain("highest priority")
+  })
+
+  it("flags blocked work and excludes drafts/closed", () => {
+    const said = composeCurrentWork(wos([
+      ["WO-1", "Blocked thing", "blocked", "high", []],
+      ["WO-2", "A draft", "draft", "critical", []],
+      ["WO-3", "Closed thing", "closed", "high", []],
+    ]))
+    expect(said).toContain("BLOCKED")
+    expect(said).not.toContain("A draft")
+    expect(said).not.toContain("Closed thing")
+  })
+
+  it("scopes to the named project and says so honestly when nothing is in flight there", () => {
+    const said = composeCurrentWork(
+      [{ ref: "WO-9", title: "Atlas thing", status: "active", priority: "high", scope: "Atlas", lane: null, evidence: [] }],
+      "TerraFusion",
+    )
+    expect(said.toLowerCase()).toContain("nothing is in flight on terrafusion")
     expect(said.toLowerCase()).toContain("won't")
-    expect(said).toContain("TerraFusion")
-    expect(said).not.toContain("Old")
+    expect(said).not.toContain("Atlas thing")
+  })
+
+  it("never fabricates when the register is empty", () => {
+    const said = composeCurrentWork([], "TerraFusion")
+    for (const invented of ["chatbot", "customer support", "community event"]) {
+      expect(said.toLowerCase()).not.toContain(invented)
+    }
+  })
+})
+
+describe("matchKnownProject extracts the scoped project", () => {
+  const projects = rows([["TerraFusion OS", "standby"], ["WilliamOS", "active"], ["LocalOps", "standby"]])
+  it("finds the project named in the question, longest match first", () => {
+    expect(matchKnownProject("what are we doing right now on TerraFusion OS", projects)).toBe("TerraFusion OS")
+    expect(matchKnownProject("what's in flight for LocalOps", projects)).toBe("LocalOps")
+  })
+  it("returns null when no known project is named", () => {
+    expect(matchKnownProject("what are we working on right now", projects)).toBeNull()
   })
 })
 

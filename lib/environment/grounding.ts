@@ -22,6 +22,17 @@ export type GroundedKind = "identity" | "projects" | "current-work"
 
 export type ProjectRow = Readonly<{ name: string; lifecycle: string }>
 
+/** The Work-Order fields the Line surfaces — a subset of the real `work_order` row. */
+export type WorkOrderRow = Readonly<{
+  ref: string | null
+  title: string
+  status: string
+  priority: string
+  scope: string | null
+  lane: string | null
+  evidence: readonly string[]
+}>
+
 // An operational request (show/open/edit a page, source, file, route, component) is not a metadata
 // question, even when it mentions "projects". These must reach normal handling, not a registry list.
 const OPERATIONAL = /\b(source|page|code|file|route|url|endpoint|repository|repo|component|render|screenshot|open|edit|deploy|build|log)\b/i
@@ -47,6 +58,14 @@ export function classifyGrounded(text: string): GroundedKind | null {
   if (PROJECTS.test(text)) return "projects"
   if (IDENTITY.test(text)) return "identity"
   return null
+}
+
+/** The known project a current-work question is scoped to ("...on TerraFusion"), or null for all. */
+export function matchKnownProject(text: string, projects: readonly ProjectRow[]): string | null {
+  const lower = text.toLowerCase()
+  // Longest name first, so "TerraFusion OS" wins over a bare "TerraFusion".
+  const byLength = projects.map((p) => p.name).filter(Boolean).sort((a, b) => b.length - a.length)
+  return byLength.find((name) => lower.includes(name.toLowerCase())) ?? null
 }
 
 /** WilliamOS in its actual role — not a generic assistant. Deterministic, so it cannot drift. */
@@ -96,22 +115,49 @@ export function composeProjectsAnswer(projects: readonly ProjectRow[]): string {
   )
 }
 
+const PRIORITY_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 }
+// Work that is genuinely in flight — not a draft, and not finished/abandoned.
+const DORMANT_STATUS = new Set(["draft", "closed", "aborted", "done", "cancelled"])
+
+/** True when the work order plausibly belongs to the named project (ref/title/scope/lane mention it). */
+function matchesProject(wo: WorkOrderRow, project: string): boolean {
+  const needle = project.toLowerCase()
+  return [wo.ref, wo.title, wo.scope, wo.lane].some((f) => (f ?? "").toLowerCase().includes(needle))
+}
+
 /**
- * "What are we doing right now" — honest about the seam. The live Work Order / evidence state is not
- * yet wired into this surface (acceptance criterion 5), so name the active projects from the register
- * but do not invent in-flight task state.
+ * "What are we doing right now [on <project>]" — read from the REAL work orders (criterion 4). Reports
+ * the in-flight work highest-priority first, with status, blockers, and latest evidence, or says
+ * honestly that nothing is in flight. Never invents work. Takes the rows so it is unit-testable.
  */
-export function groundedCurrentWork(projects: readonly ProjectRow[]): string {
-  const active = names(projects, "active")
-  const anchor =
-    active.length > 0
-      ? ` The register shows active: ${join(active)} — but not the live task or evidence state behind them.`
-      : " Nothing is marked active in the register, and I won't invent work that isn't there."
+export function composeCurrentWork(workOrders: readonly WorkOrderRow[], project?: string): string {
+  const scoped = project ? workOrders.filter((wo) => matchesProject(wo, project)) : workOrders
+  const active = scoped
+    .filter((wo) => !DORMANT_STATUS.has(wo.status.toLowerCase()))
+    .slice()
+    .sort((a, b) => (PRIORITY_RANK[a.priority.toLowerCase()] ?? 2) - (PRIORITY_RANK[b.priority.toLowerCase()] ?? 2))
+
+  const label = project ? ` on ${project}` : ""
+  if (active.length === 0) {
+    return (
+      `Nothing is in flight${label} right now — no active work order in the register, and I won't ` +
+      `invent one. Name a piece of work and I'll assemble the world for it.`
+    )
+  }
+
+  const lines = active.slice(0, 5).map((wo) => {
+    const id = wo.ref ? `${wo.ref} ` : ""
+    const blocked = wo.status.toLowerCase() === "blocked" ? " — BLOCKED" : ""
+    const ev = wo.evidence.length > 0 ? `; latest evidence: ${wo.evidence[wo.evidence.length - 1]}` : "; no evidence yet"
+    return `• ${id}${wo.title} [${wo.priority}/${wo.status}${blocked}]${ev}`
+  })
+  const more = active.length > 5 ? `\n(+${active.length - 5} more active)` : ""
+  const top = active[0]
   return (
-    "I don't have the governed Work Order and evidence state wired into this surface yet, so I can't " +
-    "tell you what's in flight without inventing it — and I won't." +
-    anchor +
-    " Name a specific piece of work and I'll assemble the world for it now."
+    `In flight${label}, highest priority first:\n${lines.join("\n")}${more}\n\n` +
+    `Highest priority is ${top.ref ? `${top.ref} ` : ""}"${top.title}" (${top.priority}). ` +
+    `Say "continue the highest-priority${label} work" and I'll take it through the governed path. ` +
+    `I'm reading the register, not guessing.`
   )
 }
 
