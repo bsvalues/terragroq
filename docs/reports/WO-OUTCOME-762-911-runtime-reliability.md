@@ -7,7 +7,7 @@
 ```text
 RECORD_FORMAT: WILLIAMOS_RUNTIME_RELIABILITY_REMEDIATION_V1
 RECORD_ID: WO-OUTCOME-762-911
-RECORD_REVISION: 2
+RECORD_REVISION: 3
 DISPATCH_WORK_ORDER: WO-HERMES-OUTCOME-28
 AUTHORITY_SOURCE: GOAL-0024
 PARENT_OUTCOME: OUTCOME-762
@@ -33,9 +33,17 @@ CURRENT_RUNTIME_HEALTH_CLAIMED: false
 CURRENT_HOST_INVENTORY_CLAIMED: false
 ISSUE_CLOSURE_CLAIMED: false
 TAG_OR_RELEASE_ACTION_AUTHORIZED: false
-VALIDATION_STATE: PENDING_HERMES_HOST
+VALIDATION_STATE: REMEDIATION_PENDING_HERMES_HOST
 INDEPENDENT_FILE_REVIEW_STATE: COMPLETE_FINDINGS_REMEDIATED
-HERMES_EXACT_HEAD_REVIEW_STATE: PENDING_HERMES_HOST
+DIRECT_REMEDIATION_FILE_REVIEW_STATE: COMPLETE
+CURRENT_PR_WORK_CONTEXT_CHECK: work context receipt (#831)
+CURRENT_PR_WORK_CONTEXT_CHECK_STATE: FAILURE_REPORTED
+CURRENT_PR_WORK_CONTEXT_FAILURE_CODE: NOT_SUPPLIED
+CURRENT_PR_WORK_CONTEXT_CAUSE: NOT_ASSERTED
+CURRENT_PR_WORK_CONTEXT_REMEDIATION_STATE: RECORDED_PENDING_HERMES_HOST
+CURRENT_PR_WORK_CONTEXT_RECEIPT_LOCATION: PULL_REQUEST_BODY
+CURRENT_PR_WORK_CONTEXT_EXEMPTION_USED: false
+HERMES_EXACT_HEAD_REVIEW_STATE: REMEDIATION_RECHECK_REQUIRED
 OWNER_TOUCH_COUNT: 0
 BLOCKED_SCOPE_CROSSED: false
 ```
@@ -53,7 +61,8 @@ control-plane reliability defect in the handling of findings discovered during a
 The earlier record instead centered a June 2026 Ollama release-hardening decision that no inspected
 source independently binds to `#911`. That material is retained below only as separate historical
 context. Stale pull-request receipt and head state from the previous dispatch is not current state for
-this Work Order and has been removed.
+this Work Order and has been removed. The current `work context receipt (#831)` failure reported by
+Hermes is recorded separately below without importing any prior receipt, token, or head result.
 
 ## #911 defect statement
 
@@ -209,7 +218,54 @@ was rerun in this lane.
 - The focused Hermes work-contract test validates dispatch confinement. It does not parse this report,
   prove its substantive claims, establish live runtime reliability, or close issue `#911`.
 - Prior `#831` pull-request receipt and head results belong to an earlier dispatch. They are not
-  carried forward as current PR, validation, or review state.
+  carried forward as current PR, validation, or review state. The current check conclusion below is
+  new evidence from this dispatch.
+
+## Current pull-request work-context remediation
+
+Hermes reported the required check named `work context receipt (#831)` with conclusion `FAILURE`.
+The dispatch did not include the check's emitted failure code, detail, pull-request event payload, or
+body. This record therefore treats the failed required gate as one valid actionable finding without
+claiming whether the concrete code was `FAILED_CONTEXT_NOT_PROVEN`, `FAILED_RECEIPT_MISMATCH`,
+`FAILED_STALE_MAIN`, or `FAILED_SCOPE_ESCAPE`.
+
+```text
+CHECK_NAME: work context receipt (#831)
+REPORTED_CONCLUSION: FAILURE
+DETAILED_FAILURE_CODE_SUPPLIED_TO_REMEDIATION_LANE: false
+PULL_REQUEST_BODY_OR_EVENT_PAYLOAD_INSPECTED_BY_CODEX: false
+EXACT_FAILURE_CAUSE_CLAIMED: false
+DISTINCT_ACTIONABLE_FINDINGS_RECORDED: 1
+FINDING_DISPOSITION: VALID_REMEDIATION_HANDOFF_RECORDED
+RECEIPT_CONSUMER: PULL_REQUEST_BODY
+REPORT_EMBEDDED_RECEIPT_WOULD_SATISFY_CHECK: false
+CURRENT_PR_RECEIPT_OR_CLAIMS_FABRICATED_OR_REUSED: false
+WORK_CONTEXT_EXEMPTION_USED: false
+RECOVERY_OWNER: HERMES_HOST
+RECOVERY_STATE: PENDING_HERMES_HOST
+OWNER_TOUCH_REQUIRED: false
+```
+
+The repository-side gate is precise about the recovery boundary:
+
+| Evidence | Consequence for this remediation |
+| --- | --- |
+| `.github/workflows/work-context.yml:1-15`, `.github/workflows/work-context.yml:24-42` | The required check reads the receipt from the pull-request body and accepts a fresh `edited` event, so a corrected body can be checked without an empty commit or replaying a stale event payload. |
+| `lib/governance/pr-receipt.ts:19-60`, `lib/governance/pr-receipt.ts:75-128` | A named fenced JSON block is required. Missing/malformed proof, token/claim mismatch, stale doctrine or main dependencies, and reservation escape remain distinct fail-closed outcomes with explicit recovery routes. |
+| `scripts/verify-pr-work-context.mjs:15-21`, `scripts/verify-pr-work-context.mjs:47-89` | The reviewer measures live doctrine and changed files, while authority is enforced when the receipt is issued. An exemption is only a recorded claim, not verified proof, and is not used here. |
+| `scripts/hermes-bridge/orchestrator.mjs:1380-1384` | The inspected default Hermes pull-request creation body contains bounded-delivery prose but no `WORK_CONTEXT_RECEIPT` block. That is a concrete creation-path risk, not proof of the body or failure code carried by the reported check event. |
+
+The report is not a substitute receipt: the check does not read this Markdown file for proof. Hermes
+must use the supported issuer to re-establish context against current main, the current doctrine, this
+Work Order, its active parent authority, and the exact pull-request changed-file set. It must then add
+the returned token and unedited claims to the existing pull-request body in a fenced
+`WORK_CONTEXT_RECEIPT` block. It must not invent a token, alter claims to fit a token, reuse the stale
+receipt from the earlier dispatch, or add `WORK_CONTEXT_EXEMPT`.
+
+After the body is corrected, Hermes must obtain a fresh check event—`edited`, or `synchronize` when
+the remediation head is pushed—and require `work context receipt (#831)` to pass on the exact
+candidate before merge. Re-running only the already-failed event would replay its captured body and
+would not prove the remediation.
 
 ## No-runtime-host-mutation ledger
 
@@ -219,6 +275,10 @@ READ_ONLY_REPOSITORY_COMMANDS_EXECUTED: rg
 BOUNDED_FILE_EDIT_TOOL_USED: apply_patch
 VALIDATOR_EXECUTED_BY_CODEX: false
 GIT_OR_GITHUB_OPERATION_PERFORMED_BY_CODEX: false
+PULL_REQUEST_BODY_EDITED_BY_CODEX: false
+WORK_CONTEXT_RECEIPT_ISSUED_BY_CODEX: false
+CURRENT_PR_WORK_CONTEXT_RECEIPT_TOKEN_OR_CLAIMS_INSPECTED_BY_CODEX: false
+WORK_CONTEXT_EXEMPTION_USED: false
 HOST_MUTATING_COMMAND_EXECUTED: false
 HOST_RUNTIME_PROCESS_STARTED_OR_STOPPED: false
 SERVICE_CONTAINER_SCHEDULER_OR_DATABASE_CHANGED: false
@@ -255,6 +315,12 @@ record now distinguishes verified parent authority from mechanically narrowed ch
 and queue grants, and its structured review state agrees with the READY handoff. Exact-candidate
 recheck confirmed both findings resolved and reported no new finding.
 
+For this bounded follow-up, the dispatch expressly prohibited another subagent lane. Codex directly
+reviewed the revision against the reported check conclusion, the pull-request workflow, the receipt
+verifier, and the exact reserved-path boundary. The review preserves the prior independent assurance,
+does not relabel this follow-up as independent, and found no remaining in-file contradiction or
+unsupported claim.
+
 ## Hermes host validation handoff
 
 Codex did not run validators, Git, GitHub, interpreters, package managers, runtime commands, or host
@@ -264,6 +330,7 @@ Work Order:
 ```text
 git diff --check: PENDING_HERMES_HOST
 npx vitest run tests/hermes-work-contract.test.ts: PENDING_HERMES_HOST
+work context receipt (#831): FAILURE_REPORTED; FRESH_PR_BODY_RECEIPT_AND_EXACT_HEAD_RECHECK_PENDING_HERMES_HOST
 commit: null
 prUrl: null
 merged: false
@@ -271,9 +338,9 @@ mergeCommit: null
 ```
 
 The Vitest command verifies the exact registered #911 contract and its no-host-mutation confinement;
-it does not parse the Markdown body. Substantive assurance is supplied by independent file review.
-A normal repository revert of this single report is the complete rollback; no host rollback is
-needed.
+it does not parse the Markdown body. Substantive assurance is supplied by the completed independent
+file review and the direct review of this bounded check remediation. A normal repository revert of
+this single report is the complete rollback; no host rollback is needed.
 
 ## Safety
 
@@ -281,6 +348,8 @@ needed.
 - The report records the #911 control-plane remediation without executing the cases it describes.
 - Historical Ollama release evidence is preserved as separate context and is not upgraded into current
   runtime truth.
+- The current required-check failure is recorded without fabricating a receipt, asserting an
+  unavailable failure code, editing the pull-request body, or using an exemption.
 - No blocked scope was crossed, no new authority was inferred, and no owner touch occurred.
-- Host validation, exact-head review, commit, pull request, merge, verification, and cleanup remain
-  owned by Hermes after this file handoff.
+- Remediation validation, commit and push, pull-request-body context recovery, fresh exact-head
+  review, merge, verification, and cleanup remain owned by Hermes after this file handoff.
