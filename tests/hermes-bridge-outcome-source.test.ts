@@ -3389,6 +3389,34 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(confirmed).toMatchObject({ eventId: 971 })
     expect(confirmationQuery.mock.calls[5][0]).toMatch(/ACTIVE_POST_MERGE_CLEANUP_CONFIRMED/)
 
+    const preCleanupCheckpointPayload = {
+      idempotencyKey: "hermes-outcome:23:attempt:8:checkpoint:46", outcomeId: 23,
+      workOrderRef: "WO-HERMES-OUTCOME-23", attempt: 8, checkpointSequence: 46,
+      checkpointState: "POST_MERGE_CLEANUP_RETRY",
+      checkpointDetail: "HERMES_POST_MERGE_CLEANUP_WALL", prNumber: 929,
+      headRefOid: proof.reviewedHeadSha, mergeSha: proof.mergeSha,
+      reviewRecoveryProofDigest: proof.proofDigest,
+      executionBinding: executionBinding.executionBinding,
+      acquisitionKey: executionBinding.acquisitionKey, acquisitionFencingToken: 4,
+      executionEpochDigest: createHash("sha256").update(JSON.stringify([
+        executionBinding.userId, executionBinding.outcomeKey,
+        executionBinding.executionBinding, executionBinding.acquisitionKey,
+      ])).digest("hex"),
+      findingsSetDigest: emptyFindingsSetDigest,
+      workContractId: workContract.id, workContractDigest: workContract.digest,
+      workContractVersion: workContract.version, workContractRepository: workContract.repository,
+      workContractLane: workContract.lane, authorizationDecisionId: 74,
+      executionGrantRef: "WB-EXEC-GRANT-911", implementationGrantId: 81,
+      implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
+      projectionIssueNumber: workContract.projection.issueNumber,
+      projectionCompletionOwned: workContract.projection.completionOwned,
+      deliveryAuthorityLevel: workContract.delivery.authorityLevel,
+      deliveryAllowedActions: workContract.delivery.allowedActions,
+      commitAllowed: workContract.delivery.commitAllowed, tagAllowed: workContract.delivery.tagAllowed,
+      pushAllowed: workContract.delivery.pushAllowed,
+    }
+    const preCleanupCheckpointMetadata = { ...preCleanupCheckpointPayload,
+      payloadDigest: createHash("sha256").update(JSON.stringify(preCleanupCheckpointPayload)).digest("hex") }
     const settleQuery = vi.fn()
       .mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
@@ -3400,7 +3428,13 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       ] })
       .mockResolvedValueOnce({ rows: [{
         goalId: 23, userId: "owner", goalStatus: "classified", workOrderId: 51,
-        workOrderRef: "WO-HERMES-OUTCOME-23", workOrderStatus: "active",
+        goalLane: workContract.lane, approvalDecisionId: 74,
+        executionGrantRef: "WB-EXEC-GRANT-911", implementationGrantId: 81,
+        implementationGrantRef: "WB-EXEC-IMPL-GRANT-911",
+        workOrderRef: "WO-HERMES-OUTCOME-23", workOrderStatus: "blocked",
+        workOrderResult: "PARTIAL", preCleanupCheckpointId: 969,
+        preCleanupCheckpointActor: "hermes-codex-bridge",
+        preCleanupCheckpointMetadata,
         version: 8, fencingToken: 6, lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
         authorizationId: 970, authorizationMetadata: authorized.metadata,
         confirmationId: 971, confirmationMetadata: confirmed.metadata,
@@ -4377,7 +4411,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           ALTER TABLE work_order ADD COLUMN IF NOT EXISTS "completedAt" timestamptz;
           ALTER TABLE work_order ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz;`)
         await client.query(`UPDATE goal SET status='classified' WHERE id=4;
-          UPDATE work_order SET status='review',result=NULL,"commitRef"=NULL,
+          UPDATE work_order SET status='blocked',result='PARTIAL',"commitRef"=NULL,
             "closedAt"=NULL,"completedAt"=NULL WHERE id=42;
           UPDATE outcome_queue_item SET "lifecycleState"='active',"lifecycleReason"='STALE_LEASE_RECOVERED',
             version=8,"fencingToken"=6,"executionBinding"='execution-binding-4',
@@ -4387,6 +4421,17 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           WHERE "goalId"=4;
           UPDATE outcome_queue_acquisition_receipt SET "latestFencingToken"=6
           WHERE "outcomeKey"='goal:GOAL-0004';`)
+        const preCleanupCheckpointPayload = { ...recoveredPayload,
+          idempotencyKey: "hermes-outcome:4:attempt:8:checkpoint:46", attempt: 8,
+          checkpointSequence: 46, checkpointState: "POST_MERGE_CLEANUP_RETRY",
+          checkpointDetail: "HERMES_POST_MERGE_CLEANUP_WALL", acquisitionFencingToken: 4 }
+        const preCleanupCheckpointMetadata = { ...preCleanupCheckpointPayload,
+          payloadDigest: createHash("sha256").update(JSON.stringify(preCleanupCheckpointPayload)).digest("hex") }
+        const preCleanupCheckpointId = (await client.query(`INSERT INTO governance_event
+          ("userId","eventType","entityType","entityId",actor,reason,metadata)
+          VALUES ('owner','HERMES_RUNTIME_CHECKPOINT','work_order','42','hermes-codex-bridge',
+            'Retained cleanup wall',$1::jsonb) RETURNING id`,
+        [JSON.stringify(preCleanupCheckpointMetadata)])).rows[0].id
         const cleanupBinding = { ...continuedActive, leaseExpiresAt: undefined }
         const cleanupProofDigest = "7".repeat(64)
         const cleanupBranch = "codex/hermes-goal-0023-27"
@@ -4431,7 +4476,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
               AND checkpoint."eventType"='HERMES_RUNTIME_CHECKPOINT'
             ORDER BY checkpoint."createdAt" DESC,checkpoint.id DESC LIMIT 1) latest ON true
           WHERE wo.id=42`)).rows).toEqual([{
-          status: "review", result: null, latestCheckpointId: "95",
+          status: "blocked", result: "PARTIAL", latestCheckpointId: String(preCleanupCheckpointId),
         }])
         expect((await client.query(`SELECT count(*)::integer AS count FROM governance_event
           WHERE "eventType"='HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED'`)).rows)
@@ -4454,6 +4499,33 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         expect((await client.query(`SELECT "eventType",count(*)::integer AS count FROM governance_event
           WHERE "eventType" IN ('HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED',
             'HERMES_OUTCOME_COMPLETED') GROUP BY "eventType"`)).rows).toEqual([])
+
+        await client.query(`UPDATE work_order SET result='WRONG' WHERE id=42`)
+        await expect(settleActivePostMergeCleanupOutcome({
+          query: client.query.bind(client), ...settlementInput,
+        })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
+        await client.query(`UPDATE work_order SET result='PARTIAL' WHERE id=42`)
+        const wrongDetailPayload = { ...preCleanupCheckpointPayload, checkpointDetail: "OTHER_WALL" }
+        const wrongDetailMetadata = { ...wrongDetailPayload,
+          payloadDigest: createHash("sha256").update(JSON.stringify(wrongDetailPayload)).digest("hex") }
+        await client.query(`UPDATE governance_event SET metadata=$1::jsonb WHERE id=$2`,
+          [JSON.stringify(wrongDetailMetadata), preCleanupCheckpointId])
+        await expect(settleActivePostMergeCleanupOutcome({
+          query: client.query.bind(client), ...settlementInput,
+        })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
+        await client.query(`UPDATE governance_event SET metadata=$1::jsonb WHERE id=$2`,
+          [JSON.stringify(preCleanupCheckpointMetadata), preCleanupCheckpointId])
+        const laterWrongCheckpoint = (await client.query(`INSERT INTO governance_event
+          ("userId","eventType","entityType","entityId",actor,reason,metadata,"createdAt")
+          SELECT "userId","eventType","entityType","entityId",actor,reason,$1::jsonb,
+            "createdAt" + interval '1 millisecond' FROM governance_event WHERE id=$2 RETURNING id`,
+          [JSON.stringify(wrongDetailMetadata), preCleanupCheckpointId])).rows[0].id
+        await expect(settleActivePostMergeCleanupOutcome({
+          query: client.query.bind(client), ...settlementInput,
+        })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
+        await client.query(`DELETE FROM governance_event WHERE id=$1`, [laterWrongCheckpoint])
+        expect((await client.query(`SELECT version,"lifecycleState" FROM outcome_queue_item
+          WHERE "goalId"=4`)).rows).toEqual([{ version: 8, lifecycleState: "active" }])
 
         const cleanupSettlement = await settleActivePostMergeCleanupOutcome({
           query: client.query.bind(client), ...settlementInput,
