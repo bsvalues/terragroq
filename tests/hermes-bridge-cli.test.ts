@@ -916,6 +916,60 @@ describe("Hermes bridge CLI", () => {
     }
   })
 
+  it("routes reviewed-merge repository verification through the resident AEGIS backend", async () => {
+    const runtimeRoot = path.join(os.tmpdir(), "hermes-reviewed-merge-aegis")
+    const executionBackend = { isLocal: false }
+    const environment = {
+      WILLIAMOS_CODEX_EXEC_NODE: "aegis",
+      WILLIAMOS_AEGIS_REPOSITORY_ROOT: "/home/bs/terragroq",
+    }
+    const selectExecutionBackend = vi.fn(() => executionBackend)
+    const createLifecycle = vi.fn(() => ({}))
+    const orchestrator = {
+      runtimeRoot,
+      state: {
+        read: () => ({
+          ownerTouchCounters: {
+            OWNER_OPERATION_TOUCH_COUNT: 0,
+            OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+            OWNER_DIAGNOSTIC_TOUCH_COUNT: 0,
+            OWNER_ROUTINE_DECISION_COUNT: 0,
+            OWNER_ROUTINE_CONTACT_COUNT: 0,
+          },
+          executions: {},
+        }),
+      },
+    }
+
+    await expect(recoverReviewedMerge({
+      orchestrator,
+      environment,
+      selectExecutionBackend,
+      createLifecycle,
+    })).rejects.toMatchObject({ code: "HERMES_REVIEW_RECOVERY_CANDIDATE_WALL" })
+    expect(selectExecutionBackend).toHaveBeenCalledOnce()
+    expect(selectExecutionBackend).toHaveBeenCalledWith(environment)
+    expect(createLifecycle).toHaveBeenCalledWith({
+      workspaceRoot: process.cwd(),
+      ownedWorktreeRoot: path.join(runtimeRoot, "worktrees"),
+      executionBackend,
+    })
+  })
+
+  it("refuses a local reviewed-merge repository lifecycle before construction", async () => {
+    const createLifecycle = vi.fn()
+    await expect(recoverReviewedMerge({
+      orchestrator: { runtimeRoot: os.tmpdir() },
+      environment: {
+        WILLIAMOS_CODEX_EXEC_NODE: "aegis",
+        WILLIAMOS_AEGIS_REPOSITORY_ROOT: "/home/bs/terragroq",
+      },
+      selectExecutionBackend: () => ({ isLocal: true }),
+      createLifecycle,
+    })).rejects.toMatchObject({ code: "HERMES_RESIDENT_LOCAL_BACKEND_WALL" })
+    expect(createLifecycle).not.toHaveBeenCalled()
+  })
+
   it("verifies and finalizes one exact reviewed merge after remediation exhaustion", async () => {
     const candidate = {
       outcomeId: "7",

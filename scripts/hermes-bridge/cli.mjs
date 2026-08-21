@@ -620,10 +620,23 @@ export async function recoverTerminalPostMergeCleanupWall(options = {}) {
 }
 
 export async function recoverReviewedMerge(options = {}) {
-  const orchestrator = options.orchestrator ?? createResidentHermesOrchestrator()
-  const lifecycle = options.lifecycle ?? createHermesRepositoryLifecycle({
+  const environment = options.environment ?? process.env
+  const executionBackend = options.lifecycle
+    ? null
+    : requireResidentAegisBackend(
+        environment,
+        options.selectExecutionBackend
+          ?? (options.executionBackend ? () => options.executionBackend : selectExecutionBackend),
+      )
+  const orchestrator = options.orchestrator ?? createResidentHermesOrchestrator({
+    environment,
+    ...(executionBackend ? { executionBackend } : {}),
+  })
+  const createLifecycle = options.createLifecycle ?? createHermesRepositoryLifecycle
+  const lifecycle = options.lifecycle ?? createLifecycle({
     workspaceRoot: process.cwd(),
     ownedWorktreeRoot: path.join(orchestrator.runtimeRoot, "worktrees"),
+    executionBackend,
   })
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const recoverOutcome = options.recoverOutcome ?? recoverReviewedOutcome
