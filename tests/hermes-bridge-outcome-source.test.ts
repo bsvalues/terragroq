@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { describe, expect, it, vi } from "vitest"
 
 import {
+  authorizeHistoricalRecoveryProjection,
   closeProjectionResources,
   completeOutcome,
   deferProviderOutcome,
@@ -1127,9 +1128,16 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
 
   it.each([
     ["reviewed merge", "PR_MERGED", "Recovered reviewed PR #929",
-      { reviewRecoveryProofDigest: "d".repeat(64) }, "d".repeat(64), "review"],
+      { reviewRecoveryProofDigest: "d".repeat(64) }, "d".repeat(64), "review",
+      "REVIEW_REMEDIATION_EXHAUSTED", "HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED"],
+    ["review recovery confirmation", "REVIEW_REMEDIATION_RECOVERED",
+      "REVIEW_REMEDIATION_EXHAUSTED",
+      { reviewRecoveryProofDigest: "d".repeat(64) }, "d".repeat(64), "review",
+      "REVIEW_REMEDIATION_EXHAUSTED", "HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED"],
     ["terminal cleanup", "POST_MERGE_CLEANUP_RECOVERED", "PR #929",
-      { terminalCleanupRecoveryProofDigest: "e".repeat(64) }, "e".repeat(64), "active"],
+      { terminalCleanupRecoveryProofDigest: "e".repeat(64) }, "e".repeat(64), "active",
+      "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+      "HERMES_OUTCOME_TERMINAL_CLEANUP_RECOVERY_AUTHORIZED"],
   ])("projects %s from the exact retained execution epoch after terminal lease release", async (
     _label,
     checkpointState,
@@ -1137,6 +1145,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     proofMetadata,
     proofDigest,
     expectedStatus,
+    lifecycleReason,
+    authorizationEventType,
   ) => {
     const historicalBinding = {
       ...runtimeExecutionBinding,
@@ -1146,7 +1156,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     const authorization = {
       goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "operator-objective",
       outcomeKey: historicalBinding.outcomeKey,
-      lifecycleState: "blocked", version: 4,
+      lifecycleState: "blocked", lifecycleReason, version: 4,
       executionBinding: historicalBinding.executionBinding,
       leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
       acquisitionKey: runtimeAcquisitionKey, fencingToken: historicalBinding.fencingToken,
@@ -1220,6 +1230,11 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(authorizationCall[0]).toMatch(/contract_grant\.status IN \('active', 'expired'\)/)
     expect(authorizationCall[0]).toMatch(/implementation_grant\.status IN \('active', 'expired'\)/)
     expect(authorizationCall[0]).toMatch(/contract_queue\.version = \$4::integer \+ 1/)
+    expect(authorizationCall[0]).toMatch(/contract_queue\."lifecycleReason" = \$19/)
+    expect(authorizationCall[0]).toMatch(/HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED/)
+    expect(authorizationCall[0]).toMatch(/recovered\.id > recovery_authorization\.id/)
+    expect(authorizationCall[0]).toMatch(/recovery_confirmation\.id > recovered\.id/)
+    expect(authorizationCall[1]).toContain(authorizationEventType)
     const checkpointCall = query.mock.calls.find(([sql]) => (
       /HERMES_RUNTIME_CHECKPOINT/.test(sql) && /RETURNING id/.test(sql)
     ))!
@@ -1254,6 +1269,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     ["execution binding drift", { executionBinding: "other-execution" }, false],
     ["fence drift", { fencingToken: 3 }, false],
     ["terminal transition version drift", { version: 5 }, false],
+    ["blocked reason drift", { lifecycleReason: "OTHER_BLOCKED_REASON" }, false],
     ["revoked implementation grant", { implementationGrantRevokedAt: "2026-08-16T00:00:00.000Z" }, false],
     ["duplicate authorization graph", {}, true],
   ])("walls historical recovery on %s before projection mutation", async (
@@ -1266,7 +1282,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     }
     const authorization = {
       goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "operator-objective",
-      outcomeKey: historicalBinding.outcomeKey, lifecycleState: "blocked", version: 4,
+      outcomeKey: historicalBinding.outcomeKey,
+      lifecycleState: "blocked", lifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED", version: 4,
       executionBinding: historicalBinding.executionBinding,
       leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
       acquisitionKey: runtimeAcquisitionKey, fencingToken: historicalBinding.fencingToken,
@@ -2620,6 +2637,142 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       checkpoint: { sequence: 1, state: "RETRYABLE_WALL", detail: "to" + "ken=opaque-value" },
     })).rejects.toMatchObject({ code: "OUTCOME_PROJECTION_CHECKPOINT_INVALID" })
     expect(query).not.toHaveBeenCalled()
+  })
+
+  it("durably authorizes the exact historical recovery epoch without mutating queue authority", async () => {
+    const executionBinding = {
+      ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
+    }
+    const graph = {
+      goalId: 4, userId: "owner", outcomeKey: executionBinding.outcomeKey,
+      lifecycleState: "blocked", lifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED", version: 4,
+      executionBinding: executionBinding.executionBinding,
+      leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
+      acquisitionKey: executionBinding.acquisitionKey, fencingToken: executionBinding.fencingToken,
+      workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4", terminalEventId: 90,
+    }
+    const query = vi.fn(async (sql: string) => {
+      if (/FROM goal AS recovery_goal/.test(sql)) return { rows: [graph] }
+      if (/SELECT id, metadata[\s\S]+HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED/.test(sql)) {
+        return { rows: [] }
+      }
+      if (/INSERT INTO governance_event/.test(sql)) return { rows: [{ id: 91 }] }
+      return { rows: [] }
+    })
+    await expect(authorizeHistoricalRecoveryProjection({
+      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+      proofDigest: "d".repeat(64),
+    })).resolves.toEqual({ eventId: 91, replayed: false })
+    const insert = query.mock.calls.find(([sql]) => /INSERT INTO governance_event/.test(sql))!
+    const persistedMetadata = JSON.parse(String(insert[1]?.[3]))
+    expect(persistedMetadata).toMatchObject({
+      outcomeId: 4, userId: "owner", workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4",
+      terminalEventId: 90, outcomeKey: executionBinding.outcomeKey,
+      executionBinding: executionBinding.executionBinding,
+      acquisitionKey: executionBinding.acquisitionKey, fencingToken: 2,
+      prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+      proofDigest: "d".repeat(64),
+    })
+    expect(query.mock.calls.some(([sql]) => (
+      /^\s*(?:UPDATE|DELETE)/.test(sql) || /INSERT INTO (?!governance_event)/.test(sql)
+    ))).toBe(false)
+
+    query.mockClear()
+    query.mockImplementation(async (sql: string) => {
+      if (/SELECT id, metadata[\s\S]+HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED/.test(sql)) {
+        return { rows: [{ id: 91, metadata: persistedMetadata }] }
+      }
+      if (/FROM goal AS recovery_goal/.test(sql)) {
+        throw new Error("an immutable authorization replay must not require the recovered mutable graph")
+      }
+      return { rows: [] }
+    })
+    await expect(authorizeHistoricalRecoveryProjection({
+      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+      proofDigest: "d".repeat(64),
+    })).resolves.toEqual({ eventId: 91, replayed: true })
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event/.test(sql))).toBe(false)
+  })
+
+  it.each([
+    ["missing graph", []],
+    ["duplicate graph", [{}, {}]],
+  ])("walls historical recovery authorization on %s without durable mutation", async (
+    _label,
+    rows,
+  ) => {
+    const query = vi.fn(async (sql: string) => (
+      /FROM goal AS recovery_goal/.test(sql) ? { rows } : { rows: [] }
+    ))
+    await expect(authorizeHistoricalRecoveryProjection({
+      query, outcomeId: 4, recoveryKind: "review-remediation",
+      executionBinding: {
+        ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
+      },
+      prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+      proofDigest: "d".repeat(64),
+    })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event/.test(sql))).toBe(false)
+  })
+
+  it("persists terminal-cleanup authorization under its separate exact event type", async () => {
+    const executionBinding = {
+      ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
+    }
+    const query = vi.fn(async (sql: string) => {
+      if (/FROM goal AS recovery_goal/.test(sql)) return { rows: [{
+        goalId: 4, userId: "owner", outcomeKey: executionBinding.outcomeKey,
+        lifecycleState: "blocked",
+        lifecycleReason: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED", version: 4,
+        executionBinding: executionBinding.executionBinding,
+        leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
+        acquisitionKey: executionBinding.acquisitionKey, fencingToken: executionBinding.fencingToken,
+        workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4", terminalEventId: 90,
+      }] }
+      if (/SELECT id, metadata/.test(sql)) return { rows: [] }
+      if (/INSERT INTO governance_event/.test(sql)) return { rows: [{ id: 94 }] }
+      return { rows: [] }
+    })
+    await expect(authorizeHistoricalRecoveryProjection({
+      query, outcomeId: 4, recoveryKind: "terminal-cleanup", executionBinding,
+      prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+      proofDigest: "e".repeat(64),
+    })).resolves.toEqual({ eventId: 94, replayed: false })
+    expect(query.mock.calls.find(([sql]) => /INSERT INTO governance_event/.test(sql))?.[0])
+      .toContain("HERMES_OUTCOME_TERMINAL_CLEANUP_RECOVERY_AUTHORIZED")
+  })
+
+  it.each([
+    ["drifted replay", [{ id: 91, metadata: { idempotencyKey: "forged" } }]],
+    ["duplicate replay", [{ id: 91, metadata: {} }, { id: 92, metadata: {} }]],
+  ])("walls historical recovery authorization on %s cardinality", async (
+    _label,
+    priorRows,
+  ) => {
+    const executionBinding = {
+      ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
+    }
+    const graph = {
+      goalId: 4, userId: "owner", outcomeKey: executionBinding.outcomeKey,
+      lifecycleState: "blocked", lifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED", version: 4,
+      executionBinding: executionBinding.executionBinding,
+      leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
+      acquisitionKey: executionBinding.acquisitionKey, fencingToken: executionBinding.fencingToken,
+      workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4", terminalEventId: 90,
+    }
+    const query = vi.fn(async (sql: string) => {
+      if (/FROM goal AS recovery_goal/.test(sql)) return { rows: [graph] }
+      if (/SELECT id, metadata/.test(sql)) return { rows: priorRows }
+      return { rows: [] }
+    })
+    await expect(authorizeHistoricalRecoveryProjection({
+      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+      proofDigest: "d".repeat(64),
+    })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event/.test(sql))).toBe(false)
   })
 
   it("recovers review exhaustion only from exact post-terminal PR/head/merge evidence", async () => {

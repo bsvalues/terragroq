@@ -894,13 +894,14 @@ describe("Hermes bridge CLI", () => {
     const projectCheckpoint = vi.fn()
       .mockRejectedValueOnce(Object.assign(new Error("temporary dns"), { code: "ENOTFOUND" }))
       .mockResolvedValue(true)
+    const authorizeProjection = vi.fn(async () => ({ eventId: 91, replayed: false }))
     const recoverOutcome = vi.fn(async () => true)
     const read = vi.spyOn(fs, "existsSync").mockImplementation((target) =>
       target === candidate.metadata.worktreePath)
 
     try {
       await expect(recoverTerminalPostMergeCleanupWall({
-        orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+        orchestrator, lifecycle, projectCheckpoint, recoverOutcome, authorizeProjection,
         projectionSleep: async () => {},
       })).resolves.toMatchObject({
         result: "RECOVERED",
@@ -916,6 +917,7 @@ describe("Hermes bridge CLI", () => {
         expectedHeadSha: candidate.metadata.headRefOid,
       })
       expect(beginRecovery).toHaveBeenCalledBefore(lifecycle.cleanupOwnedWorktree)
+      expect(authorizeProjection).toHaveBeenCalledBefore(beginRecovery)
       expect(finalizeRecovery).toHaveBeenCalledAfter(lifecycle.cleanupOwnedWorktree)
       expect(projectCheckpoint).toHaveBeenCalledWith({
         outcomeId: 5,
@@ -1072,11 +1074,13 @@ describe("Hermes bridge CLI", () => {
     }
     const projectCheckpoint = vi.fn(async () => ({ workOrderId: 77 }))
     const recoverOutcome = vi.fn(async () => true)
+    const authorizeProjection = vi.fn(async () => ({ eventId: 92, replayed: false }))
     const authorizedOutcome = candidate.metadata.outcome
 
     candidate.metadata.outcome = { ...authorizedOutcome, verifiedQueueWorkContract: undefined } as any
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+      authorizeProjection,
     })).rejects.toMatchObject({ code: "HERMES_WORK_CONTRACT_WALL" })
     expect(beginRecovery).not.toHaveBeenCalled()
     expect(projectCheckpoint).not.toHaveBeenCalled()
@@ -1087,6 +1091,7 @@ describe("Hermes bridge CLI", () => {
     }
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+      authorizeProjection,
     })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
     expect(beginRecovery).not.toHaveBeenCalled()
     expect(projectCheckpoint).not.toHaveBeenCalled()
@@ -1097,6 +1102,7 @@ describe("Hermes bridge CLI", () => {
     })
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+      authorizeProjection,
     })).rejects.toMatchObject({ code: "FENCING_TOKEN_CONFLICT" })
     expect(projectCheckpoint).not.toHaveBeenCalled()
     expect(recoverOutcome).not.toHaveBeenCalled()
@@ -1105,6 +1111,7 @@ describe("Hermes bridge CLI", () => {
     projectCheckpoint.mockRejectedValueOnce(new Error("simulated projection crash"))
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+      authorizeProjection,
     })).rejects.toThrow("simulated projection crash")
     expect(recoverOutcome).not.toHaveBeenCalled()
     expect(finalizeRecovery).not.toHaveBeenCalled()
@@ -1121,6 +1128,7 @@ describe("Hermes bridge CLI", () => {
     cycle.mockRejectedValueOnce(new Error("simulated cycle crash"))
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+      authorizeProjection,
     })).rejects.toThrow("simulated cycle crash")
     expect(projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
       outcomeId: 7,
@@ -1163,6 +1171,8 @@ describe("Hermes bridge CLI", () => {
       headRefOid: "b".repeat(40),
       proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
     }))
+    expect(authorizeProjection.mock.invocationCallOrder[0])
+      .toBeLessThan(beginRecovery.mock.invocationCallOrder[0])
     expect(finalizeRecovery).toHaveBeenCalledWith(expect.objectContaining({
       expectedFencingToken: 28,
       headRefOid: "b".repeat(40),
@@ -1202,6 +1212,7 @@ describe("Hermes bridge CLI", () => {
     candidate.metadata.reviewProjectionReconciledFromSequence = null
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+      authorizeProjection,
     })).resolves.toMatchObject({
       result: "COMPLETE", outcomeId: "7", prNumber: 447,
       mergeSha: "c".repeat(40), checkpointSequence: 34,
@@ -1221,6 +1232,7 @@ describe("Hermes bridge CLI", () => {
     verifyProjectionCollision.mockResolvedValueOnce(false)
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+      authorizeProjection,
     })).rejects.toMatchObject({ code: "OUTCOME_PROJECTION_IDEMPOTENCY_CONFLICT" })
     expect(reconcileRecoveryProjection).not.toHaveBeenCalled()
 
@@ -1230,6 +1242,7 @@ describe("Hermes bridge CLI", () => {
     ))
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+      authorizeProjection,
     })).resolves.toMatchObject({ result: "COMPLETE", checkpointSequence: 35 })
     expect(beginRecovery).toHaveBeenCalledTimes(2)
     expect(recordMerge).toHaveBeenCalledOnce()
@@ -1254,6 +1267,7 @@ describe("Hermes bridge CLI", () => {
     candidate.metadata.reviewProjectionReconciledFromSequence = 34
     await expect(recoverReviewedMerge({
       orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+      authorizeProjection,
     })).resolves.toMatchObject({ result: "COMPLETE", checkpointSequence: 35 })
     expect(reconcileRecoveryProjection).toHaveBeenCalledOnce()
     expect(cycle).toHaveBeenCalledTimes(4)
@@ -1319,11 +1333,24 @@ describe("Hermes bridge CLI", () => {
       verifyOriginMainContains: vi.fn(async () => true),
     }
     const projectCheckpoint = vi.fn(async () => ({ workOrderId: 27 }))
+    const authorizeProjection = vi.fn(async () => ({ eventId: 956, replayed: false }))
     await expect(recoverReviewedMerge({
-      orchestrator, lifecycle, projectCheckpoint, recoverOutcome: vi.fn(async () => true),
+      orchestrator, lifecycle, projectCheckpoint, authorizeProjection,
+      recoverOutcome: vi.fn(async () => true),
     })).resolves.toMatchObject({ result: "COMPLETE", checkpointSequence: 45 })
     expect(beginRecovery).not.toHaveBeenCalled()
     expect(recordMerge).not.toHaveBeenCalled()
+    expect(authorizeProjection).toHaveBeenCalledOnce()
+    expect(authorizeProjection).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 27,
+      recoveryKind: "review-remediation",
+      executionBinding: expect.objectContaining({
+        outcomeKey: "goal:GOAL-0023", acquisitionKey: "acquisition-27", fencingToken: 2,
+      }),
+      prNumber: 929, reviewedHeadSha, mergeSha, proofDigest,
+    }))
+    expect(authorizeProjection.mock.invocationCallOrder[0])
+      .toBeLessThan(projectCheckpoint.mock.invocationCallOrder[0])
     expect(projectCheckpoint).toHaveBeenNthCalledWith(1, expect.objectContaining({
       workContract: expect.objectContaining({ id: "issue-911-runtime-reliability-evidence.v1" }),
       executionBinding: expect.objectContaining({
@@ -1414,6 +1441,7 @@ describe("Hermes bridge CLI", () => {
     }
     const projectCheckpoint = vi.fn(async () => ({ workOrderId: 99 }))
     const recoverOutcome = vi.fn(async () => true)
+    const authorizeProjection = vi.fn(async () => ({ eventId: 93, replayed: false }))
 
     for (const blockedPath of [
       "docs/governance/runtime-policy.md",
@@ -1433,21 +1461,21 @@ describe("Hermes bridge CLI", () => {
       filesDigest = digestFor([blockedPath])
       remediationFiles.mockResolvedValueOnce([blockedPath])
       await expect(recoverReviewedMerge({
-        orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+        orchestrator, lifecycle, projectCheckpoint, recoverOutcome, authorizeProjection,
       })).rejects.toMatchObject({ code: "HERMES_REVIEW_RECOVERY_PROOF_WALL" })
     }
 
     filesDigest = digestFor(["docs/reports/different-report.md"])
     remediationFiles.mockResolvedValueOnce([remediationPath])
     await expect(recoverReviewedMerge({
-      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, authorizeProjection,
     })).rejects.toMatchObject({ code: "HERMES_REVIEW_RECOVERY_PROOF_WALL" })
     expect(beginRecovery).not.toHaveBeenCalled()
 
     filesDigest = digestFor([remediationPath])
     cycle.mockRejectedValueOnce(new Error("simulated chained cycle crash"))
     await expect(recoverReviewedMerge({
-      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, authorizeProjection,
     })).rejects.toThrow("simulated chained cycle crash")
     expect(beginRecovery).toHaveBeenCalledWith(expect.objectContaining({
       expectedFencingToken: 37,
@@ -1456,6 +1484,8 @@ describe("Hermes bridge CLI", () => {
       mergeSha: "c".repeat(40),
       proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
     }))
+    expect(authorizeProjection.mock.invocationCallOrder[0])
+      .toBeLessThan(beginRecovery.mock.invocationCallOrder[0])
     expect(recordMerge).toHaveBeenCalledWith(expect.objectContaining({
       expectedFencingToken: 37,
       headRefOid: "b".repeat(40),
@@ -1492,7 +1522,7 @@ describe("Hermes bridge CLI", () => {
     candidate.metadata.reviewRecoveryPriorHeadRefOid = "a".repeat(40)
     candidate.metadata.reviewRecoveryProofDigest = beginRecovery.mock.calls[0][0].proofDigest
     await expect(recoverReviewedMerge({
-      orchestrator, lifecycle, projectCheckpoint, recoverOutcome,
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, authorizeProjection,
     })).resolves.toMatchObject({
       result: "COMPLETE", outcomeId: "9", prNumber: 464,
       mergeSha: "c".repeat(40), checkpointSequence: 31,

@@ -12,6 +12,7 @@ import {
 } from "./orchestrator.mjs"
 import { createHermesOutcomeQueueRuntime } from "./outcome-queue-runtime.mjs"
 import {
+  authorizeHistoricalRecoveryProjection,
   NATIVE_PROVIDER_RETRY_STATE,
   VALIDATION_INFRASTRUCTURE_RETRY_STATE,
   projectOutcomeRuntimeCheckpoint,
@@ -469,6 +470,7 @@ export async function recoverTerminalPostMergeCleanupWall(options = {}) {
   })
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const recoverOutcome = options.recoverOutcome ?? recoverTerminalPostMergeCleanupOutcome
+  const authorizeProjection = options.authorizeProjection ?? authorizeHistoricalRecoveryProjection
   const activationPath = path.join(orchestrator.runtimeRoot, "control", "activation")
   const supervisorPath = path.join(orchestrator.runtimeRoot, "state", "supervisor.json")
   const assertContained = () => {
@@ -555,6 +557,15 @@ export async function recoverTerminalPostMergeCleanupWall(options = {}) {
       code: "HERMES_TERMINAL_POST_MERGE_RECOVERY_PROOF_WALL",
     })
   }
+  await authorizeProjection({
+    outcomeId: Number(candidate.outcomeId),
+    recoveryKind: "terminal-cleanup",
+    executionBinding: projectionBindings.executionBinding,
+    prNumber: candidate.metadata.prNumber,
+    reviewedHeadSha: candidate.metadata.headRefOid,
+    mergeSha: candidate.metadata.mergeSha,
+    proofDigest,
+  })
   const reservation = pending || alreadyRecovered
     ? { checkpointSequence: candidate.checkpoint.sequence }
     : orchestrator.state.beginTerminalPostMergeCleanupRecovery({
@@ -664,6 +675,7 @@ export async function recoverReviewedMerge(options = {}) {
   })
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const recoverOutcome = options.recoverOutcome ?? recoverReviewedOutcome
+  const authorizeProjection = options.authorizeProjection ?? authorizeHistoricalRecoveryProjection
   const verifyProjectionCollision = options.verifyProjectionCollision
     ?? verifyReviewRecoveryProjectionCollision
   const state = orchestrator.state.read()
@@ -798,6 +810,15 @@ export async function recoverReviewedMerge(options = {}) {
       code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
     })
   }
+  await authorizeProjection({
+    outcomeId,
+    recoveryKind: "review-remediation",
+    executionBinding: projectionBindings.executionBinding,
+    prNumber: candidate.metadata.prNumber,
+    reviewedHeadSha,
+    mergeSha,
+    proofDigest,
+  })
   const reservation = recoveryPending || mergeRecorded || alreadyReopened
     ? { checkpointSequence: candidate.checkpoint.sequence }
     : orchestrator.state.beginReviewRemediationRecovery({

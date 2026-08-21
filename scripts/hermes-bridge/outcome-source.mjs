@@ -2114,6 +2114,248 @@ function normalizeRuntimeExecutionBinding(value) {
   }
 }
 
+export async function authorizeHistoricalRecoveryProjection({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  recoveryKind,
+  executionBinding,
+  prNumber,
+  reviewedHeadSha,
+  mergeSha,
+  proofDigest,
+} = {}) {
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
+    || !["review-remediation", "terminal-cleanup"].includes(recoveryKind)
+    || !Number.isSafeInteger(prNumber) || prNumber <= 0
+    || typeof reviewedHeadSha !== "string" || !COMMIT_SHA.test(reviewedHeadSha)
+    || typeof mergeSha !== "string" || !COMMIT_SHA.test(mergeSha)
+    || typeof proofDigest !== "string" || !/^[0-9a-f]{64}$/.test(proofDigest)) {
+    throw Object.assign(new Error("Historical recovery proof is invalid"), {
+      code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL",
+    })
+  }
+  const binding = normalizeRuntimeExecutionBinding(executionBinding)
+  if (binding.acquisitionKey === undefined) {
+    throw Object.assign(new Error("Historical recovery acquisition epoch is missing"), {
+      code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL",
+    })
+  }
+  const lifecycleReason = recoveryKind === "terminal-cleanup"
+    ? POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED
+    : REVIEW_REMEDIATION_EXHAUSTED
+  const eventType = recoveryKind === "terminal-cleanup"
+    ? "HERMES_OUTCOME_TERMINAL_CLEANUP_RECOVERY_AUTHORIZED"
+    : "HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED"
+  const workOrderRef = outcomeWorkOrderRef(outcomeId)
+  const idempotencyKey = [
+    "hermes-outcome", outcomeId, recoveryKind, "projection-authorization", proofDigest,
+  ].join(":")
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  let begun = false
+  if (!runQuery) {
+    if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+      throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+    }
+    const { Pool } = await import("pg")
+    pool = createHermesDatabasePool(Pool, databaseUrl)
+  }
+  try {
+    if (pool) {
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
+    await runQuery("BEGIN")
+    begun = true
+    await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [workOrderRef])
+    const prior = await runQuery(
+      `SELECT id, metadata
+       FROM governance_event
+       WHERE "userId" = $1
+         AND "entityType" = 'goal'
+         AND "entityId"::text = $2
+         AND "eventType" = '${eventType}'
+         AND metadata->>'idempotencyKey' = $3
+       ORDER BY id
+       LIMIT 2
+       FOR UPDATE`,
+      [binding.userId, String(outcomeId), idempotencyKey],
+    )
+    if ((prior?.rows?.length ?? 0) > 1) {
+      throw Object.assign(new Error("Historical recovery authorization replay conflicts"), {
+        code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL",
+      })
+    }
+    if (prior?.rows?.length === 1) {
+      const persisted = prior.rows[0].metadata
+      const workOrderId = Number(persisted?.workOrderId)
+      const terminalEventId = Number(persisted?.terminalEventId)
+      const expected = {
+        idempotencyKey,
+        recoveryKind,
+        outcomeId,
+        userId: binding.userId,
+        outcomeKey: binding.outcomeKey,
+        workOrderId,
+        workOrderRef,
+        terminalEventId,
+        executionBinding: binding.executionBinding,
+        acquisitionKey: binding.acquisitionKey,
+        fencingToken: binding.fencingToken,
+        executionEpochDigest: executionEpochDigest(binding),
+        prNumber,
+        reviewedHeadSha,
+        mergeSha,
+        proofDigest,
+      }
+      expected.payloadDigest = projectionPayloadDigest(expected)
+      if (!Number.isSafeInteger(Number(prior.rows[0].id))
+        || Number(prior.rows[0].id) <= 0
+        || !Number.isSafeInteger(workOrderId) || workOrderId <= 0
+        || !Number.isSafeInteger(terminalEventId) || terminalEventId <= 0
+        || canonicalJson(persisted) !== canonicalJson(expected)) {
+        throw Object.assign(new Error("Historical recovery authorization replay conflicts"), {
+          code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL",
+        })
+      }
+      await runQuery("COMMIT")
+      begun = false
+      return { eventId: Number(prior.rows[0].id), replayed: true }
+    }
+    const graph = await runQuery(
+      `SELECT recovery_goal.id AS "goalId", recovery_goal."userId" AS "userId",
+         recovery_queue."outcomeKey" AS "outcomeKey",
+         recovery_queue."lifecycleState" AS "lifecycleState",
+         recovery_queue."lifecycleReason" AS "lifecycleReason",
+         recovery_queue.version AS version,
+         recovery_queue."executionBinding" AS "executionBinding",
+         recovery_queue."leaseToken" AS "leaseToken",
+         recovery_queue."leaseHolder" AS "leaseHolder",
+         recovery_queue."leaseExpiresAt" AS "leaseExpiresAt",
+         recovery_queue."acquisitionKey" AS "acquisitionKey",
+         recovery_queue."fencingToken" AS "fencingToken",
+         recovery_work_order.id AS "workOrderId", recovery_work_order.ref AS "workOrderRef",
+         recovery_terminal.id AS "terminalEventId"
+       FROM goal AS recovery_goal
+       JOIN outcome_queue_item AS recovery_queue
+         ON recovery_queue."userId" = recovery_goal."userId"
+        AND recovery_queue."goalId" = recovery_goal.id
+       JOIN work_order AS recovery_work_order
+         ON recovery_work_order."userId" = recovery_goal."userId"
+        AND recovery_work_order.id = recovery_queue."activeWorkOrderId"
+        AND recovery_work_order.ref = $9
+        AND recovery_work_order.status = 'blocked'
+        AND recovery_work_order.result = 'FAIL'
+       JOIN outcome_queue_acquisition_receipt AS recovery_acquisition
+         ON recovery_acquisition."userId" = recovery_queue."userId"
+        AND recovery_acquisition."outcomeKey" = recovery_queue."outcomeKey"
+        AND recovery_acquisition."acquisitionKey" = recovery_queue."acquisitionKey"
+        AND recovery_acquisition."latestFencingToken" = recovery_queue."fencingToken"
+       JOIN LATERAL (
+         SELECT terminal.id, terminal.metadata
+         FROM governance_event AS terminal
+         WHERE terminal."userId" = recovery_goal."userId"
+           AND terminal."entityType" = 'goal'
+           AND terminal."entityId"::text = recovery_goal.id::text
+           AND terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+         ORDER BY terminal."createdAt" DESC, terminal.id DESC
+         LIMIT 1
+       ) AS recovery_terminal ON true
+       WHERE recovery_goal.id = $1::integer
+         AND recovery_goal."userId" = $2
+         AND recovery_goal.status = 'dismissed'
+         AND recovery_queue."outcomeKey" = $3
+         AND recovery_queue."lifecycleState" = 'blocked'
+         AND recovery_queue."lifecycleReason" = $8
+         AND recovery_queue.version = $4::integer + 1
+         AND recovery_queue."executionBinding" = $5
+         AND recovery_queue."leaseToken" IS NULL
+         AND recovery_queue."leaseHolder" IS NULL
+         AND recovery_queue."leaseExpiresAt" IS NULL
+         AND recovery_queue."acquisitionKey" = $6
+         AND recovery_queue."fencingToken" = $7::integer
+         AND recovery_terminal.metadata->>'result' = 'FAILED_TERMINAL'
+         AND recovery_terminal.metadata->>'nextState' = $8
+       ORDER BY recovery_goal.id
+       LIMIT 2
+       FOR UPDATE OF recovery_goal, recovery_queue, recovery_work_order`,
+      [outcomeId, binding.userId, binding.outcomeKey, binding.expectedVersion,
+        binding.executionBinding, binding.acquisitionKey, binding.fencingToken,
+        lifecycleReason, workOrderRef],
+    )
+    if (graph?.rows?.length !== 1) {
+      throw Object.assign(new Error("Historical recovery authorization graph is invalid"), {
+        code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL",
+      })
+    }
+    const row = graph.rows[0]
+    const exactGraph = Number(row.goalId) === outcomeId
+      && row.userId === binding.userId
+      && row.outcomeKey === binding.outcomeKey
+      && row.lifecycleState === "blocked"
+      && row.lifecycleReason === lifecycleReason
+      && Number(row.version) === binding.expectedVersion + 1
+      && row.executionBinding === binding.executionBinding
+      && row.leaseToken == null && row.leaseHolder == null && row.leaseExpiresAt == null
+      && row.acquisitionKey === binding.acquisitionKey
+      && Number(row.fencingToken) === binding.fencingToken
+      && Number.isSafeInteger(Number(row.workOrderId)) && Number(row.workOrderId) > 0
+      && row.workOrderRef === workOrderRef
+      && Number.isSafeInteger(Number(row.terminalEventId)) && Number(row.terminalEventId) > 0
+    if (!exactGraph) {
+      throw Object.assign(new Error("Historical recovery authorization graph conflicts"), {
+        code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL",
+      })
+    }
+    const metadata = {
+      idempotencyKey,
+      recoveryKind,
+      outcomeId,
+      userId: row.userId,
+      outcomeKey: row.outcomeKey,
+      workOrderId: Number(row.workOrderId),
+      workOrderRef: row.workOrderRef,
+      terminalEventId: Number(row.terminalEventId),
+      executionBinding: row.executionBinding,
+      acquisitionKey: row.acquisitionKey,
+      fencingToken: Number(row.fencingToken),
+      executionEpochDigest: executionEpochDigest(row),
+      prNumber,
+      reviewedHeadSha,
+      mergeSha,
+      proofDigest,
+    }
+    metadata.payloadDigest = projectionPayloadDigest(metadata)
+    const inserted = await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       VALUES ($1, '${eventType}', 'goal', $2, 'hermes-codex-bridge', $3, $4::jsonb)
+       RETURNING id`,
+      [row.userId, String(outcomeId),
+        `Authorized exact ${recoveryKind} projection for ${workOrderRef}`,
+        JSON.stringify(metadata)],
+    )
+    if (inserted?.rows?.length !== 1 || !Number.isSafeInteger(Number(inserted.rows[0].id))) {
+      throw Object.assign(new Error("Historical recovery authorization was not persisted"), {
+        code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL",
+      })
+    }
+    await runQuery("COMMIT")
+    begun = false
+    return { eventId: Number(inserted.rows[0].id), replayed: false }
+  } catch (error) {
+    if (begun) {
+      try { await runQuery("ROLLBACK") } catch {}
+    }
+    throw error
+  } finally {
+    client?.release()
+    if (pool) await pool.end()
+  }
+}
+
 function validatorLabels(commands) {
   if (!Array.isArray(commands)) return null
   const labels = []
@@ -2131,6 +2373,7 @@ function exactAuthorizationContract(
   executionBinding,
   outcomeId,
   historicalRecovery,
+  checkpointState,
 ) {
   const receiptContract = row?.workContract
   const delivery = workContract.delivery
@@ -2144,6 +2387,9 @@ function exactAuthorizationContract(
     && row.acquisitionKey.trim() !== ""
     && (historicalRecovery
       ? row.lifecycleState === "blocked"
+        && row.lifecycleReason === (checkpointState === "POST_MERGE_CLEANUP_RECOVERED"
+          ? "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
+          : "REVIEW_REMEDIATION_EXHAUSTED")
         && Number(row?.version) === executionBinding.expectedVersion + 1
         && row.leaseToken == null
         && row.leaseHolder == null
@@ -2394,6 +2640,7 @@ export async function projectOutcomeRuntimeCheckpoint({
          contract_goal.ref AS "goalRef", contract_goal.lane AS "goalLane",
          contract_queue."outcomeKey" AS "outcomeKey",
          contract_queue."lifecycleState" AS "lifecycleState",
+         contract_queue."lifecycleReason" AS "lifecycleReason",
          contract_queue.version AS version,
          contract_queue."executionBinding" AS "executionBinding",
          contract_queue."leaseToken" AS "leaseToken",
@@ -2470,6 +2717,7 @@ export async function projectOutcomeRuntimeCheckpoint({
            AND contract_queue."leaseExpiresAt" > clock_timestamp())
           OR ($13::boolean
            AND contract_queue."lifecycleState" = 'blocked'
+           AND contract_queue."lifecycleReason" = $19
            AND contract_queue.version = $4::integer + 1
            AND contract_queue."leaseToken" IS NULL
            AND contract_queue."leaseHolder" IS NULL
@@ -2582,13 +2830,77 @@ export async function projectOutcomeRuntimeCheckpoint({
                LIMIT 1
              )
          ))
+         AND (NOT $13::boolean OR (
+           SELECT count(*) = 1
+           FROM governance_event AS recovery_authorization
+           WHERE recovery_authorization."userId" = contract_queue."userId"
+             AND recovery_authorization."entityType" = 'goal'
+             AND recovery_authorization."entityId"::text = contract_goal.id::text
+             AND recovery_authorization."eventType" = $20
+             AND recovery_authorization.metadata->>'recoveryKind' = CASE
+               WHEN $18 = 'POST_MERGE_CLEANUP_RECOVERED' THEN 'terminal-cleanup'
+               ELSE 'review-remediation' END
+             AND recovery_authorization.metadata->>'outcomeId' = contract_goal.id::text
+             AND recovery_authorization.metadata->>'userId' = contract_queue."userId"
+             AND recovery_authorization.metadata->>'outcomeKey' = contract_queue."outcomeKey"
+             AND recovery_authorization.metadata->>'workOrderId' = contract_queue."activeWorkOrderId"::text
+             AND recovery_authorization.metadata->>'workOrderRef' = 'WO-HERMES-OUTCOME-' || contract_goal.id::text
+             AND recovery_authorization.metadata->>'terminalEventId' = (
+               SELECT terminal_candidate.id::text
+               FROM governance_event AS terminal_candidate
+               WHERE terminal_candidate."userId" = contract_queue."userId"
+                 AND terminal_candidate."entityType" = 'goal'
+                 AND terminal_candidate."entityId"::text = contract_goal.id::text
+                 AND terminal_candidate."eventType" = 'HERMES_OUTCOME_TERMINAL'
+               ORDER BY terminal_candidate."createdAt" DESC, terminal_candidate.id DESC
+               LIMIT 1
+             )
+             AND recovery_authorization.metadata->>'executionBinding' = contract_queue."executionBinding"
+             AND recovery_authorization.metadata->>'acquisitionKey' = contract_queue."acquisitionKey"
+             AND recovery_authorization.metadata->>'fencingToken' = contract_queue."fencingToken"::text
+             AND recovery_authorization.metadata->>'proofDigest' = $14
+             AND recovery_authorization.metadata->>'prNumber' = ($15::integer)::text
+             AND recovery_authorization.metadata->>'reviewedHeadSha' = $16
+             AND recovery_authorization.metadata->>'mergeSha' = $17
+             AND recovery_authorization.id > (
+               SELECT terminal_candidate.id
+               FROM governance_event AS terminal_candidate
+               WHERE terminal_candidate."userId" = contract_queue."userId"
+                 AND terminal_candidate."entityType" = 'goal'
+                 AND terminal_candidate."entityId"::text = contract_goal.id::text
+                 AND terminal_candidate."eventType" = 'HERMES_OUTCOME_TERMINAL'
+               ORDER BY terminal_candidate."createdAt" DESC, terminal_candidate.id DESC
+               LIMIT 1
+             )
+         ))
          AND ($18 <> 'REVIEW_REMEDIATION_RECOVERED' OR (
            SELECT count(*) = 1
-           FROM governance_event AS recovery_confirmation
-           WHERE recovery_confirmation."userId" = contract_queue."userId"
+           FROM governance_event AS recovery_authorization
+           JOIN governance_event AS recovered
+             ON recovered."userId" = recovery_authorization."userId"
+            AND recovered."entityType" = 'goal'
+            AND recovered."entityId" = recovery_authorization."entityId"
+            AND recovered."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERED'
+            AND recovered.metadata->>'proofDigest' = recovery_authorization.metadata->>'proofDigest'
+            AND recovered.metadata->>'prNumber' = recovery_authorization.metadata->>'prNumber'
+            AND recovered.metadata->>'reviewedHeadSha' = recovery_authorization.metadata->>'reviewedHeadSha'
+            AND recovered.metadata->>'mergeSha' = recovery_authorization.metadata->>'mergeSha'
+            AND recovered.id > recovery_authorization.id
+           JOIN governance_event AS recovery_confirmation
+             ON recovery_confirmation."userId" = recovered."userId"
+            AND recovery_confirmation."entityType" = 'goal'
+            AND recovery_confirmation."entityId" = recovered."entityId"
+            AND recovery_confirmation."eventType" = 'HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED'
+            AND recovery_confirmation.metadata->>'proofDigest' = recovered.metadata->>'proofDigest'
+            AND recovery_confirmation.metadata->>'prNumber' = recovered.metadata->>'prNumber'
+            AND recovery_confirmation.metadata->>'reviewedHeadSha' = recovered.metadata->>'reviewedHeadSha'
+            AND recovery_confirmation.metadata->>'mergeSha' = recovered.metadata->>'mergeSha'
+            AND recovery_confirmation.id > recovered.id
+           WHERE recovery_authorization."userId" = contract_queue."userId"
+             AND recovery_authorization."entityType" = 'goal'
+             AND recovery_authorization."entityId"::text = contract_goal.id::text
+             AND recovery_authorization."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED'
              AND recovery_confirmation."entityType" = 'goal'
-             AND recovery_confirmation."entityId"::text = contract_goal.id::text
-             AND recovery_confirmation."eventType" = 'HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED'
              AND recovery_confirmation.metadata->>'proofDigest' = $14
              AND recovery_confirmation.metadata->>'prNumber' = ($15::integer)::text
              AND recovery_confirmation.metadata->>'reviewedHeadSha' = $16
@@ -2613,12 +2925,15 @@ export async function projectOutcomeRuntimeCheckpoint({
         checkpoint.state,
         checkpoint.state === "POST_MERGE_CLEANUP_RECOVERED"
           ? "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
-          : "REVIEW_REMEDIATION_EXHAUSTED"],
+          : "REVIEW_REMEDIATION_EXHAUSTED",
+        checkpoint.state === "POST_MERGE_CLEANUP_RECOVERED"
+          ? "HERMES_OUTCOME_TERMINAL_CLEANUP_RECOVERY_AUTHORIZED"
+          : "HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED"],
     )
     if (authorizations?.rows?.length !== 1
       || !exactAuthorizationContract(
         authorizations.rows[0], normalizedWorkContract, normalizedExecutionBinding, outcomeId,
-        historicalRecovery,
+        historicalRecovery, checkpoint.state,
       )) {
       throw Object.assign(new Error("Canonical Workbench execution authorization is invalid"), {
         code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
