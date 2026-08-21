@@ -1846,6 +1846,115 @@ describe("Hermes durable outcome queue runtime", () => {
     })
   })
 
+  it("adopts the exact governed stale-lease replay after a reclaim crash before local persistence", async () => {
+    const prior = {
+      ...queueItem,
+      expectedVersion: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }
+    const reacquired = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const acquire = vi.fn()
+      .mockResolvedValueOnce({
+        outcome: reacquired, acquired: true, replayed: false, reclaimed: true, reason: null,
+      })
+      .mockResolvedValueOnce({
+        outcome: reacquired, acquired: true, replayed: true, reclaimed: false, reason: null,
+      })
+    const bridge = runtime({ acquire })
+    const outcome = { ...goal, queueBinding: prior }
+
+    await expect(bridge.refreshOutcome(outcome)).resolves.toMatchObject({
+      queueBinding: { expectedVersion: 7, fencingToken: 5 },
+    })
+    await expect(bridge.refreshOutcome(outcome)).resolves.toMatchObject({
+      queueBinding: {
+        expectedVersion: 7,
+        fencingToken: 5,
+        reviewRecoveryReclaimEventId: 701,
+        reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+        reviewRecoverySourceExpectedVersion: 4,
+        reviewRecoverySourceFencingToken: 2,
+        reviewRecoverySourceRuntimeAttempt: 5,
+      },
+    })
+    expect(acquire).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ["same fence", { item: { version: 6, fencingToken: 4 } }],
+    ["plus two fences", { item: { version: 8, fencingToken: 6 } }],
+    ["combined disposition", { result: { reclaimed: true } }],
+    ["missing replay disposition", { result: { replayed: false } }],
+    ["identity drift", { item: { executionBinding: "execution-other" } }],
+  ])("walls governed stale-lease replay carry-forward for %s", async (_name, drift) => {
+    const prior = {
+      ...queueItem,
+      expectedVersion: 6,
+      fencingToken: 4,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    }
+    const item = {
+      ...queueItem,
+      lifecycleState: "active",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved",
+      authorityState: "matched",
+      version: 7,
+      fencingToken: 5,
+      leaseHolder: "resident-hermes",
+      leaseToken: "lease-77",
+      authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      ...(drift.item ?? {}),
+    }
+    const result = {
+      outcome: item,
+      acquired: true,
+      replayed: true,
+      reclaimed: false,
+      reason: null,
+      ...(drift.result ?? {}),
+    }
+    const bridge = runtime({ acquire: vi.fn(async () => result) })
+
+    await expect(bridge.refreshOutcome({ ...goal, queueBinding: prior })).rejects.toMatchObject({
+      code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL",
+    })
+  })
+
   it.each([
     ["acquired false", { result: { acquired: false } }],
     ["same-fence stale reclaim", { item: { version: 6, fencingToken: 4 } }],

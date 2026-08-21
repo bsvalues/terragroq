@@ -784,8 +784,14 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
         && rawLifecycleReason === "STALE_LEASE_RECOVERED"
         && binding.expectedVersion === source.expectedVersion + 1
         && binding.fencingToken === source.fencingToken + 1
+      const exactGovernedStaleReplay = acquisitionResult?.acquired === true
+        && acquisitionResult?.reclaimed === false
+        && acquisitionResult?.replayed === true
+        && rawLifecycleReason === "STALE_LEASE_RECOVERED"
+        && binding.expectedVersion === source.expectedVersion + 1
+        && binding.fencingToken === source.fencingToken + 1
       const exactRefreshIdentity = exactStableIdentity
-        && (exactSameFence || exactGovernedStaleReclaim)
+        && (exactSameFence || exactGovernedStaleReclaim || exactGovernedStaleReplay)
         && Number.isSafeInteger(source.reviewRecoverySourceExpectedVersion)
         && source.reviewRecoverySourceExpectedVersion >= 0
         && source.expectedVersion === source.reviewRecoverySourceExpectedVersion + 2
