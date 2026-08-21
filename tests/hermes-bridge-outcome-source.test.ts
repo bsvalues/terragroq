@@ -1426,6 +1426,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       deliveryAuthorityLevel: "A2_WRITE_OWN", deliveryAllowedActions: ["implement"],
       commitAllowed: true, tagAllowed: false, pushAllowed: true,
     }
+    const mergedPayload = { ...recoveryPayload,
+      idempotencyKey: "hermes-outcome:4:attempt:5:checkpoint:44", checkpointSequence: 44,
+      checkpointState: "PR_MERGED", checkpointDetail: "Recovered reviewed PR #929" }
     const authorization: Record<string, any> = {
       goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "operator-objective",
       outcomeKey: activeBinding.outcomeKey, lifecycleState: "active",
@@ -1451,7 +1454,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       historicalGoalTerminal: { id: 90, metadata: terminalMetadata },
       recoveryAuthorization: { id: 91, metadata: { ...authorizationPayload,
         payloadDigest: createHash("sha256").update(JSON.stringify(authorizationPayload)).digest("hex") } },
-      activeRecoveryCheckpoint: { id: 94, metadata: { ...recoveryPayload,
+      activeMergedCheckpoint: { id: 92, actor: "hermes-codex-bridge", metadata: { ...mergedPayload,
+        payloadDigest: createHash("sha256").update(JSON.stringify(mergedPayload)).digest("hex") } },
+      activeRecoveryCheckpoint: { id: 94, actor: "hermes-codex-bridge", metadata: { ...recoveryPayload,
         payloadDigest: createHash("sha256").update(JSON.stringify(recoveryPayload)).digest("hex") } },
     }
     const query = vi.fn(async (sql: string) => {
@@ -3470,7 +3475,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
             "commitRef" text,assignee text,agent text,"allowedFiles" text[],validators text[],"authorityGrantId" integer,
             "authorityLevel" text,"authorityGranted" text,"commitAllowed" boolean,"tagAllowed" boolean,"pushAllowed" boolean);
           CREATE TABLE governance_event (id bigint PRIMARY KEY,"userId" text,"eventType" text,"entityType" text,
-            "entityId" text,metadata jsonb,"createdAt" timestamptz DEFAULT now());
+            "entityId" text,actor text,metadata jsonb,"createdAt" timestamptz DEFAULT now());
         `)
         const receiptContract = { version: issue911RuntimeWorkContract.version,
           id: issue911RuntimeWorkContract.id, digest: issue911RuntimeWorkContract.digest,
@@ -3529,19 +3534,29 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           projectionIssueNumber: 911, projectionCompletionOwned: false,
           deliveryAuthorityLevel: "A2_WRITE_OWN", deliveryAllowedActions: ["implement"],
           commitAllowed: true, tagAllowed: false, pushAllowed: true }
+        const mergedPayload = { ...recoveredPayload,
+          idempotencyKey: "hermes-outcome:4:attempt:5:checkpoint:44", checkpointSequence: 44,
+          checkpointState: "PR_MERGED", checkpointDetail: "Recovered reviewed PR #929" }
+        const recoveryIdempotencyKey = `hermes-outcome:4:review-recovery:pr:929:head:${"b".repeat(40)}:merge:${"c".repeat(40)}`
         const events = [
           [89,"HERMES_RUNTIME_CHECKPOINT","work_order","42",failed], [90,"HERMES_OUTCOME_TERMINAL","goal","4",terminal],
           [91,"HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED","goal","4",{ ...authorizationPayload,
             payloadDigest: createHash("sha256").update(JSON.stringify(authorizationPayload)).digest("hex") }],
-          [92,"HERMES_RUNTIME_CHECKPOINT","work_order","42",{ checkpointState: "PR_MERGED", reviewRecoveryProofDigest: "d".repeat(64), prNumber: 929, headRefOid: "b".repeat(40), mergeSha: "c".repeat(40) }],
-          [93,"HERMES_OUTCOME_REVIEW_RECOVERED","goal","4",{ proofDigest: "d".repeat(64), prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40) }],
-          [94,"HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED","goal","4",{ proofDigest: "d".repeat(64), prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40) }],
+          [92,"HERMES_RUNTIME_CHECKPOINT","work_order","42",{ ...mergedPayload,
+            payloadDigest: createHash("sha256").update(JSON.stringify(mergedPayload)).digest("hex") }],
+          [93,"HERMES_OUTCOME_REVIEW_RECOVERED","goal","4",{ idempotencyKey: recoveryIdempotencyKey,
+            workOrderRef: "WO-HERMES-OUTCOME-4", proofDigest: "d".repeat(64), prNumber: 929,
+            reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40) }],
+          [94,"HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED","goal","4",{
+            idempotencyKey: `${recoveryIdempotencyKey}:queue-proof:${"d".repeat(64)}`,
+            recoveryIdempotencyKey, workOrderRef: "WO-HERMES-OUTCOME-4", proofDigest: "d".repeat(64),
+            prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40) }],
           [95,"HERMES_RUNTIME_CHECKPOINT","work_order","42",{ ...recoveredPayload,
             payloadDigest: createHash("sha256").update(JSON.stringify(recoveredPayload)).digest("hex") }],
         ]
         for (const [id,eventType,entityType,entityId,metadata] of events) await client.query(
-          `INSERT INTO governance_event (id,"userId","eventType","entityType","entityId",metadata)
-           VALUES ($1,'owner',$2,$3,$4,$5::jsonb)`, [id,eventType,entityType,entityId,JSON.stringify(metadata)],
+          `INSERT INTO governance_event (id,"userId","eventType","entityType","entityId",actor,metadata)
+           VALUES ($1,'owner',$2,$3,$4,'hermes-codex-bridge',$5::jsonb)`, [id,eventType,entityType,entityId,JSON.stringify(metadata)],
         )
         const real = client.query.bind(client)
         const query = vi.fn(async (sql: string, values?: unknown[]) => {
@@ -3566,13 +3581,25 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
             headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
             reviewRecoveryProofDigest: "d".repeat(64) } } })
         await expect(projectNext(46)).resolves.toMatchObject({ workOrderId: 42 })
-        await client.query(`INSERT INTO governance_event (id,"userId","eventType","entityType","entityId",metadata)
-          VALUES (96,'owner','HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED','goal','4',$1::jsonb)`,
-        [JSON.stringify(events[2][4])])
+        await client.query("UPDATE governance_event SET actor='other' WHERE id=93")
         await expect(projectNext(47)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query("UPDATE governance_event SET actor='hermes-codex-bridge' WHERE id=93")
+        await client.query(`UPDATE governance_event SET metadata=metadata || '{"extra":true}'::jsonb WHERE id=93`)
+        await expect(projectNext(48)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query("UPDATE governance_event SET metadata=$1::jsonb WHERE id=93", [JSON.stringify(events[4][4])])
+        await client.query("UPDATE governance_event SET metadata=jsonb_set(metadata,'{recoveryIdempotencyKey}','\"wrong\"') WHERE id=94")
+        await expect(projectNext(49)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query("UPDATE governance_event SET metadata=$1::jsonb WHERE id=94", [JSON.stringify(events[5][4])])
+        await client.query("UPDATE governance_event SET metadata=jsonb_set(metadata,'{workOrderRef}','\"WO-WRONG\"') WHERE id=94")
+        await expect(projectNext(50)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await client.query("UPDATE governance_event SET metadata=$1::jsonb WHERE id=94", [JSON.stringify(events[5][4])])
+        await client.query(`INSERT INTO governance_event (id,"userId","eventType","entityType","entityId",actor,metadata)
+          VALUES (96,'owner','HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED','goal','4','hermes-codex-bridge',$1::jsonb)`,
+        [JSON.stringify(events[2][4])])
+        await expect(projectNext(51)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
         await client.query("DELETE FROM governance_event WHERE id=96")
         await client.query("DELETE FROM governance_event WHERE id=94")
-        await expect(projectNext(48)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+        await expect(projectNext(52)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
       } finally {
         try { await client.query("ROLLBACK") } catch {}
         try { await client.query("SET search_path TO public") } catch {}

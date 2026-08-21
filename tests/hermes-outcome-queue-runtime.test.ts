@@ -1661,7 +1661,12 @@ describe("Hermes durable outcome queue runtime", () => {
       reviewedHeadSha: "a".repeat(40),
       mergeSha: "b".repeat(40),
       runtimeAttempt: 5,
-    })).resolves.toMatchObject({ queueBinding: { expectedVersion: 6, fencingToken: 4 } })
+    })).resolves.toMatchObject({ queueBinding: {
+      expectedVersion: 6, fencingToken: 4,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    } })
     expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
       expectedVersion: 6,
       fencingToken: 4,

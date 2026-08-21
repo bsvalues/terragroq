@@ -1346,7 +1346,22 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
           "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL",
         )
       }
-      return refreshOutcome(outcome)
+      const refreshed = await refreshOutcome(outcome)
+      const needsExactSourceBackfill = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
+        && verified.lifecycleReason === "REVIEW_REMEDIATION_RECOVERED"
+        && binding.reviewRecoverySourceExpectedVersion === undefined
+        && binding.reviewRecoverySourceFencingToken === undefined
+        && binding.reviewRecoverySourceRuntimeAttempt === undefined
+      if (!needsExactSourceBackfill) return refreshed
+      return {
+        ...refreshed,
+        queueBinding: {
+          ...refreshed.queueBinding,
+          reviewRecoverySourceExpectedVersion: binding.expectedVersion - 1,
+          reviewRecoverySourceFencingToken: binding.fencingToken - 1,
+          reviewRecoverySourceRuntimeAttempt: proof.runtimeAttempt,
+        },
+      }
     }
     const resumed = await resumeReviewRecoveryQueue({
       databaseUrl,

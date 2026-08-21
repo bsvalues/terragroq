@@ -2614,19 +2614,29 @@ function exactHistoricalRecoveryAuthorization(
     && canonicalJson(authorizationMetadata) === canonicalJson(expectedAuthorization)
 }
 
-function exactActiveReviewRecoveryCheckpoint(row, executionBinding, outcomeId, proofDigest, evidence) {
-  const checkpoint = row?.activeRecoveryCheckpoint
+function exactRecoveryRuntimeCheckpoint(
+  checkpoint,
+  row,
+  executionBinding,
+  outcomeId,
+  proofDigest,
+  evidence,
+  checkpointState,
+  checkpointDetail,
+) {
   const eventId = Number(checkpoint?.id)
   const metadata = checkpoint?.metadata
-  if (!Number.isSafeInteger(eventId) || eventId <= 0 || !metadata || typeof metadata !== "object") return false
+  if (!Number.isSafeInteger(eventId) || eventId <= 0
+    || checkpoint?.actor !== "hermes-codex-bridge"
+    || !metadata || typeof metadata !== "object") return false
   const expected = {
     idempotencyKey: `hermes-outcome:${outcomeId}:attempt:${executionBinding.reviewRecoverySourceRuntimeAttempt}:checkpoint:${metadata?.checkpointSequence}`,
     outcomeId,
     workOrderRef: outcomeWorkOrderRef(outcomeId),
     attempt: executionBinding.reviewRecoverySourceRuntimeAttempt,
     checkpointSequence: Number(metadata?.checkpointSequence),
-    checkpointState: "REVIEW_REMEDIATION_RECOVERED",
-    checkpointDetail: "REVIEW_REMEDIATION_EXHAUSTED",
+    checkpointState,
+    checkpointDetail,
     prNumber: evidence.prNumber,
     headRefOid: evidence.headRefOid,
     mergeSha: evidence.mergeSha,
@@ -2656,6 +2666,23 @@ function exactActiveReviewRecoveryCheckpoint(row, executionBinding, outcomeId, p
   expected.payloadDigest = projectionPayloadDigest(expected)
   return Number.isSafeInteger(expected.checkpointSequence) && expected.checkpointSequence >= 0
     && canonicalJson(metadata) === canonicalJson(expected)
+}
+
+function exactActiveReviewRecoveryCheckpoints(row, executionBinding, outcomeId, proofDigest, evidence) {
+  const mergeDetail = row?.activeMergedCheckpoint?.metadata?.checkpointDetail
+  const allowedMergeDetails = new Set([
+    `Recovered reviewed PR #${evidence.prNumber}`,
+    `Recovered PR #${evidence.prNumber} through reviewed remediation chain`,
+  ])
+  return allowedMergeDetails.has(mergeDetail)
+    && exactRecoveryRuntimeCheckpoint(
+      row?.activeMergedCheckpoint, row, executionBinding, outcomeId, proofDigest, evidence,
+      "PR_MERGED", mergeDetail,
+    )
+    && exactRecoveryRuntimeCheckpoint(
+      row?.activeRecoveryCheckpoint, row, executionBinding, outcomeId, proofDigest, evidence,
+      "REVIEW_REMEDIATION_RECOVERED", "REVIEW_REMEDIATION_EXHAUSTED",
+    )
 }
 
 function outcomeWorkOrderRef(outcomeId) {
@@ -2918,7 +2945,8 @@ export async function projectOutcomeRuntimeCheckpoint({
             AND recovery_authorization.metadata->>'mergeSha' = $17
           ORDER BY recovery_authorization.id
           LIMIT 1) AS "recoveryAuthorization"
-         ,(SELECT jsonb_build_object('id', recovery_checkpoint.id, 'metadata', recovery_checkpoint.metadata)
+         ,(SELECT jsonb_build_object('id', recovery_checkpoint.id, 'actor', recovery_checkpoint.actor,
+            'metadata', recovery_checkpoint.metadata)
           FROM governance_event AS recovery_checkpoint
           WHERE recovery_checkpoint."userId" = contract_queue."userId"
             AND recovery_checkpoint."entityType" = 'work_order'
@@ -2928,6 +2956,17 @@ export async function projectOutcomeRuntimeCheckpoint({
             AND recovery_checkpoint.metadata->>'reviewRecoveryProofDigest' = $14
           ORDER BY recovery_checkpoint.id
           LIMIT 1) AS "activeRecoveryCheckpoint"
+         ,(SELECT jsonb_build_object('id', merged_checkpoint.id, 'actor', merged_checkpoint.actor,
+            'metadata', merged_checkpoint.metadata)
+          FROM governance_event AS merged_checkpoint
+          WHERE merged_checkpoint."userId" = contract_queue."userId"
+            AND merged_checkpoint."entityType" = 'work_order'
+            AND merged_checkpoint."entityId"::text = contract_queue."activeWorkOrderId"::text
+            AND merged_checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+            AND merged_checkpoint.metadata->>'checkpointState' = 'PR_MERGED'
+            AND merged_checkpoint.metadata->>'reviewRecoveryProofDigest' = $14
+          ORDER BY merged_checkpoint.id
+          LIMIT 1) AS "activeMergedCheckpoint"
        FROM goal AS contract_goal
        JOIN "outcome_queue_item" AS contract_queue
          ON contract_queue."userId" = contract_goal."userId"
@@ -3109,6 +3148,7 @@ export async function projectOutcomeRuntimeCheckpoint({
              AND exact_recovery_authorization."entityType" = 'goal'
              AND exact_recovery_authorization."entityId"::text = contract_goal.id::text
              AND exact_recovery_authorization."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED'
+             AND exact_recovery_authorization.actor = 'hermes-codex-bridge'
              AND exact_recovery_authorization.metadata->>'recoveryKind' = 'review-remediation'
              AND exact_recovery_authorization.metadata->>'executionBinding' = contract_queue."executionBinding"
              AND exact_recovery_authorization.metadata->>'acquisitionKey' = contract_queue."acquisitionKey"
@@ -3126,6 +3166,7 @@ export async function projectOutcomeRuntimeCheckpoint({
              AND recovery_authorization."entityType" = 'goal'
              AND recovery_authorization."entityId"::text = contract_goal.id::text
              AND recovery_authorization."eventType" = $20
+             AND recovery_authorization.actor = 'hermes-codex-bridge'
              AND recovery_authorization.metadata->>'recoveryKind' = CASE
                WHEN $18 = 'POST_MERGE_CLEANUP_RECOVERED' THEN 'terminal-cleanup'
                ELSE 'review-remediation' END
@@ -3196,16 +3237,23 @@ export async function projectOutcomeRuntimeCheckpoint({
             AND recovered."entityType" = 'goal'
             AND recovered."entityId" = recovery_authorization."entityId"
             AND recovered."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERED'
+            AND recovered.actor = 'hermes-codex-bridge'
             AND recovered.metadata->>'proofDigest' = recovery_authorization.metadata->>'proofDigest'
             AND recovered.metadata->>'prNumber' = recovery_authorization.metadata->>'prNumber'
             AND recovered.metadata->>'reviewedHeadSha' = recovery_authorization.metadata->>'reviewedHeadSha'
             AND recovered.metadata->>'mergeSha' = recovery_authorization.metadata->>'mergeSha'
             AND recovered.id > recovery_authorization.id
+            AND recovered.metadata = jsonb_build_object(
+              'idempotencyKey', 'hermes-outcome:' || contract_goal.id::text || ':review-recovery:pr:' || ($15::integer)::text
+                || ':head:' || $16 || ':merge:' || $17,
+              'workOrderRef', 'WO-HERMES-OUTCOME-' || contract_goal.id::text,
+              'prNumber', $15::integer, 'reviewedHeadSha', $16, 'mergeSha', $17, 'proofDigest', $14)
            JOIN governance_event AS merged_checkpoint
              ON merged_checkpoint."userId" = recovered."userId"
             AND merged_checkpoint."entityType" = 'work_order'
             AND merged_checkpoint."entityId"::text = contract_queue."activeWorkOrderId"::text
             AND merged_checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+            AND merged_checkpoint.actor = 'hermes-codex-bridge'
             AND merged_checkpoint.metadata->>'checkpointState' = 'PR_MERGED'
             AND merged_checkpoint.metadata->>'reviewRecoveryProofDigest' = recovered.metadata->>'proofDigest'
             AND merged_checkpoint.metadata->>'prNumber' = recovered.metadata->>'prNumber'
@@ -3218,16 +3266,25 @@ export async function projectOutcomeRuntimeCheckpoint({
             AND recovery_confirmation."entityType" = 'goal'
             AND recovery_confirmation."entityId" = recovered."entityId"
             AND recovery_confirmation."eventType" = 'HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED'
+            AND recovery_confirmation.actor = 'hermes-codex-bridge'
             AND recovery_confirmation.metadata->>'proofDigest' = recovered.metadata->>'proofDigest'
             AND recovery_confirmation.metadata->>'prNumber' = recovered.metadata->>'prNumber'
             AND recovery_confirmation.metadata->>'reviewedHeadSha' = recovered.metadata->>'reviewedHeadSha'
             AND recovery_confirmation.metadata->>'mergeSha' = recovered.metadata->>'mergeSha'
             AND recovery_confirmation.id > recovered.id
+            AND recovery_confirmation.metadata = jsonb_build_object(
+              'idempotencyKey', 'hermes-outcome:' || contract_goal.id::text || ':review-recovery:pr:' || ($15::integer)::text
+                || ':head:' || $16 || ':merge:' || $17 || ':queue-proof:' || $14,
+              'recoveryIdempotencyKey', 'hermes-outcome:' || contract_goal.id::text || ':review-recovery:pr:' || ($15::integer)::text
+                || ':head:' || $16 || ':merge:' || $17,
+              'workOrderRef', 'WO-HERMES-OUTCOME-' || contract_goal.id::text,
+              'prNumber', $15::integer, 'reviewedHeadSha', $16, 'mergeSha', $17, 'proofDigest', $14)
            JOIN governance_event AS persisted_recovery_checkpoint
              ON persisted_recovery_checkpoint."userId" = recovered."userId"
             AND persisted_recovery_checkpoint."entityType" = 'work_order'
             AND persisted_recovery_checkpoint."entityId"::text = contract_queue."activeWorkOrderId"::text
             AND persisted_recovery_checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+            AND persisted_recovery_checkpoint.actor = 'hermes-codex-bridge'
             AND persisted_recovery_checkpoint.metadata->>'checkpointState' = 'REVIEW_REMEDIATION_RECOVERED'
             AND persisted_recovery_checkpoint.metadata->>'checkpointDetail' = 'REVIEW_REMEDIATION_EXHAUSTED'
             AND persisted_recovery_checkpoint.metadata->>'reviewRecoveryProofDigest' = recovered.metadata->>'proofDigest'
@@ -3297,7 +3354,7 @@ export async function projectOutcomeRuntimeCheckpoint({
         authorizations.rows[0], sourceBinding, outcomeId, "REVIEW_REMEDIATION_RECOVERED",
         normalizedExecutionBinding.reviewRecoverySourceRuntimeAttempt,
         historicalRecoveryProofDigest, evidence,
-      ) || !exactActiveReviewRecoveryCheckpoint(
+      ) || !exactActiveReviewRecoveryCheckpoints(
         authorizations.rows[0], normalizedExecutionBinding, outcomeId,
         historicalRecoveryProofDigest, evidence,
       )) {
