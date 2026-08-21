@@ -13,6 +13,7 @@ import {
   projectOutcomeRuntimeLease,
   readValidationInfrastructureRecovery,
   resolveActiveReviewRecoveryProvenance,
+  verifyActiveReviewRecoveryContinuation,
   resolveValidationInfrastructureRecovery,
   selectNextOutcome,
   terminalizeOutcome,
@@ -403,10 +404,14 @@ export function deriveHermesRuntimeProjectionBindings(
     return { workContract, executionBinding: null }
   }
   const staleReacquisition = binding.reviewRecoveryStaleReacquisition
+  const staleContinuation = binding.reviewRecoveryStaleContinuation
   const staleKeys = ["disposition", "expectedVersion", "fencingToken", "leaseExpiresAt",
     "lifecycleReason", "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken"]
   const staleExpiry = typeof staleReacquisition?.leaseExpiresAt === "string"
     ? Date.parse(staleReacquisition.leaseExpiresAt) : Number.NaN
+  const continuationKeys = [...staleKeys, "priorLeaseExpiresAt"]
+  const continuationExpiry = typeof staleContinuation?.leaseExpiresAt === "string"
+    ? Date.parse(staleContinuation.leaseExpiresAt) : Number.NaN
   // A legacy local RECOVERED checkpoint can carry only the resume state until its durable
   // provenance resolver backfills the source triple. Every other recovery shape is closed.
   const legacyResumeOnlyRecovery = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
@@ -423,9 +428,10 @@ export function deriveHermesRuntimeProjectionBindings(
     || binding.reviewRecoveryReclaimEventId !== undefined
     || binding.reviewRecoveryReclaimPayloadDigest !== undefined
     || staleReacquisition !== undefined
+    || staleContinuation !== undefined
   const reviewRecoveryDelta = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
     ? 1 : binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
-      ? (staleReacquisition === undefined ? 2 : 3) : null
+      ? (staleContinuation !== undefined ? 4 : staleReacquisition === undefined ? 2 : 3) : null
   const validReclaimEvidence = Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
     && binding.reviewRecoveryReclaimEventId > 0
     && /^[0-9a-f]{64}$/.test(String(binding.reviewRecoveryReclaimPayloadDigest ?? ""))
@@ -455,12 +461,30 @@ export function deriveHermesRuntimeProjectionBindings(
     || staleReacquisition.priorFencingToken !== binding.reviewRecoverySourceFencingToken + 2
     || staleReacquisition.expectedVersion !== staleReacquisition.priorExpectedVersion + 1
     || staleReacquisition.fencingToken !== staleReacquisition.priorFencingToken + 1
-    || staleReacquisition.expectedVersion !== binding.expectedVersion
-    || staleReacquisition.fencingToken !== binding.fencingToken
+    || (staleContinuation === undefined
+      && (staleReacquisition.expectedVersion !== binding.expectedVersion
+        || staleReacquisition.fencingToken !== binding.fencingToken))
     || staleReacquisition.receiptLatestFencingToken !== staleReacquisition.fencingToken
     || !Number.isFinite(staleExpiry)
     || new Date(staleExpiry).toISOString() !== staleReacquisition.leaseExpiresAt)
-  if (invalidReviewRecoveryDelta || invalidStaleReacquisition) {
+  const invalidStaleContinuation = staleContinuation !== undefined && (
+    staleReacquisition === undefined || !staleContinuation
+    || typeof staleContinuation !== "object" || Array.isArray(staleContinuation)
+    || Object.keys(staleContinuation).length !== continuationKeys.length
+    || !continuationKeys.every((key) => Object.hasOwn(staleContinuation, key))
+    || staleContinuation.lifecycleReason !== "STALE_LEASE_RECOVERED"
+    || !["RECLAIMED", "REPLAY_WINNER"].includes(staleContinuation.disposition)
+    || staleContinuation.priorExpectedVersion !== staleReacquisition.expectedVersion
+    || staleContinuation.priorFencingToken !== staleReacquisition.fencingToken
+    || staleContinuation.priorLeaseExpiresAt !== staleReacquisition.leaseExpiresAt
+    || staleContinuation.expectedVersion !== staleContinuation.priorExpectedVersion + 1
+    || staleContinuation.fencingToken !== staleContinuation.priorFencingToken + 1
+    || staleContinuation.expectedVersion !== binding.expectedVersion
+    || staleContinuation.fencingToken !== binding.fencingToken
+    || staleContinuation.receiptLatestFencingToken !== staleContinuation.fencingToken
+    || !Number.isFinite(continuationExpiry)
+    || new Date(continuationExpiry).toISOString() !== staleContinuation.leaseExpiresAt)
+  if (invalidReviewRecoveryDelta || invalidStaleReacquisition || invalidStaleContinuation) {
     throw Object.assign(new Error("Runtime stale reacquisition binding is invalid"), {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
     })
@@ -517,11 +541,30 @@ export function deriveHermesRuntimeProjectionBindings(
           reviewRecoveryReclaimPayloadDigest: binding.reviewRecoveryReclaimPayloadDigest,
           ...(staleReacquisition === undefined ? {} : {
             reviewRecoveryStaleReacquisition: { ...staleReacquisition },
+            ...(staleContinuation === undefined ? {} : {
+              reviewRecoveryStaleContinuation: { ...staleContinuation },
+            }),
           }),
         } : {}),
       } : {}),
     },
   }
+}
+
+function isLegacyUnmarkedStaleReviewRecovery(binding) {
+  return binding?.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    && binding.reviewRecoveryStaleReacquisition === undefined
+    && Number.isSafeInteger(binding.reviewRecoverySourceExpectedVersion)
+    && binding.reviewRecoverySourceExpectedVersion >= 0
+    && Number.isSafeInteger(binding.reviewRecoverySourceFencingToken)
+    && binding.reviewRecoverySourceFencingToken > 0
+    && Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
+    && binding.reviewRecoverySourceRuntimeAttempt > 0
+    && binding.expectedVersion === binding.reviewRecoverySourceExpectedVersion + 3
+    && binding.fencingToken === binding.reviewRecoverySourceFencingToken + 3
+    && Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
+    && binding.reviewRecoveryReclaimEventId > 0
+    && /^[0-9a-f]{64}$/.test(String(binding.reviewRecoveryReclaimPayloadDigest ?? ""))
 }
 
 function retryableWallDetail(error) {
@@ -583,6 +626,8 @@ export function createHermesOrchestrator(options = {}) {
       : resolveValidationInfrastructureRecovery)
   const resolveReviewRecoveryProvenance = options.resolveActiveReviewRecoveryProvenance
     ?? resolveActiveReviewRecoveryProvenance
+  const verifyReviewRecoveryContinuation = options.verifyActiveReviewRecoveryContinuation
+    ?? verifyActiveReviewRecoveryContinuation
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const projectLease = options.projectLease ?? projectOutcomeRuntimeLease
   const leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? 5 * 60 * 1000
@@ -1250,17 +1295,80 @@ export function createHermesOrchestrator(options = {}) {
           code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
         })
       }
-      const { workContract, executionBinding } = deriveHermesRuntimeProjectionBindings(
-        execution.metadata?.outcome,
-        { resolver: workContractResolver },
-      )
-      const resolvedProvenance = await resolveReviewRecoveryProvenance({
-        outcomeId: Number(execution.outcomeId),
-        executionBinding,
-        workContract,
-        proof: { expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest,
-          prNumber, reviewedHeadSha, mergeSha },
-      })
+      const persistedOutcome = execution.metadata?.outcome
+      const persistedBinding = persistedOutcome?.queueBinding
+      const legacyStaleReacquired = isLegacyUnmarkedStaleReviewRecovery(persistedBinding)
+      const recoveryProof = { expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest,
+        prNumber, reviewedHeadSha, mergeSha }
+      let workContract
+      let executionBinding
+      let resolvedProvenance
+      if (legacyStaleReacquired) {
+        workContract = projectedWorkContract(persistedOutcome, workContractResolver).projection
+        const checkpointProof = {
+          outcomeId: String(execution.outcomeId),
+          outcomeKey: persistedBinding.outcomeKey,
+          fencingToken: persistedBinding.fencingToken,
+          sequence: execution.checkpoint.sequence,
+          state: execution.checkpoint.state,
+          workOrderId: persistedBinding.activeWorkOrderId ?? null,
+          commit: { headSha: reviewedHeadSha, mergeSha, prNumber },
+        }
+        resolvedProvenance = await resolveReviewRecoveryProvenance({
+          outcomeId: Number(execution.outcomeId),
+          executionBinding: persistedBinding,
+          workContract,
+          proof: recoveryProof,
+          checkpointProof,
+        })
+        const patchedOutcome = { ...persistedOutcome, queueBinding: { ...persistedBinding,
+          expectedVersion: resolvedProvenance.reviewRecoveryExpectedVersion,
+          fencingToken: resolvedProvenance.reviewRecoveryFencingToken,
+          reviewRecoveryStaleReacquisition: resolvedProvenance.reviewRecoveryStaleReacquisition,
+          ...(resolvedProvenance.reviewRecoveryStaleContinuation ? {
+            reviewRecoveryStaleContinuation: resolvedProvenance.reviewRecoveryStaleContinuation,
+          } : {}) } }
+        ;({ workContract, executionBinding } = deriveHermesRuntimeProjectionBindings(
+          patchedOutcome, { resolver: workContractResolver },
+        ))
+      } else {
+        ;({ workContract, executionBinding } = deriveHermesRuntimeProjectionBindings(
+          persistedOutcome, { resolver: workContractResolver },
+        ))
+        const staleResolverBinding = executionBinding.reviewRecoveryStaleReacquisition === undefined
+          ? executionBinding
+          : (() => {
+              if (!Number.isSafeInteger(persistedBinding.activeWorkOrderId)
+                || persistedBinding.activeWorkOrderId <= 0) {
+                throw Object.assign(new Error("Stale recovery Work Order identity is invalid"), {
+                  code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+                })
+              }
+              return { ...executionBinding, activeWorkOrderId: persistedBinding.activeWorkOrderId }
+            })()
+        const checkpointProof = {
+          outcomeId: String(execution.outcomeId),
+          outcomeKey: staleResolverBinding.outcomeKey,
+          fencingToken: staleResolverBinding.fencingToken,
+          sequence: execution.checkpoint.sequence,
+          state: execution.checkpoint.state,
+          workOrderId: staleResolverBinding.activeWorkOrderId ?? null,
+          commit: { headSha: reviewedHeadSha, mergeSha, prNumber },
+        }
+        resolvedProvenance = await resolveReviewRecoveryProvenance({
+          outcomeId: Number(execution.outcomeId),
+          executionBinding: staleResolverBinding,
+          workContract,
+          proof: recoveryProof,
+          checkpointProof,
+        })
+      }
+      if (legacyStaleReacquired && (resolvedProvenance.alreadyStaleReacquired !== true
+        || !resolvedProvenance.reviewRecoveryStaleReacquisition)) {
+        throw Object.assign(new Error("Legacy stale recovery provenance is incomplete"), {
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+      }
       verifiedReviewRecoveries.set(String(execution.outcomeId), {
         expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
         proofDigest,
@@ -1271,6 +1379,15 @@ export function createHermesOrchestrator(options = {}) {
         reviewRecoverySourceExpectedVersion: resolvedProvenance.reviewRecoverySourceExpectedVersion,
         reviewRecoverySourceFencingToken: resolvedProvenance.reviewRecoverySourceFencingToken,
         reviewRecoverySourceRuntimeAttempt: resolvedProvenance.reviewRecoverySourceRuntimeAttempt,
+        ...(resolvedProvenance.alreadyStaleReacquired === true ? {
+          alreadyStaleReacquired: true,
+          reviewRecoveryExpectedVersion: resolvedProvenance.reviewRecoveryExpectedVersion,
+          reviewRecoveryFencingToken: resolvedProvenance.reviewRecoveryFencingToken,
+          reviewRecoveryStaleReacquisition: resolvedProvenance.reviewRecoveryStaleReacquisition,
+          ...(resolvedProvenance.reviewRecoveryStaleContinuation ? {
+            reviewRecoveryStaleContinuation: resolvedProvenance.reviewRecoveryStaleContinuation,
+          } : {}),
+        } : {}),
       })
     }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (
@@ -1425,13 +1542,34 @@ export function createHermesOrchestrator(options = {}) {
           reviewRecoverySourceExpectedVersion: reviewRecoveryProof.reviewRecoverySourceExpectedVersion,
           reviewRecoverySourceFencingToken: reviewRecoveryProof.reviewRecoverySourceFencingToken,
           reviewRecoverySourceRuntimeAttempt: reviewRecoveryProof.runtimeAttempt,
+          ...(reviewRecoveryProof.alreadyStaleReacquired === true ? {
+            expectedVersion: reviewRecoveryProof.reviewRecoveryExpectedVersion,
+            fencingToken: reviewRecoveryProof.reviewRecoveryFencingToken,
+            reviewRecoveryStaleReacquisition: reviewRecoveryProof.reviewRecoveryStaleReacquisition,
+            ...(reviewRecoveryProof.reviewRecoveryStaleContinuation ? {
+              reviewRecoveryStaleContinuation: reviewRecoveryProof.reviewRecoveryStaleContinuation,
+            } : {}),
+          } : {}),
         },
       }
-      outcome = await resumeQueueAfterReviewRecovery(outcome, reviewRecoveryProof)
+      if (reviewRecoveryProof.alreadyStaleReacquired !== true) {
+        outcome = await resumeQueueAfterReviewRecovery(outcome, reviewRecoveryProof)
+      }
     }
     outcome = terminalReplay
       ? await refreshQueueOutcome(outcome, terminalReplay)
       : await refreshQueueOutcome(outcome)
+    if (reviewRecoveryProof) {
+      const projectionBindings = deriveHermesRuntimeProjectionBindings(
+        outcome, { resolver: workContractResolver, requireVerified: true },
+      )
+      await verifyReviewRecoveryContinuation({
+        outcomeId: Number(outcome.id),
+        executionBinding: projectionBindings.executionBinding,
+        workContract: projectionBindings.workContract,
+        proof: reviewRecoveryProof,
+      })
+    }
 
     let lease
     if (current) {

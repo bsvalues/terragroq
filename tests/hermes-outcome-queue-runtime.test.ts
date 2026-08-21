@@ -1922,6 +1922,64 @@ describe("Hermes durable outcome queue runtime", () => {
     expect(acquire).toHaveBeenCalledTimes(3)
   })
 
+  it("preserves the authenticated base hop while admitting one bounded stale continuation", async () => {
+    const baseHop = {
+      disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+    }
+    const prior = { ...queueItem, expectedVersion: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: 701, reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReacquisition: baseHop }
+    const continued = { ...queueItem, lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 8, fencingToken: 6,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77", authorityGrantRef: "grant-77",
+      activeWorkOrderId: 77, leaseExpiresAt: "2026-07-28T13:50:00.000Z" }
+    const acquire = vi.fn()
+      .mockResolvedValueOnce({ outcome: continued, acquired: true, replayed: false,
+        reclaimed: true, reason: null, reviewRecoveryContinuationDisposition: "RECLAIMED" })
+      .mockResolvedValueOnce({ outcome: continued, acquired: true, replayed: true,
+        reclaimed: false, reason: null, reviewRecoveryContinuationDisposition: "REPLAY_WINNER" })
+    const bridge = runtime({ acquire })
+    const advanced = await bridge.refreshOutcome({ ...goal, queueBinding: prior })
+    expect(advanced).toMatchObject({
+      queueBinding: {
+        expectedVersion: 8, fencingToken: 6,
+        reviewRecoveryStaleReacquisition: baseHop,
+        reviewRecoveryStaleContinuation: {
+          disposition: "RECLAIMED", priorExpectedVersion: 7, priorFencingToken: 5,
+          priorLeaseExpiresAt: baseHop.leaseExpiresAt, expectedVersion: 8, fencingToken: 6,
+          receiptLatestFencingToken: 6, leaseExpiresAt: continued.leaseExpiresAt,
+          lifecycleReason: "STALE_LEASE_RECOVERED",
+        },
+      },
+    })
+    expect(acquire).toHaveBeenCalledWith(expect.objectContaining({
+      activeWorkOrderId: 77,
+      reviewRecoveryContinuationEnvelope: expect.objectContaining({
+        sourceExpectedVersion: 4, sourceFencingToken: 2, sourceRuntimeAttempt: 5,
+        reclaimEventId: 701, baseHop,
+      }),
+    }))
+    await expect(bridge.refreshOutcome(advanced)).resolves.toMatchObject({ queueBinding: {
+      expectedVersion: 8, fencingToken: 6, reviewRecoveryStaleReacquisition: baseHop,
+      reviewRecoveryStaleContinuation: expect.objectContaining({
+        disposition: "RECLAIMED", expectedVersion: 8, fencingToken: 6,
+      }),
+    } })
+    expect(acquire).toHaveBeenLastCalledWith(expect.objectContaining({
+      activeWorkOrderId: 77,
+      reviewRecoveryContinuationEnvelope: expect.objectContaining({
+        mode: "REPLAY_ONLY",
+        baseHop,
+        continuation: expect.objectContaining({ expectedVersion: 8, fencingToken: 6 }),
+      }),
+    }))
+  })
+
   it.each([
     ["wrong logical state", { reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" }],
     ["binding version drift", { expectedVersion: 8 }],

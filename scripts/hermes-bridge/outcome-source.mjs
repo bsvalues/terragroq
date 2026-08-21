@@ -2,6 +2,10 @@ import { createHash } from "node:crypto"
 
 import { evaluateOutcomePolicy, PROTECTED_SCOPE_LEXEMES } from "./policy.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
+import {
+  canonicalOutcomeQueueCheckpointProof,
+  digestOutcomeQueueCheckpointProof,
+} from "./outcome-queue-source.mjs"
 import { normalizeHermesFindings } from "./state-store.mjs"
 import {
   HERMES_WORK_CONTRACT_VERSION,
@@ -2096,13 +2100,18 @@ function normalizeRuntimeExecutionBinding(value) {
     || value?.reviewRecoveryReclaimEventId !== undefined
     || value?.reviewRecoveryReclaimPayloadDigest !== undefined
     || value?.reviewRecoveryStaleReacquisition !== undefined
+    || value?.reviewRecoveryStaleContinuation !== undefined
   const reclaimedReviewRecovery = value?.reviewRecoveryResumeState
     === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
   const staleReacquisition = value?.reviewRecoveryStaleReacquisition
+  const staleContinuation = value?.reviewRecoveryStaleContinuation
   const staleKeys = ["disposition", "expectedVersion", "fencingToken", "leaseExpiresAt",
     "lifecycleReason", "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken"]
   const staleExpiry = typeof staleReacquisition?.leaseExpiresAt === "string"
     ? Date.parse(staleReacquisition.leaseExpiresAt) : Number.NaN
+  const continuationKeys = [...staleKeys, "priorLeaseExpiresAt"]
+  const continuationExpiry = typeof staleContinuation?.leaseExpiresAt === "string"
+    ? Date.parse(staleContinuation.leaseExpiresAt) : Number.NaN
   const invalidStaleReacquisition = staleReacquisition !== undefined && (
     !staleReacquisition || typeof staleReacquisition !== "object" || Array.isArray(staleReacquisition)
     || Object.keys(staleReacquisition).length !== staleKeys.length
@@ -2114,11 +2123,29 @@ function normalizeRuntimeExecutionBinding(value) {
     || staleReacquisition.priorFencingToken !== value.reviewRecoverySourceFencingToken + 2
     || staleReacquisition.expectedVersion !== staleReacquisition.priorExpectedVersion + 1
     || staleReacquisition.fencingToken !== staleReacquisition.priorFencingToken + 1
-    || staleReacquisition.expectedVersion !== value.expectedVersion
-    || staleReacquisition.fencingToken !== value.fencingToken
+    || (staleContinuation === undefined
+      && (staleReacquisition.expectedVersion !== value.expectedVersion
+        || staleReacquisition.fencingToken !== value.fencingToken))
     || staleReacquisition.receiptLatestFencingToken !== staleReacquisition.fencingToken
     || !Number.isFinite(staleExpiry)
     || new Date(staleExpiry).toISOString() !== staleReacquisition.leaseExpiresAt)
+  const invalidStaleContinuation = staleContinuation !== undefined && (
+    staleReacquisition === undefined || !staleContinuation
+    || typeof staleContinuation !== "object" || Array.isArray(staleContinuation)
+    || Object.keys(staleContinuation).length !== continuationKeys.length
+    || !continuationKeys.every((key) => Object.hasOwn(staleContinuation, key))
+    || staleContinuation.lifecycleReason !== "STALE_LEASE_RECOVERED"
+    || !["RECLAIMED", "REPLAY_WINNER"].includes(staleContinuation.disposition)
+    || staleContinuation.priorExpectedVersion !== staleReacquisition.expectedVersion
+    || staleContinuation.priorFencingToken !== staleReacquisition.fencingToken
+    || staleContinuation.priorLeaseExpiresAt !== staleReacquisition.leaseExpiresAt
+    || staleContinuation.expectedVersion !== staleContinuation.priorExpectedVersion + 1
+    || staleContinuation.fencingToken !== staleContinuation.priorFencingToken + 1
+    || staleContinuation.expectedVersion !== value.expectedVersion
+    || staleContinuation.fencingToken !== value.fencingToken
+    || staleContinuation.receiptLatestFencingToken !== staleContinuation.fencingToken
+    || !Number.isFinite(continuationExpiry)
+    || new Date(continuationExpiry).toISOString() !== staleContinuation.leaseExpiresAt)
   const invalidReviewRecovery = hasReviewRecovery && (
     !["REVIEW_REMEDIATION_RECOVERED", "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"]
       .includes(value.reviewRecoveryResumeState)
@@ -2129,9 +2156,9 @@ function normalizeRuntimeExecutionBinding(value) {
     || !Number.isSafeInteger(value.reviewRecoverySourceRuntimeAttempt)
     || value.reviewRecoverySourceRuntimeAttempt <= 0
     || value.expectedVersion !== value.reviewRecoverySourceExpectedVersion
-      + (staleReacquisition ? 3 : reclaimedReviewRecovery ? 2 : 1)
+      + (staleContinuation ? 4 : staleReacquisition ? 3 : reclaimedReviewRecovery ? 2 : 1)
     || value.fencingToken !== value.reviewRecoverySourceFencingToken
-      + (staleReacquisition ? 3 : reclaimedReviewRecovery ? 2 : 1)
+      + (staleContinuation ? 4 : staleReacquisition ? 3 : reclaimedReviewRecovery ? 2 : 1)
     || (reclaimedReviewRecovery && (!Number.isSafeInteger(value.reviewRecoveryReclaimEventId)
       || value.reviewRecoveryReclaimEventId <= 0
       || typeof value.reviewRecoveryReclaimPayloadDigest !== "string"
@@ -2139,6 +2166,7 @@ function normalizeRuntimeExecutionBinding(value) {
     || (!reclaimedReviewRecovery && (value.reviewRecoveryReclaimEventId !== undefined
       || value.reviewRecoveryReclaimPayloadDigest !== undefined))
     || invalidStaleReacquisition
+    || invalidStaleContinuation
   )
   if (!value || typeof value.userId !== "string" || value.userId.trim() === ""
     || typeof value.outcomeKey !== "string" || value.outcomeKey.trim() === ""
@@ -2173,6 +2201,9 @@ function normalizeRuntimeExecutionBinding(value) {
         reviewRecoveryReclaimPayloadDigest: value.reviewRecoveryReclaimPayloadDigest,
         ...(staleReacquisition === undefined ? {} : {
           reviewRecoveryStaleReacquisition: { ...staleReacquisition },
+          ...(staleContinuation === undefined ? {} : {
+            reviewRecoveryStaleContinuation: { ...staleContinuation },
+          }),
         }),
       } : {}),
     } : {}),
@@ -2523,7 +2554,9 @@ function exactAuthorizationContract(
   const projection = workContract.projection
   const staleReacquisition = activeReviewRecovery
     ? executionBinding.reviewRecoveryStaleReacquisition : undefined
-  const activeRecoveryDelta = staleReacquisition ? 3
+  const staleContinuation = activeReviewRecovery
+    ? executionBinding.reviewRecoveryStaleContinuation : undefined
+  const activeRecoveryDelta = staleContinuation ? 4 : staleReacquisition ? 3
     : executionBinding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" ? 2 : 1
   const rowLeaseExpiry = Date.parse(String(row?.leaseExpiresAt ?? ""))
   return Number(row?.goalId) === outcomeId
@@ -2555,9 +2588,11 @@ function exactAuthorizationContract(
             && executionBinding.fencingToken === executionBinding.reviewRecoverySourceFencingToken
               + activeRecoveryDelta
             && (!staleReacquisition || (Number(row?.executionEpochLatestFencingToken)
-              === staleReacquisition.receiptLatestFencingToken
+              === (staleContinuation?.receiptLatestFencingToken
+                ?? staleReacquisition.receiptLatestFencingToken)
               && Number.isFinite(rowLeaseExpiry)
-              && new Date(rowLeaseExpiry).toISOString() === staleReacquisition.leaseExpiresAt)))))
+              && new Date(rowLeaseExpiry).toISOString() === (staleContinuation?.leaseExpiresAt
+                ?? staleReacquisition.leaseExpiresAt))))))
     && receiptContract?.id === workContract.id
     && receiptContract?.digest === workContract.digest
     && receiptContract?.version === workContract.version
@@ -2800,6 +2835,75 @@ function exactActiveReviewRecoveryReclaim(row, executionBinding, outcomeId, proo
     && canonicalJson(body) === canonicalJson(expected)
     && payloadDigest === createHash("sha256").update(canonicalJson(body)).digest("hex")
     && Number(event.id) > Number(row?.activeRecoveryCheckpoint?.id)
+}
+
+function exactActiveReviewRecoveryAcquisitionHops(row, executionBinding, outcomeId) {
+  const base = executionBinding.reviewRecoveryStaleReacquisition
+  const continuation = executionBinding.reviewRecoveryStaleContinuation
+  const attempts = Array.isArray(row?.activeRecoveryAcquisitionAttempts)
+    ? row.activeRecoveryAcquisitionAttempts : []
+  if (base === undefined) return attempts.length === 0
+  const acquisitionKeyDigest = projectionPayloadDigest({
+    acquisitionKey: executionBinding.acquisitionKey,
+  })
+  const leaseIdentityDigest = projectionPayloadDigest({
+    leaseHolder: executionBinding.leaseHolder,
+    leaseToken: executionBinding.leaseToken,
+  })
+  const exactHop = (hop, rows) => {
+    if (!Array.isArray(rows) || rows.length < 1 || rows.length > 32) return false
+    return rows.every((attempt, index) => {
+      const attemptedAt = Date.parse(String(attempt?.attemptedAt ?? ""))
+      const leaseExpiresAt = Date.parse(String(attempt?.leaseExpiresAt ?? ""))
+      const checkpointSequence = Number(attempt?.checkpointSequence)
+      const checkpointPrNumber = attempt?.checkpointPrNumber == null
+        ? null : Number(attempt.checkpointPrNumber)
+      let checkpointDigest
+      try {
+        checkpointDigest = digestOutcomeQueueCheckpointProof({
+          outcomeId: String(attempt?.checkpointOutcomeId ?? ""),
+          outcomeKey: attempt?.outcomeKey,
+          workOrderId: Number(attempt?.activeWorkOrderId),
+          fencingToken: Number(attempt?.fencingToken),
+          sequence: checkpointSequence,
+          state: attempt?.checkpointState,
+          commit: {
+            headSha: attempt?.checkpointHeadSha ?? null,
+            mergeSha: attempt?.checkpointMergeSha ?? null,
+            prNumber: checkpointPrNumber,
+          },
+        })
+      } catch {
+        return false
+      }
+      return Number.isSafeInteger(Number(attempt?.id)) && Number(attempt.id) > 0
+        && typeof attempt?.campaignWindowId === "string" && attempt.campaignWindowId.trim() !== ""
+        && typeof attempt?.processIdentity === "string" && attempt.processIdentity.trim() !== ""
+        && attempt?.leaseHolder === executionBinding.leaseHolder
+        && attempt?.acquisitionKeyDigest === acquisitionKeyDigest
+        && attempt?.leaseIdentityDigest === leaseIdentityDigest
+        && attempt?.checkpointDigest === checkpointDigest
+        && String(attempt?.checkpointOutcomeId) === String(outcomeId)
+        && Number.isSafeInteger(checkpointSequence) && checkpointSequence >= 0
+        && attempt?.outcomeKey === executionBinding.outcomeKey
+        && Number(attempt?.fencingToken) === hop.fencingToken
+        && Number(attempt?.activeWorkOrderId) === Number(row?.activeWorkOrderId)
+        && Number.isFinite(leaseExpiresAt)
+        && new Date(leaseExpiresAt).toISOString() === hop.leaseExpiresAt
+        && attempt?.disposition === (index === 0 ? "RECLAIMED" : "REPLAY_WINNER")
+        && attempt?.reason == null
+        && Number.isFinite(attemptedAt)
+    })
+  }
+  const baseRows = attempts.filter((attempt) => Number(attempt?.fencingToken) === base.fencingToken)
+  const continuationRows = continuation === undefined ? []
+    : attempts.filter((attempt) => Number(attempt?.fencingToken) === continuation.fencingToken)
+  return exactHop(base, baseRows)
+    && (continuation === undefined
+      ? attempts.length === baseRows.length
+      : exactHop(continuation, continuationRows)
+        && attempts.length === baseRows.length + continuationRows.length
+        && Number(baseRows.at(-1)?.id) < Number(continuationRows[0]?.id))
 }
 
 function outcomeWorkOrderRef(outcomeId) {
@@ -3096,7 +3200,7 @@ export async function projectOutcomeRuntimeCheckpoint({
             AND merged_checkpoint.metadata->>'reviewRecoveryProofDigest' = $14
           ORDER BY merged_checkpoint.id
           LIMIT 1) AS "activeMergedCheckpoint"
-         ,COALESCE((SELECT jsonb_agg(jsonb_build_object(
+	         ,COALESCE((SELECT jsonb_agg(jsonb_build_object(
             'id', reclaim_event.id, 'actor', reclaim_event.actor, 'metadata', reclaim_event.metadata)
             ORDER BY reclaim_event.id)
           FROM governance_event AS reclaim_event
@@ -3106,7 +3210,35 @@ export async function projectOutcomeRuntimeCheckpoint({
             AND reclaim_event."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_RECLAIMED'
             AND reclaim_event.metadata->>'prNumber' = ($15::integer)::text
             AND reclaim_event.metadata->>'reviewedHeadSha' = $16
-            AND reclaim_event.metadata->>'mergeSha' = $17), '[]'::jsonb) AS "activeRecoveryReclaims"
+	            AND reclaim_event.metadata->>'mergeSha' = $17), '[]'::jsonb) AS "activeRecoveryReclaims"
+	         ,COALESCE((SELECT jsonb_agg(jsonb_build_object(
+	            'id', acquisition_attempt.id,
+	            'campaignWindowId', acquisition_attempt."campaignWindowId",
+	            'processIdentity', acquisition_attempt."processIdentity",
+	            'leaseHolder', acquisition_attempt."leaseHolder",
+	            'acquisitionKeyDigest', acquisition_attempt."acquisitionKeyDigest",
+	            'leaseIdentityDigest', acquisition_attempt."leaseIdentityDigest",
+	            'checkpointDigest', acquisition_attempt."checkpointDigest",
+	            'checkpointOutcomeId', acquisition_attempt."checkpointOutcomeId",
+	            'checkpointSequence', acquisition_attempt."checkpointSequence",
+	            'checkpointState', acquisition_attempt."checkpointState",
+	            'checkpointHeadSha', acquisition_attempt."checkpointHeadSha",
+	            'checkpointMergeSha', acquisition_attempt."checkpointMergeSha",
+	            'checkpointPrNumber', acquisition_attempt."checkpointPrNumber",
+	            'outcomeKey', acquisition_attempt."outcomeKey",
+	            'fencingToken', acquisition_attempt."fencingToken",
+	            'leaseExpiresAt', acquisition_attempt."leaseExpiresAt",
+	            'activeWorkOrderId', acquisition_attempt."activeWorkOrderId",
+	            'disposition', acquisition_attempt.disposition,
+	            'reason', acquisition_attempt.reason,
+	            'attemptedAt', acquisition_attempt."attemptedAt") ORDER BY acquisition_attempt.id)
+	          FROM outcome_queue_acquisition_attempt AS acquisition_attempt
+	          WHERE $29::boolean
+	            AND acquisition_attempt."userId" = contract_queue."userId"
+	            AND acquisition_attempt."outcomeKey" = contract_queue."outcomeKey"
+	            AND acquisition_attempt."fencingToken" IN (
+	              $24::integer + 3, $24::integer + CASE WHEN $31::boolean THEN 4 ELSE 3 END
+	            )), '[]'::jsonb) AS "activeRecoveryAcquisitionAttempts"
        FROM goal AS contract_goal
        JOIN "outcome_queue_item" AS contract_queue
          ON contract_queue."userId" = contract_goal."userId"
@@ -3120,9 +3252,9 @@ export async function projectOutcomeRuntimeCheckpoint({
         AND contract_acquisition."acquisitionKey" = contract_queue."acquisitionKey"
          AND ((NOT $23::boolean
            AND contract_acquisition."latestFencingToken" = contract_queue."fencingToken")
-          OR ($23::boolean
-           AND contract_acquisition."latestFencingToken" = CASE WHEN $29::boolean
-             THEN $8::integer ELSE $24::integer END))
+	          OR ($23::boolean
+	           AND contract_acquisition."latestFencingToken" = CASE WHEN ($29::boolean OR $31::boolean)
+	             THEN $8::integer ELSE $24::integer END))
        LEFT JOIN "workbench_thread_source" AS contract_root
          ON contract_root."userId" = contract_receipt."userId"
         AND contract_root."sourceType" = 'outcome'
@@ -3164,11 +3296,12 @@ export async function projectOutcomeRuntimeCheckpoint({
            AND contract_queue."lifecycleReason" = CASE WHEN $29::boolean
              THEN 'STALE_LEASE_RECOVERED' WHEN $28::boolean
              THEN 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED' ELSE 'REVIEW_REMEDIATION_RECOVERED' END
-           AND contract_queue.version = $25::integer + CASE WHEN $29::boolean THEN 3 WHEN $28::boolean THEN 2 ELSE 1 END
-           AND contract_queue."fencingToken" = $24::integer + CASE WHEN $29::boolean THEN 3 WHEN $28::boolean THEN 2 ELSE 1 END
+	           AND contract_queue.version = $25::integer + CASE WHEN $31::boolean THEN 4 WHEN $29::boolean THEN 3 WHEN $28::boolean THEN 2 ELSE 1 END
+	           AND contract_queue."fencingToken" = $24::integer + CASE WHEN $31::boolean THEN 4 WHEN $29::boolean THEN 3 WHEN $28::boolean THEN 2 ELSE 1 END
            AND contract_queue."leaseToken" = $6
            AND contract_queue."leaseHolder" = $7
-           AND (NOT $29::boolean OR contract_queue."leaseExpiresAt" = $30::timestamptz)
+	           AND (NOT $29::boolean OR contract_queue."leaseExpiresAt" = CASE WHEN $31::boolean
+	             THEN $32::timestamptz ELSE $30::timestamptz END)
            AND ($27::boolean OR contract_queue."leaseExpiresAt" > clock_timestamp()))
           OR ($13::boolean
            AND contract_queue."lifecycleState" = 'blocked'
@@ -3499,7 +3632,9 @@ export async function projectOutcomeRuntimeCheckpoint({
         activeReviewRecoveryProvenanceOnly,
          reclaimedActiveReviewRecovery,
          Boolean(normalizedExecutionBinding.reviewRecoveryStaleReacquisition),
-         normalizedExecutionBinding.reviewRecoveryStaleReacquisition?.leaseExpiresAt ?? null],
+	         normalizedExecutionBinding.reviewRecoveryStaleReacquisition?.leaseExpiresAt ?? null,
+	         Boolean(normalizedExecutionBinding.reviewRecoveryStaleContinuation),
+	         normalizedExecutionBinding.reviewRecoveryStaleContinuation?.leaseExpiresAt ?? null],
     )
     if (authorizations?.rows?.length !== 1
       || !exactAuthorizationContract(
@@ -3530,6 +3665,8 @@ export async function projectOutcomeRuntimeCheckpoint({
       ) || !exactActiveReviewRecoveryReclaim(
         authorizations.rows[0], normalizedExecutionBinding, outcomeId,
         historicalRecoveryProofDigest, evidence,
+      ) || !exactActiveReviewRecoveryAcquisitionHops(
+        authorizations.rows[0], normalizedExecutionBinding, outcomeId,
       )) {
         throw Object.assign(new Error("Active review recovery authorization is invalid"), {
           code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
@@ -4182,6 +4319,7 @@ export async function resolveActiveReviewRecoveryProvenance({
   executionBinding,
   workContract,
   proof,
+  checkpointProof,
 } = {}) {
   if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
     || !executionBinding || typeof executionBinding.userId !== "string"
@@ -4195,6 +4333,47 @@ export async function resolveActiveReviewRecoveryProvenance({
     throw Object.assign(new Error("Active review recovery binding is invalid"), {
       code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
     })
+  }
+  const reclaimedRecoveryBinding = executionBinding.reviewRecoveryResumeState
+      === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    && Number.isSafeInteger(executionBinding.reviewRecoverySourceExpectedVersion)
+    && executionBinding.reviewRecoverySourceExpectedVersion >= 0
+    && Number.isSafeInteger(executionBinding.reviewRecoverySourceFencingToken)
+    && executionBinding.reviewRecoverySourceFencingToken > 0
+    && Number.isSafeInteger(executionBinding.reviewRecoverySourceRuntimeAttempt)
+    && executionBinding.reviewRecoverySourceRuntimeAttempt > 0
+    && Number.isSafeInteger(executionBinding.reviewRecoveryReclaimEventId)
+    && executionBinding.reviewRecoveryReclaimEventId > 0
+    && /^[0-9a-f]{64}$/.test(String(executionBinding.reviewRecoveryReclaimPayloadDigest ?? ""))
+  const localBaseHop = executionBinding.reviewRecoveryStaleReacquisition
+  const localContinuation = executionBinding.reviewRecoveryStaleContinuation
+  const localStaleDelta = executionBinding.expectedVersion
+    - Number(executionBinding.reviewRecoverySourceExpectedVersion)
+  const staleRecoveryBinding = reclaimedRecoveryBinding
+    && executionBinding.fencingToken - executionBinding.reviewRecoverySourceFencingToken
+      === localStaleDelta
+    && (localStaleDelta === 3 || localStaleDelta === 4)
+    && (localStaleDelta === 3
+      ? localContinuation === undefined
+      : localBaseHop !== undefined && localContinuation !== undefined)
+  const legacyStaleReacquired = staleRecoveryBinding && localBaseHop === undefined
+  let exactCheckpointProof = null
+  if (staleRecoveryBinding) {
+    try {
+      exactCheckpointProof = canonicalOutcomeQueueCheckpointProof(checkpointProof)
+    } catch {
+      throw Object.assign(new Error("Legacy stale recovery checkpoint proof is invalid"), {
+        code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+      })
+    }
+    if (exactCheckpointProof.outcomeId !== String(outcomeId)
+      || exactCheckpointProof.outcomeKey !== executionBinding.outcomeKey
+      || exactCheckpointProof.fencingToken !== executionBinding.fencingToken
+      || exactCheckpointProof.workOrderId !== Number(executionBinding.activeWorkOrderId)) {
+      throw Object.assign(new Error("Legacy stale recovery checkpoint proof conflicts"), {
+        code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+      })
+    }
   }
   let runQuery = normalizeQuery(query)
   let pool
@@ -4210,12 +4389,26 @@ export async function resolveActiveReviewRecoveryProvenance({
       client = await pool.connect()
       runQuery = client.query.bind(client)
     }
+    const requestedSourceExpectedVersion = reclaimedRecoveryBinding
+      ? executionBinding.reviewRecoverySourceExpectedVersion
+      : executionBinding.expectedVersion - 1
+    const requestedSourceFencingToken = reclaimedRecoveryBinding
+      ? executionBinding.reviewRecoverySourceFencingToken
+      : executionBinding.fencingToken - 1
     const resolved = await runQuery(
       `SELECT (recovery_authorization.metadata->>'runtimeAttempt')::integer AS "sourceRuntimeAttempt",
           queue.version AS "queueVersion", queue."fencingToken" AS "queueFencingToken",
           queue."lifecycleReason" AS "queueLifecycleReason",
+          queue."leaseExpiresAt" AS "queueLeaseExpiresAt",
+          queue."activeWorkOrderId" AS "queueActiveWorkOrderId",
+          acquisition_receipt."firstFencingToken" AS "receiptFirstFencingToken",
+          acquisition_receipt."latestFencingToken" AS "receiptLatestFencingToken",
           reclaim.id AS "reclaimEventId", reclaim.metadata->>'payloadDigest' AS "reclaimPayloadDigest"
        FROM outcome_queue_item AS queue
+       JOIN outcome_queue_acquisition_receipt AS acquisition_receipt
+         ON acquisition_receipt."userId" = queue."userId"
+        AND acquisition_receipt."outcomeKey" = queue."outcomeKey"
+        AND acquisition_receipt."acquisitionKey" = queue."acquisitionKey"
        JOIN governance_event AS recovery_authorization
          ON recovery_authorization."userId" = queue."userId"
         AND recovery_authorization."entityType" = 'goal'
@@ -4230,9 +4423,7 @@ export async function resolveActiveReviewRecoveryProvenance({
         AND recovery_authorization.metadata->>'workOrderRef' = 'WO-HERMES-OUTCOME-' || queue."goalId"::text
         AND recovery_authorization.metadata->>'executionBinding' = queue."executionBinding"
         AND recovery_authorization.metadata->>'acquisitionKey' = queue."acquisitionKey"
-        AND recovery_authorization.metadata->>'fencingToken' = (queue."fencingToken" - CASE
-          WHEN queue."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED' THEN 2
-          ELSE 1 END)::text
+        AND recovery_authorization.metadata->>'fencingToken' = ($17::integer)::text
         AND recovery_authorization.metadata->>'proofDigest' = $10
         AND recovery_authorization.metadata->>'prNumber' = ($11::integer)::text
         AND recovery_authorization.metadata->>'reviewedHeadSha' = $12
@@ -4258,17 +4449,27 @@ export async function resolveActiveReviewRecoveryProvenance({
               AND queue.version = $4::integer
               AND queue."fencingToken" = $9::integer
               AND reclaim.id IS NULL)
-           OR (queue."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
-              AND queue.version = $4::integer + 1
-              AND queue."fencingToken" = $9::integer + 1
-              AND reclaim.id IS NOT NULL))
+            OR (queue."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
+               AND queue.version = $4::integer + 1
+               AND queue."fencingToken" = $9::integer + 1
+               AND reclaim.id IS NOT NULL)
+            OR ($14::boolean
+               AND queue."lifecycleReason" = 'STALE_LEASE_RECOVERED'
+               AND ((queue.version = $4::integer AND queue."fencingToken" = $9::integer)
+                 OR (queue.version = $4::integer + 1
+                   AND queue."fencingToken" = $9::integer + 1))
+               AND reclaim.id = $15::bigint
+               AND reclaim.metadata->>'payloadDigest' = $16))
        ORDER BY recovery_authorization.id
        LIMIT 2`,
       [outcomeId, executionBinding.userId, executionBinding.outcomeKey,
         executionBinding.expectedVersion, executionBinding.executionBinding,
         executionBinding.acquisitionKey, executionBinding.leaseHolder,
         executionBinding.leaseToken, executionBinding.fencingToken,
-        proof?.proofDigest, proof?.prNumber, proof?.reviewedHeadSha, proof?.mergeSha],
+        proof?.proofDigest, proof?.prNumber, proof?.reviewedHeadSha, proof?.mergeSha,
+        staleRecoveryBinding, executionBinding.reviewRecoveryReclaimEventId ?? null,
+        executionBinding.reviewRecoveryReclaimPayloadDigest ?? null,
+        requestedSourceFencingToken],
     )
     const row = resolved?.rows?.[0]
     const sourceRuntimeAttempt = Number(row?.sourceRuntimeAttempt)
@@ -4279,8 +4480,12 @@ export async function resolveActiveReviewRecoveryProvenance({
       })
     }
     const provenance = {
-      reviewRecoverySourceExpectedVersion: executionBinding.expectedVersion - 1,
-      reviewRecoverySourceFencingToken: executionBinding.fencingToken - 1,
+      reviewRecoverySourceExpectedVersion: reclaimedRecoveryBinding
+        ? executionBinding.reviewRecoverySourceExpectedVersion
+        : executionBinding.expectedVersion - 1,
+      reviewRecoverySourceFencingToken: reclaimedRecoveryBinding
+        ? executionBinding.reviewRecoverySourceFencingToken
+        : executionBinding.fencingToken - 1,
       reviewRecoverySourceRuntimeAttempt: sourceRuntimeAttempt,
     }
     const local = [executionBinding.reviewRecoverySourceExpectedVersion,
@@ -4295,6 +4500,138 @@ export async function resolveActiveReviewRecoveryProvenance({
         code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
       })
     }
+    let staleReacquisition = null
+    let staleContinuation = null
+    if (staleRecoveryBinding) {
+      const acquisitionKeyDigest = createHash("sha256").update(canonicalJson({
+        acquisitionKey: executionBinding.acquisitionKey,
+      })).digest("hex")
+      const leaseIdentityDigest = createHash("sha256").update(canonicalJson({
+        leaseHolder: executionBinding.leaseHolder,
+        leaseToken: executionBinding.leaseToken,
+      })).digest("hex")
+      const observed = await runQuery(
+        `SELECT id,"campaignWindowId","processIdentity","leaseHolder","acquisitionKeyDigest",
+            "leaseIdentityDigest","checkpointDigest","checkpointOutcomeId","checkpointSequence",
+            "checkpointState","checkpointHeadSha","checkpointMergeSha","checkpointPrNumber",
+            "fencingToken","leaseExpiresAt","activeWorkOrderId",disposition,reason,"attemptedAt"
+         FROM outcome_queue_acquisition_attempt
+         WHERE "userId" = $1 AND "outcomeKey" = $2
+           AND "fencingToken" IN ($3::integer, $4::integer)
+         ORDER BY "fencingToken",id
+         LIMIT 66`,
+        [executionBinding.userId, executionBinding.outcomeKey,
+          provenance.reviewRecoverySourceFencingToken + 3,
+          provenance.reviewRecoverySourceFencingToken + 4],
+      )
+      const attempts = observed?.rows ?? []
+      const queueExpiry = Date.parse(String(row.queueLeaseExpiresAt ?? ""))
+      const exactAttempt = (attempt, disposition, fence, groupExpiry) => {
+        const fenceCheckpoint = { ...exactCheckpointProof, fencingToken: fence }
+        const expectedCheckpointDigest = digestOutcomeQueueCheckpointProof(fenceCheckpoint)
+        return Number.isSafeInteger(Number(attempt?.id))
+        && Number(attempt.id) > 0
+        && attempt.disposition === disposition
+        && attempt.reason === null
+        && typeof attempt.campaignWindowId === "string" && attempt.campaignWindowId.trim() !== ""
+        && typeof attempt.processIdentity === "string" && attempt.processIdentity.trim() !== ""
+        && attempt.leaseHolder === executionBinding.leaseHolder
+        && attempt.acquisitionKeyDigest === acquisitionKeyDigest
+        && attempt.leaseIdentityDigest === leaseIdentityDigest
+        && attempt.checkpointDigest === expectedCheckpointDigest
+        && attempt.checkpointOutcomeId === exactCheckpointProof.outcomeId
+        && Number(attempt.checkpointSequence) === exactCheckpointProof.sequence
+        && attempt.checkpointState === exactCheckpointProof.state
+        && attempt.checkpointHeadSha === exactCheckpointProof.commit.headSha
+        && attempt.checkpointMergeSha === exactCheckpointProof.commit.mergeSha
+        && Number(attempt.checkpointPrNumber) === exactCheckpointProof.commit.prNumber
+        && Number(attempt.fencingToken) === fence
+        && Date.parse(String(attempt.leaseExpiresAt ?? "")) === groupExpiry
+        && Number(attempt.activeWorkOrderId) === exactCheckpointProof.workOrderId
+        && Number.isFinite(Date.parse(String(attempt.attemptedAt ?? "")))
+      }
+      const baseFence = provenance.reviewRecoverySourceFencingToken + 3
+      const continuationFence = provenance.reviewRecoverySourceFencingToken + 4
+      const baseAttempts = attempts.filter((attempt) => Number(attempt.fencingToken) === baseFence)
+      const continuationAttempts = attempts.filter(
+        (attempt) => Number(attempt.fencingToken) === continuationFence,
+      )
+      const baseExpiry = Date.parse(String(baseAttempts[0]?.leaseExpiresAt ?? ""))
+      const continuationExpiry = Date.parse(String(continuationAttempts[0]?.leaseExpiresAt ?? ""))
+      const queueFence = Number(row.queueFencingToken)
+      const queueVersion = Number(row.queueVersion)
+      const hasContinuation = queueFence === continuationFence
+        && queueVersion === provenance.reviewRecoverySourceExpectedVersion + 4
+      const evidenceChecks = {
+        localDelta: localStaleDelta === 3 || localStaleDelta === 4,
+        queueDelta: (queueFence === baseFence
+          && queueVersion === provenance.reviewRecoverySourceExpectedVersion + 3)
+          || hasContinuation,
+        forwardBound: queueFence === executionBinding.fencingToken
+          || (localStaleDelta === 3 && queueFence === executionBinding.fencingToken + 1),
+        boundedBase: baseAttempts.length >= 1 && baseAttempts.length <= 32,
+        baseTransition: exactAttempt(baseAttempts[0], "RECLAIMED", baseFence, baseExpiry),
+        baseReplays: !baseAttempts.slice(1).some(
+          (attempt) => !exactAttempt(attempt, "REPLAY_WINNER", baseFence, baseExpiry),
+        ),
+        boundedContinuation: hasContinuation
+          ? continuationAttempts.length >= 1 && continuationAttempts.length <= 32
+          : continuationAttempts.length === 0,
+        continuationTransition: !hasContinuation
+          || exactAttempt(continuationAttempts[0], "RECLAIMED", continuationFence,
+            continuationExpiry),
+        continuationReplays: !hasContinuation || !continuationAttempts.slice(1).some(
+          (attempt) => !exactAttempt(attempt, "REPLAY_WINNER", continuationFence,
+            continuationExpiry),
+        ),
+        attemptOrder: !hasContinuation
+          || Number(baseAttempts.at(-1)?.id) < Number(continuationAttempts[0]?.id),
+        expiry: Number.isFinite(queueExpiry),
+        workOrder: Number(row.queueActiveWorkOrderId) === exactCheckpointProof.workOrderId,
+        receiptFirst: Number(row.receiptFirstFencingToken)
+          === provenance.reviewRecoverySourceFencingToken,
+        receiptLatest: Number(row.receiptLatestFencingToken) === queueFence,
+        currentExpiry: queueExpiry === (hasContinuation ? continuationExpiry : baseExpiry),
+      }
+      if (Object.values(evidenceChecks).some((valid) => !valid)) {
+        const failed = Object.entries(evidenceChecks).filter(([, valid]) => !valid)
+          .map(([name]) => name).join(",")
+        throw Object.assign(new Error(`Legacy stale recovery acquisition evidence conflicts: ${failed}`), {
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+      }
+      staleReacquisition = {
+        disposition: "RECLAIMED",
+        expectedVersion: provenance.reviewRecoverySourceExpectedVersion + 3,
+        fencingToken: baseFence,
+        leaseExpiresAt: new Date(baseExpiry).toISOString(),
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        priorExpectedVersion: provenance.reviewRecoverySourceExpectedVersion + 2,
+        priorFencingToken: provenance.reviewRecoverySourceFencingToken + 2,
+        receiptLatestFencingToken: baseFence,
+      }
+      if (hasContinuation) {
+        staleContinuation = {
+          disposition: "RECLAIMED",
+          expectedVersion: queueVersion,
+          fencingToken: queueFence,
+          leaseExpiresAt: new Date(continuationExpiry).toISOString(),
+          lifecycleReason: "STALE_LEASE_RECOVERED",
+          priorExpectedVersion: staleReacquisition.expectedVersion,
+          priorFencingToken: staleReacquisition.fencingToken,
+          priorLeaseExpiresAt: staleReacquisition.leaseExpiresAt,
+          receiptLatestFencingToken: queueFence,
+        }
+      }
+      if ((localBaseHop !== undefined
+          && canonicalJson(localBaseHop) !== canonicalJson(staleReacquisition))
+        || (localContinuation !== undefined
+          && canonicalJson(localContinuation) !== canonicalJson(staleContinuation))) {
+        throw Object.assign(new Error("Local stale recovery chain conflicts with durable evidence"), {
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+      }
+    }
     const forwardReclaimed = row.queueLifecycleReason === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
     const verifiedExecutionBinding = forwardReclaimed ? {
       ...executionBinding,
@@ -4304,16 +4641,28 @@ export async function resolveActiveReviewRecoveryProvenance({
       reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
       reviewRecoveryReclaimEventId: Number(row.reclaimEventId),
       reviewRecoveryReclaimPayloadDigest: row.reclaimPayloadDigest,
-    } : { ...executionBinding, ...provenance }
+    } : { ...executionBinding, ...provenance,
+      ...(staleRecoveryBinding ? {
+        expectedVersion: Number(row.queueVersion),
+        fencingToken: Number(row.queueFencingToken),
+      } : {}),
+      ...(staleReacquisition ? { reviewRecoveryStaleReacquisition: staleReacquisition } : {}),
+      ...(staleContinuation ? { reviewRecoveryStaleContinuation: staleContinuation } : {}) }
     await verifyActiveReviewRecoveryContinuation({
       query: runQuery,
       outcomeId,
       executionBinding: verifiedExecutionBinding,
       workContract,
       proof: { ...proof, runtimeAttempt: sourceRuntimeAttempt },
-      provenanceOnly: !forwardReclaimed,
+      provenanceOnly: !forwardReclaimed && !staleContinuation,
     })
-    return provenance
+    return { ...provenance, ...(staleReacquisition ? {
+      alreadyStaleReacquired: true,
+      reviewRecoveryExpectedVersion: Number(row.queueVersion),
+      reviewRecoveryFencingToken: Number(row.queueFencingToken),
+      reviewRecoveryStaleReacquisition: staleReacquisition,
+      ...(staleContinuation ? { reviewRecoveryStaleContinuation: staleContinuation } : {}),
+    } : {}) }
   } catch (error) {
     primaryError = error
     if (error?.code === "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL") throw error

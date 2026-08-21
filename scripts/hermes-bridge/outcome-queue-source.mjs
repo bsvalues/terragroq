@@ -4074,6 +4074,59 @@ async function appendAcquisitionAttempt(
   }
 }
 
+const REVIEW_RECOVERY_BASE_HOP_KEYS = Object.freeze([
+  "disposition", "expectedVersion", "fencingToken", "leaseExpiresAt", "lifecycleReason",
+  "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken",
+])
+
+function exactReviewRecoveryContinuationEnvelope(value) {
+  if (value === undefined || value === null) return null
+  const keys = ["sourceExpectedVersion", "sourceFencingToken", "sourceRuntimeAttempt",
+    "reclaimEventId", "reclaimPayloadDigest", "baseHop", "mode", "continuation"]
+  const hop = value?.baseHop
+  const continued = value?.continuation
+  const hopExpiry = typeof hop?.leaseExpiresAt === "string" ? Date.parse(hop.leaseExpiresAt) : Number.NaN
+  const continuationKeys = [...REVIEW_RECOVERY_BASE_HOP_KEYS, "priorLeaseExpiresAt"]
+  const continuedExpiry = typeof continued?.leaseExpiresAt === "string"
+    ? Date.parse(continued.leaseExpiresAt) : Number.NaN
+  const exactContinued = continued && typeof continued === "object" && !Array.isArray(continued)
+    && Object.keys(continued).length === continuationKeys.length
+    && continuationKeys.every((key) => Object.hasOwn(continued, key))
+    && continued.disposition === "RECLAIMED"
+    && continued.lifecycleReason === "STALE_LEASE_RECOVERED"
+    && continued.priorExpectedVersion === hop?.expectedVersion
+    && continued.priorFencingToken === hop?.fencingToken
+    && continued.priorLeaseExpiresAt === hop?.leaseExpiresAt
+    && continued.expectedVersion === continued.priorExpectedVersion + 1
+    && continued.fencingToken === continued.priorFencingToken + 1
+    && continued.receiptLatestFencingToken === continued.fencingToken
+    && Number.isFinite(continuedExpiry)
+    && new Date(continuedExpiry).toISOString() === continued.leaseExpiresAt
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).length !== keys.length || !keys.every((key) => Object.hasOwn(value, key))
+    || !hop || typeof hop !== "object" || Array.isArray(hop)
+    || Object.keys(hop).length !== REVIEW_RECOVERY_BASE_HOP_KEYS.length
+    || !REVIEW_RECOVERY_BASE_HOP_KEYS.every((key) => Object.hasOwn(hop, key))
+    || !Number.isSafeInteger(value.sourceExpectedVersion) || value.sourceExpectedVersion < 0
+    || !Number.isSafeInteger(value.sourceFencingToken) || value.sourceFencingToken <= 0
+    || !Number.isSafeInteger(value.sourceRuntimeAttempt) || value.sourceRuntimeAttempt <= 0
+    || !Number.isSafeInteger(value.reclaimEventId) || value.reclaimEventId <= 0
+    || !/^[0-9a-f]{64}$/.test(String(value.reclaimPayloadDigest ?? ""))
+    || hop.disposition !== "RECLAIMED" || hop.lifecycleReason !== "STALE_LEASE_RECOVERED"
+    || hop.priorExpectedVersion !== value.sourceExpectedVersion + 2
+    || hop.priorFencingToken !== value.sourceFencingToken + 2
+    || hop.expectedVersion !== hop.priorExpectedVersion + 1
+    || hop.fencingToken !== hop.priorFencingToken + 1
+    || hop.receiptLatestFencingToken !== hop.fencingToken
+    || !Number.isFinite(hopExpiry) || new Date(hopExpiry).toISOString() !== hop.leaseExpiresAt
+    || !((value.mode === "ADVANCE_OR_REPLAY" && continued === null)
+      || (value.mode === "REPLAY_ONLY" && exactContinued))) {
+    fail("OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL")
+  }
+  return { ...value, baseHop: { ...hop },
+    continuation: continued ? { ...continued } : null }
+}
+
 export async function acquireNextEligibleOutcome({
   query,
   databaseUrl = process.env.DATABASE_URL,
@@ -4087,6 +4140,7 @@ export async function acquireNextEligibleOutcome({
   campaignWindowId,
   processIdentity,
   checkpointProofProvider,
+  reviewRecoveryContinuationEnvelope: continuationInput = null,
   now = new Date(),
 } = {}) {
   const user = userScope(userId)
@@ -4113,6 +4167,7 @@ export async function acquireNextEligibleOutcome({
   )
   const at = timestamp(now)
   const expiresAt = timestamp(new Date(Date.parse(at) + leaseDurationMs))
+  const continuation = exactReviewRecoveryContinuationEnvelope(continuationInput)
   const attemptContext = {
     user,
     campaignWindowId: campaign,
@@ -4159,6 +4214,35 @@ export async function acquireNextEligibleOutcome({
     }
     if (prior?.rows?.length === 1) {
       let row = prior.rows[0]
+      let continuationMode = null
+      if (continuation) {
+        const base = continuation.baseHop
+        const leaseExpiry = Date.parse(String(row.leaseExpiresAt ?? ""))
+        const sameIdentity = row.acquisitionKey === key && row.executionBinding === binding
+          && row.leaseHolder === holder && row.leaseToken === token
+          && Number(row.activeWorkOrderId) === Number(workOrderId)
+        const baseRow = Number(row.version) === base.expectedVersion
+          && Number(row.fencingToken) === base.fencingToken
+        const continuedRow = Number(row.version) === base.expectedVersion + 1
+          && Number(row.fencingToken) === base.fencingToken + 1
+        const replayOnly = continuation.mode === "REPLAY_ONLY"
+        if (!receipt || receipt.outcomeKey !== row.outcomeKey
+          || Number(receipt.firstFencingToken) !== continuation.sourceFencingToken
+          || row.lifecycleState !== "active" || row.lifecycleReason !== "STALE_LEASE_RECOVERED"
+          || !sameIdentity || !Number.isFinite(leaseExpiry)
+          || (baseRow && (replayOnly
+            || Number(receipt.latestFencingToken) !== base.fencingToken
+            || leaseExpiry > Date.parse(at)))
+          || (continuedRow && (Number(receipt.latestFencingToken) !== base.fencingToken + 1
+            || leaseExpiry <= Date.parse(at)
+            || (replayOnly && (continuation.continuation.expectedVersion !== Number(row.version)
+              || continuation.continuation.fencingToken !== Number(row.fencingToken)
+              || continuation.continuation.leaseExpiresAt !== new Date(leaseExpiry).toISOString()))))
+          || (!baseRow && !continuedRow)) {
+          fail("OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL")
+        }
+        continuationMode = baseRow ? "ADVANCE" : "REPLAY"
+      }
       if (!receipt) {
         await ensureAcquisitionReceipt(connection, user, key, row, at)
         receiptEstablished = true
@@ -4237,8 +4321,16 @@ export async function acquireNextEligibleOutcome({
       }
       if (live) {
         if (sameLiveIdentity) {
+          if (continuation && continuationMode !== "REPLAY") {
+            fail("OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL")
+          }
           return await finish(
-            acquisitionResult(row, { replayed: true }),
+            {
+              ...acquisitionResult(row, { replayed: true }),
+              ...(continuation ? {
+                reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+              } : {}),
+            },
             "REPLAY_WINNER",
           )
         }
@@ -4271,8 +4363,19 @@ export async function acquireNextEligibleOutcome({
             at,
             receiptEstablished,
           )
+          if (continuation && (continuationMode !== "ADVANCE"
+            || Number(reclaimed.rows[0].version) !== continuation.baseHop.expectedVersion + 1
+            || Number(reclaimed.rows[0].fencingToken) !== continuation.baseHop.fencingToken + 1
+            || reclaimed.rows[0].lifecycleReason !== "STALE_LEASE_RECOVERED")) {
+            fail("OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL")
+          }
           return await finish(
-            acquisitionResult(reclaimed.rows[0], { reclaimed: true }),
+            {
+              ...acquisitionResult(reclaimed.rows[0], { reclaimed: true }),
+              ...(continuation ? {
+                reviewRecoveryContinuationDisposition: "RECLAIMED",
+              } : {}),
+            },
             "RECLAIMED",
           )
         }

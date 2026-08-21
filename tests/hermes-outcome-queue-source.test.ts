@@ -3214,6 +3214,183 @@ describe("transactional durable outcome queue source", () => {
     })
   })
 
+  it("advances one authenticated legacy stale-recovery hop and replays it without a second fence", async () => {
+    const base = queueRow({
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      leaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      fencingToken: 5,
+      version: 7,
+    })
+    const continued = queueRow({
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      leaseExpiresAt: "2026-07-28T12:01:00.000Z",
+      fencingToken: 6,
+      version: 8,
+    })
+    const envelope = {
+      sourceExpectedVersion: 4,
+      sourceFencingToken: 2,
+      sourceRuntimeAttempt: 5,
+      reclaimEventId: 961,
+      reclaimPayloadDigest: "9".repeat(64),
+      mode: "ADVANCE_OR_REPLAY",
+      continuation: null,
+      baseHop: {
+        disposition: "RECLAIMED",
+        expectedVersion: 7,
+        fencingToken: 5,
+        leaseExpiresAt: base.leaseExpiresAt,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        priorExpectedVersion: 6,
+        priorFencingToken: 4,
+        receiptLatestFencingToken: 5,
+      },
+    }
+    const firstQuery = acquisitionQuery({
+      receipt: [{
+        outcomeKey: base.outcomeKey,
+        firstFencingToken: 2,
+        latestFencingToken: 5,
+      }],
+      receiptOutcome: [base],
+      reclaimed: [continued],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query: firstQuery,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: envelope,
+    })).resolves.toMatchObject({
+      outcome: continued,
+      acquired: true,
+      reclaimed: true,
+      replayed: false,
+      reviewRecoveryContinuationDisposition: "RECLAIMED",
+    })
+    expect(firstQuery.mock.calls.filter(
+      ([sql]) => sql === OUTCOME_QUEUE_SQL.reclaimAcquisition,
+    )).toHaveLength(1)
+
+    const replayQuery = acquisitionQuery({
+      receipt: [{
+        outcomeKey: continued.outcomeKey,
+        firstFencingToken: 2,
+        latestFencingToken: 6,
+      }],
+      receiptOutcome: [continued],
+    })
+    await expect(acquireNextEligibleOutcome({
+      query: replayQuery,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: envelope,
+    })).resolves.toMatchObject({
+      outcome: continued,
+      acquired: true,
+      reclaimed: false,
+      replayed: true,
+      reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+    })
+    expect(replayQuery).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.reclaimAcquisition,
+      expect.anything(),
+    )
+
+    const replayOnlyEnvelope = {
+      ...envelope,
+      mode: "REPLAY_ONLY",
+      continuation: {
+        disposition: "RECLAIMED",
+        priorExpectedVersion: 7,
+        priorFencingToken: 5,
+        priorLeaseExpiresAt: base.leaseExpiresAt,
+        expectedVersion: 8,
+        fencingToken: 6,
+        receiptLatestFencingToken: 6,
+        leaseExpiresAt: continued.leaseExpiresAt,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+      },
+    }
+    const replayOnlyQuery = acquisitionQuery({
+      receipt: [{ outcomeKey: continued.outcomeKey, firstFencingToken: 2, latestFencingToken: 6 }],
+      receiptOutcome: [continued],
+    })
+    await expect(acquireNextEligibleOutcome({
+      query: replayOnlyQuery,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: replayOnlyEnvelope,
+    })).resolves.toMatchObject({
+      outcome: continued,
+      acquired: true,
+      reclaimed: false,
+      replayed: true,
+      reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+    })
+    const expiredContinuation = { ...continued, leaseExpiresAt: "2026-07-28T11:59:59.999Z" }
+    const expiryRaceQuery = acquisitionQuery({
+      receipt: [{ outcomeKey: continued.outcomeKey, firstFencingToken: 2, latestFencingToken: 6 }],
+      receiptOutcome: [expiredContinuation],
+    })
+    await expect(acquireNextEligibleOutcome({
+      query: expiryRaceQuery,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: replayOnlyEnvelope,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL" })
+    expect(expiryRaceQuery).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.reclaimAcquisition,
+      expect.anything(),
+    )
+    expect(expiryRaceQuery.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it("rolls back bounded stale continuation drift before changing the fence", async () => {
+    const base = queueRow({
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+      leaseExpiresAt: "2026-07-28T11:59:59.000Z",
+      fencingToken: 5,
+      version: 7,
+    })
+    const envelope = {
+      sourceExpectedVersion: 4,
+      sourceFencingToken: 2,
+      sourceRuntimeAttempt: 5,
+      reclaimEventId: 961,
+      reclaimPayloadDigest: "9".repeat(64),
+      mode: "ADVANCE_OR_REPLAY",
+      continuation: null,
+      baseHop: {
+        disposition: "RECLAIMED",
+        expectedVersion: 7,
+        fencingToken: 5,
+        leaseExpiresAt: base.leaseExpiresAt,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        priorExpectedVersion: 6,
+        priorFencingToken: 4,
+        receiptLatestFencingToken: 5,
+      },
+    }
+    const query = acquisitionQuery({
+      receipt: [{
+        outcomeKey: base.outcomeKey,
+        firstFencingToken: 2,
+        latestFencingToken: 6,
+      }],
+      receiptOutcome: [base],
+    })
+
+    await expect(acquireNextEligibleOutcome({
+      query,
+      ...acquireInput,
+      reviewRecoveryContinuationEnvelope: envelope,
+    })).rejects.toMatchObject({
+      code: "OUTCOME_QUEUE_REVIEW_RECOVERY_CONTINUATION_WALL",
+    })
+    expect(query).not.toHaveBeenCalledWith(
+      OUTCOME_QUEUE_SQL.reclaimAcquisition,
+      expect.anything(),
+    )
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
   it.each([
     ["missing insertion", { insertRows: [], evidenceRows: [] }],
     ["duplicate evidence", { insertRows: [{ id: 701 }], evidenceRows: [

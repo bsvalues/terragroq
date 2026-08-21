@@ -116,13 +116,19 @@ function residentCheckpointProvider({ runtimeRoot, readState = readHermesState }
 function queueBinding(outcome) {
   const binding = outcome?.queueBinding
   const staleReacquisition = binding?.reviewRecoveryStaleReacquisition
+  const staleContinuation = binding?.reviewRecoveryStaleContinuation
   const invalidStaleReacquisition = staleReacquisition !== undefined && (
     !exactStaleReviewRecoveryReacquisition(staleReacquisition)
     || binding.reviewRecoveryResumeState !== "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
     || staleReacquisition.priorExpectedVersion !== binding.reviewRecoverySourceExpectedVersion + 2
     || staleReacquisition.priorFencingToken !== binding.reviewRecoverySourceFencingToken + 2
-    || staleReacquisition.expectedVersion !== binding.expectedVersion
-    || staleReacquisition.fencingToken !== binding.fencingToken)
+    || (staleContinuation === undefined
+      && (staleReacquisition.expectedVersion !== binding.expectedVersion
+        || staleReacquisition.fencingToken !== binding.fencingToken)))
+  const invalidStaleContinuation = staleContinuation !== undefined && (
+    !exactStaleReviewRecoveryContinuation(staleContinuation, staleReacquisition)
+    || staleContinuation.expectedVersion !== binding.expectedVersion
+    || staleContinuation.fencingToken !== binding.fencingToken)
   if (!binding || typeof binding !== "object"
     || typeof binding.userId !== "string" || binding.userId.trim() === ""
     || typeof binding.outcomeKey !== "string" || binding.outcomeKey.trim() === ""
@@ -159,6 +165,7 @@ function queueBinding(outcome) {
         || typeof binding.reviewRecoveryReclaimPayloadDigest !== "string"
         || !/^[0-9a-f]{64}$/.test(binding.reviewRecoveryReclaimPayloadDigest)))
     || invalidStaleReacquisition
+    || invalidStaleContinuation
     || (binding.activeWorkOrderId !== undefined
       && (!Number.isSafeInteger(binding.activeWorkOrderId) || binding.activeWorkOrderId <= 0))) {
     wall("Hermes outcome is missing its durable queue binding", "HERMES_OUTCOME_QUEUE_BINDING_WALL")
@@ -185,6 +192,28 @@ function exactStaleReviewRecoveryReacquisition(value) {
     && value.receiptLatestFencingToken === value.fencingToken
     && Number.isFinite(expiry) && new Date(expiry).toISOString() === value.leaseExpiresAt
   }
+
+const STALE_REVIEW_RECOVERY_CONTINUATION_KEYS = Object.freeze([
+  "disposition", "expectedVersion", "fencingToken", "leaseExpiresAt", "lifecycleReason",
+  "priorExpectedVersion", "priorFencingToken", "priorLeaseExpiresAt", "receiptLatestFencingToken",
+])
+
+function exactStaleReviewRecoveryContinuation(value, baseHop) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).length !== STALE_REVIEW_RECOVERY_CONTINUATION_KEYS.length
+    || !STALE_REVIEW_RECOVERY_CONTINUATION_KEYS.every((key) => Object.hasOwn(value, key))
+    || !exactStaleReviewRecoveryReacquisition(baseHop)) return false
+  const expiry = typeof value.leaseExpiresAt === "string" ? Date.parse(value.leaseExpiresAt) : Number.NaN
+  return value.lifecycleReason === "STALE_LEASE_RECOVERED"
+    && ["RECLAIMED", "REPLAY_WINNER"].includes(value.disposition)
+    && value.priorExpectedVersion === baseHop.expectedVersion
+    && value.priorFencingToken === baseHop.fencingToken
+    && value.priorLeaseExpiresAt === baseHop.leaseExpiresAt
+    && value.expectedVersion === value.priorExpectedVersion + 1
+    && value.fencingToken === value.priorFencingToken + 1
+    && value.receiptLatestFencingToken === value.fencingToken
+    && Number.isFinite(expiry) && new Date(expiry).toISOString() === value.leaseExpiresAt
+}
 
 function createLazyPool(databaseUrl, createPool) {
   let poolPromise = null
@@ -793,8 +822,13 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
     if (sourceIsReclaimed) {
       const sourceStaleReacquisition = source?.reviewRecoveryStaleReacquisition
       const sourceHasStaleReacquisition = exactStaleReviewRecoveryReacquisition(sourceStaleReacquisition)
-        && sourceStaleReacquisition.expectedVersion === source.expectedVersion
-        && sourceStaleReacquisition.fencingToken === source.fencingToken
+        && sourceStaleReacquisition.expectedVersion === source.reviewRecoverySourceExpectedVersion + 3
+        && sourceStaleReacquisition.fencingToken === source.reviewRecoverySourceFencingToken + 3
+      const sourceStaleContinuation = source?.reviewRecoveryStaleContinuation
+      const sourceHasStaleContinuation = exactStaleReviewRecoveryContinuation(
+        sourceStaleContinuation, sourceStaleReacquisition,
+      ) && sourceStaleContinuation.expectedVersion === source.expectedVersion
+        && sourceStaleContinuation.fencingToken === source.fencingToken
       const exactStableIdentity = source.userId === binding.userId
         && source.outcomeKey === binding.outcomeKey
         && source.executionBinding === binding.executionBinding
@@ -818,12 +852,16 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
         && rawLifecycleReason === "STALE_LEASE_RECOVERED"
         && binding.expectedVersion === source.expectedVersion + 1
         && binding.fencingToken === source.fencingToken + 1
+        && (!sourceHasStaleReacquisition
+          || acquisitionResult?.reviewRecoveryContinuationDisposition === "RECLAIMED")
       const exactGovernedStaleReplay = acquisitionResult?.acquired === true
         && acquisitionResult?.reclaimed === false
         && acquisitionResult?.replayed === true
         && rawLifecycleReason === "STALE_LEASE_RECOVERED"
         && binding.expectedVersion === source.expectedVersion + 1
         && binding.fencingToken === source.fencingToken + 1
+        && (!sourceHasStaleReacquisition
+          || acquisitionResult?.reviewRecoveryContinuationDisposition === "REPLAY_WINNER")
       const exactPersistedStaleReplay = acquisitionResult?.acquired === true
         && acquisitionResult?.reclaimed === false
         && acquisitionResult?.replayed === true
@@ -837,11 +875,11 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
         && Number.isSafeInteger(source.reviewRecoverySourceExpectedVersion)
         && source.reviewRecoverySourceExpectedVersion >= 0
         && source.expectedVersion === source.reviewRecoverySourceExpectedVersion
-          + (sourceHasStaleReacquisition ? 3 : 2)
+          + (sourceHasStaleContinuation ? 4 : sourceHasStaleReacquisition ? 3 : 2)
         && Number.isSafeInteger(source.reviewRecoverySourceFencingToken)
         && source.reviewRecoverySourceFencingToken > 0
         && source.fencingToken === source.reviewRecoverySourceFencingToken
-          + (sourceHasStaleReacquisition ? 3 : 2)
+          + (sourceHasStaleContinuation ? 4 : sourceHasStaleReacquisition ? 3 : 2)
         && Number.isSafeInteger(source.reviewRecoverySourceRuntimeAttempt)
         && source.reviewRecoverySourceRuntimeAttempt > 0
       if (!exactRefreshIdentity || !sourceHasEvidence
@@ -873,24 +911,32 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
           wall("Review recovery stale reacquisition lease is invalid",
             "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
         }
-        binding.reviewRecoveryStaleReacquisition = {
+        const hop = {
           disposition: exactGovernedStaleReclaim ? "RECLAIMED" : "REPLAY_WINNER",
-          expectedVersion: binding.expectedVersion,
-          fencingToken: binding.fencingToken,
+          expectedVersion: binding.expectedVersion, fencingToken: binding.fencingToken,
           leaseExpiresAt: new Date(leaseExpiry).toISOString(),
-          lifecycleReason: "STALE_LEASE_RECOVERED",
-          priorExpectedVersion: source.expectedVersion,
-          priorFencingToken: source.fencingToken,
-          receiptLatestFencingToken: binding.fencingToken,
+          lifecycleReason: "STALE_LEASE_RECOVERED", priorExpectedVersion: source.expectedVersion,
+          priorFencingToken: source.fencingToken, receiptLatestFencingToken: binding.fencingToken,
         }
+        if (sourceHasStaleReacquisition) {
+          binding.reviewRecoveryStaleReacquisition = { ...sourceStaleReacquisition }
+          binding.reviewRecoveryStaleContinuation = {
+            ...hop, priorLeaseExpiresAt: sourceStaleReacquisition.leaseExpiresAt,
+          }
+        } else binding.reviewRecoveryStaleReacquisition = hop
       } else if (sourceHasStaleReacquisition) {
         const itemExpiry = Date.parse(String(item?.leaseExpiresAt ?? ""))
+        const expectedExpiry = sourceHasStaleContinuation
+          ? sourceStaleContinuation.leaseExpiresAt : sourceStaleReacquisition.leaseExpiresAt
         if (!Number.isFinite(itemExpiry)
-          || new Date(itemExpiry).toISOString() !== sourceStaleReacquisition.leaseExpiresAt) {
+          || new Date(itemExpiry).toISOString() !== expectedExpiry) {
           wall("Review recovery stale reacquisition lease conflicts",
             "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
         }
         binding.reviewRecoveryStaleReacquisition = { ...sourceStaleReacquisition }
+        if (sourceHasStaleContinuation) {
+          binding.reviewRecoveryStaleContinuation = { ...sourceStaleContinuation }
+        }
       }
     } else if (!bindingHasEvidence) {
       wall("Review recovery reclaim evidence is unavailable",
@@ -1388,6 +1434,27 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     requireExecutionProofContext()
     if (!outcome?.queueBinding) return outcome
     const binding = queueBinding(outcome)
+    const baseHop = binding.reviewRecoveryStaleReacquisition
+    const continuation = binding.reviewRecoveryStaleContinuation
+    if (continuation && Date.parse(continuation.leaseExpiresAt) <= now().getTime()) {
+      wall("Review recovery stale continuation depth is exhausted",
+        "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+    }
+    const reviewRecoveryContinuationEnvelope = baseHop ? {
+      sourceExpectedVersion: binding.reviewRecoverySourceExpectedVersion,
+      sourceFencingToken: binding.reviewRecoverySourceFencingToken,
+      sourceRuntimeAttempt: binding.reviewRecoverySourceRuntimeAttempt,
+      reclaimEventId: binding.reviewRecoveryReclaimEventId,
+      reclaimPayloadDigest: binding.reviewRecoveryReclaimPayloadDigest,
+      baseHop: { ...baseHop },
+      mode: continuation ? "REPLAY_ONLY" : "ADVANCE_OR_REPLAY",
+      continuation: continuation ? { ...continuation } : null,
+    } : undefined
+    if (reviewRecoveryContinuationEnvelope
+      && (!Number.isSafeInteger(binding.activeWorkOrderId) || binding.activeWorkOrderId <= 0)) {
+      wall("Review recovery continuation Work Order binding is missing",
+        "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+    }
     const refreshed = await acquire({
       databaseUrl,
       userId: binding.userId,
@@ -1400,6 +1467,10 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       processIdentity,
       checkpointProofProvider,
       now: now(),
+      ...(reviewRecoveryContinuationEnvelope ? {
+        reviewRecoveryContinuationEnvelope,
+        activeWorkOrderId: binding.activeWorkOrderId,
+      } : {}),
     })
     if (refreshed?.outcome && refreshed.acquired) {
       const governedOutcome = governedQueueOutcome(refreshed.outcome, outcome)

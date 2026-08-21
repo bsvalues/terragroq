@@ -18,6 +18,7 @@ import {
   normalizeHermesTurnResult,
 } from "../scripts/hermes-bridge/state-store.mjs"
 import { resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
+import { createHermesOutcomeQueueRuntime } from "../scripts/hermes-bridge/outcome-queue-runtime.mjs"
 
 const roots: string[] = []
 
@@ -312,6 +313,12 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       leaseExpiresAt: "2098-01-02T12:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
       priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
     }
+    const continuation = {
+      disposition: "RECLAIMED", expectedVersion: 8, fencingToken: 6,
+      leaseExpiresAt: "2098-01-02T13:50:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 7, priorFencingToken: 5,
+      priorLeaseExpiresAt: marker.leaseExpiresAt, receiptLatestFencingToken: 6,
+    }
     const outcome = {
       id: 23,
       outcomeKey: "goal:GOAL-0023",
@@ -342,6 +349,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       { ...outcome.queueBinding, expectedVersion: 6, fencingToken: 4,
         reviewRecoveryStaleReacquisition: undefined },
       outcome.queueBinding,
+      { ...outcome.queueBinding, expectedVersion: 8, fencingToken: 6,
+        reviewRecoveryStaleContinuation: continuation },
     ]
     for (const queueBinding of validBindings) {
       for (const options of [{ requireVerified: true }, { requireVerified: false }]) {
@@ -352,6 +361,13 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(deriveHermesRuntimeProjectionBindings(outcome)).toMatchObject({
       executionBinding: { reviewRecoveryStaleReacquisition: marker },
     })
+    expect(deriveHermesRuntimeProjectionBindings({ ...outcome, queueBinding: {
+      ...outcome.queueBinding, expectedVersion: 8, fencingToken: 6,
+      reviewRecoveryStaleContinuation: continuation,
+    } })).toMatchObject({ executionBinding: {
+      reviewRecoveryStaleReacquisition: marker,
+      reviewRecoveryStaleContinuation: continuation,
+    } })
     expect(() => deriveHermesRuntimeProjectionBindings({ ...outcome, queueBinding: {
       ...outcome.queueBinding, reviewRecoveryStaleReacquisition: { ...marker, extra: true },
     } }, { requireVerified: true })).toThrow(expect.objectContaining({
@@ -376,6 +392,14 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       { ...outcome.queueBinding, reviewRecoveryStaleReacquisition: {
         ...marker, priorFencingToken: 5, fencingToken: 6, receiptLatestFencingToken: 6,
       } },
+      { ...outcome.queueBinding, expectedVersion: 8, fencingToken: 6,
+        reviewRecoveryStaleContinuation: undefined },
+      { ...outcome.queueBinding, expectedVersion: 7, fencingToken: 5,
+        reviewRecoveryStaleContinuation: continuation },
+      { ...outcome.queueBinding, expectedVersion: 8, fencingToken: 6,
+        reviewRecoveryStaleContinuation: { ...continuation, priorLeaseExpiresAt: undefined } },
+      { ...outcome.queueBinding, expectedVersion: 8, fencingToken: 6,
+        reviewRecoveryStaleContinuation: { ...continuation, extra: true } },
     ]) for (const options of [{ requireVerified: true }, { requireVerified: false }]) {
       expect(() => deriveHermesRuntimeProjectionBindings({ ...outcome, queueBinding }, options))
         .toThrow(expect.objectContaining({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" }))
@@ -1913,16 +1937,30 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       reviewRecoverySourceFencingToken: 2,
       reviewRecoverySourceRuntimeAttempt: 5,
     }))
+    const verifyActiveReviewRecoveryContinuation = vi.fn(async () => true)
     const value = fixture(undefined, {
       resumeQueueAfterReviewRecovery,
       refreshQueueOutcome,
       resolveActiveReviewRecoveryProvenance,
+      verifyActiveReviewRecoveryContinuation,
     })
     const outcome = await value.selectOutcome()
+    const recoveryCommand = "record structured #911 reliability remediation without host mutation"
+    Object.assign(outcome, { command: recoveryCommand, title: recoveryCommand,
+      objective: recoveryCommand, lane: "operator-objective", risk: "R1",
+      authority: "A2_WRITE_OWN", outcomeKey: "goal:GOAL-0077" })
+    const recoveryContract = resolveHermesWorkContract({ command: recoveryCommand,
+      title: recoveryCommand, objective: recoveryCommand, lane: "operator-objective",
+      risk: "R1", authority: "A2_WRITE_OWN" })!
+    outcome.verifiedQueueWorkContract = { contract: recoveryContract, provenance: {
+      operation: "workbench_execution.authorize", outcomeKey: "goal:GOAL-0077",
+      workOrderRef: "WO-HERMES-OUTCOME-77",
+    } }
     outcome.queueBinding = {
       userId: "owner-id", outcomeKey: "goal:GOAL-0077", expectedVersion: 5,
       executionBinding: "execution-binding-77", acquisitionKey: "acquisition-key-77",
       leaseHolder: "resident-hermes", leaseToken: "lease-token-77", fencingToken: 3,
+      activeWorkOrderId: 77,
       reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
     }
     value.selectOutcome.mockClear()
@@ -2021,6 +2059,170 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       expect(value.projectLease).not.toHaveBeenCalled()
     }
     fs.writeFileSync(statePath, `${JSON.stringify(exactAbandonedState, null, 2)}\n`)
+    const legacyStaleState = structuredClone(exactAbandonedState)
+    Object.assign(legacyStaleState.executions["77"].metadata.outcome.queueBinding, {
+      expectedVersion: 7,
+      fencingToken: 5,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+      reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+    })
+    fs.writeFileSync(statePath, `${JSON.stringify(legacyStaleState, null, 2)}\n`)
+    resolveActiveReviewRecoveryProvenance.mockRejectedValueOnce(Object.assign(
+      new Error("legacy stale resolver reached before strict projection"),
+      { code: "LEGACY_STALE_RESOLVER_SENTINEL" },
+    ))
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "LEGACY_STALE_RESOLVER_SENTINEL",
+    })
+    expect(resolveActiveReviewRecoveryProvenance).toHaveBeenCalledWith(expect.objectContaining({
+      executionBinding: expect.objectContaining({ expectedVersion: 7, fencingToken: 5 }),
+      checkpointProof: expect.objectContaining({ sequence: expect.any(Number) }),
+    }))
+    fs.writeFileSync(statePath, `${JSON.stringify(legacyStaleState, null, 2)}\n`)
+    resumeQueueAfterReviewRecovery.mockClear()
+    resolveActiveReviewRecoveryProvenance.mockResolvedValueOnce({
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+      alreadyStaleReacquired: true,
+      reviewRecoveryExpectedVersion: 8,
+      reviewRecoveryFencingToken: 6,
+      reviewRecoveryStaleReacquisition: {
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        disposition: "RECLAIMED",
+        priorExpectedVersion: 6,
+        priorFencingToken: 4,
+        expectedVersion: 7,
+        fencingToken: 5,
+        receiptLatestFencingToken: 5,
+        leaseExpiresAt: "2026-07-21T00:00:00.000Z",
+      },
+      reviewRecoveryStaleContinuation: {
+        disposition: "RECLAIMED",
+        priorExpectedVersion: 7,
+        priorFencingToken: 5,
+        priorLeaseExpiresAt: "2026-07-21T00:00:00.000Z",
+        expectedVersion: 8,
+        fencingToken: 6,
+        receiptLatestFencingToken: 6,
+        leaseExpiresAt: "2026-07-21T03:00:00.000Z",
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+      },
+    })
+    const boundedAcquire = vi.fn(async () => ({
+      outcome: {
+        userId: "owner-id", outcomeKey: "goal:GOAL-0077", goalId: 77,
+        lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
+        approvalState: "approved", authorityState: "matched",
+        version: 8, fencingToken: 6, executionBinding: "execution-binding-77",
+        acquisitionKey: "acquisition-key-77", leaseHolder: "resident-hermes",
+        leaseToken: "lease-token-77", activeWorkOrderId: 77,
+        leaseExpiresAt: "2026-07-21T03:00:00.000Z",
+      },
+      acquired: true, replayed: true, reclaimed: false, reason: null,
+      reviewRecoveryContinuationDisposition: "REPLAY_WINNER",
+    }))
+    const composedRuntime = createHermesOutcomeQueueRuntime({
+      databaseUrl: "postgresql://not-used", holderId: "resident-hermes",
+      campaignWindowId: "campaign-v1-2", processIdentity: "supervisor-nonce-1",
+      checkpointProofProvider: vi.fn(async () => ({ state: "REVIEW_REMEDIATION_RECOVERED" })),
+      now: () => new Date("2026-07-21T01:00:00.000Z"), acquire: boundedAcquire,
+    })
+    refreshQueueOutcome.mockImplementationOnce((candidate) => composedRuntime.refreshOutcome(candidate))
+    verifyActiveReviewRecoveryContinuation.mockRejectedValueOnce(Object.assign(
+      new Error("bounded stale continuation verified before local effects"),
+      { code: "BOUNDED_STALE_CONTINUATION_VERIFIER_SENTINEL" },
+    ))
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "BOUNDED_STALE_CONTINUATION_VERIFIER_SENTINEL",
+    })
+    expect(resumeQueueAfterReviewRecovery).not.toHaveBeenCalled()
+    expect(boundedAcquire).toHaveBeenCalledWith(expect.objectContaining({
+      activeWorkOrderId: 77,
+      reviewRecoveryContinuationEnvelope: expect.objectContaining({
+        mode: "REPLAY_ONLY",
+        sourceExpectedVersion: 4,
+        sourceFencingToken: 2,
+        sourceRuntimeAttempt: 5,
+        baseHop: expect.objectContaining({ expectedVersion: 7, fencingToken: 5 }),
+      }),
+    }))
+    expect(verifyActiveReviewRecoveryContinuation).toHaveBeenCalledWith(expect.objectContaining({
+      executionBinding: expect.objectContaining({
+        expectedVersion: 8,
+        fencingToken: 6,
+        reviewRecoveryStaleContinuation: expect.objectContaining({
+          priorExpectedVersion: 7,
+          expectedVersion: 8,
+        }),
+      }),
+    }))
+    const durableBaseHop = {
+      disposition: "RECLAIMED", expectedVersion: 7, fencingToken: 5,
+      leaseExpiresAt: "2026-07-21T00:00:00.000Z", lifecycleReason: "STALE_LEASE_RECOVERED",
+      priorExpectedVersion: 6, priorFencingToken: 4, receiptLatestFencingToken: 5,
+    }
+    const durableContinuation = {
+      disposition: "RECLAIMED", priorExpectedVersion: 7, priorFencingToken: 5,
+      priorLeaseExpiresAt: durableBaseHop.leaseExpiresAt, expectedVersion: 8, fencingToken: 6,
+      receiptLatestFencingToken: 6, leaseExpiresAt: "2026-07-21T03:00:00.000Z",
+      lifecycleReason: "STALE_LEASE_RECOVERED",
+    }
+    const resolvedForward = {
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+      alreadyStaleReacquired: true,
+      reviewRecoveryExpectedVersion: 8,
+      reviewRecoveryFencingToken: 6,
+      reviewRecoveryStaleReacquisition: durableBaseHop,
+      reviewRecoveryStaleContinuation: durableContinuation,
+    }
+    for (const [name, expectedFence, queuePatch] of [
+      ["base-marked", 5, { reviewRecoveryStaleReacquisition: durableBaseHop }],
+      ["closed-continuation", 6, { expectedVersion: 8, fencingToken: 6,
+        reviewRecoveryStaleReacquisition: durableBaseHop,
+        reviewRecoveryStaleContinuation: durableContinuation }],
+    ] as const) {
+      const persisted = structuredClone(legacyStaleState)
+      Object.assign(persisted.executions["77"].metadata.outcome.queueBinding, queuePatch)
+      fs.writeFileSync(statePath, `${JSON.stringify(persisted, null, 2)}\n`)
+      resumeQueueAfterReviewRecovery.mockClear()
+      resolveActiveReviewRecoveryProvenance.mockImplementationOnce(async (input) => {
+        if (input.executionBinding.activeWorkOrderId !== 77
+          || input.checkpointProof.workOrderId !== input.executionBinding.activeWorkOrderId) {
+          throw Object.assign(new Error("composed Work Order identity conflicts"), {
+            code: "COMPOSED_WORK_ORDER_IDENTITY_WALL",
+          })
+        }
+        return resolvedForward
+      })
+      refreshQueueOutcome.mockImplementationOnce((candidate) => composedRuntime.refreshOutcome(candidate))
+      verifyActiveReviewRecoveryContinuation.mockRejectedValueOnce(Object.assign(
+        new Error(`${name} replay-only verification reached`),
+        { code: `PERSISTED_${name.toUpperCase().replaceAll("-", "_")}_SENTINEL` },
+      ))
+      await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+        code: `PERSISTED_${name.toUpperCase().replaceAll("-", "_")}_SENTINEL`,
+      })
+      expect(resumeQueueAfterReviewRecovery).not.toHaveBeenCalled()
+      expect(resolveActiveReviewRecoveryProvenance).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          executionBinding: expect.objectContaining({ activeWorkOrderId: 77 }),
+          checkpointProof: expect.objectContaining({ fencingToken: expectedFence, workOrderId: 77 }),
+        }),
+      )
+      expect(boundedAcquire).toHaveBeenLastCalledWith(expect.objectContaining({
+        activeWorkOrderId: 77,
+        reviewRecoveryContinuationEnvelope: expect.objectContaining({ mode: "REPLAY_ONLY" }),
+      }))
+    }
+    refreshQueueOutcome.mockClear()
+    fs.writeFileSync(statePath, `${JSON.stringify(exactAbandonedState, null, 2)}\n`)
     value.lifecycle.inspectPullRequest.mockResolvedValue({
       state: "MERGED",
       baseRefName: "main",
@@ -2053,7 +2255,28 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.projectLease).not.toHaveBeenCalled()
     expect(resumeQueueAfterReviewRecovery).not.toHaveBeenCalled()
 
+    verifyActiveReviewRecoveryContinuation.mockRejectedValueOnce(Object.assign(
+      new Error("continued recovery chain drifted"),
+      { code: "ACTIVE_REVIEW_CONTINUATION_SENTINEL" },
+    ))
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "ACTIVE_REVIEW_CONTINUATION_SENTINEL",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      fencingToken: 6,
+      lease: { status: "ACTIVE", abandonedAt: expect.any(String) },
+      checkpoint: { state: "REVIEW_REMEDIATION_RECOVERED" },
+    })
+    expect(value.projectLease).not.toHaveBeenCalled()
+    expect(value.lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
+
     value.projectCheckpoint.mockClear()
+    value.lifecycle.inspectWorkingTreePaths.mockResolvedValue([
+      "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md",
+    ])
+    value.lifecycle.inspectPullRequestFiles.mockResolvedValue([
+      "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md",
+    ])
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
       result: "COMPLETE", outcomeId: "77", prNumber: 500,
     })
@@ -2088,7 +2311,9 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       }),
     }))
     expect(resolveActiveReviewRecoveryProvenance.mock.invocationCallOrder.at(-1))
-      .toBeLessThan(resumeQueueAfterReviewRecovery.mock.invocationCallOrder[0])
+      .toBeLessThan(resumeQueueAfterReviewRecovery.mock.invocationCallOrder.at(-1))
+    expect(refreshQueueOutcome.mock.invocationCallOrder.at(-1))
+      .toBeLessThan(verifyActiveReviewRecoveryContinuation.mock.invocationCallOrder.at(-1))
     expect(value.state.read().executions["77"]).toMatchObject({
       fencingToken: 7,
       lease: { status: "RELEASED" },
