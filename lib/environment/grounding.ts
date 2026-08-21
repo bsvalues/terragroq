@@ -96,24 +96,9 @@ export function composeProjectsAnswer(projects: readonly ProjectRow[]): string {
   )
 }
 
-/**
- * "What are we doing right now" — honest about the seam. The live Work Order / evidence state is not
- * yet wired into this surface (acceptance criterion 5), so name the active projects from the register
- * but do not invent in-flight task state.
- */
-export function groundedCurrentWork(projects: readonly ProjectRow[]): string {
-  const active = names(projects, "active")
-  const anchor =
-    active.length > 0
-      ? ` The register shows active: ${join(active)} — but not the live task or evidence state behind them.`
-      : " Nothing is marked active in the register, and I won't invent work that isn't there."
-  return (
-    "I don't have the governed Work Order and evidence state wired into this surface yet, so I can't " +
-    "tell you what's in flight without inventing it — and I won't." +
-    anchor +
-    " Name a specific piece of work and I'll assemble the world for it now."
-  )
-}
+// current-work is now answered through the canonical project → thread → outcome reader
+// (lib/environment/current-work-db.ts), not from the project register. groundedCurrentWork was the
+// honest "not wired yet" placeholder and has been superseded.
 
 /**
  * A compact grounding block for the free-form model's system prompt — the second layer. Anything the
