@@ -61,18 +61,21 @@ reconfigure a runtime host.
 
 The source decision `DEC-WILLIAMOS-V131-RUNTIME-HARDENING` records v1.3.1 as the Ollama
 startup/runtime reliability hardening baseline while preserving v1.3.0. The remediation is defined by
-the following bounded behavior:
+the following recorded behavior:
 
 ```text
 MANAGED_AUTOSTART_ENDPOINT_SCOPE: LOOPBACK_ONLY
 AUTO_START_ELIGIBILITY: INSTALLED_LOCAL_OLLAMA_ONLY
 NON_LOCAL_AUTO_START: REFUSED
 READINESS_POLLING_DEADLINE_SECONDS: 30
-SETUP_TAGS_PROBE_TIMEOUT_SECONDS: 5
-CONTROL_CENTER_TAGS_PROBE_TIMEOUT_SECONDS: 10
+SETUP_TAGS_PROBE_CONFIGURED_IO_TIMEOUT_SECONDS: 5
+CONTROL_CENTER_TAGS_PROBE_CONFIGURED_IO_TIMEOUT_SECONDS: 10
+PROBE_TIMEOUT_SEMANTICS: BLOCKING_IO_NOT_TOTAL_DURATION
+IN_FLIGHT_PROBE_TOTAL_DURATION_BOUND: NONE_ESTABLISHED
 STRICT_READINESS_WALL_CLOCK_CEILING_ENFORCED: false
 POST_DEADLINE_IN_FLIGHT_PROBE_CAN_SUCCEED: true
 UNREADY_RESULT_AFTER_POLLING_LOOP: EXPLICIT_FAILURE
+UNREADY_RESULT_REQUIRES_PROBE_RETURN: true
 DEFAULT_RUNTIME: ollama
 DEFAULT_CHAT_MODEL: qwen2.5:14b-instruct-q4_K_M
 DEVELOPMENT_MODEL_OVERRIDE: WILLIAMOS_LLM_MODEL
@@ -87,7 +90,7 @@ V130_BASELINE_MOVEMENT: PROHIBITED
 | --- | --- | --- |
 | Structured, searchable hardening decision | `control-center/backend/decision_register.py`; `control-center/backend/tests/test_decision_register.py` | The v1.3.1 hardening record has an ID, status, decision, reason, scope, evidence, review date, and authority category. The seed register is read-only and does not itself enforce or mutate runtime state. |
 | Local-only startup | `scripts/setup_copilot.py`; `scripts/williamos_control_center.py` | Startup is attempted only for an installed Ollama endpoint on `127.0.0.1` or `localhost`; a non-local host is refused. |
-| Bounded readiness polling | `scripts/setup_copilot.py`; `scripts/williamos_control_center.py` | Both startup paths use a 30-second polling deadline after pre-window health work. A probe admitted before the deadline may finish afterward: setup probes allow 5 seconds and Control Center probes allow 10 seconds. That probe may still report success after the deadline; otherwise the paths return an explicit failure after the polling loop regains control. They do not enforce a strict 30-second end-to-end ceiling. |
+| Readiness polling and probe duration | `scripts/setup_copilot.py`; `scripts/williamos_control_center.py` | Both startup paths use a 30-second polling deadline after pre-window health work. The configured 5-second setup and 10-second Control Center values constrain blocking I/O inactivity, not total request duration. An endpoint that continues making I/O progress can keep an admitted probe in flight beyond the polling deadline with no finite total-duration bound established by these paths. If the probe returns without readiness, the paths return an explicit failure after the loop regains control. |
 | Stable model selection | `control-center/backend/copilot/llm.py`; `control-center/backend/decision_register.py` | Ollama and `qwen2.5:14b-instruct-q4_K_M` remain defaults; a lighter model requires an explicit environment override. |
 | No silent failover | `control-center/backend/copilot/llm.py`; `scripts/williamos_control_center.py` | Runtime evidence exposes `fallback: false`; an unavailable selected runtime is reported, and no fallback runtime is selected automatically. |
 | Baseline preservation | `WilliamOS/95_ReleaseGovernance/reports/Release Notes - v1.3.1 - 2026-06-26.md`; `control-center/backend/decision_register.py` | The hardening is recorded as a patch baseline without moving the accepted v1.3.0 baseline. This lane did not inspect or change tags. |
@@ -115,10 +118,12 @@ or present either historical run as a current host check.
 The remediation remains correctly represented only while all of these invariants hold:
 
 1. Automatic startup is limited to an installed loopback Ollama endpoint.
-2. Startup readiness uses a 30-second polling deadline with an observable failure result. Pre-window
-   health work and a final in-flight probe may extend wall-clock completion by bounded 5-second setup
-   or 10-second Control Center request timeouts. The final admitted probe may still succeed after the
-   deadline; no strict 30-second end-to-end ceiling is claimed.
+2. Startup readiness uses a 30-second polling deadline for admitting polling work, not a completion
+   deadline. The configured 5-second setup and 10-second Control Center values are blocking-I/O
+   inactivity timeouts, not total probe-duration caps; continued response progress can keep an
+   admitted probe in flight without an established finite wall-clock bound. If control returns, the
+   final probe may still succeed or the path can expose failure. No end-to-end completion or
+   deadline-to-failure ceiling is claimed.
 3. Ollama and the 14B chat model remain the defaults unless an explicit runtime or model override is
    supplied.
 4. Runtime failure remains visible and never causes an automatic provider, runtime, or cloud switch.
@@ -141,6 +146,9 @@ The remediation remains correctly represented only while all of these invariants
 - No historical command, count, health response, or cold-start result was re-executed in this lane.
 - The existing "within 30 seconds" failure text describes the polling window. It is not evidence of
   a measured 30-second end-to-end wall-clock ceiling.
+- The configured 5-second and 10-second probe timeouts constrain blocking I/O inactivity. They do not
+  establish total request-duration bounds, because continued response progress can keep a probe in
+  flight.
 - The named Hermes work-contract test is an unrelated selected-Thread UI regression test; it does not
   validate this report, prove live runtime reliability, or establish issue closure.
 
@@ -185,16 +193,24 @@ execution. No product, runtime, authority, or historical-evidence claim was wide
 
 Hermes exact-head review then identified two additional P2 acceptance defects. The unrelated
 selected-Thread work-contract test is no longer represented as acceptance evidence for this report;
-the handoff below now defines a report-specific core-anchor validator. The readiness contract also
-records the 30-second value as a polling deadline, includes both per-probe timeouts, preserves the
-possibility of a final post-deadline success, and explicitly denies a strict 30-second wall-clock
-claim. Direct file review confirmed both corrections remain
-inside the reserved report and preserve the historical evidence verbatim.
+the handoff below defines report-specific validation. The readiness contract also records the
+30-second value as a polling deadline and denies a strict 30-second wall-clock claim. Direct file
+review confirmed both corrections remain inside the reserved report and preserve the historical
+evidence verbatim.
 
 A later pull-request check report contained two `FAILURE` conclusions and one `CANCELLED` conclusion
 for the same required `work context receipt (#831)` check. Direct contract inspection reduced those
 status entries to one actionable PR-admission defect and one non-actionable cancelled execution. The
 remediation below does not invent a receipt, copy one from another head, or claim the gate is green.
+
+The current exact-head review found two further P2 defects. First, the 5-second and 10-second I/O
+timeout settings had been described as bounded additions to wall-clock completion even though
+continued response progress can leave an admitted probe in flight without a total-duration limit. The
+record now states the I/O-inactivity semantics and claims no finite probe or readiness-completion
+bound. Second, the report validator checked only selected readiness fields and headings. The handoff
+now adds a separate validator that requires every substantive reliability invariant as one exact
+contiguous sequence, including loopback-only startup, stable runtime/model defaults, no automatic
+switching or cloud fallback, visible failure, and v1.3.0 baseline preservation.
 
 ## PR work-context gate remediation
 
@@ -253,18 +269,27 @@ and exact PR-body recovery remains pending with Hermes.
 
 Codex did not run validators, Git, GitHub, interpreters, package managers, or runtime commands. Hermes
 owns the following exact post-remediation validation and repository lifecycle. Each
-`REPORT_VALIDATOR_ARG_*` value is one separated process argument; the multiline expression requires
-the report identity, no-runtime-host-mutation posture, review state, corrected readiness fields, PR
-work-context remediation, and all substantive sections in their recorded order.
+validator `*_ARG_*` value is one separated process argument. The structure expression requires report
+identity, no-runtime-host-mutation posture, review state, PR work-context remediation, and every
+substantive section in order. The independent reliability expression requires the complete invariant
+block as an exact contiguous sequence, so removing, inserting, or changing a recorded invariant fails
+that gate. Both commands must exit zero.
 
 ```text
 git diff --check: PENDING_HERMES_HOST
 REPORT_VALIDATOR_COMMAND: rg
 REPORT_VALIDATOR_ARG_1: --quiet
 REPORT_VALIDATOR_ARG_2: -U
-REPORT_VALIDATOR_ARG_3: (?ms)^# WO-OUTCOME-762-911 — Runtime Reliability Remediation Record$.*^RECORD_FORMAT: WILLIAMOS_RUNTIME_RELIABILITY_REMEDIATION_V1$.*^RECORD_ID: WO-OUTCOME-762-911$.*^DISPATCH_WORK_ORDER: WO-HERMES-OUTCOME-27$.*^TRACKED_ISSUE: 911$.*^HOST_RUNTIME_MUTATION_PERFORMED: false$.*^VALIDATION_STATE: PENDING_HERMES_HOST$.*^INDEPENDENT_REVIEW_STATE: COMPLETE_FINDINGS_REMEDIATED$.*^PR_CONTEXT_GATE_STATE: AWAITING_HERMES_PR_BODY_REMEDIATION$.*^DISTINCT_VALID_FINDINGS: 1$.*^CANCELLED_RUN_DISPOSITION: NON_ACTIONABLE_CHECK_EXECUTION_STATE$.*^CANCELLED_RUN_CAUSE_CLAIMED: false$.*^RECEIPT_TOKEN_FABRICATED: false$.*^WORK_CONTEXT_EXEMPTION_USED: false$.*^OWNER_TOUCH_COUNT: 0$.*^BLOCKED_SCOPE_CROSSED: false$.*^## Owner outcome$.*^## Repository-backed remediation$.*^READINESS_POLLING_DEADLINE_SECONDS: 30$.*^SETUP_TAGS_PROBE_TIMEOUT_SECONDS: 5$.*^CONTROL_CENTER_TAGS_PROBE_TIMEOUT_SECONDS: 10$.*^STRICT_READINESS_WALL_CLOCK_CEILING_ENFORCED: false$.*^POST_DEADLINE_IN_FLIGHT_PROBE_CAN_SUCCEED: true$.*^UNREADY_RESULT_AFTER_POLLING_LOOP: EXPLICIT_FAILURE$.*^## Historical proof retained, not rerun$.*^## Reliability acceptance contract$.*^## Truth boundary$.*^## No-runtime-host-mutation ledger$.*^## Independent file review$.*^## PR work-context gate remediation$.*^ACTIONABLE_DEFECT: REQUIRED_RECEIPT_ABSENT_OR_UNPROVEN_IN_PR_BODY$.*^RECOVERY_STATE: PENDING_HERMES_HOST$.*^## Hermes host validation handoff$
+REPORT_VALIDATOR_ARG_3: (?ms)^# WO-OUTCOME-762-911 — Runtime Reliability Remediation Record$.*^RECORD_FORMAT: WILLIAMOS_RUNTIME_RELIABILITY_REMEDIATION_V1$.*^RECORD_ID: WO-OUTCOME-762-911$.*^DISPATCH_WORK_ORDER: WO-HERMES-OUTCOME-27$.*^SOURCE_DECISION_ID: DEC-WILLIAMOS-V131-RUNTIME-HARDENING$.*^HISTORICAL_RELEASE: v1\.3\.1$.*^PRESERVED_BASELINE: v1\.3\.0$.*^TRACKED_ISSUE: 911$.*^HOST_RUNTIME_MUTATION_PERFORMED: false$.*^VALIDATION_STATE: PENDING_HERMES_HOST$.*^INDEPENDENT_REVIEW_STATE: COMPLETE_FINDINGS_REMEDIATED$.*^PR_CONTEXT_GATE_STATE: AWAITING_HERMES_PR_BODY_REMEDIATION$.*^DISTINCT_VALID_FINDINGS: 1$.*^CANCELLED_RUN_DISPOSITION: NON_ACTIONABLE_CHECK_EXECUTION_STATE$.*^CANCELLED_RUN_CAUSE_CLAIMED: false$.*^RECEIPT_TOKEN_FABRICATED: false$.*^WORK_CONTEXT_EXEMPTION_USED: false$.*^OWNER_TOUCH_COUNT: 0$.*^BLOCKED_SCOPE_CROSSED: false$.*^## Owner outcome$.*^## Repository-backed remediation$.*^## Historical proof retained, not rerun$.*^## Reliability acceptance contract$.*^## Truth boundary$.*^## No-runtime-host-mutation ledger$.*^## Independent file review$.*^## PR work-context gate remediation$.*^ACTIONABLE_DEFECT: REQUIRED_RECEIPT_ABSENT_OR_UNPROVEN_IN_PR_BODY$.*^RECOVERY_STATE: PENDING_HERMES_HOST$.*^## Hermes host validation handoff$
 REPORT_VALIDATOR_ARG_4: docs/reports/WO-OUTCOME-762-911-runtime-reliability.md
 REPORT_VALIDATOR_STATE: PENDING_HERMES_HOST
+RELIABILITY_INVARIANT_VALIDATOR_COMMAND: rg
+RELIABILITY_INVARIANT_VALIDATOR_ARG_1: --quiet
+RELIABILITY_INVARIANT_VALIDATOR_ARG_2: -U
+RELIABILITY_INVARIANT_VALIDATOR_ARG_3: (?m)^MANAGED_AUTOSTART_ENDPOINT_SCOPE: LOOPBACK_ONLY$\n^AUTO_START_ELIGIBILITY: INSTALLED_LOCAL_OLLAMA_ONLY$\n^NON_LOCAL_AUTO_START: REFUSED$\n^READINESS_POLLING_DEADLINE_SECONDS: 30$\n^SETUP_TAGS_PROBE_CONFIGURED_IO_TIMEOUT_SECONDS: 5$\n^CONTROL_CENTER_TAGS_PROBE_CONFIGURED_IO_TIMEOUT_SECONDS: 10$\n^PROBE_TIMEOUT_SEMANTICS: BLOCKING_IO_NOT_TOTAL_DURATION$\n^IN_FLIGHT_PROBE_TOTAL_DURATION_BOUND: NONE_ESTABLISHED$\n^STRICT_READINESS_WALL_CLOCK_CEILING_ENFORCED: false$\n^POST_DEADLINE_IN_FLIGHT_PROBE_CAN_SUCCEED: true$\n^UNREADY_RESULT_AFTER_POLLING_LOOP: EXPLICIT_FAILURE$\n^UNREADY_RESULT_REQUIRES_PROBE_RETURN: true$\n^DEFAULT_RUNTIME: ollama$\n^DEFAULT_CHAT_MODEL: qwen2\.5:14b-instruct-q4_K_M$\n^DEVELOPMENT_MODEL_OVERRIDE: WILLIAMOS_LLM_MODEL$\n^AUTOMATIC_RUNTIME_SWITCHING: false$\n^AUTOMATIC_CLOUD_FALLBACK: false$\n^SELECTED_RUNTIME_FAILURE_VISIBILITY: EXPLICIT_OFFLINE_STATE$\n^CONTROL_CENTER_WITHOUT_SELECTED_RUNTIME: STARTS_WITH_CONVERSATIONAL_ROUTING_UNAVAILABLE$\n^V130_BASELINE_MOVEMENT: PROHIBITED$
+RELIABILITY_INVARIANT_VALIDATOR_ARG_4: docs/reports/WO-OUTCOME-762-911-runtime-reliability.md
+RELIABILITY_INVARIANT_VALIDATOR_STATE: PENDING_HERMES_HOST
+VALIDATION_AGGREGATION: ALL_COMMANDS_MUST_EXIT_ZERO
 work context receipt (#831): PENDING_HERMES_HOST_PR_BODY_REMEDIATION
 commit: null
 pr_url: null
@@ -273,7 +298,7 @@ merge_commit: null
 ```
 
 `tests/hermes-work-contract.test.ts` exercises the selected-Thread latest-evidence UI contract and is
-not acceptance evidence for this report. The report-specific validator and `git diff --check`
+not acceptance evidence for this report. The report-specific validators and `git diff --check`
 authorize no runtime, service, provider, production, release, or tag mutation. A normal repository
 revert of this single report is the complete rollback; no host rollback is needed.
 
@@ -283,6 +308,8 @@ revert of this single report is the complete rollback; no host rollback is neede
 - No blocked scope was crossed and no owner touch occurred.
 - The report records evidence without upgrading historical proof into current runtime truth.
 - Independent file review completed and its truth-scope findings were remediated in this record.
-- Both exact-head P2 findings were remediated without leaving the reserved report path.
+- The earlier two exact-head P2 findings were remediated without leaving the reserved report path.
 - The repeated #831 results are classified without fabricating a receipt or exemption; exact PR-body
   recovery remains a routine Hermes host action and does not require owner contact.
+- The latest two P2 findings were remediated by removing the false probe-duration bound and requiring
+  the full contiguous reliability invariant block in host validation.
