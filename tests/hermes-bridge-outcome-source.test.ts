@@ -3663,6 +3663,17 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           persistedLifecycleReason: null }))
           .resolves.toMatchObject({ version: 6, fencingToken: 4,
             reviewRecoveryReclaimEventId: reclaimEventId })
+        await expect(resume()).resolves.toMatchObject({ version: 6, fencingToken: 4,
+          lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+          reviewRecoveryReclaimEventId: reclaimEventId,
+          reviewRecoveryReclaimPayloadDigest: reclaimMetadata.payloadDigest })
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: unresolvedActive, workContract: issue911RuntimeWorkContract,
+          proof: recoveryProof })).resolves.toEqual({
+          reviewRecoverySourceExpectedVersion: 4,
+          reviewRecoverySourceFencingToken: 2,
+          reviewRecoverySourceRuntimeAttempt: 5,
+        })
         expect((await client.query(`SELECT count(*)::integer AS count FROM governance_event
           WHERE "eventType"='HERMES_OUTCOME_REVIEW_RECOVERY_RECLAIMED'`)).rows).toEqual([{ count: 1 }])
         const reclaimedActive = { ...active, expectedVersion: 6, fencingToken: 4,
@@ -3683,11 +3694,26 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           (id,"userId","eventType","entityType","entityId",actor,metadata)
           VALUES (1000,'owner','HERMES_OUTCOME_REVIEW_RECOVERY_RECLAIMED','goal','4',
             'hermes-codex-bridge',$1::jsonb)`, [JSON.stringify(reclaimMetadata)])
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: unresolvedActive, workContract: issue911RuntimeWorkContract,
+          proof: recoveryProof })).rejects.toMatchObject({
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
         await expect(projectReclaimed(48)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
         await client.query("DELETE FROM governance_event WHERE id=1000")
         await client.query("UPDATE governance_event SET actor='other' WHERE id=$1", [reclaimEventId])
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: unresolvedActive, workContract: issue911RuntimeWorkContract,
+          proof: recoveryProof })).rejects.toMatchObject({
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
         await expect(projectReclaimed(49)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
         await client.query("UPDATE governance_event SET actor='hermes-codex-bridge', metadata=metadata || '{\"extra\":true}'::jsonb WHERE id=$1", [reclaimEventId])
+        await expect(resolveActiveReviewRecoveryProvenance({ query, outcomeId: 4,
+          executionBinding: unresolvedActive, workContract: issue911RuntimeWorkContract,
+          proof: recoveryProof })).rejects.toMatchObject({
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
         await expect(projectReclaimed(50)).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
         await client.query("UPDATE governance_event SET metadata=$1::jsonb WHERE id=$2", [JSON.stringify(reclaimMetadata), reclaimEventId])
         await client.query("DELETE FROM governance_event WHERE id=$1", [reclaimEventId])

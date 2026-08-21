@@ -4169,7 +4169,10 @@ export async function resolveActiveReviewRecoveryProvenance({
       runQuery = client.query.bind(client)
     }
     const resolved = await runQuery(
-      `SELECT (recovery_authorization.metadata->>'runtimeAttempt')::integer AS "sourceRuntimeAttempt"
+      `SELECT (recovery_authorization.metadata->>'runtimeAttempt')::integer AS "sourceRuntimeAttempt",
+          queue.version AS "queueVersion", queue."fencingToken" AS "queueFencingToken",
+          queue."lifecycleReason" AS "queueLifecycleReason",
+          reclaim.id AS "reclaimEventId", reclaim.metadata->>'payloadDigest' AS "reclaimPayloadDigest"
        FROM outcome_queue_item AS queue
        JOIN governance_event AS recovery_authorization
          ON recovery_authorization."userId" = queue."userId"
@@ -4185,22 +4188,38 @@ export async function resolveActiveReviewRecoveryProvenance({
         AND recovery_authorization.metadata->>'workOrderRef' = 'WO-HERMES-OUTCOME-' || queue."goalId"::text
         AND recovery_authorization.metadata->>'executionBinding' = queue."executionBinding"
         AND recovery_authorization.metadata->>'acquisitionKey' = queue."acquisitionKey"
-        AND recovery_authorization.metadata->>'fencingToken' = (queue."fencingToken" - 1)::text
+        AND recovery_authorization.metadata->>'fencingToken' = (queue."fencingToken" - CASE
+          WHEN queue."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED' THEN 2
+          ELSE 1 END)::text
         AND recovery_authorization.metadata->>'proofDigest' = $10
         AND recovery_authorization.metadata->>'prNumber' = ($11::integer)::text
         AND recovery_authorization.metadata->>'reviewedHeadSha' = $12
         AND recovery_authorization.metadata->>'mergeSha' = $13
+       LEFT JOIN governance_event AS reclaim
+         ON reclaim."userId" = queue."userId"
+        AND reclaim."entityType" = 'goal'
+        AND reclaim."entityId"::text = queue."goalId"::text
+        AND reclaim."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_RECLAIMED'
+        AND reclaim.metadata->>'proofDigest' = $10
+        AND reclaim.metadata->>'prNumber' = ($11::integer)::text
+        AND reclaim.metadata->>'reviewedHeadSha' = $12
+        AND reclaim.metadata->>'mergeSha' = $13
        WHERE queue."goalId" = $1::integer
          AND queue."userId" = $2
          AND queue."outcomeKey" = $3
-         AND queue.version = $4::integer
          AND queue."executionBinding" = $5
          AND queue."acquisitionKey" = $6
          AND queue."leaseHolder" = $7
          AND queue."leaseToken" = $8
-         AND queue."fencingToken" = $9::integer
          AND queue."lifecycleState" = 'active'
-         AND queue."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERED'
+         AND ((queue."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERED'
+              AND queue.version = $4::integer
+              AND queue."fencingToken" = $9::integer
+              AND reclaim.id IS NULL)
+           OR (queue."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
+              AND queue.version = $4::integer + 1
+              AND queue."fencingToken" = $9::integer + 1
+              AND reclaim.id IS NOT NULL))
        ORDER BY recovery_authorization.id
        LIMIT 2`,
       [outcomeId, executionBinding.userId, executionBinding.outcomeKey,
@@ -4209,7 +4228,8 @@ export async function resolveActiveReviewRecoveryProvenance({
         executionBinding.leaseToken, executionBinding.fencingToken,
         proof?.proofDigest, proof?.prNumber, proof?.reviewedHeadSha, proof?.mergeSha],
     )
-    const sourceRuntimeAttempt = Number(resolved?.rows?.[0]?.sourceRuntimeAttempt)
+    const row = resolved?.rows?.[0]
+    const sourceRuntimeAttempt = Number(row?.sourceRuntimeAttempt)
     if (resolved?.rows?.length !== 1 || !Number.isSafeInteger(sourceRuntimeAttempt)
       || sourceRuntimeAttempt <= 0) {
       throw Object.assign(new Error("Active review recovery provenance is not unique"), {
@@ -4233,13 +4253,23 @@ export async function resolveActiveReviewRecoveryProvenance({
         code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
       })
     }
+    const forwardReclaimed = row.queueLifecycleReason === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    const verifiedExecutionBinding = forwardReclaimed ? {
+      ...executionBinding,
+      ...provenance,
+      expectedVersion: Number(row.queueVersion),
+      fencingToken: Number(row.queueFencingToken),
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoveryReclaimEventId: Number(row.reclaimEventId),
+      reviewRecoveryReclaimPayloadDigest: row.reclaimPayloadDigest,
+    } : { ...executionBinding, ...provenance }
     await verifyActiveReviewRecoveryContinuation({
       query: runQuery,
       outcomeId,
-      executionBinding: { ...executionBinding, ...provenance },
+      executionBinding: verifiedExecutionBinding,
       workContract,
       proof: { ...proof, runtimeAttempt: sourceRuntimeAttempt },
-      provenanceOnly: true,
+      provenanceOnly: !forwardReclaimed,
     })
     return provenance
   } catch (error) {

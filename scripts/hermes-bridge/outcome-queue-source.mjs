@@ -2231,6 +2231,45 @@ WHERE q."userId" = $1
   AND q."riskClass" IN ('R0', 'R1')
 FOR UPDATE OF q
 `,
+  readForwardReviewRecoveryReclaim: `
+SELECT ${QUEUE_COLUMNS},
+  (SELECT (recovery_authorization.metadata->>'runtimeAttempt')::integer
+   FROM governance_event AS recovery_authorization
+   WHERE recovery_authorization."userId" = q."userId"
+     AND recovery_authorization."entityType" = 'goal'
+     AND recovery_authorization."entityId"::text = q."goalId"::text
+     AND recovery_authorization."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED'
+     AND recovery_authorization.actor = 'hermes-codex-bridge'
+     AND recovery_authorization.metadata->>'recoveryKind' = 'review-remediation'
+     AND recovery_authorization.metadata->>'executionBinding' = q."executionBinding"
+     AND recovery_authorization.metadata->>'acquisitionKey' = q."acquisitionKey"
+     AND recovery_authorization.metadata->>'fencingToken' = $17::text
+     AND recovery_authorization.metadata->>'proofDigest' = $10
+     AND recovery_authorization.metadata->>'prNumber' = $7::text
+     AND recovery_authorization.metadata->>'reviewedHeadSha' = $8
+     AND recovery_authorization.metadata->>'mergeSha' = $9
+  ) AS "reviewRecoverySourceRuntimeAttempt"
+FROM "outcome_queue_item" AS q
+WHERE q."userId" = $1
+  AND q."outcomeKey" = $2
+  AND q."lifecycleState" = 'active'
+  AND q."lifecycleReason" = 'REVIEW_REMEDIATION_RECOVERY_RECLAIMED'
+  AND $3::integer = $16::integer + 1
+  AND q."version" = $16::integer + 2
+  AND q."executionBinding" = $4
+  AND q."acquisitionKey" = $5
+  AND $6::integer = $17::integer + 1
+  AND q."fencingToken" = $17::integer + 2
+  AND q."leaseHolder" = $11
+  AND q."leaseToken" = $12
+  AND $13::timestamptz IS NOT NULL
+  AND q."leaseExpiresAt" > $14::timestamptz
+  AND ${REVIEW_RECOVERY_PROOF_PREDICATE}
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${LIVE_AUTHORITY_PREDICATE.replaceAll("$1::timestamptz", "$14::timestamptz")}
+  AND q."riskClass" IN ('R0', 'R1')
+FOR UPDATE OF q
+`,
   reclaimExpiredValidationRecovery: `
 UPDATE "outcome_queue_item" AS q
 SET "lifecycleReason" = 'VALIDATION_INFRASTRUCTURE_RECOVERY_RECLAIMED',
@@ -5071,6 +5110,35 @@ export async function resumeOutcomeQueueAfterReviewRecovery({
         OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
         [...values, persistedLifecycleReason],
       )
+      if ((verified?.rows?.length ?? 0) === 0
+        && persistedLifecycleReason === "REVIEW_REMEDIATION_RECOVERED") {
+        const forward = await connection.query(
+          OUTCOME_QUEUE_SQL.readForwardReviewRecoveryReclaim,
+          values,
+        )
+        if (forward?.rows?.length !== 1) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+        const advanced = forward.rows[0]
+        if (advanced.userId !== user || advanced.outcomeKey !== key
+          || advanced.lifecycleState !== "active"
+          || advanced.lifecycleReason !== "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+          || Number(advanced.version) !== sourceVersion + 2
+          || Number(advanced.fencingToken) !== sourceFence + 2
+          || advanced.executionBinding !== binding || advanced.acquisitionKey !== acquisition
+          || advanced.leaseHolder !== holder || advanced.leaseToken !== token
+          || Number(advanced.reviewRecoverySourceRuntimeAttempt) !== Number(sourceRuntimeAttempt)) {
+          fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+        }
+        const evidence = await connection.query(OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence,
+          [user, String(advanced.goalId), reclaimIdempotencyKey(advanced.goalId)])
+        const exact = exactPersistedReclaimEvidence(advanced, evidence?.rows)
+        if (!exact) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+        await connection.query("COMMIT")
+        begun = false
+        return { ...advanced, reviewRecoveryReclaimCount: 1,
+          reviewRecoveryStaleReclaimApplied: true,
+          reviewRecoveryReclaimEventId: exact.id,
+          reviewRecoveryReclaimPayloadDigest: exact.payloadDigest }
+      }
       if (verified?.rows?.length !== 1) fail("OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
       const persisted = verified.rows[0]
       if (persisted.userId !== user || persisted.outcomeKey !== key

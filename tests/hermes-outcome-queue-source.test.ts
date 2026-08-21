@@ -3274,6 +3274,43 @@ describe("transactional durable outcome queue source", () => {
     await expect(resumeOutcomeQueueAfterReviewRecovery({ ...base, expectedVersion: 5, fencingToken: 3 }))
       .resolves.toMatchObject({ reviewRecoveryReclaimEventId: 701 })
     run.mockClear()
+    run.mockImplementation(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.readForwardReviewRecoveryReclaim ? [reclaimed]
+        : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence
+          ? [{ id: 701, actor: "hermes-codex-bridge", metadata }] : [],
+    }))
+    await expect(resumeOutcomeQueueAfterReviewRecovery({ ...base, expectedVersion: 6, fencingToken: 4,
+      persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED" }))
+      .resolves.toMatchObject({ version: 7, fencingToken: 5, reviewRecoveryReclaimEventId: 701 })
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN", OUTCOME_QUEUE_SQL.acquireLock, OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
+      OUTCOME_QUEUE_SQL.readForwardReviewRecoveryReclaim,
+      OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence, "COMMIT",
+    ])
+    for (const fault of ["missing", "duplicate", "drift"] as const) {
+      run.mockClear()
+      run.mockImplementation(async (sql: string) => ({
+        rows: sql === OUTCOME_QUEUE_SQL.readForwardReviewRecoveryReclaim
+          ? (fault === "missing" ? [] : [{ ...reclaimed,
+            ...(fault === "drift" ? { leaseToken: "drifted" } : {}) }])
+          : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence
+            ? (fault === "duplicate" ? [
+              { id: 701, actor: "hermes-codex-bridge", metadata },
+              { id: 702, actor: "hermes-codex-bridge", metadata },
+            ] : [{ id: 701, actor: "hermes-codex-bridge", metadata }]) : [],
+      }))
+      await expect(resumeOutcomeQueueAfterReviewRecovery({ ...base, expectedVersion: 6, fencingToken: 4,
+        persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED" }))
+        .rejects.toMatchObject({ code: "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
+      expect(run).toHaveBeenCalledWith("ROLLBACK")
+      expect(run).not.toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, expect.anything())
+    }
+    run.mockClear()
+    run.mockImplementation(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery ? [reclaimed]
+        : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence
+          ? [{ id: 701, actor: "hermes-codex-bridge", metadata }] : [],
+    }))
     await expect(resumeOutcomeQueueAfterReviewRecovery({ ...base, expectedVersion: 7, fencingToken: 5,
       persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
       campaignWindowId: "campaign-2", processIdentity: "process-2" }))
@@ -3317,6 +3354,8 @@ describe("transactional durable outcome queue source", () => {
         await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate}`, values))
           .resolves.toMatchObject({ rows: expect.any(Array) })
         await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery}`, values))
+          .resolves.toMatchObject({ rows: expect.any(Array) })
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.readForwardReviewRecoveryReclaim}`, values))
           .resolves.toMatchObject({ rows: expect.any(Array) })
         await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence}`,
           ["__none__", "goal:__none__", JSON.stringify({ idempotencyKey: "none" })]))

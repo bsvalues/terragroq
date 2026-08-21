@@ -1990,6 +1990,8 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(resumeQueueAfterReviewRecovery.mock.invocationCallOrder[0])
       .toBeLessThan(refreshQueueOutcome.mock.invocationCallOrder[0])
+    expect(resolveActiveReviewRecoveryProvenance.mock.invocationCallOrder.at(-1))
+      .toBeLessThan(resumeQueueAfterReviewRecovery.mock.invocationCallOrder[0])
     expect(value.state.read().executions["77"]).toMatchObject({
       fencingToken: 7,
       lease: { status: "RELEASED" },
