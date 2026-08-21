@@ -770,7 +770,13 @@ function withPersistedBinding(outcome, item, recoverySource = null, acquisitionR
         && source.leaseToken === binding.leaseToken
         && source.activeWorkOrderId === binding.activeWorkOrderId
         && source.authorityGrantRef === binding.authorityGrantRef
-      const exactSameFence = source.expectedVersion === binding.expectedVersion
+      const exactStableAcquisition = acquisitionResult === null
+        || (acquisitionResult?.acquired === true
+          && acquisitionResult?.replayed === true
+          && acquisitionResult?.reclaimed === false)
+      const exactSameFence = rawLifecycleReason === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+        && exactStableAcquisition
+        && source.expectedVersion === binding.expectedVersion
         && source.fencingToken === binding.fencingToken
       const exactGovernedStaleReclaim = acquisitionResult?.acquired === true
         && acquisitionResult?.reclaimed === true

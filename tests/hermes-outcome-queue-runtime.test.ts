@@ -1703,7 +1703,7 @@ describe("Hermes durable outcome queue runtime", () => {
     }
     const resumeReviewRecoveryQueue = vi.fn(async () => reclaimed)
     const verifyActiveReviewRecovery = vi.fn(async () => true)
-    const acquire = vi.fn(async () => ({ outcome: reclaimed, acquired: true, replayed: true }))
+    const acquire = vi.fn(async () => ({ outcome: reclaimed, acquired: true, replayed: true, reclaimed: false }))
     const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
       reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
@@ -1748,7 +1748,7 @@ describe("Hermes durable outcome queue runtime", () => {
     delete (acquisitionRow as any).reviewRecoveryReclaimPayloadDigest
     const resumeReviewRecoveryQueue = vi.fn(async () => reclaimed)
     const verifyActiveReviewRecovery = vi.fn(async () => true)
-    const acquire = vi.fn(async () => ({ outcome: acquisitionRow, acquired: true, replayed: true }))
+    const acquire = vi.fn(async () => ({ outcome: acquisitionRow, acquired: true, replayed: true, reclaimed: false }))
     const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
       reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
@@ -1848,6 +1848,15 @@ describe("Hermes durable outcome queue runtime", () => {
 
   it.each([
     ["acquired false", { result: { acquired: false } }],
+    ["same-fence stale reclaim", { item: { version: 6, fencingToken: 4 } }],
+    ["same-fence stale combined disposition", {
+      item: { version: 6, fencingToken: 4 },
+      result: { replayed: true, reclaimed: true },
+    }],
+    ["same-fence stale replay disposition", {
+      item: { version: 6, fencingToken: 4 },
+      result: { replayed: true, reclaimed: false },
+    }],
     ["missing reclaimed disposition", { result: { reclaimed: false } }],
     ["replayed disposition", { result: { replayed: true } }],
     ["non-stale lifecycle reason", { item: { lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" } }],
@@ -2053,7 +2062,7 @@ describe("Hermes durable outcome queue runtime", () => {
     }
     const resumeReviewRecoveryQueue = vi.fn(async () => reclaimed)
     const verifyActiveReviewRecovery = vi.fn(async () => true)
-    const acquire = vi.fn(async () => ({ outcome: reclaimed, acquired: true, replayed: true }))
+    const acquire = vi.fn(async () => ({ outcome: reclaimed, acquired: true, replayed: true, reclaimed: false }))
     const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
     const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
       reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
