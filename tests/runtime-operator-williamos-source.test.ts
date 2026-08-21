@@ -109,8 +109,8 @@ describe("building the registry from state", () => {
 
   it("selects by stable row identity when human refs collide", () => {
     const records = buildRegistryRecords(
-      [workOrder({ id: 26, userId: "owner-1" }), workOrder({ id: 99, userId: "owner-2" })],
-      [grant(), grant({ id: 99, userId: "owner-2" })],
+      [workOrder({ id: 26, userId: "owner-1" }), workOrder({ id: 99, userId: "owner-2", authorityGrantId: 99 })],
+      [grant(), grant({ id: 99, userId: "owner-2", workOrderId: 99 })],
       "williamos-resident-v1",
     )
     const registry = { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: records }
@@ -131,8 +131,8 @@ describe("building the registry from state", () => {
 
   it("does not let a completed colliding ref suppress a different ready row", () => {
     const records = buildRegistryRecords(
-      [workOrder({ id: 26, userId: "owner-1" }), workOrder({ id: 99, userId: "owner-2" })],
-      [grant(), grant({ id: 99, userId: "owner-2" })],
+      [workOrder({ id: 26, userId: "owner-1" }), workOrder({ id: 99, userId: "owner-2", authorityGrantId: 99 })],
+      [grant(), grant({ id: 99, userId: "owner-2", workOrderId: 99 })],
       "williamos-resident-v1",
     )
     const registry = { schemaVersion: 1, repository: "bsvalues/terragroq", workOrders: records }
