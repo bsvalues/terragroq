@@ -132,7 +132,7 @@ export function reviewPullRequestReceipt(input: ReviewInputs): PrReceiptVerdict 
   return { ok: true }
 }
 
-function within(file: string, reserved: string[]): boolean {
+function within(file: string, reserved: readonly string[]): boolean {
   const path = file.trim().replace(/\\/g, "/")
   return reserved.some((entry) => {
     const normalized = entry.trim().replace(/\\/g, "/")

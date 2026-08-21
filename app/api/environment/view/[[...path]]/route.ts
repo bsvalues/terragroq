@@ -13,6 +13,10 @@
  * page paths, set-cookie stripped from the response.
  */
 
+// Named /view rather than /anon: "anon" appears in content-blocker filter lists, and a URL that
+// ad-blockers can eat is a bad URL for a frame to depend on. (The rename began as a fix for an
+// ERR_BLOCKED_BY_CLIENT that turned out to be an automation browser blocking ALL sub-frame loads
+// regardless of URL -- the neutral name is kept as cheap insurance, not claimed as that fix.)
 export const dynamic = "force-dynamic"
 
 // Self-fetches target the standalone listener itself: loopback on the port THIS process serves.
@@ -20,6 +24,7 @@ export const dynamic = "force-dynamic"
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 
 import { isFrameablePath } from "@/lib/environment/frameable"
+import { resolveStreamedSuspense } from "@/lib/environment/resolve-streamed"
 
 // Deliberately unauthenticated: this route serves documents to sandboxed, COOKIELESS frames -- the
 // whole point is that the frame carries no session, so it cannot present one here either. Demanding
@@ -53,9 +58,20 @@ export async function GET(request: Request, { params }: { params: Promise<{ path
     // storage access, and a hydration crash tears down the server-rendered markup -- the frame went
     // blank white with the full form sitting in the document. The investigation surface shows what
     // the page IS; interactivity inside an anonymous reproduction frame is not its job.
-    const scriptFree = html
+    // But streamed suspense content only reaches its place via those same inline scripts, so the
+    // stripped document would show its loading fallback forever. Complete the stream server-side
+    // first (the $RS/$RC swaps as a pure transform), then strip.
+    //
+    // The strip's contract, stated exactly (independent review, 2026-08-20): remove everything that
+    // can EXECUTE script -- <script> elements (paired and self-closing) AND the link relations that
+    // fetch script for execution (preload as=script, modulepreload). It does NOT touch stylesheet or
+    // icon links. Nothing here runs regardless, because the frame is sandbox="" (opaque origin, no
+    // scripts); this is defense in depth so the "script-free" name is literally true.
+    const scriptFree = resolveStreamedSuspense(html)
       .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
       .replace(/<script\b[^>]*\/>/gi, "")
+      .replace(/<link\b[^>]*\brel=["']?modulepreload["']?[^>]*>/gi, "")
+      .replace(/<link\b[^>]*\bas=["']?script["']?[^>]*>/gi, "")
     return new Response(scriptFree, {
       status: response.status,
       headers: { "content-type": response.headers.get("content-type") ?? "text/html; charset=utf-8" },

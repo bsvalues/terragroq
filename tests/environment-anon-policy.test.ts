@@ -37,7 +37,7 @@ describe("the anon proxy strips scripts for real", () => {
   // runs them against real-shaped markup, so broken escaping can never ship silently again.
   it("removes script tags and keeps content and styles, using the shipped regexes", async () => {
     const fs = await import("node:fs")
-    const source = fs.readFileSync("app/api/environment/anon/[[...path]]/route.ts", "utf8")
+    const source = fs.readFileSync("app/api/environment/view/[[...path]]/route.ts", "utf8")
     const patterns = [...source.matchAll(/\.replace\(\/(.+?)\/gi, ""\)/g)].map((m) => new RegExp(m[1], "gi"))
     expect(patterns.length).toBeGreaterThanOrEqual(2)
     const html = `<html><head><script src="/a.js" defer></script><link rel="stylesheet" href="/x.css"></head><body><h1>Primary Operator</h1><script>window.boot()</script><script src="/self.js"/></body></html>`
@@ -48,9 +48,28 @@ describe("the anon proxy strips scripts for real", () => {
     expect(out).toContain("stylesheet")
   })
 
+  it("also strips the link relations that fetch script for execution, keeping stylesheet and icon links", async () => {
+    // The strip contract is "remove everything that can execute script" -- <script> AND
+    // <link rel=preload as=script> / <link rel=modulepreload>. It must leave stylesheet/icon links.
+    const fs = await import("node:fs")
+    const source = fs.readFileSync("app/api/environment/view/[[...path]]/route.ts", "utf8")
+    const patterns = [...source.matchAll(/\.replace\(\/(.+?)\/gi, ""\)/g)].map((m) => new RegExp(m[1], "gi"))
+    const html =
+      '<link rel="modulepreload" href="/_next/x.js"/>' +
+      '<link rel="preload" as="script" href="/_next/webpack.js"/>' +
+      '<link rel="stylesheet" href="/_next/a.css"/>' +
+      '<link rel="icon" href="/favicon.ico"/>'
+    let out = html
+    for (const pattern of patterns) out = out.replace(pattern, "")
+    expect(out).not.toContain("modulepreload")
+    expect(out).not.toContain('as="script"')
+    expect(out).toContain("stylesheet")
+    expect(out).toContain('rel="icon"')
+  })
+
   it("the self-closing matcher works alone, so its regression cannot hide behind the paired matcher", async () => {
     const fs = await import("node:fs")
-    const source = fs.readFileSync("app/api/environment/anon/[[...path]]/route.ts", "utf8")
+    const source = fs.readFileSync("app/api/environment/view/[[...path]]/route.ts", "utf8")
     const patterns = [...source.matchAll(/\.replace\(\/(.+?)\/gi, ""\)/g)].map((m) => new RegExp(m[1], "gi"))
     const selfClosing = patterns[1]
     expect(selfClosing).toBeTruthy()
