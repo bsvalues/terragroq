@@ -57,8 +57,12 @@ the following bounded behavior:
 MANAGED_AUTOSTART_ENDPOINT_SCOPE: LOOPBACK_ONLY
 AUTO_START_ELIGIBILITY: INSTALLED_LOCAL_OLLAMA_ONLY
 NON_LOCAL_AUTO_START: REFUSED
-READINESS_DEADLINE_SECONDS: 30
-READINESS_TIMEOUT_RESULT: EXPLICIT_FAILURE
+READINESS_POLLING_DEADLINE_SECONDS: 30
+SETUP_TAGS_PROBE_TIMEOUT_SECONDS: 5
+CONTROL_CENTER_TAGS_PROBE_TIMEOUT_SECONDS: 10
+STRICT_READINESS_WALL_CLOCK_CEILING_ENFORCED: false
+POST_DEADLINE_IN_FLIGHT_PROBE_CAN_SUCCEED: true
+UNREADY_RESULT_AFTER_POLLING_LOOP: EXPLICIT_FAILURE
 DEFAULT_RUNTIME: ollama
 DEFAULT_CHAT_MODEL: qwen2.5:14b-instruct-q4_K_M
 DEVELOPMENT_MODEL_OVERRIDE: WILLIAMOS_LLM_MODEL
@@ -73,7 +77,7 @@ V130_BASELINE_MOVEMENT: PROHIBITED
 | --- | --- | --- |
 | Structured, searchable hardening decision | `control-center/backend/decision_register.py`; `control-center/backend/tests/test_decision_register.py` | The v1.3.1 hardening record has an ID, status, decision, reason, scope, evidence, review date, and authority category. The seed register is read-only and does not itself enforce or mutate runtime state. |
 | Local-only startup | `scripts/setup_copilot.py`; `scripts/williamos_control_center.py` | Startup is attempted only for an installed Ollama endpoint on `127.0.0.1` or `localhost`; a non-local host is refused. |
-| Bounded readiness | `scripts/setup_copilot.py`; `scripts/williamos_control_center.py` | Both startup paths stop waiting after 30 seconds and return an explicit failure instead of waiting indefinitely. |
+| Bounded readiness polling | `scripts/setup_copilot.py`; `scripts/williamos_control_center.py` | Both startup paths use a 30-second polling deadline after pre-window health work. A probe admitted before the deadline may finish afterward: setup probes allow 5 seconds and Control Center probes allow 10 seconds. That probe may still report success after the deadline; otherwise the paths return an explicit failure after the polling loop regains control. They do not enforce a strict 30-second end-to-end ceiling. |
 | Stable model selection | `control-center/backend/copilot/llm.py`; `control-center/backend/decision_register.py` | Ollama and `qwen2.5:14b-instruct-q4_K_M` remain defaults; a lighter model requires an explicit environment override. |
 | No silent failover | `control-center/backend/copilot/llm.py`; `scripts/williamos_control_center.py` | Runtime evidence exposes `fallback: false`; an unavailable selected runtime is reported, and no fallback runtime is selected automatically. |
 | Baseline preservation | `WilliamOS/95_ReleaseGovernance/reports/Release Notes - v1.3.1 - 2026-06-26.md`; `control-center/backend/decision_register.py` | The hardening is recorded as a patch baseline without moving the accepted v1.3.0 baseline. This lane did not inspect or change tags. |
@@ -101,7 +105,10 @@ or present either historical run as a current host check.
 The remediation remains correctly represented only while all of these invariants hold:
 
 1. Automatic startup is limited to an installed loopback Ollama endpoint.
-2. Startup readiness has a deterministic 30-second ceiling and an observable failure result.
+2. Startup readiness uses a 30-second polling deadline with an observable failure result. Pre-window
+   health work and a final in-flight probe may extend wall-clock completion by bounded 5-second setup
+   or 10-second Control Center request timeouts. The final admitted probe may still succeed after the
+   deadline; no strict 30-second end-to-end ceiling is claimed.
 3. Ollama and the 14B chat model remain the defaults unless an explicit runtime or model override is
    supplied.
 4. Runtime failure remains visible and never causes an automatic provider, runtime, or cloud switch.
@@ -122,8 +129,10 @@ The remediation remains correctly represented only while all of these invariants
 - Static source inspection establishes the intended reliability contract, not the current condition
   of Ollama, its models, Control Center, a tag, or any machine.
 - No historical command, count, health response, or cold-start result was re-executed in this lane.
-- The named Hermes work-contract test is a handoff regression gate; it does not prove live runtime
-  reliability or issue closure.
+- The existing "within 30 seconds" failure text describes the polling window. It is not evidence of
+  a measured 30-second end-to-end wall-clock ceiling.
+- The named Hermes work-contract test is an unrelated selected-Thread UI regression test; it does not
+  validate this report, prove live runtime reliability, or establish issue closure.
 
 ## No-runtime-host-mutation ledger
 
@@ -164,22 +173,40 @@ the permitted repository write or native delivery context. This revision records
 narrows those labels to runtime-host mutation, external product/provider calls, and runtime-operator
 execution. No product, runtime, authority, or historical-evidence claim was widened.
 
+Hermes exact-head review then identified two additional P2 acceptance defects. The unrelated
+selected-Thread work-contract test is no longer represented as acceptance evidence for this report;
+the handoff below now defines a report-specific core-anchor validator. The readiness contract also
+records the 30-second value as a polling deadline, includes both per-probe timeouts, preserves the
+possibility of a final post-deadline success, and explicitly denies a strict 30-second wall-clock
+claim. Direct file review confirmed both corrections remain
+inside the reserved report and preserve the historical evidence verbatim.
+
 ## Hermes host validation handoff
 
 Codex did not run validators, Git, GitHub, interpreters, package managers, or runtime commands. Hermes
-owns the following exact post-handoff validation and repository lifecycle:
+owns the following exact post-remediation validation and repository lifecycle. Each
+`REPORT_VALIDATOR_ARG_*` value is one separated process argument; the multiline expression requires
+the report identity, no-runtime-host-mutation posture, review state, corrected readiness fields, and
+all substantive sections in their recorded order.
 
 ```text
 git diff --check: PENDING_HERMES_HOST
-npx vitest run tests/hermes-work-contract.test.ts: PENDING_HERMES_HOST
+REPORT_VALIDATOR_COMMAND: rg
+REPORT_VALIDATOR_ARG_1: --quiet
+REPORT_VALIDATOR_ARG_2: -U
+REPORT_VALIDATOR_ARG_3: (?ms)^# WO-OUTCOME-762-911 — Runtime Reliability Remediation Record$.*^RECORD_FORMAT: WILLIAMOS_RUNTIME_RELIABILITY_REMEDIATION_V1$.*^RECORD_ID: WO-OUTCOME-762-911$.*^DISPATCH_WORK_ORDER: WO-HERMES-OUTCOME-27$.*^TRACKED_ISSUE: 911$.*^HOST_RUNTIME_MUTATION_PERFORMED: false$.*^VALIDATION_STATE: PENDING_HERMES_HOST$.*^INDEPENDENT_REVIEW_STATE: COMPLETE_FINDINGS_REMEDIATED$.*^OWNER_TOUCH_COUNT: 0$.*^BLOCKED_SCOPE_CROSSED: false$.*^## Owner outcome$.*^## Repository-backed remediation$.*^READINESS_POLLING_DEADLINE_SECONDS: 30$.*^SETUP_TAGS_PROBE_TIMEOUT_SECONDS: 5$.*^CONTROL_CENTER_TAGS_PROBE_TIMEOUT_SECONDS: 10$.*^STRICT_READINESS_WALL_CLOCK_CEILING_ENFORCED: false$.*^POST_DEADLINE_IN_FLIGHT_PROBE_CAN_SUCCEED: true$.*^UNREADY_RESULT_AFTER_POLLING_LOOP: EXPLICIT_FAILURE$.*^## Historical proof retained, not rerun$.*^## Reliability acceptance contract$.*^## Truth boundary$.*^## No-runtime-host-mutation ledger$.*^## Independent file review$.*^## Hermes host validation handoff$
+REPORT_VALIDATOR_ARG_4: docs/reports/WO-OUTCOME-762-911-runtime-reliability.md
+REPORT_VALIDATOR_STATE: PENDING_HERMES_HOST
 commit: null
 pr_url: null
 merged: false
 merge_commit: null
 ```
 
-Those validators authorize no runtime, service, provider, production, release, or tag mutation. A
-normal repository revert of this single report is the complete rollback; no host rollback is needed.
+`tests/hermes-work-contract.test.ts` exercises the selected-Thread latest-evidence UI contract and is
+not acceptance evidence for this report. The report-specific validator and `git diff --check`
+authorize no runtime, service, provider, production, release, or tag mutation. A normal repository
+revert of this single report is the complete rollback; no host rollback is needed.
 
 ## Safety
 
@@ -187,3 +214,4 @@ normal repository revert of this single report is the complete rollback; no host
 - No blocked scope was crossed and no owner touch occurred.
 - The report records evidence without upgrading historical proof into current runtime truth.
 - Independent file review completed and its truth-scope findings were remediated in this record.
+- Both exact-head P2 findings were remediated without leaving the reserved report path.
