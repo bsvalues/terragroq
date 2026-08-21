@@ -188,3 +188,62 @@ describe("composeCurrentWorkAnswer + startWorkSelection", () => {
     expect(startWorkSelection(work)).toBeNull()
   })
 })
+
+import { joinCanonicalWork, type JoinThread, type QueueSurfaceItem } from "@/lib/environment/canonical-current-work"
+
+const surface = (items: QueueSurfaceItem[]) => new Map(items.map((i) => [i.outcomeKey, i]))
+const q = (outcomeKey: string, over: Partial<QueueSurfaceItem> = {}): QueueSurfaceItem => ({
+  outcomeKey, title: outcomeKey, queueOrder: 0, lifecycleState: "suggested", activeWorkOrderId: null, dependencyKeys: [], ...over,
+})
+
+describe("joinCanonicalWork enforces the join invariants", () => {
+  it("joins bound outcomes to the queue surface, keeping queue order and lifecycle from the surface", () => {
+    const threads: JoinThread[] = [{ threadId: "t1", threadTitle: "T1", loaded: true, boundOutcomeKeys: ["a", "b"] }]
+    const r = joinCanonicalWork(
+      threads,
+      surface([q("a", { queueOrder: 5, lifecycleState: "active", activeWorkOrderId: 9 }), q("b", { queueOrder: 2 })]),
+      new Map([[9, { id: 9, ref: "WO-9", status: "in progress" }]]),
+      new Map([[9, [{ workOrderId: 9, result: "PASS", notes: "ev", createdAt: "2026-08-21T00:00:00Z" }]]]),
+    )
+    expect(r.conflicts).toEqual([])
+    expect(r.unresolved).toEqual([])
+    expect(r.threads[0].outcomes.map((o) => [o.outcomeKey, o.queueOrder, o.lifecycleState])).toEqual([["a", 5, "active"], ["b", 2, "suggested"]])
+    expect(r.threads[0].workOrders).toEqual([{ id: 9, ref: "WO-9", status: "in progress" }])
+    expect(r.threads[0].evidence[0].notes).toBe("ev")
+  })
+
+  it("reports an outcome bound to two threads as a conflict and excludes it — never silently chosen", () => {
+    const threads: JoinThread[] = [
+      { threadId: "t1", threadTitle: null, loaded: true, boundOutcomeKeys: ["dup"] },
+      { threadId: "t2", threadTitle: null, loaded: true, boundOutcomeKeys: ["dup"] },
+    ]
+    const r = joinCanonicalWork(threads, surface([q("dup")]), new Map(), new Map())
+    expect(r.conflicts).toEqual(["dup"])
+    expect(r.threads.every((t) => t.outcomes.length === 0)).toBe(true)
+  })
+
+  it("reports a bound outcome missing from the surface as unresolved, never guessed", () => {
+    const threads: JoinThread[] = [{ threadId: "t1", threadTitle: null, loaded: true, boundOutcomeKeys: ["ghost"] }]
+    const r = joinCanonicalWork(threads, surface([]), new Map(), new Map())
+    expect(r.unresolved).toEqual(["ghost"])
+    expect(r.threads[0].outcomes).toEqual([])
+  })
+
+  it("preserves loaded=false for a thread that couldn't be read", () => {
+    const threads: JoinThread[] = [{ threadId: "t1", threadTitle: null, loaded: false, boundOutcomeKeys: [] }]
+    const r = joinCanonicalWork(threads, surface([]), new Map(), new Map())
+    expect(r.threads[0].loaded).toBe(false)
+  })
+
+  it("the joined result flows through aggregate + compose, surfacing diagnostics", () => {
+    const threads: JoinThread[] = [
+      { threadId: "t1", threadTitle: null, loaded: true, boundOutcomeKeys: ["a", "dup"] },
+      { threadId: "t2", threadTitle: null, loaded: true, boundOutcomeKeys: ["dup"] },
+    ]
+    const r = joinCanonicalWork(threads, surface([q("a", { lifecycleState: "active", queueOrder: 0 }), q("dup")]), new Map(), new Map())
+    const work = aggregateCurrentWork(PROJECTS[0], r.threads)
+    const said = composeCurrentWorkAnswer({ kind: "resolved", project: PROJECTS[0] }, work, { conflicts: r.conflicts, unresolved: r.unresolved })
+    expect(said).toContain("bound to more than one thread")
+    expect(said).toContain("dup")
+  })
+})

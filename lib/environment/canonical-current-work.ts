@@ -176,6 +176,93 @@ export function aggregateCurrentWork(
   }
 }
 
+/** A project thread and the outcome keys bound to it (from the thread's outcome_queue_item items). */
+export type JoinThread = Readonly<{
+  threadId: string
+  threadTitle: string | null
+  loaded: boolean
+  boundOutcomeKeys: readonly string[]
+}>
+
+/** The queue surface entry for an outcome — the authoritative priority + lifecycle source. */
+export type QueueSurfaceItem = Readonly<{
+  outcomeKey: string
+  title: string
+  queueOrder: number
+  lifecycleState: string
+  activeWorkOrderId: number | null
+  dependencyKeys: readonly string[]
+}>
+
+export type JoinResult = Readonly<{
+  threads: readonly ThreadExecution[]
+  /** outcomeKeys bound to more than one project thread — never silently assigned. */
+  conflicts: readonly string[]
+  /** outcomeKeys bound to a project thread but absent from the queue surface — priority unknowable. */
+  unresolved: readonly string[]
+}>
+
+/**
+ * Join project threads to the queue surface by outcomeKey, into ThreadExecution rows. Enforces the
+ * owner's invariants: an outcome bound to more than one thread is a CONFLICT (reported, never
+ * silently chosen); an outcome bound to a thread but missing from the surface is UNRESOLVED (reported,
+ * never guessed); queue order and lifecycle come only from the surface; evidence stays attached by
+ * canonical work-order id. Every produced outcome is provably associated with a project thread.
+ */
+export function joinCanonicalWork(
+  threads: readonly JoinThread[],
+  surfaceByKey: ReadonlyMap<string, QueueSurfaceItem>,
+  workOrdersById: ReadonlyMap<number, CanonicalWorkOrder>,
+  evidenceByWorkOrder: ReadonlyMap<number, readonly CanonicalEvidence[]>,
+): JoinResult {
+  // Which threads claim each outcome key — the basis for the conflict check.
+  const threadsByKey = new Map<string, string[]>()
+  for (const thread of threads) {
+    if (!thread.loaded) continue
+    for (const key of thread.boundOutcomeKeys) {
+      const list = threadsByKey.get(key) ?? []
+      list.push(thread.threadId)
+      threadsByKey.set(key, list)
+    }
+  }
+  const conflicts = [...threadsByKey.entries()].filter(([, ids]) => new Set(ids).size > 1).map(([key]) => key).sort()
+  const conflictSet = new Set(conflicts)
+  const unresolved: string[] = []
+
+  const result: ThreadExecution[] = threads.map((thread) => {
+    if (!thread.loaded) {
+      return { threadId: thread.threadId, threadTitle: thread.threadTitle, loaded: false, outcomes: [], workOrders: [], evidence: [] }
+    }
+    const outcomes: CanonicalOutcome[] = []
+    const workOrders: CanonicalWorkOrder[] = []
+    const evidence: CanonicalEvidence[] = []
+    for (const key of thread.boundOutcomeKeys) {
+      if (conflictSet.has(key)) continue // ambiguous provenance — excluded, reported in conflicts
+      const surface = surfaceByKey.get(key)
+      if (!surface) {
+        if (!unresolved.includes(key)) unresolved.push(key)
+        continue
+      }
+      outcomes.push({
+        outcomeKey: surface.outcomeKey,
+        outcomeTitle: surface.title,
+        lifecycleState: surface.lifecycleState,
+        queueOrder: surface.queueOrder,
+        activeWorkOrderId: surface.activeWorkOrderId,
+        dependencyKeys: surface.dependencyKeys,
+      })
+      if (surface.activeWorkOrderId !== null) {
+        const wo = workOrdersById.get(surface.activeWorkOrderId)
+        if (wo) workOrders.push(wo)
+        for (const e of evidenceByWorkOrder.get(surface.activeWorkOrderId) ?? []) evidence.push(e)
+      }
+    }
+    return { threadId: thread.threadId, threadTitle: thread.threadTitle, loaded: true, outcomes, workOrders, evidence }
+  })
+
+  return { threads: result, conflicts, unresolved: unresolved.sort() }
+}
+
 function evidenceLine(item: CanonicalCurrentWorkItem): string {
   if (item.latestEvidence.length === 0) return "no evidence recorded yet"
   const latest = item.latestEvidence[0]
@@ -186,7 +273,26 @@ function evidenceLine(item: CanonicalCurrentWorkItem): string {
  * Compose the operator-facing answer from the canonical work. Honest about partial reads, never
  * fabricates, and names the exact top item that "continue the highest-priority work" will start.
  */
-export function composeCurrentWorkAnswer(resolution: ProjectResolution, work: CanonicalCurrentWork | null): string {
+export function composeCurrentWorkAnswer(
+  resolution: ProjectResolution,
+  work: CanonicalCurrentWork | null,
+  diagnostics?: Readonly<{ conflicts: readonly string[]; unresolved: readonly string[] }>,
+): string {
+  const notes: string[] = []
+  if (diagnostics && diagnostics.conflicts.length > 0) {
+    notes.push(
+      `${diagnostics.conflicts.length} outcome(s) are bound to more than one thread (${diagnostics.conflicts.join(", ")}); ` +
+      `I've excluded them rather than guess which thread owns them.`,
+    )
+  }
+  if (diagnostics && diagnostics.unresolved.length > 0) {
+    notes.push(`${diagnostics.unresolved.length} bound outcome(s) aren't in the queue, so I can't place their priority; excluded.`)
+  }
+  const diagnosticNote = notes.length > 0 ? `${notes.join(" ")}\n` : ""
+  return diagnosticNote + composeCurrentWorkAnswerCore(resolution, work)
+}
+
+function composeCurrentWorkAnswerCore(resolution: ProjectResolution, work: CanonicalCurrentWork | null): string {
   if (resolution.kind === "unknown-named") {
     return (
       `I don't have a project registered as "${resolution.named}", so I won't guess at its work — ` +

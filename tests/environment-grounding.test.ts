@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest"
 import {
   classifyGrounded,
   composeProjectsAnswer,
-  groundedCurrentWork,
   groundedIdentity,
   groundingFacts,
   type ProjectRow,
@@ -77,15 +76,6 @@ describe("composeProjectsAnswer is lifecycle-aware and never fabricates", () => 
     for (const invented of ["chatbot", "customer support", "community event", "local business"]) {
       expect(said.toLowerCase()).not.toContain(invented)
     }
-  })
-})
-
-describe("groundedCurrentWork is honest about the unwired seam", () => {
-  it("names active projects but refuses to invent live task state", () => {
-    const said = groundedCurrentWork(rows([["TerraFusion", "active"], ["Old", "archived"]]))
-    expect(said.toLowerCase()).toContain("won't")
-    expect(said).toContain("TerraFusion")
-    expect(said).not.toContain("Old")
   })
 })
 

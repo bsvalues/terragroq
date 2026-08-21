@@ -11,7 +11,8 @@ import { project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
-import { classifyGrounded, composeProjectsAnswer, groundedCurrentWork, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
+import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
+import { answerCurrentWork } from "@/lib/environment/current-work-db"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
 import {
   createWorkingWorld,
@@ -257,7 +258,8 @@ async function groundedAnswer(text: string, userId: string): Promise<string | nu
   if (kind === "identity") return groundedIdentity()
   const projects = await loadProjects(userId)
   if (kind === "projects") return composeProjectsAnswer(projects)
-  return groundedCurrentWork(projects)
+  // current-work: read through the canonical project → thread → outcome → evidence relationship.
+  return (await answerCurrentWork(text, userId)).say
 }
 
 async function converse(world: WorkingWorldSnapshot, text: string, facts: string): Promise<string> {
