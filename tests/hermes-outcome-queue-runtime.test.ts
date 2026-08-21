@@ -88,6 +88,7 @@ function runtime(overrides: Record<string, unknown> = {}) {
     deferGoal: vi.fn(async () => true),
     deferQueue: vi.fn(async () => queueItem),
     readQueue: vi.fn(async () => []),
+    verifyActiveReviewRecovery: vi.fn(async () => true),
     resumeQueue: vi.fn(async () => ({ ...queueItem, version: 5, fencingToken: 4 })),
     renewQueue: vi.fn(async () => queueItem),
     ...overrides,
@@ -1674,6 +1675,31 @@ describe("Hermes durable outcome queue runtime", () => {
       persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
     }))
     expect(acquire).toHaveBeenCalledOnce()
+  })
+
+  it("walls malformed persisted review recovery before refresh or provenance backfill", async () => {
+    const recovered = {
+      ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 6, fencingToken: 4,
+      leaseHolder: "resident-hermes", leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+    }
+    const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
+    const acquire = vi.fn()
+    const verifyActiveReviewRecovery = vi.fn(async () => {
+      throw Object.assign(new Error("drifted recovery chain"), {
+        code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+      })
+    })
+    const bridge = runtime({ resumeReviewRecoveryQueue, acquire, verifyActiveReviewRecovery })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
+    })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL" })
+    expect(acquire).not.toHaveBeenCalled()
+    expect(outcome.queueBinding).not.toHaveProperty("reviewRecoverySourceExpectedVersion")
   })
 
   it("revalidates and refreshes a stale acquisition that preserves review recovery identity", async () => {

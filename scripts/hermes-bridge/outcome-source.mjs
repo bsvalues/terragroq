@@ -2804,6 +2804,7 @@ export async function projectOutcomeRuntimeCheckpoint({
   checkpoint,
   workContract,
   executionBinding,
+  authorizationOnly = false,
 } = {}) {
   if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0) {
     throw Object.assign(new Error("outcomeId is required"), { code: "OUTCOME_ID_REQUIRED" })
@@ -3159,6 +3160,28 @@ export async function projectOutcomeRuntimeCheckpoint({
              AND exact_recovery_authorization.metadata->>'reviewedHeadSha' = $16
              AND exact_recovery_authorization.metadata->>'mergeSha' = $17
          ))
+         AND (NOT $23::boolean OR (
+           SELECT count(*) = 1
+           FROM governance_event AS semantic_recovered
+           WHERE semantic_recovered."userId" = contract_queue."userId"
+             AND semantic_recovered."entityType" = 'goal'
+             AND semantic_recovered."entityId"::text = contract_goal.id::text
+             AND semantic_recovered."eventType" = 'HERMES_OUTCOME_REVIEW_RECOVERED'
+             AND semantic_recovered.metadata->>'prNumber' = ($15::integer)::text
+             AND semantic_recovered.metadata->>'reviewedHeadSha' = $16
+             AND semantic_recovered.metadata->>'mergeSha' = $17
+         ))
+         AND (NOT $23::boolean OR (
+           SELECT count(*) = 1
+           FROM governance_event AS semantic_confirmation
+           WHERE semantic_confirmation."userId" = contract_queue."userId"
+             AND semantic_confirmation."entityType" = 'goal'
+             AND semantic_confirmation."entityId"::text = contract_goal.id::text
+             AND semantic_confirmation."eventType" = 'HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED'
+             AND semantic_confirmation.metadata->>'prNumber' = ($15::integer)::text
+             AND semantic_confirmation.metadata->>'reviewedHeadSha' = $16
+             AND semantic_confirmation.metadata->>'mergeSha' = $17
+         ))
          AND (NOT $13::boolean OR (
            SELECT count(*) = 1
            FROM governance_event AS recovery_authorization
@@ -3362,6 +3385,10 @@ export async function projectOutcomeRuntimeCheckpoint({
           code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
         })
       }
+    }
+    if (authorizationOnly) {
+      await runQuery("COMMIT")
+      return true
     }
     const authorization = authorizations.rows[0]
     if (authorization.receiptOperation === "runtime_finding.derive") {
@@ -3946,6 +3973,53 @@ export async function projectOutcomeRuntimeCheckpoint({
     throw error
   } finally {
     await closeProjectionResources({ client, pool, primaryError })
+  }
+}
+
+export async function verifyActiveReviewRecoveryContinuation({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  executionBinding,
+  workContract,
+  proof,
+} = {}) {
+  if (!proof || proof.expectedNextState !== REVIEW_REMEDIATION_EXHAUSTED
+    || typeof proof.proofDigest !== "string" || !/^[0-9a-f]{64}$/.test(proof.proofDigest)
+    || !Number.isSafeInteger(proof.prNumber) || proof.prNumber <= 0
+    || typeof proof.reviewedHeadSha !== "string" || !COMMIT_SHA.test(proof.reviewedHeadSha)
+    || typeof proof.mergeSha !== "string" || !COMMIT_SHA.test(proof.mergeSha)) {
+    throw Object.assign(new Error("Active review recovery proof is invalid"), {
+      code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+    })
+  }
+  try {
+    await projectOutcomeRuntimeCheckpoint({
+      query,
+      databaseUrl,
+      outcomeId,
+      attempt: executionBinding?.reviewRecoverySourceRuntimeAttempt + 1,
+      executionBinding,
+      workContract,
+      authorizationOnly: true,
+      checkpoint: {
+        sequence: 0,
+        state: "LEASED",
+        metadata: {
+          prNumber: proof.prNumber,
+          headRefOid: proof.reviewedHeadSha,
+          mergeSha: proof.mergeSha,
+          reviewRecoveryProofDigest: proof.proofDigest,
+        },
+      },
+    })
+    return true
+  } catch (error) {
+    if (error?.code === "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL") throw error
+    throw Object.assign(new Error("Active review recovery authorization is invalid"), {
+      code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+      cause: error,
+    })
   }
 }
 

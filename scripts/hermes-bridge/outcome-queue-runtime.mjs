@@ -22,6 +22,7 @@ import {
   completeOutcome as completeGoalOutcome,
   deferProviderOutcome as deferGoalOutcome,
   terminalizeOutcome as terminalizeGoalOutcome,
+  verifyActiveReviewRecoveryContinuation,
 } from "./outcome-source.mjs"
 import { blocksAction } from "../runtime-findings/policy.mjs"
 import { resolveHermesWorkContract } from "./work-contract.mjs"
@@ -32,6 +33,25 @@ function canonicalJson(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
   }
   return JSON.stringify(value)
+}
+
+function activeRecoveryProjectionContract(outcome) {
+  const contract = outcome?.verifiedQueueWorkContract?.contract
+  if (!contract || !Array.isArray(contract.reservations)
+    || !Array.isArray(contract.validationCommands)) {
+    wall("Active review recovery contract is absent", "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL")
+  }
+  return {
+    version: contract.version,
+    id: contract.id,
+    digest: contract.digest,
+    repository: contract.repository,
+    lane: contract.lane,
+    allowedFiles: [...contract.reservations],
+    validators: contract.validationCommands.map(({ command, args }) => `${command} ${args.join(" ")}`),
+    projection: contract.projection,
+    delivery: contract.delivery,
+  }
 }
 import { evaluateOutcomePolicy } from "./policy.mjs"
 import { createRuntimeFindingDbConsumer } from "../runtime-findings/db-consumer.mjs"
@@ -905,6 +925,13 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     ?? resumeOutcomeQueueAfterValidationRecovery
   const resumeReviewRecoveryQueue = options.resumeReviewRecoveryQueue
     ?? resumeOutcomeQueueAfterReviewRecovery
+  const verifyActiveReviewRecovery = options.verifyActiveReviewRecovery
+    ?? verifyActiveReviewRecoveryContinuation
+  const activeReviewRecoveryWorkContract = (outcome) => (
+    options.verifyActiveReviewRecovery
+      ? undefined
+      : activeRecoveryProjectionContract(outcome)
+  )
   const readQueue = options.readQueue ?? readOutcomeQueue
   const transitionQueue = options.transitionQueue ?? transitionOutcomeQueueItem
   const completeGoal = options.completeGoal ?? completeGoalOutcome
@@ -1346,6 +1373,20 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
           "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL",
         )
       }
+      const sourceBinding = {
+        ...binding,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+        reviewRecoverySourceExpectedVersion: binding.expectedVersion - 1,
+        reviewRecoverySourceFencingToken: binding.fencingToken - 1,
+        reviewRecoverySourceRuntimeAttempt: proof.runtimeAttempt,
+      }
+      await verifyActiveReviewRecovery({
+        databaseUrl,
+        outcomeId: Number(outcome.id),
+        executionBinding: sourceBinding,
+        workContract: activeReviewRecoveryWorkContract(outcome),
+        proof,
+      })
       const refreshed = await refreshOutcome(outcome)
       const needsExactSourceBackfill = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
         && verified.lifecycleReason === "REVIEW_REMEDIATION_RECOVERED"
@@ -1357,8 +1398,8 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         ...refreshed,
         queueBinding: {
           ...refreshed.queueBinding,
-          reviewRecoverySourceExpectedVersion: binding.expectedVersion - 1,
-          reviewRecoverySourceFencingToken: binding.fencingToken - 1,
+          reviewRecoverySourceExpectedVersion: sourceBinding.reviewRecoverySourceExpectedVersion,
+          reviewRecoverySourceFencingToken: sourceBinding.reviewRecoverySourceFencingToken,
           reviewRecoverySourceRuntimeAttempt: proof.runtimeAttempt,
         },
       }
@@ -1387,11 +1428,19 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL",
       )
     }
-    return withPersistedBinding(outcome, resumed, {
+    const recoveredOutcome = withPersistedBinding(outcome, resumed, {
       reviewRecoverySourceExpectedVersion: binding.expectedVersion + 1,
       reviewRecoverySourceFencingToken: binding.fencingToken,
       reviewRecoverySourceRuntimeAttempt: proof.runtimeAttempt,
     })
+    await verifyActiveReviewRecovery({
+      databaseUrl,
+      outcomeId: Number(outcome.id),
+      executionBinding: recoveredOutcome.queueBinding,
+      workContract: activeReviewRecoveryWorkContract(recoveredOutcome),
+      proof,
+    })
+    return recoveredOutcome
   }
 
   return {

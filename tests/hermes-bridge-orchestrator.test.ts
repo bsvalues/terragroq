@@ -1875,11 +1875,11 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
 
     resumeQueueAfterReviewRecovery.mockRejectedValueOnce(Object.assign(
-      new Error("durable queue resume failed"),
-      { code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL" },
+      new Error("active recovery authorization drifted"),
+      { code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL" },
     ))
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({
-      code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL",
+      code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
     })
     expect(value.state.read().executions["77"]).toMatchObject({
       lease: { status: "ABANDONED" },
@@ -1891,6 +1891,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.runValidationCommands).not.toHaveBeenCalled()
     expect(value.lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
     expect(value.client.runTurn).not.toHaveBeenCalled()
+    expect(value.projectLease).not.toHaveBeenCalled()
 
     value.projectCheckpoint.mockClear()
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({
