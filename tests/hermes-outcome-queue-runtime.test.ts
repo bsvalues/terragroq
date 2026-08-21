@@ -1559,6 +1559,9 @@ describe("Hermes durable outcome queue runtime", () => {
       reviewedHeadSha: "a".repeat(40),
       mergeSha: "b".repeat(40),
       runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
     })).resolves.toMatchObject({
       queueBinding: {
         expectedVersion: 6,
@@ -1666,6 +1669,9 @@ describe("Hermes durable outcome queue runtime", () => {
       reviewedHeadSha: "a".repeat(40),
       mergeSha: "b".repeat(40),
       runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
     })).resolves.toMatchObject({ queueBinding: {
       expectedVersion: 6, fencingToken: 4,
       reviewRecoverySourceExpectedVersion: 5,
@@ -1683,6 +1689,74 @@ describe("Hermes durable outcome queue runtime", () => {
       proof: expect.objectContaining({ runtimeAttempt: 5 }),
     }))
     expect(acquire).toHaveBeenCalledOnce()
+  })
+
+  it("backfills a wholly absent legacy source triple from independently resolved recovery proof", async () => {
+    const reclaimed = {
+      ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      approvalState: "approved", authorityState: "matched", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-77",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryStaleReclaimApplied: true,
+      reviewRecoveryReclaimCount: 1, reviewRecoveryReclaimEventId: 701,
+      reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+    }
+    const resumeReviewRecoveryQueue = vi.fn(async () => reclaimed)
+    const verifyActiveReviewRecovery = vi.fn(async () => true)
+    const acquire = vi.fn(async () => ({ outcome: reclaimed, acquired: true, replayed: true }))
+    const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40),
+      runtimeAttempt: 7,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).resolves.toMatchObject({ queueBinding: {
+      expectedVersion: 7, fencingToken: 5,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    } })
+    expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+    }))
+    expect(verifyActiveReviewRecovery).toHaveBeenCalledWith(expect.objectContaining({
+      executionBinding: expect.objectContaining({ reviewRecoverySourceRuntimeAttempt: 5 }),
+      proof: expect.objectContaining({ runtimeAttempt: 5 }),
+    }))
+  })
+
+  it.each([
+    ["null", { reviewRecoverySourceExpectedVersion: null }, "HERMES_OUTCOME_QUEUE_BINDING_WALL"],
+    ["partial", { reviewRecoverySourceExpectedVersion: 5 }, "HERMES_OUTCOME_QUEUE_BINDING_WALL"],
+    ["drifted", {
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 6,
+    }, "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL"],
+  ])("walls a %s local recovery source triple before queue access", async (_name, sourceFields, code) => {
+    const resumeReviewRecoveryQueue = vi.fn()
+    const verifyActiveReviewRecovery = vi.fn()
+    const acquire = vi.fn()
+    const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED", ...sourceFields } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40),
+      runtimeAttempt: 7,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
+    })).rejects.toMatchObject({ code })
+    expect(resumeReviewRecoveryQueue).not.toHaveBeenCalled()
+    expect(verifyActiveReviewRecovery).not.toHaveBeenCalled()
+    expect(acquire).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -1708,6 +1782,8 @@ describe("Hermes durable outcome queue runtime", () => {
     await expect(bridge.resumeAfterReviewRecovery(outcome, {
       expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
       prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
     })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
     expect(verifyActiveReviewRecovery).not.toHaveBeenCalled()
     expect(acquire).not.toHaveBeenCalled()
@@ -1734,6 +1810,8 @@ describe("Hermes durable outcome queue runtime", () => {
     await expect(bridge.resumeAfterReviewRecovery(outcome, {
       expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
       prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
     })).resolves.toMatchObject({ queueBinding: {
       expectedVersion: 7, fencingToken: 5,
       reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
@@ -1749,7 +1827,8 @@ describe("Hermes durable outcome queue runtime", () => {
   })
 
   it.each([
-    ["drifted", 6],
+    ["drifted to current attempt", 6],
+    ["drifted to later attempt", 7],
     ["missing", undefined],
   ])("walls a %s persisted source attempt before verification or refresh", async (_name, sourceAttempt) => {
     const recovered = {
@@ -1768,6 +1847,8 @@ describe("Hermes durable outcome queue runtime", () => {
     await expect(bridge.resumeAfterReviewRecovery(outcome, {
       expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
       prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
     })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
     expect(verifyActiveReviewRecovery).not.toHaveBeenCalled()
     expect(acquire).not.toHaveBeenCalled()
@@ -1794,6 +1875,8 @@ describe("Hermes durable outcome queue runtime", () => {
     await expect(bridge.resumeAfterReviewRecovery(outcome, {
       expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
       prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5, reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
     })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL" })
     expect(acquire).not.toHaveBeenCalled()
     expect(outcome.queueBinding).not.toHaveProperty("reviewRecoverySourceExpectedVersion")
@@ -1832,6 +1915,9 @@ describe("Hermes durable outcome queue runtime", () => {
       reviewedHeadSha: "a".repeat(40),
       mergeSha: "b".repeat(40),
       runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 5,
+      reviewRecoverySourceFencingToken: 3,
+      reviewRecoverySourceRuntimeAttempt: 5,
     })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
     expect(resumeReviewRecoveryQueue).toHaveBeenCalledWith(expect.objectContaining({
       expectedVersion: 7,

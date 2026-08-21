@@ -29,6 +29,7 @@ import {
   OUTCOME_QUEUE_SQL,
   resumeOutcomeQueueAfterReviewRecovery,
 } from "@/scripts/hermes-bridge/outcome-queue-source.mjs"
+import { createHermesOutcomeQueueRuntime } from "@/scripts/hermes-bridge/outcome-queue-runtime.mjs"
 import {
   PRIMARY_DECISION_OWNER_EMAIL,
   primaryDecisionRequestDigest,
@@ -39,6 +40,7 @@ import {
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
   HERMES_WORK_CONTRACT_VERSION,
+  resolveHermesWorkContract,
 } from "@/scripts/hermes-bridge/work-contract.mjs"
 
 const issue911RuntimeWorkContract = Object.freeze({
@@ -3490,7 +3492,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           validationCommands: [{ command: "git", args: ["diff", "--check"] },
             { command: "npx", args: ["vitest", "run", "tests/hermes-work-contract.test.ts"] }],
           projection: issue911RuntimeWorkContract.projection, delivery: issue911RuntimeWorkContract.delivery }
-        await client.query(`INSERT INTO goal VALUES (4,'owner','GOAL-0004','reliability','operator-objective','classified');
+        await client.query(`INSERT INTO goal VALUES (4,'owner','GOAL-0004','record structured #911 reliability remediation without host mutation','operator-objective','classified');
           INSERT INTO decision (id,"userId",status,authority,decision,scope,ref)
             VALUES (74,'owner','accepted','binding','APPROVE','goal:GOAL-0004','DECISION-74');
           INSERT INTO authority_grant
@@ -3512,7 +3514,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
            "approvalDecisionId","authorityState","authorityLevel","authorityGrantRef","authoritySubject",
            "authorityAction","lifecycleState","lifecycleReason","activeWorkOrderId","executionBinding",
            "leaseToken","leaseHolder","leaseExpiresAt","acquisitionKey","fencingToken",version)
-          VALUES ('owner','goal:GOAL-0004',4,'GOAL-0004','reliability','reliability','R1','approved',74,
+          VALUES ('owner','goal:GOAL-0004',4,'GOAL-0004','record structured #911 reliability remediation without host mutation','record structured #911 reliability remediation without host mutation','R1','approved',74,
             'matched','A2_WRITE_OWN','WB-EXEC-GRANT-911','operator','outcome:execute','active',
             'REVIEW_REMEDIATION_RECOVERED',42,'execution-binding-4','lease-token-4','hermes-runtime-4',
             '2020-01-01','acquisition-key-4',3,5)`)
@@ -3674,6 +3676,63 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           reviewRecoverySourceFencingToken: 2,
           reviewRecoverySourceRuntimeAttempt: 5,
         })
+        expect((await client.query(`SELECT count(*)::integer AS count FROM governance_event
+          WHERE "eventType"='HERMES_OUTCOME_REVIEW_RECOVERY_RECLAIMED'`)).rows).toEqual([{ count: 1 }])
+        const verifyRuntimeRecovery = vi.fn(async (input) => verifyActiveReviewRecoveryContinuation({
+          query, outcomeId: input.outcomeId, executionBinding: input.executionBinding,
+          workContract: issue911RuntimeWorkContract, proof: input.proof,
+        }))
+        const acquireRuntimeRecovery = vi.fn(async () => ({
+          outcome: reclaimed, acquired: true, replayed: true,
+        }))
+        const runtime = createHermesOutcomeQueueRuntime({
+          databaseUrl: "postgresql://not-used",
+          holderId: "hermes-runtime-4",
+          campaignWindowId: "campaign-1",
+          processIdentity: "process-1",
+          now: () => new Date("2098-01-01T12:00:00.000Z"),
+          resumeReviewRecoveryQueue: (input) => resumeOutcomeQueueAfterReviewRecovery({
+            ...input, query: sourceQuery,
+          }),
+          verifyActiveReviewRecovery: verifyRuntimeRecovery,
+          acquire: acquireRuntimeRecovery,
+          transitionQueue: vi.fn(async () => {
+            throw new Error("unexpected policy transition")
+          }),
+        })
+        const legacyCommand = "record structured #911 reliability remediation without host mutation"
+        const registeredContract = resolveHermesWorkContract({ command: legacyCommand,
+          lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN" })
+        const legacyLocalOutcome = {
+          id: 4, userId: "owner", ref: "GOAL-0004", outcomeKey: "goal:GOAL-0004",
+          command: legacyCommand,
+          lane: "operator-objective", mode: "implementation", risk: "R1",
+          authority: "A2_WRITE_OWN", verdict: "allow", requiresApproval: false,
+          matchedRules: [], status: "classified",
+          verifiedQueueWorkContract: { contract: registeredContract, provenance: {
+            operation: "workbench_execution.authorize", outcomeKey: "goal:GOAL-0004",
+            workOrderRef: "WO-HERMES-OUTCOME-4",
+          } },
+          queueBinding: unresolvedActive,
+        }
+        await expect(runtime.resumeAfterReviewRecovery(legacyLocalOutcome, {
+          ...recoveryProof, runtimeAttempt: 7,
+          reviewRecoverySourceExpectedVersion: 4,
+          reviewRecoverySourceFencingToken: 2,
+          reviewRecoverySourceRuntimeAttempt: 5,
+        })).resolves.toMatchObject({ queueBinding: {
+          expectedVersion: 6, fencingToken: 4,
+          reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+          reviewRecoverySourceExpectedVersion: 4,
+          reviewRecoverySourceFencingToken: 2,
+          reviewRecoverySourceRuntimeAttempt: 5,
+          reviewRecoveryReclaimEventId: reclaimEventId,
+          reviewRecoveryReclaimPayloadDigest: reclaimMetadata.payloadDigest,
+        } })
+        expect(verifyRuntimeRecovery.mock.invocationCallOrder[0])
+          .toBeLessThan(acquireRuntimeRecovery.mock.invocationCallOrder[0])
+        expect((await client.query(`SELECT version,"fencingToken" FROM outcome_queue_item`)).rows)
+          .toEqual([{ version: 6, fencingToken: 4 }])
         expect((await client.query(`SELECT count(*)::integer AS count FROM governance_event
           WHERE "eventType"='HERMES_OUTCOME_REVIEW_RECOVERY_RECLAIMED'`)).rows).toEqual([{ count: 1 }])
         const reclaimedActive = { ...active, expectedVersion: 6, fencingToken: 4,

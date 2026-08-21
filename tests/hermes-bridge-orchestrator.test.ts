@@ -1987,6 +1987,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       runtimeAttempt: 5,
       reviewRecoverySourceExpectedVersion: 4,
       reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
     })
     expect(resumeQueueAfterReviewRecovery.mock.invocationCallOrder[0])
       .toBeLessThan(refreshQueueOutcome.mock.invocationCallOrder[0])

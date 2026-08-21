@@ -1198,6 +1198,7 @@ export function createHermesOrchestrator(options = {}) {
         runtimeAttempt: resolvedProvenance.reviewRecoverySourceRuntimeAttempt,
         reviewRecoverySourceExpectedVersion: resolvedProvenance.reviewRecoverySourceExpectedVersion,
         reviewRecoverySourceFencingToken: resolvedProvenance.reviewRecoverySourceFencingToken,
+        reviewRecoverySourceRuntimeAttempt: resolvedProvenance.reviewRecoverySourceRuntimeAttempt,
       })
     }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (

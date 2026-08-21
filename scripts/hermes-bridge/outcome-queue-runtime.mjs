@@ -1364,10 +1364,32 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     }
     const resumeAt = now()
     if (binding.reviewRecoveryResumeState) {
-      const sourceExpectedVersion = binding.reviewRecoverySourceExpectedVersion
-        ?? binding.expectedVersion - 1
-      const sourceFencingToken = binding.reviewRecoverySourceFencingToken
-        ?? binding.fencingToken - 1
+      const resolvedSource = {
+        expectedVersion: proof?.reviewRecoverySourceExpectedVersion,
+        fencingToken: proof?.reviewRecoverySourceFencingToken,
+        runtimeAttempt: proof?.reviewRecoverySourceRuntimeAttempt,
+      }
+      if (!Number.isSafeInteger(resolvedSource.expectedVersion) || resolvedSource.expectedVersion < 0
+        || !Number.isSafeInteger(resolvedSource.fencingToken) || resolvedSource.fencingToken <= 0
+        || !Number.isSafeInteger(resolvedSource.runtimeAttempt) || resolvedSource.runtimeAttempt <= 0) {
+        wall("Resolved review recovery source triple is incomplete",
+          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      }
+      const localSourceFields = [
+        binding.reviewRecoverySourceExpectedVersion,
+        binding.reviewRecoverySourceFencingToken,
+        binding.reviewRecoverySourceRuntimeAttempt,
+      ]
+      const localSourceAbsent = localSourceFields.every((value) => value === undefined)
+      if (!localSourceAbsent
+        && (binding.reviewRecoverySourceExpectedVersion !== resolvedSource.expectedVersion
+          || binding.reviewRecoverySourceFencingToken !== resolvedSource.fencingToken
+          || binding.reviewRecoverySourceRuntimeAttempt !== resolvedSource.runtimeAttempt)) {
+        wall("Persisted review recovery source triple conflicts",
+          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      }
+      const sourceExpectedVersion = resolvedSource.expectedVersion
+      const sourceFencingToken = resolvedSource.fencingToken
       const verified = await resumeReviewRecoveryQueue({
         databaseUrl,
         userId: binding.userId,
@@ -1387,7 +1409,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         persistedLifecycleReason: binding.reviewRecoveryResumeState,
         sourceExpectedVersion,
         sourceFencingToken,
-        sourceRuntimeAttempt: binding.reviewRecoverySourceRuntimeAttempt ?? proof.runtimeAttempt,
+        sourceRuntimeAttempt: resolvedSource.runtimeAttempt,
         campaignWindowId,
         processIdentity,
         now: resumeAt,
@@ -1401,7 +1423,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       const verifiedSourceRuntimeAttempt = Number(verified.reviewRecoverySourceRuntimeAttempt)
       if (!Number.isSafeInteger(verifiedSourceRuntimeAttempt)
         || verifiedSourceRuntimeAttempt <= 0
-        || verifiedSourceRuntimeAttempt !== proof.runtimeAttempt) {
+        || verifiedSourceRuntimeAttempt !== resolvedSource.runtimeAttempt) {
         wall("Persisted review recovery source attempt conflicts",
           "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
       }
@@ -1419,12 +1441,6 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         proof: sourceProof,
       })
       const refreshed = await refreshOutcome(verifiedOutcome)
-      const needsExactSourceBackfill = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
-        && verified.lifecycleReason === "REVIEW_REMEDIATION_RECOVERED"
-        && binding.reviewRecoverySourceExpectedVersion === undefined
-        && binding.reviewRecoverySourceFencingToken === undefined
-        && binding.reviewRecoverySourceRuntimeAttempt === undefined
-      if (!needsExactSourceBackfill) return refreshed
       return {
         ...refreshed,
         queueBinding: {
