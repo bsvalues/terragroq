@@ -1107,7 +1107,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })).resolves.toMatchObject({ workOrderRef: "WO-HERMES-OUTCOME-4" })
 
     const authorizationCall = query.mock.calls.find(([sql]) => /FROM goal AS contract_goal/.test(sql))!
-    expect(authorizationCall[1]?.slice(-3)).toEqual([
+    expect(authorizationCall[1]?.slice(8, 11)).toEqual([
       HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
       HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
       HERMES_WORK_CONTRACT_VERSION,
@@ -1123,6 +1123,195 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       acquisitionFencingToken: runtimeExecutionBinding.fencingToken,
       commitAllowed: true, tagAllowed: false, pushAllowed: true,
     })
+  })
+
+  it.each([
+    ["reviewed merge", "PR_MERGED", "Recovered reviewed PR #929",
+      { reviewRecoveryProofDigest: "d".repeat(64) }, "d".repeat(64), "review"],
+    ["terminal cleanup", "POST_MERGE_CLEANUP_RECOVERED", "PR #929",
+      { terminalCleanupRecoveryProofDigest: "e".repeat(64) }, "e".repeat(64), "active"],
+  ])("projects %s from the exact retained execution epoch after terminal lease release", async (
+    _label,
+    checkpointState,
+    checkpointDetail,
+    proofMetadata,
+    proofDigest,
+    expectedStatus,
+  ) => {
+    const historicalBinding = {
+      ...runtimeExecutionBinding,
+      expectedVersion: 3,
+      acquisitionKey: runtimeAcquisitionKey,
+    }
+    const authorization = {
+      goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "operator-objective",
+      outcomeKey: historicalBinding.outcomeKey,
+      lifecycleState: "blocked", version: 4,
+      executionBinding: historicalBinding.executionBinding,
+      leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
+      acquisitionKey: runtimeAcquisitionKey, fencingToken: historicalBinding.fencingToken,
+      executionEpochStartedAt: "2026-08-15T00:44:33.761Z", activeWorkOrderId: 42,
+      approvalDecisionId: 74, executionGrantRef: "WB-EXEC-GRANT-911",
+      receiptOperation: "workbench_execution.authorize",
+      receiptImplementationGrantRef: "WB-EXEC-IMPL-GRANT-911", receiptImplementationGrantId: "81",
+      implementationGrantRef: "WB-EXEC-IMPL-GRANT-911", implementationGrantId: 81,
+      implementationGrantStatus: "expired", implementationGrantRevokedAt: null,
+      implementationGrantExpiresAt: "2026-08-16T00:00:00.000Z",
+      implementationGrantAuthorityLevel: "A2_WRITE_OWN", implementationGrantGrantedTo: "operator",
+      implementationGrantScope: "WO-HERMES-OUTCOME-4", implementationGrantAllowedActions: ["implement"],
+      implementationGrantBlockedActions: ["host-storage-mutation"],
+      workContract: {
+        version: issue911RuntimeWorkContract.version, id: issue911RuntimeWorkContract.id,
+        digest: issue911RuntimeWorkContract.digest, repository: issue911RuntimeWorkContract.repository,
+        lane: issue911RuntimeWorkContract.lane,
+        reservations: issue911RuntimeWorkContract.allowedFiles,
+        validationCommands: [
+          { command: "git", args: ["diff", "--check"] },
+          { command: "npx", args: ["vitest", "run", "tests/hermes-work-contract.test.ts"] },
+        ],
+        projection: issue911RuntimeWorkContract.projection,
+        delivery: issue911RuntimeWorkContract.delivery,
+      },
+    }
+    const query = vi.fn(async (sql: string) => {
+      if (/FROM goal AS contract_goal/.test(sql)) return { rows: [authorization] }
+      if (/INSERT INTO work_order/.test(sql)) return { rows: [] }
+      if (/SELECT wo\.id,[\s\S]+latestCheckpointId/.test(sql)) return { rows: [{
+        id: 42, userId: "owner", ref: "WO-HERMES-OUTCOME-4", goal: "GOAL-0004",
+        lane: "operator-objective", status: "blocked", result: "FAIL", commitRef: "a".repeat(40),
+        assignee: "hermes-codex-bridge", agent: "codex",
+        authorityGrantId: 81, authorityLevel: "A2_WRITE_OWN", authorityGranted: "A2_WRITE_OWN",
+        commitAllowed: true, tagAllowed: false, pushAllowed: true,
+        allowedFiles: issue911RuntimeWorkContract.allowedFiles,
+        validators: issue911RuntimeWorkContract.validators,
+        latestCheckpointId: 90, latestCheckpointMetadata: { checkpointState: "FAILED_TERMINAL" },
+        latestCheckpointState: "FAILED_TERMINAL",
+        latestCheckpointKey: "hermes-outcome:4:attempt:2:checkpoint:42",
+        latestCheckpointDigest: "1".repeat(64), latestCheckpointSequence: "42",
+        latestExecutionEpochDigest: runtimeExecutionEpochDigest,
+        latestCheckpointCreatedAt: "2026-08-15T01:00:00.000Z",
+        latestExecutionEpochSequence: "42",
+      }] }
+      if (/HERMES_RUNTIME_CHECKPOINT/.test(sql) && /RETURNING id/.test(sql)) return { rows: [{ id: 91 }] }
+      return { rows: [] }
+    })
+
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query, outcomeId: 4, attempt: 2,
+      workContract: issue911RuntimeWorkContract,
+      executionBinding: historicalBinding,
+      checkpoint: {
+        sequence: 44, state: checkpointState, detail: checkpointDetail,
+        metadata: {
+          prNumber: 929, headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+          ...proofMetadata,
+          workContractId: issue911RuntimeWorkContract.id,
+          workContractDigest: issue911RuntimeWorkContract.digest,
+        },
+      },
+    })).resolves.toMatchObject({
+      workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4", status: expectedStatus, result: null,
+    })
+    expect(query.mock.calls.some(([sql]) => /UPDATE work_order/.test(sql))).toBe(true)
+    const authorizationCall = query.mock.calls.find(([sql]) => /FROM goal AS contract_goal/.test(sql))!
+    expect(authorizationCall[1]).toEqual(expect.arrayContaining([
+      runtimeAcquisitionKey, proofDigest, 929, "b".repeat(40), "c".repeat(40),
+    ]))
+    expect(authorizationCall[0]).toMatch(/contract_grant\.status IN \('active', 'expired'\)/)
+    expect(authorizationCall[0]).toMatch(/implementation_grant\.status IN \('active', 'expired'\)/)
+    expect(authorizationCall[0]).toMatch(/contract_queue\.version = \$4::integer \+ 1/)
+    const checkpointCall = query.mock.calls.find(([sql]) => (
+      /HERMES_RUNTIME_CHECKPOINT/.test(sql) && /RETURNING id/.test(sql)
+    ))!
+    expect(JSON.parse(String(checkpointCall[1]?.[3]))).toMatchObject({
+      ...proofMetadata,
+      prNumber: 929,
+      headRefOid: "b".repeat(40),
+      mergeSha: "c".repeat(40),
+    })
+  })
+
+  it("rejects historical recovery without its exact reviewed proof before database mutation", async () => {
+    const query = vi.fn()
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query, outcomeId: 4, attempt: 2,
+      workContract: issue911RuntimeWorkContract,
+      executionBinding: { ...runtimeExecutionBinding, acquisitionKey: runtimeAcquisitionKey },
+      checkpoint: {
+        sequence: 44, state: "PR_MERGED", detail: "Recovered reviewed PR #929",
+        metadata: {
+          prNumber: 929, headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+          workContractId: issue911RuntimeWorkContract.id,
+          workContractDigest: issue911RuntimeWorkContract.digest,
+        },
+      },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["acquisition key drift", { acquisitionKey: "other-acquisition" }, false],
+    ["execution binding drift", { executionBinding: "other-execution" }, false],
+    ["fence drift", { fencingToken: 3 }, false],
+    ["terminal transition version drift", { version: 5 }, false],
+    ["revoked implementation grant", { implementationGrantRevokedAt: "2026-08-16T00:00:00.000Z" }, false],
+    ["duplicate authorization graph", {}, true],
+  ])("walls historical recovery on %s before projection mutation", async (
+    _label,
+    drift,
+    duplicate,
+  ) => {
+    const historicalBinding = {
+      ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
+    }
+    const authorization = {
+      goalId: 4, userId: "owner", goalRef: "GOAL-0004", goalLane: "operator-objective",
+      outcomeKey: historicalBinding.outcomeKey, lifecycleState: "blocked", version: 4,
+      executionBinding: historicalBinding.executionBinding,
+      leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
+      acquisitionKey: runtimeAcquisitionKey, fencingToken: historicalBinding.fencingToken,
+      executionEpochStartedAt: "2026-08-15T00:44:33.761Z", activeWorkOrderId: 42,
+      approvalDecisionId: 74, executionGrantRef: "WB-EXEC-GRANT-911",
+      receiptOperation: "workbench_execution.authorize",
+      receiptImplementationGrantRef: "WB-EXEC-IMPL-GRANT-911", receiptImplementationGrantId: "81",
+      implementationGrantRef: "WB-EXEC-IMPL-GRANT-911", implementationGrantId: 81,
+      implementationGrantStatus: "active", implementationGrantRevokedAt: null,
+      implementationGrantAuthorityLevel: "A2_WRITE_OWN", implementationGrantGrantedTo: "operator",
+      implementationGrantScope: "WO-HERMES-OUTCOME-4", implementationGrantAllowedActions: ["implement"],
+      implementationGrantBlockedActions: ["host-storage-mutation"],
+      workContract: {
+        version: issue911RuntimeWorkContract.version, id: issue911RuntimeWorkContract.id,
+        digest: issue911RuntimeWorkContract.digest, repository: issue911RuntimeWorkContract.repository,
+        lane: issue911RuntimeWorkContract.lane,
+        reservations: issue911RuntimeWorkContract.allowedFiles,
+        validationCommands: [
+          { command: "git", args: ["diff", "--check"] },
+          { command: "npx", args: ["vitest", "run", "tests/hermes-work-contract.test.ts"] },
+        ],
+        projection: issue911RuntimeWorkContract.projection,
+        delivery: issue911RuntimeWorkContract.delivery,
+      },
+      ...drift,
+    }
+    const rows = duplicate ? [authorization, { ...authorization }] : [authorization]
+    const query = vi.fn(async (sql: string) => (
+      /FROM goal AS contract_goal/.test(sql) ? { rows } : { rows: [] }
+    ))
+    await expect(projectOutcomeRuntimeCheckpointRaw({
+      query, outcomeId: 4, attempt: 2,
+      workContract: issue911RuntimeWorkContract,
+      executionBinding: historicalBinding,
+      checkpoint: {
+        sequence: 44, state: "PR_MERGED", detail: "Recovered reviewed PR #929",
+        metadata: {
+          prNumber: 929, headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+          reviewRecoveryProofDigest: "d".repeat(64),
+          workContractId: issue911RuntimeWorkContract.id,
+          workContractDigest: issue911RuntimeWorkContract.digest,
+        },
+      },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+    expect(query.mock.calls.some(([sql]) => /^\s*(?:INSERT INTO|UPDATE )/.test(sql))).toBe(false)
   })
 
   it("projects the first derived checkpoint onto the receipt-bound precreated child Work Order", async () => {
@@ -1489,7 +1678,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(authorizationSql).toMatch(/SELECT count\(\*\) = 1[\s\S]+duplicate_contract_root/)
     expect(authorizationSql).toMatch(/SELECT count\(\*\) = 1[\s\S]+duplicate_primary_repo/)
     expect(authorizationSql).toMatch(/unnest\(contract_grant\."blockedActions"\)/)
-    expect(query.mock.calls[2][1].slice(-3)).toEqual([
+    expect(query.mock.calls[2][1].slice(8, 11)).toEqual([
       HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
       HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
       HERMES_WORK_CONTRACT_VERSION,

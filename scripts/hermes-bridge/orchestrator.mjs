@@ -394,6 +394,7 @@ export function deriveHermesRuntimeProjectionBindings(
     || typeof binding.executionBinding !== "string" || binding.executionBinding.trim() === ""
     || typeof binding.leaseToken !== "string" || binding.leaseToken.trim() === ""
     || typeof binding.leaseHolder !== "string" || binding.leaseHolder.trim() === ""
+    || typeof binding.acquisitionKey !== "string" || binding.acquisitionKey.trim() === ""
     || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0)) {
     throw Object.assign(new Error("Runtime execution binding is invalid"), {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
@@ -408,6 +409,9 @@ export function deriveHermesRuntimeProjectionBindings(
       executionBinding: binding.executionBinding,
       leaseToken: binding.leaseToken,
       leaseHolder: binding.leaseHolder,
+      ...(typeof binding.acquisitionKey === "string" && binding.acquisitionKey.trim() !== ""
+        ? { acquisitionKey: binding.acquisitionKey }
+        : {}),
       fencingToken: binding.fencingToken,
     },
   }

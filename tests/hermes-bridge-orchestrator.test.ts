@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   createHermesOrchestrator,
+  deriveHermesRuntimeProjectionBindings,
   isRetryableProjectionTransportError,
   requireHermesWorkContract,
   retryRuntimeProjection,
@@ -262,6 +263,24 @@ function seedGoalStyleRetryableExecution(
 }
 
 describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
+  it("carries the immutable acquisition key into runtime projection authorization", () => {
+    const contract = {
+      version: "hermes-work-contract.v1", id: "issue-911-runtime-reliability-evidence.v1",
+      digest: "a".repeat(64), repository: "bsvalues/terragroq", lane: "operator-objective",
+      reservations: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      validationCommands: [{ command: "git", args: ["diff", "--check"] }],
+    }
+    expect(deriveHermesRuntimeProjectionBindings({
+      queueBinding: {
+        userId: "owner", outcomeKey: "goal:GOAL-0023", expectedVersion: 3,
+        executionBinding: "execution-27", leaseToken: "lease-27", leaseHolder: "hermes-27",
+        fencingToken: 2, acquisitionKey: "acquisition-27",
+      },
+    }, { resolver: () => contract })).toMatchObject({
+      executionBinding: { acquisitionKey: "acquisition-27" },
+    })
+  })
+
   it("resolves the exact verified derived queue contract without static task inference", () => {
     const contract = {
       version: "hermes-work-contract.v1", id: "runtime-finding.101.v1",

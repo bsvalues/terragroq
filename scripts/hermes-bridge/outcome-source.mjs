@@ -2095,6 +2095,8 @@ function normalizeRuntimeExecutionBinding(value) {
     || typeof value.executionBinding !== "string" || value.executionBinding.trim() === ""
     || typeof value.leaseToken !== "string" || value.leaseToken.trim() === ""
     || typeof value.leaseHolder !== "string" || value.leaseHolder.trim() === ""
+    || (value.acquisitionKey !== undefined
+      && (typeof value.acquisitionKey !== "string" || value.acquisitionKey.trim() === ""))
     || !Number.isSafeInteger(value.fencingToken) || value.fencingToken <= 0) {
     throw Object.assign(new Error("runtime execution binding is invalid"), {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
@@ -2107,6 +2109,7 @@ function normalizeRuntimeExecutionBinding(value) {
     executionBinding: value.executionBinding,
     ["lease" + "Token"]: value.leaseToken,
     leaseHolder: value.leaseHolder,
+    ...(value.acquisitionKey === undefined ? {} : { acquisitionKey: value.acquisitionKey }),
     ["fencing" + "Token"]: value.fencingToken,
   }
 }
@@ -2122,20 +2125,33 @@ function validatorLabels(commands) {
   return labels
 }
 
-function exactAuthorizationContract(row, workContract, executionBinding, outcomeId) {
+function exactAuthorizationContract(
+  row,
+  workContract,
+  executionBinding,
+  outcomeId,
+  historicalRecovery,
+) {
   const receiptContract = row?.workContract
   const delivery = workContract.delivery
   const projection = workContract.projection
   return Number(row?.goalId) === outcomeId
     && row?.userId === executionBinding.userId
     && row?.outcomeKey === executionBinding.outcomeKey
-    && Number(row?.version) === executionBinding.expectedVersion
     && row?.executionBinding === executionBinding.executionBinding
-    && row?.leaseToken === executionBinding.leaseToken
-    && row?.leaseHolder === executionBinding.leaseHolder
     && Number(row?.fencingToken) === executionBinding.fencingToken
     && typeof row?.acquisitionKey === "string"
     && row.acquisitionKey.trim() !== ""
+    && (historicalRecovery
+      ? row.lifecycleState === "blocked"
+        && Number(row?.version) === executionBinding.expectedVersion + 1
+        && row.leaseToken == null
+        && row.leaseHolder == null
+        && row.leaseExpiresAt == null
+        && row.acquisitionKey === executionBinding.acquisitionKey
+      : Number(row?.version) === executionBinding.expectedVersion
+        && row?.leaseToken === executionBinding.leaseToken
+        && row?.leaseHolder === executionBinding.leaseHolder)
     && receiptContract?.id === workContract.id
     && receiptContract?.digest === workContract.digest
     && receiptContract?.version === workContract.version
@@ -2153,7 +2169,9 @@ function exactAuthorizationContract(row, workContract, executionBinding, outcome
       && receiptContract.delivery?.pushAllowed === delivery.pushAllowed
       && row?.implementationGrantRef === row?.receiptImplementationGrantRef
       && Number(row?.implementationGrantId) === Number(row?.receiptImplementationGrantId)
-      && row?.implementationGrantStatus === "active"
+      && (historicalRecovery
+        ? ["active", "expired"].includes(row?.implementationGrantStatus)
+        : row?.implementationGrantStatus === "active")
       && row?.implementationGrantRevokedAt == null
       && row?.implementationGrantAuthorityLevel === delivery.authorityLevel
       && row?.implementationGrantGrantedTo === "operator"
@@ -2217,10 +2235,19 @@ function checkpointEvidence(metadata) {
       code: "OUTCOME_PROJECTION_EVIDENCE_INVALID",
     })
   }
+  const reviewRecoveryProofDigest = metadata?.reviewRecoveryProofDigest
+  if (reviewRecoveryProofDigest !== undefined
+    && (typeof reviewRecoveryProofDigest !== "string"
+      || !/^[0-9a-f]{64}$/.test(reviewRecoveryProofDigest))) {
+    throw Object.assign(new Error("checkpoint review recovery proof digest is invalid"), {
+      code: "OUTCOME_PROJECTION_EVIDENCE_INVALID",
+    })
+  }
   return {
     ...(prNumber === undefined ? {} : { prNumber }),
     ...hashes,
     ...(terminalCleanupRecoveryProofDigest === undefined ? {} : { terminalCleanupRecoveryProofDigest }),
+    ...(reviewRecoveryProofDigest === undefined ? {} : { reviewRecoveryProofDigest }),
   }
 }
 
@@ -2301,6 +2328,16 @@ export async function projectOutcomeRuntimeCheckpoint({
 
   const normalizedWorkContract = normalizeRuntimeWorkContract(workContract)
   const normalizedExecutionBinding = normalizeRuntimeExecutionBinding(executionBinding)
+  const historicalRecovery = checkpoint.state === "REVIEW_REMEDIATION_RECOVERED"
+    || checkpoint.state === "POST_MERGE_CLEANUP_RECOVERED"
+    || (checkpoint.state === "PR_MERGED"
+      && /^Recovered (?:reviewed )?PR #\d+(?: through reviewed remediation chain)?$/
+        .test(checkpoint.detail ?? ""))
+  if (historicalRecovery && normalizedExecutionBinding.acquisitionKey === undefined) {
+    throw Object.assign(new Error("Historical recovery acquisition epoch is missing"), {
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    })
+  }
   const normalizedFindings = normalizeCheckpointFindings(checkpoint.findings, normalizedWorkContract)
   if ((checkpoint.metadata?.workContractId !== undefined
       && checkpoint.metadata.workContractId !== normalizedWorkContract.id)
@@ -2314,6 +2351,19 @@ export async function projectOutcomeRuntimeCheckpoint({
   const idempotencyKey = `hermes-outcome:${outcomeId}:attempt:${attempt}:checkpoint:${checkpoint.sequence}`
   const findingsSetDigest = projectionPayloadDigest(normalizedFindings)
   const evidence = checkpointEvidence(checkpoint.metadata)
+  const historicalRecoveryProofDigest = checkpoint.state === "POST_MERGE_CLEANUP_RECOVERED"
+    ? evidence.terminalCleanupRecoveryProofDigest
+    : evidence.reviewRecoveryProofDigest
+  if (historicalRecovery && (
+    historicalRecoveryProofDigest === undefined
+    || evidence.prNumber === undefined
+    || evidence.headRefOid === undefined
+    || evidence.mergeSha === undefined
+  )) {
+    throw Object.assign(new Error("Historical recovery proof is incomplete"), {
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    })
+  }
   const projection = projectionForCheckpoint(checkpoint.state)
   const commitRef = evidence.mergeSha ?? evidence.commit ?? evidence.headRefOid ?? null
   const clearCommitRef = evidence.headRefOid === null
@@ -2343,10 +2393,12 @@ export async function projectOutcomeRuntimeCheckpoint({
       `SELECT contract_goal.id AS "goalId", contract_goal."userId" AS "userId",
          contract_goal.ref AS "goalRef", contract_goal.lane AS "goalLane",
          contract_queue."outcomeKey" AS "outcomeKey",
+         contract_queue."lifecycleState" AS "lifecycleState",
          contract_queue.version AS version,
          contract_queue."executionBinding" AS "executionBinding",
          contract_queue."leaseToken" AS "leaseToken",
          contract_queue."leaseHolder" AS "leaseHolder",
+         contract_queue."leaseExpiresAt" AS "leaseExpiresAt",
          contract_queue."acquisitionKey" AS "acquisitionKey",
          contract_queue."fencingToken" AS "fencingToken",
          contract_queue."activeWorkOrderId" AS "activeWorkOrderId",
@@ -2407,14 +2459,22 @@ export async function projectOutcomeRuntimeCheckpoint({
        WHERE contract_goal.id = $1::integer
          AND contract_queue."userId" = $2
          AND contract_queue."outcomeKey" = $3
-         AND contract_queue."lifecycleState" = 'active'
-         AND contract_queue.version = $4::integer
          AND contract_queue."executionBinding" = $5
-         AND contract_queue."leaseToken" = $6
-         AND contract_queue."leaseHolder" = $7
          AND btrim(contract_queue."acquisitionKey") <> ''
          AND contract_queue."fencingToken" = $8::integer
-         AND contract_queue."leaseExpiresAt" > clock_timestamp()
+         AND ((NOT $13::boolean
+           AND contract_queue."lifecycleState" = 'active'
+           AND contract_queue.version = $4::integer
+           AND contract_queue."leaseToken" = $6
+           AND contract_queue."leaseHolder" = $7
+           AND contract_queue."leaseExpiresAt" > clock_timestamp())
+          OR ($13::boolean
+           AND contract_queue."lifecycleState" = 'blocked'
+           AND contract_queue.version = $4::integer + 1
+           AND contract_queue."leaseToken" IS NULL
+           AND contract_queue."leaseHolder" IS NULL
+           AND contract_queue."leaseExpiresAt" IS NULL
+           AND contract_queue."acquisitionKey" = $12))
          AND contract_queue."approvalState" = 'approved'
          AND EXISTS (
            SELECT 1 FROM decision AS contract_approval
@@ -2433,10 +2493,14 @@ export async function projectOutcomeRuntimeCheckpoint({
            SELECT 1 FROM authority_grant AS contract_grant
            WHERE contract_grant."userId" = contract_queue."userId"
              AND contract_grant.ref = contract_queue."authorityGrantRef"
-             AND contract_grant.status = 'active'
              AND contract_grant."revokedAt" IS NULL
              AND contract_grant."expiresAt" IS NOT NULL
-             AND contract_grant."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp()
+             AND ((NOT $13::boolean
+               AND contract_grant.status = 'active'
+               AND contract_grant."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp())
+              OR ($13::boolean
+               AND contract_grant.status IN ('active', 'expired')
+               AND contract_grant."expiresAt" AT TIME ZONE 'UTC' > contract_receipt."createdAt"))
              AND contract_grant."authorityLevel" = 'A2_WRITE_OWN'
              AND contract_grant."grantedTo" = 'operator'
              AND contract_grant.scope = contract_queue."outcomeKey"
@@ -2466,10 +2530,14 @@ export async function projectOutcomeRuntimeCheckpoint({
          AND contract_receipt."resultBinding"->'workContract'->>'repository' = 'bsvalues/terragroq'
          AND contract_receipt."resultBinding"->'workContract'->>'lane' = contract_goal.lane
          AND (contract_receipt."resultBinding"->'workContract'->'delivery' IS NULL OR (
-           implementation_grant.status = 'active'
-           AND implementation_grant."revokedAt" IS NULL
+           implementation_grant."revokedAt" IS NULL
            AND implementation_grant."expiresAt" IS NOT NULL
-           AND implementation_grant."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp()
+           AND ((NOT $13::boolean
+             AND implementation_grant.status = 'active'
+             AND implementation_grant."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp())
+            OR ($13::boolean
+             AND implementation_grant.status IN ('active', 'expired')
+             AND implementation_grant."expiresAt" AT TIME ZONE 'UTC' > contract_receipt."createdAt"))
            AND implementation_grant."authorityLevel" = contract_receipt."resultBinding"->'workContract'->'delivery'->>'authorityLevel'
            AND implementation_grant."grantedTo" = 'operator'
            AND implementation_grant.scope = CASE WHEN contract_receipt.operation = 'runtime_finding.derive'
@@ -2494,6 +2562,38 @@ export async function projectOutcomeRuntimeCheckpoint({
              AND duplicate_primary_repo.type = 'repo'
              AND duplicate_primary_repo.relationship = 'primary-repo'
          ))
+         AND (NOT $13::boolean OR EXISTS (
+           SELECT 1
+           FROM governance_event AS latest_terminal
+           WHERE latest_terminal."userId" = contract_queue."userId"
+             AND latest_terminal."entityType" = 'goal'
+             AND latest_terminal."entityId"::text = contract_goal.id::text
+             AND latest_terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+             AND latest_terminal.metadata->>'result' = 'FAILED_TERMINAL'
+             AND latest_terminal.metadata->>'nextState' = $19
+             AND latest_terminal.id = (
+               SELECT terminal_candidate.id
+               FROM governance_event AS terminal_candidate
+               WHERE terminal_candidate."userId" = contract_queue."userId"
+                 AND terminal_candidate."entityType" = 'goal'
+                 AND terminal_candidate."entityId"::text = contract_goal.id::text
+                 AND terminal_candidate."eventType" = 'HERMES_OUTCOME_TERMINAL'
+               ORDER BY terminal_candidate."createdAt" DESC, terminal_candidate.id DESC
+               LIMIT 1
+             )
+         ))
+         AND ($18 <> 'REVIEW_REMEDIATION_RECOVERED' OR (
+           SELECT count(*) = 1
+           FROM governance_event AS recovery_confirmation
+           WHERE recovery_confirmation."userId" = contract_queue."userId"
+             AND recovery_confirmation."entityType" = 'goal'
+             AND recovery_confirmation."entityId"::text = contract_goal.id::text
+             AND recovery_confirmation."eventType" = 'HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_CONFIRMED'
+             AND recovery_confirmation.metadata->>'proofDigest' = $14
+             AND recovery_confirmation.metadata->>'prNumber' = ($15::integer)::text
+             AND recovery_confirmation.metadata->>'reviewedHeadSha' = $16
+             AND recovery_confirmation.metadata->>'mergeSha' = $17
+         ))
        ORDER BY contract_receipt.id
        LIMIT 2
        FOR UPDATE OF contract_goal, contract_queue`,
@@ -2503,11 +2603,22 @@ export async function projectOutcomeRuntimeCheckpoint({
         normalizedExecutionBinding.fencingToken,
         normalizedWorkContract.id,
         normalizedWorkContract.digest,
-        normalizedWorkContract.version],
+        normalizedWorkContract.version,
+        normalizedExecutionBinding.acquisitionKey ?? null,
+        historicalRecovery,
+        historicalRecoveryProofDigest ?? null,
+        evidence.prNumber ?? null,
+        evidence.headRefOid ?? null,
+        evidence.mergeSha ?? null,
+        checkpoint.state,
+        checkpoint.state === "POST_MERGE_CLEANUP_RECOVERED"
+          ? "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
+          : "REVIEW_REMEDIATION_EXHAUSTED"],
     )
     if (authorizations?.rows?.length !== 1
       || !exactAuthorizationContract(
         authorizations.rows[0], normalizedWorkContract, normalizedExecutionBinding, outcomeId,
+        historicalRecovery,
       )) {
       throw Object.assign(new Error("Canonical Workbench execution authorization is invalid"), {
         code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",

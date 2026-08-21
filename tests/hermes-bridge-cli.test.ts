@@ -47,6 +47,7 @@ function exactIssue911Outcome(id: number, ref: string) {
     executionBinding: `execution-${id}`,
     leaseToken: `lease-${id}`,
     leaseHolder: "hermes-bridge",
+    acquisitionKey: `acquisition-${id}`,
     fencingToken: 2,
   }
   return {
@@ -936,7 +937,7 @@ describe("Hermes bridge CLI", () => {
         executionBinding: {
           userId: "user-911", outcomeKey: "goal:GOAL-0005", expectedVersion: 3,
           executionBinding: "execution-5", leaseToken: "lease-5",
-          leaseHolder: "hermes-bridge", fencingToken: 2,
+          leaseHolder: "hermes-bridge", acquisitionKey: "acquisition-5", fencingToken: 2,
         },
         checkpoint: {
           sequence: 14,
@@ -1141,7 +1142,7 @@ describe("Hermes bridge CLI", () => {
       executionBinding: {
         userId: "user-911", outcomeKey: "goal:GOAL-0007", expectedVersion: 3,
         executionBinding: "execution-7", leaseToken: "lease-7",
-        leaseHolder: "hermes-bridge", fencingToken: 2,
+        leaseHolder: "hermes-bridge", acquisitionKey: "acquisition-7", fencingToken: 2,
       },
       checkpoint: expect.objectContaining({
         sequence: 33, state: "PR_MERGED",
@@ -1325,13 +1326,21 @@ describe("Hermes bridge CLI", () => {
     expect(recordMerge).not.toHaveBeenCalled()
     expect(projectCheckpoint).toHaveBeenNthCalledWith(1, expect.objectContaining({
       workContract: expect.objectContaining({ id: "issue-911-runtime-reliability-evidence.v1" }),
-      executionBinding: expect.objectContaining({ outcomeKey: "goal:GOAL-0023" }),
-      checkpoint: expect.objectContaining({ sequence: 44, state: "PR_MERGED" }),
+      executionBinding: expect.objectContaining({
+        outcomeKey: "goal:GOAL-0023", acquisitionKey: expect.any(String),
+      }),
+      checkpoint: expect.objectContaining({
+        sequence: 44, state: "PR_MERGED",
+        metadata: expect.objectContaining({ reviewRecoveryProofDigest: proofDigest }),
+      }),
     }))
     expect(projectCheckpoint).toHaveBeenNthCalledWith(2, expect.objectContaining({
       workContract: expect.objectContaining({ id: "issue-911-runtime-reliability-evidence.v1" }),
       executionBinding: expect.objectContaining({ outcomeKey: "goal:GOAL-0023" }),
-      checkpoint: expect.objectContaining({ sequence: 45, state: "REVIEW_REMEDIATION_RECOVERED" }),
+      checkpoint: expect.objectContaining({
+        sequence: 45, state: "REVIEW_REMEDIATION_RECOVERED",
+        metadata: expect.objectContaining({ reviewRecoveryProofDigest: proofDigest }),
+      }),
     }))
   })
 
