@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto"
 
 import { blocksAction, classifyProposedAction, deriveRemediationWorkOrder } from "./policy.mjs"
+import {
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
+  isExactIssue911LiveAcceptanceContract,
+} from "../hermes-bridge/work-contract.mjs"
 
 export const RUNTIME_FINDING_CONSUMER_WALL = "HERMES_RUNTIME_FINDING_CONSUMER_WALL"
 const REPOSITORY = "bsvalues/terragroq"
@@ -118,6 +122,14 @@ function workContractPayload(contract) {
     tagAllowed: contract.delivery.tagAllowed,
     pushAllowed: contract.delivery.pushAllowed,
   }
+  if (Object.hasOwn(contract, "acceptance")) ordered.acceptance = {
+    evidencePath: contract.acceptance.evidencePath,
+    requestedFindingClasses: contract.acceptance.requestedFindingClasses,
+    emptyOrPartialAllowed: contract.acceptance.emptyOrPartialAllowed,
+    hostMutationAllowed: contract.acceptance.hostMutationAllowed,
+    noFabrication: contract.acceptance.noFabrication,
+    gatedDispatchAllowed: contract.acceptance.gatedDispatchAllowed,
+  }
   return ordered
 }
 
@@ -224,6 +236,37 @@ function sourceFinding(row, nowMs) {
   const checkpointFindings = exactCheckpointFindings(row)
   const parentRequest = row?.parentReceiptRequestBinding
   const parentResult = row?.parentReceiptResultBinding
+  const exactLiveAcceptance = isExactIssue911LiveAcceptanceContract(contract)
+  const acceptanceProof = exactLiveAcceptance ? {
+    receiptId: Number(row.parentIntakeReceiptId),
+    requestHash: row.parentIntakeRequestHash,
+    resultDigest: row.parentIntakeResultDigest,
+    idempotencyKeyDigest: canonicalDigest({ idempotencyKey: row.parentIntakeIdempotencyKey }),
+  } : null
+  const expectedIntakeRequestHash = exactLiveAcceptance ? canonicalDigest({
+    contractVersion: 1,
+    projectId: 1,
+    intent: row.parentGoalCommand,
+    idempotencyKey: row.parentIntakeIdempotencyKey,
+  }) : null
+  const expectedIntakeResultDigest = exactLiveAcceptance ? canonicalDigest({
+    contractVersion: 1,
+    requestHash: expectedIntakeRequestHash,
+    goalId: Number(row.parentGoalId),
+    outcomeKey: row.parentOutcomeKey,
+    threadId: parentRequest?.threadId,
+    root: { sourceType: "outcome", sourceId: row.parentOutcomeKey },
+    acceptedContractIds: [HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID],
+  }) : null
+  const expectedAcceptanceCriteria = exactLiveAcceptance ? [JSON.stringify({
+    contractId: contract.id, contractDigest: contract.digest,
+    evidencePath: contract.acceptance.evidencePath,
+    requestedFindingClasses: contract.acceptance.requestedFindingClasses,
+    emptyOrPartialAllowed: contract.acceptance.emptyOrPartialAllowed,
+    hostMutationAllowed: contract.acceptance.hostMutationAllowed,
+    noFabrication: contract.acceptance.noFabrication,
+    gatedDispatchAllowed: contract.acceptance.gatedDispatchAllowed,
+  })] : []
   const parentApprovalEvidence = contract && parentRequest
     && Array.isArray(contract.reservations) && Array.isArray(contract.validationCommands)
     && contract.validationCommands.every((validator) => Array.isArray(validator?.args)) ? [
@@ -233,6 +276,12 @@ function sourceFinding(row, nowMs) {
     `work-contract:${contract.id}`,
     `work-contract-digest:${contract.digest}`,
     `work-contract-json:${JSON.stringify(workContractEvidencePayload(contract))}`,
+    ...(acceptanceProof ? [
+      `acceptance-intake-receipt:${acceptanceProof.receiptId}`,
+      `acceptance-intake-request:${acceptanceProof.requestHash}`,
+      `acceptance-intake-result:${acceptanceProof.resultDigest}`,
+      `acceptance-intake-key-digest:${acceptanceProof.idempotencyKeyDigest}`,
+    ] : []),
     ...contract.reservations.map((reservation) => `reservation:${reservation}`),
     ...contract.validationCommands.map((validator) => (
       `validator:${validator.command}:${validator.args.join(" ")}`
@@ -296,7 +345,17 @@ function sourceFinding(row, nowMs) {
     || !contract || canonicalJson(Object.keys(contract).sort()) !== canonicalJson([
       "delivery", "digest", "id", "lane", "repository", "reservations", "validationCommands", "version",
       ...(Object.hasOwn(contract ?? {}, "projection") ? ["projection"] : []),
+      ...(Object.hasOwn(contract ?? {}, "acceptance") ? ["acceptance"] : []),
     ].sort())
+    || (contract.id === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID
+      ? !exactLiveAcceptance
+      : contract.acceptance !== undefined)
+    || (exactLiveAcceptance
+      ? canonicalJson(row.parentGoalAcceptedContractIds) !== canonicalJson([HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID])
+        || canonicalJson(row.parentQueueAcceptedContractIds) !== canonicalJson([HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID])
+      : canonicalJson(row.parentGoalAcceptedContractIds ?? []) !== "[]"
+        || canonicalJson(row.parentQueueAcceptedContractIds ?? []) !== "[]")
+    || canonicalJson(row.parentAcceptanceCriteria ?? []) !== canonicalJson(expectedAcceptanceCriteria)
     || contract.id !== metadata.workContractId
     || contract.digest !== metadata.workContractDigest
     || digest(workContractPayload(contract)) !== contract.digest
@@ -332,7 +391,24 @@ function sourceFinding(row, nowMs) {
     || !parentResult || canonicalJson(Object.keys(parentResult).sort()) !== canonicalJson([
       "authorizedAt", "decisionId", "decisionRef", "expiresAt", "grantId", "grantRef",
       "implementationGrantId", "implementationGrantRef", "queueVersion", "workContract",
-    ])
+      ...(exactLiveAcceptance ? ["acceptanceIntakeProof", "acceptedContractIds"] : []),
+    ].sort())
+    || (exactLiveAcceptance && (
+      Number(row.parentIntakeReceiptCount) !== 1
+      || Number(parentRequest?.projectId) !== 1
+      || Number(row.parentProjectCount) !== 1
+      || Number(row.parentRootThreadCount) !== 1
+      || Number(row.parentPrimaryRepoCount) !== 1
+      || Number(row.parentPrimaryRepoTotal) !== 1
+      || Number(row.parentIntakeGoalId) !== Number(row.parentGoalId)
+      || row.parentIntakeOutcomeKey !== row.parentOutcomeKey
+      || !/^workbench-outcome:issue-911-live-nonempty-acceptance\.v1:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.parentIntakeIdempotencyKey ?? "")
+      || canonicalJson(row.parentIntakeAcceptedContractIds) !== canonicalJson([HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID])
+      || row.parentIntakeRequestHash !== expectedIntakeRequestHash
+      || row.parentIntakeResultDigest !== expectedIntakeResultDigest
+      || canonicalJson(parentResult.acceptedContractIds) !== canonicalJson(row.parentIntakeAcceptedContractIds)
+      || canonicalJson(parentResult.acceptanceIntakeProof) !== canonicalJson(acceptanceProof)
+    ))
     || row.parentReceiptConfirmation !== "START_WORK"
     || row.parentReceiptOutcomeKey !== row.parentOutcomeKey
     || Number(row.parentReceiptDecisionId) !== Number(metadata.authorizationDecisionId)
@@ -434,10 +510,13 @@ function parentObjective(row, finding) {
 function childIdentity(row, order) {
   const eventId = order.sourceFindingEventId
   const outcomeKey = `runtime-finding:${eventId}:${order.sourcePayloadDigest}`
-  const lane = order.contractId === "issue-911-runtime-reliability-evidence.v1"
-    && canonicalJson(order.allowedPaths) === canonicalJson([
+  const reportOnly = canonicalJson(order.allowedPaths) === canonicalJson([
       "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md",
-    ]) ? "docs" : order.contractLane
+    ])
+  const exactIssue911Parent = order.contractId === "issue-911-runtime-reliability-evidence.v1"
+    || (order.contractId === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID
+      && isExactIssue911LiveAcceptanceContract(row.workContract))
+  const lane = exactIssue911Parent && reportOnly ? "docs" : order.contractLane
   const contractBody = {
     version: CONTRACT_VERSION,
     id: `runtime-finding.${eventId}.v1`,
@@ -947,6 +1026,7 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     parent.assignee AS "parentAssignee", parent.status AS "parentStatus",
                     parent.goal AS "parentGoal", parent.loop AS "parentLoop", parent.scope AS "parentScope",
                     parent."nonGoals" AS "parentNonGoals", parent."allowedFiles" AS "parentAllowedFiles",
+                    parent."acceptanceCriteria" AS "parentAcceptanceCriteria",
                     parent."forbiddenFiles" AS "parentForbiddenFiles", parent.validators AS "parentValidators",
                     parent."stopConditions" AS "parentStopConditions", parent.priority AS "parentPriority",
                     parent."authorityLevel" AS "parentAuthorityLevel",
@@ -955,7 +1035,10 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     parent."commitAllowed" AS "parentCommitAllowed", parent."tagAllowed" AS "parentTagAllowed",
                     parent."pushAllowed" AS "parentPushAllowed", checkpoint.id AS "checkpointId",
                     checkpoint.metadata AS "checkpointMetadata", receipt."resultBinding"->'workContract' AS "workContract",
+                    parent_goal.id AS "parentGoalId", parent_goal.command AS "parentGoalCommand",
+                    parent_goal."acceptedContractIds" AS "parentGoalAcceptedContractIds",
                     parent_queue."outcomeKey" AS "parentOutcomeKey",
+                    parent_queue."acceptedContractIds" AS "parentQueueAcceptedContractIds",
                     parent_queue."approvalDecisionId" AS "parentQueueApprovalDecisionId",
                     parent_queue."authorityGrantRef" AS "parentQueueAuthorityGrantRef",
                     parent_queue."executionBinding" AS "parentQueueExecutionBinding",
@@ -987,6 +1070,40 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                     receipt."resultBinding"->>'decisionId' AS "parentReceiptDecisionId",
                     receipt."resultBinding"->>'implementationGrantId' AS "parentReceiptImplementationGrantId",
                     receipt."resultBinding"->>'implementationGrantRef' AS "parentReceiptImplementationGrantRef",
+                    intake.id AS "parentIntakeReceiptId", intake."goalId" AS "parentIntakeGoalId",
+                    intake."outcomeKey" AS "parentIntakeOutcomeKey",
+                    intake."idempotencyKey" AS "parentIntakeIdempotencyKey",
+                    intake."requestHash" AS "parentIntakeRequestHash",
+                    intake."resultDigest" AS "parentIntakeResultDigest",
+                    intake."acceptedContractIds" AS "parentIntakeAcceptedContractIds",
+                    (SELECT count(*)::integer FROM goal_outcome_intake_receipt duplicate_intake
+                      WHERE duplicate_intake."userId" = finding."userId"
+                        AND duplicate_intake."acceptedContractIds"
+                          = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[]) AS "parentIntakeReceiptCount",
+                    (SELECT count(*)::integer FROM project exact_project
+                      WHERE exact_project."userId" = finding."userId"
+                        AND exact_project.id = 1 AND exact_project.lifecycle = 'active') AS "parentProjectCount",
+                    (SELECT count(*)::integer FROM workbench_thread_source exact_root
+                      JOIN workbench_thread exact_thread
+                        ON exact_thread."userId" = exact_root."userId"
+                       AND exact_thread.id = exact_root."threadId"
+                       AND exact_thread."projectId" = 1
+                      WHERE exact_root."userId" = finding."userId"
+                        AND exact_root."sourceType" = 'outcome'
+                        AND exact_root."sourceId" = parent_queue."outcomeKey"
+                        AND exact_root.role = 'root'
+                        AND exact_root."threadId" = receipt."requestBinding"->>'threadId') AS "parentRootThreadCount",
+                    (SELECT count(*)::integer FROM project_resource exact_repo
+                      WHERE exact_repo."userId" = finding."userId"
+                        AND exact_repo."projectId" = 1
+                        AND exact_repo.type = 'repo'
+                        AND exact_repo.relationship = 'primary-repo'
+                        AND exact_repo."canonicalIdentity" = 'bsvalues/terragroq') AS "parentPrimaryRepoCount",
+                    (SELECT count(*)::integer FROM project_resource any_primary_repo
+                      WHERE any_primary_repo."userId" = finding."userId"
+                        AND any_primary_repo."projectId" = 1
+                        AND any_primary_repo.type = 'repo'
+                        AND any_primary_repo.relationship = 'primary-repo') AS "parentPrimaryRepoTotal",
                     approval.id AS "parentApprovalDecisionId", approval.ref AS "parentApprovalDecisionRef",
                     approval.status AS "parentApprovalStatus",
                     approval.locked AS "parentApprovalLocked", approval.scope AS "parentApprovalScope",
@@ -1025,6 +1142,11 @@ export function createRuntimeFindingDbConsumer({ withPool, now = () => new Date(
                  AND checkpoint.actor = 'hermes-codex-bridge'
                JOIN outcome_queue_item parent_queue ON parent_queue."userId" = parent."userId"
                  AND parent_queue."activeWorkOrderId" = parent.id
+               JOIN goal parent_goal ON parent_goal."userId" = parent."userId"
+                 AND parent_goal.id = parent_queue."goalId"
+               LEFT JOIN goal_outcome_intake_receipt intake ON intake."userId" = parent_queue."userId"
+                 AND intake."goalId" = parent_queue."goalId"
+                 AND intake."outcomeKey" = parent_queue."outcomeKey"
                JOIN outcome_queue_acquisition_receipt acquisition
                  ON acquisition."userId" = parent_queue."userId"
                 AND acquisition."outcomeKey" = parent_queue."outcomeKey"

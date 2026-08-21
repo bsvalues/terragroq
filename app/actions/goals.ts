@@ -41,7 +41,10 @@ import {
   type StartWorkbenchOutcomeInput,
   type StartWorkbenchOutcomeResult,
 } from "@/lib/workbench/outcome-start"
-import { isIssue911ReliabilityOutcomeIntent } from "@/lib/workbench/registered-outcome-intent"
+import {
+  issue911LiveAcceptanceContractIds,
+  isIssue911ReliabilityOutcomeIntent,
+} from "@/lib/workbench/registered-outcome-intent"
 
 /* ------------------------------------------------------------------ */
 /* Reads                                                              */
@@ -146,9 +149,19 @@ type GoalIntakeResult = Readonly<{
   start: StartWorkbenchOutcomeResult | null
 }>
 
+function exactContractIds(actual: unknown, expected: readonly string[]): boolean {
+  return Array.isArray(actual)
+    && actual.length === expected.length
+    && actual.every((value, index) => value === expected[index])
+}
+
 function unavailableOutcomeStart(
   status: "CONFLICT" | "INVALID_INTENT" | "PROJECT_NOT_FOUND",
-  reason: "IDEMPOTENCY_CONFLICT" | "ROUTE_NOT_START_OUTCOME" | "PROJECT_NOT_FOUND",
+  reason:
+    | "IDEMPOTENCY_CONFLICT"
+    | "CONTRACT_SINGLETON_CONFLICT"
+    | "ROUTE_NOT_START_OUTCOME"
+    | "PROJECT_NOT_FOUND",
   projectId: number,
 ): StartWorkbenchOutcomeResult {
   return {
@@ -177,6 +190,9 @@ async function persistGoalOutcome(
   const trimmed = command.trim()
   if (!trimmed) throw new Error("A goal command is required.")
   const intakeKey = normalizeIntakeKey(trimmed, idempotencyKey)
+  const acceptedContractIds = startInput
+    ? [...issue911LiveAcceptanceContractIds(startInput)]
+    : []
   const intakeRequestHash = startInput
     ? buildOutcomeStartRequestHash(startInput)
     : hashRecord({ command: trimmed })
@@ -222,6 +238,9 @@ async function persistGoalOutcome(
       throw new Error("GOAL_INTAKE_RECEIPT_DUPLICATED")
     }
     const existingReceipt = existingReceipts[0]
+    if (existingReceipt && !exactContractIds(existingReceipt.acceptedContractIds, acceptedContractIds)) {
+      throw new Error("GOAL_INTAKE_ACCEPTED_CONTRACT_BINDING_WALL")
+    }
     if (existingReceipt && existingReceipt.requestHash !== intakeRequestHash) {
       if (startInput) {
         return {
@@ -238,6 +257,9 @@ async function persistGoalOutcome(
         .where(and(eq(goal.userId, userId), eq(goal.id, existingReceipt.goalId)))
         .limit(1)
       if (!existingGoal) throw new Error("GOAL_INTAKE_BINDING_WALL")
+      if (!exactContractIds(existingGoal.acceptedContractIds, acceptedContractIds)) {
+        throw new Error("GOAL_INTAKE_ACCEPTED_CONTRACT_BINDING_WALL")
+      }
       let outcomeBinding: string
       if (existingGoal.verdict === "refuse") {
         outcomeBinding = refusedGoalBinding(existingGoal.id)
@@ -249,6 +271,7 @@ async function persistGoalOutcome(
           .select({
             outcomeKey: outcomeQueueItem.outcomeKey,
             goalId: outcomeQueueItem.goalId,
+            acceptedContractIds: outcomeQueueItem.acceptedContractIds,
           })
           .from(outcomeQueueItem)
           .where(and(
@@ -259,6 +282,9 @@ async function persistGoalOutcome(
         if (existingOutcome?.goalId !== existingGoal.id) {
           throw new Error("GOAL_INTAKE_BINDING_WALL")
         }
+        if (!exactContractIds(existingOutcome.acceptedContractIds, acceptedContractIds)) {
+          throw new Error("GOAL_INTAKE_ACCEPTED_CONTRACT_BINDING_WALL")
+        }
         outcomeBinding = existingOutcome.outcomeKey
       }
       let start: StartWorkbenchOutcomeResult | null = null
@@ -268,6 +294,7 @@ async function persistGoalOutcome(
           requestHash: intakeRequestHash,
           goalId: existingGoal.id,
           refusedBinding: outcomeBinding,
+          acceptedContractIds,
         })
         start = {
           status: "REFUSED",
@@ -319,6 +346,7 @@ async function persistGoalOutcome(
           threadId: thread.id,
           rootSourceType: "outcome",
           rootSourceId: outcomeBinding,
+          acceptedContractIds,
         })
         start = {
           status: "ALREADY_ACCEPTED",
@@ -361,6 +389,16 @@ async function persistGoalOutcome(
     }
 
     if (startInput) {
+      const existingAcceptanceMarkers = acceptedContractIds.length === 1
+        ? await transaction
+            .select({ id: goal.id })
+            .from(goal)
+            .where(and(
+              eq(goal.userId, userId),
+              sql`${goal.acceptedContractIds} = ${acceptedContractIds}`,
+            ))
+            .limit(1)
+        : []
       const projects = await transaction
         .select({ id: project.id, userId: project.userId, lifecycle: project.lifecycle })
         .from(project)
@@ -386,10 +424,169 @@ async function persistGoalOutcome(
           && primaryRepositories.length === 1
           && primaryRepositories[0].canonicalIdentity === "bsvalues/terragroq"
       }
-      if (projects.length !== 1 || !registeredProjectEligible) {
+      if ((projects.length !== 1 || !registeredProjectEligible)
+        && existingAcceptanceMarkers.length === 0) {
         return {
           goal: null,
           start: unavailableOutcomeStart("PROJECT_NOT_FOUND", "PROJECT_NOT_FOUND", startInput.projectId),
+        }
+      }
+    }
+
+    if (acceptedContractIds.length === 1) {
+      const [singletonGoals, singletonOutcomes, singletonReceipts] = await Promise.all([
+        transaction
+          .select({
+            id: goal.id, ref: goal.ref, command: goal.command, lane: goal.lane,
+            mode: goal.mode, risk: goal.risk, authority: goal.authority,
+            verdict: goal.verdict, requiresApproval: goal.requiresApproval,
+            acceptedContractIds: goal.acceptedContractIds,
+          })
+          .from(goal)
+          .where(and(
+            eq(goal.userId, userId),
+            sql`${goal.acceptedContractIds} = ${acceptedContractIds}`,
+          ))
+          .limit(2),
+        transaction
+          .select({
+            id: outcomeQueueItem.id, goalId: outcomeQueueItem.goalId,
+            goalRef: outcomeQueueItem.goalRef, outcomeKey: outcomeQueueItem.outcomeKey,
+            title: outcomeQueueItem.title,
+            objective: outcomeQueueItem.objective,
+            acceptedContractIds: outcomeQueueItem.acceptedContractIds,
+          })
+          .from(outcomeQueueItem)
+          .where(and(
+            eq(outcomeQueueItem.userId, userId),
+            sql`${outcomeQueueItem.acceptedContractIds} = ${acceptedContractIds}`,
+          ))
+          .limit(2),
+        transaction
+          .select({
+            id: goalOutcomeIntakeReceipt.id, idempotencyKey: goalOutcomeIntakeReceipt.idempotencyKey,
+            requestHash: goalOutcomeIntakeReceipt.requestHash, goalId: goalOutcomeIntakeReceipt.goalId,
+            outcomeKey: goalOutcomeIntakeReceipt.outcomeKey,
+            resultDigest: goalOutcomeIntakeReceipt.resultDigest,
+            acceptedContractIds: goalOutcomeIntakeReceipt.acceptedContractIds,
+          })
+          .from(goalOutcomeIntakeReceipt)
+          .where(and(
+            eq(goalOutcomeIntakeReceipt.userId, userId),
+            sql`${goalOutcomeIntakeReceipt.acceptedContractIds} = ${acceptedContractIds}`,
+          ))
+          .limit(2),
+      ])
+      const cardinalities = [singletonGoals.length, singletonOutcomes.length, singletonReceipts.length]
+      if (cardinalities.some((count) => count > 0)) {
+        if (!cardinalities.every((count) => count === 1)) {
+          throw new Error("GOAL_INTAKE_ACCEPTANCE_SINGLETON_GRAPH_WALL")
+        }
+        const [priorGoal] = singletonGoals
+        const [priorOutcome] = singletonOutcomes
+        const [priorReceipt] = singletonReceipts
+        const roots = await transaction
+          .select({
+            threadId: workbenchThreadSource.threadId,
+            sourceType: workbenchThreadSource.sourceType,
+            sourceId: workbenchThreadSource.sourceId,
+            role: workbenchThreadSource.role,
+          })
+          .from(workbenchThreadSource)
+          .where(and(
+            eq(workbenchThreadSource.userId, userId),
+            eq(workbenchThreadSource.sourceType, "outcome"),
+            eq(workbenchThreadSource.sourceId, priorOutcome.outcomeKey),
+            eq(workbenchThreadSource.role, "root"),
+          ))
+          .limit(2)
+        const threads = roots.length === 1
+          ? await transaction
+              .select({
+                id: workbenchThread.id, projectId: workbenchThread.projectId,
+                title: workbenchThread.title,
+              })
+              .from(workbenchThread)
+              .where(and(
+                eq(workbenchThread.userId, userId),
+                eq(workbenchThread.id, roots[0].threadId),
+              ))
+              .limit(2)
+          : []
+        const repositories = await transaction
+          .select({
+            canonicalIdentity: projectResource.canonicalIdentity,
+            relationship: projectResource.relationship,
+            type: projectResource.type,
+          })
+          .from(projectResource)
+          .where(and(
+            eq(projectResource.userId, userId),
+            eq(projectResource.projectId, 1),
+            eq(projectResource.type, "repo"),
+            eq(projectResource.relationship, "primary-repo"),
+          ))
+          .limit(2)
+        let priorAcceptedContractIds: readonly string[] = []
+        try {
+          priorAcceptedContractIds = issue911LiveAcceptanceContractIds({
+            projectId: 1,
+            intent: priorGoal.command,
+            idempotencyKey: priorReceipt.idempotencyKey,
+          })
+        } catch {
+          throw new Error("GOAL_INTAKE_ACCEPTANCE_SINGLETON_GRAPH_WALL")
+        }
+        const priorRequestHash = buildOutcomeStartRequestHash({
+          projectId: 1,
+          intent: priorGoal.command,
+          idempotencyKey: priorReceipt.idempotencyKey,
+        })
+        const expectedPriorResultDigest = roots.length === 1 && threads.length === 1
+          ? buildOutcomeStartResultDigest({
+              requestHash: priorRequestHash,
+              goalId: priorGoal.id,
+              outcomeKey: priorOutcome.outcomeKey,
+              threadId: threads[0].id,
+              rootSourceType: "outcome",
+              rootSourceId: priorOutcome.outcomeKey,
+              acceptedContractIds: priorAcceptedContractIds,
+            })
+          : null
+        const exactPriorGraph = Number.isSafeInteger(priorGoal.id)
+          && typeof priorGoal.ref === "string" && /^GOAL-[0-9]{4,}$/.test(priorGoal.ref)
+          && isIssue911ReliabilityOutcomeIntent(priorGoal.command)
+          && priorGoal.lane === "operator-objective" && priorGoal.mode === "implement"
+          && priorGoal.risk === "R1" && priorGoal.authority === "A2_WRITE_OWN"
+          && priorGoal.verdict === "requires_approval" && priorGoal.requiresApproval === true
+          && exactContractIds(priorGoal.acceptedContractIds, acceptedContractIds)
+          && priorOutcome.goalId === priorGoal.id
+          && priorOutcome.goalRef === priorGoal.ref
+          && priorOutcome.outcomeKey === `goal:${priorGoal.ref}`
+          && priorOutcome.title === priorGoal.command && priorOutcome.objective === priorGoal.command
+          && exactContractIds(priorOutcome.acceptedContractIds, acceptedContractIds)
+          && priorReceipt.goalId === priorGoal.id
+          && priorReceipt.outcomeKey === priorOutcome.outcomeKey
+          && priorReceipt.requestHash === priorRequestHash
+          && priorReceipt.resultDigest === expectedPriorResultDigest
+          && exactContractIds(priorReceipt.acceptedContractIds, acceptedContractIds)
+          && exactContractIds(priorAcceptedContractIds, acceptedContractIds)
+          && roots.length === 1 && roots[0].sourceType === "outcome"
+          && roots[0].sourceId === priorOutcome.outcomeKey && roots[0].role === "root"
+          && threads.length === 1 && threads[0].projectId === 1
+          && threads[0].title === priorGoal.command
+          && repositories.length === 1
+          && repositories[0].canonicalIdentity === "bsvalues/terragroq"
+        if (!exactPriorGraph) {
+          throw new Error("GOAL_INTAKE_ACCEPTANCE_SINGLETON_GRAPH_WALL")
+        }
+        return {
+          goal: null,
+          start: unavailableOutcomeStart(
+            "CONFLICT",
+            "CONTRACT_SINGLETON_CONFLICT",
+            startInput!.projectId,
+          ),
         }
       }
     }
@@ -413,6 +610,7 @@ async function persistGoalOutcome(
         rationale: cls.rationale,
         mistakePatterns: cls.mistakePatterns.map((m) => m.id),
         matchedRules,
+        acceptedContractIds,
         recommendedMove: cls.recommendedMove,
         requiresApproval,
         status: "classified",
@@ -432,6 +630,7 @@ async function persistGoalOutcome(
         objective: queued.objective,
         queueOrder: queued.queueOrder,
         dependencyKeys: [...queued.dependencyKeys],
+        acceptedContractIds,
         riskClass: queued.riskClass,
         approvalState: queued.approvalState,
         authorityState: queued.authorityState,
@@ -452,6 +651,7 @@ async function persistGoalOutcome(
         requestHash: intakeRequestHash,
         goalId: created.id,
         refusedBinding: outcomeBinding,
+        acceptedContractIds,
       })
       start = {
         status: "REFUSED",
@@ -499,6 +699,7 @@ async function persistGoalOutcome(
         threadId,
         rootSourceType: "outcome",
         rootSourceId: outcomeBinding,
+        acceptedContractIds,
       })
       start = {
         status: "ACCEPTED",
@@ -528,6 +729,7 @@ async function persistGoalOutcome(
         requestHash: intakeRequestHash,
         goalId: created.id,
         outcomeKey: outcomeBinding,
+        acceptedContractIds,
         resultDigest,
         replayCount: 0,
         firstSubmittedAt: submittedAt,
@@ -551,6 +753,7 @@ async function persistGoalOutcome(
           intakeReceiptId: receipt.id,
           requestHash: intakeRequestHash,
           resultDigest,
+          acceptedContractIds,
           ...(start?.status === "ACCEPTED" ? {
             projectId: start.projectId,
             threadId: start.threadId,
@@ -575,6 +778,7 @@ async function persistGoalOutcome(
         governanceEventId: governance.id,
         requestHash: intakeRequestHash,
         resultDigest,
+        acceptedContractIds,
         ...(start?.status === "ACCEPTED" ? {
           projectId: start.projectId,
           threadId: start.threadId,

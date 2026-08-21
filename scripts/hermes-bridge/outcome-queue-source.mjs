@@ -11,6 +11,8 @@ import { isVerifiedPrimaryAuthorization } from "./primary-authorization-provenan
 import {
   HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
   HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST,
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
   resolveHermesWorkContract,
@@ -73,6 +75,8 @@ const REVIEWED_WORK_CONTRACT_ID_SQL = HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CON
 const REVIEWED_WORK_CONTRACT_DIGEST_SQL = HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST.replaceAll("'", "''")
 const ISSUE_911_WORK_CONTRACT_ID_SQL = HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID.replaceAll("'", "''")
 const ISSUE_911_WORK_CONTRACT_DIGEST_SQL = HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST.replaceAll("'", "''")
+const ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID_SQL = HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID.replaceAll("'", "''")
+const ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST_SQL = HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST.replaceAll("'", "''")
 const ISSUE_911_WORK_CONTRACT = resolveHermesWorkContract({
   command: "record structured #911 reliability remediation without host mutation",
   title: "record structured #911 reliability remediation without host mutation",
@@ -80,8 +84,21 @@ const ISSUE_911_WORK_CONTRACT = resolveHermesWorkContract({
   lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
 })
 if (!ISSUE_911_WORK_CONTRACT) throw new Error("Registered #911 work contract is unavailable")
+const ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT = resolveHermesWorkContract({
+  command: "record structured #911 reliability remediation without host mutation",
+  title: "record structured #911 reliability remediation without host mutation",
+  objective: "record structured #911 reliability remediation without host mutation",
+  lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+  acceptedContractIds: [HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID],
+})
+if (!ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT) {
+  throw new Error("Registered #911 live acceptance work contract is unavailable")
+}
 const sqlString = (value) => `'${String(value).replaceAll("'", "''")}'`
 const ISSUE_911_WORK_CONTRACT_JSON_SQL = JSON.stringify(ISSUE_911_WORK_CONTRACT).replaceAll("'", "''")
+const ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT_JSON_SQL = JSON.stringify(
+  ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT,
+).replaceAll("'", "''")
 const ISSUE_911_APPROVAL_EVIDENCE_SQL = [
   "repo:bsvalues/terragroq",
   `work-contract:${ISSUE_911_WORK_CONTRACT.id}`,
@@ -89,6 +106,16 @@ const ISSUE_911_APPROVAL_EVIDENCE_SQL = [
   `work-contract-json:${JSON.stringify(ISSUE_911_WORK_CONTRACT)}`,
   ...ISSUE_911_WORK_CONTRACT.reservations.map((reservation) => `reservation:${reservation}`),
   ...ISSUE_911_WORK_CONTRACT.validationCommands.map((validator) => (
+    `validator:${validator.command}:${validator.args.join(" ")}`
+  )),
+]
+const ISSUE_911_LIVE_ACCEPTANCE_APPROVAL_EVIDENCE_SQL = [
+  "repo:bsvalues/terragroq",
+  `work-contract:${ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT.id}`,
+  `work-contract-digest:${ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT.digest}`,
+  `work-contract-json:${JSON.stringify(ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT)}`,
+  ...ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT.reservations.map((reservation) => `reservation:${reservation}`),
+  ...ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT.validationCommands.map((validator) => (
     `validator:${validator.command}:${validator.args.join(" ")}`
   )),
 ]
@@ -103,6 +130,7 @@ const QUEUE_COLUMNS = `
   q."objective",
   q."queueOrder",
   q."dependencyKeys",
+  q."acceptedContractIds",
   q."riskClass",
   q."approvalState",
   q."approvedBy",
@@ -379,6 +407,13 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
     JOIN "workbench_thread" AS execution_thread
       ON execution_thread."userId" = execution_root."userId"
       AND execution_thread.id = execution_root."threadId"
+    JOIN "goal" AS exact_execution_goal
+      ON exact_execution_goal."userId" = execution_receipt."userId"
+      AND exact_execution_goal.id = q."goalId"
+    JOIN "goal_outcome_intake_receipt" AS execution_intake
+      ON execution_intake."userId" = execution_receipt."userId"
+      AND execution_intake."goalId" = q."goalId"
+      AND execution_intake."outcomeKey" = q."outcomeKey"
     JOIN "decision" AS exact_execution_approval
       ON exact_execution_approval."userId" = execution_receipt."userId"
       AND exact_execution_approval.id::text = execution_receipt."resultBinding"->>'decisionId'
@@ -437,11 +472,18 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
         (execution_receipt."resultBinding"->'workContract'->>'id' = '${ISSUE_911_WORK_CONTRACT_ID_SQL}'
           AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_WORK_CONTRACT_DIGEST_SQL}'
           AND execution_receipt."resultBinding"->'workContract' = '${ISSUE_911_WORK_CONTRACT_JSON_SQL}'::jsonb
+          AND q."acceptedContractIds" = ARRAY[]::text[]
+          AND exact_execution_goal."acceptedContractIds" = ARRAY[]::text[]
+          AND execution_intake."acceptedContractIds" = ARRAY[]::text[]
           AND execution_receipt."resultBinding" ?& ARRAY[
             'authorizedAt', 'decisionId', 'decisionRef', 'expiresAt', 'grantId', 'grantRef',
             'implementationGrantId', 'implementationGrantRef', 'queueVersion', 'workContract'
           ]::text[]
-          AND (SELECT count(*) FROM jsonb_object_keys(execution_receipt."resultBinding")) = 10
+          AND (SELECT count(*) FROM jsonb_object_keys(execution_receipt."resultBinding")) IN (10, 11)
+          AND (
+            NOT (execution_receipt."resultBinding" ? 'acceptedContractIds')
+            OR execution_receipt."resultBinding"->'acceptedContractIds' = '[]'::jsonb
+          )
           AND execution_receipt."resultBinding"->>'queueVersion' = '1'
           AND CASE
             WHEN execution_receipt."resultBinding"->>'authorizedAt'
@@ -458,6 +500,90 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
             'project:' || execution_thread."projectId"::text,
             'thread:' || execution_root."threadId",
             ${ISSUE_911_APPROVAL_EVIDENCE_SQL.map(sqlString).join(",\n            ")}
+          ]::text[]
+          AND exact_execution_approval.tags = ARRAY['workbench', 'outcome', 'explicit-start-work']::text[]
+          AND execution_receipt."resultBinding"->>'implementationGrantId' = exact_implementation_grant.id::text
+          AND exact_implementation_grant.status = 'active'
+          AND exact_implementation_grant."revokedAt" IS NULL
+          AND exact_implementation_grant."expiresAt" IS NOT NULL
+          AND exact_implementation_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+          AND exact_implementation_grant."authorityLevel" = 'A2_WRITE_OWN'
+          AND exact_implementation_grant."grantedBy" = q."userId"
+          AND exact_implementation_grant."grantedTo" = 'operator'
+          AND exact_implementation_grant.scope = 'WO-HERMES-OUTCOME-' || q."goalId"::text
+          AND exact_implementation_grant."workOrderId" IS NULL
+          AND exact_implementation_grant."allowedActions" = ARRAY['implement']::text[]
+          AND exact_implementation_grant."blockedActions" = ARRAY['production:mutate', 'release:create', 'secret:access', 'spend:increase']::text[]
+          AND exact_implementation_grant."expiresAt" = (execution_receipt."resultBinding"->>'expiresAt')::timestamptz
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest(exact_implementation_grant."blockedActions") AS blocked(action)
+            WHERE position(lower(blocked.action) IN 'implement') > 0
+          ))
+        OR
+        (execution_receipt."resultBinding"->'workContract'->>'id' = '${ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID_SQL}'
+          AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST_SQL}'
+          AND execution_receipt."resultBinding"->'workContract' = '${ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT_JSON_SQL}'::jsonb
+          AND q."acceptedContractIds" = ARRAY['${ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID_SQL}']::text[]
+          AND exact_execution_goal."acceptedContractIds" = q."acceptedContractIds"
+          AND execution_intake."acceptedContractIds" = q."acceptedContractIds"
+          AND execution_thread."projectId" = 1
+          AND execution_intake."idempotencyKey"
+            ~ '^workbench-outcome:issue-911-live-nonempty-acceptance\.v1:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+          AND execution_intake."requestHash" = encode(sha256(convert_to(
+            '{"contractVersion":1,"idempotencyKey":' || to_jsonb(execution_intake."idempotencyKey")::text
+            || ',"intent":' || to_jsonb(exact_execution_goal.command)::text
+            || ',"projectId":1}', 'UTF8'
+          )), 'hex')
+          AND execution_intake."resultDigest" = encode(sha256(convert_to(
+            '{"acceptedContractIds":["${ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID_SQL}"],"contractVersion":1,"goalId":'
+            || q."goalId"::text || ',"outcomeKey":' || to_jsonb(q."outcomeKey")::text
+            || ',"requestHash":' || to_jsonb(execution_intake."requestHash")::text
+            || ',"root":{"sourceId":' || to_jsonb(q."outcomeKey")::text
+            || ',"sourceType":"outcome"},"threadId":' || to_jsonb(execution_root."threadId")::text || '}',
+            'UTF8'
+          )), 'hex')
+          AND (SELECT count(*) FROM "goal_outcome_intake_receipt" AS duplicate_intake
+               WHERE duplicate_intake."userId" = q."userId"
+                 AND duplicate_intake."acceptedContractIds" = q."acceptedContractIds") = 1
+          AND execution_receipt."resultBinding" ?& ARRAY[
+            'acceptanceIntakeProof', 'acceptedContractIds', 'authorizedAt', 'decisionId',
+            'decisionRef', 'expiresAt', 'grantId', 'grantRef', 'implementationGrantId',
+            'implementationGrantRef', 'queueVersion', 'workContract'
+          ]::text[]
+          AND (SELECT count(*) FROM jsonb_object_keys(execution_receipt."resultBinding")) = 12
+          AND execution_receipt."resultBinding"->'acceptedContractIds'
+            = to_jsonb(q."acceptedContractIds")
+          AND execution_receipt."resultBinding"->'acceptanceIntakeProof' = jsonb_build_object(
+            'receiptId', execution_intake.id,
+            'requestHash', execution_intake."requestHash",
+            'resultDigest', execution_intake."resultDigest",
+            'idempotencyKeyDigest', encode(sha256(convert_to(
+              '{"idempotencyKey":' || to_jsonb(execution_intake."idempotencyKey")::text || '}', 'UTF8'
+            )), 'hex')
+          )
+          AND execution_receipt."resultBinding"->>'queueVersion' = '1'
+          AND CASE
+            WHEN execution_receipt."resultBinding"->>'authorizedAt'
+              ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$'
+            THEN (execution_receipt."resultBinding"->>'authorizedAt')::timestamptz
+          END = execution_receipt."createdAt"
+          AND (execution_receipt."resultBinding"->>'authorizedAt')::timestamptz = q."approvedAt"
+          AND (SELECT count(*)
+               FROM "outcome_queue_mutation_receipt" AS duplicate_execution_receipt
+               WHERE duplicate_execution_receipt."userId" = q."userId"
+                 AND duplicate_execution_receipt."outcomeKey" = q."outcomeKey"
+                 AND duplicate_execution_receipt.operation = 'workbench_execution.authorize') = 1
+          AND exact_execution_approval.evidence = ARRAY[
+            'project:' || execution_thread."projectId"::text,
+            'thread:' || execution_root."threadId",
+            ${ISSUE_911_LIVE_ACCEPTANCE_APPROVAL_EVIDENCE_SQL.slice(0, 4).map(sqlString).join(",\n            ")},
+            'acceptance-intake-receipt:' || execution_intake.id::text,
+            'acceptance-intake-request:' || execution_intake."requestHash",
+            'acceptance-intake-result:' || execution_intake."resultDigest",
+            'acceptance-intake-key-digest:' || encode(sha256(convert_to(
+              '{"idempotencyKey":' || to_jsonb(execution_intake."idempotencyKey")::text || '}', 'UTF8'
+            )), 'hex'),
+            ${ISSUE_911_LIVE_ACCEPTANCE_APPROVAL_EVIDENCE_SQL.slice(4).map(sqlString).join(",\n            ")}
           ]::text[]
           AND exact_execution_approval.tags = ARRAY['workbench', 'outcome', 'explicit-start-work']::text[]
           AND execution_receipt."resultBinding"->>'implementationGrantId' = exact_implementation_grant.id::text
@@ -574,7 +700,32 @@ function exactWorkContractReceiptPredicate(alias) {
         AND ((${alias}."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
           AND ${alias}."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}')
           OR (${alias}."resultBinding"->'workContract'->>'id' = '${ISSUE_911_WORK_CONTRACT_ID_SQL}'
-            AND ${alias}."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_WORK_CONTRACT_DIGEST_SQL}')))
+            AND ${alias}."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_WORK_CONTRACT_DIGEST_SQL}'
+            AND q."acceptedContractIds" = ARRAY[]::text[])
+          OR (${alias}."resultBinding"->'workContract'->>'id' = '${ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID_SQL}'
+            AND ${alias}."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST_SQL}'
+            AND ${alias}."resultBinding"->'workContract' = '${ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT_JSON_SQL}'::jsonb
+            AND q."acceptedContractIds" = ARRAY['${ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID_SQL}']::text[]
+            AND ${alias}."resultBinding"->'acceptedContractIds' = to_jsonb(q."acceptedContractIds")
+            AND EXISTS (
+              SELECT 1 FROM "goal_outcome_intake_receipt" AS exact_contract_intake
+              JOIN "goal" AS exact_contract_goal
+                ON exact_contract_goal."userId" = exact_contract_intake."userId"
+               AND exact_contract_goal.id = exact_contract_intake."goalId"
+              WHERE exact_contract_intake."userId" = q."userId"
+                AND exact_contract_intake."goalId" = q."goalId"
+                AND exact_contract_intake."outcomeKey" = q."outcomeKey"
+                AND exact_contract_intake."acceptedContractIds" = q."acceptedContractIds"
+                AND exact_contract_goal."acceptedContractIds" = q."acceptedContractIds"
+                AND ${alias}."resultBinding"->'acceptanceIntakeProof' = jsonb_build_object(
+                  'receiptId', exact_contract_intake.id,
+                  'requestHash', exact_contract_intake."requestHash",
+                  'resultDigest', exact_contract_intake."resultDigest",
+                  'idempotencyKeyDigest', encode(sha256(convert_to(
+                    '{"idempotencyKey":' || to_jsonb(exact_contract_intake."idempotencyKey")::text || '}', 'UTF8'
+                  )), 'hex')
+                )
+            )))
       OR (${alias}.operation = 'runtime_finding.derive'
         AND ${alias}."requestBinding"->>'operation' = 'runtime_finding.derive'
         AND ${alias}."resultBinding"->>'outcomeKey' = q."outcomeKey"
@@ -803,6 +954,7 @@ CREATE TABLE IF NOT EXISTS "outcome_queue_item" (
   "objective" text,
   "queueOrder" integer NOT NULL DEFAULT 0,
   "dependencyKeys" text[] NOT NULL DEFAULT ARRAY[]::text[],
+  "acceptedContractIds" text[] NOT NULL DEFAULT ARRAY[]::text[],
   "riskClass" text NOT NULL DEFAULT 'R1',
   "approvalState" text NOT NULL DEFAULT 'unapproved',
   "approvedBy" text,
@@ -835,6 +987,16 @@ CREATE TABLE IF NOT EXISTS "outcome_queue_item" (
   "createdAt" timestamptz NOT NULL DEFAULT NOW(),
   "updatedAt" timestamptz NOT NULL DEFAULT NOW()
 );
+ALTER TABLE "goal" ADD COLUMN IF NOT EXISTS "acceptedContractIds"
+  text[] NOT NULL DEFAULT ARRAY[]::text[];
+ALTER TABLE "outcome_queue_item" ADD COLUMN IF NOT EXISTS "acceptedContractIds"
+  text[] NOT NULL DEFAULT ARRAY[]::text[];
+CREATE UNIQUE INDEX IF NOT EXISTS "goal_issue_911_live_acceptance_singleton_idx"
+  ON "goal" ("userId")
+  WHERE "acceptedContractIds" = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[];
+CREATE UNIQUE INDEX IF NOT EXISTS "outcome_queue_item_issue_911_live_acceptance_singleton_idx"
+  ON "outcome_queue_item" ("userId")
+  WHERE "acceptedContractIds" = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[];
 CREATE UNIQUE INDEX IF NOT EXISTS "outcome_queue_item_user_key_idx"
   ON "outcome_queue_item" ("userId", "outcomeKey");
 CREATE UNIQUE INDEX IF NOT EXISTS "outcome_queue_item_user_acquisition_idx"
@@ -904,6 +1066,7 @@ CREATE TABLE IF NOT EXISTS "goal_outcome_intake_receipt" (
   "requestHash" text NOT NULL,
   "goalId" integer NOT NULL REFERENCES "goal"("id") ON DELETE RESTRICT,
   "outcomeKey" text NOT NULL,
+  "acceptedContractIds" text[] NOT NULL DEFAULT ARRAY[]::text[],
   "resultDigest" text NOT NULL,
   "replayCount" integer NOT NULL DEFAULT 0,
   "firstSubmittedAt" timestamptz NOT NULL DEFAULT NOW(),
@@ -916,7 +1079,12 @@ CREATE TABLE IF NOT EXISTS "goal_outcome_intake_receipt" (
     UNIQUE ("userId", "outcomeKey"),
   CONSTRAINT "goal_outcome_intake_receipt_replay_count_check"
     CHECK ("replayCount" >= 0)
-)
+);
+ALTER TABLE "goal_outcome_intake_receipt" ADD COLUMN IF NOT EXISTS "acceptedContractIds"
+  text[] NOT NULL DEFAULT ARRAY[]::text[];
+CREATE UNIQUE INDEX IF NOT EXISTS "goal_intake_issue_911_live_acceptance_singleton_idx"
+  ON "goal_outcome_intake_receipt" ("userId")
+  WHERE "acceptedContractIds" = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[]
 `,
   ensureAcquisitionAttemptTable: `
 CREATE TABLE IF NOT EXISTS "outcome_queue_acquisition_attempt" (
@@ -2737,6 +2905,7 @@ const RECEIPT_COLUMN_CONTRACTS = Object.freeze({
     ["requestHash", "text", true, null],
     ["goalId", "integer", true, null],
     ["outcomeKey", "text", true, null],
+    ["acceptedContractIds", "text[]", true, "'{}'::text[]"],
     ["resultDigest", "text", true, null],
     ["replayCount", "integer", true, "0"],
     ["firstSubmittedAt", "timestamp with time zone", true, "now()"],

@@ -1009,6 +1009,45 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.runTurn.mock.calls[0][0].prompt).not.toContain("WO-HERMES-7-001")
   })
 
+  it("propagates the exact verified live-acceptance contract into the production turn prompt", async () => {
+    const command = "record structured #911 reliability remediation without host mutation"
+    const contract = resolveHermesWorkContract({
+      command, title: command, objective: command,
+      lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+      acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+    })!
+    const parent = {
+      ...queueBoundOutcome(), id: 29, userId: "owner-id", ref: "GOAL-0025",
+      command, title: command, objective: command, lane: "operator-objective",
+      mode: "implement", risk: "R1", authority: "A2_WRITE_OWN",
+      verdict: "requires_approval", requiresApproval: true, status: "classified",
+      acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+      outcomeKey: "goal:GOAL-0025",
+      queueBinding: { ...queueBoundOutcome().queueBinding,
+        outcomeKey: "goal:GOAL-0025", activeWorkOrderId: 29 },
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: { operation: "workbench_execution.authorize",
+          outcomeKey: "goal:GOAL-0025", workOrderRef: "WO-HERMES-OUTCOME-29" },
+      },
+    }
+    const value = fixture(contract.reservations as string[], {
+      selectOutcome: vi.fn(async () => parent),
+    })
+    value.client.runTurn.mockImplementationOnce(async () => ({
+      threadId: "thread-25", turnId: "turn-25", status: "completed",
+      finalText: JSON.stringify({ ...readyTurnResult,
+        workOrder: "WO-HERMES-OUTCOME-29", branch: "codex/hermes-goal-0025-29" }),
+    }))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    const prompt = value.client.runTurn.mock.calls[0][0].prompt
+    expect(prompt).toContain("ISSUE_911_LIVE_NONEMPTY_ACCEPTANCE")
+    expect(prompt).toContain("Never fabricate either finding")
+    expect(value.projectCheckpoint.mock.calls[0][0].workContract.acceptance)
+      .toEqual(contract.acceptance)
+  })
+
   it("does not reproject a released historical execution without a registered contract", async () => {
     const value = fixture(undefined, { workContractResolver: () => null })
     const outcome = await value.selectOutcome()

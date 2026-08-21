@@ -5,6 +5,10 @@ import {
   deterministicWorkbenchExecutionRefs,
   normalizeWorkbenchOutcomeExecutionInput,
 } from "@/lib/workbench/outcome-execution-authorization"
+import {
+  buildOutcomeStartRequestHash,
+  buildOutcomeStartResultDigest,
+} from "@/lib/workbench/outcome-start"
 
 const input = {
   projectId: 7,
@@ -27,11 +31,13 @@ const snapshot = {
     authoritySubject: "operator", authorityAction: "outcome:execute", lifecycleState: "suggested",
     activeWorkOrderId: null, executionBinding: null, leaseHolder: null, leaseToken: null,
     leaseExpiresAt: null, acquisitionKey: null, terminalKey: null, version: 0,
+    acceptedContractIds: [],
   },
   goal: {
     id: 7, userId: "owner", command: "Add a compact on-screen latest-evidence timestamp to selected Thread work status",
     lane: "ui", risk: "low", authority: "A2_WRITE_OWN", verdict: "requires_approval",
     requiresApproval: true, status: "classified", linkedWorkOrderId: null,
+    acceptedContractIds: [],
   },
 }
 
@@ -86,6 +92,75 @@ describe("Workbench outcome execution authorization", () => {
       grantRef: `WB-EXEC-GRANT-${"A".repeat(24)}`,
       implementationGrantRef: `WB-EXEC-IMPL-GRANT-${"A".repeat(24)}`,
     })
+  })
+
+  it("authorizes live acceptance only from exact matching project-1 Goal and outcome markers", () => {
+    const intent = "record structured #911 reliability remediation without host mutation"
+    const intakeKey = "workbench-outcome:issue-911-live-nonempty-acceptance.v1:11111111-1111-4111-8111-111111111111"
+    const intakeRequestHash = buildOutcomeStartRequestHash({ projectId: 1, intent, idempotencyKey: intakeKey })
+    const acceptanceInput = {
+      ...input,
+      projectId: 1,
+      threadId: "thread-acceptance",
+      outcomeKey: "goal:GOAL-0025",
+    }
+    const acceptanceSnapshot = {
+      ...snapshot,
+      project: { id: 1, userId: "owner", lifecycle: "active" },
+      thread: { id: "thread-acceptance", userId: "owner", projectId: 1 },
+      roots: [{ threadId: "thread-acceptance", sourceType: "outcome", sourceId: "goal:GOAL-0025", role: "root" }],
+      outcome: {
+        ...snapshot.outcome,
+        outcomeKey: "goal:GOAL-0025",
+        goalId: 25,
+        title: intent,
+        objective: intent,
+        acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+      },
+      goal: {
+        ...snapshot.goal,
+        id: 25,
+        command: intent,
+        lane: "operator-objective",
+        risk: "R1",
+        acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+      },
+      intakeReceipts: [{
+        id: 51,
+        userId: "owner",
+        idempotencyKey: intakeKey,
+        requestHash: intakeRequestHash,
+        goalId: 25,
+        outcomeKey: "goal:GOAL-0025",
+        acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+        resultDigest: buildOutcomeStartResultDigest({
+          requestHash: intakeRequestHash,
+          goalId: 25,
+          outcomeKey: "goal:GOAL-0025",
+          threadId: "thread-acceptance",
+          rootSourceType: "outcome",
+          rootSourceId: "goal:GOAL-0025",
+          acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+        }),
+      }],
+    }
+
+    expect(assessWorkbenchOutcomeExecution(acceptanceInput, acceptanceSnapshot)).toMatchObject({
+      eligible: true,
+      workContract: {
+        id: "issue-911-live-nonempty-acceptance.v1",
+        acceptance: {
+          emptyOrPartialAllowed: true,
+          hostMutationAllowed: false,
+          noFabrication: true,
+          gatedDispatchAllowed: false,
+        },
+      },
+    })
+    expect(assessWorkbenchOutcomeExecution(acceptanceInput, {
+      ...acceptanceSnapshot,
+      outcome: { ...acceptanceSnapshot.outcome, acceptedContractIds: [] },
+    })).toEqual({ eligible: false, reason: "WORK_CONTRACT_UNAVAILABLE" })
   })
 
   it.each([

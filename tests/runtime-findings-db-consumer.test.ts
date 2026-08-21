@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import { createHash } from "node:crypto"
 
 import { createRuntimeFindingDbConsumer } from "../scripts/runtime-findings/db-consumer.mjs"
+import { resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 
 const effects = {
   changesReviewedPolicy: false, competesWithPriority: false, destroys: [],
@@ -161,6 +162,69 @@ function sourceRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function liveAcceptanceSourceRow(overrides: Record<string, unknown> = {}) {
+  const row = sourceRow({ settlementId: null, settlementCount: null,
+    settlementEventType: null, settlementMetadata: null }) as any
+  const intent = "record structured #911 reliability remediation without host mutation"
+  const contract = resolveHermesWorkContract({ command: intent, title: intent, objective: intent,
+    lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+    acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"] })!
+  const intakeKey = "workbench-outcome:issue-911-live-nonempty-acceptance.v1:123e4567-e89b-42d3-a456-426614174000"
+  const intakeRequestHash = canonicalSha({ contractVersion: 1, projectId: 1,
+    intent, idempotencyKey: intakeKey })
+  const intakeResultDigest = canonicalSha({ contractVersion: 1, requestHash: intakeRequestHash,
+    goalId: 4, outcomeKey: row.parentOutcomeKey, threadId: "thread-1",
+    root: { sourceType: "outcome", sourceId: row.parentOutcomeKey },
+    acceptedContractIds: [contract.id] })
+  const intakeProof = { receiptId: 601, requestHash: intakeRequestHash, resultDigest: intakeResultDigest,
+    idempotencyKeyDigest: canonicalSha({ idempotencyKey: intakeKey }) }
+  const request = { projectId: 1, threadId: "thread-1", outcomeKey: row.parentOutcomeKey,
+    idempotencyKey: "workbench-execution:acceptance-0001", confirmation: "START_WORK" }
+  const result = { ...row.parentReceiptResultBinding, workContract: contract,
+    acceptedContractIds: [contract.id], acceptanceIntakeProof: intakeProof }
+  const evidence = ["project:1", "thread:thread-1", "repo:bsvalues/terragroq",
+    `work-contract:${contract.id}`, `work-contract-digest:${contract.digest}`,
+    `work-contract-json:${JSON.stringify(contract)}`,
+    `acceptance-intake-receipt:${intakeProof.receiptId}`,
+    `acceptance-intake-request:${intakeProof.requestHash}`,
+    `acceptance-intake-result:${intakeProof.resultDigest}`,
+    `acceptance-intake-key-digest:${intakeProof.idempotencyKeyDigest}`,
+    ...contract.reservations.map((entry) => `reservation:${entry}`),
+    ...contract.validationCommands.map((entry) => `validator:${entry.command}:${entry.args.join(" ")}`)]
+  const acceptanceCriteria = [JSON.stringify({ contractId: contract.id, contractDigest: contract.digest,
+    evidencePath: contract.acceptance!.evidencePath,
+    requestedFindingClasses: contract.acceptance!.requestedFindingClasses,
+    emptyOrPartialAllowed: true, hostMutationAllowed: false,
+    noFabrication: true, gatedDispatchAllowed: false })]
+  const checkpointBase = { ...row.checkpointMetadata, workContractId: contract.id,
+    workContractDigest: contract.digest, workContractVersion: contract.version,
+    workContractRepository: contract.repository, workContractLane: contract.lane }
+  delete checkpointBase.payloadDigest
+  const checkpointMetadata = { ...checkpointBase, payloadDigest: sha(checkpointBase) }
+  const findingMetadata = { ...row.findingMetadata, workContractId: contract.id,
+    workContractDigest: contract.digest, workContractVersion: contract.version,
+    workContractRepository: contract.repository, workContractLane: contract.lane,
+    sourceCheckpointDigest: checkpointMetadata.payloadDigest }
+  delete findingMetadata.payloadDigest
+  findingMetadata.payloadDigest = sha(findingPayload(findingMetadata))
+  return { ...row, workContract: contract, checkpointMetadata, findingMetadata,
+    checkpointFindings: [findingMetadata], parentAllowedFiles: contract.reservations,
+    parentValidators: contract.validationCommands.map((entry) => `${entry.command} ${entry.args.join(" ")}`),
+    parentAcceptanceCriteria: acceptanceCriteria,
+    parentReceiptRequestBinding: request,
+    parentReceiptRequestHash: canonicalSha({ contract: "workbench-execution-authorization.v1", ...request }),
+    parentReceiptResultBinding: result, parentApprovalEvidence: evidence,
+    parentGoalId: 4, parentGoalCommand: intent,
+    parentGoalAcceptedContractIds: [contract.id], parentQueueAcceptedContractIds: [contract.id],
+    parentIntakeReceiptId: 601, parentIntakeGoalId: 4,
+    parentIntakeOutcomeKey: row.parentOutcomeKey, parentIntakeIdempotencyKey: intakeKey,
+    parentIntakeRequestHash: intakeRequestHash, parentIntakeResultDigest: intakeResultDigest,
+    parentIntakeAcceptedContractIds: [contract.id], parentIntakeReceiptCount: 1,
+    parentProjectCount: 1, parentRootThreadCount: 1,
+    parentPrimaryRepoCount: 1, parentPrimaryRepoTotal: 1,
+    ...overrides }
+}
+
 function bindCheckpointFindings(...rows: any[]) {
   const findingsSetDigest = sha(rows.map((row) => normalizedFinding(row.findingMetadata))
     .sort((left, right) => left.sequence - right.sequence))
@@ -186,6 +250,45 @@ function bindCheckpointFindings(...rows: any[]) {
 }
 
 describe("native runtime finding database consumer", () => {
+  it("derives the ordinary docs child from the exact singleton live-acceptance parent", async () => {
+    const row = liveAcceptanceSourceRow()
+    let nextId = 800
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes("FROM governance_event finding")) return { rows: [row] }
+      if (sql.startsWith("SELECT child.id")) return { rows: [] }
+      if (sql.includes("INSERT INTO")) return { rows: [{ id: ++nextId }] }
+      if (sql.startsWith("UPDATE work_order")) return { rows: [{ id: nextId }] }
+      return { rows: [] }
+    })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+    await expect(consume()).resolves.toMatchObject({ derived: 1, gated: 0, queuedChildren: 1 })
+    const derivedReceipt = query.mock.calls.find(([sql]) => sql.includes("INSERT INTO outcome_queue_mutation_receipt"))
+    expect(derivedReceipt?.[1]?.join(" ")).toContain('"lane":"docs"')
+  })
+
+  it.each([
+    ["contract profile", (row: any) => { row.workContract = { ...row.workContract,
+      acceptance: { ...row.workContract.acceptance, noFabrication: false } } }],
+    ["intake cardinality", (row: any) => { row.parentIntakeReceiptCount = 2 }],
+    ["root thread", (row: any) => { row.parentRootThreadCount = 0 }],
+    ["primary repository", (row: any) => { row.parentPrimaryRepoTotal = 2 }],
+    ["intake proof", (row: any) => { row.parentReceiptResultBinding.acceptanceIntakeProof.resultDigest = "a".repeat(64) }],
+  ])("walls live-acceptance lineage drift in %s", async (_label, mutate) => {
+    const row = liveAcceptanceSourceRow()
+    mutate(row)
+    const query = vi.fn(async (sql: string) => sql.includes("FROM governance_event finding")
+      ? { rows: [row] } : { rows: [] })
+    const consume = createRuntimeFindingDbConsumer({
+      withPool: async (action: (pool: unknown) => Promise<unknown>) => action({ query }),
+      now: () => new Date("2026-08-20T18:00:00.000Z"),
+    })
+    await expect(consume()).rejects.toMatchObject({ code: "HERMES_RUNTIME_FINDING_CONSUMER_WALL" })
+    expect(query.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
   it("verifies producer digests after PostgreSQL jsonb reorders nested finding effects", async () => {
     const row = sourceRow({ settlementId: null, settlementCount: null,
       settlementEventType: null, settlementMetadata: null }) as any

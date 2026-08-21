@@ -127,6 +127,24 @@ afterEach(() => {
 })
 
 describe("UniversalIntent shared Workbench contract", () => {
+  it("uses the one-shot live-acceptance namespace only for the exact project-1 registered intent", async () => {
+    const user = userEvent.setup()
+    outcomeHarness.start.mockResolvedValueOnce({ ...acceptedOutcome, projectId: 1 })
+    render(<UniversalIntent selectedProject={{ id: 1, name: "WilliamOS" }} onOpenThread={vi.fn()} />)
+
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), ISSUE_911)
+    await user.keyboard("{Enter}")
+
+    expect(await screen.findByText("Awaiting authority")).toBeTruthy()
+    expect(outcomeHarness.start).toHaveBeenCalledWith({
+      projectId: 1,
+      intent: ISSUE_911,
+      idempotencyKey: expect.stringMatching(
+        /^workbench-outcome:issue-911-live-nonempty-acceptance\.v1:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    })
+  })
+
   it("starts an exact outcome in the selected Project and waits for a direct user gesture before opening its Thread", async () => {
     const user = userEvent.setup()
     const onOpenThread = vi.fn()

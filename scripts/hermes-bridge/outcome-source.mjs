@@ -8,6 +8,8 @@ import {
 } from "./outcome-queue-source.mjs"
 import { normalizeHermesFindings } from "./state-store.mjs"
 import {
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST,
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
   HERMES_WORK_CONTRACT_VERSION,
   resolveHermesWorkContract,
 } from "./work-contract.mjs"
@@ -2022,6 +2024,30 @@ const ACTIVE_CLEANUP_REGISTERED_CONTRACT = resolveHermesWorkContract({
   lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
 })
 if (!ACTIVE_CLEANUP_REGISTERED_CONTRACT) throw new Error("Registered #911 work contract is unavailable")
+const ACTIVE_CLEANUP_LIVE_ACCEPTANCE_CONTRACT = resolveHermesWorkContract({
+  command: "record structured #911 reliability remediation without host mutation",
+  title: "record structured #911 reliability remediation without host mutation",
+  objective: "record structured #911 reliability remediation without host mutation",
+  lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+  acceptedContractIds: [HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID],
+})
+if (!ACTIVE_CLEANUP_LIVE_ACCEPTANCE_CONTRACT) {
+  throw new Error("Registered #911 live acceptance work contract is unavailable")
+}
+function exactActiveCleanupRegisteredContract(workContract) {
+  const selected = workContract?.id === ACTIVE_CLEANUP_REGISTERED_CONTRACT.id
+    ? ACTIVE_CLEANUP_REGISTERED_CONTRACT
+    : workContract?.id === ACTIVE_CLEANUP_LIVE_ACCEPTANCE_CONTRACT.id
+      ? ACTIVE_CLEANUP_LIVE_ACCEPTANCE_CONTRACT
+      : null
+  return selected
+    && workContract?.digest === selected.digest
+    && workContract?.version === selected.version
+    && workContract?.repository === selected.repository
+    && workContract?.lane === selected.lane
+    ? selected
+    : null
+}
 const SENSITIVE_RUNTIME_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 
 function normalizeRuntimeWorkContract(value) {
@@ -2039,13 +2065,41 @@ function normalizeRuntimeWorkContract(value) {
   }
   const projection = value.projection === undefined ? null : value.projection
   const delivery = value.delivery === undefined ? null : value.delivery
+  const acceptance = value.acceptance === undefined ? null : value.acceptance
+  const expectedAcceptance = {
+    evidencePath: "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md",
+    requestedFindingClasses: [
+      "ordinary_repository_follow_up",
+      "owner_gated_host_storage_container_policy_or_scope_follow_up",
+    ],
+    emptyOrPartialAllowed: true,
+    hostMutationAllowed: false,
+    noFabrication: true,
+    gatedDispatchAllowed: false,
+  }
+  const exactAcceptance = acceptance !== null
+    && Object.keys(acceptance).sort().join(",")
+      === Object.keys(expectedAcceptance).sort().join(",")
+    && acceptance.evidencePath === expectedAcceptance.evidencePath
+    && JSON.stringify(acceptance.requestedFindingClasses)
+      === JSON.stringify(expectedAcceptance.requestedFindingClasses)
+    && acceptance.emptyOrPartialAllowed === true
+    && acceptance.hostMutationAllowed === false
+    && acceptance.noFabrication === true
+    && acceptance.gatedDispatchAllowed === false
   if ((projection !== null && (!Number.isSafeInteger(projection?.issueNumber)
       || projection.issueNumber <= 0 || typeof projection.completionOwned !== "boolean"))
     || (delivery !== null && (delivery?.authorityLevel !== "A2_WRITE_OWN"
       || !Array.isArray(delivery.allowedActions) || delivery.allowedActions.length !== 1
       || delivery.allowedActions[0] !== "implement"
       || typeof delivery.commitAllowed !== "boolean" || typeof delivery.tagAllowed !== "boolean"
-      || typeof delivery.pushAllowed !== "boolean"))) {
+      || typeof delivery.pushAllowed !== "boolean"))
+    || (acceptance !== null && (
+      value.id !== HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID
+      || value.digest !== HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST
+      || !exactAcceptance
+    ))
+    || (value.id === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID && acceptance === null)) {
     throw Object.assign(new Error("runtime work contract is invalid"), {
       code: "OUTCOME_WORK_ORDER_CONTRACT_INVALID",
     })
@@ -2059,9 +2113,20 @@ function normalizeRuntimeWorkContract(value) {
     allowedFiles: [...value.allowedFiles],
     validators: [...value.validators],
     structuredBinding: value.version !== undefined || value.repository !== undefined
-      || value.lane !== undefined || projection !== null || delivery !== null,
+      || value.lane !== undefined || projection !== null || delivery !== null || acceptance !== null,
     ...(projection === null ? {} : { projection: { ...projection } }),
     ...(delivery === null ? {} : { delivery: { ...delivery, allowedActions: [...delivery.allowedActions] } }),
+    ...(acceptance === null ? {} : {
+      acceptance: {
+        ...acceptance,
+        requestedFindingClasses: [...acceptance.requestedFindingClasses],
+      },
+      acceptanceCriteria: [JSON.stringify({
+        contractId: value.id,
+        contractDigest: value.digest,
+        ...expectedAcceptance,
+      })],
+    }),
   }
 }
 
@@ -2569,6 +2634,7 @@ function exactAuthorizationContract(
   activeReviewRecovery = false,
 ) {
   const receiptContract = row?.workContract
+  const exactRegisteredContract = exactActiveCleanupRegisteredContract(workContract)
   const delivery = workContract.delivery
   const projection = workContract.projection
   const staleReacquisition = activeReviewRecovery
@@ -2619,6 +2685,9 @@ function exactAuthorizationContract(
     && receiptContract?.version === workContract.version
     && receiptContract?.repository === workContract.repository
     && receiptContract?.lane === row?.goalLane
+    && (workContract.id !== HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID
+      || (exactRegisteredContract === ACTIVE_CLEANUP_LIVE_ACCEPTANCE_CONTRACT
+        && canonicalJson(receiptContract) === canonicalJson(ACTIVE_CLEANUP_LIVE_ACCEPTANCE_CONTRACT)))
     && (workContract.lane === null || receiptContract.lane === workContract.lane)
     && exactStringArray(receiptContract.reservations, workContract.allowedFiles)
     && exactStringArray(validatorLabels(receiptContract.validationCommands), workContract.validators)
@@ -3775,6 +3844,28 @@ export async function projectOutcomeRuntimeCheckpoint({
          AND contract_receipt."resultBinding"->'workContract'->>'version' = $11
          AND contract_receipt."resultBinding"->'workContract'->>'repository' = 'bsvalues/terragroq'
          AND contract_receipt."resultBinding"->'workContract'->>'lane' = contract_goal.lane
+         AND ($9 <> '${HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID}' OR (
+           contract_goal."acceptedContractIds" = ARRAY['${HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID}']::text[]
+           AND contract_queue."acceptedContractIds" = contract_goal."acceptedContractIds"
+           AND contract_receipt."resultBinding"->'workContract' = $33::jsonb
+           AND contract_receipt."resultBinding"->'acceptedContractIds'
+             = to_jsonb(contract_goal."acceptedContractIds")
+           AND EXISTS (
+             SELECT 1 FROM goal_outcome_intake_receipt exact_intake
+             WHERE exact_intake."userId" = contract_goal."userId"
+               AND exact_intake."goalId" = contract_goal.id
+               AND exact_intake."outcomeKey" = contract_queue."outcomeKey"
+               AND exact_intake."acceptedContractIds" = contract_goal."acceptedContractIds"
+               AND contract_receipt."resultBinding"->'acceptanceIntakeProof' = jsonb_build_object(
+                 'receiptId', exact_intake.id,
+                 'requestHash', exact_intake."requestHash",
+                 'resultDigest', exact_intake."resultDigest",
+                 'idempotencyKeyDigest', encode(sha256(convert_to(
+                   '{"idempotencyKey":' || to_jsonb(exact_intake."idempotencyKey")::text || '}', 'UTF8'
+                 )), 'hex')
+               )
+           )
+         ))
          AND (contract_receipt."resultBinding"->'workContract'->'delivery' IS NULL OR (
            implementation_grant."revokedAt" IS NULL
            AND implementation_grant."expiresAt" IS NOT NULL
@@ -4044,7 +4135,8 @@ export async function projectOutcomeRuntimeCheckpoint({
          Boolean(normalizedExecutionBinding.reviewRecoveryStaleReacquisition),
 	         normalizedExecutionBinding.reviewRecoveryStaleReacquisition?.leaseExpiresAt ?? null,
 	         Boolean(normalizedExecutionBinding.reviewRecoveryStaleContinuation),
-	         normalizedExecutionBinding.reviewRecoveryStaleContinuation?.leaseExpiresAt ?? null],
+	         normalizedExecutionBinding.reviewRecoveryStaleContinuation?.leaseExpiresAt ?? null,
+        JSON.stringify(ACTIVE_CLEANUP_LIVE_ACCEPTANCE_CONTRACT)],
     )
     if (authorizations?.rows?.length !== 1
       || !exactAuthorizationContract(
@@ -4150,13 +4242,13 @@ export async function projectOutcomeRuntimeCheckpoint({
       `INSERT INTO work_order
          ("userId", ref, title, description, goal, lane, status, assignee, agent,
            "allowedFiles", validators, "authorityGrantId", "authorityLevel", "authorityGranted",
-           "commitAllowed", "tagAllowed", "pushAllowed", "updatedAt")
+           "commitAllowed", "tagAllowed", "pushAllowed", "acceptanceCriteria", "updatedAt")
        SELECT g."userId", $2, COALESCE(NULLIF(g.command, ''), 'Hermes outcome ' || g.id::text),
          'Durable runtime projection for ' || COALESCE(g.ref, 'goal-' || g.id::text)
            || CASE WHEN $5::integer IS NULL THEN '' ELSE '. Projected at GitHub issue ' || $5::text || '.' END
            || CASE WHEN $6::boolean = false THEN ' Projection completion: parent-owned.' ELSE '' END,
          g.ref, g.lane, 'active', 'hermes-codex-bridge', 'codex', $3::text[], $4::text[],
-         $7::integer, $8, $8, $9::boolean, $10::boolean, $11::boolean, NOW()
+         $7::integer, $8, $8, $9::boolean, $10::boolean, $11::boolean, $12::text[], NOW()
        FROM goal g
        WHERE g.id = $1::integer
          AND NOT EXISTS (
@@ -4171,11 +4263,13 @@ export async function projectOutcomeRuntimeCheckpoint({
         normalizedWorkContract.delivery?.authorityLevel ?? null,
         normalizedWorkContract.delivery?.commitAllowed ?? false,
         normalizedWorkContract.delivery?.tagAllowed ?? false,
-        normalizedWorkContract.delivery?.pushAllowed ?? false],
+        normalizedWorkContract.delivery?.pushAllowed ?? false,
+        normalizedWorkContract.acceptanceCriteria ?? []],
     )
     const workOrders = await runQuery(
       `SELECT wo.id, wo."userId" AS "userId", wo.ref, wo.goal, wo.lane, wo.status,
          wo.result, wo."commitRef", wo.assignee, wo.agent, wo."allowedFiles", wo.validators,
+         wo."acceptanceCriteria",
          wo."authorityGrantId", wo."authorityLevel", wo."authorityGranted",
          wo."commitAllowed", wo."tagAllowed", wo."pushAllowed",
          latest.id AS "latestCheckpointId",
@@ -4304,6 +4398,10 @@ export async function projectOutcomeRuntimeCheckpoint({
       workOrder.allowedFiles,
       normalizedWorkContract.allowedFiles,
     ) && exactStringArray(workOrder.validators, normalizedWorkContract.validators)
+      && exactStringArray(
+        workOrder.acceptanceCriteria,
+        normalizedWorkContract.acceptanceCriteria ?? [],
+      )
     if (!contractMatches || !deliveryIdentityMatches) {
       const contractEmpty = Array.isArray(workOrder.allowedFiles) && workOrder.allowedFiles.length === 0
         && Array.isArray(workOrder.validators) && workOrder.validators.length === 0
@@ -5840,11 +5938,8 @@ export async function authorizeActivePostMergeCleanup({
     || typeof cleanupProofDigest !== "string" || !/^[0-9a-f]{64}$/.test(cleanupProofDigest)
     || typeof branch !== "string" || branch.trim() === ""
     || typeof worktreePath !== "string" || worktreePath.trim() === "") throw wall()
-  if (workContract?.id !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.id
-    || workContract?.digest !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.digest
-    || workContract?.version !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.version
-    || workContract?.repository !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.repository
-    || workContract?.lane !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.lane) throw wall()
+  const registeredWorkContract = exactActiveCleanupRegisteredContract(workContract)
+  if (!registeredWorkContract) throw wall()
   await verifyContinuation({
     outcomeId, executionBinding, workContract, proof, provenanceOnly: true,
   })
@@ -5994,7 +6089,7 @@ export async function authorizeActivePostMergeCleanup({
         executionBinding.executionBinding, executionBinding.acquisitionKey,
         executionBinding.leaseHolder, executionBinding.leaseToken,
         executionBinding.activeWorkOrderId, workOrderRef, workContract.id, workContract.digest,
-        JSON.stringify(ACTIVE_CLEANUP_REGISTERED_CONTRACT)],
+        JSON.stringify(registeredWorkContract)],
     )
     const row = graph?.rows?.[0]
     if (graph?.rows?.length !== 1 || Number(row.goalId) !== outcomeId
@@ -6162,11 +6257,8 @@ export async function settleActivePostMergeCleanupOutcome({
     || !Number.isSafeInteger(prNumber) || prNumber <= 0
     || !COMMIT_SHA.test(String(reviewedHeadSha ?? ""))
     || !COMMIT_SHA.test(String(mergeSha ?? ""))) throw wall()
-  if (workContract?.id !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.id
-    || workContract?.digest !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.digest
-    || workContract?.version !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.version
-    || workContract?.repository !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.repository
-    || workContract?.lane !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.lane) throw wall()
+  const registeredWorkContract = exactActiveCleanupRegisteredContract(workContract)
+  if (!registeredWorkContract) throw wall()
   const workOrderRef = outcomeWorkOrderRef(outcomeId)
   const idempotencyKey = `hermes-outcome:${outcomeId}:active-post-merge-cleanup:settle:${cleanupProofDigest}`
   const checkpointKey = `hermes-outcome:${outcomeId}:attempt:${runtimeAttempt}:checkpoint:${checkpointSequence}`
@@ -6444,7 +6536,7 @@ export async function settleActivePostMergeCleanupOutcome({
         fencingToken, executionBinding.executionBinding, executionBinding.acquisitionKey,
         executionBinding.leaseHolder, executionBinding.leaseToken,
         executionBinding.activeWorkOrderId, workOrderRef, authorizationEventId, confirmationEventId,
-        workContract.id, workContract.digest, JSON.stringify(ACTIVE_CLEANUP_REGISTERED_CONTRACT)],
+        workContract.id, workContract.digest, JSON.stringify(registeredWorkContract)],
     )
     if (graph?.rows?.length !== 1) throw wall()
     const row = graph.rows[0]

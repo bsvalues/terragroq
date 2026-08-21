@@ -10,6 +10,9 @@ import {
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
   HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
   HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST,
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
+  isExactIssue911LiveAcceptanceContract,
   resolveHermesWorkContract,
 } from "../scripts/hermes-bridge/work-contract.mjs"
 
@@ -101,6 +104,84 @@ describe("Hermes exact work contract", () => {
       digest: HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
     })
     expect(contract?.digest).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it("selects the live-acceptance contract only from its exact persisted singleton marker", () => {
+    const issue911Intent = "record structured #911 reliability remediation without host mutation"
+    const contract = resolveHermesWorkContract({
+      command: issue911Intent,
+      title: issue911Intent,
+      objective: issue911Intent,
+      lane: "operator-objective",
+      risk: "R1",
+      authority: "A2_WRITE_OWN",
+      acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+    })
+
+    expect(contract).toEqual({
+      version: HERMES_WORK_CONTRACT_VERSION,
+      id: HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
+      repository: "bsvalues/terragroq",
+      lane: "operator-objective",
+      reservations: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      validationCommands: [
+        { command: "git", args: ["diff", "--check"], timeoutMs: 300_000 },
+        { command: "npx", args: ["vitest", "run", "tests/hermes-work-contract.test.ts"], timeoutMs: 300_000 },
+      ],
+      projection: { issueNumber: 911, completionOwned: false },
+      delivery: {
+        authorityLevel: "A2_WRITE_OWN",
+        allowedActions: ["implement"],
+        commitAllowed: true,
+        tagAllowed: false,
+        pushAllowed: true,
+      },
+      acceptance: {
+        evidencePath: "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md",
+        requestedFindingClasses: [
+          "ordinary_repository_follow_up",
+          "owner_gated_host_storage_container_policy_or_scope_follow_up",
+        ],
+        emptyOrPartialAllowed: true,
+        hostMutationAllowed: false,
+        noFabrication: true,
+        gatedDispatchAllowed: false,
+      },
+      digest: HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST,
+    })
+    expect(contract?.digest).toMatch(/^[0-9a-f]{64}$/)
+    const reordered = Object.fromEntries(Object.entries(contract!).reverse())
+    reordered.acceptance = Object.fromEntries(Object.entries(contract!.acceptance!).reverse())
+    expect(isExactIssue911LiveAcceptanceContract(reordered)).toBe(true)
+    expect(isExactIssue911LiveAcceptanceContract({
+      ...reordered,
+      acceptance: { ...reordered.acceptance, noFabrication: false },
+    })).toBe(false)
+    expect(isExactIssue911LiveAcceptanceContract({ ...reordered, extra: true })).toBe(false)
+  })
+
+  it.each([
+    { acceptedContractIds: [] },
+    { acceptedContractIds: ["issue-911-runtime-reliability-evidence.v1"] },
+    { acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1", "extra"] },
+    { acceptedContractIds: ["extra", "issue-911-live-nonempty-acceptance.v1"] },
+  ])("does not re-derive live acceptance from unchanged intent with marker $acceptedContractIds", ({ acceptedContractIds }) => {
+    const issue911Intent = "record structured #911 reliability remediation without host mutation"
+    const contract = resolveHermesWorkContract({
+      command: issue911Intent,
+      title: issue911Intent,
+      objective: issue911Intent,
+      lane: "operator-objective",
+      risk: "R1",
+      authority: "A2_WRITE_OWN",
+      acceptedContractIds,
+    })
+
+    if (acceptedContractIds.length === 0) {
+      expect(contract?.id).toBe(HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID)
+    } else {
+      expect(contract).toBeNull()
+    }
   })
 
   it.each([

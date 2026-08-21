@@ -43,7 +43,11 @@ export type RefusedWorkbenchOutcomeStart = PersistedWorkbenchOutcomeStartEffects
 
 export type FailedWorkbenchOutcomeStart = Readonly<{
   status: "CONFLICT" | "INVALID_INTENT" | "PROJECT_NOT_FOUND"
-  reason: "IDEMPOTENCY_CONFLICT" | "ROUTE_NOT_START_OUTCOME" | "PROJECT_NOT_FOUND"
+  reason:
+    | "IDEMPOTENCY_CONFLICT"
+    | "CONTRACT_SINGLETON_CONFLICT"
+    | "ROUTE_NOT_START_OUTCOME"
+    | "PROJECT_NOT_FOUND"
   projectId: number
   threadId: null
   goalId: null
@@ -97,23 +101,29 @@ export function buildOutcomeStartResultDigest(input: Readonly<{
   threadId: string
   rootSourceType: "outcome"
   rootSourceId: string
+  acceptedContractIds?: readonly string[]
 }>): string {
-  return hashRecord({
+  const payload = {
     contractVersion: WORKBENCH_OUTCOME_START_CONTRACT_VERSION,
     requestHash: input.requestHash,
     goalId: input.goalId,
     outcomeKey: input.outcomeKey,
     threadId: input.threadId,
     root: { sourceType: input.rootSourceType, sourceId: input.rootSourceId },
-  })
+    ...(input.acceptedContractIds?.length
+      ? { acceptedContractIds: [...input.acceptedContractIds] }
+      : {}),
+  }
+  return hashRecord(payload)
 }
 
 export function buildRefusedOutcomeStartResultDigest(input: Readonly<{
   requestHash: string
   goalId: number
   refusedBinding: string
+  acceptedContractIds?: readonly string[]
 }>): string {
-  return hashRecord({
+  const payload = {
     contractVersion: WORKBENCH_OUTCOME_START_CONTRACT_VERSION,
     requestHash: input.requestHash,
     goalId: input.goalId,
@@ -121,5 +131,9 @@ export function buildRefusedOutcomeStartResultDigest(input: Readonly<{
     threadId: null,
     root: null,
     status: "REFUSED",
-  })
+    ...(input.acceptedContractIds?.length
+      ? { acceptedContractIds: [...input.acceptedContractIds] }
+      : {}),
+  }
+  return hashRecord(payload)
 }

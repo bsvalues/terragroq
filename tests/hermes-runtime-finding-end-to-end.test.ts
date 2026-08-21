@@ -26,6 +26,8 @@ const acquisitionKey = "acquisition-key-911-e2e"
 const leaseToken = "lease-token-911-e2e"
 const userId = "runtime-finding-e2e-owner"
 const reportPath = "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"
+const acceptanceContractId = "issue-911-live-nonempty-acceptance.v1"
+const intakeKey = `workbench-outcome:${acceptanceContractId}:11111111-1111-4111-8111-111111111111`
 
 const canonicalJson = (value: any): string => value && typeof value === "object"
   ? Array.isArray(value) ? `[${value.map(canonicalJson).join(",")}]`
@@ -68,7 +70,7 @@ async function bootstrap(client: import("pg").PoolClient, schema: string) {
   await client.query(`SET search_path TO "${schema}"`)
   const tables = new Set([
     "authority_grant", "decision", "event_log", "evidence_record", "goal",
-    "governance_event", "outcome_queue_item", "project", "project_resource", "user",
+    "governance_event", "goal_outcome_intake_receipt", "outcome_queue_item", "project", "project_resource", "user",
     "work_order", "workbench_thread", "workbench_thread_source",
   ])
   const migration = fs.readFileSync(path.join(process.cwd(), "drizzle", "0000_williamos_init.sql"), "utf8")
@@ -95,6 +97,7 @@ async function bootstrap(client: import("pg").PoolClient, schema: string) {
 const workContract = resolveHermesWorkContract({
   command: intent, title: intent, objective: intent,
   lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+  acceptedContractIds: [acceptanceContractId],
 })!
 const runtimeWorkContract = {
   version: workContract.version, id: workContract.id, digest: workContract.digest,
@@ -104,46 +107,72 @@ const runtimeWorkContract = {
     `${validator.command} ${validator.args.join(" ")}`
   )),
   projection: workContract.projection, delivery: workContract.delivery,
+  acceptance: workContract.acceptance,
 }
 
 async function seedAuthorizedParent(client: import("pg").PoolClient) {
   const requestBinding = {
-    projectId: 7, threadId: "thread-911-e2e", outcomeKey,
+    projectId: 1, threadId: "thread-911-e2e", outcomeKey,
     idempotencyKey: "workbench-execution:911-e2e", confirmation: "START_WORK",
   }
-  const resultBinding = {
-    decisionId: 74, decisionRef: "WB-EXEC-DECISION-911-E2E",
-    grantId: 80, grantRef: "WB-EXEC-GRANT-911-E2E",
-    implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911-E2E",
-    queueVersion: 1, authorizedAt: now.toISOString(),
-    expiresAt: "2099-01-01T00:00:00.000Z", workContract,
-  }
-  const approvalEvidence = [
-    "project:7", "thread:thread-911-e2e", `repo:${workContract.repository}`,
-    `work-contract:${workContract.id}`, `work-contract-digest:${workContract.digest}`,
-    `work-contract-json:${JSON.stringify(workContract)}`,
-    ...workContract.reservations.map((reservation) => `reservation:${reservation}`),
-    ...workContract.validationCommands.map((validator) => (
-      `validator:${validator.command}:${validator.args.join(" ")}`
-    )),
-  ]
+  const intakeRequestHash = canonicalDigest({
+    contractVersion: 1, projectId: 1, intent, idempotencyKey: intakeKey,
+  })
+  const intakeResultDigest = canonicalDigest({
+    contractVersion: 1, requestHash: intakeRequestHash, goalId: 4, outcomeKey,
+    threadId: "thread-911-e2e", root: { sourceType: "outcome", sourceId: outcomeKey },
+    acceptedContractIds: [acceptanceContractId],
+  })
+  const acceptanceCriteria = [JSON.stringify({
+    contractId: workContract.id, contractDigest: workContract.digest,
+    ...workContract.acceptance,
+  })]
 
   await client.query("BEGIN")
   try {
     await client.query(`INSERT INTO "user" (id,name,email) VALUES ($1,'Owner','runtime-finding-e2e@example.test')`, [userId])
     await client.query(`INSERT INTO project (id,"userId",key,name,lifecycle)
-      VALUES (7,$1,'runtime-finding-e2e','Runtime finding E2E','active')`, [userId])
+      VALUES (1,$1,'runtime-finding-e2e','Runtime finding E2E','active')`, [userId])
     await client.query(`INSERT INTO project_resource
       ("userId","projectId",type,relationship,"canonicalIdentity",label)
-      VALUES ($1,7,'repo','primary-repo','bsvalues/terragroq','WilliamOS')`, [userId])
+      VALUES ($1,1,'repo','primary-repo','bsvalues/terragroq','WilliamOS')`, [userId])
     await client.query(`INSERT INTO workbench_thread (id,"userId","projectId",title)
-      VALUES ('thread-911-e2e',$1,7,'#911 runtime reliability')`, [userId])
+      VALUES ('thread-911-e2e',$1,1,'#911 runtime reliability')`, [userId])
     await client.query(`INSERT INTO workbench_thread_source ("userId","threadId","sourceType","sourceId",role)
       VALUES ($1,'thread-911-e2e','outcome',$2,'root')`, [userId, outcomeKey])
     await client.query(`INSERT INTO goal
-      (id,"userId",ref,command,lane,mode,risk,authority,verdict,"matchedRules","requiresApproval",status,"linkedWorkOrderId")
+      (id,"userId",ref,command,lane,mode,risk,authority,verdict,"matchedRules","acceptedContractIds","requiresApproval",status,"linkedWorkOrderId")
       VALUES (4,$1,'GOAL-911-E2E',$2,'operator-objective','implementation','R1','A2_WRITE_OWN','allow',
-        ARRAY['issue-911-runtime-reliability-evidence.v1'],false,'classified',4)`, [userId, intent])
+        ARRAY[$3],ARRAY[$3],false,'classified',4)`, [userId, intent, acceptanceContractId])
+    const intakeReceipt = (await client.query(`INSERT INTO goal_outcome_intake_receipt
+      ("userId","idempotencyKey","requestHash","goalId","outcomeKey","acceptedContractIds","resultDigest")
+      VALUES ($1,$2,$3,4,$4,ARRAY[$5],$6) RETURNING id`,
+    [userId, intakeKey, intakeRequestHash, outcomeKey, acceptanceContractId, intakeResultDigest])).rows[0]
+    const acceptanceIntakeProof = {
+      receiptId: Number(intakeReceipt.id), requestHash: intakeRequestHash,
+      resultDigest: intakeResultDigest, idempotencyKeyDigest: canonicalDigest({ idempotencyKey: intakeKey }),
+    }
+    const resultBinding = {
+      decisionId: 74, decisionRef: "WB-EXEC-DECISION-911-E2E",
+      grantId: 80, grantRef: "WB-EXEC-GRANT-911-E2E",
+      implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-911-E2E",
+      queueVersion: 1, authorizedAt: now.toISOString(),
+      expiresAt: "2099-01-01T00:00:00.000Z", workContract,
+      acceptedContractIds: [acceptanceContractId], acceptanceIntakeProof,
+    }
+    const approvalEvidence = [
+      "project:1", "thread:thread-911-e2e", `repo:${workContract.repository}`,
+      `work-contract:${workContract.id}`, `work-contract-digest:${workContract.digest}`,
+      `work-contract-json:${JSON.stringify(workContract)}`,
+      `acceptance-intake-receipt:${acceptanceIntakeProof.receiptId}`,
+      `acceptance-intake-request:${acceptanceIntakeProof.requestHash}`,
+      `acceptance-intake-result:${acceptanceIntakeProof.resultDigest}`,
+      `acceptance-intake-key-digest:${acceptanceIntakeProof.idempotencyKeyDigest}`,
+      ...workContract.reservations.map((reservation) => `reservation:${reservation}`),
+      ...workContract.validationCommands.map((validator) => (
+        `validator:${validator.command}:${validator.args.join(" ")}`
+      )),
+    ]
     await client.query(`INSERT INTO decision
       (id,"userId",ref,title,decision,status,authority,owner,scope,evidence,tags,locked)
       VALUES (74,$1,'WB-EXEC-DECISION-911-E2E','Start #911 work','APPROVE','accepted','binding',$1,$2,$3,
@@ -160,24 +189,21 @@ async function seedAuthorizedParent(client: import("pg").PoolClient) {
        "linkedDecisionId","commitAllowed","tagAllowed","pushAllowed") VALUES
       (4,$1,'WO-HERMES-OUTCOME-4',$2,'GOAL-911-E2E','#911',ARRAY[$3],
        ARRAY['git diff --check','npx vitest run tests/hermes-work-contract.test.ts'],'operator-objective','active','high',
-       'hermes-codex-bridge','A2_WRITE_OWN','A2_WRITE_OWN',81,ARRAY['structured findings'],'codex',$1,74,true,false,true)`,
-    [userId, intent, reportPath])
+        'hermes-codex-bridge','A2_WRITE_OWN','A2_WRITE_OWN',81,$4::text[],'codex',$1,74,true,false,true)`,
+    [userId, intent, reportPath, acceptanceCriteria])
     await client.query(`INSERT INTO outcome_queue_item
       (id,"userId","outcomeKey","goalId","goalRef",title,objective,"queueOrder","dependencyKeys",
        "riskClass","approvalState","approvedBy","approvedAt","approvalDecisionId","authorityState",
        "authorityLevel","authorityGrantRef","authoritySubject","authorityAction","lifecycleState",
-       "activeWorkOrderId","executionBinding","leaseHolder","leaseToken","leaseExpiresAt","fencingToken",version,"acquisitionKey") VALUES
+       "activeWorkOrderId","executionBinding","leaseHolder","leaseToken","leaseExpiresAt","fencingToken",version,"acquisitionKey","acceptedContractIds") VALUES
       (5,$1,$2,4,'GOAL-911-E2E',$3,$3,10,ARRAY[]::text[],'R1','approved',$1,$4,74,'matched','A2_WRITE_OWN',
-       'WB-EXEC-GRANT-911-E2E','operator','outcome:execute','active',4,$5,'resident-hermes',$6,'2099-01-01',2,1,$7)`,
-    [userId, outcomeKey, intent, now.toISOString(), executionBinding, leaseToken, acquisitionKey])
+       'WB-EXEC-GRANT-911-E2E','operator','outcome:execute','approved',4,NULL,NULL,NULL,NULL,0,1,NULL,ARRAY[$5])`,
+    [userId, outcomeKey, intent, now.toISOString(), acceptanceContractId])
     await client.query(`INSERT INTO outcome_queue_mutation_receipt
       ("userId","idempotencyKey",operation,"outcomeKey","requestHash","requestBinding","resultBinding","createdAt")
       VALUES ($1,'workbench-execution:911-e2e','workbench_execution.authorize',$2,$3,$4::jsonb,$5::jsonb,$6)`,
     [userId, outcomeKey, canonicalDigest({ contract: "workbench-execution-authorization.v1", ...requestBinding }),
       JSON.stringify(requestBinding), JSON.stringify(resultBinding), now])
-    await client.query(`INSERT INTO outcome_queue_acquisition_receipt
-      ("userId","acquisitionKey","outcomeKey","firstFencingToken","latestFencingToken")
-      VALUES ($1,$2,$3,2,2)`, [userId, acquisitionKey, outcomeKey])
     await client.query("COMMIT")
   } catch (error) {
     await client.query("ROLLBACK")
@@ -220,11 +246,88 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
   })
 
   it("keeps a completed parent's gated finding actionable only after its ordinary sibling durably completes", async () => {
-    const checkpoint = await projectOutcomeRuntimeCheckpoint({
+    const parentAcquisitionNow = new Date()
+    await client.query(`UPDATE outcome_queue_item SET "acceptedContractIds"=ARRAY[]::text[] WHERE id=5`)
+    const markerDrift = await acquireNextEligibleOutcome({
+      databaseUrl: scopedUrl, userId, acquisitionKey: "acquisition-key-marker-drift",
+      leaseHolder: "resident-hermes", leaseToken: "lease-token-marker-drift",
+      executionBinding: "execution-binding-marker-drift", leaseDurationMs: 60_000,
+      activeWorkOrderId: 4, campaignWindowId: "campaign-marker-drift",
+      processIdentity: "process-marker-drift", now: parentAcquisitionNow,
+      checkpointProofProvider: async () => { throw new Error("MARKER_DRIFT_MUST_NOT_SELECT") },
+    })
+    expect(markerDrift).toMatchObject({ acquired: false })
+    await client.query(`UPDATE outcome_queue_item SET "acceptedContractIds"=ARRAY[$1] WHERE id=5`,
+      [acceptanceContractId])
+    const acquiredParent = await acquireNextEligibleOutcome({
+      databaseUrl: scopedUrl, userId, acquisitionKey,
+      leaseHolder: "resident-hermes", leaseToken, executionBinding,
+      leaseDurationMs: 60_000, activeWorkOrderId: 4,
+      campaignWindowId: "campaign-911-parent", processIdentity: "process-911-parent",
+      now: parentAcquisitionNow,
+      checkpointProofProvider: async ({ outcome }) => ({
+        outcomeId: String(outcome.goalId), outcomeKey: outcome.outcomeKey,
+        workOrderId: outcome.activeWorkOrderId, fencingToken: outcome.fencingToken,
+        sequence: 0, state: "LEASED",
+        commit: { headSha: null, mergeSha: null, prNumber: null },
+      }),
+    })
+    expect(acquiredParent).toMatchObject({ acquired: true, replayed: false })
+    expect(acquiredParent.outcome).toMatchObject({
+      outcomeKey, acceptedContractIds: [acceptanceContractId],
+      executionBinding, acquisitionKey, activeWorkOrderId: 4,
+    })
+    const parentVersion = Number(acquiredParent.outcome.version)
+    const parentFence = Number(acquiredParent.outcome.fencingToken)
+    await client.query(`UPDATE goal_outcome_intake_receipt SET "requestHash"=$1 WHERE "goalId"=4`,
+      ["0".repeat(64)])
+    await expect(projectOutcomeRuntimeCheckpoint({
       databaseUrl: scopedUrl, outcomeId: 4, attempt: 1, workContract: runtimeWorkContract,
       executionBinding: {
-        userId, outcomeKey, expectedVersion: 1, executionBinding,
-        leaseToken, leaseHolder: "resident-hermes", fencingToken: 2,
+        userId, outcomeKey, expectedVersion: parentVersion, executionBinding,
+        leaseToken, leaseHolder: "resident-hermes", fencingToken: parentFence, acquisitionKey,
+      },
+      checkpoint: { sequence: 6, state: "CODEX_TURN_COMPLETED", detail: "empty truthful audit", findings: [] },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+    await client.query(`UPDATE goal_outcome_intake_receipt SET "requestHash"=$1 WHERE "goalId"=4`,
+      [canonicalDigest({ contractVersion: 1, projectId: 1, intent, idempotencyKey: intakeKey })])
+
+    const emptyCheckpoint = await projectOutcomeRuntimeCheckpoint({
+      databaseUrl: scopedUrl, outcomeId: 4, attempt: 1, workContract: runtimeWorkContract,
+      executionBinding: {
+        userId, outcomeKey, expectedVersion: parentVersion, executionBinding,
+        leaseToken, leaseHolder: "resident-hermes", fencingToken: parentFence, acquisitionKey,
+      },
+      checkpoint: { sequence: 6, state: "CODEX_TURN_COMPLETED", detail: "empty truthful audit", findings: [] },
+    })
+    expect(emptyCheckpoint).toMatchObject({ workOrderId: 4 })
+    expect((await client.query(`SELECT count(*)::integer AS count FROM governance_event
+      WHERE "eventType"='RUNTIME_OBJECTIVE_FINDING_RECORDED'`)).rows).toEqual([{ count: 0 }])
+    const exactAcceptanceCriteria = (await client.query(`SELECT "acceptanceCriteria" FROM work_order WHERE id=4`))
+      .rows[0].acceptanceCriteria
+    await client.query(`UPDATE work_order SET "acceptanceCriteria"=ARRAY[]::text[] WHERE id=4`)
+    await expect(projectOutcomeRuntimeCheckpoint({
+      databaseUrl: scopedUrl, outcomeId: 4, attempt: 1, workContract: runtimeWorkContract,
+      executionBinding: {
+        userId, outcomeKey, expectedVersion: parentVersion, executionBinding,
+        leaseToken, leaseHolder: "resident-hermes", fencingToken: parentFence, acquisitionKey,
+      },
+      checkpoint: { sequence: 7, state: "CODEX_TURN_COMPLETED", detail: "drift must wall", findings: [] },
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_CONTRACT_WALL" })
+    await client.query(`UPDATE work_order SET "acceptanceCriteria"=$1::text[] WHERE id=4`,
+      [exactAcceptanceCriteria])
+    const checkpoint = await projectOutcomeRuntimeCheckpoint({
+      query: async (sql: string, values?: unknown[]) => {
+        const result = await client.query(sql, values)
+        if (sql.includes("FROM goal AS contract_goal") && result.rows.length !== 1) {
+          throw new Error(`TEST_AUTHORIZATION_ROWS:${result.rows.length}`)
+        }
+        return result
+      }, outcomeId: 4, attempt: 1, workContract: runtimeWorkContract,
+      executionBinding: {
+        userId, outcomeKey, expectedVersion: parentVersion, executionBinding,
+        leaseToken, leaseHolder: "resident-hermes", fencingToken: parentFence,
+        acquisitionKey,
       },
       checkpoint: {
         sequence: 7, state: "CODEX_TURN_COMPLETED", detail: "structured #911 findings",
@@ -259,8 +362,9 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
     await projectOutcomeRuntimeCheckpoint({
       databaseUrl: scopedUrl, outcomeId: 4, attempt: 1, workContract: runtimeWorkContract,
       executionBinding: {
-        userId, outcomeKey, expectedVersion: 1, executionBinding,
-        leaseToken, leaseHolder: "resident-hermes", fencingToken: 2,
+        userId, outcomeKey, expectedVersion: parentVersion, executionBinding,
+        leaseToken, leaseHolder: "resident-hermes", fencingToken: parentFence,
+        acquisitionKey,
       },
       checkpoint: {
         sequence: 8, state: "COMPLETE", detail: "PR #929 merged and verified",
@@ -270,10 +374,15 @@ runDatabase("Hermes runtime finding producer-to-consumer regression", { timeout:
         },
       },
     })
+    const parentQueueBeforeComplete = (await client.query(`SELECT * FROM outcome_queue_item WHERE id=5`)).rows[0]
+    if (Number(parentQueueBeforeComplete.version) !== parentVersion
+      || Number(parentQueueBeforeComplete.fencingToken) !== parentFence) {
+      throw new Error(`TEST_PARENT_QUEUE_DRIFT:${JSON.stringify(parentQueueBeforeComplete)}`)
+    }
     await completeOutcomeQueueItem({
-      databaseUrl: scopedUrl, userId, outcomeKey, expectedVersion: 1, executionBinding,
-      leaseToken, fencingToken: 2, acquisitionKey,
-      terminalKey: `hermes:${outcomeKey}:2:${parentMergeSha}`,
+      databaseUrl: scopedUrl, userId, outcomeKey, expectedVersion: parentVersion, executionBinding,
+      leaseToken, fencingToken: parentFence, acquisitionKey,
+      terminalKey: `hermes:${outcomeKey}:${parentFence}:${parentMergeSha}`,
       terminalResult: "COMPLETE",
       terminalEvidenceRefs: [parentEvidenceRef, "pr:929", `merge:${parentMergeSha}`], now,
     })

@@ -25,6 +25,8 @@ import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
 import {
   HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
   HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST,
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
   resolveHermesWorkContract,
 } from "./work-contract.mjs"
 import {
@@ -457,8 +459,12 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
       && provenance?.outcomeKey === outcome?.outcomeKey
       && provenance?.outcomeKey === binding?.outcomeKey
       && provenance?.workOrderRef === `WO-HERMES-OUTCOME-${Number(outcome?.id)}`
-      && verified?.contract?.id === HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID
-      && verified?.contract?.digest === HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST
+      && (
+        (verified?.contract?.id === HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID
+          && verified?.contract?.digest === HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST)
+        || (verified?.contract?.id === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID
+          && verified?.contract?.digest === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST)
+      )
     if (!verified || (!derived && !workbenchParent)) {
       throw Object.assign(new Error("Queue work contract provenance conflicts"), {
         code: "HERMES_WORK_CONTRACT_WALL",
@@ -508,6 +514,14 @@ function projectedWorkContract(outcome, resolver) {
             delivery: {
               ...contract.delivery,
               allowedActions: [...contract.delivery.allowedActions],
+            },
+          }),
+      ...(contract.acceptance === undefined
+        ? {}
+        : {
+            acceptance: {
+              ...contract.acceptance,
+              requestedFindingClasses: [...contract.acceptance.requestedFindingClasses],
             },
           }),
     },
@@ -2459,6 +2473,7 @@ export function createHermesOrchestrator(options = {}) {
         attempt: (cp.metadata.providerRetryCount ?? 0) + 1,
         reservations,
         validators: projectedContract.validators,
+        workContract,
         })
       for (let remediationRound = initialRemediationRound;
         remediationRound <= MAX_REMEDIATION_ROUNDS; remediationRound += 1) {

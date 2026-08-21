@@ -9,6 +9,7 @@ import {
   decision,
   eventLog,
   goal,
+  goalOutcomeIntakeReceipt,
   governanceEvent,
   outcomeQueueItem,
   outcomeQueueMutationReceipt,
@@ -26,6 +27,7 @@ import {
   buildWorkbenchExecutionAuthorizationRequestHash,
   deterministicWorkbenchExecutionRefs,
   normalizeWorkbenchOutcomeExecutionInput,
+  verifyIssue911AcceptanceIntakeProof,
   type AuthorizeWorkbenchOutcomeExecutionInput,
   type AuthorizeWorkbenchOutcomeExecutionResult,
   type WorkbenchExecutionUnavailableReason,
@@ -110,7 +112,7 @@ async function loadSnapshot(
     executionBinding: outcomeQueueItem.executionBinding, leaseHolder: outcomeQueueItem.leaseHolder,
     leaseToken: outcomeQueueItem.leaseToken, leaseExpiresAt: outcomeQueueItem.leaseExpiresAt,
     acquisitionKey: outcomeQueueItem.acquisitionKey, terminalKey: outcomeQueueItem.terminalKey,
-    version: outcomeQueueItem.version,
+    version: outcomeQueueItem.version, acceptedContractIds: outcomeQueueItem.acceptedContractIds,
   }).from(outcomeQueueItem).where(and(
     eq(outcomeQueueItem.userId, userId), eq(outcomeQueueItem.outcomeKey, input.outcomeKey),
   )).limit(2)
@@ -119,8 +121,23 @@ async function loadSnapshot(
         id: goal.id, userId: goal.userId, command: goal.command, lane: goal.lane,
         risk: goal.risk, authority: goal.authority, verdict: goal.verdict,
         requiresApproval: goal.requiresApproval, status: goal.status,
-        linkedWorkOrderId: goal.linkedWorkOrderId,
+        linkedWorkOrderId: goal.linkedWorkOrderId, acceptedContractIds: goal.acceptedContractIds,
       }).from(goal).where(and(eq(goal.userId, userId), eq(goal.id, outcomes[0].goalId))).limit(2)
+    : []
+  const intakeReceipts = goals.length === 1
+    ? await transaction.select({
+        id: goalOutcomeIntakeReceipt.id, userId: goalOutcomeIntakeReceipt.userId,
+        idempotencyKey: goalOutcomeIntakeReceipt.idempotencyKey,
+        requestHash: goalOutcomeIntakeReceipt.requestHash,
+        goalId: goalOutcomeIntakeReceipt.goalId,
+        outcomeKey: goalOutcomeIntakeReceipt.outcomeKey,
+        acceptedContractIds: goalOutcomeIntakeReceipt.acceptedContractIds,
+        resultDigest: goalOutcomeIntakeReceipt.resultDigest,
+      }).from(goalOutcomeIntakeReceipt).where(and(
+        eq(goalOutcomeIntakeReceipt.userId, userId),
+        eq(goalOutcomeIntakeReceipt.goalId, goals[0].id),
+        eq(goalOutcomeIntakeReceipt.outcomeKey, input.outcomeKey),
+      )).limit(2)
     : []
   return {
     project: projects.length === 1 ? projects[0] : null,
@@ -129,6 +146,7 @@ async function loadSnapshot(
     resources,
     outcome: outcomes.length === 1 ? outcomes[0] : null,
     goal: goals.length === 1 ? goals[0] : null,
+    intakeReceipts,
   }
 }
 
@@ -201,9 +219,11 @@ export async function authorizeWorkbenchOutcomeExecution(
             lane: snapshot.goal.lane,
             risk: snapshot.goal.risk,
             authority: snapshot.goal.authority,
+            acceptedContractIds: snapshot.goal.acceptedContractIds,
           })
         : null
       const storedWorkContract = binding.workContract as Record<string, unknown> | null
+      const acceptanceVerification = verifyIssue911AcceptanceIntakeProof(snapshot)
       const delivery = workContract && "delivery" in workContract ? workContract.delivery : null
       const implementationExpiry = implementationGrant?.expiresAt
         ? new Date(implementationGrant.expiresAt)
@@ -249,8 +269,20 @@ export async function authorizeWorkbenchOutcomeExecution(
         && grant.allowedActions[0] === "outcome:execute" && expiresAt !== null
         && workContract !== null && storedWorkContract !== null
         && hashRecord(workContract) === hashRecord(storedWorkContract)
+        && hashRecord(binding.acceptedContractIds ?? []) === hashRecord(goalRow.acceptedContractIds ?? [])
+        && hashRecord(goalRow.acceptedContractIds ?? []) === hashRecord(outcome.acceptedContractIds ?? [])
+        && acceptanceVerification !== null
+        && (acceptanceVerification.selected
+          ? hashRecord(binding.acceptanceIntakeProof) === hashRecord(acceptanceVerification.proof)
+          : binding.acceptanceIntakeProof === undefined)
         && approval.evidence.includes(`work-contract:${workContract.id}`)
         && approval.evidence.includes(`work-contract-digest:${workContract.digest}`)
+        && (!acceptanceVerification.selected || (
+          approval.evidence.includes(`acceptance-intake-receipt:${acceptanceVerification.proof?.receiptId}`)
+          && approval.evidence.includes(`acceptance-intake-request:${acceptanceVerification.proof?.requestHash}`)
+          && approval.evidence.includes(`acceptance-intake-result:${acceptanceVerification.proof?.resultDigest}`)
+          && approval.evidence.includes(`acceptance-intake-key-digest:${acceptanceVerification.proof?.idempotencyKeyDigest}`)
+        ))
         && (!delivery
           || approval.evidence.includes(`work-contract-json:${JSON.stringify(workContract)}`))
         && implementationGraphExact
@@ -300,6 +332,12 @@ export async function authorizeWorkbenchOutcomeExecution(
         `work-contract:${assessment.workContract.id}`,
         `work-contract-digest:${assessment.workContract.digest}`,
         `work-contract-json:${JSON.stringify(assessment.workContract)}`,
+        ...(assessment.acceptanceIntakeProof ? [
+          `acceptance-intake-receipt:${assessment.acceptanceIntakeProof.receiptId}`,
+          `acceptance-intake-request:${assessment.acceptanceIntakeProof.requestHash}`,
+          `acceptance-intake-result:${assessment.acceptanceIntakeProof.resultDigest}`,
+          `acceptance-intake-key-digest:${assessment.acceptanceIntakeProof.idempotencyKeyDigest}`,
+        ] : []),
         ...assessment.workContract.reservations.map((reservation) => `reservation:${reservation}`),
         ...assessment.workContract.validationCommands.map((validator) => (
           `validator:${validator.command}:${validator.args.join(" ")}`
@@ -367,6 +405,10 @@ export async function authorizeWorkbenchOutcomeExecution(
         implementationGrantId: implementationGrant.id,
         implementationGrantRef: implementationGrant.ref,
       } : {}),
+      acceptedContractIds: [...(snapshot.goal?.acceptedContractIds ?? [])],
+      ...(assessment.acceptanceIntakeProof
+        ? { acceptanceIntakeProof: assessment.acceptanceIntakeProof }
+        : {}),
       workContract: {
         version: assessment.workContract.version,
         id: assessment.workContract.id,
@@ -380,6 +422,9 @@ export async function authorizeWorkbenchOutcomeExecution(
           : {}),
         ...(assessment.workContract.delivery
           ? { delivery: assessment.workContract.delivery }
+          : {}),
+        ...(assessment.workContract.acceptance
+          ? { acceptance: assessment.workContract.acceptance }
           : {}),
       },
     }

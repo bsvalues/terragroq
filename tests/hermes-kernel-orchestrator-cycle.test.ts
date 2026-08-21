@@ -175,6 +175,7 @@ class PersistedRuntimeLedger {
           assignee: this.workOrder.assignee,
           agent: "codex",
           allowedFiles: [...registeredContract.reservations],
+          acceptanceCriteria: [],
           validators: [...registeredValidators],
           latestCheckpointId: latest?.id ?? null,
           latestCheckpointMetadata: latestMetadata,

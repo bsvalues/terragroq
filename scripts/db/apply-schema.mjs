@@ -6,6 +6,7 @@
 // unless WILLIAMOS_DB_APPLY_FORCE=1. Reads DATABASE_URL from the environment;
 // prints no secrets.
 import { readFileSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import path from "node:path"
 
@@ -43,6 +44,45 @@ export async function applySchema({ pool, ddl, force = false }) {
   }
 }
 
+export const ISSUE_911_LIVE_ACCEPTANCE_MIGRATION = "issue-911-live-nonempty-acceptance.v1"
+const ISSUE_911_LIVE_ACCEPTANCE_MIGRATION_DIGEST =
+  "af6e49ae2e0a8aeb9afc0c675d84323c92499d320ba36578cc3e4b98d86ca3bc"
+
+function exactIssue911Migration(ddl) {
+  const normalized = typeof ddl === "string" ? ddl.replaceAll("\r\n", "\n") : ""
+  return createHash("sha256").update(normalized).digest("hex")
+      === ISSUE_911_LIVE_ACCEPTANCE_MIGRATION_DIGEST
+    && normalized.startsWith(`-- WILLIAMOS_MIGRATION:${ISSUE_911_LIVE_ACCEPTANCE_MIGRATION}\nBEGIN;`)
+    && /ALTER TABLE "goal"[\s\S]*ADD COLUMN IF NOT EXISTS "acceptedContractIds" text\[\] NOT NULL DEFAULT '\{\}'::text\[\]/.test(ddl)
+    && /ALTER TABLE "outcome_queue_item"[\s\S]*ADD COLUMN IF NOT EXISTS "acceptedContractIds" text\[\] NOT NULL DEFAULT '\{\}'::text\[\]/.test(ddl)
+    && /ALTER TABLE "goal_outcome_intake_receipt"[\s\S]*ADD COLUMN IF NOT EXISTS "acceptedContractIds" text\[\] NOT NULL DEFAULT '\{\}'::text\[\]/.test(ddl)
+    && (ddl.match(/CREATE UNIQUE INDEX IF NOT EXISTS/g) ?? []).length === 3
+    && /COMMIT;\s*$/.test(ddl)
+}
+
+// Apply the one reviewed existing-database migration through its own committed
+// BEGIN/COMMIT envelope on one acquired client. This intentionally does not use
+// applySchema's fresh-database force path or nest another transaction.
+export async function applyIssue911LiveAcceptanceMigration({ pool, ddl }) {
+  if (!exactIssue911Migration(ddl)) {
+    throw new Error("ISSUE_911_LIVE_ACCEPTANCE_MIGRATION_INPUT_WALL")
+  }
+  const client = await pool.connect()
+  try {
+    const before = Number((await client.query(COUNT_TABLES_SQL)).rows[0].n)
+    if (before === 0) return { status: "REFUSED", reason: "FRESH_DATABASE" }
+    try {
+      await client.query(ddl)
+    } catch (error) {
+      try { await client.query("ROLLBACK") } catch {}
+      throw error
+    }
+    return { status: "APPLIED", tables: before }
+  } finally {
+    client.release()
+  }
+}
+
 async function main() {
   const databaseUrl = process.env.DATABASE_URL
   if (!databaseUrl || databaseUrl.trim() === "") {
@@ -51,24 +91,35 @@ async function main() {
     return
   }
   const here = path.dirname(fileURLToPath(import.meta.url))
-  const sqlPath = process.argv[2]
-    ? path.resolve(process.argv[2])
-    : path.resolve(here, "..", "..", "drizzle", "0000_williamos_init.sql")
+  const args = process.argv.slice(2)
+  const migrationMode = args[0] === "--migration-0013"
+  if ((migrationMode && args.length !== 1) || (!migrationMode && args.length > 1)) {
+    console.error("APPLY_INPUT_WALL")
+    process.exitCode = 2
+    return
+  }
+  const sqlPath = migrationMode
+    ? path.resolve(here, "..", "..", "migrations", "0013-issue-911-live-nonempty-acceptance.sql")
+    : args[0]
+      ? path.resolve(args[0])
+      : path.resolve(here, "..", "..", "drizzle", "0000_williamos_init.sql")
   const ddl = readFileSync(sqlPath, "utf8")
 
   const { Pool } = await import("pg")
   const pool = new Pool({ connectionString: databaseUrl.trim() })
   try {
-    const result = await applySchema({
-      pool,
-      ddl,
-      force: process.env.WILLIAMOS_DB_APPLY_FORCE === "1",
-    })
+    const result = migrationMode
+      ? await applyIssue911LiveAcceptanceMigration({ pool, ddl })
+      : await applySchema({
+        pool,
+        ddl,
+        force: process.env.WILLIAMOS_DB_APPLY_FORCE === "1",
+      })
     if (result.status === "REFUSED") {
-      console.error(
-        `Refusing to apply: target already has ${result.existing} public table(s). ` +
-          "This bootstrap is for a fresh sovereign database. Set WILLIAMOS_DB_APPLY_FORCE=1 to override.",
-      )
+      console.error(result.reason === "FRESH_DATABASE"
+        ? "Refusing migration: target is fresh; use the sovereign bootstrap."
+        : `Refusing to apply: target already has ${result.existing} public table(s). ` +
+          "This bootstrap is for a fresh sovereign database. Set WILLIAMOS_DB_APPLY_FORCE=1 to override.")
       process.exitCode = 2
       return
     }
