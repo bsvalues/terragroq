@@ -61,3 +61,34 @@ jobs:
           name: vitest-junit
           path: vitest-junit.xml
           if-no-files-found: ignore
+
+  build:
+    # The gate this repository was missing (added 2026-08-21): main compiled green in vitest while
+    # `next build` was failing on a type error, because nothing ran the production build. A deploy
+    # then shipped a stale standalone that passed as fresh. This job type-checks and compiles the real
+    # artifact, so a non-building main can never be green again.
+    name: production build (next build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the standalone artifact
+        run: pnpm run build
+        env:
+          CI: "true"
+
+      - name: Prove the standalone artifact exists
+        run: test -f .next/standalone/server.js || (echo "next build did not emit a standalone server" && exit 1)

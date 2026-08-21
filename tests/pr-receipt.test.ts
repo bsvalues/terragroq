@@ -164,3 +164,30 @@ describe("reviewing a pull request", () => {
     }
   })
 })
+
+describe("scope check accepts the readonly reservation type it is actually given (#930 build break)", () => {
+  // work-context-receipt types reservedPaths as `readonly string[]`, and #930 began passing it
+  // straight into the scope check. The parameter was `string[]`, so `next build` stopped compiling
+  // while vitest stayed green -- CI has no build step. This locks the runtime contract; the build
+  // gate added in ci.yml locks the type. A frozen array is the strongest readonly witness.
+  const readonlyFacts: WorkContextFacts = { ...facts, reservedPaths: Object.freeze(["lib/governance/"]) as readonly string[] }
+  it("permits a changed file inside a frozen reservation", () => {
+    const verdict = reviewPullRequestReceipt({
+      body: body(receiptToken(readonlyFacts), readonlyFacts),
+      changedFiles: ["lib/governance/owner.ts"],
+      mainMovedFiles: ["components/Chart.tsx"],
+      liveDoctrineDigest: DOCTRINE,
+    })
+    expect(verdict.ok).toBe(true)
+  })
+  it("still catches a file outside the frozen reservation", () => {
+    const verdict = reviewPullRequestReceipt({
+      body: body(receiptToken(readonlyFacts), readonlyFacts),
+      changedFiles: ["app/secret.ts"],
+      mainMovedFiles: ["components/Chart.tsx"],
+      liveDoctrineDigest: DOCTRINE,
+    })
+    expect(verdict.ok).toBe(false)
+    expect(verdict.failure).toBe("FAILED_SCOPE_ESCAPE")
+  })
+})
