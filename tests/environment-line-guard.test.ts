@@ -115,3 +115,22 @@ describe("readBoundedJson bounds the actual bytes", () => {
     expect(r).toEqual({ ok: false, status: 400, error: "INVALID_BODY" })
   })
 })
+
+import { isMalformedWorldId } from "@/lib/environment/line-guard"
+
+describe("isMalformedWorldId treats absence (including the client's null) as a new-world sentinel", () => {
+  it("accepts undefined and null — the Desk sends null on the first message", () => {
+    expect(isMalformedWorldId(undefined)).toBe(false)
+    expect(isMalformedWorldId(null)).toBe(false)
+  })
+  it("accepts any string id", () => {
+    expect(isMalformedWorldId("world-123")).toBe(false)
+    expect(isMalformedWorldId("")).toBe(false)
+  })
+  it("rejects a present, non-null, non-string value", () => {
+    expect(isMalformedWorldId(123)).toBe(true)
+    expect(isMalformedWorldId({})).toBe(true)
+    expect(isMalformedWorldId(["x"])).toBe(true)
+    expect(isMalformedWorldId(true)).toBe(true)
+  })
+})

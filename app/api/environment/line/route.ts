@@ -11,7 +11,7 @@ import { project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
-import { exceedsLineCap, guardLineRequest, readBoundedJson } from "@/lib/environment/line-guard"
+import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
 import {
   createWorkingWorld,
   validateWorkingWorld,
@@ -295,9 +295,11 @@ export async function POST(request: Request) {
   const text = typeof body.text === "string" ? body.text.trim() : ""
   if (!text) return Response.json({ error: "MESSAGE_EMPTY" }, { status: 400 })
   if (exceedsLineCap(text)) return Response.json({ error: "MESSAGE_TOO_LARGE" }, { status: 413 })
-  // worldId is absent (new world) or a string id. A present non-string is a malformed request, not
-  // a silent fall-through to new-world creation (independent review nit): say so plainly.
-  if (body.worldId !== undefined && typeof body.worldId !== "string") {
+  // worldId is a string id, or absent for a new world -- and the Desk client spells "absent" as an
+  // explicit null on the first message, so null is a valid new-world sentinel, NOT a malformed
+  // request. Only a present, non-null, non-string value is malformed (Codex P1: rejecting null here
+  // would 400 every first message and no world could ever be created).
+  if (isMalformedWorldId(body.worldId)) {
     return Response.json({ error: "INVALID_WORLD_ID" }, { status: 400 })
   }
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
