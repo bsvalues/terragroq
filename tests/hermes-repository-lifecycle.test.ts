@@ -1034,11 +1034,13 @@ describe("Hermes repository lifecycle", () => {
         reviewDecision: "", statusCheckRollup: [
           {
             __typename: "CheckRun", name: "work context receipt (#831)", status: "COMPLETED",
-            conclusion: "CANCELLED", startedAt: "2026-08-21T00:10:00Z", completedAt: "2026-08-21T00:11:00Z",
+            workflowName: "work context receipt (#831)", conclusion: "CANCELLED",
+            startedAt: "2026-08-21T00:10:00Z", completedAt: "2026-08-21T00:30:00Z",
           },
           {
             __typename: "CheckRun", name: "work context receipt (#831)", status: "COMPLETED",
-            conclusion: "SUCCESS", startedAt: "2026-08-21T00:20:00Z", completedAt: "2026-08-21T00:21:00Z",
+            workflowName: "work context receipt (#831)", conclusion: "SUCCESS",
+            startedAt: "2026-08-21T00:20:00Z", completedAt: "2026-08-21T00:21:00Z",
           },
         ],
         reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: sha } }],
@@ -1055,9 +1057,9 @@ describe("Hermes repository lifecycle", () => {
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
         number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "MERGED", isDraft: false,
         reviewDecision: "", statusCheckRollup: [
-          { __typename: "CheckRun", name: "receipt", conclusion: "SUCCESS", completedAt: "2026-08-21T00:11:00Z" },
-          { __typename: "CheckRun", name: "receipt", conclusion: "CANCELLED", completedAt: "2026-08-21T00:21:00Z" },
-          { __typename: "CheckRun", name: "unit tests", conclusion: "FAILURE", completedAt: "2026-08-21T00:22:00Z" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "SUCCESS", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "CANCELLED", startedAt: "2026-08-21T00:21:00Z" },
+          { __typename: "CheckRun", workflowName: "test workflow", name: "unit tests", conclusion: "FAILURE", startedAt: "2026-08-21T00:22:00Z" },
         ], reviews: [],
       }) }),
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
@@ -1071,13 +1073,65 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("keeps same-named checks from different workflows distinct", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "verify", conclusion: "FAILURE", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", workflowName: "unit workflow", name: "verify", conclusion: "SUCCESS", startedAt: "2026-08-21T00:21:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false,
+      failedChecks: [{ name: "verify", state: "FAILURE" }],
+      pendingChecks: [],
+    })
+  })
+
+  it("does not collapse checks whose exact workflow identity differs only by whitespace", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "verify", status: "IN_PROGRESS", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", workflowName: "receipt workflow ", name: "verify", conclusion: "SUCCESS", startedAt: "2026-08-21T00:21:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false, checksComplete: false,
+      failedChecks: [], pendingChecks: [{ name: "verify", state: "IN_PROGRESS" }],
+    })
+  })
+
+  it("fails closed without a CheckRun workflow identity", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "verify", conclusion: "CANCELLED", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", name: "verify", conclusion: "SUCCESS", startedAt: "2026-08-21T00:21:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false,
+      failedChecks: [{ name: "verify", state: "CANCELLED" }],
+    })
+  })
+
   it("preserves the latest pending run and StatusContext ordering", async () => {
     const pending = fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
         number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
         statusCheckRollup: [
-          { __typename: "CheckRun", name: "receipt", conclusion: "SUCCESS", completedAt: "2026-08-21T00:11:00Z" },
-          { __typename: "CheckRun", name: "receipt", status: "IN_PROGRESS", startedAt: "2026-08-21T00:21:00Z" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "SUCCESS", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", status: "IN_PROGRESS", startedAt: "2026-08-21T00:21:00Z" },
         ], reviews: [],
       }) }),
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
@@ -1107,13 +1161,27 @@ describe("Hermes repository lifecycle", () => {
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
         number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "MERGED", isDraft: false,
         statusCheckRollup: [
-          { __typename: "CheckRun", name: "receipt", conclusion: "CANCELLED" },
-          { __typename: "CheckRun", name: "receipt", conclusion: "SUCCESS" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "CANCELLED" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "SUCCESS" },
         ], reviews: [],
       }) }),
       "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
     })
     await expect(lifecycle.inspectPullRequest(77)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_GITHUB_WALL",
+    })
+
+    const tied = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "MERGED", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "CANCELLED", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", workflowName: "receipt workflow", name: "receipt", conclusion: "SUCCESS", startedAt: "2026-08-21T00:11:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(tied.lifecycle.inspectPullRequest(77)).rejects.toMatchObject({
       code: "HERMES_REPOSITORY_GITHUB_WALL",
     })
   })

@@ -381,22 +381,19 @@ function checkName(check) {
 function latestCheckContexts(checks) {
   const groups = new Map()
   checks.forEach((check, index) => {
-    const name = checkName(check).trim()
-    if (!name) {
-      groups.set(`unnamed:${index}`, [check])
-      return
-    }
-    const kind = check?.__typename === "StatusContext"
-      || (check?.context !== undefined && check?.name === undefined)
-      ? "status-context"
-      : "check-run"
-    const key = `${kind}:${name}`
+    const name = checkName(check)
+    const workflowName = typeof check?.workflowName === "string" ? check.workflowName : ""
+    const key = check?.__typename === "CheckRun" && name.trim() && workflowName.trim()
+      ? JSON.stringify(["CheckRun", workflowName, name])
+      : check?.__typename === "StatusContext" && name.trim()
+        ? JSON.stringify(["StatusContext", name])
+        : `unscoped:${index}`
     groups.set(key, [...(groups.get(key) ?? []), check])
   })
   return [...groups.values()].map((group) => {
     if (group.length === 1) return group[0]
     const ordered = group.map((check) => {
-      const value = check?.startedAt ?? check?.completedAt
+      const value = check?.startedAt
       const timestamp = typeof value === "string" ? Date.parse(value) : Number.NaN
       if (!Number.isFinite(timestamp)) {
         wall("HERMES_REPOSITORY_GITHUB_WALL", "duplicate check ordering is unavailable")
