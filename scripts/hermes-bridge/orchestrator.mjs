@@ -420,7 +420,12 @@ export function deriveHermesRuntimeProjectionBindings(
         || binding.reviewRecoverySourceFencingToken <= 0
         || !Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
         || binding.reviewRecoverySourceRuntimeAttempt <= 0
-        || binding.reviewRecoveryResumeState !== "REVIEW_REMEDIATION_RECOVERED")))) {
+        || !["REVIEW_REMEDIATION_RECOVERED", "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"]
+          .includes(binding.reviewRecoveryResumeState)
+        || (binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+          && (!Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
+            || binding.reviewRecoveryReclaimEventId <= 0
+            || !/^[0-9a-f]{64}$/.test(String(binding.reviewRecoveryReclaimPayloadDigest ?? "")))))))) {
     throw Object.assign(new Error("Runtime execution binding is invalid"), {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
     })
@@ -438,11 +443,16 @@ export function deriveHermesRuntimeProjectionBindings(
         ? { acquisitionKey: binding.acquisitionKey }
         : {}),
       fencingToken: binding.fencingToken,
-      ...(binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED" ? {
+      ...(["REVIEW_REMEDIATION_RECOVERED", "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"]
+        .includes(binding.reviewRecoveryResumeState) ? {
         reviewRecoveryResumeState: binding.reviewRecoveryResumeState,
         reviewRecoverySourceExpectedVersion: binding.reviewRecoverySourceExpectedVersion,
         reviewRecoverySourceFencingToken: binding.reviewRecoverySourceFencingToken,
         reviewRecoverySourceRuntimeAttempt: binding.reviewRecoverySourceRuntimeAttempt,
+        ...(binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" ? {
+          reviewRecoveryReclaimEventId: binding.reviewRecoveryReclaimEventId,
+          reviewRecoveryReclaimPayloadDigest: binding.reviewRecoveryReclaimPayloadDigest,
+        } : {}),
       } : {}),
     },
   }
@@ -1186,6 +1196,8 @@ export function createHermesOrchestrator(options = {}) {
         reviewedHeadSha,
         mergeSha,
         runtimeAttempt: resolvedProvenance.reviewRecoverySourceRuntimeAttempt,
+        reviewRecoverySourceExpectedVersion: resolvedProvenance.reviewRecoverySourceExpectedVersion,
+        reviewRecoverySourceFencingToken: resolvedProvenance.reviewRecoverySourceFencingToken,
       })
     }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (
@@ -1328,6 +1340,20 @@ export function createHermesOrchestrator(options = {}) {
     }
     const reviewRecoveryProof = verifiedReviewRecoveries.get(outcomeId)
     if (reviewRecoveryProof) {
+      if (!outcome?.queueBinding) {
+        throw Object.assign(new Error("Review recovery queue binding is missing"), {
+          code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+        })
+      }
+      outcome = {
+        ...outcome,
+        queueBinding: {
+          ...outcome.queueBinding,
+          reviewRecoverySourceExpectedVersion: reviewRecoveryProof.reviewRecoverySourceExpectedVersion,
+          reviewRecoverySourceFencingToken: reviewRecoveryProof.reviewRecoverySourceFencingToken,
+          reviewRecoverySourceRuntimeAttempt: reviewRecoveryProof.runtimeAttempt,
+        },
+      }
       outcome = await resumeQueueAfterReviewRecovery(outcome, reviewRecoveryProof)
     }
     outcome = terminalReplay

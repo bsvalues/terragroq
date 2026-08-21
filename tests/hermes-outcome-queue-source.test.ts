@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { getTableName } from "drizzle-orm"
 import { getTableConfig } from "drizzle-orm/pg-core"
 
@@ -3160,12 +3160,20 @@ describe("transactional durable outcome queue source", () => {
       reviewRecoveryStaleReclaimApplied: true,
       reviewRecoveryReclaimCount: 1,
     })
-    const active = { ...reclaimed, version: 6, fencingToken: 4 }
-    const run = vi.fn(async (sql: string) => ({
-      rows: sql === OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate ? [active]
+    const active = { ...reclaimed, lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      version: 6, fencingToken: 4, leaseExpiresAt: "2026-07-28T11:59:00.000Z" }
+    let insertedMetadata: unknown = null
+    const run = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql === OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence) {
+        insertedMetadata = JSON.parse(String(values?.[2]))
+        return { rows: [{ id: 701 }] }
+      }
+      return { rows: sql === OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate ? [active]
         : sql === OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery ? [reclaimed]
-          : [],
-    }))
+          : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence
+            ? [{ id: 701, actor: "hermes-codex-bridge", metadata: insertedMetadata }]
+            : [] }
+    })
 
     await expect(resumeOutcomeQueueAfterReviewRecovery({
       query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
@@ -3175,7 +3183,9 @@ describe("transactional durable outcome queue source", () => {
       expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
       leaseHolder: "resident-hermes", leaseToken: "lease-a",
       leaseDurationMs: 50 * 60 * 1000, now,
-    })).resolves.toEqual(reclaimed)
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+      campaignWindowId: "campaign-1", processIdentity: "process-1",
+    })).resolves.toMatchObject({ ...reclaimed, reviewRecoveryReclaimEventId: 701 })
     expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
       .toContain(`q."leaseExpiresAt" <= $14::timestamptz`)
     expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
@@ -3189,7 +3199,140 @@ describe("transactional durable outcome queue source", () => {
     expect(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery)
       .not.toContain(`live."leaseExpiresAt"`)
     expect(run).toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, expect.any(Array))
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN", OUTCOME_QUEUE_SQL.acquireLock, OUTCOME_QUEUE_SQL.resumeAfterReviewRecovery,
+      OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate, OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery,
+      OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence,
+      OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence, "COMMIT",
+    ])
+    const inserted = run.mock.calls.find(([sql]) => sql === OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence)
+    expect(inserted?.[1]?.slice(0, 2)).toEqual(["owner", "goal:GOAL-1000"])
+    expect(insertedMetadata).toMatchObject({
+      campaignWindowId: "campaign-1", processIdentity: "process-1",
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+      priorVersion: 6, priorFencingToken: 4, version: 7, fencingToken: 5,
+    })
   })
+
+  it.each([
+    ["missing insertion", { insertRows: [], evidenceRows: [] }],
+    ["duplicate evidence", { insertRows: [{ id: 701 }], evidenceRows: [
+      { id: 701, actor: "hermes-codex-bridge", metadata: {} },
+      { id: 702, actor: "hermes-codex-bridge", metadata: {} },
+    ] }],
+  ])("rolls back an atomic review-recovery reclaim on %s", async (_name, fault) => {
+    const reclaimed = queueRow({ lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z" })
+    const active = { ...reclaimed, lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      version: 6, fencingToken: 4, leaseExpiresAt: "2026-07-28T11:59:00.000Z" }
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate ? [active]
+        : sql === OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery ? [reclaimed]
+          : sql === OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence ? fault.insertRows
+            : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence ? fault.evidenceRows : [],
+    }))
+    await expect(resumeOutcomeQueueAfterReviewRecovery({
+      query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      expectedVersion: 5, executionBinding: "execution-a", acquisitionKey: "acquire-a",
+      fencingToken: 3, prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40),
+      proofDigest: "d".repeat(64), expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED",
+      leaseHolder: "resident-hermes", leaseToken: "lease-a", leaseDurationMs: 50 * 60 * 1000,
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+      campaignWindowId: "campaign-1", processIdentity: "process-1", now,
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_REVIEW_RECOVERY_RESUME_WALL" })
+    expect(run).toHaveBeenCalledWith("ROLLBACK")
+    expect(run).not.toHaveBeenCalledWith("COMMIT")
+  })
+
+  it("replays exactly one canonical review-recovery reclaim event without another fence", async () => {
+    const reclaimed = queueRow({ lifecycleState: "active",
+      lifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED", version: 7, fencingToken: 5,
+      leaseHolder: "resident-hermes", leaseToken: "lease-a",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z", reviewRecoverySourceRuntimeAttempt: 5 })
+    const active = { ...reclaimed, lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      version: 6, fencingToken: 4, leaseExpiresAt: "2026-07-28T11:59:00.000Z" }
+    let metadata: any
+    const run = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (sql === OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence) {
+        metadata = JSON.parse(String(values?.[2])); return { rows: [{ id: 701 }] }
+      }
+      return { rows: sql === OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate ? [active]
+        : sql === OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery ? [reclaimed]
+          : sql === OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery ? [reclaimed]
+            : sql === OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence
+              ? [{ id: 701, actor: "hermes-codex-bridge", metadata }] : [] }
+    })
+    const base = { query: dedicatedQuery(run), userId, outcomeKey: "goal:GOAL-1000",
+      executionBinding: "execution-a", acquisitionKey: "acquire-a", prNumber: 523,
+      reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), proofDigest: "d".repeat(64),
+      expectedLifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED", leaseHolder: "resident-hermes",
+      leaseToken: "lease-a", leaseDurationMs: 50 * 60 * 1000,
+      sourceExpectedVersion: 5, sourceFencingToken: 3, sourceRuntimeAttempt: 5,
+      campaignWindowId: "campaign-1", processIdentity: "process-1", now }
+    await expect(resumeOutcomeQueueAfterReviewRecovery({ ...base, expectedVersion: 5, fencingToken: 3 }))
+      .resolves.toMatchObject({ reviewRecoveryReclaimEventId: 701 })
+    run.mockClear()
+    await expect(resumeOutcomeQueueAfterReviewRecovery({ ...base, expectedVersion: 7, fencingToken: 5,
+      persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      campaignWindowId: "campaign-2", processIdentity: "process-2" }))
+      .resolves.toMatchObject({ version: 7, fencingToken: 5, reviewRecoveryReclaimEventId: 701 })
+    expect(run).not.toHaveBeenCalledWith(OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery, expect.anything())
+    expect(run.mock.calls.map(([sql]) => sql)).toEqual([
+      "BEGIN", OUTCOME_QUEUE_SQL.acquireLock, OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
+      OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence, "COMMIT",
+    ])
+  })
+
+  it.runIf(Boolean(process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL))(
+    "parses the exact atomic review-recovery reclaim queries in an isolated real PostgreSQL schema",
+    async () => {
+      const { Pool } = await import("pg")
+      const pool = new Pool({
+        connectionString: process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL?.replace("-pooler.", "."),
+      })
+      const client = await pool.connect()
+      const schema = `hermes_reclaim_parse_${randomUUID().replaceAll("-", "")}`
+      const values = ["__none__", "goal:__none__", 5, "binding", "acquisition", 3, 929,
+        "b".repeat(40), "c".repeat(40), "d".repeat(64), "holder", "token",
+        "2099-01-01T00:00:00.000Z", "2026-08-20T00:00:00.000Z",
+        "REVIEW_REMEDIATION_EXHAUSTED", 4, 2]
+      try {
+        await client.query(`CREATE SCHEMA "${schema}"`)
+        await client.query(`SET search_path TO "${schema}"`)
+        await client.query(`
+          CREATE TABLE goal (id integer PRIMARY KEY,"userId" text,status text);
+          CREATE TABLE decision (id integer PRIMARY KEY,"userId" text,status text,authority text,decision text,scope text,
+            ref text,owner text,locked boolean,evidence text[],tags text[]);
+          CREATE TABLE work_order (id integer PRIMARY KEY);
+          CREATE TABLE governance_event (id bigserial PRIMARY KEY,"userId" text,"eventType" text,"entityType" text,
+            "entityId" text,actor text,reason text,metadata jsonb,"createdAt" timestamptz,"afterHash" text);
+          CREATE TABLE authority_grant (id integer PRIMARY KEY,"userId" text,ref text,status text,"revokedAt" timestamp,
+            "expiresAt" timestamp,"authorityLevel" text,"grantedTo" text,"grantedBy" text,scope text,
+            "workOrderId" integer,"allowedActions" text[],"blockedActions" text[],"contentHash" text,"createdAt" timestamptz);
+        `)
+        await client.query(OUTCOME_QUEUE_SQL.ensureOutcomeQueueItemTable)
+        await client.query("BEGIN READ ONLY")
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.readReviewRecoveryCandidate}`, values))
+          .resolves.toMatchObject({ rows: expect.any(Array) })
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.reclaimExpiredReviewRecovery}`, values))
+          .resolves.toMatchObject({ rows: expect.any(Array) })
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.insertReviewRecoveryReclaimEvidence}`,
+          ["__none__", "goal:__none__", JSON.stringify({ idempotencyKey: "none" })]))
+          .resolves.toMatchObject({ rows: expect.any(Array) })
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence}`,
+          ["__none__", "0", "none"])).resolves.toMatchObject({ rows: expect.any(Array) })
+        await client.query("ROLLBACK")
+      } finally {
+        try { await client.query("ROLLBACK") } catch {}
+        try { await client.query("SET search_path TO public") } catch {}
+        try { await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`) } catch {}
+        client.release(); await pool.end()
+      }
+    },
+    30_000,
+  )
 
   it("revalidates an adopted review recovery against the exact durable proof identity", async () => {
     const persisted = queueRow({
@@ -3199,7 +3342,7 @@ describe("transactional durable outcome queue source", () => {
       fencingToken: 4,
       leaseHolder: "resident-hermes",
       leaseToken: "lease-a",
-      leaseExpiresAt: "2026-07-28T12:00:00.000Z",
+      leaseExpiresAt: "2026-07-28T12:50:00.000Z",
     })
     const run = vi.fn(async (sql: string) => ({
       rows: sql === OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery ? [persisted] : [],
@@ -3226,7 +3369,7 @@ describe("transactional durable outcome queue source", () => {
       .toContain("confirmed.metadata->>'proofDigest' = $10")
   })
 
-  it("revalidates an identity-preserving stale acquisition against the original review proof", async () => {
+  it("rejects a generic stale acquisition without a dedicated recovery delta proof", async () => {
     const persisted = queueRow({
       lifecycleState: "active",
       lifecycleReason: "STALE_LEASE_RECOVERED",
@@ -3250,9 +3393,9 @@ describe("transactional durable outcome queue source", () => {
       leaseDurationMs: 50 * 60 * 1000,
       persistedLifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
       now,
-    })).resolves.toEqual(persisted)
+    })).rejects.toMatchObject({ code: "OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
     expect(OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery)
-      .toContain(`q."lifecycleReason" IN ($16, 'STALE_LEASE_RECOVERED')`)
+      .toContain(`q."lifecycleReason" = $18`)
     expect(run).toHaveBeenCalledWith(
       OUTCOME_QUEUE_SQL.verifyPersistedReviewRecovery,
       expect.arrayContaining(["REVIEW_REMEDIATION_RECOVERED"]),

@@ -1830,6 +1830,12 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       resolveActiveReviewRecoveryProvenance,
     })
     const outcome = await value.selectOutcome()
+    outcome.queueBinding = {
+      userId: "owner-id", outcomeKey: "goal:GOAL-0077", expectedVersion: 5,
+      executionBinding: "execution-binding-77", acquisitionKey: "acquisition-key-77",
+      leaseHolder: "resident-hermes", leaseToken: "lease-token-77", fencingToken: 3,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+    }
     value.selectOutcome.mockClear()
     value.state.initialize()
     const lease = value.state.acquireLease({
@@ -1966,13 +1972,21 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       request.checkpoint.state === "REVIEW_REMEDIATION_RECOVERED"
     ))).toBe(false)
     expect(value.selectOutcome).not.toHaveBeenCalled()
-    expect(resumeQueueAfterReviewRecovery).toHaveBeenCalledWith(outcome, {
+    expect(resumeQueueAfterReviewRecovery).toHaveBeenCalledWith(expect.objectContaining({
+      queueBinding: expect.objectContaining({
+        reviewRecoverySourceExpectedVersion: 4,
+        reviewRecoverySourceFencingToken: 2,
+        reviewRecoverySourceRuntimeAttempt: 5,
+      }),
+    }), {
       expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED",
       proofDigest: "d".repeat(64),
       prNumber: 500,
       reviewedHeadSha: "c".repeat(40),
       mergeSha: "b".repeat(40),
       runtimeAttempt: 5,
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
     })
     expect(resumeQueueAfterReviewRecovery.mock.invocationCallOrder[0])
       .toBeLessThan(refreshQueueOutcome.mock.invocationCallOrder[0])

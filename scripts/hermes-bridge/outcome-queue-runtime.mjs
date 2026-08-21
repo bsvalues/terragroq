@@ -145,6 +145,11 @@ function queueBinding(outcome) {
         || binding.reviewRecoverySourceFencingToken <= 0
         || !Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
         || binding.reviewRecoverySourceRuntimeAttempt <= 0))
+    || (binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+      && (!Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
+        || binding.reviewRecoveryReclaimEventId <= 0
+        || typeof binding.reviewRecoveryReclaimPayloadDigest !== "string"
+        || !/^[0-9a-f]{64}$/.test(binding.reviewRecoveryReclaimPayloadDigest)))
     || (binding.activeWorkOrderId !== undefined
       && (!Number.isSafeInteger(binding.activeWorkOrderId) || binding.activeWorkOrderId <= 0))) {
     wall("Hermes outcome is missing its durable queue binding", "HERMES_OUTCOME_QUEUE_BINDING_WALL")
@@ -691,6 +696,10 @@ function persistedBinding(item) {
       : {}),
     ...(validationRecoveryResumeState ? { validationRecoveryResumeState } : {}),
     ...(reviewRecoveryResumeState ? { reviewRecoveryResumeState } : {}),
+    ...(reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" ? {
+      reviewRecoveryReclaimEventId: Number(item.reviewRecoveryReclaimEventId),
+      reviewRecoveryReclaimPayloadDigest: item.reviewRecoveryReclaimPayloadDigest,
+    } : {}),
     ...(Number.isSafeInteger(activeWorkOrderId) && activeWorkOrderId > 0
       ? { activeWorkOrderId }
       : {}),
@@ -829,7 +838,10 @@ function isExactReviewRecoveryResume(item, binding, holderId, at) {
     ?? (item?.authorityRenewalApplied === true ? 1 : 0))
   const reclaimCount = Number(item?.reviewRecoveryReclaimCount ?? 0)
   if (!Number.isSafeInteger(renewalCount) || renewalCount < 0
-    || !Number.isSafeInteger(reclaimCount) || reclaimCount < 0) return false
+    || !Number.isSafeInteger(reclaimCount) || ![0, 1].includes(reclaimCount)
+    || (reclaimCount === 1 && (!Number.isSafeInteger(Number(item?.reviewRecoveryReclaimEventId))
+      || Number(item.reviewRecoveryReclaimEventId) <= 0
+      || !/^[0-9a-f]{64}$/.test(String(item?.reviewRecoveryReclaimPayloadDigest ?? ""))))) return false
   return item?.userId === binding.userId
     && item.outcomeKey === binding.outcomeKey
     && item.lifecycleState === "active"
@@ -860,12 +872,16 @@ function isExactPersistedReviewRecovery(item, binding, outcome) {
   const exactRecovery = fenceDelta === 0
     && versionDelta === authorityRenewalDelta
     && item?.lifecycleReason === binding.reviewRecoveryResumeState
-  const recoveredAcquisitionReclaim = Number.isSafeInteger(versionDelta)
-    && Number.isSafeInteger(fenceDelta)
-    && fenceDelta >= 0
-    && versionDelta === fenceDelta + authorityRenewalDelta
-    && item?.lifecycleReason === "STALE_LEASE_RECOVERED"
-  return (exactRecovery || recoveredAcquisitionReclaim)
+  const exactGovernedReclaim = fenceDelta === 1
+    && versionDelta === 1
+    && binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
+    && item?.lifecycleReason === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    && item?.reviewRecoveryReclaimCount === 1
+    && item?.reviewRecoveryStaleReclaimApplied === true
+    && Number.isSafeInteger(Number(item?.reviewRecoveryReclaimEventId))
+    && Number(item.reviewRecoveryReclaimEventId) > 0
+    && /^[0-9a-f]{64}$/.test(String(item?.reviewRecoveryReclaimPayloadDigest ?? ""))
+  return (exactRecovery || exactGovernedReclaim)
     && item?.userId === binding.userId
     && item.outcomeKey === binding.outcomeKey
     && item.lifecycleState === "active"
@@ -1348,6 +1364,10 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     }
     const resumeAt = now()
     if (binding.reviewRecoveryResumeState) {
+      const sourceExpectedVersion = binding.reviewRecoverySourceExpectedVersion
+        ?? binding.expectedVersion - 1
+      const sourceFencingToken = binding.reviewRecoverySourceFencingToken
+        ?? binding.fencingToken - 1
       const verified = await resumeReviewRecoveryQueue({
         databaseUrl,
         userId: binding.userId,
@@ -1365,6 +1385,11 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         leaseToken: binding.leaseToken,
         leaseDurationMs: QUEUE_LEASE_DURATION_MS,
         persistedLifecycleReason: binding.reviewRecoveryResumeState,
+        sourceExpectedVersion,
+        sourceFencingToken,
+        sourceRuntimeAttempt: binding.reviewRecoverySourceRuntimeAttempt ?? proof.runtimeAttempt,
+        campaignWindowId,
+        processIdentity,
         now: resumeAt,
       })
       if (!isExactPersistedReviewRecovery(verified, binding, outcome)) {
@@ -1380,22 +1405,20 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
         wall("Persisted review recovery source attempt conflicts",
           "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
       }
-      const sourceBinding = {
-        ...binding,
-        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
-        reviewRecoverySourceExpectedVersion: binding.expectedVersion - 1,
-        reviewRecoverySourceFencingToken: binding.fencingToken - 1,
-        reviewRecoverySourceRuntimeAttempt: verifiedSourceRuntimeAttempt,
-      }
+      const sourceBinding = { ...binding,
+        reviewRecoverySourceExpectedVersion: sourceExpectedVersion,
+        reviewRecoverySourceFencingToken: sourceFencingToken,
+        reviewRecoverySourceRuntimeAttempt: verifiedSourceRuntimeAttempt }
       const sourceProof = { ...proof, runtimeAttempt: sourceBinding.reviewRecoverySourceRuntimeAttempt }
+      const verifiedOutcome = withPersistedBinding(outcome, verified, sourceBinding)
       await verifyActiveReviewRecovery({
         databaseUrl,
         outcomeId: Number(outcome.id),
-        executionBinding: sourceBinding,
-        workContract: activeReviewRecoveryWorkContract(outcome),
+        executionBinding: verifiedOutcome.queueBinding,
+        workContract: activeReviewRecoveryWorkContract(verifiedOutcome),
         proof: sourceProof,
       })
-      const refreshed = await refreshOutcome(outcome)
+      const refreshed = await refreshOutcome(verifiedOutcome)
       const needsExactSourceBackfill = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
         && verified.lifecycleReason === "REVIEW_REMEDIATION_RECOVERED"
         && binding.reviewRecoverySourceExpectedVersion === undefined
@@ -1428,6 +1451,11 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       leaseHolder: holderId,
       leaseToken: binding.leaseToken,
       leaseDurationMs: QUEUE_LEASE_DURATION_MS,
+      sourceExpectedVersion: binding.expectedVersion + 1,
+      sourceFencingToken: binding.fencingToken,
+      sourceRuntimeAttempt: proof.runtimeAttempt,
+      campaignWindowId,
+      processIdentity,
       now: resumeAt,
     })
     if (!isExactReviewRecoveryResume(resumed, binding, holderId, resumeAt)) {
