@@ -1583,6 +1583,7 @@ export function createRepositoryLifecycle(options) {
     workspaceRoot,
     repositoryRoot,
     ownedWorktreeRoot,
+    verifyRepositoryOrigin: verifyOrigin,
     refreshOriginMain,
     createWorktree,
     ensureOwnedWorktree,

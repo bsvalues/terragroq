@@ -987,6 +987,61 @@ describe("Hermes bridge durable state store", () => {
     })
   })
 
+  it("releases local seq46 only after the durable active cleanup settlement advances version not fence", () => {
+    const { store, dir } = fixture()
+    store.acquireLease({
+      outcomeId: "5", holderId: "cleanup-holder", leaseDurationMs: 1000,
+      metadata: { outcome: { id: 5 } }, idempotencyKey: "active-cleanup-acquire",
+    })
+    const file = join(dir, "state.json")
+    const state = JSON.parse(readFileSync(file, "utf8"))
+    state.executions["5"] = {
+      ...state.executions["5"],
+      checkpoint: { sequence: 46, state: "POST_MERGE_CLEANUP_RETRY", detail: "HERMES_POST_MERGE_CLEANUP_WALL", recordedAt: "2026-07-21T00:00:00.000Z" },
+      lease: { ...state.executions["5"].lease, status: "ACTIVE", abandonedAt: "2026-07-21T00:00:01.000Z", expiresAt: "2026-07-21T00:00:01.000Z", abandonReason: "HERMES_RUNTIME_PROJECTION_WALL" },
+      metadata: {
+        ...state.executions["5"].metadata,
+        prNumber: 929, branch: "codex/hermes-goal-0023-27",
+        worktreePath: "C:\\owned\\hermes-goal-0023-27",
+        headRefOid: "a".repeat(40), mergeSha: "b".repeat(40),
+        reviewRecoveryProofDigest: "c".repeat(64),
+        postMergeCleanupRetryCount: 1, postMergeCleanupCauseCode: null,
+        outcome: { id: 5, status: "classified", queueBinding: {
+          userId: "owner", outcomeKey: "goal:GOAL-0023", expectedVersion: 8,
+          executionBinding: "execution-23", leaseToken: "lease-23", leaseHolder: "hermes-bridge",
+          acquisitionKey: "acquisition-23", fencingToken: 6, activeWorkOrderId: 51,
+        } },
+      },
+    }
+    writeFileSync(file, `${JSON.stringify(state)}\n`)
+    expect(store.completeActivePostMergeCleanupRecovery({
+      idempotencyKey: "active-cleanup-complete", outcomeId: "5", activationDisabled: true,
+      expectedLocalFencingToken: state.executions["5"].fencingToken,
+      expectedHolderId: state.executions["5"].lease.holderId,
+      expectedLeaseExpiresAt: "2026-07-21T00:00:01.000Z",
+      expectedQueueBindingDigest: createHash("sha256").update(JSON.stringify(
+        state.executions["5"].metadata.outcome.queueBinding,
+      )).digest("hex"),
+      expectedOutcomeDigest: createHash("sha256").update(JSON.stringify(
+        state.executions["5"].metadata.outcome,
+      )).digest("hex"),
+      prNumber: 929, branch: "codex/hermes-goal-0023-27", headRefOid: "a".repeat(40),
+      expectedWorktreePath: "C:\\owned\\hermes-goal-0023-27",
+      expectedPostMergeCleanupRetryCount: 1, expectedPostMergeCleanupCauseCode: null,
+      mergeSha: "b".repeat(40), reviewRecoveryProofDigest: "c".repeat(64),
+      queueVersion: 9, queueFencingToken: 6,
+      authorizationEventId: 970, confirmationEventId: 971, settlementEventId: 973,
+      cleanupProofDigest: "c".repeat(64),
+      authorizationDigest: "d".repeat(64), confirmationDigest: "e".repeat(64),
+      settlementDigest: "f".repeat(64),
+    })).toMatchObject({ checkpointSequence: 47, leaseStatus: "RELEASED" })
+    expect(store.read().executions["5"]).toMatchObject({
+      checkpoint: { sequence: 47, state: "COMPLETE" },
+      lease: { status: "RELEASED", releaseReason: "COMPLETE" },
+      metadata: { outcome: { status: "complete", queueBinding: { expectedVersion: 9, fencingToken: 6 } } },
+    })
+  })
+
   it("defers provider-unavailable work without losing its resumable execution", () => {
     const { store, advance } = fixture()
     const first = store.acquireLease({ outcomeId: "5", holderId: "one", leaseDurationMs: 1000, idempotencyKey: "a" })

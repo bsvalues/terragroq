@@ -11,6 +11,7 @@ import {
   recoverExternalToolWall,
   recoverOrphanedValidationCycle,
   recoverPostMergeCleanupWall,
+  recoverActivePostMergeCleanupWall,
   recoverReviewedMerge,
   recoverTerminalPostMergeCleanupWall,
   recoverValidationInfrastructureWall,
@@ -1010,6 +1011,223 @@ describe("Hermes bridge CLI", () => {
       ownedWorktreeRoot: path.join(runtimeRoot, "worktrees"),
       executionBackend,
     })
+  })
+
+  it("settles the exact expired active cleanup epoch without acquiring fence seven", async () => {
+    const outcome = exactIssue911Outcome(5, "GOAL-0005")
+    const binding = {
+      ...outcome.queueBinding,
+      expectedVersion: 8,
+      fencingToken: 6,
+      activeWorkOrderId: 51,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoverySourceExpectedVersion: 4,
+      reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5,
+      reviewRecoveryReclaimEventId: 961,
+      reviewRecoveryReclaimPayloadDigest: "c".repeat(64),
+      reviewRecoveryStaleReacquisition: {
+        disposition: "RECLAIMED", priorExpectedVersion: 6, priorFencingToken: 4,
+        expectedVersion: 7, fencingToken: 5, receiptLatestFencingToken: 5,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        leaseExpiresAt: "2026-08-21T06:30:00.000Z",
+        checkpointDigest: "d".repeat(64),
+      },
+      reviewRecoveryStaleContinuation: {
+        disposition: "RECLAIMED", priorExpectedVersion: 7, priorFencingToken: 5,
+        expectedVersion: 8, fencingToken: 6, receiptLatestFencingToken: 6,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        priorLeaseExpiresAt: "2026-08-21T06:30:00.000Z",
+        leaseExpiresAt: "2026-08-21T06:45:00.000Z",
+        checkpointDigest: "e".repeat(64),
+      },
+    }
+    outcome.queueBinding = binding
+    const candidate = {
+      outcomeId: "5", fencingToken: 9,
+      lease: {
+        status: "ACTIVE", holderId: "hermes-bridge",
+        acquiredAt: "2026-08-21T05:00:00.000Z",
+        expiresAt: "2026-08-21T06:00:00.000Z",
+        abandonedAt: "2026-08-21T06:00:00.000Z",
+        abandonReason: "HERMES_RUNTIME_PROJECTION_WALL",
+      },
+      checkpoint: {
+        sequence: 46, state: "POST_MERGE_CLEANUP_RETRY",
+        detail: "HERMES_POST_MERGE_CLEANUP_WALL", recordedAt: "2026-08-21T05:30:00.000Z",
+      },
+      metadata: {
+        outcome, postMergeCleanupRetryCount: 1, postMergeCleanupCauseCode: null,
+        reviewRecoveryProofDigest: "f".repeat(64), prNumber: 929,
+        branch: "codex/hermes-goal-0005-5", worktreePath: "C:\\owned\\hermes-goal-0005-5",
+        headRefOid: "a".repeat(40), mergeSha: "b".repeat(40),
+      },
+    }
+    const calls: string[] = []
+    const orchestrator = {
+      runtimeRoot: process.cwd(),
+      state: {
+        read: vi.fn(() => ({
+          ownerTouchCounters: {
+            OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+            OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0,
+            OWNER_ROUTINE_CONTACT_COUNT: 0,
+          },
+          executions: { "5": candidate },
+        })),
+        completeActivePostMergeCleanupRecovery: vi.fn(() => {
+          calls.push("local-complete")
+          return { checkpointSequence: 47 }
+        }),
+      },
+    }
+    const lifecycle = {
+      repository: "bsvalues/terragroq",
+      verifyRepositoryOrigin: vi.fn(async () => true),
+      inspectPullRequest: vi.fn(async () => ({
+        state: "MERGED", baseRefName: "main", headRefName: candidate.metadata.branch,
+        headRefOid: candidate.metadata.headRefOid, mergeCommit: { oid: candidate.metadata.mergeSha },
+        unresolvedThreadCount: 0, reviewed: true, reviewCompleted: true,
+      })),
+      inspectPullRequestFiles: vi.fn(async () => [
+        "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md",
+      ]),
+      verifyOriginMainContains: vi.fn(async () => true),
+      cleanupOwnedWorktree: vi.fn(async () => { calls.push("cleanup"); return { cleaned: true } }),
+    }
+    const resolveProvenance = vi.fn(async () => {
+      calls.push("resolve")
+      return { alreadyStaleReacquired: true, binding }
+    })
+    const verifyContinuation = vi.fn(async () => { calls.push("verify"); return true })
+    const authorizeCleanup = vi.fn(async () => {
+      calls.push("authorize")
+      return { eventId: 970, payloadDigest: "3".repeat(64), confirmed: false, settled: false }
+    })
+    const confirmCleanup = vi.fn(async () => {
+      calls.push("confirm")
+      return { eventId: 971, payloadDigest: "4".repeat(64) }
+    })
+    const settleCleanup = vi.fn(async () => {
+      calls.push("settle")
+      return {
+        checkpointEventId: 972, queueVersion: 9, fencingToken: 6,
+        settlementEventId: 973, payloadDigest: "5".repeat(64), replayed: false,
+      }
+    })
+    const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false)
+    try {
+      lifecycle.repository = "other/repository"
+      await expect(recoverActivePostMergeCleanupWall({
+        orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
+        resolveProvenance, verifyContinuation, authorizeCleanup, confirmCleanup, settleCleanup,
+      })).rejects.toMatchObject({ code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_REPOSITORY_WALL" })
+      expect(calls).toEqual(["resolve", "verify"])
+      expect(authorizeCleanup).not.toHaveBeenCalled()
+      expect(lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
+      expect(orchestrator.state.completeActivePostMergeCleanupRecovery).not.toHaveBeenCalled()
+      lifecycle.repository = "bsvalues/terragroq"
+      calls.length = 0
+
+      lifecycle.inspectPullRequestFiles.mockResolvedValueOnce([".github/workflows/host.yml"])
+      await expect(recoverActivePostMergeCleanupWall({
+        orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
+        resolveProvenance, verifyContinuation, authorizeCleanup, confirmCleanup, settleCleanup,
+      })).rejects.toMatchObject({ code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_CONTRACT_WALL" })
+      expect(calls).toEqual(["resolve", "verify"])
+      expect(authorizeCleanup).not.toHaveBeenCalled()
+      expect(lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
+      calls.length = 0
+
+      await expect(recoverActivePostMergeCleanupWall({
+        orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
+        resolveProvenance, verifyContinuation, authorizeCleanup, confirmCleanup, settleCleanup,
+      })).resolves.toMatchObject({
+        result: "COMPLETE", outcomeId: "5", checkpointSequence: 47,
+        queueVersion: 9, fencingToken: 6,
+      })
+      expect(calls).toEqual(["resolve", "verify", "authorize", "cleanup", "confirm", "settle", "local-complete"])
+      expect(settleCleanup).toHaveBeenCalledWith(expect.objectContaining({
+        expectedVersion: 8, fencingToken: 6, checkpointSequence: 47,
+      }))
+      expect(orchestrator.state.completeActivePostMergeCleanupRecovery).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expectedWorktreePath: candidate.metadata.worktreePath,
+          expectedPostMergeCleanupRetryCount: 1,
+          expectedPostMergeCleanupCauseCode: null,
+          expectedOutcomeDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        }),
+      )
+      expect(calls).not.toContain("acquire")
+
+      calls.length = 0
+      authorizeCleanup.mockResolvedValueOnce({
+        eventId: 970, confirmed: true, settled: false,
+        confirmation: { eventId: 971, payloadDigest: "9".repeat(64) },
+      })
+      await recoverActivePostMergeCleanupWall({
+        orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
+        resolveProvenance, verifyContinuation, authorizeCleanup, confirmCleanup, settleCleanup,
+      })
+      expect(calls).toEqual(["resolve", "verify", "settle", "local-complete"])
+      expect(authorizeCleanup).toHaveBeenCalledTimes(2)
+      expect(lifecycle.cleanupOwnedWorktree).toHaveBeenCalledTimes(1)
+      expect(confirmCleanup).toHaveBeenCalledTimes(1)
+
+      const completed = {
+        ...candidate,
+        lease: { ...candidate.lease, status: "RELEASED", releaseReason: "COMPLETE",
+          releasedAt: "2026-08-21T07:00:00.000Z" },
+        checkpoint: { sequence: 47, state: "COMPLETE", detail: "PR #929 merged, verified, and cleaned" },
+        metadata: {
+          ...candidate.metadata,
+          postMergeCleanupRetryCount: 0, postMergeCleanupCauseCode: null,
+          outcome: { ...outcome, status: "complete", queueBinding: { ...binding, expectedVersion: 9 } },
+          activePostMergeCleanupProofDigest: "2".repeat(64),
+          activePostMergeCleanupAuthorizationEventId: 970,
+          activePostMergeCleanupAuthorizationDigest: "3".repeat(64),
+          activePostMergeCleanupConfirmationEventId: 971,
+          activePostMergeCleanupConfirmationDigest: "4".repeat(64),
+          activePostMergeCleanupSettlementEventId: 973,
+          activePostMergeCleanupSettlementDigest: "5".repeat(64),
+        },
+      }
+      orchestrator.state.read.mockReturnValue({
+        ownerTouchCounters: {
+          OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+          OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0,
+          OWNER_ROUTINE_CONTACT_COUNT: 0,
+        }, executions: { "5": completed },
+      })
+      const verifySettlement = vi.fn(async () => ({
+        queueVersion: 9, fencingToken: 6, replayed: true,
+        authorizationPayloadDigest: "3".repeat(64),
+        confirmationPayloadDigest: "4".repeat(64), payloadDigest: "5".repeat(64),
+      }))
+      await expect(recoverActivePostMergeCleanupWall({
+        orchestrator, lifecycle, verifySettlement,
+        now: () => new Date("2026-08-21T07:00:00.000Z"),
+      })).resolves.toMatchObject({ result: "COMPLETE", replayed: true, queueVersion: 9, fencingToken: 6 })
+      expect(verifySettlement).toHaveBeenCalledOnce()
+      expect(lifecycle.cleanupOwnedWorktree).toHaveBeenCalledTimes(1)
+      expect(settleCleanup).toHaveBeenCalledTimes(2)
+
+      orchestrator.state.read.mockReturnValue({
+        ownerTouchCounters: {
+          OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+          OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0,
+          OWNER_ROUTINE_CONTACT_COUNT: 0,
+        }, executions: { "5": { ...completed,
+          lease: { ...completed.lease, releaseReason: "DRIFTED" } } },
+      })
+      await expect(recoverActivePostMergeCleanupWall({
+        orchestrator, lifecycle, verifySettlement,
+        now: () => new Date("2026-08-21T07:00:00.000Z"),
+      })).rejects.toMatchObject({ code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_CANDIDATE_WALL" })
+      expect(verifySettlement).toHaveBeenCalledOnce()
+    } finally {
+      exists.mockRestore()
+    }
   })
 
   it("refuses a local reviewed-merge repository lifecycle before construction", async () => {

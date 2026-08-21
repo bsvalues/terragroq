@@ -503,6 +503,35 @@ function metadata(input = {}, current = {}) {
     && (typeof terminalCleanupRecoveryProofDigest !== "string" || !SHA256.test(terminalCleanupRecoveryProofDigest))) {
     fail("INVALID_TERMINAL_CLEANUP_RECOVERY_PROOF_DIGEST")
   }
+  const activeCleanupFields = [
+    "activePostMergeCleanupProofDigest",
+    "activePostMergeCleanupAuthorizationEventId",
+    "activePostMergeCleanupAuthorizationDigest",
+    "activePostMergeCleanupConfirmationEventId",
+    "activePostMergeCleanupConfirmationDigest",
+    "activePostMergeCleanupSettlementEventId",
+    "activePostMergeCleanupSettlementDigest",
+  ]
+  const activeCleanup = Object.fromEntries(activeCleanupFields.map((field) => [field,
+    Object.hasOwn(input, field) ? input[field] : current[field] ?? null]))
+  const activeCleanupValues = Object.values(activeCleanup)
+  if (activeCleanupValues.some((value) => value !== null)) {
+    if (activeCleanupValues.some((value) => value === null)
+      || !SHA256.test(String(activeCleanup.activePostMergeCleanupProofDigest))
+      || !SHA256.test(String(activeCleanup.activePostMergeCleanupAuthorizationDigest))
+      || !SHA256.test(String(activeCleanup.activePostMergeCleanupConfirmationDigest))
+      || !SHA256.test(String(activeCleanup.activePostMergeCleanupSettlementDigest))
+      || !Number.isSafeInteger(activeCleanup.activePostMergeCleanupAuthorizationEventId)
+      || !Number.isSafeInteger(activeCleanup.activePostMergeCleanupConfirmationEventId)
+      || !Number.isSafeInteger(activeCleanup.activePostMergeCleanupSettlementEventId)
+      || activeCleanup.activePostMergeCleanupAuthorizationEventId <= 0
+      || activeCleanup.activePostMergeCleanupConfirmationEventId
+        <= activeCleanup.activePostMergeCleanupAuthorizationEventId
+      || activeCleanup.activePostMergeCleanupSettlementEventId
+        <= activeCleanup.activePostMergeCleanupConfirmationEventId) {
+      fail("INVALID_ACTIVE_POST_MERGE_CLEANUP_BINDING")
+    }
+  }
   const headRefOid = Object.hasOwn(input, "headRefOid")
     ? input.headRefOid
     : current.headRefOid ?? null
@@ -646,6 +675,7 @@ function metadata(input = {}, current = {}) {
     ["validationRecoveryFencing" + "Token"]: validationRecoveryFence,
     reviewRecoveryProofDigest,
     terminalCleanupRecoveryProofDigest,
+    ...activeCleanup,
     reviewRecoveryPriorHeadRefOid,
     reviewProjectionReconciledFromSequence,
     ownerDecisionId,
@@ -1326,6 +1356,96 @@ export function finalizeTerminalPostMergeCleanupRecovery(filePath, request, opti
   })
 }
 
+export function completeActivePostMergeCleanupRecovery(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    const binding = current.metadata?.outcome?.queueBinding
+    const ownerTouchesRemainZero = COUNTER_NAMES.every(
+      (counter) => state.ownerTouchCounters[counter] === 0,
+    )
+    if (request.activationDisabled !== true
+      || current.fencingToken !== request.expectedLocalFencingToken
+      || current.lease.holderId !== request.expectedHolderId
+      || current.lease.expiresAt !== request.expectedLeaseExpiresAt
+      || current.lease.abandonedAt !== request.expectedLeaseExpiresAt
+      || current.lease.abandonReason !== "HERMES_RUNTIME_PROJECTION_WALL"
+      || current.lease.status !== "ACTIVE"
+      || current.checkpoint.sequence !== 46
+      || current.checkpoint.state !== "POST_MERGE_CLEANUP_RETRY"
+      || current.checkpoint.detail !== "HERMES_POST_MERGE_CLEANUP_WALL"
+      || current.metadata.prNumber !== request.prNumber
+      || current.metadata.headRefOid !== request.headRefOid
+      || current.metadata.mergeSha !== request.mergeSha
+      || current.metadata.branch !== request.branch
+      || current.metadata.worktreePath !== request.expectedWorktreePath
+      || current.metadata.postMergeCleanupRetryCount !== request.expectedPostMergeCleanupRetryCount
+      || current.metadata.postMergeCleanupCauseCode !== request.expectedPostMergeCleanupCauseCode
+      || current.metadata.reviewRecoveryProofDigest !== request.reviewRecoveryProofDigest
+      || !Number.isSafeInteger(request.queueVersion) || request.queueVersion <= 0
+      || !Number.isSafeInteger(request.queueFencingToken) || request.queueFencingToken <= 0
+      || binding?.expectedVersion + 1 !== request.queueVersion
+      || binding?.fencingToken !== request.queueFencingToken
+      || digest(binding) !== request.expectedQueueBindingDigest
+      || digest(current.metadata?.outcome) !== request.expectedOutcomeDigest
+      || !Number.isSafeInteger(request.authorizationEventId) || request.authorizationEventId <= 0
+      || !Number.isSafeInteger(request.confirmationEventId)
+      || request.confirmationEventId <= request.authorizationEventId
+      || !Number.isSafeInteger(request.settlementEventId)
+      || request.settlementEventId <= request.confirmationEventId
+      || !SHA256.test(String(request.authorizationDigest ?? ""))
+      || !SHA256.test(String(request.confirmationDigest ?? ""))
+      || !SHA256.test(String(request.settlementDigest ?? ""))
+      || !ownerTouchesRemainZero) {
+      fail("ACTIVE_POST_MERGE_CLEANUP_RECOVERY_STATE_WALL")
+    }
+    const completed = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "RELEASED",
+        expiresAt: at.iso,
+        releasedAt: at.iso,
+        releaseReason: "COMPLETE",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "COMPLETE",
+        detail: `PR #${request.prNumber} merged, verified, and cleaned`,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({
+        postMergeCleanupRetryCount: 0,
+        postMergeCleanupCauseCode: null,
+        activePostMergeCleanupProofDigest: request.cleanupProofDigest,
+        activePostMergeCleanupAuthorizationEventId: request.authorizationEventId,
+        activePostMergeCleanupAuthorizationDigest: request.authorizationDigest,
+        activePostMergeCleanupConfirmationEventId: request.confirmationEventId,
+        activePostMergeCleanupConfirmationDigest: request.confirmationDigest,
+        activePostMergeCleanupSettlementEventId: request.settlementEventId,
+        activePostMergeCleanupSettlementDigest: request.settlementDigest,
+        outcome: {
+          ...current.metadata.outcome,
+          status: "complete",
+          queueBinding: {
+            ...binding,
+            expectedVersion: request.queueVersion,
+            fencingToken: request.queueFencingToken,
+          },
+        },
+      }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: completed }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: completed.fencingToken,
+      checkpointSequence: completed.checkpoint.sequence,
+      leaseStatus: completed.lease.status,
+    }
+  })
+}
+
 export function deferProviderWall(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at, requestedAt) => {
@@ -1407,6 +1527,7 @@ export function createHermesStateStore(filePath, options = {}) {
     recoverPostMergeCleanupWall: (request) => recoverPostMergeCleanupWall(filePath, request, options),
     beginTerminalPostMergeCleanupRecovery: (request) => beginTerminalPostMergeCleanupRecovery(filePath, request, options),
     finalizeTerminalPostMergeCleanupRecovery: (request) => finalizeTerminalPostMergeCleanupRecovery(filePath, request, options),
+    completeActivePostMergeCleanupRecovery: (request) => completeActivePostMergeCleanupRecovery(filePath, request, options),
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),

@@ -197,7 +197,7 @@ function isExactMarkedReviewRecoveryCleanupRetry(execution, now = Date.now()) {
   }
 }
 
-function isExactReviewRecoveryCleanupRetryCandidate(execution, now = Date.now()) {
+export function isExactReviewRecoveryCleanupRetryCandidate(execution, now = Date.now()) {
   return isExactReviewRecoveryCleanupRetryAbandonedLease(execution, now)
     || isExactMarkedReviewRecoveryCleanupRetry(execution, now)
 }

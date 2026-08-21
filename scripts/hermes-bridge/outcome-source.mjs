@@ -9,6 +9,7 @@ import {
 import { normalizeHermesFindings } from "./state-store.mjs"
 import {
   HERMES_WORK_CONTRACT_VERSION,
+  resolveHermesWorkContract,
 } from "./work-contract.mjs"
 import {
   assertPrimaryDecisionPacketSafety,
@@ -2009,6 +2010,13 @@ const COMMIT_SHA = /^[0-9a-f]{40}$/
 const PROJECTION_STATE = /^[A-Z][A-Z0-9_]{1,79}$/
 const REVIEW_REMEDIATION_EXHAUSTED = "REVIEW_REMEDIATION_EXHAUSTED"
 const POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED = "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
+const ACTIVE_CLEANUP_REGISTERED_CONTRACT = resolveHermesWorkContract({
+  command: "record structured #911 reliability remediation without host mutation",
+  title: "record structured #911 reliability remediation without host mutation",
+  objective: "record structured #911 reliability remediation without host mutation",
+  lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+})
+if (!ACTIVE_CLEANUP_REGISTERED_CONTRACT) throw new Error("Registered #911 work contract is unavailable")
 const SENSITIVE_RUNTIME_EVIDENCE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
 
 function normalizeRuntimeWorkContract(value) {
@@ -5252,6 +5260,835 @@ export async function recoverTerminalPostMergeCleanupOutcome({
     client?.release()
     if (pool) await pool.end()
   }
+}
+
+function activeCleanupConfirmationMetadata(authorization, authorizationEventId) {
+  const metadata = {
+    idempotencyKey: `hermes-outcome:${authorization.outcomeId}:active-post-merge-cleanup:confirmation`,
+    authorizationEventId,
+    authorizationPayloadDigest: authorization.payloadDigest,
+    outcomeId: authorization.outcomeId,
+    userId: authorization.userId,
+    outcomeKey: authorization.outcomeKey,
+    workOrderId: authorization.workOrderId,
+    workOrderRef: authorization.workOrderRef,
+    cleanupProofDigest: authorization.cleanupProofDigest,
+    branch: authorization.branch,
+    worktreePath: authorization.worktreePath,
+    prNumber: authorization.prNumber,
+    reviewedHeadSha: authorization.reviewedHeadSha,
+    mergeSha: authorization.mergeSha,
+  }
+  metadata.payloadDigest = activeCleanupPayloadDigest(metadata)
+  return metadata
+}
+
+const ACTIVE_CLEANUP_AUTHORIZATION_KEYS = [
+  "idempotencyKey", "recoveryKind", "outcomeId", "userId", "outcomeKey", "workOrderId",
+  "workOrderRef", "workContractId", "workContractDigest", "expectedVersion",
+  "executionBinding", "acquisitionKey", "fencingToken", "sourceExpectedVersion",
+  "sourceFencingToken", "sourceRuntimeAttempt", "reclaimEventId", "reclaimPayloadDigest",
+  "baseCheckpointDigest", "continuationCheckpointDigest", "reviewRecoveryProofDigest",
+  "prNumber", "reviewedHeadSha", "mergeSha", "branch", "worktreePath",
+  "cleanupProofDigest", "payloadDigest",
+].sort()
+
+const ACTIVE_CLEANUP_CONFIRMATION_KEYS = [
+  "idempotencyKey", "authorizationEventId", "authorizationPayloadDigest", "outcomeId",
+  "userId", "outcomeKey", "workOrderId", "workOrderRef", "cleanupProofDigest", "branch",
+  "worktreePath", "prNumber", "reviewedHeadSha", "mergeSha", "payloadDigest",
+].sort()
+
+const ACTIVE_CLEANUP_SETTLEMENT_KEYS = [
+  "idempotencyKey", "authorizationEventId", "confirmationEventId", "checkpointEventId",
+  "checkpointPayloadDigest", "cleanupProofDigest", "outcomeId", "userId", "outcomeKey",
+  "workOrderId", "workOrderRef", "priorQueueVersion", "completedQueueVersion",
+  "fencingToken", "prNumber", "reviewedHeadSha", "mergeSha", "payloadDigest",
+].sort()
+
+function exactActiveCleanupAuthorization(value) {
+  const metadata = exactPayloadMetadata(value)
+  return metadata
+    && canonicalJson(Object.keys(metadata).sort()) === canonicalJson(ACTIVE_CLEANUP_AUTHORIZATION_KEYS)
+    ? metadata : null
+}
+
+function exactActiveCleanupConfirmation(value) {
+  const metadata = exactPayloadMetadata(value)
+  return metadata
+    && canonicalJson(Object.keys(metadata).sort()) === canonicalJson(ACTIVE_CLEANUP_CONFIRMATION_KEYS)
+    ? metadata : null
+}
+
+function exactActiveCleanupSettlement(value) {
+  const metadata = exactPayloadMetadata(value)
+  return metadata
+    && canonicalJson(Object.keys(metadata).sort()) === canonicalJson(ACTIVE_CLEANUP_SETTLEMENT_KEYS)
+    ? metadata : null
+}
+
+function exactPayloadMetadata(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const body = { ...value }
+  const payloadDigest = body.payloadDigest
+  delete body.payloadDigest
+  return /^[0-9a-f]{64}$/.test(String(payloadDigest ?? ""))
+    && activeCleanupPayloadDigest(body) === payloadDigest ? { ...body, payloadDigest } : null
+}
+
+function activeCleanupPayloadDigest(value) {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex")
+}
+
+export async function authorizeActivePostMergeCleanup({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  executionBinding,
+  workContract,
+  proof,
+  cleanupProofDigest,
+  branch,
+  worktreePath,
+  verifyContinuation = verifyActiveReviewRecoveryContinuation,
+} = {}) {
+  const wall = () => Object.assign(new Error("Active post-merge cleanup authorization conflicts"), {
+    code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZATION_WALL",
+  })
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
+    || !executionBinding || !Number.isSafeInteger(executionBinding.expectedVersion)
+    || !Number.isSafeInteger(executionBinding.fencingToken)
+    || executionBinding.reviewRecoveryResumeState !== "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    || !Number.isSafeInteger(executionBinding.activeWorkOrderId)
+    || typeof cleanupProofDigest !== "string" || !/^[0-9a-f]{64}$/.test(cleanupProofDigest)
+    || typeof branch !== "string" || branch.trim() === ""
+    || typeof worktreePath !== "string" || worktreePath.trim() === "") throw wall()
+  if (workContract?.id !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.id
+    || workContract?.digest !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.digest
+    || workContract?.version !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.version
+    || workContract?.repository !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.repository
+    || workContract?.lane !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.lane) throw wall()
+  await verifyContinuation({
+    outcomeId, executionBinding, workContract, proof, provenanceOnly: true,
+  })
+  const workOrderRef = outcomeWorkOrderRef(outcomeId)
+  const semanticKey = ["hermes-outcome", outcomeId, "active-post-merge-cleanup",
+    executionBinding.acquisitionKey, executionBinding.fencingToken].join(":")
+  const metadata = {
+    idempotencyKey: semanticKey,
+    recoveryKind: "active-post-merge-cleanup",
+    outcomeId,
+    userId: executionBinding.userId,
+    outcomeKey: executionBinding.outcomeKey,
+    workOrderId: executionBinding.activeWorkOrderId,
+    workOrderRef,
+    workContractId: workContract?.id,
+    workContractDigest: workContract?.digest,
+    expectedVersion: executionBinding.expectedVersion,
+    executionBinding: executionBinding.executionBinding,
+    acquisitionKey: executionBinding.acquisitionKey,
+    fencingToken: executionBinding.fencingToken,
+    sourceExpectedVersion: executionBinding.reviewRecoverySourceExpectedVersion,
+    sourceFencingToken: executionBinding.reviewRecoverySourceFencingToken,
+    sourceRuntimeAttempt: executionBinding.reviewRecoverySourceRuntimeAttempt,
+    reclaimEventId: executionBinding.reviewRecoveryReclaimEventId,
+    reclaimPayloadDigest: executionBinding.reviewRecoveryReclaimPayloadDigest,
+    baseCheckpointDigest: executionBinding.reviewRecoveryStaleReacquisition?.checkpointDigest,
+    continuationCheckpointDigest: executionBinding.reviewRecoveryStaleContinuation?.checkpointDigest,
+    reviewRecoveryProofDigest: proof?.proofDigest,
+    prNumber: proof?.prNumber,
+    reviewedHeadSha: proof?.reviewedHeadSha,
+    mergeSha: proof?.mergeSha,
+    branch,
+    worktreePath,
+    cleanupProofDigest,
+  }
+  metadata.payloadDigest = activeCleanupPayloadDigest(metadata)
+  if (Object.values(metadata).some((value) => value === undefined)) throw wall()
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  let begun = false
+  try {
+    if (!runQuery) {
+      if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+        throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+      }
+      const { Pool } = await import("pg")
+      pool = createHermesDatabasePool(Pool, databaseUrl)
+      client = await pool.connect()
+      runQuery = client.query.bind(client)
+    }
+    await runQuery("BEGIN"); begun = true
+    await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [workOrderRef])
+    const prior = await runQuery(
+      `SELECT id, actor, metadata FROM governance_event
+       WHERE "userId" = $1 AND "entityType" = 'goal' AND "entityId"::text = $2
+         AND "eventType" = 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED'
+       ORDER BY id LIMIT 2 FOR UPDATE`,
+      [executionBinding.userId, String(outcomeId)],
+    )
+    if ((prior?.rows?.length ?? 0) > 1) throw wall()
+    const later = await runQuery(
+      `SELECT "eventType", id, actor, metadata FROM governance_event
+       WHERE "userId" = $1 AND "entityType" = 'goal' AND "entityId"::text = $2
+         AND "eventType" IN ('HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED',
+           'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED')
+       ORDER BY id FOR UPDATE`,
+      [executionBinding.userId, String(outcomeId)],
+    )
+    if (prior?.rows?.length === 1) {
+      if (prior.rows[0].actor !== "hermes-codex-bridge"
+        || canonicalJson(prior.rows[0].metadata) !== canonicalJson(metadata)) throw wall()
+      const confirmations = later.rows.filter((row) => row.eventType
+        === "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED")
+      const settlements = later.rows.filter((row) => row.eventType
+        === "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED")
+      if (confirmations.length > 1 || settlements.length > 1
+        || (settlements.length === 1 && confirmations.length !== 1)) throw wall()
+      const expectedConfirmation = activeCleanupConfirmationMetadata(metadata, Number(prior.rows[0].id))
+      if (confirmations.length === 1 && (confirmations[0].actor !== "hermes-codex-bridge"
+        || Number(confirmations[0].id) <= Number(prior.rows[0].id)
+        || canonicalJson(confirmations[0].metadata) !== canonicalJson(expectedConfirmation))) throw wall()
+      if (settlements.length === 1) {
+        const settlementMetadata = exactActiveCleanupSettlement(settlements[0].metadata)
+        if (settlements[0].actor !== "hermes-codex-bridge"
+          || Number(settlements[0].id) <= Number(confirmations[0].id)
+          || !settlementMetadata
+          || Number(settlementMetadata.authorizationEventId) !== Number(prior.rows[0].id)
+          || Number(settlementMetadata.confirmationEventId) !== Number(confirmations[0].id)
+          || !Number.isSafeInteger(Number(settlementMetadata.checkpointEventId))
+          || Number(settlementMetadata.checkpointEventId) <= 0
+          || !/^[0-9a-f]{64}$/.test(String(settlementMetadata.checkpointPayloadDigest ?? ""))
+          || settlementMetadata.cleanupProofDigest !== cleanupProofDigest
+          || Number(settlementMetadata.outcomeId) !== outcomeId
+          || settlementMetadata.userId !== executionBinding.userId
+          || settlementMetadata.outcomeKey !== executionBinding.outcomeKey
+          || Number(settlementMetadata.workOrderId) !== executionBinding.activeWorkOrderId
+          || settlementMetadata.workOrderRef !== workOrderRef
+          || Number(settlementMetadata.priorQueueVersion) !== executionBinding.expectedVersion
+          || Number(settlementMetadata.completedQueueVersion) !== executionBinding.expectedVersion + 1
+          || Number(settlementMetadata.fencingToken) !== executionBinding.fencingToken
+          || Number(settlementMetadata.prNumber) !== Number(proof.prNumber)
+          || settlementMetadata.reviewedHeadSha !== proof.reviewedHeadSha
+          || settlementMetadata.mergeSha !== proof.mergeSha) throw wall()
+      }
+      await runQuery("COMMIT"); begun = false
+      const confirmation = confirmations[0]
+      return {
+        eventId: Number(prior.rows[0].id), payloadDigest: metadata.payloadDigest, metadata,
+        confirmed: Boolean(confirmation),
+        ...(confirmation ? { confirmation: { eventId: Number(confirmation.id), metadata: confirmation.metadata,
+          payloadDigest: confirmation.metadata?.payloadDigest } } : {}),
+        settled: later.rows.some((row) => row.eventType
+          === "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED"),
+        replayed: true,
+      }
+    }
+    if ((later?.rows?.length ?? 0) !== 0) throw wall()
+    const graph = await runQuery(
+      `SELECT g.id AS "goalId", g."userId" AS "userId", wo.id AS "workOrderId",
+          wo.ref AS "workOrderRef", q.version, q."fencingToken" AS "fencingToken",
+          q."lifecycleState" AS "lifecycleState", q."lifecycleReason" AS "lifecycleReason",
+          q."leaseExpiresAt" AS "leaseExpiresAt"
+       FROM goal g
+       JOIN outcome_queue_item q ON q."userId" = g."userId" AND q."goalId" = g.id
+       JOIN work_order wo ON wo."userId" = q."userId" AND wo.id = q."activeWorkOrderId"
+       JOIN outcome_queue_mutation_receipt receipt ON receipt."userId" = q."userId"
+         AND receipt."outcomeKey" = q."outcomeKey" AND receipt.operation = 'workbench_execution.authorize'
+         AND receipt."requestBinding"->>'confirmation' = 'START_WORK'
+         AND receipt."requestBinding"->>'outcomeKey' = q."outcomeKey"
+         AND receipt."resultBinding"->>'grantRef' = q."authorityGrantRef"
+         AND receipt."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
+         AND receipt."resultBinding"->'workContract'->>'id' = $12
+         AND receipt."resultBinding"->'workContract'->>'digest' = $13
+         AND receipt."resultBinding"->'workContract' = $14::jsonb
+       JOIN authority_grant implementation_grant ON implementation_grant."userId" = q."userId"
+         AND implementation_grant.id::text = receipt."resultBinding"->>'implementationGrantId'
+         AND implementation_grant.ref = receipt."resultBinding"->>'implementationGrantRef'
+       WHERE g.id = $1 AND g."userId" = $2 AND g.status = 'classified'
+         AND q."outcomeKey" = $3 AND q.version = $4 AND q."fencingToken" = $5
+         AND q."executionBinding" = $6 AND q."acquisitionKey" = $7
+         AND q."leaseHolder" = $8 AND q."leaseToken" = $9
+         AND q."lifecycleState" = 'active' AND q."lifecycleReason" = 'STALE_LEASE_RECOVERED'
+         AND q."leaseExpiresAt" <= clock_timestamp()
+         AND q."activeWorkOrderId" = $10 AND wo.ref = $11
+         AND q."approvalState" = 'approved' AND q."authorityState" = 'matched'
+         AND q."authorityLevel" = 'A2_WRITE_OWN' AND q."authoritySubject" = 'operator'
+         AND q."authorityAction" = 'outcome:execute'
+         AND EXISTS (SELECT 1 FROM decision d WHERE d.id = q."approvalDecisionId"
+           AND d."userId" = q."userId" AND d.owner = q."userId" AND d.status = 'accepted'
+           AND d.authority = 'binding' AND d.locked = true
+           AND upper(trim(d.decision)) = 'APPROVE' AND d.scope = q."outcomeKey"
+           AND d.tags = ARRAY['workbench','outcome','explicit-start-work']::text[])
+         AND EXISTS (SELECT 1 FROM authority_grant grant_row
+           WHERE grant_row."userId" = q."userId" AND grant_row.ref = q."authorityGrantRef"
+             AND grant_row.status = 'active' AND grant_row."revokedAt" IS NULL
+             AND grant_row."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp()
+             AND grant_row."authorityLevel" = 'A2_WRITE_OWN'
+             AND grant_row."grantedTo" = 'operator' AND grant_row.scope = q."outcomeKey"
+             AND (grant_row."workOrderId" IS NULL OR grant_row."workOrderId" = q."activeWorkOrderId")
+             AND grant_row."allowedActions" = ARRAY['outcome:execute']::text[]
+             AND NOT EXISTS (SELECT 1 FROM unnest(COALESCE(grant_row."blockedActions", ARRAY[]::text[])) blocked(action)
+               WHERE position(lower(blocked.action) IN 'outcome:execute') > 0))
+         AND implementation_grant.status = 'active' AND implementation_grant."revokedAt" IS NULL
+         AND implementation_grant."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp()
+         AND implementation_grant."authorityLevel" = 'A2_WRITE_OWN'
+         AND implementation_grant."grantedTo" = 'operator' AND implementation_grant.scope = wo.ref
+         AND (implementation_grant."workOrderId" IS NULL OR implementation_grant."workOrderId" = wo.id)
+         AND implementation_grant."allowedActions" = ARRAY['implement']::text[]
+         AND NOT EXISTS (SELECT 1 FROM unnest(COALESCE(implementation_grant."blockedActions", ARRAY[]::text[])) blocked(action)
+           WHERE position(lower(blocked.action) IN 'implement') > 0)
+       ORDER BY g.id LIMIT 2 FOR UPDATE OF g, q, wo`,
+      [outcomeId, executionBinding.userId, executionBinding.outcomeKey,
+        executionBinding.expectedVersion, executionBinding.fencingToken,
+        executionBinding.executionBinding, executionBinding.acquisitionKey,
+        executionBinding.leaseHolder, executionBinding.leaseToken,
+        executionBinding.activeWorkOrderId, workOrderRef, workContract.id, workContract.digest,
+        JSON.stringify(ACTIVE_CLEANUP_REGISTERED_CONTRACT)],
+    )
+    const row = graph?.rows?.[0]
+    if (graph?.rows?.length !== 1 || Number(row.goalId) !== outcomeId
+      || Number(row.workOrderId) !== executionBinding.activeWorkOrderId
+      || row.workOrderRef !== workOrderRef || Number(row.version) !== executionBinding.expectedVersion
+      || Number(row.fencingToken) !== executionBinding.fencingToken
+      || row.lifecycleState !== "active" || row.lifecycleReason !== "STALE_LEASE_RECOVERED"
+      || !Number.isFinite(Date.parse(String(row.leaseExpiresAt ?? "")))) throw wall()
+    const inserted = await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       VALUES ($1, 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED', 'goal', $2,
+         'hermes-codex-bridge', $3, $4::jsonb) RETURNING id`,
+      [executionBinding.userId, String(outcomeId),
+        `Authorized cleanup-only settlement for merged PR #${proof.prNumber}`, JSON.stringify(metadata)],
+    )
+    if (inserted?.rows?.length !== 1 || !Number.isSafeInteger(Number(inserted.rows[0].id))) throw wall()
+    await runQuery("COMMIT"); begun = false
+    return { eventId: Number(inserted.rows[0].id), payloadDigest: metadata.payloadDigest,
+      metadata, confirmed: false, settled: false, replayed: false }
+  } catch (error) {
+    if (begun) { try { await runQuery("ROLLBACK") } catch {} }
+    throw error
+  } finally {
+    client?.release()
+    if (pool) await pool.end()
+  }
+}
+
+export async function confirmActivePostMergeCleanup({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  executionBinding,
+  authorizationEventId,
+  cleanupProofDigest,
+  branch,
+  worktreePath,
+  prNumber,
+  reviewedHeadSha,
+  mergeSha,
+} = {}) {
+  const wall = () => Object.assign(new Error("Active post-merge cleanup confirmation conflicts"), {
+    code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMATION_WALL",
+  })
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
+    || !Number.isSafeInteger(authorizationEventId) || authorizationEventId <= 0
+    || !executionBinding || typeof executionBinding.userId !== "string"
+    || !/^[0-9a-f]{64}$/.test(String(cleanupProofDigest ?? ""))
+    || typeof branch !== "string" || branch.trim() === ""
+    || typeof worktreePath !== "string" || worktreePath.trim() === ""
+    || !Number.isSafeInteger(prNumber) || prNumber <= 0
+    || !COMMIT_SHA.test(String(reviewedHeadSha ?? ""))
+    || !COMMIT_SHA.test(String(mergeSha ?? ""))) throw wall()
+  const workOrderRef = outcomeWorkOrderRef(outcomeId)
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  let begun = false
+  try {
+    if (!runQuery) {
+      if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+        throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+      }
+      const { Pool } = await import("pg")
+      pool = createHermesDatabasePool(Pool, databaseUrl)
+      client = await pool.connect(); runQuery = client.query.bind(client)
+    }
+    await runQuery("BEGIN"); begun = true
+    await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [workOrderRef])
+    const authorization = await runQuery(
+      `SELECT id, actor, metadata FROM governance_event
+       WHERE "userId" = $1 AND "entityType" = 'goal' AND "entityId"::text = $2
+         AND "eventType" = 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED'
+       ORDER BY id LIMIT 2 FOR UPDATE`,
+      [executionBinding.userId, String(outcomeId)],
+    )
+    if (authorization?.rows?.length !== 1
+      || Number(authorization.rows[0].id) !== authorizationEventId
+      || authorization.rows[0].actor !== "hermes-codex-bridge") throw wall()
+    const auth = authorization.rows[0].metadata
+    const exactAuth = exactActiveCleanupAuthorization(auth)
+    if (!exactAuth
+      || auth.cleanupProofDigest !== cleanupProofDigest
+      || auth.branch !== branch || auth.worktreePath !== worktreePath
+      || Number(auth.prNumber) !== prNumber || auth.reviewedHeadSha !== reviewedHeadSha
+      || auth.mergeSha !== mergeSha || auth.executionBinding !== executionBinding.executionBinding
+      || auth.acquisitionKey !== executionBinding.acquisitionKey
+      || Number(auth.fencingToken) !== executionBinding.fencingToken
+      || Number(auth.expectedVersion) !== executionBinding.expectedVersion) throw wall()
+    const metadata = activeCleanupConfirmationMetadata(auth, authorizationEventId)
+    const idempotencyKey = metadata.idempotencyKey
+    const prior = await runQuery(
+      `SELECT id, actor, metadata FROM governance_event
+       WHERE "userId" = $1 AND "entityType" = 'goal' AND "entityId"::text = $2
+         AND "eventType" = 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED'
+       ORDER BY id LIMIT 2 FOR UPDATE`,
+      [executionBinding.userId, String(outcomeId)],
+    )
+    if ((prior?.rows?.length ?? 0) > 1) throw wall()
+    const settlement = await runQuery(
+      `SELECT id FROM governance_event
+       WHERE "userId" = $1 AND "entityType" = 'goal' AND "entityId"::text = $2
+         AND "eventType" = 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED'
+       ORDER BY id LIMIT 1 FOR UPDATE`,
+      [executionBinding.userId, String(outcomeId)],
+    )
+    if ((settlement?.rows?.length ?? 0) !== 0) throw wall()
+    if (prior?.rows?.length === 1) {
+      if (prior.rows[0].actor !== "hermes-codex-bridge"
+        || canonicalJson(prior.rows[0].metadata) !== canonicalJson(metadata)) throw wall()
+      await runQuery("COMMIT"); begun = false
+      return { eventId: Number(prior.rows[0].id), payloadDigest: metadata.payloadDigest,
+        metadata, replayed: true }
+    }
+    const inserted = await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       VALUES ($1, 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED', 'goal', $2,
+         'hermes-codex-bridge', $3, $4::jsonb) RETURNING id`,
+      [executionBinding.userId, String(outcomeId),
+        `Confirmed guarded cleanup for merged PR #${prNumber}`, JSON.stringify(metadata)],
+    )
+    if (inserted?.rows?.length !== 1 || !Number.isSafeInteger(Number(inserted.rows[0].id))) throw wall()
+    await runQuery("COMMIT"); begun = false
+    return { eventId: Number(inserted.rows[0].id), payloadDigest: metadata.payloadDigest,
+      metadata, replayed: false }
+  } catch (error) {
+    if (begun) { try { await runQuery("ROLLBACK") } catch {} }
+    throw error
+  } finally {
+    client?.release(); if (pool) await pool.end()
+  }
+}
+
+export async function settleActivePostMergeCleanupOutcome({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  executionBinding,
+  workContract,
+  authorizationEventId,
+  confirmationEventId,
+  cleanupProofDigest,
+  expectedVersion,
+  fencingToken,
+  runtimeAttempt,
+  checkpointSequence,
+  prNumber,
+  reviewedHeadSha,
+  mergeSha,
+  verifyOnly = false,
+} = {}) {
+  const wall = () => Object.assign(new Error("Active post-merge cleanup settlement conflicts"), {
+    code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL",
+  })
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
+    || !executionBinding || executionBinding.expectedVersion !== expectedVersion
+    || executionBinding.fencingToken !== fencingToken
+    || !Number.isSafeInteger(runtimeAttempt) || runtimeAttempt <= 0
+    || !Number.isSafeInteger(checkpointSequence) || checkpointSequence < 0
+    || !Number.isSafeInteger(authorizationEventId) || authorizationEventId <= 0
+    || !Number.isSafeInteger(confirmationEventId) || confirmationEventId <= authorizationEventId
+    || !/^[0-9a-f]{64}$/.test(String(cleanupProofDigest ?? ""))
+    || !Number.isSafeInteger(prNumber) || prNumber <= 0
+    || !COMMIT_SHA.test(String(reviewedHeadSha ?? ""))
+    || !COMMIT_SHA.test(String(mergeSha ?? ""))) throw wall()
+  if (workContract?.id !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.id
+    || workContract?.digest !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.digest
+    || workContract?.version !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.version
+    || workContract?.repository !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.repository
+    || workContract?.lane !== ACTIVE_CLEANUP_REGISTERED_CONTRACT.lane) throw wall()
+  const workOrderRef = outcomeWorkOrderRef(outcomeId)
+  const idempotencyKey = `hermes-outcome:${outcomeId}:active-post-merge-cleanup:settle:${cleanupProofDigest}`
+  const checkpointKey = `hermes-outcome:${outcomeId}:attempt:${runtimeAttempt}:checkpoint:${checkpointSequence}`
+  const terminalKey = `${idempotencyKey}:queue`
+  let runQuery = normalizeQuery(query)
+  let pool
+  let client
+  let begun = false
+  try {
+    if (!runQuery) {
+      if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+        throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+      }
+      const { Pool } = await import("pg")
+      pool = createHermesDatabasePool(Pool, databaseUrl)
+      client = await pool.connect(); runQuery = client.query.bind(client)
+    }
+    await runQuery("BEGIN"); begun = true
+    await runQuery("SELECT pg_advisory_xact_lock(hashtext($1))", [workOrderRef])
+    const prior = await runQuery(
+      `SELECT e.id, e.actor, e.metadata, q.version, q."fencingToken" AS "fencingToken",
+          q."lifecycleState" AS "lifecycleState", q."lifecycleReason" AS "lifecycleReason",
+          q."terminalKey" AS "terminalKey", q."terminalResult" AS "terminalResult",
+          q."terminalEvidenceId" AS "terminalEvidenceId", q."terminalEvidenceRefs" AS "terminalEvidenceRefs",
+          q."leaseHolder" AS "leaseHolder",
+          q."leaseToken" AS "leaseToken", q."leaseExpiresAt" AS "leaseExpiresAt",
+          g.status AS "goalStatus", wo.status AS "workOrderStatus", wo.result AS "workOrderResult",
+          wo."commitRef" AS "workOrderCommitRef",
+          wo."latestCheckpointId" AS "latestCheckpointId", checkpoint.actor AS "checkpointActor",
+          checkpoint.metadata AS "checkpointMetadata"
+       FROM governance_event e
+       JOIN outcome_queue_item q ON q."userId" = e."userId" AND q."goalId" = e."entityId"::integer
+       JOIN goal g ON g.id = q."goalId" AND g."userId" = q."userId"
+       JOIN work_order wo ON wo.id = q."activeWorkOrderId" AND wo."userId" = q."userId"
+       JOIN governance_event checkpoint ON checkpoint.id = CASE
+           WHEN e.metadata->>'checkpointEventId' ~ '^[1-9][0-9]*$'
+           THEN (e.metadata->>'checkpointEventId')::bigint END
+         AND checkpoint."userId" = q."userId" AND checkpoint."entityType" = 'work_order'
+         AND checkpoint."entityId"::text = wo.id::text
+         AND checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+       WHERE e."userId" = $1 AND e."entityType" = 'goal' AND e."entityId"::text = $2
+         AND e."eventType" = 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED'
+         AND e.actor = 'hermes-codex-bridge'
+         AND e.metadata->>'idempotencyKey' = $3
+       ORDER BY e.id LIMIT 2 FOR UPDATE OF q`,
+      [executionBinding.userId, String(outcomeId), idempotencyKey],
+    )
+    if ((prior?.rows?.length ?? 0) > 1) throw wall()
+    const chain = await runQuery(
+      `SELECT id, "eventType", actor, metadata FROM governance_event
+       WHERE "userId" = $1 AND "entityType" = 'goal' AND "entityId"::text = $2
+         AND "eventType" IN ('HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED',
+           'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED',
+           'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED')
+       ORDER BY id FOR UPDATE`,
+      [executionBinding.userId, String(outcomeId)],
+    )
+    const authorizationKey = ["hermes-outcome", outcomeId, "active-post-merge-cleanup",
+      executionBinding.acquisitionKey, executionBinding.fencingToken].join(":")
+    const authorizations = chain.rows.filter((row) => row.eventType
+      === "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED")
+    const confirmations = chain.rows.filter((row) => row.eventType
+      === "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED")
+    const settlements = chain.rows.filter((row) => row.eventType
+      === "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED")
+    const authorization = authorizations[0]
+    const exactAuthorization = exactActiveCleanupAuthorization(authorization?.metadata)
+    const expectedConfirmation = exactAuthorization
+      ? activeCleanupConfirmationMetadata(exactAuthorization, authorizationEventId) : null
+    const confirmation = confirmations[0]
+    if (authorizations.length !== 1 || confirmations.length !== 1
+      || settlements.length !== (prior?.rows?.length ?? 0)
+      || Number(authorization?.id) !== authorizationEventId
+      || authorization?.actor !== "hermes-codex-bridge" || !exactAuthorization
+      || exactAuthorization.idempotencyKey !== authorizationKey
+      || exactAuthorization.cleanupProofDigest !== cleanupProofDigest
+      || exactAuthorization.outcomeId !== outcomeId
+      || exactAuthorization.userId !== executionBinding.userId
+      || exactAuthorization.outcomeKey !== executionBinding.outcomeKey
+      || exactAuthorization.workOrderId !== executionBinding.activeWorkOrderId
+      || exactAuthorization.workOrderRef !== workOrderRef
+      || exactAuthorization.workContractId !== workContract.id
+      || exactAuthorization.workContractDigest !== workContract.digest
+      || exactAuthorization.expectedVersion !== expectedVersion
+      || exactAuthorization.executionBinding !== executionBinding.executionBinding
+      || exactAuthorization.acquisitionKey !== executionBinding.acquisitionKey
+      || exactAuthorization.fencingToken !== fencingToken
+      || exactAuthorization.prNumber !== prNumber
+      || exactAuthorization.reviewedHeadSha !== reviewedHeadSha
+      || exactAuthorization.mergeSha !== mergeSha
+      || Number(confirmation?.id) !== confirmationEventId
+      || confirmation?.actor !== "hermes-codex-bridge"
+      || confirmationEventId <= authorizationEventId
+      || canonicalJson(confirmation?.metadata) !== canonicalJson(expectedConfirmation)
+      || (settlements[0] && settlements[0].metadata?.idempotencyKey !== idempotencyKey)) throw wall()
+    if (prior?.rows?.length === 1) {
+      const persisted = exactPayloadMetadata(prior.rows[0].metadata)
+      const checkpointMetadata = exactPayloadMetadata(prior.rows[0].checkpointMetadata)
+      const expectedCheckpoint = {
+        idempotencyKey: checkpointKey, outcomeId, workOrderRef, attempt: runtimeAttempt,
+        checkpointSequence, checkpointState: "POST_MERGE_CLEANUP_RECOVERED",
+        checkpointDetail: `PR #${prNumber}`, executionBinding: executionBinding.executionBinding,
+        acquisitionKey: executionBinding.acquisitionKey, acquisitionFencingToken: fencingToken,
+        workContractId: workContract.id, workContractDigest: workContract.digest,
+        authorizationEventId, confirmationEventId, cleanupProofDigest, prNumber,
+        headRefOid: reviewedHeadSha, mergeSha,
+      }
+      expectedCheckpoint.payloadDigest = activeCleanupPayloadDigest(expectedCheckpoint)
+      const expectedSettlement = persisted ? {
+        idempotencyKey, authorizationEventId, confirmationEventId,
+        checkpointEventId: Number(persisted.checkpointEventId),
+        checkpointPayloadDigest: expectedCheckpoint.payloadDigest, cleanupProofDigest,
+        outcomeId, userId: executionBinding.userId, outcomeKey: executionBinding.outcomeKey,
+        workOrderId: executionBinding.activeWorkOrderId, workOrderRef,
+        priorQueueVersion: expectedVersion, completedQueueVersion: expectedVersion + 1,
+        fencingToken, prNumber, reviewedHeadSha, mergeSha,
+      } : null
+      if (expectedSettlement) expectedSettlement.payloadDigest = activeCleanupPayloadDigest(expectedSettlement)
+      if (!persisted || canonicalJson(checkpointMetadata) !== canonicalJson(expectedCheckpoint)
+        || canonicalJson(persisted) !== canonicalJson(expectedSettlement)
+        || prior.rows[0].actor !== "hermes-codex-bridge"
+        || prior.rows[0].checkpointActor !== "hermes-codex-bridge"
+        || Number(prior.rows[0].version) !== expectedVersion + 1
+        || Number(prior.rows[0].fencingToken) !== fencingToken
+        || prior.rows[0].lifecycleState !== "completed"
+        || prior.rows[0].lifecycleReason !== "COMPLETE"
+        || prior.rows[0].terminalKey !== terminalKey
+        || prior.rows[0].terminalResult !== "COMPLETE"
+        || Number(prior.rows[0].terminalEvidenceId) !== Number(persisted?.checkpointEventId)
+        || !exactStringArray(prior.rows[0].terminalEvidenceRefs,
+          [runtimeEvidenceRef(outcomeId, runtimeAttempt, checkpointSequence)])
+        || prior.rows[0].leaseHolder != null || prior.rows[0].leaseToken != null
+        || prior.rows[0].leaseExpiresAt != null || prior.rows[0].goalStatus !== "converted"
+        || prior.rows[0].workOrderStatus !== "closed" || prior.rows[0].workOrderResult !== "PASS"
+        || prior.rows[0].workOrderCommitRef !== mergeSha
+        || Number(prior.rows[0].latestCheckpointId) !== Number(persisted?.checkpointEventId)) throw wall()
+      if (!(confirmationEventId < Number(persisted.checkpointEventId)
+        && Number(persisted.checkpointEventId) < Number(prior.rows[0].id))) throw wall()
+      await runQuery("COMMIT"); begun = false
+      return { checkpointEventId: Number(persisted.checkpointEventId), queueVersion: expectedVersion + 1,
+        fencingToken, settlementEventId: Number(prior.rows[0].id),
+        authorizationPayloadDigest: exactAuthorization.payloadDigest,
+        confirmationPayloadDigest: expectedConfirmation.payloadDigest,
+        payloadDigest: persisted.payloadDigest, replayed: true }
+    }
+    if (verifyOnly) throw wall()
+    const graph = await runQuery(
+      `SELECT g.id AS "goalId", g."userId" AS "userId", g.status AS "goalStatus",
+          wo.id AS "workOrderId", wo.ref AS "workOrderRef", wo.status AS "workOrderStatus",
+          q.version, q."fencingToken" AS "fencingToken", q."lifecycleState" AS "lifecycleState",
+          q."lifecycleReason" AS "lifecycleReason",
+          auth.id AS "authorizationId", auth.metadata AS "authorizationMetadata",
+          confirmed.id AS "confirmationId", confirmed.metadata AS "confirmationMetadata"
+       FROM goal g
+       JOIN outcome_queue_item q ON q."userId" = g."userId" AND q."goalId" = g.id
+       JOIN work_order wo ON wo."userId" = q."userId" AND wo.id = q."activeWorkOrderId"
+       JOIN outcome_queue_mutation_receipt receipt ON receipt."userId" = q."userId"
+         AND receipt."outcomeKey" = q."outcomeKey" AND receipt.operation = 'workbench_execution.authorize'
+         AND receipt."requestBinding"->>'confirmation' = 'START_WORK'
+         AND receipt."requestBinding"->>'outcomeKey' = q."outcomeKey"
+         AND receipt."resultBinding"->>'grantRef' = q."authorityGrantRef"
+         AND receipt."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
+         AND receipt."resultBinding"->'workContract'->>'id' = $14
+         AND receipt."resultBinding"->'workContract'->>'digest' = $15
+         AND receipt."resultBinding"->'workContract' = $16::jsonb
+       JOIN authority_grant implementation_grant ON implementation_grant."userId" = q."userId"
+         AND implementation_grant.id::text = receipt."resultBinding"->>'implementationGrantId'
+         AND implementation_grant.ref = receipt."resultBinding"->>'implementationGrantRef'
+       JOIN governance_event auth ON auth.id = $12 AND auth."userId" = q."userId"
+         AND auth."entityType" = 'goal' AND auth."entityId"::text = g.id::text
+         AND auth."eventType" = 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED'
+         AND auth.actor = 'hermes-codex-bridge'
+       JOIN governance_event confirmed ON confirmed.id = $13 AND confirmed."userId" = q."userId"
+         AND confirmed."entityType" = 'goal' AND confirmed."entityId"::text = g.id::text
+         AND confirmed."eventType" = 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED'
+         AND confirmed.actor = 'hermes-codex-bridge' AND confirmed.id > auth.id
+       WHERE g.id = $1 AND g."userId" = $2 AND g.status = 'classified'
+         AND q."outcomeKey" = $3 AND q.version = $4 AND q."fencingToken" = $5
+         AND q."executionBinding" = $6 AND q."acquisitionKey" = $7
+         AND q."leaseHolder" = $8 AND q."leaseToken" = $9
+         AND q."lifecycleState" = 'active' AND q."lifecycleReason" = 'STALE_LEASE_RECOVERED'
+         AND q."leaseExpiresAt" <= clock_timestamp()
+         AND q."activeWorkOrderId" = $10 AND wo.ref = $11
+         AND q."approvalState" = 'approved' AND q."authorityState" = 'matched'
+         AND q."authorityLevel" = 'A2_WRITE_OWN' AND q."authoritySubject" = 'operator'
+         AND q."authorityAction" = 'outcome:execute'
+         AND EXISTS (SELECT 1 FROM decision d WHERE d.id = q."approvalDecisionId"
+           AND d."userId" = q."userId" AND d.owner = q."userId" AND d.status = 'accepted'
+           AND d.authority = 'binding' AND d.locked = true
+           AND upper(trim(d.decision)) = 'APPROVE' AND d.scope = q."outcomeKey"
+           AND d.tags = ARRAY['workbench','outcome','explicit-start-work']::text[])
+         AND EXISTS (SELECT 1 FROM authority_grant grant_row
+           WHERE grant_row."userId" = q."userId" AND grant_row.ref = q."authorityGrantRef"
+             AND grant_row.status = 'active' AND grant_row."revokedAt" IS NULL
+             AND grant_row."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp()
+             AND grant_row."authorityLevel" = 'A2_WRITE_OWN'
+             AND grant_row."grantedTo" = 'operator' AND grant_row.scope = q."outcomeKey"
+             AND (grant_row."workOrderId" IS NULL OR grant_row."workOrderId" = q."activeWorkOrderId")
+             AND grant_row."allowedActions" = ARRAY['outcome:execute']::text[]
+             AND NOT EXISTS (SELECT 1 FROM unnest(COALESCE(grant_row."blockedActions", ARRAY[]::text[])) blocked(action)
+               WHERE position(lower(blocked.action) IN 'outcome:execute') > 0))
+         AND implementation_grant.status = 'active' AND implementation_grant."revokedAt" IS NULL
+         AND implementation_grant."expiresAt" AT TIME ZONE 'UTC' > clock_timestamp()
+         AND implementation_grant."authorityLevel" = 'A2_WRITE_OWN'
+         AND implementation_grant."grantedTo" = 'operator' AND implementation_grant.scope = wo.ref
+         AND (implementation_grant."workOrderId" IS NULL OR implementation_grant."workOrderId" = wo.id)
+         AND implementation_grant."allowedActions" = ARRAY['implement']::text[]
+         AND NOT EXISTS (SELECT 1 FROM unnest(COALESCE(implementation_grant."blockedActions", ARRAY[]::text[])) blocked(action)
+           WHERE position(lower(blocked.action) IN 'implement') > 0)
+       ORDER BY g.id LIMIT 2 FOR UPDATE OF g, q, wo`,
+      [outcomeId, executionBinding.userId, executionBinding.outcomeKey, expectedVersion,
+        fencingToken, executionBinding.executionBinding, executionBinding.acquisitionKey,
+        executionBinding.leaseHolder, executionBinding.leaseToken,
+        executionBinding.activeWorkOrderId, workOrderRef, authorizationEventId, confirmationEventId,
+        workContract.id, workContract.digest, JSON.stringify(ACTIVE_CLEANUP_REGISTERED_CONTRACT)],
+    )
+    if (graph?.rows?.length !== 1) throw wall()
+    const row = graph.rows[0]
+    const auth = row.authorizationMetadata
+    const rowConfirmation = row.confirmationMetadata
+    const exactAuth = exactActiveCleanupAuthorization(auth)
+    const exactConfirmation = exactActiveCleanupConfirmation(rowConfirmation)
+    const expectedRowConfirmation = exactAuth
+      ? activeCleanupConfirmationMetadata(exactAuth, authorizationEventId) : null
+    if (Number(row.goalId) !== outcomeId || row.userId !== executionBinding.userId
+      || row.goalStatus !== "classified" || Number(row.workOrderId) !== executionBinding.activeWorkOrderId
+      || row.workOrderRef !== workOrderRef || Number(row.version) !== expectedVersion
+      || Number(row.fencingToken) !== fencingToken || row.lifecycleState !== "active"
+      || row.lifecycleReason !== "STALE_LEASE_RECOVERED" || !exactAuth || !exactConfirmation
+      || exactAuth.cleanupProofDigest !== cleanupProofDigest
+      || exactAuth.recoveryKind !== "active-post-merge-cleanup"
+      || Number(exactAuth.outcomeId) !== outcomeId || exactAuth.userId !== executionBinding.userId
+      || exactAuth.outcomeKey !== executionBinding.outcomeKey
+      || Number(exactAuth.workOrderId) !== executionBinding.activeWorkOrderId
+      || exactAuth.workOrderRef !== workOrderRef
+      || exactAuth.executionBinding !== executionBinding.executionBinding
+      || exactAuth.acquisitionKey !== executionBinding.acquisitionKey
+      || Number(exactAuth.expectedVersion) !== expectedVersion
+      || Number(exactAuth.fencingToken) !== fencingToken
+      || Number(exactAuth.sourceExpectedVersion) !== executionBinding.reviewRecoverySourceExpectedVersion
+      || Number(exactAuth.sourceFencingToken) !== executionBinding.reviewRecoverySourceFencingToken
+      || Number(exactAuth.sourceRuntimeAttempt) !== executionBinding.reviewRecoverySourceRuntimeAttempt
+      || Number(exactAuth.reclaimEventId) !== executionBinding.reviewRecoveryReclaimEventId
+      || exactAuth.reclaimPayloadDigest !== executionBinding.reviewRecoveryReclaimPayloadDigest
+      || exactAuth.baseCheckpointDigest !== executionBinding.reviewRecoveryStaleReacquisition?.checkpointDigest
+      || exactAuth.continuationCheckpointDigest !== executionBinding.reviewRecoveryStaleContinuation?.checkpointDigest
+      || !/^[0-9a-f]{64}$/.test(String(exactAuth.reviewRecoveryProofDigest ?? ""))
+      || Number(exactAuth.prNumber) !== prNumber || exactAuth.reviewedHeadSha !== reviewedHeadSha
+      || exactAuth.mergeSha !== mergeSha || typeof exactAuth.branch !== "string"
+      || exactAuth.branch.trim() === "" || typeof exactAuth.worktreePath !== "string"
+      || exactAuth.worktreePath.trim() === ""
+      || exactAuth.workContractId !== workContract?.id
+      || exactAuth.workContractDigest !== workContract?.digest
+      || canonicalJson(exactConfirmation) !== canonicalJson(expectedRowConfirmation)) throw wall()
+    const checkpointMetadata = {
+      idempotencyKey: checkpointKey,
+      outcomeId,
+      workOrderRef,
+      attempt: runtimeAttempt,
+      checkpointSequence,
+      checkpointState: "POST_MERGE_CLEANUP_RECOVERED",
+      checkpointDetail: `PR #${prNumber}`,
+      executionBinding: executionBinding.executionBinding,
+      acquisitionKey: executionBinding.acquisitionKey,
+      acquisitionFencingToken: fencingToken,
+      workContractId: workContract.id,
+      workContractDigest: workContract.digest,
+      authorizationEventId,
+      confirmationEventId,
+      cleanupProofDigest,
+      prNumber,
+      headRefOid: reviewedHeadSha,
+      mergeSha,
+    }
+    checkpointMetadata.payloadDigest = activeCleanupPayloadDigest(checkpointMetadata)
+    const checkpoint = await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       SELECT $1, 'HERMES_RUNTIME_CHECKPOINT', 'work_order', $2, 'hermes-codex-bridge', $3, $4::jsonb
+       WHERE NOT EXISTS (SELECT 1 FROM governance_event prior
+         WHERE prior."userId" = $1 AND prior."entityType" = 'work_order'
+           AND prior."entityId"::text = $2::text AND prior."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+           AND prior.metadata->>'idempotencyKey' = $5) RETURNING id`,
+      [executionBinding.userId, String(executionBinding.activeWorkOrderId),
+        `Recovered guarded cleanup for PR #${prNumber}`, JSON.stringify(checkpointMetadata), checkpointKey],
+    )
+    if (checkpoint?.rows?.length !== 1) throw wall()
+    const checkpointEventId = Number(checkpoint.rows[0].id)
+    const completedQueue = await runQuery(
+      `UPDATE outcome_queue_item SET "lifecycleState" = 'completed', "lifecycleReason" = 'COMPLETE',
+          version = version + 1, "terminalKey" = $10, "terminalResult" = 'COMPLETE',
+          "terminalEvidenceId" = $11, "terminalEvidenceRefs" = ARRAY[$12]::text[],
+          "leaseHolder" = NULL, "leaseToken" = NULL, "leaseExpiresAt" = NULL, "updatedAt" = NOW()
+       WHERE "userId" = $1 AND "outcomeKey" = $2 AND version = $3
+         AND "executionBinding" = $4 AND "acquisitionKey" = $5 AND "fencingToken" = $6
+         AND "leaseHolder" = $7 AND "leaseToken" = $8 AND "activeWorkOrderId" = $9
+         AND "lifecycleState" = 'active' AND "lifecycleReason" = 'STALE_LEASE_RECOVERED'
+       RETURNING id, version, "fencingToken" AS "fencingToken"`,
+      [executionBinding.userId, executionBinding.outcomeKey, expectedVersion,
+        executionBinding.executionBinding, executionBinding.acquisitionKey, fencingToken,
+        executionBinding.leaseHolder, executionBinding.leaseToken,
+        executionBinding.activeWorkOrderId, terminalKey, checkpointEventId,
+        runtimeEvidenceRef(outcomeId, runtimeAttempt, checkpointSequence)],
+    )
+    if (completedQueue?.rows?.length !== 1
+      || Number(completedQueue.rows[0].version) !== expectedVersion + 1
+      || Number(completedQueue.rows[0].fencingToken) !== fencingToken) throw wall()
+    const completedGoal = await runQuery(
+      `UPDATE goal SET status = 'converted', "updatedAt" = NOW()
+       WHERE id = $1 AND "userId" = $2 AND status = 'classified' RETURNING id`,
+      [outcomeId, executionBinding.userId],
+    )
+    if (completedGoal?.rows?.length !== 1) throw wall()
+    const completedWorkOrder = await runQuery(
+      `UPDATE work_order SET status = 'closed', result = 'PASS', "commitRef" = $3,
+          "latestCheckpointId" = $4, "closedAt" = NOW(), "completedAt" = NOW(), "updatedAt" = NOW()
+       WHERE id = $1 AND "userId" = $2 AND ref = $5 AND status IN ('active','approved','review')
+       RETURNING id`,
+      [executionBinding.activeWorkOrderId, executionBinding.userId, mergeSha,
+        checkpointEventId, workOrderRef],
+    )
+    if (completedWorkOrder?.rows?.length !== 1) throw wall()
+    const settlementMetadata = {
+      idempotencyKey,
+      authorizationEventId,
+      confirmationEventId,
+      checkpointEventId,
+      checkpointPayloadDigest: checkpointMetadata.payloadDigest,
+      cleanupProofDigest,
+      outcomeId,
+      userId: executionBinding.userId,
+      outcomeKey: executionBinding.outcomeKey,
+      workOrderId: executionBinding.activeWorkOrderId,
+      workOrderRef,
+      priorQueueVersion: expectedVersion,
+      completedQueueVersion: expectedVersion + 1,
+      fencingToken,
+      prNumber,
+      reviewedHeadSha,
+      mergeSha,
+    }
+    settlementMetadata.payloadDigest = activeCleanupPayloadDigest(settlementMetadata)
+    const settlement = await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       VALUES ($1, 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED', 'goal', $2,
+         'hermes-codex-bridge', $3, $4::jsonb) RETURNING id`,
+      [executionBinding.userId, String(outcomeId),
+        `Completed merged PR #${prNumber} after guarded cleanup`, JSON.stringify(settlementMetadata)],
+    )
+    if (settlement?.rows?.length !== 1) throw wall()
+    await runQuery("COMMIT"); begun = false
+    return { checkpointEventId, queueVersion: expectedVersion + 1, fencingToken,
+      settlementEventId: Number(settlement.rows[0].id), payloadDigest: settlementMetadata.payloadDigest,
+      replayed: false }
+  } catch (error) {
+    if (begun) { try { await runQuery("ROLLBACK") } catch {} }
+    throw error
+  } finally {
+    client?.release(); if (pool) await pool.end()
+  }
+}
+
+export async function verifyActivePostMergeCleanupSettlement(options = {}) {
+  const result = await settleActivePostMergeCleanupOutcome({ ...options, verifyOnly: true })
+  if (result.replayed !== true) {
+    throw Object.assign(new Error("Active post-merge cleanup settlement is absent"), {
+      code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL",
+    })
+  }
+  return result
 }
 
 export const persistOutcomeRuntimeProjection = projectOutcomeRuntimeCheckpoint
