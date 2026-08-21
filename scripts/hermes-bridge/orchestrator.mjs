@@ -373,6 +373,46 @@ function projectedWorkContract(outcome, resolver) {
   }
 }
 
+export function deriveHermesRuntimeProjectionBindings(
+  outcome,
+  { resolver = resolveHermesWorkContract, requireVerified = false } = {},
+) {
+  if (requireVerified && outcome?.verifiedQueueWorkContract === undefined) {
+    throw Object.assign(new Error("Queue work contract authority is missing"), {
+      code: "HERMES_WORK_CONTRACT_WALL",
+    })
+  }
+  const { projection: workContract } = projectedWorkContract(outcome, resolver)
+  const binding = outcome?.queueBinding
+  if (binding === undefined || binding === null) {
+    return { workContract, executionBinding: null }
+  }
+  if (requireVerified && (typeof binding.userId !== "string" || binding.userId.trim() === ""
+    || typeof binding.outcomeKey !== "string" || binding.outcomeKey.trim() === ""
+    || binding.outcomeKey !== outcome?.outcomeKey
+    || !Number.isSafeInteger(binding.expectedVersion) || binding.expectedVersion < 0
+    || typeof binding.executionBinding !== "string" || binding.executionBinding.trim() === ""
+    || typeof binding.leaseToken !== "string" || binding.leaseToken.trim() === ""
+    || typeof binding.leaseHolder !== "string" || binding.leaseHolder.trim() === ""
+    || !Number.isSafeInteger(binding.fencingToken) || binding.fencingToken <= 0)) {
+    throw Object.assign(new Error("Runtime execution binding is invalid"), {
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    })
+  }
+  return {
+    workContract,
+    executionBinding: {
+      userId: binding.userId,
+      outcomeKey: binding.outcomeKey,
+      expectedVersion: binding.expectedVersion,
+      executionBinding: binding.executionBinding,
+      leaseToken: binding.leaseToken,
+      leaseHolder: binding.leaseHolder,
+      fencingToken: binding.fencingToken,
+    },
+  }
+}
+
 function retryableWallDetail(error) {
   const code = typeof error?.code === "string" ? error.code : "HERMES_CYCLE_FAILED"
   const detail = sanitizeAppServerText(error?.detail).trim()
@@ -642,26 +682,16 @@ export function createHermesOrchestrator(options = {}) {
         code: "HERMES_RUNTIME_PROJECTION_STATE_WALL",
       })
     }
-    const { projection: workContract } = projectedWorkContract(
+    const { workContract, executionBinding } = deriveHermesRuntimeProjectionBindings(
       execution.metadata?.outcome,
-      workContractResolver,
+      { resolver: workContractResolver },
     )
     try {
       return await retryRuntimeProjection(() => projectCheckpoint({
         outcomeId: Number(outcomeId),
         attempt: execution.fencingToken,
         workContract,
-        executionBinding: execution.metadata?.outcome?.queueBinding
-          ? {
-              userId: execution.metadata.outcome.queueBinding.userId,
-              outcomeKey: execution.metadata.outcome.queueBinding.outcomeKey,
-              expectedVersion: execution.metadata.outcome.queueBinding.expectedVersion,
-              executionBinding: execution.metadata.outcome.queueBinding.executionBinding,
-              leaseToken: execution.metadata.outcome.queueBinding.leaseToken,
-              leaseHolder: execution.metadata.outcome.queueBinding.leaseHolder,
-              fencingToken: execution.metadata.outcome.queueBinding.fencingToken,
-            }
-          : null,
+        executionBinding,
         checkpoint: {
           sequence: execution.checkpoint.sequence,
           state: execution.checkpoint.state,

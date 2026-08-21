@@ -23,8 +23,45 @@ import {
   sanitizeBridgeMessage,
 } from "../scripts/hermes-bridge/cli.mjs"
 import { initializeHermesState } from "../scripts/hermes-bridge/state-store.mjs"
+import { resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 
 const agentEntrypoint = fs.readFileSync(path.join(process.cwd(), "AGENTS.md"), "utf8")
+
+function exactIssue911Outcome(id: number, ref: string) {
+  const outcome = {
+    id, ref,
+    command: "record structured #911 reliability remediation without host mutation",
+    lane: "operator-objective",
+    mode: "implement",
+    risk: "R1",
+    authority: "A2_WRITE_OWN",
+    status: "classified",
+    outcomeKey: `goal:${ref}`,
+  }
+  const contract = resolveHermesWorkContract(outcome)
+  if (!contract) throw new Error("exact #911 test contract missing")
+  const queueBinding = {
+    userId: "user-911",
+    outcomeKey: outcome.outcomeKey,
+    expectedVersion: 3,
+    executionBinding: `execution-${id}`,
+    leaseToken: `lease-${id}`,
+    leaseHolder: "hermes-bridge",
+    fencingToken: 2,
+  }
+  return {
+    ...outcome,
+    queueBinding,
+    verifiedQueueWorkContract: {
+      contract,
+      provenance: {
+        operation: "workbench_execution.authorize",
+        outcomeKey: outcome.outcomeKey,
+        workOrderRef: `WO-HERMES-OUTCOME-${id}`,
+      },
+    },
+  }
+}
 
 describe("Hermes bridge CLI", () => {
   it.each([
@@ -808,16 +845,7 @@ describe("Hermes bridge CLI", () => {
         detail: "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
       },
       metadata: {
-        outcome: {
-          id: 5,
-          ref: "GOAL-0005",
-          command: "Deliver the bounded WilliamOS feature.",
-          lane: "read_model",
-          mode: "implement",
-          risk: "low",
-          authority: "A0_READ_ONLY",
-          status: "classified",
-        },
+        outcome: exactIssue911Outcome(5, "GOAL-0005"),
         branch: "codex/hermes-goal-0005-5",
         worktreePath: "C:\\owned\\hermes-goal-0005-5",
         prNumber: 440,
@@ -891,6 +919,25 @@ describe("Hermes bridge CLI", () => {
       expect(projectCheckpoint).toHaveBeenCalledWith({
         outcomeId: 5,
         attempt: 22,
+        workContract: {
+          id: "issue-911-runtime-reliability-evidence.v1",
+          digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+          version: "hermes-work-contract.v1",
+          repository: "bsvalues/terragroq",
+          lane: "operator-objective",
+          allowedFiles: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+          validators: ["git diff --check", "npx vitest run tests/hermes-work-contract.test.ts"],
+          projection: { issueNumber: 911, completionOwned: false },
+          delivery: {
+            authorityLevel: "A2_WRITE_OWN", allowedActions: ["implement"],
+            commitAllowed: true, tagAllowed: false, pushAllowed: true,
+          },
+        },
+        executionBinding: {
+          userId: "user-911", outcomeKey: "goal:GOAL-0005", expectedVersion: 3,
+          executionBinding: "execution-5", leaseToken: "lease-5",
+          leaseHolder: "hermes-bridge", fencingToken: 2,
+        },
         checkpoint: {
           sequence: 14,
           state: "POST_MERGE_CLEANUP_RECOVERED",
@@ -900,6 +947,8 @@ describe("Hermes bridge CLI", () => {
             headRefOid: candidate.metadata.headRefOid,
             mergeSha: candidate.metadata.mergeSha,
             terminalCleanupRecoveryProofDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+            workContractId: "issue-911-runtime-reliability-evidence.v1",
+            workContractDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
           },
         },
       })
@@ -981,16 +1030,7 @@ describe("Hermes bridge CLI", () => {
         detail: "REVIEW_REMEDIATION_EXHAUSTED",
       },
       metadata: {
-        outcome: {
-          id: 7,
-          ref: "GOAL-0007",
-          command: "Finish the exact recovered WilliamOS outcome.",
-          lane: "ui",
-          mode: "implement",
-          risk: "low",
-          authority: "A2_WRITE_OWN",
-          status: "classified",
-        },
+        outcome: exactIssue911Outcome(7, "GOAL-0007"),
         branch: "codex/hermes-goal-0003-7",
         prNumber: 447, headRefOid: "a".repeat(40), mergeSha: null as string | null,
         reviewRecoveryProofDigest: null as string | null,
@@ -1031,6 +1071,25 @@ describe("Hermes bridge CLI", () => {
     }
     const projectCheckpoint = vi.fn(async () => ({ workOrderId: 77 }))
     const recoverOutcome = vi.fn(async () => true)
+    const authorizedOutcome = candidate.metadata.outcome
+
+    candidate.metadata.outcome = { ...authorizedOutcome, verifiedQueueWorkContract: undefined } as any
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+    })).rejects.toMatchObject({ code: "HERMES_WORK_CONTRACT_WALL" })
+    expect(beginRecovery).not.toHaveBeenCalled()
+    expect(projectCheckpoint).not.toHaveBeenCalled()
+
+    candidate.metadata.outcome = {
+      ...authorizedOutcome,
+      queueBinding: { ...authorizedOutcome.queueBinding, leaseToken: "" },
+    }
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome, verifyProjectionCollision,
+    })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+    expect(beginRecovery).not.toHaveBeenCalled()
+    expect(projectCheckpoint).not.toHaveBeenCalled()
+    candidate.metadata.outcome = authorizedOutcome
 
     beginRecovery.mockImplementationOnce(() => {
       throw Object.assign(new Error("stale fence"), { code: "FENCING_TOKEN_CONFLICT" })
@@ -1065,10 +1124,31 @@ describe("Hermes bridge CLI", () => {
     expect(projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
       outcomeId: 7,
       attempt: 28,
+      workContract: {
+        id: "issue-911-runtime-reliability-evidence.v1",
+        digest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        version: "hermes-work-contract.v1",
+        repository: "bsvalues/terragroq",
+        lane: "operator-objective",
+        allowedFiles: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+        validators: ["git diff --check", "npx vitest run tests/hermes-work-contract.test.ts"],
+        projection: { issueNumber: 911, completionOwned: false },
+        delivery: {
+          authorityLevel: "A2_WRITE_OWN", allowedActions: ["implement"],
+          commitAllowed: true, tagAllowed: false, pushAllowed: true,
+        },
+      },
+      executionBinding: {
+        userId: "user-911", outcomeKey: "goal:GOAL-0007", expectedVersion: 3,
+        executionBinding: "execution-7", leaseToken: "lease-7",
+        leaseHolder: "hermes-bridge", fencingToken: 2,
+      },
       checkpoint: expect.objectContaining({
         sequence: 33, state: "PR_MERGED",
         metadata: expect.objectContaining({
           headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+          workContractId: "issue-911-runtime-reliability-evidence.v1",
+          workContractDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
         }),
       }),
     }))
@@ -1091,10 +1171,21 @@ describe("Hermes bridge CLI", () => {
       outcome: expect.objectContaining({ id: 7, ref: "GOAL-0007" }),
     })
     expect(projectCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      workContract: expect.objectContaining({
+        id: "issue-911-runtime-reliability-evidence.v1",
+        allowedFiles: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      }),
+      executionBinding: expect.objectContaining({
+        outcomeKey: "goal:GOAL-0007", executionBinding: "execution-7", fencingToken: 2,
+      }),
       checkpoint: expect.objectContaining({
         sequence: 34,
         state: "REVIEW_REMEDIATION_RECOVERED",
         detail: "REVIEW_REMEDIATION_EXHAUSTED",
+        metadata: expect.objectContaining({
+          workContractId: "issue-911-runtime-reliability-evidence.v1",
+          workContractDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        }),
       }),
     }))
 
@@ -1172,6 +1263,78 @@ describe("Hermes bridge CLI", () => {
     }))
   })
 
+  it("replays the persisted PR_MERGED sequence 44 with exact authority bindings", async () => {
+    const outcome = exactIssue911Outcome(27, "GOAL-0023")
+    const reviewedHeadSha = "b".repeat(40)
+    const mergeSha = "c".repeat(40)
+    const proofDigest = createHash("sha256").update(JSON.stringify({
+      outcomeId: 27,
+      prNumber: 929,
+      reviewedHeadSha,
+      mergeSha,
+      unresolvedThreadCount: 0,
+      reviewMode: "DIRECT",
+      checksGreen: true,
+      reviewed: true,
+      remediationProof: [],
+    })).digest("hex")
+    const candidate = {
+      outcomeId: "27", fencingToken: 5,
+      lease: { status: "RELEASED" },
+      checkpoint: { sequence: 44, state: "PR_MERGED", detail: "Recovered reviewed PR #929" },
+      metadata: {
+        outcome, branch: "codex/hermes-goal-0023-27", prNumber: 929,
+        headRefOid: reviewedHeadSha, mergeSha, reviewRecoveryPriorHeadRefOid: "a".repeat(40),
+        reviewRecoveryProofDigest: proofDigest,
+      },
+    }
+    const beginRecovery = vi.fn()
+    const recordMerge = vi.fn()
+    const finalizeRecovery = vi.fn(() => ({ checkpointSequence: 45 }))
+    const cycle = vi.fn(async () => ({ result: "COMPLETE" }))
+    const orchestrator = {
+      state: {
+        read: () => ({
+          ownerTouchCounters: {
+            OWNER_OPERATION_TOUCH_COUNT: 0, OWNER_CREDENTIAL_TOUCH_COUNT: 0,
+            OWNER_DIAGNOSTIC_TOUCH_COUNT: 0, OWNER_ROUTINE_DECISION_COUNT: 0,
+            OWNER_ROUTINE_CONTACT_COUNT: 0,
+          },
+          executions: { "27": candidate },
+        }),
+        beginReviewRemediationRecovery: beginRecovery,
+        recordReviewRemediationMerge: recordMerge,
+        finalizeReviewRemediationRecovery: finalizeRecovery,
+      },
+      cycle,
+    }
+    const lifecycle = {
+      inspectPullRequest: vi.fn(async () => ({
+        state: "MERGED", baseRefName: "main", headRefName: candidate.metadata.branch,
+        headRefOid: reviewedHeadSha, mergeCommit: { oid: mergeSha }, unresolvedThreadCount: 0,
+        checksGreen: true, reviewed: true,
+      })),
+      inspectReviewRemediationClaims: vi.fn(async () => []),
+      verifyOriginMainContains: vi.fn(async () => true),
+    }
+    const projectCheckpoint = vi.fn(async () => ({ workOrderId: 27 }))
+    await expect(recoverReviewedMerge({
+      orchestrator, lifecycle, projectCheckpoint, recoverOutcome: vi.fn(async () => true),
+    })).resolves.toMatchObject({ result: "COMPLETE", checkpointSequence: 45 })
+    expect(beginRecovery).not.toHaveBeenCalled()
+    expect(recordMerge).not.toHaveBeenCalled()
+    expect(projectCheckpoint).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      workContract: expect.objectContaining({ id: "issue-911-runtime-reliability-evidence.v1" }),
+      executionBinding: expect.objectContaining({ outcomeKey: "goal:GOAL-0023" }),
+      checkpoint: expect.objectContaining({ sequence: 44, state: "PR_MERGED" }),
+    }))
+    expect(projectCheckpoint).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      workContract: expect.objectContaining({ id: "issue-911-runtime-reliability-evidence.v1" }),
+      executionBinding: expect.objectContaining({ outcomeKey: "goal:GOAL-0023" }),
+      checkpoint: expect.objectContaining({ sequence: 45, state: "REVIEW_REMEDIATION_RECOVERED" }),
+    }))
+  })
+
   it("accepts a bounded exact-head-reviewed remediation chain for a rate-limited original review", async () => {
     const candidate = {
       outcomeId: "9",
@@ -1183,16 +1346,7 @@ describe("Hermes bridge CLI", () => {
         detail: "REVIEW_REMEDIATION_EXHAUSTED",
       },
       metadata: {
-        outcome: {
-          id: 9,
-          ref: "GOAL-0005",
-          command: "Add a bounded decision surface.",
-          lane: "read_model",
-          mode: "implement",
-          risk: "low",
-          authority: "A0_READ_ONLY",
-          status: "classified",
-        },
+        outcome: exactIssue911Outcome(9, "GOAL-0005"),
         branch: "codex/hermes-goal-0005-9",
         prNumber: 464,
         headRefOid: "a".repeat(40),

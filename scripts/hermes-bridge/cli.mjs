@@ -5,7 +5,11 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { sanitizeAppServerText } from "./app-server-client.mjs"
 import { selectExecutionBackend } from "./execution-backend.mjs"
-import { createHermesOrchestrator, retryRuntimeProjection } from "./orchestrator.mjs"
+import {
+  createHermesOrchestrator,
+  deriveHermesRuntimeProjectionBindings,
+  retryRuntimeProjection,
+} from "./orchestrator.mjs"
 import { createHermesOutcomeQueueRuntime } from "./outcome-queue-runtime.mjs"
 import {
   NATIVE_PROVIDER_RETRY_STATE,
@@ -507,6 +511,18 @@ export async function recoverTerminalPostMergeCleanupWall(options = {}) {
       code: "HERMES_TERMINAL_POST_MERGE_RECOVERY_OUTCOME_WALL",
     })
   }
+  const projectionBindings = deriveHermesRuntimeProjectionBindings(recoveredOutcome, {
+    requireVerified: true,
+  })
+  if (!projectionBindings.executionBinding) {
+    throw Object.assign(new Error("Terminal cleanup recovery execution binding is missing"), {
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    })
+  }
+  const workContractMetadata = {
+    workContractId: projectionBindings.workContract.id,
+    workContractDigest: projectionBindings.workContract.digest,
+  }
   const pr = await lifecycle.inspectPullRequest(candidate.metadata.prNumber)
   if (pr.state !== "MERGED"
     || pr.baseRefName !== "main"
@@ -593,6 +609,7 @@ export async function recoverTerminalPostMergeCleanupWall(options = {}) {
   await retryRuntimeProjection(() => projectCheckpoint({
     outcomeId: Number(candidate.outcomeId),
     attempt: candidate.fencingToken,
+    ...projectionBindings,
     checkpoint: {
       sequence: reopened.checkpointSequence,
       state: "POST_MERGE_CLEANUP_RECOVERED",
@@ -602,6 +619,7 @@ export async function recoverTerminalPostMergeCleanupWall(options = {}) {
         headRefOid: candidate.metadata.headRefOid,
         mergeSha: candidate.metadata.mergeSha,
         terminalCleanupRecoveryProofDigest: proofDigest,
+        ...workContractMetadata,
       },
     },
   }), { sleep: options.projectionSleep })
@@ -678,6 +696,18 @@ export async function recoverReviewedMerge(options = {}) {
     throw Object.assign(new Error("Recovery candidate is missing its exact outcome"), {
       code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
     })
+  }
+  const projectionBindings = deriveHermesRuntimeProjectionBindings(recoveredOutcome, {
+    requireVerified: true,
+  })
+  if (!projectionBindings.executionBinding) {
+    throw Object.assign(new Error("Reviewed recovery execution binding is missing"), {
+      code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
+    })
+  }
+  const workContractMetadata = {
+    workContractId: projectionBindings.workContract.id,
+    workContractDigest: projectionBindings.workContract.digest,
   }
   const pr = await lifecycle.inspectPullRequest(candidate.metadata.prNumber)
   const reviewedHeadSha = pr.headRefOid
@@ -801,6 +831,7 @@ export async function recoverReviewedMerge(options = {}) {
     await retryRuntimeProjection(() => projectCheckpoint({
       outcomeId,
       attempt: candidate.fencingToken,
+      ...projectionBindings,
       checkpoint: {
         sequence: mergedReservation.checkpointSequence,
         state: "PR_MERGED",
@@ -810,6 +841,7 @@ export async function recoverReviewedMerge(options = {}) {
           headRefOid: reviewedHeadSha,
           mergeSha,
           remediationPullRequests: remediationProof.map((proof) => proof.prNumber),
+          ...workContractMetadata,
         },
       },
     }), { sleep: options.projectionSleep })
@@ -840,6 +872,7 @@ export async function recoverReviewedMerge(options = {}) {
   const recoveredProjection = {
     outcomeId,
     attempt: candidate.fencingToken,
+    ...projectionBindings,
     checkpoint: {
       sequence: reopened.checkpointSequence,
       state: "REVIEW_REMEDIATION_RECOVERED",
@@ -849,6 +882,7 @@ export async function recoverReviewedMerge(options = {}) {
         headRefOid: reviewedHeadSha,
         mergeSha,
         remediationPullRequests: remediationProof.map((proof) => proof.prNumber),
+        ...workContractMetadata,
       },
     },
   }
