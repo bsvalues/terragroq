@@ -378,6 +378,38 @@ function checkName(check) {
   return String(check?.name ?? check?.context ?? "")
 }
 
+function latestCheckContexts(checks) {
+  const groups = new Map()
+  checks.forEach((check, index) => {
+    const name = checkName(check).trim()
+    if (!name) {
+      groups.set(`unnamed:${index}`, [check])
+      return
+    }
+    const kind = check?.__typename === "StatusContext"
+      || (check?.context !== undefined && check?.name === undefined)
+      ? "status-context"
+      : "check-run"
+    const key = `${kind}:${name}`
+    groups.set(key, [...(groups.get(key) ?? []), check])
+  })
+  return [...groups.values()].map((group) => {
+    if (group.length === 1) return group[0]
+    const ordered = group.map((check) => {
+      const value = check?.startedAt ?? check?.completedAt
+      const timestamp = typeof value === "string" ? Date.parse(value) : Number.NaN
+      if (!Number.isFinite(timestamp)) {
+        wall("HERMES_REPOSITORY_GITHUB_WALL", "duplicate check ordering is unavailable")
+      }
+      return { check, timestamp }
+    }).sort((left, right) => right.timestamp - left.timestamp)
+    if (ordered[0].timestamp === ordered[1].timestamp) {
+      wall("HERMES_REPOSITORY_GITHUB_WALL", "duplicate check ordering is ambiguous")
+    }
+    return ordered[0].check
+  })
+}
+
 function exactHeadApprovedReview(pr) {
   return Array.isArray(pr?.reviews) && pr.reviews.some((review) =>
     review?.author?.login && review.author.login !== "bsvalues"
@@ -1124,7 +1156,9 @@ export function createRepositoryLifecycle(options) {
     if (!SHA.test(pr.headRefOid ?? "")) wall("HERMES_REPOSITORY_GITHUB_WALL", "PR head SHA required")
     const query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{body isMinimized}}} pageInfo{hasNextPage}} comments(last:100){nodes{author{login} body createdAt updatedAt} pageInfo{hasPreviousPage hasNextPage}}}}}"
     const threadResult = await run("gh", ["api", "graphql", "-f", `query=${query}`, "-F", "owner=bsvalues", "-F", "name=terragroq", "-F", `number=${number}`])
-    const checks = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : []
+    const checks = latestCheckContexts(
+      Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup : [],
+    )
     const reviewState = parseJson(threadResult.stdout, "HERMES_REPOSITORY_GITHUB_WALL")
     const unresolved = unresolvedThreadCount(reviewState)
     const requestTimes = exactHeadCodexRequestTimes(reviewState, pr.headRefOid)

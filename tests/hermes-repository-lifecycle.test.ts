@@ -1027,6 +1027,97 @@ describe("Hermes repository lifecycle", () => {
     })
   })
 
+  it("uses the latest completed run for one named check context", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "MERGED", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          {
+            __typename: "CheckRun", name: "work context receipt (#831)", status: "COMPLETED",
+            conclusion: "CANCELLED", startedAt: "2026-08-21T00:10:00Z", completedAt: "2026-08-21T00:11:00Z",
+          },
+          {
+            __typename: "CheckRun", name: "work context receipt (#831)", status: "COMPLETED",
+            conclusion: "SUCCESS", startedAt: "2026-08-21T00:20:00Z", completedAt: "2026-08-21T00:21:00Z",
+          },
+        ],
+        reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: sha } }],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: true, checksComplete: true, failedChecks: [], pendingChecks: [],
+    })
+  })
+
+  it("preserves a genuine latest cancellation and a distinct failing context", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "MERGED", isDraft: false,
+        reviewDecision: "", statusCheckRollup: [
+          { __typename: "CheckRun", name: "receipt", conclusion: "SUCCESS", completedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", name: "receipt", conclusion: "CANCELLED", completedAt: "2026-08-21T00:21:00Z" },
+          { __typename: "CheckRun", name: "unit tests", conclusion: "FAILURE", completedAt: "2026-08-21T00:22:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false,
+      failedChecks: [
+        { name: "receipt", state: "CANCELLED" },
+        { name: "unit tests", state: "FAILURE" },
+      ],
+    })
+  })
+
+  it("preserves the latest pending run and StatusContext ordering", async () => {
+    const pending = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "receipt", conclusion: "SUCCESS", completedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "CheckRun", name: "receipt", status: "IN_PROGRESS", startedAt: "2026-08-21T00:21:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(pending.lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: false, checksComplete: false,
+      failedChecks: [], pendingChecks: [{ name: "receipt", state: "IN_PROGRESS" }],
+    })
+
+    const statusContext = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "OPEN", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "StatusContext", context: "Vercel", state: "FAILURE", startedAt: "2026-08-21T00:11:00Z" },
+          { __typename: "StatusContext", context: "Vercel", state: "SUCCESS", startedAt: "2026-08-21T00:21:00Z" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(statusContext.lifecycle.inspectPullRequest(77)).resolves.toMatchObject({
+      checksGreen: true, failedChecks: [], pendingChecks: [],
+    })
+  })
+
+  it("fails closed when duplicate check ordering is unavailable or ambiguous", async () => {
+    const { lifecycle } = fixture({
+      "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
+        number: 77, headRefName: branch, headRefOid: sha, baseRefName: "main", state: "MERGED", isDraft: false,
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "receipt", conclusion: "CANCELLED" },
+          { __typename: "CheckRun", name: "receipt", conclusion: "SUCCESS" },
+        ], reviews: [],
+      }) }),
+      "gh api graphql": () => ({ code: 0, stdout: JSON.stringify(reviewState()) }),
+    })
+    await expect(lifecycle.inspectPullRequest(77)).rejects.toMatchObject({
+      code: "HERMES_REPOSITORY_GITHUB_WALL",
+    })
+  })
+
   it("does not accept a stale approval through reviewDecision", async () => {
     const { lifecycle } = fixture({
       "gh pr view": () => ({ code: 0, stdout: JSON.stringify({
