@@ -1162,6 +1162,14 @@ describe("Hermes bridge CLI", () => {
       expect(settleCleanup).toHaveBeenCalledWith(expect.objectContaining({
         expectedVersion: 8, fencingToken: 6, checkpointSequence: 47,
       }))
+      expect(resolveSettlement).toHaveBeenCalledWith(expect.objectContaining({
+        proof: expect.objectContaining({
+          proofDigest: candidate.metadata.reviewRecoveryProofDigest,
+          prNumber: candidate.metadata.prNumber,
+        }),
+        branch: candidate.metadata.branch,
+        worktreePath: candidate.metadata.worktreePath,
+      }))
       expect(orchestrator.state.completeActivePostMergeCleanupRecovery).toHaveBeenCalledWith(
         expect.objectContaining({
           expectedWorktreePath: candidate.metadata.worktreePath,
@@ -1228,16 +1236,19 @@ describe("Hermes bridge CLI", () => {
       outcome.queueBinding = binding
 
       calls.length = 0
-      authorizeCleanup.mockResolvedValueOnce({
-        eventId: 970, confirmed: true, settled: false,
-        confirmation: { eventId: 971, payloadDigest: "9".repeat(64) },
+      authorizeCleanup.mockImplementationOnce(async () => {
+        calls.push("authorize-replay")
+        return {
+          eventId: 970, confirmed: true, settled: false,
+          confirmation: { eventId: 971, payloadDigest: "9".repeat(64) },
+        }
       })
       await recoverActivePostMergeCleanupWall({
         orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
         resolveProvenance, verifyContinuation, resolveSettlement,
         authorizeCleanup, confirmCleanup, settleCleanup,
       })
-      expect(calls).toEqual(["resolve", "verify", "settle", "local-complete"])
+      expect(calls).toEqual(["resolve", "verify", "authorize-replay", "settle", "local-complete"])
       expect(authorizeCleanup).toHaveBeenCalledTimes(2)
       expect(lifecycle.cleanupOwnedWorktree).toHaveBeenCalledTimes(1)
       expect(confirmCleanup).toHaveBeenCalledTimes(1)

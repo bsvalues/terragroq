@@ -3321,8 +3321,19 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
       reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryReclaimEventId: 961,
       reviewRecoveryReclaimPayloadDigest: "a".repeat(64),
-      reviewRecoveryStaleReacquisition: { checkpointDigest: "b".repeat(64) },
-      reviewRecoveryStaleContinuation: { checkpointDigest: "c".repeat(64) },
+      reviewRecoveryStaleReacquisition: {
+        disposition: "RECLAIMED", priorExpectedVersion: 6, priorFencingToken: 4,
+        expectedVersion: 7, fencingToken: 5, receiptLatestFencingToken: 5,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        leaseExpiresAt: "2026-08-21T06:30:00.000Z", checkpointDigest: "b".repeat(64),
+      },
+      reviewRecoveryStaleContinuation: {
+        disposition: "RECLAIMED", priorExpectedVersion: 7, priorFencingToken: 5,
+        expectedVersion: 8, fencingToken: 6, receiptLatestFencingToken: 6,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        priorLeaseExpiresAt: "2026-08-21T06:30:00.000Z",
+        leaseExpiresAt: "2026-08-21T06:45:00.000Z", checkpointDigest: "c".repeat(64),
+      },
     }
     const workContract = issue911RuntimeWorkContract
     const proof = {
@@ -3388,6 +3399,136 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })
     expect(confirmed).toMatchObject({ eventId: 971 })
     expect(confirmationQuery.mock.calls[5][0]).toMatch(/ACTIVE_POST_MERGE_CLEANUP_CONFIRMED/)
+
+    const pendingSettlementQuery = vi.fn().mockResolvedValueOnce({ rows: [
+      { id: 970, eventType: "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED",
+        actor: "hermes-codex-bridge", metadata: authorized.metadata },
+      { id: 971, eventType: "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED",
+        actor: "hermes-codex-bridge", metadata: confirmed.metadata },
+    ] })
+    const pendingExecutionBinding = { ...executionBinding, expectedVersion: 7, fencingToken: 5 }
+    delete pendingExecutionBinding.reviewRecoveryStaleReacquisition
+    delete pendingExecutionBinding.reviewRecoveryStaleContinuation
+    const verifyPendingContinuation = vi.fn(async ({ executionBinding: verifiedBinding }) => {
+      if (canonicalJson(verifiedBinding.reviewRecoveryStaleReacquisition)
+          !== canonicalJson(executionBinding.reviewRecoveryStaleReacquisition)
+        || canonicalJson(verifiedBinding.reviewRecoveryStaleContinuation)
+          !== canonicalJson(executionBinding.reviewRecoveryStaleContinuation)) {
+        throw Object.assign(new Error("durable recovery evidence drifted"), {
+          code: "OUTCOME_ACTIVE_REVIEW_RECOVERY_AUTHORIZATION_WALL",
+        })
+      }
+      return true
+    })
+    await expect(resolveActivePostMergeCleanupSettlement({
+      query: pendingSettlementQuery, outcomeId: 23, executionBinding: pendingExecutionBinding,
+      workContract, cleanupProofDigest: "2".repeat(64), runtimeAttempt: 9,
+      checkpointSequence: 47, prNumber: 929, reviewedHeadSha: proof.reviewedHeadSha,
+      mergeSha: proof.mergeSha, proof, branch: "codex/hermes-goal-0023-27",
+      worktreePath: "/home/bs/.williamos/hermes-bridge/worktrees/hermes-goal-0023-27",
+      verifyContinuation: verifyPendingContinuation,
+    })).resolves.toBeNull()
+    expect(pendingSettlementQuery).toHaveBeenCalledOnce()
+    expect(verifyPendingContinuation).toHaveBeenCalledWith(expect.objectContaining({
+      outcomeId: 23, provenanceOnly: true,
+      executionBinding: expect.objectContaining({ expectedVersion: 8, fencingToken: 6 }),
+    }))
+
+    const pendingAuthorization = {
+      id: 970, eventType: "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED",
+      actor: "hermes-codex-bridge", metadata: authorized.metadata,
+    }
+    const pendingConfirmation = {
+      id: 971, eventType: "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED",
+      actor: "hermes-codex-bridge", metadata: confirmed.metadata,
+    }
+    for (const rows of [
+      [pendingAuthorization],
+      [pendingConfirmation],
+      [pendingAuthorization, pendingAuthorization, pendingConfirmation],
+      [pendingAuthorization, { ...pendingConfirmation, actor: "other" }],
+      [pendingAuthorization, { ...pendingConfirmation,
+        metadata: { ...pendingConfirmation.metadata, extra: true } }],
+    ]) {
+      await expect(resolveActivePostMergeCleanupSettlement({
+        query: vi.fn().mockResolvedValueOnce({ rows }), outcomeId: 23,
+        executionBinding: pendingExecutionBinding,
+        workContract, cleanupProofDigest: "2".repeat(64), runtimeAttempt: 9,
+        checkpointSequence: 47, prNumber: 929, reviewedHeadSha: proof.reviewedHeadSha,
+        mergeSha: proof.mergeSha, proof, branch: "codex/hermes-goal-0023-27",
+        worktreePath: "/home/bs/.williamos/hermes-bridge/worktrees/hermes-goal-0023-27",
+        verifyContinuation: verifyPendingContinuation,
+      })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
+    }
+    for (const drift of [
+      { reviewRecoveryProofDigest: "9".repeat(64) },
+      { branch: "codex/drifted" },
+      { worktreePath: "/home/bs/drifted" },
+      { idempotencyKey: "hermes-outcome:23:active-post-merge-cleanup:drifted:6" },
+      { baseCheckpointDigest: "8".repeat(64) },
+      { continuationCheckpointDigest: "7".repeat(64) },
+    ]) {
+      const authorizationBody = { ...authorized.metadata, ...drift }
+      delete authorizationBody.payloadDigest
+      const driftedAuthorization = { ...authorizationBody,
+        payloadDigest: createHash("sha256").update(canonicalJson(authorizationBody)).digest("hex") }
+      const confirmationBody = { ...confirmed.metadata,
+        authorizationPayloadDigest: driftedAuthorization.payloadDigest,
+        branch: driftedAuthorization.branch, worktreePath: driftedAuthorization.worktreePath }
+      delete confirmationBody.payloadDigest
+      const driftedConfirmation = { ...confirmationBody,
+        payloadDigest: createHash("sha256").update(canonicalJson(confirmationBody)).digest("hex") }
+      await expect(resolveActivePostMergeCleanupSettlement({
+        query: vi.fn().mockResolvedValueOnce({ rows: [
+          { ...pendingAuthorization, metadata: driftedAuthorization },
+          { ...pendingConfirmation, metadata: driftedConfirmation },
+        ] }), outcomeId: 23, executionBinding: pendingExecutionBinding, workContract,
+        cleanupProofDigest: "2".repeat(64), runtimeAttempt: 9, checkpointSequence: 47,
+        prNumber: 929, reviewedHeadSha: proof.reviewedHeadSha, mergeSha: proof.mergeSha,
+        proof, branch: "codex/hermes-goal-0023-27",
+        worktreePath: "/home/bs/.williamos/hermes-bridge/worktrees/hermes-goal-0023-27",
+        verifyContinuation: verifyPendingContinuation,
+      })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
+    }
+    for (const driftedEvidence of [
+      {
+        baseCheckpointDigest: "8".repeat(64),
+        staleReacquisition: { ...authorized.metadata.staleReacquisition,
+          checkpointDigest: "8".repeat(64) },
+      },
+      {
+        continuationCheckpointDigest: "7".repeat(64),
+        staleContinuation: { ...authorized.metadata.staleContinuation,
+          checkpointDigest: "7".repeat(64) },
+      },
+      {
+        staleReacquisition: { ...authorized.metadata.staleReacquisition,
+          leaseExpiresAt: "2026-08-21T06:31:00.000Z" },
+        staleContinuation: { ...authorized.metadata.staleContinuation,
+          priorLeaseExpiresAt: "2026-08-21T06:31:00.000Z" },
+      },
+    ]) {
+      const authorizationBody = { ...authorized.metadata, ...driftedEvidence }
+      delete authorizationBody.payloadDigest
+      const driftedAuthorization = { ...authorizationBody,
+        payloadDigest: createHash("sha256").update(canonicalJson(authorizationBody)).digest("hex") }
+      const confirmationBody = { ...confirmed.metadata,
+        authorizationPayloadDigest: driftedAuthorization.payloadDigest }
+      delete confirmationBody.payloadDigest
+      const driftedConfirmation = { ...confirmationBody,
+        payloadDigest: createHash("sha256").update(canonicalJson(confirmationBody)).digest("hex") }
+      await expect(resolveActivePostMergeCleanupSettlement({
+        query: vi.fn().mockResolvedValueOnce({ rows: [
+          { ...pendingAuthorization, metadata: driftedAuthorization },
+          { ...pendingConfirmation, metadata: driftedConfirmation },
+        ] }), outcomeId: 23, executionBinding: pendingExecutionBinding, workContract,
+        cleanupProofDigest: "2".repeat(64), runtimeAttempt: 9, checkpointSequence: 47,
+        prNumber: 929, reviewedHeadSha: proof.reviewedHeadSha, mergeSha: proof.mergeSha,
+        proof, branch: "codex/hermes-goal-0023-27",
+        worktreePath: "/home/bs/.williamos/hermes-bridge/worktrees/hermes-goal-0023-27",
+        verifyContinuation: verifyPendingContinuation,
+      })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
+    }
 
     const preCleanupCheckpointPayload = {
       idempotencyKey: "hermes-outcome:23:attempt:8:checkpoint:46", outcomeId: 23,
@@ -4448,6 +4589,14 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           branch: cleanupBranch, worktreePath: cleanupWorktree, prNumber: 929,
           reviewedHeadSha: recoveryProof.reviewedHeadSha, mergeSha: recoveryProof.mergeSha,
         })
+        await expect(resolveActivePostMergeCleanupSettlement({
+          query: client.query.bind(client), outcomeId: 4, executionBinding: cleanupBinding,
+          workContract: issue911RuntimeWorkContract, cleanupProofDigest,
+          runtimeAttempt: 9, checkpointSequence: 47, prNumber: 929,
+          reviewedHeadSha: recoveryProof.reviewedHeadSha, mergeSha: recoveryProof.mergeSha,
+          proof: recoveryProof, branch: cleanupBranch, worktreePath: cleanupWorktree,
+          verifyContinuation: async () => true,
+        })).resolves.toBeNull()
         const settlementInput = {
           outcomeId: 4, executionBinding: cleanupBinding,
           workContract: issue911RuntimeWorkContract,
@@ -4542,6 +4691,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           executionBinding: markerlessCleanupBinding, workContract: issue911RuntimeWorkContract,
           cleanupProofDigest, runtimeAttempt: 9, checkpointSequence: 47, prNumber: 929,
           reviewedHeadSha: recoveryProof.reviewedHeadSha, mergeSha: recoveryProof.mergeSha,
+          proof: recoveryProof, branch: cleanupBranch, worktreePath: cleanupWorktree,
         })).resolves.toMatchObject({
           queueVersion: 9, fencingToken: 6, replayed: true,
           executionBinding: { expectedVersion: 8, fencingToken: 6,
@@ -4553,6 +4703,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           workContract: issue911RuntimeWorkContract, cleanupProofDigest,
           runtimeAttempt: 9, checkpointSequence: 47, prNumber: 929,
           reviewedHeadSha: recoveryProof.reviewedHeadSha, mergeSha: recoveryProof.mergeSha,
+          proof: recoveryProof, branch: cleanupBranch, worktreePath: cleanupWorktree,
         }
         const baseMarkedCleanupBinding = { ...markerlessCleanupBinding,
           reviewRecoveryStaleReacquisition: cleanupBinding.reviewRecoveryStaleReacquisition }

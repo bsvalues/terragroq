@@ -5317,6 +5317,53 @@ function activeCleanupConfirmationMetadata(authorization, authorizationEventId) 
   return metadata
 }
 
+function activeCleanupAuthorizationMetadata({
+  outcomeId,
+  executionBinding,
+  workContract,
+  proof,
+  cleanupProofDigest,
+  branch,
+  worktreePath,
+}) {
+  const metadata = {
+    idempotencyKey: ["hermes-outcome", outcomeId, "active-post-merge-cleanup",
+      executionBinding?.acquisitionKey, executionBinding?.fencingToken].join(":"),
+    recoveryKind: "active-post-merge-cleanup",
+    outcomeId,
+    userId: executionBinding?.userId,
+    outcomeKey: executionBinding?.outcomeKey,
+    workOrderId: executionBinding?.activeWorkOrderId,
+    workOrderRef: outcomeWorkOrderRef(outcomeId),
+    workContractId: workContract?.id,
+    workContractDigest: workContract?.digest,
+    expectedVersion: executionBinding?.expectedVersion,
+    executionBinding: executionBinding?.executionBinding,
+    acquisitionKey: executionBinding?.acquisitionKey,
+    leaseHolder: executionBinding?.leaseHolder,
+    leaseToken: executionBinding?.leaseToken,
+    fencingToken: executionBinding?.fencingToken,
+    sourceExpectedVersion: executionBinding?.reviewRecoverySourceExpectedVersion,
+    sourceFencingToken: executionBinding?.reviewRecoverySourceFencingToken,
+    sourceRuntimeAttempt: executionBinding?.reviewRecoverySourceRuntimeAttempt,
+    reclaimEventId: executionBinding?.reviewRecoveryReclaimEventId,
+    reclaimPayloadDigest: executionBinding?.reviewRecoveryReclaimPayloadDigest,
+    baseCheckpointDigest: executionBinding?.reviewRecoveryStaleReacquisition?.checkpointDigest,
+    continuationCheckpointDigest: executionBinding?.reviewRecoveryStaleContinuation?.checkpointDigest,
+    staleReacquisition: executionBinding?.reviewRecoveryStaleReacquisition,
+    staleContinuation: executionBinding?.reviewRecoveryStaleContinuation,
+    reviewRecoveryProofDigest: proof?.proofDigest,
+    prNumber: proof?.prNumber,
+    reviewedHeadSha: proof?.reviewedHeadSha,
+    mergeSha: proof?.mergeSha,
+    branch,
+    worktreePath,
+    cleanupProofDigest,
+  }
+  metadata.payloadDigest = activeCleanupPayloadDigest(metadata)
+  return metadata
+}
+
 const ACTIVE_CLEANUP_AUTHORIZATION_KEYS = [
   "idempotencyKey", "recoveryKind", "outcomeId", "userId", "outcomeKey", "workOrderId",
   "workOrderRef", "workContractId", "workContractDigest", "expectedVersion",
@@ -5421,42 +5468,10 @@ export async function authorizeActivePostMergeCleanup({
     outcomeId, executionBinding, workContract, proof, provenanceOnly: true,
   })
   const workOrderRef = outcomeWorkOrderRef(outcomeId)
-  const semanticKey = ["hermes-outcome", outcomeId, "active-post-merge-cleanup",
-    executionBinding.acquisitionKey, executionBinding.fencingToken].join(":")
-  const metadata = {
-    idempotencyKey: semanticKey,
-    recoveryKind: "active-post-merge-cleanup",
-    outcomeId,
-    userId: executionBinding.userId,
-    outcomeKey: executionBinding.outcomeKey,
-    workOrderId: executionBinding.activeWorkOrderId,
-    workOrderRef,
-    workContractId: workContract?.id,
-    workContractDigest: workContract?.digest,
-    expectedVersion: executionBinding.expectedVersion,
-    executionBinding: executionBinding.executionBinding,
-    acquisitionKey: executionBinding.acquisitionKey,
-    leaseHolder: executionBinding.leaseHolder,
-    leaseToken: executionBinding.leaseToken,
-    fencingToken: executionBinding.fencingToken,
-    sourceExpectedVersion: executionBinding.reviewRecoverySourceExpectedVersion,
-    sourceFencingToken: executionBinding.reviewRecoverySourceFencingToken,
-    sourceRuntimeAttempt: executionBinding.reviewRecoverySourceRuntimeAttempt,
-    reclaimEventId: executionBinding.reviewRecoveryReclaimEventId,
-    reclaimPayloadDigest: executionBinding.reviewRecoveryReclaimPayloadDigest,
-    baseCheckpointDigest: executionBinding.reviewRecoveryStaleReacquisition?.checkpointDigest,
-    continuationCheckpointDigest: executionBinding.reviewRecoveryStaleContinuation?.checkpointDigest,
-    staleReacquisition: executionBinding.reviewRecoveryStaleReacquisition,
-    staleContinuation: executionBinding.reviewRecoveryStaleContinuation,
-    reviewRecoveryProofDigest: proof?.proofDigest,
-    prNumber: proof?.prNumber,
-    reviewedHeadSha: proof?.reviewedHeadSha,
-    mergeSha: proof?.mergeSha,
-    branch,
-    worktreePath,
-    cleanupProofDigest,
-  }
-  metadata.payloadDigest = activeCleanupPayloadDigest(metadata)
+  const metadata = activeCleanupAuthorizationMetadata({
+    outcomeId, executionBinding, workContract, proof, cleanupProofDigest, branch, worktreePath,
+  })
+  const semanticKey = metadata.idempotencyKey
   if (Object.values(metadata).some((value) => value === undefined)) throw wall()
   let runQuery = normalizeQuery(query)
   let pool
@@ -6295,6 +6310,10 @@ export async function resolveActivePostMergeCleanupSettlement({
   prNumber,
   reviewedHeadSha,
   mergeSha,
+  proof,
+  branch,
+  worktreePath,
+  verifyContinuation = verifyActiveReviewRecoveryContinuation,
 } = {}) {
   const wall = () => Object.assign(new Error("Active post-merge cleanup settlement conflicts"), {
     code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL",
@@ -6329,14 +6348,30 @@ export async function resolveActivePostMergeCleanupSettlement({
     const completions = ofType("HERMES_OUTCOME_COMPLETED")
     if (authorizations.length === 0 && confirmations.length === 0
       && settlements.length === 0 && completions.length === 0) return null
+    const settlementPending = settlements.length === 0 && completions.length === 0
     if (authorizations.length !== 1 || confirmations.length !== 1
-      || settlements.length !== 1 || completions.length !== 1) throw wall()
+      || (!settlementPending && (settlements.length !== 1 || completions.length !== 1))) throw wall()
     const authorization = authorizations[0]
     const auth = exactActiveCleanupAuthorization(authorization.metadata)
+    const expectedAuthorization = activeCleanupAuthorizationMetadata({
+      outcomeId, executionBinding: {
+        ...executionBinding,
+        expectedVersion: auth?.expectedVersion,
+        fencingToken: auth?.fencingToken,
+        reviewRecoveryStaleReacquisition: auth?.staleReacquisition,
+        reviewRecoveryStaleContinuation: auth?.staleContinuation,
+      }, workContract, proof, cleanupProofDigest, branch, worktreePath,
+    })
     if (authorization.actor !== "hermes-codex-bridge" || !auth
+      || Object.values(expectedAuthorization).some((value) => value === undefined)
+      || canonicalJson(auth) !== canonicalJson(expectedAuthorization)
+      || auth.recoveryKind !== "active-post-merge-cleanup"
       || auth.outcomeId !== outcomeId || auth.userId !== executionBinding.userId
       || auth.outcomeKey !== executionBinding.outcomeKey
       || auth.workOrderId !== executionBinding.activeWorkOrderId
+      || auth.workOrderRef !== outcomeWorkOrderRef(outcomeId)
+      || auth.workContractId !== workContract?.id
+      || auth.workContractDigest !== workContract?.digest
       || auth.executionBinding !== executionBinding.executionBinding
       || auth.acquisitionKey !== executionBinding.acquisitionKey
       || auth.leaseHolder !== executionBinding.leaseHolder
@@ -6378,14 +6413,33 @@ export async function resolveActivePostMergeCleanupSettlement({
     } catch {
       throw wall()
     }
+    const confirmation = confirmations[0]
+    const expectedConfirmation = activeCleanupConfirmationMetadata(auth, Number(authorization.id))
+    if (!Number.isSafeInteger(Number(authorization.id))
+      || !Number.isSafeInteger(Number(confirmation?.id))
+      || Number(confirmation.id) <= Number(authorization.id)
+      || confirmation.actor !== "hermes-codex-bridge"
+      || !exactActiveCleanupConfirmation(confirmation.metadata)
+      || canonicalJson(confirmation.metadata) !== canonicalJson(expectedConfirmation)) throw wall()
+    if (settlementPending) {
+      try {
+        await verifyContinuation({
+          query: runQuery, outcomeId, executionBinding: resolvedExecutionBinding,
+          workContract, proof, provenanceOnly: true,
+        })
+      } catch {
+        throw wall()
+      }
+      return null
+    }
     const result = await verifyActivePostMergeCleanupSettlement({
       query: runQuery, outcomeId, executionBinding: resolvedExecutionBinding, workContract,
-      authorizationEventId: Number(authorization.id), confirmationEventId: Number(confirmations[0].id),
+      authorizationEventId: Number(authorization.id), confirmationEventId: Number(confirmation.id),
       cleanupProofDigest, expectedVersion: auth.expectedVersion, fencingToken: auth.fencingToken,
       runtimeAttempt, checkpointSequence, prNumber, reviewedHeadSha, mergeSha,
     })
     return { ...result, executionBinding: resolvedExecutionBinding,
-      authorizationEventId: Number(authorization.id), confirmationEventId: Number(confirmations[0].id) }
+      authorizationEventId: Number(authorization.id), confirmationEventId: Number(confirmation.id) }
   } finally {
     if (pool) await pool.end()
   }

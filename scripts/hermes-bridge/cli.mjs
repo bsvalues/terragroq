@@ -880,7 +880,8 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
     cleanupProofDigest, runtimeAttempt: candidate.fencingToken,
     checkpointSequence: candidate.checkpoint.sequence + 1,
     prNumber: candidate.metadata.prNumber, reviewedHeadSha: candidate.metadata.headRefOid,
-    mergeSha: candidate.metadata.mergeSha,
+    mergeSha: candidate.metadata.mergeSha, proof, branch: candidate.metadata.branch,
+    worktreePath: candidate.metadata.worktreePath,
   })
   if (priorSettlement) {
     let settledBinding
