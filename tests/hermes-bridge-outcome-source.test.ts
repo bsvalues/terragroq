@@ -82,12 +82,13 @@ const runtimeExecutionEpochDigest = createHash("sha256").update(JSON.stringify([
 function failedHistoricalCheckpointMetadata(
   checkpointSequence = 42,
   checkpointDetail = "REVIEW_REMEDIATION_EXHAUSTED",
+  runtimeAttempt = runtimeExecutionBinding.fencingToken,
 ) {
   const payload = {
-    idempotencyKey: `hermes-outcome:4:attempt:2:checkpoint:${checkpointSequence}`,
+    idempotencyKey: `hermes-outcome:4:attempt:${runtimeAttempt}:checkpoint:${checkpointSequence}`,
     outcomeId: 4,
     workOrderRef: "WO-HERMES-OUTCOME-4",
-    attempt: 2,
+    attempt: runtimeAttempt,
     checkpointSequence,
     checkpointState: "FAILED_TERMINAL",
     checkpointDetail,
@@ -1209,7 +1210,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         delivery: issue911RuntimeWorkContract.delivery,
       },
     }
-    const runtimeCheckpointMetadata = failedHistoricalCheckpointMetadata(42, lifecycleReason)
+    const runtimeCheckpointMetadata = failedHistoricalCheckpointMetadata(42, lifecycleReason, 1)
     const terminalMetadata = failedGoalTerminalMetadata(lifecycleReason)
     const recoveryKind = checkpointState === "POST_MERGE_CLEANUP_RECOVERED"
       ? "terminal-cleanup"
@@ -1229,6 +1230,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       runtimeCheckpointPayloadDigest: runtimeCheckpointMetadata.payloadDigest,
       terminalEventId: 90,
       terminalPayloadDigest: createHash("sha256").update(JSON.stringify(terminalMetadata)).digest("hex"),
+      runtimeAttempt: 1,
       executionBinding: historicalBinding.executionBinding,
       acquisitionKey: historicalBinding.acquisitionKey,
       fencingToken: historicalBinding.fencingToken,
@@ -1265,7 +1267,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         validators: issue911RuntimeWorkContract.validators,
         latestCheckpointId: 90, latestCheckpointMetadata: { checkpointState: "FAILED_TERMINAL" },
         latestCheckpointState: "FAILED_TERMINAL",
-        latestCheckpointKey: "hermes-outcome:4:attempt:2:checkpoint:42",
+        latestCheckpointKey: "hermes-outcome:4:attempt:1:checkpoint:42",
         latestCheckpointDigest: "1".repeat(64), latestCheckpointSequence: "42",
         latestExecutionEpochDigest: runtimeExecutionEpochDigest,
         latestCheckpointCreatedAt: "2026-08-15T01:00:00.000Z",
@@ -1276,7 +1278,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     })
 
     await expect(projectOutcomeRuntimeCheckpointRaw({
-      query, outcomeId: 4, attempt: 2,
+      query, outcomeId: 4, attempt: 1,
       workContract: issue911RuntimeWorkContract,
       executionBinding: historicalBinding,
       checkpoint: {
@@ -1332,7 +1334,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           .update(JSON.stringify(driftedPayload)).digest("hex")
       }
       await expect(projectOutcomeRuntimeCheckpointRaw({
-        query, outcomeId: 4, attempt: 2,
+        query, outcomeId: 4, attempt: 1,
         workContract: issue911RuntimeWorkContract,
         executionBinding: historicalBinding,
         checkpoint: {
@@ -1369,7 +1371,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       metadata: Object.fromEntries(Object.entries(driftedAuthorizationMetadata).reverse()),
     }
     await expect(projectOutcomeRuntimeCheckpointRaw({
-      query, outcomeId: 4, attempt: 2,
+      query, outcomeId: 4, attempt: 1,
       workContract: issue911RuntimeWorkContract,
       executionBinding: historicalBinding,
       checkpoint: {
@@ -2801,7 +2803,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       return { rows: [] }
     })
     await expect(authorizeHistoricalRecoveryProjection({
-      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      query, outcomeId: 4, recoveryKind: "review-remediation", runtimeAttempt: 2, executionBinding,
       prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
       proofDigest: "d".repeat(64),
     })).resolves.toEqual({ eventId: 91, replayed: false })
@@ -2830,7 +2832,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       return { rows: [] }
     })
     await expect(authorizeHistoricalRecoveryProjection({
-      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      query, outcomeId: 4, recoveryKind: "review-remediation", runtimeAttempt: 2, executionBinding,
       prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
       proofDigest: "d".repeat(64),
     })).resolves.toEqual({ eventId: 91, replayed: true })
@@ -2873,12 +2875,12 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       return { rows: [] }
     })
     await expect(authorizeHistoricalRecoveryProjection({
-      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      query, outcomeId: 4, recoveryKind: "review-remediation", runtimeAttempt: 2, executionBinding,
       prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
       proofDigest: "d".repeat(64),
     })).resolves.toMatchObject({ replayed: false })
     await expect(authorizeHistoricalRecoveryProjection({
-      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      query, outcomeId: 4, recoveryKind: "review-remediation", runtimeAttempt: 2, executionBinding,
       prNumber: 930, reviewedHeadSha: "e".repeat(40), mergeSha: "f".repeat(40),
       proofDigest: "a".repeat(64),
     })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
@@ -2909,7 +2911,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       return { rows: [] }
     })
     await expect(authorizeHistoricalRecoveryProjection({
-      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      query, outcomeId: 4, recoveryKind: "review-remediation", runtimeAttempt: 2, executionBinding,
       prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
       proofDigest: "d".repeat(64),
     })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
@@ -2945,7 +2947,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       return { rows: [] }
     })
     await expect(authorizeHistoricalRecoveryProjection({
-      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      query, outcomeId: 4, recoveryKind: "review-remediation", runtimeAttempt: 2, executionBinding,
       prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
       proofDigest: "d".repeat(64),
     })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
@@ -2985,7 +2987,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       return { rows: [] }
     })
     await expect(authorizeHistoricalRecoveryProjection({
-      query, outcomeId: 4, recoveryKind, executionBinding,
+      query, outcomeId: 4, recoveryKind, runtimeAttempt: 2, executionBinding,
       prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
       proofDigest: "d".repeat(64),
     })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
@@ -3003,7 +3005,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       /FROM goal AS recovery_goal/.test(sql) ? { rows } : { rows: [] }
     ))
     await expect(authorizeHistoricalRecoveryProjection({
-      query, outcomeId: 4, recoveryKind: "review-remediation",
+      query, outcomeId: 4, recoveryKind: "review-remediation", runtimeAttempt: 2,
       executionBinding: {
         ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
       },
@@ -3028,7 +3030,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4",
         runtimeCheckpointEventId: 89,
         runtimeCheckpointMetadata: failedHistoricalCheckpointMetadata(
-          42, "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED",
+          42, "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED", 1,
         ),
         terminalEventId: 90,
         terminalMetadata: failedGoalTerminalMetadata("POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"),
@@ -3038,7 +3040,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       return { rows: [] }
     })
     await expect(authorizeHistoricalRecoveryProjection({
-      query, outcomeId: 4, recoveryKind: "terminal-cleanup", executionBinding,
+      query, outcomeId: 4, recoveryKind: "terminal-cleanup", runtimeAttempt: 1, executionBinding,
       prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
       proofDigest: "e".repeat(64),
     })).resolves.toEqual({ eventId: 94, replayed: false })
@@ -3073,7 +3075,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       return { rows: [] }
     })
     await expect(authorizeHistoricalRecoveryProjection({
-      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      query, outcomeId: 4, recoveryKind: "review-remediation", runtimeAttempt: 2, executionBinding,
       prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
       proofDigest: "d".repeat(64),
     })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
@@ -3274,7 +3276,9 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         await client.query(`INSERT INTO outcome_queue_acquisition_receipt VALUES (
           'owner', 'goal:GOAL-0004', 'acquisition-key-4', 2
         )`)
-        const runtime = failedHistoricalCheckpointMetadata()
+        const runtime = failedHistoricalCheckpointMetadata(
+          42, "REVIEW_REMEDIATION_EXHAUSTED", 1,
+        )
         await client.query(`INSERT INTO governance_event
           ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
           VALUES ('owner', 'HERMES_RUNTIME_CHECKPOINT', 'work_order', '42',
@@ -3287,6 +3291,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
 
         const exactAuthorization = {
           query: client.query.bind(client), outcomeId: 4, recoveryKind: "review-remediation",
+          runtimeAttempt: 1,
           executionBinding: {
             ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
           },

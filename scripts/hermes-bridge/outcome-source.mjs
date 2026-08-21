@@ -2119,6 +2119,7 @@ export async function authorizeHistoricalRecoveryProjection({
   databaseUrl = process.env.DATABASE_URL,
   outcomeId,
   recoveryKind,
+  runtimeAttempt,
   executionBinding,
   prNumber,
   reviewedHeadSha,
@@ -2127,6 +2128,7 @@ export async function authorizeHistoricalRecoveryProjection({
 } = {}) {
   if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
     || !["review-remediation", "terminal-cleanup"].includes(recoveryKind)
+    || !Number.isSafeInteger(runtimeAttempt) || runtimeAttempt <= 0
     || !Number.isSafeInteger(prNumber) || prNumber <= 0
     || typeof reviewedHeadSha !== "string" || !COMMIT_SHA.test(reviewedHeadSha)
     || typeof mergeSha !== "string" || !COMMIT_SHA.test(mergeSha)
@@ -2211,6 +2213,7 @@ export async function authorizeHistoricalRecoveryProjection({
         runtimeCheckpointPayloadDigest: persisted?.runtimeCheckpointPayloadDigest,
         terminalEventId,
         terminalPayloadDigest: persisted?.terminalPayloadDigest,
+        runtimeAttempt,
         executionBinding: binding.executionBinding,
         acquisitionKey: binding.acquisitionKey,
         fencingToken: binding.fencingToken,
@@ -2313,20 +2316,20 @@ export async function authorizeHistoricalRecoveryProjection({
          AND recovery_runtime.metadata->>'checkpointDetail' = $8
          AND recovery_runtime.metadata->>'outcomeId' = recovery_goal.id::text
          AND recovery_runtime.metadata->>'workOrderRef' = recovery_work_order.ref
-         AND recovery_runtime.metadata->>'attempt' = recovery_queue."fencingToken"::text
+         AND recovery_runtime.metadata->>'attempt' = ($11::integer)::text
          AND recovery_runtime.metadata->>'executionBinding' = recovery_queue."executionBinding"
          AND recovery_runtime.metadata->>'acquisitionKey' = recovery_queue."acquisitionKey"
          AND recovery_runtime.metadata->>'acquisitionFencingToken' = recovery_queue."fencingToken"::text
          AND recovery_runtime.metadata->>'executionEpochDigest' = $10
          AND recovery_runtime.metadata->>'idempotencyKey' = 'hermes-outcome:' || recovery_goal.id::text
-           || ':attempt:' || recovery_queue."fencingToken"::text
+           || ':attempt:' || ($11::integer)::text
            || ':checkpoint:' || (recovery_runtime.metadata->>'checkpointSequence')
        ORDER BY recovery_goal.id
        LIMIT 2
        FOR UPDATE OF recovery_goal, recovery_queue, recovery_work_order`,
       [outcomeId, binding.userId, binding.outcomeKey, binding.expectedVersion,
         binding.executionBinding, binding.acquisitionKey, binding.fencingToken,
-        lifecycleReason, workOrderRef, recoveryExecutionEpochDigest],
+        lifecycleReason, workOrderRef, recoveryExecutionEpochDigest, runtimeAttempt],
     )
     if (graph?.rows?.length !== 1) {
       throw Object.assign(new Error("Historical recovery authorization graph is invalid"), {
@@ -2364,10 +2367,10 @@ export async function authorizeHistoricalRecoveryProjection({
       || runtimeCheckpointMetadata.checkpointDetail !== lifecycleReason
       || Number(runtimeCheckpointMetadata.outcomeId) !== outcomeId
       || runtimeCheckpointMetadata.workOrderRef !== workOrderRef
-      || Number(runtimeCheckpointMetadata.attempt) !== binding.fencingToken
+      || Number(runtimeCheckpointMetadata.attempt) !== runtimeAttempt
       || !Number.isSafeInteger(Number(runtimeCheckpointMetadata.checkpointSequence))
       || Number(runtimeCheckpointMetadata.checkpointSequence) < 0
-      || runtimeCheckpointMetadata.idempotencyKey !== `hermes-outcome:${outcomeId}:attempt:${binding.fencingToken}:checkpoint:${runtimeCheckpointMetadata.checkpointSequence}`
+      || runtimeCheckpointMetadata.idempotencyKey !== `hermes-outcome:${outcomeId}:attempt:${runtimeAttempt}:checkpoint:${runtimeCheckpointMetadata.checkpointSequence}`
       || runtimeCheckpointMetadata.executionBinding !== binding.executionBinding
       || runtimeCheckpointMetadata.acquisitionKey !== binding.acquisitionKey
       || Number(runtimeCheckpointMetadata.acquisitionFencingToken) !== binding.fencingToken
@@ -2391,6 +2394,7 @@ export async function authorizeHistoricalRecoveryProjection({
       runtimeCheckpointPayloadDigest,
       terminalEventId: Number(row.terminalEventId),
       terminalPayloadDigest,
+      runtimeAttempt,
       executionBinding: row.executionBinding,
       acquisitionKey: row.acquisitionKey,
       fencingToken: Number(row.fencingToken),
@@ -2516,6 +2520,7 @@ function exactHistoricalRecoveryAuthorization(
   executionBinding,
   outcomeId,
   checkpointState,
+  runtimeAttempt,
   proofDigest,
   evidence,
 ) {
@@ -2553,6 +2558,7 @@ function exactHistoricalRecoveryAuthorization(
     runtimeCheckpointPayloadDigest: runtimePayloadDigest,
     terminalEventId,
     terminalPayloadDigest,
+    runtimeAttempt,
     executionBinding: executionBinding.executionBinding,
     acquisitionKey: executionBinding.acquisitionKey,
     fencingToken: executionBinding.fencingToken,
@@ -2571,10 +2577,10 @@ function exactHistoricalRecoveryAuthorization(
     && runtimeMetadata?.checkpointDetail === lifecycleReason
     && Number(runtimeMetadata?.outcomeId) === outcomeId
     && runtimeMetadata?.workOrderRef === workOrderRef
-    && Number(runtimeMetadata?.attempt) === executionBinding.fencingToken
+    && Number(runtimeMetadata?.attempt) === runtimeAttempt
     && Number.isSafeInteger(Number(runtimeMetadata?.checkpointSequence))
     && Number(runtimeMetadata.checkpointSequence) >= 0
-    && runtimeMetadata?.idempotencyKey === `hermes-outcome:${outcomeId}:attempt:${executionBinding.fencingToken}:checkpoint:${runtimeMetadata.checkpointSequence}`
+    && runtimeMetadata?.idempotencyKey === `hermes-outcome:${outcomeId}:attempt:${runtimeAttempt}:checkpoint:${runtimeMetadata.checkpointSequence}`
     && runtimeMetadata?.executionBinding === executionBinding.executionBinding
     && runtimeMetadata?.acquisitionKey === executionBinding.acquisitionKey
     && Number(runtimeMetadata?.acquisitionFencingToken) === executionBinding.fencingToken
@@ -3033,6 +3039,7 @@ export async function projectOutcomeRuntimeCheckpoint({
              AND recovery_authorization.metadata->>'acquisitionKey' = contract_queue."acquisitionKey"
              AND recovery_authorization.metadata->>'fencingToken' = contract_queue."fencingToken"::text
              AND recovery_authorization.metadata->>'executionEpochDigest' = $21
+             AND recovery_authorization.metadata->>'runtimeAttempt' = ($22::integer)::text
              AND recovery_authorization.metadata->>'runtimeCheckpointEventId' = (
                SELECT runtime_checkpoint.id::text
                FROM governance_event AS runtime_checkpoint
@@ -3126,7 +3133,7 @@ export async function projectOutcomeRuntimeCheckpoint({
         checkpoint.state === "POST_MERGE_CLEANUP_RECOVERED"
           ? "HERMES_OUTCOME_TERMINAL_CLEANUP_RECOVERY_AUTHORIZED"
           : "HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED",
-        executionEpochDigest(normalizedExecutionBinding)],
+        executionEpochDigest(normalizedExecutionBinding), attempt],
     )
     if (authorizations?.rows?.length !== 1
       || !exactAuthorizationContract(
@@ -3135,7 +3142,7 @@ export async function projectOutcomeRuntimeCheckpoint({
       )
       || (historicalRecovery && !exactHistoricalRecoveryAuthorization(
         authorizations.rows[0], normalizedExecutionBinding, outcomeId, checkpoint.state,
-        historicalRecoveryProofDigest, evidence,
+        attempt, historicalRecoveryProofDigest, evidence,
       ))) {
       throw Object.assign(new Error("Canonical Workbench execution authorization is invalid"), {
         code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",

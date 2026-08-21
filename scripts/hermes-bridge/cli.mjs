@@ -560,6 +560,7 @@ export async function recoverTerminalPostMergeCleanupWall(options = {}) {
   await authorizeProjection({
     outcomeId: Number(candidate.outcomeId),
     recoveryKind: "terminal-cleanup",
+    runtimeAttempt: candidate.fencingToken,
     executionBinding: projectionBindings.executionBinding,
     prNumber: candidate.metadata.prNumber,
     reviewedHeadSha: candidate.metadata.headRefOid,
@@ -813,6 +814,7 @@ export async function recoverReviewedMerge(options = {}) {
   await authorizeProjection({
     outcomeId,
     recoveryKind: "review-remediation",
+    runtimeAttempt: candidate.fencingToken,
     executionBinding: projectionBindings.executionBinding,
     prNumber: candidate.metadata.prNumber,
     reviewedHeadSha,

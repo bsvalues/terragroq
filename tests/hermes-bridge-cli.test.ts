@@ -918,6 +918,10 @@ describe("Hermes bridge CLI", () => {
       })
       expect(beginRecovery).toHaveBeenCalledBefore(lifecycle.cleanupOwnedWorktree)
       expect(authorizeProjection).toHaveBeenCalledBefore(beginRecovery)
+      expect(authorizeProjection).toHaveBeenCalledWith(expect.objectContaining({
+        recoveryKind: "terminal-cleanup",
+        runtimeAttempt: 22,
+      }))
       expect(finalizeRecovery).toHaveBeenCalledAfter(lifecycle.cleanupOwnedWorktree)
       expect(projectCheckpoint).toHaveBeenCalledWith({
         outcomeId: 5,
@@ -1344,6 +1348,7 @@ describe("Hermes bridge CLI", () => {
     expect(authorizeProjection).toHaveBeenCalledWith(expect.objectContaining({
       outcomeId: 27,
       recoveryKind: "review-remediation",
+      runtimeAttempt: 5,
       executionBinding: expect.objectContaining({
         outcomeKey: "goal:GOAL-0023", acquisitionKey: "acquisition-27", fencingToken: 2,
       }),
