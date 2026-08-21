@@ -4119,8 +4119,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           "leaseExpiresAt" FROM outcome_queue_item`)).rows
         const beforeExpiredEvents = (await client.query(`SELECT count(*)::integer AS count
           FROM governance_event`)).rows
-        const expiredBaseLease = "2020-01-02T12:50:00.000Z"
-        const expiredContinuationLease = "2020-01-02T13:50:00.000Z"
+        const expiredBaseLease = "2020-01-02T12:50:00.153Z"
+        const expiredContinuationLease = "2020-01-02T13:50:00.646Z"
         await client.query(`UPDATE outcome_queue_acquisition_attempt
           SET "leaseExpiresAt"=$1,"attemptedAt"=CASE WHEN id=220 THEN '2020-01-02T12:00:00Z'::timestamptz
             WHEN id=221 THEN '2020-01-02T12:01:00Z'::timestamptz

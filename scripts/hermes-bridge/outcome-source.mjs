@@ -303,8 +303,12 @@ export async function readPendingPrimaryDecisionRequest({
   }
 }
 
+function timestampMilliseconds(value) {
+  return value instanceof Date ? value.getTime() : Date.parse(String(value ?? ""))
+}
+
 function normalizedTimestamp(value) {
-  const milliseconds = value instanceof Date ? value.getTime() : Date.parse(String(value ?? ""))
+  const milliseconds = timestampMilliseconds(value)
   return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : null
 }
 
@@ -2572,7 +2576,7 @@ function exactAuthorizationContract(
     ? executionBinding.reviewRecoveryStaleContinuation : undefined
   const activeRecoveryDelta = staleContinuation ? 4 : staleReacquisition ? 3
     : executionBinding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" ? 2 : 1
-  const rowLeaseExpiry = Date.parse(String(row?.leaseExpiresAt ?? ""))
+  const rowLeaseExpiry = timestampMilliseconds(row?.leaseExpiresAt)
   return Number(row?.goalId) === outcomeId
     && row?.userId === executionBinding.userId
     && row?.outcomeKey === executionBinding.outcomeKey
@@ -2871,8 +2875,8 @@ function exactActiveReviewRecoveryAcquisitionHops(row, executionBinding, outcome
       || !/^[0-9a-f]{64}$/.test(String(hop?.checkpointDigest ?? ""))) return false
     let priorAttemptedAt = priorLeaseExpiry
     return rows.every((attempt, index) => {
-      const attemptedAt = Date.parse(String(attempt?.attemptedAt ?? ""))
-      const leaseExpiresAt = Date.parse(String(attempt?.leaseExpiresAt ?? ""))
+      const attemptedAt = timestampMilliseconds(attempt?.attemptedAt)
+      const leaseExpiresAt = timestampMilliseconds(attempt?.leaseExpiresAt)
       const checkpointSequence = Number(attempt?.checkpointSequence)
       const checkpointPrNumber = attempt?.checkpointPrNumber == null
         ? null : Number(attempt.checkpointPrNumber)
@@ -2923,7 +2927,8 @@ function exactActiveReviewRecoveryAcquisitionHops(row, executionBinding, outcome
   return exactHop(base, baseRows)
     && (continuation === undefined
       ? attempts.length === baseRows.length
-      : exactHop(continuation, continuationRows, Date.parse(continuation.priorLeaseExpiresAt))
+      : exactHop(continuation, continuationRows,
+        timestampMilliseconds(continuation.priorLeaseExpiresAt))
         && attempts.length === baseRows.length + continuationRows.length
         && Number(baseRows.at(-1)?.id) < Number(continuationRows[0]?.id))
 }
@@ -4568,7 +4573,7 @@ export async function resolveActiveReviewRecoveryProvenance({
           provenance.reviewRecoverySourceFencingToken + 4],
       )
       const attempts = observed?.rows ?? []
-      const queueExpiry = Date.parse(String(row.queueLeaseExpiresAt ?? ""))
+      const queueExpiry = timestampMilliseconds(row.queueLeaseExpiresAt)
       const checkpointDigestForFence = (fence) => digestOutcomeQueueCheckpointProof({
         ...exactCheckpointProof, fencingToken: fence,
       })
@@ -4591,9 +4596,9 @@ export async function resolveActiveReviewRecoveryProvenance({
         && attempt.checkpointMergeSha === exactCheckpointProof.commit.mergeSha
         && Number(attempt.checkpointPrNumber) === exactCheckpointProof.commit.prNumber
         && Number(attempt.fencingToken) === fence
-        && Date.parse(String(attempt.leaseExpiresAt ?? "")) === groupExpiry
+        && timestampMilliseconds(attempt.leaseExpiresAt) === groupExpiry
         && Number(attempt.activeWorkOrderId) === exactCheckpointProof.workOrderId
-        && Number.isFinite(Date.parse(String(attempt.attemptedAt ?? "")))
+        && Number.isFinite(timestampMilliseconds(attempt.attemptedAt))
       }
       const baseFence = provenance.reviewRecoverySourceFencingToken + 3
       const continuationFence = provenance.reviewRecoverySourceFencingToken + 4
@@ -4601,8 +4606,8 @@ export async function resolveActiveReviewRecoveryProvenance({
       const continuationAttempts = attempts.filter(
         (attempt) => Number(attempt.fencingToken) === continuationFence,
       )
-      const baseExpiry = Date.parse(String(baseAttempts[0]?.leaseExpiresAt ?? ""))
-      const continuationExpiry = Date.parse(String(continuationAttempts[0]?.leaseExpiresAt ?? ""))
+      const baseExpiry = timestampMilliseconds(baseAttempts[0]?.leaseExpiresAt)
+      const continuationExpiry = timestampMilliseconds(continuationAttempts[0]?.leaseExpiresAt)
       const queueFence = Number(row.queueFencingToken)
       const queueVersion = Number(row.queueVersion)
       const hasContinuation = queueFence === continuationFence
