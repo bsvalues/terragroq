@@ -1259,6 +1259,13 @@ describe("Hermes bridge CLI", () => {
       ".github/workflows/receipt.yml",
       "package.json",
       "docs/reports/../governance/runtime-policy.md",
+      `${remediationPath}\n`,
+      `${remediationPath}\r`,
+      `${remediationPath}\0`,
+      `${remediationPath}\t`,
+      "app/components/runtime.ts\n",
+      "tests/runtime.test.ts\0",
+      "scripts/hermes-bridge//cli.mjs",
     ]) {
       filesDigest = digestFor([blockedPath])
       remediationFiles.mockResolvedValueOnce([blockedPath])

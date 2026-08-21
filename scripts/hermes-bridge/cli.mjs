@@ -41,13 +41,19 @@ function flushStdout() {
 
 function boundedReviewRemediationFiles(files, expectedDigest) {
   if (!Array.isArray(files) || files.length === 0 || files.length > 20) return false
-  const allowed = /^(?:app\/|components\/|lib\/|scripts\/hermes-bridge\/|tests\/|docs\/reports\/[A-Za-z0-9][A-Za-z0-9._-]*\.md$)/
+  const allowedPrefix = /^(?:app\/|components\/|lib\/|scripts\/hermes-bridge\/|tests\/)/
+  const allowedReport = /^docs\/reports\/[A-Za-z0-9][A-Za-z0-9._-]*\.md$/
   const blocked = /(?:^|\/)(?:\.github|prisma|migrations?|runtime-operator|multi-agent-operator|terraform|terrafusion|pacs|county)(?:\/|$)|(?:^|\/)(?:package(?:-lock)?\.json|vercel\.json|\.env(?:\.|$))/i
   const normalized = [...files].sort()
   return typeof expectedDigest === "string"
     && /^[0-9a-f]{64}$/.test(expectedDigest)
     && sha256(JSON.stringify(normalized)) === expectedDigest
-    && normalized.every((file) => typeof file === "string" && allowed.test(file) && !blocked.test(file))
+    && normalized.every((file) => {
+      if (typeof file !== "string" || /[\u0000-\u001f\u007f-\u009f]/u.test(file)
+        || path.posix.normalize(file) !== file || blocked.test(file)) return false
+      const reportMatch = allowedReport.exec(file)
+      return allowedPrefix.test(file) || reportMatch?.[0] === file
+    })
 }
 
 export function sanitizeBridgeMessage(value) {
