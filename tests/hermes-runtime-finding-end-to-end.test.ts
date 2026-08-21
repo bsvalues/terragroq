@@ -63,6 +63,8 @@ async function bootstrap(client: import("pg").PoolClient, schema: string) {
     OUTCOME_QUEUE_SQL.ensureMutationReceiptOutcomeIndex,
     OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable,
     OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptOutcomeIndex,
+    OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptTable,
+    OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptIndexes,
   ]) await client.query(statement)
 }
 
