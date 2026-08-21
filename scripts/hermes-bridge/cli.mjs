@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url"
 import { sanitizeAppServerText } from "./app-server-client.mjs"
 import { selectExecutionBackend } from "./execution-backend.mjs"
 import {
+  assertRetiredAcquisitionRecoveryIdentity,
   createHermesOrchestrator,
   deriveHermesRuntimeProjectionBindings,
   deriveHermesRuntimeWorkContract,
@@ -148,6 +149,42 @@ export function createResidentHermesOrchestrator(options = {}) {
     consumeRuntimeFindings: queueRuntime.consumeRuntimeFindings,
     close: queueRuntime.close,
   })
+}
+
+export async function reconcileRetiredAcquisition(options = {}) {
+  assertRetiredAcquisitionRecoveryIdentity(options.expectedOutcomeId, options.expectedOutcomeKey)
+  const runtimeRoot = path.resolve(options.runtimeRoot
+    ?? process.env.WILLIAMOS_HERMES_RUNTIME_ROOT
+    ?? path.join(os.homedir(), ".williamos", "hermes-bridge"))
+  const activationPath = path.join(runtimeRoot, "control", "activation")
+  const supervisorPath = path.join(runtimeRoot, "state", "supervisor.json")
+  let activation = null
+  try {
+    activation = fs.readFileSync(activationPath, "utf8").trim()
+  } catch {}
+  if (activation !== "disabled" || fs.existsSync(supervisorPath)) {
+    throw Object.assign(new Error("Retired acquisition recovery requires disabled activation and absent supervisor evidence"), {
+      code: "HERMES_RETIRED_ACQUISITION_RECOVERY_CONTAINMENT_WALL",
+    })
+  }
+  const createQueueRuntime = options.createQueueRuntime ?? createHermesOutcomeQueueRuntime
+  const queueRuntime = options.queueRuntime ?? createQueueRuntime()
+  const createOrchestrator = options.createOrchestrator ?? createHermesOrchestrator
+  try {
+    const orchestrator = createOrchestrator({
+      workspace: options.workspace ?? process.cwd(),
+      runtimeRoot,
+      env: options.environment ?? process.env,
+      reconciliationOnly: true,
+      resolveRetiredAcquisition: queueRuntime.resolveRetiredAcquisition,
+    })
+    return await orchestrator.reconcileRetiredAcquisition({
+      expectedOutcomeId: options.expectedOutcomeId,
+      expectedOutcomeKey: options.expectedOutcomeKey,
+    })
+  } finally {
+    await queueRuntime?.close?.()
+  }
 }
 
 export async function runHermesQueueDrain({
@@ -1361,35 +1398,47 @@ export async function recoverReviewedMerge(options = {}) {
   }
 }
 
-export async function runCli(command = process.argv[2]) {
+export async function runCli(command = process.argv[2], options = {}) {
   let orchestrator = null
+  const args = options.args ?? process.argv.slice(3)
+  const printResult = options.print ?? print
+  const createResident = options.createResidentOrchestrator ?? createResidentHermesOrchestrator
+  const runRetiredReconciliation = options.reconcileRetiredAcquisition ?? reconcileRetiredAcquisition
   try {
     if (command === "cycle") {
-      orchestrator = createResidentHermesOrchestrator({ requireAegis: true })
+      orchestrator = createResident({ requireAegis: true })
       printHermesCycleResult(
         await runHermesQueueDrain({ orchestrator, consumeDecision: consumePrimaryDecisionIntake }),
       )
     }
-    else if (command === "smoke") print(await smoke())
-    else if (command === "recover-native-provider-wall") print(await recoverNativeProviderWall())
-    else if (command === "recover-validation-infrastructure-wall") print(await recoverValidationInfrastructureWall())
-    else if (command === "recover-orphaned-validation-cycle") print(await recoverOrphanedValidationCycle())
-    else if (command === "recover-external-tool-wall") print(recoverExternalToolWall())
-    else if (command === "recover-post-merge-cleanup-wall") print(recoverPostMergeCleanupWall())
-    else if (command === "recover-terminal-post-merge-cleanup-wall") print(await recoverTerminalPostMergeCleanupWall())
-    else if (command === "recover-active-post-merge-cleanup-wall") print(await recoverActivePostMergeCleanupWall())
-    else if (command === "recover-reviewed-merge") print(await recoverReviewedMerge())
-    else if (command === "agreement") print(await captureRuntimeAgreement())
+    else if (command === "reconcile-retired-acquisition") {
+      if (args.length !== 2) assertRetiredAcquisitionRecoveryIdentity(undefined, undefined)
+      assertRetiredAcquisitionRecoveryIdentity(args[0], args[1])
+      printResult(await runRetiredReconciliation({
+        expectedOutcomeId: args[0],
+        expectedOutcomeKey: args[1],
+      }))
+    }
+    else if (command === "smoke") printResult(await smoke())
+    else if (command === "recover-native-provider-wall") printResult(await recoverNativeProviderWall())
+    else if (command === "recover-validation-infrastructure-wall") printResult(await recoverValidationInfrastructureWall())
+    else if (command === "recover-orphaned-validation-cycle") printResult(await recoverOrphanedValidationCycle())
+    else if (command === "recover-external-tool-wall") printResult(recoverExternalToolWall())
+    else if (command === "recover-post-merge-cleanup-wall") printResult(recoverPostMergeCleanupWall())
+    else if (command === "recover-terminal-post-merge-cleanup-wall") printResult(await recoverTerminalPostMergeCleanupWall())
+    else if (command === "recover-active-post-merge-cleanup-wall") printResult(await recoverActivePostMergeCleanupWall())
+    else if (command === "recover-reviewed-merge") printResult(await recoverReviewedMerge())
+    else if (command === "agreement") printResult(await captureRuntimeAgreement())
     else if (command === "status") {
-      orchestrator = createResidentHermesOrchestrator()
+      orchestrator = createResident()
       print(redactHermesStatus(
         readHermesState(path.join(orchestrator.runtimeRoot, "state", "state.json")),
       ))
     } else {
-      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|agreement|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-orphaned-validation-cycle|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-terminal-post-merge-cleanup-wall|recover-active-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
+      throw Object.assign(new Error("Usage: cli.mjs cycle|smoke|status|agreement|reconcile-retired-acquisition <outcome-id> <outcome-key>|recover-native-provider-wall|recover-validation-infrastructure-wall|recover-orphaned-validation-cycle|recover-external-tool-wall|recover-post-merge-cleanup-wall|recover-terminal-post-merge-cleanup-wall|recover-active-post-merge-cleanup-wall|recover-reviewed-merge"), { code: "HERMES_CLI_USAGE" })
     }
   } catch (error) {
-    print({
+    printResult({
       result: "WALL",
       code: error?.code ?? "HERMES_CLI_FAILED",
       message: sanitizeBridgeMessage(error?.message ?? "Hermes bridge failed"),

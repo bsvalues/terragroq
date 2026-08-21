@@ -15,11 +15,13 @@ import {
   recoverReviewedMerge,
   recoverTerminalPostMergeCleanupWall,
   recoverValidationInfrastructureWall,
+  reconcileRetiredAcquisition,
   redactHermesStatus,
   resolveHermesSmokeCwd,
   runHermesTransportSmoke,
   printHermesCycleResult,
   runHermesQueueDrain,
+  runCli,
   runCliEntrypoint,
   sanitizeBridgeMessage,
 } from "../scripts/hermes-bridge/cli.mjs"
@@ -66,6 +68,135 @@ function exactIssue911Outcome(id: number, ref: string) {
 }
 
 describe("Hermes bridge CLI", () => {
+  it("runs the retired-acquisition command through only the reconciliation-only surface", async () => {
+    const resolveRetiredAcquisition = vi.fn()
+    const forbidden = vi.fn(() => { throw new Error("forbidden queue capability") })
+    const close = vi.fn(async () => {})
+    const queueRuntime = {
+      resolveRetiredAcquisition,
+      selectOutcome: forbidden,
+      completeOutcome: forbidden,
+      terminalizeOutcome: forbidden,
+      deferOutcome: forbidden,
+      consumeRuntimeFindings: forbidden,
+      close,
+    }
+    const reconcile = vi.fn(async () => ({
+      result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId: "21",
+      checkpointSequence: 5,
+      proofDigest: "a".repeat(64),
+      replayed: false,
+    }))
+    const createOrchestrator = vi.fn((options) => {
+      expect(options).toMatchObject({
+        reconciliationOnly: true,
+        resolveRetiredAcquisition,
+      })
+      expect(options).not.toHaveProperty("selectOutcome")
+      expect(options).not.toHaveProperty("executionBackend")
+      return { reconcileRetiredAcquisition: reconcile }
+    })
+
+    await expect(reconcileRetiredAcquisition({
+      expectedOutcomeId: "21",
+      expectedOutcomeKey: "goal:GOAL-0017",
+      queueRuntime,
+      createOrchestrator,
+    })).resolves.toMatchObject({
+      result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId: "21",
+    })
+    expect(reconcile).toHaveBeenCalledWith({
+      expectedOutcomeId: "21",
+      expectedOutcomeKey: "goal:GOAL-0017",
+    })
+    expect(forbidden).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledOnce()
+  })
+
+  it("parses the supported retired-acquisition command without constructing a resident cycle", async () => {
+    const recover = vi.fn(async () => ({ result: "DURABLE_QUEUE_ACQUISITION_RETIRED" }))
+    const output: unknown[] = []
+
+    await expect(runCli("reconcile-retired-acquisition", {
+      args: ["21", "goal:GOAL-0017"],
+      reconcileRetiredAcquisition: recover,
+      print: (value) => output.push(value),
+      createResidentOrchestrator: () => { throw new Error("resident cycle must not be constructed") },
+    })).resolves.toBe(0)
+    expect(recover).toHaveBeenCalledWith({
+      expectedOutcomeId: "21",
+      expectedOutcomeKey: "goal:GOAL-0017",
+    })
+    expect(output).toEqual([{ result: "DURABLE_QUEUE_ACQUISITION_RETIRED" }])
+  })
+
+  it.each([
+    [[]],
+    [["21"]],
+    [["21", "goal:GOAL-0017", "extra"]],
+  ])("rejects a retired-acquisition command without exactly two identity arguments: %j", async (args) => {
+    const recover = vi.fn()
+    const output: any[] = []
+
+    await expect(runCli("reconcile-retired-acquisition", {
+      args,
+      reconcileRetiredAcquisition: recover,
+      print: (value) => output.push(value),
+    })).resolves.toBe(1)
+    expect(recover).not.toHaveBeenCalled()
+    expect(output).toEqual([expect.objectContaining({
+      result: "WALL",
+      code: "HERMES_RETIRED_ACQUISITION_RECOVERY_INPUT_WALL",
+    })])
+  })
+
+  it("rejects a noncanonical direct recovery identity before constructing the queue runtime", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-retired-cli-input-"))
+    try {
+      fs.mkdirSync(path.join(root, "control"), { recursive: true })
+      fs.writeFileSync(path.join(root, "control", "activation"), "disabled\n")
+      const createQueueRuntime = vi.fn()
+
+      await expect(reconcileRetiredAcquisition({
+        runtimeRoot: root,
+        expectedOutcomeId: "021",
+        expectedOutcomeKey: "goal:GOAL-0017",
+        createQueueRuntime,
+      })).rejects.toMatchObject({ code: "HERMES_RETIRED_ACQUISITION_RECOVERY_INPUT_WALL" })
+      expect(createQueueRuntime).not.toHaveBeenCalled()
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    ["enabled activation", false],
+    ["supervisor evidence", true],
+  ])("walls %s before constructing the queue runtime", async (_name, supervisor) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-retired-cli-"))
+    try {
+      fs.mkdirSync(path.join(root, "control"), { recursive: true })
+      fs.mkdirSync(path.join(root, "state"), { recursive: true })
+      fs.writeFileSync(path.join(root, "control", "activation"), supervisor ? "disabled\n" : "enabled\n")
+      if (supervisor) fs.writeFileSync(path.join(root, "state", "supervisor.json"), "{}\n")
+      const createQueueRuntime = vi.fn()
+
+      await expect(reconcileRetiredAcquisition({
+        runtimeRoot: root,
+        expectedOutcomeId: "21",
+        expectedOutcomeKey: "goal:GOAL-0017",
+        createQueueRuntime,
+      })).rejects.toMatchObject({
+        code: "HERMES_RETIRED_ACQUISITION_RECOVERY_CONTAINMENT_WALL",
+      })
+      expect(createQueueRuntime).not.toHaveBeenCalled()
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it.each([
     [{}, "HERMES_RESIDENT_AEGIS_REQUIRED"],
     [{ WILLIAMOS_CODEX_EXEC_NODE: "local" }, "HERMES_RESIDENT_AEGIS_REQUIRED"],
