@@ -106,6 +106,23 @@ export function buildTlsServerOptions({ pfx, passphrase, clientCa }) {
   return options
 }
 
+/**
+ * Fail fast ONLY while down-ness is still the question. Down-ness is decided at the socket, not
+ * at response headers: a connected application is alive and may legitimately compute for longer
+ * than any polite request timeout before it answers (an environment action that runs the real
+ * test suite sends nothing until the run finishes, and a 30s pre-header guard was returning 502
+ * with the work still in flight). So: 30s to get a connection, ten minutes once connected, and
+ * the response handler re-arms the same ceiling for the streaming phase.
+ */
+export function armUpstreamGuards(upstream, { connectMs = 30_000, aliveMs = 600_000 } = {}) {
+  upstream.setTimeout(connectMs, () => upstream.destroy(new Error("UPSTREAM_TIMEOUT")))
+  upstream.on("socket", (socket) => {
+    const relax = () => upstream.setTimeout(aliveMs, () => upstream.destroy(new Error("UPSTREAM_TIMEOUT")))
+    if (socket.connecting) socket.once("connect", relax)
+    else relax()
+  })
+}
+
 export function createHermesHttpsProxy({ pfx, passphrase, clientCa }) {
   return https.createServer(buildTlsServerOptions({ pfx, passphrase, clientCa }), (request, response) => {
     const upstream = http.request({
@@ -125,8 +142,7 @@ export function createHermesHttpsProxy({ pfx, passphrase, clientCa }) {
       response.writeHead(upstreamResponse.statusCode ?? 502, buildDownstreamHeaders(upstreamResponse.headers))
       upstreamResponse.pipe(response)
     })
-    // Until the app answers: fail fast. This covers connect and response headers only.
-    upstream.setTimeout(30_000, () => upstream.destroy(new Error("UPSTREAM_TIMEOUT")))
+    armUpstreamGuards(upstream)
     upstream.on("error", () => {
       if (!response.headersSent) response.writeHead(502, { "content-type": "text/plain; charset=utf-8" })
       response.end("HERMES application unavailable")

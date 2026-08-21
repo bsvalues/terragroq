@@ -143,3 +143,43 @@ describe("HERMES HTTPS proxy device identity", () => {
     expect(options).toEqual({ pfx: "PFX", passphrase: "P" })
   })
 })
+
+import { armUpstreamGuards } from "@/scripts/hermes-https-proxy.mjs"
+
+/** An upstream-request stub recording each setTimeout arm and its socket listeners. */
+function upstreamStub() {
+  const arms: number[] = []
+  const listeners: Record<string, (socket: unknown) => void> = {}
+  return {
+    arms,
+    listeners,
+    setTimeout(ms: number) { arms.push(ms) },
+    on(event: string, handler: (socket: unknown) => void) { listeners[event] = handler },
+    emitSocket(socket: unknown) { listeners.socket?.(socket) },
+  }
+}
+
+describe("upstream timeout guards", () => {
+  it("arms the fail-fast guard before any socket exists", () => {
+    const upstream = upstreamStub()
+    armUpstreamGuards(upstream)
+    expect(upstream.arms).toEqual([30_000])
+  })
+
+  it("relaxes to the alive ceiling the moment a fresh socket connects — down-ness is decided at connect, not at headers", () => {
+    const upstream = upstreamStub()
+    armUpstreamGuards(upstream)
+    let onConnect: (() => void) | undefined
+    upstream.emitSocket({ connecting: true, once: (event: string, fn: () => void) => { if (event === "connect") onConnect = fn } })
+    expect(upstream.arms).toEqual([30_000])
+    onConnect?.()
+    expect(upstream.arms).toEqual([30_000, 600_000])
+  })
+
+  it("relaxes immediately on a reused keep-alive socket, which never emits connect", () => {
+    const upstream = upstreamStub()
+    armUpstreamGuards(upstream)
+    upstream.emitSocket({ connecting: false, once: () => { throw new Error("must not wait for connect on a live socket") } })
+    expect(upstream.arms).toEqual([30_000, 600_000])
+  })
+})
