@@ -335,7 +335,7 @@ describe("Hermes interactive-user supervisor", () => {
           "$wanted = @('ConvertTo-WindowsCommandLineArgument', 'Join-WindowsCommandLineArguments')",
           "$functions = @($ast.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $wanted -ccontains $node.Name }, $true))",
           "foreach ($function in $functions) { . ([ScriptBlock]::Create($function.Extent.Text)) }",
-          "$controls = @(0, 9, 10, 13, 31, 127)",
+          "$controls = @(0, 9, 10, 13, 31, 127, 133, 159)",
           "$walls = foreach ($code in $controls) {",
           "  try {",
           "    $null = Join-WindowsCommandLineArguments -Values @('safe', ('unsafe' + [char]$code))",
@@ -356,7 +356,7 @@ describe("Hermes interactive-user supervisor", () => {
 
       expect(result.status, result.stderr).toBe(0)
       expect(JSON.parse(result.stdout)).toEqual(
-        Array.from({ length: 6 }, () => "HERMES_SUPERVISOR_ARGUMENT_CONTROL_CHARACTER_WALL"),
+        Array.from({ length: 8 }, () => "HERMES_SUPERVISOR_ARGUMENT_CONTROL_CHARACTER_WALL"),
       )
     },
   )

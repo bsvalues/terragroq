@@ -65,7 +65,7 @@ function ConvertTo-SupervisorToken {
 function ConvertTo-WindowsCommandLineArgument {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
 
-    if ($Value -cmatch '[\x00-\x1f\x7f]') {
+    if ($Value -cmatch '\p{Cc}') {
         throw "HERMES_SUPERVISOR_ARGUMENT_CONTROL_CHARACTER_WALL"
     }
     if ($Value.Length -gt 0 -and $Value -cnotmatch '[\s"]') {
