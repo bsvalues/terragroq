@@ -62,6 +62,20 @@ const RECOVERABLE_DELIVERY_WALLS = new Set([
   "HERMES_REVIEW_CONTINUITY_WALL",
 ])
 
+export function isExactReviewRecoveredAbandonedLease(execution, now = Date.now()) {
+  if (execution?.checkpoint?.state !== "REVIEW_REMEDIATION_RECOVERED"
+    || execution?.checkpoint?.detail !== "REVIEW_REMEDIATION_EXHAUSTED") return false
+  if (execution?.lease?.status === "ABANDONED") return true
+  if (execution?.lease?.status !== "ACTIVE"
+    || typeof execution.lease.abandonedAt !== "string"
+    || execution.lease.abandonedAt === ""
+    || typeof execution.lease.expiresAt !== "string"
+    || execution.lease.abandonedAt !== execution.lease.expiresAt) return false
+  const abandonedAt = Date.parse(execution.lease.abandonedAt)
+  const currentTime = now instanceof Date ? now.getTime() : Number(now)
+  return Number.isFinite(abandonedAt) && Number.isFinite(currentTime) && abandonedAt <= currentTime
+}
+
 export function isRetryableProjectionTransportError(error) {
   if (!error || typeof error !== "object") return false
   if (Array.isArray(error.errors)) {
@@ -1036,11 +1050,22 @@ export function createHermesOrchestrator(options = {}) {
     const initialized = state.initialize()
     if (initialized.killSwitch.active) return { result: "KILL_SWITCH_ACTIVE" }
     assertOwnerTouchCountersZero(initialized)
+    for (const execution of Object.values(initialized.executions)) {
+      const hasReviewRecoveryCheckpoint = execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
+        && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED"
+      const hasAbandonedMarker = Object.hasOwn(execution?.lease ?? {}, "abandonedAt")
+        && execution?.lease?.abandonedAt !== null
+      if (hasReviewRecoveryCheckpoint && execution?.lease?.status === "ACTIVE"
+        && hasAbandonedMarker
+        && !isExactReviewRecoveredAbandonedLease(execution, now())) {
+        throw Object.assign(new Error("Persisted review recovery abandoned lease is invalid"), {
+          code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+        })
+      }
+    }
     const unfinished = Object.values(initialized.executions).filter((execution) => (
       execution?.lease?.status === "ACTIVE"
-      && !(execution?.lease?.abandonedAt
-        && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
-        && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED")
+      && !isExactReviewRecoveredAbandonedLease(execution, now())
     ))
     if (unfinished.length > 1) throw Object.assign(new Error("Multiple unfinished executions found"), { code: "HERMES_EXECUTION_CONCURRENCY_WALL" })
     const pendingExecution = unfinished[0] ?? null
@@ -1130,9 +1155,7 @@ export function createHermesOrchestrator(options = {}) {
     }
     const verifiedReviewRecoveries = new Map()
     for (const execution of Object.values(initialized.executions)) {
-      if (!(execution?.lease?.status === "ABANDONED" || execution?.lease?.abandonedAt)
-        || execution?.checkpoint?.state !== "REVIEW_REMEDIATION_RECOVERED"
-        || execution?.checkpoint?.detail !== "REVIEW_REMEDIATION_EXHAUSTED") continue
+      if (!isExactReviewRecoveredAbandonedLease(execution, now())) continue
       const prNumber = Number(execution?.metadata?.prNumber)
       const reviewedHeadSha = execution?.metadata?.headRefOid
       const mergeSha = execution?.metadata?.mergeSha
@@ -1167,9 +1190,7 @@ export function createHermesOrchestrator(options = {}) {
     }
     const recoveredCandidates = Object.values(initialized.executions).filter((execution) => (
       (execution?.lease?.status === "ABANDONED"
-        || (execution?.lease?.status === "ACTIVE" && Boolean(execution?.lease?.abandonedAt)
-          && execution?.checkpoint?.state === "REVIEW_REMEDIATION_RECOVERED"
-          && execution?.checkpoint?.detail === "REVIEW_REMEDIATION_EXHAUSTED"))
+        || isExactReviewRecoveredAbandonedLease(execution, now()))
       && (
         (execution?.checkpoint?.state === "VALIDATION_INFRASTRUCTURE_RECOVERED"
           && execution?.checkpoint?.detail === VALIDATION_INFRASTRUCTURE_RETRY_STATE

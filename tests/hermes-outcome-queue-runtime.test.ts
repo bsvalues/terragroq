@@ -1663,7 +1663,7 @@ describe("Hermes durable outcome queue runtime", () => {
       prNumber: 523,
       reviewedHeadSha: "a".repeat(40),
       mergeSha: "b".repeat(40),
-      runtimeAttempt: 6,
+      runtimeAttempt: 5,
     })).resolves.toMatchObject({ queueBinding: {
       expectedVersion: 6, fencingToken: 4,
       reviewRecoverySourceExpectedVersion: 5,
@@ -1681,6 +1681,31 @@ describe("Hermes durable outcome queue runtime", () => {
       proof: expect.objectContaining({ runtimeAttempt: 5 }),
     }))
     expect(acquire).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ["drifted", 6],
+    ["missing", undefined],
+  ])("walls a %s persisted source attempt before verification or refresh", async (_name, sourceAttempt) => {
+    const recovered = {
+      ...queueItem, lifecycleState: "active", lifecycleReason: "REVIEW_REMEDIATION_RECOVERED",
+      approvalState: "approved", authorityState: "matched", version: 6, fencingToken: 4,
+      leaseHolder: "resident-hermes", leaseExpiresAt: "2026-07-28T12:50:00.000Z",
+      ...(sourceAttempt === undefined ? {} : { reviewRecoverySourceRuntimeAttempt: sourceAttempt }),
+    }
+    const resumeReviewRecoveryQueue = vi.fn(async () => recovered)
+    const verifyActiveReviewRecovery = vi.fn(async () => true)
+    const acquire = vi.fn()
+    const bridge = runtime({ resumeReviewRecoveryQueue, verifyActiveReviewRecovery, acquire })
+    const outcome = { ...goal, queueBinding: { ...queueItem, expectedVersion: 6, fencingToken: 4,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" } }
+
+    await expect(bridge.resumeAfterReviewRecovery(outcome, {
+      expectedNextState: "REVIEW_REMEDIATION_EXHAUSTED", proofDigest: "d".repeat(64),
+      prNumber: 523, reviewedHeadSha: "a".repeat(40), mergeSha: "b".repeat(40), runtimeAttempt: 5,
+    })).rejects.toMatchObject({ code: "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL" })
+    expect(verifyActiveReviewRecovery).not.toHaveBeenCalled()
+    expect(acquire).not.toHaveBeenCalled()
   })
 
   it("walls malformed persisted review recovery before refresh or provenance backfill", async () => {

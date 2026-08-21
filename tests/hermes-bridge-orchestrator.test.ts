@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createHermesOrchestrator,
   deriveHermesRuntimeProjectionBindings,
+  isExactReviewRecoveredAbandonedLease,
   isRetryableProjectionTransportError,
   requireHermesWorkContract,
   retryRuntimeProjection,
@@ -19,6 +20,27 @@ import {
 import { resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 
 const roots: string[] = []
+
+describe("exact review-recovered abandoned lease", () => {
+  const checkpoint = { state: "REVIEW_REMEDIATION_RECOVERED", detail: "REVIEW_REMEDIATION_EXHAUSTED" }
+  const now = Date.parse("2026-08-21T05:00:00.000Z")
+  it.each([
+    ["durable abandoned status", { status: "ABANDONED" }, checkpoint, true],
+    ["exact expired active marker", { status: "ACTIVE", abandonedAt: "2026-08-21T04:00:00.000Z",
+      expiresAt: "2026-08-21T04:00:00.000Z" }, checkpoint, true],
+    ["empty marker", { status: "ACTIVE", abandonedAt: "", expiresAt: "" }, checkpoint, false],
+    ["invalid marker", { status: "ACTIVE", abandonedAt: "invalid", expiresAt: "invalid" }, checkpoint, false],
+    ["mismatched marker", { status: "ACTIVE", abandonedAt: "2026-08-21T03:59:00.000Z",
+      expiresAt: "2026-08-21T04:00:00.000Z" }, checkpoint, false],
+    ["live expiry stale marker", { status: "ACTIVE", abandonedAt: "2026-08-21T06:00:00.000Z",
+      expiresAt: "2026-08-21T06:00:00.000Z" }, checkpoint, false],
+    ["wrong checkpoint", { status: "ACTIVE", abandonedAt: "2026-08-21T04:00:00.000Z",
+      expiresAt: "2026-08-21T04:00:00.000Z" }, { ...checkpoint, state: "LEASED" }, false],
+  ])("classifies %s", (_name, lease, persistedCheckpoint, expected) => {
+    expect(isExactReviewRecoveredAbandonedLease({ lease, checkpoint: persistedCheckpoint }, now))
+      .toBe(expected)
+  })
+})
 const ownerDecisionPacket = {
   blockedAction: "Resume the exact blocked validation.",
   authorityBoundary: "Primary authority is required.",
@@ -1885,6 +1907,25 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         reason: "TEST_CRASH_WINDOW",
       })
     }
+    const statePath = path.join(value.root, "state", "state.json")
+    const exactAbandonedState = JSON.parse(fs.readFileSync(statePath, "utf8"))
+    for (const marker of [
+      { abandonedAt: "", expiresAt: "" },
+      { abandonedAt: "invalid", expiresAt: "invalid" },
+      { abandonedAt: "2026-07-21T00:59:59.000Z", expiresAt: "2026-07-21T01:00:00.000Z" },
+      { abandonedAt: "2026-07-21T02:00:00.000Z", expiresAt: "2026-07-21T02:00:00.000Z" },
+    ]) {
+      const malformed = structuredClone(exactAbandonedState)
+      Object.assign(malformed.executions["77"].lease, marker)
+      fs.writeFileSync(statePath, `${JSON.stringify(malformed, null, 2)}\n`)
+      await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+        code: "HERMES_REVIEW_RECOVERY_PROOF_WALL",
+      })
+      expect(resolveActiveReviewRecoveryProvenance).not.toHaveBeenCalled()
+      expect(resumeQueueAfterReviewRecovery).not.toHaveBeenCalled()
+      expect(value.projectLease).not.toHaveBeenCalled()
+    }
+    fs.writeFileSync(statePath, `${JSON.stringify(exactAbandonedState, null, 2)}\n`)
     value.lifecycle.inspectPullRequest.mockResolvedValue({
       state: "MERGED",
       baseRefName: "main",

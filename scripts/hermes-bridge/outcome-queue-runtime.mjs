@@ -1373,17 +1373,19 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
           "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL",
         )
       }
+      const verifiedSourceRuntimeAttempt = Number(verified.reviewRecoverySourceRuntimeAttempt)
+      if (!Number.isSafeInteger(verifiedSourceRuntimeAttempt)
+        || verifiedSourceRuntimeAttempt <= 0
+        || verifiedSourceRuntimeAttempt !== proof.runtimeAttempt) {
+        wall("Persisted review recovery source attempt conflicts",
+          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      }
       const sourceBinding = {
         ...binding,
         reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
         reviewRecoverySourceExpectedVersion: binding.expectedVersion - 1,
         reviewRecoverySourceFencingToken: binding.fencingToken - 1,
-        reviewRecoverySourceRuntimeAttempt: Number(verified.reviewRecoverySourceRuntimeAttempt),
-      }
-      if (!Number.isSafeInteger(sourceBinding.reviewRecoverySourceRuntimeAttempt)
-        || sourceBinding.reviewRecoverySourceRuntimeAttempt <= 0) {
-        wall("Persisted review recovery source attempt is absent",
-          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+        reviewRecoverySourceRuntimeAttempt: verifiedSourceRuntimeAttempt,
       }
       const sourceProof = { ...proof, runtimeAttempt: sourceBinding.reviewRecoverySourceRuntimeAttempt }
       await verifyActiveReviewRecovery({
