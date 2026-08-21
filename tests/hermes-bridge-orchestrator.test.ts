@@ -327,6 +327,114 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
+describe("retired durable queue acquisition reconciliation", () => {
+  it("retires the exact expired local execution before projection, refresh, selection, or host effects", async () => {
+    const resolveRetiredAcquisition = vi.fn()
+    const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
+    const value = fixture(undefined, { resolveRetiredAcquisition, refreshQueueOutcome })
+    const outcome = queueBoundOutcome()
+    const acquired = prepareRetiredExecution(value, outcome, "success")
+    const binding = outcome.queueBinding
+    const proofBody = {
+      schemaVersion: 1,
+      kind: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId: 77,
+      userId: binding.userId,
+      outcomeKey: binding.outcomeKey,
+      activeWorkOrderId: binding.activeWorkOrderId,
+      runtimeAttempt: acquired.fencingToken,
+      priorVersion: binding.expectedVersion,
+      recoveredVersion: binding.expectedVersion + 1,
+      priorFencingToken: binding.fencingToken,
+      recoveredFencingToken: binding.fencingToken + 1,
+      receiptId: 7,
+      blockedAttemptId: 207,
+      replayAttemptIds: [224],
+      acquisitionKeyDigest: createHash("sha256")
+        .update(JSON.stringify({ acquisitionKey: binding.acquisitionKey })).digest("hex"),
+      leaseIdentityDigest: createHash("sha256").update(JSON.stringify({
+        leaseHolder: binding.leaseHolder,
+        leaseToken: binding.leaseToken,
+      })).digest("hex"),
+      executionEpochDigest: createHash("sha256").update(JSON.stringify([
+        binding.userId, binding.outcomeKey, binding.executionBinding, binding.acquisitionKey,
+      ])).digest("hex"),
+      blockedAt: "2026-07-21T01:00:00.500Z",
+    }
+    resolveRetiredAcquisition.mockResolvedValue({
+      ...proofBody,
+      proofDigest: createHash("sha256").update(JSON.stringify(proofBody)).digest("hex"),
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "DURABLE_QUEUE_ACQUISITION_RETIRED",
+      outcomeId: "77",
+      checkpointSequence: 5,
+    })
+    expect(resolveRetiredAcquisition).toHaveBeenCalledOnce()
+    expect(value.projectCheckpoint).not.toHaveBeenCalled()
+    expect(value.projectLease).not.toHaveBeenCalled()
+    expect(refreshQueueOutcome).not.toHaveBeenCalled()
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.lifecycle.refreshOriginMain).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "RELEASED", releaseReason: "DURABLE_QUEUE_ACQUISITION_RETIRED" },
+      checkpoint: { sequence: 5, state: "DURABLE_QUEUE_ACQUISITION_RETIRED" },
+    })
+  })
+
+  it("walls a drifted durable proof before local state, projection, queue, or host effects", async () => {
+    const proofWall = Object.assign(new Error("drift"), {
+      code: "OUTCOME_RETIRED_ACQUISITION_PROOF_WALL",
+    })
+    const resolveRetiredAcquisition = vi.fn(async () => { throw proofWall })
+    const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
+    const value = fixture(undefined, { resolveRetiredAcquisition, refreshQueueOutcome })
+    prepareRetiredExecution(value, queueBoundOutcome(), "wall")
+    const before = value.state.read()
+
+    await expect(value.orchestrator.cycle()).rejects.toBe(proofWall)
+    expect(value.state.read()).toEqual(before)
+    expect(value.projectCheckpoint).not.toHaveBeenCalled()
+    expect(value.projectLease).not.toHaveBeenCalled()
+    expect(refreshQueueOutcome).not.toHaveBeenCalled()
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(value.lifecycle.refreshOriginMain).not.toHaveBeenCalled()
+    expect(value.client.connect).not.toHaveBeenCalled()
+  })
+
+  it("keeps an expired ordinary same-key acquisition on the existing recovery path", async () => {
+    const resolveRetiredAcquisition = vi.fn(async () => null)
+    const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
+    const value = fixture(undefined, { resolveRetiredAcquisition, refreshQueueOutcome })
+    prepareRetiredExecution(value, queueBoundOutcome(), "ordinary")
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(resolveRetiredAcquisition).toHaveBeenCalledOnce()
+    expect(value.projectCheckpoint).toHaveBeenCalled()
+    expect(refreshQueueOutcome).toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).not.toMatchObject({
+      checkpoint: { state: "DURABLE_QUEUE_ACQUISITION_RETIRED" },
+    })
+  })
+})
+
+function prepareRetiredExecution(value: ReturnType<typeof fixture>, outcome: any, suffix: string) {
+  const acquired = value.state.acquireLease({ idempotencyKey: `retired-orchestrator-acquire-${suffix}`,
+    outcomeId: "77", holderId: "crashed-holder", leaseDurationMs: 1_000,
+    metadata: { outcome } })
+  for (const [state, sequence] of [["QUEUE_WORK_ORDER_BOUND", 1], ["WORKTREE_INTENT", 2],
+    ["WORKTREE_READY", 3], ["CODEX_THREAD_READY", 4]] as const) {
+    value.state.checkpoint({ idempotencyKey: `retired-orchestrator-${suffix}-cp${sequence}`,
+      outcomeId: "77", holderId: "crashed-holder", fencingToken: acquired.fencingToken,
+      expectedCheckpointSequence: value.state.read().executions["77"].checkpoint.sequence,
+      state })
+  }
+  value.advance(1_001)
+  return acquired
+}
+
 function queueBoundOutcome() {
   return {
     id: 77,

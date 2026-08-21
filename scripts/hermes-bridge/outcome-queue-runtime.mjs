@@ -22,6 +22,7 @@ import {
   completeOutcome as completeGoalOutcome,
   deferProviderOutcome as deferGoalOutcome,
   terminalizeOutcome as terminalizeGoalOutcome,
+  resolveRetiredOutcomeAcquisition,
   verifyActiveReviewRecoveryContinuation,
 } from "./outcome-source.mjs"
 import { blocksAction } from "../runtime-findings/policy.mjs"
@@ -1224,6 +1225,8 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     ?? resumeOutcomeQueueAfterReviewRecovery
   const verifyActiveReviewRecovery = options.verifyActiveReviewRecovery
     ?? verifyActiveReviewRecoveryContinuation
+  const resolveRetiredAcquisitionGraph = options.resolveRetiredAcquisitionGraph
+    ?? resolveRetiredOutcomeAcquisition
   const activeReviewRecoveryWorkContract = (outcome) => (
     options.verifyActiveReviewRecovery
       ? undefined
@@ -1568,6 +1571,22 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     )
   }
 
+  async function resolveRetiredAcquisition(outcome, {
+    checkpoint, lease, observedAt, runtimeAttempt,
+  } = {}) {
+    if (!outcome?.queueBinding) return null
+    const binding = queueBinding(outcome)
+    return resolveRetiredAcquisitionGraph({
+      databaseUrl,
+      outcomeId: Number(outcome.id),
+      executionBinding: binding,
+      checkpoint,
+      lease,
+      runtimeAttempt,
+      now: observedAt ?? now(),
+    })
+  }
+
   async function resumeAfterOwnerDecision(outcome, proof) {
     requireExecutionProofContext()
     if (!outcome?.queueBinding) return outcome
@@ -1809,6 +1828,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     renewOutcomeLease,
     bindWorkOrder,
     refreshOutcome,
+    resolveRetiredAcquisition,
     resumeAfterOwnerDecision,
     resumeAfterReviewRecovery,
     resumeAfterValidationRecovery,

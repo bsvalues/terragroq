@@ -97,6 +97,30 @@ function runtime(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Hermes durable outcome queue runtime", () => {
+  it("forwards one exact retired-acquisition proof request without queue effects", async () => {
+    const resolveRetiredAcquisitionGraph = vi.fn(async () => ({
+      kind: "DURABLE_QUEUE_ACQUISITION_RETIRED", proofDigest: "a".repeat(64),
+    }))
+    const bridge = runtime({ resolveRetiredAcquisitionGraph })
+    const binding = { userId: "primary-user", outcomeKey: "goal:GOAL-0017",
+      expectedVersion: 2, executionBinding: "execution-17", acquisitionKey: "acquisition-17",
+      leaseHolder: "queue-holder", leaseToken: "queue-token", fencingToken: 1,
+      authorityGrantRef: "GRANT-17", activeWorkOrderId: 18 }
+    const checkpoint = { sequence: 4, state: "CODEX_THREAD_READY", detail: null,
+      recordedAt: "2026-07-28T11:00:00.000Z" }
+    const lease = { status: "ACTIVE", holderId: "resident-hermes",
+      acquiredAt: "2026-07-28T11:00:00.000Z", expiresAt: "2026-07-28T11:50:00.000Z" }
+    const observedAt = new Date("2026-07-28T12:00:00.000Z")
+
+    await expect(bridge.resolveRetiredAcquisition({ id: 17, queueBinding: binding }, {
+      checkpoint, lease, observedAt, runtimeAttempt: 7,
+    })).resolves.toMatchObject({ kind: "DURABLE_QUEUE_ACQUISITION_RETIRED" })
+    expect(resolveRetiredAcquisitionGraph).toHaveBeenCalledWith({
+      databaseUrl: "postgresql://not-used", outcomeId: 17, executionBinding: binding,
+      checkpoint, lease, runtimeAttempt: 7, now: observedAt,
+    })
+  })
+
   it("loads the exact registered #911 parent contract across UTC and Los Angeles grant decodes", async () => {
     const command = "record structured #911 reliability remediation without host mutation"
     const outcomeKey = "goal:GOAL-0007"

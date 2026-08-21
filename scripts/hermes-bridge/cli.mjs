@@ -138,6 +138,7 @@ export function createResidentHermesOrchestrator(options = {}) {
     renewQueueLease: queueRuntime.renewOutcomeLease,
     bindQueueWorkOrder: queueRuntime.bindWorkOrder,
     refreshQueueOutcome: queueRuntime.refreshOutcome,
+    resolveRetiredAcquisition: queueRuntime.resolveRetiredAcquisition,
     resumeQueueAfterDecision: queueRuntime.resumeAfterOwnerDecision,
     resumeQueueAfterReviewRecovery: queueRuntime.resumeAfterReviewRecovery,
     resumeQueueAfterValidationRecovery: queueRuntime.resumeAfterValidationRecovery,
