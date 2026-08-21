@@ -68,8 +68,10 @@ export type CanonicalCurrentWorkItem = Readonly<{
 
 export type CanonicalCurrentWork = Readonly<{
   project: ProjectIdentity
+  /** All non-terminal outcomes, canonical queue order — for the human answer. */
   items: readonly CanonicalCurrentWorkItem[]
-  topItem: CanonicalCurrentWorkItem | null
+  /** The highest-priority STARTABLE (suggested) outcome — what "continue" would START_WORK. */
+  topStartable: CanonicalCurrentWorkItem | null
   threadsRead: number
   threadsTotal: number
   complete: boolean
@@ -80,10 +82,14 @@ export type ProjectResolution =
   | Readonly<{ kind: "unknown-named"; named: string }>
   | Readonly<{ kind: "none" }>
 
-// "active" is the single in-flight outcome; "suggested" is queued/proposed (NOT currently doing).
-// Everything else (terminal, superseded) is excluded from current work.
-const IN_FLIGHT = "active"
-const QUEUED = "suggested"
+// Canonical lifecycle: suggested → approved → active (with blocked as a stuck non-terminal), and
+// completed/declined/superseded terminal. "Current work" is every NON-terminal outcome. Only
+// `suggested` is START_WORK-able: authorizeWorkbenchOutcomeExecution requires version 0 + suggested +
+// unapproved (app/actions/authorize-workbench-outcome-execution.ts) — active/approved/blocked are
+// past the start gate and are continuation, not a fresh start.
+const TERMINAL_STATES = new Set(["completed", "declined", "superseded", "terminal", "done", "closed", "aborted", "cancelled"])
+const STARTABLE_STATES = new Set(["suggested"])
+const IN_PROGRESS_STATES = new Set(["active", "approved", "blocked"])
 
 /**
  * Resolve a project ONLY through its registered key/name (alias-aware: "TerraFusion" → key
@@ -92,12 +98,14 @@ const QUEUED = "suggested"
  * names no project at all (a general "what are we doing" — the caller decides scope).
  */
 export function resolveProject(text: string, projects: readonly ProjectIdentity[]): ProjectResolution {
-  const lower = ` ${text.toLowerCase()} `
+  const lower = text.toLowerCase()
   const ranked = [...projects].sort((a, b) => b.name.length - a.name.length)
   for (const project of ranked) {
-    const key = project.key.toLowerCase()
-    const name = project.name.toLowerCase()
-    if (lower.includes(` ${name} `) || lower.includes(name) || new RegExp(`\\b${escapeRegExp(key)}\\b`).test(lower)) {
+    // Word-boundary match on BOTH name and key — no unbounded substring (which would let an
+    // unregistered "TerraFusionX" match "TerraFusion", violating the no-fuzzy contract).
+    const nameRe = new RegExp(`\\b${escapeRegExp(project.name.toLowerCase())}\\b`)
+    const keyRe = new RegExp(`\\b${escapeRegExp(project.key.toLowerCase())}\\b`)
+    if (nameRe.test(lower) || keyRe.test(lower)) {
       return { kind: "resolved", project }
     }
   }
@@ -128,7 +136,9 @@ export function aggregateCurrentWork(
   for (const thread of loaded) {
     const woById = new Map(thread.workOrders.map((w) => [w.id, w]))
     for (const outcome of thread.outcomes) {
-      if (outcome.lifecycleState !== IN_FLIGHT && outcome.lifecycleState !== QUEUED) continue
+      // Current work is every NON-terminal outcome (suggested/approved/blocked/active). An unknown
+      // state is treated conservatively as terminal — never surfaced as work we can't classify.
+      if (TERMINAL_STATES.has(outcome.lifecycleState) || (!STARTABLE_STATES.has(outcome.lifecycleState) && !IN_PROGRESS_STATES.has(outcome.lifecycleState))) continue
       const wo = outcome.activeWorkOrderId === null ? undefined : woById.get(outcome.activeWorkOrderId)
       const latestEvidence = outcome.activeWorkOrderId === null
         ? []
@@ -149,27 +159,28 @@ export function aggregateCurrentWork(
         workOrderStatus: wo?.status ?? null,
         blockers: [...outcome.dependencyKeys],
         latestEvidence,
-        // Both the in-flight item and a queued item are things START_WORK can act on; terminal never
-        // reaches here. "Blocked" (unmet dependencies) is surfaced but does not remove actionability —
-        // the caller decides, and never invents.
-        actionable: true,
+        // Only `suggested` can be START_WORK'd; the rest are already past the start gate.
+        actionable: STARTABLE_STATES.has(outcome.lifecycleState),
       })
     }
   }
 
-  // Queue order wins over timestamps/titles; the single active outcome is always the current work, so
-  // it sorts first regardless of its queueOrder.
+  // In-progress work (active/approved/blocked) reads first — it is what's being done — then the queued
+  // (suggested) work. Within each group, queue order is the canonical priority; it is not unique, so
+  // ties break by outcomeKey (deterministic), the way the canonical comparator ends.
   items.sort((a, b) => {
-    const activeA = a.lifecycleState === IN_FLIGHT ? 0 : 1
-    const activeB = b.lifecycleState === IN_FLIGHT ? 0 : 1
-    if (activeA !== activeB) return activeA - activeB
-    return a.queuePosition - b.queuePosition
+    const groupA = IN_PROGRESS_STATES.has(a.lifecycleState) ? 0 : 1
+    const groupB = IN_PROGRESS_STATES.has(b.lifecycleState) ? 0 : 1
+    if (groupA !== groupB) return groupA - groupB
+    if (a.queuePosition !== b.queuePosition) return a.queuePosition - b.queuePosition
+    return a.outcomeKey.localeCompare(b.outcomeKey)
   })
 
   return {
     project,
     items,
-    topItem: items[0] ?? null,
+    // The item "continue the highest-priority work" would START — the top STARTABLE (suggested) one.
+    topStartable: items.find((item) => item.actionable) ?? null,
     threadsRead: loaded.length,
     threadsTotal,
     complete: loaded.length === threadsTotal,
@@ -304,46 +315,67 @@ function composeCurrentWorkAnswerCore(resolution: ProjectResolution, work: Canon
     return "Which project? Name one and I'll read its current work from the governed queue — I answer per project, not from a general guess."
   }
 
-  const { project, items, topItem, threadsRead, threadsTotal } = work
+  const { project, items, topStartable, threadsRead, threadsTotal } = work
   const partial = work.complete
     ? ""
     : `I can read ${threadsRead} of ${threadsTotal} governed threads for ${project.name}; one canonical ` +
-      `execution state is unavailable, so I won't claim this is a complete status. From what I can read:\n`
+      `execution state is unavailable, so I won't claim this is a complete status, and I won't select ` +
+      `work to continue until I can read all of it. From what I can read:\n`
 
   if (items.length === 0) {
     return (
       partial +
-      `Nothing is in flight on ${project.name} — no active or queued outcome in the governed queue. ` +
+      `Nothing is in flight on ${project.name} — no non-terminal outcome in the governed queue. ` +
       `I'm reading the register, not guessing. Name a piece of work and I'll assemble the world for it.`
     )
   }
 
+  const stateLabel = (item: CanonicalCurrentWorkItem): string => {
+    const s = item.lifecycleState
+    if (s === "active") return "IN PROGRESS"
+    if (s === "approved") return "APPROVED"
+    if (s === "blocked") return "BLOCKED"
+    return `queued #${item.queuePosition}`
+  }
   const lines = items.slice(0, 6).map((item) => {
-    const flag = item.lifecycleState === IN_FLIGHT ? "ACTIVE" : `queued #${item.queuePosition}`
     const wo = item.activeWorkOrderId ? ` (WO ${item.workOrderStatus ?? "?"})` : ""
     const blocked = item.blockers.length > 0 ? ` — waiting on ${item.blockers.join(", ")}` : ""
     const provenance = item.threadTitle ? ` · thread "${item.threadTitle}"` : ""
-    return `• [${flag}] ${item.outcomeTitle}${wo}${blocked} — ${evidenceLine(item)}${provenance}`
+    return `• [${stateLabel(item)}] ${item.outcomeTitle}${wo}${blocked} — ${evidenceLine(item)}${provenance}`
   })
-  const top = topItem!
-  const topLabel = top.lifecycleState === IN_FLIGHT ? "the active outcome" : `the top of the queue (#${top.queuePosition})`
 
-  return (
-    partial +
-    `On ${project.name}, current work from the governed queue:\n${lines.join("\n")}\n\n` +
-    `Highest priority is "${top.outcomeTitle}" — ${topLabel}. Say "continue the highest-priority ` +
-    `${project.name} work" and I'll take that exact outcome through the governed authorization path.`
-  )
+  // The "continue" offer is only valid when a STARTABLE outcome exists and reads are complete — that
+  // is the exact item startWorkSelection returns, so told == started.
+  let closer: string
+  if (!work.complete) {
+    closer = `I won't name work to continue until the unreadable thread is available — that's where a higher-priority outcome could be.`
+  } else if (topStartable) {
+    closer =
+      `The next startable outcome is "${topStartable.outcomeTitle}" (queued #${topStartable.queuePosition}). ` +
+      `Say "continue the highest-priority ${project.name} work" and I'll take that exact outcome through the governed authorization path.`
+  } else {
+    const inProgress = items.find((item) => IN_PROGRESS_STATES.has(item.lifecycleState))
+    closer = inProgress
+      ? `Nothing is queued to start — "${inProgress.outcomeTitle}" is already ${inProgress.lifecycleState}; continuing it is a governed step of its own, not a fresh start.`
+      : `Nothing here is in a startable state.`
+  }
+
+  return partial + `On ${project.name}, current work from the governed queue:\n${lines.join("\n")}\n\n${closer}`
 }
 
-/** The machine-usable selection for START_WORK — the exact item the answer named highest-priority. */
+/**
+ * The machine-usable selection for START_WORK — the exact STARTABLE item the answer named. Returns
+ * null when reads were incomplete (an unread thread could hold a higher-priority outcome, so we must
+ * not claim a selection), or when nothing is startable. Only a `suggested` outcome is ever selected;
+ * active/approved/blocked are continuation, which START_WORK does not do.
+ */
 export function startWorkSelection(work: CanonicalCurrentWork | null): Readonly<{
   projectId: number
   threadId: string
   outcomeKey: string
   activeWorkOrderId: number | null
 }> | null {
-  if (!work?.topItem) return null
-  const { projectId, threadId, outcomeKey, activeWorkOrderId } = work.topItem
+  if (!work || !work.complete || !work.topStartable) return null
+  const { projectId, threadId, outcomeKey, activeWorkOrderId } = work.topStartable
   return { projectId, threadId, outcomeKey, activeWorkOrderId }
 }

@@ -67,9 +67,10 @@ describe("aggregateCurrentWork — outcome is the authoritative unit", () => {
         workOrders: [{ id: 100, ref: "WO-100", status: "in progress" }],
       }),
     ])
-    // active first despite queueOrder 9; then suggested by queueOrder (0 before 1).
+    // in-progress (active) reads first; then suggested by queueOrder (0 before 1).
     expect(work.items.map((i) => i.outcomeKey)).toEqual(["o-active", "o-mid", "o-low"])
-    expect(work.topItem?.outcomeKey).toBe("o-active")
+    // topStartable is the top SUGGESTED item (active is continuation, not START_WORK).
+    expect(work.topStartable?.outcomeKey).toBe("o-mid")
   })
 
   it("excludes proposed-equivalent and terminal outcomes from 'currently doing' set correctly", () => {
@@ -91,14 +92,14 @@ describe("aggregateCurrentWork — outcome is the authoritative unit", () => {
     const work = aggregateCurrentWork(project, [
       thread({ threadId: "t1", outcomes: [{ outcomeKey: "q1", outcomeTitle: "Q1", lifecycleState: "suggested", queueOrder: 3, activeWorkOrderId: null, dependencyKeys: [] }] }),
     ])
-    expect(work.topItem?.outcomeKey).toBe("q1")
-    expect(work.topItem?.lifecycleState).toBe("suggested")
+    expect(work.topStartable?.outcomeKey).toBe("q1")
+    expect(work.topStartable?.lifecycleState).toBe("suggested")
   })
 
   it("empty project has no items and no fabricated top", () => {
     const work = aggregateCurrentWork(project, [thread({ threadId: "t1" })])
     expect(work.items).toHaveLength(0)
-    expect(work.topItem).toBeNull()
+    expect(work.topStartable).toBeNull()
     expect(work.complete).toBe(true)
   })
 
@@ -115,8 +116,8 @@ describe("aggregateCurrentWork — outcome is the authoritative unit", () => {
         ],
       }),
     ])
-    expect(work.topItem?.latestEvidence[0].notes).toBe("latest")
-    expect(work.topItem?.latestEvidence.some((e) => e.notes === "other WO")).toBe(false)
+    expect(work.items[0].latestEvidence[0].notes).toBe("latest")
+    expect(work.items[0].latestEvidence.some((e) => e.notes === "other WO")).toBe(false)
   })
 
   it("aggregates multiple threads deterministically and retains provenance", () => {
@@ -140,9 +141,9 @@ describe("aggregateCurrentWork — outcome is the authoritative unit", () => {
 
   it("the top item carries the exact tuple START_WORK needs", () => {
     const work = aggregateCurrentWork(project, [
-      thread({ threadId: "t-xyz", outcomes: [{ outcomeKey: "outcome-42", outcomeTitle: "X", lifecycleState: "active", queueOrder: 0, activeWorkOrderId: 7, dependencyKeys: [] }], workOrders: [{ id: 7, ref: "WO-7", status: "active" }] }),
+      thread({ threadId: "t-xyz", outcomes: [{ outcomeKey: "outcome-42", outcomeTitle: "X", lifecycleState: "suggested", queueOrder: 0, activeWorkOrderId: 7, dependencyKeys: [] }], workOrders: [{ id: 7, ref: "WO-7", status: "active" }] }),
     ])
-    expect(work.topItem).toMatchObject({ projectId: 1, projectKey: "terrafusion", threadId: "t-xyz", outcomeKey: "outcome-42", activeWorkOrderId: 7 })
+    expect(work.topStartable).toMatchObject({ projectId: 1, projectKey: "terrafusion", threadId: "t-xyz", outcomeKey: "outcome-42", activeWorkOrderId: 7 })
   })
 })
 
@@ -154,7 +155,7 @@ describe("composeCurrentWorkAnswer + startWorkSelection", () => {
   it("names the exact top item and the SAME item is what START_WORK selects (the invariant)", () => {
     const work = aggregateCurrentWork(project, [
       thread({ threadId: "t-x", threadTitle: "permit intake", outcomes: [
-        { outcomeKey: "top", outcomeTitle: "Ship permit search", lifecycleState: "active", queueOrder: 0, activeWorkOrderId: 7, dependencyKeys: [] },
+        { outcomeKey: "top", outcomeTitle: "Ship permit search", lifecycleState: "suggested", queueOrder: 0, activeWorkOrderId: 7, dependencyKeys: [] },
       ], workOrders: [{ id: 7, ref: "WO-7", status: "in progress" }] }),
     ])
     const said = composeCurrentWorkAnswer({ kind: "resolved", project }, work)
@@ -245,5 +246,51 @@ describe("joinCanonicalWork enforces the join invariants", () => {
     const said = composeCurrentWorkAnswer({ kind: "resolved", project: PROJECTS[0] }, work, { conflicts: r.conflicts, unresolved: r.unresolved })
     expect(said).toContain("bound to more than one thread")
     expect(said).toContain("dup")
+  })
+})
+
+import { startWorkSelection as sel } from "@/lib/environment/canonical-current-work"
+
+describe("review-hardened invariants (Codex #944)", () => {
+  const project = PROJECTS[0]
+
+  it("includes approved and blocked (non-terminal); excludes completed/declined/superseded", () => {
+    const work = aggregateCurrentWork(project, [thread({ threadId: "t1", outcomes: [
+      { outcomeKey: "ap", outcomeTitle: "Ap", lifecycleState: "approved", queueOrder: 0, activeWorkOrderId: null, dependencyKeys: [] },
+      { outcomeKey: "bl", outcomeTitle: "Bl", lifecycleState: "blocked", queueOrder: 1, activeWorkOrderId: null, dependencyKeys: [] },
+      { outcomeKey: "co", outcomeTitle: "Co", lifecycleState: "completed", queueOrder: 2, activeWorkOrderId: null, dependencyKeys: [] },
+      { outcomeKey: "de", outcomeTitle: "De", lifecycleState: "declined", queueOrder: 3, activeWorkOrderId: null, dependencyKeys: [] },
+    ] })])
+    expect(work.items.map((i) => i.outcomeKey).sort()).toEqual(["ap", "bl"])
+  })
+
+  it("blocks the START_WORK selection when reads are incomplete, even if a startable exists", () => {
+    const work = aggregateCurrentWork(project, [
+      thread({ threadId: "ok", outcomes: [{ outcomeKey: "s", outcomeTitle: "S", lifecycleState: "suggested", queueOrder: 0, activeWorkOrderId: null, dependencyKeys: [] }] }),
+      thread({ threadId: "bad", loaded: false }),
+    ])
+    expect(work.topStartable?.outcomeKey).toBe("s")   // display still names it
+    expect(sel(work)).toBeNull()                       // but selection is blocked (unread thread may hold higher priority)
+  })
+
+  it("an active/approved/blocked outcome is not a START_WORK selection (continuation, not fresh start)", () => {
+    const work = aggregateCurrentWork(project, [thread({ threadId: "t1", outcomes: [
+      { outcomeKey: "a", outcomeTitle: "A", lifecycleState: "active", queueOrder: 0, activeWorkOrderId: 3, dependencyKeys: [] },
+    ] })])
+    expect(work.topStartable).toBeNull()
+    expect(sel(work)).toBeNull()
+    expect(composeCurrentWorkAnswer({ kind: "resolved", project }, work).toLowerCase()).toContain("already active")
+  })
+
+  it("project resolution is word-boundary, not substring: unregistered 'TerraFusionX' does not resolve", () => {
+    expect(resolveProject("what are we doing on TerraFusionX", PROJECTS)).not.toMatchObject({ kind: "resolved" })
+  })
+
+  it("equal queue positions break ties deterministically by outcomeKey", () => {
+    const work = aggregateCurrentWork(project, [thread({ threadId: "t1", outcomes: [
+      { outcomeKey: "zeta", outcomeTitle: "Z", lifecycleState: "suggested", queueOrder: 5, activeWorkOrderId: null, dependencyKeys: [] },
+      { outcomeKey: "alpha", outcomeTitle: "A", lifecycleState: "suggested", queueOrder: 5, activeWorkOrderId: null, dependencyKeys: [] },
+    ] })])
+    expect(work.items.map((i) => i.outcomeKey)).toEqual(["alpha", "zeta"])
   })
 })
