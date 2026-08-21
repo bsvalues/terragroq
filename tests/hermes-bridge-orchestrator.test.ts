@@ -328,7 +328,28 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         reviewRecoveryStaleReacquisition: marker,
       },
     }
-    expect(deriveHermesRuntimeProjectionBindings(outcome, { requireVerified: true })).toMatchObject({
+    const legacyResumeOnly = { ...outcome.queueBinding, expectedVersion: 5, fencingToken: 3,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+      reviewRecoverySourceExpectedVersion: undefined, reviewRecoverySourceFencingToken: undefined,
+      reviewRecoverySourceRuntimeAttempt: undefined, reviewRecoveryReclaimEventId: undefined,
+      reviewRecoveryReclaimPayloadDigest: undefined, reviewRecoveryStaleReacquisition: undefined }
+    const validBindings = [
+      legacyResumeOnly,
+      { ...outcome.queueBinding, expectedVersion: 5, fencingToken: 3,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED",
+        reviewRecoveryReclaimEventId: undefined, reviewRecoveryReclaimPayloadDigest: undefined,
+        reviewRecoveryStaleReacquisition: undefined },
+      { ...outcome.queueBinding, expectedVersion: 6, fencingToken: 4,
+        reviewRecoveryStaleReacquisition: undefined },
+      outcome.queueBinding,
+    ]
+    for (const queueBinding of validBindings) {
+      for (const options of [{ requireVerified: true }, { requireVerified: false }]) {
+        expect(() => deriveHermesRuntimeProjectionBindings({ ...outcome, queueBinding }, options))
+          .not.toThrow()
+      }
+    }
+    expect(deriveHermesRuntimeProjectionBindings(outcome)).toMatchObject({
       executionBinding: { reviewRecoveryStaleReacquisition: marker },
     })
     expect(() => deriveHermesRuntimeProjectionBindings({ ...outcome, queueBinding: {
@@ -337,8 +358,14 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
     }))
     for (const queueBinding of [
+      { ...legacyResumeOnly, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" },
+      { ...legacyResumeOnly, reviewRecoveryResumeState: "UNKNOWN_RECOVERY_STATE" },
       { ...outcome.queueBinding, reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERED" },
       { ...outcome.queueBinding, expectedVersion: 8 },
+      { ...outcome.queueBinding, reviewRecoveryStaleReacquisition: undefined },
+      { ...outcome.queueBinding, expectedVersion: 6, fencingToken: 4,
+        reviewRecoveryStaleReacquisition: { ...marker, expectedVersion: 6, fencingToken: 4,
+          priorExpectedVersion: 5, priorFencingToken: 3, receiptLatestFencingToken: 4 } },
       { ...outcome.queueBinding, reviewRecoveryStaleReacquisition: {
         ...marker, priorFencingToken: 5, fencingToken: 6, receiptLatestFencingToken: 6,
       } },

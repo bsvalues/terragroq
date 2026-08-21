@@ -407,6 +407,35 @@ export function deriveHermesRuntimeProjectionBindings(
     "lifecycleReason", "priorExpectedVersion", "priorFencingToken", "receiptLatestFencingToken"]
   const staleExpiry = typeof staleReacquisition?.leaseExpiresAt === "string"
     ? Date.parse(staleReacquisition.leaseExpiresAt) : Number.NaN
+  // A legacy local RECOVERED checkpoint can carry only the resume state until its durable
+  // provenance resolver backfills the source triple. Every other recovery shape is closed.
+  const legacyResumeOnlyRecovery = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
+    && binding.reviewRecoverySourceExpectedVersion === undefined
+    && binding.reviewRecoverySourceFencingToken === undefined
+    && binding.reviewRecoverySourceRuntimeAttempt === undefined
+    && binding.reviewRecoveryReclaimEventId === undefined
+    && binding.reviewRecoveryReclaimPayloadDigest === undefined
+    && staleReacquisition === undefined
+  const hasReviewRecovery = binding.reviewRecoveryResumeState !== undefined
+    || binding.reviewRecoverySourceExpectedVersion !== undefined
+    || binding.reviewRecoverySourceFencingToken !== undefined
+    || binding.reviewRecoverySourceRuntimeAttempt !== undefined
+    || binding.reviewRecoveryReclaimEventId !== undefined
+    || binding.reviewRecoveryReclaimPayloadDigest !== undefined
+    || staleReacquisition !== undefined
+  const reviewRecoveryDelta = binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERED"
+    ? 1 : binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+      ? (staleReacquisition === undefined ? 2 : 3) : null
+  const invalidReviewRecoveryDelta = hasReviewRecovery && !legacyResumeOnlyRecovery && (
+    reviewRecoveryDelta === null
+    || !Number.isSafeInteger(binding.reviewRecoverySourceExpectedVersion)
+    || binding.reviewRecoverySourceExpectedVersion < 0
+    || !Number.isSafeInteger(binding.reviewRecoverySourceFencingToken)
+    || binding.reviewRecoverySourceFencingToken <= 0
+    || !Number.isSafeInteger(binding.reviewRecoverySourceRuntimeAttempt)
+    || binding.reviewRecoverySourceRuntimeAttempt <= 0
+    || binding.expectedVersion !== binding.reviewRecoverySourceExpectedVersion + reviewRecoveryDelta
+    || binding.fencingToken !== binding.reviewRecoverySourceFencingToken + reviewRecoveryDelta)
   const invalidStaleReacquisition = staleReacquisition !== undefined && (
     !staleReacquisition || typeof staleReacquisition !== "object" || Array.isArray(staleReacquisition)
     || Object.keys(staleReacquisition).length !== staleKeys.length
@@ -423,7 +452,7 @@ export function deriveHermesRuntimeProjectionBindings(
     || staleReacquisition.receiptLatestFencingToken !== staleReacquisition.fencingToken
     || !Number.isFinite(staleExpiry)
     || new Date(staleExpiry).toISOString() !== staleReacquisition.leaseExpiresAt)
-  if (invalidStaleReacquisition) {
+  if (invalidReviewRecoveryDelta || invalidStaleReacquisition) {
     throw Object.assign(new Error("Runtime stale reacquisition binding is invalid"), {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
     })
