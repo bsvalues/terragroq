@@ -682,6 +682,19 @@ function persistedBinding(item) {
   ].includes(item.lifecycleReason)
     ? item.lifecycleReason
     : null
+  const reclaimEventId = item?.reviewRecoveryReclaimEventId
+  const reclaimPayloadDigest = item?.reviewRecoveryReclaimPayloadDigest
+  const hasAnyReclaimEvidence = reclaimEventId !== undefined
+    || reclaimPayloadDigest !== undefined
+  const hasExactReclaimEvidence = Number.isSafeInteger(Number(reclaimEventId))
+    && Number(reclaimEventId) > 0
+    && typeof reclaimPayloadDigest === "string"
+    && /^[0-9a-f]{64}$/.test(reclaimPayloadDigest)
+  if (reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    && hasAnyReclaimEvidence && !hasExactReclaimEvidence) {
+    wall("Review recovery reclaim evidence is incomplete",
+      "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+  }
   return {
     userId: item.userId,
     outcomeKey: item.outcomeKey,
@@ -696,9 +709,10 @@ function persistedBinding(item) {
       : {}),
     ...(validationRecoveryResumeState ? { validationRecoveryResumeState } : {}),
     ...(reviewRecoveryResumeState ? { reviewRecoveryResumeState } : {}),
-    ...(reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED" ? {
-      reviewRecoveryReclaimEventId: Number(item.reviewRecoveryReclaimEventId),
-      reviewRecoveryReclaimPayloadDigest: item.reviewRecoveryReclaimPayloadDigest,
+    ...(reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+      && hasExactReclaimEvidence ? {
+      reviewRecoveryReclaimEventId: Number(reclaimEventId),
+      reviewRecoveryReclaimPayloadDigest: reclaimPayloadDigest,
     } : {}),
     ...(Number.isSafeInteger(activeWorkOrderId) && activeWorkOrderId > 0
       ? { activeWorkOrderId }
@@ -717,6 +731,49 @@ function withPersistedBinding(outcome, item, recoverySource = null) {
     binding.reviewRecoveryResumeState = priorReviewRecoveryState
   }
   const source = recoverySource ?? outcome?.queueBinding
+  if (binding.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED") {
+    const sourceIsReclaimed = source?.reviewRecoveryResumeState
+      === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
+    const bindingHasEvidence = Number.isSafeInteger(binding.reviewRecoveryReclaimEventId)
+      && binding.reviewRecoveryReclaimEventId > 0
+      && typeof binding.reviewRecoveryReclaimPayloadDigest === "string"
+      && /^[0-9a-f]{64}$/.test(binding.reviewRecoveryReclaimPayloadDigest)
+    const sourceHasEvidence = Number.isSafeInteger(source?.reviewRecoveryReclaimEventId)
+      && source.reviewRecoveryReclaimEventId > 0
+      && typeof source?.reviewRecoveryReclaimPayloadDigest === "string"
+      && /^[0-9a-f]{64}$/.test(source.reviewRecoveryReclaimPayloadDigest)
+    if (sourceIsReclaimed) {
+      const exactRefreshIdentity = source.userId === binding.userId
+        && source.outcomeKey === binding.outcomeKey
+        && source.expectedVersion === binding.expectedVersion
+        && source.executionBinding === binding.executionBinding
+        && source.acquisitionKey === binding.acquisitionKey
+        && source.leaseHolder === binding.leaseHolder
+        && source.leaseToken === binding.leaseToken
+        && source.fencingToken === binding.fencingToken
+        && Number.isSafeInteger(source.reviewRecoverySourceExpectedVersion)
+        && source.reviewRecoverySourceExpectedVersion >= 0
+        && source.expectedVersion === source.reviewRecoverySourceExpectedVersion + 2
+        && Number.isSafeInteger(source.reviewRecoverySourceFencingToken)
+        && source.reviewRecoverySourceFencingToken > 0
+        && source.fencingToken === source.reviewRecoverySourceFencingToken + 2
+        && Number.isSafeInteger(source.reviewRecoverySourceRuntimeAttempt)
+        && source.reviewRecoverySourceRuntimeAttempt > 0
+      if (!exactRefreshIdentity || !sourceHasEvidence
+        || (bindingHasEvidence
+          && (binding.reviewRecoveryReclaimEventId !== source.reviewRecoveryReclaimEventId
+            || binding.reviewRecoveryReclaimPayloadDigest
+              !== source.reviewRecoveryReclaimPayloadDigest))) {
+        wall("Review recovery reclaim refresh evidence conflicts",
+          "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+      }
+      binding.reviewRecoveryReclaimEventId = source.reviewRecoveryReclaimEventId
+      binding.reviewRecoveryReclaimPayloadDigest = source.reviewRecoveryReclaimPayloadDigest
+    } else if (!bindingHasEvidence) {
+      wall("Review recovery reclaim evidence is unavailable",
+        "HERMES_OUTCOME_QUEUE_REVIEW_RECOVERY_PROOF_WALL")
+    }
+  }
   if (binding.reviewRecoveryResumeState || priorReviewRecoveryState) {
     for (const field of [
       "reviewRecoverySourceExpectedVersion",

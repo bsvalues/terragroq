@@ -27,6 +27,7 @@ import {
 } from "@/scripts/hermes-bridge/outcome-source.mjs"
 import {
   OUTCOME_QUEUE_SQL,
+  readOutcomeQueue,
   resumeOutcomeQueueAfterReviewRecovery,
 } from "@/scripts/hermes-bridge/outcome-queue-source.mjs"
 import { createHermesOutcomeQueueRuntime } from "@/scripts/hermes-bridge/outcome-queue-runtime.mjs"
@@ -3682,8 +3683,12 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           query, outcomeId: input.outcomeId, executionBinding: input.executionBinding,
           workContract: issue911RuntimeWorkContract, proof: input.proof,
         }))
+        const acquisitionRows = await readOutcomeQueue({ query: sourceQuery, userId: "owner" })
+        const acquisitionShapedRow = acquisitionRows.find((row) => row.outcomeKey === "goal:GOAL-0004")
+        expect(acquisitionShapedRow).not.toHaveProperty("reviewRecoveryReclaimEventId")
+        expect(acquisitionShapedRow).not.toHaveProperty("reviewRecoveryReclaimPayloadDigest")
         const acquireRuntimeRecovery = vi.fn(async () => ({
-          outcome: reclaimed, acquired: true, replayed: true,
+          outcome: acquisitionShapedRow, acquired: true, replayed: true,
         }))
         const runtime = createHermesOutcomeQueueRuntime({
           databaseUrl: "postgresql://not-used",
@@ -3715,17 +3720,22 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           } },
           queueBinding: unresolvedActive,
         }
-        await expect(runtime.resumeAfterReviewRecovery(legacyLocalOutcome, {
+        const resumedRuntimeOutcome = await runtime.resumeAfterReviewRecovery(legacyLocalOutcome, {
           ...recoveryProof, runtimeAttempt: 7,
           reviewRecoverySourceExpectedVersion: 4,
           reviewRecoverySourceFencingToken: 2,
           reviewRecoverySourceRuntimeAttempt: 5,
-        })).resolves.toMatchObject({ queueBinding: {
+        })
+        expect(resumedRuntimeOutcome).toMatchObject({ queueBinding: {
           expectedVersion: 6, fencingToken: 4,
           reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
           reviewRecoverySourceExpectedVersion: 4,
           reviewRecoverySourceFencingToken: 2,
           reviewRecoverySourceRuntimeAttempt: 5,
+          reviewRecoveryReclaimEventId: reclaimEventId,
+          reviewRecoveryReclaimPayloadDigest: reclaimMetadata.payloadDigest,
+        } })
+        await expect(runtime.refreshOutcome(resumedRuntimeOutcome)).resolves.toMatchObject({ queueBinding: {
           reviewRecoveryReclaimEventId: reclaimEventId,
           reviewRecoveryReclaimPayloadDigest: reclaimMetadata.payloadDigest,
         } })

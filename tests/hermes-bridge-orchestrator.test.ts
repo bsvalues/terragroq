@@ -1817,7 +1817,17 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
   })
 
   it("adopts a durable reviewed-merge recovery before queue selection after restart", async () => {
-    const resumeQueueAfterReviewRecovery = vi.fn(async (outcome) => outcome)
+    const resumeQueueAfterReviewRecovery = vi.fn(async (outcome) => ({
+      ...outcome,
+      queueBinding: {
+        ...outcome.queueBinding,
+        expectedVersion: 6,
+        fencingToken: 4,
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+        reviewRecoveryReclaimEventId: 701,
+        reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      },
+    }))
     const refreshQueueOutcome = vi.fn(async (outcome) => outcome)
     const resolveActiveReviewRecoveryProvenance = vi.fn(async () => ({
       reviewRecoverySourceExpectedVersion: 4,
@@ -1991,6 +2001,13 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     expect(resumeQueueAfterReviewRecovery.mock.invocationCallOrder[0])
       .toBeLessThan(refreshQueueOutcome.mock.invocationCallOrder[0])
+    expect(refreshQueueOutcome).toHaveBeenCalledWith(expect.objectContaining({
+      queueBinding: expect.objectContaining({
+        reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+        reviewRecoveryReclaimEventId: 701,
+        reviewRecoveryReclaimPayloadDigest: "e".repeat(64),
+      }),
+    }))
     expect(resolveActiveReviewRecoveryProvenance.mock.invocationCallOrder.at(-1))
       .toBeLessThan(resumeQueueAfterReviewRecovery.mock.invocationCallOrder[0])
     expect(value.state.read().executions["77"]).toMatchObject({
