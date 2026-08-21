@@ -2663,14 +2663,22 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.state.read().executions["77"]).toMatchObject({
       lease: { status: "ACTIVE", abandonReason: "HERMES_POST_MERGE_CLEANUP_WALL" },
       checkpoint: { state: "POST_MERGE_CLEANUP_RETRY", detail: "HERMES_POST_MERGE_CLEANUP_WALL" },
-      metadata: { prNumber: 500, mergeSha: "b".repeat(40), postMergeCleanupRetryCount: 1 },
+      metadata: {
+        prNumber: 500,
+        mergeSha: "b".repeat(40),
+        postMergeCleanupRetryCount: 1,
+        postMergeCleanupCauseCode: "HERMES_REPOSITORY_COMMAND_FAILED",
+      },
     })
     const firstFence = value.state.read().executions["77"].fencingToken
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({ code: "HERMES_POST_MERGE_CLEANUP_WALL" })
     expect(value.state.read().executions["77"]).toMatchObject({
       lease: { status: "ACTIVE", abandonReason: "HERMES_POST_MERGE_CLEANUP_WALL" },
       checkpoint: { state: "POST_MERGE_CLEANUP_RETRY", detail: "HERMES_POST_MERGE_CLEANUP_WALL" },
-      metadata: { postMergeCleanupRetryCount: 2 },
+      metadata: {
+        postMergeCleanupRetryCount: 2,
+        postMergeCleanupCauseCode: "HERMES_REPOSITORY_COMMAND_FAILED",
+      },
     })
     expect(value.state.read().executions["77"].fencingToken).toBeGreaterThan(firstFence)
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })

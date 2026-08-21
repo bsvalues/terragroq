@@ -917,13 +917,19 @@ export function createHermesOrchestrator(options = {}) {
       const nextState = "POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"
       return finalizeTerminal({
         lease, sequence: current.checkpoint.sequence, outcome, nextState,
-        metadata: { postMergeCleanupRetryCount: retryCount },
+        metadata: {
+          postMergeCleanupRetryCount: retryCount,
+          postMergeCleanupCauseCode: error?.causeCode ?? "HERMES_REPOSITORY_CLEANUP_WALL",
+        },
       })
     }
     const retry = await checkpoint(
       lease, current.checkpoint.sequence, "POST_MERGE_CLEANUP_RETRY",
       error?.code ?? "HERMES_POST_MERGE_CLEANUP_WALL",
-      { postMergeCleanupRetryCount: retryCount },
+      {
+        postMergeCleanupRetryCount: retryCount,
+        postMergeCleanupCauseCode: error?.causeCode ?? "HERMES_REPOSITORY_CLEANUP_WALL",
+      },
     )
     await abandonLease({
       idempotencyKey: `${lease.outcomeId}:abandon-post-merge:${lease.fencingToken}:${retry.checkpointSequence}`,

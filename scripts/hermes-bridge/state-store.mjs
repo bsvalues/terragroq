@@ -415,6 +415,14 @@ function metadata(input = {}, current = {}) {
   if (!Number.isInteger(postMergeCleanupRetryCount) || postMergeCleanupRetryCount < 0) {
     fail("INVALID_POST_MERGE_CLEANUP_RETRY_COUNT")
   }
+  const postMergeCleanupCauseCode = Object.hasOwn(input, "postMergeCleanupCauseCode")
+    ? input.postMergeCleanupCauseCode
+    : current.postMergeCleanupCauseCode ?? null
+  if (postMergeCleanupCauseCode !== null
+    && (typeof postMergeCleanupCauseCode !== "string"
+      || !/^[A-Z][A-Z0-9_]{2,99}$/.test(postMergeCleanupCauseCode))) {
+    fail("INVALID_POST_MERGE_CLEANUP_CAUSE_CODE")
+  }
   const outcome = input.outcome ?? current.outcome ?? null
   if (outcome !== null && (typeof outcome !== "object" || Array.isArray(outcome))) fail("INVALID_OUTCOME_SNAPSHOT")
   if (outcome?.queueBinding !== undefined) {
@@ -629,6 +637,7 @@ function metadata(input = {}, current = {}) {
     providerRetryCount,
     externalToolRetryCount,
     postMergeCleanupRetryCount,
+    postMergeCleanupCauseCode,
     remediationRound,
     validationFailure,
     validationRemediationRound,

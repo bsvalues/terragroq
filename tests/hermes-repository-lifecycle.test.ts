@@ -39,6 +39,12 @@ function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
     if (override) return override(call)
     if (key.includes("remote get-url origin")) return { code: 0, stdout: "https://github.com/bsvalues/terragroq.git\n" }
     if (key.includes("rev-parse refs/remotes/origin/main")) return { code: 0, stdout: `${sha}\n` }
+    if (key.includes("ls-remote --heads origin refs/heads/")) {
+      return { code: 0, stdout: `${sha}\t${call.args.at(-1)}\n` }
+    }
+    if (key.includes("rev-parse FETCH_HEAD")) return { code: 0, stdout: `${sha}\n` }
+    if (key.includes("rev-parse refs/heads/")) return { code: 0, stdout: `${sha}\n` }
+    if (key.includes("rev-parse HEAD")) return { code: 0, stdout: `${sha}\n` }
     if (key.includes("show-ref --verify --quiet")) return { code: 1 }
     if (key.includes("gh api repos/bsvalues/terragroq/commits/")) {
       return { code: 0, stdout: JSON.stringify({ statuses: [] }) }
@@ -1525,6 +1531,166 @@ describe("Hermes repository lifecycle", () => {
     expect(second).toMatchObject({ cleaned: true, alreadyCleaned: true })
     expect(calls.filter(({ args }) => args.includes("remove"))).toHaveLength(1)
     expect(calls.filter(({ args }) => args.includes("update-ref"))).toHaveLength(1)
+  })
+
+  it("cleans a reviewed branch whose authoritative remote head fast-forwards the clean owned worktree head", async () => {
+    const reviewedHead = "c".repeat(40)
+    const { lifecycle, calls, record } = await ownedFixture({
+      [`${rootGit} ls-remote --heads origin refs/heads/${branch}`]: () => ({
+        code: 0,
+        stdout: `${reviewedHead}\trefs/heads/${branch}\n`,
+      }),
+      [`${ownedGit} rev-parse HEAD`]: () => ({ code: 0, stdout: `${sha}\n` }),
+      [`${rootGit} fetch --no-tags origin refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse FETCH_HEAD`]: () => ({ code: 0, stdout: `${reviewedHead}\n` }),
+      [`${rootGit} merge-base --is-ancestor ${sha} ${reviewedHead}`]: () => ({ code: 0 }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+      [`${ownedGit} status`]: () => ({ code: 0, stdout: "" }),
+    })
+
+    await expect(lifecycle.cleanupOwnedWorktree({
+      ...record,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: reviewedHead,
+    })).resolves.toMatchObject({ cleaned: true, alreadyCleaned: false })
+
+    const cleanupCalls = calls.map(({ command, args }) => `${command} ${args.join(" ")}`)
+    const remoteIndex = cleanupCalls.indexOf(`${rootGit} ls-remote --heads origin refs/heads/${branch}`)
+    const statusIndex = cleanupCalls.indexOf(`${ownedGit} status --porcelain=v1 -z --untracked-files=all`)
+    const removeIndex = cleanupCalls.indexOf(`${rootGit} worktree remove ${ownedWorktree}`)
+    const deleteIndex = cleanupCalls.indexOf(`${rootGit} update-ref -d refs/heads/${branch} ${sha}`)
+    expect(remoteIndex).toBeGreaterThanOrEqual(0)
+    expect(statusIndex).toBeGreaterThan(remoteIndex)
+    expect(removeIndex).toBeGreaterThan(statusIndex)
+    expect(deleteIndex).toBeGreaterThan(removeIndex)
+    expect(cleanupCalls).not.toContain(`${rootGit} update-ref -d refs/heads/${branch} ${reviewedHead}`)
+  })
+
+  it("replays partial cleanup by deleting only the observed ancestor branch ref", async () => {
+    const reviewedHead = "c".repeat(40)
+    let worktreeReads = 0
+    const { lifecycle, calls } = fixture({
+      [`${rootGit} worktree list --porcelain`]: () => {
+        worktreeReads += 1
+        return { code: 0, stdout: "" }
+      },
+      [`${rootGit} show-ref --verify --quiet refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse refs/heads/${branch}`]: () => ({ code: 0, stdout: `${sha}\n` }),
+      [`${rootGit} ls-remote --heads origin refs/heads/${branch}`]: () => ({
+        code: 0,
+        stdout: `${reviewedHead}\trefs/heads/${branch}\n`,
+      }),
+      [`${rootGit} fetch --no-tags origin refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse FETCH_HEAD`]: () => ({ code: 0, stdout: `${reviewedHead}\n` }),
+      [`${rootGit} merge-base --is-ancestor ${sha} ${reviewedHead}`]: () => ({ code: 0 }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+    })
+
+    await expect(lifecycle.cleanupOwnedWorktree({
+      branch,
+      worktreePath: ownedWorktree,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: reviewedHead,
+    })).resolves.toMatchObject({ cleaned: true, alreadyCleaned: true })
+
+    expect(worktreeReads).toBe(2)
+    expect(calls).toContainEqual(expect.objectContaining({
+      command: "git",
+      args: ["-C", root, "update-ref", "-d", `refs/heads/${branch}`, sha],
+    }))
+    expect(calls.some(({ args }) => args.includes("remove"))).toBe(false)
+  })
+
+  it.each([
+    ["a mismatched authoritative remote", `${"d".repeat(40)}\trefs/heads/${branch}\n`, 0],
+    ["duplicate authoritative remote rows", `${sha}\trefs/heads/${branch}\n${sha}\trefs/heads/${branch}\n`, 0],
+    ["a divergent local branch", `${"c".repeat(40)}\trefs/heads/${branch}\n`, 1],
+  ])("walls before cleanup effects for %s", async (_label, remoteRows, ancestorCode) => {
+    const reviewedHead = "c".repeat(40)
+    const { lifecycle, calls, record } = await ownedFixture({
+      [`${rootGit} ls-remote --heads origin refs/heads/${branch}`]: () => ({ code: 0, stdout: remoteRows }),
+      [`${ownedGit} rev-parse HEAD`]: () => ({ code: 0, stdout: `${sha}\n` }),
+      [`${rootGit} fetch --no-tags origin refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse FETCH_HEAD`]: () => ({ code: 0, stdout: `${reviewedHead}\n` }),
+      [`${rootGit} merge-base --is-ancestor ${sha} ${reviewedHead}`]: () => ({ code: ancestorCode }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+      [`${ownedGit} status`]: () => ({ code: 0, stdout: "" }),
+    })
+
+    await expect(lifecycle.cleanupOwnedWorktree({
+      ...record,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: reviewedHead,
+    })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_OWNERSHIP_WALL" })
+    expect(calls.some(({ args }) => args.includes("remove") || args.includes("update-ref"))).toBe(false)
+  })
+
+  it("walls partial-cleanup replay if the owned worktree reappears before branch deletion", async () => {
+    const reviewedHead = "c".repeat(40)
+    let worktreeReads = 0
+    const { lifecycle, calls } = fixture({
+      [`${rootGit} worktree list --porcelain`]: () => {
+        worktreeReads += 1
+        return {
+          code: 0,
+          stdout: worktreeReads === 1 ? "" : `worktree ${ownedWorktree}\nHEAD ${sha}\nbranch refs/heads/${branch}\n\n`,
+        }
+      },
+      [`${rootGit} show-ref --verify --quiet refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse refs/heads/${branch}`]: () => ({ code: 0, stdout: `${sha}\n` }),
+      [`${rootGit} ls-remote --heads origin refs/heads/${branch}`]: () => ({
+        code: 0,
+        stdout: `${reviewedHead}\trefs/heads/${branch}\n`,
+      }),
+      [`${rootGit} fetch --no-tags origin refs/heads/${branch}`]: () => ({ code: 0 }),
+      [`${rootGit} rev-parse FETCH_HEAD`]: () => ({ code: 0, stdout: `${reviewedHead}\n` }),
+      [`${rootGit} merge-base --is-ancestor ${sha} ${reviewedHead}`]: () => ({ code: 0 }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+    })
+
+    await expect(lifecycle.cleanupOwnedWorktree({
+      branch,
+      worktreePath: ownedWorktree,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: reviewedHead,
+    })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_OWNERSHIP_WALL" })
+    expect(calls.some(({ args }) => args.includes("update-ref"))).toBe(false)
+  })
+
+  it("walls before worktree removal when the registered branch ref drifts from the owned worktree head", async () => {
+    const driftedBranchHead = "d".repeat(40)
+    const { lifecycle, calls, record } = await ownedFixture({
+      [`${rootGit} ls-remote --heads origin refs/heads/${branch}`]: () => ({
+        code: 0,
+        stdout: `${sha}\trefs/heads/${branch}\n`,
+      }),
+      [`${ownedGit} rev-parse HEAD`]: () => ({ code: 0, stdout: `${sha}\n` }),
+      [`${rootGit} rev-parse refs/heads/${branch}`]: () => ({ code: 0, stdout: `${driftedBranchHead}\n` }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+      [`${ownedGit} status`]: () => ({ code: 0, stdout: "" }),
+    })
+
+    await expect(lifecycle.cleanupOwnedWorktree({
+      ...record,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: sha,
+    })).rejects.toMatchObject({ code: "HERMES_REPOSITORY_OWNERSHIP_WALL" })
+    expect(calls.some(({ args }) => args.includes("remove") || args.includes("update-ref"))).toBe(false)
+  })
+
+  it("treats an absent owned worktree and absent local branch as idempotently cleaned", async () => {
+    const { lifecycle, calls } = fixture({
+      [`${rootGit} worktree list --porcelain`]: () => ({ code: 0, stdout: "" }),
+      [`${rootGit} show-ref --verify --quiet refs/heads/${branch}`]: () => ({ code: 1 }),
+      [`${rootGit} merge-base`]: () => ({ code: 0 }),
+    })
+    await expect(lifecycle.cleanupOwnedWorktree({
+      branch,
+      worktreePath: ownedWorktree,
+      mergeCommitSha: mergeSha,
+      expectedHeadSha: sha,
+    })).resolves.toMatchObject({ cleaned: true, alreadyCleaned: true })
+    expect(calls.some(({ args }) => args.includes("ls-remote") || args.includes("update-ref"))).toBe(false)
   })
 
   it("removes only an ignored ordinary dependency directory during terminal cleanup recovery", async () => {

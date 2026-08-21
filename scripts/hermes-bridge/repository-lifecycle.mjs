@@ -1473,6 +1473,47 @@ export function createRepositoryLifecycle(options) {
     return result.code === 0
   }
 
+  async function authoritativeRemoteBranchHead(safeBranch) {
+    const ref = `refs/heads/${safeBranch}`
+    const result = await run("git", ["-C", repositoryRoot, "ls-remote", "--heads", "origin", ref])
+    if (result.stdout === "") return null
+    const lines = result.stdout.endsWith("\n")
+      ? result.stdout.slice(0, -1).split("\n")
+      : result.stdout.split("\n")
+    if (lines.length !== 1) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "authoritative cleanup branch cardinality mismatch")
+    const match = /^([0-9a-f]{40})\t(refs\/heads\/[^\r\n\0]+)$/.exec(lines[0])
+    if (!match || match[2] !== ref) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "authoritative cleanup branch response is invalid")
+    }
+    return match[1]
+  }
+
+  async function proveCleanupBranchHead({ safeBranch, expectedHeadSha, observedHeadSha }) {
+    if (!SHA.test(observedHeadSha ?? "")) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup branch head is invalid")
+    }
+    const authoritativeHead = await authoritativeRemoteBranchHead(safeBranch)
+    if (authoritativeHead !== expectedHeadSha) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "authoritative cleanup branch head mismatch")
+    }
+    if (observedHeadSha === expectedHeadSha) return observedHeadSha
+    await run("git", ["-C", repositoryRoot, "fetch", "--no-tags", "origin", `refs/heads/${safeBranch}`])
+    const fetched = await run("git", ["-C", repositoryRoot, "rev-parse", "FETCH_HEAD"])
+    if (fetched.stdout.trim() !== expectedHeadSha) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "fetched cleanup branch head mismatch")
+    }
+    const ancestor = await run(
+      "git",
+      ["-C", repositoryRoot, "merge-base", "--is-ancestor", observedHeadSha, expectedHeadSha],
+      { allowFailure: true },
+    )
+    if (ancestor.code !== 0) {
+      if (ancestor.code !== 1) wall("HERMES_REPOSITORY_COMMAND_FAILED", "git merge-base failed")
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup branch diverged from reviewed head")
+    }
+    return observedHeadSha
+  }
+
   async function cleanupOwnedWorktree({ worktreePath, branch, mergeCommitSha, expectedHeadSha } = {}) {
     const safeBranch = branchName(branch)
     const absoluteWorktree = workspacePath(worktreePath)
@@ -1499,20 +1540,40 @@ export function createRepositoryLifecycle(options) {
         if (![0, 1].includes(branchResult.code)) wall("HERMES_REPOSITORY_COMMAND_FAILED", "git show-ref failed")
         if (branchResult.code === 0) {
           const branchHead = await run("git", ["-C", repositoryRoot, "rev-parse", `refs/heads/${safeBranch}`])
-          if (branchHead.stdout.trim() !== expectedHeadSha) wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup branch head mismatch")
-          await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, expectedHeadSha])
+          const observedHeadSha = await proveCleanupBranchHead({
+            safeBranch,
+            expectedHeadSha,
+            observedHeadSha: branchHead.stdout.trim(),
+          })
+          const replayListing = await run("git", ["-C", repositoryRoot, "worktree", "list", "--porcelain"])
+          const replayEntries = worktreeEntries(replayListing.stdout)
+          if (replayEntries.some((entry) => entry.branch === safeBranch
+            || (entry.worktreePath && sameWorkspace(entry.worktreePath, absoluteWorktree)))) {
+            wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "cleanup worktree reappeared")
+          }
+          await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, observedHeadSha])
         }
         records.set(safeBranch, Object.freeze({ repository, branch: safeBranch, worktreePath: absoluteWorktree, ownedWorktreeRoot, cleaned: true }))
         return { branch: safeBranch, worktreePath: absoluteWorktree, cleaned: true, alreadyCleaned: true }
       }
     }
     ownedRecord(absoluteWorktree, safeBranch)
+    const worktreeHead = await run("git", ["-C", absoluteWorktree, "rev-parse", "HEAD"])
+    const observedHeadSha = await proveCleanupBranchHead({
+      safeBranch,
+      expectedHeadSha,
+      observedHeadSha: worktreeHead.stdout.trim(),
+    })
+    const branchHead = await run("git", ["-C", repositoryRoot, "rev-parse", `refs/heads/${safeBranch}`])
+    if (branchHead.stdout.trim() !== observedHeadSha) {
+      wall("HERMES_REPOSITORY_OWNERSHIP_WALL", "registered cleanup branch and worktree head conflict")
+    }
     await removeValidationArtifacts(record)
     const status = await run("git", ["-C", absoluteWorktree, "status", "--porcelain=v1", "-z", "--untracked-files=all"])
     if (status.stdout.length > 0) wall("HERMES_REPOSITORY_CLEANUP_WALL", "owned worktree is dirty")
     if (executionBackend) await executionBackend.cleanup({ workspacePath: absoluteWorktree })
     else await run("git", ["-C", repositoryRoot, "worktree", "remove", absoluteWorktree])
-    await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, expectedHeadSha])
+    await run("git", ["-C", repositoryRoot, "update-ref", "-d", `refs/heads/${safeBranch}`, observedHeadSha])
     records.set(safeBranch, Object.freeze({ ...record, cleaned: true }))
     return { branch: safeBranch, worktreePath: absoluteWorktree, cleaned: true, alreadyCleaned: false }
   }
