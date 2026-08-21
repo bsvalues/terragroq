@@ -2148,8 +2148,10 @@ export async function authorizeHistoricalRecoveryProjection({
     ? "HERMES_OUTCOME_TERMINAL_CLEANUP_RECOVERY_AUTHORIZED"
     : "HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED"
   const workOrderRef = outcomeWorkOrderRef(outcomeId)
-  const idempotencyKey = [
-    "hermes-outcome", outcomeId, recoveryKind, "projection-authorization", proofDigest,
+  const recoveryExecutionEpochDigest = executionEpochDigest(binding)
+  const authorizationKey = (terminalEventId) => [
+    "hermes-outcome", outcomeId, recoveryKind, "projection-authorization",
+    "terminal", terminalEventId, "epoch", recoveryExecutionEpochDigest,
   ].join(":")
   let runQuery = normalizeQuery(query)
   let pool
@@ -2177,11 +2179,15 @@ export async function authorizeHistoricalRecoveryProjection({
          AND "entityType" = 'goal'
          AND "entityId"::text = $2
          AND "eventType" = '${eventType}'
-         AND metadata->>'idempotencyKey' = $3
+         AND metadata->>'recoveryKind' = $3
+         AND metadata->>'executionBinding' = $4
+         AND metadata->>'acquisitionKey' = $5
+         AND metadata->>'fencingToken' = ($6::integer)::text
        ORDER BY id
        LIMIT 2
        FOR UPDATE`,
-      [binding.userId, String(outcomeId), idempotencyKey],
+      [binding.userId, String(outcomeId), recoveryKind, binding.executionBinding,
+        binding.acquisitionKey, binding.fencingToken],
     )
     if ((prior?.rows?.length ?? 0) > 1) {
       throw Object.assign(new Error("Historical recovery authorization replay conflicts"), {
@@ -2191,20 +2197,24 @@ export async function authorizeHistoricalRecoveryProjection({
     if (prior?.rows?.length === 1) {
       const persisted = prior.rows[0].metadata
       const workOrderId = Number(persisted?.workOrderId)
+      const runtimeCheckpointEventId = Number(persisted?.runtimeCheckpointEventId)
       const terminalEventId = Number(persisted?.terminalEventId)
       const expected = {
-        idempotencyKey,
+        idempotencyKey: authorizationKey(terminalEventId),
         recoveryKind,
         outcomeId,
         userId: binding.userId,
         outcomeKey: binding.outcomeKey,
         workOrderId,
         workOrderRef,
+        runtimeCheckpointEventId,
+        runtimeCheckpointPayloadDigest: persisted?.runtimeCheckpointPayloadDigest,
         terminalEventId,
+        terminalPayloadDigest: persisted?.terminalPayloadDigest,
         executionBinding: binding.executionBinding,
         acquisitionKey: binding.acquisitionKey,
         fencingToken: binding.fencingToken,
-        executionEpochDigest: executionEpochDigest(binding),
+        executionEpochDigest: recoveryExecutionEpochDigest,
         prNumber,
         reviewedHeadSha,
         mergeSha,
@@ -2214,7 +2224,13 @@ export async function authorizeHistoricalRecoveryProjection({
       if (!Number.isSafeInteger(Number(prior.rows[0].id))
         || Number(prior.rows[0].id) <= 0
         || !Number.isSafeInteger(workOrderId) || workOrderId <= 0
+        || !Number.isSafeInteger(runtimeCheckpointEventId) || runtimeCheckpointEventId <= 0
         || !Number.isSafeInteger(terminalEventId) || terminalEventId <= 0
+        || runtimeCheckpointEventId >= terminalEventId
+        || typeof expected.runtimeCheckpointPayloadDigest !== "string"
+        || !/^[0-9a-f]{64}$/.test(expected.runtimeCheckpointPayloadDigest)
+        || typeof expected.terminalPayloadDigest !== "string"
+        || !/^[0-9a-f]{64}$/.test(expected.terminalPayloadDigest)
         || canonicalJson(persisted) !== canonicalJson(expected)) {
         throw Object.assign(new Error("Historical recovery authorization replay conflicts"), {
           code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL",
@@ -2237,7 +2253,10 @@ export async function authorizeHistoricalRecoveryProjection({
          recovery_queue."acquisitionKey" AS "acquisitionKey",
          recovery_queue."fencingToken" AS "fencingToken",
          recovery_work_order.id AS "workOrderId", recovery_work_order.ref AS "workOrderRef",
-         recovery_terminal.id AS "terminalEventId"
+         recovery_runtime.id AS "runtimeCheckpointEventId",
+         recovery_runtime.metadata AS "runtimeCheckpointMetadata",
+         recovery_terminal.id AS "terminalEventId",
+         recovery_terminal.metadata AS "terminalMetadata"
        FROM goal AS recovery_goal
        JOIN outcome_queue_item AS recovery_queue
          ON recovery_queue."userId" = recovery_goal."userId"
@@ -2253,6 +2272,17 @@ export async function authorizeHistoricalRecoveryProjection({
         AND recovery_acquisition."outcomeKey" = recovery_queue."outcomeKey"
         AND recovery_acquisition."acquisitionKey" = recovery_queue."acquisitionKey"
         AND recovery_acquisition."latestFencingToken" = recovery_queue."fencingToken"
+       JOIN LATERAL (
+         SELECT checkpoint.id, checkpoint.metadata
+         FROM governance_event AS checkpoint
+         WHERE checkpoint."userId" = recovery_goal."userId"
+           AND checkpoint."entityType" = 'work_order'
+           AND checkpoint."entityId"::text = recovery_work_order.id::text
+           AND checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+           AND checkpoint.metadata->>'checkpointState' = 'FAILED_TERMINAL'
+         ORDER BY checkpoint."createdAt" DESC, checkpoint.id DESC
+         LIMIT 1
+       ) AS recovery_runtime ON true
        JOIN LATERAL (
          SELECT terminal.id, terminal.metadata
          FROM governance_event AS terminal
@@ -2278,12 +2308,24 @@ export async function authorizeHistoricalRecoveryProjection({
          AND recovery_queue."fencingToken" = $7::integer
          AND recovery_terminal.metadata->>'result' = 'FAILED_TERMINAL'
          AND recovery_terminal.metadata->>'nextState' = $8
+         AND recovery_runtime.id < recovery_terminal.id
+         AND recovery_runtime.metadata->>'checkpointState' = 'FAILED_TERMINAL'
+         AND recovery_runtime.metadata->>'outcomeId' = recovery_goal.id::text
+         AND recovery_runtime.metadata->>'workOrderRef' = recovery_work_order.ref
+         AND recovery_runtime.metadata->>'attempt' = recovery_queue."fencingToken"::text
+         AND recovery_runtime.metadata->>'executionBinding' = recovery_queue."executionBinding"
+         AND recovery_runtime.metadata->>'acquisitionKey' = recovery_queue."acquisitionKey"
+         AND recovery_runtime.metadata->>'acquisitionFencingToken' = recovery_queue."fencingToken"::text
+         AND recovery_runtime.metadata->>'executionEpochDigest' = $10
+         AND recovery_runtime.metadata->>'idempotencyKey' = 'hermes-outcome:' || recovery_goal.id::text
+           || ':attempt:' || recovery_queue."fencingToken"::text
+           || ':checkpoint:' || recovery_runtime.metadata->>'checkpointSequence'
        ORDER BY recovery_goal.id
        LIMIT 2
        FOR UPDATE OF recovery_goal, recovery_queue, recovery_work_order`,
       [outcomeId, binding.userId, binding.outcomeKey, binding.expectedVersion,
         binding.executionBinding, binding.acquisitionKey, binding.fencingToken,
-        lifecycleReason, workOrderRef],
+        lifecycleReason, workOrderRef, recoveryExecutionEpochDigest],
     )
     if (graph?.rows?.length !== 1) {
       throw Object.assign(new Error("Historical recovery authorization graph is invalid"), {
@@ -2303,12 +2345,38 @@ export async function authorizeHistoricalRecoveryProjection({
       && Number(row.fencingToken) === binding.fencingToken
       && Number.isSafeInteger(Number(row.workOrderId)) && Number(row.workOrderId) > 0
       && row.workOrderRef === workOrderRef
+      && Number.isSafeInteger(Number(row.runtimeCheckpointEventId))
+      && Number(row.runtimeCheckpointEventId) > 0
       && Number.isSafeInteger(Number(row.terminalEventId)) && Number(row.terminalEventId) > 0
+      && Number(row.runtimeCheckpointEventId) < Number(row.terminalEventId)
     if (!exactGraph) {
       throw Object.assign(new Error("Historical recovery authorization graph conflicts"), {
         code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL",
       })
     }
+    const runtimeCheckpointMetadata = row.runtimeCheckpointMetadata
+    const runtimeCheckpointPayloadDigest = runtimeCheckpointMetadata?.payloadDigest
+    const expectedTerminalMetadata = { result: "FAILED_TERMINAL", nextState: lifecycleReason }
+    if (typeof runtimeCheckpointPayloadDigest !== "string"
+      || !/^[0-9a-f]{64}$/.test(runtimeCheckpointPayloadDigest)
+      || runtimeCheckpointMetadata.checkpointState !== "FAILED_TERMINAL"
+      || Number(runtimeCheckpointMetadata.outcomeId) !== outcomeId
+      || runtimeCheckpointMetadata.workOrderRef !== workOrderRef
+      || Number(runtimeCheckpointMetadata.attempt) !== binding.fencingToken
+      || !Number.isSafeInteger(Number(runtimeCheckpointMetadata.checkpointSequence))
+      || Number(runtimeCheckpointMetadata.checkpointSequence) < 0
+      || runtimeCheckpointMetadata.idempotencyKey !== `hermes-outcome:${outcomeId}:attempt:${binding.fencingToken}:checkpoint:${runtimeCheckpointMetadata.checkpointSequence}`
+      || runtimeCheckpointMetadata.executionBinding !== binding.executionBinding
+      || runtimeCheckpointMetadata.acquisitionKey !== binding.acquisitionKey
+      || Number(runtimeCheckpointMetadata.acquisitionFencingToken) !== binding.fencingToken
+      || runtimeCheckpointMetadata.executionEpochDigest !== recoveryExecutionEpochDigest
+      || canonicalJson(row.terminalMetadata) !== canonicalJson(expectedTerminalMetadata)) {
+      throw Object.assign(new Error("Historical recovery terminal epoch is invalid"), {
+        code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL",
+      })
+    }
+    const terminalPayloadDigest = projectionPayloadDigest(expectedTerminalMetadata)
+    const idempotencyKey = authorizationKey(Number(row.terminalEventId))
     const metadata = {
       idempotencyKey,
       recoveryKind,
@@ -2317,11 +2385,14 @@ export async function authorizeHistoricalRecoveryProjection({
       outcomeKey: row.outcomeKey,
       workOrderId: Number(row.workOrderId),
       workOrderRef: row.workOrderRef,
+      runtimeCheckpointEventId: Number(row.runtimeCheckpointEventId),
+      runtimeCheckpointPayloadDigest,
       terminalEventId: Number(row.terminalEventId),
+      terminalPayloadDigest,
       executionBinding: row.executionBinding,
       acquisitionKey: row.acquisitionKey,
       fencingToken: Number(row.fencingToken),
-      executionEpochDigest: executionEpochDigest(row),
+      executionEpochDigest: recoveryExecutionEpochDigest,
       prNumber,
       reviewedHeadSha,
       mergeSha,
@@ -2436,6 +2507,77 @@ function executionEpochDigest(row) {
     row.executionBinding,
     row.acquisitionKey,
   ])).digest("hex")
+}
+
+function exactHistoricalRecoveryAuthorization(
+  row,
+  executionBinding,
+  outcomeId,
+  checkpointState,
+  proofDigest,
+  evidence,
+) {
+  const recoveryKind = checkpointState === "POST_MERGE_CLEANUP_RECOVERED"
+    ? "terminal-cleanup"
+    : "review-remediation"
+  const lifecycleReason = recoveryKind === "terminal-cleanup"
+    ? POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED
+    : REVIEW_REMEDIATION_EXHAUSTED
+  const runtime = row?.historicalRuntimeCheckpoint
+  const terminal = row?.historicalGoalTerminal
+  const authorization = row?.recoveryAuthorization
+  const runtimeEventId = Number(runtime?.id)
+  const terminalEventId = Number(terminal?.id)
+  const authorizationEventId = Number(authorization?.id)
+  const runtimeMetadata = runtime?.metadata
+  const runtimePayloadDigest = runtimeMetadata?.payloadDigest
+  const expectedEpochDigest = executionEpochDigest(executionBinding)
+  const workOrderRef = outcomeWorkOrderRef(outcomeId)
+  const expectedTerminal = { result: "FAILED_TERMINAL", nextState: lifecycleReason }
+  const terminalPayloadDigest = projectionPayloadDigest(expectedTerminal)
+  const authorizationMetadata = authorization?.metadata
+  const expectedAuthorization = {
+    idempotencyKey: [
+      "hermes-outcome", outcomeId, recoveryKind, "projection-authorization",
+      "terminal", terminalEventId, "epoch", expectedEpochDigest,
+    ].join(":"),
+    recoveryKind,
+    outcomeId,
+    userId: executionBinding.userId,
+    outcomeKey: executionBinding.outcomeKey,
+    workOrderId: Number(row?.activeWorkOrderId),
+    workOrderRef,
+    runtimeCheckpointEventId: runtimeEventId,
+    runtimeCheckpointPayloadDigest: runtimePayloadDigest,
+    terminalEventId,
+    terminalPayloadDigest,
+    executionBinding: executionBinding.executionBinding,
+    acquisitionKey: executionBinding.acquisitionKey,
+    fencingToken: executionBinding.fencingToken,
+    executionEpochDigest: expectedEpochDigest,
+    prNumber: evidence.prNumber,
+    reviewedHeadSha: evidence.headRefOid,
+    mergeSha: evidence.mergeSha,
+    proofDigest,
+  }
+  expectedAuthorization.payloadDigest = projectionPayloadDigest(expectedAuthorization)
+  return Number.isSafeInteger(runtimeEventId) && runtimeEventId > 0
+    && Number.isSafeInteger(terminalEventId) && terminalEventId > runtimeEventId
+    && Number.isSafeInteger(authorizationEventId) && authorizationEventId > terminalEventId
+    && typeof runtimePayloadDigest === "string" && /^[0-9a-f]{64}$/.test(runtimePayloadDigest)
+    && runtimeMetadata?.checkpointState === "FAILED_TERMINAL"
+    && Number(runtimeMetadata?.outcomeId) === outcomeId
+    && runtimeMetadata?.workOrderRef === workOrderRef
+    && Number(runtimeMetadata?.attempt) === executionBinding.fencingToken
+    && Number.isSafeInteger(Number(runtimeMetadata?.checkpointSequence))
+    && Number(runtimeMetadata.checkpointSequence) >= 0
+    && runtimeMetadata?.idempotencyKey === `hermes-outcome:${outcomeId}:attempt:${executionBinding.fencingToken}:checkpoint:${runtimeMetadata.checkpointSequence}`
+    && runtimeMetadata?.executionBinding === executionBinding.executionBinding
+    && runtimeMetadata?.acquisitionKey === executionBinding.acquisitionKey
+    && Number(runtimeMetadata?.acquisitionFencingToken) === executionBinding.fencingToken
+    && runtimeMetadata?.executionEpochDigest === expectedEpochDigest
+    && canonicalJson(terminal?.metadata) === canonicalJson(expectedTerminal)
+    && canonicalJson(authorizationMetadata) === canonicalJson(expectedAuthorization)
 }
 
 function outcomeWorkOrderRef(outcomeId) {
@@ -2666,7 +2808,36 @@ export async function projectOutcomeRuntimeCheckpoint({
          implementation_grant."allowedActions" AS "implementationGrantAllowedActions",
          implementation_grant."blockedActions" AS "implementationGrantBlockedActions",
          contract_queue."approvalDecisionId" AS "approvalDecisionId",
-         contract_queue."authorityGrantRef" AS "executionGrantRef"
+         contract_queue."authorityGrantRef" AS "executionGrantRef",
+         (SELECT jsonb_build_object('id', runtime_checkpoint.id, 'metadata', runtime_checkpoint.metadata)
+          FROM governance_event AS runtime_checkpoint
+          WHERE runtime_checkpoint."userId" = contract_queue."userId"
+            AND runtime_checkpoint."entityType" = 'work_order'
+            AND runtime_checkpoint."entityId"::text = contract_queue."activeWorkOrderId"::text
+            AND runtime_checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+            AND runtime_checkpoint.metadata->>'checkpointState' = 'FAILED_TERMINAL'
+          ORDER BY runtime_checkpoint."createdAt" DESC, runtime_checkpoint.id DESC
+          LIMIT 1) AS "historicalRuntimeCheckpoint",
+         (SELECT jsonb_build_object('id', goal_terminal.id, 'metadata', goal_terminal.metadata)
+          FROM governance_event AS goal_terminal
+          WHERE goal_terminal."userId" = contract_queue."userId"
+            AND goal_terminal."entityType" = 'goal'
+            AND goal_terminal."entityId"::text = contract_goal.id::text
+            AND goal_terminal."eventType" = 'HERMES_OUTCOME_TERMINAL'
+          ORDER BY goal_terminal."createdAt" DESC, goal_terminal.id DESC
+          LIMIT 1) AS "historicalGoalTerminal",
+         (SELECT jsonb_build_object('id', recovery_authorization.id, 'metadata', recovery_authorization.metadata)
+          FROM governance_event AS recovery_authorization
+          WHERE recovery_authorization."userId" = contract_queue."userId"
+            AND recovery_authorization."entityType" = 'goal'
+            AND recovery_authorization."entityId"::text = contract_goal.id::text
+            AND recovery_authorization."eventType" = $20
+            AND recovery_authorization.metadata->>'proofDigest' = $14
+            AND recovery_authorization.metadata->>'prNumber' = ($15::integer)::text
+            AND recovery_authorization.metadata->>'reviewedHeadSha' = $16
+            AND recovery_authorization.metadata->>'mergeSha' = $17
+          ORDER BY recovery_authorization.id
+          LIMIT 1) AS "recoveryAuthorization"
        FROM goal AS contract_goal
        JOIN "outcome_queue_item" AS contract_queue
          ON contract_queue."userId" = contract_goal."userId"
@@ -2858,6 +3029,29 @@ export async function projectOutcomeRuntimeCheckpoint({
              AND recovery_authorization.metadata->>'executionBinding' = contract_queue."executionBinding"
              AND recovery_authorization.metadata->>'acquisitionKey' = contract_queue."acquisitionKey"
              AND recovery_authorization.metadata->>'fencingToken' = contract_queue."fencingToken"::text
+             AND recovery_authorization.metadata->>'executionEpochDigest' = $21
+             AND recovery_authorization.metadata->>'runtimeCheckpointEventId' = (
+               SELECT runtime_checkpoint.id::text
+               FROM governance_event AS runtime_checkpoint
+               WHERE runtime_checkpoint."userId" = contract_queue."userId"
+                 AND runtime_checkpoint."entityType" = 'work_order'
+                 AND runtime_checkpoint."entityId"::text = contract_queue."activeWorkOrderId"::text
+                 AND runtime_checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+                 AND runtime_checkpoint.metadata->>'checkpointState' = 'FAILED_TERMINAL'
+               ORDER BY runtime_checkpoint."createdAt" DESC, runtime_checkpoint.id DESC
+               LIMIT 1
+             )
+             AND recovery_authorization.metadata->>'runtimeCheckpointPayloadDigest' = (
+               SELECT runtime_checkpoint.metadata->>'payloadDigest'
+               FROM governance_event AS runtime_checkpoint
+               WHERE runtime_checkpoint."userId" = contract_queue."userId"
+                 AND runtime_checkpoint."entityType" = 'work_order'
+                 AND runtime_checkpoint."entityId"::text = contract_queue."activeWorkOrderId"::text
+                 AND runtime_checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+                 AND runtime_checkpoint.metadata->>'checkpointState' = 'FAILED_TERMINAL'
+               ORDER BY runtime_checkpoint."createdAt" DESC, runtime_checkpoint.id DESC
+               LIMIT 1
+             )
              AND recovery_authorization.metadata->>'proofDigest' = $14
              AND recovery_authorization.metadata->>'prNumber' = ($15::integer)::text
              AND recovery_authorization.metadata->>'reviewedHeadSha' = $16
@@ -2928,13 +3122,18 @@ export async function projectOutcomeRuntimeCheckpoint({
           : "REVIEW_REMEDIATION_EXHAUSTED",
         checkpoint.state === "POST_MERGE_CLEANUP_RECOVERED"
           ? "HERMES_OUTCOME_TERMINAL_CLEANUP_RECOVERY_AUTHORIZED"
-          : "HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED"],
+          : "HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED",
+        executionEpochDigest(normalizedExecutionBinding)],
     )
     if (authorizations?.rows?.length !== 1
       || !exactAuthorizationContract(
         authorizations.rows[0], normalizedWorkContract, normalizedExecutionBinding, outcomeId,
         historicalRecovery, checkpoint.state,
-      )) {
+      )
+      || (historicalRecovery && !exactHistoricalRecoveryAuthorization(
+        authorizations.rows[0], normalizedExecutionBinding, outcomeId, checkpoint.state,
+        historicalRecoveryProofDigest, evidence,
+      ))) {
       throw Object.assign(new Error("Canonical Workbench execution authorization is invalid"), {
         code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
       })

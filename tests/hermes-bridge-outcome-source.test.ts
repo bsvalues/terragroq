@@ -79,6 +79,29 @@ const runtimeExecutionEpochDigest = createHash("sha256").update(JSON.stringify([
   runtimeExecutionBinding.executionBinding,
   runtimeAcquisitionKey,
 ])).digest("hex")
+function failedHistoricalCheckpointMetadata(checkpointSequence = 42) {
+  const payload = {
+    idempotencyKey: `hermes-outcome:4:attempt:2:checkpoint:${checkpointSequence}`,
+    outcomeId: 4,
+    workOrderRef: "WO-HERMES-OUTCOME-4",
+    attempt: 2,
+    checkpointSequence,
+    checkpointState: "FAILED_TERMINAL",
+    checkpointDetail: "REVIEW_REMEDIATION_EXHAUSTED",
+    executionBinding: runtimeExecutionBinding.executionBinding,
+    acquisitionKey: runtimeAcquisitionKey,
+    acquisitionFencingToken: runtimeExecutionBinding.fencingToken,
+    executionEpochDigest: runtimeExecutionEpochDigest,
+  }
+  return {
+    ...payload,
+    payloadDigest: createHash("sha256").update(JSON.stringify(payload)).digest("hex"),
+  }
+}
+
+function failedGoalTerminalMetadata(nextState = "REVIEW_REMEDIATION_EXHAUSTED") {
+  return { result: "FAILED_TERMINAL", nextState }
+}
 const completeFindingEffects = Object.freeze({
   spendsMoney: false,
   irreversible: false,
@@ -1183,6 +1206,49 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         delivery: issue911RuntimeWorkContract.delivery,
       },
     }
+    const runtimeCheckpointMetadata = failedHistoricalCheckpointMetadata()
+    const terminalMetadata = failedGoalTerminalMetadata(lifecycleReason)
+    const recoveryKind = checkpointState === "POST_MERGE_CLEANUP_RECOVERED"
+      ? "terminal-cleanup"
+      : "review-remediation"
+    const authorizationPayload = {
+      idempotencyKey: [
+        "hermes-outcome", 4, recoveryKind, "projection-authorization",
+        "terminal", 90, "epoch", runtimeExecutionEpochDigest,
+      ].join(":"),
+      recoveryKind,
+      outcomeId: 4,
+      userId: "owner",
+      outcomeKey: historicalBinding.outcomeKey,
+      workOrderId: 42,
+      workOrderRef: "WO-HERMES-OUTCOME-4",
+      runtimeCheckpointEventId: 89,
+      runtimeCheckpointPayloadDigest: runtimeCheckpointMetadata.payloadDigest,
+      terminalEventId: 90,
+      terminalPayloadDigest: createHash("sha256").update(JSON.stringify(terminalMetadata)).digest("hex"),
+      executionBinding: historicalBinding.executionBinding,
+      acquisitionKey: historicalBinding.acquisitionKey,
+      fencingToken: historicalBinding.fencingToken,
+      executionEpochDigest: runtimeExecutionEpochDigest,
+      prNumber: 929,
+      reviewedHeadSha: "b".repeat(40),
+      mergeSha: "c".repeat(40),
+      proofDigest,
+    }
+    ;(authorization as Record<string, unknown>).historicalRuntimeCheckpoint = {
+      id: 89, metadata: runtimeCheckpointMetadata,
+    }
+    ;(authorization as Record<string, unknown>).historicalGoalTerminal = {
+      id: 90, metadata: terminalMetadata,
+    }
+    const authorizationMetadata = {
+      ...authorizationPayload,
+      payloadDigest: createHash("sha256").update(JSON.stringify(authorizationPayload)).digest("hex"),
+    }
+    ;(authorization as Record<string, unknown>).recoveryAuthorization = {
+      id: 91,
+      metadata: Object.fromEntries(Object.entries(authorizationMetadata).reverse()),
+    }
     const query = vi.fn(async (sql: string) => {
       if (/FROM goal AS contract_goal/.test(sql)) return { rows: [authorization] }
       if (/INSERT INTO work_order/.test(sql)) return { rows: [] }
@@ -1244,6 +1310,36 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       headRefOid: "b".repeat(40),
       mergeSha: "c".repeat(40),
     })
+
+    const exactAuthorization = JSON.parse(JSON.stringify(
+      (authorization as Record<string, any>).recoveryAuthorization,
+    ))
+    for (const drift of ["payloadDigest", "executionEpochDigest"] as const) {
+      ;(authorization as Record<string, any>).recoveryAuthorization = JSON.parse(
+        JSON.stringify(exactAuthorization),
+      )
+      const driftedMetadata = (authorization as Record<string, any>).recoveryAuthorization.metadata
+      driftedMetadata[drift] = "f".repeat(64)
+      if (drift === "executionEpochDigest") {
+        const { payloadDigest: _prior, ...driftedPayload } = driftedMetadata
+        driftedMetadata.payloadDigest = createHash("sha256")
+          .update(JSON.stringify(driftedPayload)).digest("hex")
+      }
+      await expect(projectOutcomeRuntimeCheckpointRaw({
+        query, outcomeId: 4, attempt: 2,
+        workContract: issue911RuntimeWorkContract,
+        executionBinding: historicalBinding,
+        checkpoint: {
+          sequence: 45, state: checkpointState, detail: checkpointDetail,
+          metadata: {
+            prNumber: 929, headRefOid: "b".repeat(40), mergeSha: "c".repeat(40),
+            ...proofMetadata,
+            workContractId: issue911RuntimeWorkContract.id,
+            workContractDigest: issue911RuntimeWorkContract.digest,
+          },
+        },
+      })).rejects.toMatchObject({ code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL" })
+    }
   })
 
   it("rejects historical recovery without its exact reviewed proof before database mutation", async () => {
@@ -2649,7 +2745,10 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       executionBinding: executionBinding.executionBinding,
       leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
       acquisitionKey: executionBinding.acquisitionKey, fencingToken: executionBinding.fencingToken,
-      workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4", terminalEventId: 90,
+      workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4",
+      runtimeCheckpointEventId: 89,
+      runtimeCheckpointMetadata: failedHistoricalCheckpointMetadata(),
+      terminalEventId: 90, terminalMetadata: failedGoalTerminalMetadata(),
     }
     const query = vi.fn(async (sql: string) => {
       if (/FROM goal AS recovery_goal/.test(sql)) return { rows: [graph] }
@@ -2696,6 +2795,121 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event/.test(sql))).toBe(false)
   })
 
+  it("walls a second proof for the same historical recovery epoch instead of inserting another authorization", async () => {
+    const executionBinding = {
+      ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
+    }
+    const graph = {
+      goalId: 4, userId: "owner", outcomeKey: executionBinding.outcomeKey,
+      lifecycleState: "blocked", lifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED", version: 4,
+      executionBinding: executionBinding.executionBinding,
+      leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
+      acquisitionKey: executionBinding.acquisitionKey, fencingToken: executionBinding.fencingToken,
+      workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4",
+      runtimeCheckpointEventId: 89,
+      runtimeCheckpointMetadata: failedHistoricalCheckpointMetadata(),
+      terminalEventId: 90, terminalMetadata: failedGoalTerminalMetadata(),
+    }
+    let persisted: Record<string, unknown> | null = null
+    let inserts = 0
+    const query = vi.fn(async (sql: string, values?: unknown[]) => {
+      if (/SELECT id, metadata[\s\S]+HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED/.test(sql)) {
+        if (!persisted) return { rows: [] }
+        if (/metadata->>'idempotencyKey'/.test(sql)) {
+          return values?.includes(persisted.idempotencyKey)
+            ? { rows: [{ id: 91, metadata: persisted }] }
+            : { rows: [] }
+        }
+        return { rows: [{ id: 91, metadata: persisted }] }
+      }
+      if (/FROM goal AS recovery_goal/.test(sql)) return { rows: [graph] }
+      if (/INSERT INTO governance_event/.test(sql)) {
+        inserts += 1
+        persisted = JSON.parse(String(values?.[3]))
+        return { rows: [{ id: 90 + inserts }] }
+      }
+      return { rows: [] }
+    })
+    await expect(authorizeHistoricalRecoveryProjection({
+      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+      proofDigest: "d".repeat(64),
+    })).resolves.toMatchObject({ replayed: false })
+    await expect(authorizeHistoricalRecoveryProjection({
+      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      prNumber: 930, reviewedHeadSha: "e".repeat(40), mergeSha: "f".repeat(40),
+      proofDigest: "a".repeat(64),
+    })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
+    expect(inserts).toBe(1)
+    expect(String(persisted?.idempotencyKey)).not.toContain("d".repeat(64))
+  })
+
+  it("rejects a goal terminal that is not ordered after its exact failed runtime checkpoint", async () => {
+    const executionBinding = {
+      ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
+    }
+    const query = vi.fn(async (sql: string) => {
+      if (/SELECT id, metadata[\s\S]+HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED/.test(sql)) {
+        return { rows: [] }
+      }
+      if (/FROM goal AS recovery_goal/.test(sql)) return { rows: [{
+        goalId: 4, userId: "owner", outcomeKey: executionBinding.outcomeKey,
+        lifecycleState: "blocked", lifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED", version: 4,
+        executionBinding: executionBinding.executionBinding,
+        leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
+        acquisitionKey: executionBinding.acquisitionKey, fencingToken: executionBinding.fencingToken,
+        workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4",
+        runtimeCheckpointEventId: 95,
+        runtimeCheckpointMetadata: failedHistoricalCheckpointMetadata(),
+        terminalEventId: 90, terminalMetadata: failedGoalTerminalMetadata(),
+      }] }
+      if (/INSERT INTO governance_event/.test(sql)) return { rows: [{ id: 96 }] }
+      return { rows: [] }
+    })
+    await expect(authorizeHistoricalRecoveryProjection({
+      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+      proofDigest: "d".repeat(64),
+    })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event/.test(sql))).toBe(false)
+  })
+
+  it("rejects a failed runtime checkpoint from a different acquisition epoch", async () => {
+    const executionBinding = {
+      ...runtimeExecutionBinding, expectedVersion: 3, acquisitionKey: runtimeAcquisitionKey,
+    }
+    const driftedCheckpoint = {
+      ...failedHistoricalCheckpointMetadata(),
+      acquisitionKey: "another-acquisition",
+    }
+    const { payloadDigest: _priorDigest, ...driftedPayload } = driftedCheckpoint
+    driftedCheckpoint.payloadDigest = createHash("sha256")
+      .update(JSON.stringify(driftedPayload)).digest("hex")
+    const query = vi.fn(async (sql: string) => {
+      if (/SELECT id, metadata[\s\S]+HERMES_OUTCOME_REVIEW_RECOVERY_AUTHORIZED/.test(sql)) {
+        return { rows: [] }
+      }
+      if (/FROM goal AS recovery_goal/.test(sql)) return { rows: [{
+        goalId: 4, userId: "owner", outcomeKey: executionBinding.outcomeKey,
+        lifecycleState: "blocked", lifecycleReason: "REVIEW_REMEDIATION_EXHAUSTED", version: 4,
+        executionBinding: executionBinding.executionBinding,
+        leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
+        acquisitionKey: executionBinding.acquisitionKey, fencingToken: executionBinding.fencingToken,
+        workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4",
+        runtimeCheckpointEventId: 89, runtimeCheckpointMetadata: driftedCheckpoint,
+        terminalEventId: 90, terminalMetadata: failedGoalTerminalMetadata(),
+      }] }
+      if (/INSERT INTO governance_event/.test(sql)) return { rows: [{ id: 91 }] }
+      return { rows: [] }
+    })
+    await expect(authorizeHistoricalRecoveryProjection({
+      query, outcomeId: 4, recoveryKind: "review-remediation", executionBinding,
+      prNumber: 929, reviewedHeadSha: "b".repeat(40), mergeSha: "c".repeat(40),
+      proofDigest: "d".repeat(64),
+    })).rejects.toMatchObject({ code: "OUTCOME_HISTORICAL_RECOVERY_AUTHORIZATION_WALL" })
+    expect(query.mock.calls.some(([sql]) => /INSERT INTO governance_event/.test(sql))).toBe(false)
+  })
+
   it.each([
     ["missing graph", []],
     ["duplicate graph", [{}, {}]],
@@ -2729,7 +2943,11 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         executionBinding: executionBinding.executionBinding,
         leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
         acquisitionKey: executionBinding.acquisitionKey, fencingToken: executionBinding.fencingToken,
-        workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4", terminalEventId: 90,
+        workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4",
+        runtimeCheckpointEventId: 89,
+        runtimeCheckpointMetadata: failedHistoricalCheckpointMetadata(),
+        terminalEventId: 90,
+        terminalMetadata: failedGoalTerminalMetadata("POST_MERGE_CLEANUP_REMEDIATION_EXHAUSTED"),
       }] }
       if (/SELECT id, metadata/.test(sql)) return { rows: [] }
       if (/INSERT INTO governance_event/.test(sql)) return { rows: [{ id: 94 }] }
@@ -2760,7 +2978,10 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
       executionBinding: executionBinding.executionBinding,
       leaseToken: null, leaseHolder: null, leaseExpiresAt: null,
       acquisitionKey: executionBinding.acquisitionKey, fencingToken: executionBinding.fencingToken,
-      workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4", terminalEventId: 90,
+      workOrderId: 42, workOrderRef: "WO-HERMES-OUTCOME-4",
+      runtimeCheckpointEventId: 89,
+      runtimeCheckpointMetadata: failedHistoricalCheckpointMetadata(),
+      terminalEventId: 90, terminalMetadata: failedGoalTerminalMetadata(),
     }
     const query = vi.fn(async (sql: string) => {
       if (/FROM goal AS recovery_goal/.test(sql)) return { rows: [graph] }
