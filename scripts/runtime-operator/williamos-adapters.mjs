@@ -1597,16 +1597,112 @@ ${tail}
   }
 }
 
+const ENVIRONMENT_PREVIEW_START_GRACE_MS = 60_000
+
+function environmentPreviewEntries(state) {
+  return Array.isArray(state?.endpoints) ? state.endpoints : []
+}
+
+function sameEnvironmentPreview(entry, candidate) {
+  return entry.worldId === candidate.worldId && entry.head === candidate.head && entry.port === candidate.port
+}
+
+/** Persist the detached child before polling can time out, so a slow start remains reconcilable. */
+export function recordStartingEnvironmentPreview(state, candidate) {
+  return {
+    endpoints: [
+      ...environmentPreviewEntries(state).filter((entry) => !sameEnvironmentPreview(entry, candidate)),
+      { ...candidate, status: "starting" },
+    ],
+  }
+}
+
+/** Select the now-ready head and return every superseded same-world process for explicit cleanup. */
+export function activateEnvironmentPreview(state, candidate) {
+  const entries = environmentPreviewEntries(state)
+  return {
+    state: {
+      endpoints: [
+        ...entries.filter((entry) => entry.worldId !== candidate.worldId),
+        { ...candidate, status: "ready" },
+      ],
+    },
+    retired: entries.filter((entry) => entry.worldId === candidate.worldId && !sameEnvironmentPreview(entry, candidate)),
+  }
+}
+
+function withoutEnvironmentPreview(state, candidate) {
+  return {
+    endpoints: environmentPreviewEntries(state).filter((entry) => !sameEnvironmentPreview(entry, candidate)),
+  }
+}
+
+function environmentPreviewProcessIsAlive(entry) {
+  const pid = Number(entry?.pid)
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function stopEnvironmentPreview(entry) {
+  const pid = Number(entry?.pid)
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  if (!environmentPreviewProcessIsAlive(entry)) return true
+  try {
+    if (process.platform === "win32") {
+      await execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 10_000 })
+    } else {
+      try { process.kill(-pid, "SIGTERM") } catch { process.kill(pid, "SIGTERM") }
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      if (environmentPreviewProcessIsAlive(entry)) {
+        try { process.kill(-pid, "SIGKILL") } catch { process.kill(pid, "SIGKILL") }
+      }
+    }
+  } catch { /* absence after a recorded PID is an already-clean result */ }
+  return !environmentPreviewProcessIsAlive(entry)
+}
+
+async function persistActivatedEnvironmentPreview(stateFile, state, candidate) {
+  const activation = activateEnvironmentPreview(state, candidate)
+  const retained = []
+  for (const entry of activation.retired) {
+    if (!(await stopEnvironmentPreview(entry))) retained.push({ ...entry, status: "retire_pending" })
+  }
+  const next = { endpoints: [...activation.state.endpoints, ...retained] }
+  atomicJson(stateFile, next)
+  return next
+}
+
 async function ensureEnvironmentPreview({ root, workspace, worldId, head, port }) {
   const stateFile = path.join(root, "state", "environment-endpoints.json")
   let state = { endpoints: [] }
   try { state = JSON.parse(fs.readFileSync(stateFile, "utf8")) } catch { /* first endpoint */ }
-  const existing = Array.isArray(state.endpoints)
-    ? state.endpoints.find((entry) => entry.worldId === worldId && entry.head === head && entry.port === port)
-    : null
+  const candidateIdentity = { worldId, head, port }
+  const existing = environmentPreviewEntries(state).find((entry) => sameEnvironmentPreview(entry, candidateIdentity)) ?? null
   const probe = `http://127.0.0.1:${port}`
   if (await endpointResponds(probe)) {
-    return existing ? "ready" : "ENVIRONMENT_RUNTIME_PORT_COLLISION_WAIT"
+    if (!existing) return "ENVIRONMENT_RUNTIME_PORT_COLLISION_WAIT"
+    await persistActivatedEnvironmentPreview(stateFile, state, { ...existing, ...candidateIdentity })
+    return "ready"
+  }
+
+  if (existing) {
+    const startedAt = Date.parse(String(existing.startedAt ?? ""))
+    const withinStartGrace = Number.isFinite(startedAt) && Date.now() - startedAt < ENVIRONMENT_PREVIEW_START_GRACE_MS
+    if (environmentPreviewProcessIsAlive(existing) && withinStartGrace) {
+      return "ENVIRONMENT_RUNTIME_PREVIEW_START_WAIT"
+    }
+    if (!(await stopEnvironmentPreview(existing))) {
+      state = recordStartingEnvironmentPreview(state, { ...existing, status: "cleanup_pending" })
+      atomicJson(stateFile, state)
+      return "ENVIRONMENT_RUNTIME_PREVIEW_CLEANUP_WAIT"
+    }
+    state = withoutEnvironmentPreview(state, existing)
+    atomicJson(stateFile, state)
   }
 
   const logDirectory = path.join(root, "state", "environment-logs")
@@ -1620,17 +1716,16 @@ async function ensureEnvironmentPreview({ root, workspace, worldId, head, port }
     : spawn("pnpm", ["exec", "next", "start", "-H", "127.0.0.1", "-p", String(port)], {
         cwd: workspace, detached: true, stdio: ["ignore", log, log], env: previewEnvironment(worldId, head, port),
       })
+  child.on("error", () => {})
   child.unref()
   fs.closeSync(log)
+  const startedAt = new Date().toISOString()
+  const starting = { worldId, head, port, pid: child.pid, workspace, logPath, startedAt }
+  state = recordStartingEnvironmentPreview(state, starting)
+  atomicJson(stateFile, state)
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if (await endpointResponds(probe)) {
-      const next = {
-        endpoints: [
-          ...(Array.isArray(state.endpoints) ? state.endpoints.filter((entry) => entry.worldId !== worldId) : []),
-          { worldId, head, port, pid: child.pid, workspace, logPath, startedAt: new Date().toISOString() },
-        ],
-      }
-      atomicJson(stateFile, next)
+      await persistActivatedEnvironmentPreview(stateFile, state, starting)
       return "ready"
     }
     await new Promise((resolve) => setTimeout(resolve, 250))

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  activateEnvironmentPreview,
   buildRegistryRecords,
   linkGrant,
   parseProjectionIssue,
   projectionCompletionOwned,
   projectionIssueDirective,
   queueStateFor,
+  recordStartingEnvironmentPreview,
 } from "../scripts/runtime-operator/williamos-adapters.mjs"
 import { selectEligibleWorkOrder } from "../scripts/runtime-operator/operational-kernel.mjs"
 
@@ -177,5 +179,30 @@ describe("queue state mapping", () => {
     expect(queueStateFor("active")).toBe("LEASED")
     expect(queueStateFor("draft")).toBe("READY")
     expect(queueStateFor("approved")).toBe("READY")
+  })
+})
+
+describe("Environment preview lifecycle state", () => {
+  const oldHead = {
+    worldId: "world-42", head: "old-head", port: 4101, pid: 111,
+    workspace: "/work/old", logPath: "/logs/old", startedAt: "2026-08-20T19:00:00.000Z", status: "ready",
+  }
+  const nextHead = {
+    worldId: "world-42", head: "new-head", port: 4102, pid: 222,
+    workspace: "/work/new", logPath: "/logs/new", startedAt: "2026-08-20T19:00:01.000Z",
+  }
+
+  it("records a detached child before a slow startup can cross the polling deadline", () => {
+    const state = recordStartingEnvironmentPreview({ endpoints: [oldHead] }, nextHead)
+
+    expect(state.endpoints).toEqual([oldHead, { ...nextHead, status: "starting" }])
+  })
+
+  it("retains the superseded process handle until activation explicitly cleans it up", () => {
+    const starting = recordStartingEnvironmentPreview({ endpoints: [oldHead] }, nextHead)
+    const activation = activateEnvironmentPreview(starting, nextHead)
+
+    expect(activation.retired).toEqual([oldHead])
+    expect(activation.state.endpoints).toEqual([{ ...nextHead, status: "ready" }])
   })
 })

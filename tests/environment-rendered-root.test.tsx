@@ -11,18 +11,20 @@ import { EnvironmentSignIn } from "@/components/environment-root/environment-sig
 import type { EnvironmentSurfaceDto, EnvironmentWorldDto } from "@/lib/environment/api-contract"
 import type { WorldEndpointIdentity } from "@/lib/environment/world-projection"
 
-const navigation = { replace: vi.fn(), refresh: vi.fn() }
-const auth = vi.hoisted(() => ({ signInEmail: vi.fn() }))
+const navigation = { push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }
+const auth = vi.hoisted(() => ({ signInEmail: vi.fn(), signInPasskey: vi.fn() }))
 
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }))
-vi.mock("@/lib/auth-client", () => ({ authClient: { signIn: { email: auth.signInEmail } } }))
+vi.mock("@/lib/auth-client", () => ({ authClient: { signIn: { email: auth.signInEmail, passkey: auth.signInPasskey } } }))
 
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
   navigation.replace.mockReset()
+  navigation.push.mockReset()
   navigation.refresh.mockReset()
   auth.signInEmail.mockReset()
+  auth.signInPasskey.mockReset()
 })
 
 describe("greenfield Environment rendered root", () => {
@@ -195,6 +197,23 @@ describe("greenfield Environment rendered root", () => {
 
     await waitFor(() => expect(auth.signInEmail).toHaveBeenCalledWith({ email: "owner@example.test", password: "password123" }))
     expect(navigation.replace).toHaveBeenCalledWith("/environment")
+    expect(navigation.refresh).toHaveBeenCalled()
+  })
+
+  it("preserves passkey-only owner access and returns it directly to the Environment", async () => {
+    ;(window as unknown as { PublicKeyCredential: unknown }).PublicKeyCredential = {
+      isUserVerifyingPlatformAuthenticatorAvailable: () => Promise.resolve(true),
+    }
+    auth.signInPasskey.mockImplementation(async (options?: { autoFill?: boolean }) =>
+      options?.autoFill ? new Promise(() => {}) : { error: null },
+    )
+    const user = userEvent.setup()
+    render(<EnvironmentSignIn passkeyAvailable={true} />)
+
+    await user.click(await screen.findByRole("button", { name: /sign in with this device/i }))
+
+    await waitFor(() => expect(auth.signInPasskey).toHaveBeenCalledWith())
+    expect(navigation.push).toHaveBeenCalledWith("/environment")
     expect(navigation.refresh).toHaveBeenCalled()
   })
 })

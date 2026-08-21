@@ -65,7 +65,7 @@ export function environmentError(error: unknown): Response {
       ? 403
       : code.startsWith("RUNTIME_EVIDENCE_") || code.startsWith("RUNTIME_ENDPOINT_") || code.startsWith("RUNTIME_SUCCESS_") || code.startsWith("RUNTIME_FAILURE_")
         ? 409
-        : code === "ENDPOINT_NOT_LIVE" || code === "ENDPOINT_NOT_READY" || code === "ENDPOINT_PUBLIC_NOT_LIVE" || code === "ENDPOINT_PUBLIC_NOT_READY" || code === "ENDPOINT_ORIGIN_NOT_ALLOWED"
+        : code === "ENDPOINT_NOT_LIVE" || code === "ENDPOINT_NOT_READY" || code === "ENDPOINT_PUBLIC_NOT_LIVE" || code === "ENDPOINT_PUBLIC_NOT_READY" || code === "ENDPOINT_ORIGIN_NOT_ALLOWED" || code === "ENDPOINT_PUBLIC_HTTPS_REQUIRED" || code === "ENDPOINT_PUBLIC_ORIGIN_NOT_ALLOWED"
           ? 422
           : code === "REQUEST_BODY_TOO_LARGE" || code === "CONTENT_TOO_LARGE" || code === "COMPARISON_RESPONSE_TOO_LARGE" || code.startsWith("TOO_MANY_")
             ? 413

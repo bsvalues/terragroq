@@ -417,6 +417,32 @@ describe("real endpoint liveness seam", () => {
     expect(restored?.endpoints[0]?.provenance.liveness.observedAt).toBe(refreshedAt)
   })
 
+  it("invalidates an admitted endpoint immediately when its current probe fails", async () => {
+    const repository = new MemoryRepository()
+    const resource = { recordId: 1, candidateId: "a", canonicalIdentity: "repo:a", label: "A" }
+    const projection = admitWorldEndpoint(createEnvironmentWorldProjection({
+      id: "world",
+      meaning: createWorkingWorld({ intent: "Fix sign-in", resources: [resource.canonicalIdentity] }),
+      resource,
+    }), endpoint("world", resource.canonicalIdentity, "one"))
+    await repository.insert("owner", projection, instant)
+    const refresh = vi.fn(async () => null)
+    const service = createEnvironmentWorldService({
+      repository,
+      endpointLivenessPort: { refresh },
+      // Stay inside the old receipt's TTL to prove a known failed probe wins immediately.
+      now: () => "2026-08-20T19:00:05.000Z",
+    })
+
+    const restored = await service.load("owner", "world")
+
+    expect(refresh).toHaveBeenCalledOnce()
+    expect(restored?.endpoints[0]?.provenance.liveness.status).toBe("unavailable")
+    expect(restored?.endpoints[0]?.provenance.liveness.publicRoute.status).toBe("unavailable")
+    expect(restored?.status).toBe("waiting_for_execution_endpoint")
+    expect(restored?.surfaces.find((surface) => surface.kind === "browser")?.status).toBe("unavailable")
+  })
+
   it("refuses an erroring listener as a ready application endpoint", async () => {
     const candidate: UnverifiedWorldEndpoint = {
       ...endpoint("world", "repo:a", "one"),

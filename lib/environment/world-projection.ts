@@ -23,13 +23,13 @@ export type EndpointProvenance = Readonly<{
   evidenceRef: string
   capturedAt: string
   liveness: Readonly<{
-    status: "reachable"
+    status: "reachable" | "unavailable"
     httpStatus: number
     observedAt: string
     /** Durable endpoint/source receipt this volatile server probe is anchored to. */
     sourceEvidenceRef: string
     publicRoute: Readonly<{
-      status: "reachable"
+      status: "reachable" | "unavailable"
       httpStatus: number
       observedAt: string
       sourceEvidenceRef: string
@@ -148,6 +148,8 @@ export function admitWorldEndpoint(
 ): EnvironmentWorldProjection {
   validateEnvironmentWorldProjection(world)
   validateEndpoint(endpoint)
+  if (endpoint.provenance.liveness.status !== "reachable") throw new Error("ENDPOINT_NOT_LIVE")
+  if (endpoint.provenance.liveness.publicRoute.status !== "reachable") throw new Error("ENDPOINT_PUBLIC_NOT_READY")
   if (endpoint.worldId !== world.id) throw new Error("ENDPOINT_WORLD_MISMATCH")
   if (!world.resource || endpoint.resourceIdentity !== world.resource.canonicalIdentity) {
     throw new Error("ENDPOINT_RESOURCE_MISMATCH")
@@ -324,8 +326,10 @@ function validateEndpoint(raw: unknown): WorldEndpointIdentity {
     throw new Error("ENDPOINT_LIVENESS_REQUIRED")
   }
   const liveness = provenance.liveness as Record<string, unknown>
-  if (liveness.status !== "reachable") throw new Error("ENDPOINT_NOT_LIVE")
-    if (!Number.isInteger(liveness.httpStatus) || Number(liveness.httpStatus) < 200 || Number(liveness.httpStatus) >= 300) {
+  if (liveness.status !== "reachable" && liveness.status !== "unavailable") throw new Error("ENDPOINT_LIVENESS_STATUS_INVALID")
+  if (!Number.isInteger(liveness.httpStatus) || (liveness.status === "reachable"
+    ? Number(liveness.httpStatus) < 200 || Number(liveness.httpStatus) >= 300
+    : Number(liveness.httpStatus) !== 0)) {
     throw new Error("ENDPOINT_LIVENESS_STATUS_INVALID")
   }
   requireIsoInstant(liveness.observedAt, "ENDPOINT_LIVENESS_AT_INVALID")
@@ -334,8 +338,10 @@ function validateEndpoint(raw: unknown): WorldEndpointIdentity {
     throw new Error("ENDPOINT_PUBLIC_LIVENESS_REQUIRED")
   }
   const publicRoute = liveness.publicRoute as Record<string, unknown>
-  if (publicRoute.status !== "reachable" || !Number.isInteger(publicRoute.httpStatus) ||
-      Number(publicRoute.httpStatus) < 200 || Number(publicRoute.httpStatus) >= 300) {
+  if ((publicRoute.status !== "reachable" && publicRoute.status !== "unavailable") ||
+      !Number.isInteger(publicRoute.httpStatus) || (publicRoute.status === "reachable"
+        ? Number(publicRoute.httpStatus) < 200 || Number(publicRoute.httpStatus) >= 300
+        : Number(publicRoute.httpStatus) !== 0)) {
     throw new Error("ENDPOINT_PUBLIC_NOT_READY")
   }
   requireIsoInstant(publicRoute.observedAt, "ENDPOINT_PUBLIC_LIVENESS_AT_INVALID")

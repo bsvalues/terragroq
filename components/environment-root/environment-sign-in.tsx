@@ -4,8 +4,15 @@ import { useState, type FormEvent } from "react"
 import { useRouter } from "next/navigation"
 
 import { authClient } from "@/lib/auth-client"
+import { PasskeySignIn } from "@/components/auth/passkey-sign-in"
 
-export function EnvironmentSignIn() {
+export function EnvironmentSignIn({
+  passkeyAvailable = false,
+  passkeyUnavailableReason,
+}: {
+  passkeyAvailable?: boolean
+  passkeyUnavailableReason?: string | null
+}) {
   const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -39,7 +46,15 @@ export function EnvironmentSignIn() {
         </h1>
         <p className="mt-2 text-sm leading-6 text-neutral-400">Your working world will be restored after you sign in.</p>
 
-        <form className="mt-8 space-y-5" onSubmit={submit}>
+        <div className="mt-8">
+          <PasskeySignIn
+            available={passkeyAvailable}
+            unavailableReason={passkeyUnavailableReason}
+            returnTo="/environment"
+          />
+        </div>
+
+        <form className="mt-5 space-y-5" onSubmit={submit}>
           <label className="block text-sm text-neutral-300">
             <span className="mb-2 block">Email</span>
             <input

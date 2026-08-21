@@ -107,7 +107,9 @@ export function createEnvironmentWorldService({
     }))
     return validateEnvironmentWorldProjection({
       ...world,
-      endpoints: world.endpoints.map((endpoint, index) => observed[index] ?? endpoint),
+      // A failed current probe invalidates admission for this response. Keeping the prior endpoint
+      // until its TTL elapsed would present a known-dead preview as ready and make Job 4 compare it.
+      endpoints: observed.map((endpoint, index) => endpoint ?? invalidateEndpoint(world.endpoints[index], now())),
     })
   }
 
@@ -287,8 +289,8 @@ export function createEnvironmentWorldService({
       const leftDto = dto(left, leftStored.updatedAt)
       const rightDto = dto(right, rightStored.updatedAt)
       const isolationConflicts = distinctEndpointConflicts(left, right)
-      const leftEndpoint = left.endpoints[0]
-      const rightEndpoint = right.endpoints[0]
+      const leftEndpoint = left.endpoints.find(endpointIsCurrentlyReachable)
+      const rightEndpoint = right.endpoints.find(endpointIsCurrentlyReachable)
       if (isolationConflicts.length > 0 || !leftEndpoint || !rightEndpoint) {
         return {
           state: "waiting_for_distinct_endpoints",
@@ -374,10 +376,36 @@ export function distinctEndpointConflicts(
   right: EnvironmentWorldProjection,
 ): string[] {
   if (left.id === right.id) return ["SAME_WORLD"]
-  const a = left.endpoints[0]
-  const b = right.endpoints[0]
+  const a = left.endpoints.find(endpointIsCurrentlyReachable)
+  const b = right.endpoints.find(endpointIsCurrentlyReachable)
   if (!a || !b) return ["ENDPOINT_MISSING"]
   return endpointPairConflicts(a, b)
+}
+
+function endpointIsCurrentlyReachable(endpoint: WorldEndpointIdentity): boolean {
+  return endpoint.provenance.liveness.status === "reachable" &&
+    endpoint.provenance.liveness.publicRoute.status === "reachable"
+}
+
+function invalidateEndpoint(endpoint: WorldEndpointIdentity, observedAt: string): WorldEndpointIdentity {
+  return {
+    ...endpoint,
+    provenance: {
+      ...endpoint.provenance,
+      liveness: {
+        ...endpoint.provenance.liveness,
+        status: "unavailable",
+        httpStatus: 0,
+        observedAt,
+        publicRoute: {
+          ...endpoint.provenance.liveness.publicRoute,
+          status: "unavailable",
+          httpStatus: 0,
+          observedAt,
+        },
+      },
+    },
+  }
 }
 
 export function endpointPairConflicts(a: WorldEndpointIdentity, b: WorldEndpointIdentity): string[] {

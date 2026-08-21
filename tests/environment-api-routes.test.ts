@@ -38,6 +38,7 @@ import { POST as linePost } from "@/app/api/environment/line/route"
 import { GET as worldGet } from "@/app/api/environment/world/route"
 import { POST as runtimePost } from "@/app/api/environment/runtime/route"
 import { GET as previewIdentityGet } from "@/app/api/environment/preview-identity/route"
+import { environmentError } from "@/app/api/environment/http"
 
 function lineRequest(body: unknown) {
   return new Request("http://localhost/api/environment/line", {
@@ -54,6 +55,14 @@ describe("Environment authenticated routes", () => {
     boundary.getRuntimeDevicePrincipal.mockResolvedValue({ userId: "owner", credentialId: "runtime", sessionId: "session" })
     boundary.requireRuntimeAuthority.mockResolvedValue({ evidence: [{ id: 7, ref: "EV-1" }] })
   })
+
+  it.each(["ENDPOINT_PUBLIC_HTTPS_REQUIRED", "ENDPOINT_PUBLIC_ORIGIN_NOT_ALLOWED"])(
+    "classifies permanent public endpoint policy refusal %s as a terminal 422",
+    (code) => {
+      const response = environmentError(new Error(code))
+      expect(response.status).toBe(422)
+    },
+  )
 
   it("uses getSession and returns 401 when auth resolution throws instead of leaking a 500", async () => {
     boundary.getSession.mockRejectedValueOnce(new Error("auth unavailable"))
