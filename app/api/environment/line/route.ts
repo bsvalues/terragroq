@@ -295,6 +295,11 @@ export async function POST(request: Request) {
   const text = typeof body.text === "string" ? body.text.trim() : ""
   if (!text) return Response.json({ error: "MESSAGE_EMPTY" }, { status: 400 })
   if (exceedsLineCap(text)) return Response.json({ error: "MESSAGE_TOO_LARGE" }, { status: 413 })
+  // worldId is absent (new world) or a string id. A present non-string is a malformed request, not
+  // a silent fall-through to new-world creation (independent review nit): say so plainly.
+  if (body.worldId !== undefined && typeof body.worldId !== "string") {
+    return Response.json({ error: "INVALID_WORLD_ID" }, { status: 400 })
+  }
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
 
   if (requestedWorldId) {
