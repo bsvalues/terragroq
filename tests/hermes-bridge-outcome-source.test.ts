@@ -16,6 +16,7 @@ import {
   readValidationInfrastructureRecovery,
   resolveValidationInfrastructureRecovery,
   resolveActiveReviewRecoveryProvenance,
+  resolveActivePostMergeCleanupSettlement,
   recordOwnerAuthorityDecision,
   recordValidationInfrastructureRecoveryProof,
   recoverNativeProviderOutcome,
@@ -3382,10 +3383,12 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         confirmationId: 971, confirmationMetadata: confirmed.metadata,
       }] })
       .mockResolvedValueOnce({ rows: [{ id: 972 }] })
-      .mockResolvedValueOnce({ rows: [{ id: 20, version: 9, fencingToken: 6 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 20, version: 9, fencingToken: 6,
+        terminalAt: new Date("2026-08-21T10:00:00.000Z") }] })
       .mockResolvedValueOnce({ rows: [{ id: 23 }] })
       .mockResolvedValueOnce({ rows: [{ id: 51 }] })
       .mockResolvedValueOnce({ rows: [{ id: 973 }] })
+      .mockResolvedValueOnce({ rows: [{ id: 974 }] })
       .mockResolvedValueOnce({ rows: [] })
     const settled = await settleActivePostMergeCleanupOutcome({
       query: settleQuery, outcomeId: 23, executionBinding, workContract,
@@ -3398,11 +3401,13 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
 
     const checkpointMetadata = JSON.parse(settleQuery.mock.calls[5][1][3])
     const settlementMetadata = JSON.parse(settleQuery.mock.calls[9][1][3])
+    const completionMetadata = JSON.parse(settleQuery.mock.calls[10][1][3])
     const replayRow = {
       id: 973, actor: "hermes-codex-bridge", metadata: settlementMetadata,
       version: 9, fencingToken: 6, lifecycleState: "completed", lifecycleReason: "COMPLETE",
       terminalKey: settlementMetadata.idempotencyKey + ":queue", terminalResult: "COMPLETE",
       terminalEvidenceId: 972, terminalEvidenceRefs: ["EV-HERMES-23-9-47"],
+      terminalAt: new Date("2026-08-21T10:00:00.000Z"),
       leaseHolder: null, leaseToken: null, leaseExpiresAt: null,
       goalStatus: "converted", workOrderStatus: "closed", workOrderResult: "PASS",
       workOrderCommitRef: proof.mergeSha, latestCheckpointId: 972,
@@ -3418,6 +3423,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           actor: "hermes-codex-bridge", metadata: confirmed.metadata },
         { id: 973, eventType: "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED",
           actor: "hermes-codex-bridge", metadata: settlementMetadata },
+        { id: 974, eventType: "HERMES_OUTCOME_COMPLETED",
+          actor: "hermes-codex-bridge", metadata: completionMetadata },
       ] }).mockResolvedValueOnce({ rows: [] })
     await expect(settleActivePostMergeCleanupOutcome({
       query: replayQuery, outcomeId: 23, executionBinding, workContract,
@@ -3443,6 +3450,8 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
             actor: "hermes-codex-bridge", metadata: confirmed.metadata },
           { id: 973, eventType: "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED",
             actor: "hermes-codex-bridge", metadata: settlementMetadata },
+          { id: 974, eventType: "HERMES_OUTCOME_COMPLETED",
+            actor: "hermes-codex-bridge", metadata: completionMetadata },
         ] })
         .mockResolvedValueOnce({ rows: [] })
       await expect(settleActivePostMergeCleanupOutcome({
@@ -4329,6 +4338,24 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           WHERE "eventType"='HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED'`)).rows)
           .toEqual([{ count: 0 }])
 
+        const failingCompletionQuery = vi.fn(async (sql: string, values?: unknown[]) => {
+          if (/HERMES_OUTCOME_COMPLETED/.test(sql) && /INSERT INTO governance_event/.test(sql)) {
+            throw new Error("forced completion event wall")
+          }
+          return client.query(sql, values)
+        })
+        await expect(settleActivePostMergeCleanupOutcome({
+          query: failingCompletionQuery, ...settlementInput,
+        })).rejects.toThrow("forced completion event wall")
+        expect((await client.query(`SELECT version,"fencingToken","lifecycleState","lifecycleReason",
+            "terminalAt" FROM outcome_queue_item WHERE "goalId"=4`)).rows).toEqual([{
+          version: 8, fencingToken: 6, lifecycleState: "active",
+          lifecycleReason: "STALE_LEASE_RECOVERED", terminalAt: null,
+        }])
+        expect((await client.query(`SELECT "eventType",count(*)::integer AS count FROM governance_event
+          WHERE "eventType" IN ('HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED',
+            'HERMES_OUTCOME_COMPLETED') GROUP BY "eventType"`)).rows).toEqual([])
+
         const cleanupSettlement = await settleActivePostMergeCleanupOutcome({
           query: client.query.bind(client), ...settlementInput,
         })
@@ -4336,10 +4363,43 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         await expect(verifyActivePostMergeCleanupSettlement({
           query: client.query.bind(client), ...settlementInput,
         })).resolves.toMatchObject({ queueVersion: 9, fencingToken: 6, replayed: true })
+        const markerlessCleanupBinding = { ...cleanupBinding, expectedVersion: 7, fencingToken: 5 }
+        delete markerlessCleanupBinding.reviewRecoveryStaleReacquisition
+        delete markerlessCleanupBinding.reviewRecoveryStaleContinuation
+        await expect(resolveActivePostMergeCleanupSettlement({
+          query: client.query.bind(client), outcomeId: 4,
+          executionBinding: markerlessCleanupBinding, workContract: issue911RuntimeWorkContract,
+          cleanupProofDigest, runtimeAttempt: 9, checkpointSequence: 47, prNumber: 929,
+          reviewedHeadSha: recoveryProof.reviewedHeadSha, mergeSha: recoveryProof.mergeSha,
+        })).resolves.toMatchObject({
+          queueVersion: 9, fencingToken: 6, replayed: true,
+          executionBinding: { expectedVersion: 8, fencingToken: 6,
+            reviewRecoveryStaleReacquisition: cleanupBinding.reviewRecoveryStaleReacquisition,
+            reviewRecoveryStaleContinuation: cleanupBinding.reviewRecoveryStaleContinuation },
+        })
+        const settlementResolutionInput = {
+          query: client.query.bind(client), outcomeId: 4,
+          workContract: issue911RuntimeWorkContract, cleanupProofDigest,
+          runtimeAttempt: 9, checkpointSequence: 47, prNumber: 929,
+          reviewedHeadSha: recoveryProof.reviewedHeadSha, mergeSha: recoveryProof.mergeSha,
+        }
+        const baseMarkedCleanupBinding = { ...markerlessCleanupBinding,
+          reviewRecoveryStaleReacquisition: cleanupBinding.reviewRecoveryStaleReacquisition }
+        await expect(resolveActivePostMergeCleanupSettlement({
+          ...settlementResolutionInput, executionBinding: baseMarkedCleanupBinding,
+        })).resolves.toMatchObject({ executionBinding: { expectedVersion: 8, fencingToken: 6,
+          reviewRecoveryStaleContinuation: cleanupBinding.reviewRecoveryStaleContinuation } })
+        for (const drift of [{ leaseHolder: "wrong-holder" }, { leaseToken: "wrong-token" }]) {
+          await expect(resolveActivePostMergeCleanupSettlement({
+            ...settlementResolutionInput,
+            executionBinding: { ...markerlessCleanupBinding, ...drift },
+          })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
+        }
         expect((await client.query(`SELECT version,"fencingToken","lifecycleState","lifecycleReason",
-            "leaseHolder","leaseToken","leaseExpiresAt" FROM outcome_queue_item WHERE "goalId"=4`)).rows)
+            "leaseHolder","leaseToken","leaseExpiresAt","terminalAt" FROM outcome_queue_item WHERE "goalId"=4`)).rows)
           .toEqual([{ version: 9, fencingToken: 6, lifecycleState: "completed", lifecycleReason: "COMPLETE",
-            leaseHolder: null, leaseToken: null, leaseExpiresAt: null }])
+            leaseHolder: null, leaseToken: null, leaseExpiresAt: null,
+            terminalAt: expect.any(Date) }])
         expect((await client.query(`SELECT status FROM goal WHERE id=4`)).rows).toEqual([{ status: "converted" }])
         expect((await client.query(`SELECT status,result,"latestCheckpointId" AS "latestCheckpointId"
           FROM work_order WHERE id=42`)).rows).toEqual([{
@@ -4348,12 +4408,29 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         expect((await client.query(`SELECT "eventType",count(*)::integer AS count FROM governance_event
           WHERE "eventType" IN ('HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED',
             'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED',
-            'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED') GROUP BY "eventType" ORDER BY "eventType"`)).rows)
+            'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED','HERMES_OUTCOME_COMPLETED')
+          GROUP BY "eventType" ORDER BY "eventType"`)).rows)
           .toEqual([
             { eventType: "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED", count: 1 },
             { eventType: "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED", count: 1 },
             { eventType: "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED", count: 1 },
+            { eventType: "HERMES_OUTCOME_COMPLETED", count: 1 },
           ])
+        expect(cleanupSettlement).toMatchObject({
+          completionEventId: expect.any(Number), completionPayloadDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        })
+        const completion = (await client.query(`SELECT id,actor,metadata FROM governance_event
+          WHERE "userId"='owner' AND "entityType"='goal' AND "entityId"='4'
+            AND "eventType"='HERMES_OUTCOME_COMPLETED'`)).rows[0]
+        expect(completion).toMatchObject({
+          id: String(cleanupSettlement.completionEventId), actor: "hermes-codex-bridge",
+          metadata: {
+            settlementEventId: cleanupSettlement.settlementEventId,
+            checkpointEventId: cleanupSettlement.checkpointEventId,
+            cleanupProofDigest,
+            payloadDigest: cleanupSettlement.completionPayloadDigest,
+          },
+        })
         const duplicateSettlement = (await client.query(`INSERT INTO governance_event
           ("userId","eventType","entityType","entityId",actor,reason,metadata)
           SELECT "userId","eventType","entityType","entityId",actor,reason,metadata
@@ -4362,6 +4439,14 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           query: client.query.bind(client), ...settlementInput,
         })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
         await client.query(`DELETE FROM governance_event WHERE id=$1`, [duplicateSettlement])
+        const duplicateCompletion = (await client.query(`INSERT INTO governance_event
+          ("userId","eventType","entityType","entityId",actor,reason,metadata)
+          SELECT "userId","eventType","entityType","entityId",actor,reason,metadata
+          FROM governance_event WHERE id=$1 RETURNING id`, [cleanupSettlement.completionEventId])).rows[0].id
+        await expect(verifyActivePostMergeCleanupSettlement({
+          query: client.query.bind(client), ...settlementInput,
+        })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
+        await client.query(`DELETE FROM governance_event WHERE id=$1`, [duplicateCompletion])
         const duplicateConfirmation = (await client.query(`INSERT INTO governance_event
           ("userId","eventType","entityType","entityId",actor,reason,metadata)
           SELECT "userId","eventType","entityType","entityId",actor,reason,metadata

@@ -511,6 +511,8 @@ function metadata(input = {}, current = {}) {
     "activePostMergeCleanupConfirmationDigest",
     "activePostMergeCleanupSettlementEventId",
     "activePostMergeCleanupSettlementDigest",
+    "activePostMergeCleanupCompletionEventId",
+    "activePostMergeCleanupCompletionDigest",
   ]
   const activeCleanup = Object.fromEntries(activeCleanupFields.map((field) => [field,
     Object.hasOwn(input, field) ? input[field] : current[field] ?? null]))
@@ -521,14 +523,18 @@ function metadata(input = {}, current = {}) {
       || !SHA256.test(String(activeCleanup.activePostMergeCleanupAuthorizationDigest))
       || !SHA256.test(String(activeCleanup.activePostMergeCleanupConfirmationDigest))
       || !SHA256.test(String(activeCleanup.activePostMergeCleanupSettlementDigest))
+      || !SHA256.test(String(activeCleanup.activePostMergeCleanupCompletionDigest))
       || !Number.isSafeInteger(activeCleanup.activePostMergeCleanupAuthorizationEventId)
       || !Number.isSafeInteger(activeCleanup.activePostMergeCleanupConfirmationEventId)
       || !Number.isSafeInteger(activeCleanup.activePostMergeCleanupSettlementEventId)
+      || !Number.isSafeInteger(activeCleanup.activePostMergeCleanupCompletionEventId)
       || activeCleanup.activePostMergeCleanupAuthorizationEventId <= 0
       || activeCleanup.activePostMergeCleanupConfirmationEventId
         <= activeCleanup.activePostMergeCleanupAuthorizationEventId
       || activeCleanup.activePostMergeCleanupSettlementEventId
-        <= activeCleanup.activePostMergeCleanupConfirmationEventId) {
+        <= activeCleanup.activePostMergeCleanupConfirmationEventId
+      || activeCleanup.activePostMergeCleanupCompletionEventId
+        <= activeCleanup.activePostMergeCleanupSettlementEventId) {
       fail("INVALID_ACTIVE_POST_MERGE_CLEANUP_BINDING")
     }
   }
@@ -1362,6 +1368,22 @@ export function completeActivePostMergeCleanupRecovery(filePath, request, option
     assertRunning(state)
     const current = execution(state, request.outcomeId)
     const binding = current.metadata?.outcome?.queueBinding
+    const resolvedBinding = request.resolvedQueueBinding
+    const sameQueueIdentity = ["userId", "outcomeKey", "executionBinding", "acquisitionKey",
+      "leaseHolder", "leaseToken", "activeWorkOrderId", "reviewRecoveryResumeState",
+      "reviewRecoverySourceExpectedVersion", "reviewRecoverySourceFencingToken",
+      "reviewRecoverySourceRuntimeAttempt", "reviewRecoveryReclaimEventId",
+      "reviewRecoveryReclaimPayloadDigest"].every((key) => binding?.[key] === resolvedBinding?.[key])
+    const localMatchesResolved = digest(binding) === digest(resolvedBinding)
+    const exactPredecessor = sameQueueIdentity
+      && binding?.reviewRecoveryStaleContinuation === undefined
+      && resolvedBinding?.reviewRecoveryStaleReacquisition !== undefined
+      && resolvedBinding?.reviewRecoveryStaleContinuation !== undefined
+      && (binding?.reviewRecoveryStaleReacquisition === undefined
+        || digest(binding.reviewRecoveryStaleReacquisition)
+          === digest(resolvedBinding.reviewRecoveryStaleReacquisition))
+      && binding?.expectedVersion + 1 === resolvedBinding?.expectedVersion
+      && binding?.fencingToken + 1 === resolvedBinding?.fencingToken
     const ownerTouchesRemainZero = COUNTER_NAMES.every(
       (counter) => state.ownerTouchCounters[counter] === 0,
     )
@@ -1385,18 +1407,23 @@ export function completeActivePostMergeCleanupRecovery(filePath, request, option
       || current.metadata.reviewRecoveryProofDigest !== request.reviewRecoveryProofDigest
       || !Number.isSafeInteger(request.queueVersion) || request.queueVersion <= 0
       || !Number.isSafeInteger(request.queueFencingToken) || request.queueFencingToken <= 0
-      || binding?.expectedVersion + 1 !== request.queueVersion
-      || binding?.fencingToken !== request.queueFencingToken
+      || resolvedBinding?.expectedVersion + 1 !== request.queueVersion
+      || resolvedBinding?.fencingToken !== request.queueFencingToken
       || digest(binding) !== request.expectedQueueBindingDigest
+      || digest(resolvedBinding) !== request.expectedResolvedQueueBindingDigest
+      || (!localMatchesResolved && !exactPredecessor)
       || digest(current.metadata?.outcome) !== request.expectedOutcomeDigest
       || !Number.isSafeInteger(request.authorizationEventId) || request.authorizationEventId <= 0
       || !Number.isSafeInteger(request.confirmationEventId)
       || request.confirmationEventId <= request.authorizationEventId
       || !Number.isSafeInteger(request.settlementEventId)
       || request.settlementEventId <= request.confirmationEventId
+      || !Number.isSafeInteger(request.completionEventId)
+      || request.completionEventId <= request.settlementEventId
       || !SHA256.test(String(request.authorizationDigest ?? ""))
       || !SHA256.test(String(request.confirmationDigest ?? ""))
       || !SHA256.test(String(request.settlementDigest ?? ""))
+      || !SHA256.test(String(request.completionDigest ?? ""))
       || !ownerTouchesRemainZero) {
       fail("ACTIVE_POST_MERGE_CLEANUP_RECOVERY_STATE_WALL")
     }
@@ -1425,11 +1452,13 @@ export function completeActivePostMergeCleanupRecovery(filePath, request, option
         activePostMergeCleanupConfirmationDigest: request.confirmationDigest,
         activePostMergeCleanupSettlementEventId: request.settlementEventId,
         activePostMergeCleanupSettlementDigest: request.settlementDigest,
+        activePostMergeCleanupCompletionEventId: request.completionEventId,
+        activePostMergeCleanupCompletionDigest: request.completionDigest,
         outcome: {
           ...current.metadata.outcome,
           status: "complete",
           queueBinding: {
-            ...binding,
+            ...resolvedBinding,
             expectedVersion: request.queueVersion,
             fencingToken: request.queueFencingToken,
           },

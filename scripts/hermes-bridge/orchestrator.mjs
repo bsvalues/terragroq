@@ -686,6 +686,18 @@ export function deriveHermesRuntimeProjectionBindings(
   }
 }
 
+export function deriveHermesRuntimeWorkContract(
+  outcome,
+  { resolver = resolveHermesWorkContract, requireVerified = false } = {},
+) {
+  if (requireVerified && outcome?.verifiedQueueWorkContract === undefined) {
+    throw Object.assign(new Error("Queue work contract authority is missing"), {
+      code: "HERMES_WORK_CONTRACT_WALL",
+    })
+  }
+  return projectedWorkContract(outcome, resolver).projection
+}
+
 function isLegacyUnmarkedStaleReviewRecovery(binding) {
   return binding?.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
     && binding.reviewRecoveryStaleReacquisition === undefined

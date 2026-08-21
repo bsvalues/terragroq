@@ -995,6 +995,30 @@ describe("Hermes bridge durable state store", () => {
     })
     const file = join(dir, "state.json")
     const state = JSON.parse(readFileSync(file, "utf8"))
+    const baseMarker = {
+      disposition: "RECLAIMED", priorExpectedVersion: 6, priorFencingToken: 4,
+      expectedVersion: 7, fencingToken: 5, receiptLatestFencingToken: 5,
+      lifecycleReason: "STALE_LEASE_RECOVERED", leaseExpiresAt: "2026-07-20T23:30:00.000Z",
+      checkpointDigest: "7".repeat(64),
+    }
+    const localQueueBinding = {
+      userId: "owner", outcomeKey: "goal:GOAL-0023", expectedVersion: 7,
+      executionBinding: "execution-23", leaseToken: "lease-23", leaseHolder: "hermes-bridge",
+      acquisitionKey: "acquisition-23", fencingToken: 5, activeWorkOrderId: 51,
+      reviewRecoveryResumeState: "REVIEW_REMEDIATION_RECOVERY_RECLAIMED",
+      reviewRecoverySourceExpectedVersion: 4, reviewRecoverySourceFencingToken: 2,
+      reviewRecoverySourceRuntimeAttempt: 5, reviewRecoveryReclaimEventId: 961,
+      reviewRecoveryReclaimPayloadDigest: "8".repeat(64),
+      reviewRecoveryStaleReacquisition: baseMarker,
+    }
+    const resolvedQueueBinding = { ...localQueueBinding, expectedVersion: 8, fencingToken: 6,
+      reviewRecoveryStaleContinuation: {
+        disposition: "RECLAIMED", priorExpectedVersion: 7, priorFencingToken: 5,
+        expectedVersion: 8, fencingToken: 6, receiptLatestFencingToken: 6,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+        priorLeaseExpiresAt: baseMarker.leaseExpiresAt,
+        leaseExpiresAt: "2026-07-21T00:00:00.000Z", checkpointDigest: "9".repeat(64),
+      } }
     state.executions["5"] = {
       ...state.executions["5"],
       checkpoint: { sequence: 46, state: "POST_MERGE_CLEANUP_RETRY", detail: "HERMES_POST_MERGE_CLEANUP_WALL", recordedAt: "2026-07-21T00:00:00.000Z" },
@@ -1006,11 +1030,7 @@ describe("Hermes bridge durable state store", () => {
         headRefOid: "a".repeat(40), mergeSha: "b".repeat(40),
         reviewRecoveryProofDigest: "c".repeat(64),
         postMergeCleanupRetryCount: 1, postMergeCleanupCauseCode: null,
-        outcome: { id: 5, status: "classified", queueBinding: {
-          userId: "owner", outcomeKey: "goal:GOAL-0023", expectedVersion: 8,
-          executionBinding: "execution-23", leaseToken: "lease-23", leaseHolder: "hermes-bridge",
-          acquisitionKey: "acquisition-23", fencingToken: 6, activeWorkOrderId: 51,
-        } },
+        outcome: { id: 5, status: "classified", queueBinding: localQueueBinding },
       },
     }
     writeFileSync(file, `${JSON.stringify(state)}\n`)
@@ -1022,6 +1042,10 @@ describe("Hermes bridge durable state store", () => {
       expectedQueueBindingDigest: createHash("sha256").update(JSON.stringify(
         state.executions["5"].metadata.outcome.queueBinding,
       )).digest("hex"),
+      resolvedQueueBinding,
+      expectedResolvedQueueBindingDigest: createHash("sha256").update(JSON.stringify(
+        resolvedQueueBinding,
+      )).digest("hex"),
       expectedOutcomeDigest: createHash("sha256").update(JSON.stringify(
         state.executions["5"].metadata.outcome,
       )).digest("hex"),
@@ -1031,14 +1055,19 @@ describe("Hermes bridge durable state store", () => {
       mergeSha: "b".repeat(40), reviewRecoveryProofDigest: "c".repeat(64),
       queueVersion: 9, queueFencingToken: 6,
       authorizationEventId: 970, confirmationEventId: 971, settlementEventId: 973,
+      completionEventId: 974,
       cleanupProofDigest: "c".repeat(64),
       authorizationDigest: "d".repeat(64), confirmationDigest: "e".repeat(64),
-      settlementDigest: "f".repeat(64),
+      settlementDigest: "f".repeat(64), completionDigest: "9".repeat(64),
     })).toMatchObject({ checkpointSequence: 47, leaseStatus: "RELEASED" })
     expect(store.read().executions["5"]).toMatchObject({
       checkpoint: { sequence: 47, state: "COMPLETE" },
       lease: { status: "RELEASED", releaseReason: "COMPLETE" },
-      metadata: { outcome: { status: "complete", queueBinding: { expectedVersion: 9, fencingToken: 6 } } },
+      metadata: {
+        activePostMergeCleanupCompletionEventId: 974,
+        activePostMergeCleanupCompletionDigest: "9".repeat(64),
+        outcome: { status: "complete", queueBinding: { expectedVersion: 9, fencingToken: 6 } },
+      },
     })
   })
 

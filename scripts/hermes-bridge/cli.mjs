@@ -8,6 +8,7 @@ import { selectExecutionBackend } from "./execution-backend.mjs"
 import {
   createHermesOrchestrator,
   deriveHermesRuntimeProjectionBindings,
+  deriveHermesRuntimeWorkContract,
   isExactReviewRecoveryCleanupRetryCandidate,
   retryRuntimeProjection,
 } from "./orchestrator.mjs"
@@ -23,6 +24,7 @@ import {
   recoverNativeProviderOutcome,
   recoverReviewedOutcome,
   recoverTerminalPostMergeCleanupOutcome,
+  resolveActivePostMergeCleanupSettlement,
   resolveActiveReviewRecoveryProvenance,
   settleActivePostMergeCleanupOutcome,
   verifyActiveReviewRecoveryContinuation,
@@ -684,6 +686,7 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
   const confirmCleanup = options.confirmCleanup ?? confirmActivePostMergeCleanup
   const settleCleanup = options.settleCleanup ?? settleActivePostMergeCleanupOutcome
   const verifySettlement = options.verifySettlement ?? verifyActivePostMergeCleanupSettlement
+  const resolveSettlement = options.resolveSettlement ?? resolveActivePostMergeCleanupSettlement
   const currentTime = (options.now ?? (() => new Date()))()
   const nowMs = currentTime instanceof Date ? currentTime.getTime() : Number(currentTime)
   const activationPath = path.join(orchestrator.runtimeRoot, "control", "activation")
@@ -704,7 +707,8 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
     const evidence = [metadata?.activePostMergeCleanupProofDigest,
       metadata?.activePostMergeCleanupAuthorizationDigest,
       metadata?.activePostMergeCleanupConfirmationDigest,
-      metadata?.activePostMergeCleanupSettlementDigest]
+      metadata?.activePostMergeCleanupSettlementDigest,
+      metadata?.activePostMergeCleanupCompletionDigest]
     return execution?.lease?.status === "RELEASED"
       && execution?.lease?.releaseReason === "COMPLETE"
       && Number.isFinite(Date.parse(String(execution?.lease?.releasedAt ?? "")))
@@ -715,10 +719,13 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
       && Number.isSafeInteger(metadata?.activePostMergeCleanupAuthorizationEventId)
       && Number.isSafeInteger(metadata?.activePostMergeCleanupConfirmationEventId)
       && Number.isSafeInteger(metadata?.activePostMergeCleanupSettlementEventId)
+      && Number.isSafeInteger(metadata?.activePostMergeCleanupCompletionEventId)
       && metadata.activePostMergeCleanupAuthorizationEventId
         < metadata.activePostMergeCleanupConfirmationEventId
       && metadata.activePostMergeCleanupConfirmationEventId
         < metadata.activePostMergeCleanupSettlementEventId
+      && metadata.activePostMergeCleanupSettlementEventId
+        < metadata.activePostMergeCleanupCompletionEventId
       && metadata?.postMergeCleanupRetryCount === 0
       && metadata?.postMergeCleanupCauseCode === null
       && metadata?.outcome?.status === "complete"
@@ -766,6 +773,13 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
         code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_CANDIDATE_WALL",
       })
     }
+    if (settled.completionEventId !== completed.metadata.activePostMergeCleanupCompletionEventId
+      || settled.completionPayloadDigest
+        !== completed.metadata.activePostMergeCleanupCompletionDigest) {
+      throw Object.assign(new Error("Completed active cleanup recovery evidence conflicts"), {
+        code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_CANDIDATE_WALL",
+      })
+    }
     return { result: "COMPLETE", outcomeId: completed.outcomeId,
       prNumber: completed.metadata.prNumber, mergeSha: completed.metadata.mergeSha,
       checkpointSequence: completed.checkpoint.sequence, queueVersion: settled.queueVersion,
@@ -786,10 +800,6 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
       && typeof metadata?.worktreePath === "string" && metadata.worktreePath.trim() !== ""
       && String(metadata?.outcome?.id) === String(execution?.outcomeId)
       && binding?.reviewRecoveryResumeState === "REVIEW_REMEDIATION_RECOVERY_RECLAIMED"
-      && binding?.reviewRecoveryStaleReacquisition !== undefined
-      && binding?.reviewRecoveryStaleContinuation !== undefined
-      && binding?.expectedVersion === binding?.reviewRecoverySourceExpectedVersion + 4
-      && binding?.fencingToken === binding?.reviewRecoverySourceFencingToken + 4
   })
   if (!ownerTouchesRemainZero || candidates.length !== 1) {
     throw Object.assign(new Error("Exactly one zero-touch active cleanup recovery is required"), {
@@ -798,8 +808,9 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
   }
   const candidate = candidates[0]
   const outcome = candidate.metadata.outcome
-  const projectionBindings = deriveHermesRuntimeProjectionBindings(outcome, { requireVerified: true })
-  if (!projectionBindings.executionBinding) {
+  const workContract = deriveHermesRuntimeWorkContract(outcome, { requireVerified: true })
+  const resolverBinding = { ...outcome.queueBinding }
+  if (!resolverBinding || typeof resolverBinding !== "object") {
     throw Object.assign(new Error("Active cleanup execution binding is missing"), {
       code: "OUTCOME_WORK_ORDER_AUTHORIZATION_WALL",
     })
@@ -811,47 +822,7 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
     reviewedHeadSha: candidate.metadata.headRefOid,
     mergeSha: candidate.metadata.mergeSha,
   }
-  const checkpointProof = {
-    outcomeId: String(candidate.outcomeId),
-    outcomeKey: projectionBindings.executionBinding.outcomeKey,
-    workOrderId: projectionBindings.executionBinding.activeWorkOrderId,
-    fencingToken: projectionBindings.executionBinding.fencingToken,
-    sequence: candidate.checkpoint.sequence,
-    state: candidate.checkpoint.state,
-    commit: {
-      headSha: candidate.metadata.headRefOid,
-      mergeSha: candidate.metadata.mergeSha,
-      prNumber: candidate.metadata.prNumber,
-    },
-  }
-  const resolved = await resolveProvenance({
-    outcomeId: Number(candidate.outcomeId),
-    executionBinding: projectionBindings.executionBinding,
-    workContract: projectionBindings.workContract,
-    proof,
-    checkpointProof,
-  })
-  const executionBinding = resolved?.binding ?? {
-    ...projectionBindings.executionBinding,
-    reviewRecoverySourceExpectedVersion: resolved.reviewRecoverySourceExpectedVersion,
-    reviewRecoverySourceFencingToken: resolved.reviewRecoverySourceFencingToken,
-    reviewRecoverySourceRuntimeAttempt: resolved.reviewRecoverySourceRuntimeAttempt,
-    ...(resolved.reviewRecoveryExpectedVersion === undefined ? {} : {
-      expectedVersion: resolved.reviewRecoveryExpectedVersion,
-      fencingToken: resolved.reviewRecoveryFencingToken,
-    }),
-    ...(resolved.reviewRecoveryStaleReacquisition === undefined ? {} : {
-      reviewRecoveryStaleReacquisition: resolved.reviewRecoveryStaleReacquisition,
-    }),
-    ...(resolved.reviewRecoveryStaleContinuation === undefined ? {} : {
-      reviewRecoveryStaleContinuation: resolved.reviewRecoveryStaleContinuation,
-    }),
-  }
-  await verifyContinuation({
-    outcomeId: Number(candidate.outcomeId), executionBinding,
-    workContract: projectionBindings.workContract, proof, provenanceOnly: true,
-  })
-  if (lifecycle.repository !== projectionBindings.workContract.repository
+  if (lifecycle.repository !== workContract.repository
     || await lifecycle.verifyRepositoryOrigin() !== true) {
     throw Object.assign(new Error("Repository origin does not match the active cleanup contract"), {
       code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_REPOSITORY_WALL",
@@ -871,17 +842,17 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
   }
   const changedPaths = await lifecycle.inspectPullRequestFiles(candidate.metadata.prNumber)
   if (!Array.isArray(changedPaths) || changedPaths.length === 0
-    || changedPaths.some((changedPath) => !projectionBindings.workContract.allowedFiles.includes(changedPath))) {
+    || changedPaths.some((changedPath) => !workContract.allowedFiles.includes(changedPath))) {
     throw Object.assign(new Error("Merged PR files exceed the active cleanup contract"), {
       code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_CONTRACT_WALL",
     })
   }
   const cleanupProofDigest = sha256(JSON.stringify({
-    repository: projectionBindings.workContract.repository,
+    repository: workContract.repository,
     outcomeId: String(candidate.outcomeId),
     workOrderRef: `WO-HERMES-OUTCOME-${candidate.outcomeId}`,
-    contractId: projectionBindings.workContract.id,
-    contractDigest: projectionBindings.workContract.digest,
+    contractId: workContract.id,
+    contractDigest: workContract.digest,
     prNumber: candidate.metadata.prNumber,
     branch: candidate.metadata.branch,
     worktreePath: path.resolve(candidate.metadata.worktreePath),
@@ -891,9 +862,124 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
     originMainContainsMerge: true,
     recoveryMode: "ACTIVE_POST_MERGE_CLEANUP",
   }))
+  const checkpointProof = {
+    outcomeId: String(candidate.outcomeId),
+    outcomeKey: resolverBinding.outcomeKey,
+    workOrderId: resolverBinding.activeWorkOrderId,
+    fencingToken: resolverBinding.fencingToken,
+    sequence: candidate.checkpoint.sequence,
+    state: candidate.checkpoint.state,
+    commit: {
+      headSha: candidate.metadata.headRefOid,
+      mergeSha: candidate.metadata.mergeSha,
+      prNumber: candidate.metadata.prNumber,
+    },
+  }
+  const priorSettlement = await resolveSettlement({
+    outcomeId: Number(candidate.outcomeId), executionBinding: resolverBinding, workContract,
+    cleanupProofDigest, runtimeAttempt: candidate.fencingToken,
+    checkpointSequence: candidate.checkpoint.sequence + 1,
+    prNumber: candidate.metadata.prNumber, reviewedHeadSha: candidate.metadata.headRefOid,
+    mergeSha: candidate.metadata.mergeSha,
+  })
+  if (priorSettlement) {
+    let settledBinding
+    try {
+      deriveHermesRuntimeProjectionBindings({
+        ...outcome, queueBinding: priorSettlement.executionBinding,
+      }, { requireVerified: true })
+      settledBinding = priorSettlement.executionBinding
+    } catch {
+      throw Object.assign(new Error("Settled active cleanup recovery provenance is incomplete"), {
+        code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_CANDIDATE_WALL",
+      })
+    }
+    const sameIdentity = ["userId", "outcomeKey", "executionBinding", "acquisitionKey",
+      "leaseHolder", "leaseToken", "activeWorkOrderId", "reviewRecoveryResumeState",
+      "reviewRecoverySourceExpectedVersion", "reviewRecoverySourceFencingToken",
+      "reviewRecoverySourceRuntimeAttempt", "reviewRecoveryReclaimEventId",
+      "reviewRecoveryReclaimPayloadDigest"].every((key) => settledBinding?.[key] === resolverBinding?.[key])
+    if (!sameIdentity || settledBinding?.reviewRecoveryStaleReacquisition == null
+      || settledBinding?.reviewRecoveryStaleContinuation == null
+      || settledBinding.expectedVersion !== settledBinding.reviewRecoverySourceExpectedVersion + 4
+      || settledBinding.fencingToken !== settledBinding.reviewRecoverySourceFencingToken + 4) {
+      throw Object.assign(new Error("Settled active cleanup recovery provenance is incomplete"), {
+        code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_CANDIDATE_WALL",
+      })
+    }
+    assertContained()
+    const completed = orchestrator.state.completeActivePostMergeCleanupRecovery({
+      idempotencyKey: `${candidate.outcomeId}:complete-active-post-merge-cleanup:${cleanupProofDigest}`,
+      outcomeId: candidate.outcomeId, activationDisabled: true,
+      expectedLocalFencingToken: candidate.fencingToken,
+      expectedHolderId: candidate.lease.holderId,
+      expectedLeaseExpiresAt: candidate.lease.expiresAt,
+      expectedQueueBindingDigest: sha256(JSON.stringify(candidate.metadata.outcome.queueBinding)),
+      resolvedQueueBinding: settledBinding,
+      expectedResolvedQueueBindingDigest: sha256(JSON.stringify(settledBinding)),
+      expectedOutcomeDigest: sha256(JSON.stringify(candidate.metadata.outcome)),
+      expectedWorktreePath: candidate.metadata.worktreePath,
+      expectedPostMergeCleanupRetryCount: candidate.metadata.postMergeCleanupRetryCount,
+      expectedPostMergeCleanupCauseCode: candidate.metadata.postMergeCleanupCauseCode,
+      prNumber: candidate.metadata.prNumber, branch: candidate.metadata.branch,
+      headRefOid: candidate.metadata.headRefOid, mergeSha: candidate.metadata.mergeSha,
+      reviewRecoveryProofDigest: candidate.metadata.reviewRecoveryProofDigest,
+      queueVersion: priorSettlement.queueVersion, queueFencingToken: priorSettlement.fencingToken,
+      authorizationEventId: priorSettlement.authorizationEventId,
+      confirmationEventId: priorSettlement.confirmationEventId,
+      settlementEventId: priorSettlement.settlementEventId,
+      completionEventId: priorSettlement.completionEventId,
+      cleanupProofDigest,
+      authorizationDigest: priorSettlement.authorizationPayloadDigest,
+      confirmationDigest: priorSettlement.confirmationPayloadDigest,
+      settlementDigest: priorSettlement.payloadDigest,
+      completionDigest: priorSettlement.completionPayloadDigest,
+    })
+    return { result: "COMPLETE", outcomeId: candidate.outcomeId,
+      prNumber: candidate.metadata.prNumber, mergeSha: candidate.metadata.mergeSha,
+      checkpointSequence: completed.checkpointSequence,
+      queueVersion: priorSettlement.queueVersion, fencingToken: priorSettlement.fencingToken,
+      replayed: true }
+  }
+  const resolved = await resolveProvenance({
+    outcomeId: Number(candidate.outcomeId),
+    executionBinding: resolverBinding,
+    workContract,
+    proof,
+    checkpointProof,
+  })
+  const executionBinding = resolved?.binding ?? {
+    ...resolverBinding,
+    reviewRecoverySourceExpectedVersion: resolved.reviewRecoverySourceExpectedVersion,
+    reviewRecoverySourceFencingToken: resolved.reviewRecoverySourceFencingToken,
+    reviewRecoverySourceRuntimeAttempt: resolved.reviewRecoverySourceRuntimeAttempt,
+    ...(resolved.reviewRecoveryExpectedVersion === undefined ? {} : {
+      expectedVersion: resolved.reviewRecoveryExpectedVersion,
+      fencingToken: resolved.reviewRecoveryFencingToken,
+    }),
+    ...(resolved.reviewRecoveryStaleReacquisition === undefined ? {} : {
+      reviewRecoveryStaleReacquisition: resolved.reviewRecoveryStaleReacquisition,
+    }),
+    ...(resolved.reviewRecoveryStaleContinuation === undefined ? {} : {
+      reviewRecoveryStaleContinuation: resolved.reviewRecoveryStaleContinuation,
+    }),
+  }
+  if (resolved?.alreadyStaleReacquired !== true
+    || executionBinding.reviewRecoveryStaleReacquisition == null
+    || executionBinding.reviewRecoveryStaleContinuation == null
+    || executionBinding.expectedVersion !== executionBinding.reviewRecoverySourceExpectedVersion + 4
+    || executionBinding.fencingToken !== executionBinding.reviewRecoverySourceFencingToken + 4) {
+    throw Object.assign(new Error("Active cleanup recovery provenance is incomplete"), {
+      code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_CANDIDATE_WALL",
+    })
+  }
+  await verifyContinuation({
+    outcomeId: Number(candidate.outcomeId), executionBinding,
+    workContract, proof, provenanceOnly: true,
+  })
   const authorized = await authorizeCleanup({
     outcomeId: Number(candidate.outcomeId), executionBinding,
-    workContract: projectionBindings.workContract, proof,
+    workContract, proof,
     cleanupProofDigest, branch: candidate.metadata.branch,
     worktreePath: candidate.metadata.worktreePath,
   })
@@ -920,7 +1006,7 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
   const checkpointSequence = candidate.checkpoint.sequence + 1
   const settled = await settleCleanup({
     outcomeId: Number(candidate.outcomeId), executionBinding,
-    workContract: projectionBindings.workContract,
+    workContract,
     authorizationEventId: authorized.eventId,
     confirmationEventId: confirmed.eventId,
     cleanupProofDigest,
@@ -941,6 +1027,8 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
     expectedHolderId: candidate.lease.holderId,
     expectedLeaseExpiresAt: candidate.lease.expiresAt,
     expectedQueueBindingDigest: sha256(JSON.stringify(candidate.metadata.outcome.queueBinding)),
+    resolvedQueueBinding: executionBinding,
+    expectedResolvedQueueBindingDigest: sha256(JSON.stringify(executionBinding)),
     expectedOutcomeDigest: sha256(JSON.stringify(candidate.metadata.outcome)),
     expectedWorktreePath: candidate.metadata.worktreePath,
     expectedPostMergeCleanupRetryCount: candidate.metadata.postMergeCleanupRetryCount,
@@ -955,10 +1043,12 @@ export async function recoverActivePostMergeCleanupWall(options = {}) {
     authorizationEventId: authorized.eventId,
     confirmationEventId: confirmed.eventId,
     settlementEventId: settled.settlementEventId,
+    completionEventId: settled.completionEventId,
     cleanupProofDigest,
     authorizationDigest: authorized.payloadDigest,
     confirmationDigest: confirmed.payloadDigest,
     settlementDigest: settled.payloadDigest,
+    completionDigest: settled.completionPayloadDigest,
   })
   return {
     result: "COMPLETE", outcomeId: candidate.outcomeId,

@@ -5286,9 +5286,10 @@ function activeCleanupConfirmationMetadata(authorization, authorizationEventId) 
 const ACTIVE_CLEANUP_AUTHORIZATION_KEYS = [
   "idempotencyKey", "recoveryKind", "outcomeId", "userId", "outcomeKey", "workOrderId",
   "workOrderRef", "workContractId", "workContractDigest", "expectedVersion",
-  "executionBinding", "acquisitionKey", "fencingToken", "sourceExpectedVersion",
+  "executionBinding", "acquisitionKey", "leaseHolder", "leaseToken", "fencingToken", "sourceExpectedVersion",
   "sourceFencingToken", "sourceRuntimeAttempt", "reclaimEventId", "reclaimPayloadDigest",
-  "baseCheckpointDigest", "continuationCheckpointDigest", "reviewRecoveryProofDigest",
+  "baseCheckpointDigest", "continuationCheckpointDigest", "staleReacquisition",
+  "staleContinuation", "reviewRecoveryProofDigest",
   "prNumber", "reviewedHeadSha", "mergeSha", "branch", "worktreePath",
   "cleanupProofDigest", "payloadDigest",
 ].sort()
@@ -5304,6 +5305,13 @@ const ACTIVE_CLEANUP_SETTLEMENT_KEYS = [
   "checkpointPayloadDigest", "cleanupProofDigest", "outcomeId", "userId", "outcomeKey",
   "workOrderId", "workOrderRef", "priorQueueVersion", "completedQueueVersion",
   "fencingToken", "prNumber", "reviewedHeadSha", "mergeSha", "payloadDigest",
+].sort()
+
+const ACTIVE_CLEANUP_COMPLETION_KEYS = [
+  "idempotencyKey", "settlementEventId", "settlementPayloadDigest", "checkpointEventId",
+  "checkpointPayloadDigest", "cleanupProofDigest", "outcomeId", "userId", "outcomeKey",
+  "workOrderId", "workOrderRef", "completedQueueVersion", "fencingToken", "terminalAt",
+  "prNumber", "reviewedHeadSha", "mergeSha", "payloadDigest",
 ].sort()
 
 function exactActiveCleanupAuthorization(value) {
@@ -5324,6 +5332,13 @@ function exactActiveCleanupSettlement(value) {
   const metadata = exactPayloadMetadata(value)
   return metadata
     && canonicalJson(Object.keys(metadata).sort()) === canonicalJson(ACTIVE_CLEANUP_SETTLEMENT_KEYS)
+    ? metadata : null
+}
+
+function exactActiveCleanupCompletion(value) {
+  const metadata = exactPayloadMetadata(value)
+  return metadata
+    && canonicalJson(Object.keys(metadata).sort()) === canonicalJson(ACTIVE_CLEANUP_COMPLETION_KEYS)
     ? metadata : null
 }
 
@@ -5387,6 +5402,8 @@ export async function authorizeActivePostMergeCleanup({
     expectedVersion: executionBinding.expectedVersion,
     executionBinding: executionBinding.executionBinding,
     acquisitionKey: executionBinding.acquisitionKey,
+    leaseHolder: executionBinding.leaseHolder,
+    leaseToken: executionBinding.leaseToken,
     fencingToken: executionBinding.fencingToken,
     sourceExpectedVersion: executionBinding.reviewRecoverySourceExpectedVersion,
     sourceFencingToken: executionBinding.reviewRecoverySourceFencingToken,
@@ -5395,6 +5412,8 @@ export async function authorizeActivePostMergeCleanup({
     reclaimPayloadDigest: executionBinding.reviewRecoveryReclaimPayloadDigest,
     baseCheckpointDigest: executionBinding.reviewRecoveryStaleReacquisition?.checkpointDigest,
     continuationCheckpointDigest: executionBinding.reviewRecoveryStaleContinuation?.checkpointDigest,
+    staleReacquisition: executionBinding.reviewRecoveryStaleReacquisition,
+    staleContinuation: executionBinding.reviewRecoveryStaleContinuation,
     reviewRecoveryProofDigest: proof?.proofDigest,
     prNumber: proof?.prNumber,
     reviewedHeadSha: proof?.reviewedHeadSha,
@@ -5742,6 +5761,7 @@ export async function settleActivePostMergeCleanupOutcome({
           q."lifecycleState" AS "lifecycleState", q."lifecycleReason" AS "lifecycleReason",
           q."terminalKey" AS "terminalKey", q."terminalResult" AS "terminalResult",
           q."terminalEvidenceId" AS "terminalEvidenceId", q."terminalEvidenceRefs" AS "terminalEvidenceRefs",
+          q."terminalAt" AS "terminalAt",
           q."leaseHolder" AS "leaseHolder",
           q."leaseToken" AS "leaseToken", q."leaseExpiresAt" AS "leaseExpiresAt",
           g.status AS "goalStatus", wo.status AS "workOrderStatus", wo.result AS "workOrderResult",
@@ -5771,7 +5791,7 @@ export async function settleActivePostMergeCleanupOutcome({
        WHERE "userId" = $1 AND "entityType" = 'goal' AND "entityId"::text = $2
          AND "eventType" IN ('HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED',
            'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED',
-           'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED')
+           'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED', 'HERMES_OUTCOME_COMPLETED')
        ORDER BY id FOR UPDATE`,
       [executionBinding.userId, String(outcomeId)],
     )
@@ -5783,6 +5803,7 @@ export async function settleActivePostMergeCleanupOutcome({
       === "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED")
     const settlements = chain.rows.filter((row) => row.eventType
       === "HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED")
+    const completions = chain.rows.filter((row) => row.eventType === "HERMES_OUTCOME_COMPLETED")
     const authorization = authorizations[0]
     const exactAuthorization = exactActiveCleanupAuthorization(authorization?.metadata)
     const expectedConfirmation = exactAuthorization
@@ -5790,6 +5811,7 @@ export async function settleActivePostMergeCleanupOutcome({
     const confirmation = confirmations[0]
     if (authorizations.length !== 1 || confirmations.length !== 1
       || settlements.length !== (prior?.rows?.length ?? 0)
+      || completions.length !== (prior?.rows?.length ?? 0)
       || Number(authorization?.id) !== authorizationEventId
       || authorization?.actor !== "hermes-codex-bridge" || !exactAuthorization
       || exactAuthorization.idempotencyKey !== authorizationKey
@@ -5804,7 +5826,18 @@ export async function settleActivePostMergeCleanupOutcome({
       || exactAuthorization.expectedVersion !== expectedVersion
       || exactAuthorization.executionBinding !== executionBinding.executionBinding
       || exactAuthorization.acquisitionKey !== executionBinding.acquisitionKey
+      || exactAuthorization.leaseHolder !== executionBinding.leaseHolder
+      || exactAuthorization.leaseToken !== executionBinding.leaseToken
       || exactAuthorization.fencingToken !== fencingToken
+      || exactAuthorization.sourceExpectedVersion !== executionBinding.reviewRecoverySourceExpectedVersion
+      || exactAuthorization.sourceFencingToken !== executionBinding.reviewRecoverySourceFencingToken
+      || exactAuthorization.sourceRuntimeAttempt !== executionBinding.reviewRecoverySourceRuntimeAttempt
+      || exactAuthorization.reclaimEventId !== executionBinding.reviewRecoveryReclaimEventId
+      || exactAuthorization.reclaimPayloadDigest !== executionBinding.reviewRecoveryReclaimPayloadDigest
+      || canonicalJson(exactAuthorization.staleReacquisition)
+        !== canonicalJson(executionBinding.reviewRecoveryStaleReacquisition)
+      || canonicalJson(exactAuthorization.staleContinuation)
+        !== canonicalJson(executionBinding.reviewRecoveryStaleContinuation)
       || exactAuthorization.prNumber !== prNumber
       || exactAuthorization.reviewedHeadSha !== reviewedHeadSha
       || exactAuthorization.mergeSha !== mergeSha
@@ -5836,8 +5869,27 @@ export async function settleActivePostMergeCleanupOutcome({
         fencingToken, prNumber, reviewedHeadSha, mergeSha,
       } : null
       if (expectedSettlement) expectedSettlement.payloadDigest = activeCleanupPayloadDigest(expectedSettlement)
+      const terminalAt = prior.rows[0].terminalAt instanceof Date
+        ? prior.rows[0].terminalAt.toISOString() : String(prior.rows[0].terminalAt ?? "")
+      const expectedCompletion = persisted ? {
+        idempotencyKey: `${idempotencyKey}:completed`,
+        settlementEventId: Number(prior.rows[0].id),
+        settlementPayloadDigest: persisted.payloadDigest,
+        checkpointEventId: Number(persisted.checkpointEventId),
+        checkpointPayloadDigest: expectedCheckpoint.payloadDigest,
+        cleanupProofDigest, outcomeId, userId: executionBinding.userId,
+        outcomeKey: executionBinding.outcomeKey, workOrderId: executionBinding.activeWorkOrderId,
+        workOrderRef, completedQueueVersion: expectedVersion + 1, fencingToken, terminalAt,
+        prNumber, reviewedHeadSha, mergeSha,
+      } : null
+      if (expectedCompletion) expectedCompletion.payloadDigest = activeCleanupPayloadDigest(expectedCompletion)
+      const completion = completions[0]
       if (!persisted || canonicalJson(checkpointMetadata) !== canonicalJson(expectedCheckpoint)
         || canonicalJson(persisted) !== canonicalJson(expectedSettlement)
+        || completion?.actor !== "hermes-codex-bridge"
+        || Number(completion?.id) <= Number(prior.rows[0].id)
+        || canonicalJson(exactActiveCleanupCompletion(completion?.metadata))
+          !== canonicalJson(expectedCompletion)
         || prior.rows[0].actor !== "hermes-codex-bridge"
         || prior.rows[0].checkpointActor !== "hermes-codex-bridge"
         || Number(prior.rows[0].version) !== expectedVersion + 1
@@ -5846,6 +5898,7 @@ export async function settleActivePostMergeCleanupOutcome({
         || prior.rows[0].lifecycleReason !== "COMPLETE"
         || prior.rows[0].terminalKey !== terminalKey
         || prior.rows[0].terminalResult !== "COMPLETE"
+        || !Number.isFinite(Date.parse(terminalAt))
         || Number(prior.rows[0].terminalEvidenceId) !== Number(persisted?.checkpointEventId)
         || !exactStringArray(prior.rows[0].terminalEvidenceRefs,
           [runtimeEvidenceRef(outcomeId, runtimeAttempt, checkpointSequence)])
@@ -5859,6 +5912,7 @@ export async function settleActivePostMergeCleanupOutcome({
       await runQuery("COMMIT"); begun = false
       return { checkpointEventId: Number(persisted.checkpointEventId), queueVersion: expectedVersion + 1,
         fencingToken, settlementEventId: Number(prior.rows[0].id),
+        completionEventId: Number(completion.id), completionPayloadDigest: expectedCompletion.payloadDigest,
         authorizationPayloadDigest: exactAuthorization.payloadDigest,
         confirmationPayloadDigest: expectedConfirmation.payloadDigest,
         payloadDigest: persisted.payloadDigest, replayed: true }
@@ -5955,6 +6009,8 @@ export async function settleActivePostMergeCleanupOutcome({
       || exactAuth.workOrderRef !== workOrderRef
       || exactAuth.executionBinding !== executionBinding.executionBinding
       || exactAuth.acquisitionKey !== executionBinding.acquisitionKey
+      || exactAuth.leaseHolder !== executionBinding.leaseHolder
+      || exactAuth.leaseToken !== executionBinding.leaseToken
       || Number(exactAuth.expectedVersion) !== expectedVersion
       || Number(exactAuth.fencingToken) !== fencingToken
       || Number(exactAuth.sourceExpectedVersion) !== executionBinding.reviewRecoverySourceExpectedVersion
@@ -5964,6 +6020,10 @@ export async function settleActivePostMergeCleanupOutcome({
       || exactAuth.reclaimPayloadDigest !== executionBinding.reviewRecoveryReclaimPayloadDigest
       || exactAuth.baseCheckpointDigest !== executionBinding.reviewRecoveryStaleReacquisition?.checkpointDigest
       || exactAuth.continuationCheckpointDigest !== executionBinding.reviewRecoveryStaleContinuation?.checkpointDigest
+      || canonicalJson(exactAuth.staleReacquisition)
+        !== canonicalJson(executionBinding.reviewRecoveryStaleReacquisition)
+      || canonicalJson(exactAuth.staleContinuation)
+        !== canonicalJson(executionBinding.reviewRecoveryStaleContinuation)
       || !/^[0-9a-f]{64}$/.test(String(exactAuth.reviewRecoveryProofDigest ?? ""))
       || Number(exactAuth.prNumber) !== prNumber || exactAuth.reviewedHeadSha !== reviewedHeadSha
       || exactAuth.mergeSha !== mergeSha || typeof exactAuth.branch !== "string"
@@ -6010,12 +6070,13 @@ export async function settleActivePostMergeCleanupOutcome({
       `UPDATE outcome_queue_item SET "lifecycleState" = 'completed', "lifecycleReason" = 'COMPLETE',
           version = version + 1, "terminalKey" = $10, "terminalResult" = 'COMPLETE',
           "terminalEvidenceId" = $11, "terminalEvidenceRefs" = ARRAY[$12]::text[],
-          "leaseHolder" = NULL, "leaseToken" = NULL, "leaseExpiresAt" = NULL, "updatedAt" = NOW()
+          "leaseHolder" = NULL, "leaseToken" = NULL, "leaseExpiresAt" = NULL,
+          "terminalAt" = clock_timestamp(), "updatedAt" = NOW()
        WHERE "userId" = $1 AND "outcomeKey" = $2 AND version = $3
          AND "executionBinding" = $4 AND "acquisitionKey" = $5 AND "fencingToken" = $6
          AND "leaseHolder" = $7 AND "leaseToken" = $8 AND "activeWorkOrderId" = $9
          AND "lifecycleState" = 'active' AND "lifecycleReason" = 'STALE_LEASE_RECOVERED'
-       RETURNING id, version, "fencingToken" AS "fencingToken"`,
+       RETURNING id, version, "fencingToken" AS "fencingToken", "terminalAt" AS "terminalAt"`,
       [executionBinding.userId, executionBinding.outcomeKey, expectedVersion,
         executionBinding.executionBinding, executionBinding.acquisitionKey, fencingToken,
         executionBinding.leaseHolder, executionBinding.leaseToken,
@@ -6069,9 +6130,36 @@ export async function settleActivePostMergeCleanupOutcome({
         `Completed merged PR #${prNumber} after guarded cleanup`, JSON.stringify(settlementMetadata)],
     )
     if (settlement?.rows?.length !== 1) throw wall()
+    const settlementEventId = Number(settlement.rows[0].id)
+    const terminalAt = completedQueue.rows[0].terminalAt instanceof Date
+      ? completedQueue.rows[0].terminalAt.toISOString() : String(completedQueue.rows[0].terminalAt ?? "")
+    if (!Number.isFinite(Date.parse(terminalAt))) throw wall()
+    const completionMetadata = {
+      idempotencyKey: `${idempotencyKey}:completed`, settlementEventId,
+      settlementPayloadDigest: settlementMetadata.payloadDigest, checkpointEventId,
+      checkpointPayloadDigest: checkpointMetadata.payloadDigest, cleanupProofDigest,
+      outcomeId, userId: executionBinding.userId, outcomeKey: executionBinding.outcomeKey,
+      workOrderId: executionBinding.activeWorkOrderId, workOrderRef,
+      completedQueueVersion: expectedVersion + 1, fencingToken, terminalAt,
+      prNumber, reviewedHeadSha, mergeSha,
+    }
+    completionMetadata.payloadDigest = activeCleanupPayloadDigest(completionMetadata)
+    const completion = await runQuery(
+      `INSERT INTO governance_event
+         ("userId", "eventType", "entityType", "entityId", actor, reason, metadata)
+       VALUES ($1, 'HERMES_OUTCOME_COMPLETED', 'goal', $2, 'hermes-codex-bridge', $3, $4::jsonb)
+       RETURNING id`,
+      [executionBinding.userId, String(outcomeId),
+        `Completed goal-${outcomeId} through active post-merge cleanup`,
+        JSON.stringify(completionMetadata)],
+    )
+    if (completion?.rows?.length !== 1
+      || !Number.isSafeInteger(Number(completion.rows[0].id))) throw wall()
     await runQuery("COMMIT"); begun = false
     return { checkpointEventId, queueVersion: expectedVersion + 1, fencingToken,
-      settlementEventId: Number(settlement.rows[0].id), payloadDigest: settlementMetadata.payloadDigest,
+      settlementEventId, payloadDigest: settlementMetadata.payloadDigest,
+      completionEventId: Number(completion.rows[0].id),
+      completionPayloadDigest: completionMetadata.payloadDigest,
       replayed: false }
   } catch (error) {
     if (begun) { try { await runQuery("ROLLBACK") } catch {} }
@@ -6089,6 +6177,114 @@ export async function verifyActivePostMergeCleanupSettlement(options = {}) {
     })
   }
   return result
+}
+
+export async function resolveActivePostMergeCleanupSettlement({
+  query,
+  databaseUrl = process.env.DATABASE_URL,
+  outcomeId,
+  executionBinding,
+  workContract,
+  cleanupProofDigest,
+  runtimeAttempt,
+  checkpointSequence,
+  prNumber,
+  reviewedHeadSha,
+  mergeSha,
+} = {}) {
+  const wall = () => Object.assign(new Error("Active post-merge cleanup settlement conflicts"), {
+    code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL",
+  })
+  if (!Number.isSafeInteger(outcomeId) || outcomeId <= 0
+    || !executionBinding || typeof executionBinding.userId !== "string") throw wall()
+  let runQuery = normalizeQuery(query)
+  let pool
+  try {
+    if (!runQuery) {
+      if (typeof databaseUrl !== "string" || databaseUrl.trim() === "") {
+        throw Object.assign(new Error("DATABASE_URL is required"), { code: "DATABASE_URL_REQUIRED" })
+      }
+      const { Pool } = await import("pg")
+      pool = createHermesDatabasePool(Pool, databaseUrl)
+      runQuery = pool.query.bind(pool)
+    }
+    const chain = await runQuery(
+      `SELECT id, "eventType", actor, metadata FROM governance_event
+       WHERE "userId" = $1 AND "entityType" = 'goal' AND "entityId"::text = $2
+         AND "eventType" IN ('HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED',
+           'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED',
+           'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED', 'HERMES_OUTCOME_COMPLETED')
+       ORDER BY id`,
+      [executionBinding.userId, String(outcomeId)],
+    )
+    const rows = Array.isArray(chain?.rows) ? chain.rows : []
+    const ofType = (eventType) => rows.filter((row) => row.eventType === eventType)
+    const authorizations = ofType("HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_AUTHORIZED")
+    const confirmations = ofType("HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_CONFIRMED")
+    const settlements = ofType("HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED")
+    const completions = ofType("HERMES_OUTCOME_COMPLETED")
+    if (authorizations.length === 0 && confirmations.length === 0
+      && settlements.length === 0 && completions.length === 0) return null
+    if (authorizations.length !== 1 || confirmations.length !== 1
+      || settlements.length !== 1 || completions.length !== 1) throw wall()
+    const authorization = authorizations[0]
+    const auth = exactActiveCleanupAuthorization(authorization.metadata)
+    if (authorization.actor !== "hermes-codex-bridge" || !auth
+      || auth.outcomeId !== outcomeId || auth.userId !== executionBinding.userId
+      || auth.outcomeKey !== executionBinding.outcomeKey
+      || auth.workOrderId !== executionBinding.activeWorkOrderId
+      || auth.executionBinding !== executionBinding.executionBinding
+      || auth.acquisitionKey !== executionBinding.acquisitionKey
+      || auth.leaseHolder !== executionBinding.leaseHolder
+      || auth.leaseToken !== executionBinding.leaseToken
+      || auth.sourceExpectedVersion !== executionBinding.reviewRecoverySourceExpectedVersion
+      || auth.sourceFencingToken !== executionBinding.reviewRecoverySourceFencingToken
+      || auth.sourceRuntimeAttempt !== executionBinding.reviewRecoverySourceRuntimeAttempt
+      || auth.reclaimEventId !== executionBinding.reviewRecoveryReclaimEventId
+      || auth.reclaimPayloadDigest !== executionBinding.reviewRecoveryReclaimPayloadDigest
+      || auth.cleanupProofDigest !== cleanupProofDigest
+      || auth.prNumber !== prNumber || auth.reviewedHeadSha !== reviewedHeadSha
+      || auth.mergeSha !== mergeSha) throw wall()
+    const markerless = executionBinding.reviewRecoveryStaleReacquisition === undefined
+      && executionBinding.reviewRecoveryStaleContinuation === undefined
+      && executionBinding.expectedVersion + 1 === auth.expectedVersion
+      && executionBinding.fencingToken + 1 === auth.fencingToken
+    const baseMarked = canonicalJson(executionBinding.reviewRecoveryStaleReacquisition)
+        === canonicalJson(auth.staleReacquisition)
+      && executionBinding.reviewRecoveryStaleContinuation === undefined
+      && executionBinding.expectedVersion + 1 === auth.expectedVersion
+      && executionBinding.fencingToken + 1 === auth.fencingToken
+    const marked = executionBinding.expectedVersion === auth.expectedVersion
+      && executionBinding.fencingToken === auth.fencingToken
+      && canonicalJson(executionBinding.reviewRecoveryStaleReacquisition)
+        === canonicalJson(auth.staleReacquisition)
+      && canonicalJson(executionBinding.reviewRecoveryStaleContinuation)
+        === canonicalJson(auth.staleContinuation)
+    if ((!markerless && !baseMarked && !marked)
+      || !auth.staleReacquisition || !auth.staleContinuation) throw wall()
+    const resolvedExecutionBinding = {
+      ...executionBinding,
+      expectedVersion: auth.expectedVersion,
+      fencingToken: auth.fencingToken,
+      reviewRecoveryStaleReacquisition: auth.staleReacquisition,
+      reviewRecoveryStaleContinuation: auth.staleContinuation,
+    }
+    try {
+      normalizeRuntimeExecutionBinding(resolvedExecutionBinding)
+    } catch {
+      throw wall()
+    }
+    const result = await verifyActivePostMergeCleanupSettlement({
+      query: runQuery, outcomeId, executionBinding: resolvedExecutionBinding, workContract,
+      authorizationEventId: Number(authorization.id), confirmationEventId: Number(confirmations[0].id),
+      cleanupProofDigest, expectedVersion: auth.expectedVersion, fencingToken: auth.fencingToken,
+      runtimeAttempt, checkpointSequence, prNumber, reviewedHeadSha, mergeSha,
+    })
+    return { ...result, executionBinding: resolvedExecutionBinding,
+      authorizationEventId: Number(authorization.id), confirmationEventId: Number(confirmations[0].id) }
+  } finally {
+    if (pool) await pool.end()
+  }
 }
 
 export const persistOutcomeRuntimeProjection = projectOutcomeRuntimeCheckpoint

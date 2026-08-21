@@ -1015,7 +1015,7 @@ describe("Hermes bridge CLI", () => {
 
   it("settles the exact expired active cleanup epoch without acquiring fence seven", async () => {
     const outcome = exactIssue911Outcome(5, "GOAL-0005")
-    const binding = {
+    const resolvedBinding = {
       ...outcome.queueBinding,
       expectedVersion: 8,
       fencingToken: 6,
@@ -1042,6 +1042,9 @@ describe("Hermes bridge CLI", () => {
         checkpointDigest: "e".repeat(64),
       },
     }
+    const binding = { ...resolvedBinding, expectedVersion: 7, fencingToken: 5 }
+    delete (binding as any).reviewRecoveryStaleReacquisition
+    delete (binding as any).reviewRecoveryStaleContinuation
     outcome.queueBinding = binding
     const candidate = {
       outcomeId: "5", fencingToken: 9,
@@ -1097,9 +1100,10 @@ describe("Hermes bridge CLI", () => {
     }
     const resolveProvenance = vi.fn(async () => {
       calls.push("resolve")
-      return { alreadyStaleReacquired: true, binding }
+      return { alreadyStaleReacquired: true, binding: resolvedBinding }
     })
     const verifyContinuation = vi.fn(async () => { calls.push("verify"); return true })
+    const resolveSettlement = vi.fn(async () => null)
     const authorizeCleanup = vi.fn(async () => {
       calls.push("authorize")
       return { eventId: 970, payloadDigest: "3".repeat(64), confirmed: false, settled: false }
@@ -1113,6 +1117,7 @@ describe("Hermes bridge CLI", () => {
       return {
         checkpointEventId: 972, queueVersion: 9, fencingToken: 6,
         settlementEventId: 973, payloadDigest: "5".repeat(64), replayed: false,
+        completionEventId: 974, completionPayloadDigest: "6".repeat(64),
       }
     })
     const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false)
@@ -1120,9 +1125,10 @@ describe("Hermes bridge CLI", () => {
       lifecycle.repository = "other/repository"
       await expect(recoverActivePostMergeCleanupWall({
         orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
-        resolveProvenance, verifyContinuation, authorizeCleanup, confirmCleanup, settleCleanup,
+        resolveProvenance, verifyContinuation, resolveSettlement,
+        authorizeCleanup, confirmCleanup, settleCleanup,
       })).rejects.toMatchObject({ code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_REPOSITORY_WALL" })
-      expect(calls).toEqual(["resolve", "verify"])
+      expect(calls).toEqual([])
       expect(authorizeCleanup).not.toHaveBeenCalled()
       expect(lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
       expect(orchestrator.state.completeActivePostMergeCleanupRecovery).not.toHaveBeenCalled()
@@ -1132,16 +1138,18 @@ describe("Hermes bridge CLI", () => {
       lifecycle.inspectPullRequestFiles.mockResolvedValueOnce([".github/workflows/host.yml"])
       await expect(recoverActivePostMergeCleanupWall({
         orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
-        resolveProvenance, verifyContinuation, authorizeCleanup, confirmCleanup, settleCleanup,
+        resolveProvenance, verifyContinuation, resolveSettlement,
+        authorizeCleanup, confirmCleanup, settleCleanup,
       })).rejects.toMatchObject({ code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_CONTRACT_WALL" })
-      expect(calls).toEqual(["resolve", "verify"])
+      expect(calls).toEqual([])
       expect(authorizeCleanup).not.toHaveBeenCalled()
       expect(lifecycle.cleanupOwnedWorktree).not.toHaveBeenCalled()
       calls.length = 0
 
       await expect(recoverActivePostMergeCleanupWall({
         orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
-        resolveProvenance, verifyContinuation, authorizeCleanup, confirmCleanup, settleCleanup,
+        resolveProvenance, verifyContinuation, resolveSettlement,
+        authorizeCleanup, confirmCleanup, settleCleanup,
       })).resolves.toMatchObject({
         result: "COMPLETE", outcomeId: "5", checkpointSequence: 47,
         queueVersion: 9, fencingToken: 6,
@@ -1160,6 +1168,61 @@ describe("Hermes bridge CLI", () => {
       )
       expect(calls).not.toContain("acquire")
 
+      const durableSettlement = {
+        executionBinding: resolvedBinding,
+        queueVersion: 9, fencingToken: 6, replayed: true,
+        authorizationEventId: 970, confirmationEventId: 971,
+        settlementEventId: 973, completionEventId: 974,
+        authorizationPayloadDigest: "3".repeat(64),
+        confirmationPayloadDigest: "4".repeat(64), payloadDigest: "5".repeat(64),
+        completionPayloadDigest: "6".repeat(64),
+      }
+      const partialSettlement = { ...durableSettlement,
+        executionBinding: { ...resolvedBinding, reviewRecoveryStaleContinuation: undefined } }
+      calls.length = 0
+      resolveSettlement.mockResolvedValueOnce(partialSettlement)
+      const completedCalls = orchestrator.state.completeActivePostMergeCleanupRecovery.mock.calls.length
+      await expect(recoverActivePostMergeCleanupWall({
+        orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
+        resolveProvenance, verifyContinuation, resolveSettlement,
+        authorizeCleanup, confirmCleanup, settleCleanup,
+      })).rejects.toMatchObject({ code: "HERMES_ACTIVE_POST_MERGE_CLEANUP_CANDIDATE_WALL" })
+      expect(resolveProvenance).toHaveBeenCalledTimes(1)
+      expect(orchestrator.state.completeActivePostMergeCleanupRecovery).toHaveBeenCalledTimes(completedCalls)
+      expect(lifecycle.cleanupOwnedWorktree).toHaveBeenCalledTimes(1)
+
+      calls.length = 0
+      resolveSettlement.mockResolvedValueOnce(durableSettlement)
+      await expect(recoverActivePostMergeCleanupWall({
+        orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
+        resolveProvenance, verifyContinuation, resolveSettlement,
+        authorizeCleanup, confirmCleanup, settleCleanup,
+      })).resolves.toMatchObject({ result: "COMPLETE", replayed: true, queueVersion: 9 })
+      expect(calls).toEqual(["local-complete"])
+      expect(resolveProvenance).toHaveBeenCalledTimes(1)
+      expect(authorizeCleanup).toHaveBeenCalledTimes(1)
+      expect(confirmCleanup).toHaveBeenCalledTimes(1)
+      expect(settleCleanup).toHaveBeenCalledTimes(1)
+      expect(lifecycle.cleanupOwnedWorktree).toHaveBeenCalledTimes(1)
+      expect(orchestrator.state.completeActivePostMergeCleanupRecovery).toHaveBeenLastCalledWith(
+        expect.objectContaining({ resolvedQueueBinding: resolvedBinding,
+          completionEventId: 974, completionDigest: "6".repeat(64) }),
+      )
+
+      const baseMarkedBinding = { ...binding,
+        reviewRecoveryStaleReacquisition: resolvedBinding.reviewRecoveryStaleReacquisition }
+      outcome.queueBinding = baseMarkedBinding
+      calls.length = 0
+      resolveSettlement.mockResolvedValueOnce(durableSettlement)
+      await expect(recoverActivePostMergeCleanupWall({
+        orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
+        resolveProvenance, verifyContinuation, resolveSettlement,
+        authorizeCleanup, confirmCleanup, settleCleanup,
+      })).resolves.toMatchObject({ result: "COMPLETE", replayed: true, queueVersion: 9 })
+      expect(calls).toEqual(["local-complete"])
+      expect(resolveProvenance).toHaveBeenCalledTimes(1)
+      outcome.queueBinding = binding
+
       calls.length = 0
       authorizeCleanup.mockResolvedValueOnce({
         eventId: 970, confirmed: true, settled: false,
@@ -1167,7 +1230,8 @@ describe("Hermes bridge CLI", () => {
       })
       await recoverActivePostMergeCleanupWall({
         orchestrator, lifecycle, now: () => new Date("2026-08-21T07:00:00.000Z"),
-        resolveProvenance, verifyContinuation, authorizeCleanup, confirmCleanup, settleCleanup,
+        resolveProvenance, verifyContinuation, resolveSettlement,
+        authorizeCleanup, confirmCleanup, settleCleanup,
       })
       expect(calls).toEqual(["resolve", "verify", "settle", "local-complete"])
       expect(authorizeCleanup).toHaveBeenCalledTimes(2)
@@ -1182,7 +1246,7 @@ describe("Hermes bridge CLI", () => {
         metadata: {
           ...candidate.metadata,
           postMergeCleanupRetryCount: 0, postMergeCleanupCauseCode: null,
-          outcome: { ...outcome, status: "complete", queueBinding: { ...binding, expectedVersion: 9 } },
+          outcome: { ...outcome, status: "complete", queueBinding: { ...resolvedBinding, expectedVersion: 9 } },
           activePostMergeCleanupProofDigest: "2".repeat(64),
           activePostMergeCleanupAuthorizationEventId: 970,
           activePostMergeCleanupAuthorizationDigest: "3".repeat(64),
@@ -1190,6 +1254,8 @@ describe("Hermes bridge CLI", () => {
           activePostMergeCleanupConfirmationDigest: "4".repeat(64),
           activePostMergeCleanupSettlementEventId: 973,
           activePostMergeCleanupSettlementDigest: "5".repeat(64),
+          activePostMergeCleanupCompletionEventId: 974,
+          activePostMergeCleanupCompletionDigest: "6".repeat(64),
         },
       }
       orchestrator.state.read.mockReturnValue({
@@ -1203,6 +1269,7 @@ describe("Hermes bridge CLI", () => {
         queueVersion: 9, fencingToken: 6, replayed: true,
         authorizationPayloadDigest: "3".repeat(64),
         confirmationPayloadDigest: "4".repeat(64), payloadDigest: "5".repeat(64),
+        completionEventId: 974, completionPayloadDigest: "6".repeat(64),
       }))
       await expect(recoverActivePostMergeCleanupWall({
         orchestrator, lifecycle, verifySettlement,
