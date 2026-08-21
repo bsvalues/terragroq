@@ -4373,13 +4373,12 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         // Prove the distinct cleanup-only transition through real PostgreSQL after the
         // active-review drift matrix has exhausted the original projection fixture.
         await client.query(`ALTER TABLE goal ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz;
-          ALTER TABLE work_order ADD COLUMN IF NOT EXISTS "latestCheckpointId" bigint;
           ALTER TABLE work_order ADD COLUMN IF NOT EXISTS "closedAt" timestamptz;
           ALTER TABLE work_order ADD COLUMN IF NOT EXISTS "completedAt" timestamptz;
           ALTER TABLE work_order ADD COLUMN IF NOT EXISTS "updatedAt" timestamptz;`)
         await client.query(`UPDATE goal SET status='classified' WHERE id=4;
           UPDATE work_order SET status='review',result=NULL,"commitRef"=NULL,
-            "latestCheckpointId"=95,"closedAt"=NULL,"completedAt"=NULL WHERE id=42;
+            "closedAt"=NULL,"completedAt"=NULL WHERE id=42;
           UPDATE outcome_queue_item SET "lifecycleState"='active',"lifecycleReason"='STALE_LEASE_RECOVERED',
             version=8,"fencingToken"=6,"executionBinding"='execution-binding-4',
             "acquisitionKey"='acquisition-key-4',"leaseHolder"='hermes-runtime-4',
@@ -4425,8 +4424,13 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           FROM outcome_queue_item WHERE "goalId"=4`)).rows).toEqual([{
           version: 8, fencingToken: 6, lifecycleState: "active", lifecycleReason: "STALE_LEASE_RECOVERED",
         }])
-        expect((await client.query(`SELECT status,result,"latestCheckpointId" AS "latestCheckpointId"
-          FROM work_order WHERE id=42`)).rows).toEqual([{
+        expect((await client.query(`SELECT wo.status,wo.result,latest.id AS "latestCheckpointId"
+          FROM work_order wo LEFT JOIN LATERAL (SELECT checkpoint.id FROM governance_event checkpoint
+            WHERE checkpoint."userId"=wo."userId" AND checkpoint."entityType"='work_order'
+              AND checkpoint."entityId"::text=wo.id::text
+              AND checkpoint."eventType"='HERMES_RUNTIME_CHECKPOINT'
+            ORDER BY checkpoint."createdAt" DESC,checkpoint.id DESC LIMIT 1) latest ON true
+          WHERE wo.id=42`)).rows).toEqual([{
           status: "review", result: null, latestCheckpointId: "95",
         }])
         expect((await client.query(`SELECT count(*)::integer AS count FROM governance_event
@@ -4496,8 +4500,13 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
             leaseHolder: null, leaseToken: null, leaseExpiresAt: null,
             terminalAt: expect.any(Date) }])
         expect((await client.query(`SELECT status FROM goal WHERE id=4`)).rows).toEqual([{ status: "converted" }])
-        expect((await client.query(`SELECT status,result,"latestCheckpointId" AS "latestCheckpointId"
-          FROM work_order WHERE id=42`)).rows).toEqual([{
+        expect((await client.query(`SELECT wo.status,wo.result,latest.id AS "latestCheckpointId"
+          FROM work_order wo LEFT JOIN LATERAL (SELECT checkpoint.id FROM governance_event checkpoint
+            WHERE checkpoint."userId"=wo."userId" AND checkpoint."entityType"='work_order'
+              AND checkpoint."entityId"::text=wo.id::text
+              AND checkpoint."eventType"='HERMES_RUNTIME_CHECKPOINT'
+            ORDER BY checkpoint."createdAt" DESC,checkpoint.id DESC LIMIT 1) latest ON true
+          WHERE wo.id=42`)).rows).toEqual([{
           status: "closed", result: "PASS", latestCheckpointId: String(cleanupSettlement.checkpointEventId),
         }])
         expect((await client.query(`SELECT "eventType",count(*)::integer AS count FROM governance_event
@@ -4542,6 +4551,15 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
           query: client.query.bind(client), ...settlementInput,
         })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
         await client.query(`DELETE FROM governance_event WHERE id=$1`, [duplicateCompletion])
+        const duplicateCheckpoint = (await client.query(`INSERT INTO governance_event
+          ("userId","eventType","entityType","entityId",actor,reason,metadata,"createdAt")
+          SELECT "userId","eventType","entityType","entityId",actor,reason,metadata,
+            "createdAt" + interval '1 millisecond'
+          FROM governance_event WHERE id=$1 RETURNING id`, [cleanupSettlement.checkpointEventId])).rows[0].id
+        await expect(verifyActivePostMergeCleanupSettlement({
+          query: client.query.bind(client), ...settlementInput,
+        })).rejects.toMatchObject({ code: "OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLEMENT_WALL" })
+        await client.query(`DELETE FROM governance_event WHERE id=$1`, [duplicateCheckpoint])
         const duplicateConfirmation = (await client.query(`INSERT INTO governance_event
           ("userId","eventType","entityType","entityId",actor,reason,metadata)
           SELECT "userId","eventType","entityType","entityId",actor,reason,metadata

@@ -5800,7 +5800,7 @@ export async function settleActivePostMergeCleanupOutcome({
           q."leaseToken" AS "leaseToken", q."leaseExpiresAt" AS "leaseExpiresAt",
           g.status AS "goalStatus", wo.status AS "workOrderStatus", wo.result AS "workOrderResult",
           wo."commitRef" AS "workOrderCommitRef",
-          wo."latestCheckpointId" AS "latestCheckpointId", checkpoint.actor AS "checkpointActor",
+          latest_checkpoint.id AS "latestCheckpointId", checkpoint.actor AS "checkpointActor",
           checkpoint.metadata AS "checkpointMetadata"
        FROM governance_event e
        JOIN outcome_queue_item q ON q."userId" = e."userId" AND q."goalId" = e."entityId"::integer
@@ -5812,6 +5812,16 @@ export async function settleActivePostMergeCleanupOutcome({
          AND checkpoint."userId" = q."userId" AND checkpoint."entityType" = 'work_order'
          AND checkpoint."entityId"::text = wo.id::text
          AND checkpoint."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+       LEFT JOIN LATERAL (
+         SELECT latest.id
+         FROM governance_event latest
+         WHERE latest."userId" = wo."userId"
+           AND latest."entityType" = 'work_order'
+           AND latest."entityId"::text = wo.id::text
+           AND latest."eventType" = 'HERMES_RUNTIME_CHECKPOINT'
+         ORDER BY latest."createdAt" DESC, latest.id DESC
+         LIMIT 1
+       ) latest_checkpoint ON true
        WHERE e."userId" = $1 AND e."entityType" = 'goal' AND e."entityId"::text = $2
          AND e."eventType" = 'HERMES_OUTCOME_ACTIVE_POST_MERGE_CLEANUP_SETTLED'
          AND e.actor = 'hermes-codex-bridge'
@@ -6128,11 +6138,10 @@ export async function settleActivePostMergeCleanupOutcome({
     if (completedGoal?.rows?.length !== 1) throw wall()
     const completedWorkOrder = await runQuery(
       `UPDATE work_order SET status = 'closed', result = 'PASS', "commitRef" = $3,
-          "latestCheckpointId" = $4, "closedAt" = NOW(), "completedAt" = NOW(), "updatedAt" = NOW()
-       WHERE id = $1 AND "userId" = $2 AND ref = $5 AND status IN ('active','approved','review')
+          "closedAt" = NOW(), "completedAt" = NOW(), "updatedAt" = NOW()
+       WHERE id = $1 AND "userId" = $2 AND ref = $4 AND status IN ('active','approved','review')
        RETURNING id`,
-      [executionBinding.activeWorkOrderId, executionBinding.userId, mergeSha,
-        checkpointEventId, workOrderRef],
+      [executionBinding.activeWorkOrderId, executionBinding.userId, mergeSha, workOrderRef],
     )
     if (completedWorkOrder?.rows?.length !== 1) throw wall()
     const settlementMetadata = {
