@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleDot,
+  Command,
   Cpu,
   FolderKanban,
   Home,
@@ -705,6 +706,10 @@ export function WorkbenchShell({
       <aside className="hidden w-[4.5rem] shrink-0 flex-col border-r border-[var(--workbench-hairline)] bg-[var(--workbench-canvas)] sm:flex">
         <Link href="/" aria-label="WilliamOS Home" className="workbench-focus grid h-14 place-items-center border-b border-[var(--workbench-hairline)]"><span className="grid size-7 place-items-center bg-[var(--workbench-text)] font-mono text-xs font-bold text-[var(--workbench-canvas)]">W</span></Link>
         <nav aria-label="Workbench views" className="flex flex-1 flex-col items-center gap-1 py-3">
+          {/* The canonical doorway into the Environment (the Desk). It leaves this compatibility shell
+              for /environment, which owns its own full-screen layout — the shell is never embedded in
+              the Desk. First and emphasised, so the operator never needs the bare URL. */}
+          <Link href="/environment" aria-label="Environment" className="workbench-focus flex h-14 w-full flex-col items-center justify-center gap-1 border-l-2 border-[var(--workbench-copper)] text-[var(--workbench-text)]"><Command className="size-4" aria-hidden /><span className="text-[9px] uppercase tracking-wide">Environment</span></Link>
           {modes.map((mode) => <Link key={mode.mode} href={mode.href} aria-current={routeMode === mode.mode ? "page" : undefined} className={cn("workbench-focus flex h-14 w-full flex-col items-center justify-center gap-1 border-l-2 border-transparent text-[var(--workbench-muted)]", routeMode === mode.mode && "border-l-[var(--workbench-copper)] bg-[var(--workbench-raised)] text-[var(--workbench-text)]")}><mode.icon className="size-4" aria-hidden /><span className="text-[9px] uppercase tracking-wide">{mode.label}</span></Link>)}
         </nav>
       </aside>
@@ -720,7 +725,15 @@ export function WorkbenchShell({
           <UserMenu name={user.name} email={user.email} />
         </header>
 
-        <nav aria-label="Compact Workbench views" className="grid shrink-0 grid-cols-4 border-b border-[var(--workbench-hairline)] sm:hidden">
+        <nav aria-label="Compact Workbench views" className="grid shrink-0 grid-cols-5 border-b border-[var(--workbench-hairline)] sm:hidden">
+          <Link
+            href="/environment"
+            aria-label="Environment"
+            className="workbench-focus flex h-11 items-center justify-center gap-1.5 border-b-2 border-[var(--workbench-copper)] text-[10px] uppercase tracking-wide text-[var(--workbench-text)]"
+          >
+            <Command className="size-3.5" aria-hidden />
+            Environment
+          </Link>
           {modes.map((mode) => (
             <Link
               key={mode.mode}
