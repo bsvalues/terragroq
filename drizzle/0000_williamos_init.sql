@@ -309,6 +309,7 @@ CREATE TABLE "goal" (
 	"rationale" text,
 	"mistakePatterns" text[] DEFAULT '{}' NOT NULL,
 	"matchedRules" text[] DEFAULT '{}' NOT NULL,
+	"acceptedContractIds" text[] DEFAULT '{}' NOT NULL,
 	"recommendedMove" text,
 	"requiresApproval" boolean DEFAULT false NOT NULL,
 	"linkedWorkOrderId" integer,
@@ -324,6 +325,7 @@ CREATE TABLE "goal_outcome_intake_receipt" (
 	"requestHash" text NOT NULL,
 	"goalId" integer NOT NULL,
 	"outcomeKey" text NOT NULL,
+	"acceptedContractIds" text[] DEFAULT '{}' NOT NULL,
 	"resultDigest" text NOT NULL,
 	"replayCount" integer DEFAULT 0 NOT NULL,
 	"firstSubmittedAt" timestamp with time zone DEFAULT now() NOT NULL,
@@ -460,6 +462,7 @@ CREATE TABLE "outcome_queue_item" (
 	"objective" text,
 	"queueOrder" integer DEFAULT 0 NOT NULL,
 	"dependencyKeys" text[] DEFAULT '{}' NOT NULL,
+	"acceptedContractIds" text[] DEFAULT '{}' NOT NULL,
 	"riskClass" text DEFAULT 'R1' NOT NULL,
 	"approvalState" text DEFAULT 'unapproved' NOT NULL,
 	"approvedBy" text,
@@ -738,6 +741,9 @@ CREATE INDEX "device_session_credential_expiry_idx" ON "device_session" USING bt
 CREATE INDEX "outcome_queue_acquisition_attempt_campaign_idx" ON "outcome_queue_acquisition_attempt" USING btree ("userId","campaignWindowId","attemptedAt");--> statement-breakpoint
 CREATE INDEX "outcome_queue_acquisition_attempt_identity_idx" ON "outcome_queue_acquisition_attempt" USING btree ("userId","acquisitionKeyDigest","attemptedAt");--> statement-breakpoint
 CREATE INDEX "outcome_queue_acquisition_receipt_user_outcome_idx" ON "outcome_queue_acquisition_receipt" USING btree ("userId","outcomeKey");--> statement-breakpoint
+CREATE UNIQUE INDEX "goal_issue_911_live_acceptance_singleton_idx" ON "goal" USING btree ("userId") WHERE "goal"."acceptedContractIds" = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[];--> statement-breakpoint
+CREATE UNIQUE INDEX "goal_intake_issue_911_live_acceptance_singleton_idx" ON "goal_outcome_intake_receipt" USING btree ("userId") WHERE "goal_outcome_intake_receipt"."acceptedContractIds" = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[];--> statement-breakpoint
+CREATE UNIQUE INDEX "outcome_queue_item_issue_911_live_acceptance_singleton_idx" ON "outcome_queue_item" USING btree ("userId") WHERE "outcome_queue_item"."acceptedContractIds" = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[];--> statement-breakpoint
 CREATE UNIQUE INDEX "outcome_queue_item_user_key_idx" ON "outcome_queue_item" USING btree ("userId","outcomeKey");--> statement-breakpoint
 CREATE UNIQUE INDEX "outcome_queue_item_user_acquisition_idx" ON "outcome_queue_item" USING btree ("userId","acquisitionKey");--> statement-breakpoint
 CREATE UNIQUE INDEX "outcome_queue_item_user_terminal_idx" ON "outcome_queue_item" USING btree ("userId","terminalKey");--> statement-breakpoint

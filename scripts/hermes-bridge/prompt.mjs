@@ -1,3 +1,5 @@
+import { isExactIssue911LiveAcceptanceContract } from "./work-contract.mjs"
+
 export const HERMES_BLOCKED_SCOPE = Object.freeze([
   "Property Workbench, TerraPilot, TerraFusion, county/PACS systems or data",
   "production deployment or unrelated production mutation",
@@ -29,6 +31,26 @@ export function buildHermesCodexPrompt(input) {
   const reservations = requireStringList(input.reservations, "reservations")
   const validators = requireStringList(input.validators, "validators")
   const attempt = Number.isInteger(input.attempt) && input.attempt > 0 ? input.attempt : 1
+  const acceptanceClaimed = input.workContract?.id === "issue-911-live-nonempty-acceptance.v1"
+    || input.workContract?.acceptance !== undefined
+  if (acceptanceClaimed && !isExactIssue911LiveAcceptanceContract(input.workContract)) {
+    throw new Error("HERMES_PROMPT_ACCEPTANCE_CONTRACT_WALL")
+  }
+  const liveAcceptance = acceptanceClaimed
+  if (liveAcceptance && (
+    reservations.length !== 1
+    || reservations[0] !== "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"
+  )) throw new Error("HERMES_PROMPT_ACCEPTANCE_CONTRACT_WALL")
+  const acceptanceAddendum = liveAcceptance
+    ? `
+ISSUE_911_LIVE_NONEMPTY_ACCEPTANCE:
+- Inspect repository and host evidence read-only; record supported audit results only by editing the reserved report path.
+- Return an ordinary repository-only follow-up if and only if the repository evidence supports it. Its paths must be exactly the reserved report path and every owner-gating effect must be false.
+- Separately return a host, storage, container, reviewed-policy, or scope-escaping follow-up if and only if the repository evidence supports it. Its paths must still be exactly the reserved report evidence path, and at least one applicable effect among protectedResource, changesReviewedPolicy, or outsideObjectiveScope must be true.
+- Never fabricate either finding. Returning [] or only one supported finding is valid and leaves this live acceptance unmet.
+- Findings are proposals, not authority. The gated finding must never be dispatched or executed. Do not mutate any host, storage, container, policy, production, release, secret, credential, or spending surface.
+`
+    : ""
 
   return `You are the Codex delivery engine operating one Hermes-dispatched WilliamOS Work Order.
 
@@ -50,6 +72,7 @@ ${reservations.map((path) => `- ${path}`).join("\n")}
 
 Hermes host validation after your file handoff:
 ${validators.map((validator) => `- ${validator}`).join("\n")}
+${acceptanceAddendum}
 
 Operating contract:
 - Read AGENTS.md and docs/governance/multi-agent-operator-playbook.md first.

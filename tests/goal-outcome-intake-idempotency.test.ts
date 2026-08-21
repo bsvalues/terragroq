@@ -8,7 +8,11 @@ const harness = vi.hoisted(() => {
     receipts: [] as Record<string, unknown>[],
     governance: [] as Record<string, unknown>[],
     events: [] as Record<string, unknown>[],
-    projects: [{ id: 7, userId: "owner", lifecycle: "active" }, { id: 8, userId: "owner", lifecycle: "active" }] as Record<string, unknown>[],
+    projects: [
+      { id: 7, userId: "owner", lifecycle: "active" },
+      { id: 8, userId: "owner", lifecycle: "active" },
+      { id: 1, userId: "owner", lifecycle: "active" },
+    ] as Record<string, unknown>[],
     projectResources: [] as Record<string, unknown>[],
     threads: [] as Record<string, unknown>[],
     threadSources: [] as Record<string, unknown>[],
@@ -262,10 +266,12 @@ beforeEach(async () => {
   harness.state.projects.splice(0, harness.state.projects.length,
     { id: 7, userId: "owner", lifecycle: "active" },
     { id: 8, userId: "owner", lifecycle: "active" },
+    { id: 1, userId: "owner", lifecycle: "active" },
   )
   harness.state.projectResources.splice(0, harness.state.projectResources.length,
     { id: 1, userId: "owner", projectId: 7, type: "repo", canonicalIdentity: "bsvalues/terragroq", relationship: "primary-repo" },
     { id: 2, userId: "owner", projectId: 8, type: "repo", canonicalIdentity: "bsvalues/terragroq", relationship: "primary-repo" },
+    { id: 3, userId: "owner", projectId: 1, type: "repo", canonicalIdentity: "bsvalues/terragroq", relationship: "primary-repo" },
   )
   harness.state.threads.length = 0
   harness.state.threadSources.length = 0
@@ -545,6 +551,158 @@ describe("authenticated goal outcome intake idempotency", () => {
     ])
     expect(JSON.stringify({ result, goal: harness.state.goals[0], outcome: harness.state.outcomes[0] }))
       .not.toMatch(/authorityGrantRef":"(?!null)|approvalDecisionId":[0-9]|dispatch/i)
+  })
+
+  it("atomically admits only one project-1 live-acceptance parent and persists its exact contract binding", async () => {
+    const intent = "record structured #911 reliability remediation without host mutation"
+    const key = "workbench-outcome:issue-911-live-nonempty-acceptance.v1:11111111-1111-4111-8111-111111111111"
+
+    const accepted = await startWorkbenchOutcome({ projectId: 1, intent, idempotencyKey: key })
+
+    expect(accepted).toMatchObject({ status: "ACCEPTED", projectId: 1, goalId: 1 })
+    expect(harness.state.goals).toEqual([
+      expect.objectContaining({ acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"] }),
+    ])
+    expect(harness.state.outcomes).toEqual([
+      expect.objectContaining({ acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"] }),
+    ])
+    expect(harness.state.receipts).toEqual([
+      expect.objectContaining({
+        idempotencyKey: key,
+        acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+      }),
+    ])
+  })
+
+  it("serializes different live-acceptance keys so exactly one singleton parent wins", async () => {
+    const intent = "record structured #911 reliability remediation without host mutation"
+    const [first, second] = await Promise.all([
+      startWorkbenchOutcome({
+        projectId: 1,
+        intent,
+        idempotencyKey: "workbench-outcome:issue-911-live-nonempty-acceptance.v1:11111111-1111-4111-8111-111111111111",
+      }),
+      startWorkbenchOutcome({
+        projectId: 1,
+        intent,
+        idempotencyKey: "workbench-outcome:issue-911-live-nonempty-acceptance.v1:22222222-2222-4222-8222-222222222222",
+      }),
+    ])
+
+    expect([first.status, second.status].sort()).toEqual(["ACCEPTED", "CONFLICT"])
+    expect(harness.state.goals).toHaveLength(1)
+    expect(harness.state.outcomes).toHaveLength(1)
+    expect(harness.state.receipts).toHaveLength(1)
+    expect(harness.state.threads).toHaveLength(1)
+    expect(harness.state.threadSources).toHaveLength(1)
+  })
+
+  it("replays the identical live-acceptance key after response loss without another parent", async () => {
+    harness.state.failAfterCommit = true
+    const input = {
+      projectId: 1,
+      intent: "record structured #911 reliability remediation without host mutation",
+      idempotencyKey: "workbench-outcome:issue-911-live-nonempty-acceptance.v1:33333333-3333-4333-8333-333333333333",
+    }
+
+    await expect(startWorkbenchOutcome(input)).rejects.toThrow("SIMULATED_RESPONSE_LOSS")
+    await expect(startWorkbenchOutcome(input)).resolves.toMatchObject({
+      status: "ALREADY_ACCEPTED",
+      goalId: 1,
+    })
+    expect(harness.state.goals).toHaveLength(1)
+    expect(harness.state.outcomes).toHaveLength(1)
+    expect(harness.state.receipts).toEqual([
+      expect.objectContaining({
+        replayCount: 1,
+        acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+      }),
+    ])
+  })
+
+  it("keeps the historical GOAL-0024-style key on the evidence-only contract", async () => {
+    await startWorkbenchOutcome({
+      projectId: 1,
+      intent: "record structured #911 reliability remediation without host mutation",
+      idempotencyKey: "workbench-outcome:44444444-4444-4444-8444-444444444444",
+    })
+
+    expect(harness.state.goals[0].acceptedContractIds).toEqual([])
+    expect(harness.state.outcomes[0].acceptedContractIds).toEqual([])
+    expect(harness.state.receipts[0].acceptedContractIds).toEqual([])
+  })
+
+  it.each([
+    "workbench-outcome:issue-911-live-nonempty-acceptance.v1:not-a-uuid",
+    "workbench-outcome:issue-911-live-nonempty-acceptance.v1:55555555-5555-3555-8555-555555555555",
+    "workbench-outcome:issue-911-live-nonempty-acceptance.v1:AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+    "workbench-outcome:issue-911-live-nonempty-acceptance.v2:55555555-5555-4555-8555-555555555555",
+  ])("walls a malformed or near live-acceptance key before effects: %s", async (idempotencyKey) => {
+    await expect(startWorkbenchOutcome({
+      projectId: 1,
+      intent: "record structured #911 reliability remediation without host mutation",
+      idempotencyKey,
+    })).rejects.toThrow("ISSUE_911_LIVE_ACCEPTANCE_INPUT_WALL")
+    expect(harness.state.goals).toHaveLength(0)
+    expect(harness.state.outcomes).toHaveLength(0)
+    expect(harness.state.receipts).toHaveLength(0)
+  })
+
+  it("walls the live-acceptance key outside project 1 before effects", async () => {
+    await expect(startWorkbenchOutcome({
+      projectId: 7,
+      intent: "record structured #911 reliability remediation without host mutation",
+      idempotencyKey: "workbench-outcome:issue-911-live-nonempty-acceptance.v1:66666666-6666-4666-8666-666666666666",
+    })).rejects.toThrow("ISSUE_911_LIVE_ACCEPTANCE_INPUT_WALL")
+    expect(harness.state.goals).toHaveLength(0)
+  })
+
+  it.each(["goal", "outcome", "receipt"])("walls coherent %s contract-marker drift on replay", async (target) => {
+    const input = {
+      projectId: 1,
+      intent: "record structured #911 reliability remediation without host mutation",
+      idempotencyKey: "workbench-outcome:issue-911-live-nonempty-acceptance.v1:77777777-7777-4777-8777-777777777777",
+    }
+    await startWorkbenchOutcome(input)
+    const rows = target === "goal"
+      ? harness.state.goals
+      : target === "outcome"
+        ? harness.state.outcomes
+        : harness.state.receipts
+    rows[0].acceptedContractIds = []
+
+    await expect(startWorkbenchOutcome(input)).rejects.toThrow(
+      "GOAL_INTAKE_ACCEPTED_CONTRACT_BINDING_WALL",
+    )
+    expect(harness.state.receipts[0].replayCount).toBe(0)
+  })
+
+  it.each([
+    ["cross-linked outcome", () => { harness.state.outcomes[0].goalId = 99 }],
+    ["cross-linked receipt", () => { harness.state.receipts[0].outcomeKey = "goal:GOAL-9999" }],
+    ["drifted root", () => { harness.state.threadSources[0].sourceId = "goal:GOAL-9999" }],
+    ["drifted Thread project", () => { harness.state.threads[0].projectId = 7 }],
+    ["drifted repository", () => {
+      harness.state.projectResources.find((row) => row.projectId === 1)!.canonicalIdentity = "bsvalues/other"
+    }],
+    ["duplicate Goal marker", () => { harness.state.goals.push({ ...harness.state.goals[0], id: 99 }) }],
+    ["duplicate outcome marker", () => { harness.state.outcomes.push({ ...harness.state.outcomes[0], id: 99 }) }],
+    ["duplicate receipt marker", () => { harness.state.receipts.push({ ...harness.state.receipts[0], id: 99 }) }],
+  ])("walls a %s singleton graph before admitting a distinct key", async (_label, mutate) => {
+    const intent = "record structured #911 reliability remediation without host mutation"
+    await startWorkbenchOutcome({
+      projectId: 1,
+      intent,
+      idempotencyKey: "workbench-outcome:issue-911-live-nonempty-acceptance.v1:88888888-8888-4888-8888-888888888888",
+    })
+    mutate()
+
+    await expect(startWorkbenchOutcome({
+      projectId: 1,
+      intent,
+      idempotencyKey: "workbench-outcome:issue-911-live-nonempty-acceptance.v1:99999999-9999-4999-8999-999999999999",
+    })).rejects.toThrow("GOAL_INTAKE_ACCEPTANCE_SINGLETON_GRAPH_WALL")
+    expect(harness.state.threadSources).toHaveLength(1)
   })
 
   it.each(["standby", "archived"])("rejects the exact #911 outcome before effects when the Project is %s", async (lifecycle) => {

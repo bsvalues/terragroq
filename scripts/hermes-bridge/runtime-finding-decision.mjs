@@ -5,6 +5,10 @@ import {
   isVerifiedPrimaryDecisionResponse,
   primaryDecisionRequestDigest,
 } from "./primary-decision-provenance.mjs"
+import {
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
+  isExactIssue911LiveAcceptanceContract,
+} from "./work-contract.mjs"
 
 export const RUNTIME_FINDING_DECISION_SOURCE_KIND = "RUNTIME_FINDING"
 export const RUNTIME_FINDING_ACTIONABILITY_PROJECTION_ID = "RUNTIME_FINDING_ACTIONABILITY_V1"
@@ -227,10 +231,13 @@ function exactDerivedFindingProof(proof, row) {
   const sourceHasProjection = parentSourceMetadata.projectionIssueNumber != null
     || parentSourceMetadata.projectionCompletionOwned != null
   const childHasProjection = Object.hasOwn(metadata.childWorkContract, "projection")
-  const expectedChildLane = metadata.contractId === "issue-911-runtime-reliability-evidence.v1"
-    && canonicalJson(metadata.allowedPaths) === canonicalJson([
+  const reportOnly = canonicalJson(metadata.allowedPaths) === canonicalJson([
       "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md",
-    ]) ? "docs" : metadata.contractLane
+    ])
+  const exactIssue911Parent = metadata.contractId === "issue-911-runtime-reliability-evidence.v1"
+    || (metadata.contractId === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID
+      && isExactIssue911LiveAcceptanceContract(row.parentWorkContract))
+  const expectedChildLane = exactIssue911Parent && reportOnly ? "docs" : metadata.contractLane
   if (!Number.isSafeInteger(sourceEventId) || sourceEventId <= 0
     || metadata.childWorkContract.version !== "hermes-work-contract.v1"
     || metadata.childWorkContract.id !== `runtime-finding.${sourceEventId}.v1`
@@ -386,6 +393,73 @@ function validateCandidate(row) {
     wall("RUNTIME_FINDING_DECISION_SOURCE_WALL")
   }
   const calculatedSourceDigest = exactFindingPayloadDigest(row.sourceMetadata)
+  const liveAcceptanceSource = row.sourceMetadata.workContractId
+    === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID
+  const parentRequest = row.parentAuthorizationRequestBinding
+  const parentResult = row.parentAuthorizationResultBinding
+  const acceptanceIds = [HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID]
+  const expectedIntakeRequestHash = liveAcceptanceSource ? sha256(canonicalJson({
+    contractVersion: 1, projectId: 1, intent: row.parentGoalCommand,
+    idempotencyKey: row.parentIntakeIdempotencyKey,
+  })) : null
+  const expectedIntakeResultDigest = liveAcceptanceSource ? sha256(canonicalJson({
+    contractVersion: 1, requestHash: expectedIntakeRequestHash,
+    goalId: Number(row.parentGoalId), outcomeKey: row.parentOutcomeKey,
+    threadId: parentRequest?.threadId,
+    root: { sourceType: "outcome", sourceId: row.parentOutcomeKey },
+    acceptedContractIds: acceptanceIds,
+  })) : null
+  const expectedAcceptanceProof = liveAcceptanceSource ? {
+    receiptId: Number(row.parentIntakeReceiptId),
+    requestHash: row.parentIntakeRequestHash,
+    resultDigest: row.parentIntakeResultDigest,
+    idempotencyKeyDigest: sha256(canonicalJson({ idempotencyKey: row.parentIntakeIdempotencyKey })),
+  } : null
+  const expectedAcceptanceCriteria = liveAcceptanceSource && row.parentWorkContract?.acceptance
+    ? [JSON.stringify({
+    contractId: row.parentWorkContract.id, contractDigest: row.parentWorkContract.digest,
+    evidencePath: row.parentWorkContract.acceptance.evidencePath,
+    requestedFindingClasses: row.parentWorkContract.acceptance.requestedFindingClasses,
+    emptyOrPartialAllowed: row.parentWorkContract.acceptance.emptyOrPartialAllowed,
+    hostMutationAllowed: row.parentWorkContract.acceptance.hostMutationAllowed,
+    noFabrication: row.parentWorkContract.acceptance.noFabrication,
+    gatedDispatchAllowed: row.parentWorkContract.acceptance.gatedDispatchAllowed,
+    })] : null
+  if (liveAcceptanceSource && (
+    Number(row.parentAuthorizationReceiptCount) !== 1
+    || !isExactIssue911LiveAcceptanceContract(row.parentWorkContract)
+    || canonicalJson(parentResult?.workContract)
+      !== canonicalJson(row.parentWorkContract)
+    || row.parentWorkContract.digest !== row.sourceMetadata.workContractDigest
+    || canonicalJson(Object.keys(parentRequest ?? {}).sort()) !== canonicalJson([
+      "confirmation", "idempotencyKey", "outcomeKey", "projectId", "threadId",
+    ])
+    || parentRequest.confirmation !== "START_WORK" || Number(parentRequest.projectId) !== 1
+    || parentRequest.outcomeKey !== row.parentOutcomeKey || parentRequest.threadId == null
+    || row.parentAuthorizationRequestHash !== sha256(canonicalJson({
+      contract: "workbench-execution-authorization.v1", ...parentRequest,
+    }))
+    || canonicalJson(Object.keys(parentResult ?? {}).sort()) !== canonicalJson([
+      "acceptanceIntakeProof", "acceptedContractIds", "authorizedAt", "decisionId",
+      "decisionRef", "expiresAt", "grantId", "grantRef", "implementationGrantId",
+      "implementationGrantRef", "queueVersion", "workContract",
+    ])
+    || canonicalJson(parentResult.acceptedContractIds) !== canonicalJson(acceptanceIds)
+    || canonicalJson(parentResult.acceptanceIntakeProof) !== canonicalJson(expectedAcceptanceProof)
+    || canonicalJson(row.parentGoalAcceptedContractIds) !== canonicalJson(acceptanceIds)
+    || canonicalJson(row.parentQueueAcceptedContractIds) !== canonicalJson(acceptanceIds)
+    || canonicalJson(row.parentIntakeAcceptedContractIds) !== canonicalJson(acceptanceIds)
+    || Number(row.parentIntakeReceiptCount) !== 1
+    || !/^workbench-outcome:issue-911-live-nonempty-acceptance\.v1:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.parentIntakeIdempotencyKey ?? "")
+    || row.parentIntakeRequestHash !== expectedIntakeRequestHash
+    || row.parentIntakeResultDigest !== expectedIntakeResultDigest
+    || Number(row.parentProjectCount) !== 1 || Number(row.parentRootThreadCount) !== 1
+    || Number(row.parentPrimaryRepoCount) !== 1 || Number(row.parentPrimaryRepoTotal) !== 1
+    || canonicalJson(row.parentAcceptanceCriteria ?? []) !== canonicalJson(expectedAcceptanceCriteria)
+    || canonicalJson(row.sourceMetadata.paths) !== canonicalJson([
+      "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md",
+    ])
+  )) wall("RUNTIME_FINDING_DECISION_SOURCE_WALL")
   const exactGateMetadata = {
     ...canonicalGate,
     parentGrantRef: canonicalGate.grantRef,
@@ -464,6 +538,51 @@ export async function readPendingRuntimeFindingDecisionRequest({
          source_checkpoint.metadata AS "sourceCheckpointMetadata",
          source_checkpoint.metadata->>'payloadDigest' AS "sourceCheckpointDigest",
          parent.status AS "parentStatus",
+         parent."acceptanceCriteria" AS "parentAcceptanceCriteria",
+         parent_receipt."resultBinding"->'workContract' AS "parentWorkContract",
+         parent_receipt."resultBinding" AS "parentAuthorizationResultBinding",
+         parent_receipt."requestBinding" AS "parentAuthorizationRequestBinding",
+         parent_receipt."requestHash" AS "parentAuthorizationRequestHash",
+         parent_queue."acceptedContractIds" AS "parentQueueAcceptedContractIds",
+         parent_queue."outcomeKey" AS "parentOutcomeKey",
+         parent_goal."acceptedContractIds" AS "parentGoalAcceptedContractIds",
+         parent_goal.id AS "parentGoalId",
+         parent_goal.command AS "parentGoalCommand",
+         parent_intake.id AS "parentIntakeReceiptId",
+         parent_intake."idempotencyKey" AS "parentIntakeIdempotencyKey",
+         parent_intake."requestHash" AS "parentIntakeRequestHash",
+         parent_intake."resultDigest" AS "parentIntakeResultDigest",
+         parent_intake."acceptedContractIds" AS "parentIntakeAcceptedContractIds",
+         (SELECT count(*) FROM goal_outcome_intake_receipt singleton_intake
+           WHERE singleton_intake."userId" = parent."userId"
+             AND singleton_intake."acceptedContractIds"
+               = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[]) AS "parentIntakeReceiptCount",
+         (SELECT count(*) FROM project exact_project
+           WHERE exact_project."userId" = parent."userId"
+             AND exact_project.id = 1 AND exact_project.lifecycle = 'active') AS "parentProjectCount",
+         (SELECT count(*) FROM workbench_thread_source exact_root
+           JOIN workbench_thread exact_thread
+             ON exact_thread."userId" = exact_root."userId"
+            AND exact_thread.id = exact_root."threadId"
+            AND exact_thread."projectId" = 1
+           WHERE exact_root."userId" = parent."userId"
+             AND exact_root."sourceType" = 'outcome'
+             AND exact_root."sourceId" = parent_queue."outcomeKey"
+             AND exact_root.role = 'root'
+             AND exact_root."threadId" = parent_receipt."requestBinding"->>'threadId') AS "parentRootThreadCount",
+         (SELECT count(*) FROM project_resource primary_repo
+           WHERE primary_repo."userId" = parent."userId"
+             AND primary_repo."projectId" = 1 AND primary_repo.type = 'repo'
+             AND primary_repo.relationship = 'primary-repo') AS "parentPrimaryRepoTotal",
+         (SELECT count(*) FROM project_resource exact_repo
+           WHERE exact_repo."userId" = parent."userId"
+             AND exact_repo."projectId" = 1 AND exact_repo.type = 'repo'
+             AND exact_repo.relationship = 'primary-repo'
+             AND exact_repo."canonicalIdentity" = 'bsvalues/terragroq') AS "parentPrimaryRepoCount",
+         (SELECT count(*) FROM outcome_queue_mutation_receipt exact_parent_receipt
+           WHERE exact_parent_receipt."userId" = parent_queue."userId"
+             AND exact_parent_receipt."outcomeKey" = parent_queue."outcomeKey"
+             AND exact_parent_receipt.operation = 'workbench_execution.authorize') AS "parentAuthorizationReceiptCount",
          parent.id AS "parentWorkOrderRowId",
          parent.ref AS "parentWorkOrderRef", grant_row.id AS "authorityGrantId",
          grant_row.ref AS "authorityGrantRef", grant_row."authorityLevel" AS "authorityGrantLevel",
@@ -550,6 +669,20 @@ export async function readPendingRuntimeFindingDecisionRequest({
        JOIN work_order parent ON parent.id::text = source."entityId"
          AND parent."userId" = source."userId"
          AND parent.ref = source.metadata->>'objectiveWorkOrderId'
+       JOIN outcome_queue_item parent_queue ON parent_queue."userId" = parent."userId"
+         AND parent_queue."activeWorkOrderId" = parent.id
+       JOIN outcome_queue_mutation_receipt parent_receipt
+         ON parent_receipt."userId" = parent_queue."userId"
+        AND parent_receipt."outcomeKey" = parent_queue."outcomeKey"
+        AND parent_receipt.operation = 'workbench_execution.authorize'
+        AND parent_receipt."resultBinding"->'workContract'->>'id' = source.metadata->>'workContractId'
+        AND parent_receipt."resultBinding"->'workContract'->>'digest' = source.metadata->>'workContractDigest'
+       JOIN goal parent_goal ON parent_goal."userId" = parent_queue."userId"
+         AND parent_goal.id = parent_queue."goalId"
+       LEFT JOIN goal_outcome_intake_receipt parent_intake
+         ON parent_intake."userId" = parent_queue."userId"
+        AND parent_intake."goalId" = parent_queue."goalId"
+        AND parent_intake."outcomeKey" = parent_queue."outcomeKey"
        JOIN governance_event source_checkpoint
          ON source_checkpoint.id = CASE
            WHEN source.metadata->>'sourceCheckpointId' ~ '^[1-9][0-9]*$'

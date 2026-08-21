@@ -22,7 +22,10 @@ import {
 import type { UniversalIntentRoute } from "@/lib/intent/router"
 import { MAX_OBJECTIVE_LENGTH } from "@/lib/objective/intake"
 import type { StartWorkbenchOutcomeResult } from "@/lib/workbench/outcome-start"
-import { isIssue911ReliabilityOutcomeIntent } from "@/lib/workbench/registered-outcome-intent"
+import {
+  ISSUE_911_LIVE_NONEMPTY_ACCEPTANCE_KEY_PREFIX,
+  isIssue911ReliabilityOutcomeIntent,
+} from "@/lib/workbench/registered-outcome-intent"
 
 /**
  * Submit an ordinary-language objective (#891, #871 boundary 1).
@@ -187,7 +190,9 @@ export const UniversalIntent: FC<ShellContext> = ({ selectedProject = null, onOp
           ? outcomeAttemptRef.current
           : {
               signature,
-              idempotencyKey: `workbench-outcome:${globalThis.crypto.randomUUID()}`,
+              idempotencyKey: selectedProject.id === 1
+                ? `${ISSUE_911_LIVE_NONEMPTY_ACCEPTANCE_KEY_PREFIX}${globalThis.crypto.randomUUID()}`
+                : `workbench-outcome:${globalThis.crypto.randomUUID()}`,
             }
         outcomeAttemptRef.current = attempt
         const outcome = await startWorkbenchOutcome({

@@ -1,4 +1,12 @@
 import { hashRecord } from "@/lib/governance/hash"
+import {
+  buildOutcomeStartRequestHash,
+  buildOutcomeStartResultDigest,
+} from "@/lib/workbench/outcome-start"
+import {
+  ISSUE_911_LIVE_NONEMPTY_ACCEPTANCE_CONTRACT_ID,
+  issue911LiveAcceptanceContractIds,
+} from "@/lib/workbench/registered-outcome-intent"
 import { evaluateOutcomePolicy } from "@/scripts/hermes-bridge/policy.mjs"
 import { resolveHermesWorkContract } from "@/scripts/hermes-bridge/work-contract.mjs"
 
@@ -82,12 +90,24 @@ export type WorkbenchOutcomeExecutionSnapshot = Readonly<{
     activeWorkOrderId: number | null; executionBinding: string | null
     leaseHolder: string | null; leaseToken: string | null; leaseExpiresAt: Date | null
     acquisitionKey: string | null; terminalKey: string | null; version: number
+    acceptedContractIds?: readonly string[]
   } | null
   goal?: {
     id: number; userId: string; command: string; lane: string; risk: string
     authority: string; verdict: string; requiresApproval: boolean; status: string
     linkedWorkOrderId: number | null
+    acceptedContractIds?: readonly string[]
   } | null
+  intakeReceipts?: ReadonlyArray<{
+    id: number
+    userId: string
+    idempotencyKey: string
+    requestHash: string
+    goalId: number
+    outcomeKey: string
+    acceptedContractIds: readonly string[]
+    resultDigest: string
+  }>
 }>
 
 export type WorkbenchOutcomeExecutionAssessment =
@@ -117,6 +137,20 @@ export type WorkbenchOutcomeExecutionAssessment =
           tagAllowed: boolean
           pushAllowed: boolean
         }>
+        acceptance?: Readonly<{
+          evidencePath: string
+          requestedFindingClasses: readonly string[]
+          emptyOrPartialAllowed: true
+          hostMutationAllowed: false
+          noFabrication: true
+          gatedDispatchAllowed: false
+        }>
+      }>
+      acceptanceIntakeProof?: Readonly<{
+        receiptId: number
+        requestHash: string
+        resultDigest: string
+        idempotencyKeyDigest: string
       }>
     }>
   | Readonly<{ eligible: false; reason: WorkbenchExecutionUnavailableReason }>
@@ -149,6 +183,76 @@ export function buildWorkbenchExecutionAuthorizationRequestHash(
   input: AuthorizeWorkbenchOutcomeExecutionInput,
 ): string {
   return hashRecord({ contract: WORKBENCH_EXECUTION_AUTHORIZATION_VERSION, ...input })
+}
+
+export function verifyIssue911AcceptanceIntakeProof(
+  snapshot: WorkbenchOutcomeExecutionSnapshot,
+): Readonly<{
+  selected: boolean
+  proof?: Readonly<{
+    receiptId: number
+    requestHash: string
+    resultDigest: string
+    idempotencyKeyDigest: string
+  }>
+}> | null {
+  const { project, thread, roots, outcome, goal } = snapshot
+  if (!project || !thread || !outcome || !goal) return null
+  const goalContractIds = goal.acceptedContractIds ?? []
+  const outcomeContractIds = outcome.acceptedContractIds ?? []
+  if (!Array.isArray(goalContractIds) || !Array.isArray(outcomeContractIds)
+    || goalContractIds.length !== outcomeContractIds.length
+    || goalContractIds.some((value, index) => value !== outcomeContractIds[index])) return null
+  if (goalContractIds.length === 0) return { selected: false }
+  if (goalContractIds.length !== 1
+    || goalContractIds[0] !== ISSUE_911_LIVE_NONEMPTY_ACCEPTANCE_CONTRACT_ID
+    || project.id !== 1 || thread.projectId !== 1
+    || roots.length !== 1 || roots[0].threadId !== thread.id
+    || roots[0].sourceType !== "outcome" || roots[0].sourceId !== outcome.outcomeKey
+    || roots[0].role !== "root" || outcome.goalId !== goal.id) return null
+  const receipts = snapshot.intakeReceipts ?? []
+  if (receipts.length !== 1) return null
+  const receipt = receipts[0]
+  let selectedContractIds: readonly string[]
+  try {
+    selectedContractIds = issue911LiveAcceptanceContractIds({
+      projectId: project.id,
+      intent: goal.command,
+      idempotencyKey: receipt.idempotencyKey,
+    })
+  } catch {
+    return null
+  }
+  const expectedRequestHash = buildOutcomeStartRequestHash({
+    projectId: project.id,
+    intent: goal.command,
+    idempotencyKey: receipt.idempotencyKey,
+  })
+  const expectedResultDigest = buildOutcomeStartResultDigest({
+    requestHash: expectedRequestHash,
+    goalId: goal.id,
+    outcomeKey: outcome.outcomeKey,
+    threadId: thread.id,
+    rootSourceType: "outcome",
+    rootSourceId: outcome.outcomeKey,
+    acceptedContractIds: selectedContractIds,
+  })
+  if (!Number.isSafeInteger(receipt.id) || receipt.id <= 0
+    || receipt.userId !== project.userId
+    || receipt.goalId !== goal.id || receipt.outcomeKey !== outcome.outcomeKey
+    || receipt.requestHash !== expectedRequestHash
+    || receipt.resultDigest !== expectedResultDigest
+    || receipt.acceptedContractIds.length !== selectedContractIds.length
+    || receipt.acceptedContractIds.some((value, index) => value !== selectedContractIds[index])) return null
+  return {
+    selected: true,
+    proof: {
+      receiptId: receipt.id,
+      requestHash: receipt.requestHash,
+      resultDigest: receipt.resultDigest,
+      idempotencyKeyDigest: hashRecord({ idempotencyKey: receipt.idempotencyKey }),
+    },
+  }
 }
 
 export function assessWorkbenchOutcomeExecution(
@@ -190,6 +294,17 @@ export function assessWorkbenchOutcomeExecution(
   if (INJECTION_PATTERN.test(text)) return { eligible: false, reason: "UNTRUSTED_INTENT" }
   if (STRICT_PROTECTED_PATTERN.test(text)) return { eligible: false, reason: "POLICY_INELIGIBLE" }
 
+  const goalContractIds = goal.acceptedContractIds ?? []
+  const outcomeContractIds = outcome.acceptedContractIds ?? []
+  if (!Array.isArray(goalContractIds) || !Array.isArray(outcomeContractIds)
+    || goalContractIds.length !== outcomeContractIds.length
+    || goalContractIds.some((value, index) => value !== outcomeContractIds[index])) {
+    return { eligible: false, reason: "WORK_CONTRACT_UNAVAILABLE" }
+  }
+  const acceptanceVerification = verifyIssue911AcceptanceIntakeProof(snapshot)
+  if (!acceptanceVerification) return { eligible: false, reason: "WORK_CONTRACT_UNAVAILABLE" }
+  const acceptanceIntakeProof = acceptanceVerification.proof
+
   const workContract = resolveHermesWorkContract({
     command: goal.command,
     title: outcome.title,
@@ -197,6 +312,7 @@ export function assessWorkbenchOutcomeExecution(
     lane: goal.lane,
     risk: goal.risk,
     authority: goal.authority,
+    acceptedContractIds: goalContractIds,
   })
   const policy = evaluateCanonicalOutcomePolicy({
     outcome: {
@@ -222,6 +338,7 @@ export function assessWorkbenchOutcomeExecution(
   return {
     eligible: true, reason: "ELIGIBLE", goalId: goal.id,
     repository: "bsvalues/terragroq", workContract,
+    ...(acceptanceIntakeProof ? { acceptanceIntakeProof } : {}),
   }
 }
 

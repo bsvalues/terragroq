@@ -460,13 +460,18 @@ export const goal = pgTable("goal", {
   rationale: text("rationale"),
   mistakePatterns: text("mistakePatterns").array().default([]).notNull(),
   matchedRules: text("matchedRules").array().default([]).notNull(),
+  acceptedContractIds: text("acceptedContractIds").array().default([]).notNull(),
   recommendedMove: text("recommendedMove"),
   requiresApproval: boolean("requiresApproval").default(false).notNull(),
   linkedWorkOrderId: integer("linkedWorkOrderId"),
   status: text("status").default("classified").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
-})
+}, (table) => [
+  uniqueIndex("goal_issue_911_live_acceptance_singleton_idx")
+    .on(table.userId)
+    .where(sql`${table.acceptedContractIds} = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[]`),
+])
 
 /* ------------------------------------------------------------------ */
 /* Durable outcome queue (WO-WOS-V1.2-001)                            */
@@ -487,6 +492,7 @@ export const outcomeQueueItem = pgTable(
     objective: text("objective"),
     queueOrder: integer("queueOrder").default(0).notNull(),
     dependencyKeys: text("dependencyKeys").array().default([]).notNull(),
+    acceptedContractIds: text("acceptedContractIds").array().default([]).notNull(),
     riskClass: text("riskClass").default("R1").notNull(),
     approvalState: text("approvalState").default("unapproved").notNull(),
     approvedBy: text("approvedBy"),
@@ -527,6 +533,9 @@ export const outcomeQueueItem = pgTable(
     uniqueIndex("outcome_queue_item_user_key_idx").on(table.userId, table.outcomeKey),
     uniqueIndex("outcome_queue_item_user_acquisition_idx").on(table.userId, table.acquisitionKey),
     uniqueIndex("outcome_queue_item_user_terminal_idx").on(table.userId, table.terminalKey),
+    uniqueIndex("outcome_queue_item_issue_911_live_acceptance_singleton_idx")
+      .on(table.userId)
+      .where(sql`${table.acceptedContractIds} = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[]`),
     uniqueIndex("outcome_queue_item_one_active_per_user_idx")
       .on(table.userId)
       .where(sql`${table.lifecycleState} = 'active'`),
@@ -648,6 +657,7 @@ export const goalOutcomeIntakeReceipt = pgTable(
       .notNull()
       .references(() => goal.id, { onDelete: "restrict" }),
     outcomeKey: text("outcomeKey").notNull(),
+    acceptedContractIds: text("acceptedContractIds").array().default([]).notNull(),
     resultDigest: text("resultDigest").notNull(),
     replayCount: integer("replayCount").default(0).notNull(),
     firstSubmittedAt: timestamp("firstSubmittedAt", { withTimezone: true })
@@ -668,6 +678,9 @@ export const goalOutcomeIntakeReceipt = pgTable(
       table.userId,
       table.outcomeKey,
     ),
+    uniqueIndex("goal_intake_issue_911_live_acceptance_singleton_idx")
+      .on(table.userId)
+      .where(sql`${table.acceptedContractIds} = ARRAY['issue-911-live-nonempty-acceptance.v1']::text[]`),
     check(
       "goal_outcome_intake_receipt_replay_count_check",
       sql`${table.replayCount} >= 0`,

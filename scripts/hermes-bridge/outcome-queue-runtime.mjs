@@ -26,7 +26,10 @@ import {
   verifyActiveReviewRecoveryContinuation,
 } from "./outcome-source.mjs"
 import { blocksAction } from "../runtime-findings/policy.mjs"
-import { resolveHermesWorkContract } from "./work-contract.mjs"
+import {
+  HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
+  resolveHermesWorkContract,
+} from "./work-contract.mjs"
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
@@ -34,6 +37,10 @@ function canonicalJson(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
   }
   return JSON.stringify(value)
+}
+
+function canonicalDigest(value) {
+  return createHash("sha256").update(canonicalJson(value)).digest("hex")
 }
 
 function activeRecoveryProjectionContract(outcome) {
@@ -327,6 +334,15 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
   const result = await pool.query(
     `SELECT receipt.operation AS "receiptOperation", receipt."requestHash" AS "requestHash",
             receipt."requestBinding" AS "requestBinding", receipt."resultBinding" AS "resultBinding",
+            intake.id AS "intakeReceiptId", intake."idempotencyKey" AS "intakeIdempotencyKey",
+            intake."requestHash" AS "intakeRequestHash", intake."goalId" AS "intakeGoalId",
+            intake."outcomeKey" AS "intakeOutcomeKey",
+            intake."acceptedContractIds" AS "intakeAcceptedContractIds",
+            intake."resultDigest" AS "intakeResultDigest",
+            (SELECT count(*)::integer FROM goal_outcome_intake_receipt duplicate_intake
+              WHERE duplicate_intake."userId" = receipt."userId"
+                AND duplicate_intake."goalId" = intake."goalId"
+                AND duplicate_intake."outcomeKey" = intake."outcomeKey") AS "intakeReceiptCount",
             project.id AS "projectId", project."userId" AS "projectUserId",
             project.lifecycle AS "projectLifecycle",
             thread.id AS "threadId", thread."userId" AS "threadUserId",
@@ -379,6 +395,8 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
          AND project.id::text = receipt."requestBinding"->>'projectId'
        JOIN workbench_thread thread ON thread."userId" = receipt."userId"
          AND thread.id = receipt."requestBinding"->>'threadId'
+       JOIN goal_outcome_intake_receipt intake ON intake."userId" = receipt."userId"
+         AND intake."goalId" = $3::integer AND intake."outcomeKey" = receipt."outcomeKey"
        JOIN decision approval ON approval."userId" = receipt."userId"
          AND approval.id::text = receipt."resultBinding"->>'decisionId'
        JOIN authority_grant queue_grant ON queue_grant."userId" = receipt."userId"
@@ -390,7 +408,7 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
       WHERE receipt."userId" = $1 AND receipt."outcomeKey" = $2
         AND receipt.operation = 'workbench_execution.authorize'
       ORDER BY receipt.id LIMIT 2`,
-    [queueItem.userId, queueItem.outcomeKey],
+    [queueItem.userId, queueItem.outcomeKey, Number(goal.id)],
   )
   if (result.rows.length !== 1) {
     wall("Workbench parent authorization graph is not unique", "HERMES_WORKBENCH_PARENT_CONTRACT_WALL")
@@ -399,15 +417,47 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
   const request = row.requestBinding
   const binding = row.resultBinding
   const contract = binding?.workContract
+  const acceptedContractIds = Array.isArray(goal.acceptedContractIds)
+    ? goal.acceptedContractIds
+    : []
   const registered = resolveHermesWorkContract({
     command: goal.command, title: queueItem.title, objective: queueItem.objective,
     lane: goal.lane, risk: goal.risk, authority: goal.authority,
+    acceptedContractIds: goal.acceptedContractIds,
   })
+  const liveAcceptance = registered?.id === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID
+  const intakeRequestHash = canonicalDigest({
+    contractVersion: 1,
+    projectId: Number(row.projectId),
+    intent: goal.command,
+    idempotencyKey: row.intakeIdempotencyKey,
+  })
+  const intakeResultDigest = canonicalDigest({
+    contractVersion: 1,
+    requestHash: intakeRequestHash,
+    goalId: Number(goal.id),
+    outcomeKey: queueItem.outcomeKey,
+    threadId: row.threadId,
+    root: { sourceType: "outcome", sourceId: queueItem.outcomeKey },
+    acceptedContractIds,
+  })
+  const acceptanceIntakeProof = {
+    receiptId: Number(row.intakeReceiptId),
+    requestHash: row.intakeRequestHash,
+    resultDigest: row.intakeResultDigest,
+    idempotencyKeyDigest: canonicalDigest({ idempotencyKey: row.intakeIdempotencyKey }),
+  }
   const expectedWorkOrderRef = `WO-HERMES-OUTCOME-${Number(goal.id)}`
   const expectedEvidence = registered && [
     `project:${request?.projectId}`, `thread:${request?.threadId}`, "repo:bsvalues/terragroq",
     `work-contract:${registered.id}`, `work-contract-digest:${registered.digest}`,
     `work-contract-json:${JSON.stringify(registered)}`,
+    ...(liveAcceptance ? [
+      `acceptance-intake-receipt:${acceptanceIntakeProof.receiptId}`,
+      `acceptance-intake-request:${acceptanceIntakeProof.requestHash}`,
+      `acceptance-intake-result:${acceptanceIntakeProof.resultDigest}`,
+      `acceptance-intake-key-digest:${acceptanceIntakeProof.idempotencyKeyDigest}`,
+    ] : []),
     ...registered.reservations.map((reservation) => `reservation:${reservation}`),
     ...registered.validationCommands.map((validator) => `validator:${validator.command}:${validator.args.join(" ")}`),
   ]
@@ -418,9 +468,14 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
   const queueGrantExpiresAtMs = Number(row.queueGrantExpiresAtEpoch) * 1000
   const implementationGrantExpiresAtMs = Number(row.implementationGrantExpiresAtEpoch) * 1000
   const exactRequestKeys = "confirmation,idempotencyKey,outcomeKey,projectId,threadId"
-  const exactResultKeys = [
+  const baseResultKeys = [
     "authorizedAt", "decisionId", "decisionRef", "expiresAt", "grantId", "grantRef",
     "implementationGrantId", "implementationGrantRef", "queueVersion", "workContract",
+  ]
+  const exactResultKeys = [
+    ...baseResultKeys,
+    ...(binding?.acceptedContractIds === undefined ? [] : ["acceptedContractIds"]),
+    ...(liveAcceptance ? ["acceptanceIntakeProof"] : []),
   ].sort().join(",")
   if (row.receiptOperation !== "workbench_execution.authorize"
     || Object.keys(request ?? {}).sort().join(",") !== exactRequestKeys
@@ -434,7 +489,22 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
     || Number(row.rootCount) !== 1 || row.rootThreadId !== request?.threadId
     || Number(row.primaryRepoCount) !== 1
     || row.primaryRepository !== "bsvalues/terragroq"
+    || canonicalJson(queueItem.acceptedContractIds ?? []) !== canonicalJson(acceptedContractIds)
     || !registered || canonicalJson(contract) !== canonicalJson(registered)
+    || (liveAcceptance && (
+      Number(row.projectId) !== 1
+      || !/^workbench-outcome:issue-911-live-nonempty-acceptance\.v1:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.intakeIdempotencyKey ?? "")
+      || Number(row.intakeReceiptCount) !== 1
+      || Number(row.intakeReceiptId) <= 0
+      || Number(row.intakeGoalId) !== Number(goal.id)
+      || row.intakeOutcomeKey !== queueItem.outcomeKey
+      || canonicalJson(row.intakeAcceptedContractIds) !== canonicalJson(acceptedContractIds)
+      || row.intakeRequestHash !== intakeRequestHash
+      || row.intakeResultDigest !== intakeResultDigest
+      || canonicalJson(binding?.acceptanceIntakeProof) !== canonicalJson(acceptanceIntakeProof)
+    ))
+    || (!liveAcceptance && binding?.acceptanceIntakeProof !== undefined)
+    || canonicalJson(binding?.acceptedContractIds ?? []) !== canonicalJson(acceptedContractIds)
     || Number(binding?.decisionId) !== Number(queueItem.approvalDecisionId)
     || Number(binding?.decisionId) !== Number(row.approvalId)
     || binding?.decisionRef !== row.approvalRef || row.approvalUserId !== queueItem.userId
@@ -493,7 +563,7 @@ async function loadLinkedGoal(withPool, queueItem) {
     const result = await pool.query(
       `SELECT goal.id, goal."userId" AS "userId", goal.ref, goal.command, goal.lane, goal.mode, goal.risk,
               authority, verdict, "requiresApproval" AS "requiresApproval",
-              "matchedRules" AS "matchedRules", status,
+              "matchedRules" AS "matchedRules", "acceptedContractIds" AS "acceptedContractIds", status,
               goal."createdAt" AS "createdAt", goal."updatedAt" AS "updatedAt",
               derived.operation AS "derivedReceiptOperation",
               derived."requestHash" AS "derivedRequestHash",

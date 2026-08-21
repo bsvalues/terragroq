@@ -5,6 +5,10 @@ import {
   buildWorkbenchExecutionAuthorizationRequestHash,
   deterministicWorkbenchExecutionRefs,
 } from "@/lib/workbench/outcome-execution-authorization"
+import {
+  buildOutcomeStartRequestHash,
+  buildOutcomeStartResultDigest,
+} from "@/lib/workbench/outcome-start"
 import { resolveHermesWorkContract } from "@/scripts/hermes-bridge/work-contract.mjs"
 
 const harness = vi.hoisted(() => ({
@@ -257,6 +261,82 @@ describe("authorizeWorkbenchOutcomeExecution action", () => {
         delivery: { allowedActions: ["implement"], commitAllowed: true, tagAllowed: false, pushAllowed: true },
       },
     })
+    expect(harness.effects.some((effect) => effect.table === "work_order")).toBe(false)
+  })
+
+  it("persists the exact singleton acceptance marker and full acceptance contract in START_WORK authority", async () => {
+    const acceptanceInput = {
+      ...input,
+      projectId: 1,
+      threadId: "thread-acceptance",
+      outcomeKey: "goal:GOAL-0025",
+      idempotencyKey: "workbench-execution:acceptance-0025",
+    }
+    const intakeKey = "workbench-outcome:issue-911-live-nonempty-acceptance.v1:11111111-1111-4111-8111-111111111111"
+    const intakeRequestHash = buildOutcomeStartRequestHash({
+      projectId: 1,
+      intent: issue911Intent,
+      idempotencyKey: intakeKey,
+    })
+    harness.transaction.mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => callback(txAdapter({
+      project: [[{ id: 1, userId: "owner", lifecycle: "active" }]],
+      workbench_thread: [[{ id: "thread-acceptance", userId: "owner", projectId: 1 }]],
+      workbench_thread_source: [[{
+        threadId: "thread-acceptance", sourceType: "outcome",
+        sourceId: "goal:GOAL-0025", role: "root",
+      }]],
+      outcome_queue_item: [[{
+        outcomeKey: "goal:GOAL-0025", goalId: 25, title: issue911Intent,
+        objective: issue911Intent, riskClass: "R1", approvalState: "unapproved",
+        approvalDecisionId: null, authorityState: "unverified", authorityLevel: "A2_WRITE_OWN",
+        authorityGrantRef: null, authoritySubject: "operator", authorityAction: "outcome:execute",
+        lifecycleState: "suggested", activeWorkOrderId: null, executionBinding: null,
+        leaseHolder: null, leaseToken: null, leaseExpiresAt: null, acquisitionKey: null,
+        terminalKey: null, version: 0,
+        acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+      }]],
+      goal: [[{
+        id: 25, userId: "owner", command: issue911Intent, lane: "operator-objective", risk: "R1",
+        authority: "A2_WRITE_OWN", verdict: "requires_approval", requiresApproval: true,
+        status: "classified", linkedWorkOrderId: null,
+        acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+      }]],
+      goal_outcome_intake_receipt: [[{
+        id: 51, userId: "owner", idempotencyKey: intakeKey,
+        requestHash: intakeRequestHash, goalId: 25, outcomeKey: "goal:GOAL-0025",
+        acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+        resultDigest: buildOutcomeStartResultDigest({
+          requestHash: intakeRequestHash, goalId: 25, outcomeKey: "goal:GOAL-0025",
+          threadId: "thread-acceptance", rootSourceType: "outcome",
+          rootSourceId: "goal:GOAL-0025",
+          acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+        }),
+      }]],
+    })))
+    const { authorizeWorkbenchOutcomeExecution } = await import("@/app/actions/authorize-workbench-outcome-execution")
+
+    await expect(authorizeWorkbenchOutcomeExecution(acceptanceInput)).resolves.toMatchObject({
+      status: "AUTHORIZED_FOR_ACQUISITION",
+      dispatchPerformed: false,
+    })
+    const receipt = harness.effects.find((effect) => effect.table === "outcome_queue_mutation_receipt")?.value
+    expect(receipt?.resultBinding).toMatchObject({
+      acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+      workContract: {
+        id: "issue-911-live-nonempty-acceptance.v1",
+        acceptance: {
+          evidencePath: "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md",
+          emptyOrPartialAllowed: true,
+          hostMutationAllowed: false,
+          noFabrication: true,
+          gatedDispatchAllowed: false,
+        },
+      },
+    })
+    const approval = harness.effects.find((effect) => effect.table === "decision")?.value
+    expect(approval?.evidence).toContainEqual(
+      expect.stringContaining('"id":"issue-911-live-nonempty-acceptance.v1"'),
+    )
     expect(harness.effects.some((effect) => effect.table === "work_order")).toBe(false)
   })
 

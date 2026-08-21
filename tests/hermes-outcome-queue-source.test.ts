@@ -175,6 +175,7 @@ const receiptColumnRows = [
   ["goal_outcome_intake_receipt", "requestHash", "text", true, null],
   ["goal_outcome_intake_receipt", "goalId", "integer", true, null],
   ["goal_outcome_intake_receipt", "outcomeKey", "text", true, null],
+  ["goal_outcome_intake_receipt", "acceptedContractIds", "text[]", true, "'{}'::text[]"],
   ["goal_outcome_intake_receipt", "resultDigest", "text", true, null],
   ["goal_outcome_intake_receipt", "replayCount", "integer", true, "0"],
   ["goal_outcome_intake_receipt", "firstSubmittedAt", "timestamp with time zone", true, "now()"],

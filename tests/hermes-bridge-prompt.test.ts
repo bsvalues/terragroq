@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { buildHermesCodexPrompt, HERMES_TURN_OUTPUT_SCHEMA } from "../scripts/hermes-bridge/prompt.mjs"
+import { resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 
 const packet = {
   outcome: "Add a compact recent outcomes summary to WilliamOS Home.",
@@ -45,6 +46,44 @@ describe("Hermes Codex prompt", () => {
   it("rejects missing authority and empty reservations", () => {
     expect(() => buildHermesCodexPrompt({ ...packet, outcomeRef: "" })).toThrow("HERMES_PROMPT_OUTCOME_REF_WALL")
     expect(() => buildHermesCodexPrompt({ ...packet, reservations: [] })).toThrow("HERMES_PROMPT_RESERVATIONS_WALL")
+  })
+
+  it("adds the exact evidence-only live acceptance request without forcing or fabricating findings", () => {
+    const intent = "record structured #911 reliability remediation without host mutation"
+    const workContract = resolveHermesWorkContract({
+      command: intent, title: intent, objective: intent,
+      lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+      acceptedContractIds: ["issue-911-live-nonempty-acceptance.v1"],
+    })
+    const prompt = buildHermesCodexPrompt({
+      ...packet,
+      outcome: intent,
+      reservations: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
+      workContract,
+    })
+
+    expect(prompt).toContain("ISSUE_911_LIVE_NONEMPTY_ACCEPTANCE")
+    expect(prompt).toContain("if and only if the repository evidence supports it")
+    expect(prompt).toContain("ordinary repository-only follow-up")
+    expect(prompt).toContain("host, storage, container, reviewed-policy, or scope-escaping follow-up")
+    expect(prompt).toContain("docs/reports/WO-OUTCOME-762-911-runtime-reliability.md")
+    expect(prompt).toContain("protectedResource, changesReviewedPolicy, or outsideObjectiveScope")
+    expect(prompt).toContain("Never fabricate either finding")
+    expect(prompt).toContain("Returning [] or only one supported finding is valid")
+    expect(prompt).toContain("must never be dispatched or executed")
+    expect(HERMES_TURN_OUTPUT_SCHEMA.properties.findings.minItems).toBeUndefined()
+  })
+
+  it("walls a forged acceptance profile and keeps ordinary prompts free of the acceptance request", () => {
+    expect(buildHermesCodexPrompt(packet)).not.toContain("ISSUE_911_LIVE_NONEMPTY_ACCEPTANCE")
+    expect(() => buildHermesCodexPrompt({
+      ...packet,
+      workContract: {
+        id: "issue-911-live-nonempty-acceptance.v1",
+        digest: "a".repeat(64),
+        acceptance: { noFabrication: true },
+      },
+    })).toThrow("HERMES_PROMPT_ACCEPTANCE_CONTRACT_WALL")
   })
 
   it("requires a closed, machine-readable completion shape", () => {

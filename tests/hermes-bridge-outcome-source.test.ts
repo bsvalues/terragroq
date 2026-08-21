@@ -191,6 +191,7 @@ function projectOutcomeRuntimeCheckpoint(input: Record<string, any>) {
             agent: "codex",
             allowedFiles: runtimeWorkContract.allowedFiles,
             validators: runtimeWorkContract.validators,
+            acceptanceCriteria: [],
             ...entry,
           })),
         }
@@ -1589,7 +1590,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
     expect(query.mock.calls[2][0]).toMatch(/"allowedFiles", validators/)
     expect(query.mock.calls[2][1]).toEqual([
       4, "WO-HERMES-OUTCOME-4", runtimeWorkContract.allowedFiles, runtimeWorkContract.validators,
-      null, null, null, null, false, false, false,
+      null, null, null, null, false, false, false, [],
     ])
     expect(query.mock.calls[2][0]).toMatch(/NOT EXISTS/)
     expect(query.mock.calls[4][0]).toMatch(/INSERT INTO governance_event/)
@@ -1642,6 +1643,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         commitAllowed: true, tagAllowed: false, pushAllowed: true,
         allowedFiles: issue911RuntimeWorkContract.allowedFiles,
         validators: issue911RuntimeWorkContract.validators,
+        acceptanceCriteria: [],
         latestCheckpointId: null, latestCheckpointState: null, latestCheckpointKey: null,
         latestCheckpointDigest: null, latestCheckpointSequence: null,
         latestExecutionEpochDigest: null, latestCheckpointCreatedAt: null,
@@ -1788,6 +1790,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         commitAllowed: true, tagAllowed: false, pushAllowed: true,
         allowedFiles: issue911RuntimeWorkContract.allowedFiles,
         validators: issue911RuntimeWorkContract.validators,
+        acceptanceCriteria: [],
         latestCheckpointId: 90, latestCheckpointMetadata: { checkpointState: "FAILED_TERMINAL" },
         latestCheckpointState: "FAILED_TERMINAL",
         latestCheckpointKey: "hermes-outcome:4:attempt:1:checkpoint:42",
@@ -1993,6 +1996,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         authorityLevel: "A2_WRITE_OWN", authorityGranted: "A2_WRITE_OWN",
         commitAllowed: true, tagAllowed: false, pushAllowed: true,
         allowedFiles: issue911RuntimeWorkContract.allowedFiles, validators: issue911RuntimeWorkContract.validators,
+        acceptanceCriteria: [],
         latestCheckpointId: 94, latestCheckpointMetadata: authorization.activeRecoveryCheckpoint.metadata,
         latestCheckpointState: "REVIEW_REMEDIATION_RECOVERED",
         latestCheckpointKey: recoveryPayload.idempotencyKey,
@@ -2010,7 +2014,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         reviewRecoveryProofDigest: "d".repeat(64) } } })).resolves.toMatchObject({ workOrderId: 42 })
     const authorizationCall = query.mock.calls.find(([sql]) => /FROM goal AS contract_goal/.test(sql))!
     expect(authorizationCall[1]?.slice(22)).toEqual([
-      true, 2, 4, 5, false, false, false, null, false, null,
+      true, 2, 4, 5, false, false, false, null, false, null, expect.any(String),
     ])
     authorization.activeRecoveryCheckpoint.metadata.checkpointDetail = "DRIFTED"
     const { payloadDigest: _digest, ...drifted } = authorization.activeRecoveryCheckpoint.metadata
@@ -2164,6 +2168,7 @@ describe("Hermes bridge PostgreSQL outcome source", () => {
         authorityGrantId: 205, authorityLevel: "A2_WRITE_OWN", authorityGranted: "A2_WRITE_OWN",
         commitAllowed: true, tagAllowed: false, pushAllowed: true,
         allowedFiles: projectedContract.allowedFiles, validators: projectedContract.validators,
+        acceptanceCriteria: [],
         latestCheckpointId: null, latestCheckpointState: null, latestCheckpointKey: null,
         latestCheckpointDigest: null, latestCheckpointSequence: null,
         latestExecutionEpochDigest: null, latestCheckpointCreatedAt: null,
