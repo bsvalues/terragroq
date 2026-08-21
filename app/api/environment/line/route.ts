@@ -11,6 +11,7 @@ import { project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
+import { classifyGrounded, composeProjectsAnswer, groundedCurrentWork, groundedIdentity } from "@/lib/environment/grounding"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
 import {
   createWorkingWorld,
@@ -241,14 +242,30 @@ async function saveWorld(userId: string, worldId: string, world: WorkingWorldSna
 }
 
 /** Bounded, honest conversation with the sovereign model. */
+/**
+ * Answer identity/project/current-work questions from grounded state, never from the free-form model.
+ * Returns null when the sentence is not one of those, so it falls through to converse(). This is what
+ * makes fabrication unreachable on these paths (real-operator acceptance).
+ */
+async function groundedAnswer(text: string, userId: string): Promise<string | null> {
+  const kind = classifyGrounded(text)
+  if (!kind) return null
+  if (kind === "identity") return groundedIdentity()
+  const projects = await db.select({ name: project.name }).from(project).where(eq(project.userId, userId))
+  if (kind === "projects") return composeProjectsAnswer(projects)
+  return groundedCurrentWork(projects)
+}
+
 async function converse(world: WorkingWorldSnapshot, text: string): Promise<string> {
   const messages = [
     {
       role: "system",
       content:
-        `You are WilliamOS, the owner's development environment, mid-work on: "${world.intent}". ` +
-        `Speak plainly, never require system vocabulary, never claim to have executed anything. ` +
-        `Keep replies under 120 words.`,
+        `You ARE WilliamOS — the Primary Operator's sovereign command environment for governed ` +
+        `development work, mid-work on: "${world.intent}". You are not a generic assistant. Speak ` +
+        `plainly, never require system vocabulary, never claim to have executed anything. Never invent ` +
+        `projects, work, systems, or facts: if you do not have grounded information, say you do not ` +
+        `have it rather than guessing. Keep replies under 120 words.`,
     },
     ...world.conversation.slice(-10).map((turn) => ({
       role: turn.role === "owner" ? "user" : "assistant",
@@ -321,7 +338,7 @@ export async function POST(request: Request) {
         updated = withSurface(updated, { kind: "tests", subject: "auth copy contracts", because: "the governing contract" })
       }
     } else {
-      say = await converse(updated, text)
+      say = (await groundedAnswer(text, userId)) ?? (await converse(updated, text))
     }
     updated = withTurn(updated, "williamos", say)
     await saveWorld(userId, requestedWorldId, updated, false)
@@ -364,7 +381,7 @@ export async function POST(request: Request) {
   }
 
   const scratch = createWorkingWorld({ intent: text })
-  const say = await converse(scratch, text)
+  const say = (await groundedAnswer(text, userId)) ?? (await converse(scratch, text))
   const worldId = crypto.randomUUID()
   let world = withTurn(scratch, "owner", text)
   world = withTurn(world, "williamos", say)
