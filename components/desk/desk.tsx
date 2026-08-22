@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react"
 
 import { cn } from "@/lib/utils"
 import { EMPTY_SPINE, type WorldSpine } from "@/lib/environment/working-world"
+import { isExecutionLive } from "@/lib/environment/world-execution"
 
 /**
  * The replacement environment's root (#762). Greenfield: this tree imports nothing from the legacy
@@ -48,6 +49,44 @@ export function Desk() {
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end" })
   }, [turns, busy])
+
+  /**
+   * The world watches its own work.
+   *
+   * This is what "nothing moves" was really about: execution changed in the runtime and the screen
+   * had no reason to find out. While the bound outcome is live, the environment re-reads canonical
+   * execution and the world line moves on its own — no navigation, no refresh, nothing for the owner
+   * to go check.
+   *
+   * It stops when the work settles. Polling a finished world forever is how an operator surface
+   * becomes a battery drain that learns nothing.
+   */
+  useEffect(() => {
+    const outcomeKey = spine.outcomeKey
+    if (!outcomeKey || !isExecutionLive(spine.execution)) return
+    let cancelled = false
+    const timer = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/environment/execution?outcomeKey=${encodeURIComponent(outcomeKey)}`)
+        if (!response.ok) return
+        const live = (await response.json()) as Pick<WorldSpine, "execution" | "worker" | "evidence">
+        if (cancelled) return
+        // Only the execution facts move; the bound identity of the work is not re-decided here.
+        setSpine((current) =>
+          current.outcomeKey !== outcomeKey
+            ? current
+            : { ...current, execution: live.execution, worker: live.worker, evidence: live.evidence },
+        )
+      } catch {
+        // A missed read is not an event: the world keeps its last known truth rather than flickering
+        // to a guess, and the next tick corrects it.
+      }
+    }, 4000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [spine.outcomeKey, spine.execution])
 
   // The Line is universal input: typing anywhere in the environment reaches it.
   useEffect(() => {
