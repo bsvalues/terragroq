@@ -45,7 +45,7 @@ const CLARIFICATION = {
 const ANSWER = {
   state: "routed",
   intent: "answer",
-  destination: { href: "/chat", action: "respond" },
+  destination: { href: "/", action: "respond" },
   executionAuthorized: false,
   authority: { required: false, granted: false },
   reason: "A single deterministic intent contract matched.",
@@ -54,7 +54,7 @@ const ANSWER = {
 const NAVIGATION = {
   state: "routed",
   intent: "navigation",
-  destination: { href: "/projects", action: "navigate" },
+  destination: { href: "/activity", action: "navigate" },
   executionAuthorized: false,
   authority: { required: false, granted: false },
   reason: "A single deterministic intent contract matched.",
@@ -253,7 +253,6 @@ describe("UniversalIntent shared Workbench contract", () => {
     const palette = screen.getByRole("textbox", { name: "Intent palette" }) as HTMLInputElement
     expect(document.activeElement).toBe(palette)
     expect(palette.value).toBe("Build the useful cockpit")
-    expect(screen.getByRole("link", { name: "Projects" })).toBeTruthy()
     expect(screen.getByRole("link", { name: "Evidence" })).toBeTruthy()
     expect(screen.getByRole("link", { name: "Raw Runtime" })).toBeTruthy()
   })
@@ -298,11 +297,11 @@ describe("UniversalIntent shared Workbench contract", () => {
     intentReply = async () => reply(NAVIGATION)
     render(<UniversalIntent selectedProject={{ id: 7, name: "WilliamOS" }} onOpenThread={vi.fn()} />)
 
-    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Open Projects")
+    await user.type(screen.getByRole("textbox", { name: "Ask or do anything" }), "Open Activity")
     await user.keyboard("{Enter}")
 
     const destination = await screen.findByRole("link", { name: "Open destination" })
-    expect(destination.getAttribute("href")).toBe("/projects")
+    expect(destination.getAttribute("href")).toBe("/activity")
     expect(objectiveCalls()).toHaveLength(0)
     expect(screen.queryByText("Admitted as work")).toBeNull()
   })

@@ -18,30 +18,30 @@ describe("same-tab intent handoff", () => {
   })
 
   it("clears a matching handoff after one read", () => {
-    storeIntentHandoff("/chat", "Explain the activity feed")
+    storeIntentHandoff("/", "Explain the activity feed")
 
-    expect(consumeIntentHandoff("/chat")).toBe("Explain the activity feed")
-    expect(consumeIntentHandoff("/chat")).toBe("")
+    expect(consumeIntentHandoff("/")).toBe("Explain the activity feed")
+    expect(consumeIntentHandoff("/")).toBe("")
   })
 
   it("does not disclose a handoff to the wrong destination", () => {
     storeIntentHandoff("/goal-console", "Draft an outcome")
 
-    expect(consumeIntentHandoff("/chat")).toBe("")
+    expect(consumeIntentHandoff("/")).toBe("")
     expect(consumeIntentHandoff("/goal-console")).toBe("Draft an outcome")
   })
 
   it("drops expired or malformed handoffs", () => {
     values.set(INTENT_HANDOFF_KEY, JSON.stringify({
-      destination: "/chat",
+      destination: "/",
       intent: "stale",
       createdAt: Date.now() - 6 * 60 * 1000,
     }))
-    expect(consumeIntentHandoff("/chat")).toBe("")
+    expect(consumeIntentHandoff("/")).toBe("")
     expect(values.has(INTENT_HANDOFF_KEY)).toBe(false)
 
     values.set(INTENT_HANDOFF_KEY, "not json")
-    expect(consumeIntentHandoff("/chat")).toBe("")
+    expect(consumeIntentHandoff("/")).toBe("")
     expect(values.has(INTENT_HANDOFF_KEY)).toBe(false)
   })
 })

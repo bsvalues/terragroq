@@ -829,7 +829,6 @@ export async function startGoalOutcome(
   if (!persisted.start) throw new Error("WORKBENCH_OUTCOME_START_RESULT_WALL")
   if (persisted.start.intakeTruth === "persisted") {
     revalidatePath("/")
-    revalidatePath("/projects")
   }
   return persisted.start
 }

@@ -80,7 +80,7 @@ describe("the freeze: no new code may extend the old product shape", () => {
     // capability. The set is frozen at what already exists; a new one fails here, which is the point.
     const shell = source(FROZEN_SHELL)
     const modes = [...shell.matchAll(/mode:\s*"([a-z-]+)"/gi)].map((match) => match[1])
-    expect(new Set(modes).size).toBeLessThanOrEqual(4)
+    expect(new Set(modes).size).toBeLessThanOrEqual(3)
   })
 
   it("adds no new top-level product route", () => {
@@ -90,7 +90,7 @@ describe("the freeze: no new code may extend the old product shape", () => {
     const routes = fs.existsSync(shellDir)
       ? fs.readdirSync(shellDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).length
       : 0
-    expect(routes).toBeLessThanOrEqual(22)
+    expect(routes).toBeLessThanOrEqual(20)
   })
 })
 

@@ -3,11 +3,10 @@ import { describe, expect, it } from "vitest"
 import { NAV_GROUP_IDS, navGroups, navItems } from "@/components/shell/nav-items"
 import { supportingCapabilities } from "@/components/workbench/supporting-capabilities"
 
-describe("four-primary cockpit navigation", () => {
-  it("exposes exactly HOME, PROJECTS, ACTIVITY, and SYSTEM in the normal shell", () => {
+describe("legacy cockpit navigation (compatibility only)", () => {
+  it("exposes exactly HOME, ACTIVITY, and SYSTEM in the normal shell", () => {
     expect(navItems.map(({ href, label }) => ({ href, label }))).toEqual([
       { href: "/", label: "Home" },
-      { href: "/projects", label: "Projects" },
       { href: "/activity", label: "Activity" },
       { href: "/system", label: "System" },
     ])
@@ -28,7 +27,10 @@ describe("four-primary cockpit navigation", () => {
   })
 
   it("keeps supporting routes out of primary navigation without deleting them", () => {
-    const supporting = ["/work-orders", "/audit", "/brain-council", "/goal-console", "/chat"]
+    // "/chat" is absent because it no longer exists: there is no separate Chat product, and the Line
+    // in the Environment is the operator's input. A route kept here "for compatibility" would go on
+    // teaching that chat is a destination.
+    const supporting = ["/work-orders", "/audit", "/brain-council", "/goal-console"]
     expect(navItems.map((item) => item.href)).not.toEqual(expect.arrayContaining(supporting))
     // Assert the routes stay reachable, not the literal syntax that expresses them: the intent
     // router moved from a flat phrase->href map to intent-keyed destinations, which silently

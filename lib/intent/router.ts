@@ -53,7 +53,7 @@ const SIGNALS: Readonly<Record<Exclude<UniversalIntent, "navigation">, readonly 
 }
 
 const DESTINATIONS: Readonly<Record<Exclude<UniversalIntent, "navigation">, IntentDestination>> = {
-  answer: { href: "/chat", action: "respond" },
+  answer: { href: "/", action: "respond" },
   research: { href: "/brain-council", action: "research" },
   council: { href: "/brain-council", action: "council_review" },
   outcome: { href: null, action: "start_outcome" },
