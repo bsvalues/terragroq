@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { createHash, randomUUID } from "node:crypto"
+import fs from "node:fs"
+import path from "node:path"
 import { getTableName } from "drizzle-orm"
 import { getTableConfig } from "drizzle-orm/pg-core"
 
@@ -45,6 +47,7 @@ import {
   transitionOutcomeQueueItem,
   verifyOutcomeQueueWorkOrderBinding,
 } from "@/scripts/hermes-bridge/outcome-queue-source.mjs"
+import { resolveHermesWorkContract } from "@/scripts/hermes-bridge/work-contract.mjs"
 import { verifyMutationRows } from "@/scripts/hermes-bridge/v1-2-acceptance-campaign.mjs"
 import {
   acceptanceCampaignIdempotencyKey,
@@ -3684,6 +3687,242 @@ describe("transactional durable outcome queue source", () => {
       }
     },
     30_000,
+  )
+
+  it.runIf(Boolean(process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL))(
+    "binds and verifies the exact acceptance Work Order in an isolated PostgreSQL graph",
+    async () => {
+      const { Pool } = await import("pg")
+      const pool = new Pool({
+        connectionString: process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL?.replace("-pooler.", "."),
+      })
+      const client = await pool.connect()
+      const schema = `hermes_bind_work_order_${randomUUID().replaceAll("-", "")}`
+      const acceptanceContractId = "issue-911-live-nonempty-acceptance.v1"
+      const intent = "record structured #911 reliability remediation without host mutation"
+      const outcomeKey = "goal:GOAL-0025"
+      const owner = "bind-work-order-owner"
+      const threadId = "thread-bind-work-order"
+      const intakeKey = `workbench-outcome:${acceptanceContractId}:11111111-1111-4111-8111-111111111111`
+      const at = "2026-08-22T04:20:25.031Z"
+      const firstAcquiredAt = "2026-08-22T04:18:00.000Z"
+      const contract = resolveHermesWorkContract({
+        command: intent, title: intent, objective: intent,
+        lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN",
+        acceptedContractIds: [acceptanceContractId],
+      })!
+      const canonicalJson = (value: any): string => value && typeof value === "object"
+        ? Array.isArray(value) ? `[${value.map(canonicalJson).join(",")}]`
+          : `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+        : JSON.stringify(value)
+      const digest = (value: unknown) => createHash("sha256").update(canonicalJson(value)).digest("hex")
+      const query = client.query.bind(client)
+      const dedicated = { connect: async () => ({ query, release: vi.fn() }) }
+      const bind = () => bindOutcomeQueueWorkOrder({
+        query, userId: owner, outcomeKey, expectedVersion: 3,
+        executionBinding: "execution-22", leaseHolder: "resident-hermes",
+        leaseToken: "lease-22", fencingToken: 2, activeWorkOrderId: 54, now: at,
+      })
+      try {
+        await client.query(`CREATE SCHEMA "${schema}"`)
+        await client.query(`SET search_path TO "${schema}"`)
+        const tables = new Set([
+          "authority_grant", "decision", "goal", "goal_outcome_intake_receipt", "governance_event",
+          "outcome_queue_item", "project", "project_resource", "user", "work_order",
+          "workbench_thread", "workbench_thread_source",
+        ])
+        const migration = fs.readFileSync(path.join(process.cwd(), "drizzle", "0000_williamos_init.sql"), "utf8")
+        for (const statement of migration.split("--> statement-breakpoint").map((value) => value.trim()).filter(Boolean)) {
+          const created = statement.match(/^CREATE TABLE "([^"]+)"/)?.[1]
+          const altered = statement.match(/^ALTER TABLE "([^"]+)"/)?.[1]
+          const indexed = statement.match(/^CREATE (?:UNIQUE )?INDEX "[^"]+" ON "([^"]+)"/)?.[1]
+          const refs = [...statement.matchAll(/REFERENCES "public"\."([^"]+)"/g)].map((match) => match[1])
+          if (!(created && tables.has(created))
+            && !(altered && tables.has(altered) && refs.every((ref) => tables.has(ref)))
+            && !(indexed && tables.has(indexed))) continue
+          await client.query(statement.replaceAll('"public".', `"${schema}".`))
+        }
+        await client.query(OUTCOME_QUEUE_SQL.ensureMutationReceiptTable)
+        await client.query(OUTCOME_QUEUE_SQL.ensureAcquisitionReceiptTable)
+        await client.query(OUTCOME_QUEUE_SQL.ensureAcquisitionAttemptTable)
+
+        const intakeRequestHash = digest({ contractVersion: 1, projectId: 1, intent, idempotencyKey: intakeKey })
+        const intakeResultDigest = digest({
+          contractVersion: 1, requestHash: intakeRequestHash, goalId: 25, outcomeKey, threadId,
+          root: { sourceType: "outcome", sourceId: outcomeKey },
+          acceptedContractIds: [acceptanceContractId],
+        })
+        await client.query(`INSERT INTO "user" (id,name,email) VALUES ($1,'Owner','bind-work-order@example.test')`, [owner])
+        await client.query(`INSERT INTO project (id,"userId",key,name,lifecycle)
+          VALUES (1,$1,'bind-work-order','WilliamOS','active')`, [owner])
+        await client.query(`INSERT INTO project_resource
+          ("userId","projectId",type,relationship,"canonicalIdentity",label)
+          VALUES ($1,1,'repo','primary-repo','bsvalues/terragroq','WilliamOS')`, [owner])
+        await client.query(`INSERT INTO workbench_thread (id,"userId","projectId",title)
+          VALUES ($1,$2,1,'#911 acceptance')`, [threadId, owner])
+        await client.query(`INSERT INTO workbench_thread_source ("userId","threadId","sourceType","sourceId",role)
+          VALUES ($1,$2,'outcome',$3,'root')`, [owner, threadId, outcomeKey])
+        await client.query(`INSERT INTO goal
+          (id,"userId",ref,command,lane,mode,risk,authority,verdict,"matchedRules","acceptedContractIds",
+           "requiresApproval",status,"linkedWorkOrderId")
+          VALUES (25,$1,'GOAL-0025',$2,'operator-objective','implementation','R1','A2_WRITE_OWN','allow',
+            ARRAY[$3],ARRAY[$3],false,'classified',54)`, [owner, intent, acceptanceContractId])
+        const intakeReceipt = (await client.query(`INSERT INTO goal_outcome_intake_receipt
+          ("userId","idempotencyKey","requestHash","goalId","outcomeKey","acceptedContractIds","resultDigest")
+          VALUES ($1,$2,$3,25,$4,ARRAY[$5],$6) RETURNING id`,
+        [owner, intakeKey, intakeRequestHash, outcomeKey, acceptanceContractId, intakeResultDigest])).rows[0]
+        const acceptanceIntakeProof = {
+          receiptId: Number(intakeReceipt.id), requestHash: intakeRequestHash, resultDigest: intakeResultDigest,
+          idempotencyKeyDigest: digest({ idempotencyKey: intakeKey }),
+        }
+        const requestBinding = {
+          projectId: 1, threadId, outcomeKey,
+          idempotencyKey: "workbench-execution:bind-work-order", confirmation: "START_WORK",
+        }
+        const expiresAt = "2099-01-01T00:00:00.000Z"
+        const resultBinding = {
+          decisionId: 74, decisionRef: "WB-EXEC-DECISION-BIND-WO",
+          grantId: 80, grantRef: "WB-EXEC-GRANT-BIND-WO",
+          implementationGrantId: 81, implementationGrantRef: "WB-EXEC-IMPL-GRANT-BIND-WO",
+          queueVersion: 1, authorizedAt: at, expiresAt, workContract: contract,
+          acceptedContractIds: [acceptanceContractId], acceptanceIntakeProof,
+        }
+        const approvalEvidence = [
+          "project:1", `thread:${threadId}`, `repo:${contract.repository}`,
+          `work-contract:${contract.id}`, `work-contract-digest:${contract.digest}`,
+          `work-contract-json:${JSON.stringify(contract)}`,
+          `acceptance-intake-receipt:${acceptanceIntakeProof.receiptId}`,
+          `acceptance-intake-request:${acceptanceIntakeProof.requestHash}`,
+          `acceptance-intake-result:${acceptanceIntakeProof.resultDigest}`,
+          `acceptance-intake-key-digest:${acceptanceIntakeProof.idempotencyKeyDigest}`,
+          ...contract.reservations.map((reservation) => `reservation:${reservation}`),
+          ...contract.validationCommands.map((validator) => `validator:${validator.command}:${validator.args.join(" ")}`),
+        ]
+        await client.query(`INSERT INTO decision
+          (id,"userId",ref,title,decision,status,authority,owner,scope,evidence,tags,locked)
+          VALUES (74,$1,'WB-EXEC-DECISION-BIND-WO','Start #911 work','APPROVE','accepted','binding',$1,$2,$3,
+            ARRAY['workbench','outcome','explicit-start-work'],true)`, [owner, outcomeKey, approvalEvidence])
+        await client.query(`INSERT INTO authority_grant
+          (id,"userId",ref,"workOrderId","grantedBy","grantedTo","authorityLevel",scope,"allowedActions",
+           "blockedActions",status,"expiresAt") VALUES
+          (80,$1,'WB-EXEC-GRANT-BIND-WO',NULL,$1,'operator','A2_WRITE_OWN',$2,ARRAY['outcome:execute'],
+            ARRAY['production:mutate','release:create','secret:access','spend:increase'],'active',$3),
+          (81,$1,'WB-EXEC-IMPL-GRANT-BIND-WO',NULL,$1,'operator','A2_WRITE_OWN','WO-HERMES-OUTCOME-25',ARRAY['implement'],
+            ARRAY['production:mutate','release:create','secret:access','spend:increase'],'active',$3)`,
+        [owner, outcomeKey, expiresAt])
+        const acceptanceCriteria = [JSON.stringify({
+          contractId: contract.id, contractDigest: contract.digest, ...contract.acceptance,
+        })]
+        await client.query(`INSERT INTO work_order
+          (id,"userId",ref,title,goal,scope,"allowedFiles",validators,lane,status,priority,assignee,
+           "authorityLevel","authorityGranted","authorityGrantId","acceptanceCriteria",agent,"approvedBy",
+           "linkedDecisionId","commitAllowed","tagAllowed","pushAllowed") VALUES
+          (54,$1,'WO-HERMES-OUTCOME-25',$2,'GOAL-0025','#911',$3::text[],$4::text[],$5,'active','high',
+           'hermes-codex-bridge','A2_WRITE_OWN','A2_WRITE_OWN',81,$6::text[],'codex',$1,74,true,false,true)`,
+        [owner, intent, contract.reservations,
+          contract.validationCommands.map((validator) => `${validator.command} ${validator.args.join(" ")}`),
+          contract.lane, acceptanceCriteria])
+        await client.query(`INSERT INTO outcome_queue_item
+          (id,"userId","outcomeKey","goalId","goalRef",title,objective,"queueOrder","dependencyKeys","riskClass",
+           "approvalState","approvedBy","approvedAt","approvalDecisionId","authorityState","authorityLevel",
+           "authorityGrantRef","authoritySubject","authorityAction","lifecycleState","activeWorkOrderId",
+           "executionBinding","leaseHolder","leaseToken","leaseExpiresAt","fencingToken",version,"acquisitionKey",
+           "acceptedContractIds") VALUES
+          (22,$1,$2,25,'GOAL-0025',$3,$3,10,ARRAY[]::text[],'R1','approved',$1,$4,74,'matched','A2_WRITE_OWN',
+           'WB-EXEC-GRANT-BIND-WO','operator','outcome:execute','approved',NULL,NULL,NULL,
+           NULL,NULL,0,1,NULL,ARRAY[$5])`,
+        [owner, outcomeKey, intent, at, acceptanceContractId])
+        await client.query(`INSERT INTO outcome_queue_mutation_receipt
+          ("userId","idempotencyKey",operation,"outcomeKey","requestHash","requestBinding","resultBinding","createdAt")
+          VALUES ($1,$2,'workbench_execution.authorize',$3,$4,$5::jsonb,$6::jsonb,$7)`,
+        [owner, requestBinding.idempotencyKey, outcomeKey,
+          digest({ contract: "workbench-execution-authorization.v1", ...requestBinding }),
+          JSON.stringify(requestBinding), JSON.stringify(resultBinding), at])
+
+        const checkpointProofProvider = vi.fn(async ({ outcome }: any) => ({
+          outcomeId: String(outcome.goalId), outcomeKey: outcome.outcomeKey,
+          workOrderId: outcome.activeWorkOrderId, fencingToken: outcome.fencingToken,
+          sequence: 0, state: "LEASED",
+          commit: { headSha: null, mergeSha: null, prNumber: null },
+        }))
+        const first = await acquireNextEligibleOutcome({
+          query: dedicated, userId: owner, acquisitionKey: "acquisition-22",
+          leaseHolder: "resident-hermes", leaseToken: "lease-22", executionBinding: "execution-22",
+          leaseDurationMs: 60_000, activeWorkOrderId: null, campaignWindowId: "campaign-22",
+          processIdentity: "process-22", checkpointProofProvider, now: firstAcquiredAt,
+        })
+        expect(first).toMatchObject({ acquired: true, replayed: false, reclaimed: false,
+          outcome: { version: 2, fencingToken: 1, activeWorkOrderId: null } })
+        await client.query(`UPDATE outcome_queue_item SET "leaseExpiresAt"='2026-08-22T04:19:00.000Z'
+          WHERE id=22`)
+        const reclaimed = await acquireNextEligibleOutcome({
+          query: dedicated, userId: owner, acquisitionKey: "acquisition-22",
+          leaseHolder: "resident-hermes", leaseToken: "lease-22", executionBinding: "execution-22",
+          leaseDurationMs: 60_000, activeWorkOrderId: null, campaignWindowId: "campaign-22",
+          processIdentity: "process-22", checkpointProofProvider, now: at,
+        })
+        expect(reclaimed).toMatchObject({ acquired: true, replayed: false, reclaimed: true,
+          outcome: { version: 3, fencingToken: 2, activeWorkOrderId: null,
+            lifecycleReason: "STALE_LEASE_RECOVERED" } })
+        expect((await client.query(`SELECT disposition,"fencingToken" FROM outcome_queue_acquisition_attempt
+          ORDER BY id`)).rows).toEqual([
+          { disposition: "WINNER", fencingToken: 1 },
+          { disposition: "RECLAIMED", fencingToken: 2 },
+        ])
+
+        await client.query("BEGIN READ ONLY")
+        await expect(client.query(`PREPARE hermes_bind_work_order AS ${OUTCOME_QUEUE_SQL.bindWorkOrder}`))
+          .resolves.toMatchObject({ command: "PREPARE" })
+        await expect(client.query(`PREPARE hermes_verify_bound_work_order AS ${OUTCOME_QUEUE_SQL.verifyBoundWorkOrder}`))
+          .resolves.toMatchObject({ command: "PREPARE" })
+        await client.query("DEALLOCATE hermes_bind_work_order")
+        await client.query("DEALLOCATE hermes_verify_bound_work_order")
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.bindWorkOrder}`, [
+          owner, outcomeKey, 3, "execution-22", "lease-22", 2, 54, at, "resident-hermes",
+        ])).resolves.toMatchObject({ rows: expect.any(Array) })
+        await expect(client.query(`EXPLAIN ${OUTCOME_QUEUE_SQL.verifyBoundWorkOrder}`, [
+          owner, outcomeKey, 3, "execution-22", "lease-22", 2, 54, "active", at, "resident-hermes",
+        ])).resolves.toMatchObject({ rows: expect.any(Array) })
+        await client.query("ROLLBACK")
+
+        for (const [name, mutate] of [
+          ["goal marker", () => client.query(`UPDATE goal SET "acceptedContractIds"=ARRAY[]::text[] WHERE id=25`)],
+          ["intake proof", () => client.query(`UPDATE goal_outcome_intake_receipt SET "resultDigest"=$1`, ["0".repeat(64)])],
+          ["decision", () => client.query(`UPDATE decision SET evidence=ARRAY[]::text[] WHERE id=74`)],
+          ["grant", () => client.query(`UPDATE authority_grant SET "revokedAt"=$1 WHERE id=81`, [at])],
+          ["project repository", () => client.query(`UPDATE project_resource SET "canonicalIdentity"='bsvalues/drift'`)],
+          ["projected contract", () => client.query(`UPDATE work_order SET "allowedFiles"=ARRAY['drift']::text[] WHERE id=54`)],
+          ["duplicate receipt", () => client.query(`INSERT INTO outcome_queue_mutation_receipt
+            ("userId","idempotencyKey",operation,"outcomeKey","requestHash","requestBinding","resultBinding","createdAt")
+            SELECT "userId",'workbench-execution:duplicate',operation,"outcomeKey","requestHash","requestBinding",
+              "resultBinding","createdAt" FROM outcome_queue_mutation_receipt`)],
+        ] as const) {
+          await client.query("BEGIN")
+          await mutate()
+          await expect(bind(), name).rejects.toMatchObject({ code: "OUTCOME_QUEUE_STALE_FENCE" })
+          expect((await client.query(`SELECT "activeWorkOrderId" FROM outcome_queue_item WHERE id=22`)).rows)
+            .toEqual([{ activeWorkOrderId: null }])
+          await client.query("ROLLBACK")
+        }
+
+        await expect(bind()).resolves.toMatchObject({ id: 22, activeWorkOrderId: 54, version: 3, fencingToken: 2 })
+        await expect(verifyOutcomeQueueWorkOrderBinding({
+          query, userId: owner, outcomeKey, expectedVersion: 3,
+          executionBinding: "execution-22", leaseHolder: "resident-hermes", leaseToken: "lease-22",
+          fencingToken: 2, activeWorkOrderId: 54, expectedWorkOrderStatus: "active", now: at,
+        })).resolves.toMatchObject({ id: 22, activeWorkOrderId: 54 })
+        expect((await client.query(`SELECT count(*)::integer AS count FROM work_order WHERE id=54`)).rows)
+          .toEqual([{ count: 1 }])
+        expect((await client.query(`SELECT count(*)::integer AS count FROM outcome_queue_mutation_receipt`)).rows)
+          .toEqual([{ count: 1 }])
+      } finally {
+        try { await client.query("ROLLBACK") } catch {}
+        try { await client.query("SET search_path TO public") } catch {}
+        try { await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`) } catch {}
+        client.release(); await pool.end()
+      }
+    },
+    60_000,
   )
 
   it.runIf(Boolean(process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL))(

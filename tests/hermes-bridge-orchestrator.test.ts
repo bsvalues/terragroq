@@ -3255,6 +3255,91 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
   })
 
+  it("reclaims the stale null-Work-Order crash window and binds the existing Work Order before AEGIS", async () => {
+    const seed = fixture()
+    const priorOutcome = {
+      ...(await seed.selectOutcome()),
+      queueBinding: {
+        userId: "owner-id",
+        outcomeKey: "goal:GOAL-0025",
+        expectedVersion: 2,
+        executionBinding: "execution-22",
+        acquisitionKey: "acquisition-22",
+        leaseHolder: "resident-hermes",
+        leaseToken: "lease-22",
+        fencingToken: 1,
+      },
+    }
+    const reclaimedOutcome = {
+      ...priorOutcome,
+      queueBinding: {
+        ...priorOutcome.queueBinding,
+        expectedVersion: 3,
+        fencingToken: 2,
+        lifecycleReason: "STALE_LEASE_RECOVERED",
+      },
+    }
+    const refreshQueueOutcome = vi.fn(async () => reclaimedOutcome)
+    const bindQueueWorkOrder = vi.fn(async (candidate, workOrderId) => ({
+      ...candidate,
+      queueBinding: { ...candidate.queueBinding, activeWorkOrderId: workOrderId },
+    }))
+    const projectCheckpoint = vi.fn(async () => ({ workOrderId: 54, status: "active" }))
+    const value = fixture(undefined, {
+      refreshQueueOutcome,
+      bindQueueWorkOrder,
+      projectCheckpoint,
+    })
+    value.selectOutcome.mockClear()
+    value.state.initialize()
+    const lease = value.state.acquireLease({
+      idempotencyKey: "acceptance-crash-window-acquire",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      leaseDurationMs: 1000,
+      metadata: { outcome: priorOutcome },
+    })
+    value.state.abandonLease({
+      idempotencyKey: "acceptance-crash-window-abandon",
+      outcomeId: "77",
+      holderId: "crashed-holder",
+      fencingToken: lease.fencingToken,
+      reason: "42601",
+    })
+    value.advance(1001)
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "COMPLETE",
+      outcomeId: "77",
+    })
+    expect(value.selectOutcome).not.toHaveBeenCalled()
+    expect(refreshQueueOutcome).toHaveBeenCalledOnce()
+    expect(refreshQueueOutcome).toHaveBeenCalledWith(priorOutcome)
+    expect(bindQueueWorkOrder).toHaveBeenCalledOnce()
+    expect(bindQueueWorkOrder).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueBinding: expect.objectContaining({
+          expectedVersion: 3,
+          fencingToken: 2,
+        }),
+      }),
+      54,
+      "active",
+    )
+    expect(Object.hasOwn(bindQueueWorkOrder.mock.calls[0][0].queueBinding, "activeWorkOrderId")).toBe(false)
+    expect(refreshQueueOutcome.mock.invocationCallOrder[0])
+      .toBeLessThan(bindQueueWorkOrder.mock.invocationCallOrder[0])
+    expect(bindQueueWorkOrder.mock.invocationCallOrder[0])
+      .toBeLessThan(value.client.connect.mock.invocationCallOrder[0])
+    expect(projectCheckpoint).toHaveBeenCalled()
+    expect(value.state.read().executions["77"]).toMatchObject({
+      fencingToken: lease.fencingToken + 1,
+      lease: { status: "RELEASED" },
+      checkpoint: { state: "COMPLETE" },
+      metadata: { outcome: { queueBinding: { activeWorkOrderId: 54 } } },
+    })
+  })
+
   it("fails closed when an active execution has no exact outcome snapshot", async () => {
     const value = fixture()
     value.state.initialize()

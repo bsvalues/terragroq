@@ -725,7 +725,7 @@ function exactWorkContractReceiptPredicate(alias) {
                     '{"idempotencyKey":' || to_jsonb(exact_contract_intake."idempotencyKey")::text || '}', 'UTF8'
                   )), 'hex')
                 )
-            )))
+            ))))
       OR (${alias}.operation = 'runtime_finding.derive'
         AND ${alias}."requestBinding"->>'operation' = 'runtime_finding.derive'
         AND ${alias}."resultBinding"->>'outcomeKey' = q."outcomeKey"
