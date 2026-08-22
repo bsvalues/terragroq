@@ -705,6 +705,45 @@ describe("authenticated goal outcome intake idempotency", () => {
     expect(harness.state.threadSources).toHaveLength(1)
   })
 
+  it.each([
+    ["missing Goal marker", "goal", undefined],
+    ["empty Goal marker", "goal", []],
+    ["extra Goal marker", "goal", ["issue-911-live-nonempty-acceptance.v1", "unexpected.v1"]],
+    ["other Goal marker", "goal", ["other-contract.v1"]],
+    ["missing outcome marker", "outcome", undefined],
+    ["empty outcome marker", "outcome", []],
+    ["extra outcome marker", "outcome", ["issue-911-live-nonempty-acceptance.v1", "unexpected.v1"]],
+    ["other outcome marker", "outcome", ["other-contract.v1"]],
+    ["missing receipt marker", "receipt", undefined],
+    ["empty receipt marker", "receipt", []],
+    ["extra receipt marker", "receipt", ["issue-911-live-nonempty-acceptance.v1", "unexpected.v1"]],
+    ["other receipt marker", "receipt", ["other-contract.v1"]],
+  ])("walls a %s without partially admitting a distinct key", async (_label, target, marker) => {
+    const intent = "record structured #911 reliability remediation without host mutation"
+    await startWorkbenchOutcome({
+      projectId: 1,
+      intent,
+      idempotencyKey: "workbench-outcome:issue-911-live-nonempty-acceptance.v1:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    })
+    const rows = target === "goal"
+      ? harness.state.goals
+      : target === "outcome"
+        ? harness.state.outcomes
+        : harness.state.receipts
+    rows[0].acceptedContractIds = marker
+
+    await expect(startWorkbenchOutcome({
+      projectId: 1,
+      intent,
+      idempotencyKey: "workbench-outcome:issue-911-live-nonempty-acceptance.v1:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    })).rejects.toThrow("GOAL_INTAKE_ACCEPTANCE_SINGLETON_GRAPH_WALL")
+    expect(harness.state.goals).toHaveLength(1)
+    expect(harness.state.outcomes).toHaveLength(1)
+    expect(harness.state.receipts).toHaveLength(1)
+    expect(harness.state.threads).toHaveLength(1)
+    expect(harness.state.threadSources).toHaveLength(1)
+  })
+
   it.each(["standby", "archived"])("rejects the exact #911 outcome before effects when the Project is %s", async (lifecycle) => {
     harness.state.projects[0].lifecycle = lifecycle
 

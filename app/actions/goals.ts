@@ -27,7 +27,7 @@ import type { CurrentTruth } from "@/lib/goal/current-truth"
 import { lane as findLane } from "@/lib/goal/taxonomy"
 import { getActiveLocks } from "@/app/actions/locks"
 import { hashRecord } from "@/lib/governance/hash"
-import { and, desc, eq, sql } from "drizzle-orm"
+import { and, desc, eq, sql, type SQLWrapper } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 import { mapLegacyGoalToOutcome } from "@/lib/outcome-queue/engine"
 import { routeUniversalIntent } from "@/lib/intent/router"
@@ -42,6 +42,7 @@ import {
   type StartWorkbenchOutcomeResult,
 } from "@/lib/workbench/outcome-start"
 import {
+  ISSUE_911_LIVE_NONEMPTY_ACCEPTANCE_CONTRACT_ID,
   issue911LiveAcceptanceContractIds,
   isIssue911ReliabilityOutcomeIntent,
 } from "@/lib/workbench/registered-outcome-intent"
@@ -153,6 +154,10 @@ function exactContractIds(actual: unknown, expected: readonly string[]): boolean
   return Array.isArray(actual)
     && actual.length === expected.length
     && actual.every((value, index) => value === expected[index])
+}
+
+function issue911LiveAcceptanceSingleton(column: SQLWrapper) {
+  return sql`${column} = ARRAY[${ISSUE_911_LIVE_NONEMPTY_ACCEPTANCE_CONTRACT_ID}]::text[]`
 }
 
 function unavailableOutcomeStart(
@@ -395,7 +400,7 @@ async function persistGoalOutcome(
             .from(goal)
             .where(and(
               eq(goal.userId, userId),
-              sql`${goal.acceptedContractIds} = ${acceptedContractIds}`,
+              issue911LiveAcceptanceSingleton(goal.acceptedContractIds),
             ))
             .limit(1)
         : []
@@ -445,7 +450,7 @@ async function persistGoalOutcome(
           .from(goal)
           .where(and(
             eq(goal.userId, userId),
-            sql`${goal.acceptedContractIds} = ${acceptedContractIds}`,
+            issue911LiveAcceptanceSingleton(goal.acceptedContractIds),
           ))
           .limit(2),
         transaction
@@ -459,7 +464,7 @@ async function persistGoalOutcome(
           .from(outcomeQueueItem)
           .where(and(
             eq(outcomeQueueItem.userId, userId),
-            sql`${outcomeQueueItem.acceptedContractIds} = ${acceptedContractIds}`,
+            issue911LiveAcceptanceSingleton(outcomeQueueItem.acceptedContractIds),
           ))
           .limit(2),
         transaction
@@ -473,7 +478,7 @@ async function persistGoalOutcome(
           .from(goalOutcomeIntakeReceipt)
           .where(and(
             eq(goalOutcomeIntakeReceipt.userId, userId),
-            sql`${goalOutcomeIntakeReceipt.acceptedContractIds} = ${acceptedContractIds}`,
+            issue911LiveAcceptanceSingleton(goalOutcomeIntakeReceipt.acceptedContractIds),
           ))
           .limit(2),
       ])
