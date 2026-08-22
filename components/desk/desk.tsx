@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 
 import { cn } from "@/lib/utils"
+import { EMPTY_SPINE, type WorldSpine } from "@/lib/environment/working-world"
 
 /**
  * The replacement environment's root (#762). Greenfield: this tree imports nothing from the legacy
@@ -32,6 +33,9 @@ type ProbeStep = Readonly<{
 
 export function Desk() {
   const [worldId, setWorldId] = useState<string | null>(null)
+  // The governed spine of the mounted world (phase 2). The environment renders execution FROM this,
+  // so the screen moves when work moves instead of waiting for the owner to go look somewhere.
+  const [spine, setSpine] = useState<WorldSpine>(EMPTY_SPINE)
   const [intent, setIntent] = useState<string | null>(null)
   const [turns, setTurns] = useState<readonly Turn[]>([])
   const [surfaces, setSurfaces] = useState<readonly Surface[]>([])
@@ -78,8 +82,12 @@ export function Desk() {
         worldId: string
         say: string
         surfaces: readonly Omit<Surface, "id">[]
+        spine?: WorldSpine
       }
       if (reply.worldId) setWorldId(reply.worldId)
+      // Execution state arrives with every exchange, so the world header reflects where the work
+      // actually stands rather than what was true when the page was last loaded.
+      if (reply.spine) setSpine(reply.spine)
       setTurns((current) => [...current, { id: crypto.randomUUID(), role: "williamos", content: reply.say }])
       if (reply.surfaces.length > 0) {
         // Materialize by appending: existing surfaces keep their place; spatial memory survives.
@@ -98,8 +106,48 @@ export function Desk() {
 
   const dialogShape = surfaces.length === 0
 
+  /**
+   * The world line: what work this is, and where its execution stands.
+   *
+   * Absent until an outcome is actually bound. An empty world draws NOTHING here — no welcome, no
+   * status card, no billboard explaining WilliamOS. A region that needs explanatory text to justify
+   * existing gets removed, and there is no work to describe yet.
+   *
+   * The worker appears as a lane fact, never a persona: "claude lane" reads the way a disk name reads
+   * in a file listing. The operator is WilliamOS regardless of which lane is executing.
+   */
+  const worldLine = spine.outcomeKey === null ? null : (
+    <div
+      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-neutral-800/80 px-1 pb-2 font-mono text-[11px]"
+      aria-label="Current work"
+    >
+      {spine.projectName ? <span className="text-neutral-300">{spine.projectName}</span> : null}
+      <span className="text-neutral-600">·</span>
+      <span className="text-neutral-400">{spine.outcomeKey}</span>
+      <span
+        className={cn(
+          "rounded px-1.5 py-0.5 uppercase tracking-wide",
+          spine.execution === "complete"
+            ? "bg-emerald-950/70 text-emerald-300"
+            : spine.execution === "blocked"
+              ? "bg-amber-950/70 text-amber-300"
+              : "bg-sky-950/70 text-sky-300",
+        )}
+      >
+        {spine.execution}
+      </span>
+      {spine.worker ? (
+        <span className="text-neutral-500">worker: {spine.worker.lane} lane</span>
+      ) : null}
+      {spine.evidence.length > 0 ? (
+        <span className="text-neutral-500">evidence: {spine.evidence.length}</span>
+      ) : null}
+    </div>
+  )
+
   const line = (
     <div className={cn("flex min-h-0 flex-col", dialogShape ? "mx-auto w-full max-w-2xl flex-1 justify-end pb-10" : "h-full")}>
+      {worldLine}
       <div className={cn("min-h-0 overflow-y-auto", dialogShape ? "" : "flex-1")}>
         {turns.length === 0 && dialogShape ? (
           <p className="pb-8 text-center text-lg text-neutral-500">What are we working on?</p>
