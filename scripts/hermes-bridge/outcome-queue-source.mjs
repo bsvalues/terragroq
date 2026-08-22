@@ -15,6 +15,7 @@ import {
   HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST,
   HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_ID,
+  deriveHermesWorkContract,
   resolveHermesWorkContract,
 } from "./work-contract.mjs"
 import {
@@ -95,6 +96,37 @@ if (!ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT) {
   throw new Error("Registered #911 live acceptance work contract is unavailable")
 }
 const sqlString = (value) => `'${String(value).replaceAll("'", "''")}'`
+
+// Derived lane-policy work contracts (owner invariant 2026-08-21): an unregistered governed startable
+// outcome derives its contract from its LANE, and PR #952 opened the JS execution walls to it. This is
+// the SQL sibling: the acquisition-eligibility predicate must ALSO admit a derived contract, or an
+// Environment-authorized derived-contract outcome is authorized-for-acquisition but never selected
+// (NO_ELIGIBLE_OUTCOME). deriveHermesWorkContract is the SINGLE source of truth — the same function the
+// authorize action stored the contract from — so the id/digest/json pinned here can never drift from
+// what was persisted. Only the two lanes with a governed derivation policy exist; each is exact.
+const DERIVED_LANE_WORK_CONTRACTS = Object.freeze([
+  deriveHermesWorkContract({ lane: "ui", risk: "low", authority: "A2_WRITE_OWN", acceptedContractIds: [] }),
+  deriveHermesWorkContract({ lane: "operator-objective", risk: "R1", authority: "A2_WRITE_OWN", acceptedContractIds: [] }),
+])
+if (DERIVED_LANE_WORK_CONTRACTS.some((contract) => !contract)) {
+  throw new Error("Derived lane-policy work contracts are unavailable")
+}
+
+/**
+ * SQL OR-branches admitting the derived lane-policy contracts for one receipt binding path (e.g.
+ * `execution_receipt."resultBinding"` or `${alias}."resultBinding"`). Each branch pins id + digest
+ * (digest === sha256 of the whole contract, so cryptographically exact) + the full contract JSON
+ * (jsonb value-equality, order-insensitive) + default selection (acceptedContractIds = []). Text still
+ * selects no paths: the pinned contract determines everything, exactly as the registered branches do.
+ */
+function derivedWorkContractBranchesSql(bindingPath) {
+  return DERIVED_LANE_WORK_CONTRACTS.map((contract) => (
+    `(${bindingPath}->'workContract'->>'id' = ${sqlString(contract.id)}`
+    + `\n          AND ${bindingPath}->'workContract'->>'digest' = ${sqlString(contract.digest)}`
+    + `\n          AND ${bindingPath}->'workContract' = ${sqlString(JSON.stringify(contract))}::jsonb`
+    + `\n          AND q."acceptedContractIds" = ARRAY[]::text[])`
+  )).join("\n        OR ")
+}
 const ISSUE_911_WORK_CONTRACT_JSON_SQL = JSON.stringify(ISSUE_911_WORK_CONTRACT).replaceAll("'", "''")
 const ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT_JSON_SQL = JSON.stringify(
   ISSUE_911_LIVE_ACCEPTANCE_WORK_CONTRACT,
@@ -469,6 +501,8 @@ const EXACT_WORKBENCH_EXECUTION_GRANT_PREDICATE = `
         (execution_receipt."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
           AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}')
         OR
+        ${derivedWorkContractBranchesSql('execution_receipt."resultBinding"')}
+        OR
         (execution_receipt."resultBinding"->'workContract'->>'id' = '${ISSUE_911_WORK_CONTRACT_ID_SQL}'
           AND execution_receipt."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_WORK_CONTRACT_DIGEST_SQL}'
           AND execution_receipt."resultBinding"->'workContract' = '${ISSUE_911_WORK_CONTRACT_JSON_SQL}'::jsonb
@@ -699,6 +733,7 @@ function exactWorkContractReceiptPredicate(alias) {
         AND ${alias}."resultBinding"->>'decisionId' = q."approvalDecisionId"::text
         AND ((${alias}."resultBinding"->'workContract'->>'id' = '${REVIEWED_WORK_CONTRACT_ID_SQL}'
           AND ${alias}."resultBinding"->'workContract'->>'digest' = '${REVIEWED_WORK_CONTRACT_DIGEST_SQL}')
+          OR ${derivedWorkContractBranchesSql(`${alias}."resultBinding"`)}
           OR (${alias}."resultBinding"->'workContract'->>'id' = '${ISSUE_911_WORK_CONTRACT_ID_SQL}'
             AND ${alias}."resultBinding"->'workContract'->>'digest' = '${ISSUE_911_WORK_CONTRACT_DIGEST_SQL}'
             AND q."acceptedContractIds" = ARRAY[]::text[])
