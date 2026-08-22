@@ -27,8 +27,7 @@ import {
   ChevronUp,
   CircleDot,
   Command,
-  Cpu,
-  FolderKanban,
+  Cpu,
   Home,
   PanelLeft,
   PanelRight,
@@ -68,7 +67,6 @@ const modes: ReadonlyArray<{
   icon: typeof Home
 }> = [
   { mode: "home", href: "/", label: "Home", icon: Home },
-  { mode: "projects", href: "/projects", label: "Projects", icon: FolderKanban },
   { mode: "activity", href: "/activity", label: "Activity", icon: Activity },
   { mode: "system", href: "/system", label: "System", icon: Cpu },
 ]
@@ -90,7 +88,6 @@ function restorationKey(userId: string): string {
 
 function viewMode(pathname: string): WorkbenchViewMode | null {
   if (pathname === "/") return "home"
-  if (pathname.startsWith("/projects")) return "projects"
   if (pathname.startsWith("/activity")) return "activity"
   if (pathname.startsWith("/system")) return "system"
   if (pathname.startsWith("/runtime")) return "system"

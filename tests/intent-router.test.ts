@@ -4,7 +4,7 @@ import { routeUniversalIntent } from "@/lib/intent/router"
 
 describe("universal intent router", () => {
   it.each([
-    ["Explain why the activity feed is empty", "answer", "/chat", "respond"],
+    ["Explain why the activity feed is empty", "answer", "/", "respond"],
     ["Research authenticated desktop access", "research", "/brain-council", "research"],
     ["Ask the council to compare these two architectures", "council", "/brain-council", "council_review"],
     ["Draft an outcome for device enrollment", "outcome", null, "start_outcome"],
@@ -23,8 +23,7 @@ describe("universal intent router", () => {
     })
   })
 
-  it.each([
-    ["Open Projects", "/projects"],
+  it.each([
     ["Open System", "/system"],
     ["Show Brain Council", "/brain-council"],
     ["Go to Goal Console", "/goal-console"],
@@ -58,14 +57,14 @@ describe("universal intent router", () => {
     expect(routeUniversalIntent("How do I add evidence to a Thread?")).toMatchObject({
       state: "routed",
       intent: "answer",
-      destination: { href: "/chat", action: "respond" },
+      destination: { href: "/", action: "respond" },
       executionAuthorized: false,
     })
   })
 
   it.each([
     "Research the rollout and deploy it",
-    "Open Projects and restart the runtime",
+    "Open Activity and restart the runtime",
     "Add a timestamp and deploy it",
     "Navigate to Mars",
     "   ",

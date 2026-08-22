@@ -400,16 +400,16 @@ describe("WorkbenchShell rendered interaction contract", () => {
     const view = renderShell()
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/activity"))
 
-    navigation.pathname = "/projects"
+    navigation.pathname = "/system"
     view.rerender(
       <WorkbenchShell user={{ id: "owner-1", name: "William", email: "owner@example.test" }} projects={projects} projectState="available" pulse={{ working: 1, needsYou: 0, queueDepth: 1 }} readiness={readiness} runtime={runtime} observedAt="2026-08-14T10:10:00.000Z">
-        <p>Projects mode content</p>
+        <p>System mode content</p>
       </WorkbenchShell>,
     )
 
     await waitFor(() => {
       const serialized = window.localStorage.getItem("williamos.workbench.layout.v1:owner-1")
-      expect(serialized).toContain('"viewMode":"projects"')
+      expect(serialized).toContain('"viewMode":"system"')
     })
   })
 
@@ -438,7 +438,6 @@ describe("WorkbenchShell rendered interaction contract", () => {
       // The Environment doorway leads the nav — a link OUT to the Desk (real-operator acceptance).
       "Environment",
       "Home",
-      "Projects",
       "Activity",
       "System",
     ])

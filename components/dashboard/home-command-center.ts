@@ -12,7 +12,12 @@ export type HomeStatusCard = {
   label: string
   value: string
   description: string
-  href: string
+  /**
+   * Optional: a card states a fact, and only some facts have somewhere to go. It became optional when
+   * /projects was deleted — the Active Project card still tells the truth, it just isn't a doorway to
+   * a route that no longer exists.
+   */
+  href?: string
 }
 
 export type HomeBriefingLane = {
@@ -446,7 +451,6 @@ export function getHomeCommandCenter(
         label: "Active Project",
         value: "TerraFusion OS",
         description: "Project systems stay inside WilliamOS under Work Orders and Evidence.",
-        href: "/projects",
       },
     ],
     systemPosture: [

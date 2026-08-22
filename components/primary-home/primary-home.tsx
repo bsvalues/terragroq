@@ -166,9 +166,9 @@ export function PrimaryHome({
                   <FolderKanban className="size-4 text-[#59b8df]" aria-hidden />
                   <h2 className="text-xs font-semibold">Project horizon</h2>
                 </div>
-                <Link href="/projects" className="text-xs text-[#8e9994] hover:text-[#edf1ed]">
+                <span className="text-xs text-[#8e9994]">
                   {projectCount} {projectCount === 1 ? "project" : "projects"}
-                </Link>
+                </span>
               </div>
               {projectCount === 0 ? (
                 <p className="border-t border-[#2a3232] py-4 text-sm text-[#8e9994]">
