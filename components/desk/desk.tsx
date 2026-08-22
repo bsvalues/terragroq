@@ -19,7 +19,7 @@ import { isExecutionLive } from "@/lib/environment/world-execution"
 type Turn = Readonly<{ id: string; role: "owner" | "williamos"; content: string }>
 type Surface = Readonly<{
   id: string
-  kind: "browser" | "trace" | "source" | "diff" | "tests"
+  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence"
   subject: string
   payload?: unknown
 }>
@@ -122,12 +122,21 @@ export function Desk() {
         say: string
         surfaces: readonly Omit<Surface, "id">[]
         spine?: WorldSpine
+        /** A kind to drop, or "all". Surfaces leave when they stop being useful. */
+        dismiss?: "all" | string
       }
       if (reply.worldId) setWorldId(reply.worldId)
       // Execution state arrives with every exchange, so the world header reflects where the work
       // actually stands rather than what was true when the page was last loaded.
       if (reply.spine) setSpine(reply.spine)
       setTurns((current) => [...current, { id: crypto.randomUUID(), role: "williamos", content: reply.say }])
+      // Surfaces leave when they stop being useful. Dropping happens before appending, so "hide the
+      // diff and show me the tests" in one breath does the right thing in the right order.
+      if (reply.dismiss) {
+        setSurfaces((current) =>
+          reply.dismiss === "all" ? [] : current.filter((surface) => surface.kind !== reply.dismiss),
+        )
+      }
       if (reply.surfaces.length > 0) {
         // Materialize by appending: existing surfaces keep their place; spatial memory survives.
         setSurfaces((current) => [
@@ -333,6 +342,89 @@ function SurfaceView({ surface }: { surface: Surface }) {
             {line || " "}
           </div>
         ))}
+      </div>
+    )
+  }
+  if (surface.kind === "project") {
+    // The project registry, summoned — not a page you navigate to and not a permanent explorer nailed
+    // to the left. Lifecycle is shown because standby is not the same as active, and a surface that
+    // blurs them is how "what are we working on" gets answered wrongly.
+    const rows = (surface.payload ?? []) as readonly { name: string; key: string; lifecycle: string }[]
+    return (
+      <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
+        {rows.length === 0 ? (
+          <p className="text-neutral-500">No projects are registered.</p>
+        ) : (
+          rows.map((row) => (
+            <div key={row.key} className="flex items-baseline gap-3 py-0.5">
+              <span className="text-neutral-200">{row.name}</span>
+              <span className={cn(row.lifecycle === "active" ? "text-emerald-500" : "text-neutral-600")}>
+                {row.lifecycle}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+    )
+  }
+  if (surface.kind === "activity") {
+    // The governed queue itself, most recently touched first. This is what "what is HERMES doing"
+    // means: not a feed of prose about work, the work.
+    const rows = (surface.payload ?? []) as readonly {
+      outcomeKey: string
+      title: string
+      lifecycleState: string
+      activeWorkOrderId: number | null
+    }[]
+    return (
+      <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
+        {rows.length === 0 ? (
+          <p className="text-neutral-500">The governed queue is empty.</p>
+        ) : (
+          rows.map((row) => (
+            <div key={row.outcomeKey} className="flex items-baseline gap-3 py-0.5">
+              <span
+                className={cn(
+                  "w-[5.5rem] shrink-0 uppercase",
+                  row.lifecycleState === "completed"
+                    ? "text-emerald-500"
+                    : row.lifecycleState === "blocked"
+                      ? "text-amber-500"
+                      : "text-sky-500",
+                )}
+              >
+                {row.lifecycleState}
+              </span>
+              <span className="truncate text-neutral-400">{row.title}</span>
+            </div>
+          ))
+        )}
+      </div>
+    )
+  }
+  if (surface.kind === "evidence") {
+    // The record behind a result. Empty is shown as empty: evidence is the one thing that must never
+    // be padded, because padded proof is worse than none.
+    const rows = (surface.payload ?? []) as readonly { result: string | null; notes: string | null; at: string }[]
+    return (
+      <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
+        {rows.length === 0 ? (
+          <p className="text-neutral-500">No evidence records.</p>
+        ) : (
+          rows.map((row, index) => (
+            <div key={index} className="flex items-baseline gap-3 py-0.5">
+              <span
+                className={cn(
+                  "w-16 shrink-0",
+                  row.result === "PASS" ? "text-emerald-500" : row.result === "FAIL" ? "text-red-400" : "text-neutral-500",
+                )}
+              >
+                {row.result ?? "—"}
+              </span>
+              <span className="truncate text-neutral-400">{row.notes ?? ""}</span>
+            </div>
+          ))
+        )}
       </div>
     )
   }

@@ -4,16 +4,17 @@ import os from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
 
-import { and, eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 
 import { db } from "@/lib/db"
-import { project, workingWorld } from "@/lib/db/schema"
+import { evidenceRecord, outcomeQueueItem, project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
 import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { isContinueIntent } from "@/lib/environment/start-work"
+import { classifyDismissal, classifySummon } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
 import {
@@ -51,7 +52,7 @@ const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT?.trim() || null
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 
 type SurfaceDirective = Readonly<{
-  kind: "browser" | "trace" | "source" | "diff" | "tests"
+  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence"
   subject: string
   payload?: unknown
 }>
@@ -66,6 +67,13 @@ type LineReply = Readonly<{
   say: string
   surfaces: readonly SurfaceDirective[]
   spine: WorldSpine
+  /**
+   * Surfaces the owner asked to drop — a kind, or "all". Absent when nothing was dismissed.
+   *
+   * "And when those aren't useful anymore, they disappear." A surface you can only accumulate is a
+   * panel with extra steps, which is the thing being replaced.
+   */
+  dismiss?: "all" | string
 }>
 
 const LOGIN_WORK = /(login|log.?in|sign.?in|auth)\b/i
@@ -266,6 +274,81 @@ async function loadProjects(userId: string): Promise<ProjectRow[]> {
   return db.select({ name: project.name, lifecycle: project.lifecycle }).from(project).where(eq(project.userId, userId))
 }
 
+/**
+ * Materialize a summoned surface from GOVERNED state (phase 3).
+ *
+ * Projects, Activity and the Inspector used to be applications you navigated to. They are surfaces
+ * now — but a surface that shows invented content is worse than the page it replaced, so each of
+ * these reads the real register and says so honestly when there is nothing there. An empty result is
+ * reported as empty; it is never padded to look like a working dashboard.
+ */
+async function summonSurface(
+  kind: "project" | "activity" | "evidence",
+  userId: string,
+  spine: WorldSpine,
+): Promise<{ say: string; surface: SurfaceDirective }> {
+  if (kind === "project") {
+    const rows = await db
+      .select({ name: project.name, key: project.key, lifecycle: project.lifecycle })
+      .from(project)
+      .where(eq(project.userId, userId))
+    return {
+      say: rows.length === 0
+        ? "No projects are registered, so there is nothing to show — I won't invent a list."
+        : `${rows.length} registered ${rows.length === 1 ? "project" : "projects"}, from the governed register.`,
+      surface: { kind: "project", subject: "registered projects", payload: rows },
+    }
+  }
+
+  if (kind === "activity") {
+    const rows = await db
+      .select({
+        outcomeKey: outcomeQueueItem.outcomeKey,
+        title: outcomeQueueItem.title,
+        lifecycleState: outcomeQueueItem.lifecycleState,
+        activeWorkOrderId: outcomeQueueItem.activeWorkOrderId,
+      })
+      .from(outcomeQueueItem)
+      .where(eq(outcomeQueueItem.userId, userId))
+      .orderBy(desc(outcomeQueueItem.updatedAt))
+      .limit(12)
+    return {
+      say: rows.length === 0
+        ? "The governed queue is empty right now — nothing is running and nothing is waiting."
+        : `The governed queue as it stands: ${rows.length} outcomes, most recently touched first.`,
+      surface: { kind: "activity", subject: "governed queue", payload: rows },
+    }
+  }
+
+  // evidence: only for the work this world is actually bound to. Evidence with no work to belong to
+  // is a filing cabinet, not an answer.
+  if (spine.workOrderId === null) {
+    return {
+      say: "No work is bound to this world yet, so there is no evidence to show. Start an outcome and its record accumulates here.",
+      surface: { kind: "evidence", subject: "no bound work", payload: [] },
+    }
+  }
+  const rows = await db
+    .select({ result: evidenceRecord.result, notes: evidenceRecord.notes, createdAt: evidenceRecord.createdAt })
+    .from(evidenceRecord)
+    .where(and(eq(evidenceRecord.userId, userId), eq(evidenceRecord.workOrderId, spine.workOrderId)))
+    .limit(50)
+  return {
+    say: rows.length === 0
+      ? `Work order ${spine.workOrderId} has produced no evidence records yet.`
+      : `${rows.length} evidence ${rows.length === 1 ? "record" : "records"} for work order ${spine.workOrderId}.`,
+    surface: {
+      kind: "evidence",
+      subject: `work order ${spine.workOrderId}`,
+      payload: rows.map((row) => ({
+        result: row.result,
+        notes: row.notes,
+        at: row.createdAt.toISOString(),
+      })),
+    },
+  }
+}
+
 // Returns null when the sentence is not a grounded question (fall through to converse). For
 // current-work it also carries `retained`: the exact selection to keep for a later "continue it".
 async function groundedAnswer(
@@ -372,6 +455,29 @@ export async function POST(request: Request) {
         updated = withSurface(updated, { kind: "diff", subject: "sign-in copy fix", because: "the proposed change" })
         updated = withSurface(updated, { kind: "tests", subject: "auth copy contracts", because: "the governing contract" })
       }
+    } else if (classifyDismissal(text)) {
+      // Dropping a surface is a real operation on the world, not conversation: it must not reach the
+      // model, which would answer *about* hiding things instead of hiding them.
+      const target = classifyDismissal(text) as "all" | string
+      say = target === "all"
+        ? "Cleared the surfaces."
+        : `Dropped the ${target} surface.`
+      updated = withTurn(updated, "williamos", say)
+      await saveWorld(userId, requestedWorldId, updated, false)
+      return Response.json({
+        worldId: requestedWorldId, say, surfaces: [], spine: updated.spine, dismiss: target,
+      } satisfies LineReply)
+    } else if (classifySummon(text)) {
+      // Projects / Activity / Evidence used to be applications you navigated to. They are summoned
+      // here from governed state, and they leave when the owner says so.
+      const summoned = await summonSurface(classifySummon(text) as "project" | "activity" | "evidence", userId, updated.spine)
+      say = summoned.say
+      surfaces = [summoned.surface]
+      updated = withSurface(updated, {
+        kind: "data",
+        subject: summoned.surface.subject,
+        because: "the owner asked to see it",
+      })
     } else {
       const grounded = await groundedAnswer(text, userId)
       if (grounded) {
