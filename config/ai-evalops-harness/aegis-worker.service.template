@@ -1,0 +1,40 @@
+# VALIDATION_ONLY=true; NONINSTALLABLE_UNTIL_R3_AUTHORITY=true
+[Unit]
+Description=INERT WilliamOS AEGIS HASH_VERIFY worker template
+ConditionPathExists=/nonexistent/WO-AEH-024-R3-AUTHORITY-NOT-GRANTED
+
+[Service]
+Type=simple
+User={{DEDICATED_NON_ROOT_IDENTITY}}
+Group={{DEDICATED_NON_ROOT_GROUP}}
+ExecStart={{FIXED_ABSOLUTE_HASHED_WORKER_ENTRYPOINT}}
+WorkingDirectory={{FIXED_READ_ONLY_WORKING_DIRECTORY}}
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateUsers=true
+DevicePolicy=closed
+PrivateNetwork=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service ~@mount @network-io @privileged @resources
+UMask=0077
+MemoryMax=512M
+TasksMax=2
+CPUQuota=100%
+RuntimeMaxSec=60
+TimeoutStopSec=10
+KillMode=control-group
+Restart=no
+# Isolated compute namespace permits no sockets via ~@network-io. WO021 transport runs in a separate EXTERNAL_BROKER_NOT_IMPLEMENTED boundary.

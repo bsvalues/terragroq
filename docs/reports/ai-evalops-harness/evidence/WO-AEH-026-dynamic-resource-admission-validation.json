@@ -1,0 +1,11 @@
+{
+  "schema":"williamos.ai-evalops.wo-aeh-026-evidence/v1","workOrder":"WO-AEH-026","result":"SIMULATION_SUBSTAGE_COMPLETE","liveDependency":"INCOMPLETE","dispatchAuthority":false,
+  "tests":{"run1":{"passed":9,"failed":0},"run2":{"passed":9,"failed":0}},
+  "input":{"schemaVersion":"aeh.dynamic-admission.v2","closed":true,"ed25519Signed":true,"trustedExternalDecisionClock":true,"bootSequenceReplayGate":true,"snapshotCollectorReceipts":true,"clockSynchronizationAndError":true,"measurementDigest":true,"policyDigest":true,"fullJobCostEvidenceDigest":true,"wo021BindingAndArtifactIdentities":true,"freshnessFailClosed":true,"safeIntegerUnits":true,"completeDiskAndRamWorkingSets":true,"runtimeLeaseGate":true},
+  "gates":["TRANSFER_LIMIT","CPU_TEMP","GPU_TEMP","CPU_LOAD","MEMORY_PRESSURE","QUEUE_SATURATED","LEASE_SATURATED","ATLAS_RAM_RESERVE","ATLAS_DISK_RESERVE","AEGIS_RAM_RESERVE","AEGIS_SCRATCH_RESERVE","HERMES_VRAM_RESERVE"],
+  "output":{"passingDecision":"ADMIT_SIMULATION","passingClassification":"STALE_RACE_ATOMIC_RESERVATION_REQUIRED","recommendationOnly":true,"dispatchAllowed":false,"reservationCreated":false,"deterministicDecisionDigest":true},
+  "artifacts":{"evaluatorSha256":"fa2606fb25503ea8fca6afea9f8bcd91fdcff0d5a2a83b19649aef3b4895162f","testSha256":"766f7e27339bc7e430f11384e3e11d32451153160b4d6cb9a2ccda961c8f9b09"},
+  "ownerCounters":{"OWNER_OPERATION_TOUCH_COUNT":0,"OWNER_CREDENTIAL_TOUCH_COUNT":0,"OWNER_DIAGNOSTIC_TOUCH_COUNT":0,"OWNER_ROUTINE_DECISION_COUNT":0,"OWNER_ROUTINE_CONTACT_COUNT":0},
+  "liveMetricsRead":false,"reservationCreated":false,"dispatchPerformed":false,"networkAccessed":false,"databaseMutated":false,"externalEffects":0,
+  "nonProofs":["No live metrics, atomic reservation, worker placement, dispatch, or production capacity behavior was proven."]
+}

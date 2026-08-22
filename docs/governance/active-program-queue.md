@@ -10,17 +10,17 @@ Document: `WILLIAMOS-ACTIVE-PROGRAM-QUEUE-001`
 
 Queue program: `PROGRAM-WILLIAMOS-ACTIVE-QUEUE-001`
 
-Active program: `NO_ACTIVE_PROGRAM` when no eligible persisted outcome exists
+Active program: `PROGRAM-WILLIAMOS-AI-EVALOPS-HARNESS-001` (selected bounded owner outcome)
 
-Goal: `GOAL-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
+Goal: `GOAL-WILLIAMOS-DURABLE-AI-EXECUTION-001`
 
-Loop: `LOOP-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001`
+Loop: `LOOP-WILLIAMOS-DURABLE-AI-EXECUTION-001`
 
-Recorded selector baseline: `origin/main = 0a308fd2a932dbfb1feaa9d1ee26c02dcab1c12d`
+Recorded selector baseline: `terragroq = 13709f5789c25dea408283730a6bd35e8fd894ab`; `HermesLab = 0481061acf1f683688a00b09795647d0288c7232` (read-only dirty checkout)
 
-Risk ceiling: `R1` for WilliamOS-native, reversible owner outcomes
+Risk ceiling: `R1 ACTIVE`; every R2/R3 Work Order remains separately authority- and reservation-gated
 
-Status: `STANDING_AWAITING_OUTCOME`; Work Orders 001-008 are complete and `WO-OWNER-OUTCOME-009` is `READY`
+Status: `SELECTED / WO-AEH-001 REGISTERED / R2_R3_BLOCKED_AUTHORITY`
 
 ## Purpose
 
@@ -192,6 +192,42 @@ The controlling invariant is:
 
 ```text
 DO_NOT_RETURN_TO_NO_ACTIVE_PROGRAM_WHILE_APPROVED_USEFUL_WILLIAMOS_R0_R1_WORK_REMAINS
+```
+
+## Selected AI Eval-Ops and Durable Harness Program
+
+`PROGRAM-WILLIAMOS-AI-EVALOPS-HARNESS-001` is selected as the current bounded
+owner outcome under direct owner direction `OWNER-DIRECTION-2026-08-11-AEH-EXECUTE-001`.
+Its goal is `GOAL-WILLIAMOS-DURABLE-AI-EXECUTION-001`; its loop is
+`LOOP-WILLIAMOS-DURABLE-AI-EXECUTION-001`.
+
+`WO-AEH-001` completed the R1 governance registration. Its evidence is
+`docs/reports/ai-evalops-harness/WO-AEH-001-program-activation-registration-and-authority-map.md`.
+Dependencies now release `WO-AEH-002`, `WO-AEH-011`, and `WO-AEH-013` only to
+fresh reservation and authority matching. Registration does not authorize their
+implementation.
+
+The standing `PROGRAM-WILLIAMOS-OWNER-OUTCOME-DELIVERY-001` remains active
+continuation infrastructure and is neither closed nor superseded. The selected
+AEH program is its current bounded owner outcome.
+
+Current authority is limited to R1 repository-governance registration and
+non-mutating inspection. R2 implementation requires an exact child Work Order,
+repository path, contract, and test-environment match. R3 remains blocked pending
+a fresh grant naming exact hosts, actions, protected resources, and time window.
+Blocked actions include live database, firewall, port, sudo, service, backup,
+credential, off-site-provider, reboot, fault-injection, worker, scheduler,
+canary, soak, deployment, and production changes.
+
+Safety state remains:
+
+```text
+RUNTIME_ACTIVATED: false
+SCHEDULER_ACTIVE: false
+BACKGROUND_WORKER_ACTIVE: false
+HOST_NETWORK_DATABASE_BACKUP_MUTATED: false
+PRODUCTION_DEPLOYMENT_PERFORMED: false
+ISSUE_357: FAILED_TERMINAL / QUARANTINED_TERMINAL / NON_SELECTABLE
 ```
 
 ## Selection Rule

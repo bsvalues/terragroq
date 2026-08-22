@@ -1,0 +1,64 @@
+{
+  "schema": "williamos.ai-evalops.wo-aeh-052-role-policy-evidence/v2",
+  "workOrder": "WO-AEH-052",
+  "result": "REPOSITORY_SUBSTAGE_COMPLETE",
+  "authorityGate": "R3_APPLY_BLOCKED",
+  "liveAtlasProven": false,
+  "tests": {
+    "run1": {"passed": 5, "failed": 0, "skipped": 0},
+    "run2": {"passed": 5, "failed": 0, "skipped": 0},
+    "postgresFixture": "PASS_POSTGRES_16_CACHED",
+    "migrationRange": "0000-0007",
+    "renderedCheckedInTemplateBytesExecuted": true,
+    "canonicalCatalogRollbackExact": true,
+    "hbaPreimageBytesRollbackExact": true,
+    "cleanup": "PASS_ZERO_MATCHING_CONTAINERS"
+  },
+  "policy": {
+    "snapshotSchema": "aeh.atlas-catalog-snapshot.v3",
+    "closedCatalogSnapshot": true,
+    "templatePreimagesBound": true,
+    "migrationOwner": "aeh_migration_owner",
+    "migrationOwnerLogin": false,
+    "migrationOwnerInherit": false,
+    "schemaAndFunctionOwnershipTransferred": true,
+    "exactWrapperAllocation": {
+      "aeh_coordinator": ["request_worker_cancellation_enveloped"],
+      "aeh_worker": ["pull_worker_envelope", "worker_heartbeat", "acknowledge_worker_cancellation_enveloped"]
+    },
+    "allCrossRoleWrapperDenialsProven": true,
+    "publicFunctionExecuteRevoked": true,
+    "runtimeDirectObjectAuthority": false,
+    "futureDefaultsFailClosed": true,
+    "securityDefinerSearchPath": "pg_catalog, ai_evalops, pg_temp",
+    "hbaPreimageNontrivial": true,
+    "secrets": []
+  },
+  "artifacts": {
+    "policySha256": "983f36d244b68b6141dff1e3e19302c69775dfb179f6990a4b40eee4f84fdf2a",
+    "pgHbaTemplateSha256": "78f87adf91483af0028aa406bede6e80f646735a474102b5d4e811f68c0a59c2",
+    "grantTemplateSha256": "5b54d1eb5893c06c395e9df2c0de21daf70b36f6e5d297dc684e0ea85b2eefcc",
+    "rollbackTemplateSha256": "5e4c7c5e7c5f9f1c8e6fc5458e896e5b778eceeafaa0c018ef46d93eef31ac3e",
+    "rendererSha256": "6439d4868cdb4b2a04d90b5174396a84065cf8dae7ce94e71313b959208d34b6",
+    "testSha256": "be61e7c42e017791361148e9f1135ae3ef0103c5be29e0a1b609cbdfae31ecdf",
+    "migration0007Sha256": "9053c560291194475a18ad6dabfe8a35627fd9a00d515bf7a9e2034643eac324",
+    "migrationManifestSha256": "3a6dceff395a28e963249e1fb942276aed5e3826cd77747993813a8b6d579b10"
+  },
+  "ownerCounters": {
+    "OWNER_OPERATION_TOUCH_COUNT": 0,
+    "OWNER_CREDENTIAL_TOUCH_COUNT": 0,
+    "OWNER_DIAGNOSTIC_TOUCH_COUNT": 0,
+    "OWNER_ROUTINE_DECISION_COUNT": 0,
+    "OWNER_ROUTINE_CONTACT_COUNT": 0
+  },
+  "atlasConnected": false,
+  "databaseMutated": false,
+  "roleMutated": false,
+  "certificateAccessed": false,
+  "networkAccessed": false,
+  "imagePulled": false,
+  "externalEffects": 0,
+  "nonProofs": [
+    "Disposable PostgreSQL proves repository renderer and database privilege semantics only; live Atlas discovery, TLS certificates, HBA reload, CIDRs, issuer/SAN issuance, service behavior, installation/restart, and production authority remain unproven."
+  ]
+}

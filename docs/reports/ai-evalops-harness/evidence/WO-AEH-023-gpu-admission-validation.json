@@ -1,0 +1,14 @@
+{
+  "schema":"williamos.ai-evalops.wo-aeh-023-evidence/v2",
+  "workOrder":"WO-AEH-023",
+  "result":"PASS_SIMULATION_ONLY",
+  "tests":{"run1":{"passed":8,"failed":0},"run2":{"passed":8,"failed":0}},
+  "contract":{"inputSchema":"aeh.gpu-admission.input.v1","outputSchema":"aeh.gpu-admission.result.v1","closedFields":true,"completeWo021Binding":true,"derivedPolicyMatchesWo021Binding":true,"measurementOwnedCosts":true,"strictUtc":true,"safeIntegerCheckedArithmetic":true,"concurrency":1,"statuses":["ADMIT_SIMULATION","REJECT","INPUT_REJECTED"],"canonicalIntegrityDigests":["inputDigest","measurementDigest","policyDigest"],"sourceReferenceDigests":["snapshotSourceDigest","kvSourceDigest"],"canonicalDecisionDigest":"SHA-256","decisionBindsIntegrityDigests":true,"sortedUniqueReasonCodes":true},
+  "properties":{"plusMinusOneBoundary":true,"reserveMonotonic":true,"contextMonotonic":true,"undefinedRejected":true,"zeroCostRejected":true,"nanRejected":true,"overflowRejected":true,"staleRejected":true,"futureRejected":true,"identityMismatchRejected":true,"historicalPlacementInsufficient":true,"concurrentSameSnapshotNonAuthorizing":true,"materialFieldMutationSweep":{"binding":true,"measurement":true,"policy":true,"staleDigestRejected":true,"recomputedReceiptChanges":true}},
+  "authority":{"recommendationOnly":true,"dispatchAllowed":false,"executionAuthorized":false,"reservationCreated":false,"dynamicAdmissionOwner":"WO-AEH-026","liveHermesQualificationOwner":"WO-AEH-045"},
+  "artifacts":{"engineSha256":"632cbf9b70747454a37b614b7d0f066162f21fc7347aa1f32caf33737c6e3814","testSha256":"41bfbd76e1c2a9793852d13424a119cdd4c83e67b18373e2efaf38c81be1b25c"},
+  "ownerCounters":{"OWNER_OPERATION_TOUCH_COUNT":0,"OWNER_CREDENTIAL_TOUCH_COUNT":0,"OWNER_DIAGNOSTIC_TOUCH_COUNT":0,"OWNER_ROUTINE_DECISION_COUNT":0,"OWNER_ROUTINE_CONTACT_COUNT":0},
+  "ownerOperationCertificationState":"UNVERIFIED_ZERO_OWNER_OPERATIONS",
+  "networkAccessed":false,"liveMetricsAccessed":false,"gpuExecution":false,"databaseMutated":false,"externalEffects":0,
+  "nonProofs":["No atomic GPU resource reservation, dispatch authority, live Hermes readiness, throughput, latency, OOM, cancellation, or production concurrency was proven."]
+}

@@ -1,0 +1,11 @@
+{
+  "schema":"williamos.ai-evalops.wo-aeh-022-packaging-evidence/v1","workOrder":"WO-AEH-022","result":"REPOSITORY_PACKAGING_SUBSTAGE_COMPLETE","authorityGate":"R3_BLOCKED","liveInstalled":false,
+  "tests":{"run1":{"passed":12,"failed":0},"run2":{"passed":12,"failed":0}},
+  "daemon":{"standaloneEntrypoint":true,"allowedMode":"INERT_NO_CLAIM","claimsEnabled":false,"networkOpened":false,"processSpawned":false,"descriptorReconciliation":true},
+  "material":{"absoluteOsReferences":true,"keyProvider":"WINDOWS_CREDENTIAL_MANAGER","secretLiteralAccepted":false,"releaseManifestVerified":true,"sbomFormat":"CycloneDX-1.5"},
+  "windows":{"templateEnabled":false,"allowStartOnDemand":false,"runLevel":"LeastPrivilege","serviceIdentity":"NT SERVICE\\WilliamOSHermesWorker","fixedCommand":true,"dryRunOnly":true,"closedObservedSnapshot":true,"reparseRejected":true,"perFileOwnershipLedger":true,"planIdBoundCreation":true,"exactPreimageRestore":true,"removeCreatedFileOnlyOnHashMatch":true,"removeCreatedDirectoryOnlyWhenObservedEmpty":true,"partialRecovery":true,"collisionFailClosed":true,"rollbackPreservesEvidence":true},
+  "artifacts":{"packageSha256":"798d8e1eecccf7018c2c2fb6ede1c416d675a8fac8e4b6b8b4f61559127a5fa8","entrypointSha256":"5f57a46dff3d23c32c866fcf7cca287a90c4487278e0a91ab73e1a5ecab9636f","testSha256":"d6268af35beaef541d155b041c3678102ad30b214c61283ed475ee3333c6be44","manifestSha256":"0eca1d06e7e0390452d898659653d347595911ac8a838cfbabb12a84901eb98a","sbomSha256":"89e4b2c0ecf3b78682ef5cd7e1064965b25a198774c268535c22aed4089ac3c7","taskTemplateSha256":"b59323ead265ad187d55579af262c41c4d727971568a32dbe26601623d59d06d"},
+  "ownerCounters":{"OWNER_OPERATION_TOUCH_COUNT":0,"OWNER_CREDENTIAL_TOUCH_COUNT":0,"OWNER_DIAGNOSTIC_TOUCH_COUNT":0,"OWNER_ROUTINE_DECISION_COUNT":0,"OWNER_ROUTINE_CONTACT_COUNT":0},
+  "networkAccessed":false,"childProcessSpawned":false,"serviceMutated":false,"credentialStoreAccessed":false,"filesystemInstalled":false,"externalEffects":0,
+  "nonProofs":["No production bundle, credential retrieval, ACL, service/task registration, live connectivity, claim, restart, or uninstall behavior was proven."]
+}

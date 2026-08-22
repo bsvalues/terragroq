@@ -1,7 +1,11 @@
 {
-  "name": "ai-sdk-starter",
+  "name": "williamos-control-plane",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.17.1",
+  "engines": {
+    "node": ">=20 <23"
+  },
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "node scripts/clean-next.mjs && node scripts/write-build-provenance.mjs && next build",

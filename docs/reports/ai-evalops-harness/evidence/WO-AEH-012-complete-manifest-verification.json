@@ -1,0 +1,19 @@
+{
+  "schema": "williamos.ai-evalops.wo-aeh-012-evidence/v1",
+  "workOrderId": "WO-AEH-012",
+  "hermesLabBase": "0481061acf1f683688a00b09795647d0288c7232",
+  "validationMode": "SYNTHETIC_ONLY",
+  "testCommand": "node --test aegis/tests/complete-manifest-verification.test.mjs",
+  "tests": 15,
+  "passed": 15,
+  "failed": 0,
+  "moduleSha256": "03cdfb2a8c0c002eb3fb16718846c8fb72805f857549497aeafe01f5eff939e5",
+  "testSha256": "387e4e33c86a68d3a8b0b92a16925f44e24a63edcb27b9669103b3c556315c16",
+  "backupMountAccessed": false,
+  "networkAccessed": false,
+  "liveMutationPerformed": false,
+  "prunePerformed": false,
+  "backupScriptIntegrated": false,
+  "authorityGranted": false,
+  "maturityPromoted": false
+}

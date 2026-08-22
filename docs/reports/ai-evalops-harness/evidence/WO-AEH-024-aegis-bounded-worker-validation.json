@@ -1,0 +1,14 @@
+{
+  "schema":"williamos.ai-evalops.wo-aeh-024-evidence/v2","workOrder":"WO-AEH-024","result":"BUILDER_SUBSTAGE_COMPLETE","authorityGate":"R3_INSTALL_BLOCKED","liveAdapterProven":false,
+  "tests":{"run1":{"passed":16,"failed":0},"run2":{"passed":16,"failed":0}},
+  "protocol":{"wo021Actions":["PULL","HEARTBEAT","CANCEL","CANCEL_ACK"],"actualEd25519VerifierKeyringFlow":true,"realSignedFlow":["PULL","HEARTBEAT","HASH_VERIFY","RESULT_STORE","HANDOFF","CANCEL","CANCEL_ACK"],"signedCancelAckUsesCurrentRenewal":true,"signedAckMatchesSupervisorAmbiguityEvidence":true,"restartFirst":true,"currentRenewalBinding":true,"activeUntilDurableHandoff":true,"ambiguousRoutes":"WO-AEH-019"},
+  "content":{"operation":"HASH_VERIFY","objectIdGrammar":"obj_sha256_<64-lowercase-hex>","pathUriDeviceIdentifiersRejected":true,"callerPathAccepted":false,"sandboxOwnsBytes":true,"internalChunkHashing":"SHA-256","beforeAfterIdentity":true,"noFollowReadOnlyExclusiveRequired":true,"shortExtraMutationSpecialFilesRejected":true,"digestMismatchIsResult":true,"contentAddressedResultStore":true,"durableHandoffBindsResultContentCleanupAndBinding":true},
+  "identity":{"canonicalConfigContentDigest":true,"configDigestExcludesOnlySelf":true,"runtimeTemplatePolicyImageCovered":true,"signedBindingConfigImagePolicyExact":true},
+  "containment":{"immutableFullLimitSpec":true,"networkPolicy":"NO_SOCKETS","socketAllowlist":[],"classifications":["PASS","TIMEOUT","OOM","DISK_QUOTA","PIDS","NETWORK_ATTEMPT"],"classifiedFailuresCleanupAndReconcile":true,"strictAllStoppedBoolean":true},
+  "cleanup":{"closedReceipt":true,"objectAttemptLeaseFenceBound":true,"missingProofReconciles":true},
+  "serviceTemplate":{"validationOnly":true,"noninstallable":true,"nonrootDeclared":true,"network":"ISOLATED_COMPUTE_NO_SOCKETS","protocolBroker":"SEPARATE_EXTERNAL_BROKER_NOT_IMPLEMENTED","tasksMax":2,"killMode":"control-group"},
+  "artifacts":{"workerSha256":"183bb035b1f99b2edff747c7930d1b20a8d4cc71a61036015c292b2083feba70","configSha256":"e6498ab715274d71a8347cb86965c462fb6c9a8c6f61386a95bbbf2cb389130e","templateSha256":"3a4831bb26dfe46ddfc63e1cc5c859bb2421899934b37e92d73ea9722c5549b4","testSha256":"df3d949d9fa4dee3011634572f099c33b690775dad7d8c782e34e6f98dccaa19"},
+  "ownerCounters":{"OWNER_OPERATION_TOUCH_COUNT":0,"OWNER_CREDENTIAL_TOUCH_COUNT":0,"OWNER_DIAGNOSTIC_TOUCH_COUNT":0,"OWNER_ROUTINE_DECISION_COUNT":0,"OWNER_ROUTINE_CONTACT_COUNT":0},"ownerOperationCertificationState":"UNVERIFIED_ZERO_OWNER_OPERATIONS",
+  "networkAccessed":false,"processSpawned":false,"serviceMutated":false,"filesystemPayloadAccessed":false,"databaseMutated":false,"externalEffects":0,
+  "nonProofs":["No live AEGIS systemd identity, cgroup, namespace, network denial, filesystem containment, cleanup, broker, lease/fence, process kill, resource limit, or production behavior was proven."]
+}

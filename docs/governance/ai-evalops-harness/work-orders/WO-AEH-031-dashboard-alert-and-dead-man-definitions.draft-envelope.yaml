@@ -1,0 +1,132 @@
+schemaVersion: 1
+artifactType: DRAFT_WORK_ORDER_PACKET
+validationOnly: true
+dispatchReadiness: BLOCKED_AUTHORITY_AND_RESERVATION
+dispatchPerformed: false
+authorityGranted: false
+workOrderId: WO-AEH-031
+programId: PROGRAM-WILLIAMOS-AI-EVALOPS-HARNESS-001
+goalId: GOAL-WILLIAMOS-DURABLE-AI-EXECUTION-001
+loopId: LOOP-WILLIAMOS-DURABLE-AI-EXECUTION-001
+objective: "Versioned queue, lease, AI, worker, DB, backup, restart, evidence and alert-delivery dashboards/rules; no claim of live delivery."
+riskClass: R2
+repositories:
+  - "terragroq"
+  - "HermesLab"
+checkoutBindings:
+  - id: terragroq
+    repository: bsvalues/terragroq
+    root: C:\Users\bs\terragroq-review
+    reviewAnchor: 13709f5789c25dea408283730a6bd35e8fd894ab
+  - id: HermesLab
+    repository: bsvalues/terragroq
+    root: C:\HermesLab
+    reviewAnchor: 0481061acf1f683688a00b09795647d0288c7232
+baseRefs:
+  - checkoutId: terragroq
+    sha: 13709f5789c25dea408283730a6bd35e8fd894ab
+    status: REVIEW_ANCHOR_REFRESH_REQUIRED_AT_ACTIVATION
+  - checkoutId: HermesLab
+    sha: 0481061acf1f683688a00b09795647d0288c7232
+    status: REVIEW_ANCHOR_REFRESH_REQUIRED_AT_ACTIVATION
+dependencies:
+  - "WO-AEH-030"
+fanInGate: ALL
+laneId: wo-aeh-031-draft
+teamRoles:
+  coordinator: UNASSIGNED
+  builder: UNASSIGNED
+  reviewer: UNASSIGNED_INDEPENDENT
+providerRequirements:
+  - repository-read
+  - repository-write-scoped-to-reservations
+  - deterministic-validation
+preferredProviders:
+  - supported-hosted-codex-session
+fallbackProviders: []
+reservations:
+  status: PRELIMINARY_AREA_BOUNDS_REFINEMENT_REQUIRED
+  paths:
+    - "terragroq:scripts"
+    - "terragroq:config"
+    - "terragroq:tests"
+    - "terragroq:docs"
+    - "HermesLab:hermes"
+    - "HermesLab:atlas"
+    - "HermesLab:aegis"
+    - "terragroq:docs/reports/ai-evalops-harness"
+  contracts:
+    - "wo-aeh-031-outcome"
+    - "telemetry-redaction-and-correlation"
+  environments:
+    - "repository-validation"
+  protectedResources:
+    - "historical-evidence"
+    - "issue-357-quarantine"
+    - "Atlas-authoritative-state"
+    - "Hermes-inference-availability"
+    - "AEGIS-backup-and-worker-boundary"
+    - "telemetry-payload-confidentiality"
+    - "alert-delivery-path"
+allowedActions:
+  - inspect-within-declared-scope
+  - implement-only-after-authority-match
+  - validate-and-record-evidence
+forbiddenActions:
+  - authority-minting-or-self-activation
+  - secret-credential-or-protected-data-access-without-exact-authority
+  - issue-357-retry-wrap-rename-or-reuse
+  - general-shell-or-unbounded-command-runner
+authorityGrantRefs: []
+programActivationGrantRef: null
+grantStatusEventRefs: []
+authorityScopeRequired: "Exact repository paths, contracts, test environments, and any non-live integration resources."
+requiredOutputs:
+  - "Versioned queue, lease, AI, worker, DB, backup, restart, evidence and alert-delivery dashboards/rules; no claim of live delivery."
+requiredValidation:
+  - "focused unit and negative tests"
+  - "changed-path and secret scan"
+  - "git diff --check"
+  - "independent review"
+  - "typed fail-closed and rollback verification"
+  - "payload leakage negatives and alert fire/recover/dead-man proof"
+  - "prove exact declared outcome: Versioned queue, lease, AI, worker, DB, backup, restart, evidence and alert-delivery dashboards/rules; no claim of live delivery."
+reviewRequirements:
+  - reviewer-differs-from-builder
+  - all-blocking-findings-resolved
+  - authority-and-scope-independently-verified
+mergeMode: NONE_DRAFT_ONLY
+retryBudget: 2
+remediationBudget: 2
+reroutePolicy: compatible-independent-provider-only
+stopConditions:
+  - missing-stale-mismatched-or-revoked-authority
+  - reservation-collision-or-foreign-change
+  - ambiguous-base-worker-lease-fence-input-or-outcome
+  - duplicate-effect-or-evidence-gap
+  - issue-357-reuse
+evidenceTargets:
+  - "terragroq:docs/reports/ai-evalops-harness/WO-AEH-031-dashboard-alert-and-dead-man-definitions.md"
+  - exact-base-head-and-reservation-record
+  - authority-freshness-and-validation-results
+  - rollback-or-reversal-verification
+  - all-five-owner-touch-counter-evidence
+  - maturity-state-before-and-after
+  - explicit-non-proof-statement
+  - independent-reviewer-identity-findings-and-closure
+  - immutable-config-image-model-input-output-digests-as-applicable
+  - live-worker-boot-claim-lease-fence-evidence-as-applicable
+ownerDecisionConditions:
+  - "new-spend-account-or-provider"
+  - "credential-or-secret-use"
+  - "live-database-host-network-sudo-or-backup-mutation"
+  - "reboot-outage-or-fault-injection"
+  - "runtime-worker-scheduler-or-production-activation"
+ownerTouchBudget:
+  operation: 0
+  credential: 0
+  diagnostic: 0
+  routineDecision: 0
+  routineContact: 0
+ownerOperationsAllowed: false
+communicationPolicy: FINAL_ONLY

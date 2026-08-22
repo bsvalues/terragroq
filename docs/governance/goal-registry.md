@@ -250,6 +250,57 @@ Canonical program:
 Evidence:
 `docs/reports/WO-OWNER-OUTCOME-008-owner-outcome-delivery-rollup.md`
 
+### `GOAL-WILLIAMOS-DURABLE-AI-EXECUTION-001 - Durable AI Execution`
+
+Status: `SELECTED / PROGRAM_REGISTERED / WO-AEH-001_COMPLETE / R2_R3_AUTHORITY_GATED`
+
+Program: `PROGRAM-WILLIAMOS-AI-EVALOPS-HARNESS-001`
+
+Loop: `LOOP-WILLIAMOS-DURABLE-AI-EXECUTION-001`
+
+Risk ceiling: the program contains R3 outcomes; the current active grant covers
+only R1 repository-governance registration and non-mutating inspection.
+
+Owner authority: `OWNER-DIRECTION-2026-08-11-AEH-EXECUTE-001`, recorded from the
+direct authenticated statement `Execute on my authority` at
+`2026-08-11T07:46:29-07:00`.
+
+Purpose: build one bounded, restart-safe, observable, recoverable AI execution
+lane while correcting backup, exposure, supply-chain, placement, and evidence
+hazards without overstating runtime maturity.
+
+Current completed Work Order: `WO-AEH-001`.
+
+Released only to fresh authority and reservation evaluation:
+`WO-AEH-002`, `WO-AEH-011`, and `WO-AEH-013`.
+
+Allowed now: exact registry reconciliation, read-only baseline and inventory
+work, packet/DAG validation, and independent assurance inside matched R1 scope.
+
+Blocked now: all unreserved R2 implementation and every R3 live host, database,
+network, sudo, backup, credential, provider, outage, runtime, worker, scheduler,
+soak, deployment, and cutover action. Issue #357 remains terminal and may not be
+retried, wrapped, renamed, or reused.
+
+Completion requires independent WO-AEH-041 certification. WO-AEH-042 remains a
+separate production authorization decision.
+
+Owner-operation state:
+
+```text
+OWNER_OPERATION_TOUCH_COUNT: 0
+OWNER_CREDENTIAL_TOUCH_COUNT: 0
+OWNER_DIAGNOSTIC_TOUCH_COUNT: 0
+OWNER_ROUTINE_DECISION_COUNT: 0
+OWNER_ROUTINE_CONTACT_COUNT: 0
+OWNER_OPERATION_CERTIFICATION_STATE: UNVERIFIED_ZERO_OWNER_OPERATIONS
+```
+
+Canonical program: `docs/governance/ai-evalops-harness-program.md`.
+
+Activation evidence:
+`docs/reports/ai-evalops-harness/WO-AEH-001-program-activation-registration-and-authority-map.md`.
+
 ### `NO_ACTIVE_GOAL - Inactive Sentinel Only`
 
 Status: `inactive sentinel / not current`

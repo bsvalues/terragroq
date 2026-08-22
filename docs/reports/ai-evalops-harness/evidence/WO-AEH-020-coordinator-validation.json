@@ -1,0 +1,38 @@
+{
+  "work_order": "WO-AEH-020",
+  "scope": "repository-only coordinator implementation and inert packaging",
+  "result": "PASS",
+  "tests": {
+    "command": "node --test tests/ai-evalops-harness-coordinator.test.mjs",
+    "consecutive_runs": 2,
+    "tests_per_run": 15,
+    "failures": 0
+  },
+  "checks": {
+    "node_syntax": "PASS",
+    "configuration_json_parse": "PASS",
+    "scoped_diff_check": "PASS",
+    "local_typescript_runner": "UNAVAILABLE_NOT_INSTALLED",
+    "live_atlas_connection": "NOT_PERFORMED",
+    "service_or_host_mutation": "NOT_PERFORMED",
+    "network_or_dependency_install": "NOT_PERFORMED"
+  },
+  "contracts": {
+    "leadership": "dedicated-session PostgreSQL advisory lock",
+    "job_pull": "WO-AEH-016 typed pullEligibleJob binding",
+    "replacement": "authoritative injected drain inspection; repeatable fail-closed drain; unlock requires exact true",
+    "leaderUncertainty": "transport/session uncertainty clears admission and local leadership and enters FAILED; deterministic domain errors preserve leadership",
+    "emptyQueue": "CLAIM_NOT_ELIGIBLE returns typed NO_WORK without leader demotion",
+    "proofFreshness": "health and readiness require Atlas proof no older than pollIntervalMs",
+    "reconciliation": "WO-AEH-019_REQUIRED_NOT_IMPLEMENTED",
+    "packaging": "inert non-root hardened service template with restart policy"
+  },
+  "sha256": {
+    "lib/execution-control/coordinator/core.mjs": "a44ab6d27b88b533eda8dbca4a3afaef9b26f62c5e99e62503d8d078ea4f0152",
+    "lib/execution-control/coordinator/core.d.ts": "d435fe6eb90ac2bcdbaa4f76dc14fff3ed07487c29c7e06cec3dbde63cccc056",
+    "lib/execution-control/coordinator/index.ts": "254294408b13865439360dd30ab30d77ebbed4e74bf7e9f64cb1a6d0b55e8d7a",
+    "config/ai-evalops-harness/coordinator/coordinator.validation.json": "c33d208e8d1c285ca440ac7006e2363d7cb85bcfe48814ce21352491a0fbc0b0",
+    "config/ai-evalops-harness/coordinator/aeh-coordinator.service.template": "61e779b473c62422ab92f9c9b495b918226b29bd42bc1e3a346e7e41f139fc92",
+    "tests/ai-evalops-harness-coordinator.test.mjs": "9aa042e194aa35a7ecbc7bb1535fab4c5a367b57c8b8e797917522ff224f2f9e"
+  }
+}

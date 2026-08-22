@@ -1,0 +1,463 @@
+{
+  "schema": "williamos-ai-evalops-current-state-inventory/1",
+  "workOrder": "WO-AEH-002",
+  "observedAt": "2026-08-11T14:53:14.000Z",
+  "method": "read-only local inspection; no environment values, credentials, container labels, process command lines, or protected payloads captured",
+  "repositories": [
+    {
+      "id": "terragroq",
+      "root": "C:\\Users\\bs\\terragroq-review",
+      "head": "13709f5789c25dea408283730a6bd35e8fd894ab",
+      "branch": "DETACHED",
+      "dirty": true,
+      "statusEntries": [
+        " M docs/governance/goal-registry.md",
+        " M docs/governance/loop-registry.md",
+        " M tests/active-program-queue-header.test.ts",
+        "?? docs/governance/WO-AEH-000-ai-evalops-harness-program-coordination.md",
+        "?? docs/governance/ai-evalops-harness-program.md",
+        "?? docs/governance/ai-evalops-harness/",
+        "?? docs/reports/ai-evalops-harness/",
+        "?? scripts/ai-evalops-harness/",
+        "M docs/governance/active-program-queue.md"
+      ],
+      "source": "git rev-parse/branch/status --short (read-only; reserved WO-AEH-002 outputs excluded)"
+    },
+    {
+      "id": "HermesLab",
+      "root": "C:\\HermesLab",
+      "head": "0481061acf1f683688a00b09795647d0288c7232",
+      "branch": "master",
+      "dirty": true,
+      "statusEntries": [
+        " M atlas/atlas-placement.json",
+        " M hermes/hermes-placement.json",
+        "?? aegis/aegis-latest.json",
+        "?? aegis/aegis-live.json",
+        "?? aegis/capture-aegis-replay-evidence.mjs",
+        "?? aegis/claim.json",
+        "?? aegis/diagnose-aegis-placement-replay.mjs",
+        "?? aegis/first-run.json",
+        "?? aegis/fresh-aegis-95014397aa31c503161447ad5d2d86b99ea789d69a9aeeb03033db39f11e9f02.json",
+        "?? aegis/fresh-atlas-3d969ea9bb778c0fd180316441540bf3bd2d938c6c92acb5df13bd259c7308d6.json",
+        "?? aegis/fresh-hermes-node-d3a79ff9d4f65497770255fe1f59cb2da9813c20873bd6dd57028b37ada2df7b.json",
+        "?? aegis/fresh-receipt.json",
+        "?? aegis/generate-aegis-placement-receipt.mjs",
+        "?? aegis/lease-reconstruction-evidence.json",
+        "?? aegis/live-proof-pinned/",
+        "?? aegis/provision-williamos-aegis-node.sh",
+        "?? aegis/rapid-aegis-ccf13d6e02781c8eb90f58a56c4e753b63a31a6ab983b7f8fc8e328dabbc4b56.json",
+        "?? aegis/rapid-atlas-32879530a35081f6f3feb1eb8fee074368a70032123dd4b66b67be406f06984f.json",
+        "?? aegis/rapid-hermes-node-c5a1f5153a125ae3bd7ca482ebe9773442194e8f05ec21947b8db3cba8c610d2.json",
+        "?? aegis/reconstruct-aegis-lease.mjs",
+        "?? aegis/reconstructed-lease.json",
+        "?? aegis/release.json",
+        "?? aegis/replay-evidence.json",
+        "?? aegis/replay.json",
+        "?? aegis/retention-policy-v1.json",
+        "?? aegis/run-aegis-single-use-proof.sh",
+        "?? aegis/run-williamos-aegis-proof.sh",
+        "?? aegis/tests/",
+        "?? atlas/classify-drive.sh",
+        "?? atlas/pacs-trace.sh",
+        "?? bounded-dispatch-ledger/",
+        "?? hermes/docker-compose.yml.bak.20260809_062003",
+        "?? pilot0/",
+        "?? snapshots/atlas/297bc68f7092438a1eca6d8f5065257026a44996cb4a3ac83f5997f59690b5c9.json",
+        "?? snapshots/atlas/c759679c1b7a7c666784ed2fec934796a532b708d3cd150dcbc27366edb04121.json",
+        "?? snapshots/atlas/f9376e1ea8d78e5aceab74aebbcf68ebca659ffadabab1eb9322cdc93c8755b5.json",
+        "?? snapshots/hermes-node/18fea65278d2f54ea5770d9bfad795275942db3687d6b50a7e5be995bd5df7db.json",
+        "?? snapshots/hermes-node/28c38ea34a722884a9f97a2310d758548b6bbae79acc98e4c1d98fb424e1fa74.json",
+        "?? snapshots/hermes-node/45e314b1e828697566203c26ee832fe79551339383b833885641078063689d92.json",
+        "?? snapshots/hermes-node/4c3129eeedb32c86f222631cdc62f3e7170996bd0b247e75295a4b776394cb56.json",
+        "?? snapshots/hermes-node/4efbf28f13c17f9f66f98855c39a37a85f9b94d3a0db695628e626d231bd4b5e.json",
+        "?? snapshots/hermes-node/64546efa512b2278fe18a7a8522ee991f7d435739ee731b20b536a31c83bd353.json",
+        "?? snapshots/hermes-node/9df2ea423eac0ffb25276cb33ae4c4410af59aa88ca3078bee45ddcdfe094466.json",
+        "?? snapshots/hermes-node/c329c3c16fd16dbddd71c26ff0d67a15c55e86d7d7a8210836f15a711785d299.json",
+        "M aegis/backup-v1.sh"
+      ],
+      "source": "git rev-parse/branch/status --short (read-only; reserved WO-AEH-002 outputs excluded)"
+    }
+  ],
+  "localMachine": {
+    "hostname": "Hermes",
+    "platform": "win32",
+    "release": "10.0.19045",
+    "arch": "x64",
+    "cpuModel": "Intel(R) Core(TM) i7-5960X CPU @ 3.00GHz",
+    "logicalCpuCount": 16,
+    "totalMemoryBytes": 34263711744,
+    "source": "Node.js os module (local host only)"
+  },
+  "declaredSources": [
+    {
+      "path": "C:\\HermesLab\\README.md",
+      "sha256": "b53935af53efa092bad7f0eaf06fc645d6bb77b45c2d3acb0bc931677950f1af"
+    },
+    {
+      "path": "C:\\HermesLab\\SERVICE-MAP.md",
+      "sha256": "18b58edd6c57a41e603c62dbbd1e54ac9427806b2546317a3431f3c40235dff7"
+    },
+    {
+      "path": "C:\\HermesLab\\hermes\\docker-compose.yml",
+      "sha256": "2ffc6ccddb650f215a5328a0a2464863bc5ab2bf8ef4067d663d04bc86542c7e"
+    }
+  ],
+  "observedRuntime": {
+    "dockerAvailable": true,
+    "containers": [
+      {
+        "name": "ollama",
+        "image": "ollama/ollama:latest",
+        "state": "running",
+        "status": "Up 19 hours",
+        "ports": "127.0.0.1:11434->11434/tcp"
+      },
+      {
+        "name": "open-webui",
+        "image": "ghcr.io/open-webui/open-webui:main",
+        "state": "running",
+        "status": "Up 19 hours (healthy)",
+        "ports": "0.0.0.0:3000->8080/tcp, [::]:3000->8080/tcp"
+      },
+      {
+        "name": "portainer",
+        "image": "portainer/portainer-ce:latest",
+        "state": "running",
+        "status": "Up 19 hours",
+        "ports": "0.0.0.0:9000->9000/tcp, [::]:9000->9000/tcp"
+      },
+      {
+        "name": "postgres",
+        "image": "postgres:16",
+        "state": "running",
+        "status": "Up 19 hours (healthy)",
+        "ports": "0.0.0.0:5433->5432/tcp, [::]:5433->5432/tcp"
+      },
+      {
+        "name": "redis",
+        "image": "redis:7",
+        "state": "running",
+        "status": "Up 19 hours",
+        "ports": "0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp"
+      }
+    ],
+    "relevantListeners": [
+      {
+        "address": "::",
+        "port": 3000
+      },
+      {
+        "address": "::1",
+        "port": 3000
+      },
+      {
+        "address": "::",
+        "port": 5433
+      },
+      {
+        "address": "::1",
+        "port": 5433
+      },
+      {
+        "address": "::",
+        "port": 6379
+      },
+      {
+        "address": "::1",
+        "port": 6379
+      },
+      {
+        "address": "::",
+        "port": 9000
+      },
+      {
+        "address": "::1",
+        "port": 9000
+      },
+      {
+        "address": "127.0.0.1",
+        "port": 11434
+      }
+    ],
+    "source": "docker ps minimal fields; Get-NetTCPConnection limited to declared lab ports"
+  },
+  "scheduledTasks": {
+    "items": [
+      {
+        "name": "HermesCrossNodeBackupSync",
+        "state": "Ready",
+        "principal": "bs",
+        "logonType": "Interactive",
+        "runLevel": "Limited",
+        "lastRunTime": "2026-08-11T11:00:00.0000000Z",
+        "lastTaskResult": 0,
+        "nextRunTime": "2026-08-12T11:00:00.0000000Z"
+      },
+      {
+        "name": "HermesLabHealth",
+        "state": "Ready",
+        "principal": "bs",
+        "logonType": "Interactive",
+        "runLevel": "Limited",
+        "lastRunTime": "2026-08-11T14:10:10.0000000Z",
+        "lastTaskResult": 0,
+        "nextRunTime": "2026-08-11T15:10:10.0000000Z"
+      },
+      {
+        "name": "HermesVolumeBackup",
+        "state": "Ready",
+        "principal": "bs",
+        "logonType": "Interactive",
+        "runLevel": "Limited",
+        "lastRunTime": "2026-08-11T10:00:00.0000000Z",
+        "lastTaskResult": 0,
+        "nextRunTime": "2026-08-12T10:00:00.0000000Z"
+      }
+    ],
+    "source": "Get-ScheduledTask/Get-ScheduledTaskInfo restricted to root tasks named Hermes*; actions and arguments excluded"
+  },
+  "installedModels": {
+    "ollamaAvailable": true,
+    "items": [
+      {
+        "name": "llama3.2:3b",
+        "digestPrefix": "a80c4f17acd5",
+        "size": "2.0 GB"
+      }
+    ],
+    "source": "docker exec ollama ollama list; model name, digest prefix, and size only"
+  },
+  "disksAndMounts": {
+    "items": [
+      {
+        "drive": "C",
+        "fileSystem": "NTFS",
+        "health": "Healthy",
+        "operational": "OK",
+        "sizeBytes": 498963906560,
+        "freeGiBFloor": 256
+      },
+      {
+        "drive": "D",
+        "fileSystem": "NTFS",
+        "health": "Healthy",
+        "operational": "OK",
+        "sizeBytes": 119926681600,
+        "freeGiBFloor": 85
+      },
+      {
+        "drive": "E",
+        "fileSystem": "Unknown",
+        "health": "Healthy",
+        "operational": "OK",
+        "sizeBytes": 104660992,
+        "freeGiBFloor": 0
+      },
+      {
+        "drive": "F",
+        "fileSystem": "NTFS",
+        "health": "Healthy",
+        "operational": "OK",
+        "sizeBytes": 1000169226240,
+        "freeGiBFloor": 931
+      },
+      {
+        "drive": "H",
+        "fileSystem": "NTFS",
+        "health": "Healthy",
+        "operational": "OK",
+        "sizeBytes": 366583214080,
+        "freeGiBFloor": 0
+      },
+      {
+        "drive": "I",
+        "fileSystem": "NTFS",
+        "health": "Healthy",
+        "operational": "OK",
+        "sizeBytes": 125570121216,
+        "freeGiBFloor": 29
+      }
+    ],
+    "source": "Get-Volume drive-letter volumes; free capacity rounded down to whole GiB for deterministic evidence"
+  },
+  "runtimeIdentities": {
+    "scheduledTaskPrincipals": [
+      {
+        "name": "HermesCrossNodeBackupSync",
+        "principal": "bs",
+        "logonType": "Interactive",
+        "runLevel": "Limited"
+      },
+      {
+        "name": "HermesLabHealth",
+        "principal": "bs",
+        "logonType": "Interactive",
+        "runLevel": "Limited"
+      },
+      {
+        "name": "HermesVolumeBackup",
+        "principal": "bs",
+        "logonType": "Interactive",
+        "runLevel": "Limited"
+      }
+    ],
+    "containerUsers": [
+      {
+        "service": "ollama",
+        "declaredContainerUser": "IMAGE_DEFAULT_UNSPECIFIED"
+      },
+      {
+        "service": "open-webui",
+        "declaredContainerUser": "0:0"
+      },
+      {
+        "service": "portainer",
+        "declaredContainerUser": "IMAGE_DEFAULT_UNSPECIFIED"
+      },
+      {
+        "service": "postgres",
+        "declaredContainerUser": "IMAGE_DEFAULT_UNSPECIFIED"
+      },
+      {
+        "service": "redis",
+        "declaredContainerUser": "IMAGE_DEFAULT_UNSPECIFIED"
+      }
+    ],
+    "source": "scheduled-task principals and Docker Config.User only; no tokens, profiles, environment, groups, or credential stores inspected"
+  },
+  "backupMetadata": {
+    "source": {
+      "path": "C:\\HermesLab\\aegis\\aegis-latest.json",
+      "sha256": "00a21d7981dffaf6585e3c42c412f538266f49897383cff99f48abc94bd4d115",
+      "kind": "retained repository snapshot; not a live AEGIS probe"
+    },
+    "generation": "20260810T061501Z",
+    "lastBackup": "20260810T061501Z",
+    "lastRestoreVerify": "20260810T061501Z",
+    "backupAgeSeconds": 117493,
+    "thresholdHours": 48,
+    "freshness": "WITHIN_RETAINED_THRESHOLD",
+    "restoreClockAmbiguous": false,
+    "capabilityClaim": "READY"
+  },
+  "capabilitySnapshots": [
+    {
+      "label": "Hermes",
+      "source": {
+        "path": "C:\\HermesLab\\hermes\\hermes-placement.json",
+        "sha256": "95d88784964c2ad6922f8c94ef914e0a27083496ebb6207f9480f8b78db72d1c"
+      },
+      "observedAt": "2026-08-10T20:46:16Z",
+      "ageSeconds": 65218,
+      "freshnessTtlSeconds": 300,
+      "clockAmbiguous": false,
+      "freshness": "STALE",
+      "scheduler": "OFF",
+      "nodeHealth": "OK",
+      "runningWorkloads": [
+        "ollama",
+        "open-webui",
+        "portainer",
+        "postgres",
+        "redis"
+      ]
+    },
+    {
+      "label": "Atlas",
+      "source": {
+        "path": "C:\\HermesLab\\atlas\\atlas-placement.json",
+        "sha256": "6a4abe66bbbaff6ca66cc6d2b65b13f83c1b06e8902092f2360f4576f5e279db"
+      },
+      "observedAt": "2026-08-10T14:07:15Z",
+      "ageSeconds": 89159,
+      "freshnessTtlSeconds": 300,
+      "clockAmbiguous": false,
+      "freshness": "STALE",
+      "scheduler": "OFF",
+      "nodeHealth": "OK",
+      "runningWorkloads": null
+    },
+    {
+      "label": "AEGIS",
+      "source": {
+        "path": "C:\\HermesLab\\aegis\\aegis-latest.json",
+        "sha256": "00a21d7981dffaf6585e3c42c412f538266f49897383cff99f48abc94bd4d115"
+      },
+      "observedAt": "2026-08-10T20:46:18Z",
+      "ageSeconds": 65216,
+      "freshnessTtlSeconds": 300,
+      "clockAmbiguous": false,
+      "freshness": "STALE",
+      "scheduler": "OFF",
+      "nodeHealth": "OK",
+      "runningWorkloads": null
+    }
+  ],
+  "reconciliation": {
+    "contradictions": [
+      {
+        "id": "HERMES_POSTGRES_STATE_DRIFT",
+        "severity": "HIGH",
+        "declared": "STOPPED / non-authoritative",
+        "observed": "running container",
+        "declaredSource": "C:\\HermesLab\\SERVICE-MAP.md",
+        "observedSource": "docker ps"
+      },
+      {
+        "id": "HERMES_REDIS_STATE_DRIFT",
+        "severity": "HIGH",
+        "declared": "STOPPED / non-authoritative",
+        "observed": "running container",
+        "declaredSource": "C:\\HermesLab\\SERVICE-MAP.md",
+        "observedSource": "docker ps"
+      },
+      {
+        "id": "HERMES_README_UI_DRIFT",
+        "severity": "MEDIUM",
+        "declared": "images not pulled",
+        "observed": "open-webui and portainer running",
+        "declaredSource": "C:\\HermesLab\\README.md",
+        "observedSource": "docker ps"
+      }
+    ],
+    "broadPublishedLabListeners": [
+      {
+        "address": "::",
+        "port": 3000
+      },
+      {
+        "address": "::",
+        "port": 5433
+      },
+      {
+        "address": "::",
+        "port": 6379
+      },
+      {
+        "address": "::",
+        "port": 9000
+      }
+    ],
+    "floatingRuntimeImages": [
+      {
+        "name": "ollama",
+        "image": "ollama/ollama:latest"
+      },
+      {
+        "name": "open-webui",
+        "image": "ghcr.io/open-webui/open-webui:main"
+      },
+      {
+        "name": "portainer",
+        "image": "portainer/portainer-ce:latest"
+      }
+    ],
+    "conclusions": [
+      "Historical capability snapshots do not establish live dispatch readiness after their five-minute TTL.",
+      "Scheduler declarations remain OFF; running services do not imply execution authority.",
+      "Dirty repository state is foreign/shared state and was not modified or normalized by this inventory.",
+      "Atlas and AEGIS values are repository snapshot claims, not live probes from this local-only run."
+    ]
+  }
+}

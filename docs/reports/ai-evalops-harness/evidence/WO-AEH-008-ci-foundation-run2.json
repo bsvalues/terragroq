@@ -1,0 +1,64 @@
+{
+  "schema": "williamos.ai-evalops-ci-foundation/v1",
+  "status": "FOUNDATION_DEFINED_WITH_EXPLICIT_GAPS",
+  "gates": {
+    "typescript": {
+      "status": "READY_FROZEN_INSTALL",
+      "lockfile": "pnpm-lock.yaml"
+    },
+    "python": {
+      "status": "PARTIAL_EXACT_DIRECT_CONSTRAINTS_NO_HASH_LOCK",
+      "unconstrainedRequirementCount": 0,
+      "constraintCount": 10,
+      "constraintDirectiveComplete": true,
+      "staticSyntaxGate": true,
+      "transitiveHashLockPresent": false
+    },
+    "fabric": {
+      "status": "READY",
+      "testFileCount": 26
+    },
+    "api": {
+      "status": "PARTIAL_TS_GATE_PYTHON_NOT_HASH_LOCKED",
+      "testFileCount": 7
+    },
+    "database": {
+      "status": "PARTIAL_UNIT_ONLY_MISSING_DISPOSABLE_DB",
+      "testFileCount": 2
+    },
+    "component": {
+      "status": "MISSING",
+      "testFileCount": 0
+    },
+    "playwright": {
+      "status": "MISSING",
+      "configPresent": false,
+      "dependencyPresent": false
+    },
+    "secret": {
+      "status": "PARTIAL_PATTERN_TESTS_ONLY",
+      "testFileCount": 2
+    },
+    "artifact": {
+      "status": "PARTIAL_BUILD_UPLOAD_NO_PROVENANCE"
+    }
+  },
+  "workflowViolations": [],
+  "contractInputSha256": {
+    "package.json": "75ded7922c9c9370a5d83baa8c7a04274aea7daafa8ff22320da778031f3f75a",
+    "pnpm-lock.yaml": "70ae45a62924ace42e7edfdaddf5a59b75be3a33ad6a439492993ca43ab6823e",
+    "requirements.txt": "ad3c79d87bdcee6624bb37ba74adb4a40fe3a14c83de46df56990baf8d3853ea",
+    "requirements-search.txt": "840d51e3a14ce44f3db159c4bee95576fc99068dacb4198f54d70b6c0eb09c33",
+    "requirements-execution-fabric.txt": "37b7fe92dced33caead3578e0d253055a01c076cccd918fa0681e2342bd72383",
+    "requirements-constraints.txt": "3a31b009b649957e34890e9ab7f402dc811e210ac914e3252e78b1fadfef8464"
+  },
+  "prohibitions": [
+    "no dependency installation by contract checker",
+    "no network access",
+    "no GitHub settings mutation",
+    "no live runtime mutation"
+  ],
+  "observedAt": "2026-08-11T16:00:00.000Z",
+  "workflowSha256": "c858b41c8b7ea2a32de7d5a96dafd12ccdf4f45181ad7f4f42fa678634c72bc3",
+  "mutationPerformed": false
+}

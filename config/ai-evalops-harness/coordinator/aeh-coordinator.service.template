@@ -1,0 +1,21 @@
+[Unit]
+Description=WilliamOS AEH coordinator (template only; not installed)
+After=network-online.target
+
+[Service]
+Type=simple
+User={{DEDICATED_NON_ROOT_IDENTITY}}
+Group={{DEDICATED_NON_ROOT_GROUP}}
+EnvironmentFile={{ROOT_OWNED_ENV_FILE}}
+ExecStart={{IMMUTABLE_NODE_PATH}} {{IMMUTABLE_COORDINATOR_ENTRYPOINT}}
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

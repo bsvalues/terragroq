@@ -1,0 +1,23 @@
+{
+  "schema":"williamos.ai-evalops.wo-aeh-019-evidence/v1",
+  "workOrder":"WO-AEH-019",
+  "result":"PASS_DISPOSABLE_POSTGRESQL",
+  "tests":{"focusedRun1":{"passed":2,"failed":0},"focusedRun2":{"passed":2,"failed":0},"combined":{"passed":31,"failed":0}},
+  "outcomeContract":{"NOT_EXECUTED":"RETRY_SAFE","EXECUTED":"TERMINAL_EXECUTED","AMBIGUOUS":"BLOCKED_AMBIGUOUS","EXPIRED":"TERMINAL_EXPIRED","FENCED":"TERMINAL_FENCED"},
+  "postgresOutcomesExercised":["NOT_EXECUTED","EXECUTED","AMBIGUOUS","EXPIRED","FENCED"],
+  "historicalDescriptor":true,
+  "projectionCas":true,
+  "atomicEventReceipt":true,
+  "observationDigestBound":true,
+  "terminalDigestBound":true,
+  "executedRequiresOutboxDeliveryReceipt":true,
+  "processLocalState":false,
+  "responseLossFreshSessionReplay":true,
+  "concurrencyProof":{"canonicalOrder":"EFFECT_DOMAIN_THEN_CAPABILITY_THEN_AUTHORITY_THEN_PROJECTION","effectDomainLockBeforeProjection":true,"controlRowsBeforeProjection":true,"sharedEffectDomainLock":true,"dispatchVsNotExecutedSerialized":true,"authorityRevokeVsReconcileSerialized":true,"capabilityStaleVsReconcileSerialized":true,"exactConcurrentReplaySerialized":true,"conflictingConcurrentReplayRejected":true},
+  "externalEffects":0,
+  "artifacts":{"engineSha256":"649ad53841ebe2a281c9d19514781143eca09a95661d7ee16a28485d94c2779f","migrationSha256":"7e4fbd7cdc595e897974fcb7666105505dfccc815d4ba5d31e88331469320148","rollbackSha256":"0730efc5b7a52856551c1480899b521ba834b3e79b5843f76c8f91fa3abb9303","manifestSha256":"d36257ea67095d4da6f59db2edb8ee51dffe36009aa0eaffe75e40b558c25b4a","testSha256":"1e4218747905ed51c40b8886a8a56d68a52d29198dbf067a0af7a647fb108874","integratedOutboxMigrationSha256":"827aa8790dcfc7b1f7c40bc3ae4f941bf407e292d74a8c25f0f9d86904e302fa","integratedOutboxTestSha256":"92864a81c5412c08e343c2dc61970d3094daece20cc86554dfbccd67a8ff537e"},
+  "ownerCounters":{"OWNER_OPERATION_TOUCH_COUNT":0,"OWNER_CREDENTIAL_TOUCH_COUNT":0,"OWNER_DIAGNOSTIC_TOUCH_COUNT":0,"OWNER_ROUTINE_DECISION_COUNT":0,"OWNER_ROUTINE_CONTACT_COUNT":0},
+  "ownerOperationCertificationState":"UNVERIFIED_ZERO_OWNER_OPERATIONS",
+  "networkAccessed":false,"liveDatabaseAccessed":false,"disposableDatabaseMutated":true,"containerRemoved":true,
+  "nonProofs":["No external effect or live recovery occurred; delivery records were synthetic disposable fixtures.","Disposable PostgreSQL evidence does not prove production concurrency or outage recovery."]
+}

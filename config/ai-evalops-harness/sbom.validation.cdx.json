@@ -1,0 +1,13 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:00000000-0000-4000-8000-000000000010",
+  "version": 1,
+  "metadata": { "properties": [{ "name": "williamos:fixture-only", "value": "true" }] },
+  "components": [],
+  "bindings": {
+    "sourceCommit": "0000000000000000000000000000000000000000",
+    "imageDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "documentSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  }
+}

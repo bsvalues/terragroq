@@ -1,0 +1,15 @@
+# TRANSIENT_SCOPE_TEMPLATE=true; NO_DIRECT_INSTALL=true
+[Scope]
+User=williamos-aegis
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateNetwork=true
+RestrictAddressFamilies=none
+DevicePolicy=closed
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+MemoryMax=512M
+TasksMax=1
+RuntimeMaxSec=60
+KillMode=control-group

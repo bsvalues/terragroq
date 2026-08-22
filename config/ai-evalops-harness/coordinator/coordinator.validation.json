@@ -1,0 +1,9 @@
+{
+  "coordinatorId": "atlas:aeh-coordinator:validation",
+  "atlasDatabaseEnv": "AEH_ATLAS_DATABASE_URL",
+  "leaderLockKey": 16600420,
+  "pollIntervalMs": 1000,
+  "shutdownTimeoutMs": 30000,
+  "healthPort": 9080,
+  "reconciliationDependency": "WO-AEH-019_REQUIRED_NOT_IMPLEMENTED"
+}

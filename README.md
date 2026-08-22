@@ -48,18 +48,21 @@ covered by tests.
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 20 or 22 (`>=20 <23`, matching `package.json`)
+- pnpm 10.17.1 through Corepack (`corepack enable`)
 - A Neon Postgres database (provided via the v0 Neon integration)
 - The following environment variables (injected by the integration / project settings):
   - `DATABASE_URL` — Neon connection string. Prefer `sslmode=verify-full`; the app normalizes ambiguous `sslmode=require` / `prefer` / `verify-ca` values before passing the URL to `pg`.
   - `BETTER_AUTH_SECRET` — session signing secret (`openssl rand -base64 32`)
   - `BETTER_AUTH_URL` — base URL of the app (optional in dev)
   - `AUTH_SIGNUP_MODE` — `bootstrap` (default), `open`, or `closed`
+  - `LOCAL_SETUP_ENABLED` — local setup is enabled unless this is exactly `false`
+  - `GROQ_API_KEY` — optional model-provider secret; never record its value in evidence
 
 ### Install & run
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 pnpm dev          # http://localhost:3000
 ```
 
@@ -82,8 +85,24 @@ then sign-up closes automatically unless `AUTH_SIGNUP_MODE=open`.
 | `pnpm test`      | Run the Vitest suite                     |
 | `pnpm test:watch`| Watch mode                              |
 
-The database schema lives in [`lib/db/schema.ts`](lib/db/schema.ts) and is applied
-to Neon through the integration. There is no separate migrate step in this repo.
+The application schema lives in [`lib/db/schema.ts`](lib/db/schema.ts). Existing
+Neon environments retain their integration-managed flow. The AEH program also
+defines a checked-in, validation-only workflow under
+[`migrations/ai-evalops-harness/`](migrations/ai-evalops-harness/) and
+[`drizzle.aeh.config.ts`](drizzle.aeh.config.ts); it refuses live database URLs
+and neither authorizes nor applies a production migration.
+
+### Supported and bounded surfaces
+
+| Surface | Status |
+|---|---|
+| WilliamOS Next.js console | Supported primary product |
+| Governance/execution-fabric contracts | Supported tests; non-dispatching by default |
+| Python control-center/search tools | Optional/legacy; use constrained `requirements*.txt` inputs |
+| `control-center/frontend` | Optional legacy Vite surface, not the primary console |
+| Hermes Ollama | Bounded local inference; scheduler off |
+| AEGIS | Narrow HASH_VERIFY proof capability; no general scheduler |
+| Unattended multi-agent operation | Not certified; durable background operation unproven |
 
 ---
 

@@ -1,0 +1,40 @@
+{
+  "schema": "williamos.ai-evalops.wo-aeh-016-evidence/v1",
+  "workOrder": "WO-AEH-016",
+  "result": "PASS_DISPOSABLE_POSTGRESQL",
+  "validationCommand": "node --test --test-concurrency=1 tests/ai-evalops-harness-claim-lease-engine.test.mjs tests/ai-evalops-harness-durable-schema.test.mjs tests/ai-evalops-harness-schema-drift.test.mjs",
+  "tests": { "passed": 24, "failed": 0, "wo016": 3, "wo015Regression": 11, "wo009Regression": 10 },
+  "contention": { "concurrentClaimants": 2, "successfulClaims": 1, "attemptRows": 1, "leaseRows": 1, "nextFencingToken": 2 },
+  "replay": { "digestComputedAtTrustedBoundary": true, "callerDigestAccepted": false, "pullReceiptCheckedBeforeEligibility": true, "pullChosenJobBoundInResponse": true, "pullConnectionLossReplay": true, "pullChangedArgumentsConflict": true, "claimExactReplay": true, "renewExactReplay": true, "releaseExactReplay": true, "concurrentChangedArgumentConflict": { "claim": true, "renew": true, "release": true } },
+  "recovery": { "transactionRollbackLeftRows": 0, "expiryState": "RECONCILING", "reconciliationReceiptAndEventAtomic": true, "exactActorAuthorityAndObservationEvidenceRequired": true, "expectedVersionAndAttemptRequired": true, "ambiguousResult": "AMBIGUOUS_RECONCILIATION_REQUIRED", "notExecutedReconciliation": "RETRY_SAFE", "expiredLeaseReclaimed": true, "replacementFence": 2, "expiredOutboxRejected": true, "wallSleepUsed": false },
+  "domainIsolation": { "sameDomainSecondJobRejected": true, "differentDomainConcurrentLeaseAccepted": true, "bigintFence": "9007199254740993" },
+  "negativeCodesObserved": ["CLAIM_NOT_ELIGIBLE", "OPERATION_IDEMPOTENCY_CONFLICT", "LEASE_WRONG_HOLDER", "LEASE_WRONG_BOOT", "LEASE_STALE_OR_FORGED", "LEASE_EXPIRED", "FENCE_NOT_CURRENT", "RETRY_NOT_PROVEN_SAFE"],
+  "artifacts": {
+    "engineSha256": "925140d56516c63616ae431124b9e2d41753a74c91c05bdabd42a595da0b878a",
+    "migrationSha256": "b0d997332ffff9a3dafacdec14ea88464ce86d6d1a773d5b6abad632bb1244bf",
+    "rollbackSha256": "b60ce3c2fe668a753e3785de8818f125e2db12b5fc76ced5613e926f5a8af692",
+    "manifestSha256": "980ebfcf452520f6e70c6f8c65e900e8947837ba4b8051292cd4fccf865abe88",
+    "testSha256": "4dc07e5d1c0bb97b0aa290222004d2911419ad3226b40663ab542c8fb2665b41"
+  },
+  "ownerCounters": {
+    "OWNER_OPERATION_TOUCH_COUNT": 0,
+    "OWNER_CREDENTIAL_TOUCH_COUNT": 0,
+    "OWNER_DIAGNOSTIC_TOUCH_COUNT": 0,
+    "OWNER_ROUTINE_DECISION_COUNT": 0,
+    "OWNER_ROUTINE_CONTACT_COUNT": 0
+  },
+  "ownerOperationCertificationState": "UNVERIFIED_ZERO_OWNER_OPERATIONS",
+  "cachedImage": "postgres:16",
+  "imagePulled": false,
+  "networkAccessed": false,
+  "liveDatabaseAccessed": false,
+  "disposableDatabaseMutated": true,
+  "containerRemoved": true,
+  "containerRemovalAsserted": true,
+  "matchingContainerResidueCount": 0,
+  "nonProofs": [
+    "Synthetic jobs, workers, authority/capability status, attempts, events, operation receipts, leases, renewals, releases, expiry/reconciliation/reclaim operations, and fences existed only in removed disposable databases.",
+    "No live worker, Atlas database, external effect, adapter, outbox delivery, receipt, recovery, soak, or production path was exercised.",
+    "Exactly one database claimant under this fixture does not prove all production isolation or outage behavior."
+  ]
+}

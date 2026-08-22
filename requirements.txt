@@ -1,3 +1,4 @@
+-c requirements-constraints.txt
 PyYAML>=6.0.1
 python-frontmatter>=1.0.1
 rich>=13.7.0

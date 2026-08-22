@@ -1,0 +1,185 @@
+{
+  "schema": "williamos.ai-evalops-current-status/v1",
+  "programId": "PROGRAM-WILLIAMOS-AI-EVALOPS-HARNESS-001",
+  "goalId": "GOAL-WILLIAMOS-DURABLE-AI-EXECUTION-001",
+  "loopId": "LOOP-WILLIAMOS-DURABLE-AI-EXECUTION-001",
+  "currentMaturity": "MODEL_VERIFIED",
+  "statusLabel": "MODEL_VERIFIED / RUNTIME_NOT_ACTIVE / PRODUCTION_NOT_AUTHORIZED",
+  "evidence": {
+    "modelVerified": true,
+    "contractVerified": false,
+    "adapterProven": false,
+    "recoveryProven": false,
+    "soakProven": false,
+    "productionAuthorityActive": false
+  },
+  "maturityGates": {
+    "MODEL_VERIFIED": {
+      "status": "EVIDENCED",
+      "evidencePaths": [
+        "docs/governance/ai-evalops-harness-program.md",
+        "docs/governance/WO-AEH-000-ai-evalops-harness-program-coordination.md"
+      ],
+      "requiredWorkOrders": []
+    },
+    "CONTRACT_VERIFIED": {
+      "status": "FUTURE_GATE",
+      "evidencePaths": [],
+      "requiredWorkOrders": [
+        "WO-AEH-021"
+      ]
+    },
+    "ADAPTER_PROVEN": {
+      "status": "FUTURE_GATE",
+      "evidencePaths": [],
+      "requiredWorkOrders": [
+        "WO-AEH-028"
+      ]
+    },
+    "RECOVERY_PROVEN": {
+      "status": "FUTURE_GATE",
+      "evidencePaths": [],
+      "requiredWorkOrders": [
+        "WO-AEH-034",
+        "WO-AEH-052"
+      ]
+    },
+    "SOAK_PROVEN": {
+      "status": "FUTURE_GATE",
+      "evidencePaths": [],
+      "requiredWorkOrders": [
+        "WO-AEH-041"
+      ]
+    },
+    "PRODUCTION_AUTHORIZED": {
+      "status": "FUTURE_GATE",
+      "evidencePaths": [],
+      "requiredWorkOrders": [
+        "WO-AEH-042"
+      ]
+    }
+  },
+  "runtime": {
+    "schedulerActive": false,
+    "backgroundWorkerActive": false,
+    "runtimeActivated": false,
+    "productionAuthorized": false,
+    "issue357QuarantinedTerminal": true
+  },
+  "historyReferences": [
+    {
+      "path": "docs/governance/ai-evalops-harness-program.md",
+      "purpose": "program contract and maturity vocabulary",
+      "immutable": true
+    },
+    {
+      "path": "docs/governance/WO-AEH-000-ai-evalops-harness-program-coordination.md",
+      "purpose": "umbrella Work Order and non-activation boundary",
+      "immutable": true
+    },
+    {
+      "path": "docs/reports/ai-evalops-harness/WO-AEH-001-program-activation-registration-and-authority-map.md",
+      "purpose": "R1 program registration evidence",
+      "immutable": true
+    },
+    {
+      "path": "docs/reports/ai-evalops-harness/WO-AEH-002-current-state-and-drift-inventory.md",
+      "purpose": "read-only current-state inventory",
+      "immutable": true
+    },
+    {
+      "path": "docs/reports/WO-MAO-059-sustained-zero-touch-soak-rejection.md",
+      "purpose": "historical unattended-soak rejection",
+      "immutable": true
+    },
+    {
+      "path": "docs/reports/WO-MAO-062-program-closure-portfolio-continuation.md",
+      "purpose": "historical multi-agent program closure",
+      "immutable": true
+    }
+  ],
+  "nonProof": [
+    "Program registration and deterministic contracts do not prove a live durable scheduler.",
+    "Existing bounded adapters do not prove the new end-to-end AI lane or restart recovery.",
+    "Historical capability snapshots do not prove current placement readiness.",
+    "Only WO-AEH-041 may declare SOAK_PROVEN and only WO-AEH-042 with separate authority may declare PRODUCTION_AUTHORIZED."
+  ],
+  "observedAt": "2026-08-11T15:30:00.000Z",
+  "maturityVocabulary": [
+    {
+      "state": "MODEL_VERIFIED",
+      "rank": 0,
+      "definition": "A deterministic or zero-input model passed tests; no live execution is implied."
+    },
+    {
+      "state": "CONTRACT_VERIFIED",
+      "rank": 1,
+      "definition": "Exact input, authority, output, and failure semantics passed contract tests."
+    },
+    {
+      "state": "ADAPTER_PROVEN",
+      "rank": 2,
+      "definition": "A bounded real operation executed through the reviewed adapter."
+    },
+    {
+      "state": "RECOVERY_PROVEN",
+      "rank": 3,
+      "definition": "Restart and ambiguous-outcome recovery passed live failure tests."
+    },
+    {
+      "state": "SOAK_PROVEN",
+      "rank": 4,
+      "definition": "The declared continuous-duration and useful-work soak passed."
+    },
+    {
+      "state": "PRODUCTION_AUTHORIZED",
+      "rank": 5,
+      "definition": "Separate active authority covers the exact deployment and operation."
+    }
+  ],
+  "historicalEvidence": [
+    {
+      "path": "docs/governance/ai-evalops-harness-program.md",
+      "purpose": "program contract and maturity vocabulary",
+      "immutable": true,
+      "sha256": "a905be7b6d4c69e908cc6404cf2e65c4857d8516691b4d91d415b0aafaf55dc4",
+      "sizeBytes": 32343
+    },
+    {
+      "path": "docs/governance/WO-AEH-000-ai-evalops-harness-program-coordination.md",
+      "purpose": "umbrella Work Order and non-activation boundary",
+      "immutable": true,
+      "sha256": "42b5d7bc2e1e1c44e9ea2eaf50b23ba29939bebe9a1bf6937f41ae0882f4149f",
+      "sizeBytes": 13725
+    },
+    {
+      "path": "docs/reports/ai-evalops-harness/WO-AEH-001-program-activation-registration-and-authority-map.md",
+      "purpose": "R1 program registration evidence",
+      "immutable": true,
+      "sha256": "1e4c9d3ee79ba5019c02537d321b84f5e0b84889c89730d95c6b0613660ccbe5",
+      "sizeBytes": 5012
+    },
+    {
+      "path": "docs/reports/ai-evalops-harness/WO-AEH-002-current-state-and-drift-inventory.md",
+      "purpose": "read-only current-state inventory",
+      "immutable": true,
+      "sha256": "276f0a959953ff38175d59772d785bac3c5c56e44b4f3985498056a89b27b70b",
+      "sizeBytes": 9301
+    },
+    {
+      "path": "docs/reports/WO-MAO-059-sustained-zero-touch-soak-rejection.md",
+      "purpose": "historical unattended-soak rejection",
+      "immutable": true,
+      "sha256": "f9d40d0fc87a947ac8b618edc8313930b6a32e20784f1e283421298741516e98",
+      "sizeBytes": 2001
+    },
+    {
+      "path": "docs/reports/WO-MAO-062-program-closure-portfolio-continuation.md",
+      "purpose": "historical multi-agent program closure",
+      "immutable": true,
+      "sha256": "bad1b8018be975759c19536dfa1431b486e8b246d5e5d3004b0ce13c8caf96c5",
+      "sizeBytes": 1674
+    }
+  ],
+  "generatedProjectionSha256": "bc264bd10ee65c7f5ba6502f2d20582e1a283f5bd4271547c453a411ad1751c4"
+}

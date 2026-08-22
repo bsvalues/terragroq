@@ -1,0 +1,492 @@
+{
+  "schema": "ai-evalops-harness-lexical-draft-packet-validation/1",
+  "validation_only": true,
+  "dispatch_performed": false,
+  "authority_granted": false,
+  "dispatch_readiness": "BLOCKED_AUTHORITY_AND_RESERVATION",
+  "status": "PASS_LEXICAL_DRAFT_COMPLETENESS_NON_AUTHORIZING",
+  "counts": {
+    "program_children": 52,
+    "markdown_packets": 52,
+    "yaml_envelopes": 52,
+    "graph_nodes": 53,
+    "graph_edges": 90,
+    "graph_visited": 53
+  },
+  "caveats": [
+    "This checker validates lexical draft completeness and deterministic cross-file consistency; it is not a YAML schema validator and does not replace the executable authority validator.",
+    "Every packet requires refreshed bases, exact collision-checked reservations, named roles, and active authority before dispatch.",
+    "The two checkout IDs intentionally distinguish physical roots that currently share one repository origin."
+  ],
+  "failures": [],
+  "packets": [
+    {
+      "id": "WO-AEH-001",
+      "markdown": "WO-AEH-001-program-activation-registration-and-authority-map.md",
+      "envelope": "WO-AEH-001-program-activation-registration-and-authority-map.draft-envelope.yaml",
+      "markdown_sha256": "8f4cc6fce6bfdcf61af0046c01a7e8333f5790efae594d64f6809ec2c893453f",
+      "envelope_sha256": "74e261312151fb4ec0eae5044c078a1e22bf556cbaddfc73d73406fd05313568",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-002",
+      "markdown": "WO-AEH-002-current-state-and-drift-inventory.md",
+      "envelope": "WO-AEH-002-current-state-and-drift-inventory.draft-envelope.yaml",
+      "markdown_sha256": "a432ab0bd9376b5bdc851d24cb8e7a8c0c7a7ecbdfb8bef920c8476b44449a1f",
+      "envelope_sha256": "32514b2d2ad33b52cdd4fe63ce0f4bd273e2c0e4894de4232d5dd6c3b2e3dbdf",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-003",
+      "markdown": "WO-AEH-003-canonical-maturity-status-projection.md",
+      "envelope": "WO-AEH-003-canonical-maturity-status-projection.draft-envelope.yaml",
+      "markdown_sha256": "32134cc33c71541a7b6cb76a097e45bee51bcd6028ad05cf7fcb1c5507fa5e86",
+      "envelope_sha256": "a079ed055ae82111f92f6c8e2c84fb08fac43f7312b1b316ee6504e2af50ace2",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-004",
+      "markdown": "WO-AEH-004-target-architecture-and-protocol-adr.md",
+      "envelope": "WO-AEH-004-target-architecture-and-protocol-adr.draft-envelope.yaml",
+      "markdown_sha256": "e0d490b681e59b221221a6854e81d6dd5629390a5a37af1215faa43f8fdb80c8",
+      "envelope_sha256": "8947fe03e8fd016314a572979b89f5d8ec55cfee7e6763012be5822cec623244",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-005",
+      "markdown": "WO-AEH-005-threat-model-and-data-classification.md",
+      "envelope": "WO-AEH-005-threat-model-and-data-classification.draft-envelope.yaml",
+      "markdown_sha256": "45a4c5927c1e25f77f63b8c84bf1f40f742fc554769082b0b7014e0ed25bd09d",
+      "envelope_sha256": "4731fbb72b256dc2f9e18748bf2d1ef95b3a47bad5827658d744531c8c37125f",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-006",
+      "markdown": "WO-AEH-006-network-and-identity-remediation-design.md",
+      "envelope": "WO-AEH-006-network-and-identity-remediation-design.draft-envelope.yaml",
+      "markdown_sha256": "0e196700e24f50d44f346969a4eade0e8f459d8caf2c8ef66843c32faadfcded",
+      "envelope_sha256": "f923917ab46166344303dd8e09fa960b5e232fef17e2dfed369d21884877a7d7",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-007",
+      "markdown": "WO-AEH-007-hermes-state-service-containment.md",
+      "envelope": "WO-AEH-007-hermes-state-service-containment.draft-envelope.yaml",
+      "markdown_sha256": "ec88c5b0fbdc7d55e631ea38dce19183b3c463d15f591a08c0c34d3736334188",
+      "envelope_sha256": "927b2d87c4e9c6b260200ca3339cd8693373af19bac468888737dd1272741ef7",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-008",
+      "markdown": "WO-AEH-008-reproducible-ci-foundation.md",
+      "envelope": "WO-AEH-008-reproducible-ci-foundation.draft-envelope.yaml",
+      "markdown_sha256": "8f6de86657c3e675293b9b27613b7521d16a3ffe57561207abe55178e3d77e8c",
+      "envelope_sha256": "9eeaaac3981fc72869c90d40b22eefaeb0e4234fb876bf028004726bdc6b90ee",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-009",
+      "markdown": "WO-AEH-009-database-migration-and-rollback-workflow.md",
+      "envelope": "WO-AEH-009-database-migration-and-rollback-workflow.draft-envelope.yaml",
+      "markdown_sha256": "d327446a6d42b835e7ca72de2e93235b1e47f9f8dbbdc0a371282ab7c307633b",
+      "envelope_sha256": "6e5ed74f8720f1990de2b9912c0d996ea30ab41312d0b4153ea38602a49f3070",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-010",
+      "markdown": "WO-AEH-010-dependency-image-and-model-provenance.md",
+      "envelope": "WO-AEH-010-dependency-image-and-model-provenance.draft-envelope.yaml",
+      "markdown_sha256": "e2da0fb689e37f451654faf3fb49b62092ea26a4f59db21bb92dcd19900211cf",
+      "envelope_sha256": "cf9c6e7e3f3296f1a0ced2f3096817fddbfc402f58d5f402dae2904b4a335144",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-011",
+      "markdown": "WO-AEH-011-postgresql-restore-verification-code-and-fixtures.md",
+      "envelope": "WO-AEH-011-postgresql-restore-verification-code-and-fixtures.draft-envelope.yaml",
+      "markdown_sha256": "8e38dd62576c9858571d0f8a0f5af9ffbc01fe98cbf1c23d1482d4082b94d0ff",
+      "envelope_sha256": "033bb8c06942ede2f89f1d80d525dcd34ec59e7ed14d6bae6878db5ed97c8742",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-012",
+      "markdown": "WO-AEH-012-complete-manifest-secondary-verification.md",
+      "envelope": "WO-AEH-012-complete-manifest-secondary-verification.draft-envelope.yaml",
+      "markdown_sha256": "f0405a38a46188749c88cee93acd982e5fcf1fadfd782ee0e8547c854cd7ec1b",
+      "envelope_sha256": "ced45041f6fff76de1ac2248985515ec6769408e39df10ec47d2f76f3eb944b1",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-013",
+      "markdown": "WO-AEH-013-receipt-driven-retention-contract-and-tests.md",
+      "envelope": "WO-AEH-013-receipt-driven-retention-contract-and-tests.draft-envelope.yaml",
+      "markdown_sha256": "d64c9b36acd01db3d65c001abeddf92da05dee28db8614959def295f04ca5c10",
+      "envelope_sha256": "0832233b5ffe431cbb9477af4890c000a6569a09b3c8c09811ad1f59b0ff2e34",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-014",
+      "markdown": "WO-AEH-014-independent-encrypted-off-site-backup.md",
+      "envelope": "WO-AEH-014-independent-encrypted-off-site-backup.draft-envelope.yaml",
+      "markdown_sha256": "a429da2d181f6b054623a939ab5c973134489b2aea09d30795a71a668267e4b0",
+      "envelope_sha256": "3b6b709014b0a74e14f28e6ce327e90bc1a10c0c46a53a9c02a4f0d136c3babe",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-015",
+      "markdown": "WO-AEH-015-durable-schema-implementation.md",
+      "envelope": "WO-AEH-015-durable-schema-implementation.draft-envelope.yaml",
+      "markdown_sha256": "5e9c226604c01ab2a9d837030f2a2c63c878e1adda2581de0ba61d2a46925d72",
+      "envelope_sha256": "b15c04c987d13c0968a5d8bffa8bdb56f0d8a67fe1dd5e238edd6ee31253c46b",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-016",
+      "markdown": "WO-AEH-016-claim-lease-and-fencing-engine.md",
+      "envelope": "WO-AEH-016-claim-lease-and-fencing-engine.draft-envelope.yaml",
+      "markdown_sha256": "a53d04efe92ef0b2521b00045287b5e7a2599f957ba85e0bf0bf78db09f33fa0",
+      "envelope_sha256": "c220a2d9d5b505664d897d6a9b6337667129c948a60504ed82099341c3691deb",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-017",
+      "markdown": "WO-AEH-017-transactional-outbox-and-effect-idempotency.md",
+      "envelope": "WO-AEH-017-transactional-outbox-and-effect-idempotency.draft-envelope.yaml",
+      "markdown_sha256": "bddf700f5164e45396fa5aace9270ab55f20d53981564d3e857ac6607ddb8b2e",
+      "envelope_sha256": "ec0fca554b1e3b534c587efe2e750f3fcd56eef4da3d6b861e6d4cd4f1e71e1d",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-018",
+      "markdown": "WO-AEH-018-restart-safe-settlement-descriptor.md",
+      "envelope": "WO-AEH-018-restart-safe-settlement-descriptor.draft-envelope.yaml",
+      "markdown_sha256": "0e3d251d5a886c1432f35c5931541f8a553f4fc475aca7be33ed68cde6f6038e",
+      "envelope_sha256": "c0ba16ede39501fb6f364b2bea8f5dbdb0ab9f554c80e4c74d477dfa44e73bba",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-019",
+      "markdown": "WO-AEH-019-reconciliation-and-recovery-service.md",
+      "envelope": "WO-AEH-019-reconciliation-and-recovery-service.draft-envelope.yaml",
+      "markdown_sha256": "90c42e3b97b68ebf1581ddf921aa9576f840c3bddf87459de8faf1360c2e2839",
+      "envelope_sha256": "ec5c6a896c1bde8f7f8e4e10656340ca7ba4d5d8463937bae31a2924744c37c5",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-020",
+      "markdown": "WO-AEH-020-coordinator-implementation-and-packaging.md",
+      "envelope": "WO-AEH-020-coordinator-implementation-and-packaging.draft-envelope.yaml",
+      "markdown_sha256": "4997f619ae61bdbac51ea34c09f321e26823f1d5a3aefe6392609dadb71d7d90",
+      "envelope_sha256": "0b096981f11c50327c2f60349cd34f66823f008666408226eb2fa0fd7caf5597",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-021",
+      "markdown": "WO-AEH-021-common-worker-protocol.md",
+      "envelope": "WO-AEH-021-common-worker-protocol.draft-envelope.yaml",
+      "markdown_sha256": "6577ac1c25cd2cfb7eaa6a20be3b9efd894ff0ba99a797f75cbfc6eada7d1e44",
+      "envelope_sha256": "88e063a77d767e53bea18894251b432346b8656685b1303bfc4fc3301ee832ba",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-022",
+      "markdown": "WO-AEH-022-hermes-resident-worker.md",
+      "envelope": "WO-AEH-022-hermes-resident-worker.draft-envelope.yaml",
+      "markdown_sha256": "29383c9e966113d8f81b8e07b5349891c3e0d958b2c74673c637ffc068ec61d2",
+      "envelope_sha256": "09373b13bca447c15d4edb305ef0c81ec0c494fcd47b03d7bce44fe80abedb28",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-023",
+      "markdown": "WO-AEH-023-model-aware-gpu-admission.md",
+      "envelope": "WO-AEH-023-model-aware-gpu-admission.draft-envelope.yaml",
+      "markdown_sha256": "b9a969041e05e2861e8702cfe33b647ed7806ec7c539045d68fe3834dc02577f",
+      "envelope_sha256": "136ebfd4de0d2e88021a6105fa5889b63f973c023b3772a3edd4f7690f6b87d6",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-024",
+      "markdown": "WO-AEH-024-aegis-bounded-worker.md",
+      "envelope": "WO-AEH-024-aegis-bounded-worker.draft-envelope.yaml",
+      "markdown_sha256": "86e16488f256943ea67836c050d83f932759adcd84512906d9cbc9478c63ec5d",
+      "envelope_sha256": "0c83b225a4829ba1d8578e0353e5162ac8a5111a669c4d90c06e914a6b2d0a20",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-025",
+      "markdown": "WO-AEH-025-aegis-bounded-build-adapter.md",
+      "envelope": "WO-AEH-025-aegis-bounded-build-adapter.draft-envelope.yaml",
+      "markdown_sha256": "59d662a270ce574abf44011236d43fe61b5aec8d0bc7431b414387a3d6ba3c88",
+      "envelope_sha256": "4db2210ac393a7977e307cb5fe060ec9b5b64f86947a00a8dfc88900b1e5b235",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-026",
+      "markdown": "WO-AEH-026-dynamic-resource-admission.md",
+      "envelope": "WO-AEH-026-dynamic-resource-admission.draft-envelope.yaml",
+      "markdown_sha256": "9c65105503f62cae447156868cd80d567b23ce779ec1141f21ce818558d6bfc0",
+      "envelope_sha256": "305ec52b44aeeff8a82ef48157c3b925a21418d4aeb2648e11ca105f31c0a56f",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-027",
+      "markdown": "WO-AEH-027-placement-policy-v2.md",
+      "envelope": "WO-AEH-027-placement-policy-v2.draft-envelope.yaml",
+      "markdown_sha256": "c17eebf0f0a87697d6bb332cfe4d3cc384949314c43866a1535394735c23a1da",
+      "envelope_sha256": "7b7cef46fc12774bc0803a110187604cc0d241f92e18b51efc91d863d5ad2117",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-028",
+      "markdown": "WO-AEH-028-one-end-to-end-ai-lane.md",
+      "envelope": "WO-AEH-028-one-end-to-end-ai-lane.draft-envelope.yaml",
+      "markdown_sha256": "26519769a941666fa16267788f6011e079ca7192354560af94ae8b09b3cce57c",
+      "envelope_sha256": "432efbf8c2e2ba4df63592976c982d7f2eef760c7d663ac633ebd2d0b99856de",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-029",
+      "markdown": "WO-AEH-029-metrics-traces-and-event-schema.md",
+      "envelope": "WO-AEH-029-metrics-traces-and-event-schema.draft-envelope.yaml",
+      "markdown_sha256": "029f3791774b21c4f446987bf0b32deb0678e34baad68f8038ac97f10b930d18",
+      "envelope_sha256": "64d36846968ac8b3dfb42ff31166bc94ef04a8c72216671fd1f0932621d41c5a",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-030",
+      "markdown": "WO-AEH-030-monitoring-stack-configuration.md",
+      "envelope": "WO-AEH-030-monitoring-stack-configuration.draft-envelope.yaml",
+      "markdown_sha256": "0fbf62cf55c11b851471f54b3a450d180e986150c04488799bbccf9b3feca9f4",
+      "envelope_sha256": "814b8aff68c5e19a971afc13faf126f19a40496df2fc5734d34c3bd9f428d544",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-031",
+      "markdown": "WO-AEH-031-dashboard-alert-and-dead-man-definitions.md",
+      "envelope": "WO-AEH-031-dashboard-alert-and-dead-man-definitions.draft-envelope.yaml",
+      "markdown_sha256": "c86747b48a50eff35c40b433849d49b46aa2fcff9f8530d545e44593d015c5d7",
+      "envelope_sha256": "af2ddcfba1b2df000b7096cca629bf904a40ff91da16692cbc45d56d0cfb3cea",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-032",
+      "markdown": "WO-AEH-032-ai-model-qualification-harness-implementation.md",
+      "envelope": "WO-AEH-032-ai-model-qualification-harness-implementation.draft-envelope.yaml",
+      "markdown_sha256": "d5f2215d10e442b180b133553ea2db7d7e7abd228c7030948c37323f3463d056",
+      "envelope_sha256": "f901b0c451a29684dc6103fd71298cb602f34958f65e626f342d4d4679e3a26b",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-033",
+      "markdown": "WO-AEH-033-independent-security-and-isolation-audit.md",
+      "envelope": "WO-AEH-033-independent-security-and-isolation-audit.draft-envelope.yaml",
+      "markdown_sha256": "04dba55b4dddbd29c4cba5e4eb56842a26dcd59b8147c1609c58a23bbfa2d749",
+      "envelope_sha256": "9a0d78b19f28d208e15f2ec1a8a25d04a5ca82f60560e0a2e75dfd69821830ea",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-034",
+      "markdown": "WO-AEH-034-deterministic-failure-injection-suite.md",
+      "envelope": "WO-AEH-034-deterministic-failure-injection-suite.draft-envelope.yaml",
+      "markdown_sha256": "722569cb4960075e7ba3d26ec8961392665772330d8dbd2f335d000f0b2761ed",
+      "envelope_sha256": "aaa90e682465a518d4898229ff2b989aa5bbb083b45fd2c525de7e2d15599479",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-035",
+      "markdown": "WO-AEH-035-network-boundary-and-ai-abuse-evaluation.md",
+      "envelope": "WO-AEH-035-network-boundary-and-ai-abuse-evaluation.draft-envelope.yaml",
+      "markdown_sha256": "11a4d0d1ed44a49b12b5e535f9f6f2d10a2fc3e5adacfba3fe662c1d04847cc3",
+      "envelope_sha256": "a0e34f228829675ca41e51c7d0cc2e75bde5bd610702f08900146137b72f9f91",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-036",
+      "markdown": "WO-AEH-036-bounded-live-canary-activation.md",
+      "envelope": "WO-AEH-036-bounded-live-canary-activation.draft-envelope.yaml",
+      "markdown_sha256": "54dc917cf6def5dd543e82d575bd9bd6185c83fff7da0a04d90bf25c6ba3216a",
+      "envelope_sha256": "8030d9b9d7f1867dfe0112d9e51414a863b4802be285f94fc2d2d903692dec63",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-037",
+      "markdown": "WO-AEH-037-node-power-and-network-capacity-qualification.md",
+      "envelope": "WO-AEH-037-node-power-and-network-capacity-qualification.draft-envelope.yaml",
+      "markdown_sha256": "3cb554a647fcf10b3b495d00ea3b70c05c8b0f3ee30467e1493f6669cfb9bfd7",
+      "envelope_sha256": "6104d1e95c3fb5082bfa079adbca283a038ecba8bb2b0e28edd1152584ed8483",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-038",
+      "markdown": "WO-AEH-038-immutable-deployment-and-rollback-pipeline-implementation.md",
+      "envelope": "WO-AEH-038-immutable-deployment-and-rollback-pipeline-implementation.draft-envelope.yaml",
+      "markdown_sha256": "43233e88b75441ed342ae63b8dbc86ccea74e68e9d1c7da26be75a93c725d9c3",
+      "envelope_sha256": "39f2aed80b42d0e75b7da86bc3b4864de1cc568411cc19516c4f5b01a3204949",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-039",
+      "markdown": "WO-AEH-039-seventy-two-hour-limited-pilot.md",
+      "envelope": "WO-AEH-039-seventy-two-hour-limited-pilot.draft-envelope.yaml",
+      "markdown_sha256": "ec4bbc870e9d9331b731a9a32ab2f99329c5179b8587bd34a169eb8b21c94588",
+      "envelope_sha256": "940abce1d75b636fb3355f0e8e273ea54386a273e8189374da7f10e1489af719",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-040",
+      "markdown": "WO-AEH-040-seven-day-unattended-soak.md",
+      "envelope": "WO-AEH-040-seven-day-unattended-soak.draft-envelope.yaml",
+      "markdown_sha256": "12b19e4ee045071d56d413e20d32f6b0990e28b0be84582f69e330b3051029ed",
+      "envelope_sha256": "efa1beaac5f6407b2d902688ddf4b66ce14143f3b6c91ac8094bad963452dcd6",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-041",
+      "markdown": "WO-AEH-041-independent-certification-rollup.md",
+      "envelope": "WO-AEH-041-independent-certification-rollup.draft-envelope.yaml",
+      "markdown_sha256": "c104402ff23ba9f28581db89fa57fd8e292f66d287bee43290b6e6f9a52149dc",
+      "envelope_sha256": "f5fd58204988697ab0e035ef7aed52b9a7f921258fbda3c5554c326337a6130b",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-042",
+      "markdown": "WO-AEH-042-production-authorization-and-cutover-decision.md",
+      "envelope": "WO-AEH-042-production-authorization-and-cutover-decision.draft-envelope.yaml",
+      "markdown_sha256": "70bca05af7e6f1e76b0facca4ec3e03b0036b482b46627ebb264c6f580b4bf37",
+      "envelope_sha256": "e60165695bb80f820c7c891c090242e2da8dec739db3167342d4dc5f81cff167",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-043",
+      "markdown": "WO-AEH-043-live-restore-and-retention-proof.md",
+      "envelope": "WO-AEH-043-live-restore-and-retention-proof.draft-envelope.yaml",
+      "markdown_sha256": "8ffdbdd759e22bdc898c3c82fb44e9cb2236e53e3aba4d03984d3ace532bd53b",
+      "envelope_sha256": "9a56a74285a7cc5669e3fe0ceca8e88835b08ba4f570f57eb4d7e212968203b6",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-044",
+      "markdown": "WO-AEH-044-monitoring-deployment-and-alert-delivery-proof.md",
+      "envelope": "WO-AEH-044-monitoring-deployment-and-alert-delivery-proof.draft-envelope.yaml",
+      "markdown_sha256": "ccd1cb4aded3fb9f0820a904b7210712d715720223cf0f7d13d1724a1a9e0162",
+      "envelope_sha256": "392b3ea95b5f88f7dda5ac66df616694781201d1d5b5ba3707d71febe1eaa509",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-045",
+      "markdown": "WO-AEH-045-live-hermes-model-qualification.md",
+      "envelope": "WO-AEH-045-live-hermes-model-qualification.draft-envelope.yaml",
+      "markdown_sha256": "387710cca897abe959a50607f0c107f686ea58ec5207f6a04dd415dda2afeee4",
+      "envelope_sha256": "10f9f91be188c53b3f4b9b18fc3ce8e1ad139b3b5cfc52843931912752679d6c",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-046",
+      "markdown": "WO-AEH-046-management-plane-exposure-remediation.md",
+      "envelope": "WO-AEH-046-management-plane-exposure-remediation.draft-envelope.yaml",
+      "markdown_sha256": "6b71ec62a11ccc902b3f17159d360067c48168c3d20dedb00d695f8f62e6dda5",
+      "envelope_sha256": "3a06132f2374e5345c1353aa36bc784f022b1100aeb170673fa924ab639f9562",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-047",
+      "markdown": "WO-AEH-047-atlas-database-network-allowlisting.md",
+      "envelope": "WO-AEH-047-atlas-database-network-allowlisting.draft-envelope.yaml",
+      "markdown_sha256": "a5a8f3aa1bf7799fdccfcdfaa4439825feb43bb89f7ca189ae19e1b52d959c50",
+      "envelope_sha256": "bb19b42768d32017fdff489f348d322294952e6e4abb0f6335c72d359358ac72",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-048",
+      "markdown": "WO-AEH-048-aegis-runtime-identity-and-sudo-hardening.md",
+      "envelope": "WO-AEH-048-aegis-runtime-identity-and-sudo-hardening.draft-envelope.yaml",
+      "markdown_sha256": "af7564b99cfc19d2502dc7ed68fcf8b41ba6a88bf5cd665dae95d447d960740d",
+      "envelope_sha256": "dec7d6a06c1dea7d85f1786a0f964050694c3f40fdc2fb080497e6d943bb0805",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-049",
+      "markdown": "WO-AEH-049-setup-topology-and-metadata-reconciliation.md",
+      "envelope": "WO-AEH-049-setup-topology-and-metadata-reconciliation.draft-envelope.yaml",
+      "markdown_sha256": "6f0407e05d58c1ec32ecb7740544f0b317c242eb0637d131f15794c819794dc2",
+      "envelope_sha256": "197e797587237bb1daaebd5c16ec351870e0716da6a06853e1729392dd1ba509",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-050",
+      "markdown": "WO-AEH-050-aegis-bounded-test-adapter.md",
+      "envelope": "WO-AEH-050-aegis-bounded-test-adapter.draft-envelope.yaml",
+      "markdown_sha256": "2387f7082c8b16253c7f634d620c9d2a1163a01b36246dc941fad7b84acc3dbc",
+      "envelope_sha256": "5cb9597b2aad6af86c802378faac412ab2b90afa96f8e398844d7e37d0a22483",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-051",
+      "markdown": "WO-AEH-051-staging-deployment-and-rollback-rehearsal.md",
+      "envelope": "WO-AEH-051-staging-deployment-and-rollback-rehearsal.draft-envelope.yaml",
+      "markdown_sha256": "029de5742e1d9767b80e813fd1eac64a34dc619375e724fdf43d80a86deec866",
+      "envelope_sha256": "78a49c83373dc792d5f36c8d37c22dc659853d5a6728eda7d270e6b890cbcbb3",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    },
+    {
+      "id": "WO-AEH-052",
+      "markdown": "WO-AEH-052-atlas-coordinator-installation-and-restart-proof.md",
+      "envelope": "WO-AEH-052-atlas-coordinator-installation-and-restart-proof.draft-envelope.yaml",
+      "markdown_sha256": "696839af346e4443fea810ecd481da87c4e5187dcf0bf1ad07beae7c9ba03aaf",
+      "envelope_sha256": "47c2f9f2b3a5c26433935c6159f2e0e80a4a810460310a34968cd73c0bf2f07c",
+      "status": "LEXICALLY_COMPLETE_DRAFT_BLOCKED_AUTHORITY_AND_RESERVATION",
+      "failures": []
+    }
+  ]
+}

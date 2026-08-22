@@ -1,0 +1,29 @@
+# INSTALLABLE_TEMPLATE=true; INERT_UNTIL_R3_MARKER=true
+[Unit]
+Description=WilliamOS AEGIS HASH_VERIFY worker coordinator
+ConditionPathExists=/etc/williamos/authority/WO-AEH-024-R3
+After=williamos-aegis-broker.service
+[Service]
+Type=simple
+User=williamos-aegis
+Group=williamos-aegis
+ExecStart=/usr/bin/node /opt/williamos/aegis/current/bin/aegis-hash-child.mjs
+WorkingDirectory=/var/lib/williamos/aegis
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateNetwork=true
+RestrictAddressFamilies=AF_UNIX
+SystemCallFilter=@system-service ~@network-io @mount @privileged @resources
+ReadWritePaths=/var/lib/williamos/aegis/scratch /var/lib/williamos/aegis/evidence
+MemoryMax=512M
+TasksMax=2
+RuntimeMaxSec=60
+KillMode=control-group
+Restart=no
+[Install]
+# Intentionally no WantedBy; R3 planner must create explicit activation transaction.
