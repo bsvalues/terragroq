@@ -93,3 +93,34 @@ describe("surfaces disappear when they stop being useful", () => {
     expect(classifyDismissal("continue")).toBeNull()
   })
 })
+
+/**
+ * Work-orders migration (bucket B, first capability).
+ *
+ * Parity is BY CONSTRUCTION here: the surface calls `getWorkOrders()` — the very reader the
+ * /work-orders route called — rather than a reimplementation that could drift from the route it
+ * replaces without anyone noticing until the two disagreed in front of the owner.
+ */
+describe("work orders became a surface", () => {
+  it.each([
+    "show me the work orders",
+    "open work orders",
+    "list the work orders",
+    "what work orders are there",
+    "pull up the work order queue",
+    "show me the workorders",
+  ])("summons the work-orders surface: %j", (text) => {
+    expect(classifySummon(text)).toBe("work-orders")
+  })
+
+  it("does not hijack a sentence about the work-order source", () => {
+    expect(classifySummon("open the work-orders route file")).toBeNull()
+    expect(classifySummon("which component renders work orders")).toBeNull()
+  })
+
+  it("is dismissable like any other surface", () => {
+    // Named precisely, not swept into "all": dismissing one surface must not clear the others.
+    expect(classifyDismissal("hide the work orders")).toBe("work-orders")
+    expect(classifyDismissal("close the work-order surface")).toBe("work-orders")
+  })
+})

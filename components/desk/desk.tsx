@@ -19,7 +19,7 @@ import { isExecutionLive } from "@/lib/environment/world-execution"
 type Turn = Readonly<{ id: string; role: "owner" | "williamos"; content: string }>
 type Surface = Readonly<{
   id: string
-  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence"
+  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders"
   subject: string
   payload?: unknown
 }>
@@ -396,6 +396,44 @@ function SurfaceView({ surface }: { surface: Surface }) {
                 {row.lifecycleState}
               </span>
               <span className="truncate text-neutral-400">{row.title}</span>
+            </div>
+          ))
+        )}
+      </div>
+    )
+  }
+  if (surface.kind === "work-orders") {
+    // Migrated from the /work-orders route. The page wrapped this in a header, an intent context, and
+    // five stacked panels; the fact the owner actually needed was always these rows.
+    const rows = (surface.payload ?? []) as readonly {
+      ref: string
+      title: string
+      status: string
+      agent: string | null
+      phase: string | null
+    }[]
+    return (
+      <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
+        {rows.length === 0 ? (
+          <p className="text-neutral-500">No work orders exist yet.</p>
+        ) : (
+          rows.map((row) => (
+            <div key={row.ref} className="flex items-baseline gap-3 py-0.5">
+              <span className="w-32 shrink-0 text-neutral-500">{row.ref}</span>
+              <span
+                className={cn(
+                  "w-20 shrink-0 uppercase",
+                  row.status === "completed"
+                    ? "text-emerald-500"
+                    : row.status === "blocked"
+                      ? "text-amber-500"
+                      : "text-sky-500",
+                )}
+              >
+                {row.status}
+              </span>
+              <span className="truncate text-neutral-400">{row.title}</span>
+              {row.agent ? <span className="shrink-0 text-neutral-600">{row.agent}</span> : null}
             </div>
           ))
         )}

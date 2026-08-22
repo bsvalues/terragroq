@@ -13,6 +13,7 @@ import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
 import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
+import { getWorkOrders } from "@/app/actions/work-orders"
 import { isContinueIntent } from "@/lib/environment/start-work"
 import { classifyDismissal, classifySummon } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
@@ -52,7 +53,7 @@ const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT?.trim() || null
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 
 type SurfaceDirective = Readonly<{
-  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence"
+  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders"
   subject: string
   payload?: unknown
 }>
@@ -283,7 +284,7 @@ async function loadProjects(userId: string): Promise<ProjectRow[]> {
  * reported as empty; it is never padded to look like a working dashboard.
  */
 async function summonSurface(
-  kind: "project" | "activity" | "evidence",
+  kind: "project" | "activity" | "evidence" | "work-orders",
   userId: string,
   spine: WorldSpine,
 ): Promise<{ say: string; surface: SurfaceDirective }> {
@@ -297,6 +298,30 @@ async function summonSurface(
         ? "No projects are registered, so there is nothing to show — I won't invent a list."
         : `${rows.length} registered ${rows.length === 1 ? "project" : "projects"}, from the governed register.`,
       surface: { kind: "project", subject: "registered projects", payload: rows },
+    }
+  }
+
+  if (kind === "work-orders") {
+    // Parity BY CONSTRUCTION: this calls the very reader the /work-orders route called. A
+    // reimplementation here could drift from the route it replaces and nobody would notice until the
+    // two disagreed in front of the owner — which is the whole failure mode of "migrating" a
+    // capability by rebuilding it.
+    const orders = await getWorkOrders()
+    return {
+      say: orders.length === 0
+        ? "No work orders exist yet."
+        : `${orders.length} work ${orders.length === 1 ? "order" : "orders"}, newest first.`,
+      surface: {
+        kind: "work-orders",
+        subject: "work orders",
+        payload: orders.map((order) => ({
+          ref: order.ref,
+          title: order.title,
+          status: order.status,
+          agent: order.agent ?? null,
+          phase: order.phase ?? null,
+        })),
+      },
     }
   }
 
@@ -470,7 +495,7 @@ export async function POST(request: Request) {
     } else if (classifySummon(text)) {
       // Projects / Activity / Evidence used to be applications you navigated to. They are summoned
       // here from governed state, and they leave when the owner says so.
-      const summoned = await summonSurface(classifySummon(text) as "project" | "activity" | "evidence", userId, updated.spine)
+      const summoned = await summonSurface(classifySummon(text) as "project" | "activity" | "evidence" | "work-orders", userId, updated.spine)
       say = summoned.say
       surfaces = [summoned.surface]
       updated = withSurface(updated, {
