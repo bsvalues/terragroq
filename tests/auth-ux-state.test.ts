@@ -78,8 +78,11 @@ describe("auth UX state classification", () => {
     })
 
     expect(state.state).toBe("sign-in")
-    expect(state.description).toContain("Owner provisioning is disabled by policy")
-    expect(state.description).not.toContain("operator already exists")
+    // GOAL-0018: the sign-in page speaks to the owner instead of narrating provisioning state.
+    // Closed signup is the expected steady state for a single-owner system, so it is not reported
+    // here; the policy itself is unchanged and still governs whether signup is possible.
+    expect(state.description).toBe("Welcome back.")
+    expect(state.description).not.toMatch(/provisioning|operator already exists/i)
     expect(JSON.stringify(state)).not.toMatch(/create account|request access|sign up|signup/i)
   })
 

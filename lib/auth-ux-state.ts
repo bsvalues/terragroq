@@ -102,11 +102,14 @@ export function getAuthUxState(
     state: "sign-in",
     label: "Primary Operator access",
     title: "Enter WilliamOS",
+    // GOAL-0018: speak to the owner, not about provisioning. Both closed-signup branches previously
+    // narrated internal state ("provisioning is locked because a Primary Operator already exists")
+    // at the one person who already knows they are the Primary Operator. Signup being closed is the
+    // expected steady state here, not a status worth reporting on the sign-in page. Only the copy
+    // changes: state, tone, label, and actions are untouched, so nothing that gates access moves.
     description:
-      signup?.mode === "bootstrap" && signup.open === false
-        ? "Auth is ready. Owner provisioning is locked because a Primary Operator already exists."
-        : signup?.mode === "closed"
-          ? "Auth is ready. Owner provisioning is disabled by policy."
+      (signup?.mode === "bootstrap" && signup.open === false) || signup?.mode === "closed"
+        ? "Welcome back."
         : "Auth is ready. Use your Primary Operator credentials to enter WilliamOS.",
     primaryAction: "Enter WilliamOS",
     secondaryAction: undefined,

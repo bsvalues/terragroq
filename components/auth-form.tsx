@@ -35,6 +35,16 @@ export type AuthReadinessState = {
   }
 }
 
+// The owner is the only user of this system, so the sign-in surface greets them instead of
+// narrating whether owner provisioning happens to be locked or disabled. Classification, tone and
+// every gating decision stay exactly as computed; only the rendered sentence changes.
+const PROVISIONING_STATUS_COPY = /owner provisioning is (?:locked|disabled)/i
+
+// Internal environment-flag names are deployment mechanics, not owner-facing status. A warning that
+// names one is dropped from the rendered list only — errors are never suppressed, and the unfiltered
+// lists still drive submit gating.
+const INTERNAL_FLAG_NOTE = /AUTH_EMAIL_OTP_ENABLED/
+
 export function AuthForm({
   mode,
   readiness,
@@ -63,6 +73,14 @@ export function AuthForm({
     issues: mergedIssues,
     signup: runtimeSignup,
   })
+  const stateDescription =
+    !isSignUp && PROVISIONING_STATUS_COPY.test(uxState.description)
+      ? "Welcome back."
+      : uxState.description
+  const visibleWarningIssues = warningIssues.filter(
+    (issue) => !INTERNAL_FLAG_NOTE.test(issue.message),
+  )
+  const visibleIssues = [...blockingIssues, ...visibleWarningIssues]
   const submitDisabled =
     loading || blockingIssues.length > 0 || (isSignUp && !signupOpen)
   const recoveryClass =
@@ -182,7 +200,7 @@ export function AuthForm({
           <div className="space-y-1">
             <p className="text-xs font-medium uppercase tracking-wide">{uxState.label}</p>
             <p className="font-medium">{uxState.title}</p>
-            <p className="text-xs opacity-85">{uxState.description}</p>
+            <p className="text-xs opacity-85">{stateDescription}</p>
             {uxState.secondaryAction ? (
               <p className="text-xs">
                 <Link
@@ -197,7 +215,7 @@ export function AuthForm({
         </div>
       </div>
 
-      {mergedIssues.length > 0 ? (
+      {visibleIssues.length > 0 ? (
         <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm">
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" aria-hidden />
@@ -212,9 +230,9 @@ export function AuthForm({
                   ))}
                 </ul>
               ) : null}
-              {warningIssues.length > 0 ? (
+              {visibleWarningIssues.length > 0 ? (
                 <ul className="list-disc pl-5 text-muted-foreground">
-                  {warningIssues.map((issue, index) => (
+                  {visibleWarningIssues.map((issue, index) => (
                     <li key={`${issue.code}-${index}`}>{issue.message}</li>
                   ))}
                 </ul>
@@ -264,9 +282,8 @@ export function AuthForm({
           <p className="font-medium">Recovery access</p>
           <p className="mt-1 text-xs text-muted-foreground">
             {readiness?.emailOtp?.configured
-              ? "Email OTP is configured, but production recovery remains gated by the next auth work order."
-              : readiness?.emailOtp?.reason ??
-                "Email OTP is scaffolded but not configured. Use email and password for now."}
+              ? "Email recovery is configured but not yet enabled for this system."
+              : "Email recovery isn't available yet. Use your passkey or password."}
           </p>
         </div>
       ) : null}
@@ -291,7 +308,7 @@ export function AuthForm({
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          placeholder="you@command.io"
+          placeholder="name@example.com"
           required
           autoComplete="email"
         />
