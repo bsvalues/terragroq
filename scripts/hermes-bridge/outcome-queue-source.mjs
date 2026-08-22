@@ -1257,6 +1257,8 @@ JOIN pg_class AS table_class
   ON table_class.oid = index_record.indrelid
 JOIN pg_class AS index_class
   ON index_class.oid = index_record.indexrelid
+JOIN pg_namespace AS table_namespace
+  ON table_namespace.oid = table_class.relnamespace
   WHERE index_class.relname IN (
     'outcome_queue_mutation_receipt_user_outcome_idx',
     'outcome_queue_acquisition_receipt_user_outcome_idx',
@@ -1264,6 +1266,7 @@ JOIN pg_class AS index_class
     'outcome_queue_acquisition_attempt_identity_idx',
     'outcome_queue_mutation_attempt_request_idx'
   )
+  AND table_namespace.nspname = current_schema()
 ORDER BY index_class.relname ASC
 `,
   inspectHardeningInvariantViolations: `
@@ -3059,11 +3062,11 @@ function canonicalCatalogExpression(value) {
     .replace(/[()"`\s]/g, "")
 }
 
-function receiptDefaultMatches(observed, expected) {
+function receiptDefaultMatches(observed, expected, tableName, columnName) {
   const canonical = String(observed ?? "").toLowerCase().replace(/\s/g, "")
   if (expected === null) return observed == null
   if (expected === "sequence") {
-    return /^nextval\('.+_id_seq'::regclass\)$/.test(canonical)
+    return canonical === `nextval('${tableName}_${columnName}_seq'::regclass)`
   }
   return canonical === expected
 }
@@ -3074,12 +3077,18 @@ function receiptColumnsMatch(rows) {
   return Object.entries(RECEIPT_COLUMN_CONTRACTS).every(([tableName, columns]) => {
     const observed = rows.filter((row) => row?.tableName === tableName)
     return observed.length === columns.length
-      && columns.every(([columnName, dataType, notNull, defaultExpression], index) => {
-        const row = observed[index]
+      && new Set(observed.map((row) => row?.columnName)).size === columns.length
+      && columns.every(([columnName, dataType, notNull, defaultExpression]) => {
+        const row = observed.find((candidate) => candidate?.columnName === columnName)
         return row?.columnName === columnName
           && row?.dataType === dataType
           && row?.notNull === notNull
-          && receiptDefaultMatches(row?.defaultExpression, defaultExpression)
+          && receiptDefaultMatches(
+            row?.defaultExpression,
+            defaultExpression,
+            tableName,
+            columnName,
+          )
       })
   })
 }
