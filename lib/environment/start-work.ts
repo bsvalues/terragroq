@@ -95,18 +95,28 @@ export function composeStartWorkResult(selection: RetainedStartWork, result: Sta
       ],
     }
   }
-  // Fail closed: the selection went stale or is unavailable. Do NOT reselect.
+  // Fail closed: authorization refused. Do NOT reselect — and do NOT assume a single cause. The
+  // governed reason is reported verbatim; PROJECT_THREAD_OUTCOME_UNAVAILABLE in particular can mean
+  // the project isn't in an `active` lifecycle (a standby/archived project can't start work), the
+  // outcome's state changed, or its binding no longer matches — the Line names the possibilities
+  // honestly rather than asserting one.
   const reason = "reason" in result ? result.reason : "UNSPECIFIED"
+  const GLOSS: Record<string, string> = {
+    PROJECT_THREAD_OUTCOME_UNAVAILABLE:
+      ` This usually means ${selection.projectName} isn't in an active state that permits starting work (a standby or archived project can't), or the outcome's governed state changed since I read it.`,
+    WORK_CONTRACT_UNAVAILABLE:
+      ` This means the runtime lane has no registered work contract for this outcome yet — it isn't dispatchable work, even though it's queued. That's the runtime lane's to provide, not something I'll fake.`,
+  }
+  const gloss = GLOSS[reason] ?? ""
   return {
     authorized: false,
     say:
-      `I couldn't start ${item}: ${reason}. The item I selected has changed state since I read it, so I ` +
-      `won't quietly start a different one. Ask "what are we doing on ${selection.projectName}?" again and I'll ` +
-      `re-read the governed queue.`,
+      `I couldn't start ${item}: ${reason}.${gloss} I won't quietly start a different one. Ask ` +
+      `"what are we doing on ${selection.projectName}?" again and I'll re-read the governed queue.`,
     trace: [
       { step: "selection", detail: provenance },
       { step: "authorize", detail: `START_WORK → ${result.status}: ${reason}` },
-      { step: "outcome", detail: "no work started; selection is stale (fail closed, no re-selection)" },
+      { step: "outcome", detail: "no work started (fail closed, no re-selection)" },
     ],
   }
 }
