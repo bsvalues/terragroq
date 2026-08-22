@@ -2720,8 +2720,16 @@ export function createHermesOrchestrator(options = {}) {
         } catch {}
         throw error
       }
-      if (RECOVERABLE_DELIVERY_WALLS.has(error?.code)) {
-        const retryAfter = new Date(now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
+      // A provider usage/credit exhaustion is a WAIT, not a wall to retry: the App Server ends the
+      // turn in seconds and will keep doing so until the limit lifts, so retrying burns a dispatch
+      // attempt per cycle for days (observed: attempt 15 against a limit five days out). Route it
+      // through the same proven defer path, and when the provider states WHEN it lifts, wait exactly
+      // that long instead of a fixed cooldown that would just re-dispatch into the same wall.
+      const usageLimitWait = error?.usageLimit === true
+      if (RECOVERABLE_DELIVERY_WALLS.has(error?.code) || usageLimitWait) {
+        const retryAfter = usageLimitWait && typeof error?.usageLimitRetryAfter === "string"
+          ? error.usageLimitRetryAfter
+          : new Date(now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
         cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, {
           threadId: null,
           turnId: null,

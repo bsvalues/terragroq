@@ -71,12 +71,43 @@ export class AppServerFrameLimitError extends Error {
   }
 }
 
+/**
+ * A provider usage/credit exhaustion reported by the App Server, and the moment it lifts.
+ *
+ * Codex ends the turn in ~3s with "You've hit your usage limit… or try again at Aug 27th, 2026
+ * 4:36 AM." Treated as a generic wall this burns a dispatch attempt every cycle against a wall that
+ * cannot clear for days (observed: GOAL-0025 reached attempt 15). It is a provider WAIT, and the
+ * provider states exactly when it ends — so parse that instant rather than guessing a cooldown.
+ *
+ * Deliberately mirrors the resident kernel's own retry-after parser (parseCodexRetryAfter) in
+ * semantics without importing across the lane boundary: same ordinal stripping, same "must be in the
+ * future" rule (a lapsed time is not a wait), so both lanes wait identically on the same message.
+ * Returns an ISO string, or null when absent/unparsable — callers fall back to their own cooldown
+ * rather than inventing a resume time.
+ */
+export function parseAppServerUsageLimitRetryAfter(detail) {
+  const body = String(detail ?? "")
+  if (!/usage limit|usage_limit_exceeded/i.test(body)) return null
+  const match = /try again at ([^.\r\n]+?)(?:\.|$)/i.exec(body)
+  if (!match) return null
+  const cleaned = match[1].replace(/(\d+)(?:st|nd|rd|th)/g, "$1").trim()
+  const parsed = Date.parse(cleaned)
+  return Number.isFinite(parsed) && parsed > Date.now() ? new Date(parsed).toISOString() : null
+}
+
+export function isAppServerUsageLimitDetail(detail) {
+  return /usage limit|usage_limit_exceeded/i.test(String(detail ?? ""))
+}
+
 export class AppServerTurnEndedError extends Error {
   constructor(status, detail = null) {
     super(`Codex App Server turn ended with ${status}`)
     this.name = "AppServerTurnEndedError"
     this.code = status === "failed" ? "APP_SERVER_TURN_FAILED" : "APP_SERVER_TURN_INTERRUPTED"
     this.status = status
+    // Classify BEFORE truncation: the resume time sits at the end of the message and would be lost.
+    this.usageLimit = isAppServerUsageLimitDetail(detail)
+    this.usageLimitRetryAfter = parseAppServerUsageLimitRetryAfter(detail)
     const sanitizedDetail = sanitizeAppServerText(detail).slice(0, MAX_TURN_ERROR_DETAIL_CHARS)
     this.detail = sanitizedDetail || null
   }

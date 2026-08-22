@@ -18,6 +18,7 @@ import {
   hermesTurnResultDigest,
   normalizeHermesTurnResult,
 } from "../scripts/hermes-bridge/state-store.mjs"
+import { AppServerTurnEndedError, parseAppServerUsageLimitRetryAfter } from "../scripts/hermes-bridge/app-server-client.mjs"
 import { deriveHermesWorkContract, resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 import { createHermesOutcomeQueueRuntime } from "../scripts/hermes-bridge/outcome-queue-runtime.mjs"
 
@@ -4341,6 +4342,37 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     const redispatched = value.state.read().executions["77"]
     expect(redispatched.fencingToken).toBeGreaterThan(timedOut.fencingToken)
     expect(value.client.resumeThread).toHaveBeenCalledWith("thread-77", expect.any(Object))
+  })
+
+  it("defers a usage-limit turn failure until the stated resume time instead of burning redispatches", async () => {
+    // Diagnosed live 2026-08-22: Codex ended every turn in ~3s with "You've hit your usage limit …
+    // try again at <date>" (credit balance 0). As a generic APP_SERVER_TURN_FAILED it became a
+    // RETRYABLE_WALL, so each cycle abandoned the lease and re-dispatched into the identical wall —
+    // one outcome reached attempt 15 against a limit five days out while holding the queue's only
+    // active slot. A usage limit is a WAIT, and the provider says exactly when it lifts.
+    const value = fixture()
+    // The exact message shape Codex emits (far-future year so the parser's "must be ahead" rule
+    // cannot expire this test). The expected instant comes from the parser itself — timezone
+    // semantics are covered in tests/hermes-app-server-usage-limit-wait.test.ts; what this test
+    // proves is that the orchestrator DEFERS to that instant instead of re-dispatching.
+    const message = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 27th, 2099 4:36 AM."
+    const resumeAt = parseAppServerUsageLimitRetryAfter(message)
+    expect(resumeAt).not.toBeNull()
+    value.client.runTurn.mockRejectedValueOnce(new AppServerTurnEndedError("failed", message))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PROVIDER_UNAVAILABLE",
+      nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
+      // Waits until the provider's own stated instant, not a blind cooldown that would re-dispatch
+      // straight back into the same wall.
+      retryAfter: resumeAt as string,
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "DEFERRED" },
+      checkpoint: { state: "DEFERRED_PROVIDER_UNAVAILABLE" },
+    })
+    // The turn is not re-attempted: no second dispatch burned against a wall that cannot lift yet.
+    expect(value.client.runTurn).toHaveBeenCalledOnce()
   })
 
   it("abandons a blocked external tool and clears its App Server identity", async () => {
