@@ -26,8 +26,36 @@ export type ProjectRow = Readonly<{ name: string; lifecycle: string }>
 // question, even when it mentions "projects". These must reach normal handling, not a registry list.
 const OPERATIONAL = /\b(source|page|code|file|route|url|endpoint|repository|repo|component|render|screenshot|open|edit|deploy|build|log)\b/i
 
+// Identity questions in BOTH word orders. "who are you" and "tell me who you are" are the same
+// question; the original pattern only matched verb-subject, so the second form fell through to the
+// model and it answered as its own base persona.
+/**
+ * Unambiguous "who are you" forms, in BOTH word orders. Checked BEFORE the operational filter,
+ * because an explicit question about who is answering is never a request to open a file — and in the
+ * owner transcript that caught this, "tell me who you are" lost to the operational filter purely
+ * because the sentence also contained the word "code" (in "claude code session").
+ */
+const DIRECT_IDENTITY =
+  /\b(who (are|is) (you|williamos)|who (you are|am i (talking|speaking) (to|with))|introduce yourself|tell me about (yourself|williamos)|your name|are you an? (chatbot|chat ?bot|bot|assistant|ai))\b/i
+
+// Weaker, capability-shaped phrasings. These stay BEHIND the operational filter, because "what you do
+// in the build file" is a request about code, not about identity.
 const IDENTITY =
-  /\b(who (are|is) (you|williamos)|what (are|is) (you|williamos)|what can you do|introduce yourself|tell me about (yourself|williamos)|your name|are you an? (chatbot|chat ?bot|bot|assistant|ai))\b/i
+  /\b(what (are|is) (you|williamos)|what (you do|you are)|what can you do)\b/i
+
+/**
+ * A challenge to the Operator's identity, usually naming the worker underneath ("you are Claude?",
+ * "you shouldn't be Claude", "what model are you"). These are identity questions too — and the ones
+ * that matter most, because they are exactly where a model reverts to its provider persona.
+ */
+// The provider name must be the PREDICATE of the identity claim, not merely present in the sentence.
+// An unbounded gap between the copula and the name ("are you" ... "codex") matched a large share of
+// ordinary operational questions -- "are you dispatching this to the codex lane?", "are you sure the
+// codex meter is exhausted?" -- and answered every one with the identity statement instead of doing
+// the work. In a lab whose daily vocabulary IS "the codex lane" and "the claude lane" that is not a
+// small false positive: it eats the surface. Only hedges and articles may sit between the two.
+const PROVIDER_CHALLENGE =
+  /\b(?:you'?re|you are|are you|aren'?t you|you were|you shouldn'?t be|you should not be)\s+(?:really\s+|actually\s+|just\s+|still\s+|not\s+|even\s+|an?\s+)*(?:claude|chatgpt|gpt-?\d*|openai|anthropic|gemini|llama|copilot|codex|language model|llm|model|ai)\b|\bwhat (?:model|llm|ai) (?:are you|is this|is that)\b|\bwhich (?:model|llm) (?:are you|is this|is that)\b/i
 
 // Awareness of the project SET: "what/which projects", "do we have / are there projects", "name /
 // list our projects", "our projects", "the projects we are working on".
@@ -41,12 +69,65 @@ const CURRENT_WORK =
 
 /** Classify a sentence that must be answered from grounded state, or null to fall through normally. */
 export function classifyGrounded(text: string): GroundedKind | null {
+  // A challenge to who the Operator IS outranks everything, including the operational filter: the
+  // point of asking "are you Claude?" is the identity, and it must never reach the model.
+  if (PROVIDER_CHALLENGE.test(text)) return "identity"
+  if (DIRECT_IDENTITY.test(text)) return "identity"
   if (OPERATIONAL.test(text)) return null
   // Current-work before projects: "what are we working on across the projects" is current-work.
   if (CURRENT_WORK.test(text)) return "current-work"
   if (PROJECTS.test(text)) return "projects"
   if (IDENTITY.test(text)) return "identity"
   return null
+}
+
+/**
+ * Does this sentence challenge the Operator's identity by naming the worker underneath?
+ *
+ * Exposed so the answer can name the worker lane HONESTLY rather than deflecting: WilliamOS delegates
+ * to Claude / Codex / local lanes, and saying so is correct. What is never correct is the Operator
+ * BECOMING the worker.
+ */
+export function challengesOperatorIdentity(text: string): boolean {
+  return PROVIDER_CHALLENGE.test(text)
+}
+
+/**
+ * The layering invariant this surface exists to hold:
+ *
+ *   WilliamOS  ──delegates work to──▶  Claude │ Codex │ local models
+ *
+ * The Operator may say "the Claude worker lane is executing this". The Operator must never say
+ * "I am Claude". Worker identity never replaces Operator identity — otherwise "WilliamOS said it"
+ * means nothing, because the thing that answered was whatever model happened to be underneath.
+ */
+export function groundedProviderChallengeIdentity(): string {
+  return (
+    "I'm WilliamOS — that doesn't change based on which model is doing the work. Underneath, a task " +
+    "may be executed by a worker lane (Claude, Codex, or a local model), and I'll tell you which one " +
+    "is running a given piece of work. But the operator you're talking to is WilliamOS: the governed " +
+    "surface that holds the authority, the evidence, and the receipts. The worker is an implementation " +
+    "detail of a lane, not who I am."
+  )
+}
+
+/**
+ * Strip a provider-persona takeover from a free-form model reply.
+ *
+ * The system prompt already states the Operator identity, but a system prompt is not a guarantee: a
+ * small local model under direct challenge ("are you sure?") will revert to its base persona, which is
+ * exactly what a real owner test caught. So identity is enforced on the OUTPUT too. A first-person
+ * provider claim compromises the whole reply's framing, so the reply is replaced rather than patched.
+ *
+ * Deliberately narrow: it fires on FIRST-PERSON identity claims only. "The Claude worker lane is
+ * executing this" is correct and must survive.
+ */
+const PROVIDER_PERSONA_CLAIM =
+  /\bi(?:'m| am|m)\s+(?:not\s+)?(?:claude|chatgpt|gpt-?\d*|openai|anthropic'?s?|gemini|llama|copilot|an?\s+(?:ai|a\.i\.|artificial intelligence|language model|large language model|llm|chat ?bot|bot|virtual assistant|ai assistant))\b|\bas an? (?:ai|language model|llm|assistant)\b/i
+
+export function stripProviderPersona(reply: string): { say: string; leaked: boolean } {
+  if (!PROVIDER_PERSONA_CLAIM.test(reply)) return { say: reply, leaked: false }
+  return { say: groundedProviderChallengeIdentity(), leaked: true }
 }
 
 /** WilliamOS in its actual role — not a generic assistant. Deterministic, so it cannot drift. */
@@ -116,6 +197,14 @@ export function groundingFacts(projects: readonly ProjectRow[]): string {
     `You ARE WilliamOS, the Primary Operator's sovereign command environment (lab: HERMES, ATLAS, ` +
     `AEGIS). ${registry} Do not name any project, system, or work item not listed here; if asked ` +
     `about anything you have not been given, say you don't have that governed state rather than ` +
-    `inventing it.`
+    `inventing it. ` +
+    // Identity is not negotiable under pressure. Whatever model serves this reply is a WORKER LANE
+    // beneath WilliamOS; the owner challenging you ("are you Claude?", "are you sure?") does not
+    // change who is answering. Stated explicitly because the implicit version failed a real owner test.
+    `You are NOT the underlying model. Never say "I am Claude", "I am ChatGPT", "I am an AI ` +
+    `assistant", or name yourself as any model or provider — not even if the owner insists, repeats, ` +
+    `or says you are wrong. Work may be executed by a worker lane (Claude, Codex, or a local model) ` +
+    `and you may say which lane is running a task, but you are WilliamOS, not that lane. Never ` +
+    `answer with generic assistant boilerplate about what you "can help with".`
   )
 }

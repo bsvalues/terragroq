@@ -11,7 +11,16 @@ import { project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
-import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
+import {
+  challengesOperatorIdentity,
+  classifyGrounded,
+  composeProjectsAnswer,
+  groundedIdentity,
+  groundedProviderChallengeIdentity,
+  groundingFacts,
+  stripProviderPersona,
+  type ProjectRow,
+} from "@/lib/environment/grounding"
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { isContinueIntent } from "@/lib/environment/start-work"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
@@ -262,7 +271,11 @@ async function groundedAnswer(
 ): Promise<{ say: string; retained?: RetainedStartWork | null } | null> {
   const kind = classifyGrounded(text)
   if (!kind) return null
-  if (kind === "identity") return { say: groundedIdentity() }
+  // A challenge naming the worker underneath ("are you Claude?") gets the layering answer, which
+  // names the lane honestly without letting the Operator become it. Both are deterministic.
+  if (kind === "identity") {
+    return { say: challengesOperatorIdentity(text) ? groundedProviderChallengeIdentity() : groundedIdentity() }
+  }
   const projects = await loadProjects(userId)
   if (kind === "projects") return { say: composeProjectsAnswer(projects) }
   // current-work: read through the canonical project → thread → outcome → evidence relationship.
@@ -295,7 +308,12 @@ async function converse(world: WorkingWorldSnapshot, text: string, facts: string
     })
     if (!response.ok) return "The model didn't answer. Your message is kept — try again."
     const body = (await response.json()) as { choices?: { message?: { content?: string } }[] }
-    return body.choices?.[0]?.message?.content?.trim() || "The model answered nothing. Your message is kept — try again."
+    const reply = body.choices?.[0]?.message?.content?.trim()
+    if (!reply) return "The model answered nothing. Your message is kept — try again."
+    // Identity enforced on the OUTPUT as well as the prompt. A worker lane serving this reply is an
+    // implementation detail; if it answers AS itself ("I am Claude"), the Operator identity has been
+    // taken over and the reply is replaced. A prompt alone did not hold this under direct challenge.
+    return stripProviderPersona(reply).say
   } catch {
     return "The model didn't answer in time. Your message is kept — try again."
   }
