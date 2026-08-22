@@ -833,6 +833,14 @@ const ELIGIBILITY_PREDICATE = `
       FROM "outcome_queue_item" AS occupied_slot
       WHERE occupied_slot."userId" = q."userId"
         AND occupied_slot."lifecycleState" = 'active'
+        -- An outcome parked on a provider wait does not occupy the slot (owner decision 2026-08-22).
+        -- deferLease keeps it 'active' with leaseExpiresAt = retryAfter, so a multi-day provider
+        -- limit otherwise parks the ENTIRE queue behind work that cannot run yet. It resumes as a
+        -- normal stale-lease candidate once retryAfter passes.
+        AND NOT (
+          occupied_slot."lifecycleReason" = 'PROVIDER_UNAVAILABLE'
+          AND occupied_slot."leaseExpiresAt" > $1::timestamptz
+        )
     )
   )
   AND NOT EXISTS (
@@ -849,6 +857,11 @@ const ELIGIBILITY_PREDICATE = `
     WHERE live."userId" = q."userId"
       AND live."lifecycleState" = 'active'
       AND live."leaseExpiresAt" > $1::timestamptz
+      -- A provider-deferred lease is a WAIT, not work in flight: its lease runs to retryAfter, so
+      -- counting it as "genuinely running" is what pinned the queue. Anything actually executing
+      -- still blocks here — including when a deferred outcome's own retryAfter passes and another
+      -- outcome is by then running, so at most one outcome is ever really in flight.
+      AND live."lifecycleReason" IS DISTINCT FROM 'PROVIDER_UNAVAILABLE'
   )
 `
 
