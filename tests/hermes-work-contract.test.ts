@@ -236,7 +236,9 @@ describe("governed lane-policy derivation (owner invariant 2026-08-21)", () => {
     const contract = deriveHermesWorkContract(uiOutcome)
     expect(contract?.id).toBe("derived-lane-ui.v1")
     expect(contract?.repository).toBe("bsvalues/terragroq")
-    expect(contract?.reservations).toEqual(["app/", "components/", "lib/", "tests/"])
+    // Client-owned paths only (review P1): a ui derivation must never reach lib/ (auth, sessions,
+    // governance) or app/ (API routes).
+    expect(contract?.reservations).toEqual(["components/", "tests/"])
     expect(contract?.digest).toMatch(/^[0-9a-f]{64}$/)
     // deterministic: idempotent replay hash-compares identically
     expect(deriveHermesWorkContract(uiOutcome)?.digest).toBe(contract?.digest)

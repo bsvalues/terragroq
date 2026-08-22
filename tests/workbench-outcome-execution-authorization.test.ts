@@ -222,7 +222,7 @@ describe("Workbench outcome execution authorization", () => {
     expect(assessment.eligible).toBe(true)
     if (!assessment.eligible) throw new Error("EXPECTED_ELIGIBLE")
     expect(assessment.workContract.id).toBe("derived-lane-ui.v1")
-    expect(assessment.workContract.reservations).toEqual(["app/", "components/", "lib/", "tests/"])
+    expect(assessment.workContract.reservations).toEqual(["components/", "tests/"])
     expect(assessment.workContract.digest).toMatch(/^[0-9a-f]{64}$/)
     // Exact schema parity with the runtime's contract shape check — no extra keys.
     expect(Object.keys(assessment.workContract).sort()).toEqual(

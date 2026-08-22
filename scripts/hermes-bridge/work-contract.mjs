@@ -173,7 +173,10 @@ export function isExactIssue911LiveAcceptanceContract(value) {
  */
 const DERIVED_LANE_POLICIES = Object.freeze({
   ui: Object.freeze({
-    reservations: Object.freeze(["app/", "components/", "lib/", "tests/"]),
+    // Client-owned paths ONLY (review P1): a "ui"-classified command must not be able to authorize
+    // writes into lib/ (auth, sessions, governance) or app/ (API routes). Work needing those gets a
+    // registered contract or a finer future policy — never a broad derived envelope.
+    reservations: Object.freeze(["components/", "tests/"]),
     validationCommands: Object.freeze([
       Object.freeze({ command: "npm", args: Object.freeze(["run", "lint"]), timeoutMs: 10 * 60 * 1000 }),
       Object.freeze({
