@@ -17,11 +17,13 @@ import { isContinueIntent } from "@/lib/environment/start-work"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
 import {
+  EMPTY_SPINE,
   createWorkingWorld,
   validateWorkingWorld,
   withSurface,
   withTurn,
   type WorkingWorldSnapshot,
+  type WorldSpine,
 } from "@/lib/environment/working-world"
 
 /**
@@ -54,7 +56,17 @@ type SurfaceDirective = Readonly<{
   payload?: unknown
 }>
 
-type LineReply = Readonly<{ worldId: string; say: string; surfaces: readonly SurfaceDirective[] }>
+/**
+ * Every reply carries the mounted world's governed SPINE (phase 2). The environment renders execution
+ * from it, so the screen reflects where the work actually stands after each exchange instead of what
+ * was true when the page last loaded.
+ */
+type LineReply = Readonly<{
+  worldId: string
+  say: string
+  surfaces: readonly SurfaceDirective[]
+  spine: WorldSpine
+}>
 
 const LOGIN_WORK = /(login|log.?in|sign.?in|auth)\b/i
 const BROKEN = /(broken|busted|wrong|fail|drops?|mess|not work|doesn.?t work|figure out)/i
@@ -372,7 +384,7 @@ export async function POST(request: Request) {
     }
     updated = withTurn(updated, "williamos", say)
     await saveWorld(userId, requestedWorldId, updated, false)
-    return Response.json({ worldId: requestedWorldId, say, surfaces } satisfies LineReply)
+    return Response.json({ worldId: requestedWorldId, say, surfaces, spine: updated.spine } satisfies LineReply)
   }
 
   if (LOGIN_WORK.test(text) && (BROKEN.test(text) || FIX_INTENT.test(text))) {
@@ -387,7 +399,7 @@ export async function POST(request: Request) {
     }))
     const decision = resolveAmbiguity({ subject: "which login flow", candidates, costOfWrongGuess: "cheap" })
     if (decision.mode === "ASK") {
-      return Response.json({ worldId: "", say: decision.question, surfaces: [] } satisfies LineReply)
+      return Response.json({ worldId: "", say: decision.question, surfaces: [], spine: EMPTY_SPINE } satisfies LineReply)
     }
 
     const steps = await probeAuthFlow()
@@ -407,6 +419,7 @@ export async function POST(request: Request) {
         { kind: "browser", subject: "/sign-in" },
         { kind: "trace", subject: "auth-probe", payload: steps },
       ],
+      spine: world.spine,
     } satisfies LineReply)
   }
 
@@ -419,5 +432,5 @@ export async function POST(request: Request) {
   // A first-message current-work read retains its selection so the next "continue it" starts it.
   if (grounded && "retained" in grounded) world = { ...world, pendingStartWork: grounded.retained ?? null }
   await saveWorld(userId, worldId, world, true)
-  return Response.json({ worldId, say, surfaces: [] } satisfies LineReply)
+  return Response.json({ worldId, say, surfaces: [], spine: world.spine } satisfies LineReply)
 }
