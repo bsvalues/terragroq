@@ -6,6 +6,16 @@ import { randomUUID } from "node:crypto"
 import { sanitizeAppServerText } from "./app-server-client.mjs"
 import { selectExecutionBackend } from "./execution-backend.mjs"
 import {
+  HERMES_DISPATCH_LANE,
+  recordLaneExhaustion,
+  resolveProviderStatusPath,
+} from "./provider-status.mjs"
+import {
+  IMPLEMENTATION,
+  laneRoster,
+  selectLane as selectWorkerLane,
+} from "../runtime-operator/worker-lanes.mjs"
+import {
   completeOutcome,
   deferProviderOutcome,
   readApprovedOwnerDecision,
@@ -816,6 +826,14 @@ export function createHermesOrchestrator(options = {}) {
     ?? resolveActiveReviewRecoveryProvenance
   const verifyReviewRecoveryContinuation = options.verifyActiveReviewRecoveryContinuation
     ?? verifyActiveReviewRecoveryContinuation
+  // Lane availability lives beside the runtime operator's own state, not this bridge's: `selectLane`
+  // reads one file, so this writer must aim at the same one. Derived from `runtimeRoot` rather than
+  // hard-wired to the home directory so a relocated or test root stays self-contained.
+  const providerStatusPath = options.providerStatusPath
+    ?? resolveProviderStatusPath({ root: path.join(runtimeRoot, "..", "runtime-operator") })
+  const recordProviderLaneExhaustion = options.recordLaneExhaustion ?? recordLaneExhaustion
+  const selectProviderLane = options.selectLane ?? selectWorkerLane
+  const providerLaneRoster = options.laneRoster ?? laneRoster
   const projectCheckpoint = options.projectCheckpoint ?? projectOutcomeRuntimeCheckpoint
   const projectLease = options.projectLease ?? projectOutcomeRuntimeLease
   const leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? 5 * 60 * 1000
@@ -881,6 +899,51 @@ export function createHermesOrchestrator(options = {}) {
       && execution?.metadata?.validationRecoveryPhase === "PENDING_HOST_VALIDATION"
       && sourceFence !== null
   }
+  /**
+   * Publish a provider exhaustion as a LANE fact and report whether another lane could serve.
+   *
+   * Deferring this outcome records that THIS work waits; it says nothing about the lane, so the next
+   * dispatch — of this outcome or any other — walks into the same empty meter. Recording
+   * `unavailableUntil` is what lets `selectLane` skip the lane without contacting it, which is the
+   * policy `worker-lanes.mjs` already states: exhaustion reroutes when another approved lane can
+   * satisfy the work order, and parks only when nothing capable remains.
+   *
+   * Reporting only, for now. The reroute itself is a separate change with its own authority; this
+   * returns the observable seam so that change has something true to act on, and so the difference
+   * between "parked because nothing could serve" and "parked while a capable lane sat idle" is
+   * visible in the result instead of being invisible.
+   *
+   * Fails soft in both halves: a status file that cannot be read or written, or a lane policy that
+   * throws, costs the report and never the defer.
+   */
+  function noteProviderLaneExhaustion(retryAfter) {
+    let status = {}
+    try {
+      status = recordProviderLaneExhaustion({
+        laneId: HERMES_DISPATCH_LANE,
+        unavailableUntil: retryAfter,
+        statusPath: providerStatusPath,
+      })?.status ?? {}
+    } catch { status = {} }
+    if (typeof selectProviderLane !== "function" || typeof providerLaneRoster !== "function") return null
+    try {
+      const choice = selectProviderLane({
+        assigned: HERMES_DISPATCH_LANE,
+        roster: providerLaneRoster(),
+        status,
+        capability: IMPLEMENTATION,
+        now: now().getTime(),
+      })
+      return choice?.wait === false
+        && typeof choice.lane?.id === "string"
+        && choice.lane.id !== HERMES_DISPATCH_LANE
+        ? choice.lane.id
+        : null
+    } catch {
+      return null
+    }
+  }
+
   async function abandonOwnedCycleLease() {
     const owned = Object.values(state.read().executions).filter((execution) => (
       execution?.lease?.status === "ACTIVE"
@@ -2730,6 +2793,9 @@ export function createHermesOrchestrator(options = {}) {
         const retryAfter = usageLimitWait && typeof error?.usageLimitRetryAfter === "string"
           ? error.usageLimitRetryAfter
           : new Date(now().getTime() + PROVIDER_RETRY_COOLDOWN_MS).toISOString()
+        // Only a usage limit is a statement about the LANE. The delivery walls in this branch are
+        // about this repository interaction, so they must not mark a provider exhausted.
+        const reroutableLane = usageLimitWait ? noteProviderLaneExhaustion(retryAfter) : null
         cp = await checkpoint(lease, sequence, "PROVIDER_UNAVAILABLE", retryAfter, {
           threadId: null,
           turnId: null,
@@ -2771,6 +2837,7 @@ export function createHermesOrchestrator(options = {}) {
           nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
           reasonCode: error.code,
           retryAfter,
+          ...(usageLimitWait ? { reroutableLane } : {}),
         }
       }
       const externalToolRetryCount = externalToolWall

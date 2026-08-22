@@ -4375,6 +4375,89 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.client.runTurn).toHaveBeenCalledOnce()
   })
 
+  it("publishes the usage limit as a lane fact and names the lane that could have served", async () => {
+    // Deferring says THIS work waits; it says nothing about the lane, so the next dispatch walks
+    // into the same empty meter. worker-lanes.mjs already states the policy — "provider exhaustion
+    // reroutes when another approved lane can satisfy the work order" — and selectLane implements
+    // it, but only for a lane somebody recorded as unavailable. This is that missing write, plus the
+    // seam that makes "parked while a capable lane sat idle" visible instead of invisible.
+    const statusPath = path.join(runtime(), "runtime-operator", "state", "provider-status.json")
+    fs.mkdirSync(path.dirname(statusPath), { recursive: true })
+    fs.writeFileSync(statusPath, JSON.stringify({
+      lastDispatch: { workOrderId: "WO-0028", lane: "codex" },
+    }), "utf8")
+    const value = fixture(undefined, { providerStatusPath: statusPath })
+    const message = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 27th, 2099 4:36 AM."
+    const resumeAt = parseAppServerUsageLimitRetryAfter(message)
+    value.client.runTurn.mockRejectedValueOnce(new AppServerTurnEndedError("failed", message))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PROVIDER_UNAVAILABLE",
+      nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
+      retryAfter: resumeAt as string,
+      // claude is the other approved implementation lane and nothing says it is exhausted, so the
+      // park is a choice this result now has to admit to.
+      reroutableLane: "claude",
+    })
+    expect(JSON.parse(fs.readFileSync(statusPath, "utf8"))).toEqual({
+      // Merged, not clobbered: this writer knows about one lane and must not speak for the rest.
+      lastDispatch: { workOrderId: "WO-0028", lane: "codex" },
+      codex: { unavailableUntil: resumeAt, reason: "USAGE_LIMIT_EXCEEDED" },
+    })
+  })
+
+  it("reports no reroutable lane when every capable lane is already exhausted", async () => {
+    const statusPath = path.join(runtime(), "runtime-operator", "state", "provider-status.json")
+    fs.mkdirSync(path.dirname(statusPath), { recursive: true })
+    fs.writeFileSync(statusPath, JSON.stringify({
+      claude: { unavailableUntil: "2099-12-31T00:00:00.000Z", reason: "RATE_LIMITED" },
+    }), "utf8")
+    const value = fixture(undefined, { providerStatusPath: statusPath })
+    value.client.runTurn.mockRejectedValueOnce(new AppServerTurnEndedError(
+      "failed",
+      "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 27th, 2099 4:36 AM.",
+    ))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PROVIDER_UNAVAILABLE",
+      // Null, not absent: "nothing could serve" is a finding, and the seam has to be able to say it.
+      reroutableLane: null,
+    })
+  })
+
+  it("keeps deferring when the lane status cannot be written — the report is optional, the defer is not", async () => {
+    const value = fixture(undefined, {
+      recordLaneExhaustion: () => { throw new Error("EROFS") },
+    })
+    value.client.runTurn.mockRejectedValueOnce(new AppServerTurnEndedError(
+      "failed",
+      "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 27th, 2099 4:36 AM.",
+    ))
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({
+      result: "PROVIDER_UNAVAILABLE",
+      nextState: "DEFERRED_PROVIDER_UNAVAILABLE",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "DEFERRED" },
+      checkpoint: { state: "DEFERRED_PROVIDER_UNAVAILABLE" },
+    })
+  })
+
+  it("does not mark a lane exhausted for a delivery wall, which says nothing about the provider", async () => {
+    const recordLaneExhaustion = vi.fn(() => ({ persisted: true, status: {} }))
+    const value = fixture(undefined, { recordLaneExhaustion })
+    value.client.runTurn.mockRejectedValueOnce(Object.assign(
+      new Error("push rejected"),
+      { code: "HERMES_REPOSITORY_GITHUB_WALL" },
+    ))
+
+    const result = await value.orchestrator.cycle()
+    expect(result).toMatchObject({ result: "PROVIDER_UNAVAILABLE" })
+    expect(result).not.toHaveProperty("reroutableLane")
+    expect(recordLaneExhaustion).not.toHaveBeenCalled()
+  })
+
   it("abandons a blocked external tool and clears its App Server identity", async () => {
     const value = fixture()
     value.client.runTurn.mockRejectedValueOnce(Object.assign(new Error("mcpToolCall"), {
