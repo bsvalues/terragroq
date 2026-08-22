@@ -16,7 +16,7 @@
  * request for the project registry.
  */
 
-export type SummonedSurface = "project" | "activity" | "evidence"
+export type SummonedSurface = "project" | "activity" | "evidence" | "work-orders"
 
 /**
  * An operational request — show/open/edit a file, page, route, component — is about code, and must
@@ -34,6 +34,13 @@ const ACTIVITY =
   // a separate word — the kind of gap that silently drops the most natural phrasing an owner uses.
   /\bwhat(?:'s|s|\s+is)\s+(hermes|the runtime|the lane|the worker|it)\s+doing\b|\b(show|open|bring up)\b[^?]*\b(activity|execution|runtime|lanes?)\b|\bwhat(?:'s|s|\s+is)\s+running\b/i
 
+/**
+ * Work orders: the governed units of delivery. Migrated from the /work-orders route, which held this
+ * as a destination with a permanent page around it.
+ */
+const WORK_ORDERS =
+  /\b(show|open|list|bring up|pull up|what)\b[^?]*\bwork[ -]?orders?\b|\bwork[ -]?orders?\b\s*(surface|queue|list)\b/i
+
 /** The record: evidence, proof, receipts, the technical detail behind a result. */
 const EVIDENCE =
   /\b(show|open|bring up|give me|i need)\b[^?]*\b(evidence|proof|receipts?|technical details?|the record)\b|\bwhat proves\b/i
@@ -47,6 +54,7 @@ const EVIDENCE =
  */
 export function classifySummon(text: string): SummonedSurface | null {
   if (OPERATIONAL.test(text)) return null
+  if (WORK_ORDERS.test(text)) return "work-orders"
   if (EVIDENCE.test(text)) return "evidence"
   if (ACTIVITY.test(text)) return "activity"
   if (PROJECT.test(text)) return "project"
@@ -57,16 +65,19 @@ export function classifySummon(text: string): SummonedSurface | null {
  * Sentences that DISMISS a surface. The owner said it plainly: "and when those aren't useful anymore,
  * they disappear." A surface you can only accumulate is a panel with extra steps.
  */
-const DISMISS = /\b(hide|close|dismiss|get rid of|drop|remove)\b[^?]*\b(browser|diff|tests?|trace|source|project|activity|evidence|surface|panel|logs?|it|that|them|everything|all)\b/i
+const DISMISS = /\b(hide|close|dismiss|get rid of|drop|remove)\b[^?]*\b(browser|diff|tests?|trace|source|project|activity|evidence|work[ -]?orders?|surface|panel|logs?|it|that|them|everything|all)\b/i
 
 export function classifyDismissal(text: string): "all" | string | null {
   if (!DISMISS.test(text)) return null
   if (/\b(everything|all|them)\b/i.test(text)) return "all"
-  const named = /\b(browser|diff|tests?|trace|source|project|activity|evidence|logs?)\b/i.exec(text)
+  // Work orders first: "work order" contains no other surface name, but listing it ahead of the
+  // single-word alternatives keeps the match unambiguous as this list grows with each migration.
+  const named = /\b(work[ -]?orders?|browser|diff|tests?|trace|source|project|activity|evidence|logs?)\b/i.exec(text)
   if (!named) return "all"
   const subject = named[1].toLowerCase()
   // "logs" is what an owner calls the trace surface; honour their word, not ours.
   if (subject.startsWith("log")) return "trace"
   if (subject === "test") return "tests"
+  if (/^work/.test(subject)) return "work-orders"
   return subject
 }
