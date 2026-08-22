@@ -4,9 +4,15 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 
 import { sanitizeAppServerText } from "./app-server-client.mjs"
+import {
+  CLAUDE_LANE_ID,
+  ClaudeLaneClient,
+  isClaudeLaneAvailable,
+} from "./claude-lane-client.mjs"
 import { selectExecutionBackend } from "./execution-backend.mjs"
 import {
   HERMES_DISPATCH_LANE,
+  readProviderStatus,
   recordLaneExhaustion,
   resolveProviderStatusPath,
 } from "./provider-status.mjs"
@@ -285,7 +291,10 @@ function validatedTurnResult(text) {
   const result = normalizeHermesTurnResult(parseTurnResult(text))
   if (result.ownerTouchCount !== 0
     || result.blockedScopeCrossed) {
-    throw Object.assign(new Error("Codex result crossed the owner or blocked-scope boundary"), {
+    // "Worker", not "Codex": this is the generic validation path every implementation lane returns
+    // through, and naming one provider inside a shared abstraction is how provider semantics leak
+    // into it. The gate itself is unchanged.
+    throw Object.assign(new Error("Worker result crossed the owner or blocked-scope boundary"), {
       code: "HERMES_COMPLETION_GATE_WALL",
     })
   }
@@ -838,6 +847,11 @@ export function createHermesOrchestrator(options = {}) {
   const projectLease = options.projectLease ?? projectOutcomeRuntimeLease
   const leaseRenewalIntervalMs = options.leaseRenewalIntervalMs ?? 5 * 60 * 1000
   const clientFactory = options.clientFactory
+  const claudeLaneFactory = options.claudeLaneClientFactory
+    ?? ((worktreePath, workOrderId) => new ClaudeLaneClient({
+      cwd: worktreePath, workOrderId, timeoutMs: TURN_TIMEOUT_MS,
+    }))
+  const claudeLaneAvailable = options.isClaudeLaneAvailable ?? isClaudeLaneAvailable
   const now = options.now ?? (() => new Date())
   const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
   const isProcessAlive = options.isProcessAlive ?? ((processId) => {
@@ -942,6 +956,63 @@ export function createHermesOrchestrator(options = {}) {
     } catch {
       return null
     }
+  }
+
+  /**
+   * Bind the lane and the executor in ONE decision.
+   *
+   * The dangerous shape this exists to make unrepresentable: `selectLane` says "claude", and the
+   * dispatch a few lines later builds a Codex client anyway because that is what the default seam
+   * does. So lane id and client constructor are chosen together and returned together -- there is no
+   * intermediate state where the selected lane and the executable executor can disagree, and no
+   * second place that decides.
+   *
+   * `selectLane` is consulted against the SAME persisted status the runtime-operator kernel reads and
+   * the usage-limit branch below writes, so the reroute is driven by the lane fact the previous
+   * cycle recorded rather than by anything this cycle guesses. Two conditions must both hold before
+   * the claude executor is bound: policy has to name the lane, and the host has to actually have the
+   * binary -- being on the roster is not being installed.
+   *
+   * Fails soft in exactly one direction. Anything unreadable, unavailable, or throwing yields the
+   * Codex path unchanged, so a lane-selection defect can never cost a dispatch. When Codex is
+   * available this returns the identical client the orchestrator built before this seam existed.
+   */
+  const codexDispatch = Object.freeze({
+    laneId: HERMES_DISPATCH_LANE,
+    createClient: async (worktreePath) => (clientFactory
+      ? await clientFactory(worktreePath)
+      : await executionBackend.runCodexClient({
+          workspacePath: worktreePath,
+          timeoutMs: TURN_TIMEOUT_MS,
+        })),
+  })
+
+  function resolveDispatchExecutor() {
+    // `clientFactory` is the CODEX lane's factory, not a lane decision: every caller that injects one
+    // injects an App Server client stand-in. Letting it short-circuit selection would recreate
+    // exactly the divergence this function exists to prevent -- policy naming claude while the
+    // dispatch builds a Codex client anyway -- so selection runs first and binds both together.
+    if (typeof selectProviderLane !== "function" || typeof providerLaneRoster !== "function") {
+      return codexDispatch
+    }
+    let choice
+    try {
+      choice = selectProviderLane({
+        assigned: HERMES_DISPATCH_LANE,
+        roster: providerLaneRoster(),
+        status: readProviderStatus({ statusPath: providerStatusPath }),
+        capability: IMPLEMENTATION,
+        now: now().getTime(),
+      })
+    } catch { return codexDispatch }
+    if (choice?.wait !== false || choice.lane?.id !== CLAUDE_LANE_ID) return codexDispatch
+    // Policy named the lane; the host still has to be able to run it. A roster entry is a claim, and
+    // an executor bound to a binary that is not there would trade a typed park for a failed turn.
+    try { if (!claudeLaneAvailable()) return codexDispatch } catch { return codexDispatch }
+    return Object.freeze({
+      laneId: CLAUDE_LANE_ID,
+      createClient: async (worktreePath, workOrderId) => claudeLaneFactory(worktreePath, workOrderId),
+    })
   }
 
   async function abandonOwnedCycleLease() {
@@ -2395,12 +2466,11 @@ export function createHermesOrchestrator(options = {}) {
       }
     }
 
-    const client = clientFactory
-      ? await clientFactory(record.worktreePath)
-      : await executionBackend.runCodexClient({
-          workspacePath: record.worktreePath,
-          timeoutMs: TURN_TIMEOUT_MS,
-        })
+    // Lane and executor, decided together. Everything after this point is provider-neutral: the same
+    // prompt, reservations, blocked scope, validators, checkpoints, leases and completion gates run
+    // whichever lane this bound.
+    const dispatch = resolveDispatchExecutor()
+    const client = await dispatch.createClient(record.worktreePath, workOrderRef)
     let replayedTurnResult = cp.metadata.turnResult
       ? normalizeHermesTurnResult(cp.metadata.turnResult)
       : null

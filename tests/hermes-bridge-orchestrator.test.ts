@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events"
 import fs from "node:fs"
 import { createHash } from "node:crypto"
 import os from "node:os"
@@ -19,6 +20,8 @@ import {
   normalizeHermesTurnResult,
 } from "../scripts/hermes-bridge/state-store.mjs"
 import { AppServerTurnEndedError, parseAppServerUsageLimitRetryAfter } from "../scripts/hermes-bridge/app-server-client.mjs"
+import { ClaudeLaneClient } from "../scripts/hermes-bridge/claude-lane-client.mjs"
+import { HERMES_BLOCKED_SCOPE } from "../scripts/hermes-bridge/prompt.mjs"
 import { deriveHermesWorkContract, resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 import { createHermesOutcomeQueueRuntime } from "../scripts/hermes-bridge/outcome-queue-runtime.mjs"
 
@@ -292,6 +295,12 @@ function fixture(
     workspace: process.cwd(), runtimeRoot: root, state, lifecycle, selectOutcome, markComplete, markTerminal, deferOutcome,
     projectCheckpoint, projectLease, readApprovedOwnerDecision,
     clientFactory: () => client,
+    // Lane availability is HOST state, and the default path derives from runtimeRoot/.. — i.e. the
+    // shared temp directory every fixture sits in. One test recording a usage-limit exhaustion there
+    // would otherwise be visible to every later test (and every later RUN), which is a genuine
+    // cross-test leak now that dispatch reads this file. Each fixture gets its own; anything in
+    // orchestratorOptions still overrides it, since that spread comes last.
+    providerStatusPath: path.join(root, "provider-status.json"),
     holderId: "test-holder",
     now: () => new Date(currentTime),
     sleep: async () => {},
@@ -5886,5 +5895,223 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         ownerDecisionPacketDigest: null,
       },
     })
+  })
+})
+
+/**
+ * Lane selection and executor binding, proved at the orchestrator — not at the adapter.
+ *
+ * An adapter unit test can only show that a ClaudeLaneClient works. What matters is that HERMES
+ * actually routes through it when policy says to, that everything downstream of the turn is
+ * unchanged, and that a claude-lane turn is held to exactly the same walls a Codex turn is.
+ */
+describe("claude lane dispatch", () => {
+  const laneReadyResult = {
+    result: "READY_FOR_VALIDATION",
+    workOrder: "WO-HERMES-77-001",
+    branch: "codex/hermes-goal-77-77",
+    commit: null,
+    prUrl: null,
+    merged: false,
+    mergeCommit: null,
+    validation: ["pass"],
+    reviewThreads: 0,
+    ownerTouchCount: 0,
+    blockedScopeCrossed: false,
+    nextState: "READY_FOR_HERMES_MERGE",
+    blockedAction: null,
+    authorityBoundary: null,
+    minimumChoice: null,
+    approveConsequence: null,
+    denyConsequence: null,
+    // The claude lane validates against the canonical contract the worker was actually handed, which
+    // requires `findings` — stricter than the orchestrator's own normalizer, deliberately so.
+    findings: [],
+  }
+
+  function laneStatus(lanes: Record<string, unknown>) {
+    const statusPath = path.join(runtime(), "runtime-operator", "state", "provider-status.json")
+    fs.mkdirSync(path.dirname(statusPath), { recursive: true })
+    fs.writeFileSync(statusPath, JSON.stringify(lanes), "utf8")
+    return statusPath
+  }
+
+  const codexExhausted = { codex: { unavailableUntil: "2099-12-31T00:00:00.000Z", reason: "USAGE_LIMIT_EXCEEDED" } }
+
+  function fakeCliChild() {
+    return Object.assign(new EventEmitter(), {
+      stdout: Object.assign(new EventEmitter(), { setEncoding: () => {} }),
+      stderr: Object.assign(new EventEmitter(), { setEncoding: () => {} }),
+      stdin: { end: () => {} },
+      kill: vi.fn(),
+    }) as any
+  }
+
+  /** A real ClaudeLaneClient over a scripted CLI, so the orchestrator drives the actual adapter. */
+  function claudeLane(turnResult: Record<string, unknown> = laneReadyResult) {
+    const prompts: string[] = []
+    const spawn = vi.fn((_command: string, args: string[]) => {
+      const child = fakeCliChild()
+      const prompt = args[args.indexOf("-p") + 1]
+      prompts.push(prompt)
+      const runId = /runId=([A-Za-z0-9-]+)/.exec(prompt)?.[1] ?? ""
+      const sessionId = args[args.indexOf(args.includes("--resume") ? "--resume" : "--session-id") + 1]
+      queueMicrotask(() => {
+        child.stdout.emit("data", JSON.stringify({
+          type: "result", subtype: "success", is_error: false, session_id: sessionId,
+          result: [
+            "Implemented the change and reviewed it.",
+            "HERMES_TURN_OUTPUT runId=" + runId,
+            JSON.stringify(turnResult),
+            "HERMES_TURN_OUTPUT_END",
+          ].join("\n"),
+        }))
+        child.emit("close", 0, null)
+      })
+      return child
+    })
+    const created: any[] = []
+    const factory = (worktreePath: string, workOrderId: string) => {
+      fs.mkdirSync(worktreePath, { recursive: true })
+      const lane = new ClaudeLaneClient({
+        cwd: worktreePath, workOrderId, command: "/fake/claude", spawn,
+        env: { PATH: "/usr/bin", ANTHROPIC_API_KEY: "sk-live-must-not-travel" },
+      })
+      created.push(lane)
+      return lane
+    }
+    return { factory, spawn, prompts, created }
+  }
+
+  it("dispatches through the claude executor when codex is exhausted and never touches the codex client", async () => {
+    const lane = claudeLane()
+    const value = fixture(undefined, {
+      providerStatusPath: laneStatus(codexExhausted),
+      claudeLaneClientFactory: lane.factory,
+      isClaudeLaneAvailable: () => true,
+    })
+
+    // Delivery runs to completion through the ordinary machinery: validation, commit, PR, review,
+    // merge, merged-main verification, cleanup. Nothing downstream of the turn is lane-specific.
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+
+    expect(lane.created).toHaveLength(1)
+    expect(lane.spawn).toHaveBeenCalledOnce()
+    // The Codex client is never constructed and never invoked: lane selection and executor selection
+    // are one decision, so they cannot disagree.
+    expect(value.client.connect).not.toHaveBeenCalled()
+    expect(value.client.runTurn).not.toHaveBeenCalled()
+
+    // The owned worktree HERMES prepared, not a tree the lane chose for itself.
+    const owned = await value.lifecycle.ensureOwnedWorktree.mock.results[0].value
+    expect(lane.created[0].cwd).toBe(owned.worktreePath)
+    expect(lane.spawn.mock.calls[0][2].cwd).toBe(owned.worktreePath)
+
+    // The same governed prompt: identical reservations, identical blocked scope.
+    const prompt = lane.prompts[0]
+    expect(prompt).toContain("- components/hermes/live-status.tsx")
+    expect(prompt).toContain("- tests/hermes-live-status.test.tsx")
+    for (const blocked of HERMES_BLOCKED_SCOPE) expect(prompt).toContain("- " + blocked)
+    // And the terminal-result channel contract the executor reads back.
+    expect(prompt).toContain("HERMES_TURN_OUTPUT_END")
+
+    // Native validation ran, and delivery reached verified merged main.
+    expect(value.lifecycle.runValidationCommands).toHaveBeenCalled()
+    expect(value.lifecycle.mergePullRequest).toHaveBeenCalled()
+    expect(value.lifecycle.verifyOriginMainContains).toHaveBeenCalled()
+    expect(value.markComplete).toHaveBeenCalled()
+    // The completion gate held on the accepted turn.
+    expect(value.state.read().ownerTouchCount ?? 0).toBe(0)
+    // The credential never reached the child.
+    expect(JSON.stringify(lane.spawn.mock.calls[0][2].env)).not.toContain("must-not-travel")
+  })
+
+  it("walls a claude turn that crosses the owner boundary, with no commit and no fabricated completion", async () => {
+    const lane = claudeLane({ ...laneReadyResult, ownerTouchCount: 1 })
+    const value = fixture(undefined, {
+      providerStatusPath: laneStatus(codexExhausted),
+      claudeLaneClientFactory: lane.factory,
+      isClaudeLaneAvailable: () => true,
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_COMPLETION_GATE_WALL",
+    })
+    expect(lane.spawn).toHaveBeenCalledOnce()
+    expect(value.lifecycle.commitChanges).not.toHaveBeenCalled()
+    expect(value.lifecycle.createPullRequest).not.toHaveBeenCalled()
+    expect(value.lifecycle.mergePullRequest).not.toHaveBeenCalled()
+    expect(value.markComplete).not.toHaveBeenCalled()
+  })
+
+  it("walls a claude turn answering in prose instead of the delimited result channel", async () => {
+    const spawn = vi.fn((_command: string, args: string[]) => {
+      const child = fakeCliChild()
+      const sessionId = args[args.indexOf(args.includes("--resume") ? "--resume" : "--session-id") + 1]
+      queueMicrotask(() => {
+        // Prose a permissive first-brace/last-brace scan could have mined for a "result".
+        child.stdout.emit("data", JSON.stringify({
+          type: "result", subtype: "success", is_error: false, session_id: sessionId,
+          result: 'All done. The shape is { "result": "READY_FOR_VALIDATION", "merged": true }.',
+        }))
+        child.emit("close", 0, null)
+      })
+      return child
+    })
+    const value = fixture(undefined, {
+      providerStatusPath: laneStatus(codexExhausted),
+      isClaudeLaneAvailable: () => true,
+      claudeLaneClientFactory: (worktreePath: string, workOrderId: string) => {
+        fs.mkdirSync(worktreePath, { recursive: true })
+        return new ClaudeLaneClient({ cwd: worktreePath, workOrderId, command: "/fake/claude", spawn })
+      },
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      laneCode: "CLAUDE_LANE_RESULT_CHANNEL_MISSING",
+    })
+    expect(value.lifecycle.commitChanges).not.toHaveBeenCalled()
+    expect(value.markComplete).not.toHaveBeenCalled()
+  })
+
+  it("keeps the codex path unchanged when the assigned lane is available", async () => {
+    const claudeLaneClientFactory = vi.fn()
+    const value = fixture(undefined, {
+      providerStatusPath: laneStatus({ claude: { unavailableUntil: "2099-12-31T00:00:00.000Z" } }),
+      claudeLaneClientFactory,
+      isClaudeLaneAvailable: () => true,
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
+    expect(value.client.runTurn).toHaveBeenCalled()
+    expect(claudeLaneClientFactory).not.toHaveBeenCalled()
+  })
+
+  it("stays on codex when policy names the claude lane but the host cannot run it", async () => {
+    const claudeLaneClientFactory = vi.fn()
+    const value = fixture(undefined, {
+      providerStatusPath: laneStatus(codexExhausted),
+      claudeLaneClientFactory,
+      // A roster entry is a claim; an absent binary is the truth. Binding an executor to it would
+      // trade a typed park for a failed turn.
+      isClaudeLaneAvailable: () => false,
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(claudeLaneClientFactory).not.toHaveBeenCalled()
+    expect(value.client.runTurn).toHaveBeenCalled()
+  })
+
+  it("keeps dispatching on codex when lane selection itself fails", async () => {
+    const claudeLaneClientFactory = vi.fn()
+    const value = fixture(undefined, {
+      selectLane: () => { throw new Error("roster unreadable") },
+      claudeLaneClientFactory,
+      isClaudeLaneAvailable: () => true,
+    })
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE" })
+    expect(claudeLaneClientFactory).not.toHaveBeenCalled()
+    expect(value.client.runTurn).toHaveBeenCalled()
   })
 })
