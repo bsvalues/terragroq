@@ -8,7 +8,7 @@ import {
   issue911LiveAcceptanceContractIds,
 } from "@/lib/workbench/registered-outcome-intent"
 import { evaluateOutcomePolicy } from "@/scripts/hermes-bridge/policy.mjs"
-import { resolveHermesWorkContract } from "@/scripts/hermes-bridge/work-contract.mjs"
+import { resolveOrDeriveHermesWorkContract } from "@/scripts/hermes-bridge/work-contract.mjs"
 
 const evaluateCanonicalOutcomePolicy = evaluateOutcomePolicy as unknown as (input: {
   outcome: Record<string, unknown>
@@ -305,7 +305,14 @@ export function assessWorkbenchOutcomeExecution(
   if (!acceptanceVerification) return { eligible: false, reason: "WORK_CONTRACT_UNAVAILABLE" }
   const acceptanceIntakeProof = acceptanceVerification.proof
 
-  const workContract = resolveHermesWorkContract({
+  // Registered contracts take precedence; otherwise a governed lane-policy derivation applies
+  // (owner invariant 2026-08-21: a missing contract is work to create, not a terminal wall). Every
+  // gate above — repo, authority, version-0 suggested, injection, protected paths, contract-id
+  // equality, acceptance intake proof — has already passed before this line, so derivation only ever
+  // reaches an already-governed outcome, and the canonical outcome policy below still gets its veto.
+  // Derivation applies ONLY on default contract selection (empty acceptedContractIds); an explicitly
+  // selected acceptance contract is never silently replaced.
+  const workContract = resolveOrDeriveHermesWorkContract({
     command: goal.command,
     title: outcome.title,
     objective: outcome.objective,

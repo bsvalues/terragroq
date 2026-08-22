@@ -18,7 +18,7 @@ import {
   hermesTurnResultDigest,
   normalizeHermesTurnResult,
 } from "../scripts/hermes-bridge/state-store.mjs"
-import { resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
+import { deriveHermesWorkContract, resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 import { createHermesOutcomeQueueRuntime } from "../scripts/hermes-bridge/outcome-queue-runtime.mjs"
 
 const roots: string[] = []
@@ -943,6 +943,49 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         provenance: {
           operation: "workbench_execution.authorize", outcomeKey: "goal:GOAL-OTHER",
           workOrderRef: "WO-HERMES-OUTCOME-7",
+        },
+      },
+    }, resolver)).toThrow(expect.objectContaining({ code: "HERMES_WORK_CONTRACT_WALL" }))
+  })
+
+  it("accepts a Workbench-parent DERIVED contract only when an independent re-derivation matches (owner invariant 2026-08-21)", () => {
+    const command = "Make the sign-in page speak to the owner with neutral copy"
+    const goalFields = { command, title: command, objective: command, lane: "ui", risk: "low", authority: "A2_WRITE_OWN" }
+    const contract = deriveHermesWorkContract(goalFields)!
+    const resolver = vi.fn(() => null)
+    // The verified contract equals what THIS process re-derives from the governed goal fields.
+    expect(requireHermesWorkContract({
+      id: 18, ...goalFields, outcomeKey: "goal:GOAL-0018",
+      queueBinding: { outcomeKey: "goal:GOAL-0018" },
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: {
+          operation: "workbench_execution.authorize", outcomeKey: "goal:GOAL-0018",
+          workOrderRef: "WO-HERMES-OUTCOME-18",
+        },
+      },
+    }, resolver)).toBe(contract)
+    // A tampered digest cannot pass: nothing is trusted from storage that does not re-derive.
+    expect(() => requireHermesWorkContract({
+      id: 18, ...goalFields, outcomeKey: "goal:GOAL-0018",
+      queueBinding: { outcomeKey: "goal:GOAL-0018" },
+      verifiedQueueWorkContract: {
+        contract: { ...contract, digest: "f".repeat(64) },
+        provenance: {
+          operation: "workbench_execution.authorize", outcomeKey: "goal:GOAL-0018",
+          workOrderRef: "WO-HERMES-OUTCOME-18",
+        },
+      },
+    }, resolver)).toThrow(expect.objectContaining({ code: "HERMES_WORK_CONTRACT_WALL" }))
+    // And a goal whose lane cannot derive (no policy) still walls even with a plausible-looking contract.
+    expect(() => requireHermesWorkContract({
+      id: 18, ...goalFields, lane: "read_model", outcomeKey: "goal:GOAL-0018",
+      queueBinding: { outcomeKey: "goal:GOAL-0018" },
+      verifiedQueueWorkContract: {
+        contract,
+        provenance: {
+          operation: "workbench_execution.authorize", outcomeKey: "goal:GOAL-0018",
+          workOrderRef: "WO-HERMES-OUTCOME-18",
         },
       },
     }, resolver)).toThrow(expect.objectContaining({ code: "HERMES_WORK_CONTRACT_WALL" }))

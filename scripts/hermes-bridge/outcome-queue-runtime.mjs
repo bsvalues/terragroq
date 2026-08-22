@@ -28,7 +28,7 @@ import {
 import { blocksAction } from "../runtime-findings/policy.mjs"
 import {
   HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
-  resolveHermesWorkContract,
+  resolveOrDeriveHermesWorkContract,
 } from "./work-contract.mjs"
 
 function canonicalJson(value) {
@@ -420,7 +420,11 @@ async function loadWorkbenchParentContract(pool, queueItem, goal) {
   const acceptedContractIds = Array.isArray(goal.acceptedContractIds)
     ? goal.acceptedContractIds
     : []
-  const registered = resolveHermesWorkContract({
+  // Independent re-resolution — registered contract or lane-policy derivation (owner invariant
+  // 2026-08-21). The stored contract must match this byte-for-byte (canonicalJson below), so a
+  // derived contract is verified with exactly the same strength as a registered one: nothing is
+  // trusted from storage that this process cannot re-derive from the governed goal itself.
+  const registered = resolveOrDeriveHermesWorkContract({
     command: goal.command, title: queueItem.title, objective: queueItem.objective,
     lane: goal.lane, risk: goal.risk, authority: goal.authority,
     acceptedContractIds: goal.acceptedContractIds,

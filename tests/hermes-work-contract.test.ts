@@ -13,7 +13,9 @@ import {
   HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST,
   HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
   isExactIssue911LiveAcceptanceContract,
+  deriveHermesWorkContract,
   resolveHermesWorkContract,
+  resolveOrDeriveHermesWorkContract,
 } from "../scripts/hermes-bridge/work-contract.mjs"
 
 const command = "Add a compact on-screen latest-evidence timestamp to selected Thread work status."
@@ -215,5 +217,62 @@ describe("Hermes exact work contract", () => {
       risk: "low",
       authority: "A2_WRITE_OWN",
     })).toThrow(expect.objectContaining({ code: "HERMES_WORK_CONTRACT_WALL" }))
+  })
+})
+
+describe("governed lane-policy derivation (owner invariant 2026-08-21)", () => {
+  // A missing execution contract is system work to create, not a terminal wall. The LANE — a
+  // structured governed field, never free text — selects a reviewed envelope; text selects no paths.
+  const uiOutcome = {
+    command: "Make the sign-in page speak to the owner with neutral copy",
+    title: "Make the sign-in page speak to the owner with neutral copy",
+    objective: null,
+    lane: "ui",
+    risk: "low",
+    authority: "A2_WRITE_OWN",
+  }
+
+  it("derives a ui-lane contract for unregistered governed work, deterministic and schema-exact", () => {
+    const contract = deriveHermesWorkContract(uiOutcome)
+    expect(contract?.id).toBe("derived-lane-ui.v1")
+    expect(contract?.repository).toBe("bsvalues/terragroq")
+    // Client-owned paths only (review P1): a ui derivation must never reach lib/ (auth, sessions,
+    // governance) or app/ (API routes).
+    expect(contract?.reservations).toEqual(["components/", "tests/"])
+    expect(contract?.digest).toMatch(/^[0-9a-f]{64}$/)
+    // deterministic: idempotent replay hash-compares identically
+    expect(deriveHermesWorkContract(uiOutcome)?.digest).toBe(contract?.digest)
+    // exact schema parity with the runtime's contract shape check — no extra keys
+    expect(Object.keys(contract ?? {}).sort()).toEqual(
+      ["delivery", "digest", "id", "lane", "repository", "reservations", "validationCommands", "version"],
+    )
+  })
+
+  it.each([
+    ["lane with no policy", { ...uiOutcome, lane: "read_model" }],
+    ["release lane (A9 territory)", { ...uiOutcome, lane: "release" }],
+    ["auth lane (A6 territory)", { ...uiOutcome, lane: "auth" }],
+    ["insufficient authority", { ...uiOutcome, authority: "A1_DRAFT" }],
+    ["elevated authority is not derivable either", { ...uiOutcome, authority: "A9_RELEASE" }],
+    ["risk above the envelope", { ...uiOutcome, risk: "R2" }],
+  ])("refuses derivation for %s — true boundaries remain walls", (_label, outcome) => {
+    expect(deriveHermesWorkContract(outcome)).toBeNull()
+  })
+
+  it("registered contracts always take precedence over derivation", () => {
+    const registered = resolveOrDeriveHermesWorkContract({
+      command,
+      title: command,
+      objective: command,
+      lane: "ui",
+      risk: "low",
+      authority: "A2_WRITE_OWN",
+    })
+    expect(registered?.digest).toBe(HERMES_SELECTED_THREAD_LATEST_EVIDENCE_CONTRACT_DIGEST)
+    expect(registered?.id).not.toContain("derived")
+  })
+
+  it("falls through to derivation only when no registered contract matches", () => {
+    expect(resolveOrDeriveHermesWorkContract(uiOutcome)?.id).toBe("derived-lane-ui.v1")
   })
 })

@@ -28,6 +28,7 @@ import {
   HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST,
   HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID,
   resolveHermesWorkContract,
+  resolveOrDeriveHermesWorkContract,
 } from "./work-contract.mjs"
 import {
   createHermesStateStore,
@@ -454,6 +455,12 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
       && Number(provenance?.workOrderId) === Number(binding?.activeWorkOrderId)
       && typeof provenance?.workOrderRef === "string"
       && provenance.workOrderRef.trim() !== ""
+    // The contract acceptance is an INDEPENDENT re-resolution, not trust in storage: the verified
+    // contract must equal (by id + collision-resistant digest) what this process re-resolves from
+    // the governed goal fields itself — a registered contract or a lane-policy derivation (owner
+    // invariant 2026-08-21). Strictly monotone over the old #911 id/digest pins: everything that
+    // passed still passes; a derived contract passes only when re-derivable here and now.
+    const independentContract = resolveOrDeriveHermesWorkContract(outcome)
     const workbenchParent = provenance?.operation === "workbench_execution.authorize"
       && Object.keys(provenance).sort().join(",") === "operation,outcomeKey,workOrderRef"
       && provenance?.outcomeKey === outcome?.outcomeKey
@@ -464,6 +471,9 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
           && verified?.contract?.digest === HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST)
         || (verified?.contract?.id === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_ID
           && verified?.contract?.digest === HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST)
+        || (independentContract !== null
+          && verified?.contract?.id === independentContract.id
+          && verified?.contract?.digest === independentContract.digest)
       )
     if (!verified || (!derived && !workbenchParent)) {
       throw Object.assign(new Error("Queue work contract provenance conflicts"), {

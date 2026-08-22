@@ -158,6 +158,97 @@ export function isExactIssue911LiveAcceptanceContract(value) {
 }
 
 /**
+ * Governed lane policies for DERIVED contracts (owner invariant, 2026-08-21: a missing execution
+ * contract is system work to create, not a terminal wall — WilliamOS is an operator, not a
+ * gatekeeper over a whitelist of two intents).
+ *
+ * The security property of the registry is PRESERVED, not relaxed: text still selects no paths.
+ * What selects the reservation and validation envelope is the LANE — a structured, governed field
+ * set at goal classification, never free text — and each lane's envelope is reviewed here in code.
+ * Derivation is additionally gated by everything the authorization assessment already enforces
+ * before the contract is consulted: single primary repo, A2_WRITE_OWN everywhere, version-0
+ * suggested outcome, injection and protected-path pattern checks, and the canonical outcome policy.
+ * Lanes with no policy here (release, auth, write_model — all above A2) remain true authority
+ * boundaries and still refuse.
+ */
+const DERIVED_LANE_POLICIES = Object.freeze({
+  ui: Object.freeze({
+    // Client-owned paths ONLY (review P1): a "ui"-classified command must not be able to authorize
+    // writes into lib/ (auth, sessions, governance) or app/ (API routes). Work needing those gets a
+    // registered contract or a finer future policy — never a broad derived envelope.
+    reservations: Object.freeze(["components/", "tests/"]),
+    validationCommands: Object.freeze([
+      Object.freeze({ command: "npm", args: Object.freeze(["run", "lint"]), timeoutMs: 10 * 60 * 1000 }),
+      Object.freeze({
+        command: "npm",
+        args: Object.freeze(["run", "build"]),
+        env: Object.freeze({ NEXT_PRIVATE_BUILD_WORKER: "0", NEXT_TELEMETRY_DISABLED: "1" }),
+        timeoutMs: 15 * 60 * 1000,
+      }),
+      Object.freeze({ command: "npx", args: Object.freeze(["vitest", "run"]), timeoutMs: 20 * 60 * 1000 }),
+    ]),
+    delivery: Object.freeze({
+      authorityLevel: "A2_WRITE_OWN",
+      allowedActions: Object.freeze(["implement"]),
+      commitAllowed: true,
+      tagAllowed: false,
+      pushAllowed: true,
+    }),
+  }),
+  "operator-objective": Object.freeze({
+    reservations: Object.freeze(["docs/"]),
+    validationCommands: Object.freeze([
+      Object.freeze({ command: "git", args: Object.freeze(["diff", "--check"]), timeoutMs: 5 * 60 * 1000 }),
+    ]),
+    delivery: Object.freeze({
+      authorityLevel: "A2_WRITE_OWN",
+      allowedActions: Object.freeze(["implement"]),
+      commitAllowed: true,
+      tagAllowed: false,
+      pushAllowed: true,
+    }),
+  }),
+})
+
+/**
+ * Derive a governed work contract for an outcome with no registered one. Same guards as the
+ * registry (A2_WRITE_OWN, low/R1 risk), plus the lane must carry a reviewed policy above.
+ * Deterministic and digest-stamped, so idempotent replay hash-compares identically.
+ */
+export function deriveHermesWorkContract(outcome) {
+  if (!outcome || typeof outcome !== "object") return null
+  if (outcome.authority !== "A2_WRITE_OWN") return null
+  if (!["low", "R1"].includes(outcome.risk)) return null
+  // Derivation applies only on DEFAULT contract selection: an outcome that explicitly accepted a
+  // named contract must resolve that contract or nothing — never a silently substituted derivation.
+  const acceptedContractIds = outcome.acceptedContractIds === undefined ? [] : outcome.acceptedContractIds
+  if (!Array.isArray(acceptedContractIds) || acceptedContractIds.length !== 0) return null
+  const policy = DERIVED_LANE_POLICIES[outcome.lane]
+  if (!policy) return null
+  // Exact key parity with the runtime's contract schema check (delivery, digest, id, lane,
+  // repository, reservations, validationCommands, version) — no extra fields. The "derived-lane-"
+  // id prefix IS the provenance marker.
+  const contract = Object.freeze({
+    version: HERMES_WORK_CONTRACT_VERSION,
+    id: `derived-lane-${outcome.lane}.v1`,
+    repository: "bsvalues/terragroq",
+    lane: outcome.lane,
+    reservations: policy.reservations,
+    validationCommands: policy.validationCommands,
+    delivery: policy.delivery,
+  })
+  return Object.freeze({ ...contract, digest: sha256(contract) })
+}
+
+/**
+ * Resolve an outcome to a work contract: a pre-registered exact contract when the intent matches
+ * one, otherwise a governed lane-policy derivation. Registered contracts always take precedence.
+ */
+export function resolveOrDeriveHermesWorkContract(outcome) {
+  return resolveHermesWorkContract(outcome) ?? deriveHermesWorkContract(outcome)
+}
+
+/**
  * Resolve an owner outcome to a reviewed, exact repository work contract.
  * Text selects no paths dynamically: it may only match a pre-registered contract.
  */
