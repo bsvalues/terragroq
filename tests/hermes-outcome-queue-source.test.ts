@@ -175,11 +175,13 @@ const receiptColumnRows = [
   ["goal_outcome_intake_receipt", "requestHash", "text", true, null],
   ["goal_outcome_intake_receipt", "goalId", "integer", true, null],
   ["goal_outcome_intake_receipt", "outcomeKey", "text", true, null],
-  ["goal_outcome_intake_receipt", "acceptedContractIds", "text[]", true, "'{}'::text[]"],
   ["goal_outcome_intake_receipt", "resultDigest", "text", true, null],
   ["goal_outcome_intake_receipt", "replayCount", "integer", true, "0"],
   ["goal_outcome_intake_receipt", "firstSubmittedAt", "timestamp with time zone", true, "now()"],
   ["goal_outcome_intake_receipt", "lastReplayedAt", "timestamp with time zone", false, null],
+  // Existing databases receive this column through migration 0013, so PostgreSQL
+  // appends it after the historical receipt columns (physical attnum 11).
+  ["goal_outcome_intake_receipt", "acceptedContractIds", "text[]", true, "'{}'::text[]"],
   ["outcome_queue_acquisition_attempt", "id", "integer", true, "nextval('outcome_queue_acquisition_attempt_id_seq'::regclass)"],
   ["outcome_queue_acquisition_attempt", "userId", "text", true, null],
   ["outcome_queue_acquisition_attempt", "campaignWindowId", "text", true, null],
@@ -997,6 +999,45 @@ describe("transactional durable outcome queue source", () => {
     await expect(ensureOutcomeQueueHardeningSchema({ query })).rejects.toMatchObject({
       code: "OUTCOME_QUEUE_HARDENING_RECEIPT_COLUMN_WALL",
     })
+    expect(run.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
+  })
+
+  it.each([
+    {
+      drift: "duplicate name",
+      rows: receiptColumnRows.map((row) => (
+        row.tableName === "goal_outcome_intake_receipt"
+          && row.columnName === "acceptedContractIds"
+          ? { ...row, columnName: "lastReplayedAt", dataType: "timestamp with time zone",
+            notNull: false, defaultExpression: null }
+          : row
+      )),
+    },
+    {
+      drift: "extra column",
+      rows: [...receiptColumnRows, {
+        tableName: "goal_outcome_intake_receipt",
+        columnName: "unexpected",
+        dataType: "text",
+        notNull: false,
+        defaultExpression: null,
+      }],
+    },
+    {
+      drift: "sequence identity",
+      rows: receiptColumnRows.map((row) => (
+        row.tableName === "goal_outcome_intake_receipt" && row.columnName === "id"
+          ? { ...row, defaultExpression: "nextval('other_receipt_id_seq'::regclass)" }
+          : row
+      )),
+    },
+  ])("fails closed when the receipt column closed set has $drift drift", async ({ rows }) => {
+    const run = vi.fn(async (sql: string) => ({
+      rows: sql === OUTCOME_QUEUE_SQL.readReceiptColumns ? rows : [],
+    }))
+
+    await expect(ensureOutcomeQueueHardeningSchema({ query: dedicatedQuery(run) }))
+      .rejects.toMatchObject({ code: "OUTCOME_QUEUE_HARDENING_RECEIPT_COLUMN_WALL" })
     expect(run.mock.calls.at(-1)?.[0]).toBe("ROLLBACK")
   })
 
@@ -3550,6 +3591,100 @@ describe("transactional durable outcome queue source", () => {
       OUTCOME_QUEUE_SQL.readReviewRecoveryReclaimEvidence, "COMMIT",
     ])
   })
+
+  it.runIf(Boolean(process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL))(
+    "accepts the exact migration-appended receipt column at physical attnum 11 in PostgreSQL",
+    async () => {
+      const { Pool } = await import("pg")
+      const pool = new Pool({
+        connectionString: process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL?.replace("-pooler.", "."),
+      })
+      const client = await pool.connect()
+      const schema = `hermes_receipt_order_${randomUUID().replaceAll("-", "")}`
+      const foreignSchema = `hermes_receipt_foreign_${randomUUID().replaceAll("-", "")}`
+      try {
+        await client.query(`CREATE SCHEMA "${schema}"`)
+        await client.query(`CREATE SCHEMA "${foreignSchema}"`)
+        await client.query(`
+          CREATE TABLE "${foreignSchema}".shadow (
+            "userId" text, "outcomeKey" text, "campaignWindowId" text,
+            "attemptedAt" timestamptz, "acquisitionKeyDigest" text,
+            "requestHash" text, "createdAt" timestamptz
+          );
+          CREATE INDEX outcome_queue_mutation_receipt_user_outcome_idx
+            ON "${foreignSchema}".shadow ("userId", "outcomeKey", "createdAt");
+          CREATE INDEX outcome_queue_acquisition_receipt_user_outcome_idx
+            ON "${foreignSchema}".shadow ("userId", "outcomeKey");
+          CREATE INDEX outcome_queue_acquisition_attempt_campaign_idx
+            ON "${foreignSchema}".shadow ("userId", "campaignWindowId", "attemptedAt");
+          CREATE INDEX outcome_queue_acquisition_attempt_identity_idx
+            ON "${foreignSchema}".shadow ("userId", "acquisitionKeyDigest", "attemptedAt");
+          CREATE INDEX outcome_queue_mutation_attempt_request_idx
+            ON "${foreignSchema}".shadow ("userId", "requestHash", "attemptedAt")
+        `)
+        await client.query(`SET search_path TO "${schema}"`)
+        await client.query(`
+          CREATE TABLE goal (id serial PRIMARY KEY, "userId" text NOT NULL);
+          CREATE TABLE decision (id serial PRIMARY KEY);
+          CREATE TABLE work_order (id serial PRIMARY KEY);
+          CREATE TABLE goal_outcome_intake_receipt (
+            id serial PRIMARY KEY,
+            "userId" text NOT NULL,
+            "idempotencyKey" text NOT NULL,
+            "requestHash" text NOT NULL,
+            "goalId" integer NOT NULL REFERENCES goal(id) ON DELETE RESTRICT,
+            "outcomeKey" text NOT NULL,
+            "resultDigest" text NOT NULL,
+            "replayCount" integer NOT NULL DEFAULT 0,
+            "firstSubmittedAt" timestamptz NOT NULL DEFAULT NOW(),
+            "lastReplayedAt" timestamptz,
+            CONSTRAINT goal_outcome_intake_receipt_user_key_unique
+              UNIQUE ("userId", "idempotencyKey"),
+            CONSTRAINT goal_outcome_intake_receipt_user_goal_unique
+              UNIQUE ("userId", "goalId"),
+            CONSTRAINT goal_outcome_intake_receipt_user_outcome_unique
+              UNIQUE ("userId", "outcomeKey"),
+            CONSTRAINT goal_outcome_intake_receipt_replay_count_check
+              CHECK ("replayCount" >= 0)
+          )
+        `)
+        await client.query(`
+          ALTER TABLE goal_outcome_intake_receipt
+            ADD COLUMN "acceptedContractIds" text[] NOT NULL DEFAULT '{}'::text[]
+        `)
+        const query = Object.assign(client.query.bind(client), {
+          connect: async () => ({ query: client.query.bind(client), release: vi.fn() }),
+        })
+
+        await expect(ensureOutcomeQueueHardeningSchema({ query })).resolves.toBe(true)
+        const columns = await client.query(`
+          SELECT attnum, attname, format_type(atttypid, atttypmod) AS data_type,
+                 attnotnull AS not_null,
+                 pg_get_expr(def.adbin, def.adrelid, true) AS default_expression
+          FROM pg_attribute AS attribute
+          LEFT JOIN pg_attrdef AS def
+            ON def.adrelid = attribute.attrelid AND def.adnum = attribute.attnum
+          WHERE attribute.attrelid = 'goal_outcome_intake_receipt'::regclass
+            AND attribute.attnum > 0 AND NOT attribute.attisdropped
+          ORDER BY attribute.attnum
+        `)
+        expect(columns.rows.at(-1)).toEqual({
+          attnum: 11,
+          attname: "acceptedContractIds",
+          data_type: "text[]",
+          not_null: true,
+          default_expression: "'{}'::text[]",
+        })
+      } finally {
+        try { await client.query("ROLLBACK") } catch {}
+        try { await client.query("SET search_path TO public") } catch {}
+        try { await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`) } catch {}
+        try { await client.query(`DROP SCHEMA IF EXISTS "${foreignSchema}" CASCADE`) } catch {}
+        client.release(); await pool.end()
+      }
+    },
+    30_000,
+  )
 
   it.runIf(Boolean(process.env.HERMES_PROJECT_EXECUTION_TEST_DATABASE_URL))(
     "parses the exact atomic review-recovery reclaim queries in an isolated real PostgreSQL schema",
