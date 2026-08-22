@@ -20,7 +20,7 @@ import {
 } from "@/lib/db/schema"
 import { hashRecord } from "@/lib/governance/hash"
 import { getUserId } from "@/lib/session"
-import { resolveHermesWorkContract } from "@/scripts/hermes-bridge/work-contract.mjs"
+import { resolveOrDeriveHermesWorkContract } from "@/scripts/hermes-bridge/work-contract.mjs"
 import {
   WORKBENCH_EXECUTION_GRANT_HOURS,
   assessWorkbenchOutcomeExecution,
@@ -212,7 +212,10 @@ export async function authorizeWorkbenchOutcomeExecution(
       const approval = decisions[0]
       const expiresAt = grant?.expiresAt ? new Date(grant.expiresAt) : null
       const workContract = snapshot.goal && snapshot.outcome
-        ? resolveHermesWorkContract({
+        // Replay must resolve the SAME contract the original authorization used — including a
+        // derived lane-policy contract — or the idempotent hash comparison below would spuriously
+        // mismatch for every derived authorization.
+        ? resolveOrDeriveHermesWorkContract({
             command: snapshot.goal.command,
             title: snapshot.outcome.title,
             objective: snapshot.outcome.objective,
