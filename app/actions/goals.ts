@@ -797,7 +797,6 @@ async function persistGoalOutcome(
   })
   if (!row.goal) return row
   revalidatePath("/goal-console")
-  revalidatePath("/work-orders")
   return row
 }
 
@@ -912,7 +911,6 @@ export async function convertGoalToWorkOrder(goalId: number): Promise<{ workOrde
     metadata: { workOrderId: wo.id },
   })
   revalidatePath("/goal-console")
-  revalidatePath("/work-orders")
   return { workOrderId: wo.id }
 }
 
