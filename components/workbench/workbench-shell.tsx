@@ -21,8 +21,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState, useTransition } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import {
-  Activity,
+import {
   ChevronDown,
   ChevronUp,
   CircleDot,
@@ -67,7 +66,6 @@ const modes: ReadonlyArray<{
   icon: typeof Home
 }> = [
   { mode: "home", href: "/", label: "Home", icon: Home },
-  { mode: "activity", href: "/activity", label: "Activity", icon: Activity },
   { mode: "system", href: "/system", label: "System", icon: Cpu },
 ]
 
@@ -88,7 +86,6 @@ function restorationKey(userId: string): string {
 
 function viewMode(pathname: string): WorkbenchViewMode | null {
   if (pathname === "/") return "home"
-  if (pathname.startsWith("/activity")) return "activity"
   if (pathname.startsWith("/system")) return "system"
   if (pathname.startsWith("/runtime")) return "system"
   return null

@@ -4,10 +4,9 @@ import { DESTINATIONS, objectActionRegistry } from "@/lib/intent/object-action-r
 import { supportingCapabilities } from "@/components/workbench/supporting-capabilities"
 
 describe("legacy cockpit navigation (compatibility only)", () => {
-  it("exposes exactly HOME, ACTIVITY, and SYSTEM in the normal shell", () => {
+  it("exposes exactly HOME and SYSTEM in the normal shell", () => {
     expect(navItems.map(({ href, label }) => ({ href, label }))).toEqual([
       { href: "/", label: "Home" },
-      { href: "/activity", label: "Activity" },
       { href: "/system", label: "System" },
     ])
   })

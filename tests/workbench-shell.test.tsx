@@ -6,7 +6,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event"
 
 import { WorkbenchShell } from "@/components/workbench/workbench-shell"
-import { WorkbenchActivity } from "@/components/workbench/workbench-activity"
 import type { ProjectView } from "@/lib/operator/operator-state"
 import type { Thread } from "@/lib/workbench/thread-projection"
 import type { WorkbenchExecutionProjection } from "@/lib/workbench/execution-projection"
@@ -261,14 +260,14 @@ describe("WorkbenchShell rendered interaction contract", () => {
     expect(screen.getByRole("option", { name: /Ship the cockpit/ }).getAttribute("aria-selected")).toBe("true")
   })
 
-  it("keeps explicit Activity and System mode content reachable after a Thread is selected", async () => {
+  it("keeps explicit System mode content reachable after a Thread is selected", async () => {
     const user = userEvent.setup()
     const view = renderShell({ child: <p>Home mode content</p> })
     await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
     await user.click(await screen.findByRole("option", { name: /Ship the cockpit/ }))
     expect(screen.getByRole("heading", { name: "Ship the cockpit" })).toBeTruthy()
 
-    navigation.pathname = "/activity"
+    navigation.pathname = "/system"
     view.rerender(
       <WorkbenchShell user={{ id: "owner-1", name: "William", email: "owner@example.test" }} projects={projects} projectState="available" pulse={{ working: 1, needsYou: 0, queueDepth: 1 }} readiness={readiness} runtime={runtime} observedAt="2026-08-14T10:10:00.000Z">
         <p>Activity mode content</p>
@@ -286,43 +285,6 @@ describe("WorkbenchShell rendered interaction contract", () => {
     expect(screen.getByText("Raw Runtime technical detail")).toBeTruthy()
   })
 
-  it("reloads an already-selected Project and resolves an explicit Activity Thread focus without guessing", async () => {
-    navigation.pathname = "/activity"
-    const user = userEvent.setup()
-    const activity = {
-      items: [{
-        id: 99,
-        at: "2026-08-14T10:05:00.000Z",
-        kind: "goal" as const,
-        label: "Goal created",
-        detail: "GOAL-0041",
-        ref: "GOAL-0041",
-        threadId: "thread-alpha",
-        projectId: 7,
-      }],
-      churnCollapsed: 0,
-      source: "governance_event",
-      latestEventAt: "2026-08-14T10:05:00.000Z",
-      observedAt: "2026-08-14T10:10:00.000Z",
-      truthState: "persisted" as const,
-    }
-    const view = renderShell({ child: <WorkbenchActivity feed={activity} /> })
-
-    await user.click(screen.getByRole("option", { name: /WilliamOS/ }))
-    await screen.findByRole("option", { name: /Ship the cockpit/ })
-    await user.click(screen.getByRole("button", { name: "Focus thread" }))
-    await waitFor(() => expect(actions.getWorkbenchThreads).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(screen.getByRole("option", { name: /Ship the cockpit/ }).getAttribute("aria-selected")).toBe("true"))
-    expect(document.activeElement).toBe(screen.getByRole("main"))
-
-    navigation.pathname = "/"
-    view.rerender(
-      <WorkbenchShell user={{ id: "owner-1", name: "William", email: "owner@example.test" }} projects={projects} projectState="available" pulse={{ working: 1, needsYou: 0, queueDepth: 1 }} readiness={readiness} runtime={runtime} observedAt="2026-08-14T10:10:00.000Z">
-        <p>Home mode content</p>
-      </WorkbenchShell>,
-    )
-    expect(screen.getByRole("heading", { name: "Ship the cockpit" })).toBeTruthy()
-  })
 
   it("distinguishes a failed Project projection from a canonical empty Project register", () => {
     const degraded = renderShell({ projectState: "degraded", projectRows: [] })
@@ -350,7 +312,7 @@ describe("WorkbenchShell rendered interaction contract", () => {
       schemaVersion: 1,
       selectedProjectId: "7",
       selectedThreadId: null,
-      viewMode: "activity",
+      viewMode: "system",
       inspectorTab: "overview",
       executionExpanded: true,
       foregroundFocus: "thread",
@@ -359,10 +321,10 @@ describe("WorkbenchShell rendered interaction contract", () => {
 
     renderShell()
 
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/activity"))
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/system"))
     await waitFor(() => {
       const serialized = window.localStorage.getItem("williamos.workbench.layout.v1:owner-1")
-      expect(serialized).toContain('"viewMode":"activity"')
+      expect(serialized).toContain('"viewMode":"system"')
       expect(serialized).toContain('"executionExpanded":true')
     })
   })
@@ -390,7 +352,7 @@ describe("WorkbenchShell rendered interaction contract", () => {
       schemaVersion: 1,
       selectedProjectId: "7",
       selectedThreadId: null,
-      viewMode: "activity",
+      viewMode: "system",
       inspectorTab: "overview",
       executionExpanded: false,
       foregroundFocus: "thread",
@@ -398,7 +360,7 @@ describe("WorkbenchShell rendered interaction contract", () => {
     }))
 
     const view = renderShell()
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/activity"))
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/system"))
 
     navigation.pathname = "/system"
     view.rerender(
@@ -438,7 +400,6 @@ describe("WorkbenchShell rendered interaction contract", () => {
       // The Environment doorway leads the nav — a link OUT to the Desk (real-operator acceptance).
       "Environment",
       "Home",
-      "Activity",
       "System",
     ])
     // And that first link goes to /environment, not an internal shell view.

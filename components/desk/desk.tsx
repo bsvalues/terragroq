@@ -368,72 +368,38 @@ function SurfaceView({ surface }: { surface: Surface }) {
     )
   }
   if (surface.kind === "activity") {
-    // The governed queue itself, most recently touched first. This is what "what is HERMES doing"
-    // means: not a feed of prose about work, the work.
+    // The governed event feed, migrated from /activity. Kind carries the meaning, so a failure reads
+    // as a failure at a glance rather than as one more line of prose.
     const rows = (surface.payload ?? []) as readonly {
-      outcomeKey: string
-      title: string
-      lifecycleState: string
-      activeWorkOrderId: number | null
+      at: string
+      kind: string
+      label: string
+      detail: string | null
+      ref: string | null
     }[]
     return (
       <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
         {rows.length === 0 ? (
-          <p className="text-neutral-500">The governed queue is empty.</p>
+          <p className="text-neutral-500">No governed activity recorded.</p>
         ) : (
-          rows.map((row) => (
-            <div key={row.outcomeKey} className="flex items-baseline gap-3 py-0.5">
+          rows.map((row, index) => (
+            <div key={`${row.at}-${index}`} className="flex items-baseline gap-3 py-0.5">
               <span
                 className={cn(
-                  "w-[5.5rem] shrink-0 uppercase",
-                  row.lifecycleState === "completed"
-                    ? "text-emerald-500"
-                    : row.lifecycleState === "blocked"
+                  "w-[4.5rem] shrink-0 uppercase",
+                  row.kind === "failure" || row.kind === "terminal"
+                    ? "text-red-400"
+                    : row.kind === "authority"
                       ? "text-amber-500"
-                      : "text-sky-500",
+                      : row.kind === "delivery"
+                        ? "text-emerald-500"
+                        : "text-sky-500",
                 )}
               >
-                {row.lifecycleState}
+                {row.kind}
               </span>
-              <span className="truncate text-neutral-400">{row.title}</span>
-            </div>
-          ))
-        )}
-      </div>
-    )
-  }
-  if (surface.kind === "work-orders") {
-    // Migrated from the /work-orders route. The page wrapped this in a header, an intent context, and
-    // five stacked panels; the fact the owner actually needed was always these rows.
-    const rows = (surface.payload ?? []) as readonly {
-      ref: string
-      title: string
-      status: string
-      agent: string | null
-      phase: string | null
-    }[]
-    return (
-      <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
-        {rows.length === 0 ? (
-          <p className="text-neutral-500">No work orders exist yet.</p>
-        ) : (
-          rows.map((row) => (
-            <div key={row.ref} className="flex items-baseline gap-3 py-0.5">
-              <span className="w-32 shrink-0 text-neutral-500">{row.ref}</span>
-              <span
-                className={cn(
-                  "w-20 shrink-0 uppercase",
-                  row.status === "completed"
-                    ? "text-emerald-500"
-                    : row.status === "blocked"
-                      ? "text-amber-500"
-                      : "text-sky-500",
-                )}
-              >
-                {row.status}
-              </span>
-              <span className="truncate text-neutral-400">{row.title}</span>
-              {row.agent ? <span className="shrink-0 text-neutral-600">{row.agent}</span> : null}
+              <span className="truncate text-neutral-300">{row.label}</span>
+              {row.detail ? <span className="truncate text-neutral-600">{row.detail}</span> : null}
             </div>
           ))
         )}

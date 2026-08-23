@@ -4,16 +4,17 @@ import os from "node:os"
 import path from "node:path"
 import { promisify } from "node:util"
 
-import { and, desc, eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 
 import { db } from "@/lib/db"
-import { evidenceRecord, outcomeQueueItem, project, workingWorld } from "@/lib/db/schema"
+import { evidenceRecord, project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
 import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { getWorkOrders } from "@/app/actions/work-orders"
+import { getActivity } from "@/lib/operator/activity"
 import { isContinueIntent } from "@/lib/environment/start-work"
 import { classifyDismissal, classifySummon } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
@@ -326,22 +327,29 @@ async function summonSurface(
   }
 
   if (kind === "activity") {
-    const rows = await db
-      .select({
-        outcomeKey: outcomeQueueItem.outcomeKey,
-        title: outcomeQueueItem.title,
-        lifecycleState: outcomeQueueItem.lifecycleState,
-        activeWorkOrderId: outcomeQueueItem.activeWorkOrderId,
-      })
-      .from(outcomeQueueItem)
-      .where(eq(outcomeQueueItem.userId, userId))
-      .orderBy(desc(outcomeQueueItem.updatedAt))
-      .limit(12)
+    // Parity BY CONSTRUCTION with the retired /activity route: the same getActivity() reader, not the
+    // outcome queue. An earlier version of this surface showed the QUEUE and called itself activity —
+    // close enough to look migrated, different enough to be wrong. The route's capability is the
+    // governance event feed, and a migration that quietly swaps the data source is not a migration.
+    const feed = await getActivity()
     return {
-      say: rows.length === 0
-        ? "The governed queue is empty right now — nothing is running and nothing is waiting."
-        : `The governed queue as it stands: ${rows.length} outcomes, most recently touched first.`,
-      surface: { kind: "activity", subject: "governed queue", payload: rows },
+      say: feed.items.length === 0
+        ? feed.truthState === "idle-empty"
+          ? "No governed activity has been recorded yet."
+          : "The activity feed read as empty."
+        : `${feed.items.length} recorded ${feed.items.length === 1 ? "event" : "events"}` +
+          `${feed.churnCollapsed > 0 ? `, with ${feed.churnCollapsed} checkpoint/lease events collapsed` : ""}.`,
+      surface: {
+        kind: "activity",
+        subject: "governed activity",
+        payload: feed.items.map((item) => ({
+          at: item.at,
+          kind: item.kind,
+          label: item.label,
+          detail: item.detail,
+          ref: item.ref,
+        })),
+      },
     }
   }
 
