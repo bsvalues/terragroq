@@ -174,3 +174,28 @@ describe("runtime trace became a surface", () => {
     expect(classifySummon("which component renders the trace")).toBeNull()
   })
 })
+
+/**
+ * The governed queue surface.
+ *
+ * This one exists because a FIX created a gap: correcting the activity surface to its real reader
+ * (getActivity) left the outcome queue with nowhere to appear. A green suite hid it, because nothing
+ * asserted that the queue was reachable at all. Surfaces have to be checked for what they stopped
+ * showing, not only for what they show.
+ */
+describe("the governed queue became a surface", () => {
+  it.each([
+    "show me the queue",
+    "what's in the queue",
+    "bring up the backlog",
+    "what's next",
+    "what is startable",
+  ])("summons the queue surface: %j", (text) => {
+    expect(classifySummon(text)).toBe("queue")
+  })
+
+  it("does not hijack queue-related code requests", () => {
+    expect(classifySummon("open the outcome queue source file")).toBeNull()
+    expect(classifySummon("which component renders the queue")).toBeNull()
+  })
+})

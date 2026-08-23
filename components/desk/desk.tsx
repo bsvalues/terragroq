@@ -19,7 +19,7 @@ import { isExecutionLive } from "@/lib/environment/world-execution"
 type Turn = Readonly<{ id: string; role: "owner" | "williamos"; content: string }>
 type Surface = Readonly<{
   id: string
-  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace"
+  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace" | "queue"
   subject: string
   payload?: unknown
 }>
@@ -400,6 +400,45 @@ function SurfaceView({ surface }: { surface: Surface }) {
               </span>
               <span className="truncate text-neutral-300">{row.label}</span>
               {row.detail ? <span className="truncate text-neutral-600">{row.detail}</span> : null}
+            </div>
+          ))
+        )}
+      </div>
+    )
+  }
+  if (surface.kind === "queue") {
+    // The governed queue in queue ORDER — the question "what is next" is about order, and a list that
+    // drops it answers a different question convincingly.
+    const rows = (surface.payload ?? []) as readonly {
+      outcomeKey: string
+      title: string
+      lifecycleState: string
+      queueOrder: number
+      activeWorkOrderId: number | null
+    }[]
+    return (
+      <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
+        {rows.length === 0 ? (
+          <p className="text-neutral-500">The governed queue is empty.</p>
+        ) : (
+          rows.map((row) => (
+            <div key={row.outcomeKey} className="flex items-baseline gap-3 py-0.5">
+              <span className="w-8 shrink-0 text-neutral-600">{row.queueOrder}</span>
+              <span
+                className={cn(
+                  "w-[5.5rem] shrink-0 uppercase",
+                  row.lifecycleState === "completed"
+                    ? "text-emerald-500"
+                    : row.lifecycleState === "blocked"
+                      ? "text-amber-500"
+                      : row.lifecycleState === "suggested"
+                        ? "text-neutral-400"
+                        : "text-sky-500",
+                )}
+              >
+                {row.lifecycleState}
+              </span>
+              <span className="truncate text-neutral-300">{row.title}</span>
             </div>
           ))
         )}
