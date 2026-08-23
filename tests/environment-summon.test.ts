@@ -151,3 +151,26 @@ describe("the decision register became a surface", () => {
     expect(classifyDismissal("close the decision surface")).toBe("decisions")
   })
 })
+
+/**
+ * Runtime trace migration (bucket B). Parity by construction: the surface calls
+ * getRuntimeExecutions(), the reader /trace called. Lease and checkpoint travel with it because they
+ * are what distinguishes a stalled execution from a failed one — the distinction the route existed
+ * to make.
+ */
+describe("runtime trace became a surface", () => {
+  it.each([
+    "show me the trace",
+    "open the runtime execution truth",
+    "bring up the attempts",
+    "show the checkpoints",
+    "what happened on WO-HERMES-OUTCOME-29",
+  ])("summons the runtime-trace surface: %j", (text) => {
+    expect(classifySummon(text)).toBe("runtime-trace")
+  })
+
+  it("does not hijack a sentence about trace code", () => {
+    expect(classifySummon("open the runtime trace projection file")).toBeNull()
+    expect(classifySummon("which component renders the trace")).toBeNull()
+  })
+})

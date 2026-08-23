@@ -15,6 +15,7 @@ import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFac
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { getWorkOrders } from "@/app/actions/work-orders"
 import { getActivity } from "@/lib/operator/activity"
+import { getRuntimeExecutions } from "@/app/actions/runtime-executions"
 import { createDecision, getDecisions, supersedeDecision } from "@/app/actions/decisions"
 import {
   classifyDecisionRecord,
@@ -61,7 +62,7 @@ const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT?.trim() || null
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 
 type SurfaceDirective = Readonly<{
-  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions"
+  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace"
   subject: string
   payload?: unknown
 }>
@@ -292,7 +293,7 @@ async function loadProjects(userId: string): Promise<ProjectRow[]> {
  * reported as empty; it is never padded to look like a working dashboard.
  */
 async function summonSurface(
-  kind: "project" | "activity" | "evidence" | "work-orders" | "decisions",
+  kind: "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace",
   userId: string,
   spine: WorldSpine,
 ): Promise<{ say: string; surface: SurfaceDirective }> {
@@ -328,6 +329,32 @@ async function summonSurface(
           status: order.status,
           agent: order.agent ?? null,
           phase: order.phase ?? null,
+        })),
+      },
+    }
+  }
+
+  if (kind === "runtime-trace") {
+    // Parity by construction with the retired /trace route: the same getRuntimeExecutions() reader.
+    // This is persisted execution TRUTH — attempts, checkpoints, lease state — not telemetry and not
+    // a summary, so the surface carries the fields an owner uses to tell a stall from a failure.
+    const executions = await getRuntimeExecutions()
+    return {
+      say: executions.length === 0
+        ? "No runtime executions are recorded."
+        : `${executions.length} recorded runtime ${executions.length === 1 ? "execution" : "executions"}.`,
+      surface: {
+        kind: "runtime-trace",
+        subject: "runtime execution truth",
+        payload: executions.map((execution) => ({
+          workOrderRef: execution.workOrderRef,
+          title: execution.title,
+          status: execution.status,
+          result: execution.result,
+          lane: execution.lane,
+          attempts: execution.attempts.length,
+          lease: execution.currentLeaseStatus,
+          checkpoint: execution.currentCheckpoint?.state ?? null,
         })),
       },
     }
@@ -590,7 +617,7 @@ export async function POST(request: Request) {
     } else if (classifySummon(text)) {
       // Projects / Activity / Evidence used to be applications you navigated to. They are summoned
       // here from governed state, and they leave when the owner says so.
-      const summoned = await summonSurface(classifySummon(text) as "project" | "activity" | "evidence" | "work-orders" | "decisions", userId, updated.spine)
+      const summoned = await summonSurface(classifySummon(text) as "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace", userId, updated.spine)
       say = summoned.say
       surfaces = [summoned.surface]
       updated = withSurface(updated, {

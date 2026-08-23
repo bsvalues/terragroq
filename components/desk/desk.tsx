@@ -19,7 +19,7 @@ import { isExecutionLive } from "@/lib/environment/world-execution"
 type Turn = Readonly<{ id: string; role: "owner" | "williamos"; content: string }>
 type Surface = Readonly<{
   id: string
-  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions"
+  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace"
   subject: string
   payload?: unknown
 }>
@@ -400,6 +400,45 @@ function SurfaceView({ surface }: { surface: Surface }) {
               </span>
               <span className="truncate text-neutral-300">{row.label}</span>
               {row.detail ? <span className="truncate text-neutral-600">{row.detail}</span> : null}
+            </div>
+          ))
+        )}
+      </div>
+    )
+  }
+  if (surface.kind === "runtime-trace") {
+    // Migrated from /trace. Lease and checkpoint are shown because they are what distinguishes a
+    // stalled execution from a failed one — the distinction the route existed to make.
+    const rows = (surface.payload ?? []) as readonly {
+      workOrderRef: string
+      title: string
+      status: string
+      result: string | null
+      lane: string | null
+      attempts: number
+      lease: string
+      checkpoint: string | null
+    }[]
+    return (
+      <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
+        {rows.length === 0 ? (
+          <p className="text-neutral-500">No runtime executions recorded.</p>
+        ) : (
+          rows.map((row) => (
+            <div key={row.workOrderRef} className="flex items-baseline gap-3 py-0.5">
+              <span className="w-32 shrink-0 text-neutral-500">{row.workOrderRef}</span>
+              <span
+                className={cn(
+                  "w-16 shrink-0 uppercase",
+                  row.result === "PASS" ? "text-emerald-500" : row.result === "FAIL" ? "text-red-400" : "text-sky-500",
+                )}
+              >
+                {row.result ?? row.status}
+              </span>
+              <span className="truncate text-neutral-400">{row.title}</span>
+              <span className="shrink-0 text-neutral-600">
+                {row.attempts}x{row.checkpoint ? ` · ${row.checkpoint}` : ""}{row.lane ? ` · ${row.lane}` : ""}
+              </span>
             </div>
           ))
         )}
