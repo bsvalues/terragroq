@@ -16,7 +16,7 @@
  * request for the project registry.
  */
 
-export type SummonedSurface = "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace"
+export type SummonedSurface = "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace" | "queue"
 
 /**
  * An operational request — show/open/edit a file, page, route, component — is about code, and must
@@ -55,6 +55,15 @@ const DECISIONS =
 const RUNTIME_TRACE =
   /\b(show|open|bring up|pull up|give me)\b[^?]*\b(trace|runtime execution|execution truth|attempts?|checkpoints?)\b|\bwhat happened (?:on|to|with)\b/i
 
+/**
+ * The governed outcome queue: what is waiting, what is startable, what is blocked.
+ *
+ * This surface exists because correcting the activity surface to its real reader left the queue with
+ * nowhere to appear — a gap introduced by a fix, which is the kind that hides behind a green suite.
+ */
+const QUEUE =
+  /\b(show|open|bring up|pull up|what.s in|what is in)\b[^?]*\b(queue|backlog|outcomes?)\b|\bwhat.s (?:startable|next)\b|\bwhat is (?:startable|next)\b/i
+
 /** The record: evidence, proof, receipts, the technical detail behind a result. */
 const EVIDENCE =
   /\b(show|open|bring up|give me|i need)\b[^?]*\b(evidence|proof|receipts?|technical details?|the record)\b|\bwhat proves\b/i
@@ -71,6 +80,7 @@ export function classifySummon(text: string): SummonedSurface | null {
   if (WORK_ORDERS.test(text)) return "work-orders"
   if (DECISIONS.test(text)) return "decisions"
   if (RUNTIME_TRACE.test(text)) return "runtime-trace"
+  if (QUEUE.test(text)) return "queue"
   if (EVIDENCE.test(text)) return "evidence"
   if (ACTIVITY.test(text)) return "activity"
   if (PROJECT.test(text)) return "project"
