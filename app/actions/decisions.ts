@@ -5,7 +5,6 @@ import { decision, type Decision } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
 import { and, desc, eq, ilike, or } from "drizzle-orm"
-import { revalidatePath } from "next/cache"
 import { isProtectedV12AuthorityScope } from "@/lib/outcome-queue/v1-2-protected-authority"
 import {
   isProtectedRuntimeFindingDecision,
@@ -157,7 +156,6 @@ export async function createDecision(input: {
     register: "decisions",
     refId: row.id,
   })
-  revalidatePath("/decisions")
   return row
 }
 
@@ -179,7 +177,6 @@ export async function updateDecisionStatus(id: number, status: string) {
     register: "decisions",
     refId: id,
   })
-  revalidatePath("/decisions")
 }
 
 export async function setDecisionAuthority(id: number, authority: string) {
@@ -196,7 +193,6 @@ export async function setDecisionAuthority(id: number, authority: string) {
     register: "decisions",
     refId: id,
   })
-  revalidatePath("/decisions")
 }
 
 export async function linkEvidence(id: number, evidence: string) {
@@ -226,7 +222,6 @@ export async function linkEvidence(id: number, evidence: string) {
     register: "decisions",
     refId: id,
   })
-  revalidatePath("/decisions")
 }
 
 // Supersession: create a replacement decision and link both directions.
@@ -292,7 +287,6 @@ export async function supersedeDecision(
     refId: replacement.id,
     metadata: { supersedes: old.id },
   })
-  revalidatePath("/decisions")
   return replacement
 }
 
@@ -315,7 +309,6 @@ export async function deleteDecision(id: number) {
   await db
     .delete(decision)
     .where(and(eq(decision.id, id), eq(decision.userId, userId)))
-  revalidatePath("/decisions")
 }
 
 /* ------------------------------------------------------------------ */
@@ -445,6 +438,5 @@ export async function seedGovernanceDecisions(): Promise<{ created: number }> {
     })
     created++
   }
-  revalidatePath("/decisions")
   return { created }
 }
