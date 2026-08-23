@@ -26,10 +26,6 @@ const goalConsoleSource = readFileSync(
   "components/goal-console/goal-console-view.tsx",
   "utf8",
 )
-const workOrdersSource = readFileSync(
-  "components/work-orders/work-orders-view.tsx",
-  "utf8",
-)
 const traceSource = readFileSync(
   "components/trace/runtime-trace-panel.tsx",
   "utf8",
@@ -286,7 +282,6 @@ describe("Goal Console outcome supporting-record drill-down", () => {
 
   it("loads exact user-scoped Evidence, Trace, and Audit records through bounded reads", () => {
     expect(goalConsoleSource).toContain("DURABLE_RECORD_ANCHORS.goal")
-    expect(workOrdersSource).toContain("DURABLE_RECORD_ANCHORS.workOrder")
     expect(traceSource).toContain("DURABLE_RECORD_ANCHORS.trace")
     expect(auditSource).toContain("DURABLE_RECORD_ANCHORS.audit")
     expect(auditSource).toContain('id="persisted-evidence-truth-title"')

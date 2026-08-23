@@ -1604,7 +1604,6 @@ export async function mutateOutcomeQueue(
   try {
     const result = await runtimeMutation(validated, userId)
     revalidatePath("/goal-console")
-    revalidatePath("/work-orders")
     return {
       status: result.replayed ? "REPLAYED" : "RECORDED",
       message: result.replayed

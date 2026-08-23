@@ -18,7 +18,6 @@ import { createAuthorityGrant } from "@/app/actions/authority"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { authorityRank } from "@/lib/goal/taxonomy"
 import { and, desc, eq } from "drizzle-orm"
-import { revalidatePath } from "next/cache"
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -127,7 +126,6 @@ export async function createWorkOrder(input: {
     register: "work-orders",
     refId: row.id,
   })
-  revalidatePath("/work-orders")
   return row
 }
 
@@ -258,7 +256,6 @@ export async function transitionWorkOrder(
     register: "work-orders",
     refId: id,
   })
-  revalidatePath("/work-orders")
   return { ok: true, status: to }
 }
 
@@ -314,7 +311,6 @@ export async function updateWorkOrderContract(
     register: "work-orders",
     refId: id,
   })
-  revalidatePath("/work-orders")
 }
 
 export async function linkWorkOrderEvidence(id: number, evidence: string) {
@@ -332,76 +328,11 @@ export async function linkWorkOrderEvidence(id: number, evidence: string) {
     register: "work-orders",
     refId: id,
   })
-  revalidatePath("/work-orders")
 }
 
 // Record the closure outcome and (optionally) the release artifacts. Commit/tag
 // refs may only be recorded when their gate has been opened.
-export async function recordWorkOrderResult(
-  id: number,
-  input: { result: "PASS" | "FAIL" | "PARTIAL"; commitRef?: string; tagRef?: string },
-) {
-  const userId = await getUserId()
-  const wo = await requireOwn(id, userId)
 
-  if (input.commitRef && !wo.commitAllowed) {
-    throw new Error("Commit gate is closed — open it before recording a commit ref")
-  }
-  if (input.tagRef && !wo.tagAllowed) {
-    throw new Error("Tag gate is closed — open it before recording a tag ref")
-  }
-
-  await db
-    .update(workOrder)
-    .set({
-      result: input.result,
-      commitRef: input.commitRef ?? wo.commitRef,
-      tagRef: input.tagRef ?? wo.tagRef,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
-  await logEvent({
-    userId,
-    type: "work_order.result",
-    summary: `${wo.ref ?? `#${id}`}: result ${input.result}`,
-    register: "work-orders",
-    refId: id,
-  })
-  revalidatePath("/work-orders")
-}
-
-// Open or close a release gate. Gates default closed; opening one is an
-// explicit operator act, recorded to the audit log.
-export async function setWorkOrderGate(
-  id: number,
-  gate: "commit" | "tag" | "push",
-  open: boolean,
-) {
-  const userId = await getUserId()
-  const wo = await requireOwn(id, userId)
-  const field =
-    gate === "commit" ? "commitAllowed" : gate === "tag" ? "tagAllowed" : "pushAllowed"
-  await db
-    .update(workOrder)
-    .set({ [field]: open, updatedAt: new Date() })
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
-  await logEvent({
-    userId,
-    type: "work_order.gate",
-    summary: `${wo.ref ?? `#${id}`}: ${gate} gate ${open ? "OPENED" : "closed"}`,
-    register: "work-orders",
-    refId: id,
-  })
-  revalidatePath("/work-orders")
-}
-
-export async function deleteWorkOrder(id: number) {
-  const userId = await getUserId()
-  await db
-    .delete(workOrder)
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
-  revalidatePath("/work-orders")
-}
 
 /* ------------------------------------------------------------------ */
 /* Closure report                                                     */

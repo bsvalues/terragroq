@@ -30,7 +30,7 @@ describe("legacy cockpit navigation (compatibility only)", () => {
     // "/chat" is absent because it no longer exists: there is no separate Chat product, and the Line
     // in the Environment is the operator's input. A route kept here "for compatibility" would go on
     // teaching that chat is a destination.
-    const supporting = ["/work-orders", "/audit", "/brain-council", "/goal-console"]
+    const supporting = ["/audit", "/brain-council", "/goal-console"]
     expect(navItems.map((item) => item.href)).not.toEqual(expect.arrayContaining(supporting))
     // Assert the routes stay reachable, and do it by READING THE CATALOGUE rather than by grepping
     // the file that happens to hold it today. This check has now broken twice for the same reason
