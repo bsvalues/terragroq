@@ -16,7 +16,7 @@
  * request for the project registry.
  */
 
-export type SummonedSurface = "project" | "activity" | "evidence" | "work-orders" | "decisions"
+export type SummonedSurface = "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace"
 
 /**
  * An operational request — show/open/edit a file, page, route, component — is about code, and must
@@ -48,6 +48,13 @@ const WORK_ORDERS =
 const DECISIONS =
   /\b(show|open|list|bring up|pull up|what)\b[^?]*\bdecisions?\b|\bdecision (register|queue|log)\b/i
 
+/**
+ * Persisted runtime execution truth: attempts, checkpoints, leases, and the trace behind a work
+ * order. Migrated from /trace, which paired it with a separate static historical ledger.
+ */
+const RUNTIME_TRACE =
+  /\b(show|open|bring up|pull up|give me)\b[^?]*\b(trace|runtime execution|execution truth|attempts?|checkpoints?)\b|\bwhat happened (?:on|to|with)\b/i
+
 /** The record: evidence, proof, receipts, the technical detail behind a result. */
 const EVIDENCE =
   /\b(show|open|bring up|give me|i need)\b[^?]*\b(evidence|proof|receipts?|technical details?|the record)\b|\bwhat proves\b/i
@@ -63,6 +70,7 @@ export function classifySummon(text: string): SummonedSurface | null {
   if (OPERATIONAL.test(text)) return null
   if (WORK_ORDERS.test(text)) return "work-orders"
   if (DECISIONS.test(text)) return "decisions"
+  if (RUNTIME_TRACE.test(text)) return "runtime-trace"
   if (EVIDENCE.test(text)) return "evidence"
   if (ACTIVITY.test(text)) return "activity"
   if (PROJECT.test(text)) return "project"
