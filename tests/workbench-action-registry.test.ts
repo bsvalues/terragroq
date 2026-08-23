@@ -8,7 +8,7 @@ import {
 describe("Workbench shared action registry", () => {
   it("keeps the four primary modes and every contextual capability discoverable", () => {
     expect(workbenchActionRegistry.filter((action) => action.kind === "mode").map((action) => action.label)).toEqual([
-      "Home", "Activity", "System",
+      "Home", "System",
     ])
     expect(workbenchActionRegistry.filter((action) => action.kind === "capability").map((action) => action.label)).toEqual([
       "Work Orders", "Council", "Knowledge", "Evidence", "Authority", "Trace",

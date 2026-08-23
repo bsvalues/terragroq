@@ -1,5 +1,4 @@
-import {
-  Activity,
+import {
   Cpu,
   LayoutDashboard,
   type LucideIcon,
@@ -37,14 +36,7 @@ export const navItems: NavItem[] = [
     icon: LayoutDashboard,
     group: "Cockpit",
     description: "Primary operator briefing.",
-  },
-  {
-    href: "/activity",
-    label: "Activity",
-    icon: Activity,
-    group: "Cockpit",
-    description: "Persisted agent activity.",
-  },
+  },
   {
     href: "/system",
     label: "System",

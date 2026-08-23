@@ -54,7 +54,7 @@ const ANSWER = {
 const NAVIGATION = {
   state: "routed",
   intent: "navigation",
-  destination: { href: "/activity", action: "navigate" },
+  destination: { href: "/system", action: "navigate" },
   executionAuthorized: false,
   authority: { required: false, granted: false },
   reason: "A single deterministic intent contract matched.",
@@ -301,7 +301,7 @@ describe("UniversalIntent shared Workbench contract", () => {
     await user.keyboard("{Enter}")
 
     const destination = await screen.findByRole("link", { name: "Open destination" })
-    expect(destination.getAttribute("href")).toBe("/activity")
+    expect(destination.getAttribute("href")).toBe("/system")
     expect(objectiveCalls()).toHaveLength(0)
     expect(screen.queryByText("Admitted as work")).toBeNull()
   })

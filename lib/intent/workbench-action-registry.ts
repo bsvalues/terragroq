@@ -10,8 +10,7 @@ export type WorkbenchActionDescriptor = Readonly<{
 }>
 
 const modes: readonly WorkbenchActionDescriptor[] = [
-  { id: "mode.home", kind: "mode", label: "Home", href: "/", keywords: ["home", "overview"] },
-  { id: "mode.activity", kind: "mode", label: "Activity", href: "/activity", keywords: ["activity", "recent", "events"] },
+  { id: "mode.home", kind: "mode", label: "Home", href: "/", keywords: ["home", "overview"] },
   { id: "mode.system", kind: "mode", label: "System", href: "/system", keywords: ["system", "status", "health"] },
 ]
 
