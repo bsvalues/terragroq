@@ -90,7 +90,7 @@ describe("the freeze: no new code may extend the old product shape", () => {
     const routes = fs.existsSync(shellDir)
       ? fs.readdirSync(shellDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).length
       : 0
-    expect(routes).toBeLessThanOrEqual(18)
+    expect(routes).toBeLessThanOrEqual(17)
   })
 })
 
