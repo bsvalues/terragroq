@@ -7,7 +7,7 @@ import { promisify } from "node:util"
 import { and, eq } from "drizzle-orm"
 
 import { db } from "@/lib/db"
-import { evidenceRecord, project, workingWorld } from "@/lib/db/schema"
+import { decision as decisionTable, evidenceRecord, project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
@@ -15,7 +15,13 @@ import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFac
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { getWorkOrders } from "@/app/actions/work-orders"
 import { getActivity } from "@/lib/operator/activity"
-import { getDecisions } from "@/app/actions/decisions"
+import { createDecision, getDecisions, supersedeDecision } from "@/app/actions/decisions"
+import {
+  classifyDecisionRecord,
+  classifySupersedingDecision,
+  composeDecisionRecorded,
+  composeDecisionSuperseded,
+} from "@/lib/environment/decision-intent"
 import { isContinueIntent } from "@/lib/environment/start-work"
 import { classifyDismissal, classifySummon } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
@@ -512,6 +518,62 @@ export async function POST(request: Request) {
         updated = withSurface(updated, { kind: "editor", subject: "components/auth-form.tsx", because: "the defects live here" })
         updated = withSurface(updated, { kind: "diff", subject: "sign-in copy fix", because: "the proposed change" })
         updated = withSurface(updated, { kind: "tests", subject: "auth copy contracts", because: "the governing contract" })
+      }
+    } else if (classifySupersedingDecision(text)) {
+      // Checked BEFORE plain recording: "record a decision superseding DECISION-0007" is also a valid
+      // plain record, and filing it as one would silently drop the lineage that makes the register a
+      // register rather than a pile of notes.
+      const superseding = classifySupersedingDecision(text) as NonNullable<ReturnType<typeof classifySupersedingDecision>>
+      const [existing] = await db
+        .select({ id: decisionTable.id })
+        .from(decisionTable)
+        .where(and(eq(decisionTable.userId, userId), eq(decisionTable.ref, superseding.supersedes)))
+        .limit(1)
+      if (!existing) {
+        // Replacing the wrong decision is worse than replacing none, so an unknown ref refuses rather
+        // than falling back to recording a fresh decision the owner did not ask for.
+        say =
+          `I can't supersede ${superseding.supersedes} — no decision with that reference is in the register. ` +
+          `Nothing was recorded. Ask for the decisions and I'll show you what is actually there.`
+      } else {
+        try {
+          const row = await supersedeDecision(existing.id, {
+            title: superseding.title,
+            decision: superseding.decision,
+            ...(superseding.rationale ? { rationale: superseding.rationale } : {}),
+            context: "Recorded from the Environment Line.",
+          })
+          say = composeDecisionSuperseded(row?.ref ?? null, superseding)
+          const register = await summonSurface("decisions", userId, updated.spine)
+          surfaces = [register.surface]
+        } catch (error) {
+          say =
+            `I couldn't supersede ${superseding.supersedes}: ${error instanceof Error ? error.message : "the register refused the write"}. ` +
+            `Nothing was written, so ${superseding.supersedes} still stands.`
+        }
+      }
+    } else if (classifyDecisionRecord(text)) {
+      // A real governed write from the Line: this is the capability that let /decisions be deleted
+      // rather than merely hidden. Recorded as PROPOSED and ADVISORY — the defaults createDecision
+      // applies — because binding authority is minted by the authorization path with evidence behind
+      // it, and a typed sentence is not that.
+      const recorded = classifyDecisionRecord(text) as NonNullable<ReturnType<typeof classifyDecisionRecord>>
+      try {
+        const row = await createDecision({
+          title: recorded.title,
+          decision: recorded.decision,
+          ...(recorded.rationale ? { rationale: recorded.rationale } : {}),
+          context: "Recorded from the Environment Line.",
+        })
+        say = composeDecisionRecorded(row?.ref ?? null, recorded)
+        // Show the register immediately: a record the owner cannot see is a claim, not a receipt.
+        const register = await summonSurface("decisions", userId, updated.spine)
+        surfaces = [register.surface]
+      } catch (error) {
+        // Fail closed and say so. A refused write must never read as a successful one.
+        say =
+          `I couldn't record that decision: ${error instanceof Error ? error.message : "the register refused the write"}. ` +
+          `Nothing was written, so the register still says what it said before.`
       }
     } else if (classifyDismissal(text)) {
       // Dropping a surface is a real operation on the world, not conversation: it must not reach the
