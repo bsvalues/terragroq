@@ -542,7 +542,6 @@ export async function recordV12AcceptanceAuthority(input: {
     return { status: "RECORDED" as const, version: approved.version }
   })
   revalidatePath("/goal-console")
-  revalidatePath("/decisions")
   revalidatePath("/governance")
   return {
     status: result.status,
@@ -980,7 +979,6 @@ export async function recordV12CampaignOutcomeAuthority(input: {
   })
 
   revalidatePath("/goal-console")
-  revalidatePath("/decisions")
   revalidatePath("/governance")
   return {
     status: result.status,

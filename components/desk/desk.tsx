@@ -19,7 +19,7 @@ import { isExecutionLive } from "@/lib/environment/world-execution"
 type Turn = Readonly<{ id: string; role: "owner" | "williamos"; content: string }>
 type Surface = Readonly<{
   id: string
-  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders"
+  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions"
   subject: string
   payload?: unknown
 }>
@@ -400,6 +400,36 @@ function SurfaceView({ surface }: { surface: Surface }) {
               </span>
               <span className="truncate text-neutral-300">{row.label}</span>
               {row.detail ? <span className="truncate text-neutral-600">{row.detail}</span> : null}
+            </div>
+          ))
+        )}
+      </div>
+    )
+  }
+  if (surface.kind === "decisions") {
+    // The register, migrated from /decisions. Supersession is shown because a decision that has been
+    // superseded is not the current answer, and a register that hides that is worse than no register.
+    const rows = (surface.payload ?? []) as readonly {
+      ref: string | null
+      title: string
+      decision: string
+      status: string
+      authority: string
+      supersededById: number | null
+    }[]
+    return (
+      <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
+        {rows.length === 0 ? (
+          <p className="text-neutral-500">The decision register is empty.</p>
+        ) : (
+          rows.map((row, index) => (
+            <div key={row.ref ?? index} className={cn("flex items-baseline gap-3 py-0.5", row.supersededById ? "opacity-50" : "")}>
+              <span className="w-28 shrink-0 text-neutral-500">{row.ref ?? "—"}</span>
+              <span className={cn("w-20 shrink-0 uppercase", row.decision === "APPROVE" ? "text-emerald-500" : "text-amber-500")}>
+                {row.decision}
+              </span>
+              <span className="truncate text-neutral-300">{row.title}</span>
+              {row.supersededById ? <span className="shrink-0 text-neutral-600">superseded</span> : null}
             </div>
           ))
         )}

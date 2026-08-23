@@ -124,3 +124,30 @@ describe("work orders became a surface", () => {
     expect(classifyDismissal("close the work-order surface")).toBe("work-orders")
   })
 })
+
+/**
+ * Decisions migration (bucket B). Parity by construction: the surface calls getDecisions(), the
+ * reader /decisions called. The register is a governance artifact — authority, evidence, supersession
+ * lineage — so the surface shows the record, not a summary of it.
+ */
+describe("the decision register became a surface", () => {
+  it.each([
+    "show me the decisions",
+    "open the decision register",
+    "list decisions",
+    "what decisions have been recorded",
+    "pull up the decision log",
+  ])("summons the decisions surface: %j", (text) => {
+    expect(classifySummon(text)).toBe("decisions")
+  })
+
+  it("does not hijack a sentence about decision code", () => {
+    expect(classifySummon("open the decisions action file")).toBeNull()
+    expect(classifySummon("which component renders decisions")).toBeNull()
+  })
+
+  it("is dismissed by name, not swept into all", () => {
+    expect(classifyDismissal("hide the decisions")).toBe("decisions")
+    expect(classifyDismissal("close the decision surface")).toBe("decisions")
+  })
+})

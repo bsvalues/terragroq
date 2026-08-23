@@ -15,6 +15,7 @@ import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFac
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { getWorkOrders } from "@/app/actions/work-orders"
 import { getActivity } from "@/lib/operator/activity"
+import { getDecisions } from "@/app/actions/decisions"
 import { isContinueIntent } from "@/lib/environment/start-work"
 import { classifyDismissal, classifySummon } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
@@ -54,7 +55,7 @@ const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT?.trim() || null
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 
 type SurfaceDirective = Readonly<{
-  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders"
+  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions"
   subject: string
   payload?: unknown
 }>
@@ -285,7 +286,7 @@ async function loadProjects(userId: string): Promise<ProjectRow[]> {
  * reported as empty; it is never padded to look like a working dashboard.
  */
 async function summonSurface(
-  kind: "project" | "activity" | "evidence" | "work-orders",
+  kind: "project" | "activity" | "evidence" | "work-orders" | "decisions",
   userId: string,
   spine: WorldSpine,
 ): Promise<{ say: string; surface: SurfaceDirective }> {
@@ -321,6 +322,30 @@ async function summonSurface(
           status: order.status,
           agent: order.agent ?? null,
           phase: order.phase ?? null,
+        })),
+      },
+    }
+  }
+
+  if (kind === "decisions") {
+    // Parity by construction: the same getDecisions() reader /decisions called. The register is a
+    // governance artifact — authority, evidence and supersession lineage — so what it shows must be
+    // the record itself, not a summary of it.
+    const rows = await getDecisions()
+    return {
+      say: rows.length === 0
+        ? "The decision register is empty."
+        : `${rows.length} recorded ${rows.length === 1 ? "decision" : "decisions"}, newest first.`,
+      surface: {
+        kind: "decisions",
+        subject: "decision register",
+        payload: rows.map((row) => ({
+          ref: row.ref,
+          title: row.title,
+          decision: row.decision,
+          status: row.status,
+          authority: row.authority,
+          supersededById: row.supersededById ?? null,
         })),
       },
     }
@@ -503,7 +528,7 @@ export async function POST(request: Request) {
     } else if (classifySummon(text)) {
       // Projects / Activity / Evidence used to be applications you navigated to. They are summoned
       // here from governed state, and they leave when the owner says so.
-      const summoned = await summonSurface(classifySummon(text) as "project" | "activity" | "evidence" | "work-orders", userId, updated.spine)
+      const summoned = await summonSurface(classifySummon(text) as "project" | "activity" | "evidence" | "work-orders" | "decisions", userId, updated.spine)
       say = summoned.say
       surfaces = [summoned.surface]
       updated = withSurface(updated, {
