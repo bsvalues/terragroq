@@ -506,7 +506,7 @@ never grants authority" is already shipped behavior, and must survive the merge.
 | "on a selected node" | **FALSE** | The route takes no body and calls `runAllBaselines(registry)` (`baseline/route.ts:18,23`), which loops every node in the registry (`run-baseline.mjs:382-386`). |
 | "read-only" | **FALSE** | It starts a hidden process or `docker run`s a container (`run-baseline.mjs:330-338`), writes a file on the node and hashes it there (`:341-348`), then force-stops the process / `docker rm -f`s the container and deletes the files (`:361-369`). |
 | "already governed through the broker" | **FALSE** | `sh()` calls `exec("powershell", …)` or `exec("ssh", sshArgs(…))` directly (`run-baseline.mjs:309-318`). It never calls `brokeredExec`, so it never gets the `BrokerDenied` unknown-node refusal. Host keys *are* pinned, via `sshArgs` (`:243-251`). |
-| "already audited" | **TRUE** | Every step audits through `auditFabricAction` on success and on failure (`run-baseline.mjs:270,298,304`). |
+| "already audited" | **BEST-EFFORT ONLY** | Every step calls `auditFabricAction` on success and on failure (`run-baseline.mjs:270,298,304`) — but **both calls are `.catch(() => {})`'d**, deliberately: "Auditing must not be able to fail the step it is describing, so a ledger error is swallowed here" (`:294-297`). A fleet-wide start / transfer / force-stop / delete can therefore complete with **no durable audit record**, and nothing reports that it did. Revision 2 first recorded this row as a flat `TRUE`; round 2 of the independent review attacked it and was right. |
 | "reason-preserving on failure" | **TRUE** | Each step carries a named `meaning` for what its failure implies (`lib/fabric/baseline.ts:28-35`). |
 
 Baseline is a genuine and valuable capability gate. It is a **multi-step mutation across the whole
@@ -529,6 +529,16 @@ fencing.
 | observed post-state | `readObservation` returns `exists`, `observedBytes`, `recordedBytes`, `agrees` (`probe.ts:35-44`, `verify/route.ts:87`). |
 | evidence | Appends a governance event (`verify/route.ts:1,117`). |
 | honest partiality | What could not be probed is reported with a reason, not silently dropped (`probe.ts:125-140`). |
+
+And the audit itself is fail-loud where baseline's is not. On the success path `brokeredExec` awaits
+`auditBrokerAction` **without** a `.catch` (`broker.mjs:102,107`), so a brokered command that cannot
+be written to the ledger fails rather than completing unrecorded. Only the denial and error paths
+swallow (`:91,111`), where the outcome is already a failure being reported. Baseline swallows on the
+**success** path (`run-baseline.mjs:298`), which is the one that matters.
+
+So the two candidates differ on the property the charter cares about most. Baseline is a fleet-wide
+mutation whose audit may silently not happen; `resource/verify` is a single read whose audit must
+happen, and which appends a governance event on top.
 
 That is the whole journey — `select object → deterministic action → governed execution → observed
 post-state → evidence` — already shipped, already governed, and mutating nothing.
