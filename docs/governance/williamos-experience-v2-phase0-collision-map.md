@@ -817,10 +817,23 @@ full seam:
   - **narrower than revision 2 said**: GPU validation and copying are driven *dynamically* from
     `$defs.gpu` (`:446,540`), so an added GPU property needs no assembler edit of its own. Gate 1
     reserves and tests this file; it does not necessarily change it for the field alone.
-  - **wider than revision 2 said**: the version walls are hardcoded here, not read from the schema —
-    `'0.2'` semantic checks at `:653,699,700,704` and the emitted `schema_version: '0.2'` at `:720`.
-    A `schema_version` bump that leaves these behind fails assembly outright. The `exactKeys`
-    node-shape check (`:433`) likewise must accept any new node-level field.
+  - **wider than revision 2 said, but not as wide as round 2 claimed.** Round 2 reported "hardcoded
+    `v0.2` semantic checks at `:653,699,700,704`" and revision 3 accepted it without opening the
+    lines. They are **error-message strings**, not version checks: `:653` is
+    `errors.push('scheduler must remain disabled and unauthorized in v0.2')` guarding
+    `seed.scheduler.state !== 'disabled'` (`:652`), and `:699,700,704` push
+    `` `...differs from canonical v0.2 policy` `` guarding the authority allow/deny/bounded-compute
+    comparisons. The literal `'0.2'` occurs **exactly once** in the file — the emitted
+    `schema_version: '0.2'` at `:720`. A grep for `v0.2` hits five lines; one of them is a version.
+
+    So a `schema_version` bump changes `:720`, and leaves those three error strings saying "v0.2"
+    about a v0.3 registry — stale wording to fix, **not** an assembly failure. "Fails assembly
+    outright" was false.
+
+    There *is* a real version wall in this file, and neither round found it: `:437` rejects any probe
+    whose `schema_version !== '0.1-node-probe'`. That is the **node-probe** schema, a different
+    contract from the registry schema, and it is the one that fails closed. The `exactKeys`
+    node-shape check (`:433`) must likewise accept any new node-level field.
   - the fallback is also **not silent**: it records `LIVE_PROBE_INVALID` and adds a fail-closed
     scheduling constraint (`:455,509`). Warned fail-closed, not silent — revision 2 overstated it.
 - **`scripts/execution-fabric/assemble-registry.mjs`** — the production entrypoint hard-pins the seed
@@ -1330,7 +1343,7 @@ the TypeScript surface of a repository the same document calls implementation tr
 | 17 | The transport registry owns reachability | **ACCEPTED (P0)** | It has no reachability field; reachability is measured per request (`route.ts:113-127`) | §4.1 |
 | 18 | Symmetric `ABSENCE` rule | **ACCEPTED (P0)** | Would promote any transport-only line to a canonical node, against `README:41` | §4.1 — unverified endpoint candidate |
 | 19 | Schema scope = `vram_used_bytes` | **ACCEPTED (P0)** | §7.4 also requires `vram_source`, equally blocked by `additionalProperties:false` (`registry.schema.json:74-90`) | §7.2 — both fields |
-| 20 | Bumping `schema_version` is enough | **ACCEPTED (P0)** | Hardcoded `v0.2` walls at `assemble-registry-core.mjs:653,699,700,704` and the emitted version at `:720` | §7.2 |
+| 20 | Bumping `schema_version` is enough | **ACCEPTED (P0) at round 2 — now PARTLY REFUTED, see §12 row 35** | The emitted version at `assemble-registry-core.mjs:720` is real and is the only `'0.2'` literal in the file. The cited "walls" at `:653,699,700,704` are error-message strings, not version checks | §7.2 — corrected; the genuine fail-closed version wall is `:437` on the *node-probe* schema, which neither round found |
 | 21 | Invariant 1 (UUID/PCI identity) | **ACCEPTED (P0)** | Cannot represent the CIM fallback (`probe-windows.ps1:109-126`) or the declared HERMES GPUs (`registry.seed.json:66`), both `uuid: null, pci_bus_id: null` | §7.5 — identity-unresolved projection |
 | 22 | Transport `role` conflict marks `stale` | **ACCEPTED (P1)** | That record has no timestamp; staleness is a temporal claim | §4.1 — `CONFLICTING` |
 | 23 | The assembler must change for the field | **ACCEPTED (P1)** | GPU validation and copying are driven dynamically from `$defs.gpu` (`:446,540`) | §7.2 — narrowed |
@@ -1377,8 +1390,18 @@ findings created new ones, and that pattern is the map's central claim about its
 | 32 | §11 row 22 accepted that a transport `role` conflict must mark `CONFLICTING`, not `stale`, and §4.1 was corrected — but invariant 13 still said `stale`. The register recorded a correction the acceptance criteria did not carry | **SELF-INTRODUCED (P1)** | §4.1 `CONFLICT` vs §7.5 invariant 13, as written in `cea7ad54` | §7.5 invariant 13 |
 | 33 | §4.1 `ABSENCE` withdrew the symmetric projection rule — a transport-only record is an unverified endpoint candidate and does **not** project as a canonical `SystemObject` — while invariant 11 continued to require exactly that projection. The gate would have tested the behaviour the join rules forbid. Round 2's own P1 (invariant 11 never tests a successful or mismatched join) was also left open | **SELF-INTRODUCED (P0)** | §4.1 `ABSENCE` vs §7.5 invariant 11, as written in `cea7ad54`; `app/api/fabric/nodes/route.ts:30-37` carries no machine pin | §7.5 invariant 11 |
 | 34 | Round 2 accepted "no second scheduler" as a **P0** (§11 row 6, pointing at §6.7). Revision 3 deleted the claim from §6.7's negative list without replacing it, so row 6 pointed at nothing and the accepted P0 was silently unresolved | **SELF-INTRODUCED (P0)** | §11 row 6 → §6.7 item 7, as written in `cea7ad54` | §6.7 item 7 — boundary analysis |
+| 35 | Round 2's P0 #20 — "hardcoded `v0.2` semantic checks at `assemble-registry-core.mjs:653,699,700,704`" — was **accepted without opening the lines**, recorded in §7.2 and §11 row 20, and then propagated into #990's binding scope. They are error-message strings guarding a scheduler-state check and the authority-catalogue comparisons. `'0.2'` occurs once in the file, at `:720`. "A `schema_version` bump that leaves these behind fails assembly outright" was false | **ACCEPTED FINDING THAT WAS ITSELF FALSE (P0)** | `assemble-registry-core.mjs:652-653,695-704,720`; `grep -n "'0\.2'" ` returns one line | §7.2, §11 row 20, and #990's assembler row |
 
-Row 34 is the one worth reading twice. Rows 32 and 33 are contradictions, which a careful re-read
+Row 35 is the one that should change how the next round is run. Rows 32-34 are failures to carry a
+correction *through* the document. Row 35 is a failure at the other end: an adversarial finding was
+**accepted on the reviewer's word**, written into the map, carried into §11's register, and then
+copied into a bounded packet that Gate 1a would have implemented — and it was never true. Three review
+rounds hardened the map's positive claims against its own authors while leaving the reviewers'
+findings unverified, which is the same asymmetry the map's method rule was written to remove. §12 now
+binds the missing half: **an accepted finding is a claim like any other, and gets opened like any
+other.** Every remaining round-2 P0 was re-opened on that basis; row 35 is the one that failed.
+
+Row 34 is the one worth reading twice for a different reason. Rows 32 and 33 are contradictions, which a careful re-read
 finds. Row 34 is a **deletion**: the false claim was removed, nothing false remained on the page, and
 the register still said `ACCEPTED (P0) — see §6.7`. Deleting a claim is not answering it, and the
 resulting document reads as clean precisely because the unresolved item is no longer visible. A
