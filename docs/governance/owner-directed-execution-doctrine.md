@@ -150,17 +150,31 @@ the earlier claim explicitly rather than quietly overwriting it.
 "owner, please obtain a review."
 
 Review is sourced through the supersession's tiers, sovereign tiers first. The delivering lane owns
-requesting it, receiving it, and acting on it. If every eligible reviewer is genuinely unavailable,
-that is recorded against the lane in the playbook's canonical vocabulary — a lifecycle state of
-`BLOCKED_NO_ELIGIBLE_PROVIDER` (or `REROUTE_PENDING` while a capable reviewer is still being sought),
-carrying the **reason code** `PROVIDER_UNAVAILABLE` — routed or persisted per §1, not handed to the
-owner as a courier task.
+requesting it, receiving it, and acting on it — never handed to the owner as a courier task.
 
-`PROVIDER_UNAVAILABLE` is a reason code and never a lifecycle state:
-`docs/governance/multi-agent-operator-playbook.md:196-198` names it as an example of a stable reason
-code and says such codes "may not be substituted for lifecycle-state names." An earlier revision of
-this document called it a state. That was the same defect this program keeps finding — a reason code
-wearing a state's name — and it is corrected here rather than explained away.
+**One provider failing and the reviewer role being exhausted are different results, and they carry
+different typed states.** An earlier revision used the first for both.
+
+| What happened | Typed result | Source |
+| --- | --- | --- |
+| A tier or provider is unavailable, capable reviewers remain | lifecycle `BLOCKED_NO_ELIGIBLE_PROVIDER`, reason code `PROVIDER_UNAVAILABLE` — or `REROUTE_PENDING` while a capable reviewer is still being sought | `playbook:133,184,196-198` |
+| **Every** tier in the sourcing chain is exhausted — sovereign, then approved Claude, then optional external advisory | typed **`REVIEW_CAPABILITY_UNAVAILABLE`** | `sovereign-runtime-and-review-supersession.md:85` |
+
+The second is not a louder version of the first. AGENTS.md:7-9 makes the supersession controlling
+"on runtime status, review sourcing, or provider dependence", and review sourcing is exactly this;
+`REVIEW_CAPABILITY_UNAVAILABLE` is therefore the governing result for role exhaustion, and
+`BLOCKED_NO_ELIGIBLE_PROVIDER` may not stand in for it. Recording one provider's outage as capability
+exhaustion tells a state consumer to stop looking when other tiers were never tried.
+
+This round supplied the worked example. A four-lane re-check died on `code-mode host exited during
+handshake`; re-running the same review as a single lane succeeded. Reviewer capability was never
+exhausted — one execution path failed — so `PROVIDER_UNAVAILABLE` against a retryable lane was the
+correct record, and `REVIEW_CAPABILITY_UNAVAILABLE` would have been false.
+
+`PROVIDER_UNAVAILABLE` is also a reason code and never a lifecycle state: `playbook:196-198` names it
+as an example of a stable reason code and says such codes "may not be substituted for lifecycle-state
+names." An earlier revision of this document called it a state. Both defects are the same one — a
+label used at the wrong altitude — and both are corrected here rather than explained away.
 
 Independence is role separation: the reviewer must not hold the builder's reservation. It is not
 vendor separation.
