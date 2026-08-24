@@ -2,7 +2,21 @@
 
 Document: `OWNER-DIRECTED-EXECUTION-DOCTRINE-001`
 
-Status: `CANONICAL`. Recorded by explicit owner direction, 2026-08-24.
+Status: `NARROWING_PENDING_REGISTRATION`. Recorded by explicit owner direction, 2026-08-24.
+
+This document is **not** an independent authority source and does not become one by declaring itself
+canonical. Its identifier is registered nowhere else in the repository — not in `AGENTS.md`, not in
+the controlling playbook, not in the supersession. Independent review confirmed that with `git grep`
+across `origin/main` and this branch: one hit, this file's own line 3. An earlier revision of this
+file said `CANONICAL` anyway, which is the same defect the Experience V2 collision map records as its
+central failure pattern — a document taking its properties from its own nomenclature.
+
+Until an authority-matched Work Order registers `OWNER-DIRECTED-EXECUTION-DOCTRINE-001` in a
+controlling contract, this document binds exactly as far as it **narrows already-recorded behaviour**
+under AGENTS.md and the playbook. Where it introduces something new rather than narrowing something
+existing — the §2 phase-report status, the §3 qualitative acceptance rule, the §4 continuation-packet
+schema — those are **advisory pending registration**, and a lane that cannot honour them is not in
+violation of recorded authority. Tracked as `CONT-ODED-REGISTRATION` (§6).
 
 Authority position: this narrows execution behavior under
 [`AGENTS.md`](../../AGENTS.md) and the
@@ -59,14 +73,52 @@ resolution is owner action is the same ask. The test is the **effect**, not the 
 ### What remains a genuine owner gate
 
 The rule is not "never ask". It degrades into uselessness if it becomes that, which is why #957 kept
-a positive control. An owner decision is required, and only required, when the operation itself needs
-a **new, non-delegable authority decision**: activation of a new authority, a genuine authority-gate
-or revocation wall, a new spend or privacy boundary, protected-data egress, release authority, or a
-credible threat to durable state.
+a positive control.
+
+**The controlling list is the playbook's, quoted rather than paraphrased.** `playbook:46-52`:
+
+> William may be asked only for a genuinely new authority decision:
+>
+> - material product scope or policy;
+> - new spending, contract, account, or provider grant;
+> - production data mutation or release/cutover authority;
+> - destructive or irreversible action;
+> - legal, privacy, or security-risk acceptance that cannot be resolved technically.
+
+An earlier revision of this section wrote its own list and attached the words "and only required" to
+it. That list omitted *material product scope or policy*, *contract / account / provider grant*, and
+*legal or security-risk acceptance* — so a narrower **exhaustive** claim sat inside a document whose
+own header says the playbook wins. Independent review caught it. An agent following the narrow list
+would have proceeded, without an owner decision, on exactly the classes the playbook reserves.
+
+This document adds **no** entry to that list and removes none. What it contributes is the test for
+deciding whether a given blocker is on it at all: an operation qualifies only when it needs a **new,
+non-delegable authority decision**, not merely when the current actor cannot perform it.
 
 The distinguishing question is not "am I stuck?" but **"would any other approved actor be equally
 stuck?"** If a different lane with the same authority could do it, the blocker is capability, and it
 is internal.
+
+### A wall's name does not make it non-delegable
+
+`isOwnerWall` (`scripts/runtime-operator/operational-kernel.mjs:416-418`) is the single place the
+kernel turns a failure into `ownerDecisionRequired: true`, and it recognises six codes. One of them
+does not belong to this class, and saying so is the point of writing this section down:
+
+`RUNTIME_READINESS_WALL` is thrown when `gh auth status` fails
+(`scripts/runtime-operator/williamos-adapters.mjs:1086-1089`) and when `codexAuth`, `githubAuth` or
+`identityContext` are not ready (`scripts/runtime-operator/native-adapters.mjs:163`). Every one of
+those is a **session/provider capability condition** — an expired integration login is the textbook
+§1 case. Applying this section's own test: another approved actor with a working login would not be
+stuck, so it is capability, so it is internal. The kernel nevertheless routes it to `BLOCKED /
+ownerDecisionRequired: true`.
+
+The accompanying test enumerates all six walls so that *widening* the owner-wall set fails loudly. On
+this row that safeguard works against the doctrine: it pins an existing violation in place rather than
+catching a new one. The row is retained in the test because it is the kernel's present behaviour and
+the test's job is to describe behaviour truthfully — **not** because this document endorses it.
+Correcting the kernel is a production change and is out of this test-only PR's scope; it is
+`CONT-ODED-RUNTIME-READINESS` (§6).
 
 ## 2. A phase cannot be reported PASS while mandatory evidence was inaccessible
 
@@ -168,10 +220,17 @@ Stated precisely, because an earlier revision of this section claimed more than 
 an independent review caught it.
 
 **It proves** that `isOwnerWall` (`scripts/runtime-operator/operational-kernel.mjs:417`) does not
-recognise any courier-shaped failure. The six authority walls in the positive control are exactly that
-predicate's regex, so widening it to admit a courier-shaped code — the specific regression this
-doctrine exists to prevent — turns the courier cases red immediately. That tripwire is real, and it is
-the reason the test earns its place.
+recognise any of the **twelve** courier fixtures it is given. The six authority walls in the positive
+control are exactly that predicate's alternation, so widening it to admit a courier-shaped code — the
+specific regression this doctrine exists to prevent — turns the courier cases red immediately. That
+tripwire is real, and it is the reason the test earns its place.
+
+**It does not prove that a courier message can never match `isOwnerWall`.** The predicate's regex is
+**unanchored** (`:417`), so it fires on any message merely *containing* one of the six tokens — for
+example `MERGE_PATH_BLOCKED: upstream reported RUNTIME_READINESS_WALL`. None of the twelve fixtures
+contains a wall token, so the suite is silent on this. The honest fix is to compare the parsed
+**leading** failure code against an exact six-value set and add mixed-context negatives; that is a
+kernel change, recorded as `CONT-ODED-OWNER-WALL-ANCHORING` below.
 
 **It does not prove** that the kernel classifies courier failures *as* courier failures. It does not,
 today: every unrecognised message reaches the generic branch at
@@ -179,6 +238,15 @@ today: every unrecognised message reaches the generic branch at
 `ownerDecisionRequired: false` and its `failureCode` preserved. Twelve arbitrary strings would behave
 identically. So the courier cases assert "not an owner wall, and still recorded" — which is true and
 worth pinning — and nothing stronger.
+
+**And "still recorded" holds only once a checkpoint exists.** `runCycle` calls `assertRuntime`,
+`listQueue` and `resolveBaseSha` *before* its first `transition(...)` writes a checkpoint
+(`:281-308`); with no prior checkpoint the handler's `if (!checkpoint) throw error` (`:425-427`)
+rethrows, so a courier failure at any of those three leaves **no checkpoint, no `failureCode`, and no
+record at all**. The fixture makes all three succeed and throws only from `invokeCodex`, so the suite
+never reaches that path. This is the second half of §1 — "don't ask the owner" and "drop it on the
+floor" are different failures — failing in the first adapter the kernel runs. Recorded as
+`CONT-ODED-PRE-CHECKPOINT-LOSS` below.
 
 **The gap that leaves.** §1 requires a courier-shaped failure to be *routed to a capable actor or
 persisted as a typed continuation*. `FAILED_TERMINAL` is neither: it is a dead end that merely
@@ -190,3 +258,82 @@ work rather than losing it.
 
 §§2–4 are reporting and sourcing obligations. They bind agent reports, and the machine surface for
 them is the phase report itself, not the kernel.
+
+## 7. Typed continuations — internal, not owner work
+
+None of these is an owner ask. Each is a typed state with an internal owner and an automatic pickup
+condition, per #957 and §1 of this document. Together they are the bounded follow-up work §6 refers
+to, written as packets rather than left as prose.
+
+```
+CONT-ODED-REGISTRATION
+  type:      BLOCKED_DEPENDENCY
+  reason:    CONTRACT_NOT_REGISTERED
+  subject:   OWNER-DIRECTED-EXECUTION-DOCTRINE-001 is referenced by no controlling contract
+  evidence:  git grep over origin/main and this branch returns one hit -- this file's own line 3.
+             Not in AGENTS.md, the playbook, or the supersession.
+  effect:    this document binds only where it NARROWS recorded behaviour. S2's phase-report
+             status, S3's acceptance rule and S4's continuation schema are ADVISORY until
+             registration lands.
+  action:    register the identifier in the controlling playbook under an authority-matched Work
+             Order, then restore a binding status here.
+  owner:     the delivering agent lane
+  not:       an owner decision. Registration is a contract edit under already-recorded program
+             authority, not a new authority grant.
+
+CONT-ODED-RUNTIME-READINESS
+  type:      BLOCKED_DEPENDENCY
+  reason:    KERNEL_CONTRADICTS_DOCTRINE
+  subject:   RUNTIME_READINESS_WALL routes a session/provider capability failure to
+             ownerDecisionRequired: true
+  evidence:  thrown on `gh auth status` failure (williamos-adapters.mjs:1086-1089) and on
+             codexAuth/githubAuth/identityContext not ready (native-adapters.mjs:163);
+             matched by isOwnerWall (operational-kernel.mjs:416-418) -> BLOCKED.
+  action:    split the code. A genuine authority failure (revoked grant, missing activation) stays
+             an owner wall; an unauthenticated or expired integration login becomes an internal
+             capability failure with a reroute or continuation. Removing the row from isOwnerWall
+             without splitting the code would silence a real authority wall too.
+  scope:     PRODUCTION kernel + adapters. Out of scope for the test-only PR that records it.
+  owner:     the delivering agent lane, as its own bounded packet
+  not:       an owner decision. The owner is not asked to re-authenticate anything; the point is
+             that his authentication state is not an authority question.
+
+CONT-ODED-OWNER-WALL-ANCHORING
+  type:      BLOCKED_DEPENDENCY
+  reason:    PREDICATE_TOO_BROAD
+  subject:   isOwnerWall's regex is unanchored (operational-kernel.mjs:417)
+  effect:    any message CONTAINING a wall token becomes an owner gate, including a courier
+             message that merely quotes one.
+  action:    parse the LEADING failure code and compare against an exact six-value set; add
+             mixed-context negative tests. operational-kernel-cli.mjs:51 carries the same
+             unanchored pattern and must move with it.
+  scope:     PRODUCTION kernel.
+  owner:     the delivering agent lane, as its own bounded packet
+  not:       an owner decision.
+
+CONT-ODED-PRE-CHECKPOINT-LOSS
+  type:      BLOCKED_DEPENDENCY
+  reason:    FAILURE_NOT_PERSISTED
+  subject:   a courier failure before the first checkpoint write leaves no record
+  evidence:  assertRuntime / listQueue / resolveBaseSha run before the first transition(...)
+             (operational-kernel.mjs:281-308); no-checkpoint rethrow at :425-427.
+  action:    persist an initial failure envelope before those calls, and test each failure locus
+             rather than only the post-checkpoint invokeCodex path.
+  scope:     PRODUCTION kernel.
+  owner:     the delivering agent lane, as its own bounded packet
+  not:       an owner decision.
+
+CONT-ODED-COURIER-NOT-ROUTABLE
+  type:      BLOCKED_DEPENDENCY
+  reason:    NO_CONSUMER_FOR_ROUTABLE_STATE
+  subject:   a courier failure reaches FAILED_TERMINAL, which runCycle returns unchanged forever
+             (operational-kernel.mjs:283)
+  effect:    S1's two permitted moves -- reroute, or persist a typed continuation -- are both
+             unavailable. Declining to bother the owner is not the same as handling the work.
+  action:    a courier classification plus a canonical routable state (REROUTE_PENDING) AND a
+             consumer that acts on it. Adding the state with no consumer manufactures a slogan;
+             this document deliberately does not do that.
+  scope:     PRODUCTION kernel + supervisor.
+  owner:     the delivering agent lane, as its own bounded packet
+  not:       an owner decision.
+```
