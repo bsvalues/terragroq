@@ -1477,7 +1477,7 @@ was a hash-chained authority log and `eventLog` merely a feed, so the pair was n
 The conclusion happens to survive — they are still not competing authorities — but the reasoning was
 false (row 4), and a right answer reached through a wrong argument is not evidence of anything.
 
-## 12. Round-3 self-check — what applying round 2 broke
+## 12. Revision-3 self-check — what applying round 2 broke
 
 Revision 3 applied round 2's findings and then re-read its own result against §10 and §11 rather than
 against the review. Three defects were introduced or left by the remediation itself. They are recorded
