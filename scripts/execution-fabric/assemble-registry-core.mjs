@@ -26,57 +26,38 @@ function readJson(filePath, label) {
 }
 const seed = readJson(seedPath, 'seed');
 const schema = readJson(schemaPath, 'schema');
+// The registry declares the version of the schema that validates it, so it is READ from that schema
+// rather than restated here. A restated literal is how a bump lands emitting the old version: the
+// only signal was a reviewer noticing two edits had to happen together, and the digest pin in
+// `assemble-registry.mjs` is the thing that actually enforces "these move together".
+const registrySchemaVersion = schema?.properties?.schema_version?.const;
+if (typeof registrySchemaVersion !== 'string') {
+  console.error('FABRIC_REGISTRY_INVALID: schema does not pin properties.schema_version.const');
+  process.exit(2);
+}
 const warnings = [];
 const probeWarnings = new Map();
 
-const canonicalAuthority = {
-  omen: {
-    allow: ['interactive-development', 'operator-control', 'read-only-lab-inspection', 'transient-ssh-tunnel', 'burst-compute'],
-    deny: ['authoritative-durable-state', 'county-production-write', 'pacs-production-write', 'unattended-critical-state']
-  },
-  'hermes-node': {
-    allow: ['local-llm-inference', 'gpu-batch', 'agent-runtime', 'bounded-execution', 'ssh-control'],
-    deny: ['authoritative-durable-state', 'county-production-write', 'pacs-production-write', 'direct-ollama-lan-exposure']
-  },
-  atlas: {
-    allow: ['authoritative-durable-state', 'database-state', 'forge-storage', 'retrieval-index', 'backup-source', 'protected-data-read-when-authorized'],
-    deny: ['noisy-unbounded-batch-by-default', 'county-production-write', 'pacs-production-write']
-  },
-  aegis: {
-    allow: ['limited-standing-compute-authority', 'ci-build-test-when-adapter-active', 'hash-verify-when-standing-integration-active', 'compression-when-adapter-active'],
-    deny: ['authoritative-durable-state', 'backup-archive', 'nas', 'county-production-write', 'pacs-production-write', 'destructive-disk-action'],
-    bounded_compute: {
-      schema: 'aegis-standing-compute-authority/1',
-      authority_ref: 'github-issue-586',
-      state: 'granted',
-      repository: 'bsvalues/terragroq',
-      risk_classes: ['R0', 'R1'],
-      workload_classes: ['CI_BUILD_TEST', 'HASH_VERIFY', 'COMPRESSION'],
-      node_id: 'aegis',
-      machine_identity_sha256: '1b490fe20bf3d61dc1f14e3a6e7fe38fc7de69c14face211fdd5afd0544c9c8b',
-      maximum_concurrency: 1,
-      maximum_cpu_threads: 12,
-      maximum_memory_bytes: 8589934592,
-      maximum_runtime_ms: 1800000,
-      maximum_output_bytes: 536870912,
-      maximum_scratch_write_bytes: 5368709120,
-      minimum_free_bytes_after_job: 107374182400,
-      network_scope: 'none',
-      execution_identity: 'williamos-fabric',
-      privilege: 'non-root-no-sudo',
-      storage_scope: 'job-scoped-nvme-scratch-only',
-      adapter_policy: 'separately-reviewed-active-adapter-required',
-      scheduler_state: 'disabled',
-      scheduler_authority: 'not-granted',
-      autonomous_work_selection: false,
-      durable_storage_authority: false
-    }
-  },
-  azure: {
-    allow: [],
-    deny: ['implicit-use', 'implicit-cost', 'implicit-protected-data-egress']
-  }
-};
+// Node identity, roster and per-node authority have ONE owner: the reviewed identity contract.
+//
+// They used to have three. `probe-windows.ps1` and `probe-linux.sh` each carried their own
+// hostname-to-node-id table, and this file restated the whole authority catalogue as a literal. Three
+// copies of the same reviewed facts drift independently, and nothing compared them -- a node renamed
+// in one probe and not the other would simply stop being the node it was.
+//
+// This is a REPLACEMENT, not a fourth copy: the literal that stood here and both probe tables are
+// gone, and all three now read this file. The contract's bytes are digest-pinned by
+// `assemble-registry.mjs` exactly as the seed and schema are, so it is a reviewed input rather than
+// an editable one -- otherwise moving authority out of code would have moved it out of review too.
+const identityContractPath = arg('--identity-contract', 'config/execution-fabric/node-identity-contract.json');
+const identityContract = readJson(identityContractPath, 'identity contract');
+if (identityContract?.contract !== 'williamos-node-identity/1') {
+  console.error('FABRIC_REGISTRY_INVALID: identity contract version is not williamos-node-identity/1');
+  process.exit(2);
+}
+const canonicalAuthority = Object.fromEntries(
+  Object.entries(identityContract.nodes ?? {}).map(([id, entry]) => [id, entry.authority])
+);
 const canonicalNodeIds = Object.keys(canonicalAuthority);
 
 function typeMatches(value, expected) {
@@ -650,7 +631,7 @@ const globalDiskSerials = new Map();
 const seedSchemaErrors = validateSchema(seed, schema);
 if (seedSchemaErrors.length) errors.push(...seedSchemaErrors.map(error => `seed schema: ${error}`));
 if (seed.scheduler?.state !== 'disabled' || seed.scheduler?.authority !== 'not-granted') {
-  errors.push('scheduler must remain disabled and unauthorized in v0.2');
+  errors.push(`scheduler must remain disabled and unauthorized in v${registrySchemaVersion}`);
 }
 const seedNodeIds = seed.nodes.map(node => node.id);
 if (
@@ -696,12 +677,12 @@ for (const n of nodes) {
     const expectedDeny = [...expectedAuthority.deny].sort();
     if (actualAllow.length !== rawAllow.length) errors.push(`${n.id}: duplicate authority allow entry`);
     if (actualDeny.length !== rawDeny.length) errors.push(`${n.id}: duplicate authority deny entry`);
-    if (JSON.stringify(actualAllow) !== JSON.stringify(expectedAllow)) errors.push(`${n.id}: authority allow set differs from canonical v0.2 policy`);
-    if (JSON.stringify(actualDeny) !== JSON.stringify(expectedDeny)) errors.push(`${n.id}: authority deny set differs from canonical v0.2 policy`);
+    if (JSON.stringify(actualAllow) !== JSON.stringify(expectedAllow)) errors.push(`${n.id}: authority allow set differs from the reviewed identity contract`);
+    if (JSON.stringify(actualDeny) !== JSON.stringify(expectedDeny)) errors.push(`${n.id}: authority deny set differs from the reviewed identity contract`);
     const actualBoundedCompute = n.authority?.bounded_compute;
     const expectedBoundedCompute = expectedAuthority.bounded_compute;
     if (canonicalizeJcs(actualBoundedCompute ?? null) !== canonicalizeJcs(expectedBoundedCompute ?? null)) {
-      errors.push(`${n.id}: bounded compute authority differs from canonical v0.2 policy`);
+      errors.push(`${n.id}: bounded compute authority differs from the reviewed identity contract`);
     }
     const conflicts = actualAllow.filter(value => actualDeny.includes(value));
     if (conflicts.length) errors.push(`${n.id}: authority allow/deny conflict ${conflicts.join(',')}`);
@@ -717,7 +698,7 @@ for (const id of ['omen','hermes-node','aegis']) {
 }
 
 const registry = {
-  schema_version: '0.2',
+  schema_version: registrySchemaVersion,
   generated_at: new Date(now).toISOString(),
   scheduler: seed.scheduler,
   nodes

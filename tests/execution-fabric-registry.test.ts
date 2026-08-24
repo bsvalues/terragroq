@@ -1329,7 +1329,7 @@ describe("Execution Fabric semantic invariants", () => {
     const result = assemble(invalidSeed)
 
     expect(result.status).toBe(2)
-    expect(result.stderr).toContain("aegis: bounded compute authority differs from canonical v0.2 policy")
+    expect(result.stderr).toContain("aegis: bounded compute authority differs from the reviewed identity contract")
   })
 
   it.each([
@@ -1346,7 +1346,7 @@ describe("Execution Fabric semantic invariants", () => {
     const result = assemble(seed)
 
     expect(result.status).toBe(2)
-    expect(result.stderr).toContain(`${nodeId}: authority ${list} set differs from canonical v0.2 policy`)
+    expect(result.stderr).toContain(`${nodeId}: authority ${list} set differs from the reviewed identity contract`)
     expect(result.registry).toBeNull()
   })
 
@@ -1432,5 +1432,140 @@ describe("Execution Fabric probe and scheduler boundaries", () => {
     expect(JSON.stringify(schedulerRule)).toContain('"disabled"')
     expect(schemaProperties).not.toHaveProperty("placement")
     expect(assembler).not.toMatch(/\b(dispatch|placeWorkload|scheduleWorkload|activateScheduler)\s*\(/)
+  })
+})
+
+describe("Gate 1 - the used-VRAM seam and the pins that must move with it", () => {
+  const gpuRule = (schema.$defs as JsonObject).gpu as JsonObject
+  const gpuProperties = gpuRule.properties as JsonObject
+
+  it("keeps $defs.gpu closed, which is why a new probe field is a rejection and not an addition", () => {
+    // `additionalProperties: false` is the whole reason the schema had to move with the probes. A
+    // field the schema does not know is not ignored; it invalidates the probe, and the node silently
+    // falls back to declared seed data -- the exact stale-state failure this gate exists to prevent.
+    expect(gpuRule.additionalProperties).toBe(false)
+    expect(gpuProperties).toHaveProperty("vram_used_bytes")
+    expect(gpuProperties).toHaveProperty("vram_source")
+    // driver_version was NOT dropped to make room.
+    expect(gpuProperties).toHaveProperty("driver_version")
+  })
+
+  it("bounds vram_source to the two producers that exist, plus null", () => {
+    expect((gpuProperties.vram_source as JsonObject).enum).toEqual(["nvidia-smi", "win32-videocontroller", null])
+  })
+
+  // Invariant 9 -- schema/assembler round trip, in both directions.
+  it("carries a probe's vram_used_bytes all the way into the snapshot", () => {
+    const seed = clone(canonicalSeed)
+    const hermes = nodeById(seed, "hermes-node")
+    const probe = probeFor(hermes)
+    ;(probe.node as JsonObject).gpus = [{
+      id: "gpu-GPU-1111", vendor: "NVIDIA", model: "GeForce RTX 3050",
+      pci_bus_id: "00000000:01:00.0", uuid: "GPU-1111",
+      vram_bytes: 6442450944, vram_used_bytes: 1442450944, vram_source: "nvidia-smi",
+      driver_version: "560.94", cuda_version: null, compute_capability: null,
+      temperature_c: 41, utilization_percent: 3,
+    }]
+    const result = assemble(seed, { "hermes-node": probe })
+    const assembled = nodeById(result.registry!, "hermes-node")
+
+    expect(result.status, result.stderr).toBe(0)
+    expect((assembled.evidence as JsonObject).confidence).toBe("observed")
+    expect((assembled.gpus as JsonObject[])[0]).toMatchObject({
+      vram_used_bytes: 1442450944,
+      vram_source: "nvidia-smi",
+      driver_version: "560.94",
+    })
+  })
+
+  it("still rejects an unknown GPU property, still falls back to declared, and records the rejection", () => {
+    const seed = clone(canonicalSeed)
+    const hermes = nodeById(seed, "hermes-node")
+    const probe = probeFor(hermes)
+    ;(probe.node as JsonObject).gpus = [{
+      id: "gpu-GPU-1111", vendor: "NVIDIA", model: "GeForce RTX 3050",
+      pci_bus_id: null, uuid: "GPU-1111", vram_bytes: 6442450944,
+      vram_used_bytes: null, vram_source: "nvidia-smi", driver_version: null,
+      cuda_version: null, compute_capability: null, temperature_c: null,
+      utilization_percent: null,
+      vram_reservable_bytes: 6442450944,
+    }]
+    const result = assemble(seed, { "hermes-node": probe })
+    const assembled = nodeById(result.registry!, "hermes-node")
+
+    expect(result.status, result.stderr).toBe(0)
+    // Not silently: the fallback is recorded and the node is fenced out of scheduling.
+    expect((assembled.evidence as JsonObject).confidence).toBe("declared")
+    expect(assembled.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/^LIVE_PROBE_INVALID /)]))
+    expect(assembled.constraints).toEqual(expect.arrayContaining(["not-schedulable-without-live-probe"]))
+  })
+
+  // Invariant 10 -- digest-pin currency. A schema edit landing without the pin moving must fail here.
+  it.each([
+    ["seed", "config/execution-fabric/registry.seed.json", "expectedSeedSha256"],
+    ["schema", "config/execution-fabric/registry.schema.json", "expectedSchemaSha256"],
+    ["identity contract", "config/execution-fabric/node-identity-contract.json", "expectedIdentityContractSha256"],
+  ])("keeps the %s digest pinned in assemble-registry.mjs current with the file on disk", (_label, filePath, pinName) => {
+    const entrypoint = fs.readFileSync(entrypointPath, "utf8")
+    const declared = new RegExp(`const ${pinName} = '([0-9a-f]{64})'`).exec(entrypoint)
+    const onDisk = crypto
+      .createHash("sha256")
+      .update(canonicalizeJcs(JSON.parse(fs.readFileSync(path.join(repositoryRoot, filePath), "utf8"))))
+      .digest("hex")
+
+    expect(declared, `${pinName} is not declared in the production entrypoint`).not.toBeNull()
+    expect(declared![1]).toBe(onDisk)
+  })
+
+  it("emits the schema version it was validated against, rather than a restated literal", () => {
+    const assembler = fs.readFileSync(assemblerPath, "utf8")
+
+    expect(assembler).toContain("schema_version: registrySchemaVersion")
+    expect(assembler).not.toMatch(/schema_version: '0\.\d'/)
+  })
+
+  it("assembles at the bumped schema version through the production entrypoint", () => {
+    const result = assemble(clone(canonicalSeed))
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.registry!.schema_version).toBe(((schema.properties as JsonObject).schema_version as JsonObject).const)
+  })
+
+  it("reads the roster and per-node authority from the identity contract instead of restating them", () => {
+    const assembler = fs.readFileSync(assemblerPath, "utf8")
+    const contract = JSON.parse(
+      fs.readFileSync(path.join(repositoryRoot, "config/execution-fabric/node-identity-contract.json"), "utf8"),
+    ) as JsonObject
+
+    expect(assembler).toContain("node-identity-contract.json")
+    expect(assembler).not.toContain("const canonicalAuthority = {")
+    // The roster the assembler enforces and the seed it validates still agree.
+    expect(Object.keys(contract.nodes as JsonObject)).toEqual((canonicalSeed.nodes as JsonObject[]).map((node) => node.id))
+  })
+
+  it("fails closed when the identity contract is the wrong version", () => {
+    const root = temporaryDirectory()
+    const brokenContract = path.join(root, "contract.json")
+    fs.writeFileSync(brokenContract, JSON.stringify({ contract: "something-else", nodes: {} }))
+    const result = spawnSync(
+      process.execPath,
+      [assemblerPath, "--seed", seedPath, "--identity-contract", brokenContract, "--out", path.join(root, "out.json")],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    )
+
+    expect(result.status).toBe(2)
+    expect(result.stderr).toContain("identity contract version is not williamos-node-identity/1")
+  })
+
+  it("queries used VRAM on both dialects without dropping driver_version", () => {
+    const windows = fs.readFileSync(path.join(repositoryRoot, "scripts/execution-fabric/probe-windows.ps1"), "utf8")
+    const linux = fs.readFileSync(path.join(repositoryRoot, "scripts/execution-fabric/probe-linux.sh"), "utf8")
+    const query = "uuid,name,pci.bus_id,memory.total,memory.used,driver_version,temperature.gpu,utilization.gpu"
+
+    expect(windows).toContain(query)
+    expect(linux).toContain(query)
+    expect(windows).toContain("vram_source = 'nvidia-smi'")
+    expect(windows).toContain("vram_source = 'win32-videocontroller'")
+    expect(linux).toContain("'vram_source': 'nvidia-smi'")
   })
 })
