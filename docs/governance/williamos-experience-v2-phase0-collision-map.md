@@ -172,7 +172,9 @@ It holds these exact seams:
 
 ### What PR #927 actually reserves, measured
 
-`gh pr view 927 --json files` — 39 files (`EXTERNAL_RECORD`, reproducible). The Gate-relevant ones:
+`gh pr view 927 --json files` — **54 files** (`EXTERNAL_RECORD`, reproducible; an earlier pass in this
+revision said 39 because the listing had been truncated at 40 — the conclusion below was re-derived
+from the complete list). The Gate-relevant ones:
 
 | Path | Gate |
 | --- | --- |
@@ -988,7 +990,7 @@ lane's, the evidence is the repository's. Deduplicated across lanes.
 | 6 | Two frontend compositions | **ACCEPTED (P0)** | `/env`→`Environment`→`/api/env/line` (`app/env/page.tsx:4,13`, `environment.tsx:75`, #919 `ddcfa607`) vs `/environment`→`Desk`→`/api/environment/line` (`app/environment/page.tsx:4,24`, `desk.tsx:71`, #922 `2d83948f`) | §5.2 — both lineages classified; §6.3 — three compositions; PR #927 owns the collapse |
 | 7 | `router.ts` is a registry consumer | **ACCEPTED (P0)** — an unverified candidate, confirmed locally | `router.ts:14-17` action-kind union, `:31-53` `SIGNALS`, `:55-61` `DESTINATIONS`; consumes the registry only at `:65` | §5.3 — reclassified as a competing half; Gate 2 converges both |
 | 8 | Baseline is read-only, selected-node, brokered | **ACCEPTED (P0)**, with one sub-claim refuted | All-node: `baseline/route.ts:18,23` → `run-baseline.mjs:382-386`. Mutating: `:330-338,341-348,361-369`. Not brokered: `:309-318` raw `exec`. **But audited**: `:270,298,304` | §5.6 — reclassified as a mutating all-node gate; `POST /api/resource/verify` chosen as the first-journey action, property by property |
-| 9 | Blanket Gate 2/3/5 freeze | **ACCEPTED (P1)** | #921 body: "freeze further Claude mutations in the Environment path; preserve reusable backend/API/data work"; PR #927's 39 files contain no `workbench-action-registry.ts` and no `router.ts` | §3 — Gate 2 `EXTEND`, dependency-gated; Gates 3/5 `BLOCKED_RESERVATION` on the measured file set |
+| 9 | Blanket Gate 2/3/5 freeze | **ACCEPTED (P1)** | #921 body: "freeze further Claude mutations in the Environment path; preserve reusable backend/API/data work"; PR #927's **54** files contain no `workbench-action-registry.ts` and no `router.ts`, and nothing under `lib/system/`, `app/api/fabric/`, `lib/fabric/` or `*/execution-fabric/` | §3 — Gate 2 `EXTEND`, dependency-gated; Gates 3/5 `BLOCKED_RESERVATION` on the measured file set |
 | 10 | `BLOCKED_AUDIT_FREEZE` | **ACCEPTED (P1)** | `multi-agent-operator-playbook.md:178-193` state list; `:196-198` forbids substituting reason codes for state names | §3 — canonical states with a separate reason code |
 | 11 | Gate 1 `RELEASABLE` | **ACCEPTED (P1)** | `charter:464-470`; `AGENTS.md:9-10`; no bounded child packet exists | §3 — `FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED`, then **cleared in this same revision** by opening #990; §9 |
 | 12 | Fallback VRAM projects `UNKNOWN` | **ACCEPTED (P1)** | `probe-windows.ps1:116` emits `AdapterRAM` as `vram_bytes`; `:125` only warns | §7.4 — a `vram_source` field and explicit qualified-lower-bound projection rules; §7.5 invariant 7 |

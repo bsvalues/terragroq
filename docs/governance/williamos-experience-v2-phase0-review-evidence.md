@@ -145,7 +145,7 @@ predecessor and does not mention `lib/intent/router.ts`. The map's §5.3 records
 
 ### PR #927 — `codex/environment-frontend-takeover-921` (OPEN)
 
-State: OPEN, `mergeable: CONFLICTING` as of 2026-08-24. 39 files. The Gate-relevant reservations,
+State: OPEN, `mergeable: CONFLICTING` as of 2026-08-24. **54 files.** The Gate-relevant reservations,
 reproducible with `gh pr view 927 --json files`:
 
 ```
@@ -166,7 +166,27 @@ migrations/0013-environment-world.sql · drizzle/0000_williamos_init.sql
 Not present in that list, and therefore not reserved by this lane:
 `lib/intent/workbench-action-registry.ts`, `lib/intent/router.ts`, and every path under
 `lib/system/`, `app/api/fabric/`, `lib/fabric/`, `scripts/execution-fabric/`,
-`config/execution-fabric/`.
+`config/execution-fabric/`. Verified against the complete 54-entry listing, not a truncated one.
+
+**One overlap worth recording, and it is not a collision.** PR #927 modifies
+`scripts/runtime-operator/operational-kernel.mjs` — the module PR #989's doctrine test exercises
+through `runOperationalKernelCycle`. Different files, shared contract, so it was checked directly:
+
+```sh
+git diff origin/main...origin/codex/environment-frontend-takeover-921 \
+  -- scripts/runtime-operator/operational-kernel.mjs \
+  | grep -E '^[+-]' | grep -iE 'isOwnerWall|ownerDecisionRequired|FAILED_TERMINAL|RATE_LIMIT'
+```
+
+#927's changes are additive: a null-safe sort, extra `validate` arguments, a `publishEnvironmentWorld`
+step, and a new `WAITING_ENVIRONMENT` state. It does **not** touch `isOwnerWall`, the default failure
+branch, or the rate-limit parsing — the three behaviours #989's test pins. The two PRs are compatible.
+
+More than compatible, in fact: #927's new `WAITING_ENVIRONMENT` carries
+`ownerDecisionRequired: false` and a `retryAfter`, which is the owner-directed execution doctrine
+applied independently by another lane before that doctrine was written down. That is corroboration,
+not coincidence, and it is the strongest available evidence that #989 encodes a rule the system was
+already reaching for.
 
 ### `origin/wb/primary-experience-replacement` — `REPOSITORY_VERIFIED`
 
