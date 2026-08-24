@@ -1557,6 +1557,54 @@ describe("Gate 1 - the used-VRAM seam and the pins that must move with it", () =
     expect(result.stderr).toContain("identity contract version is not williamos-node-identity/1")
   })
 
+  it("refuses an identity contract whose entry carries no authority, instead of skipping the check (AUTH-1)", () => {
+    // The authority comparison skips a node whose expected authority is falsy. As a literal in the
+    // core that could not happen; as a FILE, removing one `authority` key kept the roster check
+    // passing while silently disabling allow/deny/bounded comparison for that node -- and assembly
+    // still reported success. A wall that quietly stops applying is worse than no wall.
+    const root = temporaryDirectory()
+    const contract = JSON.parse(
+      fs.readFileSync(path.join(repositoryRoot, "config/execution-fabric/node-identity-contract.json"), "utf8"),
+    ) as JsonObject
+    delete ((contract.nodes as JsonObject).aegis as JsonObject).authority
+    const strippedPath = path.join(root, "contract.json")
+    fs.writeFileSync(strippedPath, JSON.stringify(contract))
+    const result = spawnSync(
+      process.execPath,
+      [assemblerPath, "--seed", seedPath, "--identity-contract", strippedPath, "--out", path.join(root, "out.json")],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    )
+
+    expect(result.status).toBe(2)
+    expect(result.stderr).toContain("identity contract entry aegis carries no allow/deny authority")
+    expect(fs.existsSync(path.join(root, "out.json"))).toBe(false)
+  })
+
+  it("fails an assembled node the contract does not describe, rather than waving it through", () => {
+    const root = temporaryDirectory()
+    const contract = JSON.parse(
+      fs.readFileSync(path.join(repositoryRoot, "config/execution-fabric/node-identity-contract.json"), "utf8"),
+    ) as JsonObject
+    ;(contract.nodes as JsonObject).aegis = { hostnames: ["aegis"], authority: { allow: ["something-else"], deny: [] } }
+    const contractPath = path.join(root, "contract.json")
+    fs.writeFileSync(contractPath, JSON.stringify(contract))
+    const result = spawnSync(
+      process.execPath,
+      [assemblerPath, "--seed", seedPath, "--identity-contract", contractPath, "--out", path.join(root, "out.json")],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    )
+
+    expect(result.status).toBe(2)
+    expect(result.stderr).toContain("aegis: authority allow set differs from the reviewed identity contract")
+  })
+
+  it("keeps the schema $id naming the version the schema actually is (SCHEMA-1)", () => {
+    // A resolver or cache keyed on `$id` would otherwise serve the changed 0.3 definition as v0.2.
+    const declaredVersion = ((schema.properties as JsonObject).schema_version as JsonObject).const
+
+    expect(schema.$id).toContain(`v${declaredVersion}`)
+  })
+
   it("queries used VRAM on both dialects without dropping driver_version", () => {
     const windows = fs.readFileSync(path.join(repositoryRoot, "scripts/execution-fabric/probe-windows.ps1"), "utf8")
     const linux = fs.readFileSync(path.join(repositoryRoot, "scripts/execution-fabric/probe-linux.sh"), "utf8")

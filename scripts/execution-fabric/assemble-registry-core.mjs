@@ -58,6 +58,19 @@ if (identityContract?.contract !== 'williamos-node-identity/1') {
 const canonicalAuthority = Object.fromEntries(
   Object.entries(identityContract.nodes ?? {}).map(([id, entry]) => [id, entry.authority])
 );
+// Every roster entry must actually carry authority, checked here rather than trusted.
+//
+// The comparison below skips a node whose expected authority is falsy. When the catalogue was a
+// literal in this file that could not happen, but a contract is a FILE: an entry with its `authority`
+// key removed would keep the roster check passing while silently disabling the allow/deny/bounded
+// comparison for that node. A wall that quietly stops applying is worse than no wall, because the
+// assembly still reports success.
+for (const [id, authority] of Object.entries(canonicalAuthority)) {
+  if (!authority || !Array.isArray(authority.allow) || !Array.isArray(authority.deny)) {
+    console.error(`FABRIC_REGISTRY_INVALID: identity contract entry ${id} carries no allow/deny authority`);
+    process.exit(2);
+  }
+}
 const canonicalNodeIds = Object.keys(canonicalAuthority);
 
 function typeMatches(value, expected) {
@@ -668,7 +681,11 @@ for (const n of nodes) {
     }
   }
   const expectedAuthority = canonicalAuthority[n.id];
-  if (expectedAuthority) {
+  if (!expectedAuthority) {
+    // An assembled node the contract does not describe has no reviewed authority to be compared
+    // against. That is a fail-closed condition, not a node to wave through.
+    errors.push(`${n.id}: no reviewed authority in the identity contract`);
+  } else {
     const rawAllow = n.authority?.allow ?? [];
     const rawDeny = n.authority?.deny ?? [];
     const actualAllow = [...new Set(rawAllow)].sort();

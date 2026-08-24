@@ -129,6 +129,57 @@ describe("Invariant 1 - accelerator identity is a UUID or PCI bus id, never a na
   })
 })
 
+describe("Invariant 1, continued - findings from the independent adversarial review", () => {
+  it("does not merge two nodes' cards that share a PCI bus address (GPU-1)", () => {
+    // A PCI bus id is an address on ONE host's bus. `0000:01:00.0` names a different card on every
+    // machine that has one, so keying on it unscoped merged two nodes' accelerators into one object.
+    const graph = project([
+      inventoryNode({ id: "hermes-node", gpus: [{ id: "gpu0", uuid: null, pci_bus_id: "0000:01:00.0" }] }),
+      inventoryNode({
+        id: "omen",
+        identity: { hostname: "OMEN", machine_id_sha256: OTHER_PIN },
+        gpus: [{ id: "gpu0", uuid: null, pci_bus_id: "0000:01:00.0" }],
+      }),
+    ])
+    const [first, second] = acceleratorObjects(graph)
+
+    expect(first.canonicalKey).not.toBe(second.canonicalKey)
+    expect(first.objectId).not.toBe(second.objectId)
+  })
+
+  it("treats the same PCI address in different case as the same slot, not a new card", () => {
+    const lower = acceleratorObjects(project([inventoryNode({ gpus: [{ id: "gpu0", pci_bus_id: "0000:01:00.0" }] })]))
+    const upper = acceleratorObjects(project([inventoryNode({ gpus: [{ id: "gpu0", pci_bus_id: "0000:01:00.0".toUpperCase() }] })]))
+
+    expect(lower[0].canonicalKey).toBe(upper[0].canonicalKey)
+  })
+
+  it("gives an unresolved accelerator NO canonical key, so history cannot accumulate on it (GPU-2)", () => {
+    // `inheritsHistory: false` was a description. It did not stop a consumer keying history on
+    // `objectId`, which for an unresolved card is derived from the node and the slot -- so replacing
+    // one unresolved card with another in the same slot produced the same string.
+    const before = acceleratorObjects(
+      project([inventoryNode({ gpus: [{ id: "gpu0", uuid: null, pci_bus_id: null, model: "Quadro K2200" }] })]),
+    )
+    const after = acceleratorObjects(
+      project([inventoryNode({ gpus: [{ id: "gpu0", uuid: null, pci_bus_id: null, model: "Tesla P40" }] })]),
+    )
+
+    expect(before[0].canonicalKey).toBeNull()
+    expect(after[0].canonicalKey).toBeNull()
+    // The render key may still collide -- that is what a slot is. The canonical key may not exist.
+    expect(before[0].objectId).toBe(after[0].objectId)
+  })
+
+  it("keeps a UUID key global, because a GPU UUID already is", () => {
+    const graph = project([
+      inventoryNode({ id: "hermes-node", gpus: [{ id: "gpu0", uuid: "GPU-1111" }] }),
+    ])
+
+    expect(acceleratorObjects(graph)[0].canonicalKey).toBe("accelerator:uuid:GPU-1111")
+  })
+})
+
 describe("Invariant 2 - accelerators enumerate without parsing any presentation string", () => {
   it("exposes accelerators as structured children of the node", () => {
     const graph = project([
@@ -206,6 +257,54 @@ describe("Invariant 4 - a probe past the freshness bound projects stale, never l
     // Not `stale` either: staleness says a measurement aged out, and this one was never taken.
     expect(node.truthState).not.toBe("stale")
     expect(node.reason).toMatch(/declared evidence/)
+  })
+
+  it("never projects future-dated evidence as live (TIME-1)", () => {
+    // `ageSeconds > ttlSeconds` is false for a negative age, so a timestamp a day in the future read
+    // as a fresh measurement. It is not stale either -- it was never aged out, it is incoherent.
+    const future = new Date(NOW + 86_400_000).toISOString()
+    const graph = project(
+      [inventoryNode({ evidence: { observed_at: future, confidence: "observed", ttl_seconds: 300 } })],
+      { HERMES: { transport: "ssh", host: "HERMES" } },
+      { HERMES: { reachable: true, observedIdentity: { machine_id_sha256: PIN } } },
+    )
+    const [node] = nodeObjects(graph)
+
+    expect(node.truthState).toBe("unknown")
+    expect(node.truthState).not.toBe("live")
+    expect(node.reason).toMatch(/in the future/)
+  })
+
+  it("tolerates ordinary clock skew rather than calling it the future", () => {
+    const slightlyAhead = new Date(NOW + 5_000).toISOString()
+    const graph = project(
+      [inventoryNode({ evidence: { observed_at: slightlyAhead, confidence: "observed", ttl_seconds: 300 } })],
+      { HERMES: { transport: "ssh", host: "HERMES" } },
+      { HERMES: { reachable: true, observedIdentity: { machine_id_sha256: PIN } } },
+    )
+
+    expect(nodeObjects(graph)[0].truthState).toBe("live")
+  })
+
+  it("lets an aged observation age the node even when the inventory record is fresh (TIME-2)", () => {
+    // `observedAt` was declared on the observation and never read, so the projection reported the
+    // freshness of the RECORD rather than of the observation that promoted it.
+    const graph = project(
+      [inventoryNode()],
+      { HERMES: { transport: "ssh", host: "HERMES" } },
+      {
+        HERMES: {
+          reachable: true,
+          observedIdentity: { machine_id_sha256: PIN },
+          observedAt: ANCIENT,
+        },
+      },
+    )
+    const [node] = nodeObjects(graph)
+
+    expect(node.promotion.promoted).toBe(true)
+    expect(node.truthState).toBe("stale")
+    expect(node.truthState).not.toBe("live")
   })
 
   it("gives system-truth a stale state distinct from unknown", () => {

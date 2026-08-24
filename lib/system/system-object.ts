@@ -73,8 +73,21 @@ export type AcceleratorIdentity =
 
 export interface AcceleratorObject {
   kind: "ACCELERATOR"
-  /** Stable object key. For unresolved identity it is scoped to the node and never reused as a pin. */
+  /**
+   * A key for addressing this object in a single projection -- for rendering, diffing one graph
+   * against another, React keys. It is NOT an identity pin. See `canonicalKey`.
+   */
   objectId: string
+  /**
+   * The ONLY key against which canonical history may be accumulated, and `null` whenever identity is
+   * unresolved.
+   *
+   * `objectId` cannot serve this purpose. For an unresolved card it has to be derived from the node
+   * and the slot, because there is nothing else to derive it from -- which means swapping one
+   * unresolved card for another in the same slot produces the same string. Saying
+   * `inheritsHistory: false` in a field did not stop a consumer keying history on it; `null` does.
+   */
+  canonicalKey: string | null
   nodeId: string
   identity: AcceleratorIdentity
   vendor: string
@@ -271,6 +284,22 @@ function projectAcceleratorIdentity(gpu: InventoryGpu): AcceleratorIdentity {
   })
 }
 
+/**
+ * Clock skew between the acquiring host and the probed node is real and small; a timestamp a day
+ * ahead is not skew. This is the width of "close enough to now", not a licence to accept the future.
+ */
+const FUTURE_TOLERANCE_SECONDS = 60
+
+function observationAgeSeconds(
+  observation: EndpointObservation | undefined,
+  nowMs: number,
+): number | null {
+  if (!observation?.observedAt) return null
+  const parsed = Date.parse(observation.observedAt)
+  if (!Number.isFinite(parsed)) return null
+  return (nowMs - parsed) / 1000
+}
+
 function evidenceAgeSeconds(node: InventoryNode, nowMs: number): number | null {
   const observedAt = node.evidence?.observed_at
   if (!observedAt) return null
@@ -289,12 +318,21 @@ function projectAccelerators(node: InventoryNode, truthState: ObjectTruthState):
       annotations.push("VRAM_LOWER_BOUND_ONLY")
     }
     if (!identity.resolved) annotations.push("IDENTITY_UNRESOLVED")
+    // A new UUID in the same slot is a NEW object, so the key is the identity -- never the slot.
+    //
+    // A GPU UUID is globally unique, so it stands alone. A PCI bus id is NOT: it is an address on one
+    // host's bus, and `0000:01:00.0` names a different card on every machine that has one. Keying on
+    // it unscoped merges two nodes' cards into a single object. It is also normalized, because the
+    // same address printed with different case is the same slot, not a new one.
+    const canonicalKey = identity.resolved
+      ? identity.kind === "uuid"
+        ? `accelerator:uuid:${identity.value}`
+        : `accelerator:${node.id}:pci-bus-id:${identity.value.toLowerCase()}`
+      : null
     return frozen({
       kind: "ACCELERATOR" as const,
-      // A new UUID in the same slot is a NEW object, so the key is the identity -- never the slot.
-      objectId: identity.resolved
-        ? `accelerator:${identity.kind}:${identity.value}`
-        : `accelerator:identity-unresolved:${node.id}:${gpu.id}`,
+      objectId: canonicalKey ?? `accelerator:identity-unresolved:${node.id}:${gpu.id}`,
+      canonicalKey,
       nodeId: node.id,
       identity,
       vendor: String(gpu.vendor ?? "unknown"),
@@ -394,16 +432,33 @@ export function projectSystemObjects(input: ProjectionInput): SystemObjectGraph 
       // carries a perfectly well-formed `observed_at` -- the seed's is `2026-08-09T21:57:00Z`. Age it
       // against a non-zero ttl and a record that was never probed reports `live`. It is not `stale`
       // either: staleness says a measurement aged out, and this one was never taken.
+      // The observation supplied for THIS request has its own age, and it is the binding one when it
+      // is older than the inventory's. Without this, an aged endpoint observation sitting beside
+      // fresh inventory evidence projected `live` -- the projection would have been reporting the
+      // freshness of the record rather than of the observation that promoted it.
+      const observationAge = observationAgeSeconds(observation, nowMs)
+      const effectiveAge = observationAge === null
+        ? ageSeconds
+        : ageSeconds === null
+          ? observationAge
+          : Math.max(ageSeconds, observationAge)
+
       if (node.evidence?.confidence !== "observed") {
         truthState = "unknown"
         reason = reason ?? "declared evidence: no live observation has been recorded for this node"
-      } else if (ageSeconds === null) {
+      } else if (effectiveAge === null) {
         truthState = "unknown"
         reason = reason ?? "no evidence timestamp"
-      } else if (ageSeconds > ttlSeconds) {
+      } else if (effectiveAge < -FUTURE_TOLERANCE_SECONDS) {
+        // Future-dated evidence is not aged out, so it is not `stale` -- it is incoherent, and the
+        // one thing it must never be is `live`. `ageSeconds > ttlSeconds` is false for a negative
+        // age, so without this branch a timestamp a day in the future read as a fresh measurement.
+        truthState = "unknown"
+        reason = reason ?? `evidence is dated ${Math.round(-effectiveAge)}s in the future`
+      } else if (effectiveAge > ttlSeconds) {
         // A probe past its bound is `stale`, never `live`.
         truthState = "stale"
-        reason = reason ?? `evidence age ${Math.round(ageSeconds)}s exceeds ttl ${ttlSeconds}s`
+        reason = reason ?? `evidence age ${Math.round(effectiveAge)}s exceeds ttl ${ttlSeconds}s`
       } else {
         truthState = "live"
       }
