@@ -206,12 +206,17 @@ git fetch origin
 for b in $(gh pr list --state open --limit 50 --json headRefName -q '.[].headRefName'); do
   echo "== $b"
   git diff --name-only "origin/main...origin/$b" \
-    | grep -E '^(lib/system/|app/api/fabric/|lib/fabric/|scripts/execution-fabric/|config/execution-fabric/)'
+    | grep -E '^(lib/system/|app/api/fabric/|lib/fabric/|scripts/execution-fabric/|config/execution-fabric/|tests/(system-object-projection|execution-fabric-registry)\.test\.ts)'
 done
 ```
 
+Round 2 of the review caught that an earlier version of this command claimed to cover `tests/` and
+then omitted it from the regex. The two reserved test paths are now named explicitly, which is the
+correct scope: Gate 1 reserves `tests/system-object-projection.test.ts` and
+`tests/execution-fabric-registry.test.ts`, not the whole directory.
+
 Result, 2026-08-24, across all nine open PR lanes: **no output**. No open lane touches any Gate 1
-source path.
+source path or either reserved test.
 
 A full sweep of all 404 remote refs found three branches that do touch those paths. All are
 historical:
@@ -293,5 +298,31 @@ Remediation lesson, recorded because it generalizes: every accepted P0 arose fro
 descriptions. The corrective discipline is in the map's §1 evidence classes and in the requirement
 that every ownership claim cite a line.
 
-Re-review of revision 2 is tracked as `CONT-EXPV2-P0-REVIEW-2` (map §9). Round 2 runs fewer parallel
-lanes, because the round-1 handshake failures correlated with lane count.
+## 6. Round-2 independent adversarial review — `SESSION_OBSERVED`, summarized
+
+Sourced internally through a bounded Codex lane against commit `903cc243`, again with no owner
+involvement. The lane pinned all reads to that commit when the branch advanced mid-review, and said
+so — correct discipline, and worth recording as the standard.
+
+**Verdict: `MAP_DEFECTIVE`. 19 P0, 9 P1, 3 P2.** All 31 accepted after local re-verification; none
+refuted. Adjudicated row by row in map §11.
+
+The result that matters is not any single row. Revision 2 fixed **all 21** of round 1's accepted
+findings, and round 2 then found **more defects than round 1 had** — several inside revision 2's own
+corrections:
+
+- revision 2 corrected "baseline is read-only" and then called its audit `TRUE`; both audit calls
+  swallow failure;
+- revision 2 corrected the GPU-observer undercount and then asserted headroom was "already observed"
+  from code that only proves a producer exists;
+- revision 2 corrected `BLOCKED_AUDIT_FREEZE` for not being a canonical lifecycle state, and in the
+  same section introduced two more non-canonical statuses;
+- revision 2 corrected revision 1's read-only/mutating confusion about the first journey by making
+  the identical error in the opposite direction.
+
+That pattern is why map §1 now binds every ownership claim to behaviour-not-nomenclature, a stated
+search scope for every negative, and quoted rather than paraphrased requirements — and why Phase 0 is
+**not** declared `PASS` in revision 3.
+
+Re-review of revision 3 is tracked as `CONT-EXPV2-P0-REVIEW-3` (map §9). Round 3 must attack the three
+method patterns directly; a round that only re-checks rows will miss the same way round 2 did.

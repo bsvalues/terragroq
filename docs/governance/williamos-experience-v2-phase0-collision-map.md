@@ -7,18 +7,56 @@ Gate: `#987` Gate 0 — reconciliation freeze. Charter:
 Evidence artifact:
 [`williamos-experience-v2-phase0-review-evidence.md`](williamos-experience-v2-phase0-review-evidence.md).
 
-Status: `PASS — REMEDIATED AFTER INDEPENDENT ADVERSARIAL REVIEW (ROUND 1)`.
+Status: **`PHASE_0_NOT_PASSED — OWNERSHIP CLAIMS FAILED INDEPENDENT REVIEW TWICE`**
 
-Revision 2. The independent adversarial review the charter requires returned **`MAP_DEFECTIVE`**
-against revision 1. Every finding was re-verified against the code by the delivering lane before being
-accepted or refuted; §10 is the finding-by-finding register with verdicts and exact-line evidence.
-Revision 1's defective claims are corrected in place below, not softened — where revision 1 asserted
-something the code contradicts, the correction says so.
+Revision 3. Two rounds of independent adversarial review have now run against this map, and both
+returned `MAP_DEFECTIVE`:
 
-Phase 0 is declared `PASS` because every mandatory read has actually happened (§2), and because the
-map's ownership claims have now survived adversarial attack and local re-verification. An earlier
-revision claimed `COMPLETE` while mandatory evidence was inaccessible; that claim was wrong and is
-retracted in §2.
+| Round | Target | Verdict | P0 | P1 | P2 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | revision 1 | `MAP_DEFECTIVE` | 8 | 7 | 1 (deduplicated to 21 accepted, 3 refuted) |
+| 2 | revision 2 | `MAP_DEFECTIVE` | 19 | 9 | 3 |
+
+Revision 2 fixed all 21 of round 1's accepted findings and round 2 then found **more defects than
+round 1 had**, several of them inside revision 2's own corrections. That is the finding that matters,
+and it is bigger than any individual row in §10 or §11.
+
+### Why this map is not being declared PASS
+
+The defect is in the **method**, not only the contents. Every accepted P0 across both rounds falls
+into one of three patterns, and patching individual claims does not touch any of them:
+
+1. **Positive claims taken from names and comments instead of behaviour.** `governanceEvent` was
+   called hash-chained because a file header says "tamper-evident" — the schema has no chain
+   (§5.5). Baseline was called audited because `auditFabricAction` is called — both calls swallow
+   failure (§5.6). Probing was called brokered-only because the broker exists — `probeLocal` bypasses
+   it (§5.1).
+2. **Blanket negatives whose search scope was never stated.** "No second memory system, event
+   authority, or command registry was found on `main`" was asserted after searching only the
+   TypeScript surface, while `main` also holds 103 tracked files under `control-center/` and a Python
+   command registry with its own execution gate (§6.7).
+3. **Requirements paraphrased rather than read.** Revision 1 called the first journey read-only and
+   picked a mutating action; revision 2 called it read-only and picked a read-only action. The
+   charter says "one safe governed **mutation**" (`charter:273`). Neither revision opened the line
+   (§5.6).
+
+A Phase 0 map exists so that later phases inherit correct ownership. Declaring `PASS` on a document
+whose ownership claims have failed adversarial review twice would hand Gates 1 through 6 exactly the
+corrupted inheritance the charter says a collision map must prevent. So this revision records the
+corrections, records the method failure, and does **not** claim the gate.
+
+### The rule this map now binds itself to
+
+Every ownership claim from here must carry, inline:
+
+- **behaviour, not nomenclature** — cite the line that *does* the thing, and for anything described as
+  durable, audited, chained or guaranteed, cite what happens when it fails;
+- **stated search scope for every negative** — a "no second owner" claim names the surfaces searched
+  (TypeScript, Python, PowerShell, shell, config) or it is not a finding;
+- **the controlling requirement quoted, not paraphrased**, wherever a choice is justified by one.
+
+§2 records the earlier retraction of a `COMPLETE` claim made while evidence was inaccessible. This is
+the same failure one level up: a `PASS` claimed while the evidence had been read but not believed.
 
 ## 1. Session and repository truth
 
@@ -204,8 +242,9 @@ GATE 3, GATE 5: BLOCKED_RESERVATION
                     WORK. It is collision evidence, not a valid competing reservation, and must not
                     be extended.
 
-GATE 2: EXTEND, dependency-gated
+GATE 2: BLOCKED_DEPENDENCY
   reason code:      GATE1_PREREQUISITE + RESERVATION_NOT_YET_TAKEN
+  disposition:      EXTEND (a classification of the work, not a lifecycle state)
   basis:            #921's freeze is path-scoped to the Environment path; the Gate 2 registry seam
                     (lib/intent/workbench-action-registry.ts, lib/intent/router.ts) is outside it and
                     outside PR #927's measured file set.
@@ -255,7 +294,13 @@ path-scoped freeze does not reach it. #985's own disposition confirms it: #985 d
 string-valued GPU/memory/disk/service summaries as the subresource model."
 
 ```
-GATE 1: DEPENDENCY_CLEARED
+GATE 1: BLOCKED_DEPENDENCY
+  reason code:      PREDECESSOR_MAP_DEFECTIVE (round 2, S11)
+  note:             the bounded packet #990 exists and the reservation is uncontested, so the
+                    packet dependency is met. What blocks Gate 1 now is that its own scope in S7.2
+                    was written on defective premises -- most sharply the withdrawn registry-join
+                    (S4.1) and the missing vram_source/version-wall scope. #990 must be amended
+                    before its first commit.
   freeze scope:     clear -- outside #921's Environment-path freeze
   reservation:      uncontested -- measured above across the complete path set
   bounded packet:   #990 EXPERIENCE_V2_GATE1_SYSTEM_OBJECT_PROJECTION, opened under #987/#985 with
@@ -264,8 +309,10 @@ GATE 1: DEPENDENCY_CLEARED
                     charter:464-470 makes that packet the required predecessor of implementation, and
                     AGENTS.md:9-10 requires the active authority-matched Work Order. A documentation
                     PR is not that packet; #990 is.
-  history:          revision 2 opened at FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED, which was
-                    the correct state until #990 existed. CONT-EXPV2-GATE1-PACKET (S9) is CLEARED.
+  history:          revision 2 opened at FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED -- itself
+                    a non-canonical status, corrected here -- and cleared the packet dependency by
+                    opening #990. Round 2 then invalidated the scope that packet carries.
+                    CONT-EXPV2-GATE1-PACKET is CLEARED; CONT-EXPV2-GATE1-RESCOPE replaces it (S9).
 ```
 
 ## 4. ARCHITECTURAL COLLISION — competing System representations
@@ -330,27 +377,49 @@ letting `SystemObject` trust whichever it read first.
 
 #### The join and precedence rules Gate 1 must implement
 
+Round 2 of the review rewrote these rules, because revision 2 wrote them from what the transport
+registry *ought* to contain rather than from `route.ts:30-37`, which is the whole of it:
+`{ transport, host, user, os, role, enrolled }`. No machine-identity pin, no reachability field, no
+timestamp. Three of the four rules depended on fields that do not exist.
+
 ```
 IDENTITY, HARDWARE, OWNER-DIRECTED ROLE, AUTHORITY, EVIDENCE FRESHNESS
-    -> Execution Fabric inventory. Authoritative. A machine identity that is not pinned in the
-       seed is NOT promoted (README:42-44).
+    -> Execution Fabric inventory. Authoritative. A machine identity not pinned in the seed is NOT
+       promoted (README:42-44; assemble-registry-core.mjs:473-483).
 
-TRANSPORT, HOST, USER, ENROLMENT, REACHABILITY
-    -> transport registry. Authoritative. The Fabric inventory says nothing about how to reach a node.
+CONNECTION CONFIGURATION AND ENROLMENT (transport, host, user, os-dialect, enrolled)
+    -> transport registry. Authoritative for HOW to attempt a connection, and nothing more.
 
-JOIN
-    -> NOT string equality on the key. The seed's HERMES node has id "hermes-node" and hostname
-       "HERMES" (registry.seed.json:43-44), while the transport registry keys by short operational
-       name with a separate `host` field (tests/fabric-registry-writes.test.ts:21,25). Gate 1 owns an
-       explicit resolver; a name match is a hint, the machine identity pin is the proof.
+OBSERVED REACHABILITY AND FAILURE REASON
+    -> neither registry. Measured per request by the brokered probe (route.ts:113-127). The transport
+       registry has no reachability field; revision 2 assigned it one.
+
+JOIN -- and the resolver ALREADY EXISTS, so Gate 1 must not write a second one
+    -> The hostname-to-node-id mapping is hardcoded today in BOTH canonical probes:
+       probe-windows.ps1:10-12 (OMEN -> omen, HERMES -> hermes-node) and probe-linux.sh:51
+       (atlas -> atlas, aegis -> aegis). The assembler additionally holds its own hardcoded roster
+       (assemble-registry-core.mjs:655-660) AND its own canonical authority allow/deny catalogue per
+       node (:32+), enforced against the seed at :699-704.
+       So the seed is NOT the sole owner of identity, roster or authority -- three files hold copies.
+       Gate 1's job is to DERIVE those aliases from one contract, not to add a fourth owner.
+       Revision 2's "lib/system/registry-join.ts -- new" would have been exactly that fourth owner.
+
+    -> A transport record cannot be joined by machine pin before probing, because it carries no pin.
+       Ordering: transport data selects a PROVISIONAL ENDPOINT; the canonical probe then observes the
+       host identity; only a match against the reviewed seed pin promotes it to a canonical node.
 
 CONFLICT
-    -> the transport registry's `role` field is an operational label and MUST NOT override the seed's
-       owner-directed `role`. Where they disagree, project both and mark the transport side `stale`.
+    -> the transport registry's `role` is an operational label and MUST NOT override the seed's
+       owner-directed `role`. Where they disagree, project both and mark the transport side
+       CONFLICTING -- not `stale`. Staleness is a temporal claim and that record has no timestamp to
+       support one.
 
 ABSENCE
-    -> a node present in one registry and not the other still projects, with truthState `unknown` for
-       the missing half. Never fabricate the missing half; never drop the node.
+    -> inventory-only node: projects, with transport UNKNOWN.
+    -> transport-only record: an UNVERIFIED ENDPOINT CANDIDATE. It does NOT project as a canonical
+       SystemObject, because promotion requires an observed identity matching a reviewed pin.
+       Revision 2's symmetric rule would have promoted any line in a local JSON file to a node.
+    -> Never fabricate the missing half; never silently drop the record.
 ```
 
 ### 4.2 Accelerator truth on `main` — what the record actually says
@@ -459,7 +528,17 @@ pair; the resolution is its to make, and this map records the seam rather than r
 | **Navigation-target catalogue** | `lib/intent/workbench-action-registry.ts` (81 lines) | `EXTEND` | 4 static `mode` descriptors (`:12-17`) + capabilities derived from `supportingCapabilities` (`:44-51`), each `{id, kind: "mode"\|"capability", label, href, keywords, navigationAliases}`. `matchWorkbenchNavigationTarget` refuses ambiguity by returning `null` unless exactly one phrase matches — the disambiguation invariant the charter demands, and it must survive generalization. No object kind, no action kind, no authority field, no context ranking. |
 | **Intent → action-kind / destination catalogue** | `lib/intent/router.ts` | `EXTEND` — **competing half, previously misclassified** | Revision 1 called this merely "a consumer of the registry." It is not. `router.ts:31-53` owns `SIGNALS`, its own regex classification catalogue for answer/research/council/outcome/execution; `router.ts:55-61` owns `DESTINATIONS`, mapping each to an `{href, action}` pair; `router.ts:14-17` owns the action-kind union `respond \| research \| council_review \| start_outcome \| request_execution \| navigate`. It consumes `matchWorkbenchNavigationTarget` for the navigation case only (`:65`). **Two static catalogues, two owners, one concept.** |
 
-**Gate 2 must converge these two into one Object + Action Registry.** #987's finding — "existing
+| **Command catalogue with its own execution authority** | `scripts/williamos_commands.py`, `control-center/backend/command_center.py`, `control-center/backend/copilot/tools.py` | `COLLISION / ADAPT` — **third catalogue, found in round 2** | Revision 2 said "two halves". Wrong, and wrong in the most consequential direction: this one *gates execution*. `command_center.py:140` classifies every registered command with `allowed`, `runnable`, `confirmation_required`, `safety_tier` and `execution_path: "safety.py -> command_runner.py"`, and `copilot/tools.py:52-55` publishes "OpenAI/Ollama function schemas for **every registered command**" — the whole catalogue, callable by a model. 103 tracked files under `control-center/`, last moved 2026-07-14 (`ed289371`, #363). |
+
+**Gate 2 must converge these three into one Object + Action Registry**, and the third is the one that
+matters most: the charter's rule is that a registry **never grants authority**, and this catalogue
+carries a safety tier and a confirmation gate in front of a real execution path. Revision 2's "two
+halves" was not merely an undercount — it missed the only catalogue on `main` that already decides
+whether something may run.
+
+Disposition is a Gate 2 decision and this map does not pre-empt it: retire, migrate, bridge, or
+explicitly fence `control-center/`. What it may not be is unmentioned.
+ #987's finding — "existing
 `workbenchActionRegistry` is the predecessor for one Object + Action Registry, but it is currently
 navigation-only" — names only one of the two halves. This map records the second. Note also that
 `router.ts:23` hardcodes `executionAuthorized: false` and `authority.granted: false`: "the registry
@@ -469,7 +548,8 @@ never grants authority" is already shipped behavior, and must survive the merge.
 
 | Primitive | Current owner | Class | Note |
 | --- | --- | --- | --- |
-| Memory facts + authority lifecycle | `memoryFact` (`schema.ts:111`) | `EXTEND` | `authority` (`unreviewed→working→reviewed→canon→deprecated/superseded/archived`), `supersededById`, `stale`, `pinned`, `embedding vector(1024)`. Strong substrate. **No second memory database.** |
+| Memory facts + authority lifecycle | `memoryFact` (`schema.ts:111`) | `EXTEND` | `authority` (`unreviewed→working→reviewed→canon→deprecated/superseded/archived`), `supersededById`, `stale`, `pinned`, `embedding vector(1024)`. Strong substrate, and the canonical one. |
+| **Second memory database** | `control-center/backend/copilot/memory.py` | `COLLISION / ADAPT` — **found in round 2** | Revision 2 asserted "**No second memory database.**" That was false. This is a live SQLite store owning `sessions`, `messages`, `facts` and `fact_events` (`memory.py:24-52`), constructed at import time (`control-center/backend/app.py:54`) and served through `/api/memory/facts`, `/api/memory/review`, `/api/memory/export` (`app.py:426,448,453`). Worse than a duplicate store: `memory.py:54-63` defines `_FACT_AUTHORITY_STATES` as `intake, unreviewed, working, reviewed, canon, deprecated, superseded, archived` — **the canonical `memoryFact.authority` lifecycle, re-declared in a second system, plus one extra state**. Two owners of the same authority vocabulary is precisely the seam Gate 4 would have inherited. |
 | Context compartment / world scoping | — | `MISSING` | `memoryFact` has `userId` + `tags[]` and no governed compartment column. `documentChunk` likewise scopes by user. Doc 21's gap statement is confirmed in the schema. Gate 4 concern. |
 | Decision register | `decision` (`schema.ts:133`) | `EXTEND` | `status`, `authority` (binding/advisory/informational), `scope`, `evidence[]`, `locked`, `supersedesId`/`supersededById`. Maps onto `DECIDED`/`SUPERSEDED`. |
 | Doctrine | `doctrine` (`schema.ts:159`) | `REUSE` | `allowed[]`/`forbidden[]`/`requiresApproval[]` — the policy-diff substrate Gate 11 will need. |
@@ -481,13 +561,14 @@ never grants authority" is already shipped behavior, and must survive the merge.
 
 | Primitive | Current owner | Class | Note |
 | --- | --- | --- | --- |
-| **Governance authority log** | `governanceEvent` (`schema.ts:839`) via `lib/governance/events.ts` | `REUSE` — canonical | Closed event-type set (`events.ts:11-34`), `beforeHash`/`afterHash`, never updated in place. This is the authority log. |
+| **Governance append log** | `governanceEvent` (`schema.ts:839`) via `lib/governance/events.ts` | `REUSE`, **with its guarantees stated correctly** | Closed event-type set (`events.ts:11-34`) and never updated in place — both true. But revision 2 called it "hash-chained" and "tamper-evident", and it is neither. `beforeHash`/`afterHash` (`events.ts:64-65`) are independent hashes of the *before* and *after payloads*; there is no prior-event hash, no sequence, no head pointer (`schema.ts:839-853`), so nothing detects a deleted or reordered event. And `appendGovernanceEvent` **swallows its own write failures** into a `console.log` (`events.ts:56-71`), by explicit design — "governance logging must never itself become a failure that blocks the operator" (`:52-54`). It is a best-effort append log with per-event payload hashes. |
+| **Signed owner-authority status chain** | `scripts/multi-agent-operator/authority-events.mjs` | `REUSE` — **a distinct authority record, found in round 2** | A separate signed, linked chain governing dispatch and revocation, consumed by `scripts/multi-agent-operator/codex-coordinator-adapter.mjs`. It is not the same thing as `governanceEvent`, and revision 2 conflated the two by giving `governanceEvent` this one's properties. Gate 6's `CAUSE` sources must include it. |
 | **Register narrative feed** | `eventLog` (`schema.ts:1210`) via `lib/registers/events.ts` | `REUSE` — **not a competing authority** | Open `type: string` with `logEvent`/`getRecentEvents` (`registers/events.ts:14-31`). No hash chain, no closed type set. It is a display feed, not an authority. Recorded here because a reviewer flagged the pair as a possible second event authority; it is not, but Gate 6 must not confuse them. |
 | Evidence records | `evidenceRecord` (`schema.ts:809`) | `REUSE` | |
 | Authority grants | `authorityGrant` (`schema.ts:859`) | `REUSE` | Approval ≠ authority; explicit unexpired unrevoked grant required. |
 | Queue receipts | `outcomeQueueAcquisitionReceipt`, `outcomeQueueMutationReceipt`, `goalOutcomeIntakeReceipt` | `REUSE` | |
 | Conflicts, locks | `conflictRecord`, `lockRecord` | `REUSE` | |
-| `NOW`/`TREND`/`HISTORY`/`CAUSE` projection | — | `MISSING` | Gate 6. Projection only, and it projects from the **hash-chained governance log plus evidence/receipts**, not from the narrative feed. #987: "do not create a new generic event authority." |
+| `NOW`/`TREND`/`HISTORY`/`CAUSE` projection | — | `MISSING` | Gate 6. Projection only, over **`governanceEvent` + `evidenceRecord` + receipts + the signed authority chain** — not the narrative feed, and not a new authority. #987: "do not create a new generic event authority." Gate 6 must also decide what to do about the two swallowed-write paths above: a projection built on a log that may silently be missing entries will present absence as evidence of absence. |
 
 ### 5.6 Governed mutation — and the corrected "one safe action"
 
@@ -515,9 +596,34 @@ fleet-wide start / transfer / force-stop cycle is what a safe object action look
 authorization is a session check and nothing more (`baseline/route.ts:13-14`) — no authority grant, no
 fencing.
 
-#### The corrected first-journey action
+#### The replacement revision 2 nominated - withdrawn
 
-**`POST /api/resource/verify`** satisfies every property revision 1 wrongly attributed to baseline:
+Revision 2 nominated **`POST /api/resource/verify`** as "the corrected first-journey action". Round 2
+of the review dismantled that, on four independent grounds, the first of which is fatal alone:
+
+1. **The charter asks for a mutation, and this is a read.** `charter:273` - "The first implementation
+   journey needs only **one safe governed mutation**"; `charter:488-489` - "Owner performs one safe
+   governed **adjustment**. WilliamOS verifies actual post-state." Revision 1 picked a mutating action
+   and mis-described it as read-only; revision 2 picked a read-only action and mis-described the
+   requirement as read-only. Same root cause, opposite direction: neither revision read the line.
+2. **It cannot reach HERMES.** The only probe command is POSIX shell -
+   `if [ -e ... ]; then du -sb ...; else echo MISSING; fi` (`probe.ts:144-150`) - while `brokeredExec`
+   sends local and Windows nodes through PowerShell (`broker.mjs:102,107`). HERMES is a Windows node,
+   so the first proof `SYSTEM -> HERMES -> P40` is structurally out of reach, and the dialect failure
+   would surface as *node unreachable* rather than as a dialect mismatch.
+3. **It selects a `project_resource`, not a SystemObject.** A different object graph entirely.
+4. **It is not user-scoped.** `verify/route.ts:31-32` checks only that a session exists; the lookups at
+   `:46-54` and `:56-60` filter on `identity` alone, with no `userId` predicate. Any authenticated user
+   can name any identity - including another user's record - and cause a brokered probe against the
+   node that record names. Revision 2 held this route up as the exemplar of governed action.
+
+Its genuinely good properties survive as a **read-only predecessor**, and Gate 2 should keep them:
+fixed probe catalogue chosen by KIND and never by caller text (`probe.ts:14,22-24`), target derived
+from the record with unsafe paths refused rather than escaped (`:87-101`), brokered with audit
+(`verify/route.ts:83-84`), skips reported rather than dropped (`:125-140`).
+
+| Property, as revision 2 claimed it | What the code does |
+| --- | --- |
 
 | #985's requirement | How the route meets it |
 | --- | --- |
@@ -527,7 +633,7 @@ fencing.
 | governed execution | Dispatched through `brokeredExec` with `action: "resource-verify"` (`verify/route.ts:83-84`) — audited, unknown node denied. |
 | target not inferred | Node comes from the record's identity prefix; unsafe or relative paths are refused, not escaped (`probe.ts:87-101`). |
 | observed post-state | `readObservation` returns `exists`, `observedBytes`, `recordedBytes`, `agrees` (`probe.ts:35-44`, `verify/route.ts:87`). |
-| evidence | Appends a governance event (`verify/route.ts:1,117`). |
+| evidence | *Attempts* a governance event (`verify/route.ts:1,117`) - but `appendGovernanceEvent` swallows insertion failures (`events.ts:56-71`), so evidence is attempted, never guaranteed. |
 | honest partiality | What could not be probed is reported with a reason, not silently dropped (`probe.ts:125-140`). |
 
 And the audit itself is fail-loud where baseline's is not. On the success path `brokeredExec` awaits
@@ -540,11 +646,25 @@ So the two candidates differ on the property the charter cares about most. Basel
 mutation whose audit may silently not happen; `resource/verify` is a single read whose audit must
 happen, and which appends a governance event on top.
 
-That is the whole journey — `select object → deterministic action → governed execution → observed
-post-state → evidence` — already shipped, already governed, and mutating nothing.
+#### So which action proves the first journey? None on `main` today.
 
-The relocate/restore pair in `lib/resource/mutation.ts` remains the model for how a *mutating* action
-must be shaped, and must not be pulled forward for demo value.
+That is the honest answer, and saying it is more useful than nominating a third wrong candidate. Every
+existing option fails a named property:
+
+| Candidate | Fails |
+| --- | --- |
+| `POST /api/fabric/baseline` | all-node, not selected; unbrokered raw transport; best-effort audit |
+| `POST /api/resource/verify` | not a mutation; POSIX-only, so it cannot reach HERMES; wrong object graph; not user-scoped |
+| `relocate` / `restore` (`lib/resource/mutation.ts`) | correctly shaped, but they move a multi-hundred-gigabyte source or restore a database - far past "safest", and the charter forbids inventing an unsafe action for the demo |
+
+**Gate 2 therefore builds the first governed action rather than adopting one.** Its shape is already
+settled by `lib/resource/mutation.ts`: chosen from a fixed catalogue by name and never from caller
+text, target derived from the record and never from the request, unsafe input refused rather than
+escaped, nothing deletes. What Gate 2 must add, taken directly from the failures above: a SystemObject
+subject, dialect-aware execution through the broker, session-user scoping on every lookup, durable
+evidence rather than best-effort, and verified post-state.
+
+Recorded as `CONT-EXPV2-FIRST-ACTION` (§9).
 
 ### 5.7 Native shell
 
@@ -568,7 +688,7 @@ must be shaped, and must not be pulled forward for demo value.
 4. **`SystemName` omits OMEN** — §4. Concrete, small, in Gate 1 scope.
 5. **Two command/action catalogues** — `workbench-action-registry.ts` and `lib/intent/router.ts`
    (§5.3). Gate 2 converges them.
-6. **GPU observation is spread across eight call sites, not two.** Revision 1 counted two and
+6. **GPU observation is spread across eight producer rows — nine executable query sites — not two.** Revision 1 counted two and
    concluded headroom was fabric-wide unobtainable. The full enumeration on `main`:
 
    | Call site | Query | Class (#974) |
@@ -582,15 +702,36 @@ must be shaped, and must not be pulled forward for demo value.
    | `lab-control/hermes/lab-health.ps1:26` | `name,temperature.gpu,memory.used,memory.total,utilization.gpu` | `SPECIALIST_RUNTIME_METRIC` — operator health display |
    | `lab-control/LabControl.psm1:403` | `name` only | `SPECIALIST_RUNTIME_METRIC` — display |
 
-   **Used VRAM and headroom are already observed and already validated on this fabric**:
-   `pinned-evidence-registry.mjs:148` requires `vram_total_mb`, `vram_free_mb` and `vram_used_mb` per
-   GPU, and `:159,162,179` enforce `gpu_vram_headroom_mb` before an inference capability may read
-   `READY`. What is missing is narrow and exact: **`memory.used` is absent from the node-probe query
+   **Used VRAM and headroom are already produced and validated on this fabric** — stated as capability,
+   not as an observation this map witnessed: `pinned-evidence-registry.mjs:148` *requires*
+   `vram_total_mb`, `vram_free_mb` and `vram_used_mb` per GPU, and `:159,162,179` enforce a
+   `gpu_vram_headroom_mb` minimum before an inference capability may read `READY`. That validation
+   checks numeric shape and a free-VRAM threshold; it does **not** check used/free/total consistency,
+   and the repository cannot show that any particular snapshot was ever collected. Revision 2 wrote
+   "already observed", which claimed a session fact from a code fact.
+
+   And the pinned-evidence path is more than a metric consumer: `recommend-pinned-placement.mjs:108`
+   with `pinned-evidence-registry.mjs:443,511` derives a **competing node inventory** whose GPU array
+   is keyed by index with null UUID and PCI data. It must be classified as a placement-only
+   projection, forbidden from owning or overwriting canonical identity, and required to bind
+   observations by durable GPU identity or leave them UNKNOWN. What is missing is narrow and exact: **`memory.used` is absent from the node-probe query
    and from the canonical registry GPU schema**, so headroom cannot reach the System Object Graph
    *through the canonical inventory path*. That is the gap Gate 1 closes.
-7. No second scheduler, memory system, event authority, node **inventory**, or command registry beyond
-   those named above was found on `main`. The `DO-NOT-REBUILD` register's remaining rows still have
-   exactly one owner.
+7. **The blanket negative revision 2 asserted here was false, and the reason is worth naming.**
+   Revision 2 said "no second scheduler, memory system, event authority, node inventory, or command
+   registry was found on `main`." It had searched only the TypeScript/Next surface, while calling
+   `main` implementation truth. `main` also contains 103 tracked files under `control-center/` and a
+   Python command registry, and round 2 of the review found both. Corrected:
+
+   | Concept | Canonical owner | Second owner on `main` |
+   | --- | --- | --- |
+   | memory + fact authority lifecycle | `memoryFact` (`schema.ts:111`) | `control-center/backend/copilot/memory.py:24-63` — §5.4 |
+   | command catalogue + execution gate | `workbench-action-registry.ts`, `lib/intent/router.ts` | `scripts/williamos_commands.py` via `command_center.py:140`, `copilot/tools.py:52` — §5.3 |
+   | event authority | `governanceEvent` | `scripts/multi-agent-operator/authority-events.mjs` (signed chain — a *distinct* record, not a duplicate) — §5.5 |
+   | node identity / role / authority | `registry.seed.json` | `assemble-registry-core.mjs:32+` `canonicalAuthority`, enforced at `:699-704`; roster at `:655-660`; hostname→node-id maps in `probe-windows.ps1:10-12` and `probe-linux.sh:51` — §4.1 |
+
+   A negative claim is only as wide as the search behind it. Any future "no second owner" statement in
+   this program must state the surfaces it searched, or it is not a finding.
 
 ## 7. Gate 1 — the smallest valid Phase 1 slice, rescoped
 
@@ -628,15 +769,24 @@ Revision 1's scope stopped at the probe scripts. The canonical record is schema-
 digest-pinned, so a probe field the schema does not know is not an addition — it is a rejection. The
 full seam:
 
-- **`config/execution-fabric/registry.schema.json`** — extend `$defs.gpu`. Today it is
-  `additionalProperties: false` with no used-VRAM property (`:74-90`), so a probe emitting
-  `vram_used_bytes` fails validation. Add the field **and** bump `schema_version`; do not remove
-  `driver_version`.
+- **`config/execution-fabric/registry.schema.json`** — extend `$defs.gpu` with **both**
+  `vram_used_bytes` **and** `vram_source`. `$defs.gpu` is `additionalProperties: false` (`:74-90`), so
+  a probe emitting *either* field fails validation. Revision 2 scoped only the first while §7.4
+  required the second — the projection rules would have been unimplementable against the canonical
+  record. Bump `schema_version`; do not remove `driver_version`.
 - **`scripts/execution-fabric/assemble-registry-core.mjs`** — the assembler validates every probe GPU
-  against `$defs.gpu` (`:449,455-458`); on any failure it calls `recordInvalidProbe` and returns
-  `null` (`:485-488`), and the node falls back to the **declared seed**. Extending the probe without
-  extending the assembler would therefore produce exactly the stale-state failure Gate 1 exists to
-  prevent. Its `exactKeys` node-shape check (`:433`) must also accept any new node-level field.
+  against `$defs.gpu` (`:449,455-458`); on failure it calls `recordInvalidProbe`, returns `null`
+  (`:485-488`), and the node falls back to the declared seed. Round 2 sharpened this in two
+  directions, and both matter:
+  - **narrower than revision 2 said**: GPU validation and copying are driven *dynamically* from
+    `$defs.gpu` (`:446,540`), so an added GPU property needs no assembler edit of its own. Gate 1
+    reserves and tests this file; it does not necessarily change it for the field alone.
+  - **wider than revision 2 said**: the version walls are hardcoded here, not read from the schema —
+    `'0.2'` semantic checks at `:653,699,700,704` and the emitted `schema_version: '0.2'` at `:720`.
+    A `schema_version` bump that leaves these behind fails assembly outright. The `exactKeys`
+    node-shape check (`:433`) likewise must accept any new node-level field.
+  - the fallback is also **not silent**: it records `LIVE_PROBE_INVALID` and adds a fail-closed
+    scheduling constraint (`:455,509`). Warned fail-closed, not silent — revision 2 overstated it.
 - **`scripts/execution-fabric/assemble-registry.mjs`** — the production entrypoint hard-pins the seed
   and schema JCS digests (`:15-16`) and fails closed with `FABRIC_REGISTRY_ENTRYPOINT_WALL` on
   mismatch (`:42-43`). A schema change **must** update `expectedSchemaSha256`, or every production
@@ -652,8 +802,15 @@ full seam:
   identity, human label, kind, parent/contains, owner-directed role, truth state including `stale`,
   `observedAt`, health/headroom, technical identity under progressive disclosure. A projection, not an
   authority.
-- **`lib/system/registry-join.ts`** — new. The §4.1 resolver and precedence rules. Transport registry
-  joined to Fabric inventory by machine-identity pin, with name as a hint only.
+- **`lib/system/registry-join.ts`** — **withdrawn as scoped.** Revision 2 called this "new". It is
+  not: the hostname-to-node-id resolver already exists, hardcoded in `probe-windows.ps1:10-12` and
+  `probe-linux.sh:51`, beside a hardcoded roster (`assemble-registry-core.mjs:655-660`) and a
+  hardcoded per-node authority catalogue (`:32+`, enforced `:699-704`). Writing a new resolver would
+  have made a **fourth** owner of node identity in a map whose purpose is to stop exactly that.
+  Gate 1's real task here is **consolidation**: derive or validate every alias from one contract, and
+  make the probes and assembler read it rather than restate it. That is a larger and more valuable
+  piece of work than the join revision 2 imagined, and it is the reason Gate 1a's scope is re-opened
+  rather than merely corrected.
 - **`lib/system/system-truth.ts`** — extend: add `OMEN`, add `stale`, derive configured roles from the
   Fabric inventory rather than `Exclude<SystemName, "ATLAS">`.
 - **`app/api/fabric/nodes/route.ts`** — adapt: emit **structured typed observations** alongside the
@@ -703,6 +860,12 @@ impossible for that observation to masquerade as measured VRAM, which is #974's 
 
 1. An accelerator's canonical identity derives from GPU UUID / PCI bus id, never from the friendly
    name or slot; a device with a new UUID in the same slot is a **new** object. (#985 identity rule.)
+   **And the invariant must survive the records that actually exist**: the Windows CIM fallback emits
+   `uuid: null, pci_bus_id: null` (`probe-windows.ps1:109-126`) and the declared HERMES GPUs are
+   `uuid: null, pci_bus_id: null` (`registry.seed.json:66`). A UUID/PCI-only rule cannot represent
+   either. Such observations project as **identity-unresolved** — visible, truthful, and explicitly
+   ineligible to inherit or accumulate canonical history — rather than being dropped or silently
+   keyed on something weaker.
 2. A client can enumerate a node's accelerators without parsing any presentation string. (#985
    acceptance.)
 3. An unreachable node still projects, with `truthState: unknown` and its preserved reason. (#985
@@ -722,7 +885,11 @@ impossible for that observation to masquerade as measured VRAM, which is #974's 
 11. **Registry join**: a node present only in the transport registry, and a node present only in the
     Fabric inventory, each project with `unknown` for the missing half, and neither is dropped nor
     fabricated.
-12. **No unbrokered transport**: no Gate 1 code path executes a node command outside `brokeredExec`.
+12. **No unbrokered transport on the canonical probe path**: no code path reachable from
+    `GET /api/fabric/nodes` executes a node command outside `brokeredExec`. Deliberately narrowed —
+    revision 2 wrote "no Gate 1 code path", which `lib/fabric/run-baseline.mjs:309-318` contradicts
+    on the very day it was written. Baseline's raw transport is a real defect (§5.6) but it is not
+    Gate 1's to fix, and an invariant that is false at merge teaches nothing.
 13. **Precedence**: a transport-registry `role` that disagrees with the seed's owner-directed role does
     not override it; both are projected and the transport side marks `stale`.
 
@@ -797,7 +964,9 @@ evidence exists is a **failure**, not a success.
 
 ```
 PHASE: 0 -- Reconciliation freeze (#987 Gate 0)
-STATUS: PASS (revision 2, remediated after independent adversarial review round 1)
+STATUS: NOT PASSED (revision 3). Two independent adversarial rounds, both MAP_DEFECTIVE.
+        Round 2 found MORE defects than round 1 after all of round 1's were fixed, several inside
+        revision 2's own corrections. The method is the defect; see the status section at the top.
 
 CURRENT TRUTH DISCOVERED
   Backend truth primitives are strong and singular: the Execution Fabric inventory with pinned
@@ -851,6 +1020,12 @@ TESTS     The DETERMINISTIC CI PROFILE is the acceptance gate, not an ad-hoc loc
           real subprocesses (vitest.ci.config.ts:32-36).
 
           RESULT: GREEN, locally and in CI. See S8.1 for the run.
+
+          One green run is not determinism, and round 2 was right to say so. The profile changes
+          exclusions and raises timeouts; it does nothing that explains SCHEDULER_LOCK_WALL
+          HEARTBEAT_START_REQUIRED. Call it the repository CI ACCEPTANCE profile. The scheduler
+          signature stays recorded as unexplained SESSION_OBSERVED evidence until someone isolates
+          it -- not as a resolved item.
 
           Revision 1 recorded a five-file "failing allowlist" from a base-config local run and
           concluded a green suite was unobtainable on this host. That was wrong on its own evidence:
@@ -918,10 +1093,13 @@ Recorded so a future regression cannot hide behind them. A signature is
 | `tests/lab-dev-preflight.test.ts :: * :: probe payload mismatch` | host-dependent; excluded by `vitest.ci.config.ts:16-19` | Probes real lab hosts and remote git identity. |
 | `tests/hermes-bridge-supervisor.test.ts :: * :: timeout 5000ms` | **profile artifact, not a failure** | Base-config default; the CI profile sets 60000ms for exactly these subprocess-spawning tests (`vitest.ci.config.ts:32-36`). Passes under the CI profile. |
 | `tests/execution-fabric-pinned-placement.test.ts :: * :: timeout 5000ms` | **profile artifact, not a failure** | Same. Passes under the CI profile. |
-| `tests/multi-agent-eligible-set-scheduler.test.ts :: * :: SCHEDULER_LOCK_WALL HEARTBEAT_START_REQUIRED` | lease-timing sensitive under parallel load | Passes under the CI profile. Not in any Gate 1 path. |
+| `tests/multi-agent-eligible-set-scheduler.test.ts :: * :: SCHEDULER_LOCK_WALL HEARTBEAT_START_REQUIRED` | **unexplained** | Passes under the CI acceptance profile, but nothing in that profile explains why it failed under the base config. Recorded as an open signature, not a resolved one. |
 
-None of these files touches `lib/system/`, `app/api/fabric/`, `lib/fabric/`, `scripts/execution-fabric/`
-or `config/execution-fabric/`, so none can be caused by, or mask, a Gate 1 change.
+Four of these five files sit outside Gate 1's source directories. That is **not** proof they cannot be
+affected: `tests/execution-fabric-pinned-placement.test.ts:8-20,111-114` imports Execution Fabric code
+directly and reads the very schema and seed Gate 1 edits. Coverage must be assessed by **dependency**,
+not by pathname — revision 2 reasoned from file location, which proves nothing about what a test
+imports.
 
 ## 9. Typed continuations — internal, not owner work
 
@@ -956,10 +1134,46 @@ CONT-EXPV2-P0-RUNTIME-PROOF
   owner:     the executing agent lane, on next HERMES availability
   not:       an owner task. The owner is not asked to power on, repair, report on, or declare a node.
 
-CONT-EXPV2-P0-REVIEW-2
+CONT-EXPV2-FIRST-ACTION
+  type:      BLOCKED_DEPENDENCY
+  reason:    NO_ELIGIBLE_CANONICAL_ACTION
+  subject:   the "one safe governed mutation" the charter requires for the first journey
+             (charter:273, charter:488-489)
+  finding:   no action on main qualifies. baseline is all-node/unbrokered/best-effort-audited;
+             resource/verify is a read, POSIX-only, wrong object graph, and not user-scoped;
+             relocate/restore are correctly shaped but far past "safest" (S5.6).
+  owner:     Gate 2, which BUILDS it on the lib/resource/mutation.ts shape rather than adopting one
+  must add:  SystemObject subject; dialect-aware brokered execution; session-user scoping on every
+             lookup; durable evidence, not best-effort; verified post-state
+  not:       an owner decision. Choosing among existing actions was the mistake; there is nothing to
+             choose.
+
+CONT-EXPV2-GATE1-RESCOPE
+  type:      BLOCKED_DEPENDENCY
+  reason:    PREDECESSOR_MAP_DEFECTIVE
+  subject:   #990's bounded scope, which was written from revision 2's S7.2
+  invalidated by round 2:
+             - lib/system/registry-join.ts as "new" -- the resolver already exists in both probes,
+               the assembler roster and the assembler authority catalogue; a new one is a FOURTH
+               owner (S4.1). The real work is consolidation.
+             - schema scope named vram_used_bytes only; vram_source is equally blocked by
+               additionalProperties:false (S7.2).
+             - the schema_version bump omits the assembler's hardcoded v0.2 walls and output
+               version (S7.2).
+             - invariant 1 cannot represent the null-UUID records that actually ship (S7.5).
+             - invariant 12 was false at merge (S7.5).
+  action:    amend #990 before its first commit. Gate 1a does not start on the old scope.
+  owner:     the delivering agent lane
+  not:       an owner decision. #990 is an agent-authored packet under already-recorded authority.
+
+CONT-EXPV2-P0-REVIEW-3
   type:      INDEPENDENT_REVIEW_PENDING
   subject:   bounded adversarial re-review of THIS revision of the collision map
-  round 1:   COMPLETE. Verdict MAP_DEFECTIVE. Findings adjudicated and remediated in S10.
+  round 1:   COMPLETE. Verdict MAP_DEFECTIVE (8 P0 / 7 P1 / 1 P2). Adjudicated in S10.
+  round 2:   COMPLETE. Verdict MAP_DEFECTIVE (19 P0 / 9 P1 / 3 P2). Adjudicated in S11.
+  round 3 must specifically attack:  the three method patterns named in the status section, since
+             round 2 found more defects than round 1 after every round-1 finding was fixed. A third
+             round that only re-checks rows will miss the same way.
   scope:     ownership-seam misclassification above all -- the failure mode the charter names as
              inherited by every later phase; plus whether revision 2's corrections are themselves
              supported by exact lines.
@@ -1020,3 +1234,83 @@ lane's, the evidence is the repository's. Deduplicated across lanes.
 Four candidates reached the round-1 coordinator unverified because their lanes died at
 `code-mode host exited during handshake`. All four were verified locally here: rows 7 (confirmed),
 13 (confirmed), 23 (refuted at P0, accepted at P2), 22 (refuted).
+
+## 11. Round-2 review response register
+
+Round 2 attacked revision 2 — the remediation of round 1 — and returned `MAP_DEFECTIVE` with
+19 P0, 9 P1 and 3 P2. Every finding below was re-verified against the code by the delivering lane
+before being accepted. **All 31 are accepted; none was refuted.** That result is itself the strongest
+evidence for the method finding in the status section.
+
+Findings are grouped by what they attack, because several rows share one root cause.
+
+### A. Ownership claims that were false — new owners found on `main`
+
+| # | Revision 2 claimed | Verdict | Evidence | Where corrected |
+| --- | --- | --- | --- | --- |
+| 1 | "**No second memory database.**" | **ACCEPTED (P0)** | `control-center/backend/copilot/memory.py:24-52` owns `sessions`/`messages`/`facts`/`fact_events`; `:54-63` re-declares the canonical `memoryFact.authority` lifecycle plus `intake`; constructed at `app.py:54`; served at `app.py:426,448,453` | §5.4 — `COLLISION / ADAPT` |
+| 2 | Gate 2 has "two halves" | **ACCEPTED (P0)** | `command_center.py:140` classifies every command with `allowed`/`runnable`/`confirmation_required`/`safety_tier`/`execution_path: "safety.py -> command_runner.py"`; `copilot/tools.py:52-55` publishes function schemas for **every registered command** | §5.3 — third catalogue, and the only one that gates execution |
+| 3 | Two action classifiers | **ACCEPTED (P0)** | `lib/workbench/registered-outcome-intent.ts` is an independently owned exact-match classifier that `router.ts:94` special-cases and `app/actions/start-workbench-outcome.ts:12-21` exclusively accepts | §5.3 |
+| 4 | `governanceEvent` is a "hash-chained authority log" | **ACCEPTED (P0)** | `schema.ts:839-853` has no prior-event hash, sequence or head; `events.ts:64-65` hashes payloads independently; `events.ts:56-71` swallows insert failures by design | §5.5 — best-effort append log |
+| 5 | One event authority | **ACCEPTED (P0)** | `scripts/multi-agent-operator/authority-events.mjs:261` is a separate signed, linked authority-status chain governing dispatch and revocation, consumed by `codex-coordinator-adapter.mjs:395` | §5.5, §6.7 |
+| 6 | "No second scheduler" | **ACCEPTED (P0)** | `eligible-set-scheduler.mjs:1635` `scheduleEligibleSet` — DAG input, dispatch claims, reservation ledger, lease store, evidence ledger (2295 lines); `outcome-queue-source.mjs` and `outcome-queue-runtime.mjs` own queue selection/acquisition | §6.7 |
+| 7 | The seed solely owns identity/role/authority | **ACCEPTED (P0)** | `assemble-registry-core.mjs:32+` holds `canonicalAuthority` per node and enforces it against the seed at `:699-704`; `:655-660` holds a hardcoded roster; `probe-windows.ps1:10-12` and `probe-linux.sh:51` hardcode hostname→node-id | §4.1, §6.7, §7.2 |
+| 8 | Pinned evidence is a `SPECIALIST_RUNTIME_METRIC` | **ACCEPTED (P0)** | `recommend-pinned-placement.mjs:108` with `pinned-evidence-registry.mjs:443,511` derives a competing node inventory whose GPU array is index-keyed with null UUID/PCI | §6.6 — placement-only projection, barred from owning identity |
+
+**Root cause for this whole group**: the blanket negative in §6.7 was asserted after searching only
+the TypeScript surface of a repository the same document calls implementation truth.
+
+### B. The first governed action — revision 2's replacement withdrawn entirely
+
+| # | Revision 2 claimed | Verdict | Evidence | Where corrected |
+| --- | --- | --- | --- | --- |
+| 9 | `resource/verify` is "the corrected first-journey action" | **ACCEPTED (P0)** | `charter:273` requires "one safe governed **mutation**"; `charter:488-489` "one safe governed **adjustment**… verifies actual post-state". The route mutates nothing | §5.6 — withdrawn |
+| 10 | It proves `SYSTEM -> HERMES -> P40` | **ACCEPTED (P0)** | `probe.ts:144-150` emits POSIX shell only; `broker.mjs:102,107` sends local/Windows through PowerShell. HERMES is Windows, and the dialect failure would read as *node unreachable* | §5.6 |
+| 11 | "selected object" | **ACCEPTED (P0)** | It selects a `project_resource` (`verify/route.ts:46-54`), not a SystemObject | §5.6 |
+| 12 | "governed" | **ACCEPTED (P0)** | `verify/route.ts:31-32` checks only that a session exists; `:46-54,56-60` filter on `identity` with **no `userId`** — any authenticated user can name another user's record and trigger a brokered probe against the node it names | §5.6 |
+| 13 | "evidence" | **ACCEPTED (P0)** | `appendGovernanceEvent` swallows failures (`events.ts:56-71`); the optional Thread binding at `verify/route.ts:128` uses a synthetic event id that `tests/workbench-thread-loader.test.ts:412` proves resolves as missing | §5.6 |
+| 14 | Baseline is "already audited" | **ACCEPTED (P0)** | `run-baseline.mjs:298,304` both `.catch(() => {})`, deliberately (`:294-297`) | §5.6 — best-effort only |
+
+### C. Gate 1 scope built on defective premises
+
+| # | Revision 2 claimed | Verdict | Evidence | Where corrected |
+| --- | --- | --- | --- | --- |
+| 15 | `lib/system/registry-join.ts` is "new" | **ACCEPTED (P0)** | The resolver exists three times over — see row 7. A new one is a **fourth** owner | §4.1, §7.2 — withdrawn; the task is consolidation |
+| 16 | Transport records join by machine pin | **ACCEPTED (P0)** | `route.ts:30-37` carries no pin. Transport can only select a provisional endpoint; the probe observes identity; the seed pin promotes | §4.1 |
+| 17 | The transport registry owns reachability | **ACCEPTED (P0)** | It has no reachability field; reachability is measured per request (`route.ts:113-127`) | §4.1 |
+| 18 | Symmetric `ABSENCE` rule | **ACCEPTED (P0)** | Would promote any transport-only line to a canonical node, against `README:41` | §4.1 — unverified endpoint candidate |
+| 19 | Schema scope = `vram_used_bytes` | **ACCEPTED (P0)** | §7.4 also requires `vram_source`, equally blocked by `additionalProperties:false` (`registry.schema.json:74-90`) | §7.2 — both fields |
+| 20 | Bumping `schema_version` is enough | **ACCEPTED (P0)** | Hardcoded `v0.2` walls at `assemble-registry-core.mjs:653,699,700,704` and the emitted version at `:720` | §7.2 |
+| 21 | Invariant 1 (UUID/PCI identity) | **ACCEPTED (P0)** | Cannot represent the CIM fallback (`probe-windows.ps1:109-126`) or the declared HERMES GPUs (`registry.seed.json:66`), both `uuid: null, pci_bus_id: null` | §7.5 — identity-unresolved projection |
+| 22 | Transport `role` conflict marks `stale` | **ACCEPTED (P1)** | That record has no timestamp; staleness is a temporal claim | §4.1 — `CONFLICTING` |
+| 23 | The assembler must change for the field | **ACCEPTED (P1)** | GPU validation and copying are driven dynamically from `$defs.gpu` (`:446,540`) | §7.2 — narrowed |
+| 24 | Invalid probes fall back "silently" | **ACCEPTED (P1)** | Fallback records `LIVE_PROBE_INVALID` and adds a fail-closed constraint (`:455,509`) | §7.2 — warned fail-closed |
+| 25 | Invariant 12: no Gate 1 path unbrokered | **ACCEPTED (P1)** | `run-baseline.mjs:309-318` contradicts it inside the same path family | §7.5 — narrowed to the canonical probe path |
+
+### D. Precision, vocabulary and evidence hygiene
+
+| # | Revision 2 claimed | Verdict | Evidence | Where corrected |
+| --- | --- | --- | --- | --- |
+| 26 | §3 uses canonical lifecycle vocabulary | **ACCEPTED (P1)** | `EXTEND, dependency-gated` and `FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED` are not in `playbook:178-193` — the same defect as `BLOCKED_AUDIT_FREEZE`, in the section that corrected it | §3 — `BLOCKED_DEPENDENCY` + reason codes |
+| 27 | The Gate 1 measurement was "complete" | **ACCEPTED (P1)** | It claims `tests/` but the published reproduction command omits `tests/` | §3, evidence artifact |
+| 28 | Used VRAM/headroom is "already observed" | **ACCEPTED (P1)** | Code proves producer/validator capability, not that any snapshot was collected; validation checks shape and a free-VRAM threshold, not used/free/total consistency | §6.6 |
+| 29 | `truthClaim` owns expiry | **ACCEPTED (P1)** | `app/actions/truth.ts:34-35,60-82` — writes cannot set expiry; reads recompute freshness from type and capture time. An inert column | §5.4 |
+| 30 | "deterministic suite" | **ACCEPTED (P1)** | The profile changes exclusions and timeouts; nothing explains `SCHEDULER_LOCK_WALL`. One green run is not determinism | §8 — CI *acceptance* profile; the signature stays open |
+| 31 | Test-file location proves non-interference | **ACCEPTED (P2)** | `tests/execution-fabric-pinned-placement.test.ts:8-20,111-114` imports fabric code and reads Gate 1's schema and seed | §8.2 — assess by dependency |
+
+Two further P2s are folded in without a row of their own: the GPU table is eight producer rows over
+nine executable query sites (§6.6), and `resource/verify` also accepts a `thread` parameter and
+deliberately mutates provenance state while leaving its subject unchanged (§5.6).
+
+### What round 2 did not overturn
+
+The round-1 corrections in §10 survive. The two registries are still two, `probeLocal` still bypasses
+the broker, `router.ts` is still a competing catalogue, `/env` and `/environment` are still separate
+lineages, `truthClaim` is still a predecessor rather than a gap, the CI profile is still the right
+acceptance gate, and Gate 1's reservation is still uncontested. Round 2 made several of those
+**sharper** rather than wrong.
+
+The refutations in §10 rows 22 and 24 also stand. Row 23's does not: it argued that `governanceEvent`
+was a hash-chained authority log and `eventLog` merely a feed, so the pair was not a second authority.
+The conclusion happens to survive — they are still not competing authorities — but the reasoning was
+false (row 4), and a right answer reached through a wrong argument is not evidence of anything.
