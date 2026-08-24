@@ -1,16 +1,34 @@
 param(
   [Parameter(Mandatory = $true)][string]$NodeId,
-  [string]$OutputPath = ""
+  [string]$OutputPath = "",
+  [string]$IdentityContractPath = ""
 )
 
 $ErrorActionPreference = 'Stop'
 $observed = (Get-Date).ToUniversalTime().ToString('o')
 $warnings = [System.Collections.Generic.List[string]]::new()
 $hostname = [Environment]::MachineName
-$canonicalNodeIds = @{
-  'OMEN' = 'omen'
-  'HERMES' = 'hermes-node'
-  'HERMES-NODE' = 'hermes-node'
+# The hostname-to-node-id table is READ from the reviewed identity contract, never restated here.
+# This probe and probe-linux.sh each used to carry their own copy, and the assembler a third; a node
+# renamed in one and not the others would quietly stop being the node it was. Missing or unreadable
+# contract fails the identity wall closed -- an identity check that degrades to "assume yes" when its
+# contract is absent is not a check.
+if (-not $IdentityContractPath) {
+  $IdentityContractPath = Join-Path $PSScriptRoot (Join-Path '..' (Join-Path '..' (Join-Path 'config' (Join-Path 'execution-fabric' 'node-identity-contract.json'))))
+}
+
+if (-not (Test-Path $IdentityContractPath)) {
+  throw "PROBE_IDENTITY_CONTRACT_WALL missing=$IdentityContractPath"
+}
+$identityContract = Get-Content -Raw -LiteralPath $IdentityContractPath | ConvertFrom-Json
+if ($identityContract.contract -ne 'williamos-node-identity/1') {
+  throw "PROBE_IDENTITY_CONTRACT_WALL version=$($identityContract.contract)"
+}
+$canonicalNodeIds = @{}
+foreach ($entry in $identityContract.nodes.PSObject.Properties) {
+  foreach ($alias in @($entry.Value.hostnames)) {
+    if ($alias) { $canonicalNodeIds[$alias.ToUpperInvariant()] = $entry.Name }
+  }
 }
 $canonicalNodeId = $canonicalNodeIds[$hostname.ToUpperInvariant()]
 if (-not $canonicalNodeId -or $NodeId -ne $canonicalNodeId) {
@@ -87,7 +105,7 @@ $gpuRows = @()
 $nvidia = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($nvidia) {
   $gpuRows = Invoke-Safely {
-    @(& nvidia-smi --query-gpu=uuid,name,pci.bus_id,memory.total,driver_version,temperature.gpu,utilization.gpu --format=csv,noheader,nounits | ForEach-Object {
+    @(& nvidia-smi --query-gpu=uuid,name,pci.bus_id,memory.total,memory.used,driver_version,temperature.gpu,utilization.gpu --format=csv,noheader,nounits | ForEach-Object {
       $p = $_ -split ',\s*'
       [ordered]@{
         id = "gpu-$($p[0])"
@@ -96,11 +114,13 @@ if ($nvidia) {
         pci_bus_id = $p[2]
         uuid = $p[0]
         vram_bytes = [int64]([double]$p[3] * 1MB)
-        driver_version = $p[4]
+        vram_used_bytes = if ($p[4] -match '^\d') { [int64]([double]$p[4] * 1MB) } else { $null }
+        vram_source = 'nvidia-smi'
+        driver_version = $p[5]
         cuda_version = $null
         compute_capability = $null
-        temperature_c = if ($p[5] -match '^\d') { [double]$p[5] } else { $null }
-        utilization_percent = if ($p[6] -match '^\d') { [double]$p[6] } else { $null }
+        temperature_c = if ($p[6] -match '^\d') { [double]$p[6] } else { $null }
+        utilization_percent = if ($p[7] -match '^\d') { [double]$p[7] } else { $null }
       }
     })
   } @() 'nvidia-smi failed'
@@ -114,6 +134,10 @@ if (-not $gpuRows -or $gpuRows.Count -eq 0) {
       pci_bus_id = $null
       uuid = $null
       vram_bytes = if ($_.AdapterRAM) { [int64]$_.AdapterRAM } else { $null }
+      # Win32_VideoController reports no used VRAM at all, and AdapterRAM understates above 4 GiB.
+      # `vram_source` is what stops that number being read as a measurement downstream.
+      vram_used_bytes = $null
+      vram_source = 'win32-videocontroller'
       driver_version = [string]$_.DriverVersion
       cuda_version = $null
       compute_capability = $null

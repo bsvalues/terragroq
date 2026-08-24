@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.2",
+  "schema_version": "0.3",
   "generated_at": "2026-08-09T21:57:00Z",
   "scheduler": {
     "state": "disabled",
@@ -31,7 +31,7 @@
       },
       "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "AMD", "model": "Ryzen 9 8940HX", "cores": 16, "threads": 32, "max_mhz": null, "numa_node": null}],
       "dimms": [],
-      "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 5060 Laptop GPU", "pci_bus_id": null, "uuid": null, "vram_bytes": 8589934592, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
+      "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 5060 Laptop GPU", "pci_bus_id": null, "uuid": null, "vram_bytes": 8589934592, "vram_used_bytes": null, "vram_source": null, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
       "disks": [],
       "network": [],
       "runtimes": [{"id": "wsl2", "kind": "wsl", "version": null, "state": "unknown", "endpoint": null, "details": {}}, {"id": "docker-desktop", "kind": "docker", "version": null, "state": "unknown", "endpoint": null, "details": {}}],
@@ -63,7 +63,7 @@
       },
       "cpus": [{"id": "cpu0", "socket": null, "manufacturer": "Intel", "model": "Core i7-5960X", "cores": 8, "threads": 16, "max_mhz": null, "numa_node": null}],
       "dimms": [],
-      "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 3050", "pci_bus_id": null, "uuid": null, "vram_bytes": 6442450944, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}, {"id": "gpu1", "vendor": "NVIDIA", "model": "Quadro K2200", "pci_bus_id": null, "uuid": null, "vram_bytes": 4294967296, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
+      "gpus": [{"id": "gpu0", "vendor": "NVIDIA", "model": "GeForce RTX 3050", "pci_bus_id": null, "uuid": null, "vram_bytes": 6442450944, "vram_used_bytes": null, "vram_source": null, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}, {"id": "gpu1", "vendor": "NVIDIA", "model": "Quadro K2200", "pci_bus_id": null, "uuid": null, "vram_bytes": 4294967296, "vram_used_bytes": null, "vram_source": null, "driver_version": null, "cuda_version": null, "compute_capability": null, "temperature_c": null, "utilization_percent": null}],
       "disks": [],
       "network": [],
       "runtimes": [{"id": "ollama", "kind": "ollama", "version": null, "state": "healthy", "endpoint": "http://127.0.0.1:11434", "details": {"exposure": "loopback-only"}}, {"id": "docker", "kind": "docker", "version": "28.5.1", "state": "running", "endpoint": null, "details": {}}, {"id": "ssh", "kind": "ssh", "version": null, "state": "running", "endpoint": null, "details": {}}],
