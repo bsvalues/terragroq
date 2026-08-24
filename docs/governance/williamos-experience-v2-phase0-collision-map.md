@@ -16,10 +16,17 @@ returned `MAP_DEFECTIVE`:
 | --- | --- | --- | --- | --- | --- |
 | 1 | revision 1 | `MAP_DEFECTIVE` | 8 | 7 | 1 (deduplicated to 21 accepted, 3 refuted) |
 | 2 | revision 2 | `MAP_DEFECTIVE` | 19 | 9 | 3 |
+| 3 (self-check) | revision 3's own remediation | 3 defects introduced or left | 2 | 1 | 0 |
 
 Revision 2 fixed all 21 of round 1's accepted findings and round 2 then found **more defects than
 round 1 had**, several of them inside revision 2's own corrections. That is the finding that matters,
 and it is bigger than any individual row in §10 or §11.
+
+It then happened a third time. Applying round 2's findings introduced two contradictions between the
+corrected rules and the acceptance criteria that test them, and silently dropped one accepted P0 by
+deleting the false claim instead of answering it. Those three are §12, found by re-reading revision 3
+against its own registers rather than by a fourth review round. The pattern has now held across three
+consecutive rounds, which is the strongest evidence in this document for the method rule below.
 
 ### Why this map is not being declared PASS
 
@@ -729,6 +736,35 @@ Recorded as `CONT-EXPV2-FIRST-ACTION` (§9).
    | command catalogue + execution gate | `workbench-action-registry.ts`, `lib/intent/router.ts` | `scripts/williamos_commands.py` via `command_center.py:140`, `copilot/tools.py:52` — §5.3 |
    | event authority | `governanceEvent` | `scripts/multi-agent-operator/authority-events.mjs` (signed chain — a *distinct* record, not a duplicate) — §5.5 |
    | node identity / role / authority | `registry.seed.json` | `assemble-registry-core.mjs:32+` `canonicalAuthority`, enforced at `:699-704`; roster at `:655-660`; hostname→node-id maps in `probe-windows.ps1:10-12` and `probe-linux.sh:51` — §4.1 |
+   | Work Order admission vs outcome dispatch | `scheduleEligibleSet` (`eligible-set-scheduler.mjs:1635`) | `acquireNextEligibleOutcome` (`outcome-queue-source.mjs:4360`) + `createHermesOutcomeQueueRuntime` (`outcome-queue-runtime.mjs:1283`) — **not a second owner; a boundary that was never drawn.** See below |
+
+   **The scheduler row needs more than a cell**, because "no second scheduler" was false and "a second
+   scheduler" would be false too. Two executable selectors exist, and they select different things, at
+   different moments, over different substrates:
+
+   - `scheduleEligibleSet` (`eligible-set-scheduler.mjs:1635`, 2295 lines) is **plan-time admission
+     over a DAG of Work Orders**. Its input set is exactly `{expectedVersion, dagInput, dispatchClaims,
+     providerCapabilities, budgets, schedulingPolicy, schedulingClaims}` (`:1637`); it resolves the
+     DAG's eligible set and refuses unless `dispatchClaims` is an exact bijection with it
+     (`:1657-1660`), validates against a pinned trust bundle (`:1653`), and writes through a
+     reservation ledger, a lease store and an evidence ledger (`:1640-1644`). It decides **which Work
+     Orders may be dispatched at all**.
+   - `acquireNextEligibleOutcome` (`outcome-queue-source.mjs:4360`) is **run-time acquisition of one
+     outcome-queue item by one worker**, against Postgres, keyed by `userId`, `acquisitionKey`,
+     `leaseHolder`, `leaseToken`, `executionBinding`, `leaseDurationMs`, `campaignWindowId` and
+     `processIdentity` (`:4360-4377`). `createHermesOutcomeQueueRuntime` (`outcome-queue-runtime.mjs:1283`)
+     is the lease lifecycle around it — acquire, complete, renew, defer, resume (`:1285-1301`).
+
+   Different object (Work Order vs outcome-queue item), different moment (admission vs acquisition),
+   different substrate (pinned file-backed ledgers vs Postgres). So they do not compete. But they are
+   not unrelated either: **both mint and hold leases** — `leaseTokenKey` under a 32-byte floor
+   (`eligible-set-scheduler.mjs:1641-1643`) on one side, `leaseToken` and `leaseDurationMs` on the
+   other. Lease identity and expiry is **one concept with two implementations**, and that is the
+   integration boundary a later gate must not implement a third time.
+
+   Round 2 accepted "no second scheduler" as a P0 and revision 3 then dropped the claim from this list
+   without replacing it, which left §10 row 6 pointing here at nothing. A negative deleted is not a
+   negative answered; the boundary above is the answer.
 
    A negative claim is only as wide as the search behind it. Any future "no second owner" statement in
    this program must state the surfaces it searched, or it is not a finding.
@@ -882,16 +918,30 @@ impossible for that observation to masquerade as measured VRAM, which is #974's 
    declared, with the rejection recorded.
 10. **Digest-pin currency**: the schema digest that `assemble-registry.mjs` pins matches the schema on
     disk. A test must fail if a schema edit lands without the pin moving.
-11. **Registry join**: a node present only in the transport registry, and a node present only in the
-    Fabric inventory, each project with `unknown` for the missing half, and neither is dropped nor
-    fabricated.
+11. **Registry join**, tested in both directions and in both outcomes:
+    - an inventory-only node projects, with transport `unknown`;
+    - a transport-only record does **not** project as a canonical `SystemObject`. It is an unverified
+      endpoint candidate (§4.1), and a test asserts it is neither promoted nor dropped;
+    - **successful join**: a probe whose observed host identity matches a reviewed seed pin promotes
+      that endpoint to the pinned node;
+    - **mismatched join**: a probe whose observed identity does not match the pin leaves the record
+      unpromoted, with the mismatch preserved as the reason rather than reported as unreachable.
+
+    Revision 2's symmetric "both project with `unknown`" rule survived into this invariant after §4.1
+    had already withdrawn it, so the acceptance criterion tested the behaviour the join rules forbid.
+    It also never tested a join *succeeding* or *mismatching*. The transport record carries no machine
+    pin — `{ transport, host, user, os, role, enrolled }` and nothing more
+    (`app/api/fabric/nodes/route.ts:30-37`) — which is why promotion has to be an **observation
+    result** and cannot be a lookup.
 12. **No unbrokered transport on the canonical probe path**: no code path reachable from
     `GET /api/fabric/nodes` executes a node command outside `brokeredExec`. Deliberately narrowed —
     revision 2 wrote "no Gate 1 code path", which `lib/fabric/run-baseline.mjs:309-318` contradicts
     on the very day it was written. Baseline's raw transport is a real defect (§5.6) but it is not
     Gate 1's to fix, and an invariant that is false at merge teaches nothing.
 13. **Precedence**: a transport-registry `role` that disagrees with the seed's owner-directed role does
-    not override it; both are projected and the transport side marks `stale`.
+    not override it; both are projected and the transport side is marked `CONFLICTING`. **Not
+    `stale`** — §4.1 withdrew that word because the transport record carries no timestamp to support a
+    temporal claim, and this invariant kept it anyway.
 
 ### 7.6 Gate 1 splits in two — releasable now, and settled on HERMES's return
 
@@ -1253,7 +1303,7 @@ Findings are grouped by what they attack, because several rows share one root ca
 | 3 | Two action classifiers | **ACCEPTED (P0)** | `lib/workbench/registered-outcome-intent.ts` is an independently owned exact-match classifier that `router.ts:94` special-cases and `app/actions/start-workbench-outcome.ts:12-21` exclusively accepts | §5.3 |
 | 4 | `governanceEvent` is a "hash-chained authority log" | **ACCEPTED (P0)** | `schema.ts:839-853` has no prior-event hash, sequence or head; `events.ts:64-65` hashes payloads independently; `events.ts:56-71` swallows insert failures by design | §5.5 — best-effort append log |
 | 5 | One event authority | **ACCEPTED (P0)** | `scripts/multi-agent-operator/authority-events.mjs:261` is a separate signed, linked authority-status chain governing dispatch and revocation, consumed by `codex-coordinator-adapter.mjs:395` | §5.5, §6.7 |
-| 6 | "No second scheduler" | **ACCEPTED (P0)** | `eligible-set-scheduler.mjs:1635` `scheduleEligibleSet` — DAG input, dispatch claims, reservation ledger, lease store, evidence ledger (2295 lines); `outcome-queue-source.mjs` and `outcome-queue-runtime.mjs` own queue selection/acquisition | §6.7 |
+| 6 | "No second scheduler" | **ACCEPTED (P0)** | `eligible-set-scheduler.mjs:1635` `scheduleEligibleSet` — DAG input, dispatch claims, reservation ledger, lease store, evidence ledger (2295 lines); `outcome-queue-source.mjs` and `outcome-queue-runtime.mjs` own queue selection/acquisition | §6.7 — resolved as a boundary (admission vs acquisition, one shared lease concept), not as a second owner |
 | 7 | The seed solely owns identity/role/authority | **ACCEPTED (P0)** | `assemble-registry-core.mjs:32+` holds `canonicalAuthority` per node and enforces it against the seed at `:699-704`; `:655-660` holds a hardcoded roster; `probe-windows.ps1:10-12` and `probe-linux.sh:51` hardcode hostname→node-id | §4.1, §6.7, §7.2 |
 | 8 | Pinned evidence is a `SPECIALIST_RUNTIME_METRIC` | **ACCEPTED (P0)** | `recommend-pinned-placement.mjs:108` with `pinned-evidence-registry.mjs:443,511` derives a competing node inventory whose GPU array is index-keyed with null UUID/PCI | §6.6 — placement-only projection, barred from owning identity |
 
@@ -1314,3 +1364,28 @@ The refutations in §10 rows 22 and 24 also stand. Row 23's does not: it argued 
 was a hash-chained authority log and `eventLog` merely a feed, so the pair was not a second authority.
 The conclusion happens to survive — they are still not competing authorities — but the reasoning was
 false (row 4), and a right answer reached through a wrong argument is not evidence of anything.
+
+## 12. Round-3 self-check — what applying round 2 broke
+
+Revision 3 applied round 2's findings and then re-read its own result against §10 and §11 rather than
+against the review. Three defects were introduced or left by the remediation itself. They are recorded
+here in full, because this is the third consecutive round in which fixing the previous round's
+findings created new ones, and that pattern is the map's central claim about its own method (§ status).
+
+| # | Defect | Class | Evidence | Fixed in |
+| --- | --- | --- | --- | --- |
+| 32 | §11 row 22 accepted that a transport `role` conflict must mark `CONFLICTING`, not `stale`, and §4.1 was corrected — but invariant 13 still said `stale`. The register recorded a correction the acceptance criteria did not carry | **SELF-INTRODUCED (P1)** | §4.1 `CONFLICT` vs §7.5 invariant 13, as written in `cea7ad54` | §7.5 invariant 13 |
+| 33 | §4.1 `ABSENCE` withdrew the symmetric projection rule — a transport-only record is an unverified endpoint candidate and does **not** project as a canonical `SystemObject` — while invariant 11 continued to require exactly that projection. The gate would have tested the behaviour the join rules forbid. Round 2's own P1 (invariant 11 never tests a successful or mismatched join) was also left open | **SELF-INTRODUCED (P0)** | §4.1 `ABSENCE` vs §7.5 invariant 11, as written in `cea7ad54`; `app/api/fabric/nodes/route.ts:30-37` carries no machine pin | §7.5 invariant 11 |
+| 34 | Round 2 accepted "no second scheduler" as a **P0** (§11 row 6, pointing at §6.7). Revision 3 deleted the claim from §6.7's negative list without replacing it, so row 6 pointed at nothing and the accepted P0 was silently unresolved | **SELF-INTRODUCED (P0)** | §11 row 6 → §6.7 item 7, as written in `cea7ad54` | §6.7 item 7 — boundary analysis |
+
+Row 34 is the one worth reading twice. Rows 32 and 33 are contradictions, which a careful re-read
+finds. Row 34 is a **deletion**: the false claim was removed, nothing false remained on the page, and
+the register still said `ACCEPTED (P0) — see §6.7`. Deleting a claim is not answering it, and the
+resulting document reads as clean precisely because the unresolved item is no longer visible. A
+register that points into the body is only as good as the body it points into, so every §10/§11 row's
+"where corrected" target was re-opened and confirmed to contain the correction it names.
+
+The boundary answer row 34 required is in §6.7: `scheduleEligibleSet` admits Work Orders from a DAG at
+plan time; `acquireNextEligibleOutcome` leases one outcome-queue item at run time; they share exactly
+one concept, **lease identity and expiry**, implemented twice. Neither "no second scheduler" nor "a
+second scheduler" was the true statement.
