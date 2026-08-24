@@ -79,6 +79,11 @@ not `PASS`. It is:
 
 with the exact inaccessible evidence enumerated, and with §1's routing obligation still live.
 
+This is a **phase-report status**, not a Work-Order lifecycle state. It never appears on a lane
+checkpoint and never substitutes for one of the playbook's typed states
+(`docs/governance/multi-agent-operator-playbook.md:178-193`). The lane carrying the blocked phase
+still reports a canonical state with a reason code.
+
 A report that presents an unread record as reconciled, or an unrun test as passing, is a false
 report, and it is worse than an incomplete one: the next agent inherits the gap as though it were
 settled truth. Gaps are cheap to carry forward when they are labelled and expensive when they are
@@ -94,8 +99,16 @@ the earlier claim explicitly rather than quietly overwriting it.
 
 Review is sourced through the supersession's tiers, sovereign tiers first. The delivering lane owns
 requesting it, receiving it, and acting on it. If every eligible reviewer is genuinely unavailable,
-that is a typed `PROVIDER_UNAVAILABLE` state recorded against the lane — routed or persisted per §1,
-not handed to the owner as a courier task.
+that is recorded against the lane in the playbook's canonical vocabulary — a lifecycle state of
+`BLOCKED_NO_ELIGIBLE_PROVIDER` (or `REROUTE_PENDING` while a capable reviewer is still being sought),
+carrying the **reason code** `PROVIDER_UNAVAILABLE` — routed or persisted per §1, not handed to the
+owner as a courier task.
+
+`PROVIDER_UNAVAILABLE` is a reason code and never a lifecycle state:
+`docs/governance/multi-agent-operator-playbook.md:196-198` names it as an example of a stable reason
+code and says such codes "may not be substituted for lifecycle-state names." An earlier revision of
+this document called it a state. That was the same defect this program keeps finding — a reason code
+wearing a state's name — and it is corrected here rather than explained away.
 
 Independence is role separation: the reviewer must not hold the builder's reservation. It is not
 vendor separation.
@@ -110,9 +123,16 @@ An **owner courier action** is any step in a delivery where the owner moves info
 authority, or execution between actors, surfaces, or machines, and where an approved actor could have
 moved it instead.
 
-Every final report is measured against this. It complements, and does not replace, #762's
-`OWNER_MINUTES_PER_DELIVERED_OUTCOME -> 0`: that metric counts the owner's time, this one counts the
-owner's errands. A delivery can consume few owner minutes and still be full of errands.
+It complements, and does not replace, #762's `OWNER_MINUTES_PER_DELIVERED_OUTCOME -> 0`: that counts
+the owner's time, this counts the owner's errands. A delivery can consume few owner minutes and still
+be full of errands.
+
+**This is a qualitative acceptance rule, not a computed metric.** Nothing in the schema, the ledger,
+the kernel, or any report field derives it today; it is asserted by the delivering lane and checked by
+the reviewer against the §1 list. Calling it a "metric" while nothing computes it would be precisely
+the slogan-shaped failure this doctrine exists to prevent, so it is named for what it is. Making it
+computable — deriving it from the lane's own checkpoint and audit trail — is worthwhile and is not
+claimed here.
 
 ## 5. Continuation packet contract
 
@@ -135,13 +155,38 @@ as a full stop, and a full stop is how an internal condition becomes owner work 
 ## 6. Machine-checked surface
 
 The kernel encodes exactly one place where a failure becomes owner work: `ownerDecisionRequired` in
-`scripts/runtime-operator/operational-kernel.mjs`. §1 is therefore a real, testable contract rather
-than a statement of intent.
+`scripts/runtime-operator/operational-kernel.mjs`.
 
 | Test | Contract |
 | --- | --- |
 | [`tests/runtime-operator-execution-path-not-owner-gate.test.ts`](../../tests/runtime-operator-execution-path-not-owner-gate.test.ts) | #957 — six actor-capability variants stay internal; an authority wall still gates |
-| [`tests/session-surface-limits-not-owner-gate.test.ts`](../../tests/session-surface-limits-not-owner-gate.test.ts) | this doctrine — the nine named courier asks stay internal **and** are recorded for re-routing; the authority walls remain exhaustively gated |
+| [`tests/session-surface-limits-not-owner-gate.test.ts`](../../tests/session-surface-limits-not-owner-gate.test.ts) | this doctrine — see the exact contract below |
+
+### What that test proves, and what it does not
+
+Stated precisely, because an earlier revision of this section claimed more than the code supports and
+an independent review caught it.
+
+**It proves** that `isOwnerWall` (`scripts/runtime-operator/operational-kernel.mjs:417`) does not
+recognise any courier-shaped failure. The six authority walls in the positive control are exactly that
+predicate's regex, so widening it to admit a courier-shaped code — the specific regression this
+doctrine exists to prevent — turns the courier cases red immediately. That tripwire is real, and it is
+the reason the test earns its place.
+
+**It does not prove** that the kernel classifies courier failures *as* courier failures. It does not,
+today: every unrecognised message reaches the generic branch at
+`scripts/runtime-operator/operational-kernel.mjs:464` and becomes `FAILED_TERMINAL` with
+`ownerDecisionRequired: false` and its `failureCode` preserved. Twelve arbitrary strings would behave
+identically. So the courier cases assert "not an owner wall, and still recorded" — which is true and
+worth pinning — and nothing stronger.
+
+**The gap that leaves.** §1 requires a courier-shaped failure to be *routed to a capable actor or
+persisted as a typed continuation*. `FAILED_TERMINAL` is neither: it is a dead end that merely
+declines to bother the owner. Closing that honestly means a courier classification plus a canonical
+routable state (`REROUTE_PENDING`) **and something that consumes it** — a reroute the operational
+kernel does not have today. Adding the state with no consumer would manufacture a second slogan, so
+this document does not do it, does not pretend otherwise, and records the gap as bounded follow-up
+work rather than losing it.
 
 §§2–4 are reporting and sourcing obligations. They bind agent reports, and the machine surface for
 them is the phase report itself, not the kernel.

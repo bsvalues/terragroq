@@ -20,17 +20,31 @@ import { runOperationalKernelCycle } from "../scripts/runtime-operator/operation
  *
  * Doctrine: docs/governance/owner-directed-execution-doctrine.md
  *
- * The kernel encodes exactly one place where a failure becomes owner work -- `ownerDecisionRequired`
- * -- so this is a real contract and not a statement of intent. Two halves are asserted, and the
- * second is why this is not simply #957 with new strings:
+ * WHAT THIS TEST PROVES -- stated exactly, because an earlier revision of this comment claimed more
+ * than the kernel supports and an independent review caught it.
+ *
+ * The courier cases assert two things, and only these two:
  *
  *   1. a courier-shaped failure never reaches the owner gate; and
  *   2. it is still RECORDED -- `failureCode` survives onto the checkpoint -- because a limitation
  *      that is silently swallowed cannot be re-routed either. "Don't ask the owner" and "drop it on
  *      the floor" are different failures, and only the first one is fixed by not asking.
  *
- * The positive control is kept, and widened to every wall the kernel actually enumerates: the rule
- * must not be allowed to degrade into "never ask".
+ * They do NOT prove that the kernel recognises these codes individually. It does not: every
+ * unrecognised message reaches the generic branch at operational-kernel.mjs:464 and becomes
+ * FAILED_TERMINAL with ownerDecisionRequired false, so twelve arbitrary strings would pass these
+ * cases identically.
+ *
+ * The load-bearing assertion is therefore the PAIR, not either half alone. The six positive controls
+ * below are exactly the regex of `isOwnerWall` (operational-kernel.mjs:417), so the moment anyone
+ * widens that predicate to admit a courier-shaped code -- the precise regression this doctrine
+ * exists to prevent -- the courier cases turn red. That tripwire is the contract. It is worth having,
+ * and it is smaller than "the kernel routes courier failures", which is not true yet.
+ *
+ * The gap that leaves is recorded in the doctrine's "What that test proves, and what it does not":
+ * §1 wants routed-or-persisted, and FAILED_TERMINAL is neither. Closing it needs a courier
+ * classification plus a canonical REROUTE_PENDING state AND a consumer for it, which the kernel does
+ * not have. A state with no consumer would be a second slogan, so it is not added here.
  */
 
 const REGISTRY = {
@@ -94,6 +108,12 @@ describe("session and surface limitations never become owner work", () => {
     ["a tool/CLI is missing on this actor", "TOOL_UNAVAILABLE: codex cli is not on PATH for this actor"],
     ["the working directory or environment is wrong", "ACTOR_CAPABILITY_UNAVAILABLE: cwd is outside the reserved worktree"],
     ["an optional provider is unauthenticated", "PROVIDER_UNAVAILABLE: reviewer integration is not authenticated on this surface"],
+    // The last three of the doctrine's nine named asks. An earlier revision had nine cases and nine
+    // named asks and assumed they lined up; three of the asks were in fact uncovered while two cases
+    // tested capability conditions the doctrine does not name. Matching counts are not coverage.
+    ["asking for a permission that only works around this surface", "ACTOR_CAPABILITY_UNAVAILABLE: needs a grant that exists only to bypass this actor's surface"],
+    ["asking to repair or restart infrastructure", "NODE_UNAVAILABLE: the node needs a restart before this lane can proceed"],
+    ["asking to re-decide what active authority already decides", "AUTHORITY_ALREADY_RECORDED: the active Work Order already covers this action"],
   ])("%s → internal, never ownerDecisionRequired", async (_label, message) => {
     const result = await cycle("williamos-session-surface-", message)
 
@@ -125,9 +145,19 @@ describe("session and surface limitations never become owner work", () => {
   it("a provider rate limit is a wait, not an owner gate and not a failure", async () => {
     // Sovereignty clause, AGENTS.md: quota exhaustion on an optional provider must never convert into
     // owner babysitting. The kernel already parks and retries; this pins that it keeps doing so.
-    const result = await cycle("williamos-rate-limit-", "PROVIDER_RATE_LIMIT_WALL:retry-60")
+    //
+    // `retry-<n>` is EPOCH SECONDS, not a delay -- operational-kernel.mjs:432 computes
+    // `new Date(Number(n) * 1000)`. An earlier revision passed `retry-60`, which is
+    // 1970-01-01T00:01:00Z: `toBeTruthy()` passed on it, but a wait already in the past is not a
+    // wait. runCycle's guard at operational-kernel.mjs:291 requires `retryAfter > now` to hold the
+    // lane, so that fixture asserted the opposite of what it claimed.
+    const retryAtEpochSeconds = Math.floor(Date.now() / 1000) + 600
+    const result = await cycle("williamos-rate-limit-", `PROVIDER_RATE_LIMIT_WALL:retry-${retryAtEpochSeconds}`)
     expect(result.ownerDecisionRequired).toBe(false)
     expect(result.state).toBe("WAITING_PROVIDER")
-    expect(result.retryAfter).toBeTruthy()
+    // The wait must actually be in the future, or the lane redispatches immediately and "parks and
+    // retries" is a claim the test never checked.
+    expect(Date.parse(result.retryAfter)).toBeGreaterThan(Date.now())
+    expect(result.failureCode).toBe("PROVIDER_RATE_LIMIT_WALL")
   })
 })
