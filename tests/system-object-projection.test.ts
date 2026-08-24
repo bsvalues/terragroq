@@ -190,6 +190,24 @@ describe("Invariant 4 - a probe past the freshness bound projects stale, never l
     expect(nodeObjects(graph)[0].truthState).toBe("live")
   })
 
+  it("never projects a DECLARED record as live, however fresh its timestamp looks", () => {
+    // The seed's declared records carry a well-formed `observed_at` and today a ttl of 0, so ageing
+    // alone happens to fence them. That is an accident of the current seed, not a rule: raise the ttl
+    // and a node that was never probed would report `live`. Confidence is checked before the
+    // arithmetic for exactly that reason.
+    const graph = project(
+      [inventoryNode({ evidence: { observed_at: FRESH, confidence: "declared", ttl_seconds: 300 } })],
+      { HERMES: { transport: "ssh", host: "HERMES" } },
+      { HERMES: { reachable: true, observedIdentity: { machine_id_sha256: PIN } } },
+    )
+    const [node] = nodeObjects(graph)
+
+    expect(node.truthState).toBe("unknown")
+    // Not `stale` either: staleness says a measurement aged out, and this one was never taken.
+    expect(node.truthState).not.toBe("stale")
+    expect(node.reason).toMatch(/declared evidence/)
+  })
+
   it("gives system-truth a stale state distinct from unknown", () => {
     const evidence = [
       {
@@ -471,6 +489,8 @@ describe("Gate 1a claims no runtime proof", () => {
     for (const node of nodeObjects(graph)) {
       expect(node.promotion.promoted).toBe(false)
       expect(node.promotion.reason).toMatch(/promotion requires an observed identity/)
+      // Every shipped seed record is `confidence: "declared"`. None of them may claim to be live.
+      expect(node.truthState).not.toBe("live")
     }
     for (const accelerator of acceleratorObjects(graph)) {
       expect(accelerator.capability).toBe("UNKNOWN")

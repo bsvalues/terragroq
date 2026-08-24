@@ -388,11 +388,20 @@ export function projectSystemObjects(input: ProjectionInput): SystemObjectGraph 
     }
 
     if (promoted || (observation === undefined && ageSeconds !== null)) {
-      // Evidence freshness decides live vs stale. A probe past its bound is `stale`, never `live`.
-      if (ageSeconds === null) {
+      // Freshness is a claim about a MEASUREMENT, so it is only asked once the record is one.
+      //
+      // `confidence` is checked before the arithmetic and not after it, because a declared record
+      // carries a perfectly well-formed `observed_at` -- the seed's is `2026-08-09T21:57:00Z`. Age it
+      // against a non-zero ttl and a record that was never probed reports `live`. It is not `stale`
+      // either: staleness says a measurement aged out, and this one was never taken.
+      if (node.evidence?.confidence !== "observed") {
+        truthState = "unknown"
+        reason = reason ?? "declared evidence: no live observation has been recorded for this node"
+      } else if (ageSeconds === null) {
         truthState = "unknown"
         reason = reason ?? "no evidence timestamp"
       } else if (ageSeconds > ttlSeconds) {
+        // A probe past its bound is `stale`, never `live`.
         truthState = "stale"
         reason = reason ?? `evidence age ${Math.round(ageSeconds)}s exceeds ttl ${ttlSeconds}s`
       } else {
