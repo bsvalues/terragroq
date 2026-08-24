@@ -397,6 +397,8 @@ export const PIN_REQUIRED_FROM_REGISTER = 12
 
 export interface RegisterReport {
   rows: RegisterRow[]
+  /** Rows that annotate an existing register row rather than declaring one. */
+  annotations: AnnotationRow[]
   violations: Violation[]
   pinnedRows: number
   /**
