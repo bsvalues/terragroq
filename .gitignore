@@ -17,9 +17,6 @@ venv/
 
 # Node
 node_modules/
-# ...and node_modules as a FILE: a worktree symlink slipped past the directory-only
-# pattern and reached CI, where pnpm could not mkdir over it (PR #989).
-node_modules
 .pnpm-debug.log*
 coverage/
 build/
