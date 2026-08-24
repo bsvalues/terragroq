@@ -16,17 +16,23 @@ returned `MAP_DEFECTIVE`:
 | --- | --- | --- | --- | --- | --- |
 | 1 | revision 1 | `MAP_DEFECTIVE` | 8 | 7 | 1 (deduplicated to 21 accepted, 3 refuted) |
 | 2 | revision 2 | `MAP_DEFECTIVE` | 19 | 9 | 3 |
-| 3 (self-check) | revision 3's own remediation | 3 defects introduced or left | 2 | 1 | 0 |
+| 3 (self-check) | revision 3's own remediation | 4 defects introduced or left | 3 | 1 | 0 |
+| 3 (independent) | revision 3 | `MAP_DEFECTIVE` | 7 | 4 | 0 |
 
 Revision 2 fixed all 21 of round 1's accepted findings and round 2 then found **more defects than
 round 1 had**, several of them inside revision 2's own corrections. That is the finding that matters,
 and it is bigger than any individual row in §10 or §11.
 
-It then happened a third time. Applying round 2's findings introduced two contradictions between the
-corrected rules and the acceptance criteria that test them, and silently dropped one accepted P0 by
-deleting the false claim instead of answering it. Those three are §12, found by re-reading revision 3
-against its own registers rather than by a fourth review round. The pattern has now held across three
-consecutive rounds, which is the strongest evidence in this document for the method rule below.
+It then happened a third time, twice over. Applying round 2's findings introduced two contradictions
+between the corrected rules and the acceptance criteria that test them, silently dropped one accepted
+P0 by deleting the false claim instead of answering it, and accepted a round-2 P0 that was itself
+false and carried it into a bounded packet. Those four are §12, found by re-reading revision 3 against
+its own registers. Round 3 then ran independently against the same revision and returned
+`MAP_DEFECTIVE` with **7 P0 and 4 P1** — §13 — including defects inside the §12 corrections themselves.
+
+Round 3 is the first round to attack a revision that had already **adopted** the method rule below,
+and the rule did not prevent the same three patterns from recurring. That is the strongest evidence in
+this document, and it is evidence against the sufficiency of the rule, not for it.
 
 ### Why this map is not being declared PASS
 
@@ -498,7 +504,7 @@ missing.
 | **Node identity + hardware + authority inventory** | `config/execution-fabric/registry.seed.json` → `assemble-registry.mjs` → snapshot | `REUSE` — canonical | Machine-identity pinned; unpinned nodes stay declared and unschedulable (`README:42-44`). |
 | **Node transport registry** | `~/.williamos/fabric/nodes.json` via `lib/fabric/registry.mjs` | `REUSE` for transport | Fingerprinted optimistic-concurrency merge, `RegistryConflict`, `RegistryFieldLoss`. Correct as a transport registry. |
 | **The relationship between those two** | — | `COLLISION / ADAPT` | **§4.1.** Different shapes, different owners, no join today. Gate 1 owns the resolver and the precedence rules. Revision 1 called this one registry; it is two. |
-| Node command transport + audit | `lib/fabric/broker.mjs`, `lib/fabric/audit.mjs` | `REUSE` | Unknown node → `BrokerDenied`; host keys pinned (`run-baseline.mjs:243-251`); every outcome incl. refusals audited. `brokeredExec` **already supports and audits local execution** (`broker.mjs:96-104`). |
+| Node command transport + audit | `lib/fabric/broker.mjs`, `lib/fabric/audit.mjs` | `REUSE`, **with the audit guarantee stated correctly** | Unknown node → `BrokerDenied`; host keys pinned (`run-baseline.mjs:243-251`). `brokeredExec` **already supports local execution** (`broker.mjs:96-104`). But "every outcome including refusals audited" was **false**, and round 3 was right to attack it: `auditFabricAction` returns early when the ledger root is absent — `if (!(await hasLedger(fabricRoot))) return` (`audit.mjs:33`) — so **a missing ledger directory silently disables auditing entirely and reports success**. On top of that the denial path (`broker.mjs:91`) and the execution-error path (`:111`) are both `.catch(() => {})`'d. Only the two success paths (`:102,107`) await without a catch. Accurate statement: **successful execution is fail-loud only when the ledger root already exists; refusals, errors, and every path under an absent ledger are best-effort.** |
 | Live node probe | `app/api/fabric/nodes/route.ts` | `ADAPT` | Keep: probe-on-request, unreachable-with-reason, per-platform dialect, `cache-control: no-store`. Wrong for V2: emits `Record<string,string>`; weak GPU query; **and a raw local transport, next row**. |
 | **`probeLocal()` raw transport** | `app/api/fabric/nodes/route.ts:76-92` | `SUPERSEDE` — **named, was hidden** | Runs `execFile("powershell", …)` directly at `:90`, bypassing the broker: no `BrokerDenied` check, no audit entry. `broker.mjs:96-104` already does local PowerShell *with* audit. Revision 1 claimed "all Gate 1 probing goes through `brokeredExec`" and "preserve brokered-only execution" — both false while this exists. Gate 1 removes it. |
 | System truth classes | `lib/system/system-truth.ts` | `EXTEND` | Keep `live/persisted/inferred/unknown` + configured-role-is-not-liveness. Must add `stale`, add `OMEN`, and derive configured roles from the Fabric inventory rather than `Exclude<SystemName,"ATLAS">`. |
@@ -560,7 +566,7 @@ never grants authority" is already shipped behavior, and must survive the merge.
 | Context compartment / world scoping | — | `MISSING` | `memoryFact` has `userId` + `tags[]` and no governed compartment column. `documentChunk` likewise scopes by user. Doc 21's gap statement is confirmed in the schema. Gate 4 concern. |
 | Decision register | `decision` (`schema.ts:133`) | `EXTEND` | `status`, `authority` (binding/advisory/informational), `scope`, `evidence[]`, `locked`, `supersedesId`/`supersededById`. Maps onto `DECIDED`/`SUPERSEDED`. |
 | Doctrine | `doctrine` (`schema.ts:159`) | `REUSE` | `allowed[]`/`forbidden[]`/`requiresApproval[]` — the policy-diff substrate Gate 11 will need. |
-| **Claim lifecycle: confidence, freshness, evidence, expiry** | `truthClaim` (`schema.ts:1106-1122`) | `EXTEND` — **not missing** | Revision 1 classified epistemic state as wholly `MISSING`. Refuted by the schema: `truthClaim` already owns `truthType` (`STATIC \| SESSION \| VOLATILE \| EVIDENCE \| LOCK \| UNKNOWN \| STALE \| ASSUMED`), `confidence`, `freshness` (`fresh\|aging\|stale`), `evidenceId`, `verificationRequiredBefore[]`, `expiresAt`, `status`. `agentClaim` (`:1126-1142`) owns `SELF_REPORTED \| EVIDENCE_BACKED \| UNSUPPORTED \| CONFLICTING \| REQUIRES_VERIFICATION`. |
+| **Claim lifecycle: confidence, freshness, evidence, expiry** | `truthClaim` (`schema.ts:1106-1122`) | `EXTEND` — **not missing** | Revision 1 classified epistemic state as wholly `MISSING`. Refuted by the schema: `truthClaim` already owns `truthType` (`STATIC \| SESSION \| VOLATILE \| EVIDENCE \| LOCK \| UNKNOWN \| STALE \| ASSUMED`), `confidence`, `freshness` (`fresh\|aging\|stale`), `evidenceId`, `verificationRequiredBefore[]`, `status`, and an `expiresAt` column that **shipped behaviour does not own**: writes cannot set it and reads recompute freshness from truth type and capture time (`app/actions/truth.ts:34-35,50,68`). It is an inert column, not an expiry owner -- §11 row 29, which pointed here without the correction ever landing until round 3 caught it. `agentClaim` (`:1126-1142`) owns `SELF_REPORTED \| EVIDENCE_BACKED \| UNSUPPORTED \| CONFLICTING \| REQUIRES_VERIFICATION`. |
 | Brain Council reasoning packet | `components/brain-council/brain-council-reasoning.ts:24-40` | **noncanonical projection predecessor** | Already shapes question / evidence / unknowns / hypotheses / ranking / confidence, with `safety.readOnly: true`. Its content is a static literal (`:42-`), so it is a UI-side predecessor, not an authority. Do not promote it; do not ignore it when naming the vocabulary. |
 | Unified epistemic lifecycle `QUESTION`/`HYPOTHESIS`/`OBSERVED`/`LIKELY`/`PROVEN`/`DISPROVEN` | — | `MISSING` — **narrowed** | What is genuinely absent is the *unified state machine over one subject*, and the transitions between those states. It must reconcile **onto** `truthClaim`/`agentClaim`/`decision`/`doctrine` authority, never beside it. `parkedIdea` (`schema.ts:1188`) is a partial predecessor for `IDEA`/`PARKED`. |
 
@@ -664,7 +670,38 @@ existing option fails a named property:
 | `POST /api/resource/verify` | not a mutation; POSIX-only, so it cannot reach HERMES; wrong object graph; not user-scoped |
 | `relocate` / `restore` (`lib/resource/mutation.ts`) | correctly shaped, but they move a multi-hundred-gigabyte source or restore a database - far past "safest", and the charter forbids inventing an unsafe action for the demo |
 
-**Gate 2 therefore builds the first governed action rather than adopting one.** Its shape is already
+#### Correction (round 3): the charter says CHOOSE, and this section reversed it
+
+`charter:273-274` reads, in full:
+
+> The first implementation journey needs only **one** safe governed mutation. **Choose the safest
+> existing canonical action** that proves the architecture. Do not invent an unsafe action to satisfy
+> the demo.
+
+Revision 3 quoted the first sentence and concluded from it that Gate 2 must **build** the action. The
+second sentence says the opposite: *choose the safest existing canonical action*. "Do not invent an
+unsafe action" is not permission to invent a safe one.
+
+This is the **third consecutive revision to get this one requirement wrong**, and the third by the same
+mechanism: revision 1 read it as read-only and picked a mutating action; revision 2 read it as
+read-only and picked a read-only action; revision 3 read half the line. The map bound itself in its
+status section to quoting controlling requirements rather than paraphrasing them, then paraphrased
+this one by truncation — which is harder to see than a paraphrase, because every word quoted was
+accurate.
+
+**So the disposition is reopened, not settled.** Two outcomes are legitimate and this map does not get
+to skip between them:
+
+1. an existing canonical action qualifies and Gate 2 adopts it — the charter's instruction, and it
+   requires a *scoped* search for candidates rather than the three this section happened to consider;
+2. no existing action qualifies, and that is a **charter amendment**, obtained explicitly, not assumed
+   by a map. `CONT-EXPV2-FIRST-ACTION` is retyped accordingly (§9).
+
+What the three candidates below do establish is that `baseline`, `resource/verify` and
+`relocate`/`restore` each fail a named property. That is evidence toward (2); it is not a search, and
+it is not an amendment.
+
+**If an existing action is adopted, its shape is already
 settled by `lib/resource/mutation.ts`: chosen from a fixed catalogue by name and never from caller
 text, target derived from the record and never from the request, unsafe input refused rather than
 escaped, nothing deletes. What Gate 2 must add, taken directly from the failures above: a SystemObject
@@ -738,33 +775,42 @@ Recorded as `CONT-EXPV2-FIRST-ACTION` (§9).
    | node identity / role / authority | `registry.seed.json` | `assemble-registry-core.mjs:32+` `canonicalAuthority`, enforced at `:699-704`; roster at `:655-660`; hostname→node-id maps in `probe-windows.ps1:10-12` and `probe-linux.sh:51` — §4.1 |
    | Work Order admission vs outcome dispatch | `scheduleEligibleSet` (`eligible-set-scheduler.mjs:1635`) | `acquireNextEligibleOutcome` (`outcome-queue-source.mjs:4360`) + `createHermesOutcomeQueueRuntime` (`outcome-queue-runtime.mjs:1283`) — **not a second owner; a boundary that was never drawn.** See below |
 
-   **The scheduler row needs more than a cell**, because "no second scheduler" was false and "a second
-   scheduler" would be false too. Two executable selectors exist, and they select different things, at
-   different moments, over different substrates:
+   **This row has now been wrong twice, in opposite directions, and the second time was mine.**
 
-   - `scheduleEligibleSet` (`eligible-set-scheduler.mjs:1635`, 2295 lines) is **plan-time admission
-     over a DAG of Work Orders**. Its input set is exactly `{expectedVersion, dagInput, dispatchClaims,
-     providerCapabilities, budgets, schedulingPolicy, schedulingClaims}` (`:1637`); it resolves the
-     DAG's eligible set and refuses unless `dispatchClaims` is an exact bijection with it
-     (`:1657-1660`), validates against a pinned trust bundle (`:1653`), and writes through a
-     reservation ledger, a lease store and an evidence ledger (`:1640-1644`). It decides **which Work
-     Orders may be dispatched at all**.
-   - `acquireNextEligibleOutcome` (`outcome-queue-source.mjs:4360`) is **run-time acquisition of one
-     outcome-queue item by one worker**, against Postgres, keyed by `userId`, `acquisitionKey`,
-     `leaseHolder`, `leaseToken`, `executionBinding`, `leaseDurationMs`, `campaignWindowId` and
-     `processIdentity` (`:4360-4377`). `createHermesOutcomeQueueRuntime` (`outcome-queue-runtime.mjs:1283`)
-     is the lease lifecycle around it — acquire, complete, renew, defer, resume (`:1285-1301`).
+   Round 2 accepted "no second scheduler" as a P0. Revision 3 deleted the claim without replacing it,
+   leaving §10 row 6 pointing here at nothing — a negative deleted is not a negative answered (§12 row
+   34). The replacement I then wrote said "two executable selectors exist… not a second owner, a
+   boundary." Round 3 attacked that and both halves failed.
 
-   Different object (Work Order vs outcome-queue item), different moment (admission vs acquisition),
-   different substrate (pinned file-backed ledgers vs Postgres). So they do not compete. But they are
-   not unrelated either: **both mint and hold leases** — `leaseTokenKey` under a 32-byte floor
-   (`eligible-set-scheduler.mjs:1641-1643`) on one side, `leaseToken` and `leaseDurationMs` on the
-   other. Lease identity and expiry is **one concept with two implementations**, and that is the
-   integration boundary a later gate must not implement a third time.
+   **Four selector implementations exist, not two.** The sweep behind "two" was never stated, which is
+   the pattern-2 defect committed inside the row written to fix a pattern-2 defect:
 
-   Round 2 accepted "no second scheduler" as a P0 and revision 3 then dropped the claim from this list
-   without replacing it, which left §10 row 6 pointing here at nothing. A negative deleted is not a
-   negative answered; the boundary above is the answer.
+   | Implementation | Object | Substrate |
+   | --- | --- | --- |
+   | `scheduleEligibleSet` (`eligible-set-scheduler.mjs:1635`, 2295 lines) | Work Order lanes from a DAG | file-backed reservation ledger + lane lease store + evidence ledger, under a pinned trust bundle (`:1640-1644,1653`) |
+   | `acquireNextEligibleOutcome` (`outcome-queue-source.mjs:4360`) + `createHermesOutcomeQueueRuntime` (`outcome-queue-runtime.mjs:1283`) | outcome-queue items | Postgres |
+   | `selectNextOutcome` (`scripts/hermes-bridge/outcome-source.mjs:1276`) | goals/outcomes — the legacy selector, still the orchestrator default | — |
+   | `selectNextOutcome` / `acquireOutcome` (`lib/outcome-queue/engine.ts:277,431`) | outcomes — used by the operator projection | TypeScript |
+
+   **And `scheduleEligibleSet` is not "plan-time admission".** It acquires reservations and leases
+   through `acquirePhaseTwoClaim`, each with a fencing token, and drives the lifecycle
+   `PLANNED → AUTHORITY_MATCHED → DEPENDENCY_CLEARED → RESERVED → LEASED → PROVIDER_DISPATCHED`
+   (`:1785`), recording `RESERVATION_ACQUIRED` and `LIFECYCLE_PROVIDER_DISPATCHED` (`:1792`). It
+   reserves, leases, fences, dispatches, releases and reaps — the same verbs as the queue side. The
+   "admission vs acquisition" distinction I drew does not exist in the code.
+
+   So the shared surface is not "exactly one concept". They overlap on **dependency eligibility,
+   authority and policy admission, risk/capability gating, fencing, leasing, and dispatch** — the
+   whole lifecycle, implemented more than once over more than one object graph and substrate.
+
+   **Correct classification, and it is deliberately weaker than either previous attempt:** these are
+   *distinct overlapping scheduler authorities with an unproven handoff*. No call boundary between
+   them has been evidenced in this map. "Not a second owner" is **not established**, and neither is
+   "a second owner" — what is established is that four implementations of one concern exist and
+   nobody has written down how they compose. Enumerating and classifying each as supported runtime,
+   fallback, projection/pure engine, or Work-Order scheduler is real work with a real owner, recorded
+   as `CONT-EXPV2-SELECTOR-INVENTORY` (§9). It is not something a paragraph in a collision map
+   disposes of, which is what both previous versions of this row tried to do.
 
    A negative claim is only as wide as the search behind it. Any future "no second owner" statement in
    this program must state the surfaces it searched, or it is not a finding.
@@ -788,7 +834,16 @@ Revision 1's proposed query also silently dropped `driver_version`, which both c
 The corrected direction:
 
 ```
-canonical probe (probe-windows.ps1 / probe-linux.sh)   -- the ONLY structured GPU observer
+canonical probe (probe-windows.ps1 / probe-linux.sh)   -- the only CANONICAL PER-DEVICE INVENTORY
+                                                       observer. NOT the only structured GPU
+                                                       observer: collect-resident-hermes-embedding-
+                                                       evidence.ps1:58 runs its own nvidia-smi
+                                                       --query-gpu and emits structured resource
+                                                       fields (:139). That is a SPECIALIST_RUNTIME_
+                                                       METRIC producer (S6.6) and stays out of Gate 1,
+                                                       but "the ONLY structured GPU observer" was
+                                                       false. Scope searched: TypeScript/Next, Python,
+                                                       PowerShell, shell, .mjs, config/JSON.
     -> registry.schema.json $defs.gpu                  -- the ONLY canonical GPU record shape
         -> assemble-registry-core.mjs                  -- the ONLY validator/assembler
             -> registry.snapshot.json                  -- the canonical inventory
@@ -966,7 +1021,14 @@ not treated as a defect anywhere in this map.
 The review's merge-threshold finding and that direction converge on the same answer: split the gate.
 
 ```
-GATE 1a -- SCHEMA / PARSER / PROJECTION            RELEASABLE NOW
+GATE 1a -- SCHEMA / PARSER / PROJECTION            BLOCKED_DEPENDENCY
+  reason code: PREDECESSOR_MAP_DEFECTIVE
+  note:        revision 3 said RELEASABLE NOW while S9's CONT-EXPV2-GATE1-RESCOPE simultaneously said
+               #990's scope was defective and Gate 1a must not start on it. Both cannot be true, and
+               round 3 caught the contradiction. #990 has since been amended (S12), so what remains is
+               that THIS map is still MAP_DEFECTIVE after three rounds. Gate 1a becomes releasable when
+               the map's Gate 1 scope survives a review round, not before.
+  when clear:  content and evidence below are unchanged and correct
   content:     S7.2 in full, S7.4 projection rules, S7.5 invariants 1-13
   evidence:    deterministic tests with synthetic probe fixtures; the deterministic CI suite green
   merges on:   its own tests. It claims NO runtime proof and must not.
@@ -1020,7 +1082,8 @@ evidence exists is a **failure**, not a success.
 | Branch / commit / push / PR | **MET** — this document is delivered through it |
 | Fabric inventory read access | **MET** — `config/execution-fabric/registry.seed.json`, tracked |
 | Transport-registry shape | **MET** — from `route.ts:30-37` and `tests/fabric-registry-writes.test.ts:21`; the file itself is absent on this host, which is why §4.1 keeps the two registries distinct rather than assuming one |
-| Authority-matched bounded child packet | **MET** — #990, opened under #987/#985 (§3, §9) |
+| Authority-matched bounded child packet | **MET** — #990, opened under #987/#985 and **amended** for the round-2/3 rescope (§3, §9, §12) |
+| Gate 1 scope reviewed clean | **NOT MET** — this map is `MAP_DEFECTIVE` after three rounds (§13). Gate 1a is `BLOCKED_DEPENDENCY`, not releasable |
 | Live HERMES accelerator observation | **`WAITING_EXTERNAL_ENVIRONMENT`** — Gate 1b; automatic continuation on `HERMES_REACHABLE` |
 
 ## 8. Phase 0 report
@@ -1032,10 +1095,15 @@ STATUS: NOT PASSED (revision 3). Two independent adversarial rounds, both MAP_DE
         revision 2's own corrections. The method is the defect; see the status section at the top.
 
 CURRENT TRUTH DISCOVERED
-  Backend truth primitives are strong and singular: the Execution Fabric inventory with pinned
+  Backend truth primitives are strong but NOT singular -- "singular" was an unscoped uniqueness
+  claim contradicted by this map's own S5.3/S5.4/S5.5/S6.7, which name a second memory + fact-authority
+  store, a third command catalogue that gates execution, a distinct signed authority chain, and
+  multiple selector implementations. Searched surfaces: TypeScript/Next, Python (control-center/,
+  scripts/), PowerShell, shell, .mjs, config/JSON. What is strong: the Execution Fabric inventory with pinned
   machine identity, a fingerprint-merged transport registry, brokered audited transport,
   probe-on-request with preserved failure reasons, system truth classes, memory authority lifecycle,
-  decision/doctrine supersession, hash-chained governance events, evidence, authority grants, queue
+  decision/doctrine supersession, a best-effort governance append log with independent before/after
+  payload hashes and no chain (S5.5), evidence, authority grants, queue
   receipts, truth/agent claims, and a fixed-catalogue mutation surface with post-state verification.
 
   What is missing is a CROSS-SURFACE ADDRESSABLE PROJECTION AND IDENTITY RESOLVER. The underlying
@@ -1056,7 +1124,8 @@ CURRENT TRUTH DISCOVERED
     and the canonical GPU schema (S6.6).
   - lib/intent/router.ts is a competing static action catalogue, not a registry consumer (S5.3).
   - THREE frontend compositions exist, not two: /env (#919) shipped beside /environment (#922) (S5.2).
-  - truthClaim already owns claim confidence/freshness/evidence/expiry. Epistemic state is EXTEND,
+  - truthClaim already owns claim confidence/freshness/evidence. Its expiresAt column is INERT:
+    writes cannot set it, reads recompute freshness (truth.ts:34-35,50,68). Epistemic state is EXTEND,
     not MISSING; only the unified lifecycle is new (S5.4).
   - Extending the probes alone would be REJECTED by the canonical schema and silently replaced by
     declared seed data. Gate 1 must move the schema, the assembler and the digest pin together (S7.2).
@@ -1208,8 +1277,15 @@ CONT-EXPV2-FIRST-ACTION
   owner:     Gate 2, which BUILDS it on the lib/resource/mutation.ts shape rather than adopting one
   must add:  SystemObject subject; dialect-aware brokered execution; session-user scoping on every
              lookup; durable evidence, not best-effort; verified post-state
-  not:       an owner decision. Choosing among existing actions was the mistake; there is nothing to
-             choose.
+  round 3:   REOPENED. charter:273-274 says "Choose the safest existing canonical action"; this
+             packet had inverted that into "there is nothing to choose" by reading only the first
+             sentence. Three candidates failing is not a search.
+  next:      (a) a scoped search for existing canonical actions across the stated surfaces, then
+             adopt the safest qualifying one; or (b) if none qualifies, an explicit charter
+             amendment recording that the first journey's action must be built. Not (b) by default.
+  not:       an owner courier task. (b) is a charter amendment, which is a recorded-authority
+             decision and must be obtained explicitly rather than assumed by this map -- but the
+             search in (a) comes first and is ordinary agent work.
 
 CONT-EXPV2-GATE1-RESCOPE
   type:      BLOCKED_DEPENDENCY
@@ -1228,6 +1304,29 @@ CONT-EXPV2-GATE1-RESCOPE
   action:    amend #990 before its first commit. Gate 1a does not start on the old scope.
   owner:     the delivering agent lane
   not:       an owner decision. #990 is an agent-authored packet under already-recorded authority.
+
+CONT-EXPV2-SELECTOR-INVENTORY
+  type:      BLOCKED_DEPENDENCY
+  reason:    OWNERSHIP_UNRESOLVED
+  subject:   four selector/scheduler implementations with no evidenced call boundary (S6.7)
+  members:   scheduleEligibleSet (eligible-set-scheduler.mjs:1635) -- Work Order lanes from a DAG,
+             file-backed reservation ledger + lease store + evidence ledger;
+             acquireNextEligibleOutcome (outcome-queue-source.mjs:4360) + the queue runtime
+             (outcome-queue-runtime.mjs:1283) -- outcome-queue items, Postgres;
+             selectNextOutcome (scripts/hermes-bridge/outcome-source.mjs:1276) -- legacy, still the
+             orchestrator default;
+             selectNextOutcome / acquireOutcome (lib/outcome-queue/engine.ts:277,431) -- used by the
+             operator projection.
+  finding:   they overlap on dependency eligibility, authority/policy admission, risk/capability
+             gating, fencing, leasing and dispatch. scheduleEligibleSet is NOT plan-time only: it
+             acquires reservations and leases with fencing tokens and advances work to
+             PROVIDER_DISPATCHED (:1785,1792).
+  action:    enumerate and classify each as supported runtime, fallback, projection/pure engine, or
+             Work-Order scheduler, and evidence the call boundary between them, BEFORE any gate
+             decides ownership. Neither "no second scheduler" nor "not a second owner" is
+             established.
+  owner:     the delivering agent lane
+  not:       an owner decision.
 
 CONT-EXPV2-P0-REVIEW-3
   type:      INDEPENDENT_REVIEW_PENDING
@@ -1316,7 +1415,7 @@ Findings are grouped by what they attack, because several rows share one root ca
 | 3 | Two action classifiers | **ACCEPTED (P0)** | `lib/workbench/registered-outcome-intent.ts` is an independently owned exact-match classifier that `router.ts:94` special-cases and `app/actions/start-workbench-outcome.ts:12-21` exclusively accepts | §5.3 |
 | 4 | `governanceEvent` is a "hash-chained authority log" | **ACCEPTED (P0)** | `schema.ts:839-853` has no prior-event hash, sequence or head; `events.ts:64-65` hashes payloads independently; `events.ts:56-71` swallows insert failures by design | §5.5 — best-effort append log |
 | 5 | One event authority | **ACCEPTED (P0)** | `scripts/multi-agent-operator/authority-events.mjs:261` is a separate signed, linked authority-status chain governing dispatch and revocation, consumed by `codex-coordinator-adapter.mjs:395` | §5.5, §6.7 |
-| 6 | "No second scheduler" | **ACCEPTED (P0)** | `eligible-set-scheduler.mjs:1635` `scheduleEligibleSet` — DAG input, dispatch claims, reservation ledger, lease store, evidence ledger (2295 lines); `outcome-queue-source.mjs` and `outcome-queue-runtime.mjs` own queue selection/acquisition | §6.7 — resolved as a boundary (admission vs acquisition, one shared lease concept), not as a second owner |
+| 6 | "No second scheduler" | **ACCEPTED (P0)** | `eligible-set-scheduler.mjs:1635` `scheduleEligibleSet` — DAG input, dispatch claims, reservation ledger, lease store, evidence ledger (2295 lines); `outcome-queue-source.mjs` and `outcome-queue-runtime.mjs` own queue selection/acquisition | §6.7 — **still open.** Revision 3's "boundary, not a second owner" answer was itself refuted at round 3: four implementations exist, and `scheduleEligibleSet` reserves/leases/dispatches rather than merely admitting. Retyped as `CONT-EXPV2-SELECTOR-INVENTORY` (§9) |
 | 7 | The seed solely owns identity/role/authority | **ACCEPTED (P0)** | `assemble-registry-core.mjs:32+` holds `canonicalAuthority` per node and enforces it against the seed at `:699-704`; `:655-660` holds a hardcoded roster; `probe-windows.ps1:10-12` and `probe-linux.sh:51` hardcode hostname→node-id | §4.1, §6.7, §7.2 |
 | 8 | Pinned evidence is a `SPECIALIST_RUNTIME_METRIC` | **ACCEPTED (P0)** | `recommend-pinned-placement.mjs:108` with `pinned-evidence-registry.mjs:443,511` derives a competing node inventory whose GPU array is index-keyed with null UUID/PCI | §6.6 — placement-only projection, barred from owning identity |
 
@@ -1423,7 +1522,63 @@ what superseded it. An earlier draft of this section asserted the sweep had been
 nothing; it had not been done. That assertion was the same defect this section is about, made inside
 the section that names it, which is worth leaving on the record rather than quietly deleting.
 
+**And the corrected sweep was still incomplete.** Round 3 found three more targets whose corrections
+had never landed in the body — §11 row 29 (`truthClaim` owns expiry) pointed at §5.4, which still
+listed `expiresAt` as an owned field; §11 row 4's hash-chain correction had not reached the §8 Phase 0
+report; and the §5.1 broker row still said "every outcome incl. refusals audited". All three are
+corrected above. The lesson is not "sweep harder": it is that **a register pointing into a body is a
+data structure with no integrity check**, and this document has now failed to maintain it by hand
+three times. §13 records that as the finding rather than as three more rows.
+
 The boundary answer row 34 required is in §6.7: `scheduleEligibleSet` admits Work Orders from a DAG at
 plan time; `acquireNextEligibleOutcome` leases one outcome-queue item at run time; they share exactly
 one concept, **lease identity and expiry**, implemented twice. Neither "no second scheduler" nor "a
 second scheduler" was the true statement.
+
+## 13. Round-3 review response register
+
+Round 3 ran against `54b02953` as `CONT-EXPV2-P0-REVIEW-3`, sovereign tier, single lane, attacking the
+three method patterns rather than re-checking rows. **Verdict: `MAP_DEFECTIVE` — 7 P0, 4 P1.**
+
+Two of its findings had already been found and fixed independently by the delivering lane while the
+review was running (`2b314c3a`, `c5363092`); the review reached them from a different direction and
+confirmed both. The rest are new.
+
+| # | Pattern | Finding | Verdict | Fixed in |
+| --- | --- | --- | --- | --- |
+| 36 | A | §5.1 "every outcome incl. refusals audited" is false — `auditFabricAction` returns early when the ledger root is absent (`audit.mjs:33`), silently disabling auditing; denial (`broker.mjs:91`) and error (`:111`) paths swallow | **ACCEPTED (P0)** | §5.1 — fail-loud only on success *and* only when the ledger exists |
+| 37 | B | §8 "backend truth primitives are strong and **singular**" — unscoped uniqueness claim this map's own §5.3/§5.4/§5.5/§6.7 contradict | **ACCEPTED (P0)** | §8 — "strong but not singular", with surfaces stated |
+| 38 | E | §6.7 "two executable selectors exist" — **four** exist; the sweep was never stated | **ACCEPTED (P0)** | §6.7, `CONT-EXPV2-SELECTOR-INVENTORY` |
+| 39 | E | §6.7 `scheduleEligibleSet` is not plan-time admission — it acquires reservations and leases with fencing tokens and advances to `PROVIDER_DISPATCHED` (`:1785,1792`); the systems overlap on far more than one concept | **ACCEPTED (P0)** | §6.7 — retyped as distinct overlapping authorities with an unproven handoff |
+| 40 | C | §5.6/§9 reverse `charter:273-274`. The charter says "**Choose the safest existing canonical action**"; the map concluded Gate 2 must build one, by quoting only the preceding sentence | **ACCEPTED (P0)** | §5.6, §9 — disposition reopened |
+| 41 | D | §7.6 declares Gate 1a `RELEASABLE NOW` with its packet prerequisite `MET`, while §9 simultaneously says #990's scope is defective and Gate 1a must not start | **ACCEPTED (P0)** | §7.6 — `BLOCKED_DEPENDENCY / PREDECESSOR_MAP_DEFECTIVE` |
+| 42 | D | §12's certification that every register target was reopened is disproved by §11 row 29 and by stale audit/hash-chain targets | **ACCEPTED (P0)** | §12 — certification withdrawn and replaced with the finding |
+| 43 | A | §8's Phase 0 report still calls `governanceEvent` hash-chained | **ACCEPTED (P1)** | §8 |
+| 44 | B | §7.1 "the ONLY structured GPU observer" — `collect-resident-hermes-embedding-evidence.ps1:58` runs its own `nvidia-smi --query-gpu` and emits structured fields (`:139`) | **ACCEPTED (P1)** | §7.1 — narrowed to canonical per-device inventory observer, scope stated |
+| 45 | D | §11 row 29 points at §5.4 as corrected; §5.4 and §8 still claimed `truthClaim` owns expiry | **ACCEPTED (P1)** | §5.4, §8 — inert column |
+| 46 | D | §7.2/§11 row 20's "hardcoded `v0.2` walls" are error-message strings | **ACCEPTED (P1)** — already found independently, `c5363092` | §7.2, §11 row 20, §12 row 35 |
+
+### What round 3 changes about this map's own thesis
+
+The status section says the defect is a method failure in three patterns. Round 3 supports that and
+sharpens it in one way the earlier rounds could not, because it is the first round to run against a
+revision that had *adopted* the method rule:
+
+**The rule was followed and the same defects recurred.** §6.7's scheduler row was written under the
+rule, with behaviour cited and lines opened — and it still asserted an unscoped negative ("two
+executable selectors") and an unverified positive ("plan-time admission"). §5.6 was rewritten under
+the rule and still reversed its controlling requirement, this time by truncating a two-sentence quote
+rather than paraphrasing it. Stating a rule at the top of a document does not execute it.
+
+Two structural findings follow, and they are worth more than any row above:
+
+1. **A register that points into a body has no integrity check.** Rows 32-34, 42 and 45 are all the
+   same failure: a "where corrected" cell naming a correction the body does not contain. Hand
+   maintenance has failed three times running. Any future register in this program needs the target
+   to be verifiable, or it will drift again.
+2. **Accepted findings were never verified, only the map's own claims were** (§12 row 35). Three rounds
+   of adversarial pressure ran in one direction. An accepted finding is a claim like any other.
+
+Phase 0 remains **`PHASE_0_NOT_PASSED`**. Three independent rounds, three `MAP_DEFECTIVE` verdicts,
+and round 3 found defects inside revision 3's corrections exactly as round 2 found them inside
+revision 2's. Gate 1a is `BLOCKED_DEPENDENCY` and does not start on this map.
