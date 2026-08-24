@@ -253,14 +253,17 @@ path-scoped freeze does not reach it. #985's own disposition confirms it: #985 d
 string-valued GPU/memory/disk/service summaries as the subresource model."
 
 ```
-GATE 1: FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED
+GATE 1: DEPENDENCY_CLEARED
   freeze scope:     clear -- outside #921's Environment-path freeze
   reservation:      uncontested -- measured above across the complete path set
-  missing:          an authority-matched bounded child issue / goal / Work Order.
-                    charter:464-470 makes that packet the required predecessor of implementation,
-                    and AGENTS.md:9-10 requires the active authority-matched Work Order.
-                    This documentation PR is NOT that packet.
-  clears when:      the Gate 1 child packet exists and is authority-matched (S7.6, S9)
+  bounded packet:   #990 EXPERIENCE_V2_GATE1_SYSTEM_OBJECT_PROJECTION, opened under #987/#985 with
+                    WO-985-GATE1-SYSTEM-OBJECT-PROJECTION (schemaVersion 2), the S7.2 reservation set,
+                    the S7.5 invariants as acceptance, and the S7.6 1a/1b split.
+                    charter:464-470 makes that packet the required predecessor of implementation, and
+                    AGENTS.md:9-10 requires the active authority-matched Work Order. A documentation
+                    PR is not that packet; #990 is.
+  history:          revision 2 opened at FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED, which was
+                    the correct state until #990 existed. CONT-EXPV2-GATE1-PACKET (S9) is CLEARED.
 ```
 
 ## 4. ARCHITECTURAL COLLISION — competing System representations
@@ -581,8 +584,10 @@ must be shaped, and must not be pulled forward for demo value.
 
 **Bounded child:** canonical `SystemObject` projection over existing fabric truth, read-only.
 
-Status: `FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED` (§3). The reservation is uncontested; the
-bounded child packet does not exist yet (§7.6, §9).
+Status: `DEPENDENCY_CLEARED` (§3). The reservation is uncontested and the bounded child packet
+exists: **#990** `EXPERIENCE_V2_GATE1_SYSTEM_OBJECT_PROJECTION`, carrying
+`WO-985-GATE1-SYSTEM-OBJECT-PROJECTION` with this section's reservation set, §7.5 as acceptance, and
+the §7.6 split.
 
 ### 7.1 The convergence rule, corrected
 
@@ -773,7 +778,7 @@ evidence exists is a **failure**, not a success.
 | Branch / commit / push / PR | **MET** — this document is delivered through it |
 | Fabric inventory read access | **MET** — `config/execution-fabric/registry.seed.json`, tracked |
 | Transport-registry shape | **MET** — from `route.ts:30-37` and `tests/fabric-registry-writes.test.ts:21`; the file itself is absent on this host, which is why §4.1 keeps the two registries distinct rather than assuming one |
-| Authority-matched bounded child packet | **NOT MET** — §3, §9. Blocks Gate 1a start, not Gate 1a design |
+| Authority-matched bounded child packet | **MET** — #990, opened under #987/#985 (§3, §9) |
 | Live HERMES accelerator observation | **`WAITING_EXTERNAL_ENVIRONMENT`** — Gate 1b; automatic continuation on `HERMES_REACHABLE` |
 
 ## 8. Phase 0 report
@@ -866,13 +871,14 @@ KNOWN GAPS
   2. memory.used is absent from the node-probe query AND from the canonical GPU schema, so #974's
      HEADROOM class cannot reach the System Object Graph through the canonical inventory path.
      Bounded, and in Gate 1a scope (S7.2). It is NOT absent fabric-wide (S6.6).
-  3. Gate 1's bounded child packet does not exist yet: FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED.
+  3. (CLOSED during this revision.) Gate 1's bounded child packet now exists: #990. Gate 1 moved
+     FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED -> DEPENDENCY_CLEARED.
   4. Gates 3/5 are BLOCKED_RESERVATION behind PR #927; Gate 2 is dependency-gated on Gate 1 plus a
      fresh bounded reservation (S3).
   5. Round-1 independent review is complete and remediated here. A bounded re-review of THIS revision
      is the remaining assurance step (S9, CONT-EXPV2-P0-REVIEW-2).
 
-NEXT  Create the Gate 1 bounded child packet, then build Gate 1a. Gate 1b resumes automatically on
+NEXT  Build Gate 1a under #990. Gate 1b resumes automatically on
       HERMES_REACHABLE. Gate 2 after Gate 1 (both halves) plus a fresh reservation. Gates 3/5 stay
       BLOCKED_RESERVATION regardless.
 ```
@@ -952,16 +958,18 @@ CONT-EXPV2-P0-REVIEW-2
   not:       an owner courier task. The owner does not relay the review request or its result.
 
 CONT-EXPV2-GATE1-PACKET
-  type:      BLOCKED_DEPENDENCY
-  reason:    BOUNDED_CHILD_PACKET_MISSING
+  type:      CLEARED
+  was:       BLOCKED_DEPENDENCY / BOUNDED_CHILD_PACKET_MISSING
   subject:   Gate 1's authority-matched bounded child issue / goal / Work Order
   basis:     charter:464-470 makes the bounded packet the required predecessor of implementation;
-             AGENTS.md:9-10 requires the active authority-matched Work Order. This documentation PR
-             is not that packet.
-  clears:    when the packet exists under #987/#985 with a bounded scope matching S7.2 and an
-             acceptance target matching S7.5.
-  owner:     the delivering agent lane, per AGENTS.md packet mechanics
-  not:       an owner decision. The authority to create the child under #987 is already recorded.
+             AGENTS.md:9-10 requires the active authority-matched Work Order. A documentation PR is
+             not that packet.
+  cleared by: #990 EXPERIENCE_V2_GATE1_SYSTEM_OBJECT_PROJECTION, opened under #987/#985 by the
+             delivering lane under already-recorded program authority, carrying
+             WO-985-GATE1-SYSTEM-OBJECT-PROJECTION (schemaVersion 2): the S7.2 reservation set, the
+             S7.5 invariants as acceptance, the S7.6 1a/1b split, explicit stop conditions, and
+             ownerOperationsAllowed: false.
+  not:       an owner decision. The authority to create the child under #987 was already recorded.
 ```
 
 ## 10. Round-1 review response register
@@ -982,7 +990,7 @@ lane's, the evidence is the repository's. Deduplicated across lanes.
 | 8 | Baseline is read-only, selected-node, brokered | **ACCEPTED (P0)**, with one sub-claim refuted | All-node: `baseline/route.ts:18,23` → `run-baseline.mjs:382-386`. Mutating: `:330-338,341-348,361-369`. Not brokered: `:309-318` raw `exec`. **But audited**: `:270,298,304` | §5.6 — reclassified as a mutating all-node gate; `POST /api/resource/verify` chosen as the first-journey action, property by property |
 | 9 | Blanket Gate 2/3/5 freeze | **ACCEPTED (P1)** | #921 body: "freeze further Claude mutations in the Environment path; preserve reusable backend/API/data work"; PR #927's 39 files contain no `workbench-action-registry.ts` and no `router.ts` | §3 — Gate 2 `EXTEND`, dependency-gated; Gates 3/5 `BLOCKED_RESERVATION` on the measured file set |
 | 10 | `BLOCKED_AUDIT_FREEZE` | **ACCEPTED (P1)** | `multi-agent-operator-playbook.md:178-193` state list; `:196-198` forbids substituting reason codes for state names | §3 — canonical states with a separate reason code |
-| 11 | Gate 1 `RELEASABLE` | **ACCEPTED (P1)** | `charter:464-470`; `AGENTS.md:9-10`; no bounded child packet exists | §3 — `FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED`; §9 `CONT-EXPV2-GATE1-PACKET` |
+| 11 | Gate 1 `RELEASABLE` | **ACCEPTED (P1)** | `charter:464-470`; `AGENTS.md:9-10`; no bounded child packet exists | §3 — `FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED`, then **cleared in this same revision** by opening #990; §9 |
 | 12 | Fallback VRAM projects `UNKNOWN` | **ACCEPTED (P1)** | `probe-windows.ps1:116` emits `AdapterRAM` as `vram_bytes`; `:125` only warns | §7.4 — a `vram_source` field and explicit qualified-lower-bound projection rules; §7.5 invariant 7 |
 | 13 | Epistemic state wholly `MISSING` | **ACCEPTED (P1)** — an unverified candidate, confirmed locally | `schema.ts:1106-1122` `truthClaim`; `:1126-1142` `agentClaim`; `brain-council-reasoning.ts:24-40` | §5.4 — `truthClaim`/`agentClaim` `EXTEND`; Brain Council a noncanonical projection predecessor; only the unified lifecycle new |
 | 14 | "Nothing on main models a GPU/disk/service as an addressable thing" | **ACCEPTED (P1)** | `registry.schema.json:74-97,142-159,290-315` define identified gpu/disk/runtime/node objects | §8 — restated as a missing cross-surface addressable projection and identity resolver |
