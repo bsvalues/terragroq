@@ -778,7 +778,7 @@ Recorded as `CONT-EXPV2-FIRST-ACTION` (§9).
    **This row has now been wrong twice, in opposite directions, and the second time was mine.**
 
    Round 2 accepted "no second scheduler" as a P0. Revision 3 deleted the claim without replacing it,
-   leaving §10 row 6 pointing here at nothing — a negative deleted is not a negative answered (§12 row
+   leaving §11 row 6 pointing here at nothing — a negative deleted is not a negative answered (§12 row
    34). The replacement I then wrote said "two executable selectors exist… not a second owner, a
    boundary." Round 3 attacked that and both halves failed.
 
@@ -1486,10 +1486,10 @@ findings created new ones, and that pattern is the map's central claim about its
 
 | # | Defect | Class | Evidence | Fixed in |
 | --- | --- | --- | --- | --- |
-| 32 | §11 row 22 accepted that a transport `role` conflict must mark `CONFLICTING`, not `stale`, and §4.1 was corrected — but invariant 13 still said `stale`. The register recorded a correction the acceptance criteria did not carry | **SELF-INTRODUCED (P1)** | §4.1 `CONFLICT` vs §7.5 invariant 13, as written in `cea7ad54` | §7.5 invariant 13 |
-| 33 | §4.1 `ABSENCE` withdrew the symmetric projection rule — a transport-only record is an unverified endpoint candidate and does **not** project as a canonical `SystemObject` — while invariant 11 continued to require exactly that projection. The gate would have tested the behaviour the join rules forbid. Round 2's own P1 (invariant 11 never tests a successful or mismatched join) was also left open | **SELF-INTRODUCED (P0)** | §4.1 `ABSENCE` vs §7.5 invariant 11, as written in `cea7ad54`; `app/api/fabric/nodes/route.ts:30-37` carries no machine pin | §7.5 invariant 11 |
-| 34 | Round 2 accepted "no second scheduler" as a **P0** (§11 row 6, pointing at §6.7). Revision 3 deleted the claim from §6.7's negative list without replacing it, so row 6 pointed at nothing and the accepted P0 was silently unresolved | **SELF-INTRODUCED (P0)** | §11 row 6 → §6.7 item 7, as written in `cea7ad54` | §6.7 item 7 — boundary analysis |
-| 35 | Round 2's P0 #20 — "hardcoded `v0.2` semantic checks at `assemble-registry-core.mjs:653,699,700,704`" — was **accepted without opening the lines**, recorded in §7.2 and §11 row 20, and then propagated into #990's binding scope. They are error-message strings guarding a scheduler-state check and the authority-catalogue comparisons. `'0.2'` occurs once in the file, at `:720`. "A `schema_version` bump that leaves these behind fails assembly outright" was false | **ACCEPTED FINDING THAT WAS ITSELF FALSE (P0)** | `assemble-registry-core.mjs:652-653,695-704,720`; `grep -n "'0\.2'" ` returns one line | §7.2, §11 row 20, and #990's assembler row |
+| 32 | §11 row 22 accepted that a transport `role` conflict must mark `CONFLICTING`, not `stale`, and §4.1 was corrected — but invariant 13 still said `stale`. The register recorded a correction the acceptance criteria did not carry | **SELF-INTRODUCED (P1)** | §4.1 `CONFLICT` vs §7.5 invariant 13, as written in `cea7ad54` | §7.5 invariant 13 — pin: "the transport side is marked `CONFLICTING`" |
+| 33 | §4.1 `ABSENCE` withdrew the symmetric projection rule — a transport-only record is an unverified endpoint candidate and does **not** project as a canonical `SystemObject` — while invariant 11 continued to require exactly that projection. The gate would have tested the behaviour the join rules forbid. Round 2's own P1 (invariant 11 never tests a successful or mismatched join) was also left open | **SELF-INTRODUCED (P0)** | §4.1 `ABSENCE` vs §7.5 invariant 11, as written in `cea7ad54`; `app/api/fabric/nodes/route.ts:30-37` carries no machine pin | §7.5 invariant 11 — pin: "unverified endpoint candidate", "mismatched join" |
+| 34 | Round 2 accepted "no second scheduler" as a **P0** (§11 row 6, pointing at §6.7). Revision 3 deleted the claim from §6.7's negative list without replacing it, so row 6 pointed at nothing and the accepted P0 was silently unresolved | **SELF-INTRODUCED (P0)** | §11 row 6 → §6.7 item 7, as written in `cea7ad54` | §6.7 item 7 — boundary analysis — pin: "distinct overlapping scheduler authorities with an unproven handoff" |
+| 35 | Round 2's P0 #20 — "hardcoded `v0.2` semantic checks at `assemble-registry-core.mjs:653,699,700,704`" — was **accepted without opening the lines**, recorded in §7.2 and §11 row 20, and then propagated into #990's binding scope. They are error-message strings guarding a scheduler-state check and the authority-catalogue comparisons. `'0.2'` occurs once in the file, at `:720`. "A `schema_version` bump that leaves these behind fails assembly outright" was false | **ACCEPTED FINDING THAT WAS ITSELF FALSE (P0)** | `assemble-registry-core.mjs:652-653,695-704,720`; `grep -n "'0\.2'" ` returns one line | §7.2, §11 row 20, and #990's assembler row — pin: "error-message strings" |
 
 Row 35 is the one that should change how the next round is run. Rows 32-34 are failures to carry a
 correction *through* the document. Row 35 is a failure at the other end: an adversarial finding was
@@ -1546,17 +1546,17 @@ confirmed both. The rest are new.
 
 | # | Pattern | Finding | Verdict | Fixed in |
 | --- | --- | --- | --- | --- |
-| 36 | A | §5.1 "every outcome incl. refusals audited" is false — `auditFabricAction` returns early when the ledger root is absent (`audit.mjs:33`), silently disabling auditing; denial (`broker.mjs:91`) and error (`:111`) paths swallow | **ACCEPTED (P0)** | §5.1 — fail-loud only on success *and* only when the ledger exists |
-| 37 | B | §8 "backend truth primitives are strong and **singular**" — unscoped uniqueness claim this map's own §5.3/§5.4/§5.5/§6.7 contradict | **ACCEPTED (P0)** | §8 — "strong but not singular", with surfaces stated |
-| 38 | E | §6.7 "two executable selectors exist" — **four** exist; the sweep was never stated | **ACCEPTED (P0)** | §6.7, `CONT-EXPV2-SELECTOR-INVENTORY` |
-| 39 | E | §6.7 `scheduleEligibleSet` is not plan-time admission — it acquires reservations and leases with fencing tokens and advances to `PROVIDER_DISPATCHED` (`:1785,1792`); the systems overlap on far more than one concept | **ACCEPTED (P0)** | §6.7 — retyped as distinct overlapping authorities with an unproven handoff |
-| 40 | C | §5.6/§9 reverse `charter:273-274`. The charter says "**Choose the safest existing canonical action**"; the map concluded Gate 2 must build one, by quoting only the preceding sentence | **ACCEPTED (P0)** | §5.6, §9 — disposition reopened |
-| 41 | D | §7.6 declares Gate 1a `RELEASABLE NOW` with its packet prerequisite `MET`, while §9 simultaneously says #990's scope is defective and Gate 1a must not start | **ACCEPTED (P0)** | §7.6 — `BLOCKED_DEPENDENCY / PREDECESSOR_MAP_DEFECTIVE` |
-| 42 | D | §12's certification that every register target was reopened is disproved by §11 row 29 and by stale audit/hash-chain targets | **ACCEPTED (P0)** | §12 — certification withdrawn and replaced with the finding |
-| 43 | A | §8's Phase 0 report still calls `governanceEvent` hash-chained | **ACCEPTED (P1)** | §8 |
-| 44 | B | §7.1 "the ONLY structured GPU observer" — `collect-resident-hermes-embedding-evidence.ps1:58` runs its own `nvidia-smi --query-gpu` and emits structured fields (`:139`) | **ACCEPTED (P1)** | §7.1 — narrowed to canonical per-device inventory observer, scope stated |
-| 45 | D | §11 row 29 points at §5.4 as corrected; §5.4 and §8 still claimed `truthClaim` owns expiry | **ACCEPTED (P1)** | §5.4, §8 — inert column |
-| 46 | D | §7.2/§11 row 20's "hardcoded `v0.2` walls" are error-message strings | **ACCEPTED (P1)** — already found independently, `c5363092` | §7.2, §11 row 20, §12 row 35 |
+| 36 | A | §5.1 "every outcome incl. refusals audited" is false — `auditFabricAction` returns early when the ledger root is absent (`audit.mjs:33`), silently disabling auditing; denial (`broker.mjs:91`) and error (`:111`) paths swallow | **ACCEPTED (P0)** | §5.1 — fail-loud only on success *and* only when the ledger exists — pin: "fail-loud only when the ledger root already exists" |
+| 37 | B | §8 "backend truth primitives are strong and **singular**" — unscoped uniqueness claim this map's own §5.3/§5.4/§5.5/§6.7 contradict | **ACCEPTED (P0)** | §8 — "strong but not singular", with the surfaces stated — pin: "strong but NOT singular" |
+| 38 | E | §6.7 "two executable selectors exist" — **four** exist; the sweep was never stated | **ACCEPTED (P0)** | §6.7, `CONT-EXPV2-SELECTOR-INVENTORY` — pin: "Four selector implementations exist, not two" |
+| 39 | E | §6.7 `scheduleEligibleSet` is not plan-time admission — it acquires reservations and leases with fencing tokens and advances to `PROVIDER_DISPATCHED` (`:1785,1792`); the systems overlap on far more than one concept | **ACCEPTED (P0)** | §6.7 — retyped as distinct overlapping authorities with an unproven handoff — pin: "acquires reservations and leases through `acquirePhaseTwoClaim`" |
+| 40 | C | §5.6/§9 reverse `charter:273-274`. The charter says "**Choose the safest existing canonical action**"; the map concluded Gate 2 must build one, by quoting only the preceding sentence | **ACCEPTED (P0)** | §5.6, §9 — disposition reopened — pin: "Choose the safest existing canonical action" |
+| 41 | D | §7.6 declares Gate 1a `RELEASABLE NOW` with its packet prerequisite `MET`, while §9 simultaneously says #990's scope is defective and Gate 1a must not start | **ACCEPTED (P0)** | §7.6 — `BLOCKED_DEPENDENCY` with reason code — pin: "PREDECESSOR_MAP_DEFECTIVE" |
+| 42 | D | §12's certification that every register target was reopened is disproved by §11 row 29 and by stale audit/hash-chain targets | **ACCEPTED (P0)** | §12 — certification withdrawn and replaced with the finding — pin: "a register pointing into a body is a data structure with no integrity check" |
+| 43 | A | §8's Phase 0 report still calls `governanceEvent` hash-chained | **ACCEPTED (P1)** | §8 — pin: "payload hashes and no chain" |
+| 44 | B | §7.1 "the ONLY structured GPU observer" — `collect-resident-hermes-embedding-evidence.ps1:58` runs its own `nvidia-smi --query-gpu` and emits structured fields (`:139`) | **ACCEPTED (P1)** | §7.1 — narrowed to the canonical per-device inventory observer, scope stated — pin: "the only CANONICAL PER-DEVICE INVENTORY" |
+| 45 | D | §11 row 29 points at §5.4 as corrected; §5.4 and §8 still claimed `truthClaim` owns expiry | **ACCEPTED (P1)** | §5.4, §8 — inert column — pin: "It is an inert column, not an expiry owner" |
+| 46 | D | §7.2/§11 row 20's "hardcoded `v0.2` walls" are error-message strings | **ACCEPTED (P1)** — already found independently, `c5363092` | §7.2, §11 row 20, §12 row 35 — pin: "error-message strings" |
 
 ### What round 3 changes about this map's own thesis
 
@@ -1582,3 +1582,52 @@ Two structural findings follow, and they are worth more than any row above:
 Phase 0 remains **`PHASE_0_NOT_PASSED`**. Three independent rounds, three `MAP_DEFECTIVE` verdicts,
 and round 3 found defects inside revision 3's corrections exactly as round 2 found them inside
 revision 2's. Gate 1a is `BLOCKED_DEPENDENCY` and does not start on this map.
+
+## 14. The register now has an integrity check
+
+§13's first structural finding was that a register pointing into a body is a data structure with no
+integrity check, and that hand maintenance of it had failed three rounds running. This section
+records the mechanism that answers it, and — because the finding this map keeps re-committing is the
+unstated limit — states precisely what the mechanism does *not* establish.
+
+**Implementation.** `lib/governance/review-register.ts` parses this document; the assertions live in
+`tests/experience-v2-collision-map-register.test.ts`, which runs in the deterministic CI profile
+(`vitest.ci.config.ts`) on every push. Drift fails a build.
+
+**What it enforces.**
+
+1. Registers are found by structure — any `##` section declaring three or more numbered table rows
+   of four or more columns. §12 is titled "Revision-3 self-check" and would have been skipped by any
+   rule keyed on the word *register*; being skipped silently is the failure class one level up.
+2. Row numbers are unique within a register and run contiguously. They are namespaced per register —
+   §10 numbers its findings 1-24 and §11 restarts at 1 — which is why every cross-reference in this
+   map is written `§11 row 20` and never bare `row 20`.
+3. Every section reference **in the whole document**, not only in the registers, resolves to a real
+   heading or to a real numbered list item. This map writes §6.7 for item 7 of §6 and §7.5 invariant
+   13 for item 13 of §7.5; both forms resolve, and both fail when the item is deleted. That is §12
+   row 34's exact failure — a claim removed rather than answered, leaving the register pointing at
+   nothing while the page read clean.
+4. Every `§N row K` cross-reference resolves to a row register §N actually declares.
+5. Every register row names at least one resolvable target: a section, a packet, a PR, or a commit.
+6. **Content pins.** A row in §12 or any later register must carry `pin: "…"` naming text its target
+   section contains. §12 row 32's failure — invariant 13 still saying `stale` after §4.1 withdrew the
+   word — is caught by a pin and by nothing else in this list. Matching is whitespace- and
+   blockquote-normalised, so a pin survives reflow, and a row's own line is removed from the body
+   before matching, so a row whose target is its own register cannot pin against itself.
+
+**What it does not establish, stated because that is the defect this map keeps repeating.** The
+check cannot tell whether a correction is *correct*. Reference resolution catches deletion and
+typos; a pin catches a target still carrying withdrawn wording. Nothing here catches a section that
+exists, satisfies its pin, and still fails to answer the finding — only review does that. **Passing
+this check is not evidence that this register is honest**, and it is not evidence for any claim in
+§8. It removes one recurring failure mode from a document that has produced several.
+
+**Coverage is recorded rather than assumed.** §10 and §11 predate the pin mechanism: 55 of their
+rows are reference-checked but unpinned, and the test asserts that number so the carve-out cannot
+grow in a diff without argument. §12 and §13 are fully pinned, 15 rows.
+
+**One defect was found by building it.** §6 item 7 cited "§10 row 6" for the scheduler finding.
+§10 row 6 is the two-frontend-compositions row; the scheduler finding is §11 row 6. Corrected in
+place. The check does *not* catch that class — both citations resolve — which is the point of the
+paragraph above: it was found by reading the document closely enough to write a parser for it, not
+by the parser.
