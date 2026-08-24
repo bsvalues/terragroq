@@ -72,7 +72,7 @@ describe("Experience V2 collision map review registers", () => {
     // first cell names an existing register row is an annotation whatever its width.
     expect(annotations.length).toBeGreaterThanOrEqual(29)
     expect(annotations.every((a) => ["10", "11", "15"].includes(a.register))).toBe(true)
-    expect(annotations.filter((a) => a.register === "15").length).toBe(18)
+    expect(annotations.filter((a) => a.register === "15").length).toBe(19)
   })
 
   it("holds the whole document clean", () => {

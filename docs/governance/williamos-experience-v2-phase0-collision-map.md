@@ -1006,15 +1006,28 @@ full seam:
   identity, human label, kind, parent/contains, owner-directed role, truth state including `stale`,
   `observedAt`, health/headroom, technical identity under progressive disclosure. A projection, not an
   authority.
-- **`lib/system/registry-join.ts`** — **withdrawn as scoped.** Revision 2 called this "new". It is
-  not: the hostname-to-node-id resolver already exists, hardcoded in `probe-windows.ps1:10-12` and
-  `probe-linux.sh:51`, beside a hardcoded roster (`assemble-registry-core.mjs:655-660`) and a
-  hardcoded per-node authority catalogue (`:32+`, enforced `:699-704`). Writing a new resolver would
-  have made a **fourth** owner of node identity in a map whose purpose is to stop exactly that.
-  Gate 1's real task here is **consolidation**: derive or validate every alias from one contract, and
-  make the probes and assembler read it rather than restate it. That is a larger and more valuable
-  piece of work than the join revision 2 imagined, and it is the reason Gate 1a's scope is re-opened
-  rather than merely corrected.
+- **`lib/system/registry-join.ts`** — **withdrawn as a file name; the reason has been corrected
+  twice.** Revision 2 called it "new". Revision 3 withdrew it because "the resolver already exists
+  three times over, so a new one is a fourth owner". **Round 4 overturned that reason** (§15 row 48):
+  what exists three times over is duplicated hostname-to-node-id **aliasing** and per-node
+  **authority** data — `probe-windows.ps1:10-12`, `probe-linux.sh:51`, the assembler roster
+  (`assemble-registry-core.mjs:655-660`) and its authority catalogue (`:32+`, enforced `:699-704`) —
+  **all of it on the inventory side.** None of it reads the transport registry's shape
+  (`app/api/fabric/nodes/route.ts:30-37`), and §5.1's own table says the relationship between the two
+  registries is `COLLISION / ADAPT` with **no join today**.
+
+  So Gate 1 owns **two** distinct pieces of work here, and conflating them is what produced the
+  wrong reason twice:
+  1. **Consolidation.** Derive or validate every alias and authority entry from one contract and make
+     the probes and assembler read it rather than restate it. A consolidation module **replaces**
+     three copies; it does not add a fourth owner.
+  2. **The join itself**, which nothing on `main` performs. §4.1's rules — `ABSENCE`, `CONFLICT`,
+     precedence, and promotion as an *observation result* rather than a lookup, because the transport
+     record carries no machine pin — are Gate 1's to implement.
+
+  The file name stays withdrawn because naming a module before its contract is what started this.
+  Found while reading §7.2 to begin Gate 1a: the round-4 correction had reached §4.1 and §11 row 15
+  and not this section, which is #990's binding scope. §15 row 65.
 - **`lib/system/system-truth.ts`** — extend: add `OMEN`, add `stale`, derive configured roles from the
   Fabric inventory rather than `Exclude<SystemName, "ATLAS">`.
 - **`app/api/fabric/nodes/route.ts`** — adapt: emit **structured typed observations** alongside the
@@ -2016,6 +2029,7 @@ Found by the delivering lane while round 4 was running, and not by round 4:
 | # | Defect | Pattern | Verdict | Fixed in |
 | --- | --- | --- | --- | --- |
 | 63 | §10 row 16 named "Gate 1a releasable now" as its correction; §7.6 has said `BLOCKED_DEPENDENCY / PREDECESSOR_MAP_DEFECTIVE` since round 3. Sixth instance of §13's structural finding, inside the unpinned legacy carve-out | D | **ACCEPTED (P0)** | §10 row 16, §14 — pin: "the sixth instance of §13's structural finding" |
+| 65 | §7.2's `registry-join.ts` bullet still gave the withdrawn "a new one is a **fourth** owner" reason, which §15 row 48 overturned. §7.2 is the section #990's Gate 1a scope is written from, so the stale reason would have been implemented from. Found by the delivering lane while reading §7.2 to **begin** Gate 1a — after the §16 pass, which is exactly what §16 says a pass does not rule out | D | **ACCEPTED (P0)** | §7.2 — the two pieces of work separated: consolidation replaces three copies, and the join is work nothing on `main` performs — pin: "Gate 1 owns **two** distinct pieces of work here" |
 | 64 | §5.6 said the broker is "the only place on `main` where audit is fail-loud" and that a brokered command that cannot reach the ledger "fails rather than completing unrecorded". `broker.mjs:55` aliases `auditBrokerAction` to `auditFabricAction`, whose first line (`audit.mjs:34`) returns silently when the ledger root is absent. §13 row 36 had established this for §5.1 and the correction never reached §5.6 | A, B | **ACCEPTED (P0)** | §5.6 — pin: "the brokered command completes unrecorded" |
 
 ### What round 4 changes about this map's own thesis
@@ -2113,6 +2127,7 @@ released.
 | §15 row 61 | the legacy carve-out asserted a count, not row identities | **`AFFECTS_GATE_1_NOW`** | same criterion; a count cannot detect carve-out growth |
 | §15 row 62 | §6.7 cited `:1792` for records at `:1805-1806` | `DOES_NOT_AFFECT_GATE_1_NOW` | precision, in the scheduler section |
 | §15 row 63 | §10 row 16 named a correction §7.6 no longer contains | **`AFFECTS_GATE_1_NOW`** | it asserted "Gate 1a releasable now" — sequencing |
+| §15 row 65 | §7.2 still carried the "fourth owner" reason round 4 finding 2 overturned | **`AFFECTS_GATE_1_NOW`** | §7.2 **is** #990's binding scope; the correction had reached §4.1 and §11 row 15 and not the section Gate 1a is implemented from. Found while reading §7.2 to begin Gate 1a, after the pass |
 | §15 row 64 | §5.6's broker audit is not fail-loud under an absent ledger root | `DOES_NOT_AFFECT_GATE_1_NOW` | the owner direction names swallowed audit failures as phase-scoped. Gate 1 is read-only, grants no authority and mutates nothing; the exposure is on the mutating paths. `mustResolveBefore = Gate 2` |
 
 **Every `AFFECTS_GATE_1_NOW` finding is fixed**, in `947b6ea4`, `bf86d30d`, `39189969` and
