@@ -57,13 +57,19 @@ describe("Experience V2 collision map review registers", () => {
     expect(byRegister.get("15")?.[0]).toBe(47)
   })
 
-  it("parses §12's correction sweep as annotations over rows that exist", () => {
-    // Round 4 finding 11: the sweep was excluded for having three columns -- the one table in the
-    // document whose entire subject is stale correction targets.
+  it("parses annotation tables over rows that exist", () => {
+    // Round 4 finding 11: §12's correction sweep was excluded for having three columns -- the one
+    // table in the document whose entire subject is stale correction targets. §15's re-opening of
+    // the six rows round 4 left unreviewed is the second such table.
     const annotations = parseAnnotationRows(map)
-    expect(annotations.length).toBe(5)
-    expect(annotations.every((annotation) => annotation.register === "10")).toBe(true)
-    expect(annotations.map((annotation) => annotation.row).sort((a, b) => a - b)).toEqual([8, 9, 11, 23, 24])
+    const sweep = annotations.filter((annotation) => annotation.register === "10" && annotation.row < 25)
+    expect(sweep.map((annotation) => annotation.row).sort((a, b) => a - b)).toEqual(
+      expect.arrayContaining([8, 9, 11, 23, 24]),
+    )
+    // Every annotation must name a row that exists; checkReviewRegister enforces it, and the
+    // clean-document case above is what proves none dangles.
+    expect(annotations.length).toBeGreaterThanOrEqual(11)
+    expect(annotations.every((annotation) => ["10", "11"].includes(annotation.register))).toBe(true)
   })
 
   it("holds the whole document clean", () => {

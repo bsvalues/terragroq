@@ -1948,7 +1948,24 @@ Round 4 also could not run the focused Vitest suite: the read-only Windows sandb
 process spawn with `CreateProcessAsUserW failed: 5 (Access is denied.)` on 27 attempts. Its review of
 the machine check is therefore static reading only, and it said so rather than implying a run. The
 delivering lane ran the suite here; that is a different lane's evidence, and this row does not
-transfer it.
+transfer it. Round 5 is given a writable workspace and an explicit read-only instruction so that gap
+closes with post-review verification of `git status` and `HEAD`.
+
+**The six rows round 4 left unreviewed have since been opened by the delivering lane, and all six
+hold.** They are recorded here as *this lane's* evidence, not as an independent re-verification —
+the distinction round 4 itself drew about the test run, applied to the delivering lane in turn:
+
+| Row | Re-opened at | Result |
+| --- | --- | --- |
+| §10 row 12 | `probe-windows.ps1:116` (`vram_bytes = if ($_.AdapterRAM) { [int64]$_.AdapterRAM } else { $null }`), `:125` (warning only) | holds, exactly as cited |
+| §11 row 8 | `pinned-evidence-registry.mjs:146-152` — `exactKeys(gpu, ["name","vram_total_mb","vram_free_mb","vram_used_mb","util_pct","temp_c"])`, index-keyed, **no `uuid` and no `pci_bus_id`** | holds. The row cites `:443,511`, which are real members of the path; the *shape* evidence is at `:146-152` and the row does not cite it |
+| §11 row 10 | `lib/resource/probe.ts:144-150` — `probeCommand` emits `if [ -e … ]; then du -sb … ` and has no PowerShell branch | holds |
+| §11 row 12 | `app/api/resource/verify/route.ts:31-32` checks only `session?.user`; `:46-54` filters on `lower(resourceKey)`/`lower(canonicalIdentity)` with **no `userId`** | holds — the security claim is real |
+| §11 row 18 | `scripts/execution-fabric/README.md:41-44` — promotion requires "an exact match to the trusted hashed machine-identity pin"; an unpinned node "remains declared and unschedulable" | holds |
+| §11 row 27 | `williamos-experience-v2-phase0-review-evidence.md:209` now names the two reserved test files, and `:213-216` records the earlier over-claim | holds, and its correction landed |
+
+Round 5 should still open them independently. One lane confirming its own register is worth less than
+a second lane doing it, which is the whole argument of this section.
 
 **And one correction in this register lands somewhere the check cannot reach.** §15 row 56's target is
 the status section at the top of this document, which carries no number. Every rule in §14 keys on a
