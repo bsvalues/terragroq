@@ -216,6 +216,50 @@ The same exact P40 object must be reachable from System, Inspector, global comma
 Clients must not parse human presentation strings to discover resource identities. Offline or
 unreachable objects remain visible and truthful. Stale state must not masquerade as live state.
 
+### Hardware truth is discovered, never declared
+
+Recorded owner direction, 2026-08-24. This governs every hardware object, not only the P40.
+
+The owner must never have to tell WilliamOS what hardware exists. "I installed a P40; update your
+database" is a defect in WilliamOS, not an input to it. A changed machine is reconciled into the
+System Object Graph through the canonical probe path with no hand-maintained configuration:
+
+```
+node boots -> canonical probe path runs -> hardware inventory observed
+  -> a new accelerator identity appears (UUID / PCI bus / model / VRAM bound)
+  -> compared with previous hardware truth -> "New accelerator discovered on <node>" recorded
+  -> capability remains UNKNOWN until measured -> bench / evaluation -> capability evidence
+  -> admission
+```
+
+Three epistemic facts, never conflated:
+
+1. **EXISTS** — established by observation alone, at boot.
+2. **HEALTHY** — established by health measurement.
+3. **capability** — driver-generation support, model X at context Y, current VRAM headroom —
+   established only by bench or evaluation evidence.
+
+A projection that reports a capability state better than `UNKNOWN` before bench evidence exists is a
+failure, not a success. Correspondingly, a canonical record that does **not** attest hardware nobody
+has observed is correct behaviour and must not be reported as a WilliamOS defect.
+
+### Hardware-dependent work is typed, and does not park the queue
+
+Where the only missing prerequisite for a gate is live evidence from an unavailable node, that half of
+the gate is typed:
+
+```
+WAITING_EXTERNAL_ENVIRONMENT
+  condition              = <NODE>_REACHABLE
+  continuation           = automatic
+  ownerDecisionRequired  = false
+```
+
+The releasable half — schema, parser, projection, deterministic tests — proceeds on its own evidence
+and claims no runtime proof. The runtime half remains mandatory before the **next** gate's terminal
+acceptance. One unavailable dependency must never park unrelated eligible work, and node
+availability is never an owner task.
+
 ## Direct operation
 
 Real objects should expose deterministic actions where canonical action owners exist — for example
