@@ -1263,10 +1263,10 @@ lane's, the evidence is the repository's. Deduplicated across lanes.
 | 5 | All Gate 1 probing is brokered; preserve brokered-only | **ACCEPTED (P0)** | `route.ts:76-92` raw `execFile` PowerShell at `:90`; `broker.mjs:96-104` already does local, audited | §5.1 names `probeLocal()` as a hidden transport; §7.2 deletes it; §7.5 invariant 12 |
 | 6 | Two frontend compositions | **ACCEPTED (P0)** | `/env`→`Environment`→`/api/env/line` (`app/env/page.tsx:4,13`, `environment.tsx:75`, #919 `ddcfa607`) vs `/environment`→`Desk`→`/api/environment/line` (`app/environment/page.tsx:4,24`, `desk.tsx:71`, #922 `2d83948f`) | §5.2 — both lineages classified; §6.3 — three compositions; PR #927 owns the collapse |
 | 7 | `router.ts` is a registry consumer | **ACCEPTED (P0)** — an unverified candidate, confirmed locally | `router.ts:14-17` action-kind union, `:31-53` `SIGNALS`, `:55-61` `DESTINATIONS`; consumes the registry only at `:65` | §5.3 — reclassified as a competing half; Gate 2 converges both |
-| 8 | Baseline is read-only, selected-node, brokered | **ACCEPTED (P0)**, with one sub-claim refuted | All-node: `baseline/route.ts:18,23` → `run-baseline.mjs:382-386`. Mutating: `:330-338,341-348,361-369`. Not brokered: `:309-318` raw `exec`. **But audited**: `:270,298,304` | §5.6 — reclassified as a mutating all-node gate; `POST /api/resource/verify` chosen as the first-journey action, property by property |
-| 9 | Blanket Gate 2/3/5 freeze | **ACCEPTED (P1)** | #921 body: "freeze further Claude mutations in the Environment path; preserve reusable backend/API/data work"; PR #927's **54** files contain no `workbench-action-registry.ts` and no `router.ts`, and nothing under `lib/system/`, `app/api/fabric/`, `lib/fabric/` or `*/execution-fabric/` | §3 — Gate 2 `EXTEND`, dependency-gated; Gates 3/5 `BLOCKED_RESERVATION` on the measured file set |
+| 8 | Baseline is read-only, selected-node, brokered | **ACCEPTED (P0)**, with one sub-claim refuted | All-node: `baseline/route.ts:18,23` → `run-baseline.mjs:382-386`. Mutating: `:330-338,341-348,361-369`. Not brokered: `:309-318` raw `exec`. **But audited**: `:270,298,304` | §5.6 — reclassified as a mutating all-node gate. **The rest of this cell is superseded**: `POST /api/resource/verify` was withdrawn in revision 3, and this row's "But audited" sub-claim is downgraded to best-effort by §11 row 14 |
+| 9 | Blanket Gate 2/3/5 freeze | **ACCEPTED (P1)** | #921 body: "freeze further Claude mutations in the Environment path; preserve reusable backend/API/data work"; PR #927's **54** files contain no `workbench-action-registry.ts` and no `router.ts`, and nothing under `lib/system/`, `app/api/fabric/`, `lib/fabric/` or `*/execution-fabric/` | §3 — Gate 2 `BLOCKED_DEPENDENCY` (disposition `EXTEND`); Gates 3/5 `BLOCKED_RESERVATION` on the measured file set. **Vocabulary superseded** by §11 row 26: `EXTEND, dependency-gated` is not a canonical lifecycle state |
 | 10 | `BLOCKED_AUDIT_FREEZE` | **ACCEPTED (P1)** | `multi-agent-operator-playbook.md:178-193` state list; `:196-198` forbids substituting reason codes for state names | §3 — canonical states with a separate reason code |
-| 11 | Gate 1 `RELEASABLE` | **ACCEPTED (P1)** | `charter:464-470`; `AGENTS.md:9-10`; no bounded child packet exists | §3 — `FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED`, then **cleared in this same revision** by opening #990; §9 |
+| 11 | Gate 1 `RELEASABLE` | **ACCEPTED (P1)** | `charter:464-470`; `AGENTS.md:9-10`; no bounded child packet exists | §3 — cleared by opening **#990**; Gate 1 is `DEPENDENCY_CLEARED` on the packet axis; §9. **Vocabulary superseded** by §11 row 26: `FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED`, which this row previously named as the correction, is itself non-canonical |
 | 12 | Fallback VRAM projects `UNKNOWN` | **ACCEPTED (P1)** | `probe-windows.ps1:116` emits `AdapterRAM` as `vram_bytes`; `:125` only warns | §7.4 — a `vram_source` field and explicit qualified-lower-bound projection rules; §7.5 invariant 7 |
 | 13 | Epistemic state wholly `MISSING` | **ACCEPTED (P1)** — an unverified candidate, confirmed locally | `schema.ts:1106-1122` `truthClaim`; `:1126-1142` `agentClaim`; `brain-council-reasoning.ts:24-40` | §5.4 — `truthClaim`/`agentClaim` `EXTEND`; Brain Council a noncanonical projection predecessor; only the unified lifecycle new |
 | 14 | "Nothing on main models a GPU/disk/service as an addressable thing" | **ACCEPTED (P1)** | `registry.schema.json:74-97,142-159,290-315` define identified gpu/disk/runtime/node objects | §8 — restated as a missing cross-surface addressable projection and identity resolver |
@@ -1278,8 +1278,8 @@ lane's, the evidence is the repository's. Deduplicated across lanes.
 | 20 | Session-local observations presented as repository facts | **ACCEPTED (P2)** | the tailnet, port, ICMP and home-directory claims have no tracked artifact | §1 evidence classes; §9 labels; the sanitized evidence artifact |
 | 21 | "HERMES is offline" ambiguous beside `AGENTS.md:68` | **ACCEPTED (P2)** | `AGENTS.md:68` describes the execution backend, not node reachability | §9 — surface, timestamp and the P40-install cause all stated |
 | 22 | Preference store collides with `memoryFact.kind="preference"` | **REFUTED** | Revision 1 already drew exactly this distinction (`schema.ts:115`); #987 independently: "No credible canonical Experience V2 preference store was found" | §5.8 unchanged; the refutation is recorded |
-| 23 | `lib/governance/events.ts` vs `lib/registers/events.ts` is a second event authority | **REFUTED at P0; ACCEPTED at P2 for precision** | `events.ts:11-34` closed type set plus hash chain, vs `registers/events.ts:14-31` open `type`, no chain; #987: "do not create a new generic event authority" | §5.5 — the two are named and separated; Gate 6 projects from the hash-chained log |
-| 24 | Baseline is not audited (implied) | **REFUTED** | `run-baseline.mjs:270,298,304` audit every step, on success and on failure | §5.6 records audited = TRUE |
+| 23 | `lib/governance/events.ts` vs `lib/registers/events.ts` is a second event authority | **REFUTED at P0; ACCEPTED at P2 for precision** | `events.ts:11-34` closed type set ~~plus hash chain~~, vs `registers/events.ts:14-31` open `type`, no chain; #987: "do not create a new generic event authority" | §5.5 — the two are named and separated. **The reasoning is superseded** by §11 row 4: `governanceEvent` is *not* hash-chained, so "Gate 6 projects from the hash-chained log" — this row's original wording — was false. Gate 6 projects from `governanceEvent` + `evidenceRecord` + receipts + the signed authority chain. The conclusion survives; the argument for it did not |
+| 24 | Baseline is not audited (implied) | **REFUTED at round 1, then SUPERSEDED at round 2** | `run-baseline.mjs:270,298,304` do call `auditFabricAction` on success and failure — but both calls are `.catch(() => {})`'d (`:294-297`) | §5.6 records audited = **BEST-EFFORT ONLY**, per §11 row 14. The refutation was literally true and practically misleading: the calls exist, and a fleet-wide start/transfer/force-stop can still complete with no durable record |
 
 Four candidates reached the round-1 coordinator unverified because their lanes died at
 `code-mode host exited during handshake`. All four were verified locally here: rows 7 (confirmed),
@@ -1382,8 +1382,23 @@ Row 34 is the one worth reading twice. Rows 32 and 33 are contradictions, which 
 finds. Row 34 is a **deletion**: the false claim was removed, nothing false remained on the page, and
 the register still said `ACCEPTED (P0) — see §6.7`. Deleting a claim is not answering it, and the
 resulting document reads as clean precisely because the unresolved item is no longer visible. A
-register that points into the body is only as good as the body it points into, so every §10/§11 row's
-"where corrected" target was re-opened and confirmed to contain the correction it names.
+register that points into the body is only as good as the body it points into.
+
+So every §10/§11 row's "where corrected" target was re-opened. **That sweep found five more of the
+same class**, all in §10 — round-1 rows still naming corrections that rounds 2 and 3 overturned:
+
+| Row | Named as the correction | Actually |
+| --- | --- | --- |
+| 8 | "`POST /api/resource/verify` chosen as the first-journey action" | withdrawn entirely in revision 3 (§5.6); the row's own "But audited" sub-claim is best-effort (§11 row 14) |
+| 9 | "Gate 2 `EXTEND`, dependency-gated" | not a canonical lifecycle state (§11 row 26) |
+| 11 | "`FREEZE_SCOPE_CLEAR / NOT_YET_DEPENDENCY_CLEARED`" | also non-canonical, and §3 says so in the same revision that left this row citing it |
+| 23 | "Gate 6 projects from the hash-chained log" | there is no hash chain (§11 row 4) |
+| 24 | "§5.6 records audited = TRUE" | §5.6 records `BEST-EFFORT ONLY` (§11 row 14) |
+
+Each row is now annotated in place rather than rewritten, so the round-1 verdict stays visible beside
+what superseded it. An earlier draft of this section asserted the sweep had been done and found
+nothing; it had not been done. That assertion was the same defect this section is about, made inside
+the section that names it, which is worth leaving on the record rather than quietly deleting.
 
 The boundary answer row 34 required is in §6.7: `scheduleEligibleSet` admits Work Orders from a DAG at
 plan time; `acquireNextEligibleOutcome` leases one outcome-queue item at run time; they share exactly
