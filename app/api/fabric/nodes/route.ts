@@ -59,14 +59,26 @@ const LINUX_PROBE = [
 // A Windows node answers in PowerShell. Sending it `nproc` and `free -g` because it happens to be
 // reached over ssh is the same conflation of transport with dialect that made the baseline gate
 // report the cockpit as unmanageable.
+//
+// This is the UNION of the two Windows scripts that used to exist, not the thinner of them. The
+// local-only probe reported Docker containers and service names and looked at both C: and D:; the
+// remote one did neither. Routing local nodes through this script without folding those lines in
+// would have quietly dropped `containers`, `services` and the D: figure from the board for the one
+// node the operator looks at most -- a UI regression smuggled in as a transport fix.
+//
+// The extra lines are safe on a remote Windows node: `docker ps` failures are swallowed to a count of
+// 0, and `Get-PSDrive C,D -ErrorAction SilentlyContinue` simply omits a drive that is not there.
 const WINDOWS_PROBE = [
+  '$c = Get-CimInstance Win32_ComputerSystem',
   '"host=" + $env:COMPUTERNAME',
-  '"cores=" + (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors',
+  '"cores=" + $c.NumberOfLogicalProcessors',
   '$o = Get-CimInstance Win32_OperatingSystem',
-  '"mem=" + [math]::Round($o.FreePhysicalMemory/1MB,1) + "/" + [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory/1GB,1)',
+  '"mem=" + [math]::Round($o.FreePhysicalMemory/1MB,1) + "/" + [math]::Round($c.TotalPhysicalMemory/1GB,1)',
   '"uptime=" + [string]([math]::Round(((Get-Date) - $o.LastBootUpTime).TotalDays,1)) + " days"',
-  '"disk=" + ((Get-PSDrive C -ErrorAction SilentlyContinue | ForEach-Object { "C:" + [math]::Round($_.Free/1GB,0) + "G" }) -join " ")',
+  '"disk=" + ((Get-PSDrive C,D -ErrorAction SilentlyContinue | ForEach-Object { $_.Name + ":" + [math]::Round($_.Free/1GB,0) + "G" }) -join " ")',
   '"gpu=" + ((Get-CimInstance Win32_VideoController).Name -join ";")',
+  '"containers=" + ((docker ps -q 2>$null) | Measure-Object).Count',
+  '"services=" + ((docker ps --format "{{.Names}}" 2>$null) -join ",")',
 ].join("; ")
 
 function parseProbe(text: string): Record<string, string> {

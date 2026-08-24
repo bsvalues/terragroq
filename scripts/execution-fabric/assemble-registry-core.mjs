@@ -71,6 +71,23 @@ for (const [id, authority] of Object.entries(canonicalAuthority)) {
     process.exit(2);
   }
 }
+// One hostname belongs to exactly one node. The three readers of this contract resolve a duplicate
+// differently -- the probes build maps by assignment and keep the LAST claim, the TypeScript reader
+// returns the FIRST -- so an alias claimed twice would have the probes and the projection disagree
+// about which node a machine is. Rejected here as well as in the reader, because this is the check
+// CI actually runs, and a contract that reaches assembly has therefore been proven unambiguous.
+const hostnameClaims = new Map();
+for (const [id, entry] of Object.entries(identityContract.nodes ?? {})) {
+  for (const alias of entry.hostnames ?? []) {
+    const normalized = String(alias).trim().toLowerCase();
+    if (!normalized) continue;
+    if (hostnameClaims.has(normalized)) {
+      console.error(`FABRIC_REGISTRY_INVALID: identity contract hostname ${normalized} is claimed by both ${hostnameClaims.get(normalized)} and ${id}`);
+      process.exit(2);
+    }
+    hostnameClaims.set(normalized, id);
+  }
+}
 const canonicalNodeIds = Object.keys(canonicalAuthority);
 
 function typeMatches(value, expected) {

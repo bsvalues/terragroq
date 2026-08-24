@@ -544,6 +544,23 @@ describe("the node identity contract replaces three copies rather than adding a 
     expect(assembler).toContain("node-identity-contract.json")
   })
 
+  it("refuses a contract where one hostname is claimed by two nodes (N2)", () => {
+    // The readers disagree on duplicates by construction: this module returns the FIRST match, the
+    // probe maps are built by assignment and keep the LAST. A contract with the alias twice would
+    // have the probes and the projection disagree about which node a machine is -- exactly the drift
+    // the contract exists to make impossible. So it is refused, not resolved: any resolution picks a
+    // winner the other readers do not.
+    expect(() =>
+      parseNodeIdentityContract({
+        contract: "williamos-node-identity/1",
+        nodes: {
+          omen: { hostnames: ["OMEN"], authority: { allow: [], deny: [] } },
+          "hermes-node": { hostnames: ["omen"], authority: { allow: [], deny: [] } },
+        },
+      }),
+    ).toThrow(/claimed by both omen and hermes-node/)
+  })
+
   it("fails closed on a wrong-version or malformed contract", () => {
     expect(() => parseNodeIdentityContract({ contract: "something-else", nodes: {} })).toThrow(
       NodeIdentityContractError,
@@ -554,6 +571,19 @@ describe("the node identity contract replaces three copies rather than adding a 
     expect(() => readNodeIdentityContract(path.join(repositoryRoot, "does-not-exist.json"))).toThrow(
       NodeIdentityContractError,
     )
+  })
+})
+
+describe("the route keeps every field the local probe used to report (N1)", () => {
+  it("folds the local-only Docker and D: lines into the shared Windows probe", () => {
+    // Routing local nodes through the thinner remote script would have dropped `containers`,
+    // `services` and the D: figure from the board for the one node the operator looks at most.
+    const route = fs.readFileSync(path.join(repositoryRoot, "app/api/fabric/nodes/route.ts"), "utf8")
+    const windowsProbe = route.slice(route.indexOf("const WINDOWS_PROBE"), route.indexOf("function parseProbe"))
+
+    expect(windowsProbe).toContain('"containers=" +')
+    expect(windowsProbe).toContain('"services=" +')
+    expect(windowsProbe).toContain("Get-PSDrive C,D")
   })
 })
 

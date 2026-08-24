@@ -1598,6 +1598,24 @@ describe("Gate 1 - the used-VRAM seam and the pins that must move with it", () =
     expect(result.stderr).toContain("aegis: authority allow set differs from the reviewed identity contract")
   })
 
+  it("refuses an identity contract where one hostname is claimed by two nodes (N2)", () => {
+    const root = temporaryDirectory()
+    const contract = JSON.parse(
+      fs.readFileSync(path.join(repositoryRoot, "config/execution-fabric/node-identity-contract.json"), "utf8"),
+    ) as JsonObject
+    ;((contract.nodes as JsonObject).atlas as JsonObject).hostnames = ["atlas", "OMEN"]
+    const contractPath = path.join(root, "contract.json")
+    fs.writeFileSync(contractPath, JSON.stringify(contract))
+    const result = spawnSync(
+      process.execPath,
+      [assemblerPath, "--seed", seedPath, "--identity-contract", contractPath, "--out", path.join(root, "out.json")],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    )
+
+    expect(result.status).toBe(2)
+    expect(result.stderr).toContain("hostname omen is claimed by both omen and atlas")
+  })
+
   it("keeps the schema $id naming the version the schema actually is (SCHEMA-1)", () => {
     // A resolver or cache keyed on `$id` would otherwise serve the changed 0.3 definition as v0.2.
     const declaredVersion = ((schema.properties as JsonObject).schema_version as JsonObject).const

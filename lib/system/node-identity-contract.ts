@@ -64,6 +64,15 @@ export function parseNodeIdentityContract(value: unknown): NodeIdentityContract 
     throw new NodeIdentityContractError("NODE_IDENTITY_CONTRACT_WALL: nodes is not an object")
   }
   const nodes: Record<string, NodeIdentityContractEntry> = {}
+  // One hostname belongs to exactly one node, and a contract that says otherwise is refused.
+  //
+  // The three readers resolve a duplicate differently: this module returns the FIRST match, while the
+  // PowerShell and Python maps are built by assignment and so keep the LAST. A contract with the same
+  // alias under two node ids would therefore have the probes and the projection disagree about which
+  // node a machine is -- the precise drift this contract exists to make impossible. It has to be
+  // rejected here rather than resolved, because any resolution picks a winner the other readers do
+  // not.
+  const claimedBy = new Map<string, string>()
   for (const [nodeId, rawEntry] of Object.entries(candidate.nodes as Record<string, unknown>)) {
     const entry = rawEntry as { hostnames?: unknown; authority?: unknown }
     if (!Array.isArray(entry?.hostnames)) {
@@ -72,6 +81,17 @@ export function parseNodeIdentityContract(value: unknown): NodeIdentityContract 
     const authority = entry.authority as NodeAuthority | undefined
     if (!authority || !Array.isArray(authority.allow) || !Array.isArray(authority.deny)) {
       throw new NodeIdentityContractError(`NODE_IDENTITY_CONTRACT_WALL: ${nodeId} has no allow/deny authority`)
+    }
+    for (const alias of entry.hostnames) {
+      const normalized = String(alias).trim().toLowerCase()
+      if (!normalized) continue
+      const owner = claimedBy.get(normalized)
+      if (owner !== undefined) {
+        throw new NodeIdentityContractError(
+          `NODE_IDENTITY_CONTRACT_WALL: hostname ${normalized} is claimed by both ${owner} and ${nodeId}`,
+        )
+      }
+      claimedBy.set(normalized, nodeId)
     }
     nodes[nodeId] = { hostnames: entry.hostnames.map(String), authority }
   }
