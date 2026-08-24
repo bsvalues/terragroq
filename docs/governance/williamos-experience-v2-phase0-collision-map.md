@@ -1771,6 +1771,31 @@ CONT-EXPV2-REVIEW-REGISTER-EOL
   owner:              the Phase 0 / review-register lane
   fix shape:          normalise to LF, and consider a `lib/**/*.ts text eol=lf` .gitattributes rule
                       so the next one cannot land the same way
+
+CONT-EXPV2-BASELINE-RAW-TRANSPORT
+  type:               TYPED_DEFECT
+  opened:             2026-08-24 by the Gate 1a lane; recorded here 2026-08-24 by the
+                      merge-coordinator lane, which found it typed only in an untracked evidence
+                      file and therefore not recorded at all.
+  subject:            lib/fabric/run-baseline.mjs:311,317
+  finding:            `exec("powershell", ["-NoProfile", "-Command", command], ...)` and
+                      `exec("ssh", sshArgs(node, remote, fabricRoot), ...)` run outside
+                      `brokeredExec`, so the baseline path keeps a raw transport that the broker's
+                      unknown-node denial, host-key pinning and audit ledger never see.
+  verified:           yes, on main at 8452b780, by reading both call sites.
+  why Gate 1 did not own it: invariant 12 is deliberately narrowed to the
+                      `GET /api/fabric/nodes` canonical-probe path. The broad form -- "no unbrokered
+                      transport anywhere" -- is false on main today, and an invariant that is false
+                      at merge teaches nothing. The narrowing cannot rot into a lie unnoticed:
+                      tests/system-object-projection.test.ts:606 asserts run-baseline.mjs still
+                      contains `child_process`, so whoever fixes this defect is forced to come back
+                      and widen the invariant in the same change.
+  blocksGate1:        false
+  mustResolveBefore:  Gate 2
+  owner:              the baseline / fabric-transport lane
+  related:            CONT-EXPV2-AUDIT-FAIL-LOUD -- the audit ledger's own fail-open behaviour is a
+                      separate defect on the same guarantee, and fixing one without the other still
+                      leaves node execution partly unwitnessed.
 ```
 
 ## 10. Round-1 review response register
