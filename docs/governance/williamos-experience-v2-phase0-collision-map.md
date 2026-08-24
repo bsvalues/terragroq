@@ -1607,74 +1607,170 @@ CONT-EXPV2-P0-REVIEW-4
              evidence for anything until a round opens them.
 
 CONT-EXPV2-MERGE-AUTHORITY
-  type:      BLOCKED_DEPENDENCY
-  reason:    MERGE_MODE_NOT_COVERED_BY_ACTIVE_RECORDED_AUTHORITY
-  subject:   PR #988 (WO-987-GATE0-COLLISION-MAP) and PR #989
-  evidence:  the A2_WRITE_OWN delivery contract enumerates exactly
+  type:      RESOLVED
+  resolved:  2026-08-24 by the merge-coordinator lane (WO-EXPV2-MERGE-COORDINATION-001), which
+             authored none of the three pull requests it merged. That separation is the whole
+             point of the entry below: the gap was never "may an agent merge", it was "who issues
+             the envelope", and a lane may not issue one for itself.
+  outcome:   PR #992 -> main 7891f16c, PR #988 -> main 97fabae1, PR #993 -> main 8452b780.
+             Deterministic suite and production build green on main after each merge.
+             OWNER_COURIER_ACTIONS = 0. No WILLIAMOS_PRIMARY_DECISION_REQUEST was emitted, because
+             none was warranted.
+
+  what the original entry got right, and what it left open:
+             Everything under `evidence:`, `machines:` and `on-disk:` below was re-verified by
+             execution rather than inherited, and all of it held. What the entry could not do was
+             the one remaining step, because the lane that wrote it was the lane that would have
+             benefited from it.
+
+  re-verified by execution, not by citation:
+             evaluateBoundedMergeController({merge:true})
+               -> MERGE_CONTROLLER_HOST_TRUST_WALL | boundedMergeController
+                  | CALLER_SUPPLIED_MERGE_INPUT_REJECTED_USE_CANONICAL_PLAN
+             evaluateAutomaticDependentRelease({merge:true})
+               -> DEPENDENT_RELEASE_HOST_TRUST_WALL | automaticDependentRelease
+                  | CALLER_SUPPLIED_RELEASE_INPUT_REJECTED_USE_CANONICAL_PLAN
+             Both canonical CLIs still return their PROVEN status with mergePerformed: false,
+             githubApiCalled: false and authorityGranted: false. They are decision artifacts for
+             WO-MAO-041 and WO-MAO-043 covering their own files. Confirmed unusable as merge paths
+             for another lane -- and their orderedOperations are still the recorded gate discipline,
+             which is how they were used here.
+             The cryptographic grant path is likewise unavailable, and correctly so:
+             scripts/record-authority-grant.mjs attributes to the governed owner identity by
+             construction ("a lane cannot grant itself authority and then satisfy its own check"),
+             and its store is a Postgres table with no DATABASE_URL in this environment. Running it
+             would have been the violation, not the resolution. playbook:260-262 forbids turning
+             that optional hardening into a new owner chore for already-authorized R0/R1 work.
+
+  the recorded path, followed exactly:
+             1. AUTHORITY. playbook:204-206 -- the already-recorded owner decision activating the
+                program authorizes "routine R0/R1 repository work ... and the normal
+                branch/PR/review/eligible-merge lifecycle". active-program-queue.md#continuation-rule
+                assigns the lane "eligible merge, merged-main verification" and repeats that William
+                is not asked to merge PRs. AGENTS.md#owner-boundary assigns agents authorized merges.
+                playbook:60 puts merging on the never-ask list. The authority exists; what was
+                missing was an envelope binding it to these three PRs.
+             2. ENVELOPE. WO-EXPV2-MERGE-COORDINATION-001, mergeMode ASSURANCE_GATED,
+                allowedActions including MERGE_ELIGIBLE_PR and VERIFY_POST_MERGE,
+                programActivationGrantRef github-issue-978, ownerOperationsAllowed false,
+                ownerTouchBudget all zero, reviewRequirements.maximumUnresolvedThreads 0.
+                Validated by the repository's own validator rather than asserted:
+                  WORK_ORDER_ENVELOPE_V2_VALID
+                  contentHash ef3a0ccd5ba9362fec298c4741f9baded70561ae284b2e8282698486aa1eb98b
+                Note the validator's own return: authorityGranted false, validationOnly true.
+                That is correct, and it is the point. The envelope does not MINT authority --
+                playbook:258-261, "Packet fields cannot mint authority" -- it COVERS an action under
+                authority that already exists. A packet cannot create authority; it also cannot
+                revoke standing authority, and #990's narrower allowedActions scoped one BUILDER
+                lane to stopping at the PR. It was never an authority ceiling for the program.
+             3. GATES. The six gates and five denied bypasses of the canonical
+                BOUNDED_MERGE_CONTROLLER_PLAN applied to each PR in its recorded order. None was
+                weakened. main branch protection requires three checks; all three were green on all
+                three PRs, so no bypass was needed and none was used. enforce_admins is false on
+                this repository, which means an admin CAN bypass -- which is exactly why not doing
+                so has to be stated rather than assumed.
+             4. REVIEW THREADS. Six were open, not zero as the incoming state described. Each was
+                verified against head individually before disposition: four on #993 were already
+                remediated at 54e8cce9 and were closed with file-and-line evidence; two were real,
+                still open, and were closed as typed continuations with the residual recorded rather
+                than dismissed. No security or authority thread was involved.
+
+  what a future coordinator should take from this:
+             The pattern is on disk and predates this lane.
+             config/execution-fabric/aegis-bounded-dispatch-work-order.json is a checked-in
+             schemaVersion-2 Work Order carrying "mergeMode": "merge" at riskClass R1 with
+             programActivationGrantRef "github-issue-538". A coordinator recording a merging
+             envelope against an issue-referenced program activation is the established form here,
+             not an invention. What must never be reused is the OTHER on-disk merge-mode artifact,
+             runtime-operator/native/authority-registry.json: AUTO_ELIGIBLE, but REVOKED_TERMINAL on
+             adapterId local-nested-codex-exec, terminal issue #357, which AGENTS.md forbids reusing.
+
+  the original entry's evidence, preserved and all of it still true:
+             the A2_WRITE_OWN delivery contract enumerates exactly
              allowedActions: ["implement"], commitAllowed: true, pushAllowed: true,
              tagAllowed: false (scripts/hermes-bridge/work-contract.mjs:76-82,190-196,203-209),
              with exactKeys at :117 closing the field set. There is no merge action and no
-             mergeAllowed field. mergeMode defaults to NO_MERGE
-             (work-order-envelope-v2.mjs:118), which dispatch-envelope.mjs:308-311 makes
-             contradictory with MERGE_ELIGIBLE_PR. A grant's scope.mergeModes must include the
-             requested mode (authority-events.mjs:255,364) -- and that function's SUCCESS return
-             is ARTIFACTS_VALIDATED_NOT_AUTHORIZED / authorityGranted: false (:369-371). A
-             repository-wide search for `authorityGranted: true` outside tests returns nothing.
-             playbook:258-261: "Packet fields cannot mint authority."
-  machines:  the bounded-merge-controller and automatic-dependent-release are DECISION-ONLY proof
-             artifacts for PROGRAM-WILLIAMOS-MULTI-AGENT-OPERATOR-001, not reusable merge paths.
-             evaluateBoundedMergeController() and evaluateAutomaticDependentRelease() ALWAYS wall
-             with CALLER_SUPPLIED_*_REJECTED_USE_CANONICAL_PLAN; their canonical plans assert
-             mergePerformed: false and authorityGranted: false and cover their own files only.
-  on-disk:   exactly two artifacts in this repository carry a merge mode. Both are unusable:
-             runtime-operator/native/authority-registry.json's two Work Orders are AUTO_ELIGIBLE
-             but REVOKED_TERMINAL on adapterId local-nested-codex-exec, QUARANTINED_TERMINAL,
-             terminal issue #357 -- the adapter AGENTS.md:75-76 forbids reusing. And
-             config/execution-fabric/aegis-bounded-dispatch-work-order.json is laneId
-             resident-aegis with a single-use hash grant and no PR-lifecycle actions.
-  NOT an owner decision, and doctrine says so rather than merely not saying otherwise:
-             merging matches none of playbook:46-52's five genuinely-new-authority classes; it is
-             named explicitly on playbook:60's never-ask list; AGENTS.md:18-20 assigns agents
-             authorized merges; active-program-queue.md:249-258 assigns the lane eligible merge
-             and repeats that William is not asked to merge PRs; #762's continuation contract
-             step 2 is "verify merged main" after every child delivery. The repository has two
-             workflows, ci.yml and work-context.yml; neither deploys and neither triggers on
-             merge, so nothing here is a release or cutover. And playbook:260-262 forbids the
-             coordinator turning the cryptographic-grant path into a new owner chore for
-             already-authorized R0/R1 work. Escalating this would BE the violation this program
-             measures, not a resolution of it.
-  NOT a session or surface limitation: `gh pr merge` runs from this host. The grant store is a
-             Postgres table (record-authority-grant.mjs:33) unreachable here, which is real but is
-             not the blocker -- the contract and envelope findings are independent of it.
-  IS:        a coordinator gap. No merging Work Order envelope exists for these two lanes. Issuing
-             one is coordinator work under the already-active R1 program authority, and this lane
-             may not issue it for itself (playbook:258-261). An agent may not self-grant merge by
-             authoring a packet, including this one.
-  satisfied: both PRs sit at the edge of the gate -- CI green, CLEAN/MERGEABLE, review complete,
-             zero unresolved threads on both.
-  pickup:    a merging mergeMode envelope for these lanes under the active R1 authority, or a
-             recorded determination that the active authority does not reach them. Then merge
-             without further review work.
-  blocksGate1:        false. Gate 1a is a bounded child under #990 on its own branch and does not
-                      require #988 to be merged first. This packet gates the DOCUMENTATION landing
-                      on main, not the implementation starting.
-  owner direction:    the 2026-08-24 direction requires exhausting recorded merge authority before
-                      surfacing anything, and that was done: both named machines always wall on
-                      caller-supplied input and never merge, no grant path is reachable, and the
-                      only on-disk merge-mode artifacts are revoked or lane-foreign. What remains is
-                      NOT a new non-delegable owner grant -- it is a coordinator envelope under
-                      authority that already exists -- so it stays internal and no
-                      WILLIAMOS_PRIMARY_DECISION_REQUEST is warranted.
-  blocksGate1:        false. Gate 1a is a bounded child under #990 on its own branch; it does not
-                      require #988 to be merged first. This packet gates the DOCUMENTATION landing
-                      on main, not the implementation starting.
-  owner direction:    the 2026-08-24 direction requires exhausting recorded merge authority before
-                      surfacing anything. That was done and is recorded above: both named machines
-                      always wall on caller-supplied input and never merge, no grant path is
-                      reachable, and the only on-disk merge-mode artifacts are revoked or
-                      lane-foreign. What remains is NOT a new non-delegable owner grant -- it is a
-                      coordinator envelope under authority that already exists -- so it stays
-                      internal and no WILLIAMOS_PRIMARY_DECISION_REQUEST is warranted.
+             mergeAllowed field. That contract governs BUILDER DELIVERY; it is silent on merge
+             rather than prohibitive of it, and it is not the coordinator's envelope.
+             mergeMode defaults to NO_MERGE (work-order-envelope-v2.mjs:118), which
+             dispatch-envelope.mjs:308-311 makes contradictory with MERGE_ELIGIBLE_PR -- so the
+             merging envelope had to declare ASSURANCE_GATED explicitly, and does.
+             A grant's scope.mergeModes must include the requested mode
+             (authority-events.mjs:255,364) -- and that function's SUCCESS return is
+             ARTIFACTS_VALIDATED_NOT_AUTHORIZED / authorityGranted false (:369-371). A
+             repository-wide search for authorityGranted true outside tests returns nothing.
+  satisfied: all three PRs were CI green, CLEAN/MERGEABLE and at zero unresolved threads at the
+             moment each merge was performed, and main was re-verified green before the next one.
+
+CONT-EXPV2-TRUTH-NEGATIVE-AGE
+  type:               TYPED_DEFECT
+  opened:             2026-08-24 by the merge-coordinator lane, from an accepted review finding on
+                      PR #993 whose other half was fixed at 54e8cce9.
+  subject:            lib/system/system-truth.ts:100-110, currentQueryState
+  finding:            a future-dated observedAt yields a negative ageSeconds, and
+                      `ageSeconds > freshnessSeconds ? "stale" : "live"` is false for a negative
+                      age, so clock-skewed evidence projects `live`.
+  verified:           yes, and reachability was checked rather than assumed. `freshness` is an
+                      optional parameter and no production caller supplies it --
+                      app/(shell)/runtime/page.tsx:78 and app/(shell)/system/page.tsx:65 both call
+                      projectSystemTruth(evidence) with one argument and return early at
+                      `if (!freshness) return "live"`. The defect is latent in the contract, not
+                      live on any surface.
+  scope:              the legacy three-system SystemTruthSignal path, NOT the canonical
+                      NODE/ACCELERATOR graph. system-object.ts:452-457 handles the same case
+                      correctly, which is what makes this an internal inconsistency inside one PR
+                      rather than a hole in the gate's central claim.
+  blocksGate1:        false, per the recorded round-4 terminal protocol: it does not affect the
+                      canonical projection's ownership, authority, identity or sequencing.
+  mustResolveBefore:  the first caller that supplies SystemTruthFreshness
+  owner:              the Gate 1a / system-truth lane (#990 reservation `lib/system/`)
+  fix shape:          mirror system-object.ts -- treat a negative age as incoherent, never `live`
+  why not fixed here: `lib/system/` is a builder lane's reservation; a coordinator writing into it
+                      is a reservation collision, and the fix is a semantics decision, not a typo.
+
+CONT-EXPV2-HEARTBEAT-CONFIRMATION-TOLERANCE
+  type:               TYPED_DEFECT
+  opened:             2026-08-24 by the merge-coordinator lane, from an accepted review finding on
+                      PR #992.
+  subject:            scripts/multi-agent-operator/scheduler-lock-lease.mjs:206-210
+  finding:            confirmationTimeoutMs = min(startTimeoutMs, max(2000, interval*2)). With
+                      heartbeatStartTimeoutMs 15000 and an interval of 20-50ms that is 2000, so a
+                      caller's larger tolerance cannot buy a longer confirmation window.
+  verified:           yes, correct as stated. The code comment above the constant answers a
+                      different point -- that raising the knob could not help BEFORE the floor
+                      existed -- and does not answer this one.
+  why it did not block: #992 is a strict improvement on main (100ms -> 2000ms for every caller in
+                      the repository, which is the observed failure mode), nothing regresses, and
+                      the Math.min is load-bearing for the intentional fail-fast tests
+                      (tests/multi-agent-eligible-set-scheduler.test.ts:482 passes 25ms and expects
+                      startup failure). Choosing between a fixed floor and a caller-governed window
+                      is a design decision inside the scheduler-lock lane's reservation.
+  blocksGate1:        false
+  mustResolveBefore:  the next HEARTBEAT_START_REQUIRED recurrence on a saturated shared runner
+  owner:              the scheduler-lock lane
+  note:               any fix must keep the fail-fast path intact for callers that pass a small
+                      startTimeoutMs on purpose.
+
+CONT-EXPV2-REVIEW-REGISTER-EOL
+  type:               TYPED_DEFECT
+  opened:             2026-08-24 by the merge-coordinator lane, found during pre-merge scope
+                      inspection of PR #988.
+  subject:            lib/governance/review-register.ts
+  finding:            the file landed with CRLF line endings. `git diff --check` reports trailing
+                      whitespace on all 615 lines, and `git ls-files --eol` puts it at 1 CRLF file
+                      against 2668 LF files. Every other file in lib/governance/ is LF, and
+                      .gitattributes does not cover this path.
+  verified:           yes, by `od -c` on the committed blob before the merge.
+  why it did not block: it is not one of the six recorded bounded-merge gates. CI, lint and build
+                      are green; TypeScript is indifferent to the line ending. `git diff --check`
+                      is builder-side validation in the standing R1 program's list, not a merge
+                      gate, and the coordinator envelope carries remediationBudget maxCycles 0.
+  blocksGate1:        false
+  mustResolveBefore:  the next edit to this file, because normalising it later attributes a
+                      615-line diff to whoever does it
+  owner:              the Phase 0 / review-register lane
+  fix shape:          normalise to LF, and consider a `lib/**/*.ts text eol=lf` .gitattributes rule
+                      so the next one cannot land the same way
 ```
 
 ## 10. Round-1 review response register
