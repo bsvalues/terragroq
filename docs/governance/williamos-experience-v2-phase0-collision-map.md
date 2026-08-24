@@ -622,10 +622,9 @@ fixed probe catalogue chosen by KIND and never by caller text (`probe.ts:14,22-2
 from the record with unsafe paths refused rather than escaped (`:87-101`), brokered with audit
 (`verify/route.ts:83-84`), skips reported rather than dropped (`:125-140`).
 
-| Property, as revision 2 claimed it | What the code does |
-| --- | --- |
+What it does satisfy, and what it only appears to:
 
-| #985's requirement | How the route meets it |
+| #985's requirement | What the route actually does |
 | --- | --- |
 | selected object | The request carries `identity` and nothing else (`verify/route.ts:34-41`). |
 | deterministic action | Probe chosen from a fixed catalogue by KIND, never by caller text (`probe.ts:14,23`). |
@@ -636,15 +635,16 @@ from the record with unsafe paths refused rather than escaped (`:87-101`), broke
 | evidence | *Attempts* a governance event (`verify/route.ts:1,117`) - but `appendGovernanceEvent` swallows insertion failures (`events.ts:56-71`), so evidence is attempted, never guaranteed. |
 | honest partiality | What could not be probed is reported with a reason, not silently dropped (`probe.ts:125-140`). |
 
-And the audit itself is fail-loud where baseline's is not. On the success path `brokeredExec` awaits
-`auditBrokerAction` **without** a `.catch` (`broker.mjs:102,107`), so a brokered command that cannot
-be written to the ledger fails rather than completing unrecorded. Only the denial and error paths
-swallow (`:91,111`), where the outcome is already a failure being reported. Baseline swallows on the
-**success** path (`run-baseline.mjs:298`), which is the one that matters.
+One property is worth carrying forward to whatever Gate 2 builds, because it is the only place on
+`main` where audit is fail-loud: on the success path `brokeredExec` awaits `auditBrokerAction`
+**without** a `.catch` (`broker.mjs:102,107`), so a brokered command that cannot reach the ledger
+fails rather than completing unrecorded. Only the denial and error paths swallow (`:91,111`), where
+the outcome is already a reported failure. Baseline swallows on the **success** path
+(`run-baseline.mjs:298`), which is the one that matters. Any action Gate 2 builds should inherit the
+broker's discipline here and not baseline's.
 
-So the two candidates differ on the property the charter cares about most. Baseline is a fleet-wide
-mutation whose audit may silently not happen; `resource/verify` is a single read whose audit must
-happen, and which appends a governance event on top.
+That is a property of `brokeredExec`, though, not of `resource/verify` — and it does not rescue the
+nomination. The route's own evidence write, one layer up, is best-effort (`events.ts:56-71`).
 
 #### So which action proves the first journey? None on `main` today.
 
