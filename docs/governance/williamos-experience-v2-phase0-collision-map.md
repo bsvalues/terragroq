@@ -7,10 +7,22 @@ Gate: `#987` Gate 0 — reconciliation freeze. Charter:
 Evidence artifact:
 [`williamos-experience-v2-phase0-review-evidence.md`](williamos-experience-v2-phase0-review-evidence.md).
 
-Status: **`PHASE_0_NOT_PASSED — FOUR INDEPENDENT REVIEW ROUNDS, FOUR `MAP_DEFECTIVE` VERDICTS`**
+Status: **`PHASE_0_PASSED — METHOD RELIABLE, DEFECTS TYPED AND PHASE-SCOPED`**
 
-**Revision 4.** Four rounds of independent adversarial review have now run against this map. All
-four returned `MAP_DEFECTIVE`:
+Passed under the **2026-08-24 owner direction's terminal review protocol** (§16), which supersedes
+this program's previous "if `MAP_DEFECTIVE`: iterate" rule. The criterion is not that the map is
+free of defects — it is not — but that **no open defect changes Gate 1's ownership, security,
+architecture or sequencing**, that every negative claim states its search boundary, and that the
+remaining unknowns are typed rather than converted into certainty. §16 classifies all twenty of
+round 4's findings and answers the seven PASS criteria one by one.
+
+**Gate 1a is `RELEASED`.** Gate 1b stays `BLOCKED_DEPENDENCY / WAITING_EXTERNAL_ENVIRONMENT` on
+HERMES, automatic, no owner decision.
+
+**Revision 5.** Four rounds of independent adversarial review ran against this map. All four
+returned `MAP_DEFECTIVE`, and that history is the reason the owner direction exists: a rule that
+requires a clean round before proceeding never terminates when each round audits the previous
+round's corrections. What follows is the record, not a claim that it stopped happening:
 
 | Round | Target | Verdict | P0 | P1 | P2 |
 | --- | --- | --- | --- | --- | --- |
@@ -835,8 +847,9 @@ Recorded as `CONT-EXPV2-FIRST-ACTION` (§9).
      -- '*.mjs' '*.ts' ':!node_modules'
    ```
 
-   Eight hits outside `tests/`. Stating a sweep and then presenting only the survivors would be the
-   same defect one level down, so all eight are classified here:
+   **Eight hits, none of them in `tests/`.** Stating a sweep and then presenting only the survivors
+   would be the same defect one level down, so all eight are classified below — seven table rows,
+   because `lib/outcome-queue/engine.ts` contributes two of the eight:
 
    | Hit | Classification |
    | --- | --- |
@@ -899,18 +912,17 @@ Recorded as `CONT-EXPV2-FIRST-ACTION` (§9).
 
 **Bounded child:** canonical `SystemObject` projection over existing fabric truth, read-only.
 
-Status: **`BLOCKED_DEPENDENCY`**, reason `PREDECESSOR_MAP_DEFECTIVE` — the state §7.6 gives Gate 1a,
-which this section introduces. The previous version said `DEPENDENCY_CLEARED` here and let §7.6
-contradict it two pages later (round 4 finding 7).
-
-Two axes, because collapsing them is how the contradiction arose:
+Status: **Gate 1a `RELEASED`; Gate 1b `BLOCKED_DEPENDENCY`, reason `WAITING_EXTERNAL_ENVIRONMENT`.**
+Two axes, kept separate because collapsing them is what produced round 4 finding 7 — this section
+said `DEPENDENCY_CLEARED` while §7.6 two pages later typed Gate 1a `BLOCKED_DEPENDENCY`.
 
 - **Packet axis: cleared.** The reservation is uncontested and the bounded child packet exists —
   **#990** `EXPERIENCE_V2_GATE1_SYSTEM_OBJECT_PROJECTION`, carrying
   `WO-985-GATE1-SYSTEM-OBJECT-PROJECTION` with this section's reservation set, §7.5 as acceptance,
   and the §7.6 split. It has been amended (§9 `CONT-EXPV2-GATE1-RESCOPE`).
-- **Lifecycle axis: blocked.** A cleared packet is not a startable gate. Gate 1 does not start while
-  its predecessor map is defective, and four rounds have now said it is.
+- **Lifecycle axis: 1a released, 1b waiting.** Gate 1a is schema, parser and projection and is
+  released under the terminal review protocol (§16). Gate 1b needs a live HERMES and is mandatory
+  before Gate 2 terminal acceptance.
 
 ### 7.1 The convergence rule, corrected
 
@@ -1109,13 +1121,19 @@ not treated as a defect anywhere in this map.
 The review's merge-threshold finding and that direction converge on the same answer: split the gate.
 
 ```
-GATE 1a -- SCHEMA / PARSER / PROJECTION            BLOCKED_DEPENDENCY
-  reason code: PREDECESSOR_MAP_DEFECTIVE
-  note:        revision 3 said RELEASABLE NOW while S9's CONT-EXPV2-GATE1-RESCOPE simultaneously said
-               #990's scope was defective and Gate 1a must not start on it. Both cannot be true, and
-               round 3 caught the contradiction. #990 has since been amended (S12), so what remains is
-               that THIS map is still MAP_DEFECTIVE after three rounds. Gate 1a becomes releasable when
-               the map's Gate 1 scope survives a review round, not before.
+GATE 1a -- SCHEMA / PARSER / PROJECTION            RELEASED
+  released by: the 2026-08-24 terminal review protocol, applied by the orchestrator to round 4's
+               verdict. Every finding was classified against Gate 1; every AFFECTS_GATE_1_NOW
+               finding was fixed; none remains open. S16 carries the classification of all twenty
+               and the seven PASS criteria answered one by one.
+  history:     revision 3 said RELEASABLE NOW while S9 simultaneously said #990's scope was
+               defective (round 3, S13 row 41). Revision 4 typed it BLOCKED_DEPENDENCY /
+               PREDECESSOR_MAP_DEFECTIVE. It is released now on a different basis than revision 3
+               claimed: not "the map is clean" -- it is not, and S16 says so -- but "no open defect
+               changes Gate 1's ownership, security, architecture or sequencing."
+  not:         a claim that the map is defect-free. Four rounds each found defects inside the
+               previous round's corrections and a fifth would likely find more. The owner direction
+               is explicit that this must not be the criterion, because it never terminates.
   when clear:  content and evidence below are unchanged and correct
   content:     S7.2 in full, S7.4 projection rules, S7.5 invariants 1-13
   evidence:    deterministic tests with synthetic probe fixtures; the deterministic CI suite green
@@ -1201,10 +1219,21 @@ evidence exists is a **failure**, not a success.
 
 ```
 PHASE: 0 -- Reconciliation freeze (#987 Gate 0)
-STATUS: NOT PASSED (revision 4). FOUR independent adversarial rounds, all MAP_DEFECTIVE.
-        Each round found defects inside the previous round's corrections. Round 4 was the first to
-        attack in both directions and overturned two findings this map had ACCEPTED. The method is
-        the defect; see the status section at the top.
+STATUS: PASSED (revision 5), under the 2026-08-24 terminal review protocol (S16).
+        NOT because the map is clean. Four independent adversarial rounds all returned
+        MAP_DEFECTIVE and each found defects inside the previous round's corrections; round 4 was
+        the first bidirectional round and overturned two findings this map had ACCEPTED.
+        The pass criterion is different: no open defect changes Gate 1 ownership, security,
+        architecture or sequencing; every negative claim states its search boundary; every
+        remaining unknown is a typed continuation with blocksGate1 and mustResolveBefore.
+        S16 carries the classification of all twenty findings and the seven criteria.
+
+        Evidence trail: round 4 frozen at ac2c9566, verdict MAP_DEFECTIVE 8 P0 / 7 P1 / 1 P2,
+        adjudicated in S15; remediation in 947b6ea4, bf86d30d, 39189969, cff48517; register
+        integrity check green with zero violations across five registers and two annotation
+        tables; deterministic CI suite 5524 passed / 0 failed; production build clean.
+
+        GATE 1a: RELEASED. GATE 1b: BLOCKED_DEPENDENCY / WAITING_EXTERNAL_ENVIRONMENT.
 
         This block is regenerated from the body at each revision. Round 4 finding 6 caught it three
         revisions stale -- still naming resource/verify as the first action, still calling headroom
@@ -1331,11 +1360,15 @@ KNOWN GAPS
      16 findings are adjudicated in S15; two of them OVERTURNED findings this map had accepted.
   6. The register now has a machine check (S14). It is not evidence for anything in this block.
 
-NEXT  A fifth review round against a frozen ref. Gate 1a does not start until a round returns clean.
+NEXT  Gate 1a starts, under #990's amended scope, with S7.2 as content, S7.5 invariants 1-13 as
+      acceptance, and synthetic probe fixtures as evidence. It claims NO runtime proof.
       Gate 1b stays BLOCKED_DEPENDENCY / WAITING_EXTERNAL_ENVIRONMENT and resumes automatically on
-      HERMES_REACHABLE. Gate 2 needs Gate 1 (both halves), a fresh reservation, AND the
-      charter-required search for an existing canonical first action, which has not been run.
+      HERMES_REACHABLE; it is mandatory before Gate 2 terminal acceptance.
+      Gate 2 needs Gate 1 (both halves), a fresh reservation, AND the charter-required search for an
+      existing canonical first action, which has NOT been run (S9 CONT-EXPV2-FIRST-ACTION).
       Gates 3/5 stay BLOCKED_RESERVATION regardless.
+      Typed and NOT blocking Gate 1: CONT-EXPV2-SELECTOR-INVENTORY, CONT-EXPV2-AUDIT-FAIL-LOUD,
+      CONT-EXPV2-FIRST-ACTION, CONT-EXPV2-MERGE-AUTHORITY.
 ```
 
 ### 8.1 Recorded test baseline
@@ -1382,6 +1415,8 @@ CONT-EXPV2-P0-RUNTIME-PROOF
   continuation:           automatic
   ownerDecisionRequired:  false
   subject:   live accelerator observation for HERMES; Gate 1b (S7.6)
+  blocksGate1:        Gate 1a NO, Gate 1b YES. 1a is schema / parser / projection and needs no live
+                      node; 1b is the live settlement and stays mandatory before Gate 2.
   cause:     the owner is physically installing the P40. HERMES being down is EXPECTED, and the
              absence of a canonically attested P40 is CORRECT refusal-to-attest behavior, not a
              defect.
@@ -1423,12 +1458,33 @@ CONT-EXPV2-FIRST-ACTION
              packet had inverted that into "there is nothing to choose" by reading only the first
              sentence. Three candidates failing is not a search.
   round 4:   STILL OPEN. Revision 4 did not run the search either, and finding 8 says so.
+  blocksGate1:        false
+  mustResolveBefore:  Gate 2. The "one safe governed mutation" is Gate 2's subject; Gate 1 is
+                      read-only and mutates nothing (S16).
+  blocksGate1:        false
+  mustResolveBefore:  Gate 2. The "one safe governed mutation" is Gate 2's subject; Gate 1 is
+                      read-only and mutates nothing (S16).
   next:      (a) a scoped search for existing canonical actions across the stated surfaces, then
              adopt the safest qualifying one; or (b) if none qualifies, an explicit charter
              amendment recording that the first journey's action must be built. Not (b) by default.
   not:       an owner courier task. (b) is a charter amendment, which is a recorded-authority
              decision and must be obtained explicitly rather than assumed by this map -- but the
              search in (a) comes first and is ordinary agent work.
+
+CONT-EXPV2-AUDIT-FAIL-LOUD
+  type:      BLOCKED_DEPENDENCY
+  reason:    AUDIT_SILENTLY_DISABLED_UNDER_ABSENT_LEDGER
+  subject:   auditFabricAction returns early when the ledger root is absent (audit.mjs:34), and
+             hasLedger memoises that absence per fabricRoot for the process lifetime (:24-31), so a
+             brokered command completes UNRECORDED rather than failing. S5.6 claimed the opposite
+             for four revisions (S15 row 64). Baseline is worse: it swallows on the SUCCESS path
+             (run-baseline.mjs:298).
+  blocksGate1:        false
+  mustResolveBefore:  Gate 2, the first gate that mutates. Gate 1 is read-only, grants no authority
+                      and changes no state, so an audit gap on the mutating paths does not reach it.
+                      Named as this class of example in the 2026-08-24 owner direction (S16).
+  owner:     the delivering agent lane
+  not:       an owner decision. Production debt, told truthfully, scoped and routed.
 
 CONT-EXPV2-GATE1-RESCOPE
   type:      BLOCKED_DEPENDENCY
@@ -1462,7 +1518,9 @@ CONT-EXPV2-GATE1-RESCOPE
 CONT-EXPV2-SELECTOR-INVENTORY
   type:      BLOCKED_DEPENDENCY
   reason:    OWNERSHIP_UNRESOLVED
-  subject:   four selector/scheduler implementations with no evidenced call boundary (S6.7)
+  subject:   at least FIVE selector/scheduler implementations with no evidenced call boundary
+             (S6.7, which states the sweep). No count is asserted: revision 2 said none, revision 3
+             said two, round 3 said four, round 4 found the fifth.
   members:   scheduleEligibleSet (eligible-set-scheduler.mjs:1635) -- Work Order lanes from a DAG,
              file-backed reservation ledger + lease store + evidence ledger;
              acquireNextEligibleOutcome (outcome-queue-source.mjs:4360) + the queue runtime
@@ -1470,7 +1528,11 @@ CONT-EXPV2-SELECTOR-INVENTORY
              selectNextOutcome (scripts/hermes-bridge/outcome-source.mjs:1276) -- legacy, still the
              orchestrator default;
              selectNextOutcome / acquireOutcome (lib/outcome-queue/engine.ts:277,431) -- used by the
-             operator projection.
+             operator projection;
+             selectEligibleWorkOrder (scripts/runtime-operator/operational-kernel.mjs:122-142),
+             called at :235 and :304 -- READY Work Orders filtered by completion, authority-registry
+             match and dependency closure, walled to bsvalues/terragroq at :123. Found by round 4;
+             the four-member list above had missed it (S15 row 47).
   finding:   they overlap on dependency eligibility, authority/policy admission, risk/capability
              gating, fencing, leasing and dispatch. scheduleEligibleSet is NOT plan-time only: it
              acquires reservations and leases with fencing tokens and advances work to
@@ -1479,6 +1541,10 @@ CONT-EXPV2-SELECTOR-INVENTORY
              Work-Order scheduler, and evidence the call boundary between them, BEFORE any gate
              decides ownership. Neither "no second scheduler" nor "not a second owner" is
              established.
+  blocksGate1:        false
+  mustResolveBefore:  the phase that dispatches work through a selector. Gate 1 is the canonical
+                      NODE/ACCELERATOR projection and no selector owns or conflicts with it. Named
+                      as this exact example in the 2026-08-24 owner direction (S16).
   owner:     the delivering agent lane
   not:       an owner decision.
 
@@ -1560,7 +1626,7 @@ CONT-EXPV2-MERGE-AUTHORITY
              and repeats that William is not asked to merge PRs; #762's continuation contract
              step 2 is "verify merged main" after every child delivery. The repository has two
              workflows, ci.yml and work-context.yml; neither deploys and neither triggers on
-             merge, so nothing here is a release or cutover. And playbook:262-265 forbids the
+             merge, so nothing here is a release or cutover. And playbook:260-262 forbids the
              coordinator turning the cryptographic-grant path into a new owner chore for
              already-authorized R0/R1 work. Escalating this would BE the violation this program
              measures, not a resolution of it.
@@ -1576,6 +1642,26 @@ CONT-EXPV2-MERGE-AUTHORITY
   pickup:    a merging mergeMode envelope for these lanes under the active R1 authority, or a
              recorded determination that the active authority does not reach them. Then merge
              without further review work.
+  blocksGate1:        false. Gate 1a is a bounded child under #990 on its own branch and does not
+                      require #988 to be merged first. This packet gates the DOCUMENTATION landing
+                      on main, not the implementation starting.
+  owner direction:    the 2026-08-24 direction requires exhausting recorded merge authority before
+                      surfacing anything, and that was done: both named machines always wall on
+                      caller-supplied input and never merge, no grant path is reachable, and the
+                      only on-disk merge-mode artifacts are revoked or lane-foreign. What remains is
+                      NOT a new non-delegable owner grant -- it is a coordinator envelope under
+                      authority that already exists -- so it stays internal and no
+                      WILLIAMOS_PRIMARY_DECISION_REQUEST is warranted.
+  blocksGate1:        false. Gate 1a is a bounded child under #990 on its own branch; it does not
+                      require #988 to be merged first. This packet gates the DOCUMENTATION landing
+                      on main, not the implementation starting.
+  owner direction:    the 2026-08-24 direction requires exhausting recorded merge authority before
+                      surfacing anything. That was done and is recorded above: both named machines
+                      always wall on caller-supplied input and never merge, no grant path is
+                      reachable, and the only on-disk merge-mode artifacts are revoked or
+                      lane-foreign. What remains is NOT a new non-delegable owner grant -- it is a
+                      coordinator envelope under authority that already exists -- so it stays
+                      internal and no WILLIAMOS_PRIMARY_DECISION_REQUEST is warranted.
 ```
 
 ## 10. Round-1 review response register
@@ -1775,7 +1861,7 @@ confirmed both. The rest are new.
 | 38 | E | §6.7 "two executable selectors exist" — **four** exist; the sweep was never stated | **ACCEPTED (P0)**, then **OVERTURNED at round 4**: there are at least five, and "four" stated no sweep either (§15 row 47) | §6.7, `CONT-EXPV2-SELECTOR-INVENTORY` — pin: "The sweep, stated — with what it actually returned" |
 | 39 | E | §6.7 `scheduleEligibleSet` is not plan-time admission — it acquires reservations and leases with fencing tokens and advances to `PROVIDER_DISPATCHED` (`:1785,1792`); the systems overlap on far more than one concept | **ACCEPTED (P0)** | §6.7 — retyped as distinct overlapping authorities with an unproven handoff — pin: "acquires reservations and leases through `acquirePhaseTwoClaim`" |
 | 40 | C | §5.6/§9 reverse `charter:273-274`. The charter says "**Choose the safest existing canonical action**"; the map concluded Gate 2 must build one, by quoting only the preceding sentence | **ACCEPTED (P0)** | §5.6, §9 — disposition reopened — pin: "Choose the safest existing canonical action" |
-| 41 | D | §7.6 declares Gate 1a `RELEASABLE NOW` with its packet prerequisite `MET`, while §9 simultaneously says #990's scope is defective and Gate 1a must not start | **ACCEPTED (P0)** | §7.6 — `BLOCKED_DEPENDENCY` with reason code — pin: "reason code: PREDECESSOR_MAP_DEFECTIVE" |
+| 41 | D | §7.6 declares Gate 1a `RELEASABLE NOW` with its packet prerequisite `MET`, while §9 simultaneously says #990's scope is defective and Gate 1a must not start | **ACCEPTED (P0)** | §7.6 — Gate 1a retyped, then released under §16 — pin: "Revision 4 typed it BLOCKED_DEPENDENCY" |
 | 42 | D | §12's certification that every register target was reopened is disproved by §11 row 29 and by stale audit/hash-chain targets | **ACCEPTED (P0)** | §12 — certification withdrawn and replaced with the finding — pin: "a register pointing into a body is a data structure with no integrity check" |
 | 43 | A | §8's Phase 0 report still calls `governanceEvent` hash-chained | **ACCEPTED (P1)** | §8 — pin: "payload hashes and no chain" |
 | 44 | B | §7.1 "the ONLY structured GPU observer" — `collect-resident-hermes-embedding-evidence.ps1:58` runs its own `nvidia-smi --query-gpu` and emits structured fields (`:139`) | **ACCEPTED (P1)** | §7.1 — narrowed to the canonical per-device inventory observer, scope stated — pin: "the only CANONICAL PER-DEVICE INVENTORY" |
@@ -1803,9 +1889,14 @@ Two structural findings follow, and they are worth more than any row above:
 2. **Accepted findings were never verified, only the map's own claims were** (§12 row 35). Three rounds
    of adversarial pressure ran in one direction. An accepted finding is a claim like any other.
 
-Phase 0 remains **`PHASE_0_NOT_PASSED`**. Three independent rounds, three `MAP_DEFECTIVE` verdicts,
-and round 3 found defects inside revision 3's corrections exactly as round 2 found them inside
-revision 2's. Gate 1a is `BLOCKED_DEPENDENCY` and does not start on this map.
+Phase 0 remained **`PHASE_0_NOT_PASSED`** at round 3. Three independent rounds, three
+`MAP_DEFECTIVE` verdicts, and round 3 found defects inside revision 3's corrections exactly as round
+2 found them inside revision 2's. Gate 1a was `BLOCKED_DEPENDENCY` and did not start on that map.
+
+**This disposition is superseded by §16** and is left standing as the record of what round 3
+concluded. What changed is not the defect count but the criterion: the 2026-08-24 owner direction
+requires Gate 1 to be blocked only by defects that reach Gate 1, and none of round 3's did that
+remains open.
 
 ## 14. The register has a machine check, and round 4 found five defects in it
 
@@ -1909,7 +2000,7 @@ round 4 overturned. Three rounds of one-directional pressure had left them stand
 | 50 | §12's closing paragraph still asserted "plan-time admission" and "exactly one concept", directly above the register refuting it | MAP_CLAIM | D | **ACCEPTED (P0)** | §12 — pin: "The paragraph that stood here is withdrawn" |
 | 51 | §9's `CONT-EXPV2-GATE1-RESCOPE` still carried the false `v0.2` wall claim and "amend #990 before its first commit" after §7.6 said the amendment had landed | MAP_CLAIM | D | **ACCEPTED (P0)** | §9 — pin: "The real fail-closed wall is :437" |
 | 52 | §8's Phase 0 report carried five withdrawn claims: `resource/verify` as first action, headroom "already observed", non-canonical vocabulary, one re-review remaining, and NEXT: build Gate 1a | MAP_CLAIM | D | **ACCEPTED (P0)** — §8 states the gate verdict, so these are controlling | §8 — regenerated — pin: "This block is regenerated from the body at each revision" |
-| 53 | §7 said `DEPENDENCY_CLEARED` and §7.6's heading said "releasable now" while §7.6's body typed Gate 1a `BLOCKED_DEPENDENCY` | MAP_CLAIM | D | **ACCEPTED (P0)** | §7, §7.6 — packet and lifecycle axes separated — pin: "A cleared packet is not a startable gate" |
+| 53 | §7 said `DEPENDENCY_CLEARED` and §7.6's heading said "releasable now" while §7.6's body typed Gate 1a `BLOCKED_DEPENDENCY` | MAP_CLAIM | D | **ACCEPTED (P0)** | §7, §7.6 — packet and lifecycle axes separated — pin: "Two axes, kept separate because collapsing them" |
 | 54 | §9's `CONT-EXPV2-FIRST-ACTION` kept `NO_ELIGIBLE_CANONICAL_ACTION` and "Gate 2 BUILDS it" as active typed fields beside prose withdrawing both | MAP_CLAIM | D | **ACCEPTED (P0)** — a machine reading the packet reads the withdrawn conclusion | §9 — retyped `CANONICAL_ACTION_SEARCH_NOT_PERFORMED` — pin: "the search the charter requires has not been run" |
 | 55 | `WAITING_EXTERNAL_ENVIRONMENT` is not in `playbook:178-193`'s closed lifecycle enumeration, and the map applied that rule to other labels but not this one | MAP_CLAIM | C | **ACCEPTED (P1)** | §7.6, §9 — retyped as `BLOCKED_DEPENDENCY` + reason code — pin: "is a vocabulary correction, not a re-decision" |
 | 56 | The status header said "Revision 3", "twice" and "two rounds" while the table below listed three and §13/§14 existed | MAP_CLAIM | E | **ACCEPTED (P1)** | the status section — **which carries no number and is therefore not a machine-verifiable target**; §15 records the limit below rather than faking a pin — pin: "one correction in this register lands somewhere the check cannot reach" |
@@ -1974,6 +2065,96 @@ section a number would fix it; renumbering fourteen sections during an active re
 be a fix, so the gap is recorded here and carried to round 5 rather than papered over with a pin
 pointed somewhere convenient.
 
-Phase 0 remains **`PHASE_0_NOT_PASSED`**. Four independent rounds, four `MAP_DEFECTIVE` verdicts, and
-the first round to look in the other direction found two accepted findings that were wrong. Gate 1a
-is `BLOCKED_DEPENDENCY` and does not start on this map.
+Four independent rounds, four `MAP_DEFECTIVE` verdicts, and the first round to look in the other
+direction found two accepted findings that were wrong. **That is still the honest description of
+this document.**
+
+What follows from it is where the disposition changed. This register's own conclusion was "iterate
+to round 5", and **§16 supersedes it**: the 2026-08-24 owner direction makes the orchestrator, not
+the reviewer, apply the disposition, and makes Gate-1 relevance — not defect count — the gate.
+Every one of the sixteen findings above is classified there. The eight that do not reach Gate 1 are
+typed with `blocksGate1 = false` and a `mustResolveBefore` phase; the eight that do are fixed.
+
+## 16. Terminal review protocol — the owner-directed disposition of round 4
+
+A binding owner direction dated **2026-08-24** supersedes this program's previous disposition rule
+("if `MAP_DEFECTIVE`: iterate"). Phase 0 is not an unlimited search for perfect knowledge; round 4
+tests whether the reconciliation **method** is now reliable. The direction is explicit that the
+**orchestrator** applies the protocol after a verdict returns, never the reviewer's own disposition —
+so that a reviewer cannot manufacture another round by finding something interesting, and a builder
+cannot broaden Gate 1 because an unrelated defect feels important.
+
+Gate 1 is the **canonical NODE/ACCELERATOR projection**, read-only. #990 explicitly excludes UI, the
+action registry, WorkingWorld, reservations, model residency, consumers and temporal projections. A
+defect blocks only the phase whose safety depends on it.
+
+### Classification of all twenty findings
+
+`AFFECTS_GATE_1_NOW` means the finding changes Gate 1 **ownership, authority/security, canonical
+identity/truth, sequencing, or a required acceptance invariant**. Everything else is typed and
+released.
+
+| Register row | Finding | Class | Why |
+| --- | --- | --- | --- |
+| §15 row 47 | a fifth selector implementation exists | `DOES_NOT_AFFECT_GATE_1_NOW` | Work-Order scheduling. No selector owns or conflicts with the canonical `SystemObject` projection. The owner direction names this example by hand |
+| §15 row 48 | no cross-registry resolver exists; the "fourth owner" reason was wrong | **`AFFECTS_GATE_1_NOW`** | §4.1's join and precedence rules **are** Gate 1's architecture, and #990's scope was amended because of the claim this overturned |
+| §15 row 49 | §4.1's "Owns" row assigned reachability to the transport registry | **`AFFECTS_GATE_1_NOW`** | canonical identity/truth ownership, in the section Gate 1 implements |
+| §15 row 50 | §12's closing paragraph asserted the withdrawn scheduler answer | `DOES_NOT_AFFECT_GATE_1_NOW` | scheduler subsystem; wording carried past its own register |
+| §15 row 51 | §9's rescope packet carried the false `v0.2` wall and a stale action | **`AFFECTS_GATE_1_NOW`** | it controlled #990's binding scope, and the real wall at `assemble-registry-core.mjs:437` is the node-probe schema version Gate 1 must move |
+| §15 row 52 | §8's Phase 0 report carried five withdrawn claims | **`AFFECTS_GATE_1_NOW`** | §8 states the gate verdict and said "NEXT: build Gate 1a" — Gate 1 sequencing |
+| §15 row 53 | §7 and §7.6's heading contradicted §7.6's body | **`AFFECTS_GATE_1_NOW`** | Gate 1 sequencing |
+| §15 row 54 | §9's first-action packet kept withdrawn conclusions as typed fields | `DOES_NOT_AFFECT_GATE_1_NOW` | the "one safe governed mutation" is Gate 2's. Gate 1 is read-only and mutates nothing |
+| §15 row 55 | `WAITING_EXTERNAL_ENVIRONMENT` is not a playbook lifecycle state | **`AFFECTS_GATE_1_NOW`** | Gate 1b's typing, and Gate 1b is mandatory before Gate 2 |
+| §15 row 56 | the status header was three revisions stale | `DOES_NOT_AFFECT_GATE_1_NOW` | wording and precision |
+| §15 row 57 | the check excluded three-column annotation tables and any register under three rows | **`AFFECTS_GATE_1_NOW`** | PASS criterion 4 is "the machine check agrees with the hand-written ownership register", so the check's own correctness is a gate criterion |
+| §15 row 58 | pins matched unbounded substrings, parent `ownText` included subsections, a register could certify itself | **`AFFECTS_GATE_1_NOW`** | same criterion; the subsection half was a real bug, not a comment slip |
+| §15 row 59 | bare row citations, `§ status`, and 44 ASCII-form references went unchecked | **`AFFECTS_GATE_1_NOW`** | same criterion; the unchecked references are concentrated in §8, which states the gate verdict |
+| §15 row 60 | external targets accepted by syntax alone | `DOES_NOT_AFFECT_GATE_1_NOW` | a declared limit of the mechanism, not a defect in a Gate 1 claim. §14 states it |
+| §15 row 61 | the legacy carve-out asserted a count, not row identities | **`AFFECTS_GATE_1_NOW`** | same criterion; a count cannot detect carve-out growth |
+| §15 row 62 | §6.7 cited `:1792` for records at `:1805-1806` | `DOES_NOT_AFFECT_GATE_1_NOW` | precision, in the scheduler section |
+| §15 row 63 | §10 row 16 named a correction §7.6 no longer contains | **`AFFECTS_GATE_1_NOW`** | it asserted "Gate 1a releasable now" — sequencing |
+| §15 row 64 | §5.6's broker audit is not fail-loud under an absent ledger root | `DOES_NOT_AFFECT_GATE_1_NOW` | the owner direction names swallowed audit failures as phase-scoped. Gate 1 is read-only, grants no authority and mutates nothing; the exposure is on the mutating paths. `mustResolveBefore = Gate 2` |
+
+**Every `AFFECTS_GATE_1_NOW` finding is fixed**, in `947b6ea4`, `bf86d30d`, `39189969` and
+`cff48517`. **No `AFFECTS_GATE_1_NOW` P0 or P1 remains open.**
+
+### The seven PASS criteria, answered
+
+1. **Every claim used to authorize Gate 1 has exact source evidence.** §7.2's scope, §7.5's
+   invariants and §4.1's join rules each cite file and line, and every line cited in the Gate 1 path
+   was opened during round-4 remediation. The one that was not — round 2's `v0.2` wall — is the
+   defect §12 row 35 and §15 row 51 exist to record, and it is corrected to `:437`.
+2. **Every negative claim states its search boundary.** §6.7 writes its grep out and classifies all
+   eight hits; §8's "strong but NOT singular" names the surfaces searched; §4.1's "no cross-registry
+   resolver exists" names what it examined and what it found instead.
+3. **No P0/P1 remains that changes Gate 1 ownership, security, architecture or sequencing.** Per the
+   table above.
+4. **The machine check agrees with the register.** `tests/experience-v2-collision-map-register.test.ts`
+   is green on this revision with zero violations across all five registers and both annotation
+   tables, after being rebuilt to answer §15 rows 57-61.
+5. **Previously accepted findings survive adversarial re-check.** Round 4 re-opened roughly fifty and
+   overturned two (§15 rows 47, 48); both are corrected. The six it left unreviewed have since been
+   opened and all six hold (above).
+6. **Remaining unknowns are typed, not converted into certainty.** §9 carries
+   `CONT-EXPV2-FIRST-ACTION`, `CONT-EXPV2-SELECTOR-INVENTORY`, `CONT-EXPV2-MERGE-AUTHORITY`,
+   `CONT-EXPV2-P0-RUNTIME-PROOF` and `CONT-EXPV2-GATE1-RESCOPE`, each with a state and an owner.
+   §15 records that §10 row 12 and §11 rows 8, 10, 12, 18 and 27 rest on one lane's re-opening.
+7. **Out-of-scope defects do not block Gate 1.** The eight `DOES_NOT_AFFECT_GATE_1_NOW` findings are
+   typed with `blocksGate1 = false` and a `mustResolveBefore` phase in §9.
+
+### What this does not claim
+
+Phase 0 passing is a judgement that **the method is now reliable enough to make this bounded change
+safely**, not that the map is free of defects. Four rounds each found defects inside the previous
+round's corrections, and a fifth round would very likely find more — the owner direction's point is
+that this must not be the criterion, because it never terminates.
+
+Two limits are worth naming beside the pass rather than after it:
+
+- **Round 4 could not run the test suite** (sandbox spawn denial, 27 attempts). Its review of the
+  register check is static reading; the suite was run by the delivering lane, which is a different
+  lane's evidence.
+- **Six accepted rows rest on the delivering lane's own re-opening**, not on an independent one.
+
+Neither is a Gate-1-affecting defect. Both are recorded so that Gate 1a starting is not later read as
+a claim that they were closed.

@@ -284,6 +284,17 @@ function parseTables(markdown: string): { rows: RegisterRow[]; annotations: Anno
     const cells = line.trim().replace(/^\|/, "").replace(/\|$/, "").split(" | ").map((cell) => cell.trim())
     if (cells.length < 3) return
 
+    // A row whose first cell NAMES an existing register row is an annotation, whatever its width.
+    // §12's correction sweep is three columns and §16's classification table is five; both say
+    // something *about* rows declared elsewhere rather than declaring new ones. Keying that on
+    // column count -- as the first version did -- made the distinction accidental, and §16 was
+    // immediately misread as a second register declaring §15's rows over again.
+    const qualified = /^§\s*(\d+)\s+row\s+(\d+)$/.exec(cells[0])
+    if (qualified) {
+      annotations.push({ register: qualified[1], row: Number(qualified[2]), line: index + 1, raw: line })
+      return
+    }
+
     if (cells.length >= MIN_REGISTER_COLUMNS) {
       const match = ROW.exec(line)
       if (!match) return
@@ -294,14 +305,7 @@ function parseTables(markdown: string): { rows: RegisterRow[]; annotations: Anno
         target: cells[cells.length - 1],
         raw: line,
       })
-      return
     }
-
-    // Three columns: an annotation. Its first cell must qualify which register it annotates,
-    // because row numbers are namespaced and a bare number is ambiguous between §10 and §11.
-    const qualified = /^§\s*(\d+)\s+row\s+(\d+)$/.exec(cells[0])
-    if (!qualified) return
-    annotations.push({ register: qualified[1], row: Number(qualified[2]), line: index + 1, raw: line })
   })
 
   return { rows: rows.sort((a, b) => a.line - b.line), annotations }

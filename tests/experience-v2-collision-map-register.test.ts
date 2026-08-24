@@ -68,8 +68,11 @@ describe("Experience V2 collision map review registers", () => {
     )
     // Every annotation must name a row that exists; checkReviewRegister enforces it, and the
     // clean-document case above is what proves none dangles.
-    expect(annotations.length).toBeGreaterThanOrEqual(11)
-    expect(annotations.every((annotation) => ["10", "11"].includes(annotation.register))).toBe(true)
+    // §16's classification table annotates §15's rows and is five columns wide -- a row whose
+    // first cell names an existing register row is an annotation whatever its width.
+    expect(annotations.length).toBeGreaterThanOrEqual(29)
+    expect(annotations.every((a) => ["10", "11", "15"].includes(a.register))).toBe(true)
+    expect(annotations.filter((a) => a.register === "15").length).toBe(18)
   })
 
   it("holds the whole document clean", () => {
@@ -118,7 +121,7 @@ describe("Experience V2 collision map review registers", () => {
 
   it("rejects a pin too generic to prove anything", () => {
     // Round 4 finding 12: `body.includes` accepted `pin: "the"`.
-    const broken = map.replace('pin: "reason code: PREDECESSOR_MAP_DEFECTIVE"', 'pin: "the"')
+    const broken = map.replace('pin: "Revision 4 typed it BLOCKED_DEPENDENCY"', 'pin: "the"')
     expect(broken).not.toBe(map)
     expect(checkReviewRegister(broken).violations.some((v) => v.kind === "PIN_TOO_GENERIC")).toBe(true)
     expect(MIN_PIN_CHARACTERS).toBeGreaterThan(8)
@@ -159,7 +162,7 @@ describe("Experience V2 collision map review registers", () => {
     expect(bare).not.toBe(map)
     expect(checkReviewRegister(bare).violations.some((v) => v.kind === "BARE_ROW_REF")).toBe(true)
 
-    const malformed = map.replace("Phase 0 remains **`PHASE_0_NOT_PASSED`**.", "Phase 0 (see § status) remains.")
+    const malformed = map.replace("## 16. Terminal review protocol", "## 16. See § status protocol")
     expect(malformed).not.toBe(map)
     expect(checkReviewRegister(malformed).violations.some((v) => v.kind === "MALFORMED_SECTION_REF")).toBe(true)
   })
