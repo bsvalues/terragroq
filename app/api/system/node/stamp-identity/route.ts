@@ -1,5 +1,5 @@
 import { pool } from "@/lib/db"
-import { requireLedger } from "@/lib/fabric/audit.mjs"
+import { auditFabricAction, requireLedger } from "@/lib/fabric/audit.mjs"
 import { BrokerDenied, brokeredExec, resolveBrokeredNode } from "@/lib/fabric/broker.mjs"
 import { defaultFabricRoot } from "@/lib/fabric/transport.mjs"
 import { appendGovernanceEvent } from "@/lib/governance/events"
@@ -227,6 +227,38 @@ export async function POST(request: Request) {
   } catch (error) {
     post = verifyPostState(stamp, "", new Date().toISOString())
     post = { ...post, reason: `the post-state could not be observed: ${String((error as Error).message).slice(0, 160)}` }
+  }
+
+  /**
+   * The observed post-state goes into the DURABLE record, not only into the governance event.
+   *
+   * This was a real gap and it is worth naming rather than quietly closing. The ledger already
+   * carried a line for the write and a line for the verify COMMAND -- but not for what the verify
+   * observed. `appendGovernanceEvent` swallows its own write failures by explicit design
+   * (`lib/governance/events.ts`), so leaving the post-state only there would have made invariant 12
+   * -- "the action's evidence records what was observed after" -- depend on a best-effort write. An
+   * action whose post-state evidence can silently vanish has a story about evidence, which is the
+   * same failure class this gate's own prerequisite existed to close on the audit path.
+   *
+   * `required: true`, so an unwritable ledger here is a refusal rather than a skip. The mutation has
+   * already happened by this point and cannot be undone, which is exactly why the response must say
+   * so instead of reporting a clean success.
+   */
+  try {
+    await auditFabricAction(
+      fabricRoot,
+      endpoint,
+      `${stamp.operation}.post-state`,
+      post.verified ? 0 : 1,
+      `${stamp.nodeId} verified=${post.verified} observed=${post.observedDigest ?? "none"} bytes=${post.observedBytes ?? "none"}`,
+      { required: true },
+    )
+  } catch (error) {
+    return refuse("POST_STATE_UNRECORDED", 503, {
+      detail: String((error as Error).message).slice(0, 200),
+      postState: post,
+      note: "the stamp was written and observed, and the observation could not be recorded durably",
+    })
   }
 
   const evidence = {

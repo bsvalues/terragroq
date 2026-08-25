@@ -109,7 +109,30 @@ git ls-files 'scripts/execution-fabric/**' 'scripts/lab-control/**' 'scripts/fab
 git grep -ln "projectSystemObjects"
 ```
 
-### 3.1 The one fact that shortens this search honestly, stated as evidence rather than as a shortcut
+### 3.1 A defect in this record's own denominator method, found by its own adversarial review
+
+The catalogue query above matches `SCREAMING_CASE` exports, because that is the convention every
+catalogue named by #995 and by #996's record happens to use. **It cannot see a camelCase catalogue**,
+and the registry this gate just merged is one. A denominator that silently excludes the seam the
+predecessor told this search to examine first would be a boundary defect of exactly the kind §5.5
+catches in the previous record, so it is recorded here rather than repaired quietly.
+
+Re-measured with a query that does see them:
+
+```
+git grep -nE "^export const [a-z][A-Za-z0-9]*(Registry|Catalogue|Catalog|Actions|Operations|Commands|Descriptors|Kinds|Steps)\b" -- 'lib/**' 'app/**'
+```
+
+| Catalogue | At `2d72d3c4` | Examined |
+| --- | --- | --- |
+| `objectActionRegistry` | `lib/intent/object-action-registry.ts:289` | §5.1 — every descriptor, individually |
+| `navigationDescriptors` | `lib/intent/object-action-registry.ts:297` | §5.1 — a subset of the above, navigation only |
+| `workbenchActionRegistry` | `lib/intent/workbench-action-registry.ts:48` | §5.1 — a facade over the registry since #996, not a fourth catalogue |
+
+Three, all in `lib/intent/`, all already the subject of §5.1. **The outcome does not move**, and that
+is a fact about what those three contain rather than a reason the query's blind spot was harmless.
+
+### 3.2 The one fact that shortens this search honestly, stated as evidence rather than as a shortcut
 
 ```
 git diff --name-only 053a33bd..HEAD | grep -vE "^(docs/|tests/|\.phase0|lib/fabric/|lib/intent/)"
@@ -128,7 +151,7 @@ does not re-derive it by retyping it. What it does re-derive from scratch is:
 3. the surface class the first search's boundary never named — §5.5.
 
 A shortened search is only legitimate if it says which part was shortened and on what evidence. That
-is what §3.1 is.
+is what §3.2 is.
 
 ---
 
@@ -275,7 +298,7 @@ changes how the lab addresses HERMES has not changed HERMES.
 
 ### 5.6 The unchanged surfaces, named so the negative states its boundary
 
-Re-confirmed byte-identical at `2d72d3c4` by §3.1, with the first search's per-candidate evidence
+Re-confirmed byte-identical at `2d72d3c4` by §3.2, with the first search's per-candidate evidence
 therefore still resolving:
 
 - **30 mutating route handlers** — 3 brokered (`resource/{relocate,restore,verify}`), 1 raw-transport
@@ -317,7 +340,7 @@ for this subject. `AMENDMENT-001` authorizes the build.
   lane that wants to build an action for a different subject must prove absence again, by bounded
   recorded search, for that subject.
 - Its negatives state their boundary. Where this record says "none", §3 gives the surface, the query
-  and the denominator that produced it, and §3.1 states exactly which part of the search was
+  and the denominator that produced it, and §3.2 states exactly which part of the search was
   shortened and on what evidence.
 
 ---

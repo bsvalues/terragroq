@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 vi.mock("@/lib/session", () => ({ getSession: vi.fn() }))
 vi.mock("@/lib/db", () => ({ pool: { query: vi.fn() } }))
 vi.mock("@/lib/governance/events", () => ({ appendGovernanceEvent: vi.fn() }))
-vi.mock("@/lib/fabric/audit.mjs", () => ({ requireLedger: vi.fn() }))
+vi.mock("@/lib/fabric/audit.mjs", () => ({ requireLedger: vi.fn(), auditFabricAction: vi.fn() }))
 vi.mock("@/lib/fabric/broker.mjs", () => ({
   brokeredExec: vi.fn(),
   resolveBrokeredNode: vi.fn(),
@@ -23,7 +23,7 @@ vi.mock("@/lib/system/system-object-source", () => ({
 }))
 
 import { pool } from "@/lib/db"
-import { requireLedger } from "@/lib/fabric/audit.mjs"
+import { auditFabricAction, requireLedger } from "@/lib/fabric/audit.mjs"
 import { brokeredExec, resolveBrokeredNode } from "@/lib/fabric/broker.mjs"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { getSession } from "@/lib/session"
@@ -42,6 +42,7 @@ import {
   verifyPostState,
   type StampPlan,
 } from "@/lib/system/node-identity-stamp"
+import { objectActionRegistry } from "@/lib/intent/object-action-registry"
 import { readNodeIdentityContract } from "@/lib/system/node-identity-contract"
 import { projectSystemObjects, type InventoryNode, type NodeObject } from "@/lib/system/system-object"
 import { POST } from "@/app/api/system/node/stamp-identity/route"
@@ -177,6 +178,37 @@ describe("criterion 4 - chosen from a fixed catalogue by name", () => {
     const signature = source.slice(source.indexOf("export function planIdentityStamp"), source.indexOf("): StampVerdict"))
     expect(signature).not.toMatch(/operation\s*:\s*string/)
     expect(signature).not.toMatch(/command/)
+  })
+})
+
+describe("criterion 4 - the action has ONE identity across every place that names it", () => {
+  it("binds the registry descriptor, the catalogue, the route and the ledger label together", () => {
+    // The strongest objection to this shape is that a descriptor in the registry and an operation
+    // vocabulary in the action module are two catalogues wearing one name -- and the honest answer is
+    // that they are two ROLES (the registry describes; the module owns the verb, exactly as
+    // `MUTATING_OPERATIONS` does for `resource.relocate-source`) held together by nothing but
+    // convention. This is the tripwire that makes it more than convention: rename any one of them and
+    // this fails.
+    const descriptor = objectActionRegistry.find((action) => action.id === "system.node.stamp-identity")
+    expect(descriptor?.implementation).toBe("lib/system/node-identity-stamp.ts")
+    expect(descriptor?.mutating).toBe(true)
+    expect(descriptor?.requiresAuthority).toBe(true)
+
+    const plan = planFor(atlasObject(), POSIX_RECORD)
+    expect(SYSTEM_OBJECT_MUTATIONS).toContain(plan.operation)
+    // The registry id is the module's operation, namespaced by its subject. Not the same string, and
+    // that is deliberate -- the registry keys on `system.<kind>.<verb>` for every descriptor -- but a
+    // derivable one, so a rename in either place cannot pass silently.
+    expect(descriptor?.id).toBe(`system.node.${plan.operation.split(".").pop()}`)
+
+    const route = fs.readFileSync(
+      path.join(repositoryRoot, "app/api/system/node/stamp-identity/route.ts"),
+      "utf8",
+    )
+    expect(route).toContain(`const STAMP_ACTION_ID = "${descriptor?.id}"`)
+    // The ledger label is the module's operation verbatim, so a reader can join the registry, the
+    // route and the audit log without a translation table.
+    expect(route).toContain("action: stamp.operation")
   })
 })
 
@@ -351,6 +383,7 @@ describe("the identity precondition, and what it does not claim", () => {
 const mockedSession = vi.mocked(getSession)
 const mockedQuery = vi.mocked(pool.query) as unknown as ReturnType<typeof vi.fn>
 const mockedLedger = vi.mocked(requireLedger)
+const mockedAudit = vi.mocked(auditFabricAction) as unknown as ReturnType<typeof vi.fn>
 const mockedExec = vi.mocked(brokeredExec) as unknown as ReturnType<typeof vi.fn>
 const mockedResolveNode = vi.mocked(resolveBrokeredNode) as unknown as ReturnType<typeof vi.fn>
 const mockedSource = vi.mocked(loadSystemObjectSource) as unknown as ReturnType<typeof vi.fn>
@@ -397,6 +430,7 @@ describe("the governed route", () => {
     mockedSession.mockResolvedValue({ user: { id: "primary" } } as never)
     mockedQuery.mockResolvedValue({ rows: [{ ref: "GRANT-0007" }] })
     mockedLedger.mockResolvedValue(undefined)
+    mockedAudit.mockResolvedValue(undefined)
     mockedResolveNode.mockResolvedValue(POSIX_RECORD)
     mockedSource.mockResolvedValue({
       graph: graphOf([ATLAS, HERMES], { atlas: POSIX_RECORD, hermes: WINDOWS_RECORD }),
@@ -488,6 +522,29 @@ describe("the governed route", () => {
     expect(event.before).toEqual({ priorDigest: null, priorBytes: 0 })
   })
 
+  it("invariant 12 - writes the OBSERVED post-state to the durable ledger, required rather than best-effort", async () => {
+    // `appendGovernanceEvent` swallows its own write failures by design, so a post-state recorded
+    // only there could vanish silently. This is the line that cannot.
+    await POST(request({ objectId: "node:atlas" }))
+    const [root, node, action, rc, detail, options] = mockedAudit.mock.calls[0]
+    expect(action).toBe("node.stamp-identity.post-state")
+    expect(node).toBe("atlas")
+    expect(String(root)).toBeTruthy()
+    expect(rc).toBe(0)
+    expect(String(detail)).toMatch(/verified=true observed=[0-9a-f]{64}/)
+    expect(options).toEqual({ required: true })
+  })
+
+  it("invariant 12 - refuses when the observation itself cannot be recorded, and says the write happened", async () => {
+    mockedAudit.mockRejectedValueOnce(new Error("AUDIT_UNAVAILABLE: ledger at /x cannot be written"))
+    const response = await POST(request({ objectId: "node:atlas" }))
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toMatchObject({
+      error: "POST_STATE_UNRECORDED",
+      note: expect.stringMatching(/was written and observed/),
+    })
+  })
+
   it("invariant 12 - refuses to claim success it could not observe, and records the failure", async () => {
     mockedExec.mockImplementation(honestNode({ tamper: true }))
     const response = await POST(request({ objectId: "node:atlas" }))
@@ -497,6 +554,21 @@ describe("the governed route", () => {
   })
 
   it("cannot be told what to run, where to write, or which machine to reach", async () => {
+    // The clock is pinned for both halves. The stamp records WHEN it was written, so two runs a
+    // millisecond apart legitimately produce different bytes and therefore different commands -- and
+    // the claim under test is that the REQUEST BODY changes nothing, not that time does not pass.
+    // Comparing the two commands byte-for-byte is the strongest form of that claim, and it is only
+    // available with the one variable that is allowed to differ held still.
+    vi.useFakeTimers({ toFake: ["Date"] })
+    vi.setSystemTime(new Date("2026-08-24T12:00:00.000Z"))
+    try {
+      await hostileBodyChangesNothing()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  async function hostileBodyChangesNothing() {
     const clean = await POST(request({ objectId: "node:atlas" }))
     expect(clean.status).toBe(200)
     const cleanCommand = mockedExec.mock.calls.find((c) => c[2]?.action === "node.stamp-identity")?.[1]
@@ -505,6 +577,7 @@ describe("the governed route", () => {
     mockedSession.mockResolvedValue({ user: { id: "primary" } } as never)
     mockedQuery.mockResolvedValue({ rows: [{ ref: "GRANT-0007" }] })
     mockedLedger.mockResolvedValue(undefined)
+    mockedAudit.mockResolvedValue(undefined)
     mockedResolveNode.mockResolvedValue(POSIX_RECORD)
     mockedSource.mockResolvedValue({
       graph: graphOf([ATLAS, HERMES], { atlas: POSIX_RECORD, hermes: WINDOWS_RECORD }),
@@ -527,7 +600,7 @@ describe("the governed route", () => {
     expect(hostile.status).toBe(200)
     expect(mockedExec.mock.calls.find((c) => c[2]?.action === "node.stamp-identity")?.[1]).toBe(cleanCommand)
     expect(mockedExec.mock.calls.every((c) => c[0] === "atlas")).toBe(true)
-  })
+  }
 
   it("invariant 3 on the execution path - an ambiguous mutating input executes nothing", async () => {
     const response = await POST(request({ input: "stamp atlas and hermes" }))
