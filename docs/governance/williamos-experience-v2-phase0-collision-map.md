@@ -1514,8 +1514,16 @@ CONT-EXPV2-FIRST-ACTION
   owner:                  no longer open to this lane; superseded by the packet below.
 
 CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION
-  type:                   BLOCKED_DEPENDENCY
-  reason:                 PREDECESSOR_LIFECYCLE_INCOMPLETE
+  type:                   PICKUP_ELIGIBLE
+  was:                    BLOCKED_DEPENDENCY / PREDECESSOR_LIFECYCLE_INCOMPLETE
+  eligible since:         2026-08-24. The dependency was the Gate 2 lane's own pull request, and it
+                          is merged: PR #996 -> main 2630ee5a, deterministic suite and production
+                          build green on main after it. Retyped by WO-EXPV2-MERGE-SWEEP-003, which
+                          performed that merge and authored none of the work in it.
+  still gated by:         the predecessor below, which is unchanged and is NOT discharged by this
+                          retype. Eligible to be PICKED UP is not eligible to BUILD. A lane that
+                          reads PICKUP_ELIGIBLE and starts building has skipped the one step this
+                          packet exists to force.
   subject:                the smallest new canonical action permitted by charter AMENDMENT-001 --
                           the first journey's one safe governed mutation.
   predecessor (MANDATORY, and it gates the BUILD branch):
@@ -1813,6 +1821,29 @@ CONT-EXPV2-MERGE-AUTHORITY
              repository-wide search for authorityGranted true outside tests returns nothing.
   satisfied: all three PRs were CI green, CLEAN/MERGEABLE and at zero unresolved threads at the
              moment each merge was performed, and main was re-verified green before the next one.
+
+CONT-EXPV2-COORDINATOR-RECORD-MERGE
+  type:      RESOLVED
+  was:       AWAITING_INDEPENDENT_COORDINATOR                        (WO-EXPV2-MERGE-SWEEP-002)
+  before:    BLOCKED_DEPENDENCY / SECURITY_OR_AUTHORITY_THREAD_OPEN  (WO-EXPV2-CLOSEOUT-001)
+  before:    AWAITING_INDEPENDENT_COORDINATOR                        (WO-EXPV2-MERGE-COORDINATION-001)
+  subject:   PR #994, the coordination record carrying this file
+  resolved:  2026-08-24 by WO-EXPV2-MERGE-SWEEP-003. PR #994 at 8771bfbd -> main 184aaa2b, main CI
+             green after it. The three-lane exclusion this entry was opened for held all the way
+             through: the AUTHORING lane could not merge its own record, the CLOSEOUT lane that
+             specified the fix could not merge what it had specified, the SWEEP-002 lane that pushed
+             the fix could not merge its own authority-material commits -- and the lane that finally
+             merged it wrote none of those three things.
+  gates at head, re-verified rather than inherited from the handoff comment:
+             MERGEABLE / CLEAN; required checks 3/3 SUCCESS at 8771bfbd, which is also the rollup
+             commit; unresolved review threads 0; no security or authority thread open; no
+             branch-protection bypass needed and none used.
+  note:      the handoff comment on #994 asked the next coordinator to "verify at head rather than
+             trusting this comment". It was. Every line above came from a query against the pull
+             request, not from the comment.
+  blocksGate1:           false
+  blocksGate2:           false
+  ownerDecisionRequired: false
 
 CONT-EXPV2-TRUTH-NEGATIVE-AGE
   type:               TYPED_DEFECT

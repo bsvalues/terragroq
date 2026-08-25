@@ -102,11 +102,25 @@ CONT-EXPV2-FIRST-ACTION
   owner:                  no longer open to this lane; superseded by the packet below.
 
 CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION
-  type:                   BLOCKED_DEPENDENCY
-  reason:                 PREDECESSOR_LIFECYCLE_INCOMPLETE
+  type:                   PICKUP_ELIGIBLE
+  was:                    BLOCKED_DEPENDENCY / PREDECESSOR_LIFECYCLE_INCOMPLETE
+  eligible since:         2026-08-24, when the Gate 2 lane's own pull request landed: PR #996 ->
+                          main 2630ee5a. Retyped by WO-EXPV2-MERGE-SWEEP-003, which performed that
+                          merge and authored none of the work in it.
+  controlling copy:       collision map S9. THAT copy, not this one, carries the MANDATORY
+                          fresh-search predecessor gating the BUILD branch -- a fresh bounded
+                          canonical-action search against the ACTUAL pickup base, recorded, before
+                          BUILD may be selected. This record states the re-proof requirement in
+                          prose further down but its packet never carried it as a field, which is
+                          the gap an authority review thread on #999 caught. Read S9 before
+                          building; PICKUP_ELIGIBLE here means eligible to be picked up, never
+                          eligible to build.
   subject:                the smallest new canonical action permitted by charter AMENDMENT-001 --
                           the first journey's one safe governed mutation, BUILT because the bounded
-                          search proved none could be chosen.
+                          search proved none could be chosen -- IF the fresh search at the pickup
+                          base still finds none. If one qualifies there, the charter's
+                          mandatory-first reuse rule selects REUSE and this packet is discharged
+                          UNBUILT.
   buildable per:          charter:273-278 as amended, read under the owner-stated semantics recorded
                           at charter AMENDMENT-001. Those semantics bind the build; they are not
                           background. Smallest new canonical action; extend the EXISTING
