@@ -527,8 +527,14 @@ migration built on.
 
 ## A note on where this landed
 
-This work extends PR **#1000** rather than opening a second pull request. #1000 is open and holds the
-reservation on `docs/reports/experience-v2-p40-commissioning/`; a concurrent second PR writing the
-same directory is precisely the reservation collision the playbook forbids. One lane, one PR, one
-terminal verdict — and #1000's own verdict is superseded by this report rather than left to contradict
-it.
+This began as an extension of PR **#1000**, to avoid two pull requests writing
+`docs/reports/experience-v2-p40-commissioning/` — the reservation collision the playbook forbids.
+**#1000 merged at `2026-08-25T03:01:08Z` while this lane was mid-flight**, which makes that moot: the
+directory is in `main` and there is no concurrent holder. So this is a separate pull request branched
+off current `main`, and #1000's verdict is superseded by this report rather than left to contradict
+it. Report 001 keeps its text and carries a superseded marker in its header.
+
+One thing went wrong in that handover and is recorded rather than quietly fixed: before noticing the
+merge, this lane rewrote #1000's title and body to describe work #1000 does not contain. Both were
+restored, with a note at the top of that body explaining the overwrite. A merged pull request is part
+of the record, and editing one to describe a later lane's work would have made it lie about itself.
