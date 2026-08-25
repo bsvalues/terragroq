@@ -1,7 +1,10 @@
 # WilliamOS Experience V2 — cross-node sync repair
 
-Continuation picked up: `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F`, typed `PICKUP_ELIGIBLE` at
-`WILLIAMOS-EXPERIENCE-V2-RUNTIME-SETTLEMENT-001.md:354` by PR `#1005`.
+Continuation picked up: `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F`, typed `PICKUP_ELIGIBLE` by PR
+`#1005` at `WILLIAMOS-EXPERIENCE-V2-RUNTIME-SETTLEMENT-001.md:354` **as that file stands on `main`
+at `c3d822fa`** — re-derived rather than carried forward, because sweep 7's finding against `#1005`
+was a where-to-look pointer aimed off the end of a file, and a bare line number in a document both
+branches edit is that same shape waiting to happen.
 
 Program: `WILLIAMOS_EXPERIENCE_V2` · Parent `#987` · Picked up from merged `main` `c3d822fa`.
 Executed on HERMES. `OWNER_COURIER_ACTIONS = 0`. No owner decision was required and no authority
