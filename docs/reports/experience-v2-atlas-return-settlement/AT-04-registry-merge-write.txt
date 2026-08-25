@@ -1,0 +1,49 @@
+CANONICAL MERGE-WRITE OF ATLAS'S ADDRESS INTO THE FABRIC REGISTRY
+2026-08-25T01:44 -07:00, on HERMES, through lib/fabric/registry.mjs updateNodeFields.
+That module is the transport registry's OWN merge-write path: it sets the fields named,
+carries every other field through untouched, and refuses if the file changed since it was
+read. No hand-edit of the registry or of registry.seed.json was made.
+Module blobs verified identical to main before use:
+  lib/fabric/registry.mjs     9e7b292141a5d37ec638d58f8e46bc94adf45df8
+  lib/fabric/run-baseline.mjs 276d9194304ea9ff59fc7fdd45326b11a0c3dfd8
+
+backup: C:\Users\bs\.williamos\fabric\nodes.json.bak-before-atlas-move-20260825T014410  sha256=8F48C17CACB087EE5483F57C636DFBBEDF2FE25A85A329570372C6CEFA9157E9
+BEFORE atlas   : {"transport":"ssh","host":"192.168.88.5","user":"bs","os":"linux","role":"state / DB / RAG"}
+fingerprint    : 8f48c17cacb087ee5483f57c636dfbbedf2fe25a85a329570372c6cefa9157e9
+AFTER atlas    : {"transport":"ssh","host":"192.168.88.8","user":"bs","os":"linux","role":"state / DB / RAG","note":"DHCP lease moved 192.168.88.5 -> 192.168.88.8 on the 2026-08-25 power cycle; 192.168.88.5 is now held by another device. Identity proven twice before this write: /etc/machine-id sha256 1406acb70a4fa29a84cacdf9bedef398af99ec6b8d85079632d6f822ddaa0ba1 matches the registry.seed.json pin, and the ed25519 host key at .8 is byte-identical to the key that was pinned for .5."}
+changed fields : ["host","note"]
+exit=0
+=== nodes.json after ===
+{
+  "hermes": {
+    "transport": "local",
+    "os": "windows",
+    "role": "control-plane + WilliamOS/Hermes"
+  },
+  "aegis": {
+    "transport": "ssh",
+    "host": "192.168.88.6",
+    "user": "bs",
+    "os": "linux",
+    "role": "dev worker"
+  },
+  "atlas": {
+    "transport": "ssh",
+    "host": "192.168.88.8",
+    "user": "bs",
+    "os": "linux",
+    "role": "state / DB / RAG",
+    "note": "DHCP lease moved 192.168.88.5 -> 192.168.88.8 on the 2026-08-25 power cycle; 192.168.88.5 is now held by another device. Identity proven twice before this write: /etc/machine-id sha256 1406acb70a4fa29a84cacdf9bedef398af99ec6b8d85079632d6f822ddaa0ba1 matches the registry.seed.json pin, and the ed25519 host key at .8 is byte-identical to the key that was pinned for .5."
+  },
+  "omen": {
+    "transport": "ssh",
+    "host": "Omen",
+    "user": "bsval",
+    "os": "windows",
+    "role": "cockpit (managed node, not an autonomous worker)",
+    "enrolled": true,
+    "note": "mDNS name, because the DHCP lease moved .8 -> .7 -> .8 in a day; identity is the pinned host key SHA256:dIK9f5fi0GKqeX/49+03jCNSvtyXkFkv8bp1KJAZXSQ",
+    "workloads": "processes"
+  }
+}
+
