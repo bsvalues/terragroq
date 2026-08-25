@@ -21,6 +21,10 @@
 
 .PARAMETER VerifyOnly
   Run the health checks against whatever is currently deployed and change nothing.
+
+.PARAMETER SkipRollbackCapture
+  Skip copying the outgoing build aside. Only for a deploy onto an empty runtime, where there is
+  nothing to preserve.
 #>
 [CmdletBinding()]
 param(
@@ -29,7 +33,8 @@ param(
   [string]$TaskName = "WilliamOS Live",
   [int]$Port = 3100,
   [switch]$WithDependencies,
-  [switch]$VerifyOnly
+  [switch]$VerifyOnly,
+  [switch]$SkipRollbackCapture
 )
 
 $ErrorActionPreference = "Stop"
@@ -131,6 +136,30 @@ $envPath = Join-Path $Runtime ".env.local"
 $envGuard = $null
 if (Test-Path $envPath) { $envGuard = (Get-FileHash $envPath -Algorithm SHA256).Hash }
 
+# ROLLBACK CAPTURE, before anything is overwritten. `robocopy /MIR` below is destructive and this
+# script used to say, accurately, that "the previous build is not automatically restored" -- which
+# left the only recovery from a bad deploy as "rebuild the previous commit", requiring the previous
+# commit to still be known and buildable. The three things the deploy replaces are copied aside
+# first, so recovery is a copy back.
+#
+# Deliberately NOT node_modules or .env.local: neither is touched unless -WithDependencies is passed,
+# and .env.local is guarded by hash below.
+if (-not $SkipRollbackCapture) {
+  $rollbackRoot = "$Runtime.rollback-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
+  $null = New-Item -ItemType Directory -Path $rollbackRoot -Force
+  if (Test-Path (Join-Path $Runtime ".next")) {
+    $null = robocopy (Join-Path $Runtime ".next") (Join-Path $rollbackRoot ".next") /MIR /NFL /NDL /NJH /NJS /NP
+    if ($LASTEXITCODE -ge 8) { throw "rollback capture failed copying .next (exit $LASTEXITCODE)" }
+  }
+  foreach ($file in @("server.js", "package.json")) {
+    $existing = Join-Path $Runtime $file
+    if (Test-Path $existing) { Copy-Item $existing (Join-Path $rollbackRoot $file) -Force }
+  }
+  # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
+  Write-Output "rollback captured: $rollbackRoot"
+  Write-Output "to restore: robocopy `"$rollbackRoot\.next`" `"$Runtime\.next`" /MIR ; copy server.js and package.json back ; Start-ScheduledTask -TaskName `"$TaskName`""
+}
+
 # Stop the supervised task AND anything still holding the port. Stop-ScheduledTask returns before the
 # child process has exited, and a half-stopped server keeps its file handles, so the copy below would
 # silently fail on exactly the files that matter.
@@ -163,6 +192,20 @@ if ($WithDependencies) {
   if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying node_modules (exit $LASTEXITCODE)" }
 }
 
+# Boot-time resolution tooling, which Next's tracer does NOT include: nothing the served application
+# imports reaches `authority-registry-url.mjs`, because its caller is the START SCRIPT rather than a
+# route (deploy/hermes/williamos-live/start-williamos-live.ps1). Its own two dependencies,
+# `registry.mjs` and `run-baseline.mjs`, are already traced in via the broker, so this is exactly two
+# files. Without them the start script refuses to boot -- which is the intended direction, but it
+# should be caused by a registry that cannot answer, not by a deploy that forgot to bring the tool.
+foreach ($tool in @("lib\fabric\authority-registry-url.mjs", "scripts\fabric\resolve-authority-registry-url.mjs")) {
+  $toolSource = Join-Path $Source $tool
+  if (-not (Test-Path $toolSource)) { throw "Missing boot-time resolution tool in the source tree: $toolSource" }
+  $toolTarget = Join-Path $Runtime $tool
+  $null = New-Item -ItemType Directory -Path (Split-Path -Parent $toolTarget) -Force
+  Copy-Item $toolSource $toolTarget -Force
+}
+
 if (-not (Test-Path (Join-Path $Runtime ".env.local"))) {
   throw "The runtime lost its .env.local. Restore it before starting: the cockpit cannot resolve the owner without WILLIAMOS_OWNER_EMAIL."
 }
@@ -178,7 +221,7 @@ if ($envGuard) {
 Start-ScheduledTask -TaskName $TaskName
 
 if (-not (Test-Cockpit -Port $Port)) {
-  Write-Error "Deployed, but the cockpit never answered on port $Port. The previous build is not automatically restored -- check the task's own log before retrying."
+  Write-Error "Deployed, but the cockpit never answered on port $Port. The outgoing build was captured above; check the task's own log, then restore it with the printed command before retrying."
   exit 1
 }
 
