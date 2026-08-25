@@ -192,18 +192,36 @@ if ($WithDependencies) {
   if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying node_modules (exit $LASTEXITCODE)" }
 }
 
-# Boot-time resolution tooling, which Next's tracer does NOT include: nothing the served application
-# imports reaches `authority-registry-url.mjs`, because its caller is the START SCRIPT rather than a
-# route (deploy/hermes/williamos-live/start-williamos-live.ps1). Its own two dependencies,
-# `registry.mjs` and `run-baseline.mjs`, are already traced in via the broker, so this is exactly two
-# files. Without them the start script refuses to boot -- which is the intended direction, but it
-# should be caused by a registry that cannot answer, not by a deploy that forgot to bring the tool.
-foreach ($tool in @("lib\fabric\authority-registry-url.mjs", "scripts\fabric\resolve-authority-registry-url.mjs")) {
-  $toolSource = Join-Path $Source $tool
-  if (-not (Test-Path $toolSource)) { throw "Missing boot-time resolution tool in the source tree: $toolSource" }
-  $toolTarget = Join-Path $Runtime $tool
-  $null = New-Item -ItemType Directory -Path (Split-Path -Parent $toolTarget) -Force
-  Copy-Item $toolSource $toolTarget -Force
+# Boot-time resolution tooling. The start script
+# (deploy/hermes/williamos-live/start-williamos-live.ps1) resolves ATLAS's address before starting
+# the server, and nothing in the standalone output can supply it: measured on this build, Next
+# BUNDLES the `lib/fabric/*.mjs` modules into the route chunks rather than tracing them as files, so
+# `.next/standalone/lib` contains only `generated/build-provenance.json`. The runtime's existing
+# `lib\fabric\*.mjs` are leftovers from an older hand-placement, not something a deploy maintains.
+#
+# The whole directory is copied rather than the two files the resolver names today. Its import
+# closure is registry -> run-baseline -> audit/broker/transport, and hand-listing that is a
+# maintenance trap: a new import would not fail here, it would fail at BOOT, on the node, as a
+# refusal to start.
+$fabricSource = Join-Path $Source "lib\fabric"
+$fabricTarget = Join-Path $Runtime "lib\fabric"
+$null = New-Item -ItemType Directory -Path $fabricTarget -Force
+$null = robocopy $fabricSource $fabricTarget "*.mjs" /NFL /NDL /NJH /NJS /NP
+if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying lib\fabric boot tooling (exit $LASTEXITCODE)" }
+
+$resolverCli = "scripts\fabric\resolve-authority-registry-url.mjs"
+$resolverSource = Join-Path $Source $resolverCli
+if (-not (Test-Path $resolverSource)) { throw "Missing boot-time resolution tool in the source tree: $resolverSource" }
+$resolverTarget = Join-Path $Runtime $resolverCli
+$null = New-Item -ItemType Directory -Path (Split-Path -Parent $resolverTarget) -Force
+Copy-Item $resolverSource $resolverTarget -Force
+
+# Prove the boot path can actually resolve, here, while the previous build is still restorable --
+# rather than finding out when the task starts and the cockpit refuses. `--redact` so the check
+# exercises the real resolution and prints a connection string with the password masked.
+$resolveCheck = & "C:\Program Files\nodejs\node.exe" $resolverTarget (Join-Path $Runtime ".env.local") --redact 2>&1
+if ($LASTEXITCODE -ne 0) {
+  throw "The deployed boot tooling cannot resolve the authority registry's address, so the cockpit would refuse to start: $resolveCheck"
 }
 
 if (-not (Test-Path (Join-Path $Runtime ".env.local"))) {

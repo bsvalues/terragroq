@@ -86,14 +86,28 @@ describe("the cockpit's start script is declared in the repository", () => {
 })
 
 describe("the deploy places what the start script needs and can be undone", () => {
-  it("copies the two boot-time tools Next's tracer does not include", () => {
+  it("copies the boot-time tooling Next's tracer does not include", () => {
     const code = executableOnly(deployText)
-    expect(code).toContain("lib\\fabric\\authority-registry-url.mjs")
+    // The whole fabric mjs directory, not a hand-listed pair: the resolver's import closure reaches
+    // registry -> run-baseline -> audit/broker/transport, and a list would fail at boot, not here.
+    expect(code).toContain('Join-Path $Source "lib\\fabric"')
     expect(code).toContain("scripts\\fabric\\resolve-authority-registry-url.mjs")
   })
 
   it("fails loudly if a boot-time tool is missing from the source tree", () => {
     expect(executableOnly(deployText)).toMatch(/throw "Missing boot-time resolution tool/)
+  })
+
+  it("proves the deployed boot path can resolve before it restarts the service", () => {
+    const code = executableOnly(deployText)
+    const checkIndex = code.indexOf("cannot resolve the authority registry")
+    // lastIndexOf: the rollback instructions printed earlier also mention Start-ScheduledTask, and
+    // the one that matters is the invocation that actually restarts the service.
+    const startIndex = code.lastIndexOf("Start-ScheduledTask")
+    expect(checkIndex).toBeGreaterThan(-1)
+    expect(startIndex).toBeGreaterThan(checkIndex)
+    // The check must exercise resolution with the password masked, never printed.
+    expect(code).toMatch(/--redact/)
   })
 
   it("captures the outgoing build before the mirroring copy destroys it", () => {
