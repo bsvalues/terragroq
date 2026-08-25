@@ -2,7 +2,7 @@ import { pool } from "@/lib/db"
 import { auditFabricAction, requireLedger } from "@/lib/fabric/audit.mjs"
 import { BrokerDenied, brokeredExec, resolveBrokeredNode } from "@/lib/fabric/broker.mjs"
 import { defaultFabricRoot } from "@/lib/fabric/transport.mjs"
-import { grantCovers } from "@/lib/governance/authority"
+import { authorityGrantFactsFromRow, grantCovers } from "@/lib/governance/authority"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { resolveObjectAction } from "@/lib/intent/object-action-registry"
 import {
@@ -111,14 +111,13 @@ export async function POST(request: Request) {
       [STAMP_WORK_ORDER, session.user.id],
     )
     for (const row of grants.rows) {
-      const grant = {
-        ...row,
-        allowedActions: row.allowedActions ?? [],
-        blockedActions: row.blockedActions ?? [],
-        expiresAt: row.expiresAt ? new Date(row.expiresAt) : null,
-        revokedAt: row.revokedAt ? new Date(row.revokedAt) : null,
-      }
-      const coverage = grantCovers(grant as never, REQUIRED_AUTHORITY, STAMP_OPERATION)
+      // Through the canonical normaliser, not a local restatement of it. `new Date(row.expiresAt)`
+      // read here for months, and it reads a UTC wall clock as LOCAL time: on HERMES at UTC-7 a grant
+      // recorded to live two hours was honoured by this route for nine
+      // (`CONT-EXPV2-GRANT-EXPIRY-TZ-SKEW`, measured against GRANT-0019). The bound in the authority
+      // record must be the bound this route enforces.
+      const grant = authorityGrantFactsFromRow(row)
+      const coverage = grantCovers(grant, REQUIRED_AUTHORITY, STAMP_OPERATION)
       if (coverage.ok) {
         grantRef = row.ref ?? `#${row.id}`
         break

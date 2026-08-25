@@ -2,7 +2,7 @@ import { getSession } from "@/lib/session"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { pool } from "@/lib/db"
 import { assertAuthorityGranted, issueWorkContextReceipt, type WorkContextFacts } from "@/lib/governance/work-context-receipt"
-import { grantCovers } from "@/lib/governance/authority"
+import { authorityGrantFactsFromRow, grantCovers, type AuthorityGrantFacts } from "@/lib/governance/authority"
 import { measureLiveWorkContext } from "@/lib/governance/work-context-live"
 
 export const dynamic = "force-dynamic"
@@ -50,14 +50,22 @@ export async function POST(request: Request) {
 
   // The claimed authority is checked against grant rows before a receipt is issued. Taking it as a
   // claim made it decoration: a lane could write its own authority level into its own premise.
-  let grants: Array<{ scope: string | null; authorityLevel: string; status: string; expiresAt: Date | null; ref: string | null; id: number; allowedActions: string[]; blockedActions: string[]; revokeReason: string | null }> = []
+  let grants: Array<AuthorityGrantFacts & { scope: string | null }> = []
   try {
     const rows = await pool.query(
       `SELECT "id", "ref", "scope", "authorityLevel", "status", "expiresAt", "allowedActions", "blockedActions", "revokeReason"
          FROM "authority_grant" WHERE "userId" = $1`,
       [session.user.id],
     )
-    grants = rows.rows
+    // The raw rows were previously handed to `grantCovers` as-is. Two things were wrong with that and
+    // both widened authority: node-pg reads these UTC wall-clock timestamps as LOCAL time, so an
+    // expired grant still covered west of UTC (`CONT-EXPV2-GRANT-EXPIRY-TZ-SKEW`), and a `null` action
+    // array threw inside the checker rather than reading as "not narrowed". `scope` is carried
+    // alongside because `assertAuthorityGranted`, not `grantCovers`, is what checks it.
+    grants = rows.rows.map((row) => ({
+      ...authorityGrantFactsFromRow(row),
+      scope: (row.scope as string | null) ?? null,
+    }))
   } catch {
     // An unreadable grant registry is not permission. Refusing is the only safe reading.
     return Response.json(
@@ -70,7 +78,7 @@ export async function POST(request: Request) {
     facts.authorityLevel,
     [facts.workOrderRef, facts.parentOutcome],
     grants,
-    (grant, required) => grantCovers(grant as never, required as never),
+    (grant, required) => grantCovers(grant as AuthorityGrantFacts, required as never),
   )
   if (!authority.ok) {
     return Response.json(
