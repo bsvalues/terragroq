@@ -16,7 +16,30 @@
  * request for the project registry.
  */
 
-export type SummonedSurface = "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace" | "queue"
+/**
+ * Every surface the environment can summon, in one place.
+ *
+ * This was a bare union type; it is a value now because two other things need to READ the set at
+ * runtime rather than merely be checked against it: the Line route validates an incoming `summon`
+ * request, and `tests/summoned-route-redirects.test.ts` proves every superseded route still lands on
+ * a surface that exists. A union a test cannot enumerate is a union that silently loses a member.
+ */
+export const SUMMONED_SURFACES = [
+  "project",
+  "activity",
+  "evidence",
+  "work-orders",
+  "decisions",
+  "runtime-trace",
+  "queue",
+] as const
+
+export type SummonedSurface = (typeof SUMMONED_SURFACES)[number]
+
+/** Narrow untrusted input (a request body, a URL parameter) to a surface this environment can show. */
+export function isSummonedSurface(value: unknown): value is SummonedSurface {
+  return typeof value === "string" && (SUMMONED_SURFACES as readonly string[]).includes(value)
+}
 
 /**
  * An operational request — show/open/edit a file, page, route, component — is about code, and must

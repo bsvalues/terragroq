@@ -25,7 +25,7 @@ import {
   composeDecisionSuperseded,
 } from "@/lib/environment/decision-intent"
 import { isContinueIntent } from "@/lib/environment/start-work"
-import { classifyDismissal, classifySummon } from "@/lib/environment/summon"
+import { classifyDismissal, classifySummon, isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
 import {
@@ -294,7 +294,7 @@ async function loadProjects(userId: string): Promise<ProjectRow[]> {
  * reported as empty; it is never padded to look like a working dashboard.
  */
 async function summonSurface(
-  kind: "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace" | "queue",
+  kind: SummonedSurface,
   userId: string,
   spine: WorldSpine,
 ): Promise<{ say: string; surface: SurfaceDirective }> {
@@ -532,9 +532,14 @@ export async function POST(request: Request) {
   // huge ignored field would still buffer fully) -- this bounds the actual bytes.
   const parsed = await readBoundedJson(request)
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: parsed.status })
-  const body = parsed.value as { worldId?: unknown; text?: unknown }
+  const body = parsed.value as { worldId?: unknown; text?: unknown; summon?: unknown }
+  // A surface asked for by ADDRESS rather than by sentence. The superseded routes redirect here
+  // carrying `?summon=`, and the Desk forwards it as this field instead of inventing an owner turn
+  // that the owner never typed -- a transcript that puts words in their mouth is a lie, however
+  // convenient. Validated against the surface catalogue, so an unknown value is refused, not guessed.
+  const summonRequest = isSummonedSurface(body.summon) ? body.summon : null
   const text = typeof body.text === "string" ? body.text.trim() : ""
-  if (!text) return Response.json({ error: "MESSAGE_EMPTY" }, { status: 400 })
+  if (!text && !summonRequest) return Response.json({ error: "MESSAGE_EMPTY" }, { status: 400 })
   if (exceedsLineCap(text)) return Response.json({ error: "MESSAGE_TOO_LARGE" }, { status: 413 })
   // worldId is a string id, or absent for a new world -- and the Desk client spells "absent" as an
   // explicit null on the first message, so null is a valid new-world sentinel, NOT a malformed
@@ -544,6 +549,27 @@ export async function POST(request: Request) {
     return Response.json({ error: "INVALID_WORLD_ID" }, { status: 400 })
   }
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
+
+  if (summonRequest) {
+    // Arriving at a surface is not a conversational turn: nothing is recorded as said. The
+    // environment materializes what was asked for and states what it is, and the world keeps the
+    // surface so a reload does not lose it.
+    const world = requestedWorldId ? await loadWorld(userId, requestedWorldId) : null
+    if (requestedWorldId && !world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
+    const base = world ?? createWorkingWorld({ intent: `show the ${summonRequest} surface` })
+    const summoned = await summonSurface(summonRequest, userId, base.spine)
+    let updatedWorld = withTurn(base, "williamos", summoned.say)
+    updatedWorld = withSurface(updatedWorld, {
+      kind: "data",
+      subject: summoned.surface.subject,
+      because: "the owner came here to see it",
+    })
+    const worldId = requestedWorldId ?? crypto.randomUUID()
+    await saveWorld(userId, worldId, updatedWorld, requestedWorldId === null)
+    return Response.json({
+      worldId, say: summoned.say, surfaces: [summoned.surface], spine: updatedWorld.spine,
+    } satisfies LineReply)
+  }
 
   if (requestedWorldId) {
     const world = await loadWorld(userId, requestedWorldId)
@@ -642,7 +668,7 @@ export async function POST(request: Request) {
     } else if (classifySummon(text)) {
       // Projects / Activity / Evidence used to be applications you navigated to. They are summoned
       // here from governed state, and they leave when the owner says so.
-      const summoned = await summonSurface(classifySummon(text) as "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace" | "queue", userId, updated.spine)
+      const summoned = await summonSurface(classifySummon(text) as SummonedSurface, userId, updated.spine)
       say = summoned.say
       surfaces = [summoned.surface]
       updated = withSurface(updated, {
@@ -698,6 +724,35 @@ export async function POST(request: Request) {
         { kind: "trace", subject: "auth-probe", payload: steps },
       ],
       spine: world.spine,
+    } satisfies LineReply)
+  }
+
+  // A summon has to work as the FIRST thing said, not only once a world already exists.
+  //
+  // `classifySummon` was consulted on the existing-world path only, so a cold load -- the most common
+  // state there is -- answered "show me the work orders" with model prose instead of the work orders.
+  // That is not a cosmetic miss: the whole warrant for deleting /work-orders, /decisions, /trace,
+  // /activity and /projects is that the environment summons them on request, and the first request
+  // after opening WilliamOS is exactly the one that did not. Found by the takeover lane; the branch
+  // never asserted it, which is why a green suite did not catch it.
+  //
+  // Placed after the sign-in-repair branch so no sentence that used to reach that path changes
+  // meaning: this only widens what would otherwise have fallen through to conversation.
+  const firstSummon = classifySummon(text)
+  if (firstSummon) {
+    const world = createWorkingWorld({ intent: text })
+    const summoned = await summonSurface(firstSummon, userId, world.spine)
+    let opened = withTurn(world, "owner", text)
+    opened = withTurn(opened, "williamos", summoned.say)
+    opened = withSurface(opened, {
+      kind: "data",
+      subject: summoned.surface.subject,
+      because: "the owner asked to see it",
+    })
+    const worldId = crypto.randomUUID()
+    await saveWorld(userId, worldId, opened, true)
+    return Response.json({
+      worldId, say: summoned.say, surfaces: [summoned.surface], spine: opened.spine,
     } satisfies LineReply)
   }
 

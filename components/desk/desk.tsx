@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import { EMPTY_SPINE, type WorldSpine } from "@/lib/environment/working-world"
 import { isExecutionLive } from "@/lib/environment/world-execution"
+import type { SummonedSurface } from "@/lib/environment/summon"
 
 /**
  * The replacement environment's root (#762). Greenfield: this tree imports nothing from the legacy
@@ -32,7 +33,13 @@ type ProbeStep = Readonly<{
   error?: string
 }>
 
-export function Desk() {
+/**
+ * @param initialSummon A surface asked for by ADDRESS instead of by sentence. The superseded routes
+ * (/work-orders, /decisions, /trace, /activity, /projects) redirect into the environment carrying
+ * the surface they used to be, so a link that has pointed at one of them for months still shows the
+ * thing it named. Absent for an ordinary visit, which still opens on an empty Line.
+ */
+export function Desk({ initialSummon = null }: { initialSummon?: SummonedSurface | null } = {}) {
   const [worldId, setWorldId] = useState<string | null>(null)
   // The governed spine of the mounted world (phase 2). The environment renders execution FROM this,
   // so the screen moves when work moves instead of waiting for the owner to go look somewhere.
@@ -45,6 +52,56 @@ export function Desk() {
   const [failed, setFailed] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
+  // One arrival, one world. Without this, a development double-mount opens two worlds for a single
+  // click and the second one wins silently.
+  const arrived = useRef(false)
+
+  /**
+   * Materialize the surface this arrival asked for.
+   *
+   * It goes through the same Line endpoint everything else does, as an explicit `summon` rather than
+   * a synthesized sentence: the owner followed a link, they did not type anything, and writing words
+   * into their side of the transcript to make the plumbing simpler would be a lie in the one place
+   * that has to stay honest.
+   */
+  useEffect(() => {
+    if (!initialSummon || arrived.current) return
+    arrived.current = true
+    let cancelled = false
+    void (async () => {
+      setBusy(true)
+      try {
+        const response = await fetch("/api/environment/line", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ worldId: null, summon: initialSummon }),
+        })
+        if (!response.ok) throw new Error(String(response.status))
+        const reply = (await response.json()) as {
+          worldId: string
+          say: string
+          surfaces: readonly Omit<Surface, "id">[]
+          spine?: WorldSpine
+        }
+        if (cancelled) return
+        if (reply.worldId) setWorldId(reply.worldId)
+        if (reply.spine) setSpine(reply.spine)
+        setTurns((current) => [...current, { id: crypto.randomUUID(), role: "williamos", content: reply.say }])
+        setSurfaces((current) => [
+          ...current,
+          ...reply.surfaces.map((surface) => ({ ...surface, id: crypto.randomUUID() })),
+        ])
+      } catch {
+        // Arriving at a blank environment with no explanation is the worse failure: say it plainly.
+        if (!cancelled) setFailed(true)
+      } finally {
+        if (!cancelled) setBusy(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [initialSummon])
 
   useEffect(() => {
     endRef.current?.scrollIntoView?.({ block: "end" })
