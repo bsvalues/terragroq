@@ -67,6 +67,7 @@ const { buildWorkerPrompt } = await import("./worker-lanes.mjs")
 const {
   buildStaleBaselineInvalidation,
   observeSameRunAccelerator,
+  runMeasurementPrelude,
   runMeasuredAttempt,
 } = await import("./lane-measurement.mjs")
 const {
@@ -89,18 +90,7 @@ function record(verdict, evidence) {
   console.log(evidence)
 }
 
-// A blocker is named at the boundary where it occurs, never inferred from a downstream symptom.
 const policy = JSON.parse(fs.readFileSync(path.join(REPOSITORY, HERMES_KERNEL_POLICY_RELATIVE), "utf8"))
-const unmounted = unmountedPolicyVolumes(policy)
-if (unmounted.length > 0) {
-  record(
-    `BLOCKED_VOLUME_UNAVAILABLE`,
-    `The provider policy pins paths on ${unmounted.map((entry) => entry.volume).join(", ")}, which is not mounted. ` +
-      `This says nothing about the lane or the model.`,
-  )
-  process.exit(0)
-}
-
 const { execFile } = await import("node:child_process")
 const { promisify } = await import("node:util")
 const exec = promisify(execFile)
@@ -134,25 +124,37 @@ async function sampleAccelerators({ signal }) {
   })
 }
 
-if (invalidateStaleBaseline) {
-  const capabilityFile = path.join(ROOT, "state", "lane-capability.json")
-  let current
-  try { current = JSON.parse(fs.readFileSync(capabilityFile, "utf8"))?.[LANE] }
-  catch { throw new Error("LANE_CAPABILITY_INVALIDATION_STATE_WALL") }
-  const baselineSha = policy?.placement?.baselineCommit
-  const baselineWorkspace = policy?.placement?.baselineWorkspace
-  const head = (await git(["rev-parse", "HEAD"], baselineWorkspace)).stdout.trim()
-  const dirty = (await git(["status", "--porcelain"], baselineWorkspace)).stdout.trim()
-  if (head !== baselineSha || dirty !== "") throw new Error("LANE_CAPABILITY_INVALIDATION_BASELINE_WALL")
-  const missingTargetPaths = []
-  for (const target of TASK_TARGET_PATHS) {
-    try { await git(["cat-file", "-e", `${baselineSha}:${target}`], baselineWorkspace) }
-    catch { missingTargetPaths.push(target) }
-  }
-  const invalidation = buildStaleBaselineInvalidation({ currentRecord: current, baselineSha, missingTargetPaths })
-  record(invalidation.verdict, invalidation.evidence)
-  process.exit(0)
-}
+// Invalidation is a guarded evidence correction, not a measurement attempt. It must run before the
+// generic volume recorder so a missing drive cannot overwrite the settled record it was asked to
+// inspect. Any failed prerequisite throws without calling record().
+const prelude = await runMeasurementPrelude({
+  invalidateStaleBaseline,
+  invalidate: async () => {
+    const capabilityFile = path.join(ROOT, "state", "lane-capability.json")
+    let current
+    try { current = JSON.parse(fs.readFileSync(capabilityFile, "utf8"))?.[LANE] }
+    catch { throw new Error("LANE_CAPABILITY_INVALIDATION_STATE_WALL") }
+    const baselineSha = policy?.placement?.baselineCommit
+    const baselineWorkspace = policy?.placement?.baselineWorkspace
+    const head = (await git(["rev-parse", "HEAD"], baselineWorkspace)).stdout.trim()
+    const dirty = (await git(["status", "--porcelain"], baselineWorkspace)).stdout.trim()
+    if (head !== baselineSha || dirty !== "") throw new Error("LANE_CAPABILITY_INVALIDATION_BASELINE_WALL")
+    const missingTargetPaths = []
+    for (const target of TASK_TARGET_PATHS) {
+      try { await git(["cat-file", "-e", `${baselineSha}:${target}`], baselineWorkspace) }
+      catch { missingTargetPaths.push(target) }
+    }
+    const invalidation = buildStaleBaselineInvalidation({ currentRecord: current, baselineSha, missingTargetPaths })
+    record(invalidation.verdict, invalidation.evidence)
+  },
+  unmounted: unmountedPolicyVolumes(policy),
+  recordVolumeUnavailable: (unmounted) => record(
+    `BLOCKED_VOLUME_UNAVAILABLE`,
+    `The provider policy pins paths on ${unmounted.map((entry) => entry.volume).join(", ")}, which is not mounted. ` +
+      `This says nothing about the lane or the model.`,
+  ),
+})
+if (prelude.stop) process.exit(0)
 
 const workspace = path.join(ROOT, "state", "capability-measurement")
 fs.rmSync(workspace, { recursive: true, force: true })
@@ -214,9 +216,8 @@ try {
       try { await git(["add", "-A"], produced) }
       catch { throw new Error("PATCH_COLLECTION_WALL") }
       const inspected = await inspectWorkspaceChanges(produced, ALLOWED_PATHS)
-      return { inspected, patchWorkspace: produced, acceleratorEvidence }
+      return { inspected, patchWorkspace: produced, acceleratorEvidence, measurementRunId }
     },
-    measurementRunId: () => measurementRunId,
     targetAccelerator: TARGET_ACCELERATOR,
     requiredValidation: REQUIRED_VALIDATION,
     validate: (request) => adapters.validate(request),

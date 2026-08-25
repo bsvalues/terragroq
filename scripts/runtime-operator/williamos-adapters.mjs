@@ -283,6 +283,13 @@ export function newlyFailingTests(failing, baseline) {
   return (failing ?? []).filter((file) => !known.has(file))
 }
 
+/** A model verdict is allowed only for a differential test failure, never a generic gate failure. */
+export function validationFailureWall(gate, { provenModelRegression = false } = {}) {
+  const normalized = String(gate ?? "").replaceAll("-", "_").toUpperCase()
+  if (gate === "test" && provenModelRegression) return "VALIDATION_TEST_REGRESSION_WALL"
+  return `VALIDATION_${normalized}_WALL`
+}
+
 /**
  * The deterministic suite does not finish inside twenty minutes on this host.
  *
@@ -603,7 +610,24 @@ export async function dispatchHermesLocal({
   const isOwned = (candidate) => process.platform === "win32"
     ? candidate.toLowerCase() === owned.toLowerCase()
     : candidate === owned
-  if (registered.some(isOwned)) {
+  const registeredAtBase = registered.some(isOwned)
+  let registeredAtPrior = false
+  if (!registeredAtBase && path.resolve(repositoryPath) !== path.resolve(baseRepository)) {
+    const priorRegistered = (await git(["worktree", "list", "--porcelain"], { cwd: repositoryPath })).stdout
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => path.resolve(line.slice("worktree ".length).trim()))
+    registeredAtPrior = priorRegistered.some(isOwned)
+  }
+  if (!registeredAtBase && registeredAtPrior) {
+    // The former repository may still carry incomplete or ignored work. Moving its worktree keeps
+    // both content and registration recoverable while deliberately releasing the canonical path for
+    // the governed baseline repository. Never force-remove it during migration.
+    const preserved = `${owned}.prior-repository`
+    if (fs.existsSync(preserved)) throw new Error("PROVIDER_WORKSPACE_RECONCILIATION_WALL")
+    await git(["worktree", "move", owned, preserved], { cwd: repositoryPath })
+  }
+  if (registeredAtBase) {
     await git(["reset", "--hard", baseSha], { cwd: owned })
     // -x deliberately: the invoker refuses a worktree carrying node_modules, and an interrupted cycle
     // elsewhere is exactly how one arrives.
@@ -1418,6 +1442,7 @@ ${String(error?.output ?? "").slice(-12000)}
         throw new Error("VALIDATION_INSTALL_WALL")
       }
       for (const gate of requiredValidation) {
+        let provenModelRegression = false
         try {
           if (gate === "diff-check") await run("git", ["diff", "--cached", "--check"], { cwd: workspace })
           else if (gate === "lint") await run("cmd.exe", ["/c", "pnpm", "run", "lint"], { cwd: workspace, timeout: 20 * 60 * 1000 })
@@ -1445,6 +1470,7 @@ ${String(error?.output ?? "").slice(-12000)}
               const newly = newlyFailingTests(failing, baseline)
               if (newly.length > 0) {
                 failure.output = newly.length + " test file(s) fail with this patch and pass without it:\n" + newly.join("\n") + "\n\n" + String(failure?.output ?? "")
+                provenModelRegression = true
                 throw failure
               }
             }
@@ -1463,7 +1489,7 @@ ${String(error?.output ?? "").slice(-12000)}
 ${tail}
 `, "utf8")
           } catch { /* feedback is best effort; the wall is not */ }
-          throw new Error(`VALIDATION_${gate.replaceAll("-", "_").toUpperCase()}_WALL`)
+          throw new Error(validationFailureWall(gate, { provenModelRegression }))
         }
       }
     },

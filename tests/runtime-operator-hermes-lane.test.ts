@@ -431,6 +431,47 @@ describe("two workspaces that each own themselves", () => {
     expect(second).toContainEqual({ command: "git", args: ["--no-replace-objects", "clean", "-fdx"], cwd: owned })
   })
 
+  it("moves a prior-repository registration aside before the baseline repository adopts the path", async () => {
+    const { root, repositoryPath, workspace, owned, baselineWorkspace } = fixture()
+    fs.mkdirSync(owned, { recursive: true })
+    fs.writeFileSync(path.join(owned, "unfinished-work.txt"), "preserve me\n")
+    const calls: Call[] = []
+    const baseRunner = recorder(calls)
+    const runner = async (command: string, args: string[], options: { cwd?: string } = {}) => {
+      const actual = command === "git" ? gitArgs(args) : args
+      if (command === "git" && actual[0] === "worktree" && actual[1] === "list") {
+        const trees = options.cwd === repositoryPath ? [owned] : []
+        calls.push({ command, args, cwd: options.cwd })
+        return { stdout: trees.map((tree) => `worktree ${tree}\nHEAD ${BASE_SHA}\ndetached\n`).join("\n"), stderr: "" }
+      }
+      if (command === "git" && actual[0] === "worktree" && actual[1] === "move") {
+        calls.push({ command, args, cwd: options.cwd })
+        fs.renameSync(actual[2], actual[3])
+        return { stdout: "", stderr: "" }
+      }
+      return baseRunner(command, args, options)
+    }
+
+    await dispatchHermesLocal({
+      root, repositoryPath, workOrderId: "WO-0030", workspace, prompt: "bounded work",
+      workContext: WORK_CONTEXT,
+      runner,
+      newId: identities("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"),
+    })
+
+    const preserved = `${owned}.prior-repository`
+    expect(fs.readFileSync(path.join(preserved, "unfinished-work.txt"), "utf8")).toBe("preserve me\n")
+    const moved = calls.findIndex((call) => gitArgs(call.args).slice(0, 2).join(" ") === "worktree move")
+    const added = calls.findIndex((call) => gitArgs(call.args).slice(0, 2).join(" ") === "worktree add")
+    expect(calls[moved]).toEqual({
+      command: "git",
+      args: ["--no-replace-objects", "worktree", "move", owned, preserved],
+      cwd: repositoryPath,
+    })
+    expect(calls[added]?.cwd).toBe(baselineWorkspace)
+    expect(moved).toBeLessThan(added)
+  })
+
   it("refuses to adopt a directory in the allowed root that is not its own worktree", async () => {
     const { root, repositoryPath, workspace, owned } = fixture()
     fs.mkdirSync(owned, { recursive: true })

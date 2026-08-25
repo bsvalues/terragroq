@@ -47,7 +47,31 @@ export function classifyDispatchFailure(message) {
   if (/^PATCH_(?:EMPTY|COLLECTION)_WALL$/.test(text)) {
     return { verdict: "BLOCKED_PATCH_COLLECTION", aboutTheModel: false }
   }
-  return { verdict: "MEASURED_INCAPABLE", aboutTheModel: true }
+  // The only incapable conclusion currently supported is the exact differential verdict emitted
+  // after dependency installation succeeded and a test failed with the patch but passed at its base.
+  // Everything else is a defect or unknown in this apparatus, never evidence against the model.
+  if (/^VALIDATION_TEST_REGRESSION_WALL$/.test(text)) {
+    return { verdict: "MEASURED_INCAPABLE", aboutTheModel: true }
+  }
+  return { verdict: "BLOCKED_MEASUREMENT_HARNESS", aboutTheModel: false }
+}
+
+/** Route mutually exclusive startup modes before either one may write capability evidence. */
+export async function runMeasurementPrelude({
+  invalidateStaleBaseline,
+  invalidate,
+  unmounted,
+  recordVolumeUnavailable,
+}) {
+  if (invalidateStaleBaseline) {
+    await invalidate()
+    return { stop: true }
+  }
+  if (Array.isArray(unmounted) && unmounted.length > 0) {
+    await recordVolumeUnavailable(unmounted)
+    return { stop: true }
+  }
+  return { stop: false }
 }
 
 /**
@@ -166,7 +190,6 @@ export async function runMeasuredAttempt({
   attempt,
   validate,
   requiredValidation,
-  measurementRunId,
   targetAccelerator,
   recordFailure,
 }) {
@@ -178,8 +201,7 @@ export async function runMeasuredAttempt({
       || !requiredValidation.includes("test")) {
       throw new Error("VALIDATION_REQUIRED_WALL")
     }
-    const effectiveRunId = typeof measurementRunId === "function" ? measurementRunId() : measurementRunId
-    if (!hasSameRunP40Evidence(value?.acceleratorEvidence, effectiveRunId, targetAccelerator)) {
+    if (!hasSameRunP40Evidence(value?.acceleratorEvidence, value?.measurementRunId, targetAccelerator)) {
       throw new Error("ACCELERATOR_SAME_RUN_EVIDENCE_WALL")
     }
     await validate({ workspace: value.patchWorkspace, requiredValidation })

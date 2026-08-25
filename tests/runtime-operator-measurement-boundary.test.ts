@@ -5,6 +5,7 @@ import * as laneMeasurement from "../scripts/runtime-operator/lane-measurement.m
 const {
   buildStaleBaselineInvalidation,
   classifyDispatchFailure,
+  runMeasurementPrelude,
   runMeasuredAttempt,
 } = laneMeasurement
 const observeSameRunAccelerator = (laneMeasurement as Record<string, unknown>).observeSameRunAccelerator as
@@ -73,24 +74,37 @@ describe("what a failed dispatch is allowed to mean", () => {
     expect(result.aboutTheModel).toBe(false)
   })
 
-  it("does call it incapable when the provider ran and returned nothing usable", () => {
-    const result = classifyDispatchFailure("CODEX_PATCH_REQUIRED_WALL")
+  it("does call it incapable for an exact differential test regression after healthy validation setup", () => {
+    const result = classifyDispatchFailure("VALIDATION_TEST_REGRESSION_WALL")
     expect(result.verdict).toBe("MEASURED_INCAPABLE")
     expect(result.aboutTheModel).toBe(true)
   })
 
-  it("treats an unrecognised failure as a claim about the model only when nothing else explains it", () => {
-    expect(classifyDispatchFailure("SOMETHING_NOBODY_ENUMERATED").aboutTheModel).toBe(true)
-    expect(classifyDispatchFailure("").aboutTheModel).toBe(true)
-    expect(classifyDispatchFailure(undefined).verdict).toBe("MEASURED_INCAPABLE")
+  it("never turns an unknown or unexpected exception into model evidence", () => {
+    for (const message of ["SOMETHING_NOBODY_ENUMERATED", "", undefined]) {
+      expect(classifyDispatchFailure(message)).toEqual({
+        verdict: "BLOCKED_MEASUREMENT_HARNESS",
+        aboutTheModel: false,
+      })
+    }
   })
 
-  it("does not mistake a wall that merely mentions a boundary for one", () => {
-    // Matching must be anchored: a model that echoes "PROCESS_WALL" inside its own output must not be
-    // able to talk its way out of an incapable verdict.
-    const result = classifyDispatchFailure("the model wrote about PROCESS_WALL:pwsh in a comment")
-    expect(result.verdict).toBe("MEASURED_INCAPABLE")
-    expect(result.aboutTheModel).toBe(true)
+  it("permits only the exact whitelisted incapable wall to blame the model", () => {
+    expect(classifyDispatchFailure("VALIDATION_TEST_REGRESSION_WALL")).toEqual({
+      verdict: "MEASURED_INCAPABLE",
+      aboutTheModel: true,
+    })
+    for (const message of [
+      "VALIDATION_TEST_WALL",
+      "VALIDATION_TEST_REGRESSION_WALL: detail",
+      "the model wrote about VALIDATION_TEST_REGRESSION_WALL in a comment",
+      "ReferenceError: measurementRunId is not defined",
+    ]) {
+      expect(classifyDispatchFailure(message)).toEqual({
+        verdict: "BLOCKED_MEASUREMENT_HARNESS",
+        aboutTheModel: false,
+      })
+    }
   })
 })
 
@@ -111,6 +125,21 @@ describe("the measurement attempt has one total failure boundary", () => {
       verdict: "BLOCKED_PATCH_COLLECTION",
       aboutTheModel: false,
       message: "PATCH_EMPTY_WALL",
+    }])
+  })
+
+  it("records an unexpected harness exception without blaming the model", async () => {
+    const recorded: Array<{ verdict: string; aboutTheModel: boolean; message: string }> = []
+    const result = await runMeasuredAttempt({
+      attempt: async () => { throw new ReferenceError("measurementRunId is not defined") },
+      recordFailure: (failure) => { recorded.push(failure) },
+    })
+
+    expect(result).toEqual({ ok: false })
+    expect(recorded).toEqual([{
+      verdict: "BLOCKED_MEASUREMENT_HARNESS",
+      aboutTheModel: false,
+      message: "measurementRunId is not defined",
     }])
   })
 
@@ -145,8 +174,8 @@ describe("the measurement attempt has one total failure boundary", () => {
         inspected: inspectedPatch,
         patchWorkspace: "D:\\HermesWorkspaces\\owned",
         acceleratorEvidence: sameRunP40,
+        measurementRunId: "measurement-run-1",
       }),
-      measurementRunId: "measurement-run-1",
       targetAccelerator: targetP40,
       requiredValidation: ["diff-check", "test"],
       recordFailure: (failure) => { recorded.push(failure) },
@@ -164,7 +193,6 @@ describe("the measurement attempt has one total failure boundary", () => {
     const recorded: Array<{ verdict: string; aboutTheModel: boolean; message: string }> = []
     const result = await runMeasuredAttempt({
       attempt: async () => ({ inspected: inspectedPatch, patchWorkspace: "D:\\HermesWorkspaces\\owned" }),
-      measurementRunId: "measurement-run-1",
       targetAccelerator: targetP40,
       requiredValidation: ["diff-check", "test"],
       validate: async () => undefined,
@@ -195,8 +223,8 @@ describe("the measurement attempt has one total failure boundary", () => {
           inspected: inspectedPatch,
           patchWorkspace: "D:\\HermesWorkspaces\\owned",
           acceleratorEvidence,
+          measurementRunId: "measurement-run-1",
         }),
-        measurementRunId: "measurement-run-1",
         targetAccelerator: targetP40,
         requiredValidation: ["diff-check", "test"],
         validate: async () => undefined,
@@ -215,9 +243,9 @@ describe("the measurement attempt has one total failure boundary", () => {
           inspected: inspectedPatch,
           patchWorkspace: "D:\\HermesWorkspaces\\owned",
           acceleratorEvidence: sameRunP40,
+          measurementRunId: "measurement-run-1",
         }
       },
-      measurementRunId: "measurement-run-1",
       targetAccelerator: targetP40,
       requiredValidation: ["diff-check", "test"],
       validate: async ({ workspace, requiredValidation }) => {
@@ -249,8 +277,8 @@ describe("the measurement attempt has one total failure boundary", () => {
           inspected: inspectedPatch,
           patchWorkspace: "D:\\HermesWorkspaces\\owned",
           acceleratorEvidence: sameRunP40,
+          measurementRunId: "measurement-run-1",
         }),
-        measurementRunId: "measurement-run-1",
         targetAccelerator: targetP40,
         requiredValidation,
         validate: async () => undefined,
@@ -258,6 +286,22 @@ describe("the measurement attempt has one total failure boundary", () => {
       })
       expect(result).toEqual({ ok: false })
     }
+  })
+})
+
+describe("measurement mode routing", () => {
+  it("never reaches the generic volume recorder during guarded invalidation", async () => {
+    const calls: string[] = []
+    await expect(runMeasurementPrelude({
+      invalidateStaleBaseline: true,
+      invalidate: async () => {
+        calls.push("invalidate")
+        throw new Error("LANE_CAPABILITY_INVALIDATION_BASELINE_WALL")
+      },
+      unmounted: [{ volume: "D:\\" }],
+      recordVolumeUnavailable: () => { calls.push("volume-record") },
+    })).rejects.toThrow("LANE_CAPABILITY_INVALIDATION_BASELINE_WALL")
+    expect(calls).toEqual(["invalidate"])
   })
 })
 
