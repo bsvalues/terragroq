@@ -90,7 +90,7 @@ export type ObjectActionDescriptor = Readonly<{
 const NAVIGATION_DEFAULTS = { kind: "navigate", mutating: false, requiresAuthority: false, implementation: null } as const
 
 /**
- * Projects and Activity are gone from here because they stopped being PLACES.
+ * Projects and Activity are gone from the discoverable modes because they stopped being PLACES.
  *
  * The primary experience replacement deleted /projects and /activity and made both surfaces the
  * environment summons on request. Leaving them as navigation modes would have kept teaching the next
@@ -104,6 +104,16 @@ const NAVIGATION_DEFAULTS = { kind: "navigate", mutating: false, requiresAuthori
 const modes: readonly ObjectActionDescriptor[] = [
   { ...NAVIGATION_DEFAULTS, id: "mode.home", subject: "workbench", label: "Home", href: "/", keywords: ["home", "overview"] },
   { ...NAVIGATION_DEFAULTS, id: "mode.system", subject: "workbench", label: "System", href: "/system", keywords: ["system", "status", "health"] },
+]
+
+// The legacy shell still mounts UniversalIntent. Its old navigation phrases must remain routing
+// contracts until that shell is gone, otherwise "Open Projects" and "Open Activity" miss routing
+// and fall through to objective admission. These descriptors are intentionally excluded from the
+// discoverable navigationDescriptors below: they preserve old addresses that redirect into summoned
+// surfaces; they do not reintroduce Projects or Activity as product modes.
+const compatibilitySurfaceAddresses: readonly ObjectActionDescriptor[] = [
+  { ...NAVIGATION_DEFAULTS, id: "compatibility.projects", subject: "workbench", label: "Projects", href: "/projects", keywords: ["projects"] },
+  { ...NAVIGATION_DEFAULTS, id: "compatibility.activity", subject: "workbench", label: "Activity", href: "/activity", keywords: ["activity"] },
 ]
 
 const capabilityIds: Readonly<Record<string, string>> = {
@@ -335,6 +345,12 @@ export const objectActionRegistry: readonly ObjectActionDescriptor[] = [
 
 /** The descriptors that are navigation targets, which is what the workbench facade still needs. */
 export const navigationDescriptors: readonly ObjectActionDescriptor[] = [...modes, ...capabilities]
+
+/** Routing-only compatibility addresses; unlike navigationDescriptors, these are not UI modes. */
+export const navigationRoutingDescriptors: readonly ObjectActionDescriptor[] = [
+  ...navigationDescriptors,
+  ...compatibilitySurfaceAddresses,
+]
 
 /**
  * The `control-center/` disposition, recorded as #995 requires: FENCE.

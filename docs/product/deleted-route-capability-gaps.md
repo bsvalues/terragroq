@@ -9,8 +9,10 @@ WRITES that lost their surface. This one names READS and behaviours that lost th
 same question — *what could the deleted page DO?* — has one answer per capability instead of a commit
 message somebody has to remember.
 
-Everything here follows the same rule: **the capability is alive in code and has no door in the
-product.** Nothing listed is broken, unsafe, or deleted. What is gone is the way to reach it.
+Most entries follow the same rule: **the capability is alive in code and has no door in the
+product.** Section 6 records mixed survival: both decision-queue models and all three panels were
+deleted, while the correction taxonomy/model survives as a read-only, doorless description. In both
+cases, what is gone is a product door; the ledger does not claim the deleted models still exist.
 
 Four findings from the same review were *not* typed — they were fixed on this branch, with
 regression tests, because they were outright broken behaviour rather than missing behaviour: the
@@ -162,6 +164,30 @@ guards would go with them."* A doorless capability is a gap. A deleted one is a 
 callers (`app/actions/goals.ts`, `app/actions/vault.ts`, `app/api/objective/route.ts`,
 `app/api/governance/workroom-authority/route.ts`); the rest are doorless and listed here for the same
 reason.
+
+## 6. `/decisions`'s pending queues and correction inspection
+
+| what | where |
+| --- | --- |
+| capability | review pending owner decisions, inspect blocked-decision evidence needs, and inspect the correction-candidate taxonomy |
+| deleted | owner-decision queue model + `OwnerDecisionQueuePanel`; blocked-decision queue projection + `BlockedDecisionQueuePanel`; `DecisionCorrectionCapturePanel` |
+| survives | only `components/dogfood/decision-correction-capture.ts`, a read-only model (`readOnlySurface: true`, `writesMemory: false`, `backgroundExtraction: false`) with no product caller |
+| door now | **none** |
+| continuation | **Continuation: #1012** — bounded Environment surfaces, after #1011; not W1 #1015 and not smuggled into stacked PR #1018 |
+
+The earlier decision audit counted the six writes wired by `DecisionsView`; it did not count the
+three sibling surfaces mounted above that view. As a result, `docs/product/decision-register-write-gap.md`
+correctly typed accept/reject, authority and evidence writes, but did not name the lost
+owner-decision queue, blocked-decision queue, or decision-correction inspection capability.
+
+This is a real capability loss, not a reason to resurrect `/decisions` as a page. The replacement
+belongs inside the Environment as summoned/contextual surfaces. The two deleted queue projections
+must be rebuilt from the governed records that remain; the correction model is only an inspection
+taxonomy and must not be represented as an input or write path. #1015 is narrowly the editable
+workspace and #1016 is the agent workspace; the
+umbrella acceptance issue #1012 is therefore the named successor until it dispatches a bounded child.
+Closing this row requires that child and an operable Environment door, not merely restoring the old
+panels or deleting this paragraph.
 
 ---
 

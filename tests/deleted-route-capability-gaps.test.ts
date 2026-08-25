@@ -63,8 +63,35 @@ describe("the ledger names every gap it claims to name", () => {
     "components/desk/desk.tsx",
     "app/actions/work-orders.ts",
     "lib/workbench/outcome-execution-authorization.ts",
+    "OwnerDecisionQueuePanel",
+    "BlockedDecisionQueuePanel",
+    "DecisionCorrectionCapturePanel",
   ])("names %s", (subject) => {
     expect(ledger.includes(subject), `${subject} is enforced here but absent from ${LEDGER}`).toBe(true)
+  })
+
+  it("routes the deleted decision queue and correction surfaces to the named successor", () => {
+    expect(ledger).toContain("Continuation: #1012")
+    expect(ledger).toContain("owner-decision queue")
+    expect(ledger).toContain("blocked-decision queue")
+    expect(ledger).toContain("decision-correction inspection")
+  })
+
+  it("enforces the three distinct survival states instead of calling them one live capability", () => {
+    for (const deleted of [
+      "components/decisions/owner-decision-queue.ts",
+      "components/decisions/blocked-decision-queue.ts",
+      "components/decisions/owner-decision-queue-panel.tsx",
+      "components/decisions/blocked-decision-queue-panel.tsx",
+      "components/dogfood/decision-correction-capture-panel.tsx",
+    ]) expect(fs.existsSync(path.join(ROOT, deleted)), `${deleted} unexpectedly exists`).toBe(false)
+
+    const correctionModel = "components/dogfood/decision-correction-capture.ts"
+    const correction = read(correctionModel)
+    expect(correction).toContain("readOnlySurface: true")
+    expect(correction).toContain("writesMemory: false")
+    expect(correction).toContain("backgroundExtraction: false")
+    expect(callers("getDecisionCorrectionCaptureSurface", correctionModel)).toEqual([])
   })
 })
 

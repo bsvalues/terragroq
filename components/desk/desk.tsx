@@ -52,9 +52,14 @@ export function Desk({ initialSummon = null }: { initialSummon?: SummonedSurface
   const [failed, setFailed] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
-  // One arrival, one world. Without this, a development double-mount opens two worlds for a single
-  // click and the second one wins silently.
-  const arrived = useRef(false)
+  // One arrival, one request. Strict Mode replays the effect, so both passes attach to this same
+  // request while cleanup prevents the discarded pass from materializing its result.
+  const arrival = useRef<Promise<{
+    worldId: string
+    say: string
+    surfaces: readonly Omit<Surface, "id">[]
+    spine?: WorldSpine
+  }> | null>(null)
 
   /**
    * Materialize the surface this arrival asked for.
@@ -65,24 +70,25 @@ export function Desk({ initialSummon = null }: { initialSummon?: SummonedSurface
    * that has to stay honest.
    */
   useEffect(() => {
-    if (!initialSummon || arrived.current) return
-    arrived.current = true
+    if (!initialSummon) return
     let cancelled = false
-    void (async () => {
-      setBusy(true)
-      try {
-        const response = await fetch("/api/environment/line", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ worldId: null, summon: initialSummon }),
-        })
-        if (!response.ok) throw new Error(String(response.status))
-        const reply = (await response.json()) as {
-          worldId: string
-          say: string
-          surfaces: readonly Omit<Surface, "id">[]
-          spine?: WorldSpine
-        }
+    setBusy(true)
+    const request = (arrival.current ??= (async () => {
+      const response = await fetch("/api/environment/line", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worldId: null, summon: initialSummon }),
+      })
+      if (!response.ok) throw new Error(String(response.status))
+      return (await response.json()) as {
+        worldId: string
+        say: string
+        surfaces: readonly Omit<Surface, "id">[]
+        spine?: WorldSpine
+      }
+    })())
+    void request
+      .then((reply) => {
         if (cancelled) return
         if (reply.worldId) setWorldId(reply.worldId)
         if (reply.spine) setSpine(reply.spine)
@@ -91,13 +97,14 @@ export function Desk({ initialSummon = null }: { initialSummon?: SummonedSurface
           ...current,
           ...reply.surfaces.map((surface) => ({ ...surface, id: crypto.randomUUID() })),
         ])
-      } catch {
+      })
+      .catch(() => {
         // Arriving at a blank environment with no explanation is the worse failure: say it plainly.
         if (!cancelled) setFailed(true)
-      } finally {
+      })
+      .finally(() => {
         if (!cancelled) setBusy(false)
-      }
-    })()
+      })
     return () => {
       cancelled = true
     }

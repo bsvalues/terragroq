@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm"
+import { and, desc, eq } from "drizzle-orm"
 
 import { db } from "@/lib/db"
 import { evidenceRecord, outcomeQueueItem, workOrder } from "@/lib/db/schema"
@@ -47,14 +47,16 @@ export async function GET(request: Request) {
   if (!outcome) return Response.json({ error: "OUTCOME_ABSENT" }, { status: 404 })
 
   let workOrderStatus: string | null = null
+  let workOrderLane: string | null = null
   let evidence: WorldEvidence[] = []
   if (outcome.activeWorkOrderId !== null) {
     const [bound] = await db
-      .select({ status: workOrder.status })
+      .select({ status: workOrder.status, lane: workOrder.lane })
       .from(workOrder)
       .where(and(eq(workOrder.userId, userId), eq(workOrder.id, outcome.activeWorkOrderId)))
       .limit(1)
     workOrderStatus = bound?.status ?? null
+    workOrderLane = bound?.lane ?? null
 
     const records = await db
       .select({
@@ -64,8 +66,9 @@ export async function GET(request: Request) {
       })
       .from(evidenceRecord)
       .where(and(eq(evidenceRecord.userId, userId), eq(evidenceRecord.workOrderId, outcome.activeWorkOrderId)))
+      .orderBy(desc(evidenceRecord.createdAt))
       .limit(50)
-    evidence = records.map((record) => ({
+    evidence = [...records].reverse().map((record) => ({
       kind: "runtime",
       detail: record.notes ?? "",
       result: record.result ?? null,
@@ -79,7 +82,7 @@ export async function GET(request: Request) {
     workOrderStatus,
     // The executing lane is only reported when the runtime actually recorded one; this read does not
     // infer it from "something is running, so presumably the usual lane".
-    lane: null,
+    lane: workOrderLane,
     evidence,
     observedAt: new Date().toISOString(),
   }

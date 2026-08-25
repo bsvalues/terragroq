@@ -33,6 +33,8 @@ import {
   EMPTY_SPINE,
   createWorkingWorld,
   validateWorkingWorld,
+  withBoundOutcome,
+  withExecution,
   withSurface,
   withTurn,
   type WorkingWorldSnapshot,
@@ -590,10 +592,17 @@ export async function POST(request: Request) {
       // The transition: start the EXACT retained selection — no re-resolve, no re-read. The
       // authorization is an atomic revalidate-and-act; a stale selection fails closed. Clear the
       // retention on a real start so a second "continue" can't re-fire it.
-      const outcome = await startRetainedWork(world.pendingStartWork)
+      const retained = world.pendingStartWork
+      const outcome = await startRetainedWork(retained)
       say = outcome.say
       surfaces = [{ kind: "trace", subject: "start-work", payload: outcome.trace }]
-      updated = { ...updated, pendingStartWork: outcome.authorized ? null : world.pendingStartWork }
+      if (outcome.authorized) {
+        updated = withExecution(withBoundOutcome(updated, retained), {
+          execution: "authorized",
+          at: new Date().toISOString(),
+        })
+      }
+      updated = { ...updated, pendingStartWork: outcome.authorized ? null : retained }
     } else if (isContinueIntent(text)) {
       say = "There's no selected work to continue yet. Ask what we're doing on a project first, and I'll name the next startable outcome — then \"continue\" starts that exact one."
     } else if (FIX_INTENT.test(text) && LOGIN_WORK.test(world.intent)) {

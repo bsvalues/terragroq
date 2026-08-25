@@ -31,6 +31,8 @@ describe("universal intent router", () => {
     ["Open Evidence", "/audit"],
     ["Open Knowledge", "/memory"],
     ["Open Raw Runtime", "/runtime?detail=technical"],
+    ["Open Projects", "/projects"],
+    ["Open Activity", "/activity"],
   ] as const)("routes known cockpit navigation %s", (input, href) => {
     expect(routeUniversalIntent(input)).toMatchObject({
       state: "routed",
