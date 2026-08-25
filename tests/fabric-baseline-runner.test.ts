@@ -1,4 +1,6 @@
 import crypto from "node:crypto"
+import { tmpdir } from "node:os"
+import path from "node:path"
 
 import { describe, expect, it } from "vitest"
 
@@ -15,6 +17,34 @@ import {
 } from "../lib/fabric/run-baseline.mjs"
 
 const NODE = { transport: "ssh", host: "10.0.0.1", user: "svc" }
+
+/**
+ * A fabric root that deliberately does not exist, so neither the gate's own audit nor the broker's
+ * can reach the real ledger from a unit test. Previously the default root was used, which on a
+ * developer machine that HAS a fabric directory meant the suite appended to the lab's live audit log.
+ */
+const NO_LEDGER = path.join(tmpdir(), "fabric-baseline-runner-no-ledger")
+
+/**
+ * Undo the broker's POSIX transport.
+ *
+ * The gate now reaches every node through `brokeredExec`, which carries a POSIX body as base64 --
+ * `echo '<b64>' | base64 -d | bash` -- because literal bodies were being torn apart by cmd quoting
+ * before ssh ever saw them. The fake node therefore receives the encoded form, and decoding it here
+ * is what keeps this double faithful to the real transport instead of pretending the wrapper is not
+ * there. A command that is not wrapped is returned unchanged.
+ */
+function decodePosix(command: string): string {
+  const encoded = /^echo '([A-Za-z0-9+/=]+)' \| base64 -d \| bash$/.exec(command)?.[1]
+  return encoded ? Buffer.from(encoded, "base64").toString("utf8") : command
+}
+
+/** Every node in these tests is reachable by the name the test uses; policy is proved elsewhere. */
+const registryOf = (name: string, node: Record<string, unknown>) => ({ [name]: node })
+
+/** The options every unit test needs: a real registry entry, and a ledger that is not the lab's. */
+const runOpts = (name: string, node: Record<string, unknown>, exec: unknown) =>
+  ({ exec, registry: registryOf(name, node), fabricRoot: NO_LEDGER }) as never
 
 /**
  * Alter a hex string so it is guaranteed to differ from the original.
@@ -41,7 +71,7 @@ function honestNode(overrides: { corruptPull?: boolean; wrongPushHash?: boolean;
   return {
     calls,
     exec: async (_file: string, args: string[]) => {
-      const command = args[args.length - 1]
+      const command = decodePosix(args[args.length - 1])
       calls.push(command)
       if (overrides.failAt && command.includes(overrides.failAt)) {
         throw Object.assign(new Error("boom"), { stderr: `ssh: ${overrides.failAt} refused` })
@@ -138,14 +168,14 @@ describe("registry parsing", () => {
 describe("runNodeBaseline", () => {
   it("passes every step against an honest node", async () => {
     const node = honestNode()
-    const results = await runNodeBaseline("n1", NODE, { exec: node.exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, node.exec))
     expect(results.map((r) => r.step)).toEqual(BASELINE_STEP_IDS)
     expect(nodePassed(results)).toBe(true)
   })
 
   it("stops after reach fails, because every later step would be noise", async () => {
     const node = honestNode({ failAt: "hostname" })
-    const results = await runNodeBaseline("n1", NODE, { exec: node.exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, node.exec))
     expect(results).toHaveLength(1)
     expect(results[0]).toMatchObject({ step: "reach", ok: false })
     expect(results[0].detail).toContain("refused")
@@ -153,7 +183,7 @@ describe("runNodeBaseline", () => {
 
   it("keeps probing after a middle step fails, so one outage does not hide another", async () => {
     const node = honestNode({ failAt: "docker run -d" })
-    const results = await runNodeBaseline("n1", NODE, { exec: node.exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, node.exec))
     expect(results.find((r) => r.step === "start")?.ok).toBe(false)
     expect(results.find((r) => r.step === "push")?.ok).toBe(true)
     expect(nodePassed(results)).toBe(false)
@@ -161,7 +191,7 @@ describe("runNodeBaseline", () => {
 
   it("fails push when the node's hash disagrees, not merely when the write errors", async () => {
     const node = honestNode({ wrongPushHash: true })
-    const results = await runNodeBaseline("n1", NODE, { exec: node.exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, node.exec))
     const push = results.find((r) => r.step === "push")
     expect(push?.ok).toBe(false)
     expect(push?.detail).toContain("hash mismatch")
@@ -169,7 +199,7 @@ describe("runNodeBaseline", () => {
 
   it("fails pull when the round trip alters a byte", async () => {
     const node = honestNode({ corruptPull: true })
-    const results = await runNodeBaseline("n1", NODE, { exec: node.exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, node.exec))
     const pull = results.find((r) => r.step === "pull")
     expect(pull?.ok).toBe(false)
     expect(pull?.detail).toContain("round trip altered the file")
@@ -178,8 +208,8 @@ describe("runNodeBaseline", () => {
   it("sends a fresh payload each run, so a stale file cannot pass the transfer steps", async () => {
     const first = honestNode()
     const second = honestNode()
-    await runNodeBaseline("n1", NODE, { exec: first.exec })
-    await runNodeBaseline("n1", NODE, { exec: second.exec })
+    await runNodeBaseline("n1", NODE, runOpts("n1", NODE, first.exec))
+    await runNodeBaseline("n1", NODE, runOpts("n1", NODE, second.exec))
     const payloadOf = (calls: string[]) => /printf %s '([0-9a-f]+)'/.exec(calls.find((c) => c.startsWith("printf")) ?? "")?.[1]
     expect(payloadOf(first.calls)).not.toBe(payloadOf(second.calls))
   })
@@ -189,6 +219,7 @@ describe("command dialect follows the node's OS, not its transport", () => {
   // OMEN is a Windows node reached over ssh. The gate assumed ssh meant Linux and sent it
   // `docker ps -q | wc -l`, so a healthy cockpit was reported as failing at "containers".
   const winNode = { transport: "ssh", host: "10.0.0.2", user: "svc", os: "windows" }
+  const LINUX_NODE = { ...winNode, os: "linux" }
 
   const decode = (command: string) => {
     const encoded = /-EncodedCommand (\S+)/.exec(command)?.[1] ?? ""
@@ -201,36 +232,42 @@ describe("command dialect follows the node's OS, not its transport", () => {
       calls.push(args[args.length - 1])
       return { stdout: "OMEN\n" }
     }
-    await runNodeBaseline("omen", winNode, { exec })
+    await runNodeBaseline("omen", winNode, runOpts("omen", winNode, exec))
     expect(calls[0]).toContain("powershell -NoProfile -EncodedCommand")
     expect(decode(calls[0])).toBe("$env:COMPUTERNAME")
     expect(decode(calls[1])).toContain("Measure-Object")
     expect(calls.join(" ")).not.toContain("wc -l")
   })
 
-  it("still sends POSIX to a linux node over ssh", async () => {
+  it("still sends POSIX to a linux node over ssh, now carried by the broker's base64 transport", async () => {
     const calls: string[] = []
     const exec = async (_file: string, args: string[]) => {
       calls.push(args[args.length - 1])
       return { stdout: "node-1\n" }
     }
-    await runNodeBaseline("atlas", { ...winNode, os: "linux" }, { exec })
-    expect(calls[0]).toBe("hostname")
-    expect(calls[1]).toContain("wc -l")
+    await runNodeBaseline("atlas", LINUX_NODE, runOpts("atlas", LINUX_NODE, exec))
+
+    // Both halves matter and they are different claims. The dialect is still POSIX -- that is the
+    // OMEN regression this suite exists to prevent. And the body now travels base64-wrapped, because
+    // the gate reaches the node through `brokeredExec` rather than building its own ssh arguments.
+    // Asserting only the decoded form would let the transport revert to the raw path unnoticed.
+    expect(calls[0]).toMatch(/^echo '[A-Za-z0-9+/=]+' \| base64 -d \| bash$/)
+    expect(decodePosix(calls[0])).toBe("hostname")
+    expect(decodePosix(calls[1])).toContain("wc -l")
   })
 })
 
 describe("summarise", () => {
   it("counts a node as passing only when all six steps passed", async () => {
-    const good = await runNodeBaseline("good", NODE, { exec: honestNode().exec })
-    const bad = await runNodeBaseline("bad", NODE, { exec: honestNode({ failAt: "docker run -d" }).exec })
+    const good = await runNodeBaseline("good", NODE, runOpts("good", NODE, honestNode().exec))
+    const bad = await runNodeBaseline("bad", NODE, runOpts("bad", NODE, honestNode({ failAt: "docker run -d" }).exec))
     const summary = summarise({ ranAt: "now", results: [...good, ...bad] })
     expect(summary).toMatchObject({ passedCount: 1, total: 2 })
     expect(summary.nodes.find((n) => n.node === "bad")?.firstFailure).toMatchObject({ step: "start" })
   })
 
   it("reports the earliest failing step, not the last one recorded", async () => {
-    const results = await runNodeBaseline("n1", NODE, { exec: honestNode({ failAt: "docker" }).exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, honestNode({ failAt: "docker" }).exec))
     const summary = summarise({ ranAt: "now", results })
     expect(summary.nodes[0].firstFailure).toMatchObject({ step: "containers" })
   })
