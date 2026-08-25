@@ -65,3 +65,26 @@ inside the harness, and it is not the exit code the script returns under -File.
 
 Same class as the F: literal, one layer up: a value read from the wrong place, believed because it
 was measured rather than because it was measured correctly.
+
+--- AND ONE MORE, IN THE REMEDIATION ITSELF ------------------------------------------------------
+
+Rewriting the pull request body to withdraw the discharge, this lane truncated it at the string
+"## Summary by Sourcery" without checking how many of those there were. There were two, and the
+`## Work context` section -- with the WORK_CONTEXT_RECEIPT block inside it -- sat between them. It
+was deleted.
+
+  work context receipt (#831)   fail   9s
+  FAILED_CONTEXT_NOT_PROVEN: the pull request declares no WORK_CONTEXT_RECEIPT block
+
+Recorded rather than quietly restored, for three reasons. It is a governance artifact removed from
+a pull request by the lane that authored it, which is the shape of §10's "evidence deletion" whether
+or not it was meant. It is the second time in one session this lane has taken a measurement -- here,
+"the body ends at the Sourcery summary" -- and acted on it without a second read. And the only
+reason it was caught in seven seconds is that #831 exists and is a required check, which is the
+argument for that check making itself.
+
+Restored byte-for-byte from the pull request's own edit history via the GraphQL `userContentEdits`
+field, not regenerated: re-issuing a receipt would have produced a new token for a work context that
+had not changed, and would have replaced a recovery with a fabrication. The restored block still
+reads `parentOutcome: "... discharge CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F ..."`, which is what the
+work order said when it was issued. That is left alone. What changed is the outcome, not the order.
