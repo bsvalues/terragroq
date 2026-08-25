@@ -1,5 +1,158 @@
 Set-StrictMode -Version Latest
 
+# ---------------------------------------------------------------------------------------------
+# RESOLUTION, AND WHY IT LIVES HERE
+#
+# Everything below this banner answers one question -- "where is the thing I am about to write to
+# or talk to?" -- and every one of them REFUSES rather than falling back. That is the whole lesson
+# of 2026-08-24/25: `crossnode-sync.ps1` wrote `F:\lab-backups\...` and talked to `bs@192.168.88.5`,
+# and by 2026-08-25 neither of those named the thing it was written for. `F:` had become `G:` when
+# the NVMe was re-lettered, and ATLAS's DHCP lease had moved to `192.168.88.8` while `192.168.88.5`
+# was left to whatever picked it up next.
+#
+# A written-down location does not fail when the thing moves. It silently starts naming something
+# else -- and `New-Item -Force` would have built a whole archive tree on a USB stick, reported
+# success, and protected nothing. That is the exact failure mode the 2026-08-18 backup recovery
+# existed to end, so these resolve from live truth and throw when live truth cannot answer.
+#
+# They are in the library, not in the script, so their refusals can be exercised against temporary
+# directories on any machine. A guard with no negative test is a guard nobody has seen refuse.
+# ---------------------------------------------------------------------------------------------
+
+function Resolve-ArchiveRoot {
+    <#
+      The archive destination is resolved by VOLUME LABEL, never by drive letter -- the same repair
+      `backup-volumes.ps1` took on 2026-08-24. A letter is an assignment the OS hands out; a label
+      travels with the disk. `HERMES_NVME` is the 931 GB NVMe that already holds every backup this
+      script has ever written, under both of its letters.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        # Injected only so the two refusals below can be tested without a disk that matches. The
+        # default is the live truth this exists to read.
+        [scriptblock]$VolumeProvider = { Get-Volume -ErrorAction Stop }
+    )
+
+    $candidates = @(& $VolumeProvider | Where-Object { $_.FileSystemLabel -eq $Label -and $_.DriveLetter })
+    if ($candidates.Count -eq 0) {
+        throw "ARCHIVE_VOLUME_ABSENT no mounted volume is labelled '$Label'. The archive disk is not attached, or its label changed. Nothing was copied in either direction."
+    }
+    if ($candidates.Count -gt 1) {
+        $letters = (@($candidates | ForEach-Object { $_.DriveLetter }) -join ', ')
+        throw "ARCHIVE_VOLUME_AMBIGUOUS $($candidates.Count) volumes are labelled '$Label' ($letters). Refusing to guess which one holds the archive."
+    }
+    "$($candidates[0].DriveLetter):"
+}
+
+function Resolve-FabricNode {
+    <#
+      A node's address comes out of the fabric registry, which is the one place in this lab that is
+      allowed to know it. `sync-models-to-forge.ps1` reads the same file for the same reason after
+      #1006; that script does not dot-source this library, so the duplication stands for now and is
+      recorded as a finding -- unifying it is a second lane's reservation, not this one's.
+
+      Node-general rather than atlas-only because `lab-health.ps1` needs ATLAS and AEGIS from the
+      same file, and a health check that resolves one node and hard-codes the other would still be
+      carrying the fault this repair exists to remove.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Fabric,
+        [Parameter(Mandatory = $true)][string]$Node
+    )
+
+    $nodes = Join-Path $Fabric 'nodes.json'
+    if (-not (Test-Path -LiteralPath $nodes -PathType Leaf)) {
+        throw "FABRIC_REGISTRY_UNREADABLE $nodes does not exist, so $Node's address cannot be resolved. Refusing rather than falling back to a written-down address that may now name another machine."
+    }
+    # Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes a BOM that `ConvertFrom-Json`
+    # rejects outright, and this registry is maintained by PowerShell tooling. A reader that only
+    # works on the files it wrote itself is not a reader.
+    $text = Get-Content -LiteralPath $nodes -Raw
+    if ($text.Length -gt 0 -and [int][char]$text[0] -eq 0xFEFF) { $text = $text.Substring(1) }
+    $registry = $null
+    try {
+        $registry = $text | ConvertFrom-Json
+    } catch {
+        throw "FABRIC_REGISTRY_UNREADABLE $nodes is not parseable JSON, so $Node's address cannot be resolved."
+    }
+    # Read through PSObject.Properties rather than dotting straight in. `Set-StrictMode -Version
+    # Latest` is on for every caller of this library, and under it a missing property raises a
+    # PropertyNotFound error instead of returning $null -- which would replace the typed refusal
+    # below with an opaque StrictMode failure at exactly the moment an operator needs to be told
+    # that the registry is incomplete.
+    $entry = $null
+    if ($registry) { $entry = $registry.PSObject.Properties[$Node] }
+    $value = $null
+    if ($entry) { $value = $entry.Value }
+    $hostProperty = $null
+    $userProperty = $null
+    if ($value) {
+        $hostProperty = $value.PSObject.Properties['host']
+        $userProperty = $value.PSObject.Properties['user']
+    }
+    $nodeHost = if ($hostProperty) { [string]$hostProperty.Value } else { '' }
+    $nodeUser = if ($userProperty) { [string]$userProperty.Value } else { '' }
+    if ([string]::IsNullOrWhiteSpace($nodeHost) -or [string]::IsNullOrWhiteSpace($nodeUser)) {
+        throw "FABRIC_REGISTRY_INCOMPLETE $nodes carries no $Node entry with both host and user, so $Node cannot be addressed. Refusing rather than guessing."
+    }
+    [pscustomobject][ordered]@{
+        Node     = $Node
+        User     = $nodeUser
+        Host     = $nodeHost
+        Endpoint = "$nodeUser@$nodeHost"
+    }
+}
+
+function Resolve-AtlasEndpoint {
+    # The cross-node sync only ever talks to ATLAS, so it takes the endpoint string directly.
+    param([Parameter(Mandatory = $true)][string]$Fabric)
+
+    (Resolve-FabricNode -Fabric $Fabric -Node 'atlas').Endpoint
+}
+
+function Resolve-FabricSshIdentity {
+    <#
+      WHY THE TRANSPORT MOVED TOO, and this is not scope creep but the other half of the same fault.
+      This script used to run bare `ssh -o BatchMode=yes bs@192.168.88.5`, leaning on the calling
+      user's `~/.ssh`. That `known_hosts` pins `192.168.88.5` and has never seen `192.168.88.8`, so
+      resolving the new address while keeping the old transport only trades one red task for
+      another: measured on HERMES 2026-08-25, `ssh bs@192.168.88.8` under the default identity exits
+      255 with `Host key verification failed`.
+
+      The fabric identity is the one that actually knows this lab: its `known_hosts` carries the
+      pinned ed25519 key that was proven byte-identical across ATLAS's move, and its key is what
+      `sync-models-to-forge.ps1` already uses. Resolving `where` from the registry and then
+      authenticating against a store that has never heard of that host would be a resolution that
+      cannot connect.
+
+      `StrictHostKeyChecking=yes` stays on deliberately. If the registry is ever wrong, the right
+      outcome is a refused connection, not a backup handed to a stranger.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Fabric)
+
+    $key = Join-Path $Fabric 'keys\williamos-fabric'
+    $known = Join-Path $Fabric 'known_hosts'
+    if (-not (Test-Path -LiteralPath $key -PathType Leaf)) {
+        throw "FABRIC_IDENTITY_UNREADABLE $key does not exist, so no authenticated transport to ATLAS can be built. Refusing rather than falling back to whatever identity the calling account happens to hold."
+    }
+    if (-not (Test-Path -LiteralPath $known -PathType Leaf)) {
+        throw "FABRIC_IDENTITY_UNREADABLE $known does not exist, so ATLAS's host key cannot be verified. Refusing rather than accepting an unverified host key for a backup transfer."
+    }
+    [pscustomobject][ordered]@{
+        KeyPath        = $key
+        KnownHostsPath = $known
+        # Every ssh and scp invocation in the sync prepends exactly these, so no call site can
+        # quietly use a different identity from the one that was resolved and refused on.
+        SshOptions     = @(
+            '-i', $key,
+            '-o', "UserKnownHostsFile=$known",
+            '-o', 'StrictHostKeyChecking=yes',
+            '-o', 'BatchMode=yes',
+            '-o', 'ConnectTimeout=30'
+        )
+    }
+}
+
 function Assert-SafeArchiveName {
     param([Parameter(Mandatory = $true)][string]$Name)
 
