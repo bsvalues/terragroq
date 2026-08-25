@@ -6,6 +6,7 @@ import { workOrder } from "@/lib/db/schema"
 import { getSession, getUserId } from "@/lib/session"
 import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
+import { WORKROOM_ALLOWED_FILES, WORKROOM_FORBIDDEN_FILES } from "@/lib/governance/workroom-file-scope"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -39,10 +40,10 @@ const WORKROOM_ENVELOPE = {
   lane: "ui",
   agent: "claude",
   authorityLevel: "A2_WRITE_OWN",
-  allowedFiles: ["app/", "components/", "lib/", "tests/", "scripts/"].join("\n"),
+  allowedFiles: WORKROOM_ALLOWED_FILES.join("\n"),
   // Approval readiness requires these to be non-empty, and they are the real boundary: the workroom
   // must never reach TLS material or environment secrets.
-  forbiddenFiles: ["C:/ProgramData/WilliamOS/tls/", ".env", ".env.local", "migrations/"].join("\n"),
+  forbiddenFiles: WORKROOM_FORBIDDEN_FILES.join("\n"),
   validators: ["pnpm exec vitest run", "pnpm exec next build"].join("\n"),
   acceptanceCriteria: [
     "Every mutation carries a valid work-context receipt",

@@ -27,7 +27,7 @@ afterEach(() => {
 })
 
 const ROOT = process.cwd()
-const DESK = fs.readFileSync(path.join(ROOT, "components/desk/desk.tsx"), "utf8")
+const SURFACE_RENDERER = fs.readFileSync(path.join(ROOT, "components/workspace-shell/inspector-surface.tsx"), "utf8")
 
 /** Arrive by ADDRESS, the way a superseded route's redirect does, with the Line stubbed. */
 async function arrive(summon: (typeof SUMMONED_SURFACES)[number], surface: unknown) {
@@ -47,7 +47,7 @@ describe("every summonable surface can actually be drawn", () => {
     // Structural, so the NEXT surface added to the catalogue cannot repeat this. A member that only
     // exists in the union reaches the source/tests `<pre>` and stringifies whatever it was given.
     expect(
-      DESK.includes(`surface.kind === "${kind}"`),
+      SURFACE_RENDERER.includes(`surface.kind === "${kind}"`),
       `"${kind}" is summonable but SurfaceView has no branch for it, so it falls through to the ` +
         `<pre> fallback and renders as stringified objects. Add the branch, not the union member.`,
     ).toBe(true)

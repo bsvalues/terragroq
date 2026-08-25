@@ -98,15 +98,15 @@ describe("the environment owns one world, and one input", () => {
   it("has exactly one conversational input, not a chat product beside the work", () => {
     // A separate Chat concept is what made the Line feel like a bolt-on tab: two states, two
     // surfaces, neither authoritative. The Line is an input device for the environment.
-    const desk = source("components/desk/desk.tsx")
-    expect(desk).toMatch(/exactly one conversational input/i)
+    const shell = code("components/workspace-shell/workspace-shell.tsx")
+    expect(shell.match(/<input\b/g)).toHaveLength(1)
+    expect(shell).not.toContain("<textarea")
   })
 
   it("renders surfaces the environment summons rather than fixed panels", () => {
-    const desk = code("components/desk/desk.tsx")
-    expect(desk).toContain("surfaces")
-    // No permanently-nailed explorer or inspector inside the primary environment.
-    expect(desk).not.toContain("ProjectExplorer")
-    expect(desk).not.toContain("Inspector")
+    const shell = code("components/workspace-shell/workspace-shell.tsx")
+    expect(shell).toContain("materializeSurfaces")
+    expect(shell).toContain("InspectorSurfaceView")
+    expect(shell).not.toContain("ProjectExplorer")
   })
 })
