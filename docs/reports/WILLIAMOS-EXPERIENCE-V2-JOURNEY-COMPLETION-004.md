@@ -301,9 +301,21 @@ are in place and were proven by a stop/start cycle; HERMES was not rebooted.
 ## Coordination
 
 `lib/db/schema.ts` is also touched by open PR **#927** (`codex/environment-frontend-takeover-921`).
-This lane's change there is confined to the `utcWallTimestamp` definition at the top of the file, so a
-textual conflict is unlikely, but the two should be sequenced deliberately rather than raced. No other
-path this lane touched appears in any open PR.
+No other path this lane touched appears in any open PR.
+
+This was checked rather than waved at, because the work-context gate treats a declared collision as
+"the lane must not proceed" and that is too strong a verdict to reach on a guess:
+
+| | region |
+| --- | --- |
+| this lane | lines 19–48, the `utcWallTimestamp` definition |
+| **#927** | `@@ -381,6 +381,30 @@` (adds `environmentWorld`) and `@@ -961/-976 @@` (adds a `kind` column to `deviceCredential`) |
+
+The two are **line-disjoint**, so this is file-level adjacency rather than an overlapping reservation,
+and it was not declared as a collision on the receipt for that reason. #927 has been open since
+2026-08-20, was last updated 2026-08-21, and already reports `mergeable: CONFLICTING` against `main`
+independently of anything here. The merge coordinator should still sequence the two deliberately
+rather than race them.
 
 ## Tests
 
