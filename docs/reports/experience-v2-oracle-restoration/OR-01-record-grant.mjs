@@ -14,9 +14,15 @@
  * general-purpose grant minter is precisely the tool that must not exist in a repository whose whole
  * authority story is that approval is not authority.
  *
- * IT ALSO REFUSES TO RUN TWICE. Before creating anything it applies the route's own lookup. If a
- * grant already covers, it reports that grant and exits without creating a second one. Re-running an
- * evidence script should not quietly double the lab's standing permissions.
+ * IT ALSO REFUSES TO RUN TWICE, AND THE TEST FOR THAT IS HISTORY, NOT COVERAGE. Before creating
+ * anything it applies the route's own lookup and asks two different questions of the result: does a
+ * grant currently COVER this operation, and does a grant of this exact shape EXIST AT ALL under this
+ * scope for this actor. The second question is the load-bearing one. Coverage is what revocation
+ * removes, so a guard written on `grantCovers` alone stops refusing the moment the grant is revoked
+ * -- which is precisely when re-running would be worst, because it would mint a fresh ACTIVE A3
+ * grant to replace one the record says was deliberately closed. One owner decision authorised one
+ * issuance. Once that issuance exists, in any status, this file will not make another, and there is
+ * no override flag; re-authorising is a new owner decision, not a re-run.
  */
 import { register } from "node:module"
 import { pathToFileURL } from "node:url"
@@ -169,8 +175,13 @@ const lookup = async () => {
     const coverage = grantCovers(grant, AUTHORITY_LEVEL, OPERATION)
     return {
       id: row.id, ref: row.ref, status: row.status, authorityLevel: row.authorityLevel,
+      allowedActions: grant.allowedActions,
       expiresAt: row.expiresAt, revokedAt: row.revokedAt,
       covers: coverage.ok, reason: coverage.reason,
+      // Whether this row IS the issuance this file exists to make -- asked of the row's own shape
+      // rather than of its current effect, because effect is exactly what revocation removes.
+      issuedByThisTool: row.authorityLevel === AUTHORITY_LEVEL
+        && JSON.stringify(grant.allowedActions) === JSON.stringify(ALLOWED_ACTIONS),
     }
   })
 }
@@ -181,8 +192,23 @@ const countGrants = async () =>
 try {
   report.before = { totalGrants: await countGrants(), routeLookup: await lookup() }
   const already = report.before.routeLookup.find((v) => v.covers)
+  // The authorised issuance, whatever became of it since. Asked BEFORE coverage, because the two
+  // questions differ the moment the grant is revoked and only this one stays answered.
+  const issued = report.before.routeLookup.find((v) => v.issuedByThisTool)
 
-  if (already) {
+  if (issued && !already) {
+    // Revoked, expired, or otherwise no longer covering. `grantCovers` says false, and the earlier
+    // version of this guard asked only `grantCovers` -- so a re-run with `--record` fell straight
+    // through and minted a second active A3 grant, which is the one thing this file must not do.
+    // One owner decision authorised one issuance; it has been made. Re-authorising is a new owner
+    // decision, and it is deliberately not reachable by running this again.
+    report.result = "ALREADY_ISSUED_HISTORICALLY"
+    report.detail = issued.ref + " is the issuance the owner's 2026-08-25 decision authorised"
+      + " (status " + issued.status + ", covers=" + issued.covers + "). It exists, so this decision"
+      + " has been spent and nothing was created. Re-authorising " + AUTHORITY_LEVEL + " for "
+      + OPERATION + " under " + SCOPE + " is a NEW owner decision, not a re-run of this file; there"
+      + " is no flag here that overrides this, on purpose."
+  } else if (already) {
     report.result = "ALREADY_GRANTED"
     report.detail = already.ref + " already covers " + AUTHORITY_LEVEL + " for " + OPERATION
       + " under " + SCOPE + "; nothing was created."
