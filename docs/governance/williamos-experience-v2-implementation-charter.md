@@ -271,7 +271,11 @@ policy, execution, reservation, fencing, receipts, and post-state verification. 
 mutation. No bypass around existing governance.
 
 The first implementation journey needs only **one** safe governed mutation. Choose the safest existing
-canonical action that proves the architecture. Do not invent an unsafe action to satisfy the demo.
+canonical action that satisfies the acceptance contract. If a bounded, recorded search proves none
+qualifies, implement the smallest new canonical action by extending the existing Object+Action Registry
+and routing it through the existing authority, execution/fencing, evidence, and verified post-state
+paths. Do not generalize an unsuitable legacy action merely to preserve its ID, and do not create a
+parallel action, authority, or execution mechanism. Do not invent an unsafe action to satisfy the demo.
 
 ## Global object + action registry
 
@@ -597,3 +601,65 @@ Experience V2 succeeds when the owner can truthfully say:
 
 The Phase 0 reconciliation and collision map produced under this charter is
 [`williamos-experience-v2-phase0-collision-map.md`](williamos-experience-v2-phase0-collision-map.md).
+
+## Amendments
+
+This charter is amended only through the governed process its canonicity rule requires: an explicit
+recorded owner decision, applied to this file, with the replaced text and the triggering evidence
+both named. One current disposition per artifact — an amended sentence is **replaced**, not annotated
+in place and left to be read two ways.
+
+### AMENDMENT-001 — the first-action rule
+
+Section: **Direct operation**. Date: `2026-08-24`. Status: `ACTIVE`.
+
+Approved by explicit owner decision, 2026-08-24, delivered to the coordinator lane and applied here
+by the amendment-recorder lane. This record does not mint authority; it transcribes a decision that
+was made elsewhere.
+
+**What changed.** The sentence *"Choose the safest existing canonical action that proves the
+architecture."* was replaced by the approved text now standing in **Direct operation**. The following
+sentence, *"Do not invent an unsafe action to satisfy the demo."*, was **retained unchanged**: the
+owner decision did not withdraw it, and since the amendment now permits building an action, that
+prohibition binds harder than it did before, not less. Nothing else in the charter was edited.
+
+**Triggering evidence.** The bounded first-action search run for Gate 2 and recorded in
+`williamos-experience-v2-gate2-first-action-search-record.md`, delivered on PR #996. Against the
+stated denominators, re-measured at `053a33bd`, no existing canonical action qualified. The strongest
+candidate, `LOOM_OPERATIONS.service.restart`, was disqualified on two **intrinsic** grounds: it
+cannot select a `SystemObject` target, and it cannot verify post-state. Bounded packet: #995.
+Program and build sequence: #987, step 2.
+
+**Owner-stated semantics, recorded beside the amendment.** These govern how the amended sentence is
+read. They constrain it; they do not extend it.
+
+- reuse remains mandatory-first, not optional;
+- absence must be proven by a bounded recorded search;
+- a new action is permitted only when that proof exists;
+- "new action" means a new canonical verb/adapter in the existing machinery, not a new control plane;
+- post-state verification is part of the action contract, not a later convenience;
+- legacy primitives (e.g. `service.restart`) must not be distorted simply to claim reuse;
+- this amendment grants NO new authority category by itself.
+
+**What this clears, and what it does not.** It clears the typed state `CHARTER_AMENDMENT_REQUIRED`
+that #996's search record raised against Gate 2 acceptance invariants 9, 12 and 13. It clears an
+**authority block only**. It does not accept those invariants, does not build the action, and does
+not grant any merge, execution, reservation, or authority mode. The action itself is typed as a
+follow-on and is not this amendment's work.
+
+**Citation drift — read this before trusting a `charter:<line>` citation.** This amendment replaces
+two source lines with six. Every line citation into this file **below** the **Direct operation**
+section therefore shifts by **+4**. Citations recorded before 2026-08-24 point at the pre-amendment
+file:
+
+| Cited as | Now at | Content |
+| --- | --- | --- |
+| `charter:273-274` | `charter:273-278` | the first-action rule (this amendment) |
+| `charter:276-288` | `charter:280-292` | global object + action registry |
+| `charter:285-287` | `charter:289-291` | context ranks, context never retargets |
+| `charter:450` | `charter:454` | gate table, Gate 2 row |
+| `charter:464-470` | `charter:468-474` | bounded child packet as required predecessor |
+| `charter:488-489` | `charter:492-493` | the first journey's governed adjustment and post-state |
+
+Companion record, carrying the typed continuations this amendment leaves:
+[`williamos-experience-v2-first-action-amendment-record.md`](williamos-experience-v2-first-action-amendment-record.md).
