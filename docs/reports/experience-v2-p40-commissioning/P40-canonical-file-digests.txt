@@ -1,0 +1,43 @@
+#997 HERMES P40 COMMISSIONING — canonical file digest verification
+=================================================================
+
+Every canonical file was digest-matched on BOTH ends before anything ran, against merged `main`
+053a33bdb3bb1db57db6d85fff96163b68f11b22. A probe whose bytes are not the merged bytes proves
+nothing about the merged system, which is why this check precedes the invocation rather than
+accompanying it.
+
+LOCAL (OMEN worktree, wb/997-hermes-p40-commissioning @ 053a33bd), `sha256sum`:
+
+  3fdbb256a7c0267c069cfbdfb29aaccde457d5b9d2631e6e15c147264ab88170  lib/fabric/audit.mjs
+  b9f5138b173962d1297e11c0f4d11fd1629747ebceb96deab1946c38a440061e  lib/fabric/broker.mjs
+  a000aa3c861625f387e4bbeb3a695cf552a26377cc8c9c04e899d49445e70d6c  lib/fabric/run-baseline.mjs
+  fe07b7b7d310bc77b5b5ad4c742add6af6452646b6fdc98ef9a0e4fef44a4658  scripts/execution-fabric/probe-windows.ps1
+  aaa80dda35ce895048013d3c956924e90219fff10e8085a1846edf246c752816  scripts/execution-fabric/assemble-registry.mjs
+  47d5c143a461f0160178cac8ba949a2814c760929ab8fb14717fd1c1a765498b  scripts/execution-fabric/assemble-registry-core.mjs
+  b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21  scripts/execution-fabric/canonical-json.mjs
+  7472d1cb72547c18fd4656b83081d606c270938a64b7b34389adba22ead921d5  config/execution-fabric/registry.seed.json
+  19131b2d1158b52e61a672889b9cfdd64ca2fd914a9ff3dc7633911d1b00b54c  config/execution-fabric/registry.schema.json
+  3c2a37a13d4bd229854f52fee5a79eccbe27716406cb935966d993a1fb08cbf2  config/execution-fabric/node-identity-contract.json
+
+REMOTE (HERMES, C:\Users\bs\p40-commissioning\), `Get-FileHash -Algorithm SHA256`:
+
+  3fdbb256a7c0267c069cfbdfb29aaccde457d5b9d2631e6e15c147264ab88170  lib\fabric\audit.mjs
+  b9f5138b173962d1297e11c0f4d11fd1629747ebceb96deab1946c38a440061e  lib\fabric\broker.mjs
+  a000aa3c861625f387e4bbeb3a695cf552a26377cc8c9c04e899d49445e70d6c  lib\fabric\run-baseline.mjs
+  fe07b7b7d310bc77b5b5ad4c742add6af6452646b6fdc98ef9a0e4fef44a4658  scripts\execution-fabric\probe-windows.ps1
+  aaa80dda35ce895048013d3c956924e90219fff10e8085a1846edf246c752816  scripts\execution-fabric\assemble-registry.mjs
+  47d5c143a461f0160178cac8ba949a2814c760929ab8fb14717fd1c1a765498b  scripts\execution-fabric\assemble-registry-core.mjs
+  b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21  scripts\execution-fabric\canonical-json.mjs
+  7472d1cb72547c18fd4656b83081d606c270938a64b7b34389adba22ead921d5  config\execution-fabric\registry.seed.json
+  19131b2d1158b52e61a672889b9cfdd64ca2fd914a9ff3dc7633911d1b00b54c  config\execution-fabric\registry.schema.json
+  3c2a37a13d4bd229854f52fee5a79eccbe27716406cb935966d993a1fb08cbf2  config\execution-fabric\node-identity-contract.json
+
+RESULT: 10 of 10 identical. `probe-windows.ps1` fe07b7b7... is the same byte sequence #998's Gate 1b
+settlement digest-verified, so the two probes are comparable observations of the same code.
+
+OBSERVED, NOT SHIPPED — the owning layer's pre-change state, retained so the rollback in the report
+names a real file rather than a description of one:
+
+  2ffc6ccddb650f215a5328a0a2464863bc5ab2bf8ef4067d663d04bc86542c7e  C:\HermesLab\hermes\docker-compose.yml
+
+That file was READ and never written. This lane performed no mutation.
