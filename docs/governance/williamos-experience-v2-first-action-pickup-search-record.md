@@ -367,24 +367,57 @@ CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION
   ownerDecisionRequired:  false.
 
 CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT
-  type:                   WAITING_RESERVATION
-  condition:              997-migration-complete
+  type:                   BLOCKED_DEPENDENCY          [retyped 2026-08-24 from WAITING_RESERVATION]
+  reason:                 AUTHORITY_UNREADABLE
+  condition:              ATLAS_REACHABLE
   continuation:           automatic
-  subject:                the live-hardware settlement of node.stamp-identity: one real brokered
-                          write against a canonical node, with the ledger line, the read-back and
-                          the post-state verdict retained as evidence.
-  why not now:            HERMES is under the #997 P40 migration lane's active reservation. A lane
-                          that does not hold a node does not probe it, and does not mutate it, and
-                          the fact that this action is small is not a reason to make an exception
-                          for it.
-  deliverable now:        the implementation and its deterministic tests, which is what #995
-                          permits to merge. #995 also forbids declaring Gate 2 ACCEPTED on them,
-                          and this lane does not.
-  blocks:                 #995 acceptance invariant 13's TERMINAL leg only. It does not block the
-                          governed-execution leg, invariant 9, or invariant 12, all of which are
-                          delivered and tested here.
-  ownerDecisionRequired:  false. The owner is not asked to power on, release, report on, or
-                          declare a node.
+  settlement attempted:   yes, for real, against live hardware. See
+                          docs/reports/WILLIAMOS-EXPERIENCE-V2-RUNTIME-SETTLEMENT-001.md.
+  released condition:     997-migration-complete IS satisfied. PR #1003 landed the native Ollama
+                          service and released HERMES; HERMES answered every read this lane made.
+                          The reservation is no longer what blocks this.
+  what blocks it now:     the authority grant registry is a table in the WilliamOS Postgres, and
+                          that Postgres lives on ATLAS. ATLAS answers nothing -- every port behaves
+                          exactly as an unassigned address does, measured against a live-host
+                          control. So `grantCovers` was never reached: the route's own catch turns
+                          an unreadable registry into AUTHORITY_UNREADABLE, and an unreadable grant
+                          registry is not permission.
+  what was NOT done:      no grant was self-minted, no session was fabricated, no local grant
+                          registry was stood up, and the node was never contacted. The stamp file
+                          does not exist on HERMES and the fabric ledger did not gain a line.
+  what WAS settled:       every leg the route reaches before authority, and every leg that can be
+                          proven without contacting the node: canonical object graph, registry
+                          selection, broker record, the exact planned bytes and their digest, and
+                          -- the thing this settlement was specifically told to verify -- WHICH
+                          ledger guard actually holds. Both do, on this path, at this base:
+                          `requireLedger` before contact, and the broker's `requireAudit`, which
+                          refused with the injected exec spy at zero calls. #1003's finding that
+                          `--require-audit` was inert applies to broker.mjs at b9f5138b, not here.
+  blocks:                 #995 acceptance invariant 13's TERMINAL leg only, unchanged. Invariants 9
+                          and 12 and the governed-execution leg remain delivered and tested.
+  owner:                  the next lane that finds ATLAS answering.
+  ownerDecisionRequired:  false. The owner is not asked to power on, report on, or declare a node,
+                          and is not asked to record a grant. When ATLAS answers, whether a
+                          qualifying grant exists is a question this lane's driver answers in one
+                          run without an owner in the loop.
+
+CONT-EXPV2-AUTHORITY-REGISTRY-SINGLE-POINT
+  type:                   TYPED_FINDING
+  raised by:              CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT, 2026-08-24
+  finding:                every governed mutation in this program checks authority against one
+                          Postgres on one node, and that node is neither the node being governed
+                          nor the node the control plane runs on. With ATLAS down, NOTHING in
+                          WilliamOS can be authorised -- not on HERMES, which is up and healthy,
+                          and not on OMEN. The sovereignty clause in AGENTS.md says WilliamOS must
+                          stay useful when optional external providers are unavailable; ATLAS is
+                          not an optional external provider, but the availability shape is the
+                          same one, and this is the first lane to hit it from the authority side.
+  not claimed:            this is NOT a claim that the grant check should degrade, cache, or fail
+                          open. It must not. The finding is that the lab has one authority oracle
+                          with no availability story, and that is a design question a gate owns.
+  blocks:                 nothing today. Recorded so the next lane blocked this way finds it
+                          already named.
+  ownerDecisionRequired:  false.
 
 CONT-EXPV2-ACCELERATOR-FIRST-ACTION
   type:                   BLOCKED_DEPENDENCY
