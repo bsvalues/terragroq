@@ -320,9 +320,15 @@ describe("Invariant 5 - the registry grants no authority", () => {
 
 describe("Invariant 6 - navigation that ships today still works", () => {
   it("keeps every descriptor resolvable", () => {
-    // Four modes and twelve supporting capabilities, unchanged in content by the move.
-    expect(workbenchActionRegistry).toHaveLength(16)
-    expect(workbenchActionRegistry.filter((a) => a.kind === "mode")).toHaveLength(4)
+    // Two modes and twelve supporting capabilities.
+    //
+    // This read "four modes ... unchanged in content by the move" when Gate 2 converged the
+    // catalogues, and that was right then. The primary experience replacement then deleted
+    // /projects and /activity: they are surfaces the environment summons, not places to navigate
+    // to, so they are no longer navigation descriptors. The capabilities are untouched -- including
+    // the two whose pages were deleted, which keep their addresses through the redirects.
+    expect(workbenchActionRegistry).toHaveLength(14)
+    expect(workbenchActionRegistry.filter((a) => a.kind === "mode")).toHaveLength(2)
     for (const action of workbenchActionRegistry) {
       expect(action.href).not.toBe("")
       expect(findWorkbenchActions(action.label).map((a) => a.id)).toContain(action.id)
