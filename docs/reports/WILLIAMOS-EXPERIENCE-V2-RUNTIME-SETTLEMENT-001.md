@@ -527,14 +527,22 @@ can exercise while the far side is down, which is the state this lab is in.
 `MODEL_STORE_DISAGREEMENT` is unchanged by this remediation and its refusal is recorded above under
 *Verification, on HERMES, with negative controls*.
 
-### The stale copy on HERMES: there was none, and that was checked
+### The stale copy on HERMES: there was none, and the one that exists now is stated
 
 The continuation this remediation answers requires that the `ATLAS_REACHABLE` run can only ever
 execute fixed bytes. The retained driver's own working copy —
 `C:\HermesLab\expv2-runtime-settlement`, the worktree `RS-01` records this settlement running from —
-**no longer exists on HERMES**. Checked rather than assumed: a recursive search of `C:\HermesLab`,
-`D:\` and `G:\` for `*settle-stamp-identity.mjs` returns nothing. The repository copy is therefore
-the only copy that exists anywhere, and it is the fixed one.
+**no longer existed on HERMES**. Checked rather than assumed: a recursive search of `C:\HermesLab`,
+`D:\` and `G:\` for `*settle-stamp-identity.mjs` returned nothing. So there was no unfixed copy for a
+successor to pick up, and no old bytes to overwrite.
+
+**One copy exists there now, and it is this remediation's own.** The section below re-created that
+path as a git worktree at `f76e880a` in order to run the fixed driver where it is retained. It is a
+**reproduction checkout, not a deployment**: it holds this branch, not `main`, and after this PR
+merges it is one squash behind by construction. The next lane on `ATLAS_REACHABLE` should refresh or
+recreate it from merged `main` before running — the blob is recorded in `RS-09` precisely so that
+"is this the merged driver?" is a check rather than an assumption, and
+`git -C C:\HermesLab\terragroq-s2 worktree remove C:\HermesLab\expv2-runtime-settlement` removes it.
 
 ### The fixed driver, run on HERMES from its retained location
 
