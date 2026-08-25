@@ -1,0 +1,14 @@
+{
+  "invocation": "brokeredExec",
+  "broker": "lib/fabric/broker.mjs",
+  "node": "hermes",
+  "action": "mig-fetch-poll",
+  "requireAudit": false,
+  "command": "$ErrorActionPreference = 'Continue'\n$name = 'WilliamOS-MIG-997-FetchOllama'\n$t = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue\n$i = Get-ScheduledTaskInfo -TaskName $name -ErrorAction SilentlyContinue\nWrite-Output \"state=$($t.State) last_result=$($i.LastTaskResult) last_run=$($i.LastRunTime)\"\nWrite-Output '--- FETCH-LOG ---'\nGet-Content 'D:\\HermesServices\\ollama\\_install\\fetch.log' -ErrorAction SilentlyContinue\nWrite-Output '--- STAGE-DIR ---'\nGet-ChildItem 'D:\\HermesServices\\ollama\\_install' -ErrorAction SilentlyContinue | Select-Object Name, Length, LastWriteTimeUtc | Format-Table -AutoSize | Out-String -Width 120\nWrite-Output '--- DIST ---'\nWrite-Output \"dist_exists=$(Test-Path 'D:\\HermesServices\\ollama\\dist')\"\nGet-ChildItem 'D:\\HermesServices\\ollama\\dist' -ErrorAction SilentlyContinue | Select-Object Name, Mode, Length | Format-Table -AutoSize | Out-String -Width 120\nWrite-Output \"d_free_gb=$([math]::Round((Get-Volume -DriveLetter D).SizeRemaining / 1GB, 2))\"\nWrite-Output '--- RC ---'\n",
+  "startedAt": "2026-08-25T02:33:56.286Z",
+  "finishedAt": "2026-08-25T02:33:58.325Z",
+  "durationMs": 2038,
+  "ok": true,
+  "stdout": "state=Ready last_result=0 last_run=08/24/2026 19:33:33\r\n--- FETCH-LOG ---\r\n2026-08-25T02:33:05.0657882Z start\r\n2026-08-25T02:33:05.5410241Z tag=v0.32.15\r\n2026-08-25T02:33:05.9598084Z checksums=sha256sum.txt\r\n2026-08-25T02:33:05.9638088Z downloading https://github.com/ollama/ollama/releases/download/v0.32.15/ollama-windows-amd64.zip expect=1460302386\r\n2026-08-25T02:33:21.8459996Z curl_rc=0 size=1460302386\r\n2026-08-25T02:33:29.9548511Z sha256=a1d11d46a944f9c7521f5e9a3a5db51cd3365401da627d96c204698fc6914ff9\r\n2026-08-25T02:33:49.2460857Z extracted\r\n2026-08-25T02:33:49.3827683Z zip_removed\r\n2026-08-25T02:33:49.3867697Z done\r\n--- STAGE-DIR ---\r\n\r\nName              Length LastWriteTimeUtc    \r\n----              ------ ----------------    \r\nchecksums.txt       1472 8/25/2026 2:33:05 AM\r\ndownloaded.sha256     66 8/25/2026 2:33:29 AM\r\nfetch-ollama.ps1    1851 8/25/2026 2:33:03 AM\r\nfetch.log            553 8/25/2026 2:33:49 AM\r\ntag.txt               10 8/25/2026 2:33:05 AM\r\n\r\n\r\n\r\n--- DIST ---\r\ndist_exists=True\r\n\r\nName       Mode   Length  \r\n----       ----   ------  \r\nlib        d-----         \r\nollama.exe -a---- 36575624\r\n\r\n\r\n\r\nd_free_gb=56.25\r\n--- RC ---\r\n",
+  "stderr": null
+}

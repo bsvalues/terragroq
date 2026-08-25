@@ -1,0 +1,35 @@
+2026-08-25T03:45:29.3745184Z SOAK START
+2026-08-25T03:45:29.4526410Z COOLDOWN begin temp=77
+2026-08-25T03:45:29.5151175Z cooldown temp=77
+2026-08-25T03:45:49.5677820Z cooldown temp=77
+2026-08-25T03:46:09.6238920Z cooldown temp=78
+2026-08-25T03:46:29.6813262Z cooldown temp=78
+2026-08-25T03:46:49.7311863Z cooldown temp=78
+2026-08-25T03:47:09.8103972Z cooldown temp=79
+2026-08-25T03:47:29.8750219Z cooldown temp=79
+2026-08-25T03:47:49.9293179Z cooldown temp=79
+2026-08-25T03:48:09.9903399Z cooldown temp=80
+2026-08-25T03:48:30.0554946Z cooldown temp=80
+2026-08-25T03:48:50.1064054Z cooldown temp=80
+2026-08-25T03:49:10.1633534Z cooldown temp=79
+2026-08-25T03:49:30.2139777Z cooldown temp=77
+2026-08-25T03:49:50.2749637Z cooldown temp=75
+2026-08-25T03:50:10.3363030Z cooldown temp=73
+2026-08-25T03:50:30.4053733Z cooldown temp=72
+2026-08-25T03:50:50.4583925Z cooldown temp=71
+2026-08-25T03:51:10.5102341Z cooldown temp=69
+2026-08-25T03:51:30.5678105Z COOLDOWN end baseline=68
+2026-08-25T03:51:30.5838121Z telemetry pid=12536
+2026-08-25T03:51:43.1319143Z iter=1 t_start=68 t_end=74 wall_ms=12426 decode_tok=320 decode_tok_s=35.21
+2026-08-25T03:51:52.4139241Z iter=2 t_start=74 t_end=76 wall_ms=9145 decode_tok=320 decode_tok_s=35.11
+2026-08-25T03:52:01.7068443Z iter=3 t_start=76 t_end=79 wall_ms=9173 decode_tok=320 decode_tok_s=35.01
+2026-08-25T03:52:11.0286457Z iter=4 t_start=78 t_end=81 wall_ms=9199 decode_tok=320 decode_tok_s=34.9
+2026-08-25T03:52:11.0336468Z    window_samples=4 rise_over_window=7C
+2026-08-25T03:52:20.3651128Z iter=5 t_start=81 t_end=83 wall_ms=9221 decode_tok=320 decode_tok_s=34.84
+2026-08-25T03:52:20.3651128Z    window_samples=5 rise_over_window=9C
+2026-08-25T03:52:29.7033617Z iter=6 t_start=83 t_end=85 wall_ms=9227 decode_tok=320 decode_tok_s=34.8
+2026-08-25T03:52:29.7073821Z    window_samples=6 rise_over_window=11C
+2026-08-25T03:52:29.7616182Z ABORT thermal 85C >= 85C at iter 7
+2026-08-25T03:52:29.8095957Z SOAK END iters=7 final_temp=85 aborted=True plateau=False baseline=68
+2026-08-25T03:52:29.8215999Z telemetry stopped
+2026-08-25T03:52:29.8255762Z DONE
