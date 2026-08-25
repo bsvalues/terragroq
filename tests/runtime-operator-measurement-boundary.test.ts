@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest"
 
-import {
+import * as laneMeasurement from "../scripts/runtime-operator/lane-measurement.mjs"
+
+const {
   buildStaleBaselineInvalidation,
   classifyDispatchFailure,
   runMeasuredAttempt,
-} from "../scripts/runtime-operator/lane-measurement.mjs"
+} = laneMeasurement
+const observeSameRunAccelerator = (laneMeasurement as Record<string, unknown>).observeSameRunAccelerator as
+  | ((options: Record<string, unknown>) => Promise<{ value: unknown; acceleratorEvidence: unknown }>)
+  | undefined
 
 /**
  * The first capability measurement of `hermes-local` nearly recorded two false verdicts, and each was
@@ -107,6 +112,268 @@ describe("the measurement attempt has one total failure boundary", () => {
       aboutTheModel: false,
       message: "PATCH_EMPTY_WALL",
     }])
+  })
+
+  const inspectedPatch = {
+    changedPaths: ["scripts/runtime-operator/worker-lanes.mjs", "tests/runtime-operator-lane-verdict.test.ts"],
+    patchBytes: 1_024,
+  }
+  const sameRunP40 = {
+    runId: "measurement-run-1",
+    startedAt: "2026-08-25T20:00:00.000Z",
+    sampleStartedAt: "2026-08-25T20:00:09.000Z",
+    sampleCompletedAt: "2026-08-25T20:00:10.000Z",
+    completedAt: "2026-08-25T20:00:30.000Z",
+    node: "HERMES",
+    uuid: "GPU-P40-1",
+    model: "Tesla P40",
+    vramUsedMiB: 3_200,
+    utilizationPercent: 67,
+    processName: "D:\\HermesServices\\ollama\\v0.9.2\\ollama.exe",
+    processVramMiB: 3_100,
+  }
+  const targetP40 = {
+    node: "HERMES",
+    uuid: "GPU-P40-1",
+    processName: "D:\\HermesServices\\ollama\\v0.9.2\\ollama.exe",
+  }
+
+  it("cannot promote an admissible patch without running the requested validation", async () => {
+    const recorded: Array<{ verdict: string; aboutTheModel: boolean; message: string }> = []
+    const result = await runMeasuredAttempt({
+      attempt: async () => ({
+        inspected: inspectedPatch,
+        patchWorkspace: "D:\\HermesWorkspaces\\owned",
+        acceleratorEvidence: sameRunP40,
+      }),
+      measurementRunId: "measurement-run-1",
+      targetAccelerator: targetP40,
+      requiredValidation: ["diff-check", "test"],
+      recordFailure: (failure) => { recorded.push(failure) },
+    })
+
+    expect(result).toEqual({ ok: false })
+    expect(recorded).toEqual([{
+      verdict: "BLOCKED_VALIDATION_REQUIRED",
+      aboutTheModel: false,
+      message: "VALIDATION_REQUIRED_WALL",
+    }])
+  })
+
+  it("cannot promote a validated patch without same-run P40 residency and utilisation", async () => {
+    const recorded: Array<{ verdict: string; aboutTheModel: boolean; message: string }> = []
+    const result = await runMeasuredAttempt({
+      attempt: async () => ({ inspected: inspectedPatch, patchWorkspace: "D:\\HermesWorkspaces\\owned" }),
+      measurementRunId: "measurement-run-1",
+      targetAccelerator: targetP40,
+      requiredValidation: ["diff-check", "test"],
+      validate: async () => undefined,
+      recordFailure: (failure) => { recorded.push(failure) },
+    })
+
+    expect(result).toEqual({ ok: false })
+    expect(recorded).toEqual([{
+      verdict: "BLOCKED_ACCELERATOR_EVIDENCE",
+      aboutTheModel: false,
+      message: "ACCELERATOR_SAME_RUN_EVIDENCE_WALL",
+    }])
+  })
+
+  it("refuses P40 evidence from another run or outside this run's observation window", async () => {
+    for (const acceleratorEvidence of [
+      { ...sameRunP40, runId: "prior-run" },
+      { ...sameRunP40, sampleStartedAt: "2026-08-25T19:59:59.999Z" },
+      { ...sameRunP40, sampleCompletedAt: "2026-08-25T20:00:30.001Z" },
+      { ...sameRunP40, vramUsedMiB: 0 },
+      { ...sameRunP40, utilizationPercent: 0 },
+      { ...sameRunP40, uuid: "GPU-UNRELATED-P40" },
+      { ...sameRunP40, processName: "C:\\unrelated-workload.exe" },
+      { ...sameRunP40, processVramMiB: 0 },
+    ]) {
+      const result = await runMeasuredAttempt({
+        attempt: async () => ({
+          inspected: inspectedPatch,
+          patchWorkspace: "D:\\HermesWorkspaces\\owned",
+          acceleratorEvidence,
+        }),
+        measurementRunId: "measurement-run-1",
+        targetAccelerator: targetP40,
+        requiredValidation: ["diff-check", "test"],
+        validate: async () => undefined,
+        recordFailure: () => undefined,
+      })
+      expect(result).toEqual({ ok: false })
+    }
+  })
+
+  it("promotes only after same-run P40 evidence and requested validation both pass", async () => {
+    const calls: string[] = []
+    const result = await runMeasuredAttempt({
+      attempt: async () => {
+        calls.push("collect")
+        return {
+          inspected: inspectedPatch,
+          patchWorkspace: "D:\\HermesWorkspaces\\owned",
+          acceleratorEvidence: sameRunP40,
+        }
+      },
+      measurementRunId: "measurement-run-1",
+      targetAccelerator: targetP40,
+      requiredValidation: ["diff-check", "test"],
+      validate: async ({ workspace, requiredValidation }) => {
+        calls.push(`validate:${workspace}:${requiredValidation.join(",")}`)
+      },
+      recordFailure: () => undefined,
+    })
+
+    expect(calls).toEqual([
+      "collect",
+      "validate:D:\\HermesWorkspaces\\owned:diff-check,test",
+    ])
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        promotion: {
+          verdict: "PROVEN",
+          requiredValidation: ["diff-check", "test"],
+          acceleratorEvidence: sameRunP40,
+        },
+      },
+    })
+  })
+
+  it("requires both diff-check and test before promotion", async () => {
+    for (const requiredValidation of [["test"], ["diff-check"]]) {
+      const result = await runMeasuredAttempt({
+        attempt: async () => ({
+          inspected: inspectedPatch,
+          patchWorkspace: "D:\\HermesWorkspaces\\owned",
+          acceleratorEvidence: sameRunP40,
+        }),
+        measurementRunId: "measurement-run-1",
+        targetAccelerator: targetP40,
+        requiredValidation,
+        validate: async () => undefined,
+        recordFailure: () => undefined,
+      })
+      expect(result).toEqual({ ok: false })
+    }
+  })
+})
+
+describe("same-run accelerator observation", () => {
+  it("binds residency and utilisation sampled while the actual invocation is pending", async () => {
+    expect(observeSameRunAccelerator).toBeTypeOf("function")
+    if (!observeSameRunAccelerator) return
+    let finish: ((value: string) => void) | undefined
+    let samples = 0
+    const result = await observeSameRunAccelerator({
+      runId: "measurement-run-1",
+      node: "HERMES",
+      targetAccelerator: {
+        uuid: "GPU-P40-1",
+        processName: "D:\\HermesServices\\ollama\\v0.9.2\\ollama.exe",
+      },
+      attempt: () => new Promise<string>((resolve) => { finish = resolve }),
+      sampleAccelerators: async () => {
+        samples += 1
+        return [{
+          uuid: "GPU-P40-1",
+          model: "Tesla P40",
+          vramUsedMiB: 3_200,
+          utilizationPercent: samples === 1 ? 0 : 67,
+          processName: "D:\\HermesServices\\ollama\\v0.9.2\\ollama.exe",
+          processVramMiB: 3_100,
+        }]
+      },
+      wait: async () => {
+        if (samples >= 2) finish?.("invocation complete")
+      },
+      now: (() => {
+        const times = [
+          "2026-08-25T20:00:00.000Z",
+          "2026-08-25T20:00:05.000Z",
+          "2026-08-25T20:00:06.000Z",
+          "2026-08-25T20:00:10.000Z",
+          "2026-08-25T20:00:11.000Z",
+          "2026-08-25T20:00:30.000Z",
+        ]
+        return () => times.shift() ?? "2026-08-25T20:00:30.000Z"
+      })(),
+    })
+
+    expect(result.value).toBe("invocation complete")
+    expect(result.acceleratorEvidence).toEqual({
+      runId: "measurement-run-1",
+      startedAt: "2026-08-25T20:00:00.000Z",
+      sampleStartedAt: "2026-08-25T20:00:10.000Z",
+      sampleCompletedAt: "2026-08-25T20:00:11.000Z",
+      completedAt: "2026-08-25T20:00:30.000Z",
+      node: "HERMES",
+      uuid: "GPU-P40-1",
+      model: "Tesla P40",
+      vramUsedMiB: 3_200,
+      utilizationPercent: 67,
+      processName: "D:\\HermesServices\\ollama\\v0.9.2\\ollama.exe",
+      processVramMiB: 3_100,
+    })
+  })
+
+  it("starts the provider invocation before the first accelerator sample", async () => {
+    expect(observeSameRunAccelerator).toBeTypeOf("function")
+    if (!observeSameRunAccelerator) return
+    const events: string[] = []
+    await observeSameRunAccelerator({
+      runId: "measurement-run-1",
+      node: "HERMES",
+      targetAccelerator: { uuid: "GPU-P40-1", processName: "ollama.exe" },
+      attempt: () => { events.push("attempt-start"); return Promise.resolve("done") },
+      sampleAccelerators: async () => { events.push("sample"); return [] },
+      wait: async () => undefined,
+    })
+    expect(events[0]).toBe("attempt-start")
+  })
+
+  it("rejects a sample that returns after the provider invocation settles", async () => {
+    expect(observeSameRunAccelerator).toBeTypeOf("function")
+    if (!observeSameRunAccelerator) return
+    let finish: ((value: string) => void) | undefined
+    const result = await observeSameRunAccelerator({
+      runId: "measurement-run-1",
+      node: "HERMES",
+      targetAccelerator: { uuid: "GPU-P40-1", processName: "ollama.exe" },
+      attempt: () => new Promise<string>((resolve) => { finish = resolve }),
+      sampleAccelerators: async () => {
+        finish?.("done")
+        await Promise.resolve()
+        return [{
+          uuid: "GPU-P40-1", model: "Tesla P40", vramUsedMiB: 3_200, utilizationPercent: 67,
+          processName: "ollama.exe", processVramMiB: 3_100,
+        }]
+      },
+      wait: async () => undefined,
+    })
+    expect(result.value).toBe("done")
+    expect(result.acceleratorEvidence).toBeNull()
+  })
+
+  it("does not hang cleanup behind a sampler still pending when the invocation settles", async () => {
+    expect(observeSameRunAccelerator).toBeTypeOf("function")
+    if (!observeSameRunAccelerator) return
+    let finish: ((value: string) => void) | undefined
+    const result = await observeSameRunAccelerator({
+      runId: "measurement-run-1",
+      node: "HERMES",
+      targetAccelerator: { uuid: "GPU-P40-1", processName: "ollama.exe" },
+      attempt: () => new Promise<string>((resolve) => { finish = resolve }),
+      sampleAccelerators: ({ signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true })
+        finish?.("done")
+      }),
+      wait: async () => undefined,
+    })
+    expect(result.value).toBe("done")
+    expect(result.acceleratorEvidence).toBeNull()
   })
 })
 

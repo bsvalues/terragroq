@@ -24,6 +24,15 @@
  */
 export function classifyDispatchFailure(message) {
   const text = String(message ?? "")
+  if (/^VALIDATION_REQUIRED_WALL$/.test(text)) {
+    return { verdict: "BLOCKED_VALIDATION_REQUIRED", aboutTheModel: false }
+  }
+  if (/^ACCELERATOR_SAME_RUN_EVIDENCE_WALL$/.test(text)) {
+    return { verdict: "BLOCKED_ACCELERATOR_EVIDENCE", aboutTheModel: false }
+  }
+  if (/^VALIDATION_INSTALL_WALL$/.test(text)) {
+    return { verdict: "BLOCKED_VALIDATION_INFRASTRUCTURE", aboutTheModel: false }
+  }
   if (/^TASK_BASELINE_DRIFT_WALL:/.test(text)) {
     return { verdict: "BLOCKED_TASK_BASELINE_DRIFT", aboutTheModel: false }
   }
@@ -42,15 +51,149 @@ export function classifyDispatchFailure(message) {
 }
 
 /**
+ * Observe the accelerator only while the provider invocation for this measurement is pending.
+ * The caller places this around the exact invoker call after base/target preflight, so a prior probe
+ * or an idle readiness check cannot be carried into promotion evidence.
+ */
+export async function observeSameRunAccelerator({
+  runId,
+  node,
+  targetAccelerator,
+  attempt,
+  sampleAccelerators,
+  pollIntervalMs = 1_000,
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  now = () => new Date().toISOString(),
+}) {
+  const startedAt = now()
+  let outcome
+  let settle
+  const settled = new Promise((resolve) => { settle = resolve })
+  let invoked
+  try { invoked = attempt() } catch (error) { invoked = Promise.reject(error) }
+  const pending = Promise.resolve(invoked).then(
+    (value) => {
+      outcome = { ok: true, value, completedAt: now() }
+      settle()
+    },
+    (error) => {
+      outcome = { ok: false, error, completedAt: now() }
+      settle()
+    },
+  )
+  let observed
+  while (!outcome) {
+    const sampleStartedAt = now()
+    const controller = new AbortController()
+    const sampled = Promise.resolve()
+      .then(() => sampleAccelerators({ signal: controller.signal }))
+      .then(
+        (accelerators) => ({ kind: "sample", accelerators }),
+        () => ({ kind: "sample", accelerators: [] }),
+      )
+    const first = await Promise.race([
+      sampled,
+      settled.then(() => ({ kind: "settled", accelerators: [] })),
+    ])
+    if (first.kind === "settled") {
+      controller.abort()
+      break
+    }
+    const sampleCompletedAt = now()
+    if (outcome) continue
+    const accelerators = first.accelerators
+    for (const accelerator of accelerators) {
+      if (String(accelerator?.uuid ?? "") === targetAccelerator?.uuid
+        && String(accelerator?.processName ?? "").toLowerCase() === String(targetAccelerator?.processName ?? "").toLowerCase()
+        && /\bP40\b/i.test(String(accelerator?.model ?? ""))
+        && Number(accelerator?.vramUsedMiB) > 0
+        && Number(accelerator?.utilizationPercent) > 0
+        && Number(accelerator?.processVramMiB) > 0) {
+        observed = { ...accelerator, sampleStartedAt, sampleCompletedAt }
+      }
+    }
+    if (!outcome) await Promise.race([settled, wait(pollIntervalMs)])
+  }
+  await pending
+  if (!outcome.ok) throw outcome.error
+  return {
+    value: outcome.value,
+    acceleratorEvidence: observed ? {
+      runId,
+      startedAt,
+      sampleStartedAt: observed.sampleStartedAt,
+      sampleCompletedAt: observed.sampleCompletedAt,
+      completedAt: outcome.completedAt,
+      node,
+      uuid: observed.uuid,
+      model: observed.model,
+      vramUsedMiB: observed.vramUsedMiB,
+      utilizationPercent: observed.utilizationPercent,
+      processName: observed.processName,
+      processVramMiB: observed.processVramMiB,
+    } : null,
+  }
+}
+
+/**
  * Put dispatch and patch collection behind one classification/recording boundary.
  *
  * A successful provider return is not a successful measurement until its patch has been collected
  * and inspected. Keeping both operations in one attempt prevents collection walls from escaping as
  * uncaught exceptions and leaving stale capability evidence in place.
  */
-export async function runMeasuredAttempt({ attempt, recordFailure }) {
+function hasSameRunP40Evidence(evidence, measurementRunId, targetAccelerator) {
+  const startedAt = Date.parse(evidence?.startedAt)
+  const sampleStartedAt = Date.parse(evidence?.sampleStartedAt)
+  const sampleCompletedAt = Date.parse(evidence?.sampleCompletedAt)
+  const completedAt = Date.parse(evidence?.completedAt)
+  return typeof measurementRunId === "string" && measurementRunId !== ""
+    && evidence?.runId === measurementRunId
+    && String(evidence?.node ?? "").toLowerCase() === String(targetAccelerator?.node ?? "").toLowerCase()
+    && evidence?.uuid === targetAccelerator?.uuid
+    && typeof evidence?.uuid === "string" && evidence.uuid.trim() !== ""
+    && typeof evidence?.model === "string" && /\bP40\b/i.test(evidence.model)
+    && Number(evidence?.vramUsedMiB) > 0
+    && Number(evidence?.utilizationPercent) > 0
+    && String(evidence?.processName ?? "").toLowerCase() === String(targetAccelerator?.processName ?? "").toLowerCase()
+    && Number(evidence?.processVramMiB) > 0
+    && Number.isFinite(startedAt) && Number.isFinite(sampleStartedAt)
+    && Number.isFinite(sampleCompletedAt) && Number.isFinite(completedAt)
+    && startedAt <= sampleStartedAt && sampleStartedAt <= sampleCompletedAt && sampleCompletedAt <= completedAt
+}
+
+export async function runMeasuredAttempt({
+  attempt,
+  validate,
+  requiredValidation,
+  measurementRunId,
+  targetAccelerator,
+  recordFailure,
+}) {
   try {
-    return { ok: true, value: await attempt() }
+    const value = await attempt()
+    if (typeof validate !== "function"
+      || !Array.isArray(requiredValidation)
+      || !requiredValidation.includes("diff-check")
+      || !requiredValidation.includes("test")) {
+      throw new Error("VALIDATION_REQUIRED_WALL")
+    }
+    const effectiveRunId = typeof measurementRunId === "function" ? measurementRunId() : measurementRunId
+    if (!hasSameRunP40Evidence(value?.acceleratorEvidence, effectiveRunId, targetAccelerator)) {
+      throw new Error("ACCELERATOR_SAME_RUN_EVIDENCE_WALL")
+    }
+    await validate({ workspace: value.patchWorkspace, requiredValidation })
+    return {
+      ok: true,
+      value: {
+        ...value,
+        promotion: {
+          verdict: "PROVEN",
+          requiredValidation: [...requiredValidation],
+          acceleratorEvidence: value.acceleratorEvidence,
+        },
+      },
+    }
   } catch (error) {
     const message = String(error?.message ?? error)
     const classification = classifyDispatchFailure(message)

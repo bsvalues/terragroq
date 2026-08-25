@@ -370,6 +370,26 @@ describe("two workspaces that each own themselves", () => {
     expect(fs.existsSync(statePath)).toBe(true)
   })
 
+  it("exposes the exact provider invocation for same-run observation after preflight", async () => {
+    const { root, repositoryPath, workspace } = fixture()
+    const calls: Call[] = []
+    const observed: string[] = []
+    await dispatchHermesLocal({
+      root, repositoryPath, workOrderId: "WO-0030", workspace, prompt: "bounded work",
+      workContext: WORK_CONTEXT,
+      runner: recorder(calls),
+      newId: identities("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"),
+      observeInvocation: async ({ runId, invoke }) => {
+        observed.push(runId)
+        return invoke()
+      },
+    })
+
+    expect(observed).toEqual(["wo-0030-bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"])
+    expect(calls.findIndex((call) => gitArgs(call.args)[0] === "cat-file"))
+      .toBeLessThan(calls.findIndex((call) => call.command === "pwsh"))
+  })
+
   it("equips the lane with the #831 work-context receipt, in the tree it will actually edit", async () => {
     const { root, repositoryPath, workspace, owned } = fixture()
     await dispatchHermesLocal({

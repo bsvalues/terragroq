@@ -545,6 +545,7 @@ export async function prepareHermesLocalBase({ policy, requestedBaseSha, runner 
 export async function dispatchHermesLocal({
   root, repositoryPath, workOrderId, workspace, prompt, workContext = null,
   requiredBasePaths = [],
+  observeInvocation = ({ invoke }) => invoke(),
   runner = run, newId = () => crypto.randomUUID(),
 }) {
   const policyPath = path.resolve(repositoryPath, HERMES_KERNEL_POLICY_RELATIVE)
@@ -642,11 +643,14 @@ export async function dispatchHermesLocal({
   fs.mkdirSync(path.dirname(packetPath), { recursive: true })
   fs.writeFileSync(packetPath, `${JSON.stringify(packet, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
 
-  const invocation = await runner("pwsh", [
-    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
-    "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", owned, "-RunId", runId,
-    "-QuarantinePath", kernelQuarantinePath(runtimeRoot), "-StatePath", statePath,
-  ], { cwd: repositoryPath, timeout: HERMES_TIMEOUT_MS })
+  const invocation = await observeInvocation({
+    runId,
+    invoke: () => runner("pwsh", [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
+      "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", owned, "-RunId", runId,
+      "-QuarantinePath", kernelQuarantinePath(runtimeRoot), "-StatePath", statePath,
+    ], { cwd: repositoryPath, timeout: HERMES_TIMEOUT_MS }),
+  })
 
   const stdout = String(invocation.stdout ?? "")
   // Believe only a completion line naming THIS run. The invoker relays the model's own output, so a

@@ -53,13 +53,27 @@ const TASK = [
 
 const ALLOWED_PATHS = ["scripts/runtime-operator/worker-lanes.mjs", "tests/**"]
 const TASK_TARGET_PATHS = ["scripts/runtime-operator/worker-lanes.mjs"]
+const REQUIRED_VALIDATION = ["diff-check", "test"]
+const TARGET_ACCELERATOR = Object.freeze({
+  node: "HERMES",
+  uuid: "GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
+  processName: "D:\\HermesServices\\ollama\\v0.9.2\\ollama.exe",
+})
 
 const dryRun = process.argv.includes("--dry-run")
 const invalidateStaleBaseline = process.argv.includes("--invalidate-stale-baseline-verdict")
 
 const { buildWorkerPrompt } = await import("./worker-lanes.mjs")
-const { buildStaleBaselineInvalidation, runMeasuredAttempt } = await import("./lane-measurement.mjs")
-const { dispatchHermesLocal, unmountedPolicyVolumes } = await import("./williamos-adapters.mjs")
+const {
+  buildStaleBaselineInvalidation,
+  observeSameRunAccelerator,
+  runMeasuredAttempt,
+} = await import("./lane-measurement.mjs")
+const {
+  createWilliamOSAdapters,
+  dispatchHermesLocal,
+  unmountedPolicyVolumes,
+} = await import("./williamos-adapters.mjs")
 const { inspectWorkspaceChanges } = await import("./native-adapters.mjs")
 const { HERMES_KERNEL_POLICY_RELATIVE } = await import("../hermes-bridge/hermes-kernel-client.mjs")
 
@@ -91,6 +105,34 @@ const { execFile } = await import("node:child_process")
 const { promisify } = await import("node:util")
 const exec = promisify(execFile)
 const git = (args, cwd = REPOSITORY) => exec("git", ["--no-replace-objects", ...args], { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 })
+
+async function sampleAccelerators({ signal }) {
+  const options = { encoding: "utf8", timeout: 3_000, windowsHide: true, signal }
+  const observed = await exec("nvidia-smi", [
+    "-i", TARGET_ACCELERATOR.uuid,
+    "--query-gpu=uuid,name,memory.used,utilization.gpu",
+    "--format=csv,noheader,nounits",
+  ], options)
+  const processes = await exec("nvidia-smi", [
+    "--query-compute-apps=gpu_uuid,process_name,used_gpu_memory",
+    "--format=csv,noheader,nounits",
+  ], options)
+  const applications = processes.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => {
+    const [uuid, processName, processVramMiB] = line.split(",").map((field) => field.trim())
+    return { uuid, processName, processVramMiB: Number(processVramMiB) }
+  })
+  return observed.stdout.trim().split(/\r?\n/).filter(Boolean).flatMap((line) => {
+    const [uuid, model, vramUsedMiB, utilizationPercent] = line.split(",").map((field) => field.trim())
+    return applications.filter((application) => application.uuid === uuid).map((application) => ({
+      uuid,
+      model,
+      vramUsedMiB: Number(vramUsedMiB),
+      utilizationPercent: Number(utilizationPercent),
+      processName: application.processName,
+      processVramMiB: application.processVramMiB,
+    }))
+  })
+}
 
 if (invalidateStaleBaseline) {
   const capabilityFile = path.join(ROOT, "state", "lane-capability.json")
@@ -139,8 +181,11 @@ try {
   }
 
   const started = Date.now()
+  const adapters = createWilliamOSAdapters({ root: ROOT, repositoryPath: REPOSITORY })
   const outcome = await runMeasuredAttempt({
     attempt: async () => {
+      let acceleratorEvidence = null
+      let measurementRunId = null
       const patchWorkspace = await dispatchHermesLocal({
         root: ROOT,
         repositoryPath: REPOSITORY,
@@ -149,6 +194,18 @@ try {
         prompt,
         workContext: null,
         requiredBasePaths: TASK_TARGET_PATHS,
+        observeInvocation: async ({ runId, invoke }) => {
+          measurementRunId = runId
+          const observed = await observeSameRunAccelerator({
+            runId,
+            node: os.hostname(),
+            targetAccelerator: TARGET_ACCELERATOR,
+            attempt: invoke,
+            sampleAccelerators,
+          })
+          acceleratorEvidence = observed.acceleratorEvidence
+          return observed.value
+        },
         newId: () => crypto.randomUUID(),
       })
       // The provider edits its own owned worktree, and leaves the change unstaged and untracked.
@@ -157,8 +214,12 @@ try {
       try { await git(["add", "-A"], produced) }
       catch { throw new Error("PATCH_COLLECTION_WALL") }
       const inspected = await inspectWorkspaceChanges(produced, ALLOWED_PATHS)
-      return { inspected }
+      return { inspected, patchWorkspace: produced, acceleratorEvidence }
     },
+    measurementRunId: () => measurementRunId,
+    targetAccelerator: TARGET_ACCELERATOR,
+    requiredValidation: REQUIRED_VALIDATION,
+    validate: (request) => adapters.validate(request),
     recordFailure: ({ verdict, aboutTheModel, message }) => {
       record(
         verdict,
@@ -174,12 +235,18 @@ try {
   })
   if (outcome.ok) {
     const elapsed = Math.round((Date.now() - started) / 1000)
-    const { inspected } = outcome.value
+    const { inspected, promotion } = outcome.value
+    const accelerator = promotion.acceleratorEvidence
     record(
-      "PROVEN",
+      promotion.verdict,
       `The lane produced a patch that passed the kernel's own walls unmodified: ` +
         `${inspected.changedPaths.length} file(s) (${inspected.changedPaths.join(", ")}), ${inspected.patchBytes} bytes, ` +
         `base ${baseSha.slice(0, 12)}, elapsed ${elapsed}s. ` +
+        `Requested validation passed: ${promotion.requiredValidation.join(", ")}. ` +
+        `Same-run accelerator evidence: run ${accelerator.runId}, ${accelerator.model} ${accelerator.uuid}, ` +
+        `${accelerator.vramUsedMiB} MiB resident (${accelerator.processVramMiB} MiB in ${accelerator.processName}) and ` +
+        `${accelerator.utilizationPercent}% utilisation sampled during ${accelerator.sampleStartedAt}..${accelerator.sampleCompletedAt} ` +
+        `within ${accelerator.startedAt}..${accelerator.completedAt}. ` +
         `Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0), no fallback. ` +
         `Task: add a pure helper with a stated contract plus vitest cases for all four branches.`,
     )
