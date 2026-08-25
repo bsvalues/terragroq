@@ -301,6 +301,50 @@ owns the runtime.
 
 ---
 
+## `#995` invariant 13 — disposition
+
+Report 002 disposed of this as **NOT ACCEPTED**, for a reason that no longer holds. It is stated
+again here rather than left to be inferred from "the terminal leg executed", because the seam
+between *what executed* and *what invariant 13 asks for* is exactly where an over-claim would sit.
+
+Invariant 13 names a journey, not a call:
+
+> The first bounded journey runs end to end on canonical seams: stable object → current world →
+> contextual action → governed execution → verified post-state → preserved return location
+> (`#987` acceptance).
+
+**SETTLED AGAINST REAL HERMES — five of the six seams.**
+
+| Seam | Where it ran | Settled |
+| --- | --- | --- |
+| stable object | leg 3 — `node:hermes-node` out of the canonical object graph, 5 nodes | yes |
+| current world | leg 3 — transport/truth state read, not assumed | yes |
+| contextual action | leg 4 — `resolveObjectMutation("NODE")` → `authority_required`, one candidate | yes |
+| governed execution | legs 2, 5, 6, 7 — `grantCovers`, brokered exec, `requireAudit`, ledger | yes |
+| verified post-state | leg 7 — separate observation, `ba29cf1b…`, 158 bytes | yes |
+| preserved return location | **nowhere** | **no** |
+
+**NOT ACCEPTED in full**, precisely: the sixth seam is a UI property of the journey and a headless
+driver has no return location to preserve. Nothing in this lane exercised it, and nothing in this
+lane could have. It is settled by a Gate that renders the journey, on deterministic tests plus a
+live pass, and it remains the one clause of invariant 13 with no live evidence behind it.
+
+**A second thing the terminal proof does not carry:** the actor was `ASSERTED_BY_OPERATOR_NOT_
+AUTHENTICATED`. Leg 1 records `SESSION_SHELL_NOT_EXECUTABLE` — `getSession()` needs a Next request
+context and the only WilliamOS serving on that node is an older bundle without the route. **No
+session was minted**, deliberately: fabricating an authentication artifact to satisfy an
+authentication check is the same class of act as minting a grant to satisfy an authority check. So
+the authority decision was enforced against the right user id, and the *identity* of the caller was
+asserted by the operator rather than proved by the runtime.
+
+What that leaves is exact. The governed-mutation core of invariant 13 — object, world, action,
+authority, execution, verified post-state — has run end to end against live hardware and is
+settled. Terminal acceptance of invariant 13 itself waits on the rendered journey and on a runtime
+that can mint a session, which is `CONT-EXPV2-RUNTIME-CREDENTIAL-STALE` and the Gate that owns the
+surface. **No lane may read this record as invariant 13 accepted.**
+
+---
+
 ## What this may NOT be read as
 
 **`CONT-EXPV2-AUTHORITY-REGISTRY-SINGLE-POINT` stays typed open**, by the owner's explicit

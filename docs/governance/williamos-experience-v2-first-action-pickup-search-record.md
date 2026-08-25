@@ -669,4 +669,28 @@ CONT-EXPV2-RESOLVER-NOT-WIRED
                           Closing this one alone produces a service that resolves correctly and
                           still refuses every governed route.
   ownerDecisionRequired:  false.
+
+CONT-EXPV2-INVARIANT-13-JOURNEY-INCOMPLETE
+  type:                   TYPED_FINDING                                  [OPEN]
+  raised by:              CONT-EXPV2-ORACLE-RESTORATION, 2026-08-25, on re-reading what invariant
+                          13 asks for against what the terminal proof actually ran.
+  why it exists:          CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT is DISCHARGED above, and a
+                          later lane could read that as "#995 invariant 13 accepted". It is not.
+                          The discharged entry is the SETTLEMENT; this entry is the INVARIANT.
+  finding:                invariant 13 names a journey of six canonical seams -- stable object,
+                          current world, contextual action, governed execution, verified
+                          post-state, preserved return location. FIVE ran end to end against live
+                          HERMES and are settled (OR-10 legs 3, 3, 4, 2/5/6/7, 7). The sixth,
+                          PRESERVED RETURN LOCATION, ran nowhere: it is a UI property of the
+                          journey and a headless driver has no return location to preserve.
+  second gap:             the actor was ASSERTED_BY_OPERATOR_NOT_AUTHENTICATED. OR-10 leg 1 is
+                          SESSION_SHELL_NOT_EXECUTABLE and NO session was minted -- deliberately,
+                          since fabricating an authentication artifact to pass an authentication
+                          check is the same act as minting a grant to pass an authority check. The
+                          authority decision was enforced against the correct user id; the
+                          IDENTITY of the caller was asserted, not proved.
+  disposition:            #995 invariant 13 is NOT ACCEPTED. Its governed-mutation core is settled.
+  close it with:          the Gate that renders the journey (return location), and a runtime that
+                          can mint a session -- which is CONT-EXPV2-RUNTIME-CREDENTIAL-STALE.
+  ownerDecisionRequired:  false.
 ```
