@@ -61,7 +61,21 @@ try {
   if (out) {
     // 0600: this file carries the registry password. The driver reads it and it is deleted by the
     // caller; it must not be world-readable in between.
-    fs.writeFileSync(out, body, { encoding: "utf8", mode: 0o600 })
+    //
+    // `mode` is honoured only when the file is CREATED. Passing it to a write that lands on an
+    // existing 0644 file truncates that file, writes the password into it, and leaves the mode
+    // alone — the guarantee in the line above silently not held, in the one case (a re-run into the
+    // same path) that is most likely. So the previous file is removed first and the mode is then
+    // asserted rather than requested.
+    fs.rmSync(out, { force: true })
+    const fd = fs.openSync(out, "wx", 0o600)
+    try {
+      fs.writeSync(fd, body, null, "utf8")
+      // No-op on Windows beyond the read-only bit, which is why creation mode is not relied on alone.
+      try { fs.fchmodSync(fd, 0o600) } catch { /* filesystem has no POSIX modes */ }
+    } finally {
+      fs.closeSync(fd)
+    }
   } else {
     process.stdout.write(body)
   }
