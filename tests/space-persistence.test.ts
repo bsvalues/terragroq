@@ -1,6 +1,89 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+
+const databaseHarness = vi.hoisted(() => {
+  const rows: OwnedWorkingWorldRecord[] = []
+  const offsets: number[] = []
+  let currentWorld: OwnedWorkingWorldRecord | null = null
+  let barrier: null | {
+    delayed: boolean
+    waiting: Promise<void>
+    release: Promise<void>
+    signalWaiting: () => void
+    signalRelease: () => void
+  } = null
+
+  function select() {
+    let limit = Number.POSITIVE_INFINITY
+    let offset = 0
+    const result = () => (currentWorld ? [currentWorld] : rows).slice(offset, offset + limit)
+    const query = {
+      from: () => query,
+      where: () => query,
+      orderBy: () => query,
+      limit: (value: number) => { limit = value; return query },
+      offset: (value: number) => { offset = value; offsets.push(value); return Promise.resolve(result()) },
+      then: (resolve: (value: readonly OwnedWorkingWorldRecord[]) => unknown) => resolve(result()),
+    }
+    return query
+  }
+
+  function update() {
+    let changes: { snapshot?: string; intent?: string } = {}
+    const query = {
+      set: (value: typeof changes) => { changes = value; return query },
+      where: () => query,
+      returning: async () => {
+        if (!currentWorld || !changes.snapshot) return []
+        const candidate = JSON.parse(changes.snapshot)
+        const isLineMutation = candidate.conversation?.some(
+          (turn: { content?: string }) => turn.content === "drop all surfaces",
+        )
+        if (barrier && isLineMutation && !barrier.delayed) {
+          barrier.delayed = true
+          barrier.signalWaiting()
+          await barrier.release
+          return []
+        }
+        currentWorld = { ...currentWorld, snapshot: changes.snapshot, intent: changes.intent ?? currentWorld.intent }
+        return [{ id: currentWorld.id }]
+      },
+      then: (resolve: (value: readonly { id: string }[]) => unknown) => {
+        if (currentWorld && changes.snapshot) {
+          currentWorld = { ...currentWorld, snapshot: changes.snapshot, intent: changes.intent ?? currentWorld.intent }
+        }
+        return resolve(currentWorld ? [{ id: currentWorld.id }] : [])
+      },
+    }
+    return query
+  }
+
+  function armLineBarrier() {
+    let signalWaiting!: () => void
+    let signalRelease!: () => void
+    const waiting = new Promise<void>((resolve) => { signalWaiting = resolve })
+    const release = new Promise<void>((resolve) => { signalRelease = resolve })
+    barrier = { delayed: false, waiting, release, signalWaiting, signalRelease }
+    return { waiting, release: signalRelease }
+  }
+
+  return {
+    rows,
+    offsets,
+    select: vi.fn(select),
+    update: vi.fn(update),
+    armLineBarrier,
+    getCurrentWorld: () => currentWorld,
+    setCurrentWorld: (row: OwnedWorkingWorldRecord | null) => { currentWorld = row },
+  }
+})
+
+vi.mock("@/lib/db", () => ({
+  db: { select: databaseHarness.select, update: databaseHarness.update },
+}))
+vi.mock("@/lib/session", () => ({ getUserId: vi.fn(async () => "owner-a") }))
 
 import {
+  databaseSpaceWorkingWorldStore,
   findLatestTerraFusionOwnedByPage,
   loadOrCreateOwnedSpace,
   saveOwnedLineWorld,
@@ -9,6 +92,7 @@ import {
   type SpaceWorkingWorldStore,
 } from "@/lib/environment/space-persistence"
 import { createWorkingWorld, withTurn, type SpaceState } from "@/lib/environment/working-world"
+import { POST } from "@/app/api/environment/line/route"
 
 class MemoryStore implements SpaceWorkingWorldStore {
   readonly rows = new Map<string, OwnedWorkingWorldRecord>()
@@ -117,6 +201,57 @@ function space(runningAppUrl: string | null = "javascript:alert(1)", revision = 
 }
 
 describe("server-owned Space persistence", () => {
+  it("binds the Line route persistence seam to the shared CAS writer", async () => {
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
+    const initialRow = {
+      id: "world-a", userId: "owner-a", intent: initial.intent,
+      snapshot: JSON.stringify(initial), updatedAt: new Date("2026-08-25T10:00:00Z"),
+    }
+    databaseHarness.setCurrentWorld(initialRow)
+    const overlap = databaseHarness.armLineBarrier()
+    const lineSave = POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "drop all surfaces" }),
+    }))
+    await Promise.race([
+      overlap.waiting,
+      lineSave.then(() => { throw new Error("Line save completed before the overlap barrier") }),
+    ])
+    databaseHarness.setCurrentWorld({
+      ...initialRow,
+      snapshot: JSON.stringify({ ...initial, space: space(null, 2) }),
+    })
+    overlap.release()
+    expect((await lineSave).status).toBe(200)
+
+    const persisted = JSON.parse(databaseHarness.getCurrentWorld()!.snapshot)
+    expect(persisted.space.revision).toBe(2)
+    expect(persisted.conversation.some((turn: { content?: string }) => turn.content === "drop all surfaces")).toBe(true)
+  })
+
+  it("binds the database store to scope-correct TerraFusion pagination", async () => {
+    databaseHarness.setCurrentWorld(null)
+    databaseHarness.rows.length = 0
+    databaseHarness.offsets.length = 0
+    databaseHarness.rows.push(...Array.from({ length: 20 }, (_, index) => ({
+      id: `unrelated-${index}`,
+      userId: "owner-a",
+      intent: `Unrelated world ${index}`,
+      snapshot: JSON.stringify(createWorkingWorld({ intent: `Unrelated world ${index}` })),
+      updatedAt: new Date(2026, 7, 25, 12, 0, 20 - index),
+    })), {
+      id: "terrafusion-world",
+      userId: "owner-a",
+      intent: "TerraFusion",
+      snapshot: JSON.stringify(createWorkingWorld({ intent: "TerraFusion" })),
+      updatedAt: new Date(2026, 7, 24),
+    })
+
+    expect((await databaseSpaceWorkingWorldStore.findLatestOwned("owner-a"))?.id).toBe("terrafusion-world")
+    expect(databaseHarness.offsets).toEqual([0, 20])
+  })
+
   it("continues past the first owned-world page to restore an older TerraFusion Space", async () => {
     const world = createWorkingWorld({ intent: "TerraFusion", resources: ["bsvalues/terragroq"] })
     const rows: OwnedWorkingWorldRecord[] = Array.from({ length: 20 }, (_, index) => ({
