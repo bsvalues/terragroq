@@ -576,10 +576,7 @@ export function resolveObjectAction(rawInput: string, context: ResolutionContext
     // The charter's own example: `restart it` with multiple plausible destructive targets requires
     // disambiguation. Ranking is deliberately computed first and then NOT used to choose, so the
     // caller can still show the operator what the options were.
-    return {
-      ...refuse("More than one object matched a mutating action; disambiguation is required.", asCandidates),
-      unavailable: undefined,
-    }
+    return refuse("More than one object matched a mutating action; disambiguation is required.", asCandidates)
   }
 
   return {
