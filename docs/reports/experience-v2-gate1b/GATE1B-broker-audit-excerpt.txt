@@ -1,0 +1,22 @@
+WilliamOS fabric audit ledger — HERMES, ~/.williamos/fabric/audit.log
+Gate 1b live settlement excerpt. Format: epoch-seconds \t node \t action \t rc= \t detail (200 chars).
+
+Ledger line count immediately BEFORE the settlement's first brokered call: 19628
+Ledger line count immediately AFTER the canonical probe:                    19629
+
+Last four lines before the settlement (unrelated resident traffic, retained for position):
+
+1787509467	aegis	resident-gh	rc=0	gh 'auth' 'status'
+1787509767	aegis	resident-gh	rc=0	gh 'auth' 'status'
+1787510067	aegis	resident-gh	rc=0	gh 'auth' 'status'
+1787510367	aegis	resident-gh	rc=0	gh 'auth' 'status'
+
+The two lines this settlement produced. Both were written by `auditBrokerAction` inside
+`brokeredExec`; neither could exist had the probes been issued over raw transport:
+
+1787619886	hermes	probe	rc=0	& 'C:\Users\bs\gate1b-settlement\scripts\execution-fabric\probe-windows.ps1' -NodeId 'hermes-node' -OutputPath 'C:\Users\bs\gate1b-settlement\.artifacts\execution-fabric\hermes-node.json'
+1787620099	hermes	probe	rc=0	$c = Get-CimInstance Win32_ComputerSystem; "host=" + $env:COMPUTERNAME; "cores=" + $c.NumberOfLogicalProcessors; $o = Get-CimInstance Win32_OperatingSystem; "mem=" + [math]::Round($o.FreePhysicalMemor
+
+1787619886 = 2026-08-25T01:04:46Z   canonical structured probe (scripts/execution-fabric/probe-windows.ps1)
+1787620099 = 2026-08-25T01:08:19Z   GET /api/fabric/nodes WINDOWS_PROBE, verbatim (truncated by the
+                                    ledger's own 200-character detail bound, not by this record)
