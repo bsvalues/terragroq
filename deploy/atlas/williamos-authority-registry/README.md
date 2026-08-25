@@ -59,6 +59,14 @@ guarantees to consult and never rewrites.
 Neither layer fails open. A missing or malformed `fabric-callers.json` exits non-zero with the port
 left as it was; "we could not read the allowlist" must never become "there was nothing to enforce".
 
+That extends to *applying* the policy, which is one `iptables-restore` transaction rather than a
+flush of the live chain followed by rule-by-rule appends. The obvious way has a window in the middle
+where the chain is empty — and an empty chain falls through to Docker's accept rules, so a failure
+part-way through leaves tcp/15432 open to the LAN permanently, reached by a sequence of commands
+that all returned zero until the one that did not. The restore either commits the new policy or
+leaves the old one exactly as it was. `apply` then re-reads what it installed and exits non-zero if
+it differs from the declaration.
+
 ## Install
 
 ```bash

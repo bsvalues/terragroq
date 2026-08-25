@@ -25,6 +25,10 @@
 # NO FAIL-OPEN. Every refusal below exits non-zero with the port left in whatever state it was
 # already in. A missing or malformed caller list is a reason to stop, never a reason to allow
 # everything: "we could not read the allowlist" must not become "there was nothing to enforce".
+# That guarantee extends to the apply itself, which replaces the policy in ONE transaction rather
+# than emptying the live chain and refilling it -- see the apply section. A half-applied allowlist
+# is an open port, and it is reached by a route that returns zero at every step until the one that
+# does not.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -40,6 +44,10 @@ case "$MODE" in
 esac
 
 command -v iptables >/dev/null 2>&1 || die "IPTABLES_MISSING: iptables is not on PATH; refusing rather than leaving tcp/15432 unfiltered"
+# The policy is applied as one transaction (see the apply section). Without this binary the only
+# alternative is flush-then-append, whose failure mode is an OPEN port -- so its absence stops the
+# run instead of silently downgrading to the unsafe method.
+command -v iptables-restore >/dev/null 2>&1 || die "IPTABLES_RESTORE_MISSING: the policy can only be replaced atomically with iptables-restore; refusing rather than flushing the live chain and rebuilding it rule by rule"
 command -v python3  >/dev/null 2>&1 || die "PYTHON3_MISSING: the caller list cannot be parsed; refusing rather than guessing an allowlist"
 # The conntrack match is what makes this policy work at all (see above). Its absence would leave a
 # chain that installs cleanly and filters nothing, so it is checked rather than assumed.
@@ -102,17 +110,44 @@ if [ "$MODE" = check ]; then
   exit 0
 fi
 
-iptables -N "$CHAIN" 2>/dev/null || true
-iptables -F "$CHAIN"
-for cidr in $CIDRS; do
-  iptables -A "$CHAIN" -s "$cidr" -p tcp -m conntrack --ctorigdstport "$PORT" --ctdir ORIGINAL -j RETURN
-done
-iptables -A "$CHAIN" -p tcp -m conntrack --ctorigdstport "$PORT" --ctdir ORIGINAL -j DROP
+# WHY A RESTORE AND NOT `-F` FOLLOWED BY `-A`. Flushing a LIVE chain and refilling it rule by rule
+# has a window in the middle where the chain is empty. An empty chain falls straight through to
+# Docker's own accept rules, so for the length of that window -- and PERMANENTLY if any one `-A`
+# fails, since `set -e` then exits with the flush already done -- tcp/$PORT is open to the whole LAN.
+# That is the fail-open this file's header says does not exist here, sitting in the one place that
+# was written before the header was.
+#
+# `iptables-restore` applies its whole input as a single transaction, and with `--noflush` a chain
+# DECLARATION replaces only that chain's contents and leaves every other chain alone. Both halves
+# were measured on ATLAS rather than assumed: declaring the chain replaced its rules, and an input
+# with an unknown option in the middle left the chain byte-identical to what it was before. So the
+# policy either becomes the new one or stays the old one, and is never absent in between.
+iptables_input() {
+  echo "*filter"
+  # Creates the chain when it does not exist, replaces its contents when it does.
+  echo ":$CHAIN - [0:0]"
+  desired
+  echo "COMMIT"
+}
+iptables_input | iptables-restore --noflush \
+  || die "POLICY_APPLY_FAILED: iptables-restore rejected the policy for tcp/$PORT. The transaction did not commit, so the chain is exactly as it was; nothing was opened."
 
 # Exactly one jump, and at the top of DOCKER-USER: a jump appended after another owner's blanket
-# RETURN would never be reached.
+# RETURN would never be reached. This comes after the rules exist, so the chain is never reachable
+# while empty.
 while iptables -C DOCKER-USER -j "$CHAIN" 2>/dev/null; do iptables -D DOCKER-USER -j "$CHAIN"; done
 iptables -I DOCKER-USER 1 -j "$CHAIN"
+
+# Apply verifies its own result. A policy that installed cleanly and does not say what it was meant
+# to say is the failure mode this whole file exists because of, and "the commands returned 0" is not
+# evidence against it.
+installed="$(iptables -S "$CHAIN" | grep -v -- "-N $CHAIN")"
+if [ "$installed" != "$(desired)" ]; then
+  echo "POLICY_APPLIED_BUT_DIFFERS: what is installed is not what fabric-callers.json declares" >&2
+  echo "--- installed ---" >&2; printf '%s\n' "$installed" >&2
+  echo "--- declared  ---" >&2; desired >&2
+  exit 1
+fi
 
 echo "POLICY_APPLIED: tcp/$PORT allowlisted to: $CIDRS (everything else dropped)"
 iptables -S "$CHAIN"

@@ -128,3 +128,35 @@ describe("the restriction has an owner that survives a reboot", () => {
     expect(unit).toMatch(/ExecStartPost=.*apply-network-policy\.sh check/)
   })
 })
+
+// Flushing the live chain and refilling it rule by rule leaves tcp/15432 OPEN for the length of the
+// gap, and open permanently if any one append fails -- `set -e` exits with the flush already done.
+// The whole policy is replaced in one `iptables-restore` transaction instead. This is asserted about
+// the script's text because CI has no iptables to run it against, and a guarantee with no test at
+// all is how the first version of this file came to contain the thing its own header denied.
+describe("applying the policy cannot leave the port open part-way through", () => {
+  const script = read("apply-network-policy.sh")
+  // The commentary explains the defect at length and necessarily quotes the commands that caused
+  // it, so the assertions read the executable lines only.
+  const code = script
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*#/.test(line) && line.trim() !== "")
+    .join("\n")
+
+  it("replaces the chain in one transaction", () => {
+    expect(code).toMatch(/iptables-restore\s+--noflush/)
+  })
+
+  it("never flushes the chain it is about to rebuild", () => {
+    expect(code).not.toMatch(/iptables\s+-F\s+"?\$CHAIN/)
+  })
+
+  it("refuses when the binary that makes the replacement atomic is absent", () => {
+    expect(code).toMatch(/command -v iptables-restore/)
+    expect(script).toMatch(/IPTABLES_RESTORE_MISSING/)
+  })
+
+  it("re-reads what it installed rather than trusting the exit codes", () => {
+    expect(code).toMatch(/POLICY_APPLIED_BUT_DIFFERS/)
+  })
+})
