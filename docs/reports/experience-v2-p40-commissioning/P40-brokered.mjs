@@ -13,10 +13,21 @@
  * forwards to a native command, and a probe body carrying `--format=csv,noheader` or an embedded
  * quote is torn apart before the broker ever sees it. Base64 has no metacharacters.
  *
- * `--require-audit` maps to the broker's `requireAudit`, which checks the ledger BEFORE the node is
- * touched. Every mutating step in this lane sets it: an action that cannot be recorded must not
- * happen, and discovering that after the container has already been replaced is a worse outcome
- * dressed as a better one.
+ * `--require-audit` is passed through to `brokeredExec` as `requireAudit`, and the intent is that an
+ * action which cannot be recorded must not happen -- discovering that after the container has already
+ * been replaced is a worse outcome dressed as a better one.
+ *
+ * CORRECTED after the independent review, and left in place rather than quietly rewritten because
+ * this file is evidence of a run. This docblock originally asserted that the option "checks the
+ * ledger BEFORE the node is touched". It did not, in the code this lane executed: `brokeredExec` at
+ * `053a33bd` does not destructure `requireAudit`, so the flag reached the broker and was dropped, and
+ * the audit happened after the command like every other call. Confirmed by running that commit's
+ * broker with the flag set against a fabric root with no ledger -- the command executed and returned.
+ * The one mutation this lane made was recorded anyway, because the lab's ledger happened to be there.
+ *
+ * The behaviour the flag names lands in #996, which gives `brokeredExec` a `requireAudit` that calls
+ * `requireLedger` first. Nothing about this wrapper changes; what changes is that the sentence above
+ * becomes true of the broker it calls.
  *
  * usage: node P40-brokered.mjs <node> <action> <base64-command> <output-json> [--require-audit] [--timeout ms]
  */

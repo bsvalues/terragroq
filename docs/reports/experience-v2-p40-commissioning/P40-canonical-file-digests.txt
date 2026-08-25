@@ -49,5 +49,12 @@ carries its own rollback in a readable register rather than in a file:
   after    power.limit 150.00 W   enforced 150.00 W   default 250.00 W   (unchanged, so restorable)
   restore  nvidia-smi -i GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2 -pl 250
 
-Bound by UUID, never by ordinal. Issued with requireAudit, so the ledger was proven writable BEFORE
-the card was touched -- ledgered as `hermes power-cap rc=0`.
+Bound by UUID, never by ordinal. Ledgered as `hermes power-cap rc=0`.
+
+CORRECTED after the independent review: this line said the ledger was "proven writable BEFORE the
+card was touched" because the invocation passed --require-audit. `brokeredExec` at 053a33bd -- the
+commit the ten files above were digest-matched against -- does not destructure a requireAudit option,
+so the flag was inert and the ledger line was written after the card, not before. The mutation was
+recorded, because the lab's ledger was present; that is the machine's state, not the wrapper's
+guarantee. #996 gives the broker a real requireAudit with a preflight; this record describes the run
+that happened.

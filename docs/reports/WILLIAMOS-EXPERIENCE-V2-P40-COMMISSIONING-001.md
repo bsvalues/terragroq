@@ -153,6 +153,9 @@ violation, not endanger them — the opposite of what the container's own config
 
 ### Secondary owners
 
+One limit on this section, typed below as `CONT-997-SECONDARY-OWNER-CANDIDATES-LISTED-NOT-READ`: the
+directory holding these candidates was enumerated, but only `start-hermes.ps1` was read.
+
 `C:\HermesLab\hermes\start-hermes.ps1` (`ab0b6d45…`) is a wrapper that runs `docker compose pull`
 then `docker compose up -d`. It does not create containers directly, so it does not compete for
 ownership — **but its `docker compose pull` would re-pull `ollama/ollama:latest` and silently replace
@@ -300,9 +303,24 @@ after:   power.limit 150.00 W · enforced 150.00 W · default 250.00 W · 32 °C
 restore: nvidia-smi -i GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2 -pl 250     (or reboot)
 ```
 
-Bound by UUID, never by ordinal. Ledgered as `hermes power-cap rc=0` with `requireAudit`, so the
-ledger was proven writable *before* the card was touched. The RTX 3050 was verified untouched
-immediately after: `70.00 W`, `WDDM`, `display_active Enabled`.
+Bound by UUID, never by ordinal. Ledgered as `hermes power-cap rc=0`. The RTX 3050 was verified
+untouched immediately after: `70.00 W`, `WDDM`, `display_active Enabled`.
+
+**Correction, from the independent review of this report.** This paragraph first said the ledger was
+"proven writable *before* the card was touched" because the invocation passed `--require-audit`. That
+was not true of the code this lane ran. At `053a33bd` — the commit every canonical file here was
+digest-matched against — `brokeredExec` did not destructure a `requireAudit` option at all, so the
+flag was inert and the audit happened AFTER the card, like every other call. Verified by executing
+that commit's broker with the flag set and a fabric root holding no ledger: the command ran and
+returned. The mutation *was* recorded, because the lab's ledger was present and writable; that is a
+fact about the machine, not a guarantee the wrapper delivered. The distinction is the whole point of
+the preflight, so the report states which one it actually had.
+
+The capability the flag names now exists: #996 gives `brokeredExec` a real `requireAudit` that calls
+`requireLedger` before execution, and its remaining gap — a preflight that accepted an `audit.log`
+which was a directory — was closed in that same pull request. A rerun of this lane on current `main`
+would get the ordering this paragraph originally claimed. This report is not rerun on that basis: it
+is the record of what happened, and #997 is blocked for a reason no audit ordering changes.
 
 ## The model store, settled
 
@@ -385,6 +403,34 @@ blocksCommissioning: YES -- it decides WHERE the fix goes, and it is why no dock
 The running `ollama` container carried no `com.docker.compose.*` labels while every other service in
 the same project did. Created by hand `2026-08-18T20:42:32Z`, squatting `container_name: ollama`, and
 drifted in three places — **on two of which the owning file was the correct one.**
+
+### `CONT-997-SECONDARY-OWNER-CANDIDATES-LISTED-NOT-READ` — REAL GAP IN THIS REPORT
+
+Raised by the independent review of this report, accepted, and typed rather than answered, because
+answering it means probing HERMES and HERMES belongs to the in-flight migration lane.
+
+```
+type:                TYPED_GAP
+affected:            "Secondary owners" above, and the ownership conclusion it feeds
+evidence:            P40-07-labels-and-modelstore.json enumerated C:\HermesLab\hermes\ and NAMED
+                     ~70 files. Exactly one of them was read: start-hermes.ps1. run-all.ps1,
+                     sync-models-to-forge.ps1, model-pull.ps1, pull-with-retry.ps1, restart-docker.ps1,
+                     start-ui.ps1, core-online.ps1 and the rest were listed and never opened.
+                     P40-06 tried a recursive C:\HermesLab listing and capped at 60 entries, all of
+                     which fell in aegis\ -- it never reached hermes\ at all.
+why it matters:      CONT-997-OLLAMA-CONTAINER-NOT-COMPOSE-OWNED establishes that SOMETHING other
+                     than compose created the live ollama container by hand on 2026-08-18. A direct
+                     `docker run` in any unread script is a candidate for that something, and this
+                     report says a fix landing in only one location is not a fix. So the unread
+                     files sit directly under the finding that blocks commissioning.
+what still holds:    the negative evidence is unaffected -- no Windows service, no host ollama.exe,
+                     no scheduled task named for Ollama startup, and compose labels present on every
+                     other service. Those were measured, not inferred.
+blocksCommissioning: NO for this lane, which is blocked on the TCC/WSL2 defect regardless
+pickup:              the #997 successor, BEFORE any reconciliation is written. Read the candidate
+                     scripts through the broker and record which, if any, issues a direct
+                     `docker run`. Not an owner task.
+```
 
 ### `CONT-997-OLLAMA-LAN-EXPOSURE-VIOLATED-DECLARED-AUTHORITY` — REAL DEFECT
 
@@ -484,6 +530,24 @@ envelope. It is serving nothing.
 
 The runtime the lane was sent to reconfigure cannot start, for a GPU-passthrough reason that is now
 proven rather than suspected, and the fix is a decision above this lane.
+
+### That decision has since been made, and this report is deliberately not rewritten around it
+
+Added by the merge coordinator, because a reader arriving after the fact should not have to guess
+whether this verdict is stale.
+
+The owner decided the #997 remedy on 2026-08-24: **native Windows Ollama**, preserving the P40 in TCC
+rather than switching it to WDDM to suit the existing Docker/WSL deployment, superseding the
+containerized runtime with one canonical Windows service definition only after model-store and API
+compatibility and rollback are proven, and leaving the RTX 3050's display role alone. A migration lane
+is in flight against that decision, working on HERMES and in its own worktree.
+
+Everything above is the pre-decision state, and it stands as written. It is what the decision was made
+*from*: the TCC/WSL2 finding is why WDDM was not chosen, the model-store settlement is why `D:` is
+preserved, the loopback violation and the cap's non-durability are two of the things the new service
+definition has to heal, and `CONT-997-SECONDARY-OWNER-CANDIDATES-LISTED-NOT-READ` is work the
+migration lane inherits before it writes any reconciliation. A blocked report that gets edited into
+agreement with the decision it produced stops being evidence of anything.
 
 ## What the P40 may and may not be claimed to be
 
