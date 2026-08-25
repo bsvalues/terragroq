@@ -40,7 +40,16 @@ the 85 °C abort in about **59 seconds** of continuous work, still climbing ~2�
 while decode throughput barely moved (35.21 → 34.80 tok/s). Performance was never the limit; heat
 was. So the staged 200 W and 250 W evaluation was **not attempted and is not recommended** — #997 §8
 allows it only after 150 W passes a thermal check, and a run that ends on the thermal rule has not
-passed one. The constraint is airflow, not the power limit.
+passed one. The constraint is airflow, not the power limit. `SUSTAINED = NOT_ADMITTED`.
+
+**Review then found the one-owner guard, and executing the failure it described found two more.** The
+guard matched a process *name*, so an orphaned runner looked exactly like a live server. Underneath
+that: the task never noticed its server had died at all — a surviving runner held the output pipe
+open and the task sat in state `Running` with nothing listening — and underneath *that*, the
+`RestartCount 3` this record cited as automatic recovery does not fire for an action that runs and
+returns a failure code, so there were no retries to refuse. All three are fixed, re-installed, and
+proven on the commissioned host, including a **113-second unattended recovery** from exactly the
+state review described. `MIG-20`, and *Review remediation* below.
 
 ## The owner decision this executes
 
@@ -205,20 +214,43 @@ them coexist.
 The owner's test, exactly as written: disable/remove only the Ollama portion of compose → restart and
 reconcile the stack → **reboot HERMES** → prove exactly one Ollama comes back.
 
-**Result: PASS.**
+**Result: PASS**, with one row qualified — the reboot-time Docker check could not run, and the note
+under the table says exactly what was and was not established unattended.
 
 | check | evidence |
 | --- | --- |
 | the reboot happened | boot time `2026-08-25T01:40:10Z` → **`03:15:02Z`** |
 | exactly one Ollama | `ollama.exe serve` **pid 10788**, parent `powershell.exe` (the service task); `ollama.exe runner --model …` **pid 9736, ppid 10788** — one server and the child it spawned, not two owners |
 | owned by the Windows service | task `WilliamOS-HERMES-Ollama` state **Running**, last run `03:15:15Z`, boot trigger |
-| no container returned | `docker ps -a --filter name=ollama` → **empty** |
+| no container returned | at reboot: **`DOCKER_ENGINE_UNAVAILABLE`, not an empty list** — `MIG-11b` records `docker ps` failing to reach the API (`npipe:////./pipe/dockerDesktopLinuxEngine … The system cannot find the file specified`). Absence is established separately by `MIG-14`, **after Docker was started by hand**. See the note under this table |
 | compose did not recreate it | compose digest unchanged `bbdf7b1c…`; services = `redis, open-webui, portainer, postgres` |
 | same models | 5, identical names and digests, from `D:\HermesData\ollama\models` |
 | same API contract | `/api/version` `0.9.2`, `/api/tags` 5, `/v1/models` 5 |
 | loopback only | listener `127.0.0.1:11434` alone; **all nine** non-loopback interfaces refused, including LAN `192.168.88.9` and Tailscale |
 | models intact | 21 blobs / 10,360,071,891 bytes |
 | inference still on the P40 | generate OK; P40 3,553 MiB @ 47 %; RTX 3050 49 MiB @ 0 % |
+
+**One row in that table is qualified, and the qualification matters because of the word the test
+turns on.** The reboot-time check for "no container returned" could not run: `MIG-11b-acceptance.json`
+records
+
+```
+containers_named_ollama=failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine;
+  check if the path is correct and if the daemon is running: open //./pipe/… The system cannot find the file specified.
+```
+
+which is the Docker **engine being absent**, not a container list being empty — and this report finds
+elsewhere, on its own evidence, that Docker Desktop's engine needs an interactive logon and so does
+not survive an unattended reboot. A query that could not run cannot establish that the removed
+container did not come back.
+
+Absence *was* proven, by `MIG-14-final-state.json` — but after Docker was started by hand, which is a
+different observation at a different time under different conditions. So the unattended leg of this
+acceptance is: **no Ollama container could have been recreated at reboot, because the engine that
+would recreate it was not running**; and **no Ollama container exists once the engine is running**,
+which is `MIG-14`, attended. Both are true and they are not the same claim. Filed by review as the
+same defect class as this branch's own `7c5b9780` — an evidence claim that was loosely worded — and
+corrected here rather than defended.
 
 ### The power cap durability proof
 
@@ -386,13 +418,47 @@ P40 is improved, and only with the same staged, fail-closed method.
 
 ## What may now be claimed
 
+### The owner's classification, verbatim
+
+`OWNER-DIRECTION-2026-08-24-p40-classification.md` is binding and its vocabulary is the vocabulary
+this record uses. It is reproduced here word for word, including the row this record previously had
+no counterpart for at all:
+
+```
+EXISTS       = PROVEN
+HEALTH       = MEASURED, THERMALLY_CONSTRAINED
+SERVICE      = COMMISSIONED
+CAPABILITY   = MEASURED_FOR_BOUNDED_LOAD
+SUSTAINED    = NOT_ADMITTED
+POWER_LIMIT  = 150 W MAX
+200/250 W    = REFUSED
+```
+
+And the owner's guard sentence, which is the reason the block exists:
+
+> **Commissioned must NOT become safe for unlimited sustained workload.**
+
+`SUSTAINED = NOT_ADMITTED` is an **admission rule**, not a mechanism. Nothing in the service stops a
+sustained workload from arriving; see *The thermal boundary, stated exactly* below, which says in one
+place what does and does not enforce it.
+
+**The named precondition for lifting `SUSTAINED = NOT_ADMITTED`** is the chassis **airflow
+qualification**: substantially better forced airflow over the P40's passive heatsink, then a re-bench
+by the same staged, fail-closed method that produced `MIG-12` and `MIG-13`. It is not a power number.
+`200/250 W = REFUSED` closes that route by owner decision, and no lane may reopen it by re-benching
+at a higher cap.
+
+### What this migration moved
+
 | truth | before | after |
 | --- | --- | --- |
-| `EXISTS` | observed | observed, unchanged |
-| `HEALTHY` | idle-only, qualified | **measured under load** — 94 % utilisation, no ECC movement, no thermal throttle, no driver reset, no service failure |
-| `SERVICE_BOUND` | **not met** | **met** — P40 only by UUID, RTX 3050 carries no inference, store and API preserved, loopback only, survives reboot |
-| `CAPABILITY` | `UNKNOWN` | **measured, for one configuration**: `qwen2.5-coder:7b` Q4_K_M at 150 W on Ollama v0.9.2 / `cuda_v11` → **~35 tok/s decode**, ~26 ms warm TTFT. Prefill remains UNKNOWN. |
-| `STEADY_STATE_POWER` | no recommendation | **150 W, do not raise** — bounded by cooling, with the soak as evidence |
+| `EXISTS` | observed | **`PROVEN`** — unchanged by this migration |
+| `HEALTH` | idle-only, qualified | **`MEASURED, THERMALLY_CONSTRAINED`** — 94 % utilisation, no ECC movement, no driver reset, no service failure, and `MIG-13`'s 68 → 85 °C in 59 s with `plateau=False` |
+| `SERVICE` | **not met** | **`COMMISSIONED`** — P40 only by UUID, RTX 3050 carries no inference, store and API preserved, loopback only, survives reboot, one owner enforced at the port |
+| `CAPABILITY` | `UNKNOWN` | **`MEASURED_FOR_BOUNDED_LOAD`**: `qwen2.5-coder:7b` Q4_K_M at 150 W on Ollama v0.9.2 / `cuda_v11` → **~35 tok/s decode**, ~26 ms warm TTFT. Prefill remains UNKNOWN, and the load it was measured under was bounded and bursty |
+| `SUSTAINED` | not claimed, and **not recorded either** | **`NOT_ADMITTED`** — the row this table did not have. Sustained inference on this card in this chassis reaches thermal slowdown; the remedy is airflow |
+| `POWER_LIMIT` | drifted to 250 W across a reboot | **`150 W MAX`**, reapplied and read back on every service start, fail closed |
+| `200/250 W` | proposed | **`REFUSED`** by the owner. Not a tuning parameter this program may revisit |
 
 The small-model figures seen in passing (`llama3.2:3b` ~58–86 tok/s, `qwen3:4b-instruct` ~79 tok/s)
 came from 3–4 token generations and are **indicative only**; they are not a capability claim.
@@ -409,11 +475,14 @@ Repo-tracked at `scripts/lab-control/hermes/ollama-service/`, installed to
 `C:\HermesLab\hermes\ollama-service\`:
 
 ```
-scheduled task  WilliamOS-HERMES-Ollama    SYSTEM · RunLevel Highest · AtStartup
+scheduled task  WilliamOS-HERMES-Ollama    SYSTEM · RunLevel Highest
+                                           triggers: AtStartup, and a TIME trigger repeating PT2M
                                            ExecutionTimeLimit PT0S · MultipleInstances IgnoreNew
-                                           RestartCount 3 / 1 min
-startup path    hermes-ollama-service.ps1  sha256 e22ac5ae92eb5295f5f07c475d65fa156f7e207285cf950da6121f8ea23609b0
-installer       install-hermes-ollama-service.ps1  (-Uninstall is the rollback)
+                                           RestartCount 3 / 1 min  (kept, but see below: it never fires
+                                           for an action that runs and returns a failure code)
+startup path    hermes-ollama-service.ps1  sha256 179a917dca12fd498558872e9941581115a498786f24d89835f448454aa1054b
+installer       install-hermes-ollama-service.ps1  sha256 7a8ee85bb83cddf3a955d02d7f38885539a38ffd54314d12ebc997de5ec89c38
+                                           (-Uninstall is the rollback)
 binary          D:\HermesServices\ollama\v0.9.2\ollama.exe   (literal path; nothing resolves "latest")
 listen          127.0.0.1:11434
 models          D:\HermesData\ollama\models
@@ -421,7 +490,15 @@ GPU             CUDA_VISIBLE_DEVICES = GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2 
 runner          OLLAMA_LLM_LIBRARY = cuda_v11
 store safety    OLLAMA_NOPRUNE = 1
 power           150 W reapplied and verified every boot; unverifiable cap ⇒ inference does not start
+thermal         START guard only: refuses at ≥80 °C or if temperature is unreadable. No runtime guard.
+ownership       the PORT, then process-tree classification; orphaned runners are reclaimed, a live
+                server is refused, and a runner from a different install is refused rather than killed
 ```
+
+The digests above are the **remediated** ones and they match the repository byte for byte. The
+commissioning run's `e22ac5ae…` is preserved on HERMES as `.bak-20260824_2330-preremediation`; it was
+7,939 bytes against the repository's 7,935, because it was materialised from a here-string over the
+broker rather than copied. Deploying the repository file closes that four-byte drift as well.
 
 It is a Task Scheduler definition rather than an SCM service because `ollama.exe` is not a service
 binary — it never answers the Service Control Manager, so `sc.exe` would report it failed to start and
@@ -432,9 +509,173 @@ interactive logon, and TCC exists precisely so CUDA works in session 0.
 Two implementation details cost real time and are worth recording. `$ErrorActionPreference = 'Stop'`
 made the first version die instantly: Windows PowerShell 5.1 turns a native command's stderr into a
 terminating error, and `ollama serve` writes its whole structured log to stderr — the service log
-ended mid-startup and looked like a crash inside Ollama. And `ollama serve` is invoked **directly**,
-not via `Start-Process`, so it is a direct child of the task: a detached grandchild would survive a
-task stop and become the second owner this migration exists to prevent.
+ended mid-startup and looked like a crash inside Ollama. And `ollama serve` must remain a child in the
+task's own process tree, because a detached grandchild would survive a task stop and become the second
+owner this migration exists to prevent — it is now started with `Start-Process -NoNewWindow`, which
+keeps that property (proven: `Stop-ScheduledTask` leaves **zero** ollama processes) while fixing the
+pipe-inheritance defect described under *Review remediation*.
+
+## Review remediation — one thread, three defects, and a recovery that never existed
+
+Three review threads were filed against this record and an independent merge sweep confirmed all
+three by execution. The `:66` one-owner thread was the one with a live consequence, and executing the
+failure it described on the commissioned host found **three** defects where it named one. The first
+two hid the third, and the third is the one that mattered most: the automatic recovery this record
+leaned on did not exist.
+
+Full transcript: `MIG-20-one-owner-and-recovery.txt`. Everything below was run on HERMES, on the
+commissioned service, against the live scheduled task.
+
+### 1. The guard matched a process NAME, so the wreckage of an owner looked like an owner
+
+Confirmed exactly as filed. `Get-Process -Name 'ollama'` cannot tell `ollama.exe serve` from
+`ollama.exe runner`, and this host's own acceptance capture records them as pid 10788 and pid 9736
+(ppid 10788). `MIG-09` records three runner children surviving a parent kill here and clearing them
+by hand before the first service start.
+
+Reproduced: a model was loaded so a runner existed, then **only** the server was killed. The runner
+survived with a dead parent, the listener was gone, and — because a task stop kills the task's tree
+and the orphan is no longer in it — it survived `Stop-ScheduledTask` too. That is the state in which
+the old guard exited 1 on every start.
+
+Now: **the port is the ownership test**, then `Win32_Process` command line and parentage classify
+what is left. A live server refuses. A runner from a *different* install refuses, because killing a
+process this service did not start is not reclamation. A runner from this service's own pinned binary
+is reclaimed, logged with its pid, ppid and command line, and its survival is re-checked before
+inference starts. Proven:
+
+```
+2026-08-25T06:36:22.4380929Z WARN  reclaiming orphaned runner pid=12132 ppid=10788 :: …runner --model …
+2026-08-25T06:36:26.5237867Z INFO  reclaimed 1 orphaned runner(s); the P40 VRAM they held returns with them
+```
+
+and, against a live owner, the refusal is at the port rather than the name:
+
+```
+2026-08-25T06:29:49.7143156Z FATAL refusing to start: port 11434 already has a listener (owning pids 10788)
+```
+
+### 2. The task stayed `Running` with no server — found by running the scenario, not by reading it
+
+Review predicted three retries that each refused. There were none, and the reason is worse than the
+prediction: **the task never stopped.** `& $OllamaExe serve *>> $ServeLog` makes PowerShell read the
+child through a pipe; the runner child inherits the write end; a runner that outlives its parent
+holds the pipe open. Measured: with the server killed and one runner alive, the task sat in state
+`Running` for minutes, no listener, no server, the task's PowerShell still blocked in the read, and
+no `ollama serve exited` line ever written.
+
+That is the precise inverse of this file's own claim that "the task state is a truthful health
+signal", and it made the guard in (1) unreachable — a guard on a restart that is never attempted
+protects nothing.
+
+Now: `Start-Process -NoNewWindow -PassThru` with real file redirection, and `WaitForExit` on the
+**process**. A surviving runner can no longer mask a dead server. Measured: the task left `Running`
+0.9 s after the kill. The child is still in the task's tree — `Stop-ScheduledTask` leaves **zero**
+ollama processes, which is the property the direct invocation was chosen for.
+
+The stdout and stderr streams are now separate files (`Start-Process` cannot send both to one), and
+both are rotated at each start rather than appended forever, because `Start-Process` truncates its
+redirect targets and losing the previous serve log would have been a silent cost of this fix.
+
+### 3. `exit $null` is `exit 0` — a success report from a service that had stopped
+
+The first version of (2) exited **0**. `Start-Process -PassThru` returns a process object whose
+`ExitCode` reads back as `$null` once the process is gone unless its handle has been cached, and
+`exit $null` is `exit 0`. Measured: `LastTaskResult: 0` on a task whose inference server had just
+died. In the file whose header claims its state is a truthful health signal, that is the
+report-success-having-done-nothing shape this program has paid for before.
+
+Now: `$null = $serve.Handle` before waiting, a non-zero floor when the code is still unreadable, and
+an explicit rule that **a server which stops at all is an outage** — an `rc=0` exit is reported as 1
+rather than passed through, because 0 would tell Task Scheduler the task completed successfully.
+
+### 4. `RestartCount 3` is not a recovery mechanism, and never was
+
+With (2) and (3) fixed the task now fails correctly — `Ready`, `LastTaskResult 0xFFFFFFFF` — and
+**nothing retried it.** `RestartCount 3 / RestartInterval PT1M` were registered exactly as this
+record describes them, and over four minutes no retry was attempted. Windows applies
+restart-on-failure to a task that fails to **run**, not to one whose action ran and returned a failure
+code. The `restart_count=3` this record cited as automatic restart, and that review reasoned about as
+"three retries that each exit 1", was never going to restart anything.
+
+A repetition attached to the **boot** trigger does not fix it either: registered post-boot with
+`PT2M`, the task sat at `Ready` with `LastRunTime` "never" and fired nothing, because a boot
+trigger's repetition window opens at boot.
+
+Now: **two triggers** — the boot trigger, and a TIME trigger repeating every two minutes. A firing
+while healthy is a genuine no-op (`MultipleInstances = IgnoreNew` drops it without running the
+action: same server pid after 150 s, and zero new lifecycle log lines). A firing while the task is
+`Ready` starts the script, whose guard reclaims any orphan on the way in.
+
+This is only safe *because* (1) is fixed. Under the old name-only guard a recheck would have found the
+orphan, refused, and logged a failure every two minutes forever.
+
+**Unattended recovery, measured end to end**, from the state the review described — task `Ready`,
+orphaned runner holding P40 VRAM, no listener, nothing touched by hand:
+
+```
+LISTENER BACK unattended after 113s
+  reclaimed 1 orphaned runner(s)   ·   power cap verified at 150W   ·   thermal preflight 62C
+  ollama serve started pid=15356 as a child of this task (pid 27044)
+  task Running · api {"version":"0.9.2"} · models 5
+```
+
+and from a clean `Stop-ScheduledTask`, restored unattended in 26 s.
+
+One honest cost, recorded rather than glossed: a no-op firing sets `LastTaskResult` to `0x800710E0`
+("instance ignored") while the service is perfectly healthy. `LastTaskResult` is therefore not the
+health signal for this task — the task **state** is, and `lab-health.ps1` asks the API rather than
+either of them.
+
+### The thermal boundary, stated exactly
+
+The review thread on `:131` was **confirmed on its facts**: `MIG-13` measured 68 → 85 °C in 59 s at
+this cap with `plateau=False`, and the abort that stopped that soak lived in the bench harness, never
+in the service. The remedy it proposed — "select and validate a sustainable operating cap" — is
+closed by owner decision: `200/250 W = REFUSED`, 150 W stands, and sustained admission is routed to
+airflow qualification. What the owner did *not* close is the thread's real subject: nothing in the
+running system made `SUSTAINED = NOT_ADMITTED` true.
+
+So here is the complete inventory, in one place, of what does and does not protect this card. No
+implied safety:
+
+| Enforced | By what | When |
+| --- | --- | --- |
+| 150 W power cap | `nvidia-smi -pl`, applied **and read back**; unverifiable ⇒ inference does not start | every service start, and it is needed every time — a reboot restores 250 W |
+| a start on an already-hot card | **new**: the service refuses at ≥ 80 °C, and refuses outright if the temperature cannot be read | every service start |
+| thermal slowdown | the card's own hardware throttle at 92 °C | always, and it is the last line, not a design |
+
+| **NOT enforced** | |
+| --- | --- |
+| a temperature ceiling during inference | nothing in the service reads temperature after `ollama serve` starts |
+| a request duration bound | none |
+| an unload or shutdown path under heat | none |
+| `SUSTAINED = NOT_ADMITTED` | an **admission rule about what may be sent here**, not a mechanism that stops it arriving |
+
+**Why the runtime cutoff was not built, stated rather than left as an omission.** A fail-closed
+runtime thermal guard has to be *verified* before it can be trusted, and verifying one means driving
+this card to its abort temperature under sustained load — which is precisely the workload the owner
+has NOT ADMITTED. Shipping an unverified process-killer into a commissioned inference service, on the
+strength of a soak that may not be run, would be the same class of claim this whole remediation is
+about: a mechanism believed to protect something, never once observed doing it. The start guard is
+what could be built and proven at idle, and it is described as exactly that, at the check itself and
+here.
+
+The precondition for closing the gap is unchanged and named: **the chassis airflow qualification**,
+then a re-bench by the same staged fail-closed method. Not a power number, and not a retry.
+
+### `CONT-997-P40-SUSTAINED-NOT-ADMITTED` — TYPED, carried forward
+
+```
+type:      BLOCKED_DEPENDENCY
+reason:    AIRFLOW_QUALIFICATION_ABSENT
+condition: chassis airflow over the P40's passive heatsink is materially improved, then MIG-12 and
+           MIG-13 are re-run by the same staged, fail-closed method
+holds:     SUSTAINED = NOT_ADMITTED, and the absence of any runtime thermal enforcement in the
+           service. Both are the same open item and neither is closed by a power change.
+notClosedBy: raising the power limit. 200/250 W = REFUSED by owner decision.
+ownerDecisionRequired: false for the qualification work itself; the refusal above is already recorded.
+```
 
 ## Findings
 
@@ -499,7 +740,15 @@ verified unchanged at the end.
 | 10 | `OWNER_COURIER_ACTIONS = 0` | **met** |
 
 Condition 7 is why this is `HERMES_P40_COMMISSIONED_WITH_LIMITS` and not `HERMES_P40_COMMISSIONED`.
-The service is genuinely commissioned; the envelope is genuinely bounded by cooling.
+The service is genuinely commissioned; the envelope is genuinely bounded by cooling, and
+`SUSTAINED = NOT_ADMITTED` is the owner's word for that boundary.
+
+Condition 4's "one owner" leg reads **met** on stronger evidence than it did when this table was
+written. It then rested on a name-matching guard that could not distinguish an owner from the
+wreckage of one, on a task that could not tell its own server had died, and on a restart policy that
+never fired. All three are repaired, re-installed on the commissioned host, and demonstrated — a
+refusal against a live owner, a reclamation of a real orphan, and a 113-second unattended recovery.
+See *Review remediation*.
 
 ## What was deliberately not done
 
@@ -507,10 +756,17 @@ The service is genuinely commissioned; the envelope is genuinely bounded by cool
   — and it is a machine-wide change to the owner's display adapter requiring a reboot. Typed, not taken.
 - **No WDDM switch.** The owner decision forbids it and TCC is why native Windows works at all.
 - **No 200 W / 250 W step.** The thermal gate did not open.
+- **No runtime thermal cutoff in the service.** A start guard was added and is proven at idle; a
+  runtime cutoff was not built, because verifying one requires driving this card to its abort
+  temperature under exactly the sustained load the owner has NOT ADMITTED. An unverified
+  process-killer in a commissioned inference service is the same class of claim this remediation is
+  about. Stated at the check, in the claims table, and in *The thermal boundary, stated exactly*.
 - **No permanent Docker autostart change.** The stack was restored for this boot; making Docker
   survive an unattended reboot is a change to a part of the stack this packet said to leave alone.
-- **No fix to `sync-models-to-forge.ps1` or `backup-volumes.ps1`.** Same reasoning, and their
-  correctness depends on ATLAS-side and backup-target truth this lane did not verify. Typed instead.
+- **No fix to `sync-models-to-forge.ps1` or `backup-volumes.ps1` by this lane** — and they are no
+  longer unfixed. The `#1004` runtime-settlement lane repaired both on its own branch, where the
+  ATLAS-side reasoning belongs, and `CONT-997-FORGE-MODEL-SYNC-BROKEN-SINCE-DRIVE-RELETTER` is
+  carried there. This lane still did not touch them, which is why the finding below stays as filed.
 - **No deletion of `G:\HermesData\ollama`.**
 - **No `OLLAMA_KEEP_ALIVE` change**, despite the resting-power finding.
 - **No rewrite of `core-online.ps1` / `model-pull.ps1`**, which this lane stranded. They fail loudly
@@ -518,9 +774,11 @@ The service is genuinely commissioned; the envelope is genuinely bounded by cool
 
 ## Evidence
 
-35 artifacts under `docs/reports/experience-v2-p40-commissioning/` prefixed `MIG-` — 29 brokered
-evidence records plus the raw soak log, the service lifecycle log, both telemetry CSVs and the two
-runner scripts. The runner scripts are retained as
+36 artifacts under `docs/reports/experience-v2-p40-commissioning/` prefixed `MIG-` — 29 brokered
+evidence records plus the raw soak log, the service lifecycle log, both telemetry CSVs, the two
+runner scripts, and `MIG-20-one-owner-and-recovery.txt`, the verbatim host transcript of the
+one-owner and recovery remediation (every step, both defects found by running it, and the unattended
+recovery). The runner scripts are retained as
 `MIG-hx-carrier.mjs` (the brokered carrier) and `MIG-zipprobe.mjs` (the ranged zip reader). Neither
 carries a UUID, a VRAM figure, a power number, a device model or a port — grep them. The only match
 for `P40` in either is the staged wrapper's own filename and the lane's staging directory, which are
