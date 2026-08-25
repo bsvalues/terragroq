@@ -29,3 +29,9 @@ worker-tier/**/*.py text eol=lf
 worker-tier/**/*.sh text eol=lf
 worker-tier/**/*.md text eol=lf
 scripts/omen-inventory.ps1 text eol=lf
+
+# The ATLAS authority-registry service definition is consumed entirely by Linux: a shell script
+# under `#!/usr/bin/env bash`, a systemd unit, a compose file and a pg_hba policy. A CRLF here is
+# not cosmetic -- `env` reads the shebang literally and reports `bash\r: No such file or directory`,
+# which is what happened once already while this directory was being written on Windows.
+deploy/atlas/williamos-authority-registry/* text eol=lf

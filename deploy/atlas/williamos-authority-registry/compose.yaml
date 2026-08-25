@@ -1,0 +1,75 @@
+# The WilliamOS authority oracle, as a service this repository OWNS.
+#
+# WHY THIS FILE EXISTS. The container `williamos-postgres` was created by a hand-typed
+# `docker run` on 2026-08-13 and carried no compose labels and no repository definition. When
+# ATLAS's DHCP lease moved `192.168.88.5` -> `192.168.88.8` on 2026-08-25, its publish
+# `HostIp: 192.168.88.5, HostPort: 15432` named an address the host no longer held. Docker could
+# not create the binding, and rather than failing the container it left it `Up`, attached to no
+# network, with no docker-proxy -- serving on its own socket and reachable from nowhere, including
+# the host it runs on. Nothing could restore it, because there was no declaration to re-apply: only
+# a new one to invent. `#1006` recorded that as a gate's decision rather than making it.
+#
+# This is that declaration. The same ownership lesson as `#997`: one owner, written down, so that a
+# reboot re-establishes the intended state instead of whatever the last person typed.
+#
+# WHY `0.0.0.0`. The publish deliberately names no interface address. ATLAS's address is
+# DHCP-assigned and has already moved once; any literal here re-creates the exact defect above the
+# next time the lease changes. The restriction that makes this safe is NOT the bind address -- it is
+# two policy layers that do not care what ATLAS's address is:
+#
+#   1. `pg_hba.conf` (mounted read-only from this directory, and therefore owned here rather than
+#      drifting inside the data volume): only the `williamos` role, only the `williamos` database,
+#      only from declared fabric callers, only with `scram-sha-256`, and everything else `reject`.
+#   2. `apply-network-policy.sh` in this directory, run at boot by
+#      `williamos-authority-firewall.service`: a `DOCKER-USER` allowlist for tcp/15432.
+#      `ufw` is NOT that layer and cannot be -- Docker's published ports are DNAT'd in `nat`
+#      PREROUTING and never traverse the `INPUT` chain `ufw` filters.
+#
+# Neither layer is optional. `0.0.0.0` without both is "Postgres open to the LAN".
+name: williamos-authority-registry
+
+services:
+  registry:
+    image: pgvector/pgvector:pg16
+    # Never re-pull. The tag is mutable upstream; the image this service was proven against is
+    # sha256:a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b, already local on
+    # ATLAS. A silent upgrade of the lab's single authority oracle is not a thing this file will do.
+    pull_policy: missing
+    container_name: williamos-postgres
+    restart: unless-stopped
+    # `hba_file` points OUT of the data volume at the mounted policy below. The copy inside
+    # `williamos_pgdata` is left exactly as it was found and is no longer consulted, so the
+    # rollback for the access policy is "stop using this compose file", not "restore a file that
+    # was edited in place".
+    command: ["postgres", "-c", "hba_file=/etc/williamos/pg_hba.conf"]
+    ports:
+      - "0.0.0.0:15432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./pg_hba.conf:/etc/williamos/pg_hba.conf:ro
+    networks:
+      - authority
+    healthcheck:
+      # Over the unix socket, because the policy above grants nothing to the container's own
+      # TCP loopback. A healthcheck that needed a network grant would be a reason to widen one.
+      test: ["CMD-SHELL", "pg_isready -U williamos -d williamos -q"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_grace_period: 60s
+
+volumes:
+  # EXTERNAL, and named exactly as the volume that already holds the registry's data. Compose would
+  # otherwise create `williamos-authority-registry_pgdata` and this service would come up as an
+  # empty database that looks healthy and knows about no grants at all.
+  pgdata:
+    external: true
+    name: williamos_pgdata
+
+networks:
+  # Its own bridge rather than the default one, so the authority oracle is not reachable by every
+  # other container on ATLAS (`tf-postgres`, `tf-redis`, `tf-mongo`, `portainer_agent`) merely by
+  # sharing `172.17.0.0/16`.
+  authority:
+    name: williamos-authority

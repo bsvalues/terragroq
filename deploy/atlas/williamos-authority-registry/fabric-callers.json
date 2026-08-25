@@ -1,0 +1,33 @@
+{
+  "contract": "williamos-authority-registry-callers/1",
+  "service": "williamos-authority-registry",
+  "container": "williamos-postgres",
+  "publishedPort": 15432,
+  "database": "williamos",
+  "role": "williamos",
+  "note": "The approved WilliamOS fabric callers of the authority oracle. This file is the single declared source for BOTH policy layers: pg_hba.conf's host lines and apply-network-policy.sh's DOCKER-USER allowlist. Adding a caller means editing this file and re-running the apply script; there is no other supported way in.",
+  "callers": [
+    {
+      "nodeId": "hermes-node",
+      "hostname": "HERMES",
+      "cidr": "192.168.88.9/32",
+      "reason": "The control plane. It runs the WilliamOS runtime that serves app/api/system/node/stamp-identity and every other governed route whose authority leg reads this registry. It is the only node that consults the authority oracle.",
+      "addressSource": "observed-lan-address-2026-08-25",
+      "addressStability": "DHCP -- see CONT-EXPV2-ALLOWLIST-ADDRESS-BOUND. An L3 allowlist can only name addresses, so this entry does not survive a lease change on its own; the owner's DHCP reservations are what make it durable."
+    }
+  ],
+  "deliberatelyExcluded": [
+    {
+      "nodeId": "omen",
+      "reason": "Cockpit only. It reaches WilliamOS through the runtime on HERMES (https://192.168.88.9:3443), never the authority registry directly. It is retained here as the negative control: a LAN host that must be refused."
+    },
+    {
+      "nodeId": "aegis",
+      "reason": "Execution worker. It receives brokered commands; it does not evaluate authority."
+    },
+    {
+      "nodeId": "atlas",
+      "reason": "The host itself. Administration is docker exec over the container's unix socket, which the pg_hba `local` line already covers and which no network grant is needed for."
+    }
+  ]
+}
