@@ -1,0 +1,14 @@
+{
+  "invocation": "brokeredExec",
+  "broker": "lib/fabric/broker.mjs",
+  "node": "hermes",
+  "action": "probe",
+  "requireAudit": false,
+  "command": "$ErrorActionPreference='Continue'\n$tmp=[System.IO.Path]::GetTempFileName()\nforeach ($d in @('docker-desktop','Ubuntu')) {\n  Write-Output \"--- $d ---\"\n  $p=Start-Process -FilePath 'wsl.exe' -ArgumentList @('-d',$d,'sh','/mnt/c/Users/bs/p40-commissioning/wslprobe.sh') -NoNewWindow -Wait -PassThru -RedirectStandardOutput \"$tmp.o\" -RedirectStandardError \"$tmp.e\"\n  Write-Output \"EXIT=$($p.ExitCode)\"\n  (Get-Content \"$tmp.o\" -ErrorAction SilentlyContinue) -join \"`n\"\n  (Get-Content \"$tmp.e\" -ErrorAction SilentlyContinue) -join \"`n\"\n}\nRemove-Item \"$tmp*\" -ErrorAction SilentlyContinue\nWrite-Output '--- RC ---'\n",
+  "startedAt": "2026-08-25T01:46:40.010Z",
+  "finishedAt": "2026-08-25T01:46:42.365Z",
+  "durationMs": 2355,
+  "ok": true,
+  "stdout": "--- docker-desktop ---\r\nEXIT=2\r\n\r\nsh: can't open '/mnt/c/Users/bs/p40-commissioning/wslprobe.sh': No such file or directory\r\n--- Ubuntu ---\r\nEXIT=0\r\n== dxg ==\ncrw-rw-rw- 1 root root 10, 125 Aug 24 18:43 /dev/dxg\n== nvidia libs in /usr/lib/wsl/lib ==\nlibcuda.so\nlibcuda.so.1\nlibcuda.so.1.1\nlibcudadebugger.so.1\nlibnvidia-encode.so\nlibnvidia-encode.so.1\nlibnvidia-ml.so.1\nlibnvidia-opticalflow.so\nlibnvidia-opticalflow.so.1\nnvidia-smi\n== libnvidia-ml ==\n-r-xr-xr-x 2 root root 245192 Sep 16  2024 /usr/lib/wsl/lib/libnvidia-ml.so.1\n== dxg in dmesg ==\n[    0.349338] hv_vmbus: registering driver dxgkrnl\n[    7.696652] misc dxg: dxgk: dxgkio_is_feature_enabled: Ioctl failed: -22\n[    7.713541] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -22\n[    7.714224] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -22\n[    7.714818] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -22\n== uname ==\n6.6.87.2-microsoft-standard-WSL2\r\n\r\n--- RC ---\r\n",
+  "stderr": null
+}

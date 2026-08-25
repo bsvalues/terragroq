@@ -1,0 +1,14 @@
+{
+  "invocation": "brokeredExec",
+  "broker": "lib/fabric/broker.mjs",
+  "node": "hermes",
+  "action": "probe",
+  "requireAudit": false,
+  "command": "$ErrorActionPreference='Continue'\nWrite-Output '--- CONTAINERS-NOW ---'\n& docker ps -a --format '{{.Names}}|{{.Status}}' 2>&1\nWrite-Output '--- GPU-FINAL ---'\n& nvidia-smi --query-gpu=uuid,name,driver_model.current,display_active,power.limit,enforced.power.limit,power.default_limit,temperature.gpu,power.draw --format=csv,noheader 2>&1\nWrite-Output '--- P40-ECC-FINAL ---'\n& nvidia-smi -i GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2 --query-gpu=ecc.mode.current,ecc.errors.corrected.volatile.total,ecc.errors.uncorrected.volatile.total,ecc.errors.corrected.aggregate.total,ecc.errors.uncorrected.aggregate.total --format=csv,noheader 2>&1\nWrite-Output '--- COMPOSE-FILE-UNCHANGED ---'\n(Get-FileHash 'C:\\HermesLab\\hermes\\docker-compose.yml' -Algorithm SHA256).Hash.ToLower()\nWrite-Output '--- MODELS-INTACT ---'\n$m=(Get-ChildItem 'D:\\HermesData\\ollama\\models\\blobs' -File | Measure-Object -Sum Length); Write-Output \"count=$($m.Count) bytes=$($m.Sum)\"\nWrite-Output '--- RC ---'\n",
+  "startedAt": "2026-08-25T01:56:06.085Z",
+  "finishedAt": "2026-08-25T01:56:06.720Z",
+  "durationMs": 635,
+  "ok": true,
+  "stdout": "--- CONTAINERS-NOW ---\r\ntf-rel002-c3fresh-evidence|Created\ntf-rel-004-evidence-governance|Created\ntf-rel-004-evidence-final|Created\ntf-rel-004-evidence-node20|Created\nollama|Exited (128) About an hour ago\nwilliamos-hermes-inference-proxy|Exited (255) About an hour ago\nopen-webui|Up 11 minutes (healthy)\nportainer|Up 11 minutes\npostgres|Up 11 minutes (healthy)\nredis|Up 11 minutes\n--- GPU-FINAL ---\r\nGPU-6d9ae165-7272-a38c-06b1-7276869e980f, NVIDIA GeForce RTX 3050, WDDM, Enabled, 70.00 W, 70.00 W, 70.00 W, 32, 7.94 W\r\nGPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2, Tesla P40, TCC, Disabled, 150.00 W, 150.00 W, 250.00 W, 32, 9.77 W\r\n--- P40-ECC-FINAL ---\r\nEnabled, 0, 0, 0, 0\r\n--- COMPOSE-FILE-UNCHANGED ---\r\n2ffc6ccddb650f215a5328a0a2464863bc5ab2bf8ef4067d663d04bc86542c7e\r\n--- MODELS-INTACT ---\r\ncount=25 bytes=10360082334\r\n--- RC ---\r\n",
+  "stderr": null
+}
