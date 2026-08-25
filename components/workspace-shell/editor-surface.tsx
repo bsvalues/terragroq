@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import dynamic from "next/dynamic"
 import { Columns2, File, Folder, FolderOpen, Save, X } from "lucide-react"
 
-import type { EditorPane, EditorSelection, WorkspaceSpace } from "./types"
+import type { EditorPane, WorkspaceSpace } from "./types"
 import styles from "./workspace-shell.module.css"
 
 const SourceEditor = dynamic(() => import("./source-editor").then((module) => module.SourceEditor), {

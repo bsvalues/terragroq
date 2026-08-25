@@ -267,7 +267,8 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
   if (snapshot.space !== undefined) snapshot.space = validateSpaceState(snapshot.space)
   // The 2026-08-25 owner contract makes a Space's window geometry durable product state. Continue
   // rejecting layout-shaped keys everywhere else, while validating Space geometry explicitly.
-  const { space: _space, ...meaning } = snapshot
+  const meaning: Record<string, unknown> = { ...snapshot }
+  delete meaning.space
   assertNoChrome(meaning, "")
   return snapshot as unknown as WorkingWorldSnapshot
 }
