@@ -503,7 +503,7 @@ preserved rather than overwritten. The repository and the deployed bytes match e
 
 | File | repo & deployed sha256 | bytes | preserved as |
 | --- | --- | --- | --- |
-| `sync-models-to-forge.ps1` | `38914bdb8da2b4bbee873a1a5dd6a4ca648410d5bdafd21a2a0390baae2d16eb` | 14036 | `.bak-20260824_2312-preremediation` (`0b92037d…`) |
+| `sync-models-to-forge.ps1` | `fd9e8779b5af4ebed7b078187bddcc3c4bfd03760a9a06530a33d7ad367526e4` | 14410 | `.bak-20260824_2312-preremediation` (`0b92037d…`) |
 | `install-forge-manifests.sh` | `f7deb8e7f7672d6192d43caac443998c0af95ce67eebf7d3e93517f0c35af7fa` | 2951 | new file |
 | `backup-volumes.ps1` | `54bf3b05df73bf4fa505ac809f20a9da63771692cd4378c8809efec5378e9866` | 4769 | unchanged by this remediation |
 
@@ -523,6 +523,14 @@ PowerShell 5.1 binds parameter defaults before `$PSScriptRoot` exists, so
 the form the scheduled task uses. The default is resolved in the body instead. The guard is also a
 **preflight**, before any ssh: a refusal reachable only after the network is up is a refusal nobody
 can exercise while the far side is down, which is the state this lab is in.
+
+**A second one was found by re-reading the fix rather than the original.** The manifest listing used
+a bare `sudo find` under a checked ssh wrapper. On an archive that does not yet hold a manifest tree
+`find` exits non-zero — so the repaired run would have died on the **first repair of exactly the
+condition the repair exists for**, which is the failure shape this whole thread is about, reproduced
+inside its own fix. Now `|| true`: an empty before-state is legitimate, and an unreadable one is
+still caught by the install step, which fails loudly. Redeployed and the controls re-run:
+`RS-10-sync-redeploy-after-fix.txt`, which supersedes `RS-09`'s sync digest.
 
 `MODEL_STORE_DISAGREEMENT` is unchanged by this remediation and its refusal is recorded above under
 *Verification, on HERMES, with negative controls*.
@@ -632,6 +640,7 @@ All under `docs/reports/experience-v2-runtime-settlement/`.
 | `RS-08-fixed-driver-rerun.json` | the REPAIRED driver, run on HERMES from its retained location; same verdict, new lattice |
 | `RS-08b-fixed-driver-named-actor.json` | the same run with `--actor` named, showing the assertion recorded rather than acted on |
 | `RS-09-remediation-hermes-controls.txt` | remediation deploy digests, five controls, blob verification, negative evidence |
+| `RS-10-sync-redeploy-after-fix.txt` | the sync redeploy after a latent failure mode was found in the fix itself; supersedes `RS-09`'s sync digest |
 
 ## Chronology (local, HERMES/OMEN are the same timezone)
 

@@ -173,7 +173,11 @@ try {
   $dest  = "$remote/models/manifests"
   $hist  = "$remote/models/manifests-superseded/$runId"
 
-  $manifestsBefore = @((Invoke-Atlas "sudo find $dest -type f -printf '%P\n' 2>/dev/null") -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  # `|| true` rather than a bare `find`: on an archive that does not yet hold a manifest tree, `find`
+  # exits non-zero, `Invoke-Atlas` is checked, and the run would die on the first repair of exactly
+  # the condition this repair exists for. An empty "before" is a legitimate state; an unreadable one
+  # is caught by the install step, which fails loudly.
+  $manifestsBefore = @((Invoke-Atlas "sudo find $dest -type f -printf '%P\n' 2>/dev/null || true") -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 
   Invoke-Atlas "rm -rf $stage && mkdir -p $stage" | Out-Null
   Invoke-Checked "scp manifests" { & scp -i $key -o UserKnownHostsFile=$known -o StrictHostKeyChecking=yes -o BatchMode=yes -r "$manifestRoot" "${atlas}:$stage/" } | Out-Null
@@ -196,7 +200,7 @@ try {
     throw "archive incomplete: $($stillMissing.Count) of $($local.Count) blobs are not on ATLAS after the run ($(($stillMissing | Select-Object -First 3 | ForEach-Object { $_.Name }) -join ', '))"
   }
 
-  $manifestsAfter = @((Invoke-Atlas "sudo find $dest -type f -printf '%P\n' 2>/dev/null") -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  $manifestsAfter = @((Invoke-Atlas "sudo find $dest -type f -printf '%P\n' 2>/dev/null || true") -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   $manifestsUninstalled = @($localManifests | Where-Object { $manifestsAfter -notcontains $_ })
   if ($manifestsUninstalled) {
     throw "manifest archive incomplete: $($manifestsUninstalled.Count) of $($localManifests.Count) manifests are not at their expected archive path after the run ($(($manifestsUninstalled | Select-Object -First 3) -join ', ')). A nested staging layout looks exactly like this."
