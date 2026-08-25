@@ -89,10 +89,20 @@ export type ObjectActionDescriptor = Readonly<{
 
 const NAVIGATION_DEFAULTS = { kind: "navigate", mutating: false, requiresAuthority: false, implementation: null } as const
 
+/**
+ * Projects and Activity are gone from here because they stopped being PLACES.
+ *
+ * The primary experience replacement deleted /projects and /activity and made both surfaces the
+ * environment summons on request. Leaving them as navigation modes would have kept teaching the next
+ * reader -- and the next agent -- that a capability is something you go to, which is the exact shape
+ * the owner ordered removed. `mode.home` now means the environment itself.
+ *
+ * The capabilities below are unchanged: they still have real pages, and the ones whose pages were
+ * deleted (Work Orders, Trace) keep their addresses through the redirects in `next.config.ts`, so
+ * "visit work orders" still lands on the work orders.
+ */
 const modes: readonly ObjectActionDescriptor[] = [
   { ...NAVIGATION_DEFAULTS, id: "mode.home", subject: "workbench", label: "Home", href: "/", keywords: ["home", "overview"] },
-  { ...NAVIGATION_DEFAULTS, id: "mode.projects", subject: "workbench", label: "Projects", href: "/projects", keywords: ["project", "projects", "context"] },
-  { ...NAVIGATION_DEFAULTS, id: "mode.activity", subject: "workbench", label: "Activity", href: "/activity", keywords: ["activity", "recent", "events"] },
   { ...NAVIGATION_DEFAULTS, id: "mode.system", subject: "workbench", label: "System", href: "/system", keywords: ["system", "status", "health"] },
 ]
 
@@ -303,7 +313,9 @@ export type IntentDestination = {
 }
 
 export const DESTINATIONS: Readonly<Record<Exclude<UniversalIntent, "navigation">, IntentDestination>> = {
-  answer: { href: "/chat", action: "respond" },
+  // `/`, not `/chat`: the Line IS the conversation, and /chat was deleted rather than replaced by a
+  // second place to talk. An answer belongs where the owner already is.
+  answer: { href: "/", action: "respond" },
   research: { href: "/brain-council", action: "research" },
   council: { href: "/brain-council", action: "council_review" },
   outcome: { href: null, action: "start_outcome" },
