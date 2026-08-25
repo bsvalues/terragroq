@@ -151,14 +151,15 @@ describe("Invariant 2 - one registry resolves a canonical SystemObject to a dete
 /**
  * A mutating node action that does NOT ship.
  *
- * #995 requires the ambiguity invariant proved "with a mutating pair, not only a navigation pair",
- * and the search record is the reason there is no shipped pair to use: no existing canonical action
- * qualifies, and adding one to the catalogue to make a test convenient would be the overturned
- * reversal arriving through a fixture. So the RULE is proved against an injected descriptor, and a
- * separate test asserts the shipped catalogue still contains no such action.
+ * WHY IT IS STILL HERE NOW THAT ONE DOES SHIP. `system.node.stamp-identity` proves the invariant
+ * against the real catalogue -- that test is directly below this block and is the one #995 asks for.
+ * This injected descriptor proves something the shipped one cannot: that the rule holds for a
+ * mutating action the resolver has never seen, rather than for the single entry the catalogue happens
+ * to contain. Deleting it would narrow the invariant to whatever is currently shipped, which is the
+ * opposite of what an invariant is for.
  *
  * `drain` is the charter's own vocabulary (`charter:264-266`) and is deliberately one of the verbs
- * the search record confirmed does not exist on `main`.
+ * both bounded search records confirmed does not exist on `main`.
  */
 const HYPOTHETICAL_DRAIN = {
   id: "test.node.drain",
@@ -202,6 +203,30 @@ describe("Invariant 3 - ambiguity is refused, not resolved by ranking", () => {
     expect(resolution.action?.id).toBe("test.node.drain")
     expect((resolution.object as NodeObject).nodeId).toBe("hermes-node")
     expect(resolution.authority).toEqual({ required: true, granted: false })
+  })
+
+  it("refuses two plausible targets for the SHIPPED mutating action", () => {
+    // #995 invariant 3, proved against the catalogue that actually ships rather than against a
+    // fixture. Nothing is injected here: this is `objectActionRegistry` as merged.
+    const resolution = resolveObjectAction("stamp hermes and atlas", { objects })
+
+    expect(resolution.state).toBe("clarification_required")
+    expect(resolution.object).toBeNull()
+    expect(resolution.reason).toMatch(/disambiguation is required/i)
+    expect(resolution.executionAuthorized).toBe(false)
+    expect(resolution.candidates.map((c) => c.action.id)).toEqual([
+      "system.node.stamp-identity",
+      "system.node.stamp-identity",
+    ])
+  })
+
+  it("resolves the shipped mutating action to one node, and still grants no authority", () => {
+    const resolution = resolveObjectAction("stamp hermes", { objects })
+    expect(resolution.state).toBe("authority_required")
+    expect(resolution.action?.id).toBe("system.node.stamp-identity")
+    expect((resolution.object as NodeObject).nodeId).toBe("hermes-node")
+    expect(resolution.authority).toEqual({ required: true, granted: false })
+    expect(resolution.executionAuthorized).toBe(false)
   })
 
   it("refuses when more than one ACTION matches, so there is nothing to disambiguate the object for", () => {
@@ -388,29 +413,53 @@ describe("Invariant 8 - the control-center disposition is recorded and enforced"
   })
 })
 
-describe("Invariants 9, 12 and 13 - the chosen action, which this gate did not choose", () => {
-  it("types the absence of a governed mutation instead of returning an empty result", () => {
-    for (const kind of ["NODE", "ACCELERATOR"] as const) {
-      const resolution = resolveObjectMutation(kind)
-      expect(resolution.state).toBe("clarification_required")
-      expect(resolution.unavailable?.reason).toBe("CHARTER_AMENDMENT_REQUIRED")
-      expect(resolution.unavailable?.continuation).toBe("CONT-EXPV2-FIRST-ACTION")
-      expect(resolution.executionAuthorized).toBe(false)
-    }
+describe("Invariants 9, 12 and 13 - the built action, and the class that still has none", () => {
+  /**
+   * This block used to assert that NO SystemObject mutation existed, and that assertion was correct
+   * for its base. It is replaced rather than annotated: charter AMENDMENT-001 permitted the build, a
+   * FRESH bounded search at the pickup base
+   * (`williamos-experience-v2-first-action-pickup-search-record.md`) returned nothing again, and
+   * `system.node.stamp-identity` was built. What survives unchanged is the RULE -- an object class
+   * with no governed mutation gets a typed refusal naming what it would take, and ACCELERATOR is
+   * still such a class.
+   */
+  it("offers the one governed NODE mutation, and grants it no authority", () => {
+    const resolution = resolveObjectMutation("NODE")
+    expect(resolution.state).toBe("authority_required")
+    expect(resolution.action?.id).toBe("system.node.stamp-identity")
+    expect(resolution.action?.implementation).toBe("lib/system/node-identity-stamp.ts")
+    expect(resolution.executionAuthorized).toBe(false)
+    expect(resolution.authority).toEqual({ required: true, granted: false })
+    expect(resolution.unavailable).toBeUndefined()
+  })
+
+  it("still types the absence for an object class that has no governed mutation", () => {
+    const resolution = resolveObjectMutation("ACCELERATOR")
+    expect(resolution.state).toBe("clarification_required")
+    expect(resolution.unavailable?.reason).toBe("NO_CANONICAL_MUTATION_FOR_OBJECT_CLASS")
+    expect(resolution.unavailable?.continuation).toBe("CONT-EXPV2-ACCELERATOR-FIRST-ACTION")
+    expect(resolution.executionAuthorized).toBe(false)
   })
 
   it("points at the durable record rather than restating its conclusion", () => {
-    expect(MUTATION_UNAVAILABLE.detail).toContain("gate2-first-action-search-record")
+    expect(MUTATION_UNAVAILABLE.detail).toContain("first-action-pickup-search-record")
   })
 
-  it("carries no SystemObject mutation, which is the finding and not an oversight", () => {
-    // If this ever fails, an action was added to a node or accelerator subject -- and unless a
-    // charter amendment was recorded first, that is the overturned reversal arriving through a
-    // catalogue entry. The search record's §5 ledger is what a reviewer should re-run.
-    const systemMutations = objectActionRegistry.filter(
-      (action) => (action.subject === "NODE" || action.subject === "ACCELERATOR") && action.mutating,
-    )
-    expect(systemMutations).toEqual([])
+  it("carries exactly one mutating descriptor per SystemObject class", () => {
+    // `resolveObjectMutation` returns `available[0]` when a class has any mutation, so a second
+    // mutating descriptor on the same subject would make it pick a winner silently -- the retargeting
+    // the charter forbids, arriving through a catalogue entry rather than through a resolver. This is
+    // the tripwire for that, and it is also the tripwire for a lane adding a mutation without the
+    // bounded search AMENDMENT-001 still requires for each new subject.
+    for (const subject of ["NODE", "ACCELERATOR"] as const) {
+      const mutations = objectActionRegistry.filter((action) => action.subject === subject && action.mutating)
+      expect(mutations.length).toBeLessThanOrEqual(1)
+    }
+    expect(
+      objectActionRegistry
+        .filter((action) => (action.subject === "NODE" || action.subject === "ACCELERATOR") && action.mutating)
+        .map((action) => action.id),
+    ).toEqual(["system.node.stamp-identity"])
   })
 
   it("keeps the catalogued resource mutations visible rather than hidden", () => {
