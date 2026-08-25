@@ -16,35 +16,17 @@ import {
   customType,
 } from "drizzle-orm/pg-core"
 
+import { fromUtcWallDriver, toUtcWallDriver } from "@/lib/db/utc-wall-timestamp"
+
+// The conversion itself lives in `lib/db/utc-wall-timestamp.ts` so that the raw-`pg` readers of these
+// same columns can share it. While it was a closure here, they could not, and read the stored UTC wall
+// clock as local time -- CONT-EXPV2-GRANT-EXPIRY-TZ-SKEW.
 const utcWallTimestamp = customType<{ data: Date; driverData: string | Date }>({
   dataType() {
     return "timestamp"
   },
-  toDriver(value) {
-    if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
-      throw new Error("AUTHORITY_TIMESTAMP_INVALID")
-    }
-    return value.toISOString().slice(0, -1).replace("T", " ")
-  },
-  fromDriver(value) {
-    if (value instanceof Date) {
-      return new Date(Date.UTC(
-        value.getFullYear(),
-        value.getMonth(),
-        value.getDate(),
-        value.getHours(),
-        value.getMinutes(),
-        value.getSeconds(),
-        value.getMilliseconds(),
-      ))
-    }
-    const normalized = value.trim().replace(" ", "T")
-    const instant = new Date(/[zZ]$|[+-]\d\d(?::?\d\d)?$/.test(normalized)
-      ? normalized
-      : `${normalized}Z`)
-    if (!Number.isFinite(instant.getTime())) throw new Error("AUTHORITY_TIMESTAMP_INVALID")
-    return instant
-  },
+  toDriver: toUtcWallDriver,
+  fromDriver: fromUtcWallDriver,
 })
 
 /* ------------------------------------------------------------------ */
