@@ -321,21 +321,34 @@ a real ATLAS, and that is what this continuation still holds open.
 `backup-volumes.ps1`'s transfer leg is separately unverified for a different reason: it drives
 `docker run`, and container interaction on HERMES is outside this lane's envelope.
 
-### `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F` — TYPED FINDING, NOT REPAIRED HERE
+### `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F` — PICKUP ELIGIBLE, STILL NOT REPAIRED HERE
 
 ```
-type:      TYPED_FINDING
+type:      PICKUP_ELIGIBLE          [retyped 2026-08-25 from TYPED_FINDING]
 file:      scripts/lab-control/hermes/crossnode-sync.ps1  (and lab-health.ps1's F: free-space check)
 symptom:   HermesCrossNodeBackupSync lastResult=1, HermesLabHealth lastResult=2, both since 2026-08-24
+released:  #1003 merged as 58819e62; #862 closed 2026-08-18. No reservation remains on either file.
 ```
 
 `crossnode-sync.ps1` hard-codes `F:\lab-backups\crossnode`, `F:\lab-backups\hermes-volumes` and
 `F:\lab-backups\crossnode\crossnode-sync-task-evidence.json`, and `lab-health.ps1` reports free space
-on `F:`. The same letter, the same day, the same one-line fix — and both belong to other lanes:
-`lab-health.ps1` is a reserved file of **open PR `#1003`**, and `crossnode-sync.ps1` is the `#862`
-backup-recovery lane's artifact. A blocked or in-flight reservation is still a reservation. Typed here
-so the next lane to open either file finds the diagnosis already done, with the destination named:
-`G:`, resolved by the label `HERMES_NVME` the way `backup-volumes.ps1` now does.
+on `F:`. The same letter, the same day, the same one-line fix.
+
+**Both reservations that held this shut are now released, and this packet is retyped rather than
+annotated so no reader meets two types for it.** `lab-health.ps1` was a reserved file of PR `#1003`,
+which merged as `58819e62` on 2026-08-25 — that PR changed only this file's Ollama probe
+(`docker ps` → the native `127.0.0.1:11434` API) and re-encoded it (UTF-8 BOM added, LF → CRLF);
+the `F:` free-space check is untouched at `:14`/`:16`, and unrepaired. `crossnode-sync.ps1` was the
+`#862` backup-recovery lane's artifact, and `#862` closed on 2026-08-18. No open pull request
+reserves either file. The diagnosis is unchanged and the destination is still named: `G:`, resolved
+by the label `HERMES_NVME` the way `backup-volumes.ps1` now does.
+
+Still true on HERMES at the moment of this retype, checked rather than carried forward from the
+prose above: `Get-Volume -DriveLetter F` returns nothing, `HermesLabHealth` last ran at
+2026-08-25T00:10:10 with `LastTaskResult 2`, and `HermesCrossNodeBackupSync` last ran at
+2026-08-24T13:07:07 with `LastTaskResult 1`. The merge sweep that retyped this did **not** repair it:
+picking it up is a lane's work, and a coordinator that fixed it here would be taking the reservation
+it had just released.
 
 Note the consequence, because it is easy to miss: `crossnode-sync.ps1` is the **off-box** replication.
 While it is dead, the repaired `backup-volumes.ps1` writes local redundancy on the same machine and
