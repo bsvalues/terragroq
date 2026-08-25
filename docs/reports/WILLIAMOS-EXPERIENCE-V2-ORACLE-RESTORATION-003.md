@@ -342,7 +342,39 @@ as "ufw".
 | `OR-15-review-remediation.md` | the six review findings, each measured; four repaired, two typed |
 | `OR-16-recorder-replay-refused.json` | the recorder re-run **with `--record`**, creating nothing |
 | `OR-17-registry-after-remediation.json` | separate observation after it: 29 rows, digests unchanged |
+| `OR-18-independent-reverification.txt` | a **second witness**, from a session that changed nothing |
 | `docs/devkit/authority/GRANT-0019.{md,json}` | the Tier-2 ledger the canonical path produced |
+
+## A second witness, and the one gap it found
+
+Everything above was captured by the session that made the changes. That is the shape of evidence
+this lane exists to distrust, so a later session that performed none of the restoration re-measured
+it, producing values before comparing them — `OR-18-independent-reverification.txt`.
+
+It agrees. The compose project owns the container and publishes `0.0.0.0:15432`; `hba_file` is the
+mounted read-only copy and its five loaded rules are the declared policy; the packet allowlist is in
+force and its boot owner is `enabled`/`active`; the stamp is still on HERMES at `ba29cf1b…`, 158
+bytes; and the route's own lookup from HERMES still returns `covers: false`. The four grant digests
+were re-derived over a **different transport and a different tool** — `psql` on the container's local
+socket rather than node-pg over TCP — and all four match to the character, which is the strongest
+form the "28 unchanged" claim has taken.
+
+Two things it found that this record did not previously say:
+
+**A documentation file has drifted on ATLAS.** Of the six deployed files, five are byte-identical to
+the repository at head. `README.md` is not: the deployed copy predates `74494cbb`, the commit that
+made the apply atomic and rewrote the README describing it. Nothing the machine executes or reads is
+affected, and correcting it would cost an ATLAS write for prose — so it is recorded here for the next
+lane that touches that directory rather than repaired.
+
+**`CONT-EXPV2-RESOLVER-NOT-WIRED` was typed in prose and never entered in the register.** It appears
+in this report and in `OR-15`, and it was absent from
+`williamos-experience-v2-first-action-pickup-search-record.md` §8, where every other typed
+continuation from this lane lives and where a later lane actually looks. A finding recorded only in
+the narrative of the lane that raised it is a finding the next lane does not find — the same failure
+mode as an undeclared service, one layer up. It was re-verified at head before being entered, and the
+register entry now carries it, including that it must be closed together with
+`CONT-EXPV2-RUNTIME-CREDENTIAL-STALE` rather than alone.
 
 ## Tests
 

@@ -640,4 +640,33 @@ CONT-EXPV2-ALLOWLIST-ADDRESS-BOUND
                           a one-file edit and a re-run, not a hunt. The owner is handling DHCP
                           reservations separately.
   ownerDecisionRequired:  false.
+
+CONT-EXPV2-RESOLVER-NOT-WIRED
+  type:                   TYPED_DEFECT
+  raised by:              PR #1008 review, 2026-08-25; verified rather than accepted, and entered
+                          here because a finding typed only in a lane report is a finding the next
+                          lane does not find.
+  finding:                lib/fabric/authority-registry-url.mjs has NO production caller. A
+                          repository-wide search at 44b28991 reaches it from exactly two places:
+                          its own CLI (scripts/fabric/resolve-authority-registry-url.mjs) and
+                          tests/authority-registry-url.test.ts. scripts/hermes-bridge/run-cycle.ps1
+                          still computes $envPath = <workspace>\.env.local and hands it to node as
+                          --env-file, so a normal HERMES cycle starts from the durable file and
+                          never asks the registry anything.
+  consequence:            the address-independence this lane built is available to an operator
+                          running the CLI and to nothing else. A future lease change breaks the
+                          runtime again exactly as it did on 2026-08-25, and the repair sitting in
+                          the repository does not fire.
+  not repaired here:      two reasons, both boundaries rather than difficulty. (1) This lane's
+                          HERMES-side envelope is reads and the driver run; wiring a resolver into
+                          a running service's startup is a production behaviour change to a runtime
+                          other lanes were active on. (2) It would not work if it were wired --
+                          CONT-EXPV2-RUNTIME-CREDENTIAL-STALE means that process cannot
+                          authenticate whatever address it resolves, so wiring it now would replace
+                          a VISIBLE wrong address with an INVISIBLE wrong credential and would look
+                          like a repair.
+  close it with:          CONT-EXPV2-RUNTIME-CREDENTIAL-STALE, in a lane that owns the runtime.
+                          Closing this one alone produces a service that resolves correctly and
+                          still refuses every governed route.
+  ownerDecisionRequired:  false.
 ```
