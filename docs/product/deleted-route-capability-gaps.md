@@ -93,6 +93,12 @@ that used to open one exact record now opens the whole runtime-execution list. T
 that probe: because the reference still arrives, closing this gap later needs a reader at `/`, not a
 change to any of the links that point at it.
 
+`getDurableTraceRecord` was **deleted** here rather than left doorless, and unlike the release gates
+in section 5 it is deliberately not restored. It was a 41-line exact-match query over `TRACE_RECORDS`
+living inside the deleted route's own directory; the data it queried survives, nothing else in the
+system reads a value it wrote, and so nothing froze when it went. Rebuilding it belongs with the
+surface that would call it.
+
 **Why 2 and 3 are typed and not closed here:** both need a surface that does not exist — a static
 ledger surface and a single-record surface — plus a summon that carries a *reference*, which no
 summon does today (`?summon=` carries a surface name and nothing else). That is the next phase of the
@@ -121,6 +127,41 @@ world does an operator return to — the last one on this device, the last one a
 they were sent a link to? A wrong answer silently resurrects stale work in front of them, which is
 worse than an honest blank Line. It also needs a reply shape the route does not have: today a reply
 carries the surfaces of the *current* action, not the world's accumulated turns and surfaces.
+
+## 5. `/work-orders`'s release gates and closure result — deleted, then restored
+
+| what | where |
+| --- | --- |
+| capability | open/close the commit, tag and push release gates; record a work order's PASS/FAIL/PARTIAL result |
+| alive at | `app/actions/work-orders.ts` — `setWorkOrderGate`, `recordWorkOrderResult`, `deleteWorkOrder` |
+| door was | `components/work-orders/work-orders-view.tsx` (deleted) |
+| door now | **none** |
+
+This one was not a missing door. Deleting `/work-orders` deleted the three actions themselves —
+69 lines out of `app/actions/work-orders.ts` — which is a different and worse thing, and it is
+undone. They are restored intact on this branch and left doorless.
+
+The reason it matters more than the other four: `commitAllowed`, `tagAllowed` and `pushAllowed` are
+**live governance inputs, not page state.** They are columns on `workOrder`; they travel in the
+delivery authority contract that `lib/workbench/outcome-execution-authorization.ts` emits; the Hermes
+bridge orchestrator and CLI consume them; `lib/work-orders/lifecycle.ts` prints whether each gate is
+open. `setWorkOrderGate` was the only writer. With it gone, every gate was frozen at whatever value
+its row already held — permanently, for every work order, with no error anywhere — and
+`recordWorkOrderResult`, the function that enforces *"commit/tag refs may only be recorded when their
+gate has been opened"*, went with it.
+
+`revalidatePath("/work-orders")` is deliberately **not** restored on any of the three: that route no
+longer exists.
+
+This is the rule the decision register's ledger already stated, applied to the register next door:
+*"Removing them would turn 'no surface reaches this' into 'this no longer exists', and the protection
+guards would go with them."* A doorless capability is a gap. A deleted one is a loss.
+
+`createWorkOrder`, `transitionWorkOrder`, `updateWorkOrderContract`, `linkWorkOrderEvidence`,
+`runGovernedLoop` and `getClosureReport` were never deleted. The first two still have governed
+callers (`app/actions/goals.ts`, `app/actions/vault.ts`, `app/api/objective/route.ts`,
+`app/api/governance/workroom-authority/route.ts`); the rest are doorless and listed here for the same
+reason.
 
 ---
 

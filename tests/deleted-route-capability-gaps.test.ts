@@ -61,6 +61,8 @@ describe("the ledger names every gap it claims to name", () => {
     "lib/workbench/execution-projection.ts",
     "lib/workbench/load-threads.ts",
     "components/desk/desk.tsx",
+    "app/actions/work-orders.ts",
+    "lib/workbench/outcome-execution-authorization.ts",
   ])("names %s", (subject) => {
     expect(ledger.includes(subject), `${subject} is enforced here but absent from ${LEDGER}`).toBe(true)
   })
@@ -141,6 +143,51 @@ describe("3. exact durable-record addressing is minted and discarded", () => {
       reads || desk.includes("initialTraceReference"),
       `the root now reads a durable trace reference — good. Move section 3 out of ${LEDGER}.`,
     ).toBe(false)
+  })
+})
+
+describe("5. the work-order release gates and closure result are alive and doorless", () => {
+  const actions = "app/actions/work-orders.ts"
+
+  /** Deleted with /work-orders and restored on this branch. Doorless is a gap; deleted is a loss. */
+  const RESTORED = ["setWorkOrderGate", "recordWorkOrderResult", "deleteWorkOrder"] as const
+
+  /** Never deleted, and still doorless. */
+  const UNREPLACED = ["updateWorkOrderContract", "linkWorkOrderEvidence", "getClosureReport"] as const
+
+  it("keeps every restored action alive, so the capability is recoverable", () => {
+    const text = read(actions)
+    for (const write of RESTORED) {
+      expect(
+        text.includes(`export async function ${write}`),
+        `${write} was deleted again. ${LEDGER} records it as restored-but-doorless: a gate nobody ` +
+          `can open is not a missing surface, it is a governance control that stopped existing.`,
+      ).toBe(true)
+    }
+  })
+
+  it("does not restore a revalidatePath for a route that no longer exists", () => {
+    // Asserted on the import rather than on the string, so the ledger comment in the file that
+    // EXPLAINS the omission does not read as the thing it warns about.
+    expect(read(actions)).not.toContain('from "next/cache"')
+  })
+
+  it("proves the gates are live governance inputs and not page state", () => {
+    // This is why deleting the writer mattered: the columns are read by the delivery authority
+    // contract and printed by the lifecycle report. If these readers ever go, the gap changes shape
+    // and this ledger owes an explanation.
+    expect(read("lib/workbench/outcome-execution-authorization.ts")).toContain("commitAllowed")
+    expect(read("lib/work-orders/lifecycle.ts")).toContain("commitAllowed")
+  })
+
+  it("still has no door for any of them", () => {
+    for (const write of [...RESTORED, ...UNREPLACED]) {
+      const doors = callers(write, actions)
+      expect(
+        doors,
+        `${write} now HAS a door (${doors.join(", ")}) — good. Move its row out of ${LEDGER}.`,
+      ).toEqual([])
+    }
   })
 })
 

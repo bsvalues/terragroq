@@ -334,6 +334,89 @@ export async function linkWorkOrderEvidence(id: number, evidence: string) {
 // refs may only be recorded when their gate has been opened.
 
 
+/**
+ * Release gates and the closure result.
+ *
+ * These three were DELETED when /work-orders was, not merely left without a surface, and that is a
+ * different thing. `commitAllowed` / `tagAllowed` / `pushAllowed` are live governance inputs: they
+ * travel in the delivery authority contract that `lib/workbench/outcome-execution-authorization.ts`
+ * emits and the Hermes bridge consumes, and `lib/work-orders/lifecycle.ts` prints their state. With
+ * `setWorkOrderGate` gone, a gate could no longer be opened or closed by anyone -- a governance
+ * control frozen at whatever the row already held, with the surface that used to operate it as the
+ * only casualty anybody noticed.
+ *
+ * So they are restored intact and left doorless, the way the decision register's unreplaced writes
+ * were: alive means the capability is recoverable, and its guards travel with it. The gap is typed in
+ * docs/product/deleted-route-capability-gaps.md and enforced by
+ * tests/deleted-route-capability-gaps.test.ts. The `revalidatePath("/work-orders")` each of these
+ * used to end with is deliberately NOT restored -- that route no longer exists.
+ */
+
+// Record the closure outcome and (optionally) the release artifacts. Commit/tag
+// refs may only be recorded when their gate has been opened.
+export async function recordWorkOrderResult(
+  id: number,
+  input: { result: "PASS" | "FAIL" | "PARTIAL"; commitRef?: string; tagRef?: string },
+) {
+  const userId = await getUserId()
+  const wo = await requireOwn(id, userId)
+
+  if (input.commitRef && !wo.commitAllowed) {
+    throw new Error("Commit gate is closed — open it before recording a commit ref")
+  }
+  if (input.tagRef && !wo.tagAllowed) {
+    throw new Error("Tag gate is closed — open it before recording a tag ref")
+  }
+
+  await db
+    .update(workOrder)
+    .set({
+      result: input.result,
+      commitRef: input.commitRef ?? wo.commitRef,
+      tagRef: input.tagRef ?? wo.tagRef,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
+  await logEvent({
+    userId,
+    type: "work_order.result",
+    summary: `${wo.ref ?? `#${id}`}: result ${input.result}`,
+    register: "work-orders",
+    refId: id,
+  })
+}
+
+// Open or close a release gate. Gates default closed; opening one is an
+// explicit operator act, recorded to the audit log.
+export async function setWorkOrderGate(
+  id: number,
+  gate: "commit" | "tag" | "push",
+  open: boolean,
+) {
+  const userId = await getUserId()
+  const wo = await requireOwn(id, userId)
+  const field =
+    gate === "commit" ? "commitAllowed" : gate === "tag" ? "tagAllowed" : "pushAllowed"
+  await db
+    .update(workOrder)
+    .set({ [field]: open, updatedAt: new Date() })
+    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
+  await logEvent({
+    userId,
+    type: "work_order.gate",
+    summary: `${wo.ref ?? `#${id}`}: ${gate} gate ${open ? "OPENED" : "closed"}`,
+    register: "work-orders",
+    refId: id,
+  })
+}
+
+export async function deleteWorkOrder(id: number) {
+  const userId = await getUserId()
+  await db
+    .delete(workOrder)
+    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
+}
+
 /* ------------------------------------------------------------------ */
 /* Closure report                                                     */
 /* ------------------------------------------------------------------ */
