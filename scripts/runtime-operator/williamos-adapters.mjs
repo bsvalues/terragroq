@@ -459,7 +459,7 @@ export function unmountedPolicyVolumes(policy, exists = fs.existsSync) {
 }
 
 const FULL_GIT_SHA = /^[a-f0-9]{40}$/
-const BUNDLE_REF = /^(?:HEAD|refs\/(?:heads|tags)\/[A-Za-z0-9][A-Za-z0-9._/-]*)$/
+const BUNDLE_REF = /^(?:HEAD|refs\/(?:heads|tags|remotes)\/[A-Za-z0-9][A-Za-z0-9._/-]*)$/
 
 /**
  * Import one requested Work Order base into the trusted baseline cache without moving its checkout.

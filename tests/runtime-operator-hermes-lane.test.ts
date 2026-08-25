@@ -44,7 +44,7 @@ const policyFor = (worktreesRoot: string) => ({
     baselineWorkspace: path.join(path.dirname(worktreesRoot), "baseline"),
     baselineCommit: BASELINE_SHA,
     baselineBundle: path.join(path.dirname(worktreesRoot), "williamos-baseline.bundle"),
-    baselineBundleRef: "refs/heads/main",
+    baselineBundleRef: "refs/remotes/origin/main",
   },
   model: { id: "williamos-qwen3-4b:64k" },
   execution: {
@@ -95,7 +95,7 @@ function recorder(calls: Call[], answers: { staged?: string; registered?: string
     }
     if (command === "git" && args[0] === "status") return { stdout: "", stderr: "" }
     if (command === "git" && args[0] === "bundle" && args[1] === "list-heads") {
-      return { stdout: `${BUNDLE_HEAD_SHA} refs/heads/main\n`, stderr: "" }
+      return { stdout: `${BUNDLE_HEAD_SHA} refs/remotes/origin/main\n`, stderr: "" }
     }
     if (command === "git" && args[0] === "diff") return { stdout: answers.staged ?? "", stderr: "" }
     if (command === "git" && args[0] === "worktree" && args[1] === "list") {
@@ -177,7 +177,7 @@ describe("two workspaces that each own themselves", () => {
     })
     expect(calls).toContainEqual({
       command: "git",
-      args: ["fetch", "--no-tags", baselineBundle, "refs/heads/main:refs/williamos/bundle-head"],
+      args: ["fetch", "--no-tags", baselineBundle, "refs/remotes/origin/main:refs/williamos/bundle-head"],
       cwd: baselineWorkspace,
     })
     expect(calls).toContainEqual({
