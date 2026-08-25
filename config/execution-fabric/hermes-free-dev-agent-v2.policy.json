@@ -49,10 +49,10 @@
       "maxAgeHours": 168
     },
     "deployedArtifactSha256": {
-      "compose.yaml": "ada957ab2af985aec2f117fc5757f31e326564e344f1ba2358ff37ce1b7d21be",
+      "compose.yaml": "e263446d4f9bfffb7b95a1004d0043bc1abcda39bdefba097b4e537be3fe0fd8",
       "config.yaml": "f8d55cf9c44a3352ee28627b30f8bcaf2f4555a7cdfa419dfae4e67675e454e1",
       "run_agent.py": "8cd7619ddeb7cdbb59c14c9288da1ada4e9c0c8e3d5a6f570dc6f838105e849d",
-      "inference_proxy.py": "606947a46c8a0bf3848a3c5cb6bd9e127a6d3881d8cbb37ffc6a4de10019ebfa"
+      "inference_proxy.py": "c8f8473cf5e7e8aa11285e545d5e89ea5b98c8c08e9fd3186cfdbc6ae26457ea"
     }
   },
   "build": {
