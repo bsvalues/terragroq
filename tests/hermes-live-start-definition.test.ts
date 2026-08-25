@@ -78,6 +78,19 @@ describe("the cockpit's start script is declared in the repository", () => {
     expect(code).not.toMatch(/Write-(Output|Host)[^\n]*\$resolvedUrl/)
   })
 
+  it("neutralises PowerShell 5.1's native-stderr trap around the resolver call", () => {
+    // Windows PowerShell 5.1 wraps ANY native stderr in a NativeCommandError, and under `Stop` that
+    // terminates the script. The resolver writes its SUCCESS evidence to stderr, so with `Stop` in
+    // force the cockpit refused to boot on every attempt while resolution was working perfectly --
+    // observed, not theorised: LastTaskResult 1, empty boot log, and a diagnostic naming .8.
+    const code = executableOnly(startText)
+    expect(code).toMatch(/\$ErrorActionPreference\s*=\s*"Continue"/)
+    expect(code).toMatch(/\$previousPreference/)
+    // The verdict must come from the exit code, never from whether stderr was written to.
+    expect(code).toMatch(/\$resolverExit\s*=\s*\$LASTEXITCODE/)
+    expect(code).not.toMatch(/&\s*\$node\s+@resolverArgs\s+2>&1/)
+  })
+
   it("only ever overrides the one variable it resolves", () => {
     const assignments = executableOnly(startText).match(/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=/g) ?? []
     const names = new Set(assignments.map((a) => a.replace(/\s*=$/, "").replace("$env:", "")))
@@ -108,6 +121,9 @@ describe("the deploy places what the start script needs and can be undone", () =
     expect(startIndex).toBeGreaterThan(checkIndex)
     // The check must exercise resolution with the password masked, never printed.
     expect(code).toMatch(/--redact/)
+    // And it must survive the same native-stderr trap, judging by exit code rather than by stderr.
+    expect(code).toMatch(/\$resolveExit\s*=\s*\$LASTEXITCODE/)
+    expect(code).not.toMatch(/--redact 2>&1/)
   })
 
   it("captures the outgoing build before the mirroring copy destroys it", () => {

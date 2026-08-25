@@ -80,13 +80,26 @@ $resolverArgs = @($resolver, $envFile)
 if ($FabricRoot) { $resolverArgs += "--fabric-root=$FabricRoot" }
 
 $diagnosticFile = Join-Path $env:TEMP ("williamos-live-resolve-{0}.err" -f [guid]::NewGuid().ToString("N"))
+
+# Two things about this call, both learned the hard way on this exact script.
+#
+# Native stderr is redirected to a FILE rather than merged with `2>&1`, because merging splices the
+# resolver's diagnostic into stdout -- and stdout is the connection string being captured.
+#
+# And `$ErrorActionPreference` is dropped to Continue around it. Windows PowerShell 5.1 wraps ANY
+# output a native command writes to stderr in a NativeCommandError record, whether or not the command
+# succeeded; under `Stop` that terminates the script. The resolver writes its (successful) evidence
+# line to stderr by design, so with `Stop` in force this refused to boot every single time while the
+# resolution underneath it was working perfectly. The exit code is what says whether it worked, so
+# that is what is read.
+$previousPreference = $ErrorActionPreference
 try {
-  # Native stderr is redirected to a file rather than merged with 2>&1: merging would splice the
-  # diagnostic into stdout and put it inside the connection string this captures.
+  $ErrorActionPreference = "Continue"
   $resolvedUrl = & $node @resolverArgs 2>$diagnosticFile
   $resolverExit = $LASTEXITCODE
-  $diagnostic = if (Test-Path -LiteralPath $diagnosticFile) { (Get-Content -LiteralPath $diagnosticFile -Raw).Trim() } else { "" }
 } finally {
+  $ErrorActionPreference = $previousPreference
+  $diagnostic = if (Test-Path -LiteralPath $diagnosticFile) { (Get-Content -LiteralPath $diagnosticFile -Raw).Trim() } else { "" }
   Remove-Item -LiteralPath $diagnosticFile -Force -ErrorAction SilentlyContinue
 }
 

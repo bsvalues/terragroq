@@ -219,10 +219,27 @@ Copy-Item $resolverSource $resolverTarget -Force
 # Prove the boot path can actually resolve, here, while the previous build is still restorable --
 # rather than finding out when the task starts and the cockpit refuses. `--redact` so the check
 # exercises the real resolution and prints a connection string with the password masked.
-$resolveCheck = & "C:\Program Files\nodejs\node.exe" $resolverTarget (Join-Path $Runtime ".env.local") --redact 2>&1
-if ($LASTEXITCODE -ne 0) {
-  throw "The deployed boot tooling cannot resolve the authority registry's address, so the cockpit would refuse to start: $resolveCheck"
+#
+# `$ErrorActionPreference` is dropped to Continue for the call, and stderr goes to a file rather than
+# through `2>&1`. Windows PowerShell 5.1 wraps ANY native stderr output in a NativeCommandError, and
+# under `Stop` that terminates the deploy -- the resolver writes its SUCCESS evidence to stderr, so
+# with `Stop` in force this aborted the deploy every time while the resolution itself was fine. The
+# exit code is the verdict.
+$resolveDiagnostic = Join-Path $env:TEMP ("williamos-deploy-resolve-{0}.err" -f [guid]::NewGuid().ToString("N"))
+$previousPreference = $ErrorActionPreference
+try {
+  $ErrorActionPreference = "Continue"
+  $resolveCheck = & "C:\Program Files\nodejs\node.exe" $resolverTarget (Join-Path $Runtime ".env.local") --redact 2>$resolveDiagnostic
+  $resolveExit = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $previousPreference
+  $resolveDetail = if (Test-Path -LiteralPath $resolveDiagnostic) { (Get-Content -LiteralPath $resolveDiagnostic -Raw).Trim() } else { "" }
+  Remove-Item -LiteralPath $resolveDiagnostic -Force -ErrorAction SilentlyContinue
 }
+if ($resolveExit -ne 0) {
+  throw "The deployed boot tooling cannot resolve the authority registry's address, so the cockpit would refuse to start: $resolveDetail"
+}
+Write-Output "boot resolution verified: $resolveCheck"
 
 if (-not (Test-Path (Join-Path $Runtime ".env.local"))) {
   throw "The runtime lost its .env.local. Restore it before starting: the cockpit cannot resolve the owner without WILLIAMOS_OWNER_EMAIL."
