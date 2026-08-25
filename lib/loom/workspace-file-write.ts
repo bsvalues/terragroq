@@ -102,6 +102,17 @@ export async function writeGovernedWorkspaceFile(
   }
   const relative = resolved.relative
   if (relative === undefined) return { ok: false, error: "PATH_INVALID", status: 400 }
+  if (relative !== requestedPath.replace(/\\/g, "/").replace(/^\.\//, "")) {
+    const resolvedAuthority = await dependencies.authorize(relative)
+    if (!resolvedAuthority.ok) {
+      return {
+        ok: false,
+        error: resolvedAuthority.failure ?? "FAILED_CONTEXT_NOT_PROVEN",
+        detail: resolvedAuthority.detail,
+        status: 409,
+      }
+    }
+  }
   const scope = workroomFileScope(relative)
   if (!scope.ok) return { ok: false, error: "FAILED_SCOPE_COLLISION", detail: scope.detail, status: 409 }
   let current

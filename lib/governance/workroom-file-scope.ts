@@ -8,7 +8,7 @@ export function workroomFileScope(relativePath: string): Readonly<{ ok: true } |
   const normalized = relativePath.replace(/\\/g, "/").replace(/^\.\//, "")
   const segments = normalized.split("/")
   const basename = segments.at(-1) ?? ""
-  const forbidden = basename === ".env" || basename.startsWith(".env.")
+  const forbidden = basename.startsWith(".env")
     || segments.some((segment) => ["migrations", ".git", "node_modules", ".next"].includes(segment))
   return !forbidden
     ? { ok: true }

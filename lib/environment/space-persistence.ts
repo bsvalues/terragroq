@@ -26,6 +26,19 @@ export interface SpaceWorkingWorldStore {
   updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string): Promise<boolean>
 }
 
+const OWNED_WORLD_PAGE_SIZE = 20
+
+export async function findLatestTerraFusionOwnedByPage(
+  readPage: (offset: number, limit: number) => Promise<readonly OwnedWorkingWorldRecord[]>,
+): Promise<OwnedWorkingWorldRecord | null> {
+  for (let offset = 0; ; offset += OWNED_WORLD_PAGE_SIZE) {
+    const rows = await readPage(offset, OWNED_WORLD_PAGE_SIZE)
+    const match = rows.find((row) => isTerraFusionWorld(row))
+    if (match) return match
+    if (rows.length < OWNED_WORLD_PAGE_SIZE) return null
+  }
+}
+
 export const databaseSpaceWorkingWorldStore: SpaceWorkingWorldStore = {
   async findOwned(userId, worldId) {
     const rows = await db.select({
@@ -38,14 +51,14 @@ export const databaseSpaceWorkingWorldStore: SpaceWorkingWorldStore = {
   },
 
   async findLatestOwned(userId) {
-    const rows = await db.select({
-      id: workingWorld.id, userId: workingWorld.userId, intent: workingWorld.intent,
-      snapshot: workingWorld.snapshot, updatedAt: workingWorld.updatedAt,
-    }).from(workingWorld)
-      .where(eq(workingWorld.userId, userId))
-      .orderBy(desc(workingWorld.updatedAt), desc(workingWorld.id))
-      .limit(20)
-    return rows.find((row) => isTerraFusionWorld(row)) ?? null
+    return findLatestTerraFusionOwnedByPage((offset, limit) => db.select({
+        id: workingWorld.id, userId: workingWorld.userId, intent: workingWorld.intent,
+        snapshot: workingWorld.snapshot, updatedAt: workingWorld.updatedAt,
+      }).from(workingWorld)
+        .where(eq(workingWorld.userId, userId))
+        .orderBy(desc(workingWorld.updatedAt), desc(workingWorld.id))
+        .limit(limit)
+        .offset(offset))
   },
 
   async insertOwned(row) {
@@ -66,6 +79,49 @@ export const databaseSpaceWorkingWorldStore: SpaceWorkingWorldStore = {
       .returning({ id: workingWorld.id })
     return rows.length === 1
   },
+}
+
+/**
+ * Persist a Line-owned world mutation without replacing Space-owned state. The CAS makes a Space
+ * write that lands between Line read and Line save visible; the retry then reapplies the Line result
+ * to that latest snapshot while retaining its Space revision and layout.
+ */
+export async function saveOwnedLineWorld(
+  input: Readonly<{
+    userId: string
+    worldId: string
+    world: WorkingWorldSnapshot
+    isNew: boolean
+  }>,
+  store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
+): Promise<void> {
+  const submitted = validateWorkingWorld(input.world)
+  if (input.isNew) {
+    await store.insertOwned({
+      id: input.worldId,
+      userId: input.userId,
+      intent: submitted.intent,
+      snapshot: JSON.stringify(submitted),
+      updatedAt: new Date(),
+    })
+    return
+  }
+
+  const maxAttempts = 3
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const row = await store.findOwned(input.userId, input.worldId)
+    if (!row) throw new Error("WORLD_NOT_FOUND")
+    const latest = validateWorkingWorld(JSON.parse(row.snapshot))
+    const merged = validateWorkingWorld({ ...submitted, space: latest.space })
+    if (await store.updateOwned(
+      input.userId,
+      input.worldId,
+      JSON.stringify(merged),
+      merged.intent,
+      row.snapshot,
+    )) return
+  }
+  throw new Error("WORLD_PERSISTENCE_BUSY")
 }
 
 function isTerraFusionWorld(row: OwnedWorkingWorldRecord): boolean {

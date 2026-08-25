@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  findLatestTerraFusionOwnedByPage,
   loadOrCreateOwnedSpace,
+  saveOwnedLineWorld,
   saveOwnedSpace,
   type OwnedWorkingWorldRecord,
   type SpaceWorkingWorldStore,
 } from "@/lib/environment/space-persistence"
-import { createWorkingWorld, type SpaceState } from "@/lib/environment/working-world"
+import { createWorkingWorld, withTurn, type SpaceState } from "@/lib/environment/working-world"
 
 class MemoryStore implements SpaceWorkingWorldStore {
   readonly rows = new Map<string, OwnedWorkingWorldRecord>()
@@ -61,6 +63,38 @@ class BarrierStore extends MemoryStore {
   }
 }
 
+class LineBarrierStore extends MemoryStore {
+  private releaseLine!: () => void
+  readonly lineWaiting = new Promise<void>((resolve) => { this.lineWaitingResolve = resolve })
+  private lineWaitingResolve!: () => void
+  private readonly spaceCommitted = new Promise<void>((resolve) => { this.releaseLine = resolve })
+  private lineDelayed = false
+
+  override async updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string) {
+    const world = JSON.parse(snapshot)
+    const isLineMutation = world.conversation?.some((turn: { content?: string }) => turn.content === "show current work")
+    if (isLineMutation && !this.lineDelayed) {
+      this.lineDelayed = true
+      this.lineWaitingResolve()
+      await this.spaceCommitted
+    }
+    return super.updateOwned(userId, worldId, snapshot, intent, expectedSnapshot)
+  }
+
+  releaseAfterSpaceCommit() {
+    this.releaseLine()
+  }
+}
+
+class RejectingCasStore extends MemoryStore {
+  updateAttempts = 0
+
+  override async updateOwned() {
+    this.updateAttempts += 1
+    return false
+  }
+}
+
 function space(runningAppUrl: string | null = "javascript:alert(1)", revision = 1): SpaceState {
   return {
     schemaVersion: 1,
@@ -83,6 +117,33 @@ function space(runningAppUrl: string | null = "javascript:alert(1)", revision = 
 }
 
 describe("server-owned Space persistence", () => {
+  it("continues past the first owned-world page to restore an older TerraFusion Space", async () => {
+    const world = createWorkingWorld({ intent: "TerraFusion", resources: ["bsvalues/terragroq"] })
+    const rows: OwnedWorkingWorldRecord[] = Array.from({ length: 20 }, (_, index) => ({
+      id: `unrelated-${index}`,
+      userId: "owner-a",
+      intent: `Unrelated world ${index}`,
+      snapshot: JSON.stringify(createWorkingWorld({ intent: `Unrelated world ${index}` })),
+      updatedAt: new Date(2026, 7, 25, 12, 0, 20 - index),
+    }))
+    rows.push({
+      id: "terrafusion-world",
+      userId: "owner-a",
+      intent: world.intent,
+      snapshot: JSON.stringify(world),
+      updatedAt: new Date(2026, 7, 24),
+    })
+    const offsets: number[] = []
+
+    const found = await findLatestTerraFusionOwnedByPage(async (offset, limit) => {
+      offsets.push(offset)
+      return rows.slice(offset, offset + limit)
+    })
+
+    expect(found?.id).toBe("terrafusion-world")
+    expect(offsets).toEqual([0, 20])
+  })
+
   it("creates a uniquely owned cold-start world and restores it from the server store", async () => {
     const store = new MemoryStore()
     const opened = await loadOrCreateOwnedSpace({
@@ -233,5 +294,74 @@ describe("server-owned Space persistence", () => {
     })
     expect(reopened?.space.windows.find((window) => window.id === "editor")?.frame.x).toBe(222)
     expect(JSON.parse(store.rows.get("world-a")!.snapshot).openConcerns).toEqual(["concurrent world update"])
+  })
+
+  it("retries a Line CAS and preserves a Space save that lands while the Line request is in flight", async () => {
+    const store = new LineBarrierStore()
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: initial.intent,
+      snapshot: JSON.stringify(initial), updatedAt: new Date("2026-08-25T10:00:00Z"),
+    })
+    const lineWorld = withTurn(initial, "owner", "show current work", () => "2026-08-25T10:01:00Z")
+    const lineSave = saveOwnedLineWorld({
+      userId: "owner-a", worldId: "world-a", world: lineWorld, isNew: false,
+    }, store)
+    await store.lineWaiting
+
+    const moved = {
+      ...space(null, 2),
+      windows: space(null, 2).windows.map((window) => window.id === "editor"
+        ? { ...window, frame: { x: 333, y: 144, width: 980, height: 710 } }
+        : window),
+    }
+    await saveOwnedSpace({ userId: "owner-a", worldId: "world-a", space: moved }, store)
+    store.releaseAfterSpaceCommit()
+    await lineSave
+
+    const persisted = JSON.parse(store.rows.get("world-a")!.snapshot)
+    expect(persisted.conversation.at(-1)).toMatchObject({ content: "show current work" })
+    expect(persisted.space.revision).toBe(2)
+    expect(persisted.space.windows.find((window: { id: string }) => window.id === "editor").frame.x).toBe(333)
+  })
+
+  it("lets a later Space save preserve a Line turn committed first", async () => {
+    const store = new MemoryStore()
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: initial.intent,
+      snapshot: JSON.stringify(initial), updatedAt: new Date("2026-08-25T10:00:00Z"),
+    })
+
+    await saveOwnedLineWorld({
+      userId: "owner-a",
+      worldId: "world-a",
+      world: withTurn(initial, "owner", "show current work", () => "2026-08-25T10:01:00Z"),
+      isNew: false,
+    }, store)
+    await saveOwnedSpace({ userId: "owner-a", worldId: "world-a", space: space(null, 2) }, store)
+
+    const persisted = JSON.parse(store.rows.get("world-a")!.snapshot)
+    expect(persisted.conversation.at(-1)).toMatchObject({ content: "show current work" })
+    expect(persisted.space.revision).toBe(2)
+  })
+
+  it("fails typed and leaves the world untouched when the Line CAS retry budget is exhausted", async () => {
+    const store = new RejectingCasStore()
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
+    const originalSnapshot = JSON.stringify(initial)
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: initial.intent,
+      snapshot: originalSnapshot, updatedAt: new Date("2026-08-25T10:00:00Z"),
+    })
+
+    await expect(saveOwnedLineWorld({
+      userId: "owner-a",
+      worldId: "world-a",
+      world: withTurn(initial, "owner", "show current work"),
+      isNew: false,
+    }, store)).rejects.toThrow("WORLD_PERSISTENCE_BUSY")
+    expect(store.updateAttempts).toBe(3)
+    expect(store.rows.get("world-a")?.snapshot).toBe(originalSnapshot)
   })
 })

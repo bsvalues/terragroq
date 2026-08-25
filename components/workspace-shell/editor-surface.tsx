@@ -13,7 +13,7 @@ const SourceEditor = dynamic(() => import("./source-editor").then((module) => mo
 })
 
 type Entry = Readonly<{ name: string; path: string; directory: boolean }>
-type FileBuffer = Readonly<{
+export type FileBuffer = Readonly<{
   path: string
   content: string
   savedContent: string
@@ -21,6 +21,14 @@ type FileBuffer = Readonly<{
   saving: boolean
   error: string | null
 }>
+
+export function acknowledgeSavedBuffer(
+  current: FileBuffer,
+  submittedContent: string,
+  modifiedAt: string,
+): FileBuffer {
+  return { ...current, savedContent: submittedContent, modifiedAt, saving: false, error: null }
+}
 
 function TreeNode({ entry, depth, selectedPath, onOpen }: {
   entry: Entry
@@ -211,13 +219,14 @@ export function EditorSurface({ space, onEditorChange }: {
   const save = useCallback(async (path: string, retry = true) => {
     const buffer = buffers[path]
     if (!buffer || buffer.saving || buffer.content === buffer.savedContent) return
+    const submittedContent = buffer.content
     setBuffers((current) => ({ ...current, [path]: { ...current[path], saving: true, error: null } }))
     try {
       const receipt = await establishReceipt(path)
       const response = await fetch("/api/loom/files", {
         method: "PUT",
         headers: { "content-type": "application/json", "x-williamos-work-context": receipt },
-        body: JSON.stringify({ path, content: buffer.content, modifiedAt: buffer.modifiedAt }),
+        body: JSON.stringify({ path, content: submittedContent, modifiedAt: buffer.modifiedAt }),
       })
       const payload = await response.json()
       if (response.status === 409 && payload.error !== "CHANGED_ON_DISK" && retry) {
@@ -231,9 +240,10 @@ export function EditorSurface({ space, onEditorChange }: {
         const detail = [payload.error ?? `SAVE_${response.status}`, payload.detail].filter(Boolean).join(": ")
         throw new Error(payload.error === "CHANGED_ON_DISK" ? "CHANGED_ON_DISK: reopen before saving" : detail)
       }
-      setBuffers((current) => ({ ...current, [path]: {
-        ...current[path], savedContent: current[path].content, modifiedAt: payload.modifiedAt, saving: false, error: null,
-      } }))
+      setBuffers((current) => ({
+        ...current,
+        [path]: acknowledgeSavedBuffer(current[path], submittedContent, payload.modifiedAt),
+      }))
     } catch (error) {
       setBuffers((current) => ({ ...current, [path]: {
         ...current[path], saving: false, error: error instanceof Error ? error.message : "SAVE_REFUSED",

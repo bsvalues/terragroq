@@ -11,6 +11,7 @@ import { decision as decisionTable, evidenceRecord, project, workingWorld } from
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
+import { saveOwnedLineWorld } from "@/lib/environment/space-persistence"
 import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { getWorkOrders } from "@/app/actions/work-orders"
@@ -267,15 +268,7 @@ async function loadWorld(userId: string, worldId: string): Promise<WorkingWorldS
 }
 
 async function saveWorld(userId: string, worldId: string, world: WorkingWorldSnapshot, isNew: boolean): Promise<void> {
-  const snapshot = JSON.stringify(validateWorkingWorld(world))
-  if (isNew) {
-    await db.insert(workingWorld).values({ id: worldId, userId, intent: world.intent, snapshot })
-  } else {
-    await db
-      .update(workingWorld)
-      .set({ snapshot, updatedAt: new Date() })
-      .where(and(eq(workingWorld.userId, userId), eq(workingWorld.id, worldId)))
-  }
+  await saveOwnedLineWorld({ userId, worldId, world, isNew })
 }
 
 /** Bounded, honest conversation with the sovereign model. */

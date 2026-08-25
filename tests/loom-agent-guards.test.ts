@@ -72,5 +72,6 @@ describe("manual workspace authority is provider-neutral", () => {
     expect(authorityRoute).not.toMatch(/agent:\s*["'](?:claude|codex)["']/i)
     expect(authorityRoute).not.toMatch(/^\s*agent:\s*/m)
     expect(authorityRoute).toContain("Workspace manual edits")
+    expect(authorityRoute).not.toContain("Workroom lane: files, structured edits, and bounded cockpit operations")
   })
 })
