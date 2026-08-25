@@ -12,6 +12,8 @@
     "workspaceRoot": "D:\\HermesWorkspaces\\williamos-free-dev-agent",
     "baselineWorkspace": "D:\\HermesWorkspaces\\williamos-free-dev-agent\\baseline",
     "baselineCommit": "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48",
+    "baselineBundle": "D:\\HermesServices\\williamos-hermes-agent\\williamos-baseline.bundle",
+    "baselineBundleRef": "refs/heads/main",
     "workspaceMode": "OWNED_WORKTREE",
     "allowedWorkspaceRoots": ["C:\\Users\\bs\\.williamos\\hermes-bridge\\worktrees"]
   },

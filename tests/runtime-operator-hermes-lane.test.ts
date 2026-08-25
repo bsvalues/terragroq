@@ -9,6 +9,7 @@ import {
   collectPatch,
   dispatchHermesLocal,
   hermesRunId,
+  prepareHermesLocalBase,
 } from "../scripts/runtime-operator/williamos-adapters.mjs"
 
 /**
@@ -27,6 +28,8 @@ const INVOKER_PACKET_FIELDS = [
 ]
 const INVOKER_RUN_ID = /^[A-Za-z0-9-]{8,64}$/
 const BASE_SHA = "1f2e3d4c5b6a798877665544332211aabbccddee"
+const BASELINE_SHA = "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48"
+const BUNDLE_HEAD_SHA = "9a8b7c6d5e4f32100123456789abcdef01234567"
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }) })
@@ -35,7 +38,14 @@ const policyFor = (worktreesRoot: string) => ({
   schemaVersion: 2,
   packetSchemaVersion: 3,
   workOrderId: "WO-HERMES-FREE-DEV-AGENT-001",
-  placement: { workspaceMode: "OWNED_WORKTREE", allowedWorkspaceRoots: [worktreesRoot] },
+  placement: {
+    workspaceMode: "OWNED_WORKTREE",
+    allowedWorkspaceRoots: [worktreesRoot],
+    baselineWorkspace: path.join(path.dirname(worktreesRoot), "baseline"),
+    baselineCommit: BASELINE_SHA,
+    baselineBundle: path.join(path.dirname(worktreesRoot), "williamos-baseline.bundle"),
+    baselineBundleRef: "refs/heads/main",
+  },
   model: { id: "williamos-qwen3-4b:64k" },
   execution: {
     maximumTurns: 20,
@@ -58,19 +68,35 @@ function fixture(overrides: { policy?: (worktreesRoot: string) => Record<string,
   fs.mkdirSync(path.join(repositoryPath, "scripts", "execution-fabric", "hermes-agent"), { recursive: true })
   fs.mkdirSync(path.join(root, "state", "requests"), { recursive: true })
   fs.mkdirSync(workspace, { recursive: true })
+  const baselineWorkspace = path.join(runtimeRoot, "baseline")
+  const baselineBundle = path.join(runtimeRoot, "williamos-baseline.bundle")
+  fs.mkdirSync(baselineWorkspace, { recursive: true })
+  fs.writeFileSync(baselineBundle, "test bundle fixture\n")
   const invokerPath = path.join(repositoryPath, "scripts", "execution-fabric", "hermes-agent", "invoke-hermes-free-dev-agent.ps1")
   fs.writeFileSync(invokerPath, "# reviewed invoker; never executed by this test\n")
   const policyPath = path.join(repositoryPath, "config", "execution-fabric", "hermes-free-dev-agent-v2.policy.json")
   fs.writeFileSync(policyPath, `${JSON.stringify({ ...policyFor(worktreesRoot), ...(overrides.policy?.(worktreesRoot) ?? {}) }, null, 2)}\n`)
   const owned = path.join(worktreesRoot, "runtime-operator-wo-0030")
-  return { base, repositoryPath, root, runtimeRoot, worktreesRoot, workspace, owned, invokerPath, policyPath }
+  return { base, repositoryPath, root, runtimeRoot, worktreesRoot, workspace, owned, invokerPath, policyPath, baselineWorkspace, baselineBundle }
 }
 
 /** A recording stand-in for the process runner: no git, no pwsh, no container. */
 function recorder(calls: Call[], answers: { staged?: string; registered?: string[]; completionRunId?: string; session?: string } = {}) {
   return async (command: string, args: string[], options: { cwd?: string } = {}) => {
     calls.push({ command, args, cwd: options.cwd })
-    if (command === "git" && args[0] === "rev-parse") return { stdout: `${BASE_SHA}\n`, stderr: "" }
+    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
+      return { stdout: `${options.cwd?.endsWith("baseline") ? BASELINE_SHA : BASE_SHA}\n`, stderr: "" }
+    }
+    if (command === "git" && args[0] === "rev-parse" && args[1]?.startsWith("refs/williamos/base-cache/")) {
+      return { stdout: `${BASE_SHA}\n`, stderr: "" }
+    }
+    if (command === "git" && args[0] === "rev-parse" && args[1] === "refs/williamos/bundle-head") {
+      return { stdout: `${BUNDLE_HEAD_SHA}\n`, stderr: "" }
+    }
+    if (command === "git" && args[0] === "status") return { stdout: "", stderr: "" }
+    if (command === "git" && args[0] === "bundle" && args[1] === "list-heads") {
+      return { stdout: `${BUNDLE_HEAD_SHA} refs/heads/main\n`, stderr: "" }
+    }
     if (command === "git" && args[0] === "diff") return { stdout: answers.staged ?? "", stderr: "" }
     if (command === "git" && args[0] === "worktree" && args[1] === "list") {
       return { stdout: (answers.registered ?? []).map((tree) => `worktree ${tree}\nHEAD ${BASE_SHA}\ndetached\n`).join("\n"), stderr: "" }
@@ -134,8 +160,60 @@ describe("the packet is the one the invoker validates", () => {
 })
 
 describe("two workspaces that each own themselves", () => {
+  it("imports the exact requested SHA through the governed bundle without moving the pinned baseline", async () => {
+    const { baselineWorkspace, baselineBundle } = fixture()
+    const calls: Call[] = []
+    const prepared = await prepareHermesLocalBase({
+      policy: policyFor(path.join(path.dirname(baselineWorkspace), "worktrees")),
+      requestedBaseSha: BASE_SHA,
+      runner: recorder(calls),
+    })
+
+    expect(prepared).toEqual({ repositoryPath: baselineWorkspace, baseSha: BASE_SHA })
+    expect(calls).toContainEqual({
+      command: "git",
+      args: ["bundle", "verify", baselineBundle],
+      cwd: baselineWorkspace,
+    })
+    expect(calls).toContainEqual({
+      command: "git",
+      args: ["fetch", "--no-tags", baselineBundle, "refs/heads/main:refs/williamos/bundle-head"],
+      cwd: baselineWorkspace,
+    })
+    expect(calls).toContainEqual({
+      command: "git",
+      args: ["merge-base", "--is-ancestor", BASE_SHA, BUNDLE_HEAD_SHA],
+      cwd: baselineWorkspace,
+    })
+    expect(calls).toContainEqual({
+      command: "git",
+      args: ["update-ref", `refs/williamos/base-cache/${BASE_SHA}`, BASE_SHA],
+      cwd: baselineWorkspace,
+    })
+    expect(calls.filter((call) => call.command === "git" && call.args[0] === "rev-parse" && call.args[1] === "HEAD"))
+      .toHaveLength(2)
+  })
+
+  it("refuses a requested SHA the governed bundle does not contain", async () => {
+    const { baselineWorkspace } = fixture()
+    const calls: Call[] = []
+    const baseRunner = recorder(calls)
+    const runner = async (command: string, args: string[], options: { cwd?: string } = {}) => {
+      if (command === "git" && args[0] === "cat-file" && args[2] === `${BASE_SHA}^{commit}`) {
+        throw new Error("unknown commit")
+      }
+      return baseRunner(command, args, options)
+    }
+    await expect(prepareHermesLocalBase({
+      policy: policyFor(path.join(path.dirname(baselineWorkspace), "worktrees")),
+      requestedBaseSha: BASE_SHA,
+      runner,
+    })).rejects.toThrow("PROVIDER_LANE_BASE_SHA_UNAVAILABLE_WALL")
+    expect(calls.some((call) => call.args[0] === "fetch")).toBe(true)
+  })
+
   it("runs the lane in a provider-side worktree at the kernel workspace's own HEAD", async () => {
-    const { root, repositoryPath, workspace, owned, worktreesRoot } = fixture()
+    const { root, repositoryPath, workspace, owned, worktreesRoot, baselineWorkspace } = fixture()
     const calls: Call[] = []
     const dispatched = await dispatchHermesLocal({
       root, repositoryPath, workOrderId: "WO-0030", workspace, prompt: "bounded work",
@@ -153,8 +231,27 @@ describe("two workspaces that each own themselves", () => {
     expect(calls).toContainEqual({
       command: "git",
       args: ["worktree", "add", "--detach", owned, BASE_SHA],
-      cwd: repositoryPath,
+      cwd: baselineWorkspace,
     })
+  })
+
+  it("stops before invocation when a required task target is absent at the requested base", async () => {
+    const { root, repositoryPath, workspace } = fixture()
+    const calls: Call[] = []
+    const baseRunner = recorder(calls)
+    const runner = async (command: string, args: string[], options: { cwd?: string } = {}) => {
+      if (command === "git" && args[0] === "cat-file" && args[2]?.endsWith(":scripts/runtime-operator/worker-lanes.mjs")) {
+        throw new Error("missing")
+      }
+      return baseRunner(command, args, options)
+    }
+    await expect(dispatchHermesLocal({
+      root, repositoryPath, workOrderId: "WO-0030", workspace, prompt: "bounded work",
+      requiredBasePaths: ["scripts/runtime-operator/worker-lanes.mjs"],
+      runner,
+      newId: identities("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"),
+    })).rejects.toThrow("TASK_BASELINE_DRIFT_WALL:scripts/runtime-operator/worker-lanes.mjs")
+    expect(calls.some((call) => call.command === "pwsh")).toBe(false)
   })
 
   it("carries what the kernel workspace already had staged into the provider's tree", async () => {

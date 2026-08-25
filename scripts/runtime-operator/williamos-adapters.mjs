@@ -442,6 +442,7 @@ export function unmountedPolicyVolumes(policy, exists = fs.existsSync) {
     policy?.placement?.dockerConfig,
     policy?.placement?.workspaceRoot,
     policy?.placement?.baselineWorkspace,
+    policy?.placement?.baselineBundle,
     ...(policy?.placement?.allowedWorkspaceRoots ?? []),
   ].filter((entry) => typeof entry === "string" && entry.trim() !== "")
   const missing = new Map()
@@ -457,8 +458,93 @@ export function unmountedPolicyVolumes(policy, exists = fs.existsSync) {
   return [...missing.entries()].map(([volume, example]) => ({ volume, example }))
 }
 
+const FULL_GIT_SHA = /^[a-f0-9]{40}$/
+const BUNDLE_REF = /^(?:HEAD|refs\/(?:heads|tags)\/[A-Za-z0-9][A-Za-z0-9._/-]*)$/
+
+/**
+ * Import one requested Work Order base into the trusted baseline cache without moving its checkout.
+ *
+ * HERMES deliberately has no GitHub access. The policy-pinned bundle is its governed transport, and
+ * the pinned baseline checkout is the trust/bootstrap anchor. A fetch may add an exact-SHA cache ref
+ * and objects; both HEAD and the worktree must remain at the reviewed baseline commit and clean.
+ */
+export async function prepareHermesLocalBase({ policy, requestedBaseSha, runner = run }) {
+  const baselineWorkspace = policy?.placement?.baselineWorkspace
+  const baselineCommit = policy?.placement?.baselineCommit
+  const baselineBundle = policy?.placement?.baselineBundle
+  const baselineBundleRef = policy?.placement?.baselineBundleRef
+  if (!FULL_GIT_SHA.test(String(requestedBaseSha ?? ""))
+    || !FULL_GIT_SHA.test(String(baselineCommit ?? ""))
+    || typeof baselineWorkspace !== "string" || !path.isAbsolute(baselineWorkspace)
+    || typeof baselineBundle !== "string" || !path.isAbsolute(baselineBundle)
+    || typeof baselineBundleRef !== "string" || !BUNDLE_REF.test(baselineBundleRef)
+    || !fs.existsSync(baselineWorkspace) || !fs.existsSync(baselineBundle)) {
+    throw new Error("PROVIDER_LANE_BASELINE_CACHE_WALL")
+  }
+
+  const git = (args) => runner("git", args, { cwd: baselineWorkspace })
+  const assertPinnedCheckout = async () => {
+    try {
+      const head = (await git(["rev-parse", "HEAD"])).stdout.trim()
+      const dirty = (await git(["status", "--porcelain"])).stdout.trim()
+      if (head !== baselineCommit || dirty !== "") throw new Error("PROVIDER_LANE_BASELINE_CACHE_WALL")
+    } catch (error) {
+      if (String(error?.message ?? error).startsWith("PROVIDER_LANE_")) throw error
+      throw new Error("PROVIDER_LANE_BASELINE_CACHE_WALL")
+    }
+  }
+
+  await assertPinnedCheckout()
+  let advertisedHead
+  try {
+    await git(["bundle", "verify", baselineBundle])
+    const heads = (await git(["bundle", "list-heads", baselineBundle])).stdout
+    advertisedHead = String(heads).split(/\r?\n/).map((line) => line.trim().split(/\s+/, 2))
+      .find(([sha, ref]) => FULL_GIT_SHA.test(sha) && ref === baselineBundleRef)?.[0]
+  } catch {
+    throw new Error("PROVIDER_LANE_BASELINE_BUNDLE_WALL")
+  }
+  if (!advertisedHead) throw new Error("PROVIDER_LANE_BASELINE_BUNDLE_WALL")
+
+  const bundleHeadRef = "refs/williamos/bundle-head"
+  const cacheRef = `refs/williamos/base-cache/${requestedBaseSha}`
+  try {
+    await git(["fetch", "--no-tags", baselineBundle, `${baselineBundleRef}:${bundleHeadRef}`])
+    const importedHead = (await git(["rev-parse", bundleHeadRef])).stdout.trim()
+    if (importedHead !== advertisedHead) throw new Error("PROVIDER_LANE_BASE_SYNC_WALL")
+  } catch (error) {
+    if (String(error?.message ?? error).startsWith("PROVIDER_LANE_")) throw error
+    throw new Error("PROVIDER_LANE_BASE_SYNC_WALL")
+  }
+  try {
+    await git(["cat-file", "-e", `${requestedBaseSha}^{commit}`])
+    // The requested Work Order base may precede a newer bundle head; it must be contained by that
+    // governed delivery, not necessarily equal its moving main ref.
+    await git(["merge-base", "--is-ancestor", requestedBaseSha, advertisedHead])
+  } catch {
+    throw new Error("PROVIDER_LANE_BASE_SHA_UNAVAILABLE_WALL")
+  }
+  try {
+    // A bundle containing an unrelated repository is valid Git but not a WilliamOS base update.
+    await git(["merge-base", "--is-ancestor", baselineCommit, requestedBaseSha])
+  } catch {
+    throw new Error("PROVIDER_LANE_BASE_LINEAGE_WALL")
+  }
+  try {
+    await git(["update-ref", cacheRef, requestedBaseSha])
+    const cached = (await git(["rev-parse", cacheRef])).stdout.trim()
+    if (cached !== requestedBaseSha) throw new Error("PROVIDER_LANE_BASE_SYNC_WALL")
+  } catch (error) {
+    if (String(error?.message ?? error).startsWith("PROVIDER_LANE_")) throw error
+    throw new Error("PROVIDER_LANE_BASE_SYNC_WALL")
+  }
+  await assertPinnedCheckout()
+  return { repositoryPath: baselineWorkspace, baseSha: requestedBaseSha }
+}
+
 export async function dispatchHermesLocal({
   root, repositoryPath, workOrderId, workspace, prompt, workContext = null,
+  requiredBasePaths = [],
   runner = run, newId = () => crypto.randomUUID(),
 }) {
   const policyPath = path.resolve(repositoryPath, HERMES_KERNEL_POLICY_RELATIVE)
@@ -488,9 +574,12 @@ export async function dispatchHermesLocal({
   // other's tree by guessing at a name.
   const owned = path.join(worktreesRoot, `runtime-operator-${workOrderId.toLowerCase()}`)
 
-  const baseSha = (await runner("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim()
+  const requestedBaseSha = (await runner("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim()
+  const preparedBase = await prepareHermesLocalBase({ policy, requestedBaseSha, runner })
+  const baseRepository = preparedBase.repositoryPath
+  const baseSha = preparedBase.baseSha
   const carried = (await runner("git", ["diff", "--cached", "--binary"], { cwd: workspace })).stdout
-  const registered = (await runner("git", ["worktree", "list", "--porcelain"], { cwd: repositoryPath })).stdout
+  const registered = (await runner("git", ["worktree", "list", "--porcelain"], { cwd: baseRepository })).stdout
     .split(/\r?\n/)
     .filter((line) => line.startsWith("worktree "))
     .map((line) => path.resolve(line.slice("worktree ".length).trim()))
@@ -507,7 +596,20 @@ export async function dispatchHermesLocal({
   } else {
     if (fs.existsSync(owned)) throw new Error("PROVIDER_WORKSPACE_RECONCILIATION_WALL")
     fs.mkdirSync(worktreesRoot, { recursive: true })
-    await runner("git", ["worktree", "add", "--detach", owned, baseSha], { cwd: repositoryPath, timeout: 120_000 })
+    await runner("git", ["worktree", "add", "--detach", owned, baseSha], { cwd: baseRepository, timeout: 120_000 })
+  }
+  if (!Array.isArray(requiredBasePaths) || requiredBasePaths.some((target) =>
+    typeof target !== "string" || target.trim() === "" || path.isAbsolute(target)
+    || target.includes("\\") || target.split("/").includes("..") || /[*?[]/.test(target))) {
+    throw new Error("PROVIDER_LANE_POLICY_WALL")
+  }
+  const missingTargets = []
+  for (const target of requiredBasePaths) {
+    try { await runner("git", ["cat-file", "-e", `${baseSha}:${target}`], { cwd: baseRepository }) }
+    catch { missingTargets.push(target) }
+  }
+  if (missingTargets.length > 0) {
+    throw new Error(`TASK_BASELINE_DRIFT_WALL:${missingTargets.join(",")}`)
   }
   if (carried.trim()) {
     // Whatever the kernel workspace already had staged is work this dispatch continues, not work it

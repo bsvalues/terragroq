@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { classifyDispatchFailure } from "../scripts/runtime-operator/lane-measurement.mjs"
+import {
+  buildStaleBaselineInvalidation,
+  classifyDispatchFailure,
+  runMeasuredAttempt,
+} from "../scripts/runtime-operator/lane-measurement.mjs"
 
 /**
  * The first capability measurement of `hermes-local` nearly recorded two false verdicts, and each was
@@ -43,6 +47,20 @@ describe("what a failed dispatch is allowed to mean", () => {
     expect(result.aboutTheModel).toBe(false)
   })
 
+  it("never blames the model when the collection process itself fails", () => {
+    const result = classifyDispatchFailure("PATCH_COLLECTION_WALL")
+    expect(result.verdict).toBe("BLOCKED_PATCH_COLLECTION")
+    expect(result.aboutTheModel).toBe(false)
+  })
+
+  it("names a task target absent from the requested base as baseline drift", () => {
+    const result = classifyDispatchFailure(
+      "TASK_BASELINE_DRIFT_WALL:scripts/runtime-operator/worker-lanes.mjs",
+    )
+    expect(result.verdict).toBe("BLOCKED_TASK_BASELINE_DRIFT")
+    expect(result.aboutTheModel).toBe(false)
+  })
+
   it("does call it incapable when the provider ran and returned nothing usable", () => {
     const result = classifyDispatchFailure("CODEX_PATCH_REQUIRED_WALL")
     expect(result.verdict).toBe("MEASURED_INCAPABLE")
@@ -61,5 +79,53 @@ describe("what a failed dispatch is allowed to mean", () => {
     const result = classifyDispatchFailure("the model wrote about PROCESS_WALL:pwsh in a comment")
     expect(result.verdict).toBe("MEASURED_INCAPABLE")
     expect(result.aboutTheModel).toBe(true)
+  })
+})
+
+describe("the measurement attempt has one total failure boundary", () => {
+  it("records PATCH_EMPTY_WALL when collection fails after a successful dispatch", async () => {
+    const recorded: Array<{ verdict: string; aboutTheModel: boolean; message: string }> = []
+    const result = await runMeasuredAttempt({
+      attempt: async () => {
+        const workspace = "D:\\HermesWorkspaces\\owned"
+        await Promise.resolve(workspace)
+        throw new Error("PATCH_EMPTY_WALL")
+      },
+      recordFailure: (failure) => { recorded.push(failure) },
+    })
+
+    expect(result).toEqual({ ok: false })
+    expect(recorded).toEqual([{
+      verdict: "BLOCKED_PATCH_COLLECTION",
+      aboutTheModel: false,
+      message: "PATCH_EMPTY_WALL",
+    }])
+  })
+})
+
+describe("false settled evidence has one governed invalidation", () => {
+  it("replaces only an incapable verdict proved to come from a missing baseline target", () => {
+    expect(buildStaleBaselineInvalidation({
+      currentRecord: { implementation: "MEASURED_INCAPABLE", evidence: "stale run" },
+      baselineSha: "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48",
+      missingTargetPaths: ["scripts/runtime-operator/worker-lanes.mjs"],
+    })).toEqual({
+      verdict: "BLOCKED_TASK_BASELINE_DRIFT",
+      aboutTheModel: false,
+      evidence: "Invalidated false MEASURED_INCAPABLE evidence: task target scripts/runtime-operator/worker-lanes.mjs is absent at pinned baseline 45f90fa59fe47e5f1aa505e9ec710ec2deb37a48. No model was dispatched.",
+    })
+  })
+
+  it("cannot overwrite another state or invalidate without the proven precondition", () => {
+    expect(() => buildStaleBaselineInvalidation({
+      currentRecord: { implementation: "PROVEN", evidence: "real proof" },
+      baselineSha: "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48",
+      missingTargetPaths: ["scripts/runtime-operator/worker-lanes.mjs"],
+    })).toThrow("LANE_CAPABILITY_INVALIDATION_STATE_WALL")
+    expect(() => buildStaleBaselineInvalidation({
+      currentRecord: { implementation: "MEASURED_INCAPABLE", evidence: "stale run" },
+      baselineSha: "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48",
+      missingTargetPaths: [],
+    })).toThrow("LANE_CAPABILITY_INVALIDATION_EVIDENCE_WALL")
   })
 })

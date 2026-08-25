@@ -19,6 +19,7 @@ const POLICY = {
     dockerConfig: winPath("D:", "HermesServices", "williamos-hermes-agent", "docker-config"),
     workspaceRoot: winPath("D:", "HermesWorkspaces", "williamos-free-dev-agent"),
     baselineWorkspace: winPath("D:", "HermesWorkspaces", "williamos-free-dev-agent", "baseline"),
+    baselineBundle: winPath("D:", "HermesServices", "williamos-hermes-agent", "williamos-baseline.bundle"),
     allowedWorkspaceRoots: [winPath("C:", "Users", "bs", ".williamos", "hermes-bridge", "worktrees")],
   },
 }
@@ -32,7 +33,7 @@ describe("a pinned path on an unmounted volume", () => {
   })
 
   it("reports each volume once however many pinned paths live on it", () => {
-    // Three of the four pinned paths are on D:; one reconnect fixes all three.
+    // Four of the five pinned paths are on D:; one reconnect fixes all four.
     const missing = unmountedPolicyVolumes(POLICY, (candidate: string) => !String(candidate).startsWith("D:"))
     expect(missing.map((entry) => entry.volume)).toEqual([`D:${B}`])
   })

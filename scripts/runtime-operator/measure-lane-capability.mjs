@@ -15,6 +15,7 @@
  * taken against a lowered bar measures the bar.
  *
  *   node --no-warnings scripts/runtime-operator/measure-lane-capability.mjs [--dry-run]
+ *   node --no-warnings scripts/runtime-operator/measure-lane-capability.mjs --invalidate-stale-baseline-verdict
  */
 import crypto from "node:crypto"
 import fs from "node:fs"
@@ -51,11 +52,13 @@ const TASK = [
 ].join("\n")
 
 const ALLOWED_PATHS = ["scripts/runtime-operator/worker-lanes.mjs", "tests/**"]
+const TASK_TARGET_PATHS = ["scripts/runtime-operator/worker-lanes.mjs"]
 
 const dryRun = process.argv.includes("--dry-run")
+const invalidateStaleBaseline = process.argv.includes("--invalidate-stale-baseline-verdict")
 
 const { buildWorkerPrompt } = await import("./worker-lanes.mjs")
-const { classifyDispatchFailure } = await import("./lane-measurement.mjs")
+const { buildStaleBaselineInvalidation, runMeasuredAttempt } = await import("./lane-measurement.mjs")
 const { dispatchHermesLocal, unmountedPolicyVolumes } = await import("./williamos-adapters.mjs")
 const { inspectWorkspaceChanges } = await import("./native-adapters.mjs")
 const { HERMES_KERNEL_POLICY_RELATIVE } = await import("../hermes-bridge/hermes-kernel-client.mjs")
@@ -84,16 +87,37 @@ if (unmounted.length > 0) {
   process.exit(0)
 }
 
-const workspace = path.join(ROOT, "state", "capability-measurement")
-fs.rmSync(workspace, { recursive: true, force: true })
-
 const { execFile } = await import("node:child_process")
 const { promisify } = await import("node:util")
 const exec = promisify(execFile)
 const git = (args, cwd = REPOSITORY) => exec("git", args, { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 })
 
-await git(["fetch", "origin", "main"])
-const baseSha = (await git(["rev-parse", "origin/main"])).stdout.trim()
+if (invalidateStaleBaseline) {
+  const capabilityFile = path.join(ROOT, "state", "lane-capability.json")
+  let current
+  try { current = JSON.parse(fs.readFileSync(capabilityFile, "utf8"))?.[LANE] }
+  catch { throw new Error("LANE_CAPABILITY_INVALIDATION_STATE_WALL") }
+  const baselineSha = policy?.placement?.baselineCommit
+  const baselineWorkspace = policy?.placement?.baselineWorkspace
+  const head = (await git(["rev-parse", "HEAD"], baselineWorkspace)).stdout.trim()
+  const dirty = (await git(["status", "--porcelain"], baselineWorkspace)).stdout.trim()
+  if (head !== baselineSha || dirty !== "") throw new Error("LANE_CAPABILITY_INVALIDATION_BASELINE_WALL")
+  const missingTargetPaths = []
+  for (const target of TASK_TARGET_PATHS) {
+    try { await git(["cat-file", "-e", `${baselineSha}:${target}`], baselineWorkspace) }
+    catch { missingTargetPaths.push(target) }
+  }
+  const invalidation = buildStaleBaselineInvalidation({ currentRecord: current, baselineSha, missingTargetPaths })
+  record(invalidation.verdict, invalidation.evidence)
+  process.exit(0)
+}
+
+const workspace = path.join(ROOT, "state", "capability-measurement")
+fs.rmSync(workspace, { recursive: true, force: true })
+
+// The checkout is a governed delivery of the requested base. Its HEAD is authoritative for this
+// measurement; origin/main may point at an older bundle ref on a host with no GitHub access.
+const baseSha = (await git(["rev-parse", "HEAD"])).stdout.trim()
 // A previous attempt that died mid-run leaves its worktree registered but gone, and git then refuses
 // the name forever. Prune first: a stale registration is bookkeeping, not a verdict about the lane.
 await git(["worktree", "prune"])
@@ -115,53 +139,51 @@ try {
   }
 
   const started = Date.now()
-  let patchWorkspace
-  try {
-    patchWorkspace = await dispatchHermesLocal({
-      root: ROOT,
-      repositoryPath: REPOSITORY,
-      workOrderId: "capability-measurement-905",
-      workspace,
-      prompt,
-      workContext: null,
-      newId: () => crypto.randomUUID(),
-    })
-  } catch (error) {
-    const message = String(error?.message ?? error)
-    // MEASURED_INCAPABLE is a claim about a model, and it may only be made when the model actually ran.
-    // A crashed invoker or an unreachable provider is an infrastructure boundary wearing a wall's name,
-    // and reading it as incapability is inference from a downstream symptom -- the exact error this
-    // measurement exists to avoid. The first run of this instrument made it: the invoker died because
-    // the inference upstream was unreachable, and the verdict blamed a 4B model that was never asked
-    // a question.
-    const { verdict, aboutTheModel } = classifyDispatchFailure(message)
+  const outcome = await runMeasuredAttempt({
+    attempt: async () => {
+      const patchWorkspace = await dispatchHermesLocal({
+        root: ROOT,
+        repositoryPath: REPOSITORY,
+        workOrderId: "capability-measurement-905",
+        workspace,
+        prompt,
+        workContext: null,
+        requiredBasePaths: TASK_TARGET_PATHS,
+        newId: () => crypto.randomUUID(),
+      })
+      // The provider edits its own owned worktree, and leaves the change unstaged and untracked.
+      // Collection is part of the measured attempt, not an afterthought outside its failure boundary.
+      const produced = patchWorkspace ?? workspace
+      try { await git(["add", "-A"], produced) }
+      catch { throw new Error("PATCH_COLLECTION_WALL") }
+      const inspected = await inspectWorkspaceChanges(produced, ALLOWED_PATHS)
+      return { inspected }
+    },
+    recordFailure: ({ verdict, aboutTheModel, message }) => {
+      record(
+        verdict,
+        `The lane produced no usable patch. Wall: ${message}. ` +
+          (aboutTheModel
+            ? `The provider ran and returned without a usable change. `
+            : `This boundary says nothing about whether the model can implement. `) +
+          `Task: the bounded pure-helper task with tests. ` +
+          `Requested base: ${baseSha}. ` +
+          `Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0). Elapsed ${Math.round((Date.now() - started) / 1000)}s.`,
+      )
+    },
+  })
+  if (outcome.ok) {
+    const elapsed = Math.round((Date.now() - started) / 1000)
+    const { inspected } = outcome.value
     record(
-      verdict,
-      `The lane produced no patch. Wall: ${message}. ` +
-        (aboutTheModel
-          ? `The provider ran and returned without a usable change. `
-          : `This is an infrastructure boundary and says nothing about whether the model can implement. `) +
-        `Task: the bounded pure-helper task with tests. ` +
-        `Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0). Elapsed ${Math.round((Date.now() - started) / 1000)}s.`,
+      "PROVEN",
+      `The lane produced a patch that passed the kernel's own walls unmodified: ` +
+        `${inspected.changedPaths.length} file(s) (${inspected.changedPaths.join(", ")}), ${inspected.patchBytes} bytes, ` +
+        `base ${baseSha.slice(0, 12)}, elapsed ${elapsed}s. ` +
+        `Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0), no fallback. ` +
+        `Task: add a pure helper with a stated contract plus vitest cases for all four branches.`,
     )
-    process.exit(0)
   }
-
-  // The provider edits its own owned worktree, and leaves the change unstaged and untracked. Inspecting
-  // with git diff --cached against an unstaged tree reports PATCH_EMPTY_WALL for a lane that just wrote
-  // a correct function -- which this instrument did, once, before this line existed.
-  const produced = patchWorkspace ?? workspace
-  await git(["add", "-A"], produced)
-  const inspected = await inspectWorkspaceChanges(produced, ALLOWED_PATHS)
-  const elapsed = Math.round((Date.now() - started) / 1000)
-  record(
-    "PROVEN",
-    `The lane produced a patch that passed the kernel's own walls unmodified: ` +
-      `${inspected.changedPaths.length} file(s) (${inspected.changedPaths.join(", ")}), ${inspected.patchBytes} bytes, ` +
-      `base ${baseSha.slice(0, 12)}, elapsed ${elapsed}s. ` +
-      `Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0), no fallback. ` +
-      `Task: add a pure helper with a stated contract plus vitest cases for all four branches.`,
-  )
 } finally {
   try { await git(["worktree", "remove", "--force", workspace]) } catch { /* a stale scratch worktree is not the verdict */ }
 }
