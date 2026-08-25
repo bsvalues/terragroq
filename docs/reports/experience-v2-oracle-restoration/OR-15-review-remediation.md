@@ -119,6 +119,25 @@ caller with no cidr  -> CALLERS_FILE_INVALID (rc=1)   then check: POLICY_OK
 empty caller list    -> CALLERS_FILE_INVALID (rc=1)   then check: POLICY_OK
 ```
 
+The boot-time owner was then restarted, so the unit's own environment ran the new script rather than
+only an interactive shell doing so:
+
+```
+systemctl restart williamos-authority-firewall  -> rc=0, active, enabled
+journal: POLICY_APPLIED: tcp/15432 allowlisted to: 192.168.88.9/32 (everything else dropped)
+         POLICY_OK      (the ExecStartPost check)
+         Finished williamos-authority-firewall.service
+```
+
+The declaration and the deployment are the same bytes — checked rather than assumed, because a repo
+file that has drifted from the machine is the shape of the original defect:
+
+```
+repo working tree : fc771be2a9740fcf58f588f0547bbc00f8e3779082352789dc507cf34b200a75
+git object at HEAD: fc771be2a9740fcf58f588f0547bbc00f8e3779082352789dc507cf34b200a75
+deployed on ATLAS : fc771be2a9740fcf58f588f0547bbc00f8e3779082352789dc507cf34b200a75
+```
+
 Measured from both sides afterwards:
 
 ```
