@@ -1,0 +1,70 @@
+CAN A SESSION BE MINTED FOR THE OWNER IDENTITY WITHOUT THE OWNER ENTERING A CREDENTIAL?
+Captured against the DEPLOYED runtime on HERMES 2026-08-25T12:26Z, after the deploy above.
+
+This is the question the journey's sixth seam now waits on, and it is answered by enumerating every
+path the product actually offers and measuring each one -- not by assuming.
+
+=== what the product says about itself ===
+GET /api/auth/readiness -> 200
+  ready              true
+  databaseReady      true
+  authReady          true
+  signup             mode "bootstrap", open FALSE
+                     "Owner provisioning is not available. Contact the Primary Operator."
+  emailOtp           enabled FALSE, configured FALSE
+                     "Email OTP is scaffolded but disabled until AUTH_EMAIL_OTP_ENABLED=true."
+  accessGrants       enabled FALSE, runtimeMode "disabled"
+  issues             []
+
+=== what the registry says about the owner identity ===
+userId YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ  (JC-session-and-grants.mjs; counts only, no token column
+was ever selected)
+
+  ownerUser              exists, hasEmail true, emailVerified FALSE
+  liveBrowserSessions    96
+  liveDeviceSessions     0
+  pendingDeviceLinks     0
+  credentialAccounts     [{ providerId "credential", n 1 }]
+  passkeys               0
+
+=== every mint path, and why each is closed to this lane ===
+1. email + password   `emailAndPassword` is enabled and the identity HAS a credential account.
+                      Minting requires the owner's password in plaintext. Not mine to handle.
+
+2. email OTP          disabled AND unconfigured on the deployed runtime. There is no delivery
+                      provider, so this path cannot mint a session for anyone at present. Reading a
+                      code out of the owner's mailbox would in any case be handling their
+                      authentication factor, which is the same act by another route.
+
+3. passkey            0 passkeys are registered for this identity, so there is nothing to
+                      authenticate against even with the hardware present.
+
+4. device link        POST /api/device-link requires an ALREADY authenticated session to mint a
+                      code. 0 codes are pending and 0 device sessions are live. Circular.
+
+5. sign-up/bootstrap  signup.open is false.
+
+=== the path deliberately NOT taken ===
+96 live browser sessions exist for this identity, and Better Auth stores `session.token` in
+PLAINTEXT in the `session` table. A token could therefore have been read out of the registry this
+lane already has authenticated access to, set as a cookie, and used to drive the journey to a green
+result.
+
+That was not done and must not be. It is not the canonical sign-in path and it is not minting -- it
+is replaying the owner's live authentication artifact, which is the same class of act as
+fabricating a session row, which is the same class of act as minting a grant to satisfy an
+authority check. PR #1008 drew exactly this line when it refused to fabricate a session and recorded
+the actor as ASSERTED_BY_OPERATOR_NOT_AUTHENTICATED rather than claim an authentication it did not
+have. A journey whose actor is a token lifted from a database proves nothing about authentication;
+it proves that whoever ran it had database access, which was never in question.
+
+=== verdict ===
+WAITING_OWNER_SESSION. Every canonical session-mint path either requires a credential only the
+owner can enter, or is disabled on the deployed runtime. This is the single typed owner interaction
+the continuation packet permits, and it is the only one this lane has raised.
+
+=== what the owner's session unblocks, exactly ===
+Everything else is already in place and measured: the route is deployed and answering
+401 UNAUTHENTICATED, the runtime reads the authority registry (database ok, 11ms), and grant expiry
+is now enforced as written. With an authenticated session the remaining work is a grant re-mint
+under the CONTINUATION-27 constraints and one journey run.

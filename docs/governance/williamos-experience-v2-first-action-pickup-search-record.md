@@ -698,3 +698,199 @@ CONT-EXPV2-INVARIANT-13-JOURNEY-INCOMPLETE
                           can mint a session -- which is CONT-EXPV2-RUNTIME-CREDENTIAL-STALE.
   ownerDecisionRequired:  false.
 ```
+
+## 9. Dispositions at the JOURNEY COMPLETION lane, 2026-08-25
+
+Branched from merged `main` `10aa6738`. Full working in
+`docs/reports/WILLIAMOS-EXPERIENCE-V2-JOURNEY-COMPLETION-004.md` and
+`docs/reports/experience-v2-journey-completion/`.
+
+```
+CONT-EXPV2-GRANT-EXPIRY-TZ-SKEW
+  type:                   TYPED_DEFECT                                    [CLOSED 2026-08-25]
+  closed by:              CONT-EXPV2-JOURNEY-COMPLETION.
+  how:                    the conversion moved out of lib/db/schema.ts's customType closure into
+                          lib/db/utc-wall-timestamp.ts, which schema.ts now calls -- extraction, not
+                          restatement, so there is exactly one implementation rather than a copy
+                          beside each raw reader. authorityGrantFactsFromRow in
+                          lib/governance/authority.ts is now the single door a raw pg row of
+                          authority_grant may come through, and it THROWS on an unreadable timestamp
+                          rather than degrading to null: a dropped bound is an UNBOUNDED grant, not
+                          a missing one.
+  wider than recorded:    the register said the scope was "wherever a governed route reads authority
+                          timestamps through raw pg" and that only one route had been checked. The
+                          audit found a SECOND: app/api/governance/work-context/route.ts:56 passed
+                          raw rows to grantCovers with no conversion at all AND no array defaulting,
+                          so a null blockedActions threw inside the checker. Both routes are fixed.
+                          grantCovers/isGrantActive now take a named AuthorityGrantFacts rather than
+                          the full row type; the "as never" casts at both sites are what let partial
+                          rows through unchecked, and a cast is not a check.
+  regression test:        tests/authority-grant-expiry-utc.test.ts, run under a forced UTC-7 zone and
+                          ASSERTING the offset before anything else -- this suite passing on a UTC
+                          machine would prove nothing. It pins the old behaviour explicitly: the same
+                          grant at the same instant is accepted by the pre-fix shape, refused by the
+                          fixed one.
+  deployed:               yes, to HERMES, before any grant was considered (build 42836911).
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-RUNTIME-CREDENTIAL-STALE
+  type:                   TYPED_DEFECT                        [CORRECTED 2026-08-25 -- NOT "fixed"]
+  corrected by:           CONT-EXPV2-JOURNEY-COMPLETION.
+  what was wrong:         the arithmetic in OR-13 is sound; the identification of the live runtime is
+                          not. Task "WilliamOS Live" serves
+                          C:\HermesLab\williamos-runtime-64034e93-flat\server.js. OR-13 measured
+                          C:\HermesLab\williamos-runtime\.env.local, a different directory among ~40
+                          williamos-runtime-* left on the node, which serves nothing. The LIVE file's
+                          credential digests to 780bae1cfb8dc1c3 -- the one OR-13 itself proved
+                          matchesRoleVerifier: true.
+  measured instead:       two connection attempts with the live runtime's OWN .env.local. As written
+                          (host .5): ECONNREFUSED in 2198ms -- NOT 28P01. With only the host resolved
+                          through the fabric registry (.8): ok, role williamos, 29 grants, 21ms. A
+                          connection REFUSED at the transport and one REJECTED at authentication look
+                          identical from a distance and are not. OR-13 saw 28P01 because the driver it
+                          was debugging sourced its credential from a different file than the deployed
+                          service does.
+  so the real wall was:   CONT-EXPV2-RESOLVER-NOT-WIRED, alone. This entry said the two had to close
+                          together because wiring the resolver "would replace a VISIBLE wrong address
+                          with an INVISIBLE wrong credential". The credential underneath was never
+                          wrong for this process, so closing the resolver closed the whole thing.
+  proof obtained:         READ_OK -- the deployed runtime reads the authority registry through its own
+                          configuration path. GET /api/health: database ok true, 11ms.
+  credential handling:    NONE. No password was read, printed, copied, changed, or moved between
+                          files. The live .env.local is byte-unchanged, sha256 AD51C4BE... before and
+                          after the deploy.
+  read this as:           a defect that did not exist as written on the deployed runtime, with a real
+                          one found in its place and repaired. A lane that reads "closed" and assumes
+                          a credential was rotated will be wrong.
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-RESOLVER-NOT-WIRED
+  type:                   TYPED_DEFECT                                    [CLOSED 2026-08-25]
+  closed by:              CONT-EXPV2-JOURNEY-COMPLETION.
+  how:                    deploy/hermes/williamos-live/start-williamos-live.ps1 -- the production
+                          caller the resolver never had. It resolves the host at boot and passes
+                          DATABASE_URL to the server in memory. Writing 192.168.88.8 into .env.local
+                          was the alternative and is the DEFECT rather than the repair: correct on the
+                          day it is typed, silently wrong the next lease change, and the fifth
+                          occurrence of CONT-EXPV2-HARDCODED-ADDRESS-CLASS.
+  ownership:              the script previously existed ONLY as a hand-typed file at
+                          C:\ProgramData\WilliamOS\start-williamos-live.ps1 -- the same gap #997 closed
+                          for Ollama and #1008 for the authority container. It is declared in the
+                          repository now and installed from there, with the displaced copy retained as
+                          start-williamos-live.ps1.rollback-20260825T121807Z.
+  fails closed:           resolution failure REFUSES the boot. The cockpit answers 200 on /sign-in
+                          while unable to reach its database, which is how this went unnoticed for two
+                          days, so starting anyway would be indistinguishable from working.
+  mechanism measured:     process.env beating .env.local is the whole design, so it was measured on the
+                          built artifact rather than cited -- two bogus loopback URLs differing only by
+                          port, a listener on each: PROCESS_ENV_WINS, 0 hits on the dotenv port, 2 on
+                          the process.env port.
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-RUNTIME-DEPLOY-LAG
+  type:                   TYPED_DEFECT                                    [CLOSED 2026-08-25]
+  closed by:              CONT-EXPV2-JOURNEY-COMPLETION, through the canonical owner
+                          scripts/deploy-hermes-runtime.ps1 with its #762 provenance gates left in
+                          force (real SHA on the artifact, equal to git HEAD, and equal to what the
+                          RUNNING instance reports at /api/health).
+  before -> after:        routePresentInDeployedBundle false -> TRUE. /api/health no-response-timeout
+                          -> 200 with database ok true. running SHA marker fe6ef4e7 -> 42836911.
+                          .env.local sha256 AD51C4BE... -> unchanged.
+  rollback:               the outgoing build is now captured BEFORE robocopy /MIR destroys it, and the
+                          deploy prints its own restore command -- a rollback directory nobody can name
+                          is not a rollback. Captured:
+                          C:\HermesLab\williamos-runtime-64034e93-flat.rollback-20260825T122506Z.
+  boot tooling:           measured on this build, Next BUNDLES lib/fabric/*.mjs into the route chunks
+                          rather than tracing them as files, so .next/standalone/lib holds only
+                          generated/build-provenance.json. The deploy copies the fabric mjs directory
+                          (not a hand-listed closure, which would fail at BOOT rather than at deploy)
+                          and then RUNS the deployed resolver, requiring exit 0 before restarting.
+  blast radius:           the WilliamOS app bundle only. The one Ollama owner was untouched and still
+                          answers -- runtime.ok, provider 127.0.0.1:11434, fallback false.
+  cost:                   one aborted deploy (see below) and ~7 minutes of downtime.
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-PS51-NATIVE-STDERR-TERMINATES
+  type:                   TYPED_OBSERVATION
+  raised by:              CONT-EXPV2-JOURNEY-COMPLETION, 2026-08-25, the hard way, twice.
+  finding:                Windows PowerShell 5.1 wraps ANYTHING a native command writes to stderr in a
+                          NativeCommandError record regardless of exit code, and
+                          $ErrorActionPreference = "Stop" makes that TERMINATING. The authority
+                          resolver writes its evidence line (registry fingerprint, previous host, new
+                          host) to stderr by design -- so SUCCESS is what killed the caller.
+                          2>$file does not avoid it; only lowering the preference around the call does.
+  what it cost:           the first deploy stopped the task, captured the rollback, replaced the
+                          bundle, placed the tooling, then threw on its own resolution CHECK -- which
+                          had succeeded -- leaving the service down. The start script then refused the
+                          boot the same way: LastTaskResult 1, empty boot log, and a diagnostic naming
+                          192.168.88.8.
+  repaired:               both call sites drop to Continue for the invocation, restore the previous
+                          preference in a finally, and read the verdict from $LASTEXITCODE, which is
+                          the only thing that was ever a verdict. Guarded by tests at both sites.
+  read this as:           the repository's existing PS 5.1 native-stderr note, met in a new place. Any
+                          lane calling a native command under "Stop" on a Windows node is exposed.
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-INVARIANT-13-JOURNEY-INCOMPLETE
+  type:                   TYPED_FINDING                             [OPEN -- NARROWED 2026-08-25]
+  narrowed by:            CONT-EXPV2-JOURNEY-COMPLETION.
+  first gap CLOSED:       routePresentInDeployedBundle is now TRUE. The route is deployed, reachable,
+                          and answers POST /api/system/node/stamp-identity with 401 UNAUTHENTICATED.
+                          Before this deploy the request reached no such route at all. The sixth seam
+                          is no longer blocked by the deploy.
+  second gap STANDS:      the actor. returnTo is emitted only on a SUCCESSFUL stamp, so the sixth seam
+                          and the authenticated-actor gap are now ONE item, not two.
+  disposition:            #995 invariant 13 remains NOT ACCEPTED. Its governed-mutation core is
+                          settled; what is missing is one authenticated journey run.
+  close it with:          an owner session (see CONT-EXPV2-OWNER-SESSION-REQUIRED), then a grant
+                          re-mint under the CONTINUATION-27 constraints, then one journey run.
+  ownerDecisionRequired:  false -- the blocking item is an owner ACTION, typed separately below.
+
+CONT-EXPV2-OWNER-SESSION-REQUIRED
+  type:                   TYPED_OWNER_ACTION                        [OPEN -- WAITING_OWNER_SESSION]
+  raised by:              CONT-EXPV2-JOURNEY-COMPLETION, 2026-08-25.
+  finding:                no canonical path can mint a session for the owner identity without the
+                          owner entering a credential. Enumerated and MEASURED against the deployed
+                          runtime, not assumed:
+                            email+password  enabled, identity has a credential account -> needs the
+                                            owner's password, which is never an agent's to handle.
+                            email OTP       enabled FALSE, configured FALSE. No delivery provider;
+                                            this path cannot mint for anyone at present.
+                            passkey         0 registered for this identity.
+                            device link     requires an ALREADY authenticated session to mint a code;
+                                            0 pending, 0 live device sessions. Circular.
+                            sign-up         signup.open FALSE, mode bootstrap.
+  NOT taken:              96 live browser sessions exist for this identity and Better Auth stores
+                          session.token in PLAINTEXT. A token could have been read out of the registry
+                          this lane already has authenticated access to and replayed as a cookie. That
+                          is not the canonical sign-in path and it is not minting -- it is replaying
+                          the owner's live authentication artifact, the same class of act as
+                          fabricating a session row or minting a grant to satisfy an authority check.
+                          #1008 drew this line and it is held. A journey whose actor is a token lifted
+                          from a database proves that whoever ran it had database access, which was
+                          never in question.
+  what it unblocks:       everything else is in place and measured -- route deployed and answering,
+                          runtime reading the authority registry (database ok, 11ms), grant expiry now
+                          enforced as written. With a session: one grant re-mint under the
+                          CONTINUATION-27 constraints, one journey run, revoke.
+  ownerDecisionRequired:  TRUE. This is the single typed owner interaction of the lane.
+
+CONT-EXPV2-GRANT-RECORDER-REPLAY-GUARD-HAS-NO-AUTHORISED-PATH
+  type:                   TYPED_OBSERVATION
+  raised by:              CONT-EXPV2-JOURNEY-COMPLETION, 2026-08-25.
+  finding:                #1008's remediation rewrote OR-01-record-grant.mjs's replay guard to test for
+                          the issuance's existence IN ANY STATUS, before --record is consulted, with no
+                          override flag -- correctly, because the previous guard was written on
+                          grantCovers and coverage is exactly what revocation removes, so a re-run
+                          after revocation would have minted a fresh ACTIVE grant with no owner
+                          decision behind it. The consequence is that a LEGITIMATELY re-authorised
+                          issuance for #995 now has no path through the canonical recorder either.
+  not resolved here:      this lane had no journey to authorise, so it did not need the path and did
+                          not weaken the guard to manufacture one. Removing a safety rail a previous
+                          lane installed, to tick a step in one's own packet, is the worst available
+                          move.
+  close it with:          an explicit, RECORDED owner-authorisation input to the recorder rather than
+                          an override flag, so that "this issuance was authorised again" is a fact in
+                          the repository rather than a switch on a command line.
+  ownerDecisionRequired:  false.
+```

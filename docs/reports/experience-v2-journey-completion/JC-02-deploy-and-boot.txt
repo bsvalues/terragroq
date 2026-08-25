@@ -1,0 +1,113 @@
+CLOSING CONT-EXPV2-RUNTIME-DEPLOY-LAG AND CONT-EXPV2-RESOLVER-NOT-WIRED
+Captured on HERMES 2026-08-25T12:18Z - 12:26Z.
+
+=== 1. env precedence, measured before anything live was touched ===
+The start script's whole mechanism is that DATABASE_URL set in the child's environment beats the
+stale one in .env.local. If that precedence went the other way the wiring would be a no-op that
+LOOKS like a repair. It was measured on the built artifact rather than read out of Next's bundled
+loader, using two BOGUS loopback URLs that differ only by port, so no credential was involved and
+the winner names itself.
+
+  .env.local            postgresql://probe:probe@127.0.0.1:5551/probe?sslmode=disable
+  process.env           postgresql://probe:probe@127.0.0.1:5552/probe?sslmode=disable
+
+A listener on each port recorded every connection AS IT ARRIVED.
+
+  verdict                 PROCESS_ENV_WINS
+  dotenvPort5551Hits      0
+  processEnvPort5552Hits  2
+  healthStatus            503  database ok:false detail "read ECONNRESET"   (the listener hung up)
+
+An earlier run of the same probe reported INCONCLUSIVE_NO_CONNECTION_OBSERVED with the app
+reporting ECONNRESET at 7ms -- i.e. it had plainly connected to one of the two listeners. The
+listener was totalling its counts and writing them at exit, and Stop-Process on Windows terminates
+rather than delivering SIGTERM, so the writer never ran. Evidence that exists only if a process is
+shut down politely is evidence that goes missing exactly when something has gone wrong. It now
+appends per connection. The first number is recorded because a reader would otherwise find it.
+
+=== 2. pre-state ===
+  routePresentInDeployedBundle   false          <- OR-10 leg 1, still true at head
+  deployed .williamos-release-sha fe6ef4e7de70c1e455cf1f2aa02fa904aae01681
+  server.js sha256               15E3DFAA565A767571D06B5087661F5BBBFE15CD6738226AF044F870998AC10E
+  .env.local sha256              AD51C4BEBBF797284D83237E1D9EEF778B6FD57A026FDDDA14ADFCB10B67CF20
+  start script sha256            BF4BA07EA64B205DDFE417621B923EAE10EFA1630835E85F6648DFEDB3707AE2
+  GET /api/health                NO RESPONSE, timed out after 15s
+
+=== 3. rollback, captured rather than promised ===
+  start script backup   C:\ProgramData\WilliamOS\start-williamos-live.ps1.rollback-20260825T121807Z
+                        sha256 BF4BA07E... -- byte-identical to the pre-state hash above
+  bundle backup         C:\HermesLab\williamos-runtime-64034e93-flat.rollback-20260825T122506Z
+                        (.next mirrored, server.js and package.json copied)
+  restore path printed by the deploy itself:
+    robocopy "<rollback>\.next" "<runtime>\.next" /MIR
+    copy server.js and package.json back
+    Start-ScheduledTask -TaskName "WilliamOS Live"
+
+  An earlier rollback directory from the aborted first attempt also survives:
+    C:\HermesLab\williamos-runtime-64034e93-flat.rollback-20260825T121814Z
+
+=== 4. the deploy that aborted, and what it cost ===
+The first run stopped the task, captured the rollback, replaced the bundle, placed the boot tooling,
+and then THREW on its own resolution check -- leaving the service down. The check had succeeded:
+its output was the resolver's diagnostic naming host 192.168.88.8.
+
+Windows PowerShell 5.1 wraps anything a native command writes to stderr in a NativeCommandError
+record regardless of exit code, and $ErrorActionPreference = "Stop" makes that terminating. The
+resolver writes its evidence line to stderr BY DESIGN. So success is what killed it. Redirecting to
+a file (2>$path) does not help; only lowering the preference around the call does.
+
+The same defect then refused the boot itself: LastTaskResult 1, an empty boot log, and a diagnostic
+naming .8. Both call sites now drop to Continue for the invocation, restore the previous preference
+in a finally, and read the verdict from $LASTEXITCODE -- which is the only thing that was ever a
+verdict. Guarded by tests at both sites.
+
+=== 5. the deploy that worked ===
+  $ deploy-hermes-runtime.ps1 -Source C:\HermesLab\expv2-journey-completion\repo
+                              -Runtime C:\HermesLab\williamos-runtime-64034e93-flat
+                              -TaskName "WilliamOS Live" -Port 3100
+
+  rollback captured: C:\HermesLab\williamos-runtime-64034e93-flat.rollback-20260825T122506Z
+  boot resolution verified: postgresql://williamos:***@192.168.88.8:15432/williamos?sslmode=disable
+  deployed and verified: running 4283691152473330cc5c4d77cc3872f3b4debd9e, /sign-in 200 on port 3100
+  DEPLOY_EXIT=0
+
+The build was made ON HERMES from the checked-out commit, and the deploy's own #762 provenance gates
+were left in force: the artifact must carry a real SHA, that SHA must equal git HEAD in the source
+tree, and the RUNNING instance must report the same SHA at /api/health.
+
+=== 6. post-state ===
+  routePresentInDeployedBundle   TRUE
+  .env.local sha256              AD51C4BEBBF797284D83237E1D9EEF778B6FD57A026FDDDA14ADFCB10B67CF20
+                                 -- byte-unchanged. The credential file was never written.
+  scheduled task                 Running
+  boot log                       2026-08-25T12:25:13.27Z BOOT_RESOLVED {"resolvedFrom":
+                                 "C:\\Users\\bs\\.williamos\\fabric","nodeId":"atlas",
+                                 "registryFingerprint":"c05bdf932c7d6172...
+  GET /api/health                200
+    {"status":"ok",
+     "build":{"sha":"4283691152473330cc5c4d77cc3872f3b4debd9e","builtAt":"2026-08-25T12:22:43.644Z"},
+     "checks":{"database":{"ok":true,"latencyMs":11},
+               "auth":{"ok":true},
+               "runtime":{"ok":true,"chatModel":"qwen2.5-coder:7b",
+                          "provider":"127.0.0.1:11434","fallback":false}}}
+
+  READ_OK. The deployed runtime reads the authority registry through its OWN configuration path --
+  not through a driver, not through a re-derivation. That is the proof CONT-EXPV2-RUNTIME-
+  CREDENTIAL-STALE asked for, obtained without touching a credential.
+
+  The one Ollama owner was not touched and is still answering: runtime.ok true, provider
+  127.0.0.1:11434, fallback false. This lane deployed the WilliamOS app bundle only.
+
+=== 7. the deployed route answers ===
+  POST /api/system/node/stamp-identity  {"objectId":"node:hermes-node"}
+    401 {"error":"UNAUTHENTICATED"}
+
+  The route is live, reachable, and refusing for the ONE remaining reason. Before this deploy the
+  same request reached no such route at all.
+
+=== a cosmetic residue, recorded rather than polished ===
+The boot log's BOOT_RESOLVED line carries PowerShell's decorated rendering of the resolver's stderr
+("node.exe : {...}" plus the caret block) rather than the bare JSON, because the diagnostic file
+captures the decorated form. The registry fingerprint and both hosts are present and legible, and
+the exit code is the verdict, so this is untidy rather than wrong. Fixing it costs another build and
+deploy cycle and buys nothing; it is left for whoever next edits that script.
