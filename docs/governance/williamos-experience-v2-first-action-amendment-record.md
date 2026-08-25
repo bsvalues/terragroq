@@ -60,20 +60,23 @@ Nothing in this section overwrites the search record. That file belongs to the #
 ## 3. Reservation boundary — what this lane did not touch, and why
 
 `AGENTS.md` assigns builders separate non-overlapping file reservations and forbids claiming
-another's. Measured against all ten open PRs on `2026-08-24`:
+another's. Measured against the ten PRs open on `2026-08-24`. The Holder column records the
+reservation as it stood at that measurement, with what has become of it since:
 
 | Artifact | Holder | This lane's action |
 | --- | --- | --- |
 | `williamos-experience-v2-implementation-charter.md` | **unreserved** — no open PR touches it | amended (`AMENDMENT-001`) |
-| `williamos-experience-v2-phase0-collision-map.md` | **PR #994**, OPEN, MERGEABLE — the map is that PR's *entire* content | **not touched**; retype typed as `CONT-EXPV2-FIRST-ACTION-MAP-RETYPE` below |
-| `williamos-experience-v2-gate2-first-action-search-record.md` | **PR #996**, OPEN — the Gate 2 builder lane | **not touched**; clearance carried by comment |
-| `lib/intent/object-action-registry.ts`, `tests/intent-object-action-registry.test.ts` | **PR #996** | **not touched**; the `CHARTER_AMENDMENT_REQUIRED` literal in the registry and its tests is the builder lane's to retire |
+| `williamos-experience-v2-phase0-collision-map.md` | **PR #994** — the map was that PR's *entire* content; #994 has since merged to `main` as `184aaa2b` | **not touched by this lane**; retype typed as `CONT-EXPV2-FIRST-ACTION-MAP-RETYPE` below, now `RESOLVED` — #994 performed it on itself |
+| `williamos-experience-v2-gate2-first-action-search-record.md` | **PR #996** — the Gate 2 builder lane; merged to `main` as `2630ee5a` | **not touched**; clearance carried by comment |
+| `lib/intent/object-action-registry.ts`, `tests/intent-object-action-registry.test.ts` | **PR #996**, merged `2630ee5a` | **not touched**; the `CHARTER_AMENDMENT_REQUIRED` literal in the registry and its tests is the builder lane's to retire |
 
-#994's hunk (`map:1607-1681`) and the block needing the retype (`map:1454-1485`) do not overlap. That
-makes this a **reservation boundary rather than a merge conflict** — precisely the case where
-honouring the reservation is a choice rather than a constraint, and precisely the choice the Gate 1b
-lane already made against this same file and this same §9 block (`292bb67a`). Making the opposite
-choice one commit later would say the rule holds only when it costs nothing.
+#994's hunk and the block that needed the retype did not overlap — `map:1607-1681` against
+`map:1454-1485` as the file stood on `2026-08-24`; the retype has since landed and the block now
+sits at `map:1495-1514`. That made this a **reservation boundary rather than a merge conflict** —
+precisely the case where honouring the reservation is a choice rather than a constraint, and
+precisely the choice the Gate 1b lane already made against this same file and this same §9 block
+(`292bb67a`). Making the opposite choice one commit later would say the rule holds only when it
+costs nothing.
 
 ## 4. Typed continuations — internal, not owner work
 
@@ -102,95 +105,93 @@ CONT-EXPV2-FIRST-ACTION
   owner:                  no longer open to this lane; superseded by the packet below.
 
 CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION
-  type:                   PICKUP_ELIGIBLE
-  was:                    BLOCKED_DEPENDENCY / PREDECESSOR_LIFECYCLE_INCOMPLETE
-  eligible since:         2026-08-24, when the Gate 2 lane's own pull request landed: PR #996 ->
-                          main 2630ee5a. Retyped by WO-EXPV2-MERGE-SWEEP-003, which performed that
-                          merge and authored none of the work in it.
-  controlling copy:       collision map S9. THAT copy, not this one, carries the MANDATORY
-                          fresh-search predecessor gating the BUILD branch -- a fresh bounded
-                          canonical-action search against the ACTUAL pickup base, recorded, before
-                          BUILD may be selected. This record states the re-proof requirement in
-                          prose further down but its packet never carried it as a field, which is
-                          the gap an authority review thread on #999 caught. Read S9 before
-                          building; PICKUP_ELIGIBLE here means eligible to be picked up, never
-                          eligible to build.
-  subject:                the smallest new canonical action permitted by charter AMENDMENT-001 --
-                          the first journey's one safe governed mutation, BUILT because the bounded
-                          search proved none could be chosen -- IF the fresh search at the pickup
-                          base still finds none. If one qualifies there, the charter's
-                          mandatory-first reuse rule selects REUSE and this packet is discharged
-                          UNBUILT.
-  buildable per:          charter:273-278 as amended, read under the owner-stated semantics recorded
-                          at charter AMENDMENT-001. Those semantics bind the build; they are not
-                          background. Smallest new canonical action; extend the EXISTING
+  type:                   RESOLVED
+  was:                    PICKUP_ELIGIBLE, set on this branch by 4dda3e97
+                          (WO-EXPV2-MERGE-SWEEP-003) and never landed on main -- the merge gate that
+                          read it found the state already consumed. Recorded so that no reader hunts
+                          main for a disposition it never held.
+  before that:            BLOCKED_DEPENDENCY / PREDECESSOR_LIFECYCLE_INCOMPLETE
+  consumed:               2026-08-24. The first-action builder lane picked the packet up, ran the
+                          MANDATORY fresh bounded canonical-action search against the ACTUAL pickup
+                          base 2d72d3c4, and recorded it in
+                          williamos-experience-v2-first-action-pickup-search-record.md. Outcome (b)
+                          again -- nothing qualified there either -- so the charter's mandatory-first
+                          reuse rule selected BUILD after REUSE was run in full, and this packet is
+                          discharged BUILT rather than UNBUILT.
+  pickup:                 DONE. The condition this field used to name -- "AFTER the #996 lifecycle
+                          completes: review, CI, threads, merge; not before" -- was met when #996
+                          merged to main as 2630ee5a, and the pickup followed at 2d72d3c4.
+  delivered as:           node.stamp-identity, the one governed NODE mutation
+                          (lib/system/node-identity-stamp.ts), in PR #1002 -> main 1a352a3f.
+  controlling copy:       collision map S9, which carries the same retype. That copy, not this one,
+                          held the MANDATORY fresh-search predecessor; the predecessor is DISCHARGED
+                          by the search record named above, not by either retype.
+  subject was:            the smallest new canonical action permitted by charter AMENDMENT-001 --
+                          the first journey's one safe governed mutation, BUILT because a second
+                          bounded search proved again that none could be chosen.
+  constraints it set:     charter:273-278 as amended, read under the owner-stated semantics recorded
+                          at AMENDMENT-001 -- smallest new canonical action; extend the EXISTING
                           Object+Action Registry; route through the EXISTING authority,
                           execution/fencing, evidence and verified-post-state paths; do not
                           generalize an unsuitable legacy action merely to preserve its ID; do not
-                          create a parallel action, authority, or execution mechanism.
-  shape:                  modelled on lib/resource/mutation.ts -- chosen by name and never from
-                          caller text, target from the record, unsafe paths refused rather than
-                          escaped, nothing deletes. The five ADDITIVE criteria Gate 2 supplies on
-                          top of it: SystemObject subject; dialect-aware brokered execution;
-                          session-user scoping on every lookup; durable evidence; verified
-                          post-state.
-  satisfies:              #995 acceptance invariants 9 and 12, and the governed-execution leg of 13.
-  does NOT satisfy:       13's terminal acceptance, which additionally needs a live HERMES
-                          settlement. Merging on deterministic tests is permitted; declaring
-                          ACCEPTED on them is not (#995).
-  authority:              NONE NEW. AMENDMENT-001 grants no authority category by itself. This packet
-                          is not a merge grant, an execution grant, or a reservation. The lane that
-                          picks it up needs its own authority-matched bounded packet.
-  reserved for:           the Gate 2 lane (#995/#996) or its recorded successor.
-  pickup:                 AFTER the #996 lifecycle completes -- review, CI, threads, merge. Not
-                          before. #996 holds the registry and search-record reservation and this
-                          work lands on top of it; starting it now would fork the seam #996 is
-                          converging.
-  blocks:                 #995 terminal acceptance.
-  does NOT block:         #996's own merge; Gate 1b; #994; any non-Gate-2 eligible work. A single
-                          blocked item must not park the rest.
-  owner:                  the delivering agent lane.
-  not:                    an owner task, and not this recorder lane's work to build. This lane is
-                          docs/governance scope only.
+                          create a parallel action, authority or execution mechanism; the shape of
+                          lib/resource/mutation.ts plus the five ADDITIVE Gate 2 criteria. Whether
+                          the delivered action meets them is #1002's review and merge record. This
+                          file set the constraints; it does not certify compliance with them.
+  satisfies:              per the delivering lane's own packet
+                          (williamos-experience-v2-first-action-pickup-search-record.md:383-385),
+                          #995 acceptance invariants 9 and 12 and the governed-execution leg of 13
+                          are delivered and tested. 13's TERMINAL acceptance is NOT satisfied and
+                          still needs a live HERMES settlement.
+  continues as:           CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT -- WAITING_RESERVATION,
+                          condition 997-migration-complete, continuation automatic -- recorded on
+                          main at line 369 of
+                          williamos-experience-v2-first-action-pickup-search-record.md. That packet,
+                          not this one, now carries Gate 2's terminal leg.
+  authority:              NONE NEW. AMENDMENT-001 granted no authority category by itself, and
+                          resolving this packet grants none either.
+  owner:                  closed. The successor names its own.
+  not:                    an owner task. It was not one while it was blocked and it is not one now.
 
 CONT-EXPV2-FIRST-ACTION-MAP-RETYPE
-  type:                   BLOCKED_RESERVATION
-  reason:                 TARGET_FILE_IS_ANOTHER_LANE_S_ENTIRE_PR
-  subject:                collision map S9's CONT-EXPV2-FIRST-ACTION packet (map:1454-1485), which
-                          still carries type BLOCKED_DEPENDENCY, reason
-                          CANONICAL_ACTION_SEARCH_NOT_PERFORMED, and "round 4: STILL OPEN". All
-                          three are now stale: the search was run (#996) and the amendment was
-                          approved (2026-08-24).
-  correct retype:         the CONT-EXPV2-FIRST-ACTION block in section 4 of this file, verbatim.
-  also stale there:       the packet's "next:" pair. Branch (b) is no longer a hypothetical; it was
-                          taken under explicit authority.
-  why not done here:      docs/governance/williamos-experience-v2-phase0-collision-map.md is the
-                          entire content of open PR #994. A reservation that is blocked is still a
-                          reservation (AGENTS.md; precedent 292bb67a, on this same S9 block).
-  non-overlap:            #994's hunk is map:1607-1681; this retype targets map:1454-1485. The edits
-                          do not collide textually -- which is why honouring the reservation is a
-                          choice, and why it is recorded as one rather than presented as a
-                          constraint.
-  pickup:                 the #994 holder, in #994 or immediately after it merges; or the next lane
-                          that legitimately holds the map.
-  blocks:                 nothing. The charter is the controlling artifact for the first-action rule
-                          and it is correct as of this commit. S9 is a derived register that is
-                          stale, not authoritative, on this point.
-  carried by comment to:  #994, #995, #996, #987 -- so the retype is discoverable without reading
-                          this file first.
-  owner:                  the delivering agent lane holding the map.
+  type:                   RESOLVED
+  was:                    BLOCKED_RESERVATION / TARGET_FILE_IS_ANOTHER_LANE_S_ENTIRE_PR
+  subject:                collision map S9's CONT-EXPV2-FIRST-ACTION packet, which carried type
+                          BLOCKED_DEPENDENCY, reason CANONICAL_ACTION_SEARCH_NOT_PERFORMED and
+                          "round 4: STILL OPEN" after all three had gone stale, and whose "next:"
+                          pair still presented branch (b) as a hypothetical.
+  resolved:               2026-08-24. That packet now reads type CLEARED at map:1495-1514, with the
+                          search recorded, the amendment named, and branch (b) recorded as taken.
+  performed by:           #994 itself, on its own branch. `git log origin/main --
+                          docs/governance/williamos-experience-v2-phase0-collision-map.md` puts the
+                          retype in 184aaa2b, the #994 merge commit. NOT by this record's lane, and
+                          NOT by PR #1001, which edits a different S9 packet
+                          (CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION at map:1516+). The pickup line
+                          below named "the #994 holder, in #994 or immediately after it merges"
+                          first; that is the option that was taken.
+  why it was blocked:     the map was the entire content of open PR #994, and a reservation that is
+                          blocked is still a reservation (AGENTS.md; precedent 292bb67a, on this
+                          same S9 block). The block ended when #994 merged, not when the edit became
+                          textually safe -- the two edits never collided, which is why honouring the
+                          reservation was a choice and was recorded as one.
+  owner:                  none. Closed, and no longer any lane's pickup.
   not:                    an owner decision.
 ```
 
 ## 5. What this record does not claim
 
-- It does not claim the collision map is wrong. It claims §9's `CONT-EXPV2-FIRST-ACTION` packet is
-  **stale** on a point the charter now settles, and it names who may fix it.
-- It does not claim Gate 2 is unblocked as a whole. Invariant 13's terminal acceptance still waits on
-  Gate 1b, and #996's own lifecycle is still open.
-- It does not claim the action is designed. `CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION` states the
-  constraints the amendment imposes on a build; it does not choose a verb, and choosing one is not
-  this lane's work.
+- It does not claim the collision map is wrong. It claimed §9's `CONT-EXPV2-FIRST-ACTION` packet
+  was **stale** on a point the charter settles, and it named who may fix it. That retype is done:
+  #994 performed it on itself in `184aaa2b`, and the packet reads `CLEARED` at `map:1495-1514`.
+- It does not claim Gate 2 is unblocked as a whole. #996's lifecycle is **complete** — merged to
+  `main` as `2630ee5a` — and the first action is built and merged (#1002 → `1a352a3f`). What
+  invariant 13's TERMINAL acceptance still waits on is a live HERMES settlement, tracked as
+  `CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT`, `WAITING_RESERVATION / 997-migration-complete /
+  automatic`.
+- It does not claim the action is designed. `CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION` stated the
+  constraints the amendment imposes on a build and deliberately chose no verb, because choosing
+  one was not this lane's work. The lane that picked the packet up chose it —
+  `node.stamp-identity`, in #1002 — after proving absence a second time.
 - It does not claim the amendment was inevitable. The search could have found a qualifying action.
   The charter's mandatory-first reuse rule survives the amendment intact, and a later lane that wants
   to build an action must prove absence again, by bounded recorded search, for its own subject.
