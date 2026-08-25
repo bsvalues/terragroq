@@ -126,9 +126,26 @@ report.substitutedModules = substituted
 
 // Digest-pin the canonical modules actually loaded, so a reader can prove this ran against merged
 // main rather than a local edit that made the grant look narrower than it is.
+//
+// TWO digests per file, because one of them is a trap. This checkout is on Windows and git
+// materialises these files with CRLF, so the bytes on disk do NOT hash to what
+// `git show <commit>:<path> | sha256sum` produces on a Linux reader's machine -- the comparison
+// fails and looks exactly like tampering. `onDisk` is what actually executed; `lfNormalised` is the
+// number to compare against main.
 report.canonicalDigests = Object.fromEntries(
   ["app/actions/authority.ts", "lib/governance/authority.ts", "lib/governance/artifacts.ts", "lib/db/schema.ts"]
-    .map((f) => [f, crypto.createHash("sha256").update(fs.readFileSync(path.join(root, f))).digest("hex")]),
+    .map((f) => {
+      const bytes = fs.readFileSync(path.join(root, f))
+      // CRLF -> LF without a regex or a string escape: the tooling between here and the file
+      // has eaten a backslash more than once today, and a digest computed over the wrong bytes
+      // is worse than no digest at all.
+      const CRLF = String.fromCharCode(13, 10)
+      const lf = Buffer.from(bytes.toString("binary").split(CRLF).join(String.fromCharCode(10)), "binary")
+      return [f, {
+        onDisk: crypto.createHash("sha256").update(bytes).digest("hex"),
+        lfNormalised: crypto.createHash("sha256").update(lf).digest("hex"),
+      }]
+    }),
 )
 
 // route.ts:104-112, applied before creating anything and again afterwards.
