@@ -459,6 +459,36 @@ describe("object names are inventory data, not patterns", () => {
     // Escaping must not take the deliberate part with it: "the lab" has to keep matching "the  lab".
     expect(matchWorkbenchNavigationTarget("open the  lab")?.action.id).toBe("capability.lab")
   })
+
+  it("inspects an accelerator by the name the projection gave it", () => {
+    // `inspect RTX 3050` refused with "the input named no object in the current graph" -- about an
+    // accelerator the graph was holding. Only the NODE descriptor listed `inspect` as an alias, so it
+    // alone matched and was then correctly dropped for naming no node; the accelerator descriptor was
+    // never considered. That contradicts the narrowing rule this resolver is built on, which expects
+    // `inspect` to name both actions and the object graph to decide between them.
+    const objects = withGpu("RTX 3050")
+    const resolution = resolveObjectAction("inspect RTX 3050", { objects })
+
+    expect(resolution.state).toBe("resolved")
+    expect(resolution.action?.id).toBe("system.accelerator.inspect")
+  })
+
+  it("still narrows to the node when the input names one", () => {
+    // The alias must not cost the other half of the rule: an accelerator action that matched no
+    // accelerator is still discarded, deterministically, from the projection.
+    const objects = withGpu("RTX 3050")
+    expect(resolveObjectAction("inspect hermes", { objects }).action?.id).toBe("system.node.inspect")
+  })
+
+  it("refuses when one input names a node AND an accelerator", () => {
+    // Two subjects, two actions, no basis to choose: the exactly-one rule refuses rather than picking
+    // a winner. Widening the alias is only safe because this stays true.
+    const objects = withGpu("RTX 3050")
+    const resolution = resolveObjectAction("inspect hermes RTX 3050", { objects })
+
+    expect(resolution.state).toBe("clarification_required")
+    expect(resolution.action).toBeNull()
+  })
 })
 
 describe("the catalogue describes shipped code, not intentions", () => {

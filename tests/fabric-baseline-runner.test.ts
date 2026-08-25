@@ -10,6 +10,7 @@ import {
   BASELINE_STEP_IDS,
   PROBE_CONTAINER,
   buildWindowsSshCommand,
+  defaultExec,
   quoteForCmd,
   nodePassed,
   parseRegistry,
@@ -152,6 +153,26 @@ describe("windows ssh wrapper", () => {
     const remote = "docker rm -f probe >/dev/null 2>&1; docker run -d --name probe alpine sleep 60"
     const command = buildWindowsSshCommand(["host", remote], "o.txt", "e.txt")
     expect(command).toContain(`"${remote}"`)
+  })
+
+  it("reaches ssh instead of throwing on a global that is not the crypto module", async () => {
+    // The wrapper names `crypto.randomBytes` for its temp-file stamp. When it was extracted into
+    // `transport.mjs` the `node:crypto` import stayed behind, and in an ES module the bare name still
+    // resolves -- to Web Crypto, which has no `randomBytes`. Nothing failed at load, so the suite saw
+    // a healthy module while every default ssh execution on the Windows control host threw
+    // `crypto.randomBytes is not a function` before ssh was spawned: the baseline gate, the brokered
+    // probes, every broker caller. The cases above check the command string this wrapper builds; this
+    // one checks that it gets far enough to build one.
+    //
+    // The assertion is about WHICH failure arrives, because this test has to be honest on a runner
+    // with no ssh and no network. A missing binary, a refused connection, a non-zero exit all mean
+    // the transport ran. A TypeError means it never tried.
+    const failure = await defaultExec("ssh", ["-o", "ConnectTimeout=1", "-V"], { timeout: 5_000 })
+      .then(() => null)
+      .catch((error: unknown) => error)
+
+    expect(failure).not.toBeInstanceOf(TypeError)
+    expect(String((failure as Error | null)?.message ?? "")).not.toContain("randomBytes")
   })
 })
 

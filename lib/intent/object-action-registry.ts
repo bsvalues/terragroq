@@ -170,7 +170,23 @@ const systemObjectActions: readonly ObjectActionDescriptor[] = [
     label: "Inspect accelerator",
     href: "/system",
     keywords: ["inspect", "gpu", "accelerator", "vram", "card"],
-    navigationAliases: ["gpu", "accelerator"],
+    /**
+     * `inspect` belongs here, and its absence made the resolver contradict its own narrowing rule.
+     *
+     * `phrasesFor` reads the label and these aliases -- `keywords` feed search, not matching -- so
+     * `inspect RTX 3050` matched only the NODE descriptor, which was then correctly discarded because
+     * no node was named. The accelerator descriptor was never considered at all, and the operator got
+     * "the input named no object in the current graph" about an accelerator the graph was holding.
+     * `resolveObjectAction` is written on the premise that `inspect` names BOTH actions and that the
+     * object graph decides between them; this makes the catalogue agree with it, so the redundant
+     * `inspect accelerator RTX 3050` is no longer the only wording that works.
+     *
+     * It cannot make `inspect` ambiguous by itself: these descriptors are not navigation targets
+     * (`navigationDescriptors` is modes plus capabilities), and when both a node and an accelerator
+     * are named the exactly-one rule refuses, which is the intended answer to a genuinely ambiguous
+     * request.
+     */
+    navigationAliases: ["gpu", "accelerator", "inspect"],
     mutating: false,
     requiresAuthority: false,
     implementation: "lib/system/system-object.ts",

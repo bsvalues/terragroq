@@ -81,3 +81,33 @@ describe("an absent ledger is not a broken one", () => {
     await expect(auditFabricAction(root, "n", "a", 0, "x")).rejects.toThrow(/AUDIT_UNAVAILABLE/)
   })
 })
+
+describe("the preflight refuses before the node is touched", () => {
+  it("refuses a ledger that is present but is not a file", async () => {
+    // The preflight was a zero-byte append, on the reasoning that it fails for every reason a real
+    // write would fail. It does not: on Node 24 `appendFile(dir, "")` succeeds -- the open is allowed
+    // and writing nothing is a no-op -- while `appendFile(dir, "x")` throws EISDIR. So the very case
+    // the preflight was written against, an `audit.log` that is a directory, passed it; the mutation
+    // ran and only the real append afterwards raised. That is the loud-unrecorded-mutation this
+    // function exists to prevent, one layer further down.
+    const { requireLedger } = await import("@/lib/fabric/audit.mjs")
+    const os = await import("node:os")
+    const fs = await import("node:fs/promises")
+    const path = await import("node:path")
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ledger-preflight-"))
+    await fs.mkdir(path.join(root, "audit.log"))
+    await expect(requireLedger(root)).rejects.toThrow(/AUDIT_UNAVAILABLE/)
+  })
+
+  it("accepts a writable root and leaves the ledger empty", async () => {
+    // Proving the ledger works must not itself pollute it: the preflight creates the log exactly as
+    // the first real write would, and adds no line.
+    const { requireLedger } = await import("@/lib/fabric/audit.mjs")
+    const os = await import("node:os")
+    const fs = await import("node:fs/promises")
+    const path = await import("node:path")
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "ledger-ok-"))
+    await expect(requireLedger(root)).resolves.toBeUndefined()
+    expect((await fs.stat(path.join(root, "audit.log"))).size).toBe(0)
+  })
+})
