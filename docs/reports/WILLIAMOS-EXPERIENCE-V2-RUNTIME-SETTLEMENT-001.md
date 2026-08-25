@@ -8,6 +8,13 @@ Continuation settled: `CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT`, retyped in
 `WAITING_RESERVATION / 997-migration-complete` to
 `BLOCKED_DEPENDENCY / AUTHORITY_UNREADABLE / ATLAS_REACHABLE`.
 
+> **SUPERSEDED 2026-08-25 by `WILLIAMOS-EXPERIENCE-V2-ATLAS-RETURN-SETTLEMENT-002.md`.** The
+> `ATLAS_REACHABLE` condition fired and is discharged: ATLAS returned at a **different address**
+> (`192.168.88.5` → `192.168.88.8`, canonically rediscovered). Reachability is no longer the
+> blocker. The settlement still does not pass, and the reason is now substantive rather than
+> environmental — the authority registry holds 28 grants and **none scoped `#995`**. Read 002
+> before acting on anything below that names an address or an availability condition.
+
 Program: `WILLIAMOS_EXPERIENCE_V2`, Gate 2 · Parent `#987` · Action contract `#995` / PR `#1002`
 
 Settled from merged `main` `1a352a3f61286e757fb09a51eaf30092a39abe38`, executed on HERMES.
@@ -178,7 +185,14 @@ stronger evidence and is the one this report reasons from.
 
 ## Typed findings
 
-### `CONT-EXPV2-AUTHORITY-REGISTRY-SINGLE-POINT` — TYPED FINDING
+### `CONT-EXPV2-AUTHORITY-REGISTRY-SINGLE-POINT` — TYPED FINDING (AMENDED 2026-08-25)
+
+> **Amended by `WILLIAMOS-EXPERIENCE-V2-ATLAS-RETURN-SETTLEMENT-002.md`.** ATLAS's return did not
+> close this and made it sharper: the oracle is now **up and still unreachable**. Its
+> `williamos-postgres` container came back bound to the literal `192.168.88.5:15432`, an address the
+> host no longer holds, so the publish never materialised — the container reports `Up`, serves
+> fine on its own socket, and is reachable over TCP from nowhere, including ATLAS itself. The
+> sentence below about "with ATLAS down" no longer describes the condition; the finding survives it.
 
 Every governed mutation in this program checks authority against one Postgres on one node — and that
 node is neither the node being governed nor the node the control plane runs on. With ATLAS down,
@@ -296,10 +310,26 @@ No scheduled task was created, modified, started, or stopped. No service, compos
 GPU setting was touched on HERMES. `HermesModelForgeSync` and `HermesVolumeBackup` will next run on
 their own existing schedules against the repaired scripts.
 
-### `CONT-EXPV2-ARCHIVE-RUN-UNVERIFIED` — the part that is not finished
+### `CONT-EXPV2-ARCHIVE-RUN-UNVERIFIED` — **DISCHARGED 2026-08-25**
 
 ```
-type:      BLOCKED_DEPENDENCY
+type:      DISCHARGED
+by:        WILLIAMOS-EXPERIENCE-V2-ATLAS-RETURN-SETTLEMENT-002.md
+run:       2026-08-25T01:59:38-07:00 via the HermesModelForgeSync scheduled task
+result:    OK  local=21 remote=26 manifests=5 archived-manifests=5 superseded=1 verified=by-name
+verified:  independently, from both sides — 21/21 blobs and 5/5 manifests present by name
+```
+
+The paragraph below predicted the first run would move "roughly 9.65 GB, because it will be
+archiving the live store for the first time." **It moved zero bytes of blob data**: all 21 live
+blobs were already archived, because Ollama blobs are content-addressed and `#997` moved the same
+content the old store had already sent. What was actually missing was metadata — 3 manifests
+archived against 5 live — and a blob no manifest names is not restorable. See 002 §*Step 2*.
+The original text is kept below rather than rewritten, because the prediction being wrong is the
+finding.
+
+```
+type:      BLOCKED_DEPENDENCY          (as written 2026-08-24, now discharged)
 reason:    WAITING_EXTERNAL_ENVIRONMENT
 condition: ATLAS_REACHABLE
 ```

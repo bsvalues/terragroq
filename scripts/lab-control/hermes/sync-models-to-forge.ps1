@@ -58,20 +58,59 @@ param(
   # absence refusal can be exercised; there is no delete-and-replace fallback behind it. Resolved
   # below rather than here: Windows PowerShell 5.1 binds parameter defaults before $PSScriptRoot
   # exists, so a default of (Join-Path $PSScriptRoot ...) throws on an empty path under -File.
-  [string]$ManifestInstaller = ""
+  [string]$ManifestInstaller = "",
+  # The fabric registry that answers where ATLAS is. Overridable ONLY so the resolution refusal
+  # can be exercised, in the same spirit as -ArchiveVolumeLabel in backup-volumes.ps1: a guard
+  # with no negative test is a guard nobody has seen refuse.
+  [string]$FabricRoot = "$env:USERPROFILE\.williamos\fabric"
 )
 
 $ErrorActionPreference = "Stop"
 
 $store   = "D:\HermesData\ollama"
 $remote  = "/forge/models/ollama"
-$atlas   = "bs@192.168.88.5"
-$fabric  = "$env:USERPROFILE\.williamos\fabric"
+$fabric  = $FabricRoot
 $key     = "$fabric\keys\williamos-fabric"
 $known   = "$fabric\known_hosts"
 $logRoot = "C:\ProgramData\WilliamOS\logs"
 New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
 $log = Join-Path $logRoot "model-forge-sync.log"
+
+# ATLAS IS RESOLVED FROM THE FABRIC REGISTRY, NOT WRITTEN DOWN HERE, and it is the same repair
+# the drive letter got, one layer out.
+#
+# This line used to read `$atlas = "bs@192.168.88.5"`. On 2026-08-25 ATLAS came back from a power
+# cycle holding 192.168.88.8 -- its DHCP lease had moved, exactly as OMEN's had moved .8 -> .7 ->
+# .8 in a single day -- and 192.168.88.5 was by then answering ARP for a different device
+# altogether. A written-down address does not fail when the machine moves. It silently starts
+# naming somebody else's machine, and this script would have offered the lab's entire model store
+# to that stranger. StrictHostKeyChecking would have refused the connection, and a guard catching
+# it downstream is not a reason to keep aiming at the wrong host.
+#
+# `nodes.json` is the canonical answer to how this lab reaches its machines, merge-written by
+# lib/fabric/registry.mjs. Reading that decision is the discipline `Assert-LiveStore` already
+# applies to the model store: one owner, read rather than restated. An unreadable or atlas-less
+# registry REFUSES -- falling back to a literal is precisely how a stale address outlives the
+# thing it named.
+function Resolve-AtlasEndpoint {
+  param([string]$Fabric)
+  $nodes = Join-Path $Fabric "nodes.json"
+  if (-not (Test-Path -LiteralPath $nodes -PathType Leaf)) {
+    throw "FABRIC_REGISTRY_UNREADABLE: $nodes does not exist, so ATLAS's address cannot be resolved. Refusing rather than falling back to a written-down address that may now name another machine."
+  }
+  # The registry is maintained by PowerShell tooling, and Set-Content -Encoding UTF8 under Windows
+  # PowerShell 5.1 emits a BOM that ConvertFrom-Json rejects outright. lib/fabric/transport.mjs
+  # strips the same BOM for the same reason; a reader that only works on files it wrote is not one.
+  $text = Get-Content -LiteralPath $nodes -Raw
+  if ($text.Length -gt 0 -and [int][char]$text[0] -eq 0xFEFF) { $text = $text.Substring(1) }
+  $atlasNode = ($text | ConvertFrom-Json).atlas
+  if (-not $atlasNode -or -not $atlasNode.host -or -not $atlasNode.user) {
+    throw "FABRIC_REGISTRY_INCOMPLETE: $nodes carries no atlas entry with both host and user, so ATLAS cannot be addressed. Refusing rather than guessing."
+  }
+  return "$($atlasNode.user)@$($atlasNode.host)"
+}
+
+$atlas = Resolve-AtlasEndpoint -Fabric $fabric
 
 # The store this script archives must be the store the runtime serves. The service script is the one
 # place that decides it; this reads that decision rather than restating it.

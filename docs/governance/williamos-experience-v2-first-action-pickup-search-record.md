@@ -367,6 +367,47 @@ CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION
   ownerDecisionRequired:  false.
 
 CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT
+  type:                   BLOCKED_AUTHORITY   [retyped 2026-08-25 from BLOCKED_DEPENDENCY, which was
+                                               itself retyped 2026-08-24 from WAITING_RESERVATION]
+  reason:                 AUTHORITY_ABSENT_FOR_SCOPE_995
+  condition:              A RECORDED AUTHORITY DECISION. No longer ATLAS_REACHABLE -- that condition
+                          fired and is discharged.
+  continuation:           blocked; not automatic. What it now waits on is not an event.
+  settled by:             docs/reports/WILLIAMOS-EXPERIENCE-V2-ATLAS-RETURN-SETTLEMENT-002.md,
+                          2026-08-25. Read that record before the 2026-08-24 text retained below,
+                          whose prediction being wrong is itself part of the finding.
+  ATLAS_REACHABLE:        DISCHARGED. ATLAS returned on the 2026-08-25 power cycle at a DIFFERENT
+                          address: its DHCP lease moved 192.168.88.5 -> 192.168.88.8, and .5 is now
+                          held by another device that answers ARP and answered a ping. Rediscovered
+                          canonically, twice over: the /etc/machine-id sha256 at .8 equals the atlas
+                          pin in config/execution-fabric/registry.seed.json, and the ed25519 host key
+                          at .8 is byte-identical to the key already pinned for .5. The fabric
+                          registry was merge-written through lib/fabric/registry.mjs updateNodeFields.
+  what blocks it NOW:     not reachability, and not only transport. TWO walls, and the second is the
+                          real one. (1) TRANSPORT: williamos-postgres came back bound to the literal
+                          HostIp 192.168.88.5:15432, an address the host no longer holds, so Docker
+                          never created the publish -- the container reports Up, serves on its own
+                          socket, and is reachable over TCP from NOWHERE, including ATLAS itself.
+                          (2) SUBSTANCE: the authority registry holds 28 grants and NOT ONE is
+                          scoped #995. Four A3_WRITE_SHARED grants exist; every one is scoped
+                          elsewhere. So even over a perfect connection the route refuses
+                          AUTHORITY_NOT_GRANTED_NO_ROWS. Repairing (1) does not move this.
+  actor corrected:        the 2026-08-24 runs passed --actor=william. No user has that id. The real
+                          id is YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ (bsvalues@gmail.com), and the
+                          2026-08-25 run used it. --actor=william would have returned zero rows for
+                          the wrong reason -- a missing actor, not a missing grant.
+  what was NOT done:      no grant minted, no session fabricated, no substitute registry stood up,
+                          no container recreated or re-plumbed, and DATABASE_URL was NOT repointed at
+                          ATLAS's other Postgres (192.168.88.8:5432 is tf-postgres -- TerraFusion, a
+                          different product). The node was never contacted; the stamp file still does
+                          not exist and the ledger is unchanged at 1241147 bytes.
+  owner:                  whoever records authority for #995. NOT a builder lane.
+  ownerDecisionRequired:  TRUE, and this is the change. The 2026-08-24 entry said false, reasoning
+                          that "whether a qualifying grant exists is a question this lane's driver
+                          answers in one run." It has now been answered: none exists. Recording one
+                          is a decision, and no lane may record it on the owner's behalf.
+
+  --- the 2026-08-24 text, retained ---
   type:                   BLOCKED_DEPENDENCY          [retyped 2026-08-24 from WAITING_RESERVATION]
   reason:                 AUTHORITY_UNREADABLE
   condition:              ATLAS_REACHABLE
@@ -401,9 +442,47 @@ CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT
                           qualifying grant exists is a question this lane's driver answers in one
                           run without an owner in the loop.
 
+CONT-EXPV2-AUTHORITY-ABSENT-FOR-SCOPE-995
+  type:                   BLOCKED_AUTHORITY
+  raised by:              CONT-EXPV2-ATLAS-RETURN-SETTLEMENT, 2026-08-25
+  finding:                the authority registry contains 28 grants, across scopes #887, #890, #891,
+                          #905, WO-0027, WO-0028, nine goals, four Hermes outcomes and two
+                          campaigns. It contains NO grant scoped #995. Gate 2's terminal leg has
+                          been waiting on an authority decision that was never recorded, and the
+                          ATLAS outage stood in front of that fact from 2026-08-24 until now.
+  observed how:           a read-only SELECT against the registry, out of band, because the governed
+                          path could not reach it. That observation did NOT authorise anything and
+                          did NOT produce the verdict: the verdict comes from the driver's own run
+                          through the route's real modules, recorded unedited at
+                          docs/reports/experience-v2-atlas-return-settlement/AT-07-settlement-run.json.
+  not claimed:            that the absence may be remedied by any lane. It may not. No grant was
+                          minted and none may be.
+  blocks:                 #995 acceptance invariant 13's terminal leg. This is now THE blocker.
+  ownerDecisionRequired:  true.
+
+CONT-EXPV2-HARDCODED-ADDRESS-CLASS
+  type:                   TYPED_OBSERVATION
+  raised by:              CONT-EXPV2-ATLAS-RETURN-SETTLEMENT, 2026-08-25
+  finding:                four instances of one defect, every one silent while green: F: outliving
+                          its NVMe; the 2026-08-18 LAN move; sync-models-to-forge.ps1's hard-coded
+                          bs@192.168.88.5; and williamos-postgres's HostIp 192.168.88.5. Three are
+                          repaired. The fourth is what makes the authority registry unreachable
+                          today. The lab already knows the remedy -- OMEN's registry entry uses an
+                          mDNS name BECAUSE its lease moved twice in one day -- and has not applied
+                          it consistently.
+  ownerDecisionRequired:  false.
+
 CONT-EXPV2-AUTHORITY-REGISTRY-SINGLE-POINT
-  type:                   TYPED_FINDING
+  type:                   TYPED_FINDING               [AMENDED 2026-08-25]
   raised by:              CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT, 2026-08-24
+  amendment:              ATLAS's return did not close this; it sharpened it. The oracle is now UP
+                          AND STILL UNREACHABLE, because its transport was pinned to an address a
+                          DHCP lease took away. So the finding is not only "one oracle with no
+                          availability story" -- it is that the oracle's reachability rests on a
+                          hand-made docker run from 2026-08-13 that no repository file describes and
+                          no health check tests. Nothing noticed. The container reported Up
+                          throughout. The "with ATLAS down" phrasing below no longer describes the
+                          condition; the finding outlives it.
   finding:                every governed mutation in this program checks authority against one
                           Postgres on one node, and that node is neither the node being governed
                           nor the node the control plane runs on. With ATLAS down, NOTHING in

@@ -1,0 +1,63 @@
+WHY THE AUTHORITY REGISTRY IS STILL UNREADABLE, WITH ATLAS UP
+Measured on ATLAS (192.168.88.8) 2026-08-25T01:31–01:33 -07:00. Read-only throughout.
+
+=== Containers, 10 minutes after boot ===
+  williamos-postgres | Up 10 minutes |                       <- NO PUBLISHED PORTS
+  tf-postgres        | Up 10 minutes (healthy) | 0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
+  tf-redis           | Up 10 minutes | 0.0.0.0:6379->6379/tcp
+  tf-mongo           | Up 10 minutes (healthy) | 0.0.0.0:27017->27017/tcp
+  portainer_agent    | Up 10 minutes | 0.0.0.0:9001->9001/tcp
+
+THE 5432 ON ATLAS IS NOT THE WILLIAMOS REGISTRY. It is tf-postgres — TerraFusion, a different
+product. Pointing the WilliamOS DATABASE_URL at 192.168.88.8:5432 would aim the authority lookup at
+the wrong database. It was not done.
+
+=== The defect, exactly ===
+  docker inspect williamos-postgres:
+    Image          : pgvector/pgvector:pg16
+    Created        : 2026-08-13T16:07:55Z      (docker run; no compose project labels at all)
+    Started        : 2026-08-25T08:21:06Z      (came back on its own: RestartPolicy=unless-stopped)
+    ExposedPorts   : {"5432/tcp":{}}
+    PortBindings   : {"5432/tcp":[{"HostIp":"192.168.88.5","HostPort":"15432"}]}   <<<< HARD-PINNED IP
+    NetworkSettings.Ports    : {}          <- the binding never materialised
+    NetworkSettings.Networks : {}          <- the container is attached to NO network
+    NetworkSettings has no IPAddress key at all
+  contrast, tf-postgres:
+    Ports : {"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"5432"},{"HostIp":"::","HostPort":"5432"}]}
+
+The container's host binding names the literal address 192.168.88.5. ATLAS is now 192.168.88.8, so
+that address does not exist on this host, the publish could not be created, and Docker left the
+container running with no network rather than failing it.
+
+  docker-proxy processes actually running: 6379, 27017, 9001, 5432 (x2 each for v4/v6).
+  There is NO docker-proxy for 15432.
+
+=== Proof that NOTHING can reach it, taken ON ATLAS ITSELF ===
+  127.0.0.1:15432      -> Connection refused
+  192.168.88.8:15432   -> Connection refused
+  127.0.0.1:5433       -> Connection refused
+  docker exec williamos-postgres pg_isready
+    -> /var/run/postgresql:5432 - accepting connections
+
+Postgres is ALIVE and healthy inside the container, and unreachable over TCP from every host in the
+lab including the one it runs on. The only way in is `docker exec`, which is not a transport the
+governed route can use.
+
+=== Data safety, checked before drawing any conclusion about repair ===
+  Mounts: type=volume name=williamos_pgdata src=/var/lib/docker/volumes/williamos_pgdata/_data
+          dst=/var/lib/postgresql/data
+A NAMED volume — so the registry's data is not at risk from the container's state, and no data was
+touched by this lane.
+
+=== WHAT THIS LANE DID NOT DO, AND WHY ===
+It did not recreate the container with a corrected publish. Changing a port binding requires
+`docker rm` + `docker run`, and the value to put there is not a restoration — 192.168.88.5 is gone
+and belongs to another device now, so any new binding (0.0.0.0:15432, or the new address) is a NEW
+decision about how the lab's single authority oracle is exposed on the network. No repo file
+declares this container: it has no compose labels, and the only repo-side record of the endpoint,
+docs/reports/WO-LOCAL-006C, specifies a LOOPBACK proof binding (127.0.0.1:15432:5432) for a
+different host entirely. There is therefore no canonical definition to re-apply — only a new one to
+invent, which is a gate's decision and not a settlement lane's.
+
+It is also worth saying plainly that repairing it would NOT have changed this settlement's verdict:
+see AT-03. There is no #995 grant in that database to find.
