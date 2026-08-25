@@ -177,8 +177,13 @@ byte for byte:
 in the repository.** The review remediation below edited `crossnode-sync-lib.ps1`, `lab-health.ps1`
 and `test-crossnode-sync-receipt.ps1` and **did not redeploy them**, because this envelope is
 terminal for environment action. So the branch head is ahead of HERMES by exactly those three
-changes, deliberately and statedly, rather than by accident. HERMES currently runs the deployed
-copies above, which are the repaired ones — both tasks are green on them. The re-proving lane
+changes, deliberately and statedly, rather than by accident.
+
+What is known about HERMES is bounded to what was measured: at 2026-08-25T02:45 those four digests
+were what was deployed, and LC-06 through LC-09 were green against them. **This envelope has not
+contacted HERMES since and does not assert its current state** — it has no standing to, having gone
+terminal, and a report that quietly re-asserts a machine's condition it stopped watching is the
+carried-forward prose this whole repair exists to argue against. The re-proving lane measures it,
 deploys the branch head, re-digests, and re-runs the controls; it should expect these four rows to
 be superseded, not to match.
 
