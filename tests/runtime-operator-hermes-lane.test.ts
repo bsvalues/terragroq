@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { execFileSync } from "node:child_process"
 
 import { afterEach, describe, expect, it } from "vitest"
 
@@ -57,6 +58,8 @@ const policyFor = (worktreesRoot: string) => ({
 
 type Call = { command: string; args: string[]; cwd?: string }
 
+const gitArgs = (args: string[]) => args[0] === "--no-replace-objects" ? args.slice(1) : args
+
 function fixture(overrides: { policy?: (worktreesRoot: string) => Record<string, unknown> } = {}) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "wo-0030-hermes-")); roots.push(base)
   const repositoryPath = path.join(base, "repo")
@@ -84,21 +87,22 @@ function fixture(overrides: { policy?: (worktreesRoot: string) => Record<string,
 function recorder(calls: Call[], answers: { staged?: string; registered?: string[]; completionRunId?: string; session?: string } = {}) {
   return async (command: string, args: string[], options: { cwd?: string } = {}) => {
     calls.push({ command, args, cwd: options.cwd })
-    if (command === "git" && args[0] === "rev-parse" && args[1] === "HEAD") {
+    const actual = command === "git" ? gitArgs(args) : args
+    if (command === "git" && actual[0] === "rev-parse" && actual[1] === "HEAD") {
       return { stdout: `${options.cwd?.endsWith("baseline") ? BASELINE_SHA : BASE_SHA}\n`, stderr: "" }
     }
-    if (command === "git" && args[0] === "rev-parse" && args[1]?.startsWith("refs/williamos/base-cache/")) {
+    if (command === "git" && actual[0] === "rev-parse" && actual[1]?.startsWith("refs/williamos/base-cache/")) {
       return { stdout: `${BASE_SHA}\n`, stderr: "" }
     }
-    if (command === "git" && args[0] === "rev-parse" && args[1] === "refs/williamos/bundle-head") {
+    if (command === "git" && actual[0] === "rev-parse" && actual[1] === "refs/williamos/bundle-head") {
       return { stdout: `${BUNDLE_HEAD_SHA}\n`, stderr: "" }
     }
-    if (command === "git" && args[0] === "status") return { stdout: "", stderr: "" }
-    if (command === "git" && args[0] === "bundle" && args[1] === "list-heads") {
+    if (command === "git" && actual[0] === "status") return { stdout: "", stderr: "" }
+    if (command === "git" && actual[0] === "bundle" && actual[1] === "list-heads") {
       return { stdout: `${BUNDLE_HEAD_SHA} refs/remotes/origin/main\n`, stderr: "" }
     }
-    if (command === "git" && args[0] === "diff") return { stdout: answers.staged ?? "", stderr: "" }
-    if (command === "git" && args[0] === "worktree" && args[1] === "list") {
+    if (command === "git" && actual[0] === "diff") return { stdout: answers.staged ?? "", stderr: "" }
+    if (command === "git" && actual[0] === "worktree" && actual[1] === "list") {
       return { stdout: (answers.registered ?? []).map((tree) => `worktree ${tree}\nHEAD ${BASE_SHA}\ndetached\n`).join("\n"), stderr: "" }
     }
     if (command === "pwsh") {
@@ -160,6 +164,52 @@ describe("the packet is the one the invoker validates", () => {
 })
 
 describe("two workspaces that each own themselves", () => {
+  it("ignores replacement refs when deciding whether a requested SHA belongs to the governed lineage", async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "wo-0030-real-git-")); roots.push(base)
+    const source = path.join(base, "source")
+    const baselineWorkspace = path.join(base, "baseline")
+    const baselineBundle = path.join(base, "williamos-baseline.bundle")
+    fs.mkdirSync(source)
+    const realGit = (cwd: string, args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim()
+    realGit(source, ["init", "--quiet"])
+    realGit(source, ["config", "user.email", "test@williamos.local"])
+    realGit(source, ["config", "user.name", "WilliamOS test"])
+    fs.writeFileSync(path.join(source, "baseline.txt"), "baseline\n")
+    realGit(source, ["add", "baseline.txt"])
+    realGit(source, ["commit", "--quiet", "-m", "baseline"])
+    const baselineCommit = realGit(source, ["rev-parse", "HEAD"])
+    fs.writeFileSync(path.join(source, "head.txt"), "bundle head\n")
+    realGit(source, ["add", "head.txt"])
+    realGit(source, ["commit", "--quiet", "-m", "head"])
+    const bundleHead = realGit(source, ["rev-parse", "HEAD"])
+    realGit(source, ["update-ref", "refs/remotes/origin/main", bundleHead])
+    realGit(source, ["bundle", "create", baselineBundle, "refs/remotes/origin/main"])
+    execFileSync("git", ["clone", "--quiet", source, baselineWorkspace], { encoding: "utf8" })
+    realGit(baselineWorkspace, ["checkout", "--quiet", "--detach", baselineCommit])
+
+    // This commit object is present locally but is unrelated to the governed history. A replacement
+    // makes ordinary Git pretend it is the bundle head while leaving HEAD and status perfectly clean.
+    const tree = realGit(baselineWorkspace, ["rev-parse", `${baselineCommit}^{tree}`])
+    const unrelated = realGit(baselineWorkspace, ["commit-tree", tree, "-m", "unrelated requested base"])
+    realGit(baselineWorkspace, ["replace", unrelated, bundleHead])
+
+    const policy = {
+      ...policyFor(path.join(base, "worktrees")),
+      placement: {
+        ...policyFor(path.join(base, "worktrees")).placement,
+        baselineWorkspace,
+        baselineBundle,
+        baselineCommit,
+      },
+    }
+    const runner = async (command: string, args: string[], options: { cwd?: string } = {}) => ({
+      stdout: execFileSync(command, args, { cwd: options.cwd, encoding: "utf8" }),
+      stderr: "",
+    })
+    await expect(prepareHermesLocalBase({ policy, requestedBaseSha: unrelated, runner }))
+      .rejects.toThrow("PROVIDER_LANE_BASE_SHA_UNAVAILABLE_WALL")
+  })
+
   it("imports the exact requested SHA through the governed bundle without moving the pinned baseline", async () => {
     const { baselineWorkspace, baselineBundle } = fixture()
     const calls: Call[] = []
@@ -172,26 +222,28 @@ describe("two workspaces that each own themselves", () => {
     expect(prepared).toEqual({ repositoryPath: baselineWorkspace, baseSha: BASE_SHA })
     expect(calls).toContainEqual({
       command: "git",
-      args: ["bundle", "verify", baselineBundle],
+      args: ["--no-replace-objects", "bundle", "verify", baselineBundle],
       cwd: baselineWorkspace,
     })
     expect(calls).toContainEqual({
       command: "git",
-      args: ["fetch", "--no-tags", baselineBundle, "refs/remotes/origin/main:refs/williamos/bundle-head"],
+      args: ["--no-replace-objects", "fetch", "--no-tags", baselineBundle, "refs/remotes/origin/main:refs/williamos/bundle-head"],
       cwd: baselineWorkspace,
     })
     expect(calls).toContainEqual({
       command: "git",
-      args: ["merge-base", "--is-ancestor", BASE_SHA, BUNDLE_HEAD_SHA],
+      args: ["--no-replace-objects", "merge-base", "--is-ancestor", BASE_SHA, BUNDLE_HEAD_SHA],
       cwd: baselineWorkspace,
     })
     expect(calls).toContainEqual({
       command: "git",
-      args: ["update-ref", `refs/williamos/base-cache/${BASE_SHA}`, BASE_SHA],
+      args: ["--no-replace-objects", "update-ref", `refs/williamos/base-cache/${BASE_SHA}`, BASE_SHA],
       cwd: baselineWorkspace,
     })
-    expect(calls.filter((call) => call.command === "git" && call.args[0] === "rev-parse" && call.args[1] === "HEAD"))
+    expect(calls.filter((call) => call.command === "git" && gitArgs(call.args)[0] === "rev-parse" && gitArgs(call.args)[1] === "HEAD"))
       .toHaveLength(2)
+    expect(calls.filter((call) => call.command === "git").every((call) => call.args[0] === "--no-replace-objects"))
+      .toBe(true)
   })
 
   it("refuses a requested SHA the governed bundle does not contain", async () => {
@@ -199,7 +251,8 @@ describe("two workspaces that each own themselves", () => {
     const calls: Call[] = []
     const baseRunner = recorder(calls)
     const runner = async (command: string, args: string[], options: { cwd?: string } = {}) => {
-      if (command === "git" && args[0] === "cat-file" && args[2] === `${BASE_SHA}^{commit}`) {
+      const actual = gitArgs(args)
+      if (command === "git" && actual[0] === "cat-file" && actual[2] === `${BASE_SHA}^{commit}`) {
         throw new Error("unknown commit")
       }
       return baseRunner(command, args, options)
@@ -209,7 +262,7 @@ describe("two workspaces that each own themselves", () => {
       requestedBaseSha: BASE_SHA,
       runner,
     })).rejects.toThrow("PROVIDER_LANE_BASE_SHA_UNAVAILABLE_WALL")
-    expect(calls.some((call) => call.args[0] === "fetch")).toBe(true)
+    expect(calls.some((call) => gitArgs(call.args)[0] === "fetch")).toBe(true)
   })
 
   it("runs the lane in a provider-side worktree at the kernel workspace's own HEAD", async () => {
@@ -230,7 +283,7 @@ describe("two workspaces that each own themselves", () => {
     // ...and it is parked at the commit the kernel workspace is on, or the patch would be foreign.
     expect(calls).toContainEqual({
       command: "git",
-      args: ["worktree", "add", "--detach", owned, BASE_SHA],
+      args: ["--no-replace-objects", "worktree", "add", "--detach", owned, BASE_SHA],
       cwd: baselineWorkspace,
     })
   })
@@ -240,7 +293,8 @@ describe("two workspaces that each own themselves", () => {
     const calls: Call[] = []
     const baseRunner = recorder(calls)
     const runner = async (command: string, args: string[], options: { cwd?: string } = {}) => {
-      if (command === "git" && args[0] === "cat-file" && args[2]?.endsWith(":scripts/runtime-operator/worker-lanes.mjs")) {
+      const actual = gitArgs(args)
+      if (command === "git" && actual[0] === "cat-file" && actual[2]?.endsWith(":scripts/runtime-operator/worker-lanes.mjs")) {
         throw new Error("missing")
       }
       return baseRunner(command, args, options)
@@ -252,6 +306,7 @@ describe("two workspaces that each own themselves", () => {
       newId: identities("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"),
     })).rejects.toThrow("TASK_BASELINE_DRIFT_WALL:scripts/runtime-operator/worker-lanes.mjs")
     expect(calls.some((call) => call.command === "pwsh")).toBe(false)
+    expect(calls.some((call) => ["worktree", "reset", "clean"].includes(gitArgs(call.args)[0]))).toBe(false)
   })
 
   it("carries what the kernel workspace already had staged into the provider's tree", async () => {
@@ -264,7 +319,7 @@ describe("two workspaces that each own themselves", () => {
       newId: identities("aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"),
     })
     // A remediation round that started from pristine base would silently revert the round before it.
-    const applied = calls.find((call) => call.command === "git" && call.args[0] === "apply")
+    const applied = calls.find((call) => call.command === "git" && gitArgs(call.args)[0] === "apply")
     expect(applied?.cwd).toBe(owned)
     // The carried patch is scratch, not evidence: it does not outlive the dispatch.
     expect(fs.existsSync(path.join(root, "state", "requests", "wo-0030-hermes-carried.patch"))).toBe(false)
@@ -349,9 +404,9 @@ describe("two workspaces that each own themselves", () => {
     expect(packet.statePath).toBe(path.join(runtimeRoot, "hermes-kernel", "threads", "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", "kernel-state"))
     // A registered worktree is reset, not added again -- and cleaned of ignored content, which is
     // what the invoker refuses to mount.
-    expect(second.some((call) => call.args[0] === "worktree" && call.args[1] === "add")).toBe(false)
-    expect(second).toContainEqual({ command: "git", args: ["reset", "--hard", BASE_SHA], cwd: owned })
-    expect(second).toContainEqual({ command: "git", args: ["clean", "-fdx"], cwd: owned })
+    expect(second.some((call) => gitArgs(call.args)[0] === "worktree" && gitArgs(call.args)[1] === "add")).toBe(false)
+    expect(second).toContainEqual({ command: "git", args: ["--no-replace-objects", "reset", "--hard", BASE_SHA], cwd: owned })
+    expect(second).toContainEqual({ command: "git", args: ["--no-replace-objects", "clean", "-fdx"], cwd: owned })
   })
 
   it("refuses to adopt a directory in the allowed root that is not its own worktree", async () => {

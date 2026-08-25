@@ -482,7 +482,7 @@ export async function prepareHermesLocalBase({ policy, requestedBaseSha, runner 
     throw new Error("PROVIDER_LANE_BASELINE_CACHE_WALL")
   }
 
-  const git = (args) => runner("git", args, { cwd: baselineWorkspace })
+  const git = (args) => runner("git", ["--no-replace-objects", ...args], { cwd: baselineWorkspace })
   const assertPinnedCheckout = async () => {
     try {
       const head = (await git(["rev-parse", "HEAD"])).stdout.trim()
@@ -574,12 +574,26 @@ export async function dispatchHermesLocal({
   // other's tree by guessing at a name.
   const owned = path.join(worktreesRoot, `runtime-operator-${workOrderId.toLowerCase()}`)
 
-  const requestedBaseSha = (await runner("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim()
+  const git = (args, options) => runner("git", ["--no-replace-objects", ...args], options)
+  const requestedBaseSha = (await git(["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim()
   const preparedBase = await prepareHermesLocalBase({ policy, requestedBaseSha, runner })
   const baseRepository = preparedBase.repositoryPath
   const baseSha = preparedBase.baseSha
-  const carried = (await runner("git", ["diff", "--cached", "--binary"], { cwd: workspace })).stdout
-  const registered = (await runner("git", ["worktree", "list", "--porcelain"], { cwd: baseRepository })).stdout
+  if (!Array.isArray(requiredBasePaths) || requiredBasePaths.some((target) =>
+    typeof target !== "string" || target.trim() === "" || path.isAbsolute(target)
+    || target.includes("\\") || target.split("/").includes("..") || /[*?[]/.test(target))) {
+    throw new Error("PROVIDER_LANE_POLICY_WALL")
+  }
+  const missingTargets = []
+  for (const target of requiredBasePaths) {
+    try { await git(["cat-file", "-e", `${baseSha}:${target}`], { cwd: baseRepository }) }
+    catch { missingTargets.push(target) }
+  }
+  if (missingTargets.length > 0) {
+    throw new Error(`TASK_BASELINE_DRIFT_WALL:${missingTargets.join(",")}`)
+  }
+  const carried = (await git(["diff", "--cached", "--binary"], { cwd: workspace })).stdout
+  const registered = (await git(["worktree", "list", "--porcelain"], { cwd: baseRepository })).stdout
     .split(/\r?\n/)
     .filter((line) => line.startsWith("worktree "))
     .map((line) => path.resolve(line.slice("worktree ".length).trim()))
@@ -589,27 +603,14 @@ export async function dispatchHermesLocal({
     ? candidate.toLowerCase() === owned.toLowerCase()
     : candidate === owned
   if (registered.some(isOwned)) {
-    await runner("git", ["reset", "--hard", baseSha], { cwd: owned })
+    await git(["reset", "--hard", baseSha], { cwd: owned })
     // -x deliberately: the invoker refuses a worktree carrying node_modules, and an interrupted cycle
     // elsewhere is exactly how one arrives.
-    await runner("git", ["clean", "-fdx"], { cwd: owned })
+    await git(["clean", "-fdx"], { cwd: owned })
   } else {
     if (fs.existsSync(owned)) throw new Error("PROVIDER_WORKSPACE_RECONCILIATION_WALL")
     fs.mkdirSync(worktreesRoot, { recursive: true })
-    await runner("git", ["worktree", "add", "--detach", owned, baseSha], { cwd: baseRepository, timeout: 120_000 })
-  }
-  if (!Array.isArray(requiredBasePaths) || requiredBasePaths.some((target) =>
-    typeof target !== "string" || target.trim() === "" || path.isAbsolute(target)
-    || target.includes("\\") || target.split("/").includes("..") || /[*?[]/.test(target))) {
-    throw new Error("PROVIDER_LANE_POLICY_WALL")
-  }
-  const missingTargets = []
-  for (const target of requiredBasePaths) {
-    try { await runner("git", ["cat-file", "-e", `${baseSha}:${target}`], { cwd: baseRepository }) }
-    catch { missingTargets.push(target) }
-  }
-  if (missingTargets.length > 0) {
-    throw new Error(`TASK_BASELINE_DRIFT_WALL:${missingTargets.join(",")}`)
+    await git(["worktree", "add", "--detach", owned, baseSha], { cwd: baseRepository, timeout: 120_000 })
   }
   if (carried.trim()) {
     // Whatever the kernel workspace already had staged is work this dispatch continues, not work it
@@ -617,7 +618,7 @@ export async function dispatchHermesLocal({
     const carriedFile = path.join(root, "state", "requests", `${workOrderId.toLowerCase()}-hermes-carried.patch`)
     fs.mkdirSync(path.dirname(carriedFile), { recursive: true })
     fs.writeFileSync(carriedFile, carried, "utf8")
-    try { await runner("git", ["apply", "--whitespace=nowarn", carriedFile], { cwd: owned }) }
+    try { await git(["apply", "--whitespace=nowarn", carriedFile], { cwd: owned }) }
     finally { fs.rmSync(carriedFile, { force: true }) }
   }
   if (workContext) equipWorkContext(owned, workContext)

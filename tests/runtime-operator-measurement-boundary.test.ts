@@ -20,6 +20,13 @@ import {
  * the next model comparison inherits it and starts from a lie.
  */
 describe("what a failed dispatch is allowed to mean", () => {
+  it("never blames the model for an orphaned provider worktree", () => {
+    expect(classifyDispatchFailure("PROVIDER_WORKSPACE_RECONCILIATION_WALL")).toEqual({
+      verdict: "BLOCKED_WORKSPACE_RECONCILIATION",
+      aboutTheModel: false,
+    })
+  })
+
   it("never blames the model for a crashed invoker", () => {
     const result = classifyDispatchFailure("PROCESS_WALL:pwsh")
     expect(result.verdict).toBe("BLOCKED_INVOKER_PROCESS_FAILED")
@@ -104,9 +111,15 @@ describe("the measurement attempt has one total failure boundary", () => {
 })
 
 describe("false settled evidence has one governed invalidation", () => {
+  const contaminatedRecord = {
+    implementation: "MEASURED_INCAPABLE",
+    measuredAt: "2026-08-25T17:12:33.397Z",
+    evidence: "The lane produced no patch. Wall: PROVIDER_WORKSPACE_RECONCILIATION_WALL. The provider ran and returned without a usable change. Task: the bounded pure-helper task with tests. Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0). Elapsed 0s.",
+  }
+
   it("replaces only an incapable verdict proved to come from a missing baseline target", () => {
     expect(buildStaleBaselineInvalidation({
-      currentRecord: { implementation: "MEASURED_INCAPABLE", evidence: "stale run" },
+      currentRecord: contaminatedRecord,
       baselineSha: "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48",
       missingTargetPaths: ["scripts/runtime-operator/worker-lanes.mjs"],
     })).toEqual({
@@ -123,9 +136,22 @@ describe("false settled evidence has one governed invalidation", () => {
       missingTargetPaths: ["scripts/runtime-operator/worker-lanes.mjs"],
     })).toThrow("LANE_CAPABILITY_INVALIDATION_STATE_WALL")
     expect(() => buildStaleBaselineInvalidation({
-      currentRecord: { implementation: "MEASURED_INCAPABLE", evidence: "stale run" },
+      currentRecord: contaminatedRecord,
       baselineSha: "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48",
       missingTargetPaths: [],
     })).toThrow("LANE_CAPABILITY_INVALIDATION_EVIDENCE_WALL")
+  })
+
+  it("cannot erase a later genuine incapable verdict", () => {
+    expect(() => buildStaleBaselineInvalidation({
+      currentRecord: { ...contaminatedRecord, measuredAt: "2026-08-25T18:00:00.000Z" },
+      baselineSha: "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48",
+      missingTargetPaths: ["scripts/runtime-operator/worker-lanes.mjs"],
+    })).toThrow("LANE_CAPABILITY_INVALIDATION_RECORD_MISMATCH_WALL")
+    expect(() => buildStaleBaselineInvalidation({
+      currentRecord: { ...contaminatedRecord, evidence: "A real later model run." },
+      baselineSha: "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48",
+      missingTargetPaths: ["scripts/runtime-operator/worker-lanes.mjs"],
+    })).toThrow("LANE_CAPABILITY_INVALIDATION_RECORD_MISMATCH_WALL")
   })
 })

@@ -27,6 +27,9 @@ export function classifyDispatchFailure(message) {
   if (/^TASK_BASELINE_DRIFT_WALL:/.test(text)) {
     return { verdict: "BLOCKED_TASK_BASELINE_DRIFT", aboutTheModel: false }
   }
+  if (/^PROVIDER_WORKSPACE_RECONCILIATION_WALL$/.test(text)) {
+    return { verdict: "BLOCKED_WORKSPACE_RECONCILIATION", aboutTheModel: false }
+  }
   const provider = /^PROVIDER_LANE_([A-Z_]+)/.exec(text)
   if (provider) return { verdict: `BLOCKED_${provider[1]}`, aboutTheModel: false }
   if (/^PROCESS_WALL:/.test(text)) return { verdict: "BLOCKED_INVOKER_PROCESS_FAILED", aboutTheModel: false }
@@ -59,16 +62,32 @@ export async function runMeasuredAttempt({ attempt, recordFailure }) {
 /**
  * Authorise one narrow correction of contaminated settled evidence.
  *
- * This is not a generic state editor: only a prior MEASURED_INCAPABLE record can be replaced, and
- * only when the instrument independently proved that at least one declared task target did not exist
- * at the pinned baseline used by that run.
+ * This is not a generic state editor: it recognises the exact timestamp and evidence of the known
+ * contaminated HERMES record, then independently proves its exact task target absent at the exact
+ * pinned baseline. A later genuine MEASURED_INCAPABLE record cannot match this one-time fingerprint.
  */
+const CONTAMINATED_LEGACY_RECORD = Object.freeze({
+  implementation: "MEASURED_INCAPABLE",
+  measuredAt: "2026-08-25T17:12:33.397Z",
+  evidence: "The lane produced no patch. Wall: PROVIDER_WORKSPACE_RECONCILIATION_WALL. The provider ran and returned without a usable change. Task: the bounded pure-helper task with tests. Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0). Elapsed 0s.",
+})
+const CONTAMINATED_BASELINE_SHA = "45f90fa59fe47e5f1aa505e9ec710ec2deb37a48"
+const CONTAMINATED_TARGET = "scripts/runtime-operator/worker-lanes.mjs"
+
 export function buildStaleBaselineInvalidation({ currentRecord, baselineSha, missingTargetPaths }) {
   if (currentRecord?.implementation !== "MEASURED_INCAPABLE") {
     throw new Error("LANE_CAPABILITY_INVALIDATION_STATE_WALL")
   }
+  if (currentRecord.measuredAt !== CONTAMINATED_LEGACY_RECORD.measuredAt
+    || currentRecord.evidence !== CONTAMINATED_LEGACY_RECORD.evidence
+    || baselineSha !== CONTAMINATED_BASELINE_SHA) {
+    throw new Error("LANE_CAPABILITY_INVALIDATION_RECORD_MISMATCH_WALL")
+  }
   if (!Array.isArray(missingTargetPaths) || missingTargetPaths.length === 0) {
     throw new Error("LANE_CAPABILITY_INVALIDATION_EVIDENCE_WALL")
+  }
+  if (missingTargetPaths.length !== 1 || missingTargetPaths[0] !== CONTAMINATED_TARGET) {
+    throw new Error("LANE_CAPABILITY_INVALIDATION_RECORD_MISMATCH_WALL")
   }
   return {
     verdict: "BLOCKED_TASK_BASELINE_DRIFT",

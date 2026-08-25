@@ -90,7 +90,7 @@ if (unmounted.length > 0) {
 const { execFile } = await import("node:child_process")
 const { promisify } = await import("node:util")
 const exec = promisify(execFile)
-const git = (args, cwd = REPOSITORY) => exec("git", args, { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 })
+const git = (args, cwd = REPOSITORY) => exec("git", ["--no-replace-objects", ...args], { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 })
 
 if (invalidateStaleBaseline) {
   const capabilityFile = path.join(ROOT, "state", "lane-capability.json")
