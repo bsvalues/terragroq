@@ -342,6 +342,19 @@ no module with anything this lane changed.
 `tsc --noEmit` reports **1645 errors on this branch and 1645 on the unmodified baseline**, verified by
 stashing this lane's changes and re-running. None is in `app/` or `lib/`.
 
+### The new test failed on CI first, for its own version of the defect it tests
+
+`authority-grant-expiry-utc` passed locally and failed on the runner: two assertions, `expected false
+to be true`. The zone was being set in `beforeAll`, but a `describe` callback body runs during
+**collection**, before any `beforeAll` — so the driver `Date`s were built in the runner's zone and read
+back in the configured one. On a UTC-7 laptop that is a no-op and everything passes; on a UTC runner
+the fixture carries a skew nobody asked for.
+
+The arrangement was environment-order-dependent in exactly the way the code under test is, which is a
+poor thing for this particular file to have been. The zone is now set at module scope and every driver
+value is constructed inside its test rather than beside it, so moving that line cannot reintroduce it.
+Verified under **both** `TZ=UTC` (the condition that failed) and the native zone: 13/13 each.
+
 ## Retained artifacts
 
 | File | What it holds |

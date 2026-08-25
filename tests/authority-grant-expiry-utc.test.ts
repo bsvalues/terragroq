@@ -16,18 +16,24 @@
  * These tests run under a fixed non-UTC zone on purpose. A suite that proved this on a UTC machine
  * would prove nothing at all, so the offset is asserted before anything else is.
  */
-import { describe, expect, it, beforeAll, afterAll, vi } from "vitest"
+import { describe, expect, it, afterAll, vi } from "vitest"
 
 import { fromUtcWallDriver, toUtcWallDriver } from "@/lib/db/utc-wall-timestamp"
 import { authorityGrantFactsFromRow, grantCovers, isGrantActive } from "@/lib/governance/authority"
 
 // UTC-7 in August, which is the zone the defect was measured in.
+//
+// Set at MODULE scope, not in `beforeAll`. A `describe` callback body runs during collection, which
+// is BEFORE any `beforeAll`, so a Date built there would be built in the runner's own zone and then
+// read back in this one -- and the two tests below would measure a skew nobody configured. That is
+// how the first version of this file passed on a UTC-7 laptop and failed on a UTC runner: the
+// arrangement was environment-order-dependent in exactly the way the code under test is.
+//
+// Every driver value is ALSO constructed inside its test rather than beside it, so the ordering
+// cannot bite again if this line is ever moved.
 const SKEWED_ZONE = "America/Los_Angeles"
 const originalTz = process.env.TZ
-
-beforeAll(() => {
-  process.env.TZ = SKEWED_ZONE
-})
+process.env.TZ = SKEWED_ZONE
 
 afterAll(() => {
   if (originalTz === undefined) delete process.env.TZ
@@ -85,9 +91,10 @@ describe("fromUtcWallDriver recovers the stored instant", () => {
 })
 
 describe("a bounded grant expires when the record says it does", () => {
-  // Granted 2026-08-25T12:05:06Z to live two hours: dead from 14:05:06Z.
-  const grantedAt = asNodePgWouldParse(2026, 8, 25, 12, 5, 6, 566)
-  const expiresAtRow = asNodePgWouldParse(2026, 8, 25, 14, 5, 6, 566)
+  // Granted 2026-08-25T12:05:06Z to live two hours: dead from 14:05:06Z. Built inside the callers,
+  // never at collection time -- see the note on the zone above.
+  const grantedAt = () => asNodePgWouldParse(2026, 8, 25, 12, 5, 6, 566)
+  const expiresAtRow = () => asNodePgWouldParse(2026, 8, 25, 14, 5, 6, 566)
 
   const row = () => ({
     id: 32,
@@ -96,7 +103,7 @@ describe("a bounded grant expires when the record says it does", () => {
     authorityLevel: "A3_WRITE_SHARED",
     allowedActions: ["node.stamp-identity"],
     blockedActions: [],
-    expiresAt: expiresAtRow,
+    expiresAt: expiresAtRow(),
     revokedAt: null,
     revokeReason: null,
   })
@@ -135,9 +142,10 @@ describe("a bounded grant expires when the record says it does", () => {
     // What a drizzle read of the identical row produces, which is the semantics the record is written
     // in. The two readers must not disagree about when a grant dies.
     expect(authorityGrantFactsFromRow(row()).expiresAt?.toISOString()).toBe(
-      fromUtcWallDriver(expiresAtRow).toISOString(),
+      fromUtcWallDriver(expiresAtRow()).toISOString(),
     )
-    expect(fromUtcWallDriver(expiresAtRow).getTime() - fromUtcWallDriver(grantedAt).getTime()).toBe(2 * 60 * 60 * 1000)
+    expect(fromUtcWallDriver(expiresAtRow()).getTime() - fromUtcWallDriver(grantedAt()).getTime())
+      .toBe(2 * 60 * 60 * 1000)
   })
 })
 
