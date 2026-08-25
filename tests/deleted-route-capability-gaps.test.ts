@@ -231,7 +231,7 @@ describe("4. the world is persisted and restored", () => {
   it("restores the owned server Space before an addressed summon", () => {
     expect(shell).toContain('fetch("/api/environment/space"')
     expect(shell).toContain("setWorldId(payload.worldId)")
-    expect(shell).toContain("const restored = normalizeSpace(payload.space, fallback)")
+    expect(shell).toContain("const restored = normalizeSpace(payload.space, fallback, {")
     expect(shell).toContain("setSpace(restored)")
   })
 

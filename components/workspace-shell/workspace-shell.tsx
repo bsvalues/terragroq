@@ -51,7 +51,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const lineRef = useRef<HTMLInputElement>(null)
   // Strict Mode replays mount effects. Both passes attach to the same arrival promises so cleanup
   // cannot strand the surviving pass in an opening/working state after the first response arrives.
-  const spaceArrival = useRef<Promise<Partial<SpaceEnvelope> & { error?: string }> | null>(null)
+  const spaceArrival = useRef<Promise<SpaceEnvelope> | null>(null)
   const summonArrival = useRef<Readonly<{ key: string; request: Promise<LineReply> }> | null>(null)
   const restorationStarted = useRef(false)
   const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -125,12 +125,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (!response.ok || typeof payload.worldId !== "string" || !payload.space) {
           throw new Error(payload.error ?? `SPACE_${response.status}`)
         }
-        return payload
+        return { worldId: payload.worldId, space: payload.space, spine: payload.spine }
     })())
     void request
       .then((payload) => {
         if (cancelled) return
-        const restored = normalizeSpace(payload.space, fallback)
+        const restored = normalizeSpace(payload.space, fallback, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        })
         revisionRef.current = restored.revision
         acknowledgedRevisionRef.current = restored.revision
         setWorldId(payload.worldId)
@@ -393,9 +396,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       <div className={styles.atmosphere} aria-hidden />
       <menu className={styles.menuBar}>
         <span className={styles.wordmark}>W</span>
-        <button type="button" className={styles.spaceName} aria-label="Current Space">
+        <span className={styles.spaceName} aria-label="Current Space">
           <Layers3 size={13} aria-hidden /> TerraFusion
-        </button>
+        </span>
         <button type="button" className={styles.lineSummon} onClick={() => { setLineOpen(true); requestAnimationFrame(() => lineRef.current?.focus()) }}>
           <Command size={12} aria-hidden /> Line <kbd>⌘K</kbd>
         </button>

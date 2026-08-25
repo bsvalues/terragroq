@@ -88,7 +88,36 @@ export function defaultSpace(viewportWidth = 1440, viewportHeight = 900): Worksp
 const finite = (value: unknown, fallback: number) =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback
 
-export function normalizeSpace(value: unknown, fallback: WorkspaceSpace): WorkspaceSpace {
+type ViewportBounds = Readonly<{ width: number; height: number }>
+
+function geometryInViewport(
+  frame: Record<string, unknown> | undefined,
+  input: Record<string, unknown> | undefined,
+  base: WindowGeometry,
+  viewport: ViewportBounds,
+): WindowGeometry {
+  const viewportWidth = Math.max(320, finite(viewport.width, 1440))
+  const viewportHeight = Math.max(240, finite(viewport.height, 900))
+  const width = Math.min(Math.max(360, viewportWidth - 16), Math.max(360, finite(frame?.width, base.width)))
+  const height = Math.min(Math.max(260, viewportHeight - 44), Math.max(260, finite(frame?.height, base.height)))
+  // Keep at least a draggable title-bar segment visible after display/browser size changes.
+  const x = Math.min(Math.max(0, viewportWidth - 180), Math.max(-width + 180, finite(frame?.x, base.x)))
+  const y = Math.min(Math.max(28, viewportHeight - 90), Math.max(28, finite(frame?.y, base.y)))
+  return {
+    x,
+    y,
+    width,
+    height,
+    z: finite(input?.z, base.z),
+    minimized: typeof input?.minimized === "boolean" ? input.minimized : base.minimized,
+  }
+}
+
+export function normalizeSpace(
+  value: unknown,
+  fallback: WorkspaceSpace,
+  viewport: ViewportBounds = { width: 1440, height: 900 },
+): WorkspaceSpace {
   if (!value || typeof value !== "object") return fallback
   const candidate = value as Record<string, unknown>
   const rawWindows = Array.isArray(candidate.windows) ? candidate.windows : []
@@ -102,11 +131,9 @@ export function normalizeSpace(value: unknown, fallback: WorkspaceSpace): Worksp
     const item = window as Record<string, unknown>
     if (item.kind !== "inspector" || typeof item.id !== "string") return []
     const frame = item.frame && typeof item.frame === "object" ? item.frame as Record<string, unknown> : {}
-    return [[item.id, {
-      x: finite(frame.x, 120), y: finite(frame.y, 90),
-      width: Math.max(360, finite(frame.width, 560)), height: Math.max(260, finite(frame.height, 480)),
-      z: finite(item.z, 3), minimized: typeof item.minimized === "boolean" ? item.minimized : false,
-    } satisfies WindowGeometry]]
+    return [[item.id, geometryInViewport(frame, item, {
+      x: 120, y: 90, width: 560, height: 480, z: 3, minimized: false,
+    }, viewport)]]
   }))
   const inspectorSeeds = Object.fromEntries(rawWindows.flatMap((window) => {
     if (!window || typeof window !== "object") return []
@@ -119,14 +146,7 @@ export function normalizeSpace(value: unknown, fallback: WorkspaceSpace): Worksp
     const input = windowsByKind.get(id) as Record<string, unknown> | undefined
     const frame = input?.frame && typeof input.frame === "object" ? input.frame as Record<string, unknown> : undefined
     const base = fallback.windows[id]
-    return {
-      x: finite(frame?.x, base.x),
-      y: finite(frame?.y, base.y),
-      width: Math.max(360, finite(frame?.width, base.width)),
-      height: Math.max(260, finite(frame?.height, base.height)),
-      z: finite(input?.z, base.z),
-      minimized: typeof input?.minimized === "boolean" ? input.minimized : base.minimized,
-    }
+    return geometryInViewport(frame, input, base, viewport)
   }
   const rawPanes = Array.isArray(candidate.panes) ? candidate.panes.slice(0, 2) : []
   const rawActivePaneId = typeof candidate.activePaneId === "string" ? candidate.activePaneId : null
@@ -136,9 +156,13 @@ export function normalizeSpace(value: unknown, fallback: WorkspaceSpace): Worksp
   const panes: EditorPane[] = rawPanes.flatMap((pane, index) => {
     if (!pane || typeof pane !== "object") return []
     const item = pane as Record<string, unknown>
-    const isActive = item.id === rawActivePaneId
-    const selection = isActive && rawSelection && Number.isFinite(rawSelection.anchor) && Number.isFinite(rawSelection.head)
-      ? { anchor: rawSelection.anchor as number, head: rawSelection.head as number }
+    const paneSelection = item.selection && typeof item.selection === "object"
+      ? item.selection as Record<string, unknown>
+      : null
+    const legacySelection = item.id === rawActivePaneId ? rawSelection : null
+    const selected = paneSelection ?? legacySelection
+    const selection = selected && Number.isFinite(selected.anchor) && Number.isFinite(selected.head)
+      ? { anchor: selected.anchor as number, head: selected.head as number }
       : null
     return [{
       id: index === 0 ? "primary" : "secondary",
@@ -164,7 +188,9 @@ export function normalizeSpace(value: unknown, fallback: WorkspaceSpace): Worksp
       : typeof candidate.activeWindowId === "string" && inspectorWindows[candidate.activeWindowId]
         ? candidate.activeWindowId
       : candidate.activeWindowId === null ? null : fallback.activeWindowId,
-    selectedPath: typeof rawSelection?.filePath === "string" ? rawSelection.filePath : null,
+    selectedPath: typeof rawSelection?.filePath === "string"
+      ? rawSelection.filePath
+      : panes[activePaneIndex]?.selection ? panes[activePaneIndex].activePath : null,
     editor: {
       openFiles: Array.isArray(candidate.openFiles)
         ? candidate.openFiles.filter((path): path is string => typeof path === "string")
@@ -218,6 +244,10 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
     panes: space.editor.panes.map((pane) => ({
       id: pane.id === "primary" ? "workspace-pane" : "workspace-pane-secondary",
       filePath: pane.activePath,
+      selection: pane.activePath && pane.selection ? {
+        anchor: Math.max(0, Math.round(pane.selection.anchor)),
+        head: Math.max(0, Math.round(pane.selection.head)),
+      } : null,
     })),
     selection: activePane?.activePath && activePane.selection ? {
       filePath: activePane.activePath,

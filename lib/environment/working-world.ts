@@ -65,7 +65,11 @@ export type SpaceState = Readonly<{
   revision: number
   windows: readonly SpaceWindow[]
   openFiles: readonly string[]
-  panes: readonly Readonly<{ id: string; filePath: string | null }>[]
+  panes: readonly Readonly<{
+    id: string
+    filePath: string | null
+    selection?: Readonly<{ anchor: number; head: number }> | null
+  }>[]
   selection: Readonly<{ filePath: string; anchor: number; head: number }> | null
   activeWindowId: string | null
   activePaneId: string | null
@@ -365,13 +369,26 @@ export function validateSpaceState(raw: unknown): SpaceState {
   const paneIds = new Set<string>()
   const panes = space.panes.map((rawPane) => {
     const pane = record(rawPane, "SPACE_PANE_MALFORMED")
-    exactKeys(pane, ["id", "filePath"], "SPACE_PANE_UNKNOWN_KEY")
+    exactKeys(pane, ["id", "filePath", "selection"], "SPACE_PANE_UNKNOWN_KEY")
     const id = boundedString(pane.id, "SPACE_PANE_ID_INVALID", 120)
     if (paneIds.has(id)) throw new Error("SPACE_PANE_ID_DUPLICATE")
     paneIds.add(id)
     const filePath = pane.filePath === null ? null : workspaceRelativePath(pane.filePath)
     if (filePath !== null && !openFileSet.has(filePath)) throw new Error("SPACE_PANE_FILE_NOT_OPEN")
-    return { id, filePath }
+    let paneSelection: { anchor: number; head: number } | null | undefined
+    if (pane.selection === null) {
+      paneSelection = null
+    } else if (pane.selection !== undefined) {
+      if (filePath === null) throw new Error("SPACE_PANE_SELECTION_WITHOUT_FILE")
+      const rawPaneSelection = record(pane.selection, "SPACE_PANE_SELECTION_MALFORMED")
+      exactKeys(rawPaneSelection, ["anchor", "head"], "SPACE_PANE_SELECTION_UNKNOWN_KEY")
+      if (!Number.isSafeInteger(rawPaneSelection.anchor) || (rawPaneSelection.anchor as number) < 0
+        || !Number.isSafeInteger(rawPaneSelection.head) || (rawPaneSelection.head as number) < 0) {
+        throw new Error("SPACE_PANE_SELECTION_INVALID")
+      }
+      paneSelection = { anchor: rawPaneSelection.anchor as number, head: rawPaneSelection.head as number }
+    }
+    return paneSelection === undefined ? { id, filePath } : { id, filePath, selection: paneSelection }
   })
 
   let selection: SpaceState["selection"] = null

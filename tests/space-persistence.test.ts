@@ -71,7 +71,10 @@ function space(runningAppUrl: string | null = "javascript:alert(1)", revision = 
       { id: "inspector", kind: "inspector", title: "Evidence", frame: { x: 1200, y: 90, width: 420, height: 560 }, z: 5, minimized: false, surfaceKind: "evidence", surfaceSubject: "audit:1042" },
     ],
     openFiles: ["src/search-ranking.ts", "src/query.ts"],
-    panes: [{ id: "left", filePath: "src/search-ranking.ts" }, { id: "right", filePath: "src/query.ts" }],
+    panes: [
+      { id: "left", filePath: "src/search-ranking.ts", selection: { anchor: 2, head: 8 } },
+      { id: "right", filePath: "src/query.ts", selection: { anchor: 11, head: 23 } },
+    ],
     selection: { filePath: "src/query.ts", anchor: 11, head: 23 },
     activeWindowId: "editor",
     activePaneId: "right",
