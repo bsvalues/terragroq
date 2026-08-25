@@ -1,20 +1,33 @@
+import {
+  DESTINATIONS,
+  SIGNALS,
+  type IntentDestination,
+  type ObjectActionKind,
+  type UniversalIntent,
+} from "@/lib/intent/object-action-registry"
 import { matchWorkbenchNavigationTarget } from "@/lib/intent/workbench-action-registry"
 import { isIssue911ReliabilityOutcomeIntent } from "@/lib/workbench/registered-outcome-intent"
 
-export type UniversalIntent =
-  | "answer"
-  | "research"
-  | "council"
-  | "outcome"
-  | "execution"
-  | "navigation"
+/**
+ * Intent routing. A consumer of the registry now, not a second one.
+ *
+ * Revision 1 of the collision map called this "a consumer of the registry" and was wrong: it owned
+ * `SIGNALS` (its own regex classification catalogue), `DESTINATIONS` (intent to `{href, action}`),
+ * and the action-kind union itself, while consuming `matchWorkbenchNavigationTarget` for the
+ * navigation case only. Two static catalogues, two owners, one concept -- §5.3.
+ *
+ * All three moved to `object-action-registry.ts` at Gate 2 and are imported here. What stays is the
+ * routing DECISION: classify the input, refuse when more than one contract matches, and route
+ * execution as a request rather than as an execution. That is a policy, not a catalogue.
+ *
+ * The no-authority guarantee this file shipped is unchanged and is now structural: `executionAuthorized`
+ * and `authority.granted` are typed `false` in the registry's resolution type, so a caller cannot set
+ * one without changing a type.
+ */
+
+export type { UniversalIntent, IntentDestination }
 
 export type IntentRouteState = "routed" | "authority_required" | "clarification_required"
-
-export type IntentDestination = {
-  href: string | null
-  action: "respond" | "research" | "council_review" | "start_outcome" | "request_execution" | "navigate"
-}
 
 export type UniversalIntentRoute = {
   state: IntentRouteState
@@ -28,37 +41,8 @@ export type UniversalIntentRoute = {
   reason: string
 }
 
-const SIGNALS: Readonly<Record<Exclude<UniversalIntent, "navigation">, readonly RegExp[]>> = {
-  answer: [/\banswer\b/i, /\bexplain\b/i, /\bsummar(?:ize|ise)\b/i, /\bwhat\b/i, /\bwhy\b/i, /\bhow\b/i],
-  research: [/\bresearch\b/i, /\binvestigate\b/i, /\bfind out\b/i, /\bstudy\b/i],
-  council: [/\bcouncil\b/i, /\bdeliberat(?:e|ion)\b/i, /\bmultiple perspectives\b/i],
-  outcome: [
-    /\boutcome\b/i,
-    /\bgoal\b/i,
-    /\bobjective\b/i,
-    /\b(?:build|fix|create|make|ship|deliver|implement)\b/i,
-    /^\s*add\b/i,
-    /^\s*do\b/i,
-  ],
-  execution: [
-    /\bexecute\b/i,
-    /\brun\b/i,
-    /\bdeploy\b/i,
-    /\brestart\b/i,
-    /\bmerge\b/i,
-    /\bdelete\b/i,
-    /\bapply\b/i,
-    /\binstall\b/i,
-  ],
-}
-
-const DESTINATIONS: Readonly<Record<Exclude<UniversalIntent, "navigation">, IntentDestination>> = {
-  answer: { href: "/chat", action: "respond" },
-  research: { href: "/brain-council", action: "research" },
-  council: { href: "/brain-council", action: "council_review" },
-  outcome: { href: null, action: "start_outcome" },
-  execution: { href: "/work-orders", action: "request_execution" },
-}
+/** Re-exported so a caller can name a kind without reaching past this module into the registry. */
+export type IntentActionKind = ObjectActionKind
 
 function navigationDestination(input: string): IntentDestination | null {
   if (!hasNavigationSignal(input)) return null
