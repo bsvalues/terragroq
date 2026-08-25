@@ -326,7 +326,12 @@ All under `docs/reports/experience-v2-atlas-return-settlement/`.
 
 HERMES and ATLAS were this lane's nodes. On HERMES: one script redeployed with its backup preserved,
 `nodes.json` merge-written with a backup preserved, `known_hosts` corrected with a backup preserved,
-two existing scheduled tasks started on their normal definitions, one worktree used. No service,
+and two existing scheduled tasks started on their own unmodified definitions. No worktree was created
+on HERMES -- the settlement ran from the checkout `#1004` already retained at
+`C:\HermesLab\expv2-runtime-settlement`, whose thirteen relevant blobs were verified against `main`
+first; this lane's own worktree is on OMEN. Two files this lane wrote are left behind at
+`C:\HermesLab\AT-07-settlement-run.json` and `.err` -- the driver's stdout and stderr, retained
+rather than deleted because the `.json` is the artifact committed here. No service,
 container, compose file, GPU setting or model was changed; the `#1003` Ollama service and the P40's
 150 W cap were not touched. On ATLAS: read-only inspection, plus the archive writes the sync script
 itself performs under its additive contract — 2 manifests installed, 1 superseded copied aside, no
