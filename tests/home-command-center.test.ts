@@ -340,8 +340,7 @@ describe("WilliamOS Home Command Center", () => {
       href: "/agent-forge",
     })
     expect(home.statusCards.find((card) => card.label === "Active Project")).toMatchObject({
-      value: "TerraFusion OS",
-      href: "/projects",
+      value: "TerraFusion OS",
     })
     expect(home.statusCards.find((card) => card.label === "Local Operations")).toMatchObject({
       value: "Manual-ready",

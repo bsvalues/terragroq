@@ -3,12 +3,10 @@ import { NAV_GROUP_IDS, navGroups, navItems } from "@/components/shell/nav-items
 import { DESTINATIONS, objectActionRegistry } from "@/lib/intent/object-action-registry"
 import { supportingCapabilities } from "@/components/workbench/supporting-capabilities"
 
-describe("four-primary cockpit navigation", () => {
-  it("exposes exactly HOME, PROJECTS, ACTIVITY, and SYSTEM in the normal shell", () => {
+describe("legacy cockpit navigation (compatibility only)", () => {
+  it("exposes exactly HOME and SYSTEM in the normal shell", () => {
     expect(navItems.map(({ href, label }) => ({ href, label }))).toEqual([
       { href: "/", label: "Home" },
-      { href: "/projects", label: "Projects" },
-      { href: "/activity", label: "Activity" },
       { href: "/system", label: "System" },
     ])
   })
@@ -28,7 +26,10 @@ describe("four-primary cockpit navigation", () => {
   })
 
   it("keeps supporting routes out of primary navigation without deleting them", () => {
-    const supporting = ["/work-orders", "/audit", "/brain-council", "/goal-console", "/chat"]
+    // "/chat" is absent because it no longer exists: there is no separate Chat product, and the Line
+    // in the Environment is the operator's input. A route kept here "for compatibility" would go on
+    // teaching that chat is a destination.
+    const supporting = ["/audit", "/brain-council", "/goal-console"]
     expect(navItems.map((item) => item.href)).not.toEqual(expect.arrayContaining(supporting))
     // Assert the routes stay reachable, and do it by READING THE CATALOGUE rather than by grepping
     // the file that happens to hold it today. This check has now broken twice for the same reason

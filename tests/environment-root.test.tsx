@@ -41,7 +41,10 @@ const REFUSED_IMPORTS = [
 ]
 
 const NEW_ROOT_FILES = [
-  "app/environment/page.tsx",
+  // `app/page.tsx`, not `app/environment/page.tsx`: the environment owns `/` now, and the two
+  // predecessor roots redirect to it. Checking a file that no longer exists would have made this
+  // guard throw rather than guard.
+  "app/page.tsx",
   "components/desk/desk.tsx",
   "app/api/environment/line/route.ts",
 ]

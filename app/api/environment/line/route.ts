@@ -7,21 +7,38 @@ import { promisify } from "node:util"
 import { and, eq } from "drizzle-orm"
 
 import { db } from "@/lib/db"
-import { project, workingWorld } from "@/lib/db/schema"
+import { decision as decisionTable, evidenceRecord, project, workingWorld } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
 import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
+import { getWorkOrders } from "@/app/actions/work-orders"
+import { getActivity } from "@/lib/operator/activity"
+import { getRuntimeExecutions } from "@/app/actions/runtime-executions"
+import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
+import { createDecision, getDecisions, supersedeDecision } from "@/app/actions/decisions"
+import {
+  classifyDecisionRecord,
+  classifySupersedingDecision,
+  composeDecisionRecorded,
+  composeDecisionSuperseded,
+  mentionsSupersession,
+} from "@/lib/environment/decision-intent"
 import { isContinueIntent } from "@/lib/environment/start-work"
+import { classifyDismissal, classifySummon, isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
 import {
+  EMPTY_SPINE,
   createWorkingWorld,
   validateWorkingWorld,
+  withBoundOutcome,
+  withExecution,
   withSurface,
   withTurn,
   type WorkingWorldSnapshot,
+  type WorldSpine,
 } from "@/lib/environment/working-world"
 
 /**
@@ -49,12 +66,29 @@ const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT?.trim() || null
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 
 type SurfaceDirective = Readonly<{
-  kind: "browser" | "trace" | "source" | "diff" | "tests"
+  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace" | "queue"
   subject: string
   payload?: unknown
 }>
 
-type LineReply = Readonly<{ worldId: string; say: string; surfaces: readonly SurfaceDirective[] }>
+/**
+ * Every reply carries the mounted world's governed SPINE (phase 2). The environment renders execution
+ * from it, so the screen reflects where the work actually stands after each exchange instead of what
+ * was true when the page last loaded.
+ */
+type LineReply = Readonly<{
+  worldId: string
+  say: string
+  surfaces: readonly SurfaceDirective[]
+  spine: WorldSpine
+  /**
+   * Surfaces the owner asked to drop — a kind, or "all". Absent when nothing was dismissed.
+   *
+   * "And when those aren't useful anymore, they disappear." A surface you can only accumulate is a
+   * panel with extra steps, which is the thing being replaced.
+   */
+  dismiss?: "all" | string
+}>
 
 const LOGIN_WORK = /(login|log.?in|sign.?in|auth)\b/i
 const BROKEN = /(broken|busted|wrong|fail|drops?|mess|not work|doesn.?t work|figure out)/i
@@ -254,6 +288,186 @@ async function loadProjects(userId: string): Promise<ProjectRow[]> {
   return db.select({ name: project.name, lifecycle: project.lifecycle }).from(project).where(eq(project.userId, userId))
 }
 
+/**
+ * Materialize a summoned surface from GOVERNED state (phase 3).
+ *
+ * Projects, Activity and the Inspector used to be applications you navigated to. They are surfaces
+ * now — but a surface that shows invented content is worse than the page it replaced, so each of
+ * these reads the real register and says so honestly when there is nothing there. An empty result is
+ * reported as empty; it is never padded to look like a working dashboard.
+ */
+async function summonSurface(
+  kind: SummonedSurface,
+  userId: string,
+  spine: WorldSpine,
+): Promise<{ say: string; surface: SurfaceDirective }> {
+  if (kind === "project") {
+    const rows = await db
+      .select({ name: project.name, key: project.key, lifecycle: project.lifecycle })
+      .from(project)
+      .where(eq(project.userId, userId))
+    return {
+      say: rows.length === 0
+        ? "No projects are registered, so there is nothing to show — I won't invent a list."
+        : `${rows.length} registered ${rows.length === 1 ? "project" : "projects"}, from the governed register.`,
+      surface: { kind: "project", subject: "registered projects", payload: rows },
+    }
+  }
+
+  if (kind === "work-orders") {
+    // Parity BY CONSTRUCTION: this calls the very reader the /work-orders route called. A
+    // reimplementation here could drift from the route it replaces and nobody would notice until the
+    // two disagreed in front of the owner — which is the whole failure mode of "migrating" a
+    // capability by rebuilding it.
+    const orders = await getWorkOrders()
+    return {
+      say: orders.length === 0
+        ? "No work orders exist yet."
+        : `${orders.length} work ${orders.length === 1 ? "order" : "orders"}, newest first.`,
+      surface: {
+        kind: "work-orders",
+        subject: "work orders",
+        payload: orders.map((order) => ({
+          ref: order.ref,
+          title: order.title,
+          status: order.status,
+          agent: order.agent ?? null,
+          phase: order.phase ?? null,
+        })),
+      },
+    }
+  }
+
+  if (kind === "queue") {
+    // Parity by construction with the queue panel /runtime mounted: the same getOutcomeQueueSurface()
+    // reader. Lifecycle and queue order are both shown because "what is next" is a question about
+    // ORDER, and a list that drops it answers a different question convincingly.
+    const surface = await getOutcomeQueueSurface()
+    const rows = [...surface.rows].sort((left, right) => left.queueOrder - right.queueOrder)
+    return {
+      say: rows.length === 0
+        ? "The governed queue is empty."
+        : `${rows.length} ${rows.length === 1 ? "outcome" : "outcomes"} in the governed queue, in queue order.`,
+      surface: {
+        kind: "queue",
+        subject: "governed outcome queue",
+        payload: rows.map((row) => ({
+          outcomeKey: row.outcomeKey,
+          title: row.title,
+          lifecycleState: row.lifecycleState,
+          queueOrder: row.queueOrder,
+          activeWorkOrderId: row.activeWorkOrderId,
+        })),
+      },
+    }
+  }
+
+  if (kind === "runtime-trace") {
+    // Parity by construction with the retired /trace route: the same getRuntimeExecutions() reader.
+    // This is persisted execution TRUTH — attempts, checkpoints, lease state — not telemetry and not
+    // a summary, so the surface carries the fields an owner uses to tell a stall from a failure.
+    const executions = await getRuntimeExecutions()
+    return {
+      say: executions.length === 0
+        ? "No runtime executions are recorded."
+        : `${executions.length} recorded runtime ${executions.length === 1 ? "execution" : "executions"}.`,
+      surface: {
+        kind: "runtime-trace",
+        subject: "runtime execution truth",
+        payload: executions.map((execution) => ({
+          workOrderRef: execution.workOrderRef,
+          title: execution.title,
+          status: execution.status,
+          result: execution.result,
+          lane: execution.lane,
+          attempts: execution.attempts.length,
+          lease: execution.currentLeaseStatus,
+          checkpoint: execution.currentCheckpoint?.state ?? null,
+        })),
+      },
+    }
+  }
+
+  if (kind === "decisions") {
+    // Parity by construction: the same getDecisions() reader /decisions called. The register is a
+    // governance artifact — authority, evidence and supersession lineage — so what it shows must be
+    // the record itself, not a summary of it.
+    const rows = await getDecisions()
+    return {
+      say: rows.length === 0
+        ? "The decision register is empty."
+        : `${rows.length} recorded ${rows.length === 1 ? "decision" : "decisions"}, newest first.`,
+      surface: {
+        kind: "decisions",
+        subject: "decision register",
+        payload: rows.map((row) => ({
+          ref: row.ref,
+          title: row.title,
+          decision: row.decision,
+          status: row.status,
+          authority: row.authority,
+          supersededById: row.supersededById ?? null,
+        })),
+      },
+    }
+  }
+
+  if (kind === "activity") {
+    // Parity BY CONSTRUCTION with the retired /activity route: the same getActivity() reader, not the
+    // outcome queue. An earlier version of this surface showed the QUEUE and called itself activity —
+    // close enough to look migrated, different enough to be wrong. The route's capability is the
+    // governance event feed, and a migration that quietly swaps the data source is not a migration.
+    const feed = await getActivity()
+    return {
+      say: feed.items.length === 0
+        ? feed.truthState === "idle-empty"
+          ? "No governed activity has been recorded yet."
+          : "The activity feed read as empty."
+        : `${feed.items.length} recorded ${feed.items.length === 1 ? "event" : "events"}` +
+          `${feed.churnCollapsed > 0 ? `, with ${feed.churnCollapsed} checkpoint/lease events collapsed` : ""}.`,
+      surface: {
+        kind: "activity",
+        subject: "governed activity",
+        payload: feed.items.map((item) => ({
+          at: item.at,
+          kind: item.kind,
+          label: item.label,
+          detail: item.detail,
+          ref: item.ref,
+        })),
+      },
+    }
+  }
+
+  // evidence: only for the work this world is actually bound to. Evidence with no work to belong to
+  // is a filing cabinet, not an answer.
+  if (spine.workOrderId === null) {
+    return {
+      say: "No work is bound to this world yet, so there is no evidence to show. Start an outcome and its record accumulates here.",
+      surface: { kind: "evidence", subject: "no bound work", payload: [] },
+    }
+  }
+  const rows = await db
+    .select({ result: evidenceRecord.result, notes: evidenceRecord.notes, createdAt: evidenceRecord.createdAt })
+    .from(evidenceRecord)
+    .where(and(eq(evidenceRecord.userId, userId), eq(evidenceRecord.workOrderId, spine.workOrderId)))
+    .limit(50)
+  return {
+    say: rows.length === 0
+      ? `Work order ${spine.workOrderId} has produced no evidence records yet.`
+      : `${rows.length} evidence ${rows.length === 1 ? "record" : "records"} for work order ${spine.workOrderId}.`,
+    surface: {
+      kind: "evidence",
+      subject: `work order ${spine.workOrderId}`,
+      payload: rows.map((row) => ({
+        result: row.result,
+        notes: row.notes,
+        at: row.createdAt.toISOString(),
+      })),
+    },
+  }
+}
+
 // Returns null when the sentence is not a grounded question (fall through to converse). For
 // current-work it also carries `retained`: the exact selection to keep for a later "continue it".
 async function groundedAnswer(
@@ -321,9 +535,14 @@ export async function POST(request: Request) {
   // huge ignored field would still buffer fully) -- this bounds the actual bytes.
   const parsed = await readBoundedJson(request)
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: parsed.status })
-  const body = parsed.value as { worldId?: unknown; text?: unknown }
+  const body = parsed.value as { worldId?: unknown; text?: unknown; summon?: unknown }
+  // A surface asked for by ADDRESS rather than by sentence. The superseded routes redirect here
+  // carrying `?summon=`, and the Desk forwards it as this field instead of inventing an owner turn
+  // that the owner never typed -- a transcript that puts words in their mouth is a lie, however
+  // convenient. Validated against the surface catalogue, so an unknown value is refused, not guessed.
+  const summonRequest = isSummonedSurface(body.summon) ? body.summon : null
   const text = typeof body.text === "string" ? body.text.trim() : ""
-  if (!text) return Response.json({ error: "MESSAGE_EMPTY" }, { status: 400 })
+  if (!text && !summonRequest) return Response.json({ error: "MESSAGE_EMPTY" }, { status: 400 })
   if (exceedsLineCap(text)) return Response.json({ error: "MESSAGE_TOO_LARGE" }, { status: 413 })
   // worldId is a string id, or absent for a new world -- and the Desk client spells "absent" as an
   // explicit null on the first message, so null is a valid new-world sentinel, NOT a malformed
@@ -333,6 +552,34 @@ export async function POST(request: Request) {
     return Response.json({ error: "INVALID_WORLD_ID" }, { status: 400 })
   }
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
+
+  if (summonRequest) {
+    // Arriving at a surface is not a conversational turn: nothing is recorded as said. The
+    // environment materializes what was asked for and states what it is, and the snapshot records
+    // the surface.
+    //
+    // Recording it is not the same as returning to it. The Desk keeps `worldId` in React state only
+    // and arrives with the new-world sentinel, so a reload re-summons the surface into a NEW world
+    // rather than restoring this one, and the transcript does not come back. That gap is typed in
+    // docs/product/deleted-route-capability-gaps.md and enforced by
+    // tests/deleted-route-capability-gaps.test.ts -- it is not described as solved here, because a
+    // comment that reads as a promise is how the next lane concludes the capability already exists.
+    const world = requestedWorldId ? await loadWorld(userId, requestedWorldId) : null
+    if (requestedWorldId && !world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
+    const base = world ?? createWorkingWorld({ intent: `show the ${summonRequest} surface` })
+    const summoned = await summonSurface(summonRequest, userId, base.spine)
+    let updatedWorld = withTurn(base, "williamos", summoned.say)
+    updatedWorld = withSurface(updatedWorld, {
+      kind: "data",
+      subject: summoned.surface.subject,
+      because: "the owner came here to see it",
+    })
+    const worldId = requestedWorldId ?? crypto.randomUUID()
+    await saveWorld(userId, worldId, updatedWorld, requestedWorldId === null)
+    return Response.json({
+      worldId, say: summoned.say, surfaces: [summoned.surface], spine: updatedWorld.spine,
+    } satisfies LineReply)
+  }
 
   if (requestedWorldId) {
     const world = await loadWorld(userId, requestedWorldId)
@@ -345,10 +592,17 @@ export async function POST(request: Request) {
       // The transition: start the EXACT retained selection — no re-resolve, no re-read. The
       // authorization is an atomic revalidate-and-act; a stale selection fails closed. Clear the
       // retention on a real start so a second "continue" can't re-fire it.
-      const outcome = await startRetainedWork(world.pendingStartWork)
+      const retained = world.pendingStartWork
+      const outcome = await startRetainedWork(retained)
       say = outcome.say
       surfaces = [{ kind: "trace", subject: "start-work", payload: outcome.trace }]
-      updated = { ...updated, pendingStartWork: outcome.authorized ? null : world.pendingStartWork }
+      if (outcome.authorized) {
+        updated = withExecution(withBoundOutcome(updated, retained), {
+          execution: "authorized",
+          at: new Date().toISOString(),
+        })
+      }
+      updated = { ...updated, pendingStartWork: outcome.authorized ? null : retained }
     } else if (isContinueIntent(text)) {
       say = "There's no selected work to continue yet. Ask what we're doing on a project first, and I'll name the next startable outcome — then \"continue\" starts that exact one."
     } else if (FIX_INTENT.test(text) && LOGIN_WORK.test(world.intent)) {
@@ -360,6 +614,103 @@ export async function POST(request: Request) {
         updated = withSurface(updated, { kind: "diff", subject: "sign-in copy fix", because: "the proposed change" })
         updated = withSurface(updated, { kind: "tests", subject: "auth copy contracts", because: "the governing contract" })
       }
+    } else if (classifySupersedingDecision(text)) {
+      // Checked BEFORE plain recording: "record a decision superseding DECISION-0007" is also a valid
+      // plain record, and filing it as one would silently drop the lineage that makes the register a
+      // register rather than a pile of notes.
+      const superseding = classifySupersedingDecision(text) as NonNullable<ReturnType<typeof classifySupersedingDecision>>
+      const [existing] = await db
+        .select({ id: decisionTable.id })
+        .from(decisionTable)
+        .where(and(eq(decisionTable.userId, userId), eq(decisionTable.ref, superseding.supersedes)))
+        .limit(1)
+      if (!existing) {
+        // Replacing the wrong decision is worse than replacing none, so an unknown ref refuses rather
+        // than falling back to recording a fresh decision the owner did not ask for.
+        say =
+          `I can't supersede ${superseding.supersedes} — no decision with that reference is in the register. ` +
+          `Nothing was recorded. Ask for the decisions and I'll show you what is actually there.`
+      } else {
+        try {
+          const row = await supersedeDecision(existing.id, {
+            title: superseding.title,
+            decision: superseding.decision,
+            ...(superseding.rationale ? { rationale: superseding.rationale } : {}),
+            context: "Recorded from the Environment Line.",
+            // Said explicitly, because the defaults are the governed FORM's defaults: accepted, and
+            // inheriting the replaced decision's authority. From a typed sentence that would mean a
+            // conversational input minting an accepted, possibly-binding record and feeding it to
+            // the agent context injector through getActiveDecisions() -- while the reply below tells
+            // the owner it is proposed and advisory. The write now matches the sentence.
+            status: "proposed",
+            authority: "advisory",
+          })
+          say = composeDecisionSuperseded(row?.ref ?? null, superseding)
+          const register = await summonSurface("decisions", userId, updated.spine)
+          surfaces = [register.surface]
+        } catch (error) {
+          say =
+            `I couldn't supersede ${superseding.supersedes}: ${error instanceof Error ? error.message : "the register refused the write"}. ` +
+            `Nothing was written, so ${superseding.supersedes} still stands.`
+        }
+      }
+    } else if (mentionsSupersession(text)) {
+      // The sentence asks to REPLACE a record but named no reference this can resolve. Falling
+      // through to plain recording here is the quiet failure: it files a brand-new decision titled
+      // "superseding the old one: ..." with no lineage, reports success, and leaves the decision the
+      // owner meant to replace standing. Refusing and naming the required form is the only honest
+      // answer, because guessing which decision was meant is worse than doing nothing.
+      say =
+        `I can't supersede anything from that sentence — it doesn't name which decision to replace, ` +
+        `and guessing is worse than refusing. Nothing was recorded. Say it as ` +
+        `"record a decision superseding ADR-0007: <the replacement>", using the reference shown in ` +
+        `the register.`
+    } else if (classifyDecisionRecord(text)) {
+      // A real governed write from the Line: this is the capability that let /decisions be deleted
+      // rather than merely hidden. Recorded as PROPOSED and ADVISORY — the defaults createDecision
+      // applies — because binding authority is minted by the authorization path with evidence behind
+      // it, and a typed sentence is not that.
+      const recorded = classifyDecisionRecord(text) as NonNullable<ReturnType<typeof classifyDecisionRecord>>
+      try {
+        const row = await createDecision({
+          title: recorded.title,
+          decision: recorded.decision,
+          ...(recorded.rationale ? { rationale: recorded.rationale } : {}),
+          context: "Recorded from the Environment Line.",
+        })
+        say = composeDecisionRecorded(row?.ref ?? null, recorded)
+        // Show the register immediately: a record the owner cannot see is a claim, not a receipt.
+        const register = await summonSurface("decisions", userId, updated.spine)
+        surfaces = [register.surface]
+      } catch (error) {
+        // Fail closed and say so. A refused write must never read as a successful one.
+        say =
+          `I couldn't record that decision: ${error instanceof Error ? error.message : "the register refused the write"}. ` +
+          `Nothing was written, so the register still says what it said before.`
+      }
+    } else if (classifyDismissal(text)) {
+      // Dropping a surface is a real operation on the world, not conversation: it must not reach the
+      // model, which would answer *about* hiding things instead of hiding them.
+      const target = classifyDismissal(text) as "all" | string
+      say = target === "all"
+        ? "Cleared the surfaces."
+        : `Dropped the ${target} surface.`
+      updated = withTurn(updated, "williamos", say)
+      await saveWorld(userId, requestedWorldId, updated, false)
+      return Response.json({
+        worldId: requestedWorldId, say, surfaces: [], spine: updated.spine, dismiss: target,
+      } satisfies LineReply)
+    } else if (classifySummon(text)) {
+      // Projects / Activity / Evidence used to be applications you navigated to. They are summoned
+      // here from governed state, and they leave when the owner says so.
+      const summoned = await summonSurface(classifySummon(text) as SummonedSurface, userId, updated.spine)
+      say = summoned.say
+      surfaces = [summoned.surface]
+      updated = withSurface(updated, {
+        kind: "data",
+        subject: summoned.surface.subject,
+        because: "the owner asked to see it",
+      })
     } else {
       const grounded = await groundedAnswer(text, userId)
       if (grounded) {
@@ -372,7 +723,7 @@ export async function POST(request: Request) {
     }
     updated = withTurn(updated, "williamos", say)
     await saveWorld(userId, requestedWorldId, updated, false)
-    return Response.json({ worldId: requestedWorldId, say, surfaces } satisfies LineReply)
+    return Response.json({ worldId: requestedWorldId, say, surfaces, spine: updated.spine } satisfies LineReply)
   }
 
   if (LOGIN_WORK.test(text) && (BROKEN.test(text) || FIX_INTENT.test(text))) {
@@ -387,7 +738,7 @@ export async function POST(request: Request) {
     }))
     const decision = resolveAmbiguity({ subject: "which login flow", candidates, costOfWrongGuess: "cheap" })
     if (decision.mode === "ASK") {
-      return Response.json({ worldId: "", say: decision.question, surfaces: [] } satisfies LineReply)
+      return Response.json({ worldId: "", say: decision.question, surfaces: [], spine: EMPTY_SPINE } satisfies LineReply)
     }
 
     const steps = await probeAuthFlow()
@@ -407,6 +758,36 @@ export async function POST(request: Request) {
         { kind: "browser", subject: "/sign-in" },
         { kind: "trace", subject: "auth-probe", payload: steps },
       ],
+      spine: world.spine,
+    } satisfies LineReply)
+  }
+
+  // A summon has to work as the FIRST thing said, not only once a world already exists.
+  //
+  // `classifySummon` was consulted on the existing-world path only, so a cold load -- the most common
+  // state there is -- answered "show me the work orders" with model prose instead of the work orders.
+  // That is not a cosmetic miss: the whole warrant for deleting /work-orders, /decisions, /trace,
+  // /activity and /projects is that the environment summons them on request, and the first request
+  // after opening WilliamOS is exactly the one that did not. Found by the takeover lane; the branch
+  // never asserted it, which is why a green suite did not catch it.
+  //
+  // Placed after the sign-in-repair branch so no sentence that used to reach that path changes
+  // meaning: this only widens what would otherwise have fallen through to conversation.
+  const firstSummon = classifySummon(text)
+  if (firstSummon) {
+    const world = createWorkingWorld({ intent: text })
+    const summoned = await summonSurface(firstSummon, userId, world.spine)
+    let opened = withTurn(world, "owner", text)
+    opened = withTurn(opened, "williamos", summoned.say)
+    opened = withSurface(opened, {
+      kind: "data",
+      subject: summoned.surface.subject,
+      because: "the owner asked to see it",
+    })
+    const worldId = crypto.randomUUID()
+    await saveWorld(userId, worldId, opened, true)
+    return Response.json({
+      worldId, say: summoned.say, surfaces: [summoned.surface], spine: opened.spine,
     } satisfies LineReply)
   }
 
@@ -419,5 +800,5 @@ export async function POST(request: Request) {
   // A first-message current-work read retains its selection so the next "continue it" starts it.
   if (grounded && "retained" in grounded) world = { ...world, pendingStartWork: grounded.retained ?? null }
   await saveWorld(userId, worldId, world, true)
-  return Response.json({ worldId, say, surfaces: [] } satisfies LineReply)
+  return Response.json({ worldId, say, surfaces: [], spine: world.spine } satisfies LineReply)
 }

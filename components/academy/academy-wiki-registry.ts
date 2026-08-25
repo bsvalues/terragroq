@@ -566,7 +566,7 @@ export const WIKI_PAGES: WikiPage[] = [
     conceptType: "county-ops",
     summary: "The governed reference pack for Washington county-assessor operations.",
     canonicalDefinition: "County Ops organizes source-backed PACS safety, levy, BOE, permit, redaction, ratio-study, and appeals guidance while real county records and systems remain outside WilliamOS.",
-    relatedSurfaces: ["/projects", "/audit", "/governance"],
+    relatedSurfaces: ["/audit", "/governance"],
     relatedEvidence: ["County Ops knowledge map", "County Ops final rollup"],
     relatedAuthority: ["TERRAFUSION_TOUCH_GATE", "SECRET_ACCESS_GATE", "DATA_MUTATION_GATE", "PRODUCTION_DEPLOY_GATE"],
     relatedMemory: ["memory-stale-contradiction-review"],

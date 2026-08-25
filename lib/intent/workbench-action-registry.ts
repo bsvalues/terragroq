@@ -2,6 +2,7 @@ import {
   findActions,
   matchActionPhrase,
   navigationDescriptors,
+  navigationRoutingDescriptors,
   type ObjectActionDescriptor,
 } from "@/lib/intent/object-action-registry"
 
@@ -64,6 +65,6 @@ export function matchWorkbenchNavigationTarget(rawInput: string): Readonly<{
   action: WorkbenchActionDescriptor
   phrase: string
 }> | null {
-  const matched = matchActionPhrase(rawInput, navigationDescriptors)
+  const matched = matchActionPhrase(rawInput, navigationRoutingDescriptors)
   return matched ? { action: asWorkbenchDescriptor(matched.action), phrase: matched.phrase } : null
 }

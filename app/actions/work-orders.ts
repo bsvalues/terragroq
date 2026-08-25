@@ -18,7 +18,6 @@ import { createAuthorityGrant } from "@/app/actions/authority"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { authorityRank } from "@/lib/goal/taxonomy"
 import { and, desc, eq } from "drizzle-orm"
-import { revalidatePath } from "next/cache"
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -127,7 +126,6 @@ export async function createWorkOrder(input: {
     register: "work-orders",
     refId: row.id,
   })
-  revalidatePath("/work-orders")
   return row
 }
 
@@ -258,7 +256,6 @@ export async function transitionWorkOrder(
     register: "work-orders",
     refId: id,
   })
-  revalidatePath("/work-orders")
   return { ok: true, status: to }
 }
 
@@ -314,7 +311,6 @@ export async function updateWorkOrderContract(
     register: "work-orders",
     refId: id,
   })
-  revalidatePath("/work-orders")
 }
 
 export async function linkWorkOrderEvidence(id: number, evidence: string) {
@@ -332,8 +328,29 @@ export async function linkWorkOrderEvidence(id: number, evidence: string) {
     register: "work-orders",
     refId: id,
   })
-  revalidatePath("/work-orders")
 }
+
+// Record the closure outcome and (optionally) the release artifacts. Commit/tag
+// refs may only be recorded when their gate has been opened.
+
+
+/**
+ * Release gates and the closure result.
+ *
+ * These three were DELETED when /work-orders was, not merely left without a surface, and that is a
+ * different thing. `commitAllowed` / `tagAllowed` / `pushAllowed` are live governance inputs: they
+ * travel in the delivery authority contract that `lib/workbench/outcome-execution-authorization.ts`
+ * emits and the Hermes bridge consumes, and `lib/work-orders/lifecycle.ts` prints their state. With
+ * `setWorkOrderGate` gone, a gate could no longer be opened or closed by anyone -- a governance
+ * control frozen at whatever the row already held, with the surface that used to operate it as the
+ * only casualty anybody noticed.
+ *
+ * So they are restored intact and left doorless, the way the decision register's unreplaced writes
+ * were: alive means the capability is recoverable, and its guards travel with it. The gap is typed in
+ * docs/product/deleted-route-capability-gaps.md and enforced by
+ * tests/deleted-route-capability-gaps.test.ts. The `revalidatePath("/work-orders")` each of these
+ * used to end with is deliberately NOT restored -- that route no longer exists.
+ */
 
 // Record the closure outcome and (optionally) the release artifacts. Commit/tag
 // refs may only be recorded when their gate has been opened.
@@ -367,7 +384,6 @@ export async function recordWorkOrderResult(
     register: "work-orders",
     refId: id,
   })
-  revalidatePath("/work-orders")
 }
 
 // Open or close a release gate. Gates default closed; opening one is an
@@ -392,7 +408,6 @@ export async function setWorkOrderGate(
     register: "work-orders",
     refId: id,
   })
-  revalidatePath("/work-orders")
 }
 
 export async function deleteWorkOrder(id: number) {
@@ -400,7 +415,6 @@ export async function deleteWorkOrder(id: number) {
   await db
     .delete(workOrder)
     .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
-  revalidatePath("/work-orders")
 }
 
 /* ------------------------------------------------------------------ */

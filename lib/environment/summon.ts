@@ -1,0 +1,145 @@
+/**
+ * Summoning surfaces (phase 3 of the primary experience replacement).
+ *
+ * The old product made Projects, Activity and System into APPLICATIONS: destinations with routes, a
+ * permanent explorer nailed to one side and inspector tabs nailed to the other. That is the shape that
+ * taught every agent WilliamOS was a website with sections, and it is the shape the owner ordered
+ * removed. The capabilities were never the problem — being *places* was.
+ *
+ * So they become surfaces the world summons when they are relevant and drops when they are not. "Show
+ * TerraFusion projects" opens a project surface; it does not navigate anywhere, and nothing is left
+ * nailed to the screen afterwards.
+ *
+ * This module is pure and deliberately conservative. The lesson already paid for in the identity
+ * classifier applies here too: a matcher that fires on any appearance of a word does not help an
+ * operator, it hijacks their sentences. "Open the projects page source" is a request about code, not a
+ * request for the project registry.
+ */
+
+import { classifyGrounded } from "@/lib/environment/grounding"
+
+/**
+ * Every surface the environment can summon, in one place.
+ *
+ * This was a bare union type; it is a value now because two other things need to READ the set at
+ * runtime rather than merely be checked against it: the Line route validates an incoming `summon`
+ * request, and `tests/summoned-route-redirects.test.ts` proves every superseded route still lands on
+ * a surface that exists. A union a test cannot enumerate is a union that silently loses a member.
+ */
+export const SUMMONED_SURFACES = [
+  "project",
+  "activity",
+  "evidence",
+  "work-orders",
+  "decisions",
+  "runtime-trace",
+  "queue",
+] as const
+
+export type SummonedSurface = (typeof SUMMONED_SURFACES)[number]
+
+/** Narrow untrusted input (a request body, a URL parameter) to a surface this environment can show. */
+export function isSummonedSurface(value: unknown): value is SummonedSurface {
+  return typeof value === "string" && (SUMMONED_SURFACES as readonly string[]).includes(value)
+}
+
+/**
+ * An operational request — show/open/edit a file, page, route, component — is about code, and must
+ * reach normal handling even when it names one of these words.
+ */
+const OPERATIONAL = /\b(source|file|route|endpoint|component|repo|repository|commit|branch|import|function)\b/i
+
+/** The project registry: what work exists, what is active, what is on standby. */
+const PROJECT =
+  /\b(show|open|list|bring up|pull up|what|which)\b[^?]*\bprojects?\b|\bprojects? (surface|registry|list)\b/i
+
+/** What the runtime and lanes are doing right now. */
+const ACTIVITY =
+  // "what's" carries no space, so the contraction has to be part of the verb alternative rather than
+  // a separate word — the kind of gap that silently drops the most natural phrasing an owner uses.
+  /\bwhat(?:'s|s|\s+is)\s+(hermes|the runtime|the lane|the worker|it)\s+doing\b|\b(show|open|bring up)\b[^?]*\b(activity|execution|runtime|lanes?)\b|\bwhat(?:'s|s|\s+is)\s+running\b/i
+
+/**
+ * Work orders: the governed units of delivery. Migrated from the /work-orders route, which held this
+ * as a destination with a permanent page around it.
+ */
+const WORK_ORDERS =
+  /\b(show|open|list|bring up|pull up|what)\b[^?]*\bwork[ -]?orders?\b|\bwork[ -]?orders?\b\s*(surface|queue|list)\b/i
+
+/**
+ * The decision register: ADR-style records carrying authority, evidence and supersession lineage.
+ * Migrated from /decisions, which held the register as a destination.
+ */
+const DECISIONS =
+  /\b(show|open|list|bring up|pull up|what)\b[^?]*\bdecisions?\b|\bdecision (register|queue|log)\b/i
+
+/**
+ * Persisted runtime execution truth: attempts, checkpoints, leases, and the trace behind a work
+ * order. Migrated from /trace, which paired it with a separate static historical ledger.
+ */
+const RUNTIME_TRACE =
+  /\b(show|open|bring up|pull up|give me)\b[^?]*\b(trace|runtime execution|execution truth|attempts?|checkpoints?)\b|\bwhat happened (?:on|to|with)\b/i
+
+/**
+ * The governed outcome queue: what is waiting, what is startable, what is blocked.
+ *
+ * This surface exists because correcting the activity surface to its real reader left the queue with
+ * nowhere to appear — a gap introduced by a fix, which is the kind that hides behind a green suite.
+ */
+const QUEUE =
+  /\b(show|open|bring up|pull up|what.s in|what is in)\b[^?]*\b(queue|backlog|outcomes?)\b|\bwhat.s (?:startable|next)\b|\bwhat is (?:startable|next)\b/i
+
+/** The record: evidence, proof, receipts, the technical detail behind a result. */
+const EVIDENCE =
+  /\b(show|open|bring up|give me|i need)\b[^?]*\b(evidence|proof|receipts?|technical details?|the record)\b|\bwhat proves\b/i
+
+/**
+ * Which surface, if any, this sentence summons.
+ *
+ * Returns null for everything else, so ordinary conversation and real work are never swallowed by a
+ * matcher. Order matters only where a sentence could plausibly be read two ways; each pattern is
+ * anchored to a request shape ("show me…", "what is X doing"), not to a bare noun.
+ */
+export function classifySummon(text: string): SummonedSurface | null {
+  if (OPERATIONAL.test(text)) return null
+  // Current work is a GROUNDED question, and it outranks every summon here.
+  //
+  // `grounding.ts` states the rule its own classifier already follows -- "Current-work before
+  // projects: 'what are we working on across the projects' is current-work" -- but this layer runs
+  // first in the Line route, and PROJECT matches that same sentence on "what ... projects". The
+  // result was a summon stealing a sentence the environment answers deterministically from the
+  // canonical project -> thread -> outcome -> evidence read, and dropping the retained start
+  // selection with it, so the next "continue" had nothing to start. The rule is enforced where the
+  // hijack happens rather than restated where it does not.
+  if (classifyGrounded(text) === "current-work") return null
+  if (WORK_ORDERS.test(text)) return "work-orders"
+  if (DECISIONS.test(text)) return "decisions"
+  if (RUNTIME_TRACE.test(text)) return "runtime-trace"
+  if (QUEUE.test(text)) return "queue"
+  if (EVIDENCE.test(text)) return "evidence"
+  if (ACTIVITY.test(text)) return "activity"
+  if (PROJECT.test(text)) return "project"
+  return null
+}
+
+/**
+ * Sentences that DISMISS a surface. The owner said it plainly: "and when those aren't useful anymore,
+ * they disappear." A surface you can only accumulate is a panel with extra steps.
+ */
+const DISMISS = /\b(hide|close|dismiss|get rid of|drop|remove)\b[^?]*\b(browser|diff|tests?|trace|source|project|activity|evidence|work[ -]?orders?|decisions?|surface|panel|logs?|it|that|them|everything|all)\b/i
+
+export function classifyDismissal(text: string): "all" | string | null {
+  if (!DISMISS.test(text)) return null
+  if (/\b(everything|all|them)\b/i.test(text)) return "all"
+  // Work orders first: "work order" contains no other surface name, but listing it ahead of the
+  // single-word alternatives keeps the match unambiguous as this list grows with each migration.
+  const named = /\b(work[ -]?orders?|decisions?|browser|diff|tests?|trace|source|project|activity|evidence|logs?)\b/i.exec(text)
+  if (!named) return "all"
+  const subject = named[1].toLowerCase()
+  // "logs" is what an owner calls the trace surface; honour their word, not ours.
+  if (subject.startsWith("log")) return "trace"
+  if (subject === "test") return "tests"
+  if (/^work/.test(subject)) return "work-orders"
+  if (/^decision/.test(subject)) return "decisions"
+  return subject
+}

@@ -8,7 +8,7 @@ import {
 describe("Workbench shared action registry", () => {
   it("keeps the four primary modes and every contextual capability discoverable", () => {
     expect(workbenchActionRegistry.filter((action) => action.kind === "mode").map((action) => action.label)).toEqual([
-      "Home", "Projects", "Activity", "System",
+      "Home", "System",
     ])
     expect(workbenchActionRegistry.filter((action) => action.kind === "capability").map((action) => action.label)).toEqual([
       "Work Orders", "Council", "Knowledge", "Evidence", "Authority", "Trace",
@@ -25,7 +25,8 @@ describe("Workbench shared action registry", () => {
   })
 
   it("uses the same bounded lookup for primary and contextual actions", () => {
-    expect(findWorkbenchActions("project").map((action) => action.id)).toContain("mode.projects")
+    // Projects is no longer a mode: project selection lives in the Environment's project surface.
+    expect(findWorkbenchActions("project").map((action) => action.id)).not.toContain("mode.projects")
     expect(findWorkbenchActions("proof").map((action) => action.id)).toContain("capability.evidence")
     expect(findWorkbenchActions("technical runtime").map((action) => action.id)).toContain("capability.raw-runtime")
     expect(findWorkbenchActions("x".repeat(201))).toEqual([])

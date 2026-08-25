@@ -76,10 +76,25 @@ those always require an explicit operator approval act, never an implicit one.
 | `transitionWorkOrder(id, to)` | Validated lifecycle transition (rejects illegal moves and unmet approval readiness). |
 | `updateWorkOrderContract(...)` | Edit scope, files, validators, etc. |
 | `linkWorkOrderEvidence(id, evidence)` | Attach evidence. |
-| `recordWorkOrderResult(...)` | Set PASS/FAIL/PARTIAL and refs. |
-| `setWorkOrderGate(...)` | Open/close a release gate (commit/tag/push). |
 | `getClosureReport(id)` | Render the operator-grade closure report (`buildClosureReport`). |
-| `deleteWorkOrder(id)` | Remove a WO. |
+
+### Retired with the `/work-orders` write UI
+
+`recordWorkOrderResult`, `setWorkOrderGate` and `deleteWorkOrder` were removed when the primary
+experience replacement deleted `/work-orders`. `components/work-orders/work-orders-view.tsx` was
+their only caller, and each of them was a SECOND way to do something the governed path already does:
+
+- **the release gates** (`commitAllowed` / `tagAllowed` / `pushAllowed`) are still written — by the
+  work contract's `delivery` block through `scripts/hermes-bridge/outcome-source.mjs`, and read by
+  `outcome-queue-runtime.mjs` and `lib/workbench/outcome-execution-authorization.ts`. They are not
+  orphaned; what went away is the manual override that sat beside the contract.
+- **the result** is recorded by the governed outcome path rather than typed into a form.
+- **deletion** has no replacement, deliberately: a governed register does not offer a delete button.
+
+`createWorkOrder` is deliberately KEPT — `app/actions/goals.ts`, `app/actions/vault.ts`, the
+workroom-authority route and the objective API all mint work orders programmatically, which is the
+path the form was competing with. Retiring a UI must not break the machinery it was a shortcut
+around.
 
 ---
 
