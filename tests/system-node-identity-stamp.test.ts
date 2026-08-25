@@ -389,6 +389,19 @@ const mockedResolveNode = vi.mocked(resolveBrokeredNode) as unknown as ReturnTyp
 const mockedSource = vi.mocked(loadSystemObjectSource) as unknown as ReturnType<typeof vi.fn>
 const mockedEvent = vi.mocked(appendGovernanceEvent)
 
+/** A grant that genuinely covers a shared-node write: right rank, action allowed, nothing blocked. */
+const COVERING_GRANT = {
+  id: 7,
+  ref: "GRANT-0007",
+  status: "active",
+  authorityLevel: "A3_WRITE_SHARED",
+  allowedActions: ["node.stamp-identity"],
+  blockedActions: [] as string[],
+  expiresAt: null,
+  revokedAt: null,
+  revokeReason: null,
+}
+
 function request(body: unknown) {
   return new Request("http://localhost/api/system/node/stamp-identity", {
     method: "POST",
@@ -428,7 +441,7 @@ describe("the governed route", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockedSession.mockResolvedValue({ user: { id: "primary" } } as never)
-    mockedQuery.mockResolvedValue({ rows: [{ ref: "GRANT-0007" }] })
+    mockedQuery.mockResolvedValue({ rows: [COVERING_GRANT] })
     mockedLedger.mockResolvedValue(undefined)
     mockedAudit.mockResolvedValue(undefined)
     mockedResolveNode.mockResolvedValue(POSIX_RECORD)
@@ -451,8 +464,8 @@ describe("the governed route", () => {
   it("criterion 8 - scopes the authority lookup to the session user", async () => {
     await POST(request({ objectId: "node:atlas" }))
     const [sql, params] = mockedQuery.mock.calls[0]
-    expect(String(sql)).toContain(`"userId" = $3`)
-    expect(params).toEqual(["#995", "node.stamp-identity", "primary"])
+    expect(String(sql)).toContain(`"userId" = $2`)
+    expect(params).toEqual(["#995", "primary"])
   })
 
   it("refuses without a recorded grant, and touches no node", async () => {
@@ -460,6 +473,81 @@ describe("the governed route", () => {
     const response = await POST(request({ objectId: "node:atlas" }))
     expect(response.status).toBe(409)
     await expect(response.json()).resolves.toMatchObject({ error: "AUTHORITY_NOT_GRANTED" })
+    expect(mockedExec).not.toHaveBeenCalled()
+  })
+
+  /**
+   * The full grant contract, not a SQL predicate that resembles it.
+   *
+   * A lookup matching only scope and `allowedActions` accepts a read-only grant and accepts one whose
+   * `blockedActions` forbids this exact operation. `lib/governance/authority.ts` is where revocation,
+   * expiry, authority RANK and explicit blocks already live, and these are the cases that prove the
+   * route asks it rather than restating a weaker version beside a mutating path.
+   */
+  describe("the grant must actually cover a shared-node write", () => {
+    const base = {
+      id: 7,
+      ref: "GRANT-0007",
+      status: "active",
+      authorityLevel: "A3_WRITE_SHARED",
+      allowedActions: ["node.stamp-identity"],
+      blockedActions: [] as string[],
+      expiresAt: null,
+      revokedAt: null,
+      revokeReason: null,
+    }
+
+    async function attempt(overrides: Record<string, unknown>) {
+      mockedQuery.mockResolvedValueOnce({ rows: [{ ...base, ...overrides }] })
+      return POST(request({ objectId: "node:atlas" }))
+    }
+
+    it("refuses a grant that does not reach the required authority rank", async () => {
+      const response = await attempt({ authorityLevel: "A0_READ_ONLY" })
+      expect(response.status).toBe(409)
+      await expect(response.json()).resolves.toMatchObject({
+        error: "AUTHORITY_NOT_GRANTED",
+        detail: expect.stringMatching(/provides A0_READ_ONLY but A3_WRITE_SHARED is required/),
+      })
+      expect(mockedExec).not.toHaveBeenCalled()
+    })
+
+    it("refuses a grant whose blockedActions forbids this operation, even when it is also allowed", async () => {
+      // Explicit blocks take precedence over allowances. A SQL `= ANY(allowedActions)` check cannot
+      // see this at all, and this grant would have authorised a real node write.
+      const response = await attempt({ blockedActions: ["node.stamp-identity"] })
+      expect(response.status).toBe(409)
+      await expect(response.json()).resolves.toMatchObject({ detail: expect.stringMatching(/explicitly blocked/) })
+      expect(mockedExec).not.toHaveBeenCalled()
+    })
+
+    it("refuses a revoked grant and an expired one", async () => {
+      expect((await attempt({ status: "revoked" })).status).toBe(409)
+      expect((await attempt({ expiresAt: new Date(Date.now() - 60_000).toISOString() })).status).toBe(409)
+      expect(mockedExec).not.toHaveBeenCalled()
+    })
+
+    it("accepts a grant that covers the rank and the action", async () => {
+      const response = await attempt({ authorityLevel: "A5_DESTRUCTIVE" })
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toMatchObject({ grant: "GRANT-0007" })
+    })
+  })
+
+  it("refuses a body that is valid JSON but not an object", async () => {
+    // `JSON.parse("null")` succeeds. Reading a property off it would be a 500 dressed as a bad
+    // request, which is the one status an operator cannot act on.
+    for (const raw of ["null", "[]", '"stamp atlas"', "42"]) {
+      const response = await POST(
+        new Request("http://localhost/api/system/node/stamp-identity", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: raw,
+        }),
+      )
+      expect(response.status).toBe(400)
+      await expect(response.json()).resolves.toMatchObject({ error: "BAD_REQUEST" })
+    }
     expect(mockedExec).not.toHaveBeenCalled()
   })
 
@@ -575,7 +663,7 @@ describe("the governed route", () => {
 
     vi.clearAllMocks()
     mockedSession.mockResolvedValue({ user: { id: "primary" } } as never)
-    mockedQuery.mockResolvedValue({ rows: [{ ref: "GRANT-0007" }] })
+    mockedQuery.mockResolvedValue({ rows: [COVERING_GRANT] })
     mockedLedger.mockResolvedValue(undefined)
     mockedAudit.mockResolvedValue(undefined)
     mockedResolveNode.mockResolvedValue(POSIX_RECORD)

@@ -90,6 +90,25 @@ describe("the canonical object source", () => {
     ).rejects.toMatchObject({ code: "CONTRACT_UNAVAILABLE" })
   })
 
+  it("reads the deployed source root, not the runtime working directory", async () => {
+    // The supported HERMES deployment is a flat standalone bundle with no `config/` beside
+    // `server.js`. Resolving against `process.cwd()` there would refuse every request with
+    // CONTRACT_UNAVAILABLE while every test passed, because a test runs from the repository.
+    const previous = process.env.WILLIAMOS_PROJECT_ROOT
+    const runtimeDir = await mkdtemp(path.join(tmpdir(), "standalone-runtime-"))
+    const previousCwd = process.cwd()
+    try {
+      process.env.WILLIAMOS_PROJECT_ROOT = repositoryRoot
+      process.chdir(runtimeDir)
+      const source = await loadSystemObjectSource({ fabricRoot: await fabricRoot({ atlas: ATLAS }) })
+      expect(source.graph.objects.length).toBeGreaterThan(0)
+    } finally {
+      process.chdir(previousCwd)
+      if (previous === undefined) delete process.env.WILLIAMOS_PROJECT_ROOT
+      else process.env.WILLIAMOS_PROJECT_ROOT = previous
+    }
+  })
+
   it("exposes no writer", async () => {
     const source = await loadSystemObjectSource({ fabricRoot: await fabricRoot({ atlas: ATLAS }) })
     // A read-only projection whose loader offered a write would be the inverse the charter forbids.

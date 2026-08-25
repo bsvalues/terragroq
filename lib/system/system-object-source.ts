@@ -47,7 +47,16 @@ export interface SystemObjectSource {
 }
 
 export interface SystemObjectSourceOptions {
-  /** Repository root. Injected by tests; the route uses the process working directory. */
+  /**
+   * Where the reviewed configuration lives. Injected by tests; otherwise the deployed source root.
+   *
+   * NOT `process.cwd()`. The supported HERMES deployment is a flat standalone bundle --
+   * `scripts/deploy-hermes-runtime.ps1` copies `.next`, `server.js`, `package.json`, the static
+   * assets and `public`, and NOT `config/`. A loader that resolved the identity contract and the
+   * inventory seed against the runtime working directory would therefore find neither, and every
+   * deployed request would refuse with `CONTRACT_UNAVAILABLE` while every test passed. The repository
+   * already exposes `WILLIAMOS_PROJECT_ROOT` for exactly this, and nine shipped routes read it.
+   */
   repositoryRoot?: string
   /** Fabric root holding `nodes.json`. Defaults to the broker's own default. */
   fabricRoot?: string
@@ -91,7 +100,7 @@ function bindEndpoints(
 export async function loadSystemObjectSource(
   options: SystemObjectSourceOptions = {},
 ): Promise<SystemObjectSource> {
-  const root = options.repositoryRoot ?? process.cwd()
+  const root = options.repositoryRoot ?? process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 
   let contract: NodeIdentityContract
   try {

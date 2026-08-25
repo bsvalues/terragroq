@@ -2,6 +2,7 @@ import { pool } from "@/lib/db"
 import { auditFabricAction, requireLedger } from "@/lib/fabric/audit.mjs"
 import { BrokerDenied, brokeredExec, resolveBrokeredNode } from "@/lib/fabric/broker.mjs"
 import { defaultFabricRoot } from "@/lib/fabric/transport.mjs"
+import { grantCovers } from "@/lib/governance/authority"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { resolveObjectAction } from "@/lib/intent/object-action-registry"
 import {
@@ -44,6 +45,8 @@ export const runtime = "nodejs"
  */
 const STAMP_WORK_ORDER = "#995"
 const STAMP_ACTION_ID = "system.node.stamp-identity"
+const STAMP_OPERATION = "node.stamp-identity"
+const REQUIRED_AUTHORITY = "A3_WRITE_SHARED"
 const OBSERVE_TIMEOUT_MS = 20_000
 const STAMP_TIMEOUT_MS = 30_000
 
@@ -57,7 +60,14 @@ export async function POST(request: Request) {
 
   let body: { input?: unknown; objectId?: unknown }
   try {
-    body = await request.json()
+    const parsed: unknown = await request.json()
+    // `JSON.parse("null")` succeeds, and a body of `null` would then throw on the first property
+    // read -- turning a malformed request into a 500 instead of the typed refusal below. Arrays are
+    // refused for the same reason: valid JSON is not the same thing as a request this route can read.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return refuse("BAD_REQUEST", 400, { detail: "the request body must be a JSON object" })
+    }
+    body = parsed as { input?: unknown; objectId?: unknown }
   } catch {
     return refuse("BAD_REQUEST", 400)
   }
@@ -69,30 +79,61 @@ export async function POST(request: Request) {
     })
   }
 
-  // Authority first, before the graph is read: an unauthorised caller learns nothing about which
-  // objects exist. Scoped to the session user as well as to the work order and the action --
-  // criterion 8, and the one place the shipped `resource/relocate` route does not scope.
+  /**
+   * Authority first, before the graph is read: an unauthorised caller learns nothing about which
+   * objects exist.
+   *
+   * THE CHECK IS `grantCovers`, NOT A SQL PREDICATE, and the difference is the whole finding. A
+   * lookup that matched only `scope` and `allowedActions` -- the shape `resource/relocate` ships --
+   * accepts a grant that declares `A0_READ_ONLY`, and accepts one whose `blockedActions` explicitly
+   * forbids this very operation, because SQL was asking a narrower question than authority actually
+   * is. `lib/governance/authority.ts` already encodes the real contract: revocation and expiry, the
+   * authority RANK, and explicit blocks taking precedence over allowances. Restating a weaker version
+   * of it beside a mutating path is how a non-mutating grant ends up authorising a node write.
+   *
+   * So SQL narrows to this operator's candidate grants for this work order, and the canonical
+   * function decides. `criterion 8` -- session-user scoping on every lookup -- is the `"userId"`
+   * predicate, which is the one thing the shipped route does not do.
+   *
+   * A3_WRITE_SHARED rather than A2_WRITE_OWN: the subject is a machine this lab shares, not a record
+   * the operator owns. Where the reading is arguable, the higher rank is the safe one to require.
+   */
   let grantRef: string | null = null
+  let refusalReason: string | null = null
   try {
     const grants = await pool.query(
-      `SELECT "ref" FROM authority_grant
-        WHERE "status" = 'active'
-          AND ("expiresAt" IS NULL OR "expiresAt" > timezone('UTC', now()))
-          AND "revokedAt" IS NULL
-          AND "scope" = $1
-          AND $2 = ANY("allowedActions")
-          AND "userId" = $3
-        ORDER BY "id" DESC LIMIT 1`,
-      [STAMP_WORK_ORDER, "node.stamp-identity", session.user.id],
+      `SELECT "id", "ref", "status", "authorityLevel", "allowedActions", "blockedActions",
+              "expiresAt", "revokedAt", "revokeReason"
+         FROM authority_grant
+        WHERE "scope" = $1
+          AND "userId" = $2
+        ORDER BY "id" DESC LIMIT 20`,
+      [STAMP_WORK_ORDER, session.user.id],
     )
-    grantRef = grants.rows[0]?.ref ?? null
+    for (const row of grants.rows) {
+      const grant = {
+        ...row,
+        allowedActions: row.allowedActions ?? [],
+        blockedActions: row.blockedActions ?? [],
+        expiresAt: row.expiresAt ? new Date(row.expiresAt) : null,
+        revokedAt: row.revokedAt ? new Date(row.revokedAt) : null,
+      }
+      const coverage = grantCovers(grant as never, REQUIRED_AUTHORITY, STAMP_OPERATION)
+      if (coverage.ok) {
+        grantRef = row.ref ?? `#${row.id}`
+        break
+      }
+      refusalReason = coverage.reason
+    }
   } catch {
     // An unreadable grant registry is not permission.
     return refuse("AUTHORITY_UNREADABLE", 503)
   }
   if (!grantRef) {
     return refuse("AUTHORITY_NOT_GRANTED", 409, {
-      detail: `no active authority grant scoped to ${STAMP_WORK_ORDER} permits node.stamp-identity for this operator`,
+      detail:
+        refusalReason
+        ?? `no authority grant scoped to ${STAMP_WORK_ORDER} covers ${REQUIRED_AUTHORITY} for ${STAMP_OPERATION} for this operator`,
       remedy: "Record an owner authority grant for this work order before retrying. Admission is not authorisation.",
     })
   }
