@@ -22,6 +22,13 @@ export interface RunOptions {
    * unknown-node refusal unfalsifiable.
    */
   registry?: Record<string, NodeRecord>
+  /**
+   * Whether a MUTATING step may run without a writable ledger. Default `true` (it may not).
+   *
+   * Defaulted on so a caller that forgets it gets the safe behaviour, and the unsafe behaviour has to
+   * be asked for in writing.
+   */
+  requireAudit?: boolean
   /** Where each step is recorded. Injectable so tests do not append to the lab's real ledger. */
   audit?: (node: string, action: string, rc: number | string, detail: string) => Promise<void>
   exec?: (
@@ -46,6 +53,13 @@ export interface NodeSummary {
 export declare const PROBE_CONTAINER: string
 export declare const BASELINE_STEP_IDS: BaselineStepId[]
 export declare const STEP_TIMEOUT_MS: number
+
+/**
+ * The steps that change the node, named rather than inferred from the id.
+ *
+ * These are the ones that refuse to run without a writable ledger.
+ */
+export declare const MUTATING_BASELINE_STEPS: ReadonlySet<BaselineStepId>
 
 export declare function runNodeBaseline(
   name: string,

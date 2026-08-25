@@ -1,4 +1,5 @@
 import crypto from "node:crypto"
+import { mkdir, mkdtemp, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -42,9 +43,16 @@ function decodePosix(command: string): string {
 /** Every node in these tests is reachable by the name the test uses; policy is proved elsewhere. */
 const registryOf = (name: string, node: Record<string, unknown>) => ({ [name]: node })
 
-/** The options every unit test needs: a real registry entry, and a ledger that is not the lab's. */
+/**
+ * The options every unit test needs: a real registry entry, and a ledger that is not the lab's.
+ *
+ * `requireAudit: false` is stated rather than inherited. These tests exercise step logic against a
+ * fake node and have no ledger; the guarantee that a MUTATING step refuses without one is a separate
+ * claim, proved in its own test below against a real temporary ledger. Opting out here in silence is
+ * how the guarantee would come back undone.
+ */
 const runOpts = (name: string, node: Record<string, unknown>, exec: unknown) =>
-  ({ exec, registry: registryOf(name, node), fabricRoot: NO_LEDGER }) as never
+  ({ exec, registry: registryOf(name, node), fabricRoot: NO_LEDGER, requireAudit: false }) as never
 
 /**
  * Alter a hex string so it is guaranteed to differ from the original.
@@ -254,6 +262,83 @@ describe("command dialect follows the node's OS, not its transport", () => {
     expect(calls[0]).toMatch(/^echo '[A-Za-z0-9+/=]+' \| base64 -d \| bash$/)
     expect(decodePosix(calls[0])).toBe("hostname")
     expect(decodePosix(calls[1])).toContain("wc -l")
+  })
+})
+
+describe("a mutating step will not run without a ledger it can actually write", () => {
+  // The review that found this was right, and the commit that introduced the brokered transport had
+  // claimed the opposite: routing through the broker was only HALF the fix. `requireAudit` defaults
+  // to false in `brokeredExec`, so a start / transfer / force-stop cycle still ran against a fabric
+  // root with no ledger and left nothing behind.
+  const REAL_EXEC = async () => ({ stdout: "ok", stderr: "" })
+
+  it("refuses start, push and stop when the ledger is absent, and reaches the node for neither", async () => {
+    const calls: string[] = []
+    const exec = async (_f: string, args: string[]) => { calls.push(String(args.at(-1))); return { stdout: "ok" } }
+
+    const results = await runNodeBaseline("atlas", NODE, {
+      exec,
+      registry: registryOf("atlas", NODE),
+      fabricRoot: path.join(tmpdir(), "fabric-runner-definitely-absent"),
+      audit: async () => {},
+    } as never)
+
+    // The reads still run -- they change nothing, so an absent ledger is not a reason to refuse them.
+    const byStep = new Map(results.map((r) => [r.step, r]))
+    expect(byStep.get("reach")?.ok).toBe(true)
+    expect(byStep.get("containers")?.ok).toBe(true)
+
+    // The three that change the node do not.
+    for (const step of ["start", "push", "stop"] as const) {
+      expect(byStep.get(step)?.ok, step).toBe(false)
+      expect(byStep.get(step)?.detail, step).toContain("AUDIT_UNAVAILABLE")
+    }
+    expect(calls.some((c) => c.includes("docker run"))).toBe(false)
+  })
+
+  it("refuses when the ledger exists but cannot be appended to", async () => {
+    // Presence is not writability. A root that exists while `audit.log` is a DIRECTORY passed the
+    // first version of the preflight, the mutation ran, and only the append afterwards complained --
+    // a loud unrecorded mutation, not a governed one.
+    //
+    // The gate stops at the very first step here rather than at the first mutating one, and that is
+    // the older `auditFabricAction` guarantee doing its job: a ledger that cannot be written must not
+    // quietly become a ledger that is not written, so even a read refuses. What this test pins is the
+    // consequence that matters -- nothing on the node is touched after the refusal.
+    const root = await mkdtemp(path.join(tmpdir(), "fabric-unwritable-"))
+    await mkdir(path.join(root, "audit.log"))
+    const calls: string[] = []
+    const exec = async (_f: string, args: string[]) => { calls.push(String(args.at(-1))); return { stdout: "ok" } }
+
+    const results = await runNodeBaseline("atlas", NODE, {
+      exec,
+      registry: registryOf("atlas", NODE),
+      fabricRoot: root,
+      audit: async () => {},
+    } as never)
+
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ step: "reach", ok: false })
+    expect(results[0].detail).toContain("AUDIT_UNAVAILABLE")
+    expect(calls.some((c) => c.includes("docker run"))).toBe(false)
+    expect(calls.some((c) => c.includes("printf %s"))).toBe(false)
+  })
+
+  it("runs the mutating steps once the ledger is real, and records them", async () => {
+    // The refusals above must be about the ledger, not about mutating steps being refused generally.
+    const root = await mkdtemp(path.join(tmpdir(), "fabric-writable-"))
+    const node = honestNode()
+
+    const results = await runNodeBaseline("atlas", NODE, {
+      exec: node.exec,
+      registry: registryOf("atlas", NODE),
+      fabricRoot: root,
+    } as never)
+
+    expect(results.find((r: { step: string }) => r.step === "start")?.ok).toBe(true)
+    const log = await readFile(path.join(root, "audit.log"), "utf8")
+    expect(log).toContain("baseline.start")
+    expect(log).toContain("atlas")
   })
 })
 

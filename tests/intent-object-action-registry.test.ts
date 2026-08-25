@@ -429,6 +429,38 @@ describe("Invariants 9, 12 and 13 - the chosen action, which this gate did not c
   })
 })
 
+describe("object names are inventory data, not patterns", () => {
+  // Found by the adversarial review. `objectNames` feeds hostnames, vendors and GPU models straight
+  // into `new RegExp`, and none of those strings is written by this repository. A real card is called
+  // `Intel(R) Arc(TM) A770`.
+  const withGpu = (model: string) =>
+    objectsFrom(inventoryNode("hermes-node", "HERMES", [
+      { id: "gpu0", uuid: "GPU-1111", pci_bus_id: "0000:01:00.0", model, vendor: "Intel" },
+    ] as InventoryNode["gpus"]))
+
+  it("matches a model whose name contains regex syntax, literally", () => {
+    const objects = withGpu("Intel(R) Arc(TM) A770")
+    const resolution = resolveObjectAction("inspect the gpu Intel(R) Arc(TM) A770", { objects })
+
+    expect(resolution.state).toBe("resolved")
+    expect(resolution.action?.id).toBe("system.accelerator.inspect")
+  })
+
+  it("does not treat a bracket in a model name as a character class", () => {
+    // Unescaped, `A[770` makes `new RegExp` throw and takes the whole resolution down with it. A
+    // registry that crashes on a legitimately-named accelerator is worse than one that cannot find
+    // it, so the failure mode being fixed here is the throw, not the miss.
+    const objects = withGpu("Arc A[770")
+    expect(() => resolveObjectAction("inspect gpu Arc A[770", { objects })).not.toThrow()
+    expect(resolveObjectAction("inspect gpu Arc A[770", { objects }).action?.id).toBe("system.accelerator.inspect")
+  })
+
+  it("still lets a phrase's own spaces span whitespace", () => {
+    // Escaping must not take the deliberate part with it: "the lab" has to keep matching "the  lab".
+    expect(matchWorkbenchNavigationTarget("open the  lab")?.action.id).toBe("capability.lab")
+  })
+})
+
 describe("the catalogue describes shipped code, not intentions", () => {
   it("points every implementation claim at a file that exists", () => {
     // A registry is an invitation to describe something that is not there. Checking the paths is

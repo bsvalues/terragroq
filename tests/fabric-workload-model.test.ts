@@ -15,6 +15,10 @@ const RUN = (name: string, node: Record<string, unknown>, exec: unknown) => ({
   exec,
   registry: { [name]: node },
   fabricRoot: path.join(tmpdir(), "fabric-workload-model-no-ledger"),
+  // Stated, not inherited. These tests assert which COMMANDS a workload model produces; the separate
+  // guarantee that a mutating step refuses without a writable ledger is proved in
+  // `tests/fabric-baseline-runner`, against a real one.
+  requireAudit: false,
 }) as never
 
 /**

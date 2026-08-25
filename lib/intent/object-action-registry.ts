@@ -341,8 +341,21 @@ function phrasesFor(action: ObjectActionDescriptor): readonly string[] {
     .sort((left, right) => right.length - left.length)
 }
 
+/**
+ * Every character of a phrase is literal EXCEPT a space, which is allowed to span whitespace.
+ *
+ * Object names are not written by this repository. They are projected from the fabric inventory --
+ * hostnames, GPU vendors, GPU models -- and a real card is called `Intel(R) Arc(TM) A770`. Without
+ * escaping, those parentheses became a capture group so the literal name never matched, and a name
+ * containing an unmatched `[` made `new RegExp` throw and took the whole resolution down with it. A
+ * registry that crashes on a legitimately-named accelerator is worse than one that cannot find it.
+ *
+ * The space is escaped last, so a phrase's own spaces still mean "any whitespace" while every
+ * metacharacter around them stays literal.
+ */
 function phraseIn(phrase: string, input: string): boolean {
-  return new RegExp(`\\b${phrase.replaceAll(" ", "\\s+")}\\b`, "i").test(input)
+  const literal = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replaceAll(" ", "\\s+")
+  return new RegExp(`\\b${literal}\\b`, "i").test(input)
 }
 
 /**
