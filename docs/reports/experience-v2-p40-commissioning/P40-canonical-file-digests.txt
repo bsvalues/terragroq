@@ -40,4 +40,14 @@ names a real file rather than a description of one:
 
   2ffc6ccddb650f215a5328a0a2464863bc5ab2bf8ef4067d663d04bc86542c7e  C:\HermesLab\hermes\docker-compose.yml
 
-That file was READ and never written. This lane performed no mutation.
+That file was READ and never written. No container, compose or image mutation was performed.
+
+The ONE mutation this lane made was to the P40's power limit, which #997 section 4 directs, and it
+carries its own rollback in a readable register rather than in a file:
+
+  before   power.limit 250.00 W   enforced 250.00 W   default 250.00 W
+  after    power.limit 150.00 W   enforced 150.00 W   default 250.00 W   (unchanged, so restorable)
+  restore  nvidia-smi -i GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2 -pl 250
+
+Bound by UUID, never by ordinal. Issued with requireAudit, so the ledger was proven writable BEFORE
+the card was touched -- ledgered as `hermes power-cap rc=0`.

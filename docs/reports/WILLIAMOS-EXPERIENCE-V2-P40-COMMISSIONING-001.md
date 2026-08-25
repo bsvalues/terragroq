@@ -1,60 +1,60 @@
 # WilliamOS Experience V2 — HERMES P40 Commissioning 001
 
-Status: `HERMES_P40_BLOCKED_RUNTIME` *(provisional — see "Disposition")*
+Status: **`HERMES_P40_BLOCKED_RUNTIME`**
 
 Issue: `#997 HERMES_P40_COMMISSIONING` · Parents `#990` Gate 1 packet, `#985` System Object Graph,
 `#964` Intelligence Fabric V1 · Prerequisite settlement `#998` (Gate 1b, live)
 
 Worked from merged `main` `053a33bdb3bb1db57db6d85fff96163b68f11b22`, in an isolated worktree.
-Every read and every write against HERMES went through `lib/fabric/broker.mjs`; SSH carried files and
-started `node`, and produced no fact recorded here.
+Every read and the single mutation went through `lib/fabric/broker.mjs` and appended to
+`C:\Users\bs\.williamos\fabric\audit.log`. SSH carried files and started `node`; it produced no fact
+recorded here.
 
 `OWNER_COURIER_ACTIONS = 0`.
 
 ## Result in one paragraph
 
-The commissioning target was reconfirmed on live hardware and then the lane stopped, twice, on things
-that were true before it arrived. **The Ollama service #997 asks me to reconfigure is not running.**
-It exited at `2026-08-25T00:48:19Z` with `ExitCode 128` and the NVIDIA container hook's
-`nvml error: unknown error`, and it has been down since — which is the same absence Gate 1b recorded
-as `CONT-EXPV2-HERMES-OLLAMA-NOT-OBSERVED`, now with a cause attached. **The canonical owner of that
-service is `C:\HermesLab\hermes\docker-compose.yml`, and the container that was running is not the
-container that file describes**: it carries no compose labels, binds a model-store path that does not
-exist on the machine, and published port 11434 on every interface in violation of the node's own
-declared `ollama-loopback-only` constraint. Two owner-supplied expectations did not survive contact
-with observation — the 150 W cap is **not** in effect (the card reads 250 W enforced) and
-`F:\HermesData\ollama` **does not exist**. Rollback was captured in full before anything was touched,
-and then nothing was touched: HERMES left the network at approximately `2026-08-25T01:35Z`, before the
-container-isolation test that would have decided whether a TCC-mode P40 can be reached through Docker
-Desktop's WSL2 backend at all. No mutation was performed. The P40 remains at `capability: UNKNOWN`.
+**The P40 in TCC mode makes GPU passthrough into WSL2 impossible for *both* cards, and that is why
+Ollama has been dead since the card went in.** Inside WSL, NVML enumerates the RTX 3050 successfully,
+reaches `0000:02:00.0` — the P40's PCI address — and fails: `Unable to determine the device handle for
+gpu 0000:02:00.0: Unknown Error`, `rc=255`. Because `nvidia-container-cli` initialises NVML *before*
+it selects devices, that single unenumerable adapter fails the prestart hook for every device set:
+`--gpus all`, `--gpus device=<P40-UUID>`, and `--gpus device=<RTX-UUID>` all return the identical
+error and exit 125. The bounded objective — make the existing Ollama service use only the P40 —
+therefore **cannot be reached by any configuration change to that service**, because no container on
+this host can currently obtain any GPU at all. One mutation was made, the one #997 §4 directs: the
+P40's power cap was moved from the 250 W it was actually at to **150 W, verified on readback**. The
+compose file was **not** touched, because a GPU-binding change that cannot be validated is exactly the
+freestyling #997 forbids. Two owner expectations were refuted by observation (the 150 W cap was not in
+effect; `F:` does not exist as a drive on this machine), and the model library was located: **9.65 GiB
+across 5 models on `D:`, precisely where the owning compose file has been pointing all along.**
 
 ## Discipline this lane held to
 
-- **Ownership inspected before Docker.** The ownership determination below was completed *before* any
-  mutation was planned, and it changed the plan: the obvious `docker rm && docker run --gpus device=…`
-  fix would have been erased by the next `docker compose up -d`, which #997 names as an acceptance
-  invariant rather than a nuisance.
-- **Rollback captured before mutation.** Full `docker inspect` of the container, its image, the proxy
-  and open-webui were written to disk before the mutation plan was finalised, and the mutation never
-  ran. The rollback receipt is therefore complete and untested — stated as such, not as proven.
-- **Expectations verified, not trusted.** Six of the owner's expectations held exactly; two did not.
-  The two that did not are recorded as observations winning over declarations, not as errors.
-- **Discovery, not declaration.** No seed, registry, pin or inventory was edited. #990 still owns
-  discovery. The P40's identity here is the one `#998` settled, re-observed fresh.
-- **Nothing declared about hardware by this lane's tooling.** `P40-brokered.mjs` and
-  `P40-run-canonical-probe.mjs` contain no device name, UUID, VRAM figure or power number — grep them.
+- **Ownership inspected before Docker.** It changed the plan. The obvious `docker rm && docker run
+  --gpus device=…` fix would have been erased by the next `docker compose up -d` — #997's acceptance
+  invariant, not a nuisance.
+- **Rollback captured before mutation**, and the mutation that ran carries its own recorded prior
+  value (`power.default_limit 250.00 W`, still readable on the card).
+- **Expectations verified, not trusted.** Ten held; two did not, and both mattered.
+- **Fail closed rather than improvise.** Three remedies for the WSL2 block exist. All three are design
+  decisions about how local inference runs on HERMES, not implementation choices inside this envelope.
+  They are named below and none was taken.
+- **Discovery, not declaration.** No seed, registry, pin or inventory was edited. This lane's tooling
+  (`P40-brokered.mjs`, `P40-run-canonical-probe.mjs`) contains no device name, UUID, VRAM figure or
+  power number — grep it.
 
 ## Step 1 — current truth, bound through the canonical brokered path
 
-`scripts/execution-fabric/probe-windows.ps1`, digest `fe07b7b7…`, byte-identical to merged `main`
-`053a33bd` on both ends, invoked through `brokeredExec` as action `probe`. All ten canonical files
-were digest-verified on HERMES before anything ran (`P40-canonical-file-digests.txt`).
+Canonical `scripts/execution-fabric/probe-windows.ps1`, digest `fe07b7b7…` — byte-identical to merged
+`main` `053a33bd` on both ends, and the same bytes `#998` verified — invoked through `brokeredExec`.
+All ten canonical files were digest-matched on HERMES before anything ran
+(`P40-canonical-file-digests.txt`). Run twice: `01:24:13Z` before the reboot, `01:48:09Z` after.
 
-- brokered invocation: `2026-08-25T01:24:13.020Z` → `01:24:22.046Z`, 9 025 ms, 21 021 bytes,
+- brokered invocation: `2026-08-25T01:48:08.847Z` → `01:48:19.624Z`, 10 776 ms, 21 021 bytes,
   `stderr: null`, `rc=0`
-- probe's own `observed_at`: `2026-08-25T01:24:13.2966005Z`
-- node identity: `hermes-node` / `HERMES`, `machine_id_sha256 7d1d7ef856…`, evidence
-  `confidence: "observed"`
+- probe's own `observed_at`: `2026-08-25T01:48:09.2160486Z`, `confidence: "observed"`
+- node identity: `hermes-node` / `HERMES`, `machine_id_sha256 7d1d7ef856…`
 
 ### Both accelerator identities
 
@@ -63,41 +63,35 @@ were digest-verified on HERMES before anything ran (`P40-canonical-file-digests.
 | uuid | `GPU-6d9ae165-7272-a38c-06b1-7276869e980f` | `GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2` |
 | pci bus id | `00000000:01:00.0` | `00000000:02:00.0` |
 | vram total | 6 442 450 944 B (6 144 MiB) | 24 159 191 040 B (23 040 MiB) |
-| vram used | 811 597 824 B | 9 437 184 B |
 | vram source | `nvidia-smi` | `nvidia-smi` |
 | driver | `560.94` | `560.94` |
-| temperature | 31 °C | 29 °C |
-| utilization | 1 % | 0 % |
+| temperature (01:48Z) | 33 °C | 32 °C |
+| utilization | 0 % | 0 % |
 
-Both UUIDs match the owner's expectation exactly. The P40 is the identity `#998` settled; this lane
-consumed it and did not re-describe it.
+Both UUIDs match the owner's expectation exactly. This is the identity `#998` settled; this lane
+consumed it and did not re-describe it. #990 still owns discovery.
 
 ### Supplementary telemetry the canonical probe does not carry
 
-`probe-windows.ps1` queries eight `nvidia-smi` fields and stops there, so PCIe link state, ECC, power
-envelope, BAR1 and driver model had to be read separately. That read also went through `brokeredExec`
-(action `probe`) so it is ledgered, but it is **supplementary evidence, not a canonical registry
-input** — nothing here feeds the snapshot.
+`probe-windows.ps1` queries eight `nvidia-smi` fields, so PCIe link state, ECC, power envelope, BAR1
+and driver model were read separately — also through `brokeredExec`, so ledgered, but **supplementary
+evidence, not a canonical registry input.** Nothing here feeds the snapshot.
 
 | Property | RTX 3050 | Tesla P40 |
 | --- | --- | --- |
 | driver model | WDDM (pending WDDM) | **TCC** (pending TCC) |
 | display mode / active | Enabled / Enabled | Disabled / Disabled |
 | compute mode | Default | Default |
-| pcie link gen cur/max | 3 / 3 | **1 / 3** |
+| pcie link gen cur/max | 3 / 3 | **1 / 3** (idle) |
 | pcie link width cur/max | 8 / 16 | **16 / 16** |
 | BAR1 total | 256 MiB | **32 768 MiB** |
-| power draw | 7.98 W | **10.06 W** |
-| power limit enforced | 70.00 W | **250.00 W** |
+| power limit enforced → | 70.00 W | **250.00 W → 150.00 W** (this lane) |
 | power limit default / min / max | 70 / 20 / 70 W | 250 / 125 / 250 W |
 | ECC mode | N/A | **Enabled** (pending Enabled) |
 | ECC volatile SBE / DBE | N/A | **0 / 0** |
 | ECC aggregate SBE / DBE | N/A | **6 / 0** |
-| shutdown temp | 97 °C | **95 °C** |
-| slowdown temp | 94 °C | **92 °C** |
-| throttle reasons active | `0x1` (GPU idle) | `0x4` (SW power cap) |
-| serial | N/A | `0324017002735` |
-| board part number | N/A | `900-2G610-0000-000` |
+| shutdown / slowdown temp | 97 / 94 °C | **95 / 92 °C** |
+| serial · board part | N/A | `0324017002735` · `900-2G610-0000-000` |
 | compute apps attached | 23 (dwm, explorer, browsers, Docker Desktop, …) | **none** |
 
 ### Owner expectations, checked one at a time
@@ -106,34 +100,30 @@ input** — nothing here feeds the snapshot.
 | --- | --- | --- | --- |
 | 1 | RTX 3050 `GPU-6d9ae165-…` | identical | **HOLDS** |
 | 2 | P40 `GPU-4f7d4396-…` | identical | **HOLDS** |
-| 3 | P40 in TCC | `Driver Model: Current TCC` | **HOLDS** |
+| 3 | P40 in TCC | `Driver Model: Current TCC` | **HOLDS** — and it is the cause of the block |
 | 4 | ~23 040 MiB usable VRAM | 23 040 MiB, `nvidia-smi` measured | **HOLDS** |
-| 5 | PCIe x16 | width `16/16` | **HOLDS (width)** — link *gen* reads 1 of 3 at idle; that is expected ASPM downclock and is only meaningful under load, which this lane never reached. Recorded `UNKNOWN`, not inferred. |
+| 5 | PCIe x16 | width `16/16` | **HOLDS (width)**; link *gen* reads 1 of 3 at idle — expected ASPM downclock, only meaningful under load, which was never reached. Recorded `UNKNOWN`, not inferred. |
 | 6 | BAR1 32 GB / Above-4G functioning | BAR1 total 32 768 MiB | **HOLDS** |
-| 7 | idle ≈ 34 °C / 10 W | 29 °C / 10.06 W | **HOLDS** (temperature lower than expected, power on the nose) |
-| 8 | Docker / WSL virtualization restored | docker 29.7.2 running, wsl running | **HOLDS at the daemon level** — and *not* at the GPU level; see step 3 |
+| 7 | idle ≈ 34 °C / 10 W | 29–32 °C / 10.06–10.74 W | **HOLDS** |
+| 8 | Docker / WSL virtualization restored | docker 29.7.2 running, WSL 2.6.1.0 running, both distros up | **HOLDS at the daemon level, FAILS at the GPU level** — see step 3 |
 | 9 | existing Ollama container exposes all GPUs | `NVIDIA_VISIBLE_DEVICES=all`, `DeviceRequests count -1` | **HOLDS** |
-| 10 | API contract `11434:11434` | live container published `11434→11434` | **HOLDS for the live container — and the live container is the drift**; the owning compose file says `127.0.0.1:11434:11434`. See the port defect below. |
-| 11 | **temporary 150 W cap already applied** | `enforced.power.limit = 250.00 W`, `default = 250.00 W`, samples avg 9.85 W over 116.9 s | **DOES NOT HOLD** |
-| 12 | **model store `F:\HermesData\ollama`** | `Test-Path F:\HermesData\ollama` → **false** | **DOES NOT HOLD** |
+| 10 | API contract `11434:11434` | live container published `11434→11434` on all interfaces | **HOLDS for the live container — and the live container is the drift**; the owning compose file says `127.0.0.1:11434:11434`. See the exposure defect. |
+| 11 | **150 W cap already applied** | `enforced.power.limit = 250.00 W` | **DID NOT HOLD** — applied by this lane, verified at 150.00 W |
+| 12 | **model store `F:\HermesData\ollama`** | **`F:` is not a drive on this machine** (C, D, E, G) | **DID NOT HOLD** — library found on `D:` |
 
-Expectations 11 and 12 are the two where canonical live observation wins, per #997. Neither was
-forced to match; both are recorded as differences.
+**On 11.** Persistence mode reads `N/A` for both cards on this Windows host, so a `-pl` setting has
+nothing holding it across a driver reload or reboot. The honest claim was *the cap is not in effect*,
+not "the owner was wrong" — and the machine rebooted mid-lane at `01:40:10Z`, which is exactly the
+event that clears it. The cap is now applied and will not survive the next reboot either; that is
+typed below rather than papered over.
 
-**On 11.** The 150 W cap is not present. Nothing in the evidence says it was never applied — a power
-limit set with `nvidia-smi -pl` does not survive a driver reload or reboot unless persistence mode
-holds it, and persistence mode reads `N/A` on this Windows host for both cards. The honest claim is
-*the cap is not in effect at `2026-08-25T01:24Z`*, not "the owner was wrong". #997 §4 requires it to
-be applied before load, and this lane did not reach load.
-
-**On 12.** See the model-store section — this is the more serious of the two.
+**On 12.** `Get-Volume` returns C, D, E, G and a few unlettered partitions. There is no `F:`. The
+running container's bind pointed at a drive letter that does not exist on this machine.
 
 ## Step 2 — ownership determination (done before touching Docker)
 
-**The canonical owner is `C:\HermesLab\hermes\docker-compose.yml`, compose project `hermes`,
-compose v2.40.3 — and the Ollama container that was running is not the one it describes.**
-
-Four of the five services in that file carry the compose labels that prove ownership:
+**The canonical owner is `C:\HermesLab\hermes\docker-compose.yml`** (project `hermes`, compose
+2.40.3), **and the Ollama container that was running is not the one it describes.**
 
 | container | `com.docker.compose.project` | `…project.config_files` |
 | --- | --- | --- |
@@ -146,353 +136,407 @@ Four of the five services in that file carry the compose labels that prove owner
 `ollama`'s entire label set is `{"org.opencontainers.image.version":"24.04"}`: the image's own label
 and nothing else. It was created `2026-08-18T20:42:32Z` by hand and attached to both `bridge` and
 `hermes_default`. The compose file *does* define an `ollama` service with `container_name: ollama`,
-and `open-webui` carries `com.docker.compose.depends_on: "ollama:service_started:false"` — so compose
-believes it owns that service, and the name it would claim is already taken by a container it did not
-create.
-
-**This settles the acceptance invariant in #997's own terms.** A `docker rm ollama && docker run
---gpus '"device=GPU-4f7d…"' …` would have worked, proved isolation, and been erased the next time
-anyone ran `docker compose up -d` in `C:\HermesLab\hermes`. The change belongs in the compose file.
+and `open-webui` carries `com.docker.compose.depends_on: "ollama:service_started:false"` — compose
+believes it owns that service, and the name it would claim is held by a container it did not create.
 
 ### Three drifts between the owning layer and what was running
 
-| | compose file (owner) | live container (observed) |
-| --- | --- | --- |
-| model store | `D:/HermesData/ollama:/root/.ollama` | `F:/HermesData/ollama:/root/.ollama` |
-| port publish | `127.0.0.1:11434:11434` | `11434:11434`, `HostIp: ""` → all interfaces |
-| GPU request | `deploy…devices: [{driver: nvidia, count: all, capabilities: [gpu]}]` | `DeviceRequests count -1` **plus** `NVIDIA_VISIBLE_DEVICES=all` |
+| | compose file (owner) | live container (observed) | which is right |
+| --- | --- | --- | --- |
+| model store | `D:/HermesData/ollama` | `F:/HermesData/ollama` | **the compose file** — `F:` is not a drive |
+| port publish | `127.0.0.1:11434:11434` | `11434:11434`, `HostIp: ""` → all interfaces | **the compose file** — the seed denies LAN exposure |
+| GPU request | `count: all` | `count: -1` + `NVIDIA_VISIBLE_DEVICES=all` | equivalent; both wrong for this lane's goal |
 
-The compose file's own header comment reads *"Ollama models (the big files) are bind-mounted to
-`D:\HermesData\ollama`"*, and its port line is commented *"Loopback-only publish: reachable on the
-host (127.0.0.1) for OMEN's SSH tunnel, NOT exposed on the LAN."* Both comments describe the
-governed intent. The running container matched neither.
+On two of three drifts the owning layer was correct and the hand-made container was wrong. That is
+worth stating plainly: reconciling compose would *repair* the model-store mount and the exposure
+violation, not endanger them — the opposite of what the container's own configuration suggested.
 
-### Secondary owners: none found, none ruled out
+### Secondary owners
 
-Compose ownership is established by label evidence. What is **not** established is whether some
-*other* layer also claims this service, because the read that would have answered it — Windows
-services, scheduled tasks, host `ollama.exe` processes, and the contents of the candidate scripts —
-was the read HERMES went offline during. It never returned, and nothing here should be read as
-clearing it.
+`C:\HermesLab\hermes\start-hermes.ps1` (`ab0b6d45…`) is a wrapper that runs `docker compose pull`
+then `docker compose up -d`. It does not create containers directly, so it does not compete for
+ownership — **but its `docker compose pull` would re-pull `ollama/ollama:latest` and silently replace
+the preserved image identity**, which is the "casual `latest` pull" #997 warns against. Typed below.
 
-Named candidates, all present in `C:\HermesLab\hermes` and all **uninspected**: `start-hermes.ps1`,
-`run-all.ps1`, `model-pull.ps1`, `sync-models-to-forge.ps1`, `restart-docker.ps1`, and an
-`ollama-inspect-before.json` that some earlier session left behind. A wrapper that calls
-`docker compose up -d` would not change the determination — compose would still be the owner. A
-wrapper that calls `docker run` directly would explain how the unlabelled container came to exist,
-and would mean the fix has to land in two places rather than one. Both possibilities are open.
+Scheduled tasks present: `HermesCrossNodeBackupSync`, `HermesLabHealth`, `HermesModelForgeSync`,
+`HermesVolumeBackup` (all `Ready`), `WilliamOS-HERMES-WSL-Keepalive` (`Running`). None is named for
+Ollama startup. No Windows service and no host `ollama.exe` process claims the runtime. Compose is
+the owner.
 
-## Step 3 — why Ollama is down, and what that does to the bounded job
+## Step 3 — the block, proven
 
-The service #997 asks me to reconfigure has not been running since before this lane began.
+### The service was already dead
 
 ```
-"State": {
-  "Status":     "exited",
-  "ExitCode":   128,
-  "StartedAt":  "2026-08-21T14:02:05.91178028Z",
-  "FinishedAt": "2026-08-25T00:48:19.415269743Z",
-  "Error": "failed to create task for container: failed to create shim task:
-            OCI runtime create failed: runc create failed: unable to start container
-            process: error during container init: error running prestart hook #0:
-            exit status 1, stdout: , stderr: Auto-detected mode as 'legacy'
-            nvidia-container-cli: detection error: nvml error: unknown error"
-}
+container `ollama`: exited, ExitCode 128
+StartedAt  2026-08-21T14:02:05.911Z
+FinishedAt 2026-08-25T00:48:19.415Z
+Error: ... error running prestart hook #0: exit status 1, stdout: , stderr:
+       Auto-detected mode as 'legacy'
+       nvidia-container-cli: detection error: nvml error: unknown error
 ```
 
-`restart: unless-stopped` is set, so Docker has been retrying and failing. The container's own
-application log ends at `2026/08/23 - 18:42:15` with a run of `GET /v1/models → 200` from
-open-webui's health polling; nothing after the restart reached Ollama's process at all, because the
-failure is in the NVIDIA prestart hook, before `/bin/ollama` runs.
+`restart: unless-stopped` has been retrying and failing since. Its application log ends
+`2026/08/23 - 18:42:15` on a run of `GET /v1/models → 200` from open-webui's health polling; nothing
+after the restart reached `/bin/ollama`, because the failure is in the NVIDIA prestart hook. This is
+the successor to `#998`'s `CONT-EXPV2-HERMES-OLLAMA-NOT-OBSERVED`. It survived the `01:40:10Z` reboot
+unchanged.
 
-**What this is evidence of:** the NVIDIA container runtime cannot initialise NVML for the device set
-this container requests, which is *all* GPUs.
+### The failure is not P40-specific, which is the surprising part
 
-**What this is not yet evidence of:** that the P40 is the cause. The correlation is strong — the
-container ran for four days and stopped at the boundary where the machine came back with a new card —
-but correlation is not the proof #997 asks for, and the test that would settle it is exactly the test
-the outage interrupted. The open question, stated so a later lane does not have to rediscover it:
+Four ephemeral `--rm` probes, each reusing the already-present `ollama/ollama:latest` image with
+`--entrypoint nvidia-smi -L`, publishing no port and mounting nothing:
 
-> Docker Desktop on Windows reaches GPUs through the WSL2 backend, which enumerates adapters via
-> `dxcore`/`/dev/dxg` — the **WDDM** stack. The P40 is in **TCC**. Whether a TCC-mode device can be
-> presented to a WSL2 container at all, and whether its presence breaks enumeration for the WDDM card
-> beside it, decides this lane. It is an empirical question with a four-command answer.
+| test | device selector | exit | result |
+| --- | --- | --- | --- |
+| T1 | `--gpus all` | **125** | prestart hook, `nvml error: unknown error` |
+| T2 | `--gpus device=GPU-6d9ae165-…` (**RTX only**) | **125** | *identical error* |
+| T3 | `--gpus device=GPU-4f7d4396-…` (**P40 only**) | **125** | *identical error* |
+| T4 | `--gpus all -e NVIDIA_VISIBLE_DEVICES=<P40>` | **125** | *identical error* |
 
-The four ephemeral, `--rm`, read-only container probes that answer it were written and staged and
-have **not** been run:
+The `nvidia` runtime is correctly registered (`docker info` → `"nvidia": {"path":
+"nvidia-container-runtime"}`). Asking for **only the WDDM card** fails exactly as hard as asking for
+the TCC one. So the block is not "the P40 cannot be passed through" — it is that *nothing* can.
 
-1. `--gpus all` → reproduce the failure in isolation from the service.
-2. `--gpus '"device=GPU-6d9ae165-…"'` (RTX only) → does the WDDM card alone work?
-3. `--gpus '"device=GPU-4f7d4396-…"'` (P40 only) → **the decisive one for the bounded job.**
-4. `NVIDIA_VISIBLE_DEVICES=GPU-4f7d4396-…` with the nvidia runtime → the env-var path the live
-   container actually used.
+### Why: NVML dies on the P40 while enumerating, before any device is selected
 
-All four reuse the already-present `ollama/ollama:latest` image with `--entrypoint nvidia-smi`, so
-they prove visibility for the exact runtime image #997 requires be preserved, pull nothing, publish
-no port, and cannot disturb the `ollama` container.
+Run inside the `Ubuntu` WSL2 distro, outside Docker entirely:
+
+```
+$ /usr/lib/wsl/lib/nvidia-smi -L
+GPU 0: NVIDIA GeForce RTX 3050 (UUID: GPU-6d9ae165-7272-a38c-06b1-7276869e980f)
+Unable to determine the device handle for gpu 0000:02:00.0: Unknown Error
+rc=255
+```
+
+`0000:02:00.0` is the P40. NVML lists the 3050, reaches the P40, cannot get a device handle, and
+**aborts the whole call**. The kernel log names the layer underneath:
+
+```
+[0.349338] hv_vmbus: registering driver dxgkrnl
+[7.696652] misc dxg: dxgk: dxgkio_is_feature_enabled: Ioctl failed: -22
+[7.713541] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -22
+[7.715537] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2
+```
+
+`-22` is `-EINVAL`, `-2` is `-ENOENT`. `/dev/dxg` exists and `/usr/lib/wsl/lib` carries the full
+driver set (`libcuda.so.1`, `libnvidia-ml.so.1`, `libdxcore.so`, `nvidia-smi`), so the WSL GPU stack
+is installed and running — it is *adapter enumeration* that fails.
+
+That is the mechanism, and it closes the question this lane was sent to answer:
+
+> WSL2 reaches GPUs through `dxgkrnl`/`dxcore` — the **WDDM** stack. A **TCC** device has no WDDM
+> presence, so `dxgkio_query_adapter_info` fails for it. NVML in WSL enumerates every adapter `dxcore`
+> reports before it will answer any query, so one unenumerable adapter fails the whole initialisation.
+> `nvidia-container-cli` calls exactly that initialisation in its prestart hook, before it applies
+> `NVIDIA_VISIBLE_DEVICES`. Hence: **while the P40 is in TCC, no container on this host gets any
+> GPU — not the P40, and not the RTX 3050 either.**
+
+Host-side `nvidia-smi` talks to both cards perfectly throughout, including reading and setting the
+P40's power limit. The card is not broken. The **container path** is blocked.
+
+### What this does to the bounded objective
+
+#997 asks me to make the existing Ollama service use only the verified P40, preserving models, the
+API surface and the mount. **No configuration of that service can achieve it**, because the failure
+happens in the runtime hook before any service configuration is consulted. Editing
+`device_ids` in the compose file would produce a container that fails to start with the same error.
+
+Three remedies exist. **None is inside this lane's envelope, and none was taken:**
+
+1. **Switch the P40 to WDDM** (`nvidia-smi -g 1 -dm 0`). It would very likely restore WSL enumeration.
+   It also contradicts the owner's own verified expectation that the P40 is in TCC, changes the card's
+   fundamental driver-model role, makes a headless compute card a display-capable adapter, and costs
+   TCC's lower overhead and full-VRAM addressing. That is a hardware-role decision, not an Ollama
+   configuration change.
+2. **Run Ollama natively on Windows**, where TCC works and the P40 is fully visible. This abandons the
+   container service contract and creates a second Ollama runtime owner — which §3 of #997 explicitly
+   says to avoid.
+3. **Keep Docker inference on the RTX 3050 only, with the P40 physically or logically removed from
+   the WSL adapter set.** There is no `nvidia-container-cli` knob for this; its NVML init is
+   all-or-nothing. It would mean not using the P40, which is the opposite of the outcome.
+
+Each trades away something the owner asked for. #997's instruction for the analogous case — *"keep the
+card at the safer observed state and type the limitation; do not improvise around it"* — is the rule
+this lane followed.
 
 ## Step 4 — rollback, captured before mutation
 
-Captured through `brokeredExec` (action `rollback-capture`) between `2026-08-25T01:24:56Z` and the
-outage — the per-call `startedAt`/`finishedAt` are in the retained invocation records, which the
-outage prevented retrieving — written to
-`C:\Users\bs\p40-commissioning\evidence\` on HERMES: full `docker inspect` of `ollama`,
-`williamos-hermes-inference-proxy` and `open-webui`, plus `docker image inspect ollama/ollama:latest`.
-
-**Container identity**
+Captured through `brokeredExec` (action `rollback-capture`) before anything was changed: full
+`docker inspect` of `ollama`, `williamos-hermes-inference-proxy` and `open-webui`, plus
+`docker image inspect ollama/ollama:latest`.
 
 | | |
 | --- | --- |
 | name / id | `/ollama` · `9ce2e2d54bda2113a848c0154dab9ec03997c5f7f7e5583c4e06f3d996a6650e` |
 | created | `2026-08-18T20:42:32.000630604Z` |
-| image | `ollama/ollama:latest` |
-| image id | `sha256:9d30908e41144b1f1da89b9d8e33c07e4aeb43ff41a8660241b1686e2cc330ad` |
-| repo digest | `ollama/ollama@sha256:9d30908e41144b1f1da89b9d8e33c07e4aeb43ff41a8660241b1686e2cc330ad` |
-| image created | `2026-08-16T17:08:24.754620686Z` |
-| entrypoint / cmd | `["/bin/ollama"]` · `["serve"]` |
+| image · id | `ollama/ollama:latest` · `sha256:9d30908e41144b1f1da89b9d8e33c07e4aeb43ff41a8660241b1686e2cc330ad` |
+| repo digest | `ollama/ollama@sha256:9d30908e4114…` (image created `2026-08-16T17:08:24Z`) |
+| entrypoint · cmd | `["/bin/ollama"]` · `["serve"]` |
 | restart policy | `unless-stopped` |
-| network mode | `bridge`; attached to `bridge` **and** `hermes_default` |
-| runtime | `runc` |
+| networks | `bridge` **and** `hermes_default` |
 | binds | `F:/HermesData/ollama:/root/.ollama` (bind, rw, rprivate) |
 | ports | `11434/tcp → 11434`, `HostIp: ""` |
 | device requests | `[{Count: -1, Capabilities: [["gpu"]], DeviceIDs: null}]` |
 | env | `OLLAMA_HOST=0.0.0.0:11434`, `NVIDIA_DRIVER_CAPABILITIES=compute,utility`, `NVIDIA_VISIBLE_DEVICES=all`, `LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64` |
 | labels | `{"org.opencontainers.image.version":"24.04"}` |
 
-**Rollback procedure, deterministic.** Because the owning layer is a file and the mutation was to be
-a file edit, restoration is `git`-shaped rather than Docker-shaped:
+Owning file, pre-change: `C:\HermesLab\hermes\docker-compose.yml`, SHA-256
+`2ffc6ccddb650f215a5328a0a2464863bc5ab2bf8ef4067d663d04bc86542c7e`. **It was read and never written.**
 
-1. restore `C:\HermesLab\hermes\docker-compose.yml` from the retained pre-change copy
-   (SHA-256 `2ffc6ccddb650f215a5328a0a2464863bc5ab2bf8ef4067d663d04bc86542c7e`);
-2. `docker compose -f C:\HermesLab\hermes\docker-compose.yml up -d ollama` to reconcile back;
-3. if the hand-made container must be reproduced exactly instead, the full `docker run` equivalent is
-   recoverable field-for-field from `rollback-ollama-inspect.json` (image id, binds, ports, env,
-   device requests, restart policy, both network attachments).
+**Honest limit.** No container or compose mutation was performed, so this receipt is *captured and
+complete*, **not proven restorable** — proving that requires mutating and undoing, which did not
+happen. #997 acceptance item 5 asks that rollback evidence exist. It does. Anything stronger would be
+manufactured.
 
-The model library is untouched by every step of this: no step copies, moves, deletes or re-pulls
-model weights, and the image is referenced by an id that is already present locally so no `latest`
-pull is implied.
+**The one mutation that did run carries its own rollback**, and it is a single reversible number:
 
-**Honest limit on this receipt.** The rollback is *captured and complete*; it is **not proven
-restorable**, because proving it requires performing the mutation and then undoing it, and the
-mutation never happened. #997's acceptance item 5 asks for rollback evidence to exist, and it does.
-Any claim stronger than that would be manufactured.
+```
+before:  power.limit 250.00 W · enforced 250.00 W · default 250.00 W · min 125 W · max 250 W
+action:  nvidia-smi -i GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2 -pl 150     (exit 0)
+         "Power limit for GPU 00000000:02:00.0 was set to 150.00 W from 250.00 W."
+after:   power.limit 150.00 W · enforced 150.00 W · default 250.00 W · 32 °C · 10.64 W
+         ECC volatile 0 / 0
+restore: nvidia-smi -i GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2 -pl 250     (or reboot)
+```
 
-## The model store — the finding that would have blocked the mutation anyway
+Bound by UUID, never by ordinal. Ledgered as `hermes power-cap rc=0` with `requireAudit`, so the
+ledger was proven writable *before* the card was touched. The RTX 3050 was verified untouched
+immediately after: `70.00 W`, `WDDM`, `display_active Enabled`.
 
-| source | says the model store is | reality on the machine |
+## The model store, settled
+
+| source | says | reality |
 | --- | --- | --- |
-| owner expectation (#997 + install-session comment) | `F:\HermesData\ollama` | — |
-| live container bind | `F:/HermesData/ollama` | `Test-Path` → **false** |
-| owning compose file | `D:/HermesData/ollama` | `Test-Path` → **true**, containing `cache`, `models`, `id_ed25519`, `id_ed25519.pub`, `pull.log` |
+| owner expectation (#997 + install-session comment) | `F:\HermesData\ollama` | **`F:` is not a drive on this machine** |
+| live container bind | `F:/HermesData/ollama` | same — a bind to a nonexistent drive letter |
+| **owning compose file** | `D:/HermesData/ollama` | **exists, and holds the library** |
 
-`F:\HermesData\ollama` does not exist on HERMES. The container that was running was bind-mounted to a
-host path that is not there. The read that would settle the rest of this — whether `F:` exists as a
-volume at all, and the manifest list and blob byte-count under `D:\HermesData\ollama\models` — was
-issued at the moment HERMES left the network and did not return.
+`D:\HermesData\ollama\models` — **25 blobs, 10 360 082 334 bytes (9.65 GiB)**, 5 manifests:
 
-Two readings are open and this lane cannot choose between them on the evidence it has:
+- `registry.ollama.ai/library/llama3.2:3b`
+- `registry.ollama.ai/library/qwen2.5-coder:7b`
+- `registry.ollama.ai/library/qwen3:4b-instruct`
+- `registry.ollama.ai/library/snowflake-arctic-embed2:latest`
+- `registry.ollama.ai/library/williamos-qwen3-4b:64k`
 
-- **`F:` is absent** (drive removed, or never existed under that letter), in which case the Ollama
-  service has been serving from an empty or Docker-fabricated model store since `2026-08-18`, and the
-  "existing model library" #997 requires be preserved lives at `D:\HermesData\ollama` — where the
-  owning compose file has been pointing all along.
-- **`F:` exists but `HermesData\ollama` under it does not**, which is the same conclusion with a
-  different cause.
+So the concern that reconciling compose would move the mount and lose the library **inverts**:
+reconciling would move it *onto* the library. The last-working Ollama container was bound to a
+nonexistent path, which is consistent with its logs — `GET /v1/models` returning `200` says the API
+answered, not that it had anything to list.
 
-Either way the consequence for the bounded job is identical and load-bearing: **reconciling the
-compose file as written would move the model-store mount from `F:` to `D:`.** That is a mount change
-during a GPU-binding change, which #997's fail-closed list covers ("existing model-store mount /
-library cannot be preserved"), and it must be decided on an inventory of what is actually under `D:`
-— not on the compose file's comment and not on the owner's recollection. The correct move is to
-verify the library on `D:`, and only then reconcile; if the library is *not* there, the lane stops.
+`D:` has 62.3 GB free of 119.9 GB. The models are on disk and this lane did not touch them: no step
+copied, moved, deleted or re-pulled a weight, and no `latest` pull was issued.
 
 ## Defects and observations, typed
 
-Nothing below was fixed. #997 scopes this lane to the Ollama/P40 binding; typing adjacent defects is
-required, fixing them is out of scope.
+Nothing below was fixed. #997 scopes this lane to the Ollama/P40 binding.
+
+### `CONT-997-TCC-P40-BLOCKS-ALL-WSL2-GPU-PASSTHROUGH` — REAL DEFECT, terminal for this lane
+
+```
+type:                TYPED_DEFECT
+affected:            every Docker container on HERMES requesting any GPU
+symptom:             prestart hook exit 1, "nvidia-container-cli: detection error:
+                     nvml error: unknown error"; docker run exit 125 for --gpus all,
+                     --gpus device=<P40>, AND --gpus device=<RTX>
+proven cause:        WSL2 NVML aborts enumeration at 0000:02:00.0 (the P40) --
+                     "Unable to determine the device handle ... Unknown Error", rc=255 --
+                     because a TCC device has no WDDM/dxgkrnl presence. dxgkio_query_adapter_info
+                     fails -EINVAL/-ENOENT in the WSL kernel log.
+blocksCommissioning: YES -- terminally, for the containerised approach
+collateral:          the RTX 3050 is ALSO unusable from any container while this holds
+remedies:            all three change something the owner asked for; see step 3. Not taken.
+```
 
 ### `CONT-997-OLLAMA-CONTAINER-NOT-COMPOSE-OWNED` — REAL DEFECT
 
 ```
-type:              TYPED_DEFECT
-affected:          C:\HermesLab\hermes\docker-compose.yml service `ollama` vs live container
-blocks:            #997 acceptance invariant "a configuration that works until HERMES next
-                   reconciles its service definition is not HERMES_P40_COMMISSIONED"
-blocksCommissioning: YES -- it determines WHERE the fix goes, and it is why no docker mutation ran
-mustResolveBefore: any P40 binding change to the Ollama service
+type:                TYPED_DEFECT
+affected:            C:\HermesLab\hermes\docker-compose.yml service `ollama` vs the live container
+blocks:              #997's invariant that a fix surviving only until the next reconcile is not
+                     HERMES_P40_COMMISSIONED
+blocksCommissioning: YES -- it decides WHERE the fix goes, and it is why no docker mutation ran
 ```
 
 The running `ollama` container carried no `com.docker.compose.*` labels while every other service in
-the same project did. It was created by hand on `2026-08-18T20:42:32Z`, squatting the
-`container_name: ollama` the compose file claims, and drifted from the owning definition in three
-places (model store, port exposure, GPU request). The next `docker compose up -d` in
-`C:\HermesLab\hermes` replaces it and silently reverts all three.
+the same project did. Created by hand `2026-08-18T20:42:32Z`, squatting `container_name: ollama`, and
+drifted in three places — **on two of which the owning file was the correct one.**
 
 ### `CONT-997-OLLAMA-LAN-EXPOSURE-VIOLATED-DECLARED-AUTHORITY` — REAL DEFECT
 
 ```
-type:              TYPED_DEFECT
-affected:          live `ollama` container port publish, 2026-08-18T20:42:32Z .. 2026-08-25T00:48:19Z
-violates:          registry.seed.json hermes-node authority.deny "direct-ollama-lan-exposure"
-                   registry.seed.json hermes-node constraints "ollama-loopback-only"
-                   registry.seed.json hermes-node runtimes[ollama].details.exposure "loopback-only"
-blocksCommissioning: NO -- but it is repaired as a side effect of restoring compose ownership
-currently live:    NO -- the container is exited, so 11434 is not published at all right now
+type:                TYPED_DEFECT
+window:              2026-08-18T20:42:32Z .. 2026-08-25T00:48:19Z (six days)
+violates:            registry.seed.json hermes-node authority.deny "direct-ollama-lan-exposure"
+                     registry.seed.json hermes-node constraints "ollama-loopback-only"
+                     registry.seed.json hermes-node runtimes[ollama].details.exposure "loopback-only"
+blocksCommissioning: NO -- and it is repaired as a side effect of restoring compose ownership
+currently live:      NO -- the container is exited, so 11434 is not published at all
 ```
 
 `config/execution-fabric/registry.seed.json` declares for `hermes-node` an authority **deny** of
-`direct-ollama-lan-exposure` and a **constraint** of `ollama-loopback-only`, with the Ollama runtime's
-own `details.exposure: "loopback-only"`. The owning compose file honours it: `127.0.0.1:11434:11434`,
-commented as deliberate. The hand-made container published `11434` with `HostIp: ""` — every
-interface, LAN included — for the six days it ran. Nothing in the system noticed. The declared
-constraint and the running configuration disagreed and no surface reported it, which is the same
-class of gap as `CONT-EXPV2-HARDWARE-CHANGE-UNRECORDED` from `#998`: the system holds a truth and a
-declaration side by side without comparing them.
+`direct-ollama-lan-exposure` and a **constraint** of `ollama-loopback-only`. The owning compose file
+honours it and says so in a comment. The hand-made container published `11434` with `HostIp: ""` —
+every interface, LAN included — for six days, and nothing in the system noticed. Same class of gap as
+`#998`'s `CONT-EXPV2-HARDWARE-CHANGE-UNRECORDED`: a declaration and a truth side by side, uncompared.
 
-### `CONT-997-OLLAMA-MODEL-STORE-PATH-ABSENT` — REAL DEFECT
+### `CONT-997-OLLAMA-MODEL-STORE-BIND-POINTS-AT-NONEXISTENT-DRIVE` — REAL DEFECT
 
 ```
-type:              TYPED_DEFECT
-affected:          live `ollama` container bind F:/HermesData/ollama -> /root/.ollama
-observed:          Test-Path 'F:\HermesData\ollama' == false, between 01:24:56Z and the outage
-blocksCommissioning: YES -- model preservation cannot be asserted until the real library is located
-mustResolveBefore: reconciling the compose definition, which would mount D: instead
+type:                TYPED_DEFECT
+affected:            live `ollama` container bind F:/HermesData/ollama -> /root/.ollama
+observed:            Get-Volume returns C, D, E, G -- there is no F: on this machine
+consequence:         the last-working Ollama served from a store that was not the model library
+blocksCommissioning: NO longer -- resolved: the library is on D:, where compose already points
 ```
 
-The service's model-store bind pointed at a host path that does not exist, while the owning compose
-file points at `D:\HermesData\ollama`, which does. The owner's stated expectation agrees with the
-container, not with the file. Deciding which holds the model library is a read, not a judgement call,
-and it is the first read this lane owes when HERMES returns.
-
-### `CONT-997-OLLAMA-GPU-PRESTART-HOOK-FAILURE` — REAL DEFECT
+### `CONT-997-START-HERMES-PULLS-LATEST` — REAL DEFECT
 
 ```
-type:              TYPED_DEFECT
-affected:          ollama container start, all attempts since 2026-08-25T00:48:19Z
-symptom:           ExitCode 128, prestart hook #0 exit 1,
-                   "Auto-detected mode as 'legacy' / nvidia-container-cli: detection error:
-                    nvml error: unknown error"
-blocksCommissioning: YES
-cause:             NOT ESTABLISHED. Correlated with the P40's arrival; the decisive test did not run.
+type:                TYPED_DEFECT
+affected:            C:\HermesLab\hermes\start-hermes.ps1 (ab0b6d45...)
+symptom:             runs `docker compose pull` before `docker compose up -d`, so any use of the
+                     documented start path silently replaces ollama/ollama:latest
+conflicts with:      #997 "preserve the existing container image/runtime identity rather than
+                     blindly pulling latest"
+blocksCommissioning: NO -- but it means image identity is preserved only by NOT using the
+                     documented start path, which is a trap rather than a guarantee
+suggested fix:       pin the digest in the compose file, or drop the pull from the wrapper.
+                     Not applied -- changing update policy is the owner's call, not this lane's.
 ```
 
-Successor to `#998`'s `CONT-EXPV2-HERMES-OLLAMA-NOT-OBSERVED`, which recorded the absence without a
-cause. The cause is now narrowed to the NVIDIA container prestart hook failing NVML detection for the
-requested device set (`all`). Whether the P40 in TCC mode is the reason, and whether binding the P40
-alone succeeds or fails, is unresolved.
-
-### `CONT-997-P40-POWER-CAP-NOT-PERSISTED` — OBSERVATION
+### `CONT-997-P40-POWER-CAP-NOT-DURABLE` — OBSERVATION
 
 ```
-type:              TYPED_OBSERVATION
-observed:          enforced.power.limit 250.00 W, default 250.00 W, min 125 W, max 250 W
-expected:          150 W temporary commissioning cap
-blocksCommissioning: NO -- #997 requires the cap be (re)applied before load, which this lane
-                   never reached; recorded so the next attempt does not assume it is in place
+type:                TYPED_OBSERVATION
+applied:             150.00 W, verified on readback at 2026-08-25T01:48Z
+durability:          NONE across reboot. Persistence mode reads N/A for both cards on this
+                     Windows host, so nothing holds a -pl setting. The 01:40:10Z reboot is
+                     precisely what cleared the owner's earlier 150 W cap.
+blocksCommissioning: NO
+suggested fix:       a boot-time reapply through an existing governed mechanism (the host already
+                     runs four Hermes scheduled tasks). Not created -- a new scheduled task is a
+                     new service owner, and this lane does not mint those.
 ```
 
-Persistence mode reads `N/A` for both cards on this Windows host, so a `-pl` setting has nothing
-holding it across a driver reload. Whether the cap can be applied at all through an admitted
-mechanism depends on elevation, which was not established before the outage.
+## Acceptance, item by item
 
-### `CONT-997-HERMES-OFFLINE-MID-LANE` — BLOCKED_DEPENDENCY
+| # | #997 requirement | State |
+| --- | --- | --- |
+| 1 | live canonical discovery proves the P40 as a new accelerator identity | **HOLDS** |
+| 2 | RTX 3050 available to host, hidden from Ollama inference | **available to host** (WDDM, display active, 23 compute apps); *hidden from Ollama* is vacuously true and worthless — nothing is running, and the 3050 is unusable from any container anyway |
+| 3 | existing models present at the existing model-store mount | **models present** (9.65 GiB, 5 models, `D:`); **not mounted** — no container is running |
+| 4 | port 11434 / HERMES API contract preserved | **NOT MET** — nothing is listening |
+| 5 | rollback evidence exists | **HOLDS** — captured, not exercised |
+| 6 | bounded inference succeeds on the P40-only runtime | **NOT MET** — impossible while the block holds |
+| 7 | telemetry proves a safe initial envelope | **PARTIAL** — idle telemetry, thermal thresholds, ECC and a verified 150 W cap; no load telemetry |
+| 8 | any 200/250 W testing follows the staged thermal gate | **N/A** — not attempted; step 6 never passed |
+| 9 | exact config/service/image changes and rollback recorded | **HOLDS** — one change, recorded with its restore command |
+| 10 | owner courier actions remain zero | **HOLDS** |
 
-```
-type:              BLOCKED_DEPENDENCY
-reason:            WAITING_EXTERNAL_ENVIRONMENT
-condition:         HERMES_REACHABLE
-ownerDecisionRequired: false
-automatic:         yes -- resume at the container-isolation test (step 3) and the model-store read
-```
+### The truth model, kept separate
 
-HERMES left the network at approximately `2026-08-25T01:35Z`, roughly eleven minutes after the
-canonical probe. Verified as a machine-level absence, not an overlay-level one: the Tailscale peer
-reports `offline`, ICMP to `100.97.194.84` fails, and no host on the lab LAN (`192.168.88.0/24`,
-which OMEN is on at `.11`) answers as HERMES on the fabric key. This is the same typed state
-`CONT-EXPV2-P0-RUNTIME-PROOF` carried before `#998` settled it, and it resolves the same way — by the
-machine returning, not by anyone being asked to fetch it.
+- `EXISTS` — **OBSERVED.** Canonical brokered probe, twice, both UUIDs, measured VRAM.
+- `HEALTHY` — **MEASURED, idle only.** 32 °C against a 92 °C slowdown, 10.64 W against a 150 W cap,
+  ECC enabled with volatile `0/0` and aggregate `6/0`. No load was ever applied, so this is a healthy
+  *idle*, not a healthy *card under work*.
+- `SERVICE_BOUND` — **NO.** The service does not run and cannot be bound.
+- `CAPABILITY` — **UNKNOWN**, and it must stay there. No inference ran. 23 040 MiB of VRAM is a
+  measurement of memory, not a promise that anything fits or that Pascal serves it at a useful rate.
+- `STEADY_STATE_POWER` — **NO RECOMMENDATION.** The 150/200/250 W comparison requires load. Producing
+  a recommendation from an idle card would be exactly the inference-from-nothing #997 forbids.
 
-## Disposition
+## Verdict
 
-**`HERMES_P40_BLOCKED_RUNTIME`**, provisionally, and the provisionally matters.
+**`HERMES_P40_BLOCKED_RUNTIME`.**
 
-`HERMES_P40_COMMISSIONED` is unreachable from here: items 2, 3, 4, 6, 7 and 9 of #997's acceptance
-list all require a running Ollama service bound to the P40, and there is no running Ollama service.
-Item 1 (live canonical discovery proves the P40 as a new accelerator identity) holds, item 5
-(rollback evidence exists) holds, and item 10 (`OWNER_COURIER_ACTIONS = 0`) holds.
+Not `BLOCKED_IDENTITY`: identity is clean, and matches the owner's expectation exactly.
+Not `BLOCKED_THERMAL`: no load was applied, no thermal or ECC anomaly was observed, and the card
+idles 60 °C below its slowdown threshold.
+Not `BLOCKED_SERVICE_PRESERVATION`: the models are intact on `D:` and nothing this lane did touched
+them; the service is unpreservable only because it cannot start.
+Not `COMMISSIONED_WITH_LIMITS`: that verdict implies the P40 is serving inference under a constrained
+envelope. It is serving nothing.
 
-`BLOCKED_RUNTIME` is the honest terminal verdict for what was observed — the runtime the lane was sent
-to reconfigure is failing to start, for a GPU-related reason, and that is a runtime block rather than
-an identity, thermal or service-preservation one. It is provisional only because HERMES left before
-the four-command test that would say whether the block is *the P40 cannot be reached through WSL2*
-(terminal, and a design question about whether Ollama on HERMES should run in Docker at all) or
-*the container is asking for the wrong device set* (repairable in the compose file, in one edit).
+The runtime the lane was sent to reconfigure cannot start, for a GPU-passthrough reason that is now
+proven rather than suspected, and the fix is a decision above this lane.
 
-`HERMES_P40_BLOCKED_THERMAL` is **not** the verdict and must not be read as one: no thermal or ECC
-anomaly was observed. The P40 idles at 29 °C against a 92 °C slowdown threshold with zero volatile ECC
-errors, and no load was ever applied.
+## What the P40 may and may not be claimed to be
 
-### What #997 may claim, and may not
+**May.** Present, measured, TCC, 23 040 MiB, BAR1 32 GiB, x16 width, ECC enabled and volatile-clean,
+thermally observable, capped at a verified 150 W, attached to no compute process, and **fully usable
+from the Windows host** — `nvidia-smi` reads and writes it without difficulty throughout.
 
-**May claim.** The P40 exists, is measured, is in TCC, has 23 040 MiB of `nvidia-smi`-measured VRAM,
-32 GiB of BAR1, ECC enabled with a clean volatile counter, an observable 92 °C slowdown threshold, and
-is attached to no compute process. The canonical owner of the Ollama service is identified with label
-evidence. Rollback is captured. Six owner expectations are verified; two are refuted by observation.
-
-**May not claim.** That the P40 is bound to Ollama — it is not. That models are preserved — their
-location is not yet established. That the API contract on 11434 is preserved — nothing is listening.
-That the P40 can serve inference — no inference was run, and `capability` stays `UNKNOWN`, which is
-the correct state and not a gap. That the 150 W envelope is in place — it is not. That rollback works
-— it is captured, not exercised. That the P40 broke Ollama — likely, unproven.
+**May not.** Bound to Ollama. Reachable from any container on this host. Proven to run a model.
+Assigned a capability, a throughput, a context length or a steady-state power recommendation.
+Assumed to have a durable 150 W cap — it does not survive a reboot.
 
 ## Resumption plan
 
-Ordered, and each step gated on the previous one, so a later lane does not have to re-derive it:
+The decision in step 3 comes first; everything else is downstream of it and none of it is this lane's
+to make.
 
-1. **Model-store read.** Volume table; `F:` existence; manifest list and blob count/bytes under
-   `D:\HermesData\ollama\models`. If the library is not on `D:`, stop —
-   `HERMES_P40_BLOCKED_SERVICE_PRESERVATION`.
-2. **Remaining ownership read.** `start-hermes.ps1`, `run-all.ps1`, `sync-models-to-forge.ps1`,
-   scheduled tasks. If any of them runs `docker run` for Ollama directly, the ownership picture
-   changes and the fix location changes with it.
-3. **Container-isolation test**, the four `--rm` probes above. This is the decision point.
-4. If the P40 is reachable in a container: edit **`C:\HermesLab\hermes\docker-compose.yml`** — the
-   owning layer — replacing `count: all` with
-   `device_ids: ['GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2']`, correcting the model-store path to
-   whatever step 1 proved, and leaving the loopback port line as it stands. Then
-   `docker compose up -d ollama` and verify the recreated container carries
-   `com.docker.compose.project=hermes` — reconciliation durability is proven by the labels being
-   there, not by the container running.
-5. Prove isolation **from inside** the container: `nvidia-smi -L` shows the P40 and not the 3050;
-   `/root/.ollama` holds the library; `/api/tags` lists the models; 11434 answers on loopback.
-6. Apply the 150 W cap, confirm it reads back, and only then run bounded inference on a model that is
-   already present, aborting at a conservative margin below the observed 92 °C slowdown.
-7. The `150 → 200 → 250 W` evaluation only if step 6 is clean, each step gated on the last.
+1. **Owner/HERMES decision** on which remedy to take: P40 → WDDM, native-Windows Ollama, or accept
+   no-GPU containers. Each trades away something #997 asked for; the trade-offs are in step 3.
+2. If **WDDM**: re-run the four `--rm` probes. If they pass, edit
+   **`C:\HermesLab\hermes\docker-compose.yml`** — the owning layer — replacing `count: all` with
+   `device_ids: ['GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2']`, leaving the `D:` mount and the
+   loopback port line as they stand (both already correct). Then `docker compose up -d ollama`
+   **without** `start-hermes.ps1`, so no `latest` pull occurs, and verify the recreated container
+   carries `com.docker.compose.project=hermes` — reconciliation durability is proven by the labels
+   being there, not by the container running.
+3. Prove isolation **from inside** the container: `nvidia-smi -L` shows the P40 and not the 3050;
+   `/root/.ollama` holds the five models; `/api/tags` lists them; 11434 answers on loopback only.
+4. Reapply and verify the 150 W cap (it will have been cleared by any reboot), then bounded inference
+   on a model already present — `llama3.2:3b` is the smallest — aborting at a conservative margin
+   below the observed 92 °C slowdown.
+5. The `150 → 200 → 250 W` evaluation only if step 4 is clean, each step gated on the last.
+
+## Reproduction
+
+```powershell
+# on HERMES, from a directory holding the ten digest-verified canonical files
+node P40-run-canonical-probe.mjs hermes hermes-node
+node P40-brokered.mjs hermes probe <base64-command> evidence/NN.json [--require-audit]
+```
+
+Every read and the single mutation are replayable from the retained invocation records: each carries
+its exact command, `startedAt`, `finishedAt`, `durationMs` and full stdout.
 
 ## Retained artifacts
 
-Written on HERMES under `C:\Users\bs\p40-commissioning\evidence\` and **not yet retrieved** — the
-outage interrupted the pull. They are named here so the resuming lane collects them rather than
-re-running the reads:
+All under `docs/reports/experience-v2-p40-commissioning/`.
 
-`01-nvidia-telemetry-preload.json`, `02-driver-model.json`, `03-docker-state.json`,
-`04-rollback-capture.json`, `05-rollback-summary.json`, `06-ownership-compose.json`,
-`07-labels-and-modelstore.json`, `rollback-ollama-inspect.json`, `rollback-proxy-inspect.json`,
-`rollback-openwebui-inspect.json`, `rollback-ollama-image-inspect.json`,
-`.artifacts/execution-fabric/hermes-node.json`,
-`.artifacts/execution-fabric/hermes-node.brokered-invocation.json`.
-
-Every one of them is the stdout of a `brokeredExec` call with its command, timestamps and duration
-recorded alongside, and every one of those calls appended a line to
-`C:\Users\bs\.williamos\fabric\audit.log`.
+| File | What it holds |
+| --- | --- |
+| `P40-hermes-node-probe.json` | canonical probe output, `observed_at 01:48:09.216Z` |
+| `P40-brokered-invocation.json` | the brokered call that produced it |
+| `P40-canonical-file-digests.txt` | ten-file digest match, both ends, vs `053a33bd` |
+| `P40-01-nvidia-telemetry-preload.json` | PCIe, ECC, power, BAR1, thermal thresholds, compute apps |
+| `P40-02-driver-model.json` | TCC/WDDM, serial, board part number |
+| `P40-04/05-rollback-*.json` | full container + image inspect, and the summarised receipt |
+| `P40-rollback-ollama-inspect.json` · `P40-rollback-ollama-image-inspect.json` | raw, retained whole |
+| `P40-06/07-ownership-*.json` | the compose file, and the per-container label evidence |
+| `P40-08-modelstore-truth.json` | volume table, `F:` absence, `D:` manifests and blob bytes |
+| `P40-09-post-reboot-state.json` | state after the `01:40:10Z` reboot |
+| `P40-10/11-container-isolation-*.json` | the four device-selector tests, with stderr |
+| `P40-12/13/14-wsl-*.json` | WSL version, `/dev/dxg`, driver libs, `dxgkrnl` log, **the NVML failure** |
+| `P40-15-power-cap-150w.json` | before / apply / verify / RTX-untouched |
+| `P40-16-ledger-excerpt.json` | the audit ledger tail, 19 649 lines |
+| `P40-brokered.mjs` · `P40-run-canonical-probe.mjs` | the only two things this lane ran; neither names a device |
 
 ## Chronology
 
-- `2026-08-25T01:24:13.020Z` — `brokeredExec` invoked, node `hermes`, action `probe`
-- `2026-08-25T01:24:13.297Z` — probe's `observed_at`; both accelerators read
-- `2026-08-25T01:24:22.046Z` — brokered call returned `rc=0`, 21 021 bytes
-- `2026-08-25T01:24:56Z` — supplementary telemetry read (`nvidia-smi -q`), brokered
-- `2026-08-25T01:24:56Z .. ~01:35Z` — driver-model read; Docker state read; rollback captured;
-  ownership determined by compose labels; model-store discrepancy found
-- `2026-08-25T~01:35Z` — HERMES left the network; all subsequent reads failed
+- `2026-08-25T01:24:13.020Z` — first canonical brokered probe, `rc=0`, 21 021 bytes
+- `01:24:56Z` — supplementary telemetry: TCC, BAR1, ECC, 250 W cap observed
+- `01:2xZ` — Docker state; rollback captured; ownership determined by compose labels
+- `~01:35Z` — HERMES left the network mid-lane
+- `01:40:10Z` — HERMES rebooted (`LastBootUpTime`); the reboot is what cleared the earlier power cap
+- `01:44:02Z` — SSH reachable again; lane resumed at the model-store read
+- `01:45Z` — `F:` proven absent; 9.65 GiB / 5 models found on `D:`; `IsAdmin=True`
+- `01:46Z` — four container isolation tests, all exit 125, including RTX-only
+- `01:47Z` — WSL NVML failure isolated to `0000:02:00.0`; `dxgkrnl` ioctl failures read
+- `01:48:02Z` — 150 W cap applied and verified; RTX 3050 confirmed untouched
+- `01:48:09Z` — final canonical brokered probe, `rc=0`
+- `01:48:19Z` — ledger at 19 649 lines, every action recorded, one of them a mutation

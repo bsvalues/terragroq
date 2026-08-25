@@ -1,0 +1,14 @@
+{
+  "invocation": "brokeredExec",
+  "broker": "lib/fabric/broker.mjs",
+  "node": "hermes",
+  "action": "probe",
+  "requireAudit": false,
+  "command": "$ErrorActionPreference='Continue'\nWrite-Output '--- DOCKER-READY ---'\n& docker version --format '{{.Server.Version}}' 2>&1\nWrite-Output '--- CONTAINERS ---'\n& docker ps -a --format '{{.Names}}|{{.Status}}|{{.Ports}}' 2>&1\nWrite-Output '--- OLLAMA-STATE ---'\n& docker inspect ollama --format '{{.State.Status}}|{{.State.ExitCode}}|{{.State.StartedAt}}|{{.State.FinishedAt}}|{{.State.Error}}' 2>&1\nWrite-Output '--- GPU-NOW ---'\n& nvidia-smi --query-gpu=index,uuid,name,driver_model.current,power.limit,enforced.power.limit,temperature.gpu,power.draw,ecc.errors.uncorrected.volatile.total,ecc.errors.corrected.volatile.total --format=csv,noheader 2>&1\nWrite-Output '--- RC ---'\n",
+  "startedAt": "2026-08-25T01:44:51.212Z",
+  "finishedAt": "2026-08-25T01:44:51.784Z",
+  "durationMs": 572,
+  "ok": true,
+  "stdout": "--- DOCKER-READY ---\r\n29.7.2\n--- CONTAINERS ---\r\ntf-rel002-c3fresh-evidence|Created|\ntf-rel-004-evidence-governance|Created|\ntf-rel-004-evidence-final|Created|\ntf-rel-004-evidence-node20|Created|\nollama|Exited (128) 56 minutes ago|\nwilliamos-hermes-inference-proxy|Exited (255) 56 minutes ago|\nopen-webui|Up 40 seconds (healthy)|0.0.0.0:3000->8080/tcp, [::]:3000->8080/tcp\nportainer|Up 40 seconds|0.0.0.0:9000->9000/tcp, [::]:9000->9000/tcp\npostgres|Up 40 seconds (healthy)|0.0.0.0:5433->5432/tcp, [::]:5433->5432/tcp\nredis|Up 40 seconds|0.0.0.0:6379->6379/tcp, [::]:6379->6379/tcp\n--- OLLAMA-STATE ---\r\nexited|128|2026-08-21T14:02:05.91178028Z|2026-08-25T00:48:19.415269743Z|failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: error running prestart hook #0: exit status 1, stdout: , stderr: Auto-detected mode as 'legacy'\nnvidia-container-cli: detection error: nvml error: unknown error\n--- GPU-NOW ---\r\n0, GPU-6d9ae165-7272-a38c-06b1-7276869e980f, NVIDIA GeForce RTX 3050, WDDM, 70.00 W, 70.00 W, 35, 22.48 W, [N/A], [N/A]\r\n1, GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2, Tesla P40, TCC, 250.00 W, 250.00 W, 32, 10.25 W, 0, 0\r\n--- RC ---\r\n",
+  "stderr": null
+}
