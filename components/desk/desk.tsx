@@ -343,6 +343,20 @@ export function Desk({ initialSummon = null }: { initialSummon?: SummonedSurface
   )
 }
 
+/**
+ * A governed event's time, in UTC, to the minute.
+ *
+ * UTC and not the viewer's locale: these rows are governance records that get quoted into evidence
+ * and compared against receipts written by HERMES and AEGIS, and a feed that silently re-times them
+ * per browser makes two people reading the same event disagree about when it happened. Unparseable
+ * input renders as an em dash rather than "Invalid Date".
+ */
+function formatEventTime(at: string): string {
+  const parsed = new Date(at)
+  if (Number.isNaN(parsed.getTime())) return "—"
+  return parsed.toISOString().slice(5, 16).replace("T", " ")
+}
+
 function SurfaceView({ surface }: { surface: Surface }) {
   if (surface.kind === "browser") {
     // Anonymity is a server guarantee: the document comes from the environment's own cookieless
@@ -424,9 +438,63 @@ function SurfaceView({ surface }: { surface: Surface }) {
       </div>
     )
   }
+  if (surface.kind === "work-orders") {
+    // The governed units of delivery, migrated from /work-orders.
+    //
+    // This branch was missing at first: `work-orders` was in the Surface union and in the route's
+    // summon catalogue, so the type checker was satisfied and the suite stayed green, but the render
+    // fell through to the source/tests `<pre>` at the bottom and painted `[object Object]` at the
+    // owner. A surface that is declared, redirected to, and never drawn is the exact failure this
+    // landing exists to prevent — the address survived and the capability did not.
+    const rows = (surface.payload ?? []) as readonly {
+      ref: string | null
+      title: string
+      status: string
+      agent: string | null
+      phase: string | null
+    }[]
+    return (
+      <div className="min-h-0 overflow-y-auto bg-neutral-950 p-3 font-mono text-[12px] leading-relaxed">
+        {rows.length === 0 ? (
+          <p className="text-neutral-500">No work orders exist yet.</p>
+        ) : (
+          rows.map((row, index) => (
+            <div key={row.ref ?? index} className="flex items-baseline gap-3 py-0.5">
+              <span className="w-28 shrink-0 text-neutral-500">{row.ref ?? "—"}</span>
+              <span
+                className={cn(
+                  "w-24 shrink-0 uppercase",
+                  row.status === "completed" || row.status === "done"
+                    ? "text-emerald-500"
+                    : row.status === "blocked" || row.status === "failed"
+                      ? "text-red-400"
+                      : row.status === "proposed" || row.status === "draft"
+                        ? "text-neutral-400"
+                        : "text-sky-500",
+                )}
+              >
+                {row.status}
+              </span>
+              <span className="truncate text-neutral-300">{row.title}</span>
+              {row.agent || row.phase ? (
+                <span className="shrink-0 text-neutral-600">
+                  {[row.agent, row.phase].filter(Boolean).join(" · ")}
+                </span>
+              ) : null}
+            </div>
+          ))
+        )}
+      </div>
+    )
+  }
   if (surface.kind === "activity") {
     // The governed event feed, migrated from /activity. Kind carries the meaning, so a failure reads
     // as a failure at a glance rather than as one more line of prose.
+    //
+    // The time and the governed ref are drawn because the route this replaces was a CHRONOLOGY: an
+    // event feed with no clock answers "what happened" but not "when", and a feed with no ref cannot
+    // be tied back to the work order it belongs to. Both fields were already on the wire and simply
+    // were not painted.
     const rows = (surface.payload ?? []) as readonly {
       at: string
       kind: string
@@ -441,6 +509,7 @@ function SurfaceView({ surface }: { surface: Surface }) {
         ) : (
           rows.map((row, index) => (
             <div key={`${row.at}-${index}`} className="flex items-baseline gap-3 py-0.5">
+              <span className="w-[7.5rem] shrink-0 text-neutral-600">{formatEventTime(row.at)}</span>
               <span
                 className={cn(
                   "w-[4.5rem] shrink-0 uppercase",
@@ -457,6 +526,7 @@ function SurfaceView({ surface }: { surface: Surface }) {
               </span>
               <span className="truncate text-neutral-300">{row.label}</span>
               {row.detail ? <span className="truncate text-neutral-600">{row.detail}</span> : null}
+              {row.ref ? <span className="ml-auto shrink-0 text-neutral-500">{row.ref}</span> : null}
             </div>
           ))
         )}
@@ -544,6 +614,10 @@ function SurfaceView({ surface }: { surface: Surface }) {
   if (surface.kind === "decisions") {
     // The register, migrated from /decisions. Supersession is shown because a decision that has been
     // superseded is not the current answer, and a register that hides that is worse than no register.
+    //
+    // STATUS is shown for the same reason, and it is the more dangerous omission: a proposed record
+    // and an accepted one rendered identically is the register claiming an authority it does not
+    // have. The Line records as proposed; the screen has to say so.
     const rows = (surface.payload ?? []) as readonly {
       ref: string | null
       title: string
@@ -562,6 +636,18 @@ function SurfaceView({ surface }: { surface: Surface }) {
               <span className="w-28 shrink-0 text-neutral-500">{row.ref ?? "—"}</span>
               <span className={cn("w-20 shrink-0 uppercase", row.decision === "APPROVE" ? "text-emerald-500" : "text-amber-500")}>
                 {row.decision}
+              </span>
+              <span
+                className={cn(
+                  "w-24 shrink-0 uppercase",
+                  row.status === "accepted"
+                    ? "text-emerald-500"
+                    : row.status === "rejected" || row.status === "superseded"
+                      ? "text-neutral-600"
+                      : "text-amber-500",
+                )}
+              >
+                {row.status}
               </span>
               <span className="truncate text-neutral-300">{row.title}</span>
               {row.supersededById ? <span className="shrink-0 text-neutral-600">superseded</span> : null}
