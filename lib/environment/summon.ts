@@ -16,6 +16,8 @@
  * request for the project registry.
  */
 
+import { classifyGrounded } from "@/lib/environment/grounding"
+
 /**
  * Every surface the environment can summon, in one place.
  *
@@ -100,6 +102,16 @@ const EVIDENCE =
  */
 export function classifySummon(text: string): SummonedSurface | null {
   if (OPERATIONAL.test(text)) return null
+  // Current work is a GROUNDED question, and it outranks every summon here.
+  //
+  // `grounding.ts` states the rule its own classifier already follows -- "Current-work before
+  // projects: 'what are we working on across the projects' is current-work" -- but this layer runs
+  // first in the Line route, and PROJECT matches that same sentence on "what ... projects". The
+  // result was a summon stealing a sentence the environment answers deterministically from the
+  // canonical project -> thread -> outcome -> evidence read, and dropping the retained start
+  // selection with it, so the next "continue" had nothing to start. The rule is enforced where the
+  // hijack happens rather than restated where it does not.
+  if (classifyGrounded(text) === "current-work") return null
   if (WORK_ORDERS.test(text)) return "work-orders"
   if (DECISIONS.test(text)) return "decisions"
   if (RUNTIME_TRACE.test(text)) return "runtime-trace"
