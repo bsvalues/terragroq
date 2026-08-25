@@ -1,0 +1,102 @@
+{
+  "artifactType": "WORK_ORDER_ENVELOPE_V2",
+  "schemaVersion": 2,
+  "programId": "PROGRAM-WILLIAMOS-EXPERIENCE-V2",
+  "goalId": "GOAL-EXPERIENCE-V2-SYSTEM-OBJECT-GRAPH",
+  "loopId": "LOOP-EXPERIENCE-V2-GATE1",
+  "workOrderId": "WO-EXPV2-MERGE-COORDINATION-001",
+  "objective": "Coordinator lane: apply the recorded bounded-merge gate discipline to PRs #992, #988 and #993 and merge each eligible PR into main, then verify merged main. This lane authored none of the three PRs.",
+  "riskClass": "R1",
+  "repositories": ["bsvalues/terragroq"],
+  "baseRefs": [
+    { "repository": "bsvalues/terragroq", "ref": "refs/heads/main", "commitSha": "9dd61c67f325d4e6acdcd09d265400befc2ab0a8" }
+  ],
+  "dependencies": [],
+  "fanInGate": "ALL",
+  "laneId": "LANE-EXPV2-MERGE-COORDINATION",
+  "teamRoles": {
+    "coordinator": "claude-merge-coordinator",
+    "builder": "experience-v2-gate1a-lane",
+    "reviewer": "independent-assurance"
+  },
+  "providerRequirements": ["github-lifecycle"],
+  "preferredProviders": ["claude-code"],
+  "fallbackProviders": [],
+  "reservations": {
+    "paths": [
+      { "repository": "bsvalues/terragroq", "path": "docs/governance/williamos-experience-v2-phase0-collision-map.md" }
+    ],
+    "contracts": ["experience-v2-merge-coordination"],
+    "environments": []
+  },
+  "allowedActions": [
+    "READ_REPOSITORY",
+    "READ_CI_AND_REVIEW",
+    "RUN_VALIDATION",
+    "WRITE_RESERVED_PATHS",
+    "COMMIT_OWN_CHANGES",
+    "PUSH_OWN_BRANCH",
+    "OPEN_DRAFT_PR",
+    "MERGE_ELIGIBLE_PR",
+    "VERIFY_POST_MERGE"
+  ],
+  "forbiddenActions": [
+    "OWNER_CONTACT",
+    "CREDENTIAL_ACCESS",
+    "RUNTIME_ACTIVATION",
+    "PRODUCTION_WRITE",
+    "BRANCH_PROTECTION_BYPASS",
+    "DESTRUCTIVE_GIT"
+  ],
+  "authorityGrantRefs": [
+    "AGENTS.md#owner-boundary::agents own authorized merges",
+    "docs/governance/active-program-queue.md#continuation-rule::eligible merge, merged-main verification",
+    "docs/governance/multi-agent-operator-playbook.md#2-owner-only-constitution::merge is on the never-ask list",
+    "docs/governance/multi-agent-operator-playbook.md#6-mandatory-work-order-packet::program activation authorizes the normal branch/PR/review/eligible-merge lifecycle for routine R0/R1 work",
+    "OWNER-DIRECTION-2026-08-24-round4-terminal-protocol.md#merge-authority::exhaust recorded merge authority; only a genuinely new non-delegable grant surfaces"
+  ],
+  "programActivationGrantRef": "github-issue-978",
+  "grantStatusEventRefs": [],
+  "requiredOutputs": [
+    "merged-main-at-verified-sha",
+    "post-merge-deterministic-suite-result",
+    "cont-expv2-merge-authority-disposition"
+  ],
+  "requiredValidation": [
+    "required-checks-green-per-pull-request",
+    "zero-unresolved-review-threads-per-pull-request",
+    "changed-path-scope-within-lane-reservations",
+    "post-merge-main-deterministic-suite-green"
+  ],
+  "reviewRequirements": {
+    "independentReviewer": true,
+    "minimumApprovals": 1,
+    "maximumUnresolvedThreads": 0
+  },
+  "mergeMode": "ASSURANCE_GATED",
+  "retryBudget": { "maxAttempts": 3, "backoffSeconds": 30 },
+  "remediationBudget": { "maxCycles": 0 },
+  "reroutePolicy": "NONE",
+  "stopConditions": [
+    "MERGE_GATE_FAILED",
+    "MAIN_CI_RED",
+    "SECURITY_OR_AUTHORITY_THREAD_OPEN",
+    "SCOPE_MISMATCH",
+    "AUTHORITY_WALL"
+  ],
+  "evidenceTargets": [
+    "owner-operation-counters",
+    "merged-main-verification",
+    "post-merge-suite-result"
+  ],
+  "ownerDecisionConditions": [],
+  "ownerOperationsAllowed": false,
+  "ownerTouchBudget": {
+    "operationTouches": 0,
+    "credentialTouches": 0,
+    "diagnosticTouches": 0,
+    "routineDecisions": 0,
+    "routineContacts": 0
+  },
+  "communicationPolicy": "FINAL_ONLY"
+}

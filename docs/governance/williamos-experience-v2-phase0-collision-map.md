@@ -16,8 +16,10 @@ architecture or sequencing**, that every negative claim states its search bounda
 remaining unknowns are typed rather than converted into certainty. §16 classifies all twenty of
 round 4's findings and answers the seven PASS criteria one by one.
 
-**Gate 1a is `RELEASED`.** Gate 1b stays `BLOCKED_DEPENDENCY / WAITING_EXTERNAL_ENVIRONMENT` on
-HERMES, automatic, no owner decision.
+**Gate 1a is `RELEASED`.** Gate 1b is `SETTLED_WITH_DEFECTS` as of 2026-08-25 (PR #998 -> `main`
+`8c0709c2`): HERMES was observed and the P40 discovered, so the external-environment condition is
+discharged. That is **not** a Gate 1b pass -- S7.6 hops 5-6 have no implementation. See §9
+`CONT-EXPV2-P0-RUNTIME-PROOF` and its successor `CONT-EXPV2-HARDWARE-CHANGE-UNRECORDED`.
 
 **Revision 5.** Four rounds of independent adversarial review ran against this map. All four
 returned `MAP_DEFECTIVE`, and that history is the reason the owner direction exists: a rule that
@@ -163,7 +165,7 @@ work. None of them became owner work; none was resolved by the owner.
 | Branch / commit / push / PR | Denied | **CLOSED.** This map and the charter are delivered through the governed branch/PR lifecycle | Agent-owned per AGENTS.md |
 | `~/.williamos/fabric/nodes.json` | Recorded as "read denied" | **CORRECTED.** The path is not permission-blocked; it does not exist on this host (`SESSION_OBSERVED`). OMEN is the cockpit, not the transport-registry holder | Registry truth re-sourced and *disambiguated* — §4.1 |
 | Independent adversarial review | Not attempted | **CLOSED (round 1).** Bounded Codex lanes ran; verdict `MAP_DEFECTIVE`; remediated in this revision (§10) | Internal delivery stage, not an owner courier task |
-| Live HERMES probe | Not attempted | **`BLOCKED_DEPENDENCY`**, reason `WAITING_EXTERNAL_ENVIRONMENT`. See §9 `CONT-EXPV2-P0-RUNTIME-PROOF` | Typed with automatic continuation; not an owner task |
+| Live HERMES probe | Not attempted | **`SETTLED_WITH_DEFECTS`** 2026-08-25 (PR #998 -> `8c0709c2`). The probe ran; S7.6 hops 5-6 remain unimplemented. See §9 `CONT-EXPV2-P0-RUNTIME-PROOF` | Ran as internal delivery work; not an owner task |
 
 The first session's "reads outside the repository are denied" row was itself a misdiagnosis: the
 registry file is absent, not forbidden. A capability report that guesses at a cause produces exactly
@@ -912,7 +914,8 @@ Recorded as `CONT-EXPV2-FIRST-ACTION` (§9).
 
 **Bounded child:** canonical `SystemObject` projection over existing fabric truth, read-only.
 
-Status: **Gate 1a `RELEASED`; Gate 1b `BLOCKED_DEPENDENCY`, reason `WAITING_EXTERNAL_ENVIRONMENT`.**
+Status: **Gate 1a `RELEASED`; Gate 1b `SETTLED_WITH_DEFECTS` (PR #998 -> `8c0709c2`) -- settled on
+the external-environment condition only, not a pass of the S7.6 sequence.**
 Two axes, kept separate because collapsing them is what produced round 4 finding 7 — this section
 said `DEPENDENCY_CLEARED` while §7.6 two pages later typed Gate 1a `BLOCKED_DEPENDENCY`.
 
@@ -1153,10 +1156,12 @@ GATE 1a -- SCHEMA / PARSER / PROJECTION            RELEASED
   merges on:   its own tests. It claims NO runtime proof and must not.
   terminal?    NO. Accepting 1a does not accept Gate 1.
 
-GATE 1b -- LIVE RUNTIME SETTLEMENT                 BLOCKED_DEPENDENCY
-  reason code:            WAITING_EXTERNAL_ENVIRONMENT
-  condition:              HERMES_REACHABLE
-  continuation:           automatic
+GATE 1b -- LIVE RUNTIME SETTLEMENT                 SETTLED_WITH_DEFECTS
+  was:                    BLOCKED_DEPENDENCY / WAITING_EXTERNAL_ENVIRONMENT / HERMES_REACHABLE
+  settled:                2026-08-25, PR #998 -> main 8c0709c2
+  NOT a pass:             S7.6 hops 5-6 (compare against previous truth; record the discovery)
+                          have no implementation. See S9 CONT-EXPV2-P0-RUNTIME-PROOF and
+                          CONT-EXPV2-HARDWARE-CHANGE-UNRECORDED.
   ownerDecisionRequired:  false
   content:     the discovery sequence below, executed against the real machine
   mandatory:   before Gate 2 terminal acceptance. Gate 2 may not be accepted on 1a alone.
@@ -1226,7 +1231,7 @@ evidence exists is a **failure**, not a success.
 | Transport-registry shape | **MET** — from `route.ts:30-37` and `tests/fabric-registry-writes.test.ts:21`; the file itself is absent on this host, which is why §4.1 keeps the two registries distinct rather than assuming one |
 | Authority-matched bounded child packet | **MET** — #990, opened under #987/#985 and **amended** for the round-2/3 rescope (§3, §9, §12) |
 | Gate 1 scope reviewed clean | **NOT MET** — this map is `MAP_DEFECTIVE` after three rounds (§13). Gate 1a is `BLOCKED_DEPENDENCY`, not releasable |
-| Live HERMES accelerator observation | **`BLOCKED_DEPENDENCY`**, reason `WAITING_EXTERNAL_ENVIRONMENT` — Gate 1b; automatic continuation on `HERMES_REACHABLE` |
+| Live HERMES accelerator observation | **`SETTLED_WITH_DEFECTS`** — Gate 1b, PR #998 -> `8c0709c2`. Observed and discovered; S7.6 hops 5-6 still unimplemented |
 
 ## 8. Phase 0 report
 
@@ -1246,7 +1251,8 @@ STATUS: PASSED (revision 5), under the 2026-08-24 terminal review protocol (S16)
         integrity check green with zero violations across five registers and two annotation
         tables; deterministic CI suite 5524 passed / 0 failed; production build clean.
 
-        GATE 1a: RELEASED. GATE 1b: BLOCKED_DEPENDENCY / WAITING_EXTERNAL_ENVIRONMENT.
+        GATE 1a: RELEASED. GATE 1b: SETTLED_WITH_DEFECTS (PR #998 -> 8c0709c2) -- the external
+        environment condition discharged, S7.6 hops 5-6 still unimplemented.
 
         This block is regenerated from the body at each revision. Round 4 finding 6 caught it three
         revisions stale -- still naming resource/verify as the first action, still calling headroom
@@ -1349,12 +1355,14 @@ TESTS     The DETERMINISTIC CI PROFILE is the acceptance gate, not an ad-hoc loc
                (file :: test name :: error class), never as a bare filename, and never as a licence
                for a new failure inside the same file.
 
-RUNTIME PROOF  NONE for the HERMES half, and typed rather than assumed:
-          BLOCKED_DEPENDENCY / reason=WAITING_EXTERNAL_ENVIRONMENT /
-          condition=HERMES_REACHABLE / continuation=automatic /
-          ownerDecisionRequired=false. HERMES is down because the owner is physically installing the
-          P40. This is an environmental condition, not an actor-capability gap, not a WilliamOS
-          defect, and not owner work. Recorded as CONT-EXPV2-P0-RUNTIME-PROOF (S9). It blocks Gate 1b
+RUNTIME PROOF  PRESENT for the HERMES half as of 2026-08-25, and bounded rather than assumed:
+          SETTLED_WITH_DEFECTS / was BLOCKED_DEPENDENCY reason=WAITING_EXTERNAL_ENVIRONMENT
+          condition=HERMES_REACHABLE / ownerDecisionRequired=false. HERMES returned, the canonical
+          brokered probe ran, and a previously undeclared Tesla P40 was discovered rather than
+          declared (PR #998 -> main 8c0709c2). What is proven is EXISTS and HEALTHY with capability
+          held at UNKNOWN; what is NOT proven is that WilliamOS notices or reports hardware change,
+          because S7.6 hops 5-6 have no implementation. Recorded as CONT-EXPV2-P0-RUNTIME-PROOF
+          with successor CONT-EXPV2-HARDWARE-CHANGE-UNRECORDED (S9). It no longer blocks Gate 1b
           only; it must not park unrelated eligible work.
 
 KNOWN GAPS
@@ -1375,10 +1383,14 @@ KNOWN GAPS
 
 NEXT  Gate 1a starts, under #990's amended scope, with S7.2 as content, S7.5 invariants 1-13 as
       acceptance, and synthetic probe fixtures as evidence. It claims NO runtime proof.
-      Gate 1b stays BLOCKED_DEPENDENCY / WAITING_EXTERNAL_ENVIRONMENT and resumes automatically on
-      HERMES_REACHABLE; it is mandatory before Gate 2 terminal acceptance.
-      Gate 2 needs Gate 1 (both halves), a fresh reservation, AND the charter-required search for an
-      existing canonical first action, which has NOT been run (S9 CONT-EXPV2-FIRST-ACTION).
+      Gate 1b is SETTLED_WITH_DEFECTS (PR #998 -> 8c0709c2): the external-environment condition is
+      discharged, S7.6 hops 5-6 are not implemented, and no surface may claim WilliamOS notices
+      hardware change.
+      Gate 2 needs Gate 1 (both halves), a fresh reservation, and the charter-required first-action
+      search -- which HAS now been run (#996) and cleared by charter AMENDMENT-001 (#999 ->
+      fa1e89df). S9 CONT-EXPV2-FIRST-ACTION is CLEARED; its successor
+      CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION carries a MANDATORY fresh-search predecessor against
+      the actual pickup base before any BUILD branch may be selected.
       Gates 3/5 stay BLOCKED_RESERVATION regardless.
       Typed and NOT blocking Gate 1: CONT-EXPV2-SELECTOR-INVENTORY, CONT-EXPV2-AUDIT-FAIL-LOUD,
       CONT-EXPV2-FIRST-ACTION, CONT-EXPV2-MERGE-AUTHORITY.
@@ -1422,67 +1434,136 @@ condition, per #957 and the owner-directed execution doctrine.
 
 ```
 CONT-EXPV2-P0-RUNTIME-PROOF
-  type:                   BLOCKED_DEPENDENCY
-  reason:                 WAITING_EXTERNAL_ENVIRONMENT
-  condition:              HERMES_REACHABLE
-  continuation:           automatic
-  ownerDecisionRequired:  false
+  type:                   SETTLED_WITH_DEFECTS
+  was:                    BLOCKED_DEPENDENCY / WAITING_EXTERNAL_ENVIRONMENT / HERMES_REACHABLE
+  settled:   2026-08-25 by the Gate 1b settlement lane. Record: PR #998, merged to main as
+             8c0709c2 -- docs/reports/WILLIAMOS-EXPERIENCE-V2-GATE1B-LIVE-SETTLEMENT-001.md
   subject:   live accelerator observation for HERMES; Gate 1b (S7.6)
-  blocksGate1:        Gate 1a NO, Gate 1b YES. 1a is schema / parser / projection and needs no live
-                      node; 1b is the live settlement and stays mandatory before Gate 2.
-  cause:     the owner is physically installing the P40. HERMES being down is EXPECTED, and the
-             absence of a canonically attested P40 is CORRECT refusal-to-attest behavior, not a
-             defect.
-  evidence:  SESSION_OBSERVED 2026-08-24 -- tailnet reported `offline, last seen 2026-08-23 18:42`;
-             on 192.168.88.9 ports 22/3000/5985/50080/50443 closed while ICMP answered.
-             NOT_REPOSITORY_VERIFIED. Retained only as a timestamp; the owner's account of the
-             install supersedes it as the explanation.
-             Which HERMES surface: the node's SSH / app / WinRM surfaces. AGENTS.md:68's statement
-             that the resident HERMES-to-AEGIS runtime is OPERATING describes the execution
-             backend's design status, not this node's current reachability.
-  blocks:    Gate 1b only. Gate 2 terminal acceptance depends on Gate 1b.
-  does NOT block: Gate 1a implementation and merge on deterministic tests; the Gate 1 child packet;
-             any non-HERMES eligible work. A single unavailable dependency must not park unrelated
-             work -- that is the queue-blocking bug class already fixed; do not recreate it.
-  pickup:    run the canonical probe path (probe-windows.ps1) through the broker, assemble, and
-             execute the S7.6 discovery sequence. Compare against the snapshot's previous hardware
-             truth. Record "New accelerator discovered on HERMES". Capability stays UNKNOWN until
-             bench evidence exists.
-  owner:     the executing agent lane, on next HERMES availability
-  not:       an owner task. The owner is not asked to power on, repair, report on, or declare a node.
+  what settled -- and it is only this: the external-environment condition. HERMES came back, the
+             canonical brokered probe ran against it, and a previously undeclared NVIDIA Tesla P40
+             was DISCOVERED rather than declared; the owner never had to say "I installed a P40".
+             EXISTS and HEALTHY are established by observation and measurement, with capability
+             held at the literal UNKNOWN by the type system.
+  what did NOT settle: S7.6 hops 5-6. The sequence reads "... -> compared against previous
+             hardware truth in the snapshot -> WilliamOS records 'New accelerator discovered on
+             HERMES' -> ...", and NEITHER hop has an implementation on main. Verified by search
+             rather than inherited from the settlement's own concession: those strings occur only
+             in governance prose (charter:229-230, the S7.6 sequence above, and this register),
+             and the single lib/ scripts/ app/ tests/ match is
+             tests/execution-fabric-registry.test.ts:1195, "removes a previous snapshot when a
+             later assembly fails validation" -- which DISCARDS prior truth rather than retaining
+             it. Hops 8-10 (bench, capability evidence, admission) are also not done, by design:
+             capability stays UNKNOWN until bench evidence exists.
+  therefore: SETTLED_WITH_DEFECTS is NOT a Gate 1b pass, and must not be read as one. S7.6 says
+             "Gate 1b passes only if this sequence completes without a hand edit", and the
+             sequence has not completed. What is discharged is the ground on which this entry
+             blocked -- an unobserved node -- and nothing further.
+  blocksGate2: no longer on the ground of an unobserved node. Gate 2 terminal acceptance still
+             depends on the successor below for ANY claim about noticing hardware change.
+  successor: CONT-EXPV2-HARDWARE-CHANGE-UNRECORDED
+  ownerDecisionRequired:  false
+  not:       an owner task. The owner was not asked to power on, repair, report on, or declare a
+             node, and was not.
+
+CONT-EXPV2-HARDWARE-CHANGE-UNRECORDED
+  type:      TYPED_DEFECT
+  reason:    NO_COMPARISON_AGAINST_PREVIOUS_HARDWARE_TRUTH
+  subject:   S7.6 hops 5-6 -- compare a fresh inventory against previous truth, and record the
+             discovery
+  observed:  both halves, in the live run, directly rather than by inference.
+             1. The P40's arrival produced NO event. It is present in the projection and absent
+                from the previous one, and nothing anywhere states the difference. Only a human
+                or an agent holding both documents can see that a card appeared.
+             2. The Quadro K2200 disappeared SILENTLY. It is declared in registry.seed.json and
+                is absent from the observed inventory; assemble-registry-core.mjs replaces
+                observed hardware wholesale, so the card stops existing in the snapshot with no
+                annotation and no record that anything was removed. A device vanishing is at
+                least as consequential as one appearing, and it is currently the quieter of the
+                two.
+  ordering:  change detection needs a durable PREVIOUS truth before it needs a differ.
+             assemble-registry.mjs --out overwrites a single snapshot file and retains no prior
+             version, so there is nowhere for a comparison to read from. History first, then the
+             comparison; do not build the second half onto nothing.
+  blocksGate1b-settlement: false
+  mustResolveBefore:  any surface or gate that CLAIMS TO NOTIFY about hardware change. A Gate 2
+             surface phrased as "WilliamOS told me a new accelerator appeared" would be false
+             today.
+  owner:     the gate that owns hardware history. A settlement lane may not decide where that
+             lives, which is why this is typed rather than fixed in #998.
+  ownerDecisionRequired:  false
 
 CONT-EXPV2-FIRST-ACTION
-  type:      BLOCKED_DEPENDENCY
-  reason:    CANONICAL_ACTION_SEARCH_NOT_PERFORMED
-  subject:   the "one safe governed mutation" the charter requires for the first journey
-             (charter:273-274, charter:488-489)
-  state:     OPEN. No conclusion is recorded, because the search the charter requires has not been
-             run. Round 4 finding 8 caught the previous version keeping reason
-             NO_ELIGIBLE_CANONICAL_ACTION, "finding: no action on main qualifies", and
-             "owner: Gate 2, which BUILDS it" as ACTIVE TYPED FIELDS while the prose four lines
-             below said all three were withdrawn. A machine reading this packet would have read
-             the withdrawn conclusion; that is what typed fields are for.
-  examined:  three candidates, which is not a search. baseline is all-node/unbrokered/
-             best-effort-audited; resource/verify is a read, POSIX-only, wrong object graph, and
-             not user-scoped; relocate/restore are correctly shaped but far past "safest" (S5.6).
-  requires:  SystemObject subject; dialect-aware brokered execution; session-user scoping on every
-             lookup; durable evidence, not best-effort; verified post-state
-  round 3:   REOPENED. charter:273-274 says "Choose the safest existing canonical action"; this
-             packet had inverted that into "there is nothing to choose" by reading only the first
-             sentence. Three candidates failing is not a search.
-  round 4:   STILL OPEN. Revision 4 did not run the search either, and finding 8 says so.
-  blocksGate1:        false
-  mustResolveBefore:  Gate 2. The "one safe governed mutation" is Gate 2's subject; Gate 1 is
-                      read-only and mutates nothing (S16).
-  blocksGate1:        false
-  mustResolveBefore:  Gate 2. The "one safe governed mutation" is Gate 2's subject; Gate 1 is
-                      read-only and mutates nothing (S16).
-  next:      (a) a scoped search for existing canonical actions across the stated surfaces, then
-             adopt the safest qualifying one; or (b) if none qualifies, an explicit charter
-             amendment recording that the first journey's action must be built. Not (b) by default.
-  not:       an owner courier task. (b) is a charter amendment, which is a recorded-authority
-             decision and must be obtained explicitly rather than assumed by this map -- but the
-             search in (a) comes first and is ordinary agent work.
+  type:                   CLEARED
+  was:                    BLOCKED_AUTHORITY / CHARTER_AMENDMENT_REQUIRED  (#996 search record)
+  before that:            BLOCKED_DEPENDENCY / CANONICAL_ACTION_SEARCH_NOT_PERFORMED  (map S9)
+  subject:                the "one safe governed mutation" the charter requires for the first
+                          journey (charter:273-278 post-amendment; cited as charter:273-274 before
+                          2026-08-24)
+  search:                 PERFORMED. #996's search record. No existing canonical action qualified at
+                          053a33bd; LOOM_OPERATIONS.service.restart disqualified on two INTRINSIC
+                          grounds -- cannot select a SystemObject target, cannot verify post-state.
+  cleared by:             owner decision 2026-08-24, applied as charter AMENDMENT-001. Landed in
+                          PR #999, merged to main as fa1e89df; companion record
+                          docs/governance/williamos-experience-v2-first-action-amendment-record.md.
+  branch taken:           (b) of the map's own next-step pair -- "an explicit charter amendment
+                          recording that the first journey's action must be built". Taken WITH the
+                          explicit authority the map required, and only after (a) was run and
+                          recorded. Not taken by default, which is what the map forbade.
+  ownerDecisionRequired:  false. It was required exactly once, for the amendment, and it was given.
+  continues as:           CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION
+  owner:                  no longer open to this lane; superseded by the packet below.
+
+CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION
+  type:                   BLOCKED_DEPENDENCY
+  reason:                 PREDECESSOR_LIFECYCLE_INCOMPLETE
+  subject:                the smallest new canonical action permitted by charter AMENDMENT-001 --
+                          the first journey's one safe governed mutation.
+  predecessor (MANDATORY, and it gates the BUILD branch):
+                          a FRESH bounded canonical-action search against the ACTUAL pickup base,
+                          recorded, before BUILD may be selected. #996's search establishes that
+                          the branch was legitimately open at 053a33bd; it does NOT pre-authorize
+                          BUILD at any later base. The pickup base is expected to contain #996's
+                          own Object+Action Registry work, which is precisely the seam most likely
+                          to introduce a newly qualifying canonical action. If one qualifies, the
+                          charter's mandatory-first reuse rule selects REUSE and this packet is
+                          discharged UNBUILT. Recorded because the amendment record states the
+                          re-proof requirement in prose while its own packet carried no
+                          predecessor -- an authority review thread on #999 caught the gap, and
+                          this register is the copy machines read.
+  buildable per:          charter:273-278 as amended, read under the owner-stated semantics
+                          recorded at charter AMENDMENT-001. Those semantics bind the build; they
+                          are not background. Smallest new canonical action; extend the EXISTING
+                          Object+Action Registry; route through the EXISTING authority,
+                          execution/fencing, evidence and verified-post-state paths; do not
+                          generalize an unsuitable legacy action merely to preserve its ID; do not
+                          create a parallel action, authority, or execution mechanism.
+  blocksGate1:            false
+  mustResolveBefore:      Gate 2 terminal acceptance. The "one safe governed mutation" is Gate 2's
+                          subject; Gate 1 is read-only and mutates nothing (S16).
+  owner:                  the Gate 2 builder lane's successor
+  ownerDecisionRequired:  false
+
+CONT-EXPV2-GATE1B-EVIDENCE-REPRO-NAMES
+  type:      TYPED_DEFECT
+  reason:    RETAINED_EVIDENCE_FILENAMES_DO_NOT_MATCH_READER
+  subject:   docs/reports/experience-v2-gate1b/GATE1B-project-system-objects.mjs:29-32 reads
+             registry.snapshot.json, transport-nodes.json, hermes-node.json and
+             hermes-node.brokered-invocation.json, while the commit retains
+             GATE1B-registry-snapshot.json, GATE1B-transport-registry.json,
+             GATE1B-hermes-node-probe.json and GATE1B-brokered-invocation.json. Four for four,
+             no overlap.
+  effect:    the settlement's own reproduction command, pointed at the committed evidence
+             directory as documented, fails ENOENT on the first read. The "reproduces
+             byte-for-byte at any future date" promise does not hold as written.
+  fix:       read the retained names, or document and automate the alias staging
+  blocksGate1b:       false
+  blocksGate2:        false
+  owner:     the Gate 1b evidence lane, or any lane holding docs/reports/experience-v2-gate1b/
+  ownerDecisionRequired:  false
+  typed here because: WO-EXPV2-MERGE-SWEEP-002 adjudicated the finding as ACCEPTED but holds
+             PUSH_OWN_BRANCH / REMEDIATE_OWN_CHANGES scoped to OWN, and does not hold
+             wb/expv2-gate1b-settlement-evidence. An accepted finding a lane may not fix is
+             typed, not dropped.
 
 CONT-EXPV2-AUDIT-FAIL-LOUD
   type:      BLOCKED_DEPENDENCY
@@ -1657,6 +1738,15 @@ CONT-EXPV2-MERGE-AUTHORITY
                 Validated by the repository's own validator rather than asserted:
                   WORK_ORDER_ENVELOPE_V2_VALID
                   contentHash ef3a0ccd5ba9362fec298c4741f9baded70561ae284b2e8282698486aa1eb98b
+                The envelope is TRACKED, so that hash is recomputable by anyone:
+                  docs/reports/WO-EXPV2-MERGE-COORDINATION-001.envelope.json
+                  validated through scripts/multi-agent-operator/work-order-envelope-v2.mjs
+                  -> validateWorkOrderEnvelopeV2(...).contentHash
+                  -> ef3a0ccd5ba9362fec298c4741f9baded70561ae284b2e8282698486aa1eb98b
+                It was UNTRACKED when this record was first written, which made this step's claim
+                true and checkable by nobody. An authority review thread caught exactly that;
+                WO-EXPV2-MERGE-SWEEP-002 persisted the artifact and re-validated it from its
+                tracked path, where it reproduces the hash above byte for byte.
                 Note the validator's own return: authorityGranted false, validationOnly true.
                 That is correct, and it is the point. The envelope does not MINT authority --
                 playbook:258-261, "Packet fields cannot mint authority" -- it COVERS an action under
@@ -1676,12 +1766,34 @@ CONT-EXPV2-MERGE-AUTHORITY
                 than dismissed. No security or authority thread was involved.
 
   what a future coordinator should take from this:
-             The pattern is on disk and predates this lane.
-             config/execution-fabric/aegis-bounded-dispatch-work-order.json is a checked-in
-             schemaVersion-2 Work Order carrying "mergeMode": "merge" at riskClass R1 with
-             programActivationGrantRef "github-issue-538". A coordinator recording a merging
-             envelope against an issue-referenced program activation is the established form here,
-             not an invention. What must never be reused is the OTHER on-disk merge-mode artifact,
+             Use THIS envelope as the pattern:
+             docs/reports/WO-EXPV2-MERGE-COORDINATION-001.envelope.json -- tracked, and it
+             validates on the CURRENT validator: WORK_ORDER_ENVELOPE_V2_VALID, contentHash
+             ef3a0ccd5ba9362fec298c4741f9baded70561ae284b2e8282698486aa1eb98b, mergeMode
+             ASSURANCE_GATED, authorityGranted false. WO-EXPV2-CLOSEOUT-001 and
+             WO-EXPV2-MERGE-SWEEP-002 are two later instances of the same form.
+
+             DO NOT use config/execution-fabric/aegis-bounded-dispatch-work-order.json as the
+             merge precedent. An earlier revision of this step did, and every literal clause of
+             that sentence was true -- checked-in, schemaVersion 2, "mergeMode": "merge",
+             riskClass R1, programActivationGrantRef "github-issue-538". The guidance built on it
+             was still unsafe, because a coordinator who follows the pointer finds an artifact
+             that:
+               - authorizes no merge of any kind. Its objective is "Prove one exact read-only
+                 SHA-256 verification on canonical AEGIS through a bounded resident adapter", and
+                 its allowedActions are acquire-fixed-local-runtime-claim-lease,
+                 read-exact-bounded-input, compute-sha256, emit-bounded-result-evidence.
+               - does not validate. The current validator refuses it outright:
+                   WALL: WORK_ORDER_ENVELOPE_UNKNOWN_FIELD_WALL | envelope.authorityStatus
+                 and behind that first wall sit "mergeMode": "merge" (not in MERGE_MODES =
+                 {NO_MERGE, DRAFT_PR_ONLY, ASSURANCE_GATED}), a numeric retryBudget, and an
+                 array-shaped reviewRequirements.
+             Both halves were re-verified by execution rather than citation by
+             WO-EXPV2-CLOSEOUT-001. A true sentence that leads a future coordinator to an
+             unusable artifact is still a defect; that is why this paragraph was rewritten rather
+             than footnoted.
+
+             What must never be reused is the OTHER on-disk merge-mode artifact,
              runtime-operator/native/authority-registry.json: AUTO_ELIGIBLE, but REVOKED_TERMINAL on
              adapterId local-nested-codex-exec, terminal issue #357, which AGENTS.md forbids reusing.
 
