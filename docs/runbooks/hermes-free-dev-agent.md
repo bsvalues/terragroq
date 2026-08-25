@@ -47,8 +47,18 @@ either one refuses the run.
 
 The workspace must be under `placement.allowedWorkspaceRoots` (the orchestrator's `worktrees` dir),
 must not be the canonical checkout, and must contain no symlink components; otherwise the invoker
-walls (`HERMES_FREE_AGENT_WORKSPACE_*_WALL`). No baseline clone is made in this mode. The kernel's
-final fenced ```json block is the turn result the orchestrator validates; validation, commit, push,
+walls (`HERMES_FREE_AGENT_WORKSPACE_*_WALL`). No baseline clone is made in this mode. Before an owned
+worktree is created, the runtime reads the requested Work Order base SHA from the kernel workspace,
+verifies the policy-pinned `baselineBundle`, imports its pinned `baselineBundleRef` into a private
+cache ref in `baselineWorkspace`, proves the requested SHA is contained by that governed bundle head
+and descends from the pinned `baselineCommit`, then records it under an exact-SHA cache ref and
+re-verifies that the baseline checkout's HEAD and worktree stayed unchanged.
+The owned worktree is then created from that cache at the requested SHA. HERMES never fetches GitHub;
+the bundle remains the governed transport, while `baselineCommit` remains the unmodified bootstrap
+anchor rather than pretending to be every future Work Order base. A missing target required by the
+qualification task stops before dispatch as `BLOCKED_TASK_BASELINE_DRIFT`, which is explicitly not a
+model verdict. The kernel's final fenced ```json block is the turn result the orchestrator validates;
+validation, commit, push,
 PR and merge stay in WilliamOS.
 
 The v2 lane is gated by evidence: every line in `promotion.requiredEvidence` must have a non-null

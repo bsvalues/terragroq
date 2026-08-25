@@ -283,6 +283,13 @@ export function newlyFailingTests(failing, baseline) {
   return (failing ?? []).filter((file) => !known.has(file))
 }
 
+/** A model verdict is allowed only for a differential test failure, never a generic gate failure. */
+export function validationFailureWall(gate, { provenModelRegression = false } = {}) {
+  const normalized = String(gate ?? "").replaceAll("-", "_").toUpperCase()
+  if (gate === "test" && provenModelRegression) return "VALIDATION_TEST_REGRESSION_WALL"
+  return `VALIDATION_${normalized}_WALL`
+}
+
 /**
  * The deterministic suite does not finish inside twenty minutes on this host.
  *
@@ -442,6 +449,7 @@ export function unmountedPolicyVolumes(policy, exists = fs.existsSync) {
     policy?.placement?.dockerConfig,
     policy?.placement?.workspaceRoot,
     policy?.placement?.baselineWorkspace,
+    policy?.placement?.baselineBundle,
     ...(policy?.placement?.allowedWorkspaceRoots ?? []),
   ].filter((entry) => typeof entry === "string" && entry.trim() !== "")
   const missing = new Map()
@@ -457,8 +465,94 @@ export function unmountedPolicyVolumes(policy, exists = fs.existsSync) {
   return [...missing.entries()].map(([volume, example]) => ({ volume, example }))
 }
 
+const FULL_GIT_SHA = /^[a-f0-9]{40}$/
+const BUNDLE_REF = /^(?:HEAD|refs\/(?:heads|tags|remotes)\/[A-Za-z0-9][A-Za-z0-9._/-]*)$/
+
+/**
+ * Import one requested Work Order base into the trusted baseline cache without moving its checkout.
+ *
+ * HERMES deliberately has no GitHub access. The policy-pinned bundle is its governed transport, and
+ * the pinned baseline checkout is the trust/bootstrap anchor. A fetch may add an exact-SHA cache ref
+ * and objects; both HEAD and the worktree must remain at the reviewed baseline commit and clean.
+ */
+export async function prepareHermesLocalBase({ policy, requestedBaseSha, runner = run }) {
+  const baselineWorkspace = policy?.placement?.baselineWorkspace
+  const baselineCommit = policy?.placement?.baselineCommit
+  const baselineBundle = policy?.placement?.baselineBundle
+  const baselineBundleRef = policy?.placement?.baselineBundleRef
+  if (!FULL_GIT_SHA.test(String(requestedBaseSha ?? ""))
+    || !FULL_GIT_SHA.test(String(baselineCommit ?? ""))
+    || typeof baselineWorkspace !== "string" || !path.isAbsolute(baselineWorkspace)
+    || typeof baselineBundle !== "string" || !path.isAbsolute(baselineBundle)
+    || typeof baselineBundleRef !== "string" || !BUNDLE_REF.test(baselineBundleRef)
+    || !fs.existsSync(baselineWorkspace) || !fs.existsSync(baselineBundle)) {
+    throw new Error("PROVIDER_LANE_BASELINE_CACHE_WALL")
+  }
+
+  const git = (args) => runner("git", ["--no-replace-objects", ...args], { cwd: baselineWorkspace })
+  const assertPinnedCheckout = async () => {
+    try {
+      const head = (await git(["rev-parse", "HEAD"])).stdout.trim()
+      const dirty = (await git(["status", "--porcelain"])).stdout.trim()
+      if (head !== baselineCommit || dirty !== "") throw new Error("PROVIDER_LANE_BASELINE_CACHE_WALL")
+    } catch (error) {
+      if (String(error?.message ?? error).startsWith("PROVIDER_LANE_")) throw error
+      throw new Error("PROVIDER_LANE_BASELINE_CACHE_WALL")
+    }
+  }
+
+  await assertPinnedCheckout()
+  let advertisedHead
+  try {
+    await git(["bundle", "verify", baselineBundle])
+    const heads = (await git(["bundle", "list-heads", baselineBundle])).stdout
+    advertisedHead = String(heads).split(/\r?\n/).map((line) => line.trim().split(/\s+/, 2))
+      .find(([sha, ref]) => FULL_GIT_SHA.test(sha) && ref === baselineBundleRef)?.[0]
+  } catch {
+    throw new Error("PROVIDER_LANE_BASELINE_BUNDLE_WALL")
+  }
+  if (!advertisedHead) throw new Error("PROVIDER_LANE_BASELINE_BUNDLE_WALL")
+
+  const bundleHeadRef = "refs/williamos/bundle-head"
+  const cacheRef = `refs/williamos/base-cache/${requestedBaseSha}`
+  try {
+    await git(["fetch", "--no-tags", baselineBundle, `${baselineBundleRef}:${bundleHeadRef}`])
+    const importedHead = (await git(["rev-parse", bundleHeadRef])).stdout.trim()
+    if (importedHead !== advertisedHead) throw new Error("PROVIDER_LANE_BASE_SYNC_WALL")
+  } catch (error) {
+    if (String(error?.message ?? error).startsWith("PROVIDER_LANE_")) throw error
+    throw new Error("PROVIDER_LANE_BASE_SYNC_WALL")
+  }
+  try {
+    await git(["cat-file", "-e", `${requestedBaseSha}^{commit}`])
+    // The requested Work Order base may precede a newer bundle head; it must be contained by that
+    // governed delivery, not necessarily equal its moving main ref.
+    await git(["merge-base", "--is-ancestor", requestedBaseSha, advertisedHead])
+  } catch {
+    throw new Error("PROVIDER_LANE_BASE_SHA_UNAVAILABLE_WALL")
+  }
+  try {
+    // A bundle containing an unrelated repository is valid Git but not a WilliamOS base update.
+    await git(["merge-base", "--is-ancestor", baselineCommit, requestedBaseSha])
+  } catch {
+    throw new Error("PROVIDER_LANE_BASE_LINEAGE_WALL")
+  }
+  try {
+    await git(["update-ref", cacheRef, requestedBaseSha])
+    const cached = (await git(["rev-parse", cacheRef])).stdout.trim()
+    if (cached !== requestedBaseSha) throw new Error("PROVIDER_LANE_BASE_SYNC_WALL")
+  } catch (error) {
+    if (String(error?.message ?? error).startsWith("PROVIDER_LANE_")) throw error
+    throw new Error("PROVIDER_LANE_BASE_SYNC_WALL")
+  }
+  await assertPinnedCheckout()
+  return { repositoryPath: baselineWorkspace, baseSha: requestedBaseSha }
+}
+
 export async function dispatchHermesLocal({
   root, repositoryPath, workOrderId, workspace, prompt, workContext = null,
+  requiredBasePaths = [],
+  observeInvocation = ({ invoke }) => invoke(),
   runner = run, newId = () => crypto.randomUUID(),
 }) {
   const policyPath = path.resolve(repositoryPath, HERMES_KERNEL_POLICY_RELATIVE)
@@ -488,9 +582,26 @@ export async function dispatchHermesLocal({
   // other's tree by guessing at a name.
   const owned = path.join(worktreesRoot, `runtime-operator-${workOrderId.toLowerCase()}`)
 
-  const baseSha = (await runner("git", ["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim()
-  const carried = (await runner("git", ["diff", "--cached", "--binary"], { cwd: workspace })).stdout
-  const registered = (await runner("git", ["worktree", "list", "--porcelain"], { cwd: repositoryPath })).stdout
+  const git = (args, options) => runner("git", ["--no-replace-objects", ...args], options)
+  const requestedBaseSha = (await git(["rev-parse", "HEAD"], { cwd: workspace })).stdout.trim()
+  const preparedBase = await prepareHermesLocalBase({ policy, requestedBaseSha, runner })
+  const baseRepository = preparedBase.repositoryPath
+  const baseSha = preparedBase.baseSha
+  if (!Array.isArray(requiredBasePaths) || requiredBasePaths.some((target) =>
+    typeof target !== "string" || target.trim() === "" || path.isAbsolute(target)
+    || target.includes("\\") || target.split("/").includes("..") || /[*?[]/.test(target))) {
+    throw new Error("PROVIDER_LANE_POLICY_WALL")
+  }
+  const missingTargets = []
+  for (const target of requiredBasePaths) {
+    try { await git(["cat-file", "-e", `${baseSha}:${target}`], { cwd: baseRepository }) }
+    catch { missingTargets.push(target) }
+  }
+  if (missingTargets.length > 0) {
+    throw new Error(`TASK_BASELINE_DRIFT_WALL:${missingTargets.join(",")}`)
+  }
+  const carried = (await git(["diff", "--cached", "--binary"], { cwd: workspace })).stdout
+  const registered = (await git(["worktree", "list", "--porcelain"], { cwd: baseRepository })).stdout
     .split(/\r?\n/)
     .filter((line) => line.startsWith("worktree "))
     .map((line) => path.resolve(line.slice("worktree ".length).trim()))
@@ -499,15 +610,32 @@ export async function dispatchHermesLocal({
   const isOwned = (candidate) => process.platform === "win32"
     ? candidate.toLowerCase() === owned.toLowerCase()
     : candidate === owned
-  if (registered.some(isOwned)) {
-    await runner("git", ["reset", "--hard", baseSha], { cwd: owned })
+  const registeredAtBase = registered.some(isOwned)
+  let registeredAtPrior = false
+  if (!registeredAtBase && path.resolve(repositoryPath) !== path.resolve(baseRepository)) {
+    const priorRegistered = (await git(["worktree", "list", "--porcelain"], { cwd: repositoryPath })).stdout
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => path.resolve(line.slice("worktree ".length).trim()))
+    registeredAtPrior = priorRegistered.some(isOwned)
+  }
+  if (!registeredAtBase && registeredAtPrior) {
+    // The former repository may still carry incomplete or ignored work. Moving its worktree keeps
+    // both content and registration recoverable while deliberately releasing the canonical path for
+    // the governed baseline repository. Never force-remove it during migration.
+    const preserved = `${owned}.prior-repository`
+    if (fs.existsSync(preserved)) throw new Error("PROVIDER_WORKSPACE_RECONCILIATION_WALL")
+    await git(["worktree", "move", owned, preserved], { cwd: repositoryPath })
+  }
+  if (registeredAtBase) {
+    await git(["reset", "--hard", baseSha], { cwd: owned })
     // -x deliberately: the invoker refuses a worktree carrying node_modules, and an interrupted cycle
     // elsewhere is exactly how one arrives.
-    await runner("git", ["clean", "-fdx"], { cwd: owned })
+    await git(["clean", "-fdx"], { cwd: owned })
   } else {
     if (fs.existsSync(owned)) throw new Error("PROVIDER_WORKSPACE_RECONCILIATION_WALL")
     fs.mkdirSync(worktreesRoot, { recursive: true })
-    await runner("git", ["worktree", "add", "--detach", owned, baseSha], { cwd: repositoryPath, timeout: 120_000 })
+    await git(["worktree", "add", "--detach", owned, baseSha], { cwd: baseRepository, timeout: 120_000 })
   }
   if (carried.trim()) {
     // Whatever the kernel workspace already had staged is work this dispatch continues, not work it
@@ -515,7 +643,7 @@ export async function dispatchHermesLocal({
     const carriedFile = path.join(root, "state", "requests", `${workOrderId.toLowerCase()}-hermes-carried.patch`)
     fs.mkdirSync(path.dirname(carriedFile), { recursive: true })
     fs.writeFileSync(carriedFile, carried, "utf8")
-    try { await runner("git", ["apply", "--whitespace=nowarn", carriedFile], { cwd: owned }) }
+    try { await git(["apply", "--whitespace=nowarn", carriedFile], { cwd: owned }) }
     finally { fs.rmSync(carriedFile, { force: true }) }
   }
   if (workContext) equipWorkContext(owned, workContext)
@@ -539,11 +667,14 @@ export async function dispatchHermesLocal({
   fs.mkdirSync(path.dirname(packetPath), { recursive: true })
   fs.writeFileSync(packetPath, `${JSON.stringify(packet, null, 2)}\n`, { encoding: "utf8", mode: 0o600 })
 
-  const invocation = await runner("pwsh", [
-    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
-    "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", owned, "-RunId", runId,
-    "-QuarantinePath", kernelQuarantinePath(runtimeRoot), "-StatePath", statePath,
-  ], { cwd: repositoryPath, timeout: HERMES_TIMEOUT_MS })
+  const invocation = await observeInvocation({
+    runId,
+    invoke: () => runner("pwsh", [
+      "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", invokerPath,
+      "-PacketPath", packetPath, "-PolicyPath", policyPath, "-WorkspacePath", owned, "-RunId", runId,
+      "-QuarantinePath", kernelQuarantinePath(runtimeRoot), "-StatePath", statePath,
+    ], { cwd: repositoryPath, timeout: HERMES_TIMEOUT_MS }),
+  })
 
   const stdout = String(invocation.stdout ?? "")
   // Believe only a completion line naming THIS run. The invoker relays the model's own output, so a
@@ -1311,6 +1442,7 @@ ${String(error?.output ?? "").slice(-12000)}
         throw new Error("VALIDATION_INSTALL_WALL")
       }
       for (const gate of requiredValidation) {
+        let provenModelRegression = false
         try {
           if (gate === "diff-check") await run("git", ["diff", "--cached", "--check"], { cwd: workspace })
           else if (gate === "lint") await run("cmd.exe", ["/c", "pnpm", "run", "lint"], { cwd: workspace, timeout: 20 * 60 * 1000 })
@@ -1338,6 +1470,7 @@ ${String(error?.output ?? "").slice(-12000)}
               const newly = newlyFailingTests(failing, baseline)
               if (newly.length > 0) {
                 failure.output = newly.length + " test file(s) fail with this patch and pass without it:\n" + newly.join("\n") + "\n\n" + String(failure?.output ?? "")
+                provenModelRegression = true
                 throw failure
               }
             }
@@ -1356,7 +1489,7 @@ ${String(error?.output ?? "").slice(-12000)}
 ${tail}
 `, "utf8")
           } catch { /* feedback is best effort; the wall is not */ }
-          throw new Error(`VALIDATION_${gate.replaceAll("-", "_").toUpperCase()}_WALL`)
+          throw new Error(validationFailureWall(gate, { provenModelRegression }))
         }
       }
     },

@@ -139,6 +139,8 @@ describe("Hermes free development agent provider — v2 owned-worktree mode", ()
       allowedWorkspaceRoots: ["C:\\Users\\bs\\.williamos\\hermes-bridge\\worktrees"],
     })
     expect(v2.placement.workspaceRoot).toBe(policy().placement.workspaceRoot)
+    expect(v2.placement.baselineBundle).toBe("D:\\HermesServices\\williamos-hermes-agent\\williamos-baseline.bundle")
+    expect(v2.placement.baselineBundleRef).toBe("refs/remotes/origin/main")
   })
   it("raises the prompt budget for remediation prompts and keeps resume fail-closed", () => {
     const v2 = policyV2()
