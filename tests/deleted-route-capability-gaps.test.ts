@@ -242,3 +242,89 @@ describe("4. the world is persisted and not restored", () => {
     expect(route).not.toContain("so a reload does not lose it")
   })
 })
+
+describe("7. the work-order triage, search and closure projections are deleted and doorless", () => {
+  /**
+   * Section 5 audited the WRITES in `app/actions/work-orders.ts` and stopped there. The deleted page
+   * mounted four more surfaces above `WorkOrdersView`, and none of them reached the environment —
+   * the same miss section 6 records for `/decisions`, made a second time in the register next door.
+   * So this describe block exists mostly to make the third occurrence impossible to land quietly.
+   */
+  const ledger = read(LEDGER)
+
+  it("names the deleted projections rather than implying the register replaced them", () => {
+    for (const subject of [
+      "active-work-queue.ts",
+      "work-order-search-filter.ts",
+      "completion-report-surface.ts",
+      "filterWorkOrders",
+      "getActiveWorkQueueSurface",
+    ]) {
+      expect(ledger.includes(subject), `${subject} is enforced here but absent from ${LEDGER}`).toBe(true)
+    }
+    expect(ledger).toContain("Continuation: #1012")
+  })
+
+  it("keeps them deleted — a loss recorded as a loss, not a door somebody can claim to have kept", () => {
+    for (const deleted of [
+      "components/work-orders/active-work-queue.ts",
+      "components/work-orders/active-work-queue-panel.tsx",
+      "components/work-orders/work-order-search-filter.ts",
+      "components/work-orders/completion-report-surface.ts",
+      "components/work-orders/completion-report-panel.tsx",
+      "components/work-orders/woe-detail-surface.ts",
+      "components/work-orders/work-orders-command-surface.ts",
+    ]) expect(fs.existsSync(path.join(ROOT, deleted)), `${deleted} unexpectedly exists`).toBe(false)
+  })
+
+  it("keeps the governed records and the arithmetic alive, so the successor rebuilds instead of reinventing", () => {
+    // The ledger promises this capability is recoverable from governed state. If these go, the row is
+    // lying and the successor has nothing to rebuild from.
+    expect(read("app/actions/work-orders.ts")).toContain("export async function getWorkOrders")
+    const lifecycle = read("lib/work-orders/lifecycle.ts")
+    expect(lifecycle).toContain("export const WO_STATUSES")
+    expect(lifecycle).toContain("export function buildClosureReport")
+    expect(read("lib/governance/owner-operation-evidence.ts")).toContain(
+      "export function evaluateOwnerOperationEvidence",
+    )
+  })
+
+  it("still projects a flat register that cannot answer 'what failed'", () => {
+    // The gap in one field. `result` is what separates an explicit FAIL from an ordinary status, and
+    // the summon does not carry it. When the surface gains triage — a failure lane, an ordering, a
+    // query — section 7 leaves the ledger.
+    const route = read("app/api/environment/line/route.ts")
+    const branch = route.slice(route.indexOf('if (kind === "work-orders")'))
+    const projection = branch.slice(0, branch.indexOf("if (kind === \"queue\")"))
+    expect(projection).toContain("const orders = await getWorkOrders()")
+    expect(
+      /\bresult\b/.test(projection),
+      `the work-orders summon now carries \`result\` — the failure lane is buildable and section 7 ` +
+        `must be revisited in ${LEDGER}.`,
+    ).toBe(false)
+  })
+
+  it("has no replacement door for any of the deleted projections", () => {
+    for (const symbol of [
+      "getActiveWorkQueueSurface",
+      "filterWorkOrders",
+      "getCompletionReportSurface",
+      "getWoeDetailSurface",
+      "getWorkOrdersCommandSurface",
+    ]) {
+      const doors = SOURCES.filter(({ text }) => text.includes(symbol)).map((s) => s.file)
+      expect(
+        doors,
+        `${symbol} now HAS a door (${doors.join(", ")}) — good. Move its row out of ${LEDGER}.`,
+      ).toEqual([])
+    }
+  })
+
+  it("does not re-audit the outcome queue, which actually did migrate", () => {
+    // The deleted page also mounted `OperatorOutcomeQueuePanel`. It survives with real doors, so it is
+    // NOT part of this gap — recorded here and in the ledger so the next audit does not relitigate it.
+    const doors = SOURCES.filter(({ text }) => text.includes("getOutcomeQueueSurface")).map((s) => s.file)
+    expect(doors).toContain("app/api/environment/line/route.ts")
+    expect(doors.length).toBeGreaterThan(1)
+  })
+})

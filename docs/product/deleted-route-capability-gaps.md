@@ -1,8 +1,11 @@
 # What the deleted routes could do that the environment cannot do yet
 
-Status: **OPEN, TYPED, ENFORCED.** Found by the independent codex assurance review of PR #1011 and
-confirmed by execution by the cutover-finish lane. Enforced by
-`tests/deleted-route-capability-gaps.test.ts`.
+Status: **OPEN, TYPED, ENFORCED.** Sections 1–6 were found by the independent codex assurance review
+of PR #1011 and confirmed by execution by the cutover-finish lane. Section 7 was found afterwards, by
+the finisher-resume lane re-auditing every deleted page against what it actually mounted, because the
+merge boundary refused to treat "all ten review threads resolved" as proof that the capability audit
+was complete. It was right to: the review did not raise section 7, and section 6 had already caught
+the same class of miss once. Enforced by `tests/deleted-route-capability-gaps.test.ts`.
 
 This is the companion to `docs/product/decision-register-write-gap.md`. That ledger names governed
 WRITES that lost their surface. This one names READS and behaviours that lost theirs, so that the
@@ -11,8 +14,10 @@ message somebody has to remember.
 
 Most entries follow the same rule: **the capability is alive in code and has no door in the
 product.** Section 6 records mixed survival: both decision-queue models and all three panels were
-deleted, while the correction taxonomy/model survives as a read-only, doorless description. In both
-cases, what is gone is a product door; the ledger does not claim the deleted models still exist.
+deleted, while the correction taxonomy/model survives as a read-only, doorless description. Section 7
+is the same shape: the projections were deleted outright, and what survives is the governed records
+they read plus the arithmetic over them. In every case, what is gone is a product door; the ledger
+does not claim the deleted models still exist.
 
 Four findings from the same review were *not* typed — they were fixed on this branch, with
 regression tests, because they were outright broken behaviour rather than missing behaviour: the
@@ -46,6 +51,13 @@ the Line's answer model. It changes what every ordinary sentence costs, what it 
 and what the reply must show alongside it. Grafting the four reads onto a 400-token conversational
 call at the end of a landing produces a slower Line that cites nothing visible, which is worse than
 the honest gap.
+
+The page's other mount, `components/chat/operator-chat-native-area.ts` + its panel, went too. It is
+named here to close the audit rather than as a claimed loss: it was a static description of the
+retired page's own posture, command sections, authority boundaries and suggested phrasings. It
+described `/chat`; deleting the page is what made it moot. With it, every file this landing deleted is
+accounted for in this ledger — as a gap, as a deliberate retirement, or as page-scaffolding that had
+nothing to migrate.
 
 ## 2. `/trace`'s static Trace Ledger
 
@@ -188,6 +200,55 @@ workspace and #1016 is the agent workspace; the
 umbrella acceptance issue #1012 is therefore the named successor until it dispatches a bounded child.
 Closing this row requires that child and an operable Environment door, not merely restoring the old
 panels or deleting this paragraph.
+
+## 7. `/work-orders`'s triage, search and closure projections
+
+| what | where |
+| --- | --- |
+| capability | see what is MOVING, what explicitly FAILED, and what Hermes should do NEXT; find one work order among many by query or facet; read closure reports with their owner-operation evidence |
+| deleted | `active-work-queue.ts` + `ActiveWorkQueuePanel`; `work-order-search-filter.ts` (`filterWorkOrders`, `getWorkOrderFilterOptions`, `getDistinctWorkOrderFilterValues`); `completion-report-surface.ts` + `CompletionReportPanel`; `woe-detail-surface.ts` + `WoeDetailSurfacePanel`; `work-orders-command-surface.ts` + `WorkOrdersCommandPanel` |
+| survives | the governed records and the arithmetic over them — `getWorkOrders`, `WO_STATUSES`, `buildClosureReport`, `evaluateOwnerOperationEvidence` |
+| door now | **none** — `/work-orders` reaches a flat list |
+| continuation | **Continuation: #1012** |
+
+Section 5 audited `app/actions/work-orders.ts` and found the deleted WRITES. It did not count the
+four sibling surfaces mounted *above* `WorkOrdersView` on the same deleted page — which is precisely
+the error section 6 records for `/decisions`, committed a second time in the register next door. The
+deleted page mounted six things; section 5 accounts for the writes inside one of them.
+
+What the environment offers at that address is `getWorkOrders()` projected to five fields — `ref`,
+`title`, `status`, `agent`, `phase`. That is a faithful register and it is not the triage surface.
+Three questions the deleted page answered cannot be asked of it:
+
+- **"what failed?"** — `result` is not in the projection at all, so the one field that distinguishes
+  an explicit `FAIL` from an ordinary status never reaches the surface. `getActiveWorkQueueSurface`
+  computed a failure lane from `result`, the recorded stop condition, and evidence presence.
+- **"what is next?"** — the `hermesNext` lane ordered `approved`/`active`/`blocked`/`review` by
+  recency with the next governed action named per row. The flat list has no order beyond newest-first
+  and no action.
+- **"where is the one I mean?"** — `filterWorkOrders` matched a query across ref, title, goal, scope,
+  lane, phase, priority, authority, result, evidence, validators and stop conditions, with nine
+  additional facets. There is no search on the register at all.
+
+**Not part of this gap, checked by execution rather than assumed:** the deleted page also mounted
+`OperatorOutcomeQueuePanel` over `getOutcomeQueueSurface()`. Both survive with real doors —
+`/goal-console`, `/runtime`, and the environment's own `queue` summon — so "what is next" in the
+*outcome* sense did migrate. Recorded here so the next lane does not re-audit it.
+
+Two of the five deleted modules are named above for honesty about what was removed, not as claimed
+losses: `getWoeDetailSurface` and `getWorkOrdersCommandSurface` were largely static descriptions of
+the retired page's own posture, safety badges and phase rollup. They described `/work-orders`;
+deleting the page is what made them moot. `work-order-draft-guidance`, `work-order-draft-packet` and
+`work-order-empty-state` went with the work-order **write UI**, which this landing retired
+deliberately — that is a decision, not a gap.
+
+**Why it is typed and not closed here:** the triage lanes and the search are a surface that does not
+exist, exactly as in sections 2, 3 and 6 — the environment summons *a register*, and a register with
+lanes, ordering and a query is a different surface with its own product decisions (which lane leads,
+what "next" means when Hermes disagrees with the queue). Bolting a filter onto the flat list at the
+end of a landing produces a search box over five fields, which answers none of the three questions
+above while looking as though it did. The records are all intact, so the successor rebuilds from
+governed state and not from the deleted panels.
 
 ---
 
