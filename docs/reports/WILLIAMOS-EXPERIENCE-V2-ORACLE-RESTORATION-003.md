@@ -322,12 +322,19 @@ Invariant 13 names a journey, not a call:
 | contextual action | leg 4 — `resolveObjectAction("stamp identity on hermes")` over the graph → `authority_required`, one candidate | yes |
 | governed execution | legs 2, 5, 6, 7 — `grantCovers`, brokered exec, `requireAudit`, ledger | yes |
 | verified post-state | leg 7 — separate observation, `ba29cf1b…`, 158 bytes | yes |
-| preserved return location | **nowhere** | **no** |
+| preserved return location | built, **not exercised** | **no** |
 
-**NOT ACCEPTED in full**, precisely: the sixth seam is a UI property of the journey and a headless
-driver has no return location to preserve. Nothing in this lane exercised it, and nothing in this
-lane could have. It is settled by a Gate that renders the journey, on deterministic tests plus a
-live pass, and it remains the one clause of invariant 13 with no live evidence behind it.
+**NOT ACCEPTED in full**, and the sixth seam deserves stating exactly rather than as "missing".
+It is **built**: `route.ts:344` returns `returnTo: object.objectId` in the success body, so the
+contract a caller would use to get back where it was exists. It was **not exercised**. `RS-00`
+walks the route's legs by importing the route's own modules; it never issues an HTTP request, and
+`OR-10` leg 1 records why there was none to issue — `routePresentInDeployedBundle: false`, the only
+WilliamOS serving on that node being an older bundle without this route. So `returnTo` was never
+emitted, nothing consumed it, and no rendered surface existed to return *to*.
+
+That is a narrower gap than report 002's, and it is still a gap: a field a live journey never
+carried is a contract, not evidence. It closes with the Gate that renders the journey and a
+deployed bundle that serves this route — not here.
 
 **A second thing the terminal proof does not carry:** the actor was `ASSERTED_BY_OPERATOR_NOT_
 AUTHENTICATED`. Leg 1 records `SESSION_SHELL_NOT_EXECUTABLE` — `getSession()` needs a Next request

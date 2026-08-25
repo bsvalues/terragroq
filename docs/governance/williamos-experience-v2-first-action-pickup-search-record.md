@@ -681,8 +681,12 @@ CONT-EXPV2-INVARIANT-13-JOURNEY-INCOMPLETE
                           current world, contextual action, governed execution, verified
                           post-state, preserved return location. FIVE ran end to end against live
                           HERMES and are settled (OR-10 legs 3, 3, 4, 2/5/6/7, 7). The sixth,
-                          PRESERVED RETURN LOCATION, ran nowhere: it is a UI property of the
-                          journey and a headless driver has no return location to preserve.
+                          PRESERVED RETURN LOCATION, is BUILT but NOT EXERCISED -- route.ts:344
+                          returns returnTo: object.objectId, and RS-00 walks the route's legs by
+                          importing its modules rather than issuing an HTTP request, because
+                          OR-10 leg 1 records routePresentInDeployedBundle: false. So returnTo was
+                          never emitted, nothing consumed it, and no rendered surface existed to
+                          return to. A contract, not evidence.
   second gap:             the actor was ASSERTED_BY_OPERATOR_NOT_AUTHENTICATED. OR-10 leg 1 is
                           SESSION_SHELL_NOT_EXECUTABLE and NO session was minted -- deliberately,
                           since fabricating an authentication artifact to pass an authentication
