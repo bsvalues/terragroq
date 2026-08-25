@@ -537,11 +537,14 @@ execute fixed bytes. The retained driver's own working copy —
 successor to pick up, and no old bytes to overwrite.
 
 **One copy exists there now, and it is this remediation's own.** The section below re-created that
-path as a git worktree at `f76e880a` in order to run the fixed driver where it is retained. It is a
-**reproduction checkout, not a deployment**: it holds this branch, not `main`, and after this PR
-merges it is one squash behind by construction. The next lane on `ATLAS_REACHABLE` should refresh or
-recreate it from merged `main` before running — the blob is recorded in `RS-09` precisely so that
-"is this the merged driver?" is a check rather than an assumption, and
+path as a git worktree at `6155b04f` — the commit that carries every code fix — in order to run the
+driver where it is retained. `RS-09` records that HEAD, and the two commits after it are
+documentation only, so the driver blob `618c64e5…` is unchanged by them.
+
+It is a **reproduction checkout, not a deployment**: it holds this branch, not `main`, and after this
+PR merges it is one squash behind by construction. The next lane on `ATLAS_REACHABLE` should refresh
+or recreate it from merged `main` before running — the blob is recorded precisely so that "is this
+the merged driver?" is a check rather than an assumption, and
 `git -C C:\HermesLab\terragroq-s2 worktree remove C:\HermesLab\expv2-runtime-settlement` removes it.
 
 ### The fixed driver, run on HERMES from its retained location
