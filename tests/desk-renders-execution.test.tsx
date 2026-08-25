@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest"
 import { EMPTY_SPINE, withBoundOutcome, withExecution, createWorkingWorld } from "@/lib/environment/working-world"
 
 const ROOT = process.cwd()
-const DESK = fs.readFileSync(path.join(ROOT, "components/desk/desk.tsx"), "utf8")
+const SHELL = fs.readFileSync(path.join(ROOT, "components/workspace-shell/workspace-shell.tsx"), "utf8")
 const LINE_ROUTE = fs.readFileSync(path.join(ROOT, "app/api/environment/line/route.ts"), "utf8")
 
 /**
@@ -33,27 +33,27 @@ describe("the Desk paints execution, and draws nothing when there is no work", (
   it("renders the world line only when an outcome is bound", () => {
     // An empty world draws NOTHING: no welcome, no status card, no billboard. A region that needs
     // explanatory text to justify existing gets removed.
-    expect(DESK).toMatch(/spine\.outcomeKey === null \? null :/)
+    expect(SHELL).toMatch(/spine\.outcomeKey \? ` · \$\{spine\.outcomeKey\} · \$\{spine\.execution\}` : ""/)
   })
 
   it("paints the execution state, the outcome, and the worker as a LANE", () => {
-    expect(DESK).toContain("spine.execution")
-    expect(DESK).toContain("spine.outcomeKey")
+    expect(SHELL).toContain("spine.execution")
+    expect(SHELL).toContain("spine.outcomeKey")
     // "worker: claude lane" — a lane fact, the way a disk name reads in a file listing. If this ever
     // becomes a persona ("Claude says…"), the Operator has been replaced by its worker.
-    expect(DESK).toMatch(/worker: \{spine\.worker\.lane\} lane/)
-    expect(DESK).not.toMatch(/I am (Claude|Codex)/i)
+    expect(SHELL).toContain("worker: ${spine.worker.lane} lane")
+    expect(SHELL).not.toMatch(/I am (Claude|Codex)/i)
   })
 
   it("takes the spine from the reply rather than deriving it locally", () => {
     // Locally-derived execution state is how a screen drifts from reality. One store, one source.
-    expect(DESK).toContain("if (reply.spine) setSpine(reply.spine)")
-    expect(DESK).toContain("useState<WorldSpine>(EMPTY_SPINE)")
+    expect(SHELL).toContain("if (reply.spine) setSpine(reply.spine)")
+    expect(SHELL).toContain("useState<WorldSpine>(EMPTY_SPINE)")
   })
 
   it("keeps the legacy frame out of the primary environment", () => {
-    for (const legacy of ["ProjectExplorer", "Inspector", "WorkbenchShell", "ThreadTimeline"]) {
-      expect(DESK).not.toContain(legacy)
+    for (const legacy of ["ProjectExplorer", "WorkbenchShell", "ThreadTimeline"]) {
+      expect(SHELL).not.toContain(legacy)
     }
   })
 })

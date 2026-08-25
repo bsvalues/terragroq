@@ -118,29 +118,20 @@ ledger surface and a single-record surface — plus a summon that carries a *ref
 summon does today (`?summon=` carries a surface name and nothing else). That is the next phase of the
 same migration, not a redirect fix.
 
-## 4. The world is not restored on reload
+## 4. The world is restored on reload — closed by #1015
 
 | what | where |
 | --- | --- |
 | capability | come back to the conversation and surfaces you had |
 | alive at | `workingWorld` rows — every world is validated, snapshotted and persisted |
-| door now | **none** — the client never sends a saved `worldId` back |
+| door now | `/api/environment/space` — owner-bound latest/exact TerraFusion world |
 
-`components/desk/desk.tsx` holds `worldId` in React state only. On arrival it posts
-`{ worldId: null }`, which is the new-world sentinel, so:
-
-- a **sentence**-summoned surface and the whole transcript are gone after a reload;
-- an **address**-summoned surface comes back — the redirect re-summons it — but as a *new* world,
-  inserting another `workingWorld` row each time rather than restoring the saved one.
-
-Nothing is lost from the database; the worlds are all there and readable. What is missing is the way
-back into one.
-
-**Why it is typed and not closed here:** restoration is a product decision before it is code. Which
-world does an operator return to — the last one on this device, the last one anywhere, or the one
-they were sent a link to? A wrong answer silently resurrects stale work in front of them, which is
-worse than an honest blank Line. It also needs a reply shape the route does not have: today a reply
-carries the surfaces of the *current* action, not the world's accumulated turns and surfaces.
+`components/workspace-shell/workspace-shell.tsx` now opens the owner-bound Space through
+`/api/environment/space`, restores its server-persisted world id, windows, files, panes, selection,
+focus and canonical spine, and only then handles an addressed summon. The server selects only an
+owned TerraFusion world; it never falls back to another working world, and creates a dedicated world
+when none exists. Reconstructable summoned Inspectors persist identity and reacquire governed payload
+on restoration. Payload-only browser/trace/diff surfaces remain explicitly transient.
 
 ## 5. `/work-orders`'s release gates and closure result — deleted, then restored
 

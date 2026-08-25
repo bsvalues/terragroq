@@ -53,7 +53,25 @@ describe("work-context coverage across the workroom API", () => {
   for (const route of routes) {
     const mutates = /export async function (POST|PUT|PATCH|DELETE)/.test(route.source)
     it(`${route.name}: ${mutates ? "enforces" : "needs no"} work context`, () => {
-      expect(route.source.includes("requireWorkContext")).toBe(mutates)
+      const directGate = route.source.includes("requireWorkContext")
+      const governedFileSeam = route.source.includes("writeGovernedWorkspaceFile")
+        && readFileSync(path.join(__dirname, "..", "lib", "loom", "workspace-file-write.ts"), "utf8")
+          .includes("authorize: requireWorkContext")
+      expect(directGate || governedFileSeam).toBe(mutates)
     })
   }
+})
+
+describe("manual workspace authority is provider-neutral", () => {
+  const authorityRoute = readFileSync(
+    path.join(__dirname, "..", "app", "api", "governance", "workroom-authority", "route.ts"),
+    "utf8",
+  )
+
+  it("attributes the authenticated owner's direct save to no provider-specific agent", () => {
+    expect(authorityRoute).not.toMatch(/agent:\s*["'](?:claude|codex)["']/i)
+    expect(authorityRoute).not.toMatch(/^\s*agent:\s*/m)
+    expect(authorityRoute).toContain("Workspace manual edits")
+    expect(authorityRoute).not.toContain("Workroom lane: files, structured edits, and bounded cockpit operations")
+  })
 })

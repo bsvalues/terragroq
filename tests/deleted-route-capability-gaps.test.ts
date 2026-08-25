@@ -60,7 +60,7 @@ describe("the ledger names every gap it claims to name", () => {
     "components/trace/trace-ledger-registry.ts",
     "lib/workbench/execution-projection.ts",
     "lib/workbench/load-threads.ts",
-    "components/desk/desk.tsx",
+    "components/workspace-shell/workspace-shell.tsx",
     "app/actions/work-orders.ts",
     "lib/workbench/outcome-execution-authorization.ts",
     "OwnerDecisionQueuePanel",
@@ -218,8 +218,8 @@ describe("5. the work-order release gates and closure result are alive and doorl
   })
 })
 
-describe("4. the world is persisted and not restored", () => {
-  const desk = read("components/desk/desk.tsx")
+describe("4. the world is persisted and restored", () => {
+  const shell = read("components/workspace-shell/workspace-shell.tsx")
 
   it("still persists every world, so restoration remains buildable", () => {
     const route = read("app/api/environment/line/route.ts")
@@ -228,10 +228,11 @@ describe("4. the world is persisted and not restored", () => {
     expect(route).toContain("validateWorkingWorld")
   })
 
-  it("still arrives with the new-world sentinel rather than a restored id", () => {
-    // The whole gap in one line: the client has no durable place to keep `worldId`, so it asks for a
-    // new world on every arrival. When that changes, section 4 leaves the ledger.
-    expect(desk).toContain('body: JSON.stringify({ worldId: null, summon: initialSummon })')
+  it("restores the owned server Space before an addressed summon", () => {
+    expect(shell).toContain('fetch("/api/environment/space"')
+    expect(shell).toContain("setWorldId(payload.worldId)")
+    expect(shell).toContain("const restored = normalizeSpace(payload.space, fallback, {")
+    expect(shell).toContain("setSpace(restored)")
   })
 
   it("does not claim a restoration it does not perform", () => {
