@@ -336,11 +336,12 @@ on `F:`. The same letter, the same day, the same one-line fix.
 
 **Both reservations that held this shut are now released, and this packet is retyped rather than
 annotated so no reader meets two types for it.** `lab-health.ps1` was a reserved file of PR `#1003`,
-which merged as `58819e62` on 2026-08-25 — that PR moved the `F:` free-space check within the file
-and did not repair it. `crossnode-sync.ps1` was the `#862` backup-recovery lane's artifact, and `#862`
-closed on 2026-08-18. No open pull request reserves either file. The diagnosis is unchanged and the
-destination is still named: `G:`, resolved by the label `HERMES_NVME` the way `backup-volumes.ps1`
-now does.
+which merged as `58819e62` on 2026-08-25 — that PR changed only this file's Ollama probe
+(`docker ps` → the native `127.0.0.1:11434` API) and re-encoded it (UTF-8 BOM added, LF → CRLF);
+the `F:` free-space check is untouched at `:14`/`:16`, and unrepaired. `crossnode-sync.ps1` was the
+`#862` backup-recovery lane's artifact, and `#862` closed on 2026-08-18. No open pull request
+reserves either file. The diagnosis is unchanged and the destination is still named: `G:`, resolved
+by the label `HERMES_NVME` the way `backup-volumes.ps1` now does.
 
 Still true on HERMES at the moment of this retype, checked rather than carried forward from the
 prose above: `Get-Volume -DriveLetter F` returns nothing, `HermesLabHealth` last ran at
