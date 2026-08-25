@@ -185,6 +185,8 @@ describe("two workspaces that each own themselves", () => {
     realGit(source, ["update-ref", "refs/remotes/origin/main", bundleHead])
     realGit(source, ["bundle", "create", baselineBundle, "refs/remotes/origin/main"])
     execFileSync("git", ["clone", "--quiet", source, baselineWorkspace], { encoding: "utf8" })
+    realGit(baselineWorkspace, ["config", "user.email", "test@williamos.local"])
+    realGit(baselineWorkspace, ["config", "user.name", "WilliamOS test"])
     realGit(baselineWorkspace, ["checkout", "--quiet", "--detach", baselineCommit])
 
     // This commit object is present locally but is unrelated to the governed history. A replacement
