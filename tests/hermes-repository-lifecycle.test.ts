@@ -1080,7 +1080,12 @@ describe("Hermes repository lifecycle", () => {
       state: "OPEN",
       isDraft: false,
       reviewDecision: "APPROVED",
-      statusCheckRollup: [{ conclusion: "SUCCESS" }, { state: "SUCCESS" }],
+      statusCheckRollup: [
+        { name: "work context receipt (#831)", conclusion: "SUCCESS" },
+        { name: "vitest (deterministic suite)", conclusion: "SUCCESS" },
+        { name: "production build (next build)", conclusion: "SUCCESS" },
+        { conclusion: "SUCCESS" }, { state: "SUCCESS" },
+      ],
       reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: sha } }],
     }
     const { lifecycle, calls, record } = await ownedFixture({

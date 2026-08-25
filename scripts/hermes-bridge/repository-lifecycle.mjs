@@ -2,8 +2,18 @@ import { spawn } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
+
+import { ADMISSION, adjudicateMergeAdmission } from "./proof-adjudication.mjs"
 
 export const HERMES_REPOSITORY = "bsvalues/terragroq"
+
+// Required proof identity is declared locally so merge admission never depends on whichever
+// checks the provider happened to return. Editing the contract changes what admission means.
+const MERGE_ADMISSION_CONTRACT = JSON.parse(fs.readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "config", "hermes-bridge", "required-proof-set.json"),
+  "utf8",
+))
 export const HERMES_BASE_BRANCH = "main"
 
 const SHA = /^[0-9a-f]{40}$/
@@ -1214,8 +1224,20 @@ export function createRepositoryLifecycle(options) {
       if (SECRET_LIKE.test(name)) wall("HERMES_REPOSITORY_SECRET_WALL", "secret-like check name refused")
       return [{ name: name.slice(0, 200), state: state.slice(0, 80) }]
     })
+    // Merge admission is adjudicated from the RAW check contexts against the locally declared
+    // contract -- never from effectiveCheckState, which may substitute a review for a check that
+    // did not run. checksGreen is retained for existing advisory/selection callers only.
+    const mergeAdmission = adjudicateMergeAdmission({
+      contract: MERGE_ADMISSION_CONTRACT,
+      checks,
+      headSha: pr?.headRefOid,
+    })
+    mergeAdmission.optionalAssurance.forEach((entry) => {
+      if (SECRET_LIKE.test(entry.name)) wall("HERMES_REPOSITORY_SECRET_WALL", "secret-like check name refused")
+    })
     return {
       ...pr,
+      mergeAdmission,
       checksGreen: checks.length > 0 && checks.every((check) => SUCCESSFUL_CHECKS.has(effectiveCheckState(check))),
       checksComplete: checks.length > 0 && checks.every((check) => !PENDING_CHECKS.has(effectiveCheckState(check))),
       failedChecks,
@@ -1440,10 +1462,13 @@ export function createRepositoryLifecycle(options) {
   async function mergePullRequest({ number, branch } = {}) {
     const safeBranch = branchName(branch)
     const pr = await inspectPullRequest(number)
+    const admissible = pr.mergeAdmission?.verdict === ADMISSION.ADMISSIBLE
     if (pr.headRefName !== safeBranch || pr.baseRefName !== HERMES_BASE_BRANCH
-      || pr.state !== "OPEN" || pr.isDraft || !pr.checksGreen
+      || pr.state !== "OPEN" || pr.isDraft || !admissible
       || !pr.reviewed || pr.unresolvedThreadCount !== 0 || !SHA.test(pr.headRefOid ?? "")) {
-      wall("HERMES_REPOSITORY_MERGE_GATE_WALL", "green checks, approval, and zero unresolved threads required")
+      const refusals = (pr.mergeAdmission?.blockingReasons ?? []).join(", ").slice(0, 400)
+      wall("HERMES_REPOSITORY_MERGE_GATE_WALL",
+        `adjudicated proof admission, approval, and zero unresolved threads required${refusals ? `; ${refusals}` : ""}`)
     }
     await run("gh", ["pr", "merge", String(number), "--repo", repository, "--squash", "--delete-branch=false", "--match-head-commit", pr.headRefOid])
     return { number, branch: safeBranch, merged: true, headRefOid: pr.headRefOid }

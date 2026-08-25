@@ -1,0 +1,12 @@
+{
+  "contractId": "HERMES_MERGE_ADMISSION_V1",
+  "version": 1,
+  "repository": "bsvalues/terragroq",
+  "baseBranch": "main",
+  "description": "Locally declared required-proof set for resident merge admission. HERMES must know which proofs are required rather than inferring them from whatever statusCheckRollup happens to return. Editing this file changes what merge admission means and is reviewed as such.",
+  "requiredProofs": [
+    { "proofId": "work-context-receipt", "matchName": "work context receipt (#831)" },
+    { "proofId": "vitest-deterministic-suite", "matchName": "vitest (deterministic suite)" },
+    { "proofId": "production-build", "matchName": "production build (next build)" }
+  ]
+}
