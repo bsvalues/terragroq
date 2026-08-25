@@ -1,0 +1,37 @@
+Canonical files staged on HERMES for the Gate 1b settlement, and their SHA-256 digests.
+
+Every one is byte-identical to merged `main` 053a33bdb3bb1db57db6d85fff96163b68f11b22. The left
+column was computed in the settlement worktree at that commit; the right column was computed on
+HERMES by `Get-FileHash -Algorithm SHA256` after extraction into `C:\Users\bs\gate1b-settlement`.
+They match, so the probe that ran on HERMES is the probe that was reviewed and merged -- not a copy
+that had drifted, and not a script this lane authored.
+
+  worktree @ 053a33bd                                               HERMES C:\Users\bs\gate1b-settlement
+  ------------------------------------------------------------------------------------------------
+  fe07b7b7d310bc77b5b5ad4c742add6af6452646b6fdc98ef9a0e4fef44a4658  scripts/execution-fabric/probe-windows.ps1
+  aaa80dda35ce895048013d3c956924e90219fff10e8085a1846edf246c752816  scripts/execution-fabric/assemble-registry.mjs
+  47d5c143a461f0160178cac8ba949a2814c760929ab8fb14717fd1c1a765498b  scripts/execution-fabric/assemble-registry-core.mjs
+  b1df628a845cdb43374e5850bb4e1b43cd203eb4baf9c0a32244578112ad9b21  scripts/execution-fabric/canonical-json.mjs
+  7472d1cb72547c18fd4656b83081d606c270938a64b7b34389adba22ead921d5  config/execution-fabric/registry.seed.json
+  19131b2d1158b52e61a672889b9cfdd64ca2fd914a9ff3dc7633911d1b00b54c  config/execution-fabric/registry.schema.json
+  3c2a37a13d4bd229854f52fee5a79eccbe27716406cb935966d993a1fb08cbf2  config/execution-fabric/node-identity-contract.json
+  b9f5138b173962d1297e11c0f4d11fd1629747ebceb96deab1946c38a440061e  lib/fabric/broker.mjs
+  3fdbb256a7c0267c069cfbdfb29aaccde457d5b9d2631e6e15c147264ab88170  lib/fabric/audit.mjs
+  a000aa3c861625f387e4bbeb3a695cf552a26377cc8c9c04e899d49445e70d6c  lib/fabric/run-baseline.mjs
+
+Transport digest of the whole staging archive, computed on both ends:
+
+  fca640b37049b0c3fd7e39147bf12f98b4f93ab2a0f6257d41660a599f492adb  gate1b-stage.tar
+
+Settlement tooling written by this lane. These carry NO hardware facts; they invoke the canonical
+path and transform its output. Both files are retained beside this one, verbatim:
+
+  539eb2d1ba6b5f63effabab6273e9f9cfef1ef2471e4f26c4493aa8895da76fa  run-canonical-probe.mjs
+  1f182becf105114c9ccc6c7c4394bc60686fe2df651c67533eabb2b69f9b7b60  run-route-probe.mjs
+
+The `WINDOWS_PROBE` body inside `run-route-probe.mjs` was verified verbatim against the route rather
+than trusted as a copy. Both extractions hash to:
+
+  bec8912b385313b6acbc19147bc0df4dbdbede8fe57fd12950e300415f1ae08c
+    from app/api/fabric/nodes/route.ts @ 053a33bd
+    from docs/reports/experience-v2-gate1b/GATE1B-run-route-probe.mjs

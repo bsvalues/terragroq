@@ -1,0 +1,31 @@
+{
+  "hermes": {
+    "transport": "local",
+    "os": "windows",
+    "role": "control-plane + WilliamOS/Hermes"
+  },
+  "aegis": {
+    "transport": "ssh",
+    "host": "192.168.88.6",
+    "user": "bs",
+    "os": "linux",
+    "role": "dev worker"
+  },
+  "atlas": {
+    "transport": "ssh",
+    "host": "192.168.88.5",
+    "user": "bs",
+    "os": "linux",
+    "role": "state / DB / RAG"
+  },
+  "omen": {
+    "transport": "ssh",
+    "host": "Omen",
+    "user": "bsval",
+    "os": "windows",
+    "role": "cockpit (managed node, not an autonomous worker)",
+    "enrolled": true,
+    "note": "mDNS name, because the DHCP lease moved .8 -> .7 -> .8 in a day; identity is the pinned host key SHA256:dIK9f5fi0GKqeX/49+03jCNSvtyXkFkv8bp1KJAZXSQ",
+    "workloads": "processes"
+  }
+}
