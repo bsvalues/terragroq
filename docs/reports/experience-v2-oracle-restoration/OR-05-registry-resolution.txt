@@ -1,0 +1,33 @@
+HERMES RESOLVES ATLAS THROUGH THE FABRIC REGISTRY, NEVER THROUGH A WRITTEN-DOWN ADDRESS
+Captured on HERMES 2026-08-25T03:12:21. Worktree 7c97549 feat(experience-v2): revoke the #995 grant after its one authorised use — single-use, since the schema has no such notion (#995)
+
+=== the canonical registry, and what it says ===
+  C:\Users\bs\.williamos\fabric\nodes.json
+  sha256     : c05bdf932c7d6172affccea36217b1aef68a5baf15e9e585c12785131cc32711
+  atlas.host : 192.168.88.8
+  (written by #1006 through lib/fabric/registry.mjs updateNodeFields, after proving
+   identity twice. This lane read it and did not write it.)
+
+=== POSITIVE: the live runtime's env still names the address that stopped existing ===
+  --- resolve, redacted  (exit=0)
+      postgresql://williamos:***@192.168.88.8:15432/williamos?sslmode=disable
+      {"resolvedFrom":"C:\\Users\\bs\\.williamos\\fabric","nodeId":"atlas","registryFingerprint":"c05bdf932c7d6172affccea36217b1aef68a5baf15e9e585c12785131cc32711","previousHost":"192.168.88.5","host":"192.168.88.8","changed":true,"wroteTo":null}
+
+=== NEGATIVE: it refuses, and never falls back to the address in the source string ===
+  --- registry absent  (exit=1)
+      FABRIC_REGISTRY_UNREADABLE: C:\Users\bs\AppData\Local\Temp\fab-a-c95804 could not be read (ENOENT), so atlas's address cannot be resolved. Refusing rather than falling back to a written-down address that may now name another machine.
+  --- registry has no atlas  (exit=1)
+      FABRIC_REGISTRY_INCOMPLETE: the registry at C:\Users\bs\AppData\Local\Temp\fab-b-e0dd6f carries no "atlas" entry with a host, so the authority registry cannot be addressed. Refusing rather than guessing.
+  --- atlas entry has no host  (exit=1)
+      FABRIC_REGISTRY_INCOMPLETE: the registry at C:\Users\bs\AppData\Local\Temp\fab-c-f0944a carries no "atlas" entry with a host, so the authority registry cannot be addressed. Refusing rather than guessing.
+  --- source env absent  (exit=1)
+      SOURCE_ENV_UNREADABLE: C:\Users\bs\AppData\Local\Temp\no-such.env could not be read (ENOENT)
+  --- source env has no DATABASE_URL  (exit=1)
+      SOURCE_ENV_NO_DATABASE_URL: C:\Users\bs\AppData\Local\Temp\blank.env carries no DATABASE_URL assignment, so there is no connection to resolve
+
+=== #1006's repaired resolution path, verified without modifying it ===
+  live file blob   : 0b67f75838c342109a60b47e5781470aac58f847
+  merged main blob : 0b67f75838c342109a60b47e5781470aac58f847
+  last written     : 2026-08-25T01:45:01  (2026-08-25 01:45, by #1006; untouched by this lane)
+  -ResolveOnly exit=0
+      {"store":"D:\\HermesData\\ollama","serviceModelsDir":"D:\\HermesData\\ollama\\models","storeAgrees":true,"blobCount":21,"blobBytes":10360071891,"manifestCount":5,"manifestInstaller":"C:\\HermesLab\\hermes\\install-forge-manifests.sh","manifestInstallerPresent":true,"remote":"/forge/models/ollama","atlas":"bs@192.168.88.8"}

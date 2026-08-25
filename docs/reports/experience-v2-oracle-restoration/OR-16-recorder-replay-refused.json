@@ -1,0 +1,106 @@
+{
+  "tool": "OR-01-record-grant",
+  "startedAt": "2026-08-25T10:53:24.973Z",
+  "host": "Hermes",
+  "worktree": "C:\\HermesLab\\expv2-oracle-restoration",
+  "databaseUrl": "postgresql://williamos:***@192.168.88.8:15432/williamos?sslmode=disable",
+  "actorUserId": "YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ",
+  "actorIdentification": "ASSERTED_BY_OPERATOR_NOT_AUTHENTICATED",
+  "mode": "RECORD",
+  "canonicalPath": "app/actions/authority.ts createAuthorityGrantWithResult",
+  "sqlWrittenByThisFile": "none",
+  "intended": {
+    "scope": "#995",
+    "authorityLevel": "A3_WRITE_SHARED",
+    "grantedTo": "claude",
+    "allowedActions": [
+      "node.stamp-identity"
+    ],
+    "blockedActions": [
+      "production mutation",
+      "TerraFusion",
+      "Property Workbench",
+      "TerraPilot",
+      "county/PACS",
+      "protected data",
+      "paid overage",
+      "destructive action",
+      "secret inspection",
+      "authority expansion",
+      "issue #357",
+      "delete",
+      "revoke",
+      "merge",
+      "release",
+      "spend"
+    ],
+    "expiresInHours": 2,
+    "workOrderId": null,
+    "targetNode": "node:hermes-node"
+  },
+  "substitutedModules": [
+    "next/cache",
+    "@/lib/session"
+  ],
+  "canonicalDigests": {
+    "app/actions/authority.ts": {
+      "onDisk": "65f2eab5528841a081cfd18ae5d139ac076cac7dc85b55ec0d67917d4272fcef",
+      "lfNormalised": "f71e47aa2b7fa2d898963a9a52df2c19d005af78e5be9f53a083248ae0e0a849"
+    },
+    "lib/governance/authority.ts": {
+      "onDisk": "1b9210a0fb5a07033263f52479cea72caf765d6108f4c0e1a857c60bcce8488a",
+      "lfNormalised": "525dc13581101b783d0fde61a6cc722ba8949f68ccb3327324ef8024932e56aa"
+    },
+    "lib/governance/artifacts.ts": {
+      "onDisk": "a4bf987781a230c7d8a340413d20fe312e471a5e10f0edd7acbea9b411d119ae",
+      "lfNormalised": "2a7093a40210526c81f17f85dc239255373131b5c243869a7279e104d9b8348b"
+    },
+    "lib/db/schema.ts": {
+      "onDisk": "4bf7db67aec0416bdf43e440feb735f2590851de574654bc69e46a58065868c2",
+      "lfNormalised": "5df348604c2c5a3f7ad35883afa1d3618e69b94fbdb075ae929fabe1e0c08357"
+    }
+  },
+  "before": {
+    "totalGrants": 29,
+    "routeLookup": [
+      {
+        "id": 32,
+        "ref": "GRANT-0019",
+        "status": "revoked",
+        "authorityLevel": "A3_WRITE_SHARED",
+        "allowedActions": [
+          "node.stamp-identity"
+        ],
+        "expiresAt": "2026-08-25T19:05:06.566Z",
+        "revokedAt": "2026-08-25T17:08:59.273Z",
+        "covers": false,
+        "reason": "Grant GRANT-0019 was revoked: Single-use, exercised. The one authorised node.stamp-identity under #995 executed and was verified by a separate post-state observation; this grant has done what the owner approved it for. Revoked through app/actions/authority.ts revokeAuthorityGrant so that no standing permission outlives the proof. Re-authorising is a new owner decision, not a re-run.",
+        "issuedByThisTool": true
+      }
+    ]
+  },
+  "result": "ALREADY_ISSUED_HISTORICALLY",
+  "detail": "GRANT-0019 is the issuance the owner's 2026-08-25 decision authorised (status revoked, covers=false). It exists, so this decision has been spent and nothing was created. Re-authorising A3_WRITE_SHARED for node.stamp-identity under #995 is a NEW owner decision, not a re-run of this file; there is no flag here that overrides this, on purpose.",
+  "after": {
+    "totalGrants": 29,
+    "routeLookup": [
+      {
+        "id": 32,
+        "ref": "GRANT-0019",
+        "status": "revoked",
+        "authorityLevel": "A3_WRITE_SHARED",
+        "allowedActions": [
+          "node.stamp-identity"
+        ],
+        "expiresAt": "2026-08-25T19:05:06.566Z",
+        "revokedAt": "2026-08-25T17:08:59.273Z",
+        "covers": false,
+        "reason": "Grant GRANT-0019 was revoked: Single-use, exercised. The one authorised node.stamp-identity under #995 executed and was verified by a separate post-state observation; this grant has done what the owner approved it for. Revoked through app/actions/authority.ts revokeAuthorityGrant so that no standing permission outlives the proof. Re-authorising is a new owner decision, not a re-run.",
+        "issuedByThisTool": true
+      }
+    ],
+    "routeAccepts": false,
+    "grantsCreated": 0
+  },
+  "finishedAt": "2026-08-25T10:53:25.464Z"
+}

@@ -1,0 +1,65 @@
+{
+  "tool": "OR-02-revoke-grant",
+  "startedAt": "2026-08-25T10:08:58.662Z",
+  "host": "Hermes",
+  "worktree": "C:\\HermesLab\\expv2-oracle-restoration",
+  "databaseUrl": "postgresql://williamos:***@192.168.88.8:15432/williamos?sslmode=disable",
+  "actorUserId": "YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ",
+  "actorIdentification": "ASSERTED_BY_OPERATOR_NOT_AUTHENTICATED",
+  "ref": "GRANT-0019",
+  "mode": "REVOKE",
+  "canonicalPath": "app/actions/authority.ts revokeAuthorityGrant",
+  "sqlWrittenByThisFile": "none",
+  "before": {
+    "routeLookup": [
+      {
+        "id": 32,
+        "ref": "GRANT-0019",
+        "status": "active",
+        "revokedAt": null,
+        "revokeReason": null,
+        "covers": true,
+        "reason": "covered"
+      }
+    ],
+    "routeAccepts": true
+  },
+  "result": "REVOKED",
+  "revokeReason": "Single-use, exercised. The one authorised node.stamp-identity under #995 executed and was verified by a separate post-state observation; this grant has done what the owner approved it for. Revoked through app/actions/authority.ts revokeAuthorityGrant so that no standing permission outlives the proof. Re-authorising is a new owner decision, not a re-run.",
+  "sideEvidence": {
+    "governanceEvent": [
+      {
+        "id": 1083,
+        "eventType": "AUTHORITY_REVOKED",
+        "entityType": "authority_grant",
+        "entityId": "32",
+        "actor": "operator"
+      }
+    ],
+    "registerEvent": [
+      {
+        "id": 148,
+        "type": "authority.revoked",
+        "register": "authority",
+        "refId": 32,
+        "summary": "GRANT-0019: REVOKED — Single-use, exercised. The one authorised node.stamp-identity under #995 executed and was verified by a separate post-state observation; this grant has done what the owner approved it for. Revoked through app/actions/authority.ts revokeAuthorityGrant so that no standing permission outlives the proof. Re-authorising is a new owner decision, not a re-run."
+      }
+    ]
+  },
+  "after": {
+    "routeLookup": [
+      {
+        "id": 32,
+        "ref": "GRANT-0019",
+        "status": "revoked",
+        "revokedAt": "2026-08-25T17:08:59.273Z",
+        "revokeReason": "Single-use, exercised. The one authorised node.stamp-identity under #995 executed and was verified by a separate post-state observation; this grant has done what the owner approved it for. Revoked through app/actions/authority.ts revokeAuthorityGrant so that no standing permission outlives the proof. Re-authorising is a new owner decision, not a re-run.",
+        "covers": false,
+        "reason": "Grant GRANT-0019 was revoked: Single-use, exercised. The one authorised node.stamp-identity under #995 executed and was verified by a separate post-state observation; this grant has done what the owner approved it for. Revoked through app/actions/authority.ts revokeAuthorityGrant so that no standing permission outlives the proof. Re-authorising is a new owner decision, not a re-run."
+      }
+    ],
+    "routeAccepts": false,
+    "totalGrants": 29
+  },
+  "finishedAt": "2026-08-25T10:08:59.307Z"
+}

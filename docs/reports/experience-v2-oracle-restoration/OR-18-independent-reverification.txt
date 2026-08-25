@@ -1,0 +1,144 @@
+INDEPENDENT RE-VERIFICATION OF THE RESTORED ORACLE
+Taken 2026-08-25 from OMEN, in a SESSION THAT DID NOT PERFORM THE RESTORATION and that read no
+value out of OR-00..OR-17 before measuring it. Every figure below was produced first and compared
+afterwards. Nothing here mutated ATLAS, HERMES, or the registry.
+
+Why it exists: OR-00..OR-17 were captured by the session that made the changes. A record whose only
+witness is its own author is the shape of defect this lane spent its length removing. This is the
+second witness, over a different transport and a different tool where one was available.
+
+=== 0 · what the repository held while measuring ===
+  origin/main                : c3d822fa   (#1006 merged; unchanged since)
+  PR #1008 head              : 44b28991
+  PR #1008 mergeable         : MERGEABLE / CLEAN
+  checks at 44b28991         : vitest (deterministic suite) PASS x2, production build PASS x2,
+                               work context receipt (#831) PASS x2
+  Head state is recorded as measured at this timestamp, not asserted as current.
+
+=== 1 · the service is owned by the declared compose project, not squatting ===
+  docker ps --filter publish=15432
+      williamos-postgres | pgvector/pgvector:pg16 | Up About an hour (healthy)
+                         | 0.0.0.0:15432->5432/tcp
+  labels
+      com.docker.compose.project              = williamos-authority-registry
+      com.docker.compose.service              = registry
+      com.docker.compose.project.config_files = /opt/williamos/deploy/atlas/
+                                                williamos-authority-registry/compose.yaml
+  HostConfig.PortBindings
+      {"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"15432"}]}      <- no interface address
+  Mounts
+      volume  williamos_pgdata  -> /var/lib/postgresql/data    rw=true
+      bind    ./pg_hba.conf     -> /etc/williamos/pg_hba.conf  rw=FALSE
+
+=== 2 · deployed bytes vs the repository, file by file, at 44b28991 ===
+  apply-network-policy.sh              fc771be2...  IDENTICAL
+  compose.yaml                         bbd376d8...  IDENTICAL
+  fabric-callers.json                  b028b17b...  IDENTICAL
+  pg_hba.conf                          fef173f7...  IDENTICAL
+  williamos-authority-firewall.service d5b161ee...  IDENTICAL
+  README.md                            deployed b3098fb0... / repo d036131d...   **DIFFERS**
+
+  The README difference is real and is reported rather than rounded off. The deployed copy is the
+  one placed at 09:38; the repository copy was edited afterwards by 74494cbb, the commit that made
+  the apply atomic and that necessarily also rewrote the README's description of it. Every file the
+  machine EXECUTES or READS is byte-identical; the file that drifted is prose. Correcting it means
+  another ATLAS write for a documentation copy, which is not worth a mutation - a later lane
+  touching this directory should re-place it.
+
+=== 3 · the Postgres policy layer, read from the running server ===
+  SHOW hba_file          -> /etc/williamos/pg_hba.conf        (the mounted, read-only file)
+  SHOW listen_addresses  -> *
+  pg_hba_file_rules (loaded; the error column is empty on every row):
+      1 local {all}         {all}                        trust
+      2 local {replication} {all}                        trust
+      3 host  {williamos}   {williamos}  192.168.88.9/32  scram-sha-256
+      4 host  {all}         {all}        0.0.0.0/0        reject
+      5 host  {all}         {all}        ::/0             reject
+  The two local trust rows are the container's unix socket, reachable only through `docker exec` -
+  a channel that already has root on ATLAS. That is the channel section 5 uses, deliberately, and
+  the file says so. No TCP rule carries trust.
+
+=== 4 · the packet layer, and its boot owner ===
+  apply-network-policy.sh check
+      POLICY_OK: tcp/15432 allowlisted to: 192.168.88.9/32 (everything else dropped)   rc=0
+  iptables -S
+      -A DOCKER-USER -j WILLIAMOS-AUTHORITY
+      -A WILLIAMOS-AUTHORITY -s 192.168.88.9/32 -p tcp
+         -m conntrack --ctorigdstport 15432 --ctdir ORIGINAL -j RETURN
+      -A WILLIAMOS-AUTHORITY -p tcp
+         -m conntrack --ctorigdstport 15432 --ctdir ORIGINAL -j DROP
+  systemctl is-enabled williamos-authority-firewall -> enabled
+  systemctl is-active  williamos-authority-firewall -> active
+
+=== 5 · the 28 pre-existing grants, re-derived over a DIFFERENT transport and tool ===
+  Tool     : psql inside the container over the local unix socket, -At -F pipe
+  Not      : node-pg over TCP from HERMES, which is what produced OR-06 and OR-17
+  Rendering: the column list and order written into OR-00, reproduced in SQL by hand
+
+      28 pre-existing / 15 col   dba0006cc86c4c35abc7d2fc58b00cacb38c03bd5698439e3c2e4ce6128353b7
+      28 pre-existing / 18 col   e458f4bc16f24ab8ee3ef20388d2f3afaa4ae5a95d14f8a68d9cbc650da3e36f
+      all 29          / 15 col   60a107a4c047ab57ab6852c3810a524c545bb26f8b675abb2c37661d1522cb7c
+      all 29          / 18 col   73747e267954b410f59ceac6c47fdf765e53a85a3d7a19de6b194999f9a95a2e
+
+  All four equal the recorded values. Counts: 29 rows, 27 active + 2 revoked; one of the two
+  revoked rows pre-dates this lane.
+
+=== 6 · the grant, and what remains of it ===
+  ref=GRANT-0019  status=revoked  level=A3_WRITE_SHARED  scope=#995
+  allowedActions=node.stamp-identity   grantedTo=claude
+  userId=YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ   revokedAt=2026-08-25 10:08:59.273
+
+  SELECT ... WHERE scope='#995'  ->  GRANT-0019 | revoked      (one row, and it is not active)
+
+  Every OTHER active grant held by that userId was enumerated as well: 27 rows, none scoped #995.
+  The only ones above A2 are grants that already existed before this lane - GRANT-0010 and
+  GRANT-0011 (#887), GRANT-0013 (WO-0027), GRANT-0014 (WO-0028), all A3_WRITE_SHARED, and
+  GRANT-0017 (#905, A3_OPERATE_HOST). No standing permission wider than what was intentionally
+  authorised exists, and nothing this lane recorded is still active.
+
+=== 7 · end-to-end from HERMES, through the registry and the route's own predicate ===
+  The two files exercised on HERMES were confirmed byte-identical to the PR head blobs BEFORE being
+  run, because that worktree's HEAD commit is older than the branch head and the remediation lives
+  there as uncommitted modifications:
+      OR-00-authority-readback.mjs           068561e8...  == blob at 44b28991 (LF)
+      lib/fabric/authority-registry-url.mjs  42c70a67...  == blob at 44b28991 (LF)
+
+  Test-NetConnection 192.168.88.8:15432 from HERMES       -> True
+  resolve-authority-registry-url.mjs (registry-resolved)  -> ...@192.168.88.8:15432/williamos
+      registryFingerprint c05bdf932c7d6172affccea36217b1aef68a5baf15e9e585c12785131cc32711
+      previousHost 192.168.88.5 -> host 192.168.88.8, changed true, wroteTo null
+      Fingerprint unchanged from OR-05: this session read the registry and did not write it.
+  OR-00 over the RESOLVED url, from HERMES:
+      count 29
+      sha256 60a107a4...   sha256Extended 73747e26...   (equal to section 5, taken on ATLAS)
+      routeLookup: predicate route.ts:104-112, checker grantCovers
+        rowsReturned 1 -> GRANT-0019, status revoked, covers FALSE
+        accepted: FALSE
+  The oracle is readable end-to-end over the governed path, and the governed path refuses.
+
+=== 8 · the mutation, observed again and later ===
+  C:\Users\bs\.williamos\node-identity.json
+      digest ba29cf1b3bf49daff826d6d17247aa862fbdc53c296cc4ca4ed2a5491dc02a22   (== OR-10)
+      bytes  158                                                                (== OR-10)
+      mtime  2026-08-25T10:06:50.0352725Z
+      body   {"contract":"williamos-node-stamp/1","nodeId":"hermes-node","hostname":"HERMES",
+              "role":"local-ai-gpu-execution-worker","stampedAt":"2026-08-25T10:06:49.549Z"}
+  The mutation is durable, not a transient of the run that made it.
+
+=== 9 · one gap this pass found in the RECORD rather than in the machine ===
+  CONT-EXPV2-RESOLVER-NOT-WIRED was typed in the lane report and in OR-15 and was never entered in
+  the continuation register in
+  docs/governance/williamos-experience-v2-first-action-pickup-search-record.md section 8, where
+  every other typed continuation from this lane lives and where a later lane actually looks. The
+  finding was re-verified at 44b28991 before being recorded - the resolver is reached only from its
+  own CLI and its tests, and scripts/hermes-bridge/run-cycle.ps1:11 still computes
+  $envPath = <workspace>\.env.local and passes it to node as --env-file - and the register entry is
+  added in the same commit as this file.
+
+=== 10 · what this re-verification did NOT do ===
+  No ATLAS mutation of any kind, so no rollback was required and none was taken.
+  No grant recorded, revoked, or altered. No registry write. No HERMES script file touched - the
+  crossnode-repair lane's reservation was respected, and the HERMES side was reads plus the two
+  read-only node runs above.
+  ATLAS was not rebooted. Reboot survival is still claimed from configuration, as OR-15 and the
+  main record already say, and is still not proved by a power cycle.

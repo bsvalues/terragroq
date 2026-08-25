@@ -1,0 +1,34 @@
+# Re-applies the authority oracle's packet-layer allowlist every boot.
+#
+# `DOCKER-USER` rules live in the kernel and nowhere else: they do not survive a reboot, and Docker
+# recreates its chains from scratch when the daemon restarts. A restriction that quietly disappears
+# on the next power cycle is a story about a restriction, which is the failure class this program has
+# already paid for more than once -- so the allowlist gets an owner that runs at boot, exactly as the
+# Ollama service on HERMES did under #997.
+#
+# Install (from this directory, on ATLAS):
+#   sudo cp williamos-authority-firewall.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now williamos-authority-firewall.service
+#
+# `WorkingDirectory` is where this repository is checked out on ATLAS. Change it there if the
+# checkout moves; the unit deliberately does not search for it.
+[Unit]
+Description=WilliamOS authority registry — DOCKER-USER allowlist for tcp/15432
+Documentation=file:///opt/williamos/deploy/atlas/williamos-authority-registry/README.md
+# Ordered AFTER docker so it installs into chains that already exist, and Wants= rather than
+# Requires= so a docker failure surfaces as a docker failure rather than as a masked firewall one.
+After=docker.service network-online.target
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/williamos/deploy/atlas/williamos-authority-registry
+ExecStart=/opt/williamos/deploy/atlas/williamos-authority-registry/apply-network-policy.sh apply
+# Proves what it just installed. If the allowlist did not take, the unit fails loudly instead of
+# reporting active over an unfiltered port.
+ExecStartPost=/opt/williamos/deploy/atlas/williamos-authority-registry/apply-network-policy.sh check
+
+[Install]
+WantedBy=multi-user.target
