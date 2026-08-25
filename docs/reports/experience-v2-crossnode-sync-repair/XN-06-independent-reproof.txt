@@ -1,0 +1,348 @@
+XN-06 — INDEPENDENT RE-PROOF, 2026-08-25T03:37–03:52 (HERMES local time)
+========================================================================
+
+WHY THIS FILE EXISTS
+
+The envelope that produced XN-01..XN-05 typed itself FAILED_TERMINAL /
+OUT_OF_SCOPE_ENVIRONMENT_MUTATION (003 §Terminal stop condition) and returned
+CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F to PICKUP_ELIGIBLE with:
+
+    remaining: independent re-proof. NOT re-repair.
+
+This is that re-proof, run by a different envelope. It authored none of the repair. It
+deployed the branch head, re-derived every control from scratch, and added two controls
+the previous envelope never ran because it went terminal before it could.
+
+Nothing here erases the §10 event. It stays in 003 permanently. What this file does is
+supply the certification the self-disabled envelope was not entitled to give.
+
+
+PRECONDITION: WHAT WAS ACTUALLY DEPLOYED, MEASURED NOT ASSUMED
+--------------------------------------------------------------
+
+003 said its four digests were the 2026-08-25T02:45 deployment and that HERMES had not
+been contacted since. Measured at 03:38, before anything was changed:
+
+  590b3989a6d6bddcb9259be71f065542768c345f7e8684558475eb68e05b48ce  crossnode-sync.ps1
+  cae108b3a3e23a102f5dc8bad1a0a527b586a4bde2e481f48df2bc255b0f9a56  crossnode-sync-lib.ps1
+  2a001349da738bf32cfb5929fc07602f1655d255646a21785dc338e016b1f38f  lab-health.ps1
+  317a0fe004d75f9490c7579baec68e0c79bc9a16df54c65326b5d1e451262867  test-crossnode-sync-receipt.ps1
+  (all four LastWriteTime 2026-08-25T02:47:58)
+
+All four match 003's table exactly. Nothing else touched these files in the interval.
+The deploy lag 003 declared was real and was exactly three files.
+
+
+LC-A (NEW) — DOES IdentitiesOnly=yes ACTUALLY AUTHENTICATE TO ATLAS?
+--------------------------------------------------------------------
+
+003 named this "the single highest-value thing for the re-proving lane to exercise,
+because the failure mode if it is wrong is a red HermesCrossNodeBackupSync". It was
+asserted in a unit test against an option list, never against a handshake.
+
+Run BEFORE deploying, so a broken option could not reach the scheduled task:
+
+  RESOLVED_ENDPOINT: bs@192.168.88.8
+  SSH_EXIT: 0
+  SSH_OUT: atlas | bs | IDENTITIES_ONLY_SSH_OK
+  SCP_EXIT: 0
+  SCP_ROUNDTRIP: lc-a-scp-probe
+  FORGE: FORGE_MOUNTED | /forge/backups/nightly/20260823_030001/
+                       | /forge/backups/nightly/20260824_030001/
+                       | /forge/backups/nightly/20260825_030001/
+
+ssh -v, which key was actually used:
+
+  debug1: Will attempt key:     C:\Users\bs\.williamos\fabric\keys\williamos-fabric ED25519
+                                SHA256:3sb3Y+hbZv1cWCLs3ZmEWJ8U+n8ghPXSe1KnTQCc6bo explicit
+  debug1: Offering public key:  ...same key... explicit
+  debug1: Server accepts key:   ...same key... explicit
+
+ONE key attempted, ONE offered, that one accepted, each marked `explicit` — which is the
+trace IdentitiesOnly=yes produces. The resolved identity is the identity that
+authenticated. VERDICT: PASS.
+
+HONEST BOUND ON WHAT THIS PROVES. `ssh-add -l` on this account returns
+"Error connecting to agent: No such file or directory" — there is no ssh-agent running,
+so today there are no extra identities for IdentitiesOnly to exclude. This control proves
+the option is correct and does not break the handshake or scp. It does NOT reproduce the
+MaxAuthTries exhaustion scenario the option guards, because the precondition for that
+scenario does not currently exist on this box. The fix is defence against a state HERMES
+is not in today, and is proven not to cost anything in the state it is in.
+
+
+DEPLOY — BRANCH HEAD, DIGEST-VERIFIED, BACKED UP
+-------------------------------------------------
+
+Three files. crossnode-sync.ps1 was already at branch head (590b3989 both sides) and was
+not redeployed. The installer refuses on a backup whose digest does not match what it
+backed up, and refuses on a deployed digest that does not match what was staged.
+
+  crossnode-sync-lib.ps1
+    preserved cae108b3a3e23a102f5dc8bad1a0a527b586a4bde2e481f48df2bc255b0f9a56
+    deployed  e4925c2a5c25ebafacd112dbb36f209f47233eede06e91f7fae9ae067955f816
+  lab-health.ps1
+    preserved 2a001349da738bf32cfb5929fc07602f1655d255646a21785dc338e016b1f38f
+    deployed  2e67812bad54c2f9f2a2c8f08ccf5801b70f5466b448462a4830e971887bf8b4
+  test-crossnode-sync-receipt.ps1
+    preserved 317a0fe004d75f9490c7579baec68e0c79bc9a16df54c65326b5d1e451262867
+    deployed  203af07c55517d6824407be1c09c59bfb9bb689e224931d854417d986d92f10c
+  DEPLOY_OK
+
+Originals preserved as *.bak-20260825_0340-reproof. The deployed digests equal the
+repository copies at a3c374f1 byte for byte. The branch head and HERMES now agree; 003's
+declared lag is closed.
+
+An aside worth one line, because it is the same lesson: the first version of the installer
+named its hash helper `H`, which is a built-in alias for Get-History. It threw on the
+first file and wrote nothing — the fail-closed ordering (hash, back up, verify, only then
+copy) meant a broken installer left the box untouched rather than half-deployed.
+
+
+LC-01..LC-05 — RE-DERIVED AGAINST THE NEWLY DEPLOYED CODE
+----------------------------------------------------------
+
+  LC-01  unit tests, deployed library     PRODUCER_TESTS_PASS            exit 0
+         (now includes the two assertions added on review: IdentitiesOnly=yes present,
+         and no `-n` on the shared ssh/scp option list)
+
+  LC-02  -ResolveOnly on real hardware    exit 0
+         {"archiveVolumeLabel":"HERMES_NVME","archiveRoot":"G:",
+          "atlasToHermes":"G:\\lab-backups\\crossnode\\atlas","atlasToHermesExists":true,
+          "hermesSource":"G:\\lab-backups\\hermes-volumes","hermesSourceExists":true,
+          "hermesSourceArchives":40,"atlas":"bs@192.168.88.8",
+          "atlasNightlyRoot":"/forge/backups/nightly"}
+
+  LC-03  -ArchiveVolumeLabel NO_SUCH_LABEL_XYZ                           exit 1
+         CROSSNODE_SYNC_FAILED code=ARCHIVE_VOLUME_ABSENT stage=PREFLIGHT_RESOLUTION
+         "no mounted volume is labelled 'NO_SUCH_LABEL_XYZ' ... Nothing was copied in
+          either direction."
+
+  LC-04  -FabricRoot at an empty directory                               exit 1
+         CROSSNODE_SYNC_FAILED code=FABRIC_REGISTRY_UNREADABLE
+         "...nodes.json does not exist, so atlas's address cannot be resolved. Refusing
+          rather than falling back to a written-down address that may now name another
+          machine."
+
+  LC-05  -FabricRoot with a registry but no key                          exit 1
+         CROSSNODE_SYNC_FAILED code=FABRIC_IDENTITY_UNREADABLE
+         "...keys\williamos-fabric does not exist, so no authenticated transport to ATLAS
+          can be built. Refusing rather than falling back to whatever identity the calling
+          account happens to hold."
+
+All three refusals fire at PREFLIGHT_RESOLUTION — before anything is created or contacted.
+
+
+LC-06/07 — A REAL RUN, ON THE UNMODIFIED SCHEDULED-TASK DEFINITION
+-------------------------------------------------------------------
+
+  BEFORE  lastResult=0  lastRun=2026-08-25T02:48:48
+          evidence mtime 2026-08-25T09:48:49Z
+          evidence sha   1d37fca1cd2aa8e011e8261c38b1ad50129873e16215d68a9aff9553c2b769ad
+
+  Start-ScheduledTask HermesCrossNodeBackupSync    ELAPSED 28 s, state returned to Ready
+
+  AFTER   lastResult=0  lastRun=2026-08-25T03:42:42
+          evidence mtime 2026-08-25T10:43:00Z
+          evidence sha   800f37c28bc8484d0c4fa6d51616e4f71d5fdcbd6a323a4356542246038b476a
+
+  {"schema_version":1,"task_name":"HermesCrossNodeBackupSync",
+   "run_id":"5b1782a6-4984-4094-b9fd-4d7d87c29c6b",
+   "started_at":"2026-08-25T10:42:37.1271893Z",
+   "receipt_completed_at":"2026-08-25T10:42:56.9555419Z",
+   "completed_at":"2026-08-25T10:43:00.8011525Z",
+   "state":"COMPLETED","result":"SUCCESS","verification":"SHA256_PASS",
+   "atlas_receipt_sha256":"267456bbb53c29c50e519cc6ac9a4aaa2f78a34ad17583e0a34d3d89f38e38e3"}
+
+This is the control that matters most, because it is the first real off-box replication
+run carried by the post-review library — the one carrying IdentitiesOnly=yes. It did not
+go red. The task was STARTED. It was not created, modified, enabled, disabled or
+rescheduled.
+
+
+LC-08 — VERIFIED FROM BOTH SIDES, HASHED SEPARATELY ON EACH MACHINE
+--------------------------------------------------------------------
+
+The script reporting SHA256_PASS about itself is the claim, not the evidence.
+
+  STAMP: 20260825_030001
+  OPTS_HAS_IDENTITIESONLY: True
+
+  hashed ON ATLAS                              hashed ON HERMES (G:)
+  eac3e861...0d27  SHA256SUMS                  eac3e861...0d27  SHA256SUMS
+  191fae2e...9bd6  tf-mongo.archive.gz         191fae2e...9bd6  tf-mongo.archive.gz
+  d7d2a451...5c59  tf-postgres--icondo.dump    d7d2a451...5c59  tf-postgres--icondo.dump
+  435a032a...f65f  tf-postgres--postgres.dump  435a032a...f65f  tf-postgres--postgres.dump
+  aa4599e1...d32d  tf-redis.rdb                aa4599e1...d32d  tf-redis.rdb
+
+  ATLAS_FILES: 5   HERMES_FILES: 5   IDENTICAL: ALL
+
+  receipt on ATLAS   267456bbb53c29c50e519cc6ac9a4aaa2f78a34ad17583e0a34d3d89f38e38e3
+  recorded on HERMES 267456bbb53c29c50e519cc6ac9a4aaa2f78a34ad17583e0a34d3d89f38e38e3
+  RECEIPT_MATCH: True
+
+That match is what makes the HERMES evidence file and the ATLAS receipt one record rather
+than two independent claims.
+
+A BUG IN THIS CONTROL, FOUND AND FIXED HERE. The first run of LC-08 picked its stamp with
+`ls -1 /forge/backups/nightly | sort | tail -1`, which returned `last-run.json` — a FILE in
+that directory — and the comparison reported ATLAS_FILES: 0, IDENTICAL: NO. The production
+script does not have this bug: it filters stamps with `^\d{8}_\d{6}$`. The control was
+wrong, not the script. Fixed by applying the same filter, and re-run. Recorded because a
+control that mis-selects its own input and reports NO is exactly as dangerous as one that
+reports YES for the wrong reason.
+
+
+LC-08b — WHY ATLAS HOLDS 70 ARCHIVES AND HERMES HOLDS 40
+---------------------------------------------------------
+
+Noticed while reading LC-08 and chased rather than assumed:
+
+  LOCAL: 40   REMOTE: 70   LOCAL_MISSING_ON_ATLAS: 0   ATLAS_ONLY: 30
+
+Every local archive is on ATLAS. The 30 extras are older files:
+
+  2026-08-11+11:00:04  hermes_pgdata-20260807_075819.tar.gz
+  2026-08-11+11:00:05  hermes_pgdata-20260807_080601.tar.gz
+  2026-08-11+11:00:05  hermes_pgdata-20260808_030002.tar.gz
+  ...
+  2026-08-25+10:42:52  terrafusion_..._redis_data-20260825_030003.tar.gz
+
+The cause is precise and benign: `scp` does not preserve mtime, so a file's ATLAS-side
+retention clock starts when it was COPIED, not when it was created. Both sides prune at
+14 days, but they are counting from different zeroes, so off-box copies survive roughly
+four days longer than their local originals. The asymmetry runs in the safe direction —
+the off-box copy outlives the local one — and is a property of the design, not a defect.
+Typed as an observation only; nothing was changed for it.
+
+
+LC-09 — HermesLabHealth
+------------------------
+
+  BEFORE  lastResult=1  lastRun=2026-08-25T03:10:10
+  AFTER   lastResult=1  lastRun=2026-08-25T03:48:48   (direct run exit 1)
+  GET_VOLUME_F: F_ABSENT
+
+  ----- HERMES -----
+    C: free :    86.8 GB   [OK]
+    G: free:  922.3 GB   [OK]  (label HERMES_NVME)      <-- resolved, not lettered
+    Docker  : up (v29.7.2), vhdx 119.7 GB   [OK]
+    Ollama  : running (native 127.0.0.1:11434)   [OK]
+    Backup  : last 0.8h ago, result 0   [OK]
+    X-sync  : last 0.1h ago, result 0   [OK]
+  ----- ATLAS -----
+    Address : bs@192.168.88.8                            <-- resolved from nodes.json
+    Issues  : no backup in 175h
+  ----- AEGIS -----
+    Address : bs@192.168.88.6                            <-- resolved from nodes.json
+    Issues  : spare disk sdd SMART UNKNOWN
+  OVERALL: WARN
+
+ONE CORRECTION TO 003. Its summary table says the two remaining problems are "both real".
+That is not right, and the distinction is the kind this program keeps paying for:
+
+  * AEGIS sdd SMART UNKNOWN — real, pre-existing, belongs to wo/866-aegis-backup-activation.
+  * ATLAS "no backup in 175h" — NOT a real backup gap. ATLAS's nightly ran today; this
+    lane replicated /forge/backups/nightly/20260825_030001 and verified all five files by
+    independent hash (LC-08). It is the monitor that is stale, via health-atlas.sh:67
+    watching the abandoned /home/bs/backups path — already typed
+    CONT-ATLAS-HEALTH-WATCHES-ABANDONED-PATH, PICKUP_ELIGIBLE, for an ATLAS-side lane.
+
+So: two problems, both ACCOUNTED FOR, one real and one a known-typed monitor defect. The
+correct reading of a WARN here is that lab-health is now telling the truth about the state
+of its own instrumentation.
+
+
+LC-10 (NEW) — THE PROBE-SKIP GUARD, EXERCISED LIVE FOR THE FIRST TIME
+----------------------------------------------------------------------
+
+The lab-health remediation (no fallback option list; skip the probes when the fabric
+identity does not resolve) was written after the previous envelope went terminal, so it had
+never been run against real hardware. lab-health.ps1 reads $env:USERPROFILE, so pointing
+that at a fabric tree holding a registry but NO KEY reproduces exactly that failure path.
+
+  HAS_NODES_JSON: True   HAS_KEY: False   LC10_EXIT: 1
+
+    fabric ssh identity unresolved: FABRIC_IDENTITY_UNREADABLE ... does not exist, so no
+    authenticated transport to ATLAS can be built. Refusing rather than falling back to
+    whatever identity the calling account happens to hold.   [FAIL]
+
+    ----- ATLAS -----
+      Address : bs@192.168.88.8
+      PROBE SKIPPED - no resolved fabric identity   [FAIL]
+    ----- AEGIS -----
+      Address : bs@192.168.88.6
+      PROBE SKIPPED - no resolved fabric identity   [FAIL]
+    OVERALL: FAIL
+
+Neither node was contacted. The address still prints — an operator should be told what was
+NOT reached — but no ssh ran under ambient credentials. VERDICT: PASS.
+
+ONE ARTIFACT OF THE HARNESS, STATED SO IT IS NOT MISREAD: this run also printed
+"Docker : NOT RESPONDING [FAIL]". That is caused by redirecting $env:USERPROFILE, which is
+where the Docker CLI keeps its context and config — not by a Docker outage. LC-09, two
+minutes earlier, showed Docker up at v29.7.2.
+
+
+THE NESTED-SSH HANG, INDEPENDENTLY REPRODUCED
+----------------------------------------------
+
+XN-03 concluded the 232-second hang was "a property of running these scripts from inside a
+nested ssh session, not a defect in them", and reverted the `-n` flag that had been added
+on the opposite theory. That conclusion reproduced here without being aimed at:
+
+LC-A was first run directly through a nested ssh and hung. Process inspection found it
+stalled on its FIRST remote call:
+
+  03:37:09  PID=4976  ssh.exe -i ...williamos-fabric -o IdentitiesOnly=yes ... -n
+            bs@192.168.88.8 "hostname; id -un; echo IDENTITIES_ONLY_SSH_OK"
+
+Note `-n` is present on that command line and it hung anyway. The identical script, run
+detached via Win32_Process.Create so it does not inherit the session's pipes, completed in
+under 25 seconds. Every control in this file was therefore run detached. XN-03's reverted
+hypothesis was correctly reverted.
+
+
+ENVELOPE
+--------
+
+Changed on HERMES: three files in C:\HermesLab\hermes\, with originals preserved as
+*.bak-20260825_0340-reproof. Nothing else.
+
+Scheduled tasks: HermesCrossNodeBackupSync and HermesLabHealth were STARTED on their own
+unmodified definitions, both within the hour they would have run anyway. None was created,
+deleted, enabled, disabled, modified or rescheduled. Final state, all four green or
+correctly warning:
+
+  HermesCrossNodeBackupSync  lastResult=0  lastRun=2026-08-25T03:42:42
+  HermesLabHealth            lastResult=1  lastRun=2026-08-25T03:48:48
+  HermesVolumeBackup         lastResult=0  lastRun=2026-08-25T03:00:00
+  HermesModelForgeSync       lastResult=0  lastRun=2026-08-25T01:59:59
+
+No service, container, compose file, GPU setting, firewall rule or registry entry touched.
+On ATLAS: nothing beyond what crossnode-sync.ps1 writes by design, plus one probe file
+under /tmp written and deleted by LC-A. Nothing on AEGIS. No database was contacted on any
+node; ATLAS's broken Postgres publish is unrelated to this lane and was not approached.
+
+PROCESSES — THE §10 QUESTION, HANDLED DIFFERENTLY THIS TIME. Clearing this lane's own hung
+LC-A run required killing processes, which is the exact act that terminalized the previous
+envelope. Every process on the box was listed with its full command line FIRST, and the
+kill was filtered to two strings that exist nowhere but in a file this lane wrote today
+(`lc-a-identity.ps1`, `IDENTITIES_ONLY_SSH_OK`):
+
+  MATCHED AS MINE: 3   (PID 22444, 27420, 4976)   KILLED: 22444, 27420
+  4976 exited with its parent before it could be signalled.
+
+  REMAINING_SSH: 3 — LEFT UNTOUCHED
+    PID=10188  ssh.exe -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=no ...
+    PID=7108   ssh.exe -i ...williamos-fabric ... "sudo -n ls /forge/models/ollama/..."
+    PID=23620  ssh.exe -i ...williamos-fabric ... "ls -1 /forge/backups/nightly ..."
+
+Those three are other lanes' stalled connections, dated 02:43:56, and they are still
+running. They were not this lane's to kill and were not killed. That is the entire
+difference between this envelope and the one that self-disabled.
+
+Probe scripts and staging were removed from C:\Users\bs afterwards; the deployment and its
+backups were not.
+
+OWNER_COURIER_ACTIONS = 0. No owner decision was required and no authority gap was reached.

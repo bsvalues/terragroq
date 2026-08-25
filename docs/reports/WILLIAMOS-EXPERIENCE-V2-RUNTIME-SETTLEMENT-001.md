@@ -351,33 +351,46 @@ a real ATLAS, and that is what this continuation still holds open.
 `backup-volumes.ps1`'s transfer leg is separately unverified for a different reason: it drives
 `docker run`, and container interaction on HERMES is outside this lane's envelope.
 
-### `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F` — REPAIRED, NOT DISCHARGED
+### `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F` — **DISCHARGED 2026-08-25**
 
 ```
-type:      PICKUP_ELIGIBLE          [stays PICKUP_ELIGIBLE. #1007 typed this DISCHARGED and
-                                     withdrew it on review -- see the note below]
+type:      DISCHARGED               [retyped 2026-08-25 from PICKUP_ELIGIBLE, which #1007 had
+                                     itself retyped from DISCHARGED when it withdrew on review]
 repaired:  WILLIAMOS-EXPERIENCE-V2-CROSSNODE-SYNC-REPAIR-003.md, PR #1007
+re-proved: 003 section "Independent re-proof", transcript XN-06-independent-reproof.txt, by a
+           SEPARATE envelope that authored none of the repair and changed none of the four files
 files:     scripts/lab-control/hermes/crossnode-sync.ps1, crossnode-sync-lib.ps1, lab-health.ps1,
            test-crossnode-sync-receipt.ps1
-measured:  HermesCrossNodeBackupSync lastResult 1 -> 0 (25 s, 2026-08-25T02:48:48-07:00)
+measured:  HermesCrossNodeBackupSync lastResult 1 -> 0 (28 s, 2026-08-25T03:42:42-07:00, re-run
+                                     against the deployed branch head)
            HermesLabHealth           lastResult 2 -> 1 (warn, and the warn is honest)
            replication verified from both sides -- 5/5 ATLAS nightly files byte-identical on G:,
-           and the receipt on ATLAS hashes to the value the HERMES-side evidence records
-remaining: independent re-proof. NOT re-repair.
+           hashed separately on each machine, and the receipt on ATLAS hashes to the value the
+           HERMES-side evidence records
+           LC-A + LC-01..LC-10 all pass; branch head and HERMES now digest-identical
+standing:  the §10 FAILED_TERMINAL against #1007's ORIGINAL envelope is NOT withdrawn by this
+           discharge and stays in the record
 ```
 
-**Why this is still open when the scripts are fixed and the tasks are green.** A §10 Immediate
-Terminal Stop condition fired inside #1007's run — clearing a hung process it owned, that lane
+**Why this could be closed when the repairing envelope could not close it.** A §10 Immediate
+Terminal Stop condition fired inside #1007's first run — clearing a hung process it owned, that lane
 killed every `ssh.exe` on HERMES rather than only its own, and two of the eight belonged to other
-lanes. The envelope was required to self-disable at that moment and did not; it deployed and ran
-its last four controls afterwards. An envelope that has acted outside its scope may not then
-certify its own outcome, so #1007 withdrew its discharge rather than defend it. The measurements
-above are retained and reproducible; what is missing is an envelope entitled to close on them.
+lanes. The envelope was required to self-disable at that moment and did not; it deployed and ran its
+last four controls afterwards. An envelope that has acted outside its scope may not then certify its
+own outcome, so #1007 withdrew its discharge rather than defend it and handed over typed.
 
-A lane picking this up should expect to find the work already done and its job to be re-derivation:
-deploy the branch head (three files there are ahead of what is deployed on HERMES, deliberately),
-re-digest, and re-run `LC-01`–`LC-09` from 003. `IdentitiesOnly=yes` on the fabric transport is the
-one change never exercised against a real ATLAS.
+A later, separate envelope did the re-derivation that handoff asked for: it deployed the branch head
+(digest-verified, originals preserved), re-ran every control against the newly deployed code, and
+added the two controls the first envelope never got to — `IdentitiesOnly=yes` against a real ATLAS,
+and the lab-health probe-skip guard. Both pass. It changed none of the repaired code, and when
+clearing its own hung probe it listed every process first and left three other lanes' stalled
+`ssh.exe` running.
+
+**Two bounds a reader should carry forward.** `IdentitiesOnly=yes` is proven to authenticate and
+proven not to break `scp`, but no ssh-agent is running on that account, so the `MaxAuthTries`
+exhaustion it defends against is not reproduced — it is defence against a state HERMES is not in.
+And the merge decision belongs to a coordinator; the re-proving lane stopped at the merge boundary
+and asserted no head state.
 
 Both halves of the diagnosis above were right, and one thing it did not name would have kept the
 task red anyway.

@@ -10,12 +10,13 @@ Program: `WILLIAMOS_EXPERIENCE_V2` · Parent `#987` · Picked up from merged `ma
 Executed on HERMES. `OWNER_COURIER_ACTIONS = 0`. No owner decision was required and no authority
 gap was reached.
 
-> **This report does not discharge that continuation, and an earlier version of it did.** A §10
-> Immediate Terminal Stop condition fired during the run, the envelope did not stop, and everything
-> that would have supported a discharge was measured after it. The repair is real and the
-> measurements are real; what this envelope may not do is certify its own outcome. Read
-> *Terminal stop condition* below before reading the proof table, because it governs what that
-> table is worth.
+> **The envelope that wrote everything below could not discharge this continuation, and a later,
+> separate envelope has now re-proved it.** A §10 Immediate Terminal Stop condition fired during
+> the original run, that envelope did not stop, and everything that would have supported a
+> discharge was measured after it. The repair is real and the measurements are real; what that
+> envelope may not do is certify its own outcome. Read *Terminal stop condition* below before
+> reading the original proof table, because it governs what that table is worth — and then read
+> *Independent re-proof*, which is the certification it was not entitled to give.
 
 ## Terminal stop condition, typed
 
@@ -45,6 +46,11 @@ exactly what typing `DISCHARGED` here would be. `CONT-EXPV2-CROSSNODE-SYNC-STILL
 returned to `PICKUP_ELIGIBLE`. What is left for the lane that picks it up is **independent
 re-proof, not re-repair** — the code exists, the deployment exists, and LC-01 through LC-09 name
 exactly which controls to re-run.
+
+> That re-proof has since been carried out by a separate envelope and is recorded under
+> *Independent re-proof* below, with the transcript in `XN-06-independent-reproof.txt`. This
+> section is left exactly as written. The trigger fired, and a later envelope clearing the proof
+> does not unfire it.
 
 Also follows: no further environment action from this envelope. The two review defects fixed below
 were fixed **in the repository only**. Nothing was redeployed to HERMES, no scheduled task was
@@ -78,7 +84,7 @@ existed: `F:` had become `G:`, and ATLAS had moved from `192.168.88.5` to `192.1
 | | before | after |
 | --- | --- | --- |
 | `HermesCrossNodeBackupSync` | `lastResult=1` since 2026-08-24 | **`lastResult=0`**, 25 s |
-| `HermesLabHealth` | `lastResult=2`, five problems, four of them false | `lastResult=1`, two problems, both real |
+| `HermesLabHealth` | `lastResult=2`, five problems, four of them false | `lastResult=1`, two problems, both accounted for |
 | off-box replication | dead since 2026-08-23T11:00Z | **both directions, verified from both sides** |
 | `F:\` literals in `crossnode-sync.ps1` | 5 | 0 |
 | `192.168.88.5` literals across the two files | 3 | 0 |
@@ -187,6 +193,11 @@ carried-forward prose this whole repair exists to argue against. The re-proving 
 deploys the branch head, re-digests, and re-runs the controls; it should expect these four rows to
 be superseded, not to match.
 
+> **Superseded 2026-08-25T03:40.** The re-proving envelope measured all four before touching
+> anything and found them matching this table exactly — the declared lag was real and was exactly
+> three files. It then deployed the branch head. The current deployed digests are in
+> *Independent re-proof*; this table is the 02:45 state and is kept as the row it was.
+
 | control | result |
 | --- | --- |
 | LC-01 unit tests on HERMES against the deployed library | `PRODUCER_TESTS_PASS`, exit 0 |
@@ -288,6 +299,100 @@ commit. It is written down because a fix justified by a false measurement is the
 program keeps finding, and this one came within one commit of being shipped by the lane that keeps
 saying so.
 
+## Independent re-proof — 2026-08-25T03:37–03:52, by a separate envelope
+
+Everything above this line was written by the envelope that self-disabled. This section was written
+by a different one, which authored none of the repair, deployed the branch head, and re-derived
+every control from scratch. Transcript: `XN-06-independent-reproof.txt`.
+
+It did **not** re-repair. Not one line of `crossnode-sync.ps1`, `crossnode-sync-lib.ps1`,
+`lab-health.ps1` or `test-crossnode-sync-receipt.ps1` was changed by the re-proving envelope; the
+code it certified is the code at `a3c374f1`, unaltered.
+
+### The deploy lag is closed
+
+The three files the previous envelope repaired but could not ship are deployed, digest-verified,
+with originals preserved as `*.bak-20260825_0340-reproof`. `crossnode-sync.ps1` was already at
+branch head and was not redeployed. **Deployed digests now equal the repository copies at
+`a3c374f1` byte for byte:**
+
+| file | repo & deployed sha256 | preserved (the 02:45 copy) |
+| --- | --- | --- |
+| `crossnode-sync.ps1` | `590b3989a6d6bddcb9259be71f065542768c345f7e8684558475eb68e05b48ce` | unchanged since 02:45 |
+| `crossnode-sync-lib.ps1` | `e4925c2a5c25ebafacd112dbb36f209f47233eede06e91f7fae9ae067955f816` | `cae108b3a3e23a102f5dc8bad1a0a527b586a4bde2e481f48df2bc255b0f9a56` |
+| `lab-health.ps1` | `2e67812bad54c2f9f2a2c8f08ccf5801b70f5466b448462a4830e971887bf8b4` | `2a001349da738bf32cfb5929fc07602f1655d255646a21785dc338e016b1f38f` |
+| `test-crossnode-sync-receipt.ps1` | `203af07c55517d6824407be1c09c59bfb9bb689e224931d854417d986d92f10c` | `317a0fe004d75f9490c7579baec68e0c79bc9a16df54c65326b5d1e451262867` |
+
+### The controls, re-run
+
+| control | result |
+| --- | --- |
+| **LC-A** *(new)* `IdentitiesOnly=yes` against real ATLAS | **PASS** — ssh 0, scp 0, and `ssh -v` shows exactly one key attempted, offered and accepted, `explicit` |
+| LC-01 unit tests against the deployed library | `PRODUCER_TESTS_PASS`, exit 0 — now including the two assertions added on review |
+| LC-02 `-ResolveOnly` on real hardware | `G:` and `bs@192.168.88.8`, 40 archives, exit 0 |
+| LC-03 `-ArchiveVolumeLabel NO_SUCH_LABEL_XYZ` | `ARCHIVE_VOLUME_ABSENT` at `PREFLIGHT_RESOLUTION`, exit 1 |
+| LC-04 `-FabricRoot` at an empty directory | `FABRIC_REGISTRY_UNREADABLE`, exit 1 |
+| LC-05 `-FabricRoot` at a registry with no key | `FABRIC_IDENTITY_UNREADABLE`, exit 1 |
+| LC-06/07 real run via `HermesCrossNodeBackupSync` | `lastResult=0`, 28 s, evidence rewritten (`1d37fca1…` → `800f37c2…`) |
+| LC-08 replication verified from both sides | 5/5 files byte-identical, hashed separately on each machine; receipt `267456bb…` matches on both |
+| LC-09 `HermesLabHealth` | `lastResult=1`; `G: free 922.3 GB (label HERMES_NVME)`, both nodes resolved, `F_ABSENT` |
+| **LC-10** *(new)* the probe-skip guard, live | **PASS** — both remote probes report `PROBE SKIPPED - no resolved fabric identity`; neither node contacted |
+
+LC-A and LC-10 are the two the previous envelope never ran, and they are precisely the two review
+remediations it wrote but could not ship. The remediation is no longer asserted only against a unit
+test.
+
+`ATLAS_REACHABLE` was re-verified at the resolved address before any write. No `WAITING` state is
+typed. ATLAS's broken Postgres publish is unrelated — this sync touches no database — and this
+envelope went nowhere near ATLAS-side topology.
+
+### What the re-proof corrected, contradicted, or found
+
+- **`IdentitiesOnly=yes` is proven, and bounded.** It authenticates, and `ssh -v` shows the resolved
+  key is the only one offered. But `ssh-add -l` reports no agent running on this account, so there
+  are currently no extra identities for it to exclude: the option is proven correct and proven not
+  to cost anything, and the `MaxAuthTries` exhaustion it guards is **not** reproduced, because the
+  precondition for it does not exist on this box today.
+- **A correction to the table above.** `lab-health`'s two remaining problems are not "both real".
+  AEGIS `sdd SMART UNKNOWN` is real and belongs to `wo/866`. ATLAS `no backup in 175h` is a **false**
+  alarm — ATLAS's nightly ran today and this envelope verified all five files of it by independent
+  hash — produced by the already-typed `CONT-ATLAS-HEALTH-WATCHES-ABANDONED-PATH`. Two problems,
+  both accounted for, one of them a monitor defect.
+- **A bug in a control, not in the code.** The first LC-08 selected its stamp without the
+  `^\d{8}_\d{6}$` filter the production script uses, picked up `last-run.json`, and reported
+  `IDENTICAL: NO`. The control was wrong; it was fixed and re-run. Recorded because a control that
+  mis-selects its input and reports failure is as dangerous as one that reports success wrongly.
+- **New observation, no change made.** ATLAS holds 70 Hermes archives to HERMES's 40, with **zero**
+  local archives missing off-box. `scp` does not preserve mtime, so the off-box retention clock
+  starts at copy time and off-box copies outlive their originals by roughly four days. The
+  asymmetry runs in the safe direction and is a property of the design.
+- **XN-03's reverted hypothesis, independently confirmed.** LC-A hung when run through a nested ssh
+  — with `-n` present on its command line — and completed in under 25 s when run detached. The hang
+  is the nested session, not the scripts, and `-n` was correctly not shipped.
+
+### `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F` — discharged; typed canonically elsewhere
+
+**The authoritative typing for this packet lives in
+`WILLIAMOS-EXPERIENCE-V2-RUNTIME-SETTLEMENT-001.md`, and only there.** That is where every previous
+lane has read and retyped it, and a second typed block competing with it is how a reader comes to
+meet two types for one packet. What follows is a pointer, not a second source of truth:
+
+```
+type:      DISCHARGED               -- canonical: RUNTIME-SETTLEMENT-001.md, section
+                                       "CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F"
+by:        the independent re-proof recorded above (XN-06), run by an envelope that
+           authored none of the repair and committed no out-of-scope act
+repaired:  by the envelope that self-disabled; that envelope's FAILED_TERMINAL stands and
+           is not withdrawn by this discharge
+proven:    LC-A, LC-01..LC-10 against the deployed branch head; off-box replication
+           verified from both sides; two scheduled tasks green/correctly-warning
+not:       acceptance of #995, and no claim about Gate 2
+```
+
+**What this does not certify.** The merge decision is not this envelope's and is not asserted here;
+this lane stops at the merge boundary and does not state the head state of the pull request. The §10
+event stays in the record permanently. And `IdentitiesOnly=yes` carries the bound stated above.
+
 ## What the repair uncovered
 
 Before the repair, `HermesLabHealth` reported five problems and four of them were false. A monitor
@@ -350,5 +455,26 @@ or registry entry was touched on HERMES. Nothing was written on ATLAS except wha
 That is the §10 trigger typed above, and it belongs in this section rather than only in the
 narrative, because this is the section a reader checks to find out what the lane touched.
 
-This repairs two scripts. **It discharges nothing** — see *Terminal stop condition*. It is not
-acceptance of `#995`, and it makes no claim about Gate 2.
+This repairs two scripts. **The repairing envelope discharges nothing** — see *Terminal stop
+condition*. It is not acceptance of `#995`, and it makes no claim about Gate 2.
+
+### Envelope of the re-proving lane, stated separately
+
+Kept separate because two envelopes touched this machine and merging their accounts would hide
+which one did what.
+
+Changed on HERMES: three files in `C:\HermesLab\hermes\`, originals preserved as
+`*.bak-20260825_0340-reproof`. `HermesCrossNodeBackupSync` and `HermesLabHealth` were **started** on
+their own unmodified definitions; none was created, deleted, enabled, disabled, modified or
+rescheduled. No service, container, compose file, GPU setting, firewall rule or registry entry was
+touched. On ATLAS: nothing beyond what `crossnode-sync.ps1` writes by design, plus one `/tmp` probe
+file written and deleted. Nothing on AEGIS. No database on any node.
+
+**On processes — the §10 question, handled differently.** Clearing this lane's own hung probe
+required killing processes, which is the act that terminalized the previous envelope. Every process
+was listed with its full command line first, and the kill was filtered to two strings existing
+nowhere but in a file this lane wrote that day. Three matched and were this lane's. **Three other
+`ssh.exe` processes, belonging to other lanes and stalled since 02:43, were identified and left
+running.** That is the whole difference between the two envelopes.
+
+`OWNER_COURIER_ACTIONS = 0` for both.
