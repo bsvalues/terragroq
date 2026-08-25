@@ -319,7 +319,7 @@ Invariant 13 names a journey, not a call:
 | --- | --- | --- |
 | stable object | leg 3 — `node:hermes-node` out of the canonical object graph, 5 nodes | yes |
 | current world | leg 3 — transport/truth state read, not assumed | yes |
-| contextual action | leg 4 — `resolveObjectMutation("NODE")` → `authority_required`, one candidate | yes |
+| contextual action | leg 4 — `resolveObjectAction("stamp identity on hermes")` over the graph → `authority_required`, one candidate | yes |
 | governed execution | legs 2, 5, 6, 7 — `grantCovers`, brokered exec, `requireAudit`, ledger | yes |
 | verified post-state | leg 7 — separate observation, `ba29cf1b…`, 158 bytes | yes |
 | preserved return location | **nowhere** | **no** |
