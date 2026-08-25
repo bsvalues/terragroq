@@ -1,0 +1,165 @@
+{
+  "tool": "OR-01-record-grant",
+  "startedAt": "2026-08-25T10:05:05.961Z",
+  "host": "Hermes",
+  "worktree": "C:\\HermesLab\\expv2-oracle-restoration",
+  "databaseUrl": "postgresql://williamos:***@192.168.88.8:15432/williamos?sslmode=disable",
+  "actorUserId": "YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ",
+  "actorIdentification": "ASSERTED_BY_OPERATOR_NOT_AUTHENTICATED",
+  "mode": "RECORD",
+  "canonicalPath": "app/actions/authority.ts createAuthorityGrantWithResult",
+  "sqlWrittenByThisFile": "none",
+  "intended": {
+    "scope": "#995",
+    "authorityLevel": "A3_WRITE_SHARED",
+    "grantedTo": "claude",
+    "allowedActions": [
+      "node.stamp-identity"
+    ],
+    "blockedActions": [
+      "production mutation",
+      "TerraFusion",
+      "Property Workbench",
+      "TerraPilot",
+      "county/PACS",
+      "protected data",
+      "paid overage",
+      "destructive action",
+      "secret inspection",
+      "authority expansion",
+      "issue #357",
+      "delete",
+      "revoke",
+      "merge",
+      "release",
+      "spend"
+    ],
+    "expiresInHours": 2,
+    "workOrderId": null,
+    "targetNode": "node:hermes-node"
+  },
+  "substitutedModules": [
+    "next/cache",
+    "@/lib/session"
+  ],
+  "canonicalDigests": {
+    "app/actions/authority.ts": {
+      "onDisk": "65f2eab5528841a081cfd18ae5d139ac076cac7dc85b55ec0d67917d4272fcef",
+      "lfNormalised": "f71e47aa2b7fa2d898963a9a52df2c19d005af78e5be9f53a083248ae0e0a849"
+    },
+    "lib/governance/authority.ts": {
+      "onDisk": "1b9210a0fb5a07033263f52479cea72caf765d6108f4c0e1a857c60bcce8488a",
+      "lfNormalised": "525dc13581101b783d0fde61a6cc722ba8949f68ccb3327324ef8024932e56aa"
+    },
+    "lib/governance/artifacts.ts": {
+      "onDisk": "a4bf987781a230c7d8a340413d20fe312e471a5e10f0edd7acbea9b411d119ae",
+      "lfNormalised": "2a7093a40210526c81f17f85dc239255373131b5c243869a7279e104d9b8348b"
+    },
+    "lib/db/schema.ts": {
+      "onDisk": "4bf7db67aec0416bdf43e440feb735f2590851de574654bc69e46a58065868c2",
+      "lfNormalised": "5df348604c2c5a3f7ad35883afa1d3618e69b94fbdb075ae929fabe1e0c08357"
+    }
+  },
+  "before": {
+    "totalGrants": 28,
+    "routeLookup": []
+  },
+  "result": "RECORDED",
+  "replayed": false,
+  "grant": {
+    "id": 32,
+    "ref": "GRANT-0019",
+    "userId": "YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ",
+    "grantedBy": "YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ",
+    "grantedTo": "claude",
+    "authorityLevel": "A3_WRITE_SHARED",
+    "scope": "#995",
+    "allowedActions": [
+      "node.stamp-identity"
+    ],
+    "blockedActions": [
+      "production mutation",
+      "TerraFusion",
+      "Property Workbench",
+      "TerraPilot",
+      "county/PACS",
+      "protected data",
+      "paid overage",
+      "destructive action",
+      "secret inspection",
+      "authority expansion",
+      "issue #357",
+      "delete",
+      "revoke",
+      "merge",
+      "release",
+      "spend"
+    ],
+    "status": "active",
+    "workOrderId": null,
+    "expiresAt": "2026-08-25T12:05:06.566Z",
+    "createdAt": "2026-08-25T10:05:06.504Z",
+    "contentHash": "be172d51d0c70bddbac667a869e098d7647cc1750884245e54a6fa565c8429a1"
+  },
+  "nextCacheCalls": [
+    {
+      "pathname": "/goal-console",
+      "type": null
+    },
+    {
+      "pathname": "/work-orders",
+      "type": null
+    }
+  ],
+  "sideEvidence": {
+    "governanceEvent": [
+      {
+        "id": 1081,
+        "eventType": "AUTHORITY_GRANTED",
+        "entityType": "authority_grant",
+        "entityId": "32",
+        "actor": "operator",
+        "afterHash": "8750ac92d9ea2d925ad49233eaa5d484c4c93d38c76e627f337a61731c007caa"
+      }
+    ],
+    "registerEvent": [
+      {
+        "id": 147,
+        "type": "authority.granted",
+        "register": "authority",
+        "refId": 32,
+        "summary": "GRANT-0019: granted A3_WRITE_SHARED to claude"
+      }
+    ],
+    "tier2Ledger": [
+      {
+        "path": "docs\\devkit\\authority\\GRANT-0019.md",
+        "exists": true,
+        "sha256": "74c1e68e14182fd0ff333f7e9de8bcc0d4aeea8cb2521add0cca26e6e4002fe6"
+      },
+      {
+        "path": "docs\\devkit\\authority\\GRANT-0019.json",
+        "exists": true,
+        "sha256": "441c820f42fc9919414dc6c4a09b044c0b0d32e81d3803e8ca8add0da6bd24d4"
+      }
+    ]
+  },
+  "after": {
+    "totalGrants": 29,
+    "routeLookup": [
+      {
+        "id": 32,
+        "ref": "GRANT-0019",
+        "status": "active",
+        "authorityLevel": "A3_WRITE_SHARED",
+        "expiresAt": "2026-08-25T19:05:06.566Z",
+        "revokedAt": null,
+        "covers": true,
+        "reason": "covered"
+      }
+    ],
+    "routeAccepts": true,
+    "grantsCreated": 1
+  },
+  "finishedAt": "2026-08-25T10:05:06.707Z"
+}

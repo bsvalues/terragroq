@@ -1,0 +1,34 @@
+THE ROUTE READS GRANT EXPIRY THROUGH THE WRONG CLOCK
+Measured on HERMES 2026-08-25, against the live GRANT-0019 row.
+
+`lib/db/schema.ts` stores authority timestamps through a custom `utcWallTimestamp` type whose
+`fromDriver` explicitly undoes node-pg's local-time interpretation, so anything reading the registry
+through drizzle gets the intended instant.
+
+`app/api/system/node/stamp-identity/route.ts` does not read through drizzle. Its authority leg uses
+the raw `pg` pool and does `new Date(row.expiresAt)`, which bypasses the custom type entirely -- so a
+stored UTC wall clock is interpreted as LOCAL time. HERMES is UTC-7.
+
+The grant was written to expire two hours after it was created. The route considers it live for nine.
+
+Direction matters: west of UTC a grant outlives its bound, east of UTC it dies early. Either way the
+number in the record is not the number being enforced.
+
+NOT REPAIRED HERE, deliberately. The fix edits `route.ts`, which is one of the thirteen modules the
+settlement driver digest-pins -- changing it mid-proof would invalidate this lane's own evidence
+chain, and it is outside the owner's authorised sequence. Typed CONT-EXPV2-GRANT-EXPIRY-TZ-SKEW.
+
+It is also why GRANT-0019 was REVOKED after its single authorised use rather than left to lapse:
+revocation is checked by status, not by clock, so it is the only bound here that behaves as written.
+
+HERMES tz    : Pacific Standard Time
+UTC offset   : -07:00:00
+{
+ "storedWallClock": "Tue Aug 25 2026 12:05:06",
+ "routeReadsItAs_rawPg": "2026-08-25T19:05:06.566Z",
+ "schemaReadsItAs_utcWallTimestamp": "2026-08-25T12:05:06.566Z",
+ "skewHours": 7,
+ "nowUtc": "2026-08-25T10:06:28.242Z",
+ "routeConsidersItActiveFor": "8.98 h",
+ "schemaConsidersItActiveFor": "1.98 h"
+}

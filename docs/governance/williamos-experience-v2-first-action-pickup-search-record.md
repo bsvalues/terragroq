@@ -513,3 +513,131 @@ CONT-EXPV2-ACCELERATOR-FIRST-ACTION
   owner:                  the lane that first needs an accelerator mutation.
   ownerDecisionRequired:  false.
 ```
+
+## 8. Dispositions at the ORACLE RESTORATION lane, 2026-08-25
+
+Executed under an explicit owner decision of 2026-08-25. `OWNER_COURIER_ACTIONS = 0`. Full record:
+`docs/reports/WILLIAMOS-EXPERIENCE-V2-ORACLE-RESTORATION-003.md`; evidence under
+`docs/reports/experience-v2-oracle-restoration/`.
+
+```
+CONT-EXPV2-AUTHORITY-ABSENT-FOR-SCOPE-995
+  type:                   DISCHARGED                                      [2026-08-25]
+  discharged by:          an owner decision, recorded through the canonical path. GRANT-0019:
+                          scope #995, A3_WRITE_SHARED, allowedActions ["node.stamp-identity"],
+                          grantedTo claude, 16 blockedActions, workOrderId null, 2h expiry.
+                          Created by app/actions/authority.ts createAuthorityGrantWithResult --
+                          NOT by SQL -- so it carries its advisory-lock-allocated ref, contentHash
+                          be172d51, governance_event 1081 AUTHORITY_GRANTED, event_log 147, and the
+                          Tier-2 ledger docs/devkit/authority/GRANT-0019.{md,json}.
+  exercised:              once. RS-00 returned SETTLED_MUTATION_EXECUTED.
+  and then closed:        REVOKED through revokeAuthorityGrant immediately after the proof
+                          (governance_event 1083, event_log 148). The same driver now returns
+                          AUTHORITY_NOT_GRANTED_NO_COVERAGE. NO standing #995 permission remains.
+                          Re-authorising is a NEW owner decision, not a re-run.
+  ownerDecisionRequired:  false. It was made, and it is spent.
+
+CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT
+  type:                   DISCHARGED                                      [2026-08-25]
+  condition:              A RECORDED AUTHORITY DECISION -- fired.
+  settled:                the mutation executed, a SEPARATE post-state observation verified it
+                          (ba29cf1b, 158 bytes), and that observation was recorded durably.
+                          Ledger 1241147 -> 1242044. All three legs of the verdict contract, which
+                          is the only way this entry could be discharged.
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-HARDCODED-ADDRESS-CLASS
+  type:                   TYPED_OBSERVATION                               [AMENDED 2026-08-25]
+  amendment:              the fourth instance is repaired, and it is the one that mattered.
+                          williamos-postgres is declared at deploy/atlas/williamos-authority-
+                          registry/compose.yaml and publishes 0.0.0.0:15432 -- no interface named.
+                          HERMES resolves ATLAS through lib/fabric/authority-registry-url.mjs,
+                          which refuses rather than falling back. A FIFTH instance was found while
+                          doing it: OMEN's ~/.ssh/config still points `atlas` at 192.168.88.5. Not
+                          repaired here (operator-workstation config, outside the repository); the
+                          lane worked around it with -o HostName, and pinned .8's host key only
+                          after proving it byte-identical to the key already pinned for .5.
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-AUTHORITY-REGISTRY-SINGLE-POINT
+  type:                   TYPED_FINDING                    [OPEN -- NOT closed by the restoration]
+  restated 2026-08-25:    the oracle is now owned, published independently of ATLAS's address, and
+                          restricted at two policy layers. That makes the architecture FUNCTIONAL.
+                          It does not make it RESILIENT. It is still one Postgres, on one node, on
+                          one LAN, and when it is unreachable every governed mutation in WilliamOS
+                          refuses -- which remains the correct behaviour and remains a single point
+                          of failure. The owner's decision said explicitly to leave this typed, and
+                          it is left typed. A restoration lane must not be read as an availability
+                          answer.
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-GRANT-EXPIRY-TZ-SKEW
+  type:                   TYPED_DEFECT
+  raised by:              CONT-EXPV2-ORACLE-RESTORATION, 2026-08-25
+  finding:                app/api/system/node/stamp-identity/route.ts reads "expiresAt" with the
+                          raw pg client and does new Date(row.expiresAt), bypassing lib/db/
+                          schema.ts's utcWallTimestamp type, whose fromDriver exists precisely to
+                          undo node-pg's local-time interpretation. A stored UTC wall clock is
+                          therefore read as LOCAL time. Measured against the live GRANT-0019 row on
+                          HERMES (UTC-7): the route reads 19:05:06Z, the schema reads 12:05:06Z,
+                          skew 7h. A grant written to live two hours is one the route accepts for
+                          nine. West of UTC grants outlive their bound; east of UTC they expire
+                          early. Either way the number in the record is not the number enforced.
+  scope:                  wherever a governed route reads authority timestamps through raw pg
+                          rather than drizzle. This lane checked one route and did not audit others.
+  not repaired here:      the fix edits a module the settlement driver digest-pins, mid-proof, and
+                          it is outside the owner's authorised sequence. It is also why GRANT-0019
+                          was REVOKED rather than left to lapse: revocation is checked by status,
+                          not by clock, and is the only bound here that behaves as written.
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-RUNTIME-CREDENTIAL-STALE
+  type:                   TYPED_DEFECT
+  raised by:              CONT-EXPV2-ORACLE-RESTORATION, 2026-08-25
+  finding:                with transport restored and both policy layers admitting HERMES, the
+                          driver still reported AUTHORITY_UNREADABLE -- 28P01, password
+                          authentication failed for user "williamos". The resolver was ruled out
+                          first: the 64-character password is byte-identical through URL parse and
+                          host substitution, and only the host changed. Three distinct DATABASE_URL
+                          passwords exist across HERMES's env files, and the LIVE runtime's
+                          (C:\HermesLab\williamos-runtime\.env.local) is NOT the role's.
+  established how:        arithmetically, against the role's stored SCRAM-SHA-256 verifier --
+                          derive SaltedPassword, ClientKey, StoredKey, compare. NOT by trying
+                          logins: a wrong guess is indistinguishable in the server log from
+                          someone else's. No password was changed, printed, or copied anywhere.
+  consequence:            the deployed WilliamOS runtime on HERMES cannot read the authority
+                          registry even now. Every governed route it serves would refuse
+                          AUTHORITY_UNREADABLE. This was invisible until the two walls in front of
+                          it were removed.
+  not repaired here:      editing a live service's configuration and restarting it is outside a
+                          reads-and-driver-run boundary, and the crossnode-repair lane was active
+                          on HERMES.
+  owner:                  a lane authorised to change the runtime's configuration.
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-GRANT-HAS-NO-TARGET-PREDICATE
+  type:                   TYPED_OBSERVATION
+  raised by:              CONT-EXPV2-ORACLE-RESTORATION, 2026-08-25
+  finding:                the owner's decision asked for a grant whose target was limited to the
+                          canonical HERMES node. authority_grant has no target column, and
+                          grantCovers checks only level and action, so no such limit is
+                          expressible. The restriction is recorded in the grant's reason as intent
+                          and is NOT claimed as enforcement. What actually confines the mutation to
+                          one machine is the route: the endpoint comes from the transport registry
+                          rather than from the request, and any object absent from the canonical
+                          graph is refused.
+  ownerDecisionRequired:  false.
+
+CONT-EXPV2-ALLOWLIST-ADDRESS-BOUND
+  type:                   TYPED_OBSERVATION
+  raised by:              CONT-EXPV2-ORACLE-RESTORATION, 2026-08-25
+  finding:                the authority oracle's two policy layers allowlist an L3 address
+                          (192.168.88.9/32, HERMES). An address allowlist cannot be made
+                          DHCP-independent the way the software was; it names addresses by nature.
+                          Declared once in deploy/atlas/williamos-authority-registry/fabric-
+                          callers.json and rendered into both pg_hba.conf and the DOCKER-USER
+                          chain, with a test asserting the two stay in step -- so a lease change is
+                          a one-file edit and a re-run, not a hunt. The owner is handling DHCP
+                          reservations separately.
+  ownerDecisionRequired:  false.
+```

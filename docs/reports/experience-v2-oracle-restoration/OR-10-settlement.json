@@ -1,0 +1,213 @@
+{
+  "settlement": "CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT",
+  "action": "node.stamp-identity",
+  "startedAt": "2026-08-25T10:06:48.901Z",
+  "host": "Hermes",
+  "node": "v24.2.0",
+  "worktree": "C:\\HermesLab\\expv2-oracle-restoration",
+  "databaseUrl": "postgresql://williamos:***@192.168.88.8:15432/williamos?sslmode=disable",
+  "actorUserId": "YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ",
+  "actorIdentification": "ASSERTED_BY_OPERATOR_NOT_AUTHENTICATED",
+  "legs": {
+    "0_canonical_digests": {
+      "app/api/system/node/stamp-identity/route.ts": "e49f5aa9a5a839a4ca8c2d38c7b3a59ed26af15d62aa273330a867310328b43d",
+      "lib/system/node-identity-stamp.ts": "07f43ae2dcd5ab5c5e2af9cd8adea34273bde7471d244312e68395b0a280adcb",
+      "lib/system/system-object-source.ts": "0956a557fe243d451e1645ed92a8012853e7324927bc1b3eabc21b3673b7221b",
+      "lib/system/system-object.ts": "e3bc7021d3ec3f849b805f722d5887fd9f359b597598a14010bafb8bddfa9959",
+      "lib/system/node-identity-contract.ts": "1e1d27e33090ba63bf3473f3f84487a3cb590f3faf46cb46a328d7d16e623b25",
+      "lib/intent/object-action-registry.ts": "ca9d3717b9df6dabe800aa43f469ca81797ee1e1b617d9de3b01805ea25f57de",
+      "lib/governance/authority.ts": "1b9210a0fb5a07033263f52479cea72caf765d6108f4c0e1a857c60bcce8488a",
+      "lib/fabric/broker.mjs": "bc00e4cc10b29b6e66613f17c1e7f51eb90b9702966327739d300bf80fb5ab4b",
+      "lib/fabric/audit.mjs": "89bb933f1f6d256a63e923ec0fbbfba113f047c7ca5233899c5b102cbfa6fb57",
+      "lib/fabric/transport.mjs": "0a4b8c6ec87d6b64c024811f51a8ea30995983a75548fa6845ec5368cfee49a7",
+      "config/execution-fabric/registry.seed.json": "12a60cee51a682908833cdc1a5f290f5448962b8aa8fb1837186a281f2d88641",
+      "config/execution-fabric/node-identity-contract.json": "8b1ebe2b21d864f11938e5af8a8e0060933b99c63e549118c0b083da57d66932"
+    },
+    "1_session": {
+      "executed": false,
+      "reason": "SESSION_SHELL_NOT_EXECUTABLE",
+      "detail": "getSession() reads next/headers, which requires a Next request context. The only WilliamOS instance running on this node serves a standalone bundle built from an older commit, and the stamp-identity route is not in it -- so there is no deployed surface that could be called.",
+      "deployedRoot": "C:\\HermesLab\\williamos-runtime-64034e93-flat",
+      "deployedReleaseSha": "fe6ef4e7de70c1e455cf1f2aa02fa904aae01681",
+      "routePresentInDeployedBundle": false,
+      "note": "No session was minted. Fabricating an authentication artifact to satisfy an authentication check is the same class of failure as minting a grant to satisfy an authority check."
+    },
+    "2_authority": {
+      "requiredAuthority": "A3_WRITE_SHARED",
+      "operation": "node.stamp-identity",
+      "workOrderScope": "#995",
+      "checker": "lib/governance/authority.ts grantCovers (canonical), not a SQL predicate",
+      "scoping": "route.ts:104-112 -- \"scope\" = $1 AND \"userId\" = $2 (criterion 8), applied verbatim",
+      "actorUserId": "YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ",
+      "actorIdentification": "ASSERTED_BY_OPERATOR_NOT_AUTHENTICATED",
+      "registryReadable": true,
+      "userScoped": true,
+      "grantsFound": 1,
+      "grantRef": "GRANT-0019",
+      "selfMinted": false,
+      "verdicts": [
+        {
+          "id": 32,
+          "ref": "GRANT-0019",
+          "userId": "YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ",
+          "ok": true,
+          "reason": "covered"
+        }
+      ],
+      "result": "AUTHORITY_GRANTED"
+    },
+    "3_object_graph": {
+      "fabricRoot": "C:\\Users\\bs\\.williamos\\fabric",
+      "nodeCount": 5,
+      "nodes": [
+        {
+          "objectId": "node:omen",
+          "nodeId": "omen",
+          "hostname": "OMEN",
+          "role": "operator-cockpit-development-burst-compute",
+          "truthState": "unknown",
+          "transportState": "present",
+          "endpoint": "omen"
+        },
+        {
+          "objectId": "node:hermes-node",
+          "nodeId": "hermes-node",
+          "hostname": "HERMES",
+          "role": "local-ai-gpu-execution-worker",
+          "truthState": "unknown",
+          "transportState": "present",
+          "endpoint": "hermes"
+        },
+        {
+          "objectId": "node:atlas",
+          "nodeId": "atlas",
+          "hostname": "atlas",
+          "role": "durable-state-forge-retrieval",
+          "truthState": "unknown",
+          "transportState": "present",
+          "endpoint": "atlas"
+        },
+        {
+          "objectId": "node:aegis",
+          "nodeId": "aegis",
+          "hostname": "aegis",
+          "role": "secondary-cpu-batch-ci-worker-storage-pending",
+          "truthState": "unknown",
+          "transportState": "present",
+          "endpoint": "aegis"
+        },
+        {
+          "objectId": "node:azure",
+          "nodeId": "azure",
+          "hostname": "",
+          "role": "approved-production-external-capability-envelope",
+          "truthState": "unknown",
+          "transportState": "unknown",
+          "endpoint": null
+        }
+      ]
+    },
+    "4_selection": {
+      "input": "stamp identity on hermes",
+      "state": "authority_required",
+      "action": "system.node.stamp-identity",
+      "objectId": "node:hermes-node",
+      "candidates": [
+        {
+          "action": "system.node.stamp-identity",
+          "objectId": "node:hermes-node"
+        }
+      ]
+    },
+    "5_plan": {
+      "endpoint": "hermes",
+      "brokerRecord": {
+        "transport": "local",
+        "os": "windows",
+        "role": "control-plane + WilliamOS/Hermes"
+      },
+      "ok": true,
+      "refusal": null,
+      "plan": {
+        "operation": "node.stamp-identity",
+        "objectId": "node:hermes-node",
+        "nodeId": "hermes-node",
+        "hostname": "HERMES",
+        "role": "local-ai-gpu-execution-worker",
+        "dialect": "windows",
+        "path": "$env:USERPROFILE\\.williamos\\node-identity.json",
+        "content": "{\"contract\":\"williamos-node-stamp/1\",\"nodeId\":\"hermes-node\",\"hostname\":\"HERMES\",\"role\":\"local-ai-gpu-execution-worker\",\"stampedAt\":\"2026-08-25T10:06:49.549Z\"}",
+        "digest": "ba29cf1b3bf49daff826d6d17247aa862fbdc53c296cc4ca4ed2a5491dc02a22",
+        "byteLength": 158
+      },
+      "commands": {
+        "observe": "$p = Join-Path $env:USERPROFILE '.williamos\\node-identity.json'; \"host=\" + $env:COMPUTERNAME; if (Test-Path -LiteralPath $p -PathType Leaf) { \"priorDigest=\" + (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower(); \"priorBytes=\" + (Get-Item -LiteralPath $p).Length } else { \"priorDigest=\"; \"priorBytes=0\" }",
+        "stamp": "$d = Join-Path $env:USERPROFILE '.williamos'; New-Item -ItemType Directory -Force -Path $d | Out-Null; $p = Join-Path $d 'node-identity.json'; [IO.File]::WriteAllBytes($p, [Convert]::FromBase64String('eyJjb250cmFjdCI6IndpbGxpYW1vcy1ub2RlLXN0YW1wLzEiLCJub2RlSWQiOiJoZXJtZXMtbm9kZSIsImhvc3RuYW1lIjoiSEVSTUVTIiwicm9sZSI6ImxvY2FsLWFpLWdwdS1leGVjdXRpb24td29ya2VyIiwic3RhbXBlZEF0IjoiMjAyNi0wOC0yNVQxMDowNjo0OS41NDlaIn0=')); \"written=\" + (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower()",
+        "verify": "$p = Join-Path $env:USERPROFILE '.williamos\\node-identity.json'; \"digest=\" + (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower(); \"bytes=\" + (Get-Item -LiteralPath $p).Length"
+      },
+      "deletesNothing": true
+    },
+    "6_ledger_guards": {
+      "realFabricRoot": "C:\\Users\\bs\\.williamos\\fabric",
+      "ledgerPath": "C:\\Users\\bs\\.williamos\\fabric\\audit.log",
+      "ledgerBytesBefore": 1241147,
+      "routePreflight": {
+        "held": true,
+        "result": "LEDGER_WRITABLE"
+      },
+      "ledgerBytesAfterPreflight": 1241147,
+      "preflightWroteNothing": true,
+      "absentRoot": {
+        "refused": true,
+        "message": "AUDIT_UNAVAILABLE: no ledger at C:\\Users\\bs\\AppData\\Local\\Temp\\expv2-ledger-guard-k5Q9xk\\not-a-fabric-root"
+      },
+      "ledgerIsADirectory": {
+        "refused": true,
+        "message": "AUDIT_UNAVAILABLE: ledger at C:\\Users\\bs\\AppData\\Local\\Temp\\expv2-ledger-guard-k5Q9xk\\ledger-is-a-directory is not a file"
+      },
+      "brokerRequireAudit": {
+        "refused": true,
+        "message": "AUDIT_UNAVAILABLE: no ledger at C:\\Users\\bs\\AppData\\Local\\Temp\\expv2-ledger-guard-k5Q9xk\\not-a-fabric-root",
+        "execCallsBeforeRefusal": 0
+      },
+      "brokerWithoutRequireAudit": {
+        "proceeded": true,
+        "execCalls": 1
+      },
+      "postStateRequired": {
+        "refused": true,
+        "message": "AUDIT_UNAVAILABLE: no ledger at C:\\Users\\bs\\AppData\\Local\\Temp\\expv2-ledger-guard-k5Q9xk\\not-a-fabric-root"
+      },
+      "ledgerBytesAtEnd": 1241147
+    },
+    "7_mutation": {
+      "executed": true,
+      "refusedAt": null,
+      "refusal": null,
+      "nodeContacted": true,
+      "postState": {
+        "expectedDigest": "ba29cf1b3bf49daff826d6d17247aa862fbdc53c296cc4ca4ed2a5491dc02a22",
+        "observedDigest": "ba29cf1b3bf49daff826d6d17247aa862fbdc53c296cc4ca4ed2a5491dc02a22",
+        "expectedBytes": 158,
+        "observedBytes": 158,
+        "observedAt": "2026-08-25T10:06:50.526Z",
+        "verified": true,
+        "reason": "the node holds exactly the bytes this action wrote"
+      },
+      "postStateRecorded": true,
+      "operation": "node.stamp-identity",
+      "nodeId": "hermes-node",
+      "endpoint": "hermes",
+      "prior": {
+        "priorDigest": null,
+        "priorBytes": 0
+      },
+      "observedHostname": "HERMES",
+      "governanceEventAttempted": true
+    }
+  },
+  "finishedAt": "2026-08-25T10:06:50.546Z",
+  "verdict": "SETTLED_MUTATION_EXECUTED",
+  "verdictContract": "Only SETTLED_MUTATION_EXECUTED settles CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT, and it requires all three of: the mutation executed, a SEPARATE post-state observation that verified, and that observation recorded durably. Authority passing is none of those three.",
+  "settled": true
+}

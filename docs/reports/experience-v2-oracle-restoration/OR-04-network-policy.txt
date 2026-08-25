@@ -1,0 +1,53 @@
+TWO POLICY LAYERS IN FRONT OF 0.0.0.0:15432, MEASURED FROM BOTH SIDES
+Captured from OMEN (192.168.88.11) 2026-08-25T03:11:03. OMEN is deliberately NOT on the
+allowlist -- fabric-callers.json lists it as the negative control.
+
+=== the authority oracle's port, from a LAN host that is not an approved caller ===
+  15432 -> {"result":"DROPPED_NO_ANSWER","ms":6013,"detail":"no RST, no banner -- the packet layer refused silently"}
+
+=== blast radius: every other service ATLAS publishes must be untouched ===
+  tcp/5432   OPEN        tf-postgres (TerraFusion)
+  tcp/6379   OPEN        tf-redis
+  tcp/27017  OPEN        tf-mongo
+  tcp/9001   OPEN        portainer_agent
+  tcp/15432  no answer   williamos-postgres (the authority oracle)
+
+Only 15432 changed. The four TerraFusion/portainer publishes answer exactly as before,
+which is what the dedicated WILLIAMOS-AUTHORITY chain and its --ctorigdstport match buy:
+the policy names one port and cannot reach past it.
+
+=== the chain from ATLAS's side, with counters, immediately after the probe above ===
+  Chain WILLIAMOS-AUTHORITY (1 references)
+   pkts bytes target     prot opt in     out     source               destination         
+    152 26222 RETURN     6    --  *      *       192.168.88.9         0.0.0.0/0            ctorigdstport 15432 ctdir ORIGINAL
+      6   312 DROP       6    --  *      *       0.0.0.0/0            0.0.0.0/0            ctorigdstport 15432 ctdir ORIGINAL
+  RETURN counts HERMES's traffic; DROP counts OMEN's. Both rules are matching real packets,
+  which is the whole point of the paragraph below.
+
+=== WHY --ctorigdstport, PROVEN RATHER THAN ASSERTED ===
+  This policy was first written the obvious way:
+      -A WILLIAMOS-AUTHORITY -p tcp -m tcp --dport 15432 -j DROP
+  It installed cleanly, DOCKER-USER's own counter climbed to 18 packets, and OMEN still reached
+  the Postgres protocol and was stopped only by pg_hba. Both rules read 0 packets:
+      1  0  0  RETURN  6  --  192.168.88.9  0.0.0.0/0  tcp dpt:15432
+      2  0  0  DROP    6  --  0.0.0.0/0     0.0.0.0/0  tcp dpt:15432
+  nat PREROUTING runs before filter FORWARD, so the destination port had already been
+  rewritten 15432 -> 5432 by the time DOCKER-USER saw the packet. A firewall that matches
+  nothing looks exactly like a firewall that is working.
+
+=== refusal controls: the apply script never fails open ===
+  callers file absent              exit=1  CALLERS_FILE_UNREADABLE: /nonexistent.json does not exist, so the approved fabric callers ca
+  callers file not JSON            exit=1  CALLERS_FILE_INVALID: /tmp/tmp.x1atRRKDTG/notjson.json is not readable JSON (Expecting value
+  no callers declared              exit=1  CALLERS_FILE_INVALID: no callers declared; refusing to apply a policy that would either open
+  caller cidr malformed            exit=1  CALLERS_FILE_INVALID: caller 'x' cidr '192.168.88.9/99' is not a network ('192.168.88.9/99' 
+  publishedPort missing            exit=1  CALLERS_FILE_INVALID: publishedPort is missing or not a valid port
+  bad mode argument                exit=1  usage: apply-network-policy.sh [apply|check]
+  POSITIVE: check                  exit=0  POLICY_OK: tcp/15432 allowlisted to: 192.168.88.9/32 (everything else dropped)
+  check sees a hand edit           exit=1  POLICY_DRIFTED: WILLIAMOS-AUTHORITY does not match fabric-callers.json
+  POSITIVE: check restored         exit=0  POLICY_OK: tcp/15432 allowlisted to: 192.168.88.9/32 (everything else dropped)
+
+  Every refusal exits 1 with the port left in whatever state it was already in. A caller list
+  that cannot be read is a reason to stop, never a reason to allow everything -- and 'check'
+  compares the installed chain against fabric-callers.json, so a hand edit is drift, not policy.
+  williamos-authority-firewall.service runs 'check' as ExecStartPost, so the unit fails loudly
+  rather than reporting active over an unfiltered port.
