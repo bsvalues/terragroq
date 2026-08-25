@@ -37,6 +37,10 @@ an honest settling verdict. All three of those describe a run that reached the n
 get that far, and reporting any of them would be a claim about a machine that was never contacted.
 The honest verdict is a third thing, and it is recorded as a third thing.
 
+That third thing is now one state in a named lattice rather than a string chosen per run. Review
+found the driver capable of emitting a SUCCESS verdict on a path that executed nothing; the lattice
+that replaced it, and the reason it exists, are under *Review remediation* below.
+
 ## Per-leg results
 
 The driver (`RS-00-settle-stamp-identity.mjs`) walks the legs of
@@ -231,6 +235,8 @@ class `#865` moved the other five HermesLab scripts into the repository to end.
   count against ours and passed if it was not smaller; ATLAS holds 26 blobs accumulated from every
   store this script ever pointed at, so after the store correction that check would have reported
   success with none of `D:`'s 21 blobs present. A count is not a fact about our blobs; their names are.
+  As written here it verified **blobs only**, which review showed was enough to let a manifest tree be
+  deleted or nested under a green log line — it covers manifests too now; see *Review remediation*.
 
 **`backup-volumes.ps1`** — the destination is resolved by **volume label** (`HERMES_NVME`), not by
 drive letter, and refuses on `ARCHIVE_VOLUME_ABSENT` or `ARCHIVE_VOLUME_AMBIGUOUS`. A letter is an
@@ -280,6 +286,12 @@ the repository copies byte for byte.
 | `backup-volumes.ps1` | `54bf3b05df73bf4fa505ac809f20a9da63771692cd4378c8809efec5378e9866` | `d1759a3490726a10c886951b51c65ab5194c95bdadf56e55cfa873f8a1094eae` |
 | `sync-models-to-forge.ps1` | `0b92037dc5b512684f1efc09b9284a2e2ebfef0b5da599da3b97385b78a529d9` | `2de0a8419f886bc9c9ed4dbb1e32879ad36aa290b6ad6517073e869249147aba` |
 
+**These are the 2026-08-24 digests and `sync-models-to-forge.ps1` has since been superseded.** Review
+found the manifest step of this very file deleting the archive's manifest tree; the repaired script
+and its installer are deployed under *Review remediation → Deployed on HERMES, digest-verified*, and
+the copy in the row above is preserved on HERMES as `.bak-20260824_2312-preremediation`. One current
+disposition per artifact: the current one is the later table.
+
 No scheduled task was created, modified, started, or stopped. No service, compose file, container or
 GPU setting was touched on HERMES. `HermesModelForgeSync` and `HermesVolumeBackup` will next run on
 their own existing schedules against the repaired scripts.
@@ -294,10 +306,17 @@ condition: ATLAS_REACHABLE
 
 The continuation asked for a real bounded archive run if ATLAS is canonically reachable. It is not.
 What is proven is the resolution, the cross-check, and both refusals; what is **not** proven is the
-transfer itself, the far-side `sudo` layout under `/forge/models/ollama`, or the new name-based
+transfer itself, the far-side `sudo` layout under `/forge/models/ollama`, or the name-based
 completion check against a real listing. The first run after ATLAS returns will move roughly 9.65 GB,
 because it will be archiving the live store for the first time. It is expected to be slow and it is
 expected to be loud if it fails.
+
+**What that first run will no longer do is destroy the archive's manifest tree on its way through.**
+When this was written, the run that would have discharged this continuation was the same run that
+would have orphaned twelve container-era blobs — so discharging it would have cost more than leaving
+it open. The manifest step is now an overlay that removes nothing, with the install path executed by
+a test rather than only described; see *Review remediation*. The transfer is still unverified against
+a real ATLAS, and that is what this continuation still holds open.
 
 `backup-volumes.ps1`'s transfer leg is separately unverified for a different reason: it drives
 `docker run`, and container interaction on HERMES is outside this lane's envelope.
@@ -322,25 +341,267 @@ Note the consequence, because it is easy to miss: `crossnode-sync.ps1` is the **
 While it is dead, the repaired `backup-volumes.ps1` writes local redundancy on the same machine and
 nothing leaves HERMES.
 
+## Review remediation — five confirmed defects, and what each one is now
+
+Five review threads were filed against this PR after the record above was written, and an
+independent merge sweep adjudicated all five **ACCEPTED / CONFIRMED** by execution against the
+committed evidence, leaving every one of them open. Two of them were one failure path and named a
+`SECURITY_OR_AUTHORITY_THREAD_OPEN` stop. This section is the remediating lane's answer, following
+the adopt-and-fix precedent of `#994` and `#1001`: the branch was adopted, the defects were fixed,
+and the PR is handed back to a coordinator that authored none of it.
+
+Nothing false was reported by the run that produced this record. Every one of these defects is in
+what the retained artifacts would do the **next** time — and `RUNTIME-SETTLEMENT-001` routes
+`CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT` straight back through them on `ATLAS_REACHABLE`, so
+the next time is the one that matters.
+
+| # | Defect | Now |
+| --- | --- | --- |
+| P1 | `RS-00:115` — the grant lookup filtered `"scope"` alone, so any operator's `#995` grant satisfied it | the route's `AND "userId" = $2` restored; an unnamed actor refuses `AUTHORITY_UNVERIFIABLE_NO_ACTOR` |
+| P1 | `RS-00:305` — the authority-PASS branch recorded `executed: false` and the verdict was `PROCEEDED` | the route's mutation and second-observation sequence actually runs; `PROCEEDED` is gone and the verdict is derived from what executed |
+| P1 | `sync-models-to-forge.ps1:125` — `sudo rm -rf` over the archive-wide manifest tree, under a header promising no deletions | overlay install through a tested script; nothing in the archive is removed; superseded manifests are copied aside |
+| P2 | same line — a fixed `/tmp/manifests-sync` staging path that nests on retry | unique per-run staging path, layout asserted before install, manifests verified by name afterwards |
+| P2 | `RS-00:21` — the retained driver could not start from its retained location (`ERR_MODULE_NOT_FOUND`) | the repository root is discovered by walking up to `scripts/repo-alias-loader.mjs`; proven by running it from that location |
+
+### The driver could not be run from where it is retained
+
+`const root = path.resolve(import.meta.dirname, "..")` was correct exactly once: the settlement ran
+from `.settlement/`, one level below a checkout root. Retained at
+`docs/reports/experience-v2-runtime-settlement/` it resolved `root` to `docs/reports`, and the
+alias-loader import failed before argv was even read. `root` was wrong twice over — the second use,
+`process.env.WILLIAMOS_PROJECT_ROOT = root`, would have resolved system objects against a
+documentation directory silently, and `WILLIAMOS_PROJECT_ROOT` is the variable `#1002` introduced so
+that root is not guessed.
+
+`findRepoRoot()` now walks up to the directory that actually contains
+`scripts/repo-alias-loader.mjs`, which is correct from both locations and refuses
+`REPO_ROOT_NOT_FOUND` from neither. The reviewer's own reproduction is the acceptance check and it
+is now a test (`tests/experience-v2-runtime-settlement-driver.test.ts`): a clean tree holding only
+the loader and the driver at its retained depth, invoked from there.
+
+```
+before  Error [ERR_MODULE_NOT_FOUND]: Cannot find module '...\docs\reports\scripts\repo-alias-loader.mjs'
+after   Error: usage: RS-00-settle-stamp-identity.mjs <path to .env.local> [--actor=<userId>]
+```
+
+The second test proves which directory `root` actually became, rather than only that the import
+stopped failing: LEG 0 digests canonical files relative to `root`, and in a bare tree the path it
+reports is the root it resolved — the repository root, not `docs/reports`.
+
+### Authority: the route's predicate, restored — and what "no session" now means
+
+The canonical route filters `WHERE "scope" = $1 AND "userId" = $2` and documents that second clause
+as `criterion 8`, in a comment written to stop this exact drift. The driver dropped it. It was right
+that it cannot build a session — `getSession` needs a Next request context, and LEG 1 says so — but
+**unable to scope is not scoped to everyone**: any active grant scoped to `#995`, belonging to any
+operator, satisfied `grantCovers` here.
+
+The predicate is back, verbatim, and the actor is now named rather than absent:
+`--actor=<userId>` (or `WILLIAMOS_SETTLEMENT_ACTOR_USER_ID`). Naming is not authenticating, and the
+report says so: `actorIdentification: ASSERTED_BY_OPERATOR_NOT_AUTHENTICATED`. Three registry states
+are kept apart, because collapsing them is how "we could not check" becomes "there is nothing to
+find":
+
+| State | Means |
+| --- | --- |
+| `AUTHORITY_UNREADABLE` | the registry did not answer. Not permission, and not absence. **This run.** |
+| `AUTHORITY_UNVERIFIABLE_NO_ACTOR` | the registry answered and there is no actor to scope to. No grant is consulted. |
+| `AUTHORITY_NOT_GRANTED_NO_ROWS` / `_NO_COVERAGE` | the registry answered *for this actor*, and nothing covers |
+
+Reachability is now established with a `SELECT 1` before scoping, deliberately: without it, a missing
+actor would mask an unreadable registry and this run's verdict would no longer reproduce. It does.
+A returned row whose `userId` is not the named actor is itself refused as `AUTHORITY_SCOPE_VIOLATION`
+rather than reasoned about.
+
+### The verdict lattice: `PROCEEDED` is gone and does not come back
+
+The `else` branch at `:305` was reached exactly when authority **passed**; it recorded
+`executed: false` with `detail: "unreachable in this run"`, and the driver then stamped
+`PROCEEDED`. So the one path meaning "the settlement succeeded" was also the only path that
+performed no mutation. `detail` was true of one run and was never a guard.
+
+LEG 7 now executes the route's own sequence when authority passes — observe, assert the observed
+identity, stamp under `requireAudit`, observe a **second** time, and record that observation with
+`required: true` — and the verdict is derived from LEG 7, never from LEG 2:
+
+```
+BLOCKED_AT_AUTHORITY:<result>      authority did not pass
+AUTHORISED_NOT_EXECUTED:<refusal>  authority passed and the mutation did not run
+EXECUTED_POST_STATE_UNVERIFIED     it ran and the second observation did not verify it
+EXECUTED_POST_STATE_UNRECORDED     it ran, verified, and the observation could not be recorded
+SETTLED_MUTATION_EXECUTED          all three: executed, separately observed, durably recorded
+```
+
+Only the last sets `settled: true`, and the report carries that contract in
+`verdictContract` so a later reader does not have to infer it. Passing an authority check is a fact
+about a grant registry; settling a governed mutation is a fact about a node.
+
+This is the failure shape this repository has already paid for once. `project-lab-backup-truth`
+records every backup mechanism reporting success while protecting nothing; a settlement driver that
+can emit a success verdict without executing is the same thing one subsystem over — and the sync
+script's own header says it in the same words.
+
+### The archive's manifest tree is no longer deleted
+
+The header at `:13` said *"Nothing is ever deleted on either side by this script."* The manifest step
+said:
+
+```powershell
+Invoke-Atlas "sudo rm -rf $remote/models/manifests && sudo mv /tmp/manifests-sync $remote/models/manifests"
+```
+
+Not a hypothetical first run: this file's own header records ATLAS archived green through
+`2026-08-23` with `local=12` — twelve container-era blobs and their three manifests — while blob sync
+is additive and never removes anything. The first repaired run would have copied `D:`'s blobs in,
+deleted all three archived manifests, installed five, and left twelve immutable blobs on the far
+side that nothing names. The comment above the delete was right — *"a blob without its manifest is
+unusable for restore"* — and the line beneath it manufactured that condition for every model this
+script has ever archived from a store it no longer points at. The by-name completion check added by
+this PR verifies **blobs only**, so it would have logged `OK` on exactly that run.
+
+The install is now `scripts/lab-control/hermes/install-forge-manifests.sh`, sent to ATLAS by content
+so nothing depends on remote quoting, and it is a real file precisely so it can be **executed** in a
+test rather than only reasoned about inside a quoted one-liner. Its contract:
+
+- nothing under the archive's manifest tree is ever removed; the current store's manifests are
+  overlaid with `cp -a src/. dest/`, which adds and replaces and does not delete;
+- a manifest the current store would overwrite **with different bytes** is copied aside to
+  `models/manifests-superseded/<run>/` first, so re-pointing a tag does not lose the metadata naming
+  the older blobs. An unchanged tag is not history and is not copied;
+- the only thing it deletes is its own staging tree under `/tmp`.
+
+The header now states exactly what is deleted on each side instead of a promise the code broke.
+
+`tests/lab-control-forge-manifest-install.test.ts` runs the real script against a real filesystem,
+starting from the concrete case: three container-era manifests in the archive that the live store
+knows nothing about. They are still there afterwards, byte-identical.
+
+### The staging path is unique per run, and manifests are verified by name
+
+`/tmp/manifests-sync` was a fixed literal that nothing cleaned. If the `scp` succeeded and the
+following `Invoke-Atlas` failed — a dropped session, a sudo refusal, ATLAS going down between the two
+calls, which `RS-02` shows is not academic — the staged tree survived; and `scp -r src dest` copies
+*into* `dest` when `dest` exists, so the next run produced
+`.../manifests/manifests/<registry>/...`, one level too deep, at a path no restore would look at.
+It nested again on every run after that, and every one of them logged `OK`.
+
+Now: a per-run staging path (`/tmp/williamos-manifest-sync/<timestamp>-<pid>`) removed before use,
+the staged layout **asserted** before anything is installed (`STAGING_LAYOUT_UNEXPECTED`, with the
+archive left untouched), and the completion check extended to manifests in both directions:
+
+- every manifest of the live store must be present at its expected archive path after the run —
+  a nested layout fails this;
+- every manifest the archive held **before** the run must still be present after it —
+  `ARCHIVE_REGRESSION`, the tripwire the blob-only check could never have.
+
+The same verification gap was behind both findings, and closing it closes both.
+
+### Deployed on HERMES, digest-verified
+
+The repaired script and its installer replace the deployed copies; the pre-remediation file is
+preserved rather than overwritten. The repository and the deployed bytes match exactly.
+
+| File | repo & deployed sha256 | bytes | preserved as |
+| --- | --- | --- | --- |
+| `sync-models-to-forge.ps1` | `38914bdb8da2b4bbee873a1a5dd6a4ca648410d5bdafd21a2a0390baae2d16eb` | 14036 | `.bak-20260824_2312-preremediation` (`0b92037d…`) |
+| `install-forge-manifests.sh` | `f7deb8e7f7672d6192d43caac443998c0af95ce67eebf7d3e93517f0c35af7fa` | 2951 | new file |
+| `backup-volumes.ps1` | `54bf3b05df73bf4fa505ac809f20a9da63771692cd4378c8809efec5378e9866` | 4769 | unchanged by this remediation |
+
+Controls re-run against the **live** files the scheduled tasks invoke, after deploy:
+
+| Probe | Result | exit |
+| --- | --- | --- |
+| `sync-models-to-forge -ResolveOnly` | `{"store":"D:\HermesData\ollama","storeAgrees":true,"blobCount":21,"manifestCount":5,"manifestInstallerPresent":true}` | 0 |
+| `sync-models-to-forge -ManifestInstaller <absent>` | `MANIFEST_INSTALLER_MISSING: … Refusing rather than falling back to deleting the archive's manifest tree.` | 1 |
+| `sync-models-to-forge -ServiceScript <absent>` | `SERVICE_CONFIG_UNREADABLE: …` | 1 |
+| `backup-volumes -ResolveOnly` | `{"archiveVolumeLabel":"HERMES_NVME","backupDirExists":true}` | 0 |
+| `backup-volumes -ArchiveVolumeLabel NO_SUCH_LABEL_XYZ` | `ARCHIVE_VOLUME_ABSENT: …` | 1 |
+
+**One real defect was found by running the controls rather than by reading the diff.** Windows
+PowerShell 5.1 binds parameter defaults before `$PSScriptRoot` exists, so
+`[string]$ManifestInstaller = (Join-Path $PSScriptRoot ...)` threw on an empty path under `-File` —
+the form the scheduled task uses. The default is resolved in the body instead. The guard is also a
+**preflight**, before any ssh: a refusal reachable only after the network is up is a refusal nobody
+can exercise while the far side is down, which is the state this lab is in.
+
+`MODEL_STORE_DISAGREEMENT` is unchanged by this remediation and its refusal is recorded above under
+*Verification, on HERMES, with negative controls*.
+
+### The stale copy on HERMES: there was none, and that was checked
+
+The continuation this remediation answers requires that the `ATLAS_REACHABLE` run can only ever
+execute fixed bytes. The retained driver's own working copy —
+`C:\HermesLab\expv2-runtime-settlement`, the worktree `RS-01` records this settlement running from —
+**no longer exists on HERMES**. Checked rather than assumed: a recursive search of `C:\HermesLab`,
+`D:\` and `G:\` for `*settle-stamp-identity.mjs` returns nothing. The repository copy is therefore
+the only copy that exists anywhere, and it is the fixed one.
+
+### The fixed driver, run on HERMES from its retained location
+
+Not asserted from a diff. The branch was delivered to HERMES as a bundle, checked out as a worktree
+at `C:\HermesLab\expv2-runtime-settlement` — the same path `RS-01` records the settlement running
+from — and the driver was invoked **from
+`docs/reports/experience-v2-runtime-settlement/`**, the location that could not start at all before
+this fix.
+
+Digest-verified both ends by the only comparison that means anything for a git-delivered artifact:
+the blob is `618c64e5ba3d1cd3e1c6867c8df9f7d07e20b288` on OMEN and on HERMES, and the HERMES
+worktree is clean. The on-disk sha256 differs (26558 bytes here, 27111 there) for one uninteresting
+reason: HERMES checks out with `core.autocrlf=true`. Byte-comparing two checkouts of the same commit
+across that setting would report a difference that is not one, so the blob is what is compared.
+
+```
+verdict           BLOCKED_AT_AUTHORITY:AUTHORITY_UNREADABLE
+settled           false
+2_authority       registryReadable false, userScoped null, result AUTHORITY_UNREADABLE
+7_mutation        executed false, refusedAt "authority", nodeContacted false
+6_ledger_guards   routePreflight LEDGER_WRITABLE; brokerRequireAudit refused, execCallsBeforeRefusal 0
+```
+
+Retained as `RS-08-fixed-driver-rerun.json`. The verdict is byte-identical to the one this record was
+written on, which is the point: the repairs did not move the answer, they moved what the driver would
+do if the answer were different. Run again with `--actor=william`
+(`RS-08b-fixed-driver-named-actor.json`) the report carries
+`actorIdentification: ASSERTED_BY_OPERATOR_NOT_AUTHENTICATED` and the same verdict — ATLAS is still
+down, so the actor changes nothing today and is recorded rather than acted on.
+
+Negative evidence after both runs, unchanged: `C:\ProgramData\WilliamOS\node-identity.json` does not
+exist, and the fabric ledger is still `1241147` bytes last written `21:26:41` — before either run.
+The driver contacted no node, and neither run left a trace.
+
+Full capture: `RS-09-remediation-hermes-controls.txt`.
 ## Reproduction
 
 ```powershell
-# on HERMES, from a checkout of 1a352a3f with node_modules available
-node --experimental-transform-types .settlement\settle-stamp-identity.mjs `
-  C:\HermesLab\williamos-runtime-64034e93-flat\.env.local
+# on HERMES, from a checkout of this branch with node_modules available. The driver runs from where
+# it is RETAINED -- that is the fix, and running it from anywhere else no longer proves anything.
+cd <checkout>\docs\reports\experience-v2-runtime-settlement
+node --experimental-transform-types .\RS-00-settle-stamp-identity.mjs `
+  C:\HermesLab\williamos-runtime-64034e93-flat\.env.local [--actor=<userId>]
 
 # the archive repairs, without side effects, from anywhere on HERMES
 powershell -File C:\HermesLab\hermes\backup-volumes.ps1        -ResolveOnly
 powershell -File C:\HermesLab\hermes\sync-models-to-forge.ps1  -ResolveOnly
+
+# and their refusals, which is the half a green run never shows you
+powershell -File C:\HermesLab\hermes\sync-models-to-forge.ps1  -ResolveOnly -ManifestInstaller <absent>
+powershell -File C:\HermesLab\hermes\sync-models-to-forge.ps1  -ResolveOnly -ServiceScript <absent>
+powershell -File C:\HermesLab\hermes\backup-volumes.ps1        -ArchiveVolumeLabel NO_SUCH_LABEL_XYZ
 ```
+
+`--actor` is optional only in the sense that omitting it is a defined outcome: without an identified
+actor the authority leg refuses `AUTHORITY_UNVERIFIABLE_NO_ACTOR` rather than consulting every
+operator's grants. While ATLAS is down the registry is unreadable either way.
 
 `--experimental-transform-types` is required rather than optional: Node 24's strip-only mode rejects
 `system-object-source.ts`'s constructor parameter property, and the module graph will not load
 without it.
 
-No TypeScript or JavaScript file changed in this lane, so no deterministic suite is implicated; the
-repository's own suites are unaffected and were not re-run. The two changed files are PowerShell, and
-both were executed on real hardware with positive and negative controls, above.
+The original settlement changed no TypeScript or JavaScript, so no deterministic suite was implicated
+by it. **The remediation adds two test files** and they are part of the suite:
+`tests/experience-v2-runtime-settlement-driver.test.ts` and
+`tests/lab-control-forge-manifest-install.test.ts`. Full deterministic suite at the remediated tree,
+via the CI config: **426 files passed / 4 skipped; 5723 tests passed / 46 skipped; 0 failed.**
 
 ## Retained artifacts
 
@@ -348,15 +609,18 @@ All under `docs/reports/experience-v2-runtime-settlement/`.
 
 | File | What it holds |
 | --- | --- |
-| `RS-00-settle-stamp-identity.mjs` | the settlement driver, exactly as run |
-| `RS-01-settlement.json` | its full output: every leg, every digest, every refusal |
+| `RS-00-settle-stamp-identity.mjs` | the settlement driver. As run on 2026-08-24, then repaired under review — see *Review remediation* |
+| `RS-01-settlement.json` | the 2026-08-24 run's full output: every leg, every digest, every refusal |
 | `RS-02-atlas-reachability.txt` | ATLAS/AEGIS probed with a live-host and an unassigned-address control |
 | `RS-03-hermes-store-and-topology.txt` | model stores on `D:`/`G:`, the service's own `OLLAMA_MODELS`, backup destinations, sync log tail |
 | `RS-03b-hermes-drives-and-tasks.txt` | volumes, `C:\HermesLab\hermes` inventory, scheduled tasks with last results |
 | `RS-04-archive-repair-controls.txt` | the positive and negative control run, pre-deploy |
 | `RS-05-ledger-untouched.txt` | ledger size, line count, last write and tail — the proof nothing ran |
 | `RS-06-node-unstamped.txt` | the stamp path on HERMES, absent |
-| `RS-07-deployed-archive-scripts.txt` | deployed and preserved digests |
+| `RS-07-deployed-archive-scripts.txt` | deployed and preserved digests, 2026-08-24 deploy |
+| `RS-08-fixed-driver-rerun.json` | the REPAIRED driver, run on HERMES from its retained location; same verdict, new lattice |
+| `RS-08b-fixed-driver-named-actor.json` | the same run with `--actor` named, showing the assertion recorded rather than acted on |
+| `RS-09-remediation-hermes-controls.txt` | remediation deploy digests, five controls, blob verification, negative evidence |
 
 ## Chronology (local, HERMES/OMEN are the same timezone)
 
@@ -366,3 +630,10 @@ All under `docs/reports/experience-v2-runtime-settlement/`.
 - `22:1x` — HERMES store and destination truth measured; `F:` confirmed absent
 - `22:21:17` — repaired archive scripts deployed, originals preserved, live positive controls pass
 - `22:23:07` — negative evidence captured: no stamp on HERMES, ledger last written `21:26:41`
+- `22:27` — PR `#1004` opened
+- `22:33` — five review threads filed; an independent sweep confirms all five and stops the merge
+- `23:0x` — remediation: driver root, authority scoping, verdict lattice; manifest overlay + staging
+- `23:09–23:11` — repaired sync script and its installer deployed to HERMES, pre-remediation copy preserved
+- `23:12` — five controls re-run against the live files; `$PSScriptRoot` defect found by running them
+- `23:15–23:16` — the fixed driver runs on HERMES from its retained location, twice; same verdict
+- `23:17` — remediation evidence captured; ledger still `1241147` bytes at `21:26:41`
