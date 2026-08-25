@@ -1,0 +1,181 @@
+=== volumes / drive letters ===
+
+DriveLetter FileSystemLabel FileSystem SizeGB FreeGB
+----------- --------------- ---------- ------ ------
+          C                 NTFS        464.7   87.1
+          D                 NTFS        111.7   53.2
+          E System Rese     exFAT         0.1    0.1
+          G HERMES_NVME     NTFS        931.5  922.4
+
+
+
+=== C:\HermesLab\hermes ===
+
+Name                                                  LastWriteTime           Length
+----                                                  -------------           ------
+.env                                                  8/3/2026 3:32:52 PM         93
+.env.example                                          8/3/2026 3:02:09 PM        221
+.gitignore                                            8/3/2026 3:02:09 PM          5
+alerts.log                                            8/24/2026 10:10:49 PM    25880
+backup.log                                            8/7/2026 7:58:45 AM       1078
+backup-volumes.ps1                                    8/24/2026 10:21:17 PM     4769
+backup-volumes.ps1.bak-20260818_082835                8/7/2026 8:04:19 AM       1637
+backup-volumes.ps1.bak-20260824_222200-preexpv2       8/18/2026 8:28:35 AM      1676
+compact2.log                                          8/6/2026 5:47:15 AM       1006
+compact3.log                                          8/6/2026 1:07:15 PM       1158
+compact-vhdx.ps1                                      8/5/2026 10:13:27 PM      1488
+compact-vhdx-v2.ps1                                   8/6/2026 5:42:01 AM       2187
+compact-vhdx-v3.ps1                                   8/6/2026 5:51:25 AM       2552
+core.log                                              8/4/2026 1:24:28 PM        865
+core-online.ps1                                       8/4/2026 1:21:34 PM       2266
+crossnode-sync.ps1                                    8/18/2026 9:30:19 AM     10124
+crossnode-sync.ps1.bak-20260818_082835                8/8/2026 10:36:30 AM      7429
+crossnode-sync-lib.ps1                                8/18/2026 8:59:30 AM     13457
+deep-survey.log                                       8/6/2026 1:34:03 PM      11483
+deep-survey.ps1                                       8/6/2026 1:13:21 PM       2101
+delete-onedrive.log                                   8/7/2026 4:27:03 AM        192
+delete-onedrive-folder.ps1                            8/7/2026 4:00:01 AM       1081
+deploy.log                                            8/3/2026 3:49:08 PM   12811051
+deploy2.log                                           8/3/2026 4:03:37 PM      57599
+disable-k8s.log                                       8/6/2026 12:49:19 PM       754
+disable-k8s.ps1                                       8/6/2026 12:48:23 PM      1816
+disk-survey.log                                       8/5/2026 9:32:01 PM       5710
+disk-survey.ps1                                       8/5/2026 9:06:18 PM       1926
+docker-cleanup.ps1                                    8/6/2026 1:36:59 PM       1068
+docker-compose.yml                                    8/24/2026 8:11:44 PM      3736
+docker-compose.yml.bak.20260809_062003                8/3/2026 3:29:00 PM       2190
+docker-images-cleanup.log                             8/6/2026 1:38:39 PM       1749
+docker-images-cleanup.ps1                             8/6/2026 1:38:02 PM        860
+health-history.jsonl                                  8/24/2026 10:10:49 PM    50539
+hermes-placement.json                                 8/24/2026 9:17:01 PM      7359
+hermes-placement-readiness.ps1                        8/24/2026 9:16:58 PM      6246
+INSTALL.md                                            8/3/2026 3:02:55 PM       1530
+install-omen-hermes.ps1                               8/8/2026 6:48:43 AM       1871
+lab-health.json                                       8/24/2026 10:10:49 PM      169
+lab-health.ps1                                        8/24/2026 9:16:58 PM      8361
+model.log                                             8/5/2026 5:49:49 AM     720440
+model-pull.ps1                                        8/5/2026 5:41:25 AM        750
+negative.ps1                                          8/18/2026 9:14:31 AM      1551
+ollama-inspect-before.json                            8/9/2026 6:16:08 AM       9994
+onedrive-analyze.log                                  8/6/2026 3:15:18 PM       3196
+onedrive-analyze.ps1                                  8/6/2026 3:04:57 PM       1012
+onedrive-freeup.log                                   8/6/2026 3:28:40 PM       4810
+onedrive-freeup.ps1                                   8/6/2026 3:18:12 PM        849
+onedrive-monitor.log                                  8/6/2026 3:38:09 PM        598
+onedrive-monitor.ps1                                  8/6/2026 3:30:00 PM        611
+onedrive-monitor2.log                                 8/6/2026 3:53:48 PM        610
+pull.log                                              8/3/2026 4:12:47 PM       1138
+pull-with-retry.ps1                                   8/3/2026 4:08:43 PM       1202
+readiness.log                                         8/7/2026 7:51:11 AM       1278
+readiness-admin.ps1                                   8/7/2026 7:50:23 AM       2946
+remove-ext.log                                        8/6/2026 12:41:59 PM      7837
+remove-extensions.ps1                                 8/6/2026 12:40:31 PM      1276
+remove-terrafusion.ps1                                8/6/2026 12:59:29 PM      1285
+remove-tf.log                                         8/6/2026 1:00:15 PM       2357
+restart.log                                           8/3/2026 10:56:02 PM       436
+restart2.log                                          8/6/2026 5:37:15 AM        436
+restart-docker.ps1                                    8/3/2026 10:55:05 PM      1968
+run-all.ps1                                           8/4/2026 1:22:38 PM        872
+setup-ubuntu.sh                                       8/3/2026 3:02:45 PM       2256
+start-hermes.ps1                                      8/24/2026 8:11:44 PM      2891
+start-ui.log                                          8/5/2026 12:57:33 PM      2011
+start-ui.ps1                                          8/5/2026 5:55:22 AM        881
+startup-run-backup.reg                                8/6/2026 12:57:31 PM      1468
+sync-models-to-forge.ps1                              8/24/2026 10:21:18 PM     8648
+sync-models-to-forge.ps1.bak-20260818                 8/17/2026 12:43:20 PM     3835
+sync-models-to-forge.ps1.bak-20260824_222200-preexpv2 8/18/2026 2:09:47 PM      3835
+test-crossnode-sync-receipt.ps1                       8/8/2026 10:36:31 AM     11389
+uninstall.log                                         8/6/2026 2:16:31 PM       1278
+uninstall2.log                                        8/7/2026 4:35:26 AM       1225
+uninstall-programs.ps1                                8/6/2026 2:08:18 PM       1246
+uninstall-programs2.ps1                               8/7/2026 4:03:01 AM       2669
+uninstall-vs.log                                      8/7/2026 7:35:38 AM        957
+uninstall-vs.ps1                                      8/7/2026 6:34:32 AM       1418
+uninstall-vs2.ps1                                     8/7/2026 7:33:49 AM       1285
+
+
+
+=== relevant scheduled tasks ===
+HermesCrossNodeBackupSync      state=Ready    lastRun=8/24/2026 1:07:07 PM lastResult=1
+    action: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\HermesLab\hermes\crossnode-sync.ps1"
+HermesLabHealth                state=Ready    lastRun=8/24/2026 10:10:10 PM lastResult=2
+    action: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\HermesLab\hermes\lab-health.ps1"
+HermesModelForgeSync           state=Ready    lastRun=8/24/2026 1:07:07 PM lastResult=2147946720
+    action: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\HermesLab\hermes\sync-models-to-forge.ps1"
+HermesVolumeBackup             state=Ready    lastRun=8/24/2026 1:07:07 PM lastResult=1073807364
+    action: powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\HermesLab\hermes\backup-volumes.ps1"
+User_Feed_Synchronization-{29DE236D-F141-4447-8F3B-B81FFA6704FD} state=Ready    lastRun=8/24/2026 7:31:31 PM lastResult=0
+    action: C:\WINDOWS\system32\msfeedssync.exe sync
+WilliamOS-HERMES-Ollama        state=Running  lastRun=8/24/2026 8:15:15 PM lastResult=267009
+    action: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\HermesLab\hermes\ollama-service\hermes-ollama-service.ps1"
+WilliamOS-HERMES-WSL-Keepalive state=Ready    lastRun=8/24/2026 8:46:46 PM lastResult=3221225786
+    action: wsl.exe -d Ubuntu -u root -e sleep infinity
+MareBackup                     state=Ready    lastRun=11/30/1999 12:00:00 AM lastResult=267011
+    action: %windir%\system32\compattelrunner.exe -m:aeinv.dll -f:UpdateSoftwareInventoryW invsvc | %windir%\system32\compattelrunner.exe -m:appraiser.dll -f:DoScheduledTelemetryRun | %windir%\system32\compattelrunner.exe -m:aemarebackup.dll -f:BackupMareData
+Backup                         state=Ready    lastRun=8/24/2026 6:03:03 PM lastResult=0
+    action:  
+BackupNonMaintenance           state=Ready    lastRun=8/23/2026 3:29:29 AM lastResult=0
+    action:  
+Backup                         state=Ready    lastRun=8/18/2026 7:57:57 PM lastResult=0
+    action:  
+UnifiedConsentSyncTask         state=Ready    lastRun=8/24/2026 6:43:43 PM lastResult=0
+    action:  
+Property Definition Sync       state=Disabled lastRun=11/30/1999 12:00:00 AM lastResult=267011
+    action:  
+LocalUserSyncDataAvailable     state=Ready    lastRun=8/3/2026 7:20:20 AM lastResult=0
+    action:  
+MouseSyncDataAvailable         state=Ready    lastRun=11/30/1999 12:00:00 AM lastResult=267011
+    action:  
+PenSyncDataAvailable           state=Ready    lastRun=4/12/2025 12:53:53 PM lastResult=0
+    action:  
+TouchpadSyncDataAvailable      state=Ready    lastRun=11/30/1999 12:00:00 AM lastResult=267011
+    action:  
+Synchronize Language Settings  state=Ready    lastRun=8/24/2026 8:47:47 PM lastResult=0
+    action:  
+Background Synchronization     state=Disabled lastRun=11/30/1999 12:00:00 AM lastResult=267011
+    action:  
+Logon Synchronization          state=Disabled lastRun=11/30/1999 12:00:00 AM lastResult=267011
+    action:  
+RegIdleBackup                  state=Ready    lastRun=8/23/2026 11:53:53 AM lastResult=0
+    action:  
+ThemesSyncedImageDownload      state=Ready    lastRun=8/24/2026 6:03:03 PM lastResult=2147746839
+    action:  
+SpeechModelDownloadTask        state=Ready    lastRun=8/24/2026 1:57:57 PM lastResult=0
+    action: %windir%\system32\speech_onecore\common\SpeechModelDownload.exe 
+ResPriStaticDbSync             state=Ready    lastRun=8/22/2026 4:04:04 AM lastResult=0
+    action:  
+ForceSynchronizeTime           state=Ready    lastRun=8/24/2026 1:23:23 PM lastResult=0
+    action:  
+SynchronizeTime                state=Ready    lastRun=8/24/2026 1:57:57 PM lastResult=0
+    action: %windir%\system32\sc.exe start w32time task_started
+SynchronizeTimeZone            state=Ready    lastRun=8/23/2026 11:53:53 AM lastResult=0
+    action: %windir%\system32\tzsync.exe 
+UpdateModelTask                state=Ready    lastRun=8/24/2026 1:07:07 PM lastResult=0
+    action: %systemroot%\system32\usoclient.exe StartModelUpdates
+CDSSync                        state=Ready    lastRun=8/24/2026 8:47:47 PM lastResult=0
+    action:  
+Work Folders Logon Synchronization state=Ready    lastRun=8/24/2026 8:51:51 PM lastResult=0
+    action:  
+Device-Sync                    state=Disabled lastRun=11/30/1999 12:00:00 AM lastResult=267011
+    action:  
+=== D: and G: top level ===
+D:\ :
+$RECYCLE.BIN
+CrossNodeBackups
+Dev_Environment
+HermesBackups
+HermesData
+HermesServices
+HermesWorkspaces
+pilot0
+pilot1
+System Volume Information
+williamos-sea
+.dropbox.device
+ubuntu-24.04.4-live-server-amd64.iso
+G:\ :
+$RECYCLE.BIN
+HermesData
+lab-backups
+System Volume Information
+F:\ : ABSENT

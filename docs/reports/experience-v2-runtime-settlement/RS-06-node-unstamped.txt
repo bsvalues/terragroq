@@ -1,0 +1,4 @@
+stamp path    : C:\Users\bs\.williamos\node-identity.json
+exists        : False
+dir exists    : True
+checked at    : 2026-08-24T22:23:07.4401883-07:00

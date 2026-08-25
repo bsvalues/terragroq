@@ -1,0 +1,29 @@
+# RS-10 -- sync-models-to-forge.ps1 redeployed after a latent failure mode found in review of the fix itself
+# host=Hermes  captured=2026-08-25T00:18:01.8256026-07:00
+
+The manifest listing used a bare sudo find under a checked ssh wrapper. On an archive that does
+not yet hold a manifest tree, find exits non-zero and the run would have died on the FIRST repair of
+exactly the condition the repair exists for -- a guard that fails at the only moment it is needed.
+Now || true: an empty before-state is legitimate, and an unreadable one is still caught by the
+install step, which fails loudly. This supersedes the sync digest in RS-09.
+
+=== deployed
+sync-models-to-forge.ps1  2026-08-25T00:17:23.9561198-07:00  bytes=14410  sha256=fd9e8779b5af4ebed7b078187bddcc3c4bfd03760a9a06530a33d7ad367526e4
+install-forge-manifests.sh  2026-08-24T23:09:55.0337032-07:00  bytes=2951  sha256=f7deb8e7f7672d6192d43caac443998c0af95ce67eebf7d3e93517f0c35af7fa
+
+=== POSITIVE  sync -ResolveOnly (the live file HermesModelForgeSync invokes)
+{"store":"D:\\HermesData\\ollama","serviceModelsDir":"D:\\HermesData\\ollama\\models","storeAgrees":true,"blobCount":21,"blobBytes":10360071891,"manifestCount":5,"manifestInstaller":"C:\\HermesLab\\hermes\\install-forge-manifests.sh","manifestInstallerPresent":true,"remote":"/forge/models/ollama","atlas":"bs@192.168.88.5"}
+exit=0
+
+=== NEGATIVE  manifest installer absent -- preflight, before any ssh
+powershell.exe : MANIFEST_INSTALLER_MISSING: C:\HermesLab\hermes\no-such-installer.sh is absent, 
+so the 
+At line:16 char:10
+exit=1
+
+=== NEGATIVE  service config unreadable
+powershell.exe : SERVICE_CONFIG_UNREADABLE: C:\HermesLab\hermes\no-such-service.ps1 does not 
+exist, so the live 
+At line:16 char:10
+exit=1
+

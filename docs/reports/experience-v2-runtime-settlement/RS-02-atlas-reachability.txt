@@ -1,0 +1,14 @@
+=== atlas 192.168.88.5 ===
+  :22 -> TIMEOUT after 3026ms
+  :15432 -> TIMEOUT after 3003ms
+  :5432 -> TIMEOUT after 3004ms
+  :80 -> TIMEOUT after 3012ms
+  :9999 -> TIMEOUT after 2999ms
+=== aegis 192.168.88.6 ===
+  :22 -> TIMEOUT after 3003ms
+  :5432 -> TIMEOUT after 3009ms
+=== control: a live host, a closed port ===
+  127.0.0.1:9999 -> ConnectionRefused in 2051ms
+  127.0.0.1:11434 -> OPEN in 0ms
+=== control: an unassigned address ===
+  192.168.88.200:22 -> TIMEOUT after 3007ms

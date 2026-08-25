@@ -1,0 +1,42 @@
+=== ollama model stores ===
+D:\HermesData\ollama : exists=True
+   blobs: 21 files, 9.65 GB
+   manifests: 5 files
+G:\HermesData\ollama : exists=True
+   blobs: 12 files, 6.69 GB
+   manifests: 3 files
+F:\HermesData\ollama : exists=False
+   blobs: ABSENT
+=== ollama service env (proves which store is live) ===
+  $ModelsDir = 'D:\HermesData\ollama\models'
+  $env:OLLAMA_MODELS = $ModelsDir
+  $env:OLLAMA_NOPRUNE = '1'
+=== backup destinations ===
+G:\lab-backups : 5 entries, newest 8/23/2026 4:00:21 AM
+    crossnode  08/23/2026 04:00:21
+    hermes-volumes  08/23/2026 03:00:16
+    omen-wip-20260819  08/19/2026 14:59:51
+    omen  08/18/2026 13:56:25
+G:\lab-backups\hermes-volumes : 30 entries, newest 8/23/2026 3:00:16 AM
+    terrafusion_final_build_20250615_051930_redis_data-20260823_030002.tar.gz  08/23/2026 03:00:16
+    terrafusion_final_build_20250615_051930_postgres_data-20260823_030002.tar.gz  08/23/2026 03:00:15
+    terrafusion_final_build_20250615_051930_mongo_data-20260823_030002.tar.gz  08/23/2026 03:00:12
+    hermes_redisdata-20260823_030002.tar.gz  08/23/2026 03:00:06
+G:\lab-backups\crossnode : 2 entries, newest 8/23/2026 4:00:21 AM
+    crossnode-sync-task-evidence.json  08/23/2026 04:00:21
+    atlas  08/23/2026 04:00:02
+D:\HermesBackups : 55 entries, newest 8/17/2026 3:00:12 AM
+    terrafusion_final_build_20250615_051930_redis_data-20260817_030001.tar.gz  08/17/2026 03:00:12
+    terrafusion_final_build_20250615_051930_postgres_data-20260817_030001.tar.gz  08/17/2026 03:00:11
+    terrafusion_final_build_20250615_051930_mongo_data-20260817_030001.tar.gz  08/17/2026 03:00:09
+    hermes_redisdata-20260817_030001.tar.gz  08/17/2026 03:00:04
+D:\CrossNodeBackups : 2 entries, newest 8/11/2026 4:00:23 AM
+    crossnode-sync-task-evidence.json  08/11/2026 04:00:23
+    atlas  08/11/2026 04:00:04
+=== model-forge-sync log tail ===
+2026-08-18T04:30:02 FAIL A parameter cannot be found that matches parameter name 'File'.
+2026-08-18T14:09:48 OK copied=0 local=5 remote=25
+2026-08-19T04:30:02 OK copied=0 local=5 remote=25
+2026-08-20T04:30:01 OK copied=1 local=12 remote=26
+2026-08-22T04:30:01 OK copied=0 local=12 remote=26
+2026-08-23T04:30:01 OK copied=0 local=12 remote=26

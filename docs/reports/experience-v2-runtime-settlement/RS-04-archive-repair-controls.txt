@@ -1,0 +1,59 @@
+=== PRE-DEPLOY: digests of the staged repairs (must match the repo copies) ===
+backup-volumes.ps1 staged  = 54bf3b05df73bf4fa505ac809f20a9da63771692cd4378c8809efec5378e9866
+backup-volumes.ps1 on-box  = 54bf3b05df73bf4fa505ac809f20a9da63771692cd4378c8809efec5378e9866
+sync-models-to-forge.ps1 staged  = 0b92037dc5b512684f1efc09b9284a2e2ebfef0b5da599da3b97385b78a529d9
+sync-models-to-forge.ps1 on-box  = 0b92037dc5b512684f1efc09b9284a2e2ebfef0b5da599da3b97385b78a529d9
+
+=== NEGATIVE CONTROLS, run against the STAGED copies before anything is deployed ===
+--- backup-volumes: a label no volume carries ---
+powershell.exe : ARCHIVE_VOLUME_ABSENT: no mounted volume is labelled 'NO_SUCH_LABEL_XYZ'. The 
+archive disk is not 
+At C:\HermesLab\expv2-runtime-settlement\.settlement\verify-repair.ps1:14 char:1
++ & powershell -NoProfile -ExecutionPolicy Bypass -File "$stage\staged- ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ARCHIVE_VOLUME_...ve disk is not :String) [], RemoteE 
+   xception
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+attached, or its label changed. Nothing was backed up.
+At C:\HermesLab\expv2-runtime-settlement\.settlement\staged-backup-volumes.ps1:30 char:5
+exit=1
+--- sync-models-to-forge: an absent service definition ---
+powershell.exe : SERVICE_CONFIG_UNREADABLE: 
+C:\HermesLab\expv2-runtime-settlement\.settlement\does-not-exist.ps1 
+At C:\HermesLab\expv2-runtime-settlement\.settlement\verify-repair.ps1:18 char:1
++ & powershell -NoProfile -ExecutionPolicy Bypass -File "$stage\staged- ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (SERVICE_CONFIG_...-not-exist.ps1 :String) [], RemoteE 
+   xception
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+does not exist, so the live model store cannot be confirmed. Point -ServiceScript at the canonical 
+Ollama service definition; do not archive an unverified store.
+exit=-1
+--- sync-models-to-forge: a service definition naming a DIFFERENT store ---
+powershell.exe : MODEL_STORE_DISAGREEMENT: this script would archive 'D:\HermesData\ollama\models' 
+but the Ollama 
+At C:\HermesLab\expv2-runtime-settlement\.settlement\verify-repair.ps1:24 char:1
++ & powershell -NoProfile -ExecutionPolicy Bypass -File "$stage\staged- ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (MODEL_STORE_DIS...but the Ollama :String) [], RemoteE 
+   xception
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+service serves 'G:\HermesData\ollama\models'. Archiving the store the runtime does not use is how 
+a green sync comes to protect nothing.
+exit=-1
+
+=== POSITIVE CONTROLS, still against the STAGED copies ===
+--- backup-volumes -ResolveOnly ---
+{"archiveVolumeLabel":"HERMES_NVME","archiveRoot":"G:","backupDir":"G:\\lab-backups\\hermes-volumes","backupMount":"G:/lab-backups/hermes-volumes","backupDirExists":true}
+exit=0
+--- sync-models-to-forge -ResolveOnly ---
+{"store":"D:\\HermesData\\ollama","serviceModelsDir":"D:\\HermesData\\ollama\\models","storeAgrees":true,"blobCount":21,"blobBytes":10360071891,"manifestCount":5,"remote":"/forge/models/ollama","atlas":"bs@192.168.88.5"}
+exit=0
+
+=== WHAT THE OLD SCRIPTS DO RIGHT NOW, for the record ===
+F: exists = False
+old backup dest F:\lab-backups\hermes-volumes exists = False
+old model store F:\HermesData\ollama exists = False
