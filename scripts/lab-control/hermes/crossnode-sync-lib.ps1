@@ -143,6 +143,15 @@ function Resolve-FabricSshIdentity {
         KnownHostsPath = $known
         # Every ssh and scp invocation in the sync prepends exactly these, so no call site can
         # quietly use a different identity from the one that was resolved and refused on.
+        #
+        # One list, not two, and deliberately no `-n`. `ssh -n` was tried here on the theory that
+        # the sync's first remote call was blocking on inherited stdin; it was not -- the same call
+        # hung identically with `-n` and runs clean under Task Scheduler either way (XN-03). A flag
+        # that fixed nothing measurable does not get shipped on a hunch, and keeping the two option
+        # lists separate to hold it would have been carrying scaffolding for a repair that was not
+        # one. If a later lane does need `-n`, note before adding it that `scp -n` in OpenSSH 9.x
+        # means DRY RUN: it would copy nothing, exit 0, and let this script log success over an
+        # empty transfer.
         SshOptions     = @(
             '-i', $key,
             '-o', "UserKnownHostsFile=$known",

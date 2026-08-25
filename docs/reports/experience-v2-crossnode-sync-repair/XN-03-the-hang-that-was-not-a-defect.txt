@@ -1,0 +1,66 @@
+XN-03 — a wrong diagnosis, the fix it produced, and why that fix was taken back out
+Lane: CROSSNODE-SYNC REPAIR (CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F)
+
+Recorded in full because the wrong turn is the useful part, and because a lane that quietly ships
+the speculative half of its own repair is doing the thing this program keeps finding.
+
+WHAT WAS SEEN. The first real run of the repaired `crossnode-sync.ps1` on HERMES, launched over an
+ssh session from OMEN, produced no output and never finished. Killed at 232 seconds:
+
+  LC-06 EXIT=-1 started=2026-08-25T02:40:05-07:00 elapsedSec=232
+  --- stdout ---  (empty)      --- stderr ---  (empty)
+
+Nothing had been created. The process table named the stall precisely:
+
+  pid=22564 powershell.exe -File C:\HermesLab\hermes\crossnode-sync.ps1
+  pid=22300 ssh.exe ... bs@192.168.88.8
+            "printf %s bHMgLTEgL2ZvcmdlL2JhY2t1cHMvbmlnaHRseSAyPi9kZXYvbnVsbA== | base64 -d | sh"
+            (base64 -d: `ls -1 /forge/backups/nightly 2>/dev/null`)
+
+Stuck on the first remote call -- a directory listing that had answered in under a second through
+the same key minutes earlier.
+
+THE HYPOTHESIS, AND THE FIX IT PRODUCED. `ssh` forwards its stdin to the remote command and holds
+the session open until that stdin reaches EOF; under Task Scheduler stdin is NUL, so such a bug
+would be invisible where the script normally runs and fatal anywhere else. `ssh -n` redirects
+stdin from /dev/null. That was implemented: `Resolve-FabricSshIdentity` was split into `SshOptions`
+(with `-n`) and `ScpOptions` (without -- `scp -n` in OpenSSH 9.x is DRY RUN, which would copy
+nothing, exit 0, and let this script log success over an empty transfer), with assertions in both
+directions, and deployed.
+
+THE HYPOTHESIS WAS WRONG.
+
+  pid=12332 ssh.exe -n -i ...williamos-fabric ... bs@192.168.88.8 "printf %s bHMgLTE... | sh"
+
+Same call, same stall, `-n` present. Meanwhile the identical script under the scheduled task
+completed in 25 seconds, `lastResult=0`, both directions verified. So the hang is a property of
+running the script from inside a nested ssh session -- an inner `ssh` whose stdout is a PIPE, in a
+non-interactive sshd session -- and not a defect in the script. Every ssh probe in this lane that
+DID terminate was launched through `Start-Process` with stdout and stderr redirected to files, or
+through `Win32_Process.Create`, which is how Task Scheduler starts it.
+
+WHAT WAS DONE ABOUT IT. `-n` and the two-list split were REVERTED. The evidence for them was a
+hang they did not fix; a flag that fixes nothing measurable does not get shipped on a hunch, and
+keeping a second option list purely to hold that flag would have been carrying scaffolding for a
+repair that was not one. What is kept is a comment at the resolver saying this was tried, that it
+did not help, and -- for whoever tries it next -- that `scp` must never be given `-n`.
+
+The lasting consequence is about method, not code: `crossnode-sync.ps1` and `lab-health.ps1` cannot
+be proven by running them over an ssh session, so every live control here is run either as the
+scheduled task itself or through a detached process. The scheduled task is the more faithful
+control anyway, because it is the only way these scripts actually run.
+
+--- COLLATERAL, RECORDED RATHER THAN QUIETLY SWEPT UP -----------------------------------------
+Clearing the first hung run, this lane killed every ssh.exe on HERMES rather than only its own.
+Eight processes died. By their command lines they were all stalled connections of the same kind:
+
+  bs@192.168.88.5 hostname                                  (an address that no longer answers)
+  bs@192.168.88.3 ... /etc/machine-id                       (an address not in the fabric registry)
+  bs@192.168.88.8 sudo ls /forge/models/ollama/models/blobs  (a stalled model-sync probe)
+  five more that were this lane's own probes from earlier in the session
+
+`HermesModelForgeSync` had already completed `lastResult=0` at 01:59:59 and `HermesVolumeBackup` at
+02:01, so no scheduled work was interrupted, and every later control in this lane passed. But two
+of those processes were not this lane's to kill. A command-line filter was available and was not
+used the first time; it was used for every kill after. Stated here because the alternative is that
+it goes unmentioned.

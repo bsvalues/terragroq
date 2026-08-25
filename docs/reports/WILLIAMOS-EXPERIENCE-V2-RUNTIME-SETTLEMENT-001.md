@@ -351,38 +351,43 @@ a real ATLAS, and that is what this continuation still holds open.
 `backup-volumes.ps1`'s transfer leg is separately unverified for a different reason: it drives
 `docker run`, and container interaction on HERMES is outside this lane's envelope.
 
-### `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F` — PICKUP ELIGIBLE, STILL NOT REPAIRED HERE
+### `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F` — **DISCHARGED 2026-08-25**
 
 ```
-type:      PICKUP_ELIGIBLE          [retyped 2026-08-25 from TYPED_FINDING]
-file:      scripts/lab-control/hermes/crossnode-sync.ps1  (and lab-health.ps1's F: free-space check)
-symptom:   HermesCrossNodeBackupSync lastResult=1, HermesLabHealth lastResult=2, both since 2026-08-24
-released:  #1003 merged as 58819e62; #862 closed 2026-08-18. No reservation remains on either file.
+type:      DISCHARGED               [was PICKUP_ELIGIBLE; before that TYPED_FINDING]
+by:        WILLIAMOS-EXPERIENCE-V2-CROSSNODE-SYNC-REPAIR-003.md
+files:     scripts/lab-control/hermes/crossnode-sync.ps1, crossnode-sync-lib.ps1, lab-health.ps1,
+           test-crossnode-sync-receipt.ps1
+result:    HermesCrossNodeBackupSync lastResult 1 -> 0 (25 s, 2026-08-25T02:48:48-07:00)
+           HermesLabHealth           lastResult 2 -> 1 (warn, and the warn is honest)
+verified:  from both sides -- 5/5 ATLAS nightly files byte-identical on G:, and the receipt on
+           ATLAS hashes to the value the HERMES-side evidence records
 ```
 
-`crossnode-sync.ps1` hard-codes `F:\lab-backups\crossnode`, `F:\lab-backups\hermes-volumes` and
-`F:\lab-backups\crossnode\crossnode-sync-task-evidence.json`, and `lab-health.ps1` reports free space
-on `F:`. The same letter, the same day, the same one-line fix.
+Both halves of the diagnosis above were right, and one thing it did not name would have kept the
+task red anyway.
 
-**Both reservations that held this shut are now released, and this packet is retyped rather than
-annotated so no reader meets two types for it.** `lab-health.ps1` was a reserved file of PR `#1003`,
-which merged as `58819e62` on 2026-08-25 — that PR changed only this file's Ollama probe
-(`docker ps` → the native `127.0.0.1:11434` API) and re-encoded it (UTF-8 BOM added, LF → CRLF);
-the `F:` free-space check is untouched at `:14`/`:16`, and unrepaired. `crossnode-sync.ps1` was the
-`#862` backup-recovery lane's artifact, and `#862` closed on 2026-08-18. No open pull request
-reserves either file. The diagnosis is unchanged and the destination is still named: `G:`, resolved
-by the label `HERMES_NVME` the way `backup-volumes.ps1` now does.
+The five `F:\` literals in `crossnode-sync.ps1` and the `F:` check in `lab-health.ps1` are gone; the
+archive resolves by the label `HERMES_NVME` to `G:`, exactly as this packet predicted, and every backup
+the sync has ever written was already sitting there. What the packet did not name is that ATLAS had
+moved too: `bs@192.168.88.5` was hard-coded in both files, `192.168.88.5` no longer answers ping from
+HERMES, and ATLAS is at `192.168.88.8`. That address now resolves from `nodes.json`, the way `#1006`
+taught `sync-models-to-forge.ps1` to.
 
-Still true on HERMES at the moment of this retype, checked rather than carried forward from the
-prose above: `Get-Volume -DriveLetter F` returns nothing, `HermesLabHealth` last ran at
-2026-08-25T00:10:10 with `LastTaskResult 2`, and `HermesCrossNodeBackupSync` last ran at
-2026-08-24T13:07:07 with `LastTaskResult 1`. The merge sweep that retyped this did **not** repair it:
-picking it up is a lane's work, and a coordinator that fixed it here would be taking the reservation
-it had just released.
+**And the address alone would not have been enough.** Both scripts used the calling account's
+`~/.ssh`, whose `known_hosts` pins `.5` and has never seen `.8` — measured on HERMES, repairing only the
+address trades `Connection timed out` for `Host key verification failed`, both exit 255, both a red
+task. The transport is resolved with the address now, against the fabric `known_hosts` that carries
+the host key proven byte-identical across ATLAS's move.
 
-Note the consequence, because it is easy to miss: `crossnode-sync.ps1` is the **off-box** replication.
-While it is dead, the repaired `backup-volumes.ps1` writes local redundancy on the same machine and
-nothing leaves HERMES.
+The consequence this packet flagged is discharged with it: `crossnode-sync.ps1` is the **off-box**
+replication, and from 2026-08-23T11:00Z until 2026-08-25T09:48Z nothing left HERMES. It does now,
+in both directions, verified from both ends.
+
+Two findings came out of the repair and are typed in 003 rather than fixed there:
+`CONT-ATLAS-HEALTH-WATCHES-ABANDONED-PATH` (ATLAS's own health script measures a backup directory
+ATLAS stopped writing to — the same fault as this one, one node over, and ATLAS-side) and
+`CONT-FABRIC-RESOLUTION-DUPLICATED` (the registry read now exists in two places on HERMES).
 
 ## Review remediation — five confirmed defects, and what each one is now
 

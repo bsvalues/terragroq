@@ -1,0 +1,141 @@
+XN-02 — live controls on HERMES
+Lane: CROSSNODE-SYNC REPAIR (CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F)
+
+WHY THESE ARE THE TESTS. No .ps1 in this repository runs in CI. `.github/workflows/ci.yml` runs
+vitest over `tests/**/*.test.{ts,tsx}` and a Next production build; `work-context.yml` runs the
+work-context receipt. Nothing invokes PowerShell, and `vitest.config.ts` include is
+`["tests/**/*.test.{ts,tsx}"]`. So these scripts cannot be proven by opening a pull request. They
+are proven by running them on the machine they run on, and that is what is recorded here.
+
+Every control is launched through Start-Process with stdout and stderr redirected to files. That
+is not decoration -- see XN-03.
+
+--- LC-01  unit tests, on HERMES, against the deployed library -------------------------------
+  powershell.exe -File C:\HermesLab\hermes\test-crossnode-sync-receipt.ps1
+  EXIT=0
+  OUT PRODUCER_TESTS_PASS
+
+--- LC-02  resolution, on real hardware, writing nothing -------------------------------------
+  powershell.exe -File C:\HermesLab\hermes\crossnode-sync.ps1 -ResolveOnly
+  EXIT=0
+  {"archiveVolumeLabel":"HERMES_NVME","archiveRoot":"G:",
+   "crossnodeRoot":"G:\lab-backups\crossnode",
+   "atlasToHermes":"G:\lab-backups\crossnode\atlas","atlasToHermesExists":true,
+   "hermesSource":"G:\lab-backups\hermes-volumes","hermesSourceExists":true,
+   "hermesSourceArchives":35,
+   "hermesTaskEvidencePath":"G:\lab-backups\crossnode\crossnode-sync-task-evidence.json",
+   "fabricRoot":"C:\Users\bs\.williamos\fabric","atlas":"bs@192.168.88.8",
+   "atlasNightlyRoot":"/forge/backups/nightly",
+   "sshKeyPath":"C:\Users\bs\.williamos\fabric\keys\williamos-fabric",
+   "knownHostsPath":"C:\Users\bs\.williamos\fabric\known_hosts"}
+
+  Both moved things are resolved to what is actually there: G:, and bs@192.168.88.8. The five
+  F:\ literals and the one .5 literal are gone from the file.
+
+--- LC-03  refusal: the archive disk is not there --------------------------------------------
+  ... -ResolveOnly -ArchiveVolumeLabel NO_SUCH_LABEL_XYZ
+  EXIT=1
+  ERR CROSSNODE_SYNC_FAILED code=ARCHIVE_VOLUME_ABSENT stage=PREFLIGHT_RESOLUTION
+      ARCHIVE_VOLUME_ABSENT no mounted volume is labelled 'NO_SUCH_LABEL_XYZ'. The archive disk is
+      not attached, or its label changed. Nothing was copied in either direction.
+
+--- LC-04  refusal: the registry cannot say where ATLAS is -----------------------------------
+  ... -ResolveOnly -FabricRoot <empty directory>
+  EXIT=1
+  ERR CROSSNODE_SYNC_FAILED code=FABRIC_REGISTRY_UNREADABLE stage=PREFLIGHT_RESOLUTION
+      FABRIC_REGISTRY_UNREADABLE ...\fabric-empty\nodes.json does not exist, so atlas's address
+      cannot be resolved. Refusing rather than falling back to a written-down address that may now
+      name another machine.
+
+--- LC-05  refusal: there is an address but no verified identity to reach it -----------------
+  ... -ResolveOnly -FabricRoot <dir holding only a valid nodes.json>
+  EXIT=1
+  ERR CROSSNODE_SYNC_FAILED code=FABRIC_IDENTITY_UNREADABLE stage=PREFLIGHT_RESOLUTION
+      FABRIC_IDENTITY_UNREADABLE ...\fabric-nokey\keys\williamos-fabric does not exist, so no
+      authenticated transport to ATLAS can be built. Refusing rather than falling back to whatever
+      identity the calling account happens to hold.
+
+  LC-03/04/05 are the point of the repair, not decoration around it. The failure this system keeps
+  producing is not a crash; it is a green run that protected nothing. Each of these is the moment
+  where the old code would have carried on: New-Item -Force would have built an archive tree on
+  whatever F: had become, and a written-down address would have kept naming a machine that is now
+  somebody else's.
+
+--- LC-06/07  the real run, as the scheduled task, against the deployed bytes ----------------
+LC-06 and LC-07 are one control, not two. The script cannot be proven over an ssh session (XN-03),
+and the scheduled task is how it actually runs, so the task IS the control.
+
+  TASK_BEFORE lastRun=2026-08-25T02:46:46-07:00 lastResult=0   (the first green run)
+  Start-ScheduledTask HermesCrossNodeBackupSync
+  TASK_AFTER  state=Ready lastRun=2026-08-25T02:48:48-07:00 lastResult=0 elapsedSec=25
+
+  G:\lab-backups\crossnode\crossnode-sync-task-evidence.json  (rewritten 02:48:49, was 08-23)
+  {
+    "schema_version": 1, "task_name": "HermesCrossNodeBackupSync",
+    "run_id": "7032a73b-7864-4e96-b04d-605ac5fb24ae",
+    "started_at":  "2026-08-25T09:48:28.7617410Z",
+    "receipt_completed_at": "2026-08-25T09:48:45.5976044Z",
+    "completed_at": "2026-08-25T09:48:49.0290051Z",
+    "state": "COMPLETED", "result": "SUCCESS", "verification": "SHA256_PASS",
+    "atlas_receipt_sha256": "98b377c08e815d7c5329682b976090a9ec1c45ef36e8e0122324d2c9b9910b6b"
+  }
+
+  G:\lab-backups\crossnode\atlas now holds a sixth stamp directory, the first since 2026-08-23:
+    20260818_131907 files=8   20260819_030002 files=8   20260820_030001 files=8
+    20260822_030001 files=8   20260823_030001 files=8   20260825_030001 files=5
+  Leftover *.tmp under G:\lab-backups\crossnode: 0
+
+  lastResult went 1 -> 0 for the first time since 2026-08-24.
+
+--- LC-08  verified from BOTH sides, independently of what the script says --------------------
+The script reports SHA256_PASS about itself. That is the claim, not the evidence. Hashes below are
+taken separately on each machine.
+
+ATLAS  /forge/backups/nightly/20260825_030001   |  HERMES  G:\...\crossnode\atlas\20260825_030001
+  191fae2e...ff9bd6  tf-mongo.archive.gz        |    191fae2e...ff9bd6  tf-mongo.archive.gz
+  435a032a...e9f65f  tf-postgres--postgres.dump |    435a032a...e9f65f  tf-postgres--postgres.dump
+  aa4599e1...1ad32d  tf-redis.rdb               |    aa4599e1...1ad32d  tf-redis.rdb
+  d7d2a451...515c59  tf-postgres--icondo.dump   |    d7d2a451...515c59  tf-postgres--icondo.dump
+  eac3e861...a40e27  SHA256SUMS                 |    eac3e861...a40e27  SHA256SUMS
+  5/5 identical.
+
+  HERMES -> ATLAS: 35 *.tar.gz sent; /home/bs/from-hermes holds 65 *.tar.gz (accumulated across
+  runs, 14-day retention); stray *.tmp receipts on ATLAS: 0.
+
+  Receipt on ATLAS, hashed on ATLAS:
+    98b377c08e815d7c5329682b976090a9ec1c45ef36e8e0122324d2c9b9910b6b
+      /home/bs/from-hermes/crossnode-sync-receipt.json
+  -- byte-identical to the atlas_receipt_sha256 recorded in the HERMES-side evidence above, which
+  is what makes the two files one record rather than two claims.
+  Its directions: ATLAS_TO_HERMES file_count=5 SHA256_PASS, HERMES_TO_ATLAS file_count=35
+  SHA256_PASS.
+
+  OFF-BOX REPLICATION IS RESTORED IN BOTH DIRECTIONS. From 2026-08-24 until now, nothing had left
+  HERMES.
+
+--- LC-09  lab-health.ps1, as its scheduled task ---------------------------------------------
+  TASK_BEFORE lastRun=2026-08-25T02:10:10-07:00 lastResult=2
+  TASK_AFTER  state=Ready lastRun=2026-08-25T02:51:51-07:00 lastResult=1 elapsedSec=11
+
+  {"timestamp":"2026-08-25T02:51:54-07:00","overall":"warn",
+   "problems":["Atlas no backup in 174h; ","Aegis spare disk sdd SMART UNKNOWN; "]}
+
+  The two prior runs, for comparison -- this is what the repair removed:
+   01:10 fail ["Hermes F: 0 GB","Backup task","X-sync task","Atlas unreachable","Aegis unreachable"]
+   02:10 fail ["Hermes F: 0 GB","X-sync task","Atlas unreachable","Aegis spare disk sdd SMART UNKNOWN; "]
+   02:51 warn ["Atlas no backup in 174h; ","Aegis spare disk sdd SMART UNKNOWN; "]
+
+  Console output of the same script, run detached (Win32_Process.Create), 02:52:
+    C: free :    86.8 GB   [OK]
+    G: free:  922.4 GB   [OK]  (label HERMES_NVME)
+    Backup  : last 0.9h ago, result 0   [OK]
+    X-sync  : last 0.1h ago, result 0   [OK]
+    ----- ATLAS -----  Address : bs@192.168.88.8   Status : WARN   Forge : PRIMARY=mounted
+    ----- AEGIS -----  Address : bs@192.168.88.6   Status : WARN
+    OVERALL: WARN   Attention: Atlas no backup in 174h; ; Aegis spare disk sdd SMART UNKNOWN;
+
+  NOT GREEN, AND SAYING SO. `lastResult` is 1 (warn), not 0. Four of the six problems this task was
+  reporting were artefacts of the fault this lane repaired -- an absent disk read as a full one, a
+  healthy ATLAS read as unreachable, an AEGIS read as unreachable, and a red X-sync task -- and
+  they are gone. The two that remain are real, are about other nodes, and were being drowned out:
+  see XN-04.
