@@ -83,7 +83,7 @@ belongs to, so a reviewer can re-run the judgement under either reading.
 | Fixed action/operation catalogues | 6 exported consts | **41** exported const catalogues repo-wide, of which **9** are executable action/operation vocabularies | **undercount of 3** |
 | Brokered action vocabulary | 4 action names | **5** action names | **omission of 1** |
 | control-center catalogue | 92 commands | **92** commands (54 `writes`, 2 `safe: False`) | confirmed |
-| Fabric / lab operations | directories named, no count | **84** files `scripts/execution-fabric/` + **26** `scripts/lab-control/` = **110** | quantified |
+| Fabric / lab operations | directories named, no count | **84** files `scripts/execution-fabric/` + **26** `scripts/lab-control/` + **2** `scripts/fabric/` = **112** | quantified, and one directory added — see below |
 | **`SystemObject` consumers** | not stated | **1** — its own test | decisive; see §4.7 |
 
 ### 3.1 Routes: 47 / 31 / 30 reconciled
@@ -131,7 +131,19 @@ nothing; `V1_2_ACCEPTANCE_BLOCKED_ACTIONS` / `V1_2_CAMPAIGN_BLOCKED_ACTIONS`
 (`lib/outcome-queue/v1-2-acceptance-authority.ts:8`, `…campaign-authority.ts:8`) are denylist
 phrases, not invokable actions.
 
-### 3.4 Brokered vocabulary: 5 action names, not 4
+### 3.4 A directory this record's first version did not name
+
+`scripts/fabric/` (2 files at `053a33bd`) was absent from the boundary above. It was surfaced by this
+gate's own adversarial review lane, sweeping for `Restart-Service`, and it is recorded here as a
+defect in this record rather than quietly folded in: "every negative claim states its search
+boundary" is the rule this document binds itself to, and a directory that is never named has not been
+searched, whatever it happens to contain.
+
+It contains no qualifying candidate, and both files are disposed of in §4.6. Stating the fix does not
+retire the finding — the boundary was incomplete when the outcome was first written, and a reader
+checking this record has to be able to see that.
+
+### 3.5 Brokered vocabulary: 5 action names, not 4
 
 Every `action:` string reaching `brokeredExec`, measured across the tree:
 
@@ -259,6 +271,13 @@ supplies no candidate.
 (`LabControl.psm1:714`) are **read-only probes**: `Invoke-LabContainers` runs `docker ps` on hermes
 and atlas (`:659-680`); `Invoke-LabBackups` runs `find` over backup directories on atlas
 (`:682-712`); the rest render snapshots. Fails criterion **1** across the entire surface.
+
+**`scripts/fabric/` — 2 files.** `run-baseline.mjs` is a headless CLI wrapper that imports and calls
+the baseline gate already examined as candidate 6 (`scripts/fabric/run-baseline.mjs:16`); it is a
+second entry point, not a second action. `enroll-omen.ps1` is a one-time enrolment applied **on OMEN
+by OMEN's own agent** (`:1-20`); its `Restart-Service sshd -Force` (`:47`) fails criteria **3** and
+**5** — the machine is not selected, it is the one running the script, and no record supplies the
+target — and it is not reachable from `app/` or `lib/` (measured: no import, no path reference).
 
 **`scripts/execution-fabric/` — 84 files.** 29 mutate a remote node through raw `ssh`/`scp`/
 `systemctl`-class calls. All fail criteria **3** and **5** (intrinsic): the node and the target come
@@ -414,6 +433,9 @@ CONT-EXPV2-FIRST-ACTION
 
 - It does not claim the repository is incapable of a safe governed mutation. It claims no **existing
   catalogued action** is one, on the stated criteria, at `053a33bd`.
+- Its own boundary was incomplete when first written: `scripts/fabric/` was unnamed until the review
+  lane found it (§3.4). The outcome did not move, and that is a fact about those two files rather
+  than a reason the omission was harmless.
 - It does not claim #995's denominators were carelessly derived. Four moved because the tree is
   measured differently by different queries; the packet's own rule is that a lane re-measures, and
   this is what that rule is for.
