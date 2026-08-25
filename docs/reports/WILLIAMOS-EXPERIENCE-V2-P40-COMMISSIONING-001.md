@@ -1,6 +1,15 @@
 # WilliamOS Experience V2 — HERMES P40 Commissioning 001
 
-Status: **`HERMES_P40_BLOCKED_RUNTIME`**
+Status: **`HERMES_P40_BLOCKED_RUNTIME`** — **SUPERSEDED** by
+[`WILLIAMOS-EXPERIENCE-V2-P40-NATIVE-MIGRATION-002.md`](WILLIAMOS-EXPERIENCE-V2-P40-NATIVE-MIGRATION-002.md)
+(`HERMES_P40_COMMISSIONED_WITH_LIMITS`), which executes the owner's remedy decision of 2026-08-24.
+
+Everything observed below still stands — the WSL2/TCC finding in particular is still true, and is the
+reason the P40 is now driven by a native Windows service instead of a container. What changed is the
+verdict, not the evidence. Two inferences in this report were later corrected by 002 and are flagged
+where they appear: `F:` was a real drive (the NVMe now lettered `G:`) at the time the hand-created
+container was built, and the model store on `D:` is provably the superset rather than merely the one
+the owning compose file named.
 
 Issue: `#997 HERMES_P40_COMMISSIONING` · Parents `#990` Gate 1 packet, `#985` System Object Graph,
 `#964` Intelligence Fabric V1 · Prerequisite settlement `#998` (Gate 1b, live)
