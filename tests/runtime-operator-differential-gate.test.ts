@@ -8,7 +8,6 @@ import {
   measureBaselineFailures,
   newlyFailingTests,
   parseFailingTestFiles,
-  validationFailureWall,
 } from "../scripts/runtime-operator/williamos-adapters.mjs"
 
 /**
@@ -17,18 +16,6 @@ import {
  * result turned every correct patch into FAILED_TERMINAL.
  */
 describe("differential test gate", () => {
-  it("distinguishes a proven new test regression from a generic test harness failure", () => {
-    expect(validationFailureWall("test", { provenModelRegression: true })).toBe("VALIDATION_TEST_REGRESSION_WALL")
-    expect(validationFailureWall("test")).toBe("VALIDATION_TEST_WALL")
-    expect(validationFailureWall("diff-check", { provenModelRegression: true })).toBe("VALIDATION_DIFF_CHECK_WALL")
-  })
-
-  it("does not let an exception mint differential proof by naming the privileged wall", () => {
-    expect(validationFailureWall("test", {
-      error: new Error("VALIDATION_TEST_REGRESSION_WALL"),
-    })).toBe("VALIDATION_TEST_WALL")
-  })
-
   it("reads failing test files out of vitest output, colour codes and all", () => {
     const output = "[31mFAIL[0m  tests/alpha.test.ts > case\nFAIL  tests/beta.test.tsx > other\n"
     expect(parseFailingTestFiles(output)).toEqual(["tests/alpha.test.ts", "tests/beta.test.tsx"])

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import * as laneMeasurement from "../scripts/runtime-operator/lane-measurement.mjs"
+import { validationFailureWall } from "../scripts/runtime-operator/williamos-adapters.mjs"
 
 const {
   buildStaleBaselineInvalidation,
@@ -26,6 +27,15 @@ const observeSameRunAccelerator = (laneMeasurement as Record<string, unknown>).o
  * the next model comparison inherits it and starts from a lie.
  */
 describe("what a failed dispatch is allowed to mean", () => {
+  it("distinguishes proven differential regression from generic or spoofed validation failures", () => {
+    expect(validationFailureWall("test", { provenModelRegression: true })).toBe("VALIDATION_TEST_REGRESSION_WALL")
+    expect(validationFailureWall("test")).toBe("VALIDATION_TEST_WALL")
+    expect(validationFailureWall("diff-check", { provenModelRegression: true })).toBe("VALIDATION_DIFF_CHECK_WALL")
+    expect(validationFailureWall("test", {
+      error: new Error("VALIDATION_TEST_REGRESSION_WALL"),
+    })).toBe("VALIDATION_TEST_WALL")
+  })
+
   it("never blames the model for an orphaned provider worktree", () => {
     expect(classifyDispatchFailure("PROVIDER_WORKSPACE_RECONCILIATION_WALL")).toEqual({
       verdict: "BLOCKED_WORKSPACE_RECONCILIATION",
