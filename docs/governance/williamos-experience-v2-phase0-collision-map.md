@@ -1537,13 +1537,15 @@ CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION
                           verified-post-state paths as recorded by the delivering lane at
                           williamos-experience-v2-first-action-pickup-search-record.md:361-365.
                           PR #1002 -> main 1a352a3f, main CI green after it.
-  continues as:           CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT -- WAITING_RESERVATION,
-                          condition 997-migration-complete, continuation automatic -- recorded on
-                          main at line 369 of
-                          williamos-experience-v2-first-action-pickup-search-record.md. Gate 2's
-                          TERMINAL leg lives there now. It is NOT settled by this resolution, and
-                          it does not become an owner ask: HERMES is under the #997 migration
-                          lane's active reservation and the continuation is automatic.
+  continues as:           CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT -- recorded on main at line 369
+                          of williamos-experience-v2-first-action-pickup-search-record.md, retyped
+                          in the same change as this line to BLOCKED_DEPENDENCY, reason
+                          AUTHORITY_UNREADABLE, condition ATLAS_REACHABLE, continuation automatic.
+                          Gate 2's TERMINAL leg lives there. It is NOT settled by this resolution
+                          and it still does not become an owner ask -- but the reason has changed:
+                          #997's reservation on HERMES released and the settlement ran, and the
+                          registry that decides authority is a table in a Postgres on ATLAS, which
+                          answers nothing. The owner is not asked to power on or declare a node.
   blocksGate1:            false
   mustResolveBefore:      nothing further here. Gate 2 terminal acceptance is now gated by the
                           successor above rather than by this packet.

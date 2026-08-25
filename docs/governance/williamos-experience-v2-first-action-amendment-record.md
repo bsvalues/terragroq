@@ -143,11 +143,17 @@ CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION
                           #995 acceptance invariants 9 and 12 and the governed-execution leg of 13
                           are delivered and tested. 13's TERMINAL acceptance is NOT satisfied and
                           still needs a live HERMES settlement.
-  continues as:           CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT -- WAITING_RESERVATION,
-                          condition 997-migration-complete, continuation automatic -- recorded on
-                          main at line 369 of
-                          williamos-experience-v2-first-action-pickup-search-record.md. That packet,
-                          not this one, now carries Gate 2's terminal leg.
+  continues as:           CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT -- recorded on main at line 369
+                          of williamos-experience-v2-first-action-pickup-search-record.md, which is
+                          still where it lives. Its TYPE has moved on: the same change that carries
+                          this line retypes it BLOCKED_DEPENDENCY, reason AUTHORITY_UNREADABLE,
+                          condition ATLAS_REACHABLE, continuation automatic. It read
+                          WAITING_RESERVATION / 997-migration-complete when this packet was
+                          resolved, which was true then and is not now -- #1003 released HERMES, the
+                          settlement ran against live hardware, and the wall behind the reservation
+                          turned out to be one step earlier than the node: the grant registry is a
+                          table in a Postgres on ATLAS, and ATLAS answers nothing. That packet, not
+                          this one, carries Gate 2's terminal leg.
   authority:              NONE NEW. AMENDMENT-001 granted no authority category by itself, and
                           resolving this packet grants none either.
   owner:                  closed. The successor names its own.
@@ -186,8 +192,10 @@ CONT-EXPV2-FIRST-ACTION-MAP-RETYPE
 - It does not claim Gate 2 is unblocked as a whole. #996's lifecycle is **complete** — merged to
   `main` as `2630ee5a` — and the first action is built and merged (#1002 → `1a352a3f`). What
   invariant 13's TERMINAL acceptance still waits on is a live HERMES settlement, tracked as
-  `CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT`, `WAITING_RESERVATION / 997-migration-complete /
-  automatic`.
+  `CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT`. That settlement has since been attempted for real:
+  the packet is now `BLOCKED_DEPENDENCY / AUTHORITY_UNREADABLE / ATLAS_REACHABLE`, retyped in the
+  same change as this line. HERMES was released and answered; the authority registry on ATLAS did
+  not.
 - It does not claim the action is designed. `CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION` stated the
   constraints the amendment imposes on a build and deliberately chose no verb, because choosing
   one was not this lane's work. The lane that picked the packet up chose it —
