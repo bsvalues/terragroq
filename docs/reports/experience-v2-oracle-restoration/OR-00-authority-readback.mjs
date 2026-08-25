@@ -4,10 +4,12 @@
  * This exists to answer two questions that must not be answered by assertion:
  *
  *   1. Did recording one grant change anything else? The 28 grants observed before this lane touched
- *      ATLAS are enumerated column-for-column and digested, so "unchanged" is a hash comparison
- *      rather than a claim. The digest covers every column that carries meaning -- including
- *      `status`, `expiresAt`, `revokedAt` and `contentHash` -- because a grant silently expiring or
- *      being revoked is exactly the kind of change a row count would hide.
+ *      ATLAS are enumerated and digested, so "unchanged" is a hash comparison rather than a claim.
+ *      The digest covers 15 of the table's 18 meaningful columns -- including `status`, `expiresAt`,
+ *      `revokedAt` and `contentHash`, because a grant silently expiring or being revoked is exactly
+ *      the kind of change a row count would hide. It does NOT cover `reason`, `revokedBy` and
+ *      `revokeReason`; a second digest over all 18 is reported alongside it as the forward baseline,
+ *      and the reasoning for keeping both is at EXTENDED_COLUMNS below.
  *
  *   2. What does the ROUTE see? `app/api/system/node/stamp-identity/route.ts:104-112` narrows in SQL
  *      to `"scope" = $1 AND "userId" = $2` and then lets `lib/governance/authority.ts` `grantCovers`
@@ -67,6 +69,23 @@ const ENUMERATION_COLUMNS = [
   "allowed_actions", "blocked_actions", "status", "expires_at", "revoked_at", "content_hash",
   "created_at", "user_id",
 ]
+
+// THE THREE COLUMNS THE BASELINE DIGEST DOES NOT COVER, and why there are two digests rather than a
+// corrected one. `authority_grant` also carries `reason`, `revokedBy` and `revokeReason`; the list
+// above omits them, so the baseline digest establishes that 15 of the table's 18 meaningful columns
+// are unchanged and not, as the first version of this comment claimed, "every column that carries
+// meaning". The omission matters least for `revokedBy`/`revokeReason` -- the canonical revoke path
+// writes them in the same statement as `status` and `revokedAt`, both of which ARE digested, so a
+// revocation cannot hide in them -- and most for `reason`, which nothing in the canonical path ever
+// updates after creation but which an ad-hoc `UPDATE` could rewrite without moving `contentHash`,
+// since that column stores the hash rather than recomputing it.
+//
+// Extending the list in place would have been the wrong repair: the pre-mutation baseline was
+// captured over these 15 columns, and a digest over 18 cannot be compared with it. So the 15-column
+// digest is kept exactly as it was and an 18-column digest is reported ALONGSIDE it, as the forward
+// baseline every later lane compares against.
+const EXTENDED_COLUMNS = [...ENUMERATION_COLUMNS, "reason", "revoked_by", "revoke_reason"]
+
 const ENUMERATION = `
   SELECT id                                     AS id,
          ref                                    AS ref,
@@ -82,7 +101,10 @@ const ENUMERATION = `
          COALESCE("revokedAt"::text,'')         AS revoked_at,
          COALESCE("contentHash",'')             AS content_hash,
          "createdAt"::text                      AS created_at,
-         "userId"                               AS user_id
+         "userId"                               AS user_id,
+         COALESCE(reason,'')                    AS reason,
+         COALESCE("revokedBy",'')               AS revoked_by,
+         COALESCE("revokeReason",'')            AS revoke_reason
     FROM authority_grant ORDER BY id`
 
 // route.ts:104-112, predicate for predicate.
@@ -108,14 +130,19 @@ try {
   const rows = (await pool.query(ENUMERATION)).rows
   // psql -At -F '|' renders exactly this: pipe-joined values, newline-terminated. Reproducing that
   // rendering is what makes the digest comparable with the baseline taken before any change.
-  const rendered = rows
-    .map((r) => ENUMERATION_COLUMNS.map((c) => (r[c] === null ? "" : String(r[c]))).join("|"))
+  const render = (columns) => rows
+    .map((r) => columns.map((c) => (r[c] === null ? "" : String(r[c]))).join("|"))
     .map((line) => line + LF)
     .join("")
+  const rendered = render(ENUMERATION_COLUMNS)
   report.enumeration = {
     columns: ENUMERATION_COLUMNS,
     count: rows.length,
     sha256: crypto.createHash("sha256").update(rendered).digest("hex"),
+    // The forward baseline: the same rows with `reason`, `revokedBy` and `revokeReason` appended.
+    // Not comparable with `sha256` and not meant to be -- see EXTENDED_COLUMNS above.
+    extendedColumns: EXTENDED_COLUMNS,
+    sha256Extended: crypto.createHash("sha256").update(render(EXTENDED_COLUMNS)).digest("hex"),
     refs: rows.map((r) => r.ref),
     statuses: rows.reduce((acc, r) => ({ ...acc, [r.status]: (acc[r.status] ?? 0) + 1 }), {}),
     scopes: [...new Set(rows.map((r) => r.grant_scope))].filter(Boolean).sort(),

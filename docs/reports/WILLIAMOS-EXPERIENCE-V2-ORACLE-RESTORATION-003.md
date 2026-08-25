@@ -119,9 +119,9 @@ answers `bs@192.168.88.8` from `nodes.json`.
 
 ## 3 · The registry read end-to-end, and the 28 grants proven untouched
 
-`OR-00-authority-readback.mjs` enumerates every grant column-for-column and digests the rendering,
-then applies the route's *own* lookup (`"scope" = $1 AND "userId" = $2`) and the canonical
-`grantCovers`. Read from HERMES over the LAN it returned `count: 28`, digest
+`OR-00-authority-readback.mjs` enumerates every grant and digests the rendering, then applies the
+route's *own* lookup (`"scope" = $1 AND "userId" = $2`) and the canonical `grantCovers`. Read from
+HERMES over the LAN it returned `count: 28`, digest
 
 ```
 dba0006cc86c4c35abc7d2fc58b00cacb38c03bd5698439e3c2e4ce6128353b7
@@ -130,6 +130,15 @@ dba0006cc86c4c35abc7d2fc58b00cacb38c03bd5698439e3c2e4ce6128353b7
 — **byte-identical** to the baseline `psql` produced on ATLAS before this lane touched anything. Two
 tools, two hosts, two transports, one number. After everything below, the same 28 rows still hash to
 it, with exactly one row added.
+
+**What that digest covers, precisely.** 15 of `authority_grant`'s 18 meaningful columns, including
+`status`, `expiresAt`, `revokedAt` and `contentHash`. It does **not** cover `reason`, `revokedBy` or
+`revokeReason` — raised in review against an earlier sentence here that claimed it covered every
+column that carries meaning, and correct. A second digest over all 18 is now reported alongside it
+as the forward baseline; the 15-column number is kept unchanged because the pre-mutation baseline
+was taken over those columns and a wider digest cannot be compared with it. `OR-15` item 5 has the
+full reasoning, both numbers for the 28 originals, and an independent re-derivation of `dba0006c…`
+from `psql` on ATLAS in a later session.
 
 ---
 
@@ -250,6 +259,48 @@ reservations separately.
 
 ---
 
+## 6 · Review remediation
+
+Six findings were raised on this PR after its last substantive commit. Four are repaired and
+measured, two are typed rather than repaired. Full working in `OR-15-review-remediation.md`; the
+three that change what this record claims are below.
+
+**The recorder would have minted a second grant.** Its "refuses to run twice" guard was written on
+`grantCovers`, and coverage is exactly what revocation removes — so once `GRANT-0019` was revoked, a
+re-run with `--record` would have created a fresh **active** `A3_WRITE_SHARED` grant under `#995`
+with no owner decision behind it. The canonical path would not have stopped it either: its replay
+check matches only `status = "active"`. This was the worst defect in the lane, because its
+consequence is standing permission existing again after this record says it was deliberately closed.
+The guard now tests for the issuance's *existence in any status*, before `--record` is consulted,
+with no override flag. Re-run against the live registry **with `--record`**: `ALREADY_ISSUED_HISTORICALLY`,
+29 grants before and after, no grant created, route still refusing.
+
+**The resolver could still return the stale address.** Filed as a P2; it is the lane's own defect
+class. `URL.hostname` is a silent setter — given a value the parser will not take it throws nothing
+and leaves the previous hostname in place, and the previous hostname is `192.168.88.5`. A registry
+holding a bare IPv6 literal, which ATLAS has, produced a URL pointing at the machine that used to be
+ATLAS while reporting `changed: true` and echoing the registry's value back as `host`. Bare IPv6 is
+now bracketed and accepted; anything the parser will not take is a typed refusal.
+
+**Applying the firewall could leave the port open.** `iptables -F` on the live chain followed by
+rule-by-rule appends empties it first, and an empty chain falls through to Docker's accept rules —
+open for the width of the window, and open permanently if any append fails, since `set -e` exits
+with the flush already done. The header of that very file says "NO FAIL-OPEN". It is now one
+`iptables-restore --noflush` transaction, with both properties measured on ATLAS on a scratch chain
+rather than assumed. Re-applied: the installed policy is byte-identical to what was in force, both
+refusal controls still leave it intact, and both sides re-measured — HERMES admitted, OMEN dropped,
+ATLAS's other published services untouched.
+
+**`CONT-EXPV2-RESOLVER-NOT-WIRED`** is the one finding typed rather than fixed on its merits: the
+resolver has no production caller, so a normal HERMES restart still uses the durable `.env.local`.
+Wiring it is a production change to a runtime this lane may only read from — and it would not work
+if it were wired, because `CONT-EXPV2-RUNTIME-CREDENTIAL-STALE` means that process cannot
+authenticate whatever address it resolves. Fixing it here would replace a visible wrong address with
+an invisible wrong credential and look like a repair. It belongs with the credential, in a lane that
+owns the runtime.
+
+---
+
 ## What this may NOT be read as
 
 **`CONT-EXPV2-AUTHORITY-REGISTRY-SINGLE-POINT` stays typed open**, by the owner's explicit
@@ -288,6 +339,9 @@ as "ufw".
 | `OR-12-closed.json` | the same driver, after |
 | `OR-13-credential-finding.txt` | the fourth wall |
 | `OR-14-suite-comparison.txt` | the local suite, this branch against unmodified main |
+| `OR-15-review-remediation.md` | the six review findings, each measured; four repaired, two typed |
+| `OR-16-recorder-replay-refused.json` | the recorder re-run **with `--record`**, creating nothing |
+| `OR-17-registry-after-remediation.json` | separate observation after it: 29 rows, digests unchanged |
 | `docs/devkit/authority/GRANT-0019.{md,json}` | the Tier-2 ledger the canonical path produced |
 
 ## Tests
