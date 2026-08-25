@@ -23,6 +23,7 @@ import {
   classifySupersedingDecision,
   composeDecisionRecorded,
   composeDecisionSuperseded,
+  mentionsSupersession,
 } from "@/lib/environment/decision-intent"
 import { isContinueIntent } from "@/lib/environment/start-work"
 import { classifyDismissal, classifySummon, isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
@@ -552,8 +553,15 @@ export async function POST(request: Request) {
 
   if (summonRequest) {
     // Arriving at a surface is not a conversational turn: nothing is recorded as said. The
-    // environment materializes what was asked for and states what it is, and the world keeps the
-    // surface so a reload does not lose it.
+    // environment materializes what was asked for and states what it is, and the snapshot records
+    // the surface.
+    //
+    // Recording it is not the same as returning to it. The Desk keeps `worldId` in React state only
+    // and arrives with the new-world sentinel, so a reload re-summons the surface into a NEW world
+    // rather than restoring this one, and the transcript does not come back. That gap is typed in
+    // docs/product/deleted-route-capability-gaps.md and enforced by
+    // tests/deleted-route-capability-gaps.test.ts -- it is not described as solved here, because a
+    // comment that reads as a promise is how the next lane concludes the capability already exists.
     const world = requestedWorldId ? await loadWorld(userId, requestedWorldId) : null
     if (requestedWorldId && !world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
     const base = world ?? createWorkingWorld({ intent: `show the ${summonRequest} surface` })
@@ -620,6 +628,13 @@ export async function POST(request: Request) {
             decision: superseding.decision,
             ...(superseding.rationale ? { rationale: superseding.rationale } : {}),
             context: "Recorded from the Environment Line.",
+            // Said explicitly, because the defaults are the governed FORM's defaults: accepted, and
+            // inheriting the replaced decision's authority. From a typed sentence that would mean a
+            // conversational input minting an accepted, possibly-binding record and feeding it to
+            // the agent context injector through getActiveDecisions() -- while the reply below tells
+            // the owner it is proposed and advisory. The write now matches the sentence.
+            status: "proposed",
+            authority: "advisory",
           })
           say = composeDecisionSuperseded(row?.ref ?? null, superseding)
           const register = await summonSurface("decisions", userId, updated.spine)
@@ -630,6 +645,17 @@ export async function POST(request: Request) {
             `Nothing was written, so ${superseding.supersedes} still stands.`
         }
       }
+    } else if (mentionsSupersession(text)) {
+      // The sentence asks to REPLACE a record but named no reference this can resolve. Falling
+      // through to plain recording here is the quiet failure: it files a brand-new decision titled
+      // "superseding the old one: ..." with no lineage, reports success, and leaves the decision the
+      // owner meant to replace standing. Refusing and naming the required form is the only honest
+      // answer, because guessing which decision was meant is worse than doing nothing.
+      say =
+        `I can't supersede anything from that sentence — it doesn't name which decision to replace, ` +
+        `and guessing is worse than refusing. Nothing was recorded. Say it as ` +
+        `"record a decision superseding ADR-0007: <the replacement>", using the reference shown in ` +
+        `the register.`
     } else if (classifyDecisionRecord(text)) {
       // A real governed write from the Line: this is the capability that let /decisions be deleted
       // rather than merely hidden. Recorded as PROPOSED and ADVISORY — the defaults createDecision

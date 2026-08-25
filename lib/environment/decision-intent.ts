@@ -102,15 +102,52 @@ export function composeDecisionRecorded(ref: string | null, recorded: RecordedDe
  */
 export type SupersedingDecision = RecordedDecision & Readonly<{ supersedes: string }>
 
-/** "record a decision superseding DECISION-0007: ..." — the ref is required and explicit. */
+/**
+ * "record a decision superseding ADR-0007: ..." — the ref is required and explicit.
+ *
+ * `ADR-` and not `DECISION-`. This pattern originally demanded `DECISION-<digits>`, a reference
+ * format the register has never issued: `nextRef()` in `app/actions/decisions.ts` mints `ADR-0001`,
+ * `ADR-0002`, and the Desk's decision surface prints exactly that. So the owner read `ADR-0007` off
+ * their own screen, typed it back, and this refused to see a supersession at all — the sentence then
+ * fell through to plain recording and filed a lineage-less decision titled "superseding ADR-0007:
+ * …". Nothing errored. The capability the deletion of /decisions was justified by simply did not
+ * exist, and the tests agreed with the bug because they were written against the same invented
+ * format.
+ */
 const SUPERSEDE =
-  /^\s*(?:record|log|capture|note)?\s*(?:a\s+)?decisions?\s+(?:that\s+)?supersed(?:es|ing)\s+(DECISION-\d+)\s*[:\-—]?\s*/i
+  /^\s*(?:record|log|capture|note)?\s*(?:a\s+)?decisions?\s+(?:that\s+)?supersed(?:es|ing)\s+(ADR-\d+)\s*[:\-—]?\s*/i
+
+/**
+ * The sentence is TRYING to supersede something, whether or not it named a reference this can
+ * resolve.
+ *
+ * Refusing an unresolvable reference is not enough on its own: without this, "record a decision
+ * superseding the old one: …" is null here, reaches `classifyDecisionRecord`, and records an
+ * ordinary decision — the owner asked to replace a record and got a new unrelated one, silently.
+ * The Line uses this to refuse and say what form it needs instead of writing the wrong thing.
+ */
+const SUPERSEDE_INTENT = /^\s*(?:record|log|capture|note)?\s*(?:a\s+)?decisions?\s+(?:that\s+)?supersed(?:es|ing)\b/i
+
+export function mentionsSupersession(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed || trimmed.length > MAX_TEXT) return false
+  if (NOT_COMMITTAL.test(trimmed)) return false
+  return SUPERSEDE_INTENT.test(trimmed)
+}
+
+/** The reference form the register actually issues, normalized so ADR-7 finds ADR-0007. */
+export function normalizeDecisionRef(raw: string): string {
+  const match = /^ADR-(\d+)$/i.exec(raw.trim())
+  if (!match) return raw.trim().toUpperCase()
+  return `ADR-${match[1].padStart(4, "0")}`
+}
 
 /**
  * The superseding decision this sentence records, or null.
  *
- * Requires an explicit DECISION-#### reference: replacing the wrong decision is worse than not
- * replacing one, so nothing here guesses which decision was meant.
+ * Requires an explicit ADR-#### reference: replacing the wrong decision is worse than not replacing
+ * one, so nothing here guesses which decision was meant. When the sentence clearly meant to supersede
+ * and this returns null anyway, `mentionsSupersession` is what stops the Line writing something else.
  */
 export function classifySupersedingDecision(text: string): SupersedingDecision | null {
   const trimmed = text.trim()
@@ -127,7 +164,7 @@ export function classifySupersedingDecision(text: string): SupersedingDecision |
   if (statement.length < 8) return null
 
   return {
-    supersedes: match[1].toUpperCase(),
+    supersedes: normalizeDecisionRef(match[1]),
     title: statement.length > MAX_TITLE ? `${statement.slice(0, MAX_TITLE - 1).trimEnd()}…` : statement,
     decision: body,
     rationale: rationale && rationale.length > 0 ? rationale : null,

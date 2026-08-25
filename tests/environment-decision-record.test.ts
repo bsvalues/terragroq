@@ -85,8 +85,8 @@ describe("it refuses anything that was only wondering aloud", () => {
 describe("it never claims authority it did not have", () => {
   it("states plainly that the record is proposed and advisory", () => {
     const recorded = classifyDecisionRecord("record a decision: the Line records decisions")!
-    const say = composeDecisionRecorded("DECISION-0007", recorded)
-    expect(say).toContain("DECISION-0007")
+    const say = composeDecisionRecorded("ADR-0007", recorded)
+    expect(say).toContain("ADR-0007")
     expect(say).toMatch(/proposed and advisory/i)
     // Binding authority is minted by the governed path with evidence. A sentence typed into a
     // conversational input is not that, and the reply must not imply otherwise.
@@ -103,20 +103,25 @@ describe("it never claims authority it did not have", () => {
 /**
  * Supersession is what makes the register a register rather than a pile of notes: a replaced decision
  * must point at what replaced it. The retired ADR form was the only place this existed.
+ *
+ * These read ADR-#### and not DECISION-####. They were written against DECISION-####, a reference
+ * format the register has never minted, so they passed while the capability was unreachable in front
+ * of the owner -- the test agreed with the bug. tests/environment-decision-supersession-ref.test.ts
+ * now pins the format against app/actions/decisions.ts rather than against a literal.
  */
 describe("superseding an existing decision", () => {
   it("records the replacement and the decision it replaces", () => {
     const recorded = classifySupersedingDecision(
-      "record a decision superseding DECISION-0007: the claude lane is the default fallback because codex exhausts",
+      "record a decision superseding ADR-0007: the claude lane is the default fallback because codex exhausts",
     )
-    expect(recorded?.supersedes).toBe("DECISION-0007")
+    expect(recorded?.supersedes).toBe("ADR-0007")
     expect(recorded?.title).toBe("the claude lane is the default fallback")
     expect(recorded?.rationale).toBe("codex exhausts")
   })
 
   it.each([
-    "decision superseding DECISION-0012: evidence lives with the work order",
-    "log a decision that supersedes DECISION-0003: retire the form",
+    "decision superseding ADR-0012: evidence lives with the work order",
+    "log a decision that supersedes ADR-0003: retire the form",
   ])("accepts the natural phrasings: %j", (text) => {
     expect(classifySupersedingDecision(text)).not.toBeNull()
   })
@@ -124,19 +129,19 @@ describe("superseding an existing decision", () => {
   it("requires an explicit reference and never guesses which decision was meant", () => {
     // Replacing the wrong decision is worse than replacing none.
     expect(classifySupersedingDecision("record a decision superseding the old one: use Postgres")).toBeNull()
-    expect(classifySupersedingDecision("record a decision superseding DECISION-: use Postgres")).toBeNull()
+    expect(classifySupersedingDecision("record a decision superseding ADR-: use Postgres")).toBeNull()
   })
 
   it("refuses questions about superseding", () => {
-    expect(classifySupersedingDecision("should we supersede DECISION-0007?")).toBeNull()
-    expect(classifySupersedingDecision("can I supersede DECISION-0007")).toBeNull()
+    expect(classifySupersedingDecision("should we supersede ADR-0007?")).toBeNull()
+    expect(classifySupersedingDecision("can I supersede ADR-0007")).toBeNull()
   })
 
   it("says the superseded decision is kept, not deleted", () => {
-    const recorded = classifySupersedingDecision("decision superseding DECISION-0007: the lane is default")!
-    const say = composeDecisionSuperseded("DECISION-0021", recorded)
-    expect(say).toContain("DECISION-0021")
-    expect(say).toContain("DECISION-0007")
+    const recorded = classifySupersedingDecision("decision superseding ADR-0007: the lane is default")!
+    const say = composeDecisionSuperseded("ADR-0021", recorded)
+    expect(say).toContain("ADR-0021")
+    expect(say).toContain("ADR-0007")
     expect(say).toMatch(/stays in the register marked superseded rather than being deleted/i)
     expect(say).toMatch(/proposed and advisory/i)
   })

@@ -224,7 +224,17 @@ export async function linkEvidence(id: number, evidence: string) {
   })
 }
 
-// Supersession: create a replacement decision and link both directions.
+/**
+ * Supersession: create a replacement decision and link both directions.
+ *
+ * `status` is an explicit input rather than a hardcoded "accepted". The governed ADR form supersedes
+ * by accepting the replacement, and that is still the default. The Environment Line supersedes from
+ * a TYPED SENTENCE, and a typed sentence does not mint acceptance: it passed nothing, inherited the
+ * replaced decision's authority, was written as `accepted`, and then told the owner the record was
+ * "proposed and advisory" — while `getActiveDecisions()` fed that same record to the agent context
+ * injector as an active, accepted, possibly-binding decision. The reply was not describing what the
+ * register had done. Callers now say which one they are.
+ */
 export async function supersedeDecision(
   oldId: number,
   input: {
@@ -233,6 +243,7 @@ export async function supersedeDecision(
     rationale?: string
     context?: string
     consequences?: string
+    status?: string
     authority?: string
     scope?: string
     evidence?: string
@@ -249,6 +260,7 @@ export async function supersedeDecision(
   assertGenericDecisionScope(old)
 
   const ref = await nextRef(userId)
+  const status = input.status ?? "accepted"
   const [replacement] = await db
     .insert(decision)
     .values({
@@ -259,14 +271,16 @@ export async function supersedeDecision(
       decision: input.decision,
       rationale: input.rationale ?? null,
       consequences: input.consequences ?? null,
-      status: "accepted",
+      status,
       authority: input.authority ?? old.authority,
       owner: old.owner,
       scope: input.scope ?? old.scope,
       evidence: splitList(input.evidence),
       tags: splitList(input.tags),
       supersedesId: old.id,
-      decidedAt: new Date(),
+      // A decision is DECIDED when it is accepted. Stamping a decidedAt on a proposal would date a
+      // decision that has not been made.
+      decidedAt: status === "accepted" ? new Date() : null,
     })
     .returning()
 

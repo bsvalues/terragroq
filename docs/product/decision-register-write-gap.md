@@ -17,7 +17,7 @@ wired **six** governed writes, not two, and only two were migrated to the Line:
 | write | had UI at `/decisions` | replaced by |
 | --- | --- | --- |
 | `createDecision` | yes | **the Line** — `record a decision: <what> because <why>` |
-| `supersedeDecision` | yes | **the Line** — `record a decision superseding DECISION-0007: …` |
+| `supersedeDecision` | yes | **the Line** — `record a decision superseding ADR-0007: …` |
 | `updateDecisionStatus` | yes — accept / reject a proposal | **nothing** |
 | `setDecisionAuthority` | yes — binding / advisory / info | **nothing** |
 | `linkEvidence` | yes — attach evidence to a decision | **nothing** |
@@ -46,11 +46,11 @@ makes a register a register rather than a pile of notes, and it currently has no
 ## Why it was typed here rather than closed here
 
 Closing it means a third Line classifier beside `classifyDecisionRecord` and
-`classifySupersedingDecision` — `accept DECISION-0007`, `reject DECISION-0007: <reason>` — and an
+`classifySupersedingDecision` — `accept ADR-0007`, `reject ADR-0007: <reason>` — and an
 accept is a governed write with authority consequences. The record path earned its safety with an
 explicit leading trigger, a hard refusal on anything interrogative, negated or hypothetical, and 26
-test cases covering every "wondering aloud" form. *"Should we accept DECISION-0007?"* must never
-accept DECISION-0007.
+test cases covering every "wondering aloud" form. *"Should we accept ADR-0007?"* must never
+accept ADR-0007.
 
 Building that at the end of a single-attempt landing, without the same care, is how a shortcut ships.
 The gap is smaller than the risk of closing it badly, so it is named, enforced, and handed to the
