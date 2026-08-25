@@ -6,9 +6,19 @@ Issue: `#997 HERMES_P40_COMMISSIONING` · Checkpoint: PR `#1000` and report
 `WILLIAMOS-EXPERIENCE-V2-P40-COMMISSIONING-001.md` (verdict `HERMES_P40_BLOCKED_RUNTIME`) ·
 Owner decision: 2026-08-24, *"Native Windows Ollama. Preserve the P40 in TCC mode."*
 
-Every read and every mutation went through `lib/fabric/broker.mjs` on HERMES and appended to the
-lab's one audit ledger; every mutating step set `requireAudit`. SSH and `scp` carried files and
-started `node`; they produced no fact recorded here.
+Every read and every mutation went through `lib/fabric/broker.mjs` on HERMES and was **appended to
+the lab's one audit ledger after execution** — 27 entries under this lane's `mig-*` action names, in
+a ledger that grew to 19,686 lines. SSH and `scp` carried files and started `node`; they produced no
+fact recorded here.
+
+**Not claimed: that the ledger was proven writable before the node was touched.** Mutating steps
+passed `--require-audit`, and that flag is **inert against this broker**. `lib/fabric/broker.mjs` at
+`b9f5138b…` — the copy staged on HERMES and the copy on this branch — contains no `requireAudit` and
+no `requireLedger` at all; grep it. The flag reached the wrapper and was dropped. The independent
+review of report 001 established this for that lane's one mutation, and it applies equally to every
+mutation here, so it is stated rather than inherited quietly. The appends are real, which is a fact
+about the lab's ledger being present and writable, not a guarantee the wrapper delivered. #996 is
+where the ordering the flag names becomes true.
 
 `OWNER_COURIER_ACTIONS = 0`.
 
@@ -247,6 +257,61 @@ boot-triggered task rather than a user-session application. The stack was then r
 permanent autostart change to the owner's Docker configuration to tidy the report. That is typed
 below as work for the owner.
 
+## Step 5b — the inherited gap, closed late, and what it found
+
+The independent review of report 001 typed `CONT-997-SECONDARY-OWNER-CANDIDATES-LISTED-NOT-READ` and
+assigned it to this lane, **"BEFORE any reconciliation is written"**. It was not. The reconciliation
+above was written first and this was closed afterwards, because the remediation commit carrying the
+assignment landed on the branch while the migration was already in flight. Saying so is cheaper than
+the alternative, and the ordering matters: had a candidate script turned out to issue a direct
+`docker run`, the supersession would have been built on a claim that was not yet true.
+
+All **38** scripts in `C:\HermesLab\hermes\` were then read — not listed — and every line mentioning
+`docker run|create|start|compose`, `docker-compose`, `ollama` or `11434` extracted.
+
+**No script creates an Ollama container directly.** Only two files issue `docker run` at all:
+`backup-volumes.ps1` (an `alpine` tar sidecar) and `setup-ubuntu.sh` (a comment). So the hand-created
+container has no surviving creator in this directory, and "one canonical owner" stands.
+
+But the sweep found something the migration itself had broken, which no amount of reasoning from the
+compose file would have surfaced — **four scripts assume Ollama is a container, and two of them run
+on a schedule and now lie:**
+
+| script | what it does now | disposition |
+| --- | --- | --- |
+| `lab-health.ps1` | `docker ps --filter name=ollama` → **"Ollama : DOWN [FAIL]"** forever, flipping OVERALL to fail and appending to `alerts.log` on a timer | **repaired** |
+| `hermes-placement-readiness.ps1` | `$ollamaUp = ($running -contains "ollama")` → `local_llm_capability_health = FAIL_CLOSED / OLLAMA_DOWN`, contradicting the service this lane just commissioned | **repaired** |
+| `core-online.ps1` | `docker compose up -d postgres redis ollama` → fails, no such service | **typed, not rewritten** |
+| `model-pull.ps1` | `docker exec ollama ollama pull` → fails, no such container | **typed, not rewritten** |
+
+The line drawn: **repair what runs unattended and reports a falsehood; type what an operator invokes
+and will watch fail loudly.** Both repairs ask the canonical endpoint instead of Docker, are
+exact-line replacements verified against the current text before writing (a mismatch aborts rather
+than letting a regex guess into a health monitor), and have their own rollback copies in
+`_997-rollback`. `hermes-placement-readiness.ps1` keeps its existing model-inventory parser untouched
+— the replacement feeds it the same `NAME / ID / SIZE / MODIFIED` shape, built from `/api/tags`.
+
+Verified after repair:
+
+```
+local_llm_capability_health=READY  reason=OK   ollama=running   models_inventoried=5
+   qwen2.5-coder:7b 4.4 GB fits_gpu=True gpu      williamos-qwen3-4b:64k 2.3 GB fits_gpu=True gpu
+   qwen3:4b-instruct 2.3 GB fits_gpu=True gpu     snowflake-arctic-embed2 1.1 GB fits_gpu=True gpu
+   llama3.2:3b 1.9 GB fits_gpu=True gpu
+
+lab-health.json: {"overall":"fail","problems":["Hermes F: 0 GB","Backup task","X-sync task",
+                                               "Atlas unreachable","Aegis unreachable"]}
+```
+
+**`"Ollama down"` is gone from that list.** Note carefully what is *not* claimed: `lab-health` still
+reports `fail`. Every remaining problem predates this lane — the `F: 0 GB` check is the same
+drive-letter bug as the forge sync, the two task warnings and the ATLAS/AEGIS reachability failures
+are its own pre-existing state, and that run happened minutes after a reboot. The Ollama check was
+repaired; the monitor was not adopted.
+
+`lab-health.ps1` is mirrored in this repo at `scripts/lab-control/hermes/lab-health.ps1`; the mirror
+was updated from the live file and is byte-identical to it (`c4f1a146…`).
+
 ## Step 6 — bounded inference and telemetry at 150 W
 
 `qwen2.5-coder:7b` Q4_K_M, 8 iterations × 320 decode tokens, then a soak. Fail-closed at **85 °C**
@@ -414,6 +479,9 @@ verified unchanged at the end.
 | `CONT-997-SECOND-MODEL-STORE-ON-G` | OBSERVATION | `G:\HermesData\ollama`, 3 models, 7.18 GiB — the container's old store under its old drive letter. Left untouched; not garbage-collected, because deciding a model store is disposable is not this lane's call. |
 | `CONT-997-PINNED-OLLAMA-DEFAULT-CONTEXT-4096` | OBSERVATION | v0.9.2 defaults `OLLAMA_CONTEXT_LENGTH` to 4096, where the superseded container ran a build that defaulted to the model's own length. `williamos-qwen3-4b:64k` therefore gets 4096 unless a request passes `num_ctx`; `num_ctx=32768` was verified working (11.2 GiB VRAM). |
 | `CONT-997-P40-HIGH-RESTING-DRAW-WITH-MODEL-RESIDENT` | OBSERVATION | ~60 W and 1,303 MHz held at 0 % utilisation for the keep-alive window; ~17 W / 544 MHz once the model unloads. Interacts with the thermal finding. `OLLAMA_KEEP_ALIVE` was left at its default rather than changed, because that alters service latency semantics the owner did not ask about. |
+| `CONT-997-CONTAINER-ERA-SCRIPTS-STRANDED-BY-MIGRATION` | DEFECT (**caused by this lane**) | Four scripts assume Ollama is a container. `lab-health.ps1` and `hermes-placement-readiness.ps1` ran unattended and reported a falsehood — **both repaired here**. `core-online.ps1` (`docker compose up -d … ollama`) and `model-pull.ps1` (`docker exec ollama …`) are operator-invoked, now fail loudly, and are **left unrepaired**: they are first-run bootstrap scripts whose rewrite is scope this packet bounded away. Anyone reviving them should point them at `127.0.0.1:11434` and `D:\HermesServices\ollama\v0.9.2\ollama.exe`. |
+| `CONT-997-BACKUP-VOLUMES-ALSO-WRITES-TO-F` | DEFECT | `backup-volumes.ps1` line 16 mounts `F:/lab-backups/hermes-volumes:/backup`, and `lab-health.ps1` checks `Get-Volume F` and reports `0 GB`. Same drive-letter class as the forge sync: the volume backup has been writing into a path on a letter that is now a Realtek driver CD-ROM. Found while closing the secondary-owner gap; **outside this lane's scope and not touched**, but it belongs with `#862`/`#866` lab-backup work rather than nowhere. |
+| `CONT-997-REQUIRE-AUDIT-FLAG-INERT` | DEFECT (inherited, confirmed) | `--require-audit` is accepted by the lane wrapper and dropped: `lib/fabric/broker.mjs` at `b9f5138b…` has no `requireAudit`/`requireLedger`. Every mutation here was ledgered **after** execution, not gated before it. Established by the independent review of report 001 and confirmed to apply to this lane. Closed by `#996`. |
 
 ## Acceptance against `#997`
 
@@ -441,14 +509,16 @@ The service is genuinely commissioned; the envelope is genuinely bounded by cool
 - **No 200 W / 250 W step.** The thermal gate did not open.
 - **No permanent Docker autostart change.** The stack was restored for this boot; making Docker
   survive an unattended reboot is a change to a part of the stack this packet said to leave alone.
-- **No fix to `sync-models-to-forge.ps1`.** Same reasoning, and its correctness depends on ATLAS-side
-  truth this lane did not verify. Typed as a defect instead.
+- **No fix to `sync-models-to-forge.ps1` or `backup-volumes.ps1`.** Same reasoning, and their
+  correctness depends on ATLAS-side and backup-target truth this lane did not verify. Typed instead.
 - **No deletion of `G:\HermesData\ollama`.**
 - **No `OLLAMA_KEEP_ALIVE` change**, despite the resting-power finding.
+- **No rewrite of `core-online.ps1` / `model-pull.ps1`**, which this lane stranded. They fail loudly
+  rather than silently, and both are first-run bootstrap scripts.
 
 ## Evidence
 
-30 artifacts under `docs/reports/experience-v2-p40-commissioning/`, prefixed `MIG-`, plus the raw
+34 artifacts under `docs/reports/experience-v2-p40-commissioning/`, prefixed `MIG-`, plus the raw
 soak log and both telemetry CSVs. The lane's two runner scripts are retained as
 `MIG-hx-carrier.mjs` (the brokered carrier) and `MIG-zipprobe.mjs` (the ranged zip reader); neither
 names a device, UUID, VRAM figure or power number — grep them. Also retained are the four `RESUME-*`

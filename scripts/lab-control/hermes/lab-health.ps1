@@ -1,4 +1,4 @@
-# One-pane lab health: Hermes local checks + Atlas over SSH. Exit 0=ok, 1=warn, 2=fail.
+﻿# One-pane lab health: Hermes local checks + Atlas over SSH. Exit 0=ok, 1=warn, 2=fail.
 $ErrorActionPreference = "SilentlyContinue"
 $script:overall = "ok"; $script:problems = @()
 function Bump($sev){ if($sev -eq "fail"){$script:overall="fail"; return}; if($sev -eq "warn" -and $script:overall -ne "fail"){$script:overall="warn"} }
@@ -27,7 +27,9 @@ $g = nvidia-smi --query-gpu=name,temperature.gpu,memory.used,memory.total,utiliz
 if($g){ foreach($line in $g){ $p=$line -split ',\s*'; if($p[0] -match '3050'){ $gt=[int]$p[1]; $s= if($gt -gt 85){"warn"}else{"ok"}; Bump $s; "  GPU     : {0} | {1}C | {2}/{3} MB | {4}% util   [{5}]" -f $p[0],$p[1],$p[2],$p[3],$p[4],$s.ToUpper() } } } else { "  GPU     : nvidia-smi n/a" }
 
 # Compute services (this is what Hermes is FOR)
-if(docker ps --filter name=ollama --filter status=running -q 2>$null){ "  Ollama  : running   [OK]" } else { "  Ollama  : DOWN   [FAIL]"; Bump "fail"; P "fail" "Ollama down" }
+# Ollama is a Windows service now (#997), not a container -- ask the API, not Docker.
+$ollamaOk=$false; try{ $null=Invoke-RestMethod http://127.0.0.1:11434/api/version -TimeoutSec 6; $ollamaOk=$true }catch{}
+if($ollamaOk){ "  Ollama  : running (native 127.0.0.1:11434)   [OK]" } else { "  Ollama  : DOWN   [FAIL]"; Bump "fail"; P "fail" "Ollama down" }
 try { $r=Invoke-WebRequest http://localhost:3000/health -TimeoutSec 6 -UseBasicParsing; "  OpenWebUI: HTTP $($r.StatusCode)   [OK]" } catch { "  OpenWebUI: not responding   [WARN]"; Bump "warn"; P "warn" "Open WebUI down" }
 
 foreach($t in @(@("Backup","HermesVolumeBackup"),@("X-sync","HermesCrossNodeBackupSync"))){
