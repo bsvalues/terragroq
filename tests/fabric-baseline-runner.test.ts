@@ -1,4 +1,7 @@
 import crypto from "node:crypto"
+import { mkdir, mkdtemp, readFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 
 import { describe, expect, it } from "vitest"
 
@@ -7,6 +10,7 @@ import {
   BASELINE_STEP_IDS,
   PROBE_CONTAINER,
   buildWindowsSshCommand,
+  defaultExec,
   quoteForCmd,
   nodePassed,
   parseRegistry,
@@ -15,6 +19,41 @@ import {
 } from "../lib/fabric/run-baseline.mjs"
 
 const NODE = { transport: "ssh", host: "10.0.0.1", user: "svc" }
+
+/**
+ * A fabric root that deliberately does not exist, so neither the gate's own audit nor the broker's
+ * can reach the real ledger from a unit test. Previously the default root was used, which on a
+ * developer machine that HAS a fabric directory meant the suite appended to the lab's live audit log.
+ */
+const NO_LEDGER = path.join(tmpdir(), "fabric-baseline-runner-no-ledger")
+
+/**
+ * Undo the broker's POSIX transport.
+ *
+ * The gate now reaches every node through `brokeredExec`, which carries a POSIX body as base64 --
+ * `echo '<b64>' | base64 -d | bash` -- because literal bodies were being torn apart by cmd quoting
+ * before ssh ever saw them. The fake node therefore receives the encoded form, and decoding it here
+ * is what keeps this double faithful to the real transport instead of pretending the wrapper is not
+ * there. A command that is not wrapped is returned unchanged.
+ */
+function decodePosix(command: string): string {
+  const encoded = /^echo '([A-Za-z0-9+/=]+)' \| base64 -d \| bash$/.exec(command)?.[1]
+  return encoded ? Buffer.from(encoded, "base64").toString("utf8") : command
+}
+
+/** Every node in these tests is reachable by the name the test uses; policy is proved elsewhere. */
+const registryOf = (name: string, node: Record<string, unknown>) => ({ [name]: node })
+
+/**
+ * The options every unit test needs: a real registry entry, and a ledger that is not the lab's.
+ *
+ * `requireAudit: false` is stated rather than inherited. These tests exercise step logic against a
+ * fake node and have no ledger; the guarantee that a MUTATING step refuses without one is a separate
+ * claim, proved in its own test below against a real temporary ledger. Opting out here in silence is
+ * how the guarantee would come back undone.
+ */
+const runOpts = (name: string, node: Record<string, unknown>, exec: unknown) =>
+  ({ exec, registry: registryOf(name, node), fabricRoot: NO_LEDGER, requireAudit: false }) as never
 
 /**
  * Alter a hex string so it is guaranteed to differ from the original.
@@ -41,7 +80,7 @@ function honestNode(overrides: { corruptPull?: boolean; wrongPushHash?: boolean;
   return {
     calls,
     exec: async (_file: string, args: string[]) => {
-      const command = args[args.length - 1]
+      const command = decodePosix(args[args.length - 1])
       calls.push(command)
       if (overrides.failAt && command.includes(overrides.failAt)) {
         throw Object.assign(new Error("boom"), { stderr: `ssh: ${overrides.failAt} refused` })
@@ -115,6 +154,26 @@ describe("windows ssh wrapper", () => {
     const command = buildWindowsSshCommand(["host", remote], "o.txt", "e.txt")
     expect(command).toContain(`"${remote}"`)
   })
+
+  it("reaches ssh instead of throwing on a global that is not the crypto module", async () => {
+    // The wrapper names `crypto.randomBytes` for its temp-file stamp. When it was extracted into
+    // `transport.mjs` the `node:crypto` import stayed behind, and in an ES module the bare name still
+    // resolves -- to Web Crypto, which has no `randomBytes`. Nothing failed at load, so the suite saw
+    // a healthy module while every default ssh execution on the Windows control host threw
+    // `crypto.randomBytes is not a function` before ssh was spawned: the baseline gate, the brokered
+    // probes, every broker caller. The cases above check the command string this wrapper builds; this
+    // one checks that it gets far enough to build one.
+    //
+    // The assertion is about WHICH failure arrives, because this test has to be honest on a runner
+    // with no ssh and no network. A missing binary, a refused connection, a non-zero exit all mean
+    // the transport ran. A TypeError means it never tried.
+    const failure = await defaultExec("ssh", ["-o", "ConnectTimeout=1", "-V"], { timeout: 5_000 })
+      .then(() => null)
+      .catch((error: unknown) => error)
+
+    expect(failure).not.toBeInstanceOf(TypeError)
+    expect(String((failure as Error | null)?.message ?? "")).not.toContain("randomBytes")
+  })
 })
 
 describe("registry parsing", () => {
@@ -138,14 +197,14 @@ describe("registry parsing", () => {
 describe("runNodeBaseline", () => {
   it("passes every step against an honest node", async () => {
     const node = honestNode()
-    const results = await runNodeBaseline("n1", NODE, { exec: node.exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, node.exec))
     expect(results.map((r) => r.step)).toEqual(BASELINE_STEP_IDS)
     expect(nodePassed(results)).toBe(true)
   })
 
   it("stops after reach fails, because every later step would be noise", async () => {
     const node = honestNode({ failAt: "hostname" })
-    const results = await runNodeBaseline("n1", NODE, { exec: node.exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, node.exec))
     expect(results).toHaveLength(1)
     expect(results[0]).toMatchObject({ step: "reach", ok: false })
     expect(results[0].detail).toContain("refused")
@@ -153,7 +212,7 @@ describe("runNodeBaseline", () => {
 
   it("keeps probing after a middle step fails, so one outage does not hide another", async () => {
     const node = honestNode({ failAt: "docker run -d" })
-    const results = await runNodeBaseline("n1", NODE, { exec: node.exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, node.exec))
     expect(results.find((r) => r.step === "start")?.ok).toBe(false)
     expect(results.find((r) => r.step === "push")?.ok).toBe(true)
     expect(nodePassed(results)).toBe(false)
@@ -161,7 +220,7 @@ describe("runNodeBaseline", () => {
 
   it("fails push when the node's hash disagrees, not merely when the write errors", async () => {
     const node = honestNode({ wrongPushHash: true })
-    const results = await runNodeBaseline("n1", NODE, { exec: node.exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, node.exec))
     const push = results.find((r) => r.step === "push")
     expect(push?.ok).toBe(false)
     expect(push?.detail).toContain("hash mismatch")
@@ -169,7 +228,7 @@ describe("runNodeBaseline", () => {
 
   it("fails pull when the round trip alters a byte", async () => {
     const node = honestNode({ corruptPull: true })
-    const results = await runNodeBaseline("n1", NODE, { exec: node.exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, node.exec))
     const pull = results.find((r) => r.step === "pull")
     expect(pull?.ok).toBe(false)
     expect(pull?.detail).toContain("round trip altered the file")
@@ -178,8 +237,8 @@ describe("runNodeBaseline", () => {
   it("sends a fresh payload each run, so a stale file cannot pass the transfer steps", async () => {
     const first = honestNode()
     const second = honestNode()
-    await runNodeBaseline("n1", NODE, { exec: first.exec })
-    await runNodeBaseline("n1", NODE, { exec: second.exec })
+    await runNodeBaseline("n1", NODE, runOpts("n1", NODE, first.exec))
+    await runNodeBaseline("n1", NODE, runOpts("n1", NODE, second.exec))
     const payloadOf = (calls: string[]) => /printf %s '([0-9a-f]+)'/.exec(calls.find((c) => c.startsWith("printf")) ?? "")?.[1]
     expect(payloadOf(first.calls)).not.toBe(payloadOf(second.calls))
   })
@@ -189,6 +248,7 @@ describe("command dialect follows the node's OS, not its transport", () => {
   // OMEN is a Windows node reached over ssh. The gate assumed ssh meant Linux and sent it
   // `docker ps -q | wc -l`, so a healthy cockpit was reported as failing at "containers".
   const winNode = { transport: "ssh", host: "10.0.0.2", user: "svc", os: "windows" }
+  const LINUX_NODE = { ...winNode, os: "linux" }
 
   const decode = (command: string) => {
     const encoded = /-EncodedCommand (\S+)/.exec(command)?.[1] ?? ""
@@ -201,36 +261,119 @@ describe("command dialect follows the node's OS, not its transport", () => {
       calls.push(args[args.length - 1])
       return { stdout: "OMEN\n" }
     }
-    await runNodeBaseline("omen", winNode, { exec })
+    await runNodeBaseline("omen", winNode, runOpts("omen", winNode, exec))
     expect(calls[0]).toContain("powershell -NoProfile -EncodedCommand")
     expect(decode(calls[0])).toBe("$env:COMPUTERNAME")
     expect(decode(calls[1])).toContain("Measure-Object")
     expect(calls.join(" ")).not.toContain("wc -l")
   })
 
-  it("still sends POSIX to a linux node over ssh", async () => {
+  it("still sends POSIX to a linux node over ssh, now carried by the broker's base64 transport", async () => {
     const calls: string[] = []
     const exec = async (_file: string, args: string[]) => {
       calls.push(args[args.length - 1])
       return { stdout: "node-1\n" }
     }
-    await runNodeBaseline("atlas", { ...winNode, os: "linux" }, { exec })
-    expect(calls[0]).toBe("hostname")
-    expect(calls[1]).toContain("wc -l")
+    await runNodeBaseline("atlas", LINUX_NODE, runOpts("atlas", LINUX_NODE, exec))
+
+    // Both halves matter and they are different claims. The dialect is still POSIX -- that is the
+    // OMEN regression this suite exists to prevent. And the body now travels base64-wrapped, because
+    // the gate reaches the node through `brokeredExec` rather than building its own ssh arguments.
+    // Asserting only the decoded form would let the transport revert to the raw path unnoticed.
+    expect(calls[0]).toMatch(/^echo '[A-Za-z0-9+/=]+' \| base64 -d \| bash$/)
+    expect(decodePosix(calls[0])).toBe("hostname")
+    expect(decodePosix(calls[1])).toContain("wc -l")
+  })
+})
+
+describe("a mutating step will not run without a ledger it can actually write", () => {
+  // The review that found this was right, and the commit that introduced the brokered transport had
+  // claimed the opposite: routing through the broker was only HALF the fix. `requireAudit` defaults
+  // to false in `brokeredExec`, so a start / transfer / force-stop cycle still ran against a fabric
+  // root with no ledger and left nothing behind.
+  const REAL_EXEC = async () => ({ stdout: "ok", stderr: "" })
+
+  it("refuses start, push and stop when the ledger is absent, and reaches the node for neither", async () => {
+    const calls: string[] = []
+    const exec = async (_f: string, args: string[]) => { calls.push(String(args.at(-1))); return { stdout: "ok" } }
+
+    const results = await runNodeBaseline("atlas", NODE, {
+      exec,
+      registry: registryOf("atlas", NODE),
+      fabricRoot: path.join(tmpdir(), "fabric-runner-definitely-absent"),
+      audit: async () => {},
+    } as never)
+
+    // The reads still run -- they change nothing, so an absent ledger is not a reason to refuse them.
+    const byStep = new Map(results.map((r) => [r.step, r]))
+    expect(byStep.get("reach")?.ok).toBe(true)
+    expect(byStep.get("containers")?.ok).toBe(true)
+
+    // The three that change the node do not.
+    for (const step of ["start", "push", "stop"] as const) {
+      expect(byStep.get(step)?.ok, step).toBe(false)
+      expect(byStep.get(step)?.detail, step).toContain("AUDIT_UNAVAILABLE")
+    }
+    expect(calls.some((c) => c.includes("docker run"))).toBe(false)
+  })
+
+  it("refuses when the ledger exists but cannot be appended to", async () => {
+    // Presence is not writability. A root that exists while `audit.log` is a DIRECTORY passed the
+    // first version of the preflight, the mutation ran, and only the append afterwards complained --
+    // a loud unrecorded mutation, not a governed one.
+    //
+    // The gate stops at the very first step here rather than at the first mutating one, and that is
+    // the older `auditFabricAction` guarantee doing its job: a ledger that cannot be written must not
+    // quietly become a ledger that is not written, so even a read refuses. What this test pins is the
+    // consequence that matters -- nothing on the node is touched after the refusal.
+    const root = await mkdtemp(path.join(tmpdir(), "fabric-unwritable-"))
+    await mkdir(path.join(root, "audit.log"))
+    const calls: string[] = []
+    const exec = async (_f: string, args: string[]) => { calls.push(String(args.at(-1))); return { stdout: "ok" } }
+
+    const results = await runNodeBaseline("atlas", NODE, {
+      exec,
+      registry: registryOf("atlas", NODE),
+      fabricRoot: root,
+      audit: async () => {},
+    } as never)
+
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ step: "reach", ok: false })
+    expect(results[0].detail).toContain("AUDIT_UNAVAILABLE")
+    expect(calls.some((c) => c.includes("docker run"))).toBe(false)
+    expect(calls.some((c) => c.includes("printf %s"))).toBe(false)
+  })
+
+  it("runs the mutating steps once the ledger is real, and records them", async () => {
+    // The refusals above must be about the ledger, not about mutating steps being refused generally.
+    const root = await mkdtemp(path.join(tmpdir(), "fabric-writable-"))
+    const node = honestNode()
+
+    const results = await runNodeBaseline("atlas", NODE, {
+      exec: node.exec,
+      registry: registryOf("atlas", NODE),
+      fabricRoot: root,
+    } as never)
+
+    expect(results.find((r: { step: string }) => r.step === "start")?.ok).toBe(true)
+    const log = await readFile(path.join(root, "audit.log"), "utf8")
+    expect(log).toContain("baseline.start")
+    expect(log).toContain("atlas")
   })
 })
 
 describe("summarise", () => {
   it("counts a node as passing only when all six steps passed", async () => {
-    const good = await runNodeBaseline("good", NODE, { exec: honestNode().exec })
-    const bad = await runNodeBaseline("bad", NODE, { exec: honestNode({ failAt: "docker run -d" }).exec })
+    const good = await runNodeBaseline("good", NODE, runOpts("good", NODE, honestNode().exec))
+    const bad = await runNodeBaseline("bad", NODE, runOpts("bad", NODE, honestNode({ failAt: "docker run -d" }).exec))
     const summary = summarise({ ranAt: "now", results: [...good, ...bad] })
     expect(summary).toMatchObject({ passedCount: 1, total: 2 })
     expect(summary.nodes.find((n) => n.node === "bad")?.firstFailure).toMatchObject({ step: "start" })
   })
 
   it("reports the earliest failing step, not the last one recorded", async () => {
-    const results = await runNodeBaseline("n1", NODE, { exec: honestNode({ failAt: "docker" }).exec })
+    const results = await runNodeBaseline("n1", NODE, runOpts("n1", NODE, honestNode({ failAt: "docker" }).exec))
     const summary = summarise({ ranAt: "now", results })
     expect(summary.nodes[0].firstFailure).toMatchObject({ step: "containers" })
   })

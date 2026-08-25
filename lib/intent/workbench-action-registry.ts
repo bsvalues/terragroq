@@ -1,4 +1,27 @@
-import { supportingCapabilities } from "@/components/workbench/supporting-capabilities"
+import {
+  findActions,
+  matchActionPhrase,
+  navigationDescriptors,
+  type ObjectActionDescriptor,
+} from "@/lib/intent/object-action-registry"
+
+/**
+ * The navigation view of the one Object + Action Registry.
+ *
+ * This file used to OWN the navigation-target catalogue -- four mode descriptors plus the supporting
+ * capabilities, with keywords and aliases. `charter:278-279` names it the predecessor to generalize,
+ * and Gate 2 did: the descriptors now live in `object-action-registry.ts` alongside the intent
+ * signals and destinations that `router.ts` used to own separately, because two static catalogues
+ * over one concept was the duplication the map's §5.3 found.
+ *
+ * What is left here is a facade, deliberately. `components/intent/universal-intent.tsx` and
+ * `tests/workbench-action-registry` import these names, and breaking callers proves nothing about
+ * convergence -- a registry is one catalogue with one owner, not one import path. The test that
+ * matters asserts the action-kind union has exactly one owner, and it does.
+ *
+ * `WorkbenchActionDescriptor` is the same shape it always was: the registry's descriptor carries
+ * additional fields, and a navigation caller neither needs nor should read them.
+ */
 
 export type WorkbenchActionDescriptor = Readonly<{
   id: string
@@ -9,73 +32,38 @@ export type WorkbenchActionDescriptor = Readonly<{
   navigationAliases?: readonly string[]
 }>
 
-const modes: readonly WorkbenchActionDescriptor[] = [
-  { id: "mode.home", kind: "mode", label: "Home", href: "/", keywords: ["home", "overview"] },
-  { id: "mode.projects", kind: "mode", label: "Projects", href: "/projects", keywords: ["project", "projects", "context"] },
-  { id: "mode.activity", kind: "mode", label: "Activity", href: "/activity", keywords: ["activity", "recent", "events"] },
-  { id: "mode.system", kind: "mode", label: "System", href: "/system", keywords: ["system", "status", "health"] },
-]
-
-const capabilityIds: Readonly<Record<string, string>> = {
-  "Work Orders": "work-orders",
-  Council: "council",
-  Knowledge: "knowledge",
-  Evidence: "evidence",
-  Authority: "authority",
-  Trace: "trace",
-  Hermes: "hermes",
-  Forge: "forge",
-  "Goal Console": "goal-console",
-  Workroom: "workroom",
-  Lab: "lab",
-  "Raw Runtime": "raw-runtime",
+function asWorkbenchDescriptor(action: ObjectActionDescriptor): WorkbenchActionDescriptor {
+  return {
+    id: action.id,
+    // The registry keys navigation by what an action DOES; this view keys it by where it sits in the
+    // cockpit, which is the distinction the ids already carried and the only reason `kind` differs.
+    kind: action.id.startsWith("mode.") ? "mode" : "capability",
+    label: action.label,
+    href: action.href ?? "",
+    keywords: action.keywords,
+    ...(action.navigationAliases ? { navigationAliases: action.navigationAliases } : {}),
+  }
 }
 
-// Words the operator would actually type for a surface, where they differ from its label. The lab
-// page in particular gets asked for as "the servers" or "the machines" far more often than by name.
-const navigationAliasesByLabel: Readonly<Record<string, readonly string[]>> = {
-  Council: ["brain council"],
-  Forge: ["agent forge"],
-  "Raw Runtime": ["runtime"],
-  Workroom: ["loom", "work room", "workspace", "editor", "terminal"],
-  Lab: ["fabric", "nodes", "machines", "servers", "the lab"],
-}
-
-const capabilities: readonly WorkbenchActionDescriptor[] = supportingCapabilities.map((capability) => ({
-  id: `capability.${capabilityIds[capability.label]}`,
-  kind: "capability",
-  label: capability.label,
-  href: capability.href,
-  keywords: [capability.label.toLowerCase(), capability.lens],
-  navigationAliases: navigationAliasesByLabel[capability.label],
-}))
-
-export const workbenchActionRegistry: readonly WorkbenchActionDescriptor[] = [
-  ...modes,
-  ...capabilities,
-]
+export const workbenchActionRegistry: readonly WorkbenchActionDescriptor[] =
+  navigationDescriptors.map(asWorkbenchDescriptor)
 
 export function findWorkbenchActions(rawQuery: string): readonly WorkbenchActionDescriptor[] {
-  const query = rawQuery.trim().toLowerCase()
-  if (query.length === 0) return workbenchActionRegistry
-  if (query.length > 200) return []
-  const tokens = query.split(/\s+/).filter(Boolean)
-  return workbenchActionRegistry.filter((action) => {
-    const haystack = `${action.label} ${action.keywords.join(" ")}`.toLowerCase()
-    return tokens.every((token) => haystack.includes(token))
-  })
+  return findActions(rawQuery).map(asWorkbenchDescriptor)
 }
 
+/**
+ * Exactly one match, or nothing.
+ *
+ * The rule is unchanged and is now enforced in one place for every subject the registry knows about,
+ * not only for navigation. Returning `null` on two matches is what makes `open the lab or the
+ * runtime` ask rather than guess, and generalizing the registry to mutations is precisely why it had
+ * to survive intact.
+ */
 export function matchWorkbenchNavigationTarget(rawInput: string): Readonly<{
   action: WorkbenchActionDescriptor
   phrase: string
 }> | null {
-  const input = rawInput.toLowerCase()
-  const matches = workbenchActionRegistry.flatMap((action) => {
-    const phrases = [action.label.toLowerCase(), ...(action.navigationAliases ?? [])]
-      .sort((left, right) => right.length - left.length)
-    const phrase = phrases.find((candidate) => new RegExp(`\\b${candidate.replaceAll(" ", "\\s+")}\\b`, "i").test(input))
-    return phrase ? [{ action, phrase }] : []
-  })
-  return matches.length === 1 ? matches[0] : null
+  const matched = matchActionPhrase(rawInput, navigationDescriptors)
+  return matched ? { action: asWorkbenchDescriptor(matched.action), phrase: matched.phrase } : null
 }

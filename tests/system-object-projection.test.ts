@@ -1,4 +1,5 @@
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 import { describe, expect, it } from "vitest"
@@ -602,12 +603,70 @@ describe("Invariant 12 - no unbrokered transport on the canonical probe path", (
     expect(route).toContain("brokeredExec")
   })
 
-  it("is deliberately narrowed to this path, because the broad form is false on main today", () => {
-    // lib/fabric/run-baseline.mjs calls exec("powershell") / exec("ssh") directly. That is a real
-    // defect and it is NOT Gate 1's to fix -- an invariant that is false at merge teaches nothing.
+  // WIDENED AT GATE 2, IN THE CHANGE THAT MADE IT TRUE.
+  //
+  // Gate 1 wrote this invariant narrow and said so: `run-baseline.mjs` called exec("powershell") and
+  // exec("ssh") directly, so the broad form was false on main and an invariant that is false at
+  // merge teaches nothing. The narrowing carried its own alarm -- an assertion that the defect was
+  // still present -- so that whoever fixed it would be forced back here rather than leaving the
+  // invariant describing a repository that no longer existed.
+  //
+  // That is what happened. `CONT-EXPV2-BASELINE-RAW-TRANSPORT` is fixed in this same change, and the
+  // assertion below is the general form the narrow one was standing in for.
+  it("keeps node execution behind a single brokered dispatch point", () => {
+    const fabricDir = path.join(repositoryRoot, "lib/fabric")
+    const modules = fs.readdirSync(fabricDir).filter((f) => f.endsWith(".mjs"))
+
+    // Exactly one module may own a raw transport, and it is the one whose entire job is transport.
+    // Naming it explicitly rather than allow-listing a count means adding a second raw path fails
+    // here even if someone also updates the number.
+    const rawTransport = modules.filter((file) =>
+      fs.readFileSync(path.join(fabricDir, file), "utf8").includes("node:child_process"),
+    )
+    expect(rawTransport).toEqual(["transport.mjs"])
+
+    // And exactly one module may dispatch to a node. `transport.mjs` supplies the primitives;
+    // `broker.mjs` is the only caller that turns them into a command on a machine.
+    const dispatchers = modules.filter((file) => {
+      const source = fs.readFileSync(path.join(fabricDir, file), "utf8")
+      // Comments describing the old raw calls are not dispatch. Only a real call site counts.
+      const code = source.replace(/^\s*(\/\/|\*|\/\*).*$/gm, "")
+      return /\bexec\(\s*"(ssh|powershell)"/.test(code)
+    })
+    expect(dispatchers).toEqual(["broker.mjs"])
+  })
+
+  it("routes the baseline gate itself through the broker, which is what widened this", () => {
     const baseline = fs.readFileSync(path.join(repositoryRoot, "lib/fabric/run-baseline.mjs"), "utf8")
 
-    expect(baseline).toContain("child_process")
+    // The gate is the case that mattered: it starts a workload, transfers a file and force-stops the
+    // workload on EVERY node in the registry, and it was the one caller the broker never saw.
+    expect(baseline).toContain("brokeredExec")
+    expect(baseline).not.toContain("node:child_process")
+
+    const code = baseline.replace(/^\s*(\/\/|\*|\/\*).*$/gm, "")
+    expect(code).not.toMatch(/\bexec\(\s*"(ssh|powershell)"/)
+    expect(code).not.toMatch(/\bsshArgs\s*\(/)
+  })
+
+  it("still refuses an unknown node on the path that used to bypass policy", async () => {
+    // The point of routing the gate through the broker is not tidiness. Before this, a name that was
+    // not in the registry was attempted anyway, because the gate built its own ssh arguments from
+    // whatever record it was handed. Now it is refused.
+    const { runNodeBaseline } = await import("@/lib/fabric/run-baseline.mjs")
+    const results = await runNodeBaseline(
+      "not-a-real-node",
+      { transport: "ssh", host: "10.0.0.9", user: "svc", os: "linux" },
+      {
+        registry: { atlas: { transport: "ssh", host: "10.0.0.1", user: "svc", os: "linux" } },
+        fabricRoot: path.join(os.tmpdir(), "invariant-12-no-ledger"),
+        exec: async () => ({ stdout: "should never run" }),
+      } as never,
+    )
+
+    expect(results).toHaveLength(1)
+    expect(results[0]).toMatchObject({ step: "reach", ok: false })
+    expect(results[0].detail).toContain("POLICY_DENY")
   })
 })
 

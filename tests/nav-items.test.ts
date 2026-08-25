@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { NAV_GROUP_IDS, navGroups, navItems } from "@/components/shell/nav-items"
+import { DESTINATIONS, objectActionRegistry } from "@/lib/intent/object-action-registry"
 import { supportingCapabilities } from "@/components/workbench/supporting-capabilities"
 
 describe("four-primary cockpit navigation", () => {
@@ -30,14 +30,18 @@ describe("four-primary cockpit navigation", () => {
   it("keeps supporting routes out of primary navigation without deleting them", () => {
     const supporting = ["/work-orders", "/audit", "/brain-council", "/goal-console", "/chat"]
     expect(navItems.map((item) => item.href)).not.toEqual(expect.arrayContaining(supporting))
-    // Assert the routes stay reachable, not the literal syntax that expresses them: the intent
-    // router moved from a flat phrase->href map to intent-keyed destinations, which silently
-    // broke this check while every route remained reachable.
-    const hrefs = (source: string) => Array.from(source.matchAll(/href: "(\/[a-z-]+)"/g), (match) => match[1])
-    const reachable = new Set([
-      ...hrefs(readFileSync("lib/intent/router.ts", "utf8")),
-      ...hrefs(readFileSync("components/workbench/supporting-capabilities.ts", "utf8")),
-    ])
+    // Assert the routes stay reachable, and do it by READING THE CATALOGUE rather than by grepping
+    // the file that happens to hold it today. This check has now broken twice for the same reason
+    // and neither time was a route unreachable: first when the router moved from a flat phrase->href
+    // map to intent-keyed destinations, and again at Gate 2 when the destinations moved out of
+    // `router.ts` into the one Object + Action Registry. A test that fails when code is reorganised
+    // but no behaviour changed is a test that trains people to edit it, which is worse than not
+    // having it. Taking the hrefs as data means the next move costs nothing here.
+    const reachable = new Set<string>([
+      ...Object.values(DESTINATIONS).map((destination) => destination.href),
+      ...objectActionRegistry.map((action) => action.href),
+      ...supportingCapabilities.map((capability) => capability.href),
+    ].filter((href): href is string => typeof href === "string" && href.length > 0))
     for (const href of supporting) expect([...reachable]).toContain(href)
   })
 })
