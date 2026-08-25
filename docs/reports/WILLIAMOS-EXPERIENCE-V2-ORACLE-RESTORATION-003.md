@@ -287,18 +287,55 @@ as "ufw".
 | `OR-11-revoke.json` | revocation and the route refusing again |
 | `OR-12-closed.json` | the same driver, after |
 | `OR-13-credential-finding.txt` | the fourth wall |
+| `OR-14-suite-comparison.txt` | the local suite, this branch against unmodified main |
 | `docs/devkit/authority/GRANT-0019.{md,json}` | the Tier-2 ledger the canonical path produced |
 
 ## Tests
 
-`tests/authority-registry-url.test.ts` (18) and `tests/authority-registry-service-definition.test.ts`
-(14) are new. The second guards the service definition as a contract: no literal IPv4 in the compose
-configuration, external volume, `hba_file` mounted, no blanket `host all all` rule that authenticates
-rather than refuses, no `trust` on any TCP rule, every network grant narrowed to one database and one
-role, `pg_hba` and `fabric-callers.json` agreeing on the caller set, and the unit both applying and
-verifying.
+**CI's deterministic suite passes on this branch** — `vitest (deterministic suite)`, 3m54s, together
+with `production build` and the `#831` work-context receipt. CI is the gate and it is green.
 
-Stated rather than glossed: **the ATLAS-side shell script, compose file, unit and `pg_hba` have no
-executable test in CI** — CI has no Docker host and no `iptables`. Their evidence is the nine live
-refusal controls and the two-sided measurement in `OR-04`, taken against the deployed files. A test
-file that could not run would be worse than saying so.
+`tests/authority-registry-url.test.ts` and `tests/authority-registry-service-definition.test.ts` are
+new. The second guards the service definition as a contract rather than as prose: no literal IPv4 in
+the compose *configuration* (its comments necessarily quote the addresses that caused all this, so
+the assertion strips comments — an assertion that could not tell prose from a setting would either
+fail on the explanation or force the explanation out), external volume, `hba_file` mounted, no
+blanket `host all all` rule that authenticates rather than refuses, no `trust` on any TCP rule, every
+network grant narrowed to one database and one role, `pg_hba.conf` and `fabric-callers.json` agreeing
+on the caller set, and the unit both applying and verifying.
+
+### The local runs, and why they are not evidence of a regression
+
+Locally on OMEN the full suite fails in three files, and **it fails in the same three files on
+unmodified `main`**:
+
+| | Test files | Tests |
+| --- | --- | --- |
+| `main` @ `c3d822fa` | 3 failed, 425 passed, 4 skipped | 23 failed, 5800 passed |
+| this branch | 3 failed, **427** passed, 4 skipped | 23 failed, 5816 passed |
+
+Same three files — `execution-fabric-hermes-embedding-bakeoff` (16),
+`lab-dev-preflight` (6), `execution-fabric-pinned-placement` (1) — and the same 23 failures. The two
+extra *passing* files are the two this branch adds. `lab-dev-preflight` was also run directly against
+unmodified `main` and produced the identical six failures, so it is pre-existing rather than inferred
+from totals.
+
+An earlier local run of this branch reported 5 failed files / 25 tests. That run is not evidence of
+anything: it overlapped with other work on the machine, and this repository's own operating notes
+record that concurrent suites here push a run past its timeouts and fail a different unrelated
+subprocess-spawning file each time. Re-running alone produced the table above. It is recorded rather
+than quietly dropped because the first number is the one a reader would otherwise find.
+
+### What has no test, stated rather than glossed
+
+The ATLAS-side shell script, compose file, systemd unit and `pg_hba.conf` have **no executable test
+in CI** — the runner has no Docker host and no `iptables`. Their evidence is the nine live refusal
+controls and the two-sided measurement in `OR-04`, taken against the *deployed* files rather than the
+repository copies. A test file that could not run would be worse than saying so.
+
+**Reboot behaviour is claimed from configuration, not from a reboot.** `restart: unless-stopped` plus
+a compose-owned container, and `williamos-authority-firewall.service` `enabled`/`active` with a
+verifying `ExecStartPost`, are what make the state survive a power cycle. ATLAS was **not** rebooted
+to prove it: it also hosts the TerraFusion containers, and a blast radius that size is not this
+lane's to spend. The unit was started and its `check` observed to pass, which is the part that was
+actually tested.
