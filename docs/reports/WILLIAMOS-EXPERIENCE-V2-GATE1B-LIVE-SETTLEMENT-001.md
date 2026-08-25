@@ -156,6 +156,43 @@ That run also stands as the live check on invariant 12: the `GET /api/fabric/nod
 reached HERMES through `brokeredExec` and was written to the ledger, on a node whose transport is
 `local` — the case the route's own comment says used to bypass the broker entirely.
 
+## Where this retype is recorded, and where it is not
+
+`CONT-EXPV2-P0-RUNTIME-PROOF` is durably tracked in two places, and this settlement reaches only one
+of them.
+
+**Reached.** This report is the settlement record. The continuation is discharged here as
+`settled-with-defects`, with the per-hop evidence, the retained artifacts and the successor defect
+all in one document. Pointer comments carry it to `#990`, `#993` and parent `#987`.
+
+**Not reached — deliberately.** The typed block in
+`docs/governance/williamos-experience-v2-phase0-collision-map.md` §9 still reads
+`type: BLOCKED_DEPENDENCY`, `reason: WAITING_EXTERNAL_ENVIRONMENT`, `condition: HERMES_REACHABLE`.
+That file is the sole file of **open PR `#994`**, which is a live builder reservation. Editing it
+from this lane would claim another builder's reservation — a forbidden action, and one that stays
+forbidden while `#994` is blocked on `AUTHORITY_REVIEW_THREADS_OPEN`, because a blocked reservation
+is still a reservation. `#994`'s single hunk sits at map lines 1607–1681 and does not textually
+overlap the block at ~1425–1452, so this is a reservation boundary rather than a merge conflict —
+which is exactly why it must be honoured rather than reasoned around.
+
+```
+CONT-EXPV2-GATE1B-MAP-RETYPE
+  type:      BLOCKED_DEPENDENCY
+  reason:    FILE_RESERVED_BY_OPEN_PR
+  reserved:  docs/governance/williamos-experience-v2-phase0-collision-map.md -- PR #994
+  blocks:    nothing. The settlement itself is complete and recorded here.
+  action:    retype the S9 CONT-EXPV2-P0-RUNTIME-PROOF block from
+             BLOCKED_DEPENDENCY / WAITING_EXTERNAL_ENVIRONMENT to
+             SETTLED_WITH_DEFECTS, pointing at this report, and open
+             CONT-EXPV2-HARDWARE-CHANGE-UNRECORDED as its successor.
+  pickup:    the lane holding the #994 reservation, folded into that PR; or any lane once #994
+             lands or is closed. Not an owner task.
+```
+
+Until that edit lands, the map's §9 entry is **stale, not wrong about the world** — it describes a
+condition that has since been met. A reader who follows its `pickup:` line arrives at this report,
+which is the outcome that line was written to produce.
+
 ## Defects and observations, typed
 
 ### `CONT-EXPV2-HARDWARE-CHANGE-UNRECORDED` — REAL DEFECT
