@@ -518,10 +518,13 @@ The service is genuinely commissioned; the envelope is genuinely bounded by cool
 
 ## Evidence
 
-34 artifacts under `docs/reports/experience-v2-p40-commissioning/`, prefixed `MIG-`, plus the raw
-soak log and both telemetry CSVs. The lane's two runner scripts are retained as
-`MIG-hx-carrier.mjs` (the brokered carrier) and `MIG-zipprobe.mjs` (the ranged zip reader); neither
-names a device, UUID, VRAM figure or power number — grep them. Also retained are the four `RESUME-*`
+35 artifacts under `docs/reports/experience-v2-p40-commissioning/` prefixed `MIG-` — 29 brokered
+evidence records plus the raw soak log, the service lifecycle log, both telemetry CSVs and the two
+runner scripts. The runner scripts are retained as
+`MIG-hx-carrier.mjs` (the brokered carrier) and `MIG-zipprobe.mjs` (the ranged zip reader). Neither
+carries a UUID, a VRAM figure, a power number, a device model or a port — grep them. The only match
+for `P40` in either is the staged wrapper's own filename and the lane's staging directory, which are
+this lane's name rather than a claim about hardware. Also retained are the four `RESUME-*`
 artifacts from the interrupted resume lane, which established the post-reboot storage truth this
 migration built on.
 
