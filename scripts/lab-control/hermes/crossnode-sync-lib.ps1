@@ -154,6 +154,17 @@ function Resolve-FabricSshIdentity {
         # empty transfer.
         SshOptions     = @(
             '-i', $key,
+            # `-i` NAMES a key. It does not RESTRICT ssh to it: OpenSSH's default is
+            # `IdentitiesOnly=no`, so every identity the calling account's agent holds is still
+            # offered, and whichever the server accepts first is the one that authenticates. An
+            # identity resolved and refused on above, and then not actually the one used, is the
+            # same class of fault as an address resolved from the registry and then not dialled.
+            #
+            # The failure mode is worse than cosmetic for a scheduled backup: an account holding
+            # several keys can exhaust the server's `MaxAuthTries` before the fabric key is ever
+            # offered, and the sync then goes red for a reason none of the messages here would
+            # explain -- a transport fault wearing the clothes of an authorization one.
+            '-o', 'IdentitiesOnly=yes',
             '-o', "UserKnownHostsFile=$known",
             '-o', 'StrictHostKeyChecking=yes',
             '-o', 'BatchMode=yes',

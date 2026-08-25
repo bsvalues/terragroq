@@ -205,6 +205,15 @@ try {
     Assert-Equal $true ($identity.SshOptions -contains 'StrictHostKeyChecking=yes') 'identity pins strict host key checking'
     Assert-Equal $true ($identity.SshOptions -contains 'BatchMode=yes') 'identity stays non-interactive'
     Assert-Equal $true ($identity.SshOptions -contains $identity.KeyPath) 'identity names its own key'
+    # Naming the key is not using it. Without IdentitiesOnly=yes, OpenSSH still offers every
+    # agent identity the calling account holds, so the resolved identity is not necessarily the
+    # one that authenticates -- and on an account with several keys the server can exhaust
+    # MaxAuthTries before reaching this one. Asserted because it is invisible when it works.
+    Assert-Equal $true ($identity.SshOptions -contains 'IdentitiesOnly=yes') 'identity is the only one offered'
+    # `scp -n` is DRY RUN in OpenSSH 9.x: it would copy nothing, exit 0, and let the sync log
+    # success over an empty transfer. One option list serves both ssh and scp here, so this asserts
+    # the flag can never reach scp by way of a later edit to the shared list. See XN-03.
+    Assert-Equal $false ($identity.SshOptions -contains '-n') 'no -n on the shared ssh/scp option list'
 
     # The archive root is resolved by LABEL. The volume provider is injected so both refusals can
     # run on a machine that has no such disk -- which is the whole point: the accepting path was

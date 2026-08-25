@@ -57,7 +57,15 @@ $fabricSsh   = Resolve-OrReport "fabric ssh identity" { Resolve-FabricSshIdentit
 # known_hosts pins 192.168.88.5 and has never seen 192.168.88.8: resolving the new address while
 # keeping the old identity would turn "unreachable" into "Host key verification failed" and change
 # nothing an operator sees. Measured on HERMES 2026-08-25, exit 255 either way.
-$sshOpts = @('-o','BatchMode=yes','-o','ConnectTimeout=8')
+#
+# THERE IS DELIBERATELY NO FALLBACK OPTION LIST. If the identity does not resolve, the remote
+# probes DO NOT RUN. A default of BatchMode+ConnectTimeout is not neutral: it hands the probe
+# back to whatever keys and known_hosts the account running this task happens to hold, which is
+# exactly the ambient transport this repair removed. That would contact lab nodes under
+# credentials nobody resolved, and print a node status underneath a resolution that had already
+# failed -- which reads as an answer. Refusing the probe is the honest output, and the FAIL is
+# already recorded by Resolve-OrReport above.
+$sshOpts = $null
 if($fabricSsh){ $sshOpts = @($fabricSsh.SshOptions) }
 
 # ---------------- HERMES ----------------
@@ -110,6 +118,7 @@ foreach($t in @(@("Backup","HermesVolumeBackup"),@("X-sync","HermesCrossNodeBack
 Write-Host "`n----- ATLAS (services) -----"
 if(-not $atlasNode){ "  ADDRESS UNRESOLVED   [FAIL]" }
 elseif(-not (Test-Connection $atlasNode.Host -Count 1 -Quiet)){ "  UNREACHABLE (ping {0})   [FAIL]" -f $atlasNode.Host; Bump "fail"; P "fail" "Atlas unreachable at $($atlasNode.Host)" }
+elseif(-not $sshOpts){ "  Address : {0}" -f $atlasNode.Endpoint; "  PROBE SKIPPED - no resolved fabric identity   [FAIL]" }
 else {
   "  Address : {0}" -f $atlasNode.Endpoint
   $ajson = ssh @sshOpts $atlasNode.Endpoint "/home/bs/health-atlas.sh"
@@ -138,6 +147,7 @@ Write-Host "`n----- AEGIS (CPU/CI/backup node) -----"
 # still be right; ATLAS's did not, and there is no way to tell which is which by looking.
 if(-not $aegisNode){ "  ADDRESS UNRESOLVED   [FAIL]" }
 elseif(-not (Test-Connection $aegisNode.Host -Count 1 -Quiet)){ "  UNREACHABLE (ping {0})   [FAIL]" -f $aegisNode.Host; Bump "fail"; P "fail" "Aegis unreachable at $($aegisNode.Host)" }
+elseif(-not $sshOpts){ "  Address : {0}" -f $aegisNode.Endpoint; "  PROBE SKIPPED - no resolved fabric identity   [FAIL]" }
 else {
   "  Address : {0}" -f $aegisNode.Endpoint
   $gjson = ssh @sshOpts $aegisNode.Endpoint "/home/bs/health-aegis.sh"

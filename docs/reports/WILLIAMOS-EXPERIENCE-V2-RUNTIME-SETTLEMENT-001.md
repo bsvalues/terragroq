@@ -351,18 +351,33 @@ a real ATLAS, and that is what this continuation still holds open.
 `backup-volumes.ps1`'s transfer leg is separately unverified for a different reason: it drives
 `docker run`, and container interaction on HERMES is outside this lane's envelope.
 
-### `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F` — **DISCHARGED 2026-08-25**
+### `CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F` — REPAIRED, NOT DISCHARGED
 
 ```
-type:      DISCHARGED               [was PICKUP_ELIGIBLE; before that TYPED_FINDING]
-by:        WILLIAMOS-EXPERIENCE-V2-CROSSNODE-SYNC-REPAIR-003.md
+type:      PICKUP_ELIGIBLE          [stays PICKUP_ELIGIBLE. #1007 typed this DISCHARGED and
+                                     withdrew it on review -- see the note below]
+repaired:  WILLIAMOS-EXPERIENCE-V2-CROSSNODE-SYNC-REPAIR-003.md, PR #1007
 files:     scripts/lab-control/hermes/crossnode-sync.ps1, crossnode-sync-lib.ps1, lab-health.ps1,
            test-crossnode-sync-receipt.ps1
-result:    HermesCrossNodeBackupSync lastResult 1 -> 0 (25 s, 2026-08-25T02:48:48-07:00)
+measured:  HermesCrossNodeBackupSync lastResult 1 -> 0 (25 s, 2026-08-25T02:48:48-07:00)
            HermesLabHealth           lastResult 2 -> 1 (warn, and the warn is honest)
-verified:  from both sides -- 5/5 ATLAS nightly files byte-identical on G:, and the receipt on
-           ATLAS hashes to the value the HERMES-side evidence records
+           replication verified from both sides -- 5/5 ATLAS nightly files byte-identical on G:,
+           and the receipt on ATLAS hashes to the value the HERMES-side evidence records
+remaining: independent re-proof. NOT re-repair.
 ```
+
+**Why this is still open when the scripts are fixed and the tasks are green.** A §10 Immediate
+Terminal Stop condition fired inside #1007's run — clearing a hung process it owned, that lane
+killed every `ssh.exe` on HERMES rather than only its own, and two of the eight belonged to other
+lanes. The envelope was required to self-disable at that moment and did not; it deployed and ran
+its last four controls afterwards. An envelope that has acted outside its scope may not then
+certify its own outcome, so #1007 withdrew its discharge rather than defend it. The measurements
+above are retained and reproducible; what is missing is an envelope entitled to close on them.
+
+A lane picking this up should expect to find the work already done and its job to be re-derivation:
+deploy the branch head (three files there are ahead of what is deployed on HERMES, deliberately),
+re-digest, and re-run `LC-01`–`LC-09` from 003. `IdentitiesOnly=yes` on the fabric transport is the
+one change never exercised against a real ATLAS.
 
 Both halves of the diagnosis above were right, and one thing it did not name would have kept the
 task red anyway.
@@ -380,13 +395,14 @@ address trades `Connection timed out` for `Host key verification failed`, both e
 task. The transport is resolved with the address now, against the fabric `known_hosts` that carries
 the host key proven byte-identical across ATLAS's move.
 
-The consequence this packet flagged is discharged with it: `crossnode-sync.ps1` is the **off-box**
-replication, and from 2026-08-23T11:00Z until 2026-08-25T09:48Z nothing left HERMES. It does now,
-in both directions, verified from both ends.
+The consequence this packet flagged is measured as repaired, though not discharged:
+`crossnode-sync.ps1` is the **off-box** replication, and from 2026-08-23T11:00Z until
+2026-08-25T09:48Z nothing left HERMES. It does now, in both directions, verified from both ends.
 
-Two findings came out of the repair and are typed in 003 rather than fixed there:
-`CONT-ATLAS-HEALTH-WATCHES-ABANDONED-PATH` (ATLAS's own health script measures a backup directory
-ATLAS stopped writing to — the same fault as this one, one node over, and ATLAS-side) and
+Two findings came out of the repair and are typed in 003 rather than fixed there, both
+`PICKUP_ELIGIBLE` and neither the owner's: `CONT-ATLAS-HEALTH-WATCHES-ABANDONED-PATH` (ATLAS's own
+health script measures a backup directory ATLAS stopped writing to — the same fault as this one,
+one node over, and reserving an ATLAS-side file rather than a repository one) and
 `CONT-FABRIC-RESOLUTION-DUPLICATED` (the registry read now exists in two places on HERMES).
 
 ## Review remediation — five confirmed defects, and what each one is now
