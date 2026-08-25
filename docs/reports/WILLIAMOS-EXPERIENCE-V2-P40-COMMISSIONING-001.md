@@ -325,6 +325,29 @@ reconciling would move it *onto* the library. The last-working Ollama container 
 nonexistent path, which is consistent with its logs — `GET /v1/models` returning `200` says the API
 answered, not that it had anything to list.
 
+### Was `F:` a disk that got unseated during the install?
+
+Worth excluding, because if `F:` were a real drive knocked loose while the P40 went in, the owner's
+expectation would have been historically correct and a *different* model store would be missing. The
+physical layer says no disk is missing:
+
+| disk | serial | bus | status | letters |
+| --- | --- | --- | --- | --- |
+| WD SN550E 1 TB | `E823_8FA6_…_BDC0` | NVMe | **Online / Healthy** | `G` |
+| Samsung SSD 840 120 GB | `S19HNEBD342394X` | SATA | **Online / Healthy** | `E`, **`D`** |
+| Samsung SSD 860 EVO 500 GB | `S598NJ0N385161P` | SATA | **Online / Healthy** | `C` + recovery/system |
+
+All three are online and healthy, none is offline, and every partition is accounted for — there is no
+unallocated space and no unlettered data partition waiting for a letter. `\DosDevices\F:` *is*
+recorded in `HKLM:\SYSTEM\MountedDevices`, but so are `H:`, `I:` and `J:`, none of which is present
+either; that registry accumulates every letter the install has ever assigned, including to removable
+media, so it is a record of history rather than evidence of a lost fixed disk.
+
+The honest limit: this proves **no disk is currently missing, offline or unhealthy**. It does not
+prove `F:` never held anything. What it does rule out is the reading in which a bumped SSD is hiding
+the real model library — every disk this machine has is present, and the only large data partition
+besides `C:` and the nearly-empty `G:` is the `D:` that holds the models.
+
 `D:` has 62.3 GB free of 119.9 GB. The models are on disk and this lane did not touch them: no step
 copied, moved, deleted or re-pulled a weight, and no `latest` pull was issued.
 
@@ -472,6 +495,29 @@ from the Windows host** — `nvidia-smi` reads and writes it without difficulty 
 Assigned a capability, a throughput, a context length or a steady-state power recommendation.
 Assumed to have a durable 150 W cap — it does not survive a reboot.
 
+## The state HERMES was left in
+
+Verified at `2026-08-25T01:52Z`, after everything above:
+
+| | |
+| --- | --- |
+| container list | **identical to what was found** — the four `--rm` probes left nothing behind |
+| `ollama` | `Exited (128)` — as found; not started, not removed, not recreated |
+| `open-webui`, `portainer`, `postgres`, `redis` | up and healthy, untouched |
+| RTX 3050 | `WDDM`, `display_active Enabled`, `70.00 W` — **untouched** |
+| Tesla P40 | `TCC`, `enforced 150.00 W`, `default 250.00 W`, 32 °C, 9.77 W |
+| `C:\HermesLab\hermes\docker-compose.yml` | SHA-256 `2ffc6ccd…` — **byte-identical to before**, proven not written |
+| model library | 25 blobs, **10 360 082 334 bytes** — byte-identical to before |
+
+**ECC did not move.** Re-read like-for-like against the `01:24Z` baseline with the same `-q -d ECC`
+query: volatile single/double bit `0 / 0`, aggregate single bit `6`, aggregate double bit `0`. Same
+as before the reboot and before the power-cap change. (A combined multi-field `--query-gpu` read
+during the final sweep appeared to show aggregate `0`; the like-for-like recheck is the authoritative
+one and is retained as `P40-18-ecc-recheck.json`. No counter was reset and nothing grew.)
+
+The machine is left **safer than it was found** — the P40 is capped at 150 W rather than 250 W — and
+otherwise exactly as it was found.
+
 ## Resumption plan
 
 The decision in step 3 comes first; everything else is downstream of it and none of it is this lane's
@@ -524,6 +570,9 @@ All under `docs/reports/experience-v2-p40-commissioning/`.
 | `P40-12/13/14-wsl-*.json` | WSL version, `/dev/dxg`, driver libs, `dxgkrnl` log, **the NVML failure** |
 | `P40-15-power-cap-150w.json` | before / apply / verify / RTX-untouched |
 | `P40-16-ledger-excerpt.json` | the audit ledger tail, 19 649 lines |
+| `P40-17-final-state.json` | the state HERMES was left in |
+| `P40-18-ecc-recheck.json` | ECC re-read like-for-like against the baseline |
+| `P40-19-physical-disks.json` | all three disks online and healthy; the `F:` letter history |
 | `P40-brokered.mjs` · `P40-run-canonical-probe.mjs` | the only two things this lane ran; neither names a device |
 
 ## Chronology

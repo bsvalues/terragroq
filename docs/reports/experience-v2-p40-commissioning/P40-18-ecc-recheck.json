@@ -1,0 +1,14 @@
+{
+  "invocation": "brokeredExec",
+  "broker": "lib/fabric/broker.mjs",
+  "node": "hermes",
+  "action": "probe",
+  "requireAudit": false,
+  "command": "$ErrorActionPreference='Continue'\nWrite-Output '--- ECC-Q-FORM (same query as the 01:24Z baseline) ---'\n& nvidia-smi -i GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2 -q -d ECC 2>&1 | Select-String -Pattern 'ECC Mode|Current|Pending|Volatile|Aggregate|Single Bit|Double Bit|Device Memory|Total' | ForEach-Object { $_.Line }\nWrite-Output '--- ECC-QUERY-GPU-FORM ---'\n& nvidia-smi -i GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2 --query-gpu=ecc.errors.corrected.aggregate.total,ecc.errors.corrected.aggregate.device_memory,ecc.errors.corrected.volatile.total --format=csv 2>&1\nWrite-Output '--- RC ---'\n",
+  "startedAt": "2026-08-25T01:56:24.264Z",
+  "finishedAt": "2026-08-25T01:56:24.662Z",
+  "durationMs": 397,
+  "ok": true,
+  "stdout": "--- ECC-Q-FORM (same query as the 01:24Z baseline) ---\r\n    ECC Mode\r\n        Current                           : Enabled\r\n        Pending                           : Enabled\r\n        Volatile\r\n            Single Bit            \r\n                Device Memory             : 0\r\n                Total                     : 0\r\n            Double Bit            \r\n                Device Memory             : 0\r\n                Total                     : 0\r\n        Aggregate\r\n            Single Bit            \r\n                Device Memory             : 6\r\n                Total                     : 6\r\n            Double Bit            \r\n                Device Memory             : 0\r\n                Total                     : 0\r\n--- ECC-QUERY-GPU-FORM ---\r\necc.errors.corrected.aggregate.total, ecc.errors.corrected.aggregate.device_memory, ecc.errors.corrected.volatile.total\r\n6, 6, 0\r\n--- RC ---\r\n",
+  "stderr": null
+}
