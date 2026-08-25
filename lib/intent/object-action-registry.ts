@@ -138,16 +138,24 @@ const capabilities: readonly ObjectActionDescriptor[] = supportingCapabilities.m
 /**
  * Actions whose subject is a canonical `SystemObject`.
  *
- * Both are reads, and that is a finding rather than an omission. The bounded search this gate was
- * required to run first
+ * TWO OF THE THREE ARE READS, and the third arrived the long way round. When this registry merged,
+ * all of them were reads: the bounded search this gate had to run first
  * (`docs/governance/williamos-experience-v2-gate2-first-action-search-record.md`) enumerated every
- * action on `main` whose subject can be a NODE or an ACCELERATOR and found no mutation that
- * satisfies the charter's intrinsic criteria. Adding one here would be inventing the first governed
+ * action on `main` whose subject can be a NODE or an ACCELERATOR and found no mutation satisfying the
+ * charter's intrinsic criteria, so adding one here would have been inventing the first governed
  * mutation while claiming to have chosen it -- the overturned reversal, repeating.
  *
- * `MUTATION_UNAVAILABLE` below is how that absence is represented in code rather than only in a
- * document, so a caller asking a node to change gets a typed refusal with a reason instead of an
- * empty result it has to interpret.
+ * `system.node.stamp-identity` is the exception, and it is an exception with a paper trail rather
+ * than an amendment to the rule. Charter `AMENDMENT-001`, under an explicit recorded owner decision,
+ * permits BUILDING the first governed mutation when a bounded recorded search proves none can be
+ * chosen. Two such searches ran -- the one above at `053a33bd`, and
+ * `williamos-experience-v2-first-action-pickup-search-record.md` at the base this descriptor was
+ * added on, which re-examined this very file first because a converged registry was the seam most
+ * likely to have opened the reuse branch. Both returned nothing.
+ *
+ * So the reuse-first rule was not weakened; it was run twice and returned twice. A fourth descriptor
+ * that mutates needs its own search, for its own subject, and `MUTATION_UNAVAILABLE` below is still
+ * what an object class with no governed mutation gets.
  */
 const systemObjectActions: readonly ObjectActionDescriptor[] = [
   {
@@ -190,6 +198,26 @@ const systemObjectActions: readonly ObjectActionDescriptor[] = [
     mutating: false,
     requiresAuthority: false,
     implementation: "lib/system/system-object.ts",
+  },
+  {
+    id: "system.node.stamp-identity",
+    kind: "mutate_object",
+    subject: "NODE",
+    label: "Stamp node identity",
+    href: "/fabric",
+    keywords: ["stamp", "identity", "record", "node", "canonical"],
+    /**
+     * `stamp` is the whole verb, and it is not a word this catalogue uses anywhere else.
+     *
+     * It deliberately does not answer to `record` or `write`, which appear in enough operator
+     * sentences about evidence and files to make an accidental match on a MUTATING action plausible.
+     * A navigation descriptor that answers too eagerly shows the wrong page; a mutating one that does
+     * changes the wrong machine.
+     */
+    navigationAliases: ["stamp identity", "stamp"],
+    mutating: true,
+    requiresAuthority: true,
+    implementation: "lib/system/node-identity-stamp.ts",
   },
 ]
 
@@ -333,19 +361,27 @@ export const CONTROL_CENTER_FENCE = {
 } as const
 
 /**
- * There is no governed mutation for a `SystemObject` on `main`, and this says so in a type.
+ * An object class with no governed mutation says so in a type, rather than returning an empty list.
  *
- * The bounded search record is the durable artifact; this is its consequence in code. A caller that
- * asks a node to change gets a named reason and a named unblocking condition, rather than an empty
- * candidate list it would have to guess the meaning of.
+ * RETYPED, AND THE PREVIOUS TEXT IS NOT LEFT TO BE READ TWO WAYS. This constant used to carry
+ * `reason: "CHARTER_AMENDMENT_REQUIRED"` and mean "no `SystemObject` has a governed mutation, and
+ * obtaining one is an owner decision". That is no longer true of `NODE`: the amendment was given, the
+ * fresh search at the pickup base returned nothing again, and `system.node.stamp-identity` was built.
+ * It remains true of `ACCELERATOR`, which is what this constant now means and all it now means.
+ *
+ * The narrower reason is not a downgrade. Reaching this for an accelerator is still a refusal with a
+ * named condition attached -- `CONT-EXPV2-ACCELERATOR-FIRST-ACTION` requires that class to run its
+ * OWN bounded recorded search before anything is built for it. The charter's reuse-first rule is not
+ * spent by having been satisfied once for a different object class.
  */
 export const MUTATION_UNAVAILABLE = {
-  reason: "CHARTER_AMENDMENT_REQUIRED",
+  reason: "NO_CANONICAL_MUTATION_FOR_OBJECT_CLASS",
   detail:
-    "No existing canonical action on main satisfies the charter's intrinsic criteria for the first " +
-    "governed mutation. Building one is a charter amendment under recorded authority, not a Gate 2 " +
-    "finding. See docs/governance/williamos-experience-v2-gate2-first-action-search-record.md.",
-  continuation: "CONT-EXPV2-FIRST-ACTION",
+    "No governed mutation is catalogued for this object class. Building one requires its own bounded " +
+    "recorded search proving no existing canonical action qualifies for that subject -- the charter's " +
+    "reuse-first rule, which survived AMENDMENT-001 intact. See " +
+    "docs/governance/williamos-experience-v2-first-action-pickup-search-record.md.",
+  continuation: "CONT-EXPV2-ACCELERATOR-FIRST-ACTION",
 } as const
 
 // ---------------------------------------------------------------------------------------------
