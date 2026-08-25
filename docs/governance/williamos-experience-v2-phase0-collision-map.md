@@ -1514,33 +1514,40 @@ CONT-EXPV2-FIRST-ACTION
   owner:                  no longer open to this lane; superseded by the packet below.
 
 CONT-EXPV2-FIRST-ACTION-IMPLEMENTATION
-  type:                   BLOCKED_DEPENDENCY
-  reason:                 PREDECESSOR_LIFECYCLE_INCOMPLETE
-  subject:                the smallest new canonical action permitted by charter AMENDMENT-001 --
-                          the first journey's one safe governed mutation.
-  predecessor (MANDATORY, and it gates the BUILD branch):
-                          a FRESH bounded canonical-action search against the ACTUAL pickup base,
-                          recorded, before BUILD may be selected. #996's search establishes that
-                          the branch was legitimately open at 053a33bd; it does NOT pre-authorize
-                          BUILD at any later base. The pickup base is expected to contain #996's
-                          own Object+Action Registry work, which is precisely the seam most likely
-                          to introduce a newly qualifying canonical action. If one qualifies, the
-                          charter's mandatory-first reuse rule selects REUSE and this packet is
-                          discharged UNBUILT. Recorded because the amendment record states the
-                          re-proof requirement in prose while its own packet carried no
-                          predecessor -- an authority review thread on #999 caught the gap, and
-                          this register is the copy machines read.
-  buildable per:          charter:273-278 as amended, read under the owner-stated semantics
-                          recorded at charter AMENDMENT-001. Those semantics bind the build; they
-                          are not background. Smallest new canonical action; extend the EXISTING
-                          Object+Action Registry; route through the EXISTING authority,
-                          execution/fencing, evidence and verified-post-state paths; do not
-                          generalize an unsuitable legacy action merely to preserve its ID; do not
-                          create a parallel action, authority, or execution mechanism.
+  type:                   RESOLVED
+  was:                    PICKUP_ELIGIBLE, set on this branch by 4dda3e97
+                          (WO-EXPV2-MERGE-SWEEP-003) and never landed on main -- the merge gate
+                          that read it found the state already consumed.
+  before that:            BLOCKED_DEPENDENCY / PREDECESSOR_LIFECYCLE_INCOMPLETE
+  predecessor:            DISCHARGED. The MANDATORY fresh bounded canonical-action search this
+                          packet existed to force was RUN against the ACTUAL pickup base 2d72d3c4
+                          -- re-measured there, not inherited from 053a33bd -- and recorded in
+                          docs/governance/williamos-experience-v2-first-action-pickup-search-record.md.
+                          The seam this packet named as the one most likely to introduce a
+                          qualifying action, #996's merged Object+Action Registry, was measured
+                          first: it carries a typed refusal where a mutation would be.
+  outcome:                (b) again -- nothing qualified at 2d72d3c4. REUSE was run in full and
+                          returned nothing, so the charter's mandatory-first reuse rule selected
+                          BUILD. Discharged BUILT, not UNBUILT. Had a candidate qualified this
+                          packet would have been discharged UNBUILT, which was a live possibility
+                          until the pickup search measured it.
+  delivered as:           node.stamp-identity, the one governed NODE mutation --
+                          lib/system/node-identity-stamp.ts, catalogued in the merged Object+Action
+                          Registry and routed through the existing brokered-execution, evidence and
+                          verified-post-state paths as recorded by the delivering lane at
+                          williamos-experience-v2-first-action-pickup-search-record.md:361-365.
+                          PR #1002 -> main 1a352a3f, main CI green after it.
+  continues as:           CONT-EXPV2-FIRST-ACTION-RUNTIME-SETTLEMENT -- WAITING_RESERVATION,
+                          condition 997-migration-complete, continuation automatic -- recorded on
+                          main at line 369 of
+                          williamos-experience-v2-first-action-pickup-search-record.md. Gate 2's
+                          TERMINAL leg lives there now. It is NOT settled by this resolution, and
+                          it does not become an owner ask: HERMES is under the #997 migration
+                          lane's active reservation and the continuation is automatic.
   blocksGate1:            false
-  mustResolveBefore:      Gate 2 terminal acceptance. The "one safe governed mutation" is Gate 2's
-                          subject; Gate 1 is read-only and mutates nothing (S16).
-  owner:                  the Gate 2 builder lane's successor
+  mustResolveBefore:      nothing further here. Gate 2 terminal acceptance is now gated by the
+                          successor above rather than by this packet.
+  owner:                  closed. The successor names its own.
   ownerDecisionRequired:  false
 
 CONT-EXPV2-GATE1B-EVIDENCE-REPRO-NAMES
@@ -1813,6 +1820,55 @@ CONT-EXPV2-MERGE-AUTHORITY
              repository-wide search for authorityGranted true outside tests returns nothing.
   satisfied: all three PRs were CI green, CLEAN/MERGEABLE and at zero unresolved threads at the
              moment each merge was performed, and main was re-verified green before the next one.
+
+CONT-EXPV2-COORDINATOR-RECORD-MERGE
+  type:      RESOLVED
+  was:       AWAITING_INDEPENDENT_COORDINATOR                        (WO-EXPV2-MERGE-SWEEP-002)
+  before:    BLOCKED_DEPENDENCY / SECURITY_OR_AUTHORITY_THREAD_OPEN  (WO-EXPV2-CLOSEOUT-001)
+  before:    AWAITING_INDEPENDENT_COORDINATOR                        (WO-EXPV2-MERGE-COORDINATION-001)
+  subject:   PR #994, the coordination record carrying this file
+  resolved:  2026-08-24 by WO-EXPV2-MERGE-SWEEP-003. PR #994 at 8771bfbd -> main 184aaa2b, main CI
+             green after it. The three-lane exclusion this entry was opened for held all the way
+             through: the AUTHORING lane could not merge its own record, the CLOSEOUT lane that
+             specified the fix could not merge what it had specified, the SWEEP-002 lane that pushed
+             the fix could not merge its own authority-material commits -- and the lane that finally
+             merged it wrote none of those three things.
+  gates at head, re-verified rather than inherited from the handoff comment:
+             MERGEABLE / CLEAN; required checks 3/3 SUCCESS at 8771bfbd, which is also the rollup
+             commit; unresolved review threads 0; no security or authority thread open; no
+             branch-protection bypass needed and none used.
+  note:      the handoff comment on #994 asked the next coordinator to "verify at head rather than
+             trusting this comment". It was. Every line above came from a query against the pull
+             request, not from the comment.
+  blocksGate1:           false
+  blocksGate2:           false
+  ownerDecisionRequired: false
+
+CONT-EXPV2-SWEEP3-RECORD-MERGE
+  type:      AWAITING_INDEPENDENT_COORDINATOR
+  subject:   PR #1001, the sweep-3 record carrying this file -- the same shape as the entry above,
+             one lane further on.
+  was:       MERGE_GATE_FAILED (WO-EXPV2-MERGE-SWEEP-004). One unresolved review thread against
+             reviewRequirements.maximumUnresolvedThreads: 0. The thread was ACCEPTED and
+             adjudicated by execution against the file at head, not dismissed: three staleness
+             claims CONFIRMED, and the central PICKUP_ELIGIBLE retype found already CONSUMED.
+  fixed by:  2026-08-24, the #1001 record-remediation lane, which ADOPTED this branch as its own
+             reservation on the #994 precedent -- the sweep-3 lane had recorded its handover and
+             held no dirty worktree, no open reservation and no further commit. The five items the
+             sweep-4 adjudication listed were applied here; charter:609 one-current-disposition is
+             the rule they were applied under.
+  why it is still open, and why that is not an authority gap:
+             the remediating lane wrote the commits, so it may not merge them. That is the
+             same three-lane exclusion CONT-EXPV2-COORDINATOR-RECORD-MERGE was opened for, and the
+             exclusion this PR exists to record holding. Sweep-4 could not remediate
+             (dispatch-envelope.mjs:7-23 has no action authorizing a write to another lane's
+             branch, and remediationBudget.maxCycles: 0); this lane could not gate.
+  pickup:    any coordinator lane holding MERGE_ELIGIBLE_PR that authored none of the commits on
+             wb/expv2-merge-sweep-3-record. Re-gate at head; do not trust this entry or the PR
+             description.
+  blocksGate1:           false
+  blocksGate2:           false
+  ownerDecisionRequired: false. Not an owner task, and not an authority gap.
 
 CONT-EXPV2-TRUTH-NEGATIVE-AGE
   type:               TYPED_DEFECT
