@@ -225,3 +225,43 @@ The amended reservation adds `scripts/hermes-bridge/orchestrator.mjs` and
 `tests/hermes-bridge-orchestrator.test.ts`, so the previous `#831` receipt no longer covered the diff
 and was re-issued. That is the gate working as designed: widening scope invalidates the receipt.
 Still **`local` provenance** — authority not checked, claim not recorded.
+
+## Third remediation — stale sibling fixtures (hosted CI, exact head `1b6431c9`)
+
+Exact-head hosted `vitest` failed with exactly two failures, both terminating through
+`HERMES_REVIEW_CONTINUITY_WALL`:
+
+- `tests/goal-operator-continuity.test.ts` — *reconstructs after App Server interruption and projects one fenced completion*
+- `tests/hermes-kernel-orchestrator-cycle.test.ts` — *completes one fenced delivery when the kernel lane returns the turn JSON*
+
+**Not flake, not a semantic defect** in the new orchestration path. Both files mock a successful PR
+using only the old scalar model (`checksGreen/checksComplete/failedChecks/reviewed`) with **no
+`mergeAdmission`**, so the new readiness gate correctly refused to advance. Fixtures brought forward
+to the truth model; `mergeAdmission` is **not** made optional — a missing adjudication must stay
+fail-closed.
+
+### The evidence-language error this exposes (mine)
+
+I reported validation as "five suites importing changed modules". That set was derived **before**
+`orchestrator.mjs` entered the reservation and was never re-derived afterwards. The true consumer set
+is **ten** test files; the two that failed import `createHermesOrchestrator` and were outside my
+bounded manual selection. **Hosted CI found precisely the sibling consumers the manual selection
+missed** — a miniature Solution Propagation lesson inside the slice built to enforce the doctrine, for
+the second time.
+
+**Rule:** after changing a module, **re-derive** the consumer set for *that* module. Do not reuse a
+set computed for an earlier reservation.
+
+### Evidence
+
+Failure-identity comparison on the two files, branch `1b6431c9`+fix vs clean baseline `73ec0713`:
+**NEW failures on branch = `[]`**, failure sets identical, and **zero `CONTINUITY_WALL` occurrences**
+remaining. The three residual failures in those files (`APP_SERVER_TURN_FAILED` assertion, EPERM/timeout)
+are **pre-existing and identical on baseline** — verified, not assumed.
+
+### Reservation widened again — receipt reissued
+
+Adds `tests/goal-operator-continuity.test.ts` and `tests/hermes-kernel-orchestrator-cycle.test.ts`.
+The prior `#831` receipt did not cover them, so it was reissued rather than the edits being slipped
+under it. Third reissue this slice; each time the gate correctly refused to cover a widened scope.
+Still `local` provenance.

@@ -396,6 +396,13 @@ function kernelScenario(printTurn: (runId: string, workspacePath: string) => str
       state: merged ? "MERGED" : "OPEN",
       baseRefName: "main",
       isDraft: false,
+      // Merge readiness is adjudicated against the required-proof contract, so a successful PR
+      // fixture must state what the REQUIRED proofs did -- not merely that every reported check
+      // happened to be green.
+      mergeAdmission: {
+        verdict: "MERGE_ADMISSIBLE", admissionState: "ADMISSIBLE",
+        terminalRefusals: [], waitingProofs: [],
+      },
       checksGreen: true,
       checksComplete: true,
       failedChecks: [],
