@@ -505,6 +505,16 @@ export const outcomeQueueItem = pgTable(
     terminalKey: text("terminalKey"),
     supersedesOutcomeKey: text("supersedesOutcomeKey"),
     supersededByOutcomeKey: text("supersededByOutcomeKey"),
+    // Bridge from the canonical work graph: when set, this row is the executable lease PROJECTION of
+    // a routed_dependency. Authority is the resource-scoped envelope below, never authorityLevel.
+    // See lib/outcome-queue/dependency-projection.ts.
+    canonicalDependencyId: integer("canonicalDependencyId").references(() => routedDependency.id, {
+      onDelete: "cascade",
+    }),
+    envelopeResource: text("envelopeResource"),
+    envelopeClass: text("envelopeClass"),
+    envelopeCapability: text("envelopeCapability"),
+    envelopeDigest: text("envelopeDigest"),
     suggestedAt: timestamp("suggestedAt", { withTimezone: true }).defaultNow().notNull(),
     activatedAt: timestamp("activatedAt", { withTimezone: true }),
     terminalAt: timestamp("terminalAt", { withTimezone: true }),

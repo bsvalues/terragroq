@@ -33,6 +33,8 @@ export const GOVERNANCE_EVENT_TYPES = [
   "DEPENDENCY_RAISED",
   "DEPENDENCY_ROUTED",
   "DEPENDENCY_RESOLVED",
+  // The graph->runtime bridge: a routed dependency projected onto the live outcome queue.
+  "DEPENDENCY_PROJECTED",
   "AUTHORITY_GRANTED",
   "AUTHORITY_REVOKED",
   "AUTHORITY_EXPIRED",
