@@ -78,7 +78,7 @@ export const LAND_OUTCOME_ORCHESTRATION_REVISION: BootstrapDependency = {
   blocksAcceptance: true,
   // Deliberately AFTER the schema: the current branch is a checkpoint, not the final deployable
   // result, and landing it as though the source work were finished would be its own untruth.
-  dependsOn: ["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS"],
+  dependsOn: ["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS", "APPLY_SERVICE_ENDPOINT_SCHEMA"],
   evidence: [
     "Branch is local-only; no delivery capability held on this repository",
     "Source work depending on the live schema is not yet written",
@@ -111,6 +111,48 @@ export const DEPLOY_OUTCOME_ORCHESTRATION_REVISION: BootstrapDependency = {
   ],
 }
 
+export const APPLY_SERVICE_ENDPOINT_SCHEMA: BootstrapDependency = {
+  key: "APPLY_SERVICE_ENDPOINT_SCHEMA",
+  operation: "apply migration 0018-project-service-endpoint to the canonical WilliamOS database",
+  requiredResource: "williamos-atlas-db",
+  requiredClass: "data",
+  requiredCapability: "additive",
+  routingState: "raised",
+  blocksAcceptance: true,
+  // Runtime discovery exposed it, exactly as the checkout gap was exposed: project_resource can say
+  // what a service is but not the per-node URL it is served at, and admission today proves a page
+  // looks like TerraFusion, not that it belongs to the bound Project.
+  evidence: [
+    "project_resource has no endpoint or node-scoped service column",
+    "admitWorkspaceApp proves reachable+frameable+looks-like-TerraFusion, not Project belonging",
+    "0018 is one additive CREATE TABLE plus two indexes",
+  ],
+  unlocks: [
+    "record per-node service endpoints and observe which Project each reports",
+    "wire the Project-derived running-app URL through bindW1Runtime",
+  ],
+  excludes: ["any destructive or non-additive migration — additive DDL only"],
+}
+
+export const DECLARE_WORKSPACE_RUNTIME_SERVICE: BootstrapDependency = {
+  key: "DECLARE_WORKSPACE_RUNTIME_SERVICE",
+  operation:
+    "owner declaration of a canonical workspace-runtime service resource for the TerraFusion " +
+    "Project (project 2 today has only a pacs/runtime service, the SQL Server data runtime)",
+  requiredResource: "williamos-project-registry",
+  // Declaring what a Project's canonical service IS is a governance act, not something an agent
+  // invents. Observing an endpoint against it, once it exists, is ordinary agent work.
+  requiredCapabilityNonAuth: "owner-resource-declaration",
+  routingState: "raised",
+  blocksAcceptance: true,
+  ownerRouted: true,
+  evidence: [
+    "Project 2's only service resource is id=40 pacs/runtime (aegis:/home/bs/mssql/data)",
+    "bindW1Runtime refuses NO_WORKSPACE_RUNTIME against the live store",
+  ],
+  unlocks: ["a Project-derived, belonging-proven running-app URL for W1"],
+}
+
 export const RATIFY_CANONICAL_PROJECT_REPOSITORIES: BootstrapDependency = {
   key: "RATIFY_CANONICAL_PROJECT_REPOSITORIES",
   operation:
@@ -137,9 +179,11 @@ export const RATIFY_CANONICAL_PROJECT_REPOSITORIES: BootstrapDependency = {
 
 export const BOOTSTRAP_DEPENDENCIES: readonly BootstrapDependency[] = [
   APPLY_GOVERNANCE_SCHEMA_MIGRATIONS,
+  APPLY_SERVICE_ENDPOINT_SCHEMA,
   LAND_OUTCOME_ORCHESTRATION_REVISION,
   DEPLOY_OUTCOME_ORCHESTRATION_REVISION,
   RATIFY_CANONICAL_PROJECT_REPOSITORIES,
+  DECLARE_WORKSPACE_RUNTIME_SERVICE,
 ]
 
 /**

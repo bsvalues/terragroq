@@ -1453,6 +1453,40 @@ export const routedDependency = pgTable(
   ],
 )
 
+// Where a Project's service is actually served, PER NODE. Same gap as the checkout table and the
+// same reason: a URL is node-specific, so hanging one off the canonical service row would be
+// WILLIAMOS_WORKSPACE_APP_URL rebuilt in the database. observedProjectId is the belonging proof --
+// a runtime serving another Project is caught here, not by a header that happens to say TerraFusion.
+export const projectServiceEndpoint = pgTable(
+  "project_service_endpoint",
+  {
+    id: serial("id").primaryKey(),
+    projectResourceId: integer("projectResourceId")
+      .notNull()
+      .references(() => projectResource.id, { onDelete: "cascade" }),
+    node: text("node").notNull(),
+    // The servable origin, e.g. https://192.168.88.9:5199. Origin only.
+    endpoint: text("endpoint").notNull(),
+    // What the endpoint reported about itself. observedProjectId is which Project the running
+    // service claims to belong to; observedRevision is the SHA it reported, so a deployed revision
+    // can be proven equal to the landed one rather than assumed.
+    observedProjectId: integer("observedProjectId").references(() => project.id, {
+      onDelete: "set null",
+    }),
+    observedServiceIdentity: text("observedServiceIdentity"),
+    observedRevision: text("observedRevision"),
+    observedAt: timestamp("observedAt", { withTimezone: true }),
+    ratifiedAt: timestamp("ratifiedAt", { withTimezone: true }),
+    ratifiedBy: text("ratifiedBy"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("project_service_endpoint_node_unique").on(table.projectResourceId, table.node),
+    index("project_service_endpoint_node_idx").on(table.node, table.projectResourceId),
+  ],
+)
+
 // Where a canonical resource is checked out, PER NODE. The path is NOT a property of the resource:
 // the same repository is at C:\... on HERMES, /srv/... on AEGIS, elsewhere on OMEN and absent on
 // ATLAS, and project_resource holds one row per canonical identity -- so a path column there could
@@ -1507,6 +1541,8 @@ export type NewProject = typeof project.$inferInsert
 export type ProjectResource = typeof projectResource.$inferSelect
 export type NewProjectResource = typeof projectResource.$inferInsert
 export type ProjectResourceCheckout = typeof projectResourceCheckout.$inferSelect
+export type ProjectServiceEndpoint = typeof projectServiceEndpoint.$inferSelect
+export type NewProjectServiceEndpoint = typeof projectServiceEndpoint.$inferInsert
 export type NewProjectResourceCheckout = typeof projectResourceCheckout.$inferInsert
 export type WorkbenchThread = typeof workbenchThread.$inferSelect
 export type WorkbenchThreadMessage = typeof workbenchThreadMessage.$inferSelect

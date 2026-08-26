@@ -29,7 +29,9 @@ import {
 
 import {
   APPLY_GOVERNANCE_SCHEMA_MIGRATIONS,
+  APPLY_SERVICE_ENDPOINT_SCHEMA,
   RATIFY_CANONICAL_PROJECT_REPOSITORIES,
+  DECLARE_WORKSPACE_RUNTIME_SERVICE,
   BOOTSTRAP_DEPENDENCIES,
   BOOTSTRAP_INDEPENDENT_WORK,
   DEPLOY_OUTCOME_ORCHESTRATION_REVISION,
@@ -400,20 +402,39 @@ describe("the bootstrap outcome's three live-boundary dependencies", () => {
   it("orders the boundaries: schema, then land, then deploy", () => {
     expect(nextActionableDependency([])?.key).toBe("APPLY_GOVERNANCE_SCHEMA_MIGRATIONS")
     expect(nextActionableDependency(["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS"])?.key).toBe(
-      "LAND_OUTCOME_ORCHESTRATION_REVISION",
+      "APPLY_SERVICE_ENDPOINT_SCHEMA",
     )
+    // Landing waits for BOTH schema migrations, not just the first.
+    expect(
+      nextActionableDependency(["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS", "APPLY_SERVICE_ENDPOINT_SCHEMA"])?.key,
+    ).toBe("LAND_OUTCOME_ORCHESTRATION_REVISION")
     expect(
       nextActionableDependency([
         "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS",
+        "APPLY_SERVICE_ENDPOINT_SCHEMA",
         "LAND_OUTCOME_ORCHESTRATION_REVISION",
       ])?.key,
     ).toBe("DEPLOY_OUTCOME_ORCHESTRATION_REVISION")
-    // The agent chain is exactly the three infra dependencies, in order.
     expect(nextActionableDependency([
       "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS",
+      "APPLY_SERVICE_ENDPOINT_SCHEMA",
       "LAND_OUTCOME_ORCHESTRATION_REVISION",
       "DEPLOY_OUTCOME_ORCHESTRATION_REVISION",
     ])).toBeNull()
+  })
+
+  it("does not land until BOTH schema migrations are applied", () => {
+    // The current branch adds two migrations; landing before the endpoint schema would leave the
+    // runtime binding unlandable.
+    expect(isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, ["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS"])).toBe(
+      false,
+    )
+    expect(
+      isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, [
+        "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS",
+        "APPLY_SERVICE_ENDPOINT_SCHEMA",
+      ]),
+    ).toBe(true)
   })
 
   it("never routes ratification to an agent — it is owner-placed", () => {
@@ -421,6 +442,20 @@ describe("the bootstrap outcome's three live-boundary dependencies", () => {
     // because ratification is a governance act the router cannot hand to an executor.
     expect(nextActionableDependency([])?.key).toBe("APPLY_GOVERNANCE_SCHEMA_MIGRATIONS")
     expect(RATIFY_CANONICAL_PROJECT_REPOSITORIES.ownerRouted).toBe(true)
+  })
+
+  it("the missing workspace-runtime service is an owner declaration, not agent work", () => {
+    // Project 2's only service resource is the PACS data runtime; declaring what the Project's
+    // canonical workspace service IS is governance, so the router never hands it to an executor.
+    expect(DECLARE_WORKSPACE_RUNTIME_SERVICE.ownerRouted).toBe(true)
+    expect(DECLARE_WORKSPACE_RUNTIME_SERVICE.blocksAcceptance).toBe(true)
+    expect(nextActionableDependency([])?.key).not.toBe("DECLARE_WORKSPACE_RUNTIME_SERVICE")
+  })
+
+  it("the endpoint schema is agent-appliable additive DDL, in the chain before land", () => {
+    expect(APPLY_SERVICE_ENDPOINT_SCHEMA.requiredClass).toBe("data")
+    expect(APPLY_SERVICE_ENDPOINT_SCHEMA.requiredCapability).toBe("additive")
+    expect(APPLY_SERVICE_ENDPOINT_SCHEMA.ownerRouted ?? false).toBe(false)
   })
 
   it("ratification blocks certification but not the source work", () => {
@@ -449,7 +484,7 @@ describe("blocked describes the present, not the past", () => {
       anyAcceptancePathExecutable: executableWorkAfter([]).length > 0,
     })
     expect(e.blocked).toBe(true)
-    expect(e.blockingDependencies).toHaveLength(4)
+    expect(e.blockingDependencies).toHaveLength(6)
   })
 
   it("stops being blocked the moment the schema dependency resolves", () => {
