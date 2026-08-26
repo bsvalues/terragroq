@@ -318,12 +318,13 @@ describe("a slug and a remote URL name the same repository", () => {
     expect(identitiesMatch(SLUG, "git@github.com:bsvalues/terragroq.git")).toBe(false)
   })
 
-  it("keeps two explicit hosts distinct", () => {
-    // A slug matches any host, but two stated hosts must agree.
-    expect(identitiesMatch("https://gitlab.com/bsvalues/x.git", "https://github.com/bsvalues/x.git")).toBe(
-      false,
-    )
-    expect(identitiesMatch("bsvalues/x", "https://gitlab.com/bsvalues/x.git")).toBe(true)
+  it("reduces every form to a host-agnostic owner/repo", () => {
+    // Canonical identity in this system is owner/repo: the store records bare slugs with no host,
+    // so the matcher cannot be stricter than the data model without false-mismatching every slug.
+    // Same owner/repo is the same repository; different owner/repo is not.
+    expect(identitiesMatch("bsvalues/x", "https://github.com/bsvalues/x.git")).toBe(true)
+    expect(identitiesMatch("https://github.com/bsvalues/x.git", "git@github.com:bsvalues/x.git")).toBe(true)
+    expect(identitiesMatch("bsvalues/x", "bsvalues/y")).toBe(false)
   })
 
   it("refuses to match on emptiness", () => {

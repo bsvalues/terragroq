@@ -29,6 +29,7 @@ import {
 
 import {
   APPLY_GOVERNANCE_SCHEMA_MIGRATIONS,
+  RATIFY_CANONICAL_PROJECT_REPOSITORIES,
   BOOTSTRAP_DEPENDENCIES,
   BOOTSTRAP_INDEPENDENT_WORK,
   DEPLOY_OUTCOME_ORCHESTRATION_REVISION,
@@ -361,9 +362,11 @@ describe("authority is resource x class x capability", () => {
 describe("the bootstrap outcome's three live-boundary dependencies", () => {
   const ALL = BOOTSTRAP_DEPENDENCIES.map((d) => d.key)
 
-  it("each names a real unavailable authority", () => {
+  it("each names a real unavailable authority or capability", () => {
     for (const d of BOOTSTRAP_DEPENDENCIES) {
-      expect(isSurfaceClass(d.requiredClass!)).toBe(true)
+      // Either an authority class, or a non-authority capability (ratification is the latter).
+      const namesANeed = (d.requiredClass && isSurfaceClass(d.requiredClass)) || Boolean(d.requiredCapabilityNonAuth)
+      expect(namesANeed).toBe(true)
       expect(d.requiredResource).toBeTruthy()
       expect(d.evidence.length).toBeGreaterThan(0)
       expect(d.blocksAcceptance).toBe(true)
@@ -405,7 +408,27 @@ describe("the bootstrap outcome's three live-boundary dependencies", () => {
         "LAND_OUTCOME_ORCHESTRATION_REVISION",
       ])?.key,
     ).toBe("DEPLOY_OUTCOME_ORCHESTRATION_REVISION")
-    expect(nextActionableDependency(ALL)).toBeNull()
+    // The agent chain is exactly the three infra dependencies, in order.
+    expect(nextActionableDependency([
+      "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS",
+      "LAND_OUTCOME_ORCHESTRATION_REVISION",
+      "DEPLOY_OUTCOME_ORCHESTRATION_REVISION",
+    ])).toBeNull()
+  })
+
+  it("never routes ratification to an agent — it is owner-placed", () => {
+    // Even with nothing resolved, the agent chain starts at the schema migration, not ratification,
+    // because ratification is a governance act the router cannot hand to an executor.
+    expect(nextActionableDependency([])?.key).toBe("APPLY_GOVERNANCE_SCHEMA_MIGRATIONS")
+    expect(RATIFY_CANONICAL_PROJECT_REPOSITORIES.ownerRouted).toBe(true)
+  })
+
+  it("ratification blocks certification but not the source work", () => {
+    // It gates final W1 certification, and it explicitly is NOT among the schema/land/deploy chain,
+    // so route wiring, runtime derivation, Space identity and the verifier proceed without it.
+    expect(RATIFY_CANONICAL_PROJECT_REPOSITORIES.blocksAcceptance).toBe(true)
+    expect(RATIFY_CANONICAL_PROJECT_REPOSITORIES.dependsOn ?? []).toEqual([])
+    expect(RATIFY_CANONICAL_PROJECT_REPOSITORIES.unlocks.join(" ")).toMatch(/certification/i)
   })
 
   it("will not land before the schema-dependent source work is possible", () => {
@@ -426,7 +449,7 @@ describe("blocked describes the present, not the past", () => {
       anyAcceptancePathExecutable: executableWorkAfter([]).length > 0,
     })
     expect(e.blocked).toBe(true)
-    expect(e.blockingDependencies).toHaveLength(3)
+    expect(e.blockingDependencies).toHaveLength(4)
   })
 
   it("stops being blocked the moment the schema dependency resolves", () => {

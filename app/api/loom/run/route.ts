@@ -5,12 +5,12 @@ import { getSession } from "@/lib/session"
 import { resolveLoomOperation } from "@/lib/loom/operations"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import { loomRootForRequest } from "@/lib/loom/route-root"
 
 export const dynamic = "force-dynamic"
 // Node runtime, not edge: this streams the output of a real process on this machine.
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const MAX_OUTPUT_BYTES = 2_000_000
 
 /**
@@ -28,6 +28,10 @@ const MAX_OUTPUT_BYTES = 2_000_000
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+
+  const rootOrRefusal = await loomRootForRequest()
+  if (rootOrRefusal instanceof Response) return rootOrRefusal
+  const PROJECT_ROOT = rootOrRefusal.root
 
   let body: { operation?: unknown; confirmed?: unknown }
   try {
@@ -52,7 +56,7 @@ export async function POST(request: Request) {
 
   const command = operation.command === "node" ? process.execPath : operation.command
   const child = spawn(command, [...operation.args], {
-    cwd: operation.scope === "project" ? PROJECT_ROOT : PROJECT_ROOT,
+    cwd: PROJECT_ROOT,
     shell: false,
     windowsHide: true,
     env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },

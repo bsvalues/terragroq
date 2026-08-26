@@ -7,6 +7,7 @@ import {
   type WorkspaceResourceLike,
 } from "@/lib/loom/project-workspace-root"
 import { eq, inArray } from "drizzle-orm"
+import { bindW1Workspace, type W1BindingResult } from "@/lib/loom/w1-binding"
 
 /**
  * Load the rows the workspace-root resolver needs, and resolve.
@@ -95,4 +96,101 @@ export async function loadWorkspaceRoot(
     ambientRoot,
     cwd,
   })
+}
+
+/* ------------------------------------------------------------------ */
+/* Strict W1 loader + route resolver                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The declared Project for this deployment, if any.
+ *
+ * Its PRESENCE is what switches a route from legacy behaviour (ambient root, no binding) to strict
+ * W1 binding (Project-derived or refuse). A deployment that has been given a Project id is asserting
+ * that it serves that Project's canonical repository, and ambient fallback is exactly the failure
+ * W1 removes — so from that point there is none.
+ */
+export function declaredProjectId(): number | null {
+  const raw = process.env.WILLIAMOS_PROJECT_ID?.trim()
+  if (!raw) return null
+  const n = Number.parseInt(raw, 10)
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
+/** Load the strict W1 binding for a Project on the serving node. No ambient fallback. */
+export async function loadW1WorkspaceRoot(input: {
+  projectId: number
+  node?: string
+}): Promise<W1BindingResult> {
+  const node = input.node ?? servingNode()
+
+  const resources = await db
+    .select({
+      id: projectResource.id,
+      resourceKey: projectResource.resourceKey,
+      relationship: projectResource.relationship,
+      type: projectResource.type,
+      canonicalIdentity: projectResource.canonicalIdentity,
+      ratifiedAt: projectResource.ratifiedAt,
+    })
+    .from(projectResource)
+    .where(eq(projectResource.projectId, input.projectId))
+
+  const ids = resources.map((r) => r.id)
+  const checkouts =
+    ids.length > 0
+      ? await db
+          .select({
+            projectResourceId: projectResourceCheckout.projectResourceId,
+            node: projectResourceCheckout.node,
+            path: projectResourceCheckout.path,
+            observedIdentity: projectResourceCheckout.observedIdentity,
+            observedRevision: projectResourceCheckout.observedRevision,
+            ratifiedAt: projectResourceCheckout.ratifiedAt,
+          })
+          .from(projectResourceCheckout)
+          .where(inArray(projectResourceCheckout.projectResourceId, ids))
+      : []
+
+  return bindW1Workspace({ projectId: input.projectId, resources, checkouts, node })
+}
+
+export interface LoomRoot {
+  root: string
+  /** true when the root came from a strict W1 binding, false for the legacy ambient fallback. */
+  bound: boolean
+  projectId: number | null
+  observedRevision: string | null
+}
+
+/**
+ * Resolve the workspace root for a loom route.
+ *
+ * When a Project is declared, this binds strictly and returns a typed refusal on any binding
+ * failure — never a silent ambient root. When no Project is declared (a legacy single-directory
+ * deployment), it returns the ambient root the routes have always used, so nothing that works today
+ * stops working. The switch is the declaration, and it is one-way: declaring a Project turns the
+ * fallback off.
+ */
+export async function resolveLoomRoot(): Promise<LoomRoot | { refused: string; detail: string }> {
+  const projectId = declaredProjectId()
+  if (projectId == null) {
+    return {
+      root: process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd(),
+      bound: false,
+      projectId: null,
+      observedRevision: null,
+    }
+  }
+
+  const binding = await loadW1WorkspaceRoot({ projectId })
+  if (!binding.ok) {
+    return { refused: binding.refusal, detail: binding.detail }
+  }
+  return {
+    root: binding.root,
+    bound: true,
+    projectId: binding.projectId,
+    observedRevision: binding.observedRevision,
+  }
 }

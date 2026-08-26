@@ -4,11 +4,11 @@ import { getSession } from "@/lib/session"
 import { readBoundedJson } from "@/lib/environment/line-guard"
 import { isIgnoredEntry, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { workspaceFileWriteDependencies, writeGovernedWorkspaceFile } from "@/lib/loom/workspace-file-write"
+import { loomRootForRequest } from "@/lib/loom/route-root"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const MAX_FILE_BYTES = 2_000_000
 const MAX_WRITE_BODY_BYTES = MAX_FILE_BYTES + 32_000
 
@@ -19,6 +19,10 @@ const refuse = (refusal: string, status: number) =>
 export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
+
+  const rootOrRefusal = await loomRootForRequest()
+  if (rootOrRefusal instanceof Response) return rootOrRefusal
+  const PROJECT_ROOT = rootOrRefusal.root
 
   const url = new URL(request.url)
   const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, url.searchParams.get("path") ?? "", fs.realpath)
@@ -73,6 +77,10 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
+
+  const rootOrRefusal = await loomRootForRequest()
+  if (rootOrRefusal instanceof Response) return rootOrRefusal
+  const PROJECT_ROOT = rootOrRefusal.root
 
   const parsed = await readBoundedJson(request, MAX_WRITE_BODY_BYTES)
   if (!parsed.ok) return refuse(parsed.error, parsed.status)

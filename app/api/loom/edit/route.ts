@@ -5,13 +5,13 @@ import fs from "node:fs/promises"
 import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL } from "@/lib/loom/providers"
 import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { loomRootForRequest } from "@/lib/loom/route-root"
 import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/receipts"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const SEA_ROOT = process.env.WILLIAMOS_SEA_ROOT ?? "D:/williamos-sea"
 const PYTHON = process.env.WILLIAMOS_PYTHON ?? "python"
 const EDIT_TIMEOUT_MS = 20 * 60_000
@@ -31,6 +31,10 @@ const EDIT_TIMEOUT_MS = 20 * 60_000
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+
+  const rootOrRefusal = await loomRootForRequest()
+  if (rootOrRefusal instanceof Response) return rootOrRefusal
+  const PROJECT_ROOT = rootOrRefusal.root
 
   // A model editing real files is the most consequential thing this application does.
   const context = await requireWorkContext()

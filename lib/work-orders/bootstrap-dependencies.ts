@@ -29,6 +29,12 @@ export interface BootstrapDependency extends RoutedDependencyLike {
   excludes?: readonly string[]
   /** Keys that must resolve before this one is even actionable. */
   dependsOn?: readonly string[]
+  /**
+   * Placed with the OWNER, not routed to an executor. A governance confirmation an agent cannot
+   * perform for itself and the router cannot hand to another agent. It is still a real, tracked,
+   * acceptance-gating dependency; it is simply not part of the agent execution chain.
+   */
+  ownerRouted?: boolean
 }
 
 export const APPLY_GOVERNANCE_SCHEMA_MIGRATIONS: BootstrapDependency = {
@@ -105,10 +111,35 @@ export const DEPLOY_OUTCOME_ORCHESTRATION_REVISION: BootstrapDependency = {
   ],
 }
 
+export const RATIFY_CANONICAL_PROJECT_REPOSITORIES: BootstrapDependency = {
+  key: "RATIFY_CANONICAL_PROJECT_REPOSITORIES",
+  operation:
+    "owner confirmation that each Project's primary-repo resource, and its observed per-node " +
+    "checkout, are the canonical repository at the intended revision",
+  requiredResource: "williamos-project-registry",
+  // Not an authority-envelope operation. Ratification is an owner governance act -- confirming that
+  // an agent-drafted record is true -- so it names a non-authority capability rather than a class.
+  requiredCapabilityNonAuth: "owner-ratification",
+  routingState: "raised",
+  blocksAcceptance: true,
+  // Placed with the owner, and orthogonal to the schema/land/deploy chain: it can happen at any
+  // time, in parallel, and depends on nothing.
+  ownerRouted: true,
+  evidence: [
+    "Zero repo resources are ratified in the canonical store",
+    "Observed checkouts recorded on 2026-08-26 are all UNRATIFIED",
+    "rootCanCertify refuses on every current binding for want of ratification",
+  ],
+  // The one thing it gates. Route wiring, runtime derivation, Space identity and the verifier are
+  // all buildable and verifiable WITHOUT it; only certification is not.
+  unlocks: ["final W1 certification against a ratified, bound workspace"],
+}
+
 export const BOOTSTRAP_DEPENDENCIES: readonly BootstrapDependency[] = [
   APPLY_GOVERNANCE_SCHEMA_MIGRATIONS,
   LAND_OUTCOME_ORCHESTRATION_REVISION,
   DEPLOY_OUTCOME_ORCHESTRATION_REVISION,
+  RATIFY_CANONICAL_PROJECT_REPOSITORIES,
 ]
 
 /**
@@ -155,7 +186,7 @@ export function nextActionableDependency(
   const resolved = new Set(resolvedKeys)
   return (
     BOOTSTRAP_DEPENDENCIES.find(
-      (d) => !resolved.has(d.key) && isActionable(d, resolvedKeys),
+      (d) => !d.ownerRouted && !resolved.has(d.key) && isActionable(d, resolvedKeys),
     ) ?? null
   )
 }

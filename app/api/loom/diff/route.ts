@@ -5,12 +5,12 @@ import fs from "node:fs/promises"
 
 import { getSession } from "@/lib/session"
 import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { loomRootForRequest } from "@/lib/loom/route-root"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
 const run = promisify(execFile)
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const MAX_DIFF_BYTES = 2_000_000
 
 /**
@@ -25,6 +25,10 @@ const MAX_DIFF_BYTES = 2_000_000
 export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+
+  const rootOrRefusal = await loomRootForRequest()
+  if (rootOrRefusal instanceof Response) return rootOrRefusal
+  const PROJECT_ROOT = rootOrRefusal.root
 
   const requested = new URL(request.url).searchParams.get("path")
   const scoped = requested !== null && requested !== ""

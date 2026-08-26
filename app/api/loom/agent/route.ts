@@ -5,12 +5,12 @@ import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/providers"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { assertThreadResume, loomThreadOwner } from "@/lib/loom/threads"
+import { loomRootForRequest } from "@/lib/loom/route-root"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const AGENT_BIN = process.env.WILLIAMOS_AGENT_BIN ?? "claude"
 const AGENT_TIMEOUT_MS = 60 * 60_000
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -30,6 +30,10 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+
+  const rootOrRefusal = await loomRootForRequest()
+  if (rootOrRefusal instanceof Response) return rootOrRefusal
+  const PROJECT_ROOT = rootOrRefusal.root
 
   let body: { prompt?: unknown; sessionId?: unknown; resume?: unknown }
   try {
