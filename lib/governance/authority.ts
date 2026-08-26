@@ -31,6 +31,16 @@ export interface AuthorityGrantFacts {
   expiresAt: Date | null
   revokedAt?: Date | null
   revokeReason?: string | null
+  /**
+   * The authority NAMESPACE this grant lives in, and the recipient it was issued to. Absent from
+   * this contract until #1015, which is how the registry came to conflate namespace, acting identity
+   * and recipient: what a check cannot see, it cannot distinguish. `grantCovers` deliberately still
+   * ignores both -- coverage is about lifecycle, level and action. Binding a grant to a subject is
+   * `bindAuthoritySubject`'s job, and keeping the two separate is what stops "covered" from quietly
+   * meaning "covered for anyone".
+   */
+  userId?: string | null
+  grantedTo?: string | null
 }
 
 /**
@@ -66,6 +76,8 @@ export function authorityGrantFactsFromRow(row: Record<string, unknown>): Author
     expiresAt: instant(row.expiresAt),
     revokedAt: instant(row.revokedAt),
     revokeReason: (row.revokeReason as string | null) ?? null,
+    userId: (row.userId as string | null) ?? null,
+    grantedTo: (row.grantedTo as string | null) ?? null,
   }
 }
 
