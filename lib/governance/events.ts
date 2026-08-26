@@ -28,6 +28,11 @@ export const GOVERNANCE_EVENT_TYPES = [
   "WO_TRUTH_BOUND",
   "WO_TRUTH_REBOUND",
   "WO_ACCEPTANCE_ATTEMPTED",
+  // An executor hitting a wall is a routing event, not a stoppage: the dependency moves, the
+  // contract does not. See lib/work-orders/routed-dependency.ts.
+  "DEPENDENCY_RAISED",
+  "DEPENDENCY_ROUTED",
+  "DEPENDENCY_RESOLVED",
   "AUTHORITY_GRANTED",
   "AUTHORITY_REVOKED",
   "AUTHORITY_EXPIRED",

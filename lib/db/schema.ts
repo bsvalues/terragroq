@@ -1387,6 +1387,72 @@ export const workOrderAcceptanceAttempt = pgTable(
   ],
 )
 
+// A dependency sits BESIDE an active work order and does not consume its lifecycle. An executor
+// that cannot perform ONE operation is not unemployed: the dependency is recorded, the router takes
+// it elsewhere, and the contract keeps working every independent path. `blocked` is correspondingly
+// narrowed to a computed condition -- lib/work-orders/routed-dependency.ts -- so that a single
+// forbidden mutation can never reach it.
+export const routedDependency = pgTable(
+  "routed_dependency",
+  {
+    id: serial("id").primaryKey(),
+    // The work order that REMAINS ACTIVE while this is routed elsewhere.
+    workOrderId: integer("workOrderId")
+      .notNull()
+      .references(() => workOrder.id, { onDelete: "cascade" }),
+    // Specific prose: "modify deploy/hermes/start-williamos-live.ps1", not "config problem".
+    operation: text("operation").notNull(),
+    // What authority WOULD have been needed: resource x class x capability.
+    requiredResource: text("requiredResource"),
+    requiredClass: text("requiredClass"),
+    requiredCapability: text("requiredCapability"),
+    // Non-authority blockers: an unreachable node, an absent credential, a service that is down.
+    requiredCapabilityNonAuth: text("requiredCapabilityNonAuth"),
+    // The wall or error actually observed. Not a summary of it.
+    evidence: text("evidence").array().default([]).notNull(),
+    routingState: text("routingState").default("raised").notNull(),
+    assignedWorkOrderId: integer("assignedWorkOrderId").references(() => workOrder.id, {
+      onDelete: "set null",
+    }),
+    assignee: text("assignee"),
+    // Only dependencies with this set can contribute to `blocked`.
+    blocksAcceptance: boolean("blocksAcceptance").default(false).notNull(),
+    raisedBy: text("raisedBy"),
+    raisedAt: timestamp("raisedAt", { withTimezone: true }).defaultNow().notNull(),
+    routedAt: timestamp("routedAt", { withTimezone: true }),
+    resolvedAt: timestamp("resolvedAt", { withTimezone: true }),
+    resolution: text("resolution"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("routed_dependency_wo_state_idx").on(
+      table.workOrderId,
+      table.routingState,
+      table.blocksAcceptance,
+    ),
+    index("routed_dependency_routing_idx").on(table.routingState, table.raisedAt),
+    check(
+      "routed_dependency_state_check",
+      sql`${table.routingState} IN ('raised', 'routed', 'accepted', 'resolved', 'refused')`,
+    ),
+    check(
+      "routed_dependency_class_check",
+      sql`${table.requiredClass} IS NULL OR ${table.requiredClass} IN ('source', 'artifact', 'runtime_config', 'runtime_control', 'data', 'secrets', 'delivery', 'external')`,
+    ),
+    // A dependency that names no unavailable capability at all is a note, not a routable item.
+    check(
+      "routed_dependency_names_a_need",
+      sql`${table.requiredClass} IS NOT NULL OR ${table.requiredCapabilityNonAuth} IS NOT NULL`,
+    ),
+    // Routing to the work order that raised it is a loop, not a route.
+    check(
+      "routed_dependency_no_self_route",
+      sql`${table.assignedWorkOrderId} IS NULL OR ${table.assignedWorkOrderId} <> ${table.workOrderId}`,
+    ),
+  ],
+)
+
 export type MemoryFact = typeof memoryFact.$inferSelect
 export type Decision = typeof decision.$inferSelect
 export type Doctrine = typeof doctrine.$inferSelect
@@ -1398,6 +1464,8 @@ export type NewWorkOrderTruthBinding = typeof workOrderTruthBinding.$inferInsert
 export type WorkOrderBoundResource = typeof workOrderBoundResource.$inferSelect
 export type WorkOrderBindingEvent = typeof workOrderBindingEvent.$inferSelect
 export type WorkOrderAcceptanceAttempt = typeof workOrderAcceptanceAttempt.$inferSelect
+export type RoutedDependency = typeof routedDependency.$inferSelect
+export type NewRoutedDependency = typeof routedDependency.$inferInsert
 export type Project = typeof project.$inferSelect
 export type NewProject = typeof project.$inferInsert
 export type ProjectResource = typeof projectResource.$inferSelect

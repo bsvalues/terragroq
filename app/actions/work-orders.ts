@@ -18,6 +18,7 @@ import { createAuthorityGrant } from "@/app/actions/authority"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { authorityRank } from "@/lib/goal/taxonomy"
 import { getBindingReadiness } from "@/app/actions/work-order-truth-binding"
+import { evaluateWorkOrderBlocked } from "@/app/actions/routed-dependencies"
 import {
   resolveAccess,
   LIVE_ASSIGNMENT_STATUSES,
@@ -216,7 +217,12 @@ export type TransitionResult =
 export async function transitionWorkOrder(
   id: number,
   to: WoStatus,
-  opts?: { approveDoctrine?: boolean; grantAuthority?: boolean },
+  opts?: {
+    approveDoctrine?: boolean
+    grantAuthority?: boolean
+    /** Whether ANY acceptance path is still executable; only the contract knows its own paths. */
+    anyAcceptancePathExecutable?: boolean
+  },
 ): Promise<TransitionResult> {
   const userId = await getUserId()
   // Authorising a WO and certifying its closure are governance acts; everything else on the path
@@ -257,6 +263,25 @@ export async function transitionWorkOrder(
         ok: false,
         reason: `Authority ${wo.authorityLevel} requires explicit operator approval to grant`,
         missing: [`Grant ${wo.authorityLevel} authority explicitly`],
+      }
+    }
+  }
+
+  // The `blocked` guard. `blocked` is not a mood, it is a computed condition: every acceptance
+  // path must be gated by an unsatisfied dependency. One forbidden mutation must never reach it --
+  // the contract stays active and its independent paths keep moving while the router places the
+  // dependency elsewhere.
+  if (to === "blocked") {
+    const evaluation = await evaluateWorkOrderBlocked(id, {
+      anyAcceptancePathExecutable: opts?.anyAcceptancePathExecutable,
+    })
+    if (!evaluation.blocked) {
+      return {
+        ok: false,
+        reason: `Cannot block: ${evaluation.reason}`,
+        missing: evaluation.nonBlockingOpen.map(
+          (d) => `Open but not gating acceptance: ${d.operation}`,
+        ),
       }
     }
   }
