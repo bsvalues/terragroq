@@ -211,11 +211,14 @@ export const ESTABLISH_SERVING_NODE_CHECKOUT: BootstrapDependency = {
   // real endpoint ends up over the wrong revision.
   requiredClass: "source",
   requiredCapability: "write",
-  routingState: "raised",
+  // RESOLVED 2026-08-26: governed worktree C:\TF-wt-w1-serving established at 5a328e72 from
+  // C:\TerraFusion-delivery on HERMES; TF-wt-rel-001 left untouched on its codex branch; the
+  // (resource 2, hermes) checkout binding now records the serving worktree and the premise MATCHES.
+  routingState: "resolved",
   blocksAcceptance: true,
   // CONDITIONAL: raised by PROVISION only when the premise check finds a revision mismatch, so it is
-  // NOT in the always-blocking BOOTSTRAP_DEPENDENCIES list. HERMES was observed at fd294dc3, so a
-  // mismatch against a bound main revision is likely and this will probably be raised.
+  // NOT in the always-blocking BOOTSTRAP_DEPENDENCIES list. It fired here (HERMES was on a release
+  // branch at fd294dc3) and has been executed and resolved.
   evidence: [
     "Protected main captured 2026-08-26 = 5a328e72 (advanced from 731b15f0 during the session)",
     "HERMES serving checkout is fd294dc3 on branch codex/tf-rel-001-release-provenance-20260820",

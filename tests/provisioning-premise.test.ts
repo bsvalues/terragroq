@@ -133,3 +133,28 @@ describe("live protected-main truth captured at provisioning time", () => {
     expect(plan.routeFirst?.requiredClass).toBe("source")
   })
 })
+
+/* ------------------------------------------------------------------ */
+/* Post-ESTABLISH: the governed serving checkout is at the bound rev   */
+/* ------------------------------------------------------------------ */
+
+describe("after ESTABLISH resolved, the premise matches and provisioning is ready", () => {
+  // Governed worktree C:\TF-wt-w1-serving established on HERMES at exactly the bound revision, and
+  // the (resource 2, hermes) checkout binding updated to it. bound == serving now.
+  const BOUND = "5a328e728852dc2bb933d704d0daa5c54750728c"
+  const SERVING_NOW = "5a328e728852dc2bb933d704d0daa5c54750728c"
+
+  it("the premise now passes", () => {
+    expect(
+      checkProvisioningPremise({ boundRevision: BOUND, servingObservedRevision: SERVING_NOW, servingNode: "hermes" }),
+    ).toEqual({ ok: true })
+  })
+
+  it("provisioning is ready to start the service — no checkout op to route", () => {
+    const plan = provisioningPlan(
+      checkProvisioningPremise({ boundRevision: BOUND, servingObservedRevision: SERVING_NOW, servingNode: "hermes" }),
+      "hermes",
+    )
+    expect(plan).toEqual({ readyToProvision: true })
+  })
+})
