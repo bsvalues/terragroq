@@ -88,7 +88,8 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
   )
 }
 
-export function EditorSurface({ space, onEditorChange }: {
+export function EditorSurface({ projectName, space, onEditorChange }: {
+  projectName: string
   space: WorkspaceSpace
   onEditorChange: (editor: WorkspaceSpace["editor"], selectedPath: string | null) => void
 }) {
@@ -267,7 +268,7 @@ export function EditorSurface({ space, onEditorChange }: {
   return (
     <div className={styles.editorSurface}>
       <nav className={styles.fileTree} aria-label="Workspace files">
-        <div className={styles.fileTreeName}>TERRAFUSION</div>
+        <div className={styles.fileTreeName}>{projectName.toUpperCase()}</div>
         {treeError ? <div className={styles.inlineRefusal} role="alert">{treeError}</div> : null}
         <ul>
           {(roots ?? []).map((entry) => (
@@ -278,83 +279,49 @@ export function EditorSurface({ space, onEditorChange }: {
       <div className={styles.editorWorkarea}>
         <div className={styles.editorActions}>
           <button type="button" onClick={split} disabled={space.editor.panes.length > 1} title="Split editor" aria-label="Split editor">
-            <Columns2 size={14} />
+            <Columns2 size={13} aria-hidden />
           </button>
-          <span className={styles.editorHint}>⌘S save · ⌘Z undo · ⇧⌘Z redo</span>
         </div>
-        <div className={styles.panes} data-split={space.editor.panes.length > 1}>
+        <div className={`${styles.editorPanes} ${space.editor.panes.length > 1 ? styles.editorPanesSplit : ""}`}>
           {space.editor.panes.map((pane) => {
-            const buffer = pane.activePath ? buffers[pane.activePath] : null
+            const path = pane.activePath
+            const buffer = path ? buffers[path] : null
             return (
-              <div
-                key={pane.id}
-                className={`${styles.pane} ${space.editor.activePaneId === pane.id ? styles.activePane : ""}`}
-                onPointerDown={() => updatePanes(space.editor.panes, space.editor.openFiles, pane.activePath, pane.id)}
-              >
-                <div className={styles.tabs} role="tablist" aria-label={`${pane.id} editor tabs`}>
-                  {space.editor.openFiles.map((path) => {
-                    const dirty = buffers[path] ? buffers[path].content !== buffers[path].savedContent : false
-                    return (
-                      <div key={path} className={`${styles.tabItem} ${pane.activePath === path ? styles.activeTab : ""}`} role="presentation">
-                        <button
-                          type="button"
-                          role="tab"
-                          aria-selected={pane.activePath === path}
-                          className={styles.tab}
-                          onClick={() => {
-                            const panes = space.editor.panes.map((item) => item.id === pane.id ? { ...item, activePath: path } : item)
-                            updatePanes(panes, space.editor.openFiles, path, pane.id)
-                            if (!buffers[path]) void openFile(path, pane.id)
-                          }}
-                        >
-                          <span>{path.split("/").at(-1)}</span>
-                          {dirty ? <span className={styles.dirtyMark} aria-label="Unsaved">●</span> : null}
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.closeTab}
-                          aria-label={`Close ${path}`}
-                          onClick={() => closeTab(path)}
-                        >
-                          <X size={11} />
-                        </button>
-                      </div>
-                    )
-                  })}
+              <section key={pane.id} className={`${styles.editorPane} ${space.editor.activePaneId === pane.id ? styles.editorPaneActive : ""}`} onPointerDown={() => updatePanes(space.editor.panes, space.editor.openFiles, path ?? null, pane.id)}>
+                <div className={styles.tabs}>
+                  {space.editor.openFiles.map((open) => (
+                    <button
+                      key={open}
+                      type="button"
+                      className={`${styles.tab} ${path === open ? styles.tabActive : ""}`}
+                      onClick={() => void openFile(open, pane.id)}
+                    >
+                      <span>{open.split("/").at(-1)}</span>
+                      {buffers[open] && buffers[open].content !== buffers[open].savedContent ? <i aria-label="unsaved">●</i> : null}
+                      <span role="button" aria-label={`Close ${open}`} tabIndex={0} onClick={(event) => { event.stopPropagation(); closeTab(open) }} onKeyDown={(event) => { if (event.key === "Enter") { event.stopPropagation(); closeTab(open) } }}><X size={10} /></span>
+                    </button>
+                  ))}
                 </div>
-                <div className={styles.editorCanvas}>
-                  {buffer ? (
-                    <>
-                      <SourceEditor
-                        path={buffer.path}
-                        value={buffer.content}
-                        selection={pane.selection}
-                        onChange={(content) => setBuffers((current) => ({ ...current, [buffer.path]: { ...current[buffer.path], content, error: null } }))}
-                        onSelection={(selection) => {
-                          const panes = space.editor.panes.map((item) => item.id === pane.id ? { ...item, selection } : item)
-                          updatePanes(panes, space.editor.openFiles, buffer.path)
-                        }}
-                        onSave={() => void save(buffer.path)}
-                      />
-                      <div className={styles.editorFooter}>
-                        <span className={buffer.error ? styles.saveError : ""}>{buffer.error ?? buffer.path}</span>
-                        <button
-                          type="button"
-                          onClick={() => void save(buffer.path)}
-                          disabled={buffer.saving || buffer.content === buffer.savedContent}
-                          aria-label={`Save ${buffer.path}`}
-                        >
-                          <Save size={12} /> {buffer.saving ? "Saving" : "Save"}
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className={styles.emptyEditor}>
-                      <span>{roots === null ? "Mounting workspace…" : "Open a file"}</span>
+                {buffer ? (
+                  <div className={styles.sourceArea}>
+                    <SourceEditor
+                      path={buffer.path}
+                      value={buffer.content}
+                      selection={pane.selection}
+                      onChange={(content) => setBuffers((current) => ({ ...current, [buffer.path]: { ...current[buffer.path], content } }))}
+                      onSelection={(selection) => updatePanes(space.editor.panes.map((item) => item.id === pane.id ? { ...item, selection } : item), space.editor.openFiles, buffer.path, pane.id)}
+                    />
+                    <div className={styles.bufferStatus}>
+                      {buffer.error ? <span className={styles.inlineRefusal}>{buffer.error}</span> : null}
+                      <button type="button" onClick={() => void save(buffer.path)} disabled={buffer.saving || buffer.content === buffer.savedContent}>
+                        <Save size={12} aria-hidden /> {buffer.saving ? "Saving…" : "Save"}
+                      </button>
                     </div>
-                  )}
-                </div>
-              </div>
+                  </div>
+                ) : (
+                  <div className={styles.emptyEditor}>Choose a file from the Project tree.</div>
+                )}
+              </section>
             )
           })}
         </div>
