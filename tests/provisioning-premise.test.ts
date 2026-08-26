@@ -104,7 +104,10 @@ describe("live protected-main truth captured at provisioning time", () => {
   const EARLIER_OBSERVED = "731b15f082341b936cdc8710ec8229c4619a6486"
   const HERMES_SERVING = "fd294dc389f8f7f5821881fa2335b7d62bc630f0" // branch codex/tf-rel-001-...
 
-  it("protected main is no longer the earlier-observed revision — a rebound, not drift", () => {
+  it("protected main is no longer the earlier-observed revision — captured as the BASE bound", () => {
+    // NOT a rebound: there was never a live W1 truth binding at 731b15f0, so calling it a rebound
+    // would invent lineage. The W1 base `bound` event is 5a328e72, captured from protected main now.
+    // A move AFTER this base binding exists would be the first real rebound.
     expect(PROTECTED_MAIN_NOW).not.toBe(EARLIER_OBSERVED)
   })
 

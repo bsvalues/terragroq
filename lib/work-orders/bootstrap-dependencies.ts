@@ -201,7 +201,10 @@ export const PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME: BootstrapDependency = {
 export const ESTABLISH_SERVING_NODE_CHECKOUT: BootstrapDependency = {
   key: "ESTABLISH_SERVING_NODE_CHECKOUT",
   operation:
-    "establish a serving-node checkout of the bound TerraFusion repository at the W1-bound revision",
+    "establish a GOVERNED serving-node checkout of the bound TerraFusion repository at the W1-bound " +
+    "revision (5a328e72), observe its remote/revision, and write the node-scoped checkout record. " +
+    "Do NOT reset the existing TF-wt-rel-001 worktree (branch codex/tf-rel-001-release-provenance) " +
+    "unless proven safe/disposable — use a separate governed worktree otherwise",
   requiredResource: "terrafusion-primary-repo",
   // A source-tree operation, deliberately NOT runtime_control. Moving a serving checkout to a
   // revision is writing the working tree, not starting a service, and conflating the two is how a
