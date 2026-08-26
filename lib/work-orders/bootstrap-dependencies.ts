@@ -214,10 +214,11 @@ export const ESTABLISH_SERVING_NODE_CHECKOUT: BootstrapDependency = {
   // NOT in the always-blocking BOOTSTRAP_DEPENDENCIES list. HERMES was observed at fd294dc3, so a
   // mismatch against a bound main revision is likely and this will probably be raised.
   evidence: [
-    "HERMES serving checkout observed at fd294dc3; the other observed TerraFusion checkout was 731b15f0",
-    "runtime_control must not silently synchronize the checkout",
+    "Protected main captured 2026-08-26 = 5a328e72 (advanced from 731b15f0 during the session)",
+    "HERMES serving checkout is fd294dc3 on branch codex/tf-rel-001-release-provenance-20260820",
+    "Premise fires REVISION_MISMATCH; runtime_control must not silently synchronize the checkout",
   ],
-  unlocks: ["provisioning resumes with the serving checkout at the bound revision"],
+  unlocks: ["provisioning resumes with the serving checkout at the bound revision 5a328e72"],
 }
 
 export const RATIFY_CANONICAL_PROJECT_REPOSITORIES: BootstrapDependency = {

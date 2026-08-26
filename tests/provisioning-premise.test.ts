@@ -91,3 +91,42 @@ describe("a mismatch is one routed dependency, not a git pull", () => {
     expect(ESTABLISH_SERVING_NODE_CHECKOUT.blocksAcceptance).toBe(true)
   })
 })
+
+/* ------------------------------------------------------------------ */
+/* Live capture, 2026-08-26 — protected main MOVED                     */
+/* ------------------------------------------------------------------ */
+
+describe("live protected-main truth captured at provisioning time", () => {
+  // Captured fresh from `git ls-remote bsvalues/terrafusion_os_1.0 main`, NOT carried forward from
+  // the 731b15f0 observed earlier in the session. Protected main advanced to 5a328e72 in between --
+  // the exact silent-drift risk the bound revision must be captured against.
+  const PROTECTED_MAIN_NOW = "5a328e728852dc2bb933d704d0daa5c54750728c"
+  const EARLIER_OBSERVED = "731b15f082341b936cdc8710ec8229c4619a6486"
+  const HERMES_SERVING = "fd294dc389f8f7f5821881fa2335b7d62bc630f0" // branch codex/tf-rel-001-...
+
+  it("protected main is no longer the earlier-observed revision — a rebound, not drift", () => {
+    expect(PROTECTED_MAIN_NOW).not.toBe(EARLIER_OBSERVED)
+  })
+
+  it("the premise fires REVISION_MISMATCH against the HERMES serving checkout", () => {
+    const p = checkProvisioningPremise({
+      boundRevision: PROTECTED_MAIN_NOW,
+      servingObservedRevision: HERMES_SERVING,
+      servingNode: "hermes",
+    })
+    expect(p).toMatchObject({ ok: false, reason: "REVISION_MISMATCH" })
+  })
+
+  it("so provisioning routes ESTABLISH at 5a328e72, in source authority, and does not start the shell", () => {
+    const plan = provisioningPlan(
+      checkProvisioningPremise({
+        boundRevision: PROTECTED_MAIN_NOW,
+        servingObservedRevision: HERMES_SERVING,
+        servingNode: "hermes",
+      }),
+      "hermes",
+    )
+    expect(plan.readyToProvision).toBe(false)
+    expect(plan.routeFirst?.requiredClass).toBe("source")
+  })
+})
