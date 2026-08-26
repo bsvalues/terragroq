@@ -30,9 +30,11 @@ import {
 import {
   APPLY_GOVERNANCE_SCHEMA_MIGRATIONS,
   APPLY_SERVICE_ENDPOINT_SCHEMA,
-  RATIFY_CANONICAL_PROJECT_REPOSITORIES,
   DECLARE_WORKSPACE_RUNTIME_SERVICE,
+  PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME,
+  RATIFY_CANONICAL_PROJECT_REPOSITORIES,
   BOOTSTRAP_DEPENDENCIES,
+  resolvedDependencyKeys,
   BOOTSTRAP_INDEPENDENT_WORK,
   DEPLOY_OUTCOME_ORCHESTRATION_REVISION,
   LAND_OUTCOME_ORCHESTRATION_REVISION,
@@ -404,35 +406,55 @@ describe("the bootstrap outcome's three live-boundary dependencies", () => {
     expect(nextActionableDependency(["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS"])?.key).toBe(
       "APPLY_SERVICE_ENDPOINT_SCHEMA",
     )
-    // Landing waits for BOTH schema migrations, not just the first.
+    // After both schemas the agent chain STALLS: the next step, provisioning, needs the owner's
+    // service declaration first, so there is nothing an executor can take until that resolves.
     expect(
-      nextActionableDependency(["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS", "APPLY_SERVICE_ENDPOINT_SCHEMA"])?.key,
-    ).toBe("LAND_OUTCOME_ORCHESTRATION_REVISION")
+      nextActionableDependency(["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS", "APPLY_SERVICE_ENDPOINT_SCHEMA"]),
+    ).toBeNull()
+    // With the owner declaration in, provisioning becomes the next executable step.
     expect(
       nextActionableDependency([
         "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS",
         "APPLY_SERVICE_ENDPOINT_SCHEMA",
-        "LAND_OUTCOME_ORCHESTRATION_REVISION",
+        "DECLARE_WORKSPACE_RUNTIME_SERVICE",
       ])?.key,
-    ).toBe("DEPLOY_OUTCOME_ORCHESTRATION_REVISION")
-    expect(nextActionableDependency([
-      "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS",
-      "APPLY_SERVICE_ENDPOINT_SCHEMA",
-      "LAND_OUTCOME_ORCHESTRATION_REVISION",
-      "DEPLOY_OUTCOME_ORCHESTRATION_REVISION",
-    ])).toBeNull()
-  })
-
-  it("does not land until BOTH schema migrations are applied", () => {
-    // The current branch adds two migrations; landing before the endpoint schema would leave the
-    // runtime binding unlandable.
-    expect(isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, ["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS"])).toBe(
-      false,
-    )
+    ).toBe("PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME")
+    // Then land, then deploy.
     expect(
-      isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, [
+      nextActionableDependency([
         "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS",
         "APPLY_SERVICE_ENDPOINT_SCHEMA",
+        "DECLARE_WORKSPACE_RUNTIME_SERVICE",
+        "PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME",
+      ])?.key,
+    ).toBe("LAND_OUTCOME_ORCHESTRATION_REVISION")
+  })
+
+  it("provisioning cannot resurrect the invented dev server", () => {
+    // The load-bearing exclusion one level up: a declared canonical service pointed at :5199 is the
+    // same failure this whole model removes.
+    expect(PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME.excludes?.join(" ")).toMatch(/5199.*improvised/)
+    expect(PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME.requiredClass).toBe("runtime_control")
+    expect(PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME.ownerRouted ?? false).toBe(false)
+  })
+
+  it("declaring the service is not the same as running it", () => {
+    // Declaration answers what is authoritative; provisioning makes it exist and produces the
+    // observed endpoint binding. They are separate authorities.
+    expect(DECLARE_WORKSPACE_RUNTIME_SERVICE.unlocks.join(" ")).toMatch(/provisioning/i)
+    expect(PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME.dependsOn).toContain("DECLARE_WORKSPACE_RUNTIME_SERVICE")
+  })
+
+  it("recompute reflects live state: the applied migration drops out of the pending set", () => {
+    // The point of routingState resolved: LAND no longer waits on a migration that is already live.
+    expect(resolvedDependencyKeys()).toContain("APPLY_GOVERNANCE_SCHEMA_MIGRATIONS")
+    expect(isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, resolvedDependencyKeys())).toBe(false)
+    // land needs the endpoint schema and a provisioned runtime, which are still pending -- correct.
+    expect(
+      isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, [
+        ...resolvedDependencyKeys(),
+        "APPLY_SERVICE_ENDPOINT_SCHEMA",
+        "PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME",
       ]),
     ).toBe(true)
   })
@@ -483,8 +505,15 @@ describe("blocked describes the present, not the past", () => {
       dependencies: [...BOOTSTRAP_DEPENDENCIES],
       anyAcceptancePathExecutable: executableWorkAfter([]).length > 0,
     })
+    // Every dependency not already resolved gates acceptance -- computed from the data so this stays
+    // correct as more resolve. Two schema migrations are live now, so the rest still block.
+    const stillPending = BOOTSTRAP_DEPENDENCIES.filter((d) => d.routingState !== "resolved").length
     expect(e.blocked).toBe(true)
-    expect(e.blockingDependencies).toHaveLength(6)
+    expect(e.blockingDependencies).toHaveLength(stillPending)
+    expect(resolvedDependencyKeys()).toEqual([
+      "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS",
+      "APPLY_SERVICE_ENDPOINT_SCHEMA",
+    ])
   })
 
   it("stops being blocked the moment the schema dependency resolves", () => {

@@ -45,12 +45,15 @@ export const APPLY_GOVERNANCE_SCHEMA_MIGRATIONS: BootstrapDependency = {
   requiredResource: "williamos-atlas-db",
   requiredClass: "data",
   requiredCapability: "additive",
-  routingState: "raised",
+  // RESOLVED: applied to ATLAS 2026-08-26 in one transaction, 42->49 tables, every existing
+  // work_order/grant/project/governance count identical. This is why the chain must be recomputed
+  // rather than replayed: dependents of this key are now satisfied.
+  routingState: "resolved",
   blocksAcceptance: true,
   evidence: [
-    "Envelope grants */data/none — no data capability on any resource",
-    "Canonical store is ATLAS williamos-postgres:15432/williamos",
-    "Four migration files exist and are unapplied",
+    "Applied 0014-0017 to ATLAS williamos-postgres:15432/williamos in a single transaction",
+    "Pre/post counts identical: 47 work_order, 30 grant, 5 project, 1111 governance_event",
+    "Seven tables created, all four invariant indexes live, zero destructive statements",
   ],
   // Every remaining source task needs a live Project, resource and per-node checkout to resolve
   // against. None of them are writable-then-verifiable before the schema exists.
@@ -78,10 +81,13 @@ export const LAND_OUTCOME_ORCHESTRATION_REVISION: BootstrapDependency = {
   blocksAcceptance: true,
   // Deliberately AFTER the schema: the current branch is a checkpoint, not the final deployable
   // result, and landing it as though the source work were finished would be its own untruth.
-  dependsOn: ["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS", "APPLY_SERVICE_ENDPOINT_SCHEMA"],
+  // APPLY_GOVERNANCE_SCHEMA_MIGRATIONS is already resolved, so it is no longer a pending gate. The
+  // live prerequisites are the endpoint schema and a real, observed workspace runtime to bind and
+  // verify the branch's binder against before it lands.
+  dependsOn: ["APPLY_SERVICE_ENDPOINT_SCHEMA", "PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME"],
   evidence: [
     "Branch is local-only; no delivery capability held on this repository",
-    "Source work depending on the live schema is not yet written",
+    "The runtime binder must be verified against a real provisioned endpoint before landing",
   ],
   unlocks: ["deploy the exact merged successor revision"],
   excludes: ["deployment — running a revision is a separate authority from landing it"],
@@ -117,15 +123,14 @@ export const APPLY_SERVICE_ENDPOINT_SCHEMA: BootstrapDependency = {
   requiredResource: "williamos-atlas-db",
   requiredClass: "data",
   requiredCapability: "additive",
-  routingState: "raised",
+  // RESOLVED: applied to ATLAS 2026-08-26, 49->50 tables, all existing counts identical, the
+  // node-unique index live. project_service_endpoint now exists to write observations into.
+  routingState: "resolved",
   blocksAcceptance: true,
-  // Runtime discovery exposed it, exactly as the checkout gap was exposed: project_resource can say
-  // what a service is but not the per-node URL it is served at, and admission today proves a page
-  // looks like TerraFusion, not that it belongs to the bound Project.
   evidence: [
-    "project_resource has no endpoint or node-scoped service column",
-    "admitWorkspaceApp proves reachable+frameable+looks-like-TerraFusion, not Project belonging",
-    "0018 is one additive CREATE TABLE plus two indexes",
+    "Applied 0018 to ATLAS in a single transaction: 1 CREATE TABLE, 2 indexes",
+    "49->50 tables; work_order 47, project 5, governance_event 1111 all unchanged",
+    "project_service_endpoint has all 12 columns and project_service_endpoint_node_unique",
   ],
   unlocks: [
     "record per-node service endpoints and observe which Project each reports",
@@ -137,11 +142,12 @@ export const APPLY_SERVICE_ENDPOINT_SCHEMA: BootstrapDependency = {
 export const DECLARE_WORKSPACE_RUNTIME_SERVICE: BootstrapDependency = {
   key: "DECLARE_WORKSPACE_RUNTIME_SERVICE",
   operation:
-    "owner declaration of a canonical workspace-runtime service resource for the TerraFusion " +
-    "Project (project 2 today has only a pacs/runtime service, the SQL Server data runtime)",
+    "owner declaration AND ratification of a canonical workspace-runtime service resource for the " +
+    "TerraFusion Project (project 2 today has only a pacs/runtime service, the SQL Server data runtime)",
   requiredResource: "williamos-project-registry",
   // Declaring what a Project's canonical service IS is a governance act, not something an agent
-  // invents. Observing an endpoint against it, once it exists, is ordinary agent work.
+  // invents. Ratification travels WITH the declaration -- a declared-but-unratified service is a
+  // governance record the owner has not actually confirmed, so certification would still refuse.
   requiredCapabilityNonAuth: "owner-resource-declaration",
   routingState: "raised",
   blocksAcceptance: true,
@@ -150,7 +156,38 @@ export const DECLARE_WORKSPACE_RUNTIME_SERVICE: BootstrapDependency = {
     "Project 2's only service resource is id=40 pacs/runtime (aegis:/home/bs/mssql/data)",
     "bindW1Runtime refuses NO_WORKSPACE_RUNTIME against the live store",
   ],
-  unlocks: ["a Project-derived, belonging-proven running-app URL for W1"],
+  // Declaring the service says what is authoritative; it does not make it run. Provisioning is a
+  // separate authority and a separate dependency.
+  unlocks: ["provisioning and observation of a real workspace-runtime endpoint"],
+}
+
+export const PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME: BootstrapDependency = {
+  key: "PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME",
+  operation:
+    "stand up a real workspace-runtime endpoint on the serving node for the declared service, and " +
+    "write its observed endpoint/project/revision binding into project_service_endpoint",
+  requiredResource: "williamos-workspace-runtime",
+  // Routed to whoever holds runtime_control (and any runtime_config the service genuinely needs)
+  // for this service -- an executor, but not this source actor, whose envelope grants only observe.
+  requiredClass: "runtime_control",
+  requiredCapability: "control",
+  routingState: "raised",
+  blocksAcceptance: true,
+  // Both prerequisites: the endpoint table must exist to write into, and the canonical service must
+  // exist to bind the endpoint to.
+  dependsOn: ["APPLY_SERVICE_ENDPOINT_SCHEMA", "DECLARE_WORKSPACE_RUNTIME_SERVICE"],
+  evidence: [
+    "No workspace-runtime endpoint exists on any node for project 2",
+    "bindW1Runtime refuses RUNTIME_NOT_OBSERVED until a real endpoint reports its Project",
+  ],
+  unlocks: ["the Project/runtime binder becomes executable and testable against live state"],
+  // The load-bearing exclusion: a declared canonical service pointed at an improvised dev server is
+  // the same defect one level up. The endpoint must be a real running service, not a resurrection.
+  excludes: [
+    "resurrecting the invented https://192.168.88.9:5199 server, or any improvised dev server, as " +
+      "the canonical endpoint",
+    "any runtime_config mutation beyond what this service genuinely requires — that is its own dependency",
+  ],
 }
 
 export const RATIFY_CANONICAL_PROJECT_REPOSITORIES: BootstrapDependency = {
@@ -180,10 +217,11 @@ export const RATIFY_CANONICAL_PROJECT_REPOSITORIES: BootstrapDependency = {
 export const BOOTSTRAP_DEPENDENCIES: readonly BootstrapDependency[] = [
   APPLY_GOVERNANCE_SCHEMA_MIGRATIONS,
   APPLY_SERVICE_ENDPOINT_SCHEMA,
+  DECLARE_WORKSPACE_RUNTIME_SERVICE,
+  PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME,
   LAND_OUTCOME_ORCHESTRATION_REVISION,
   DEPLOY_OUTCOME_ORCHESTRATION_REVISION,
   RATIFY_CANONICAL_PROJECT_REPOSITORIES,
-  DECLARE_WORKSPACE_RUNTIME_SERVICE,
 ]
 
 /**
@@ -206,6 +244,15 @@ export const BOOTSTRAP_INDEPENDENT_WORK: readonly string[] = []
  * blocked and whose schema dependency then resolved has executable work again and must return to
  * `active` — it should not stay blocked merely because it once was.
  */
+/**
+ * The keys already resolved according to the dependencies' own recorded state. This is what makes
+ * recompute reflect reality rather than a hand-passed list: APPLY_GOVERNANCE_SCHEMA_MIGRATIONS
+ * carries routingState "resolved", so it drops out of every "what is still pending" computation.
+ */
+export function resolvedDependencyKeys(): string[] {
+  return BOOTSTRAP_DEPENDENCIES.filter((d) => d.routingState === "resolved").map((d) => d.key)
+}
+
 export function executableWorkAfter(resolvedKeys: readonly string[]): string[] {
   const resolved = new Set(resolvedKeys)
   const unlocked = BOOTSTRAP_DEPENDENCIES.filter((d) => resolved.has(d.key)).flatMap(
