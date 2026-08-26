@@ -445,17 +445,17 @@ describe("the bootstrap outcome's three live-boundary dependencies", () => {
     expect(PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME.dependsOn).toContain("DECLARE_WORKSPACE_RUNTIME_SERVICE")
   })
 
-  it("recompute reflects live state: the applied migration drops out of the pending set", () => {
-    // The point of routingState resolved: LAND no longer waits on a migration that is already live.
-    expect(resolvedDependencyKeys()).toContain("APPLY_GOVERNANCE_SCHEMA_MIGRATIONS")
-    expect(isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, resolvedDependencyKeys())).toBe(false)
-    // land needs the endpoint schema and a provisioned runtime, which are still pending -- correct.
+  it("recompute reflects live state: PROVISION is the next executable step", () => {
+    // Both schemas applied, owner declared the service and ratified the repo -- so the next thing an
+    // executor can take is provisioning the real runtime. It needs runtime_control, routed to a
+    // runtime actor, but it IS now actionable.
+    const live = resolvedDependencyKeys()
+    expect(live).toContain("DECLARE_WORKSPACE_RUNTIME_SERVICE")
+    expect(nextActionableDependency(live)?.key).toBe("PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME")
+    // LAND still waits on the provisioned runtime, which is not yet resolved.
+    expect(isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, live)).toBe(false)
     expect(
-      isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, [
-        ...resolvedDependencyKeys(),
-        "APPLY_SERVICE_ENDPOINT_SCHEMA",
-        "PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME",
-      ]),
+      isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, [...live, "PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME"]),
     ).toBe(true)
   })
 
@@ -513,6 +513,8 @@ describe("blocked describes the present, not the past", () => {
     expect(resolvedDependencyKeys()).toEqual([
       "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS",
       "APPLY_SERVICE_ENDPOINT_SCHEMA",
+      "DECLARE_WORKSPACE_RUNTIME_SERVICE",
+      "RATIFY_CANONICAL_PROJECT_REPOSITORIES",
     ])
   })
 

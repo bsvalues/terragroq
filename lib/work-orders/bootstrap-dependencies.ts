@@ -149,12 +149,16 @@ export const DECLARE_WORKSPACE_RUNTIME_SERVICE: BootstrapDependency = {
   // invents. Ratification travels WITH the declaration -- a declared-but-unratified service is a
   // governance record the owner has not actually confirmed, so certification would still refuse.
   requiredCapabilityNonAuth: "owner-resource-declaration",
-  routingState: "raised",
+  // RESOLVED: owner declared+ratified service id=42 on ATLAS 2026-08-26 -- type service,
+  // resourceKey/relationship workspace-runtime, canonicalIdentity terrafusion/os-shell (logical, no
+  // URL/port/path), label "TerraFusion OS Shell". bindW1Runtime no longer returns NO_WORKSPACE_RUNTIME.
+  routingState: "resolved",
   blocksAcceptance: true,
   ownerRouted: true,
   evidence: [
-    "Project 2's only service resource is id=40 pacs/runtime (aegis:/home/bs/mssql/data)",
-    "bindW1Runtime refuses NO_WORKSPACE_RUNTIME against the live store",
+    "Declared+ratified project_resource id=42 terrafusion/os-shell for project 2",
+    "Canonical identity is logical, not a URL/port/path; endpoint belongs in project_service_endpoint",
+    "bindW1Runtime now returns NOT_SERVED_ON_NODE, not NO_WORKSPACE_RUNTIME",
   ],
   // Declaring the service says what is authoritative; it does not make it run. Provisioning is a
   // separate authority and a separate dependency.
@@ -199,15 +203,15 @@ export const RATIFY_CANONICAL_PROJECT_REPOSITORIES: BootstrapDependency = {
   // Not an authority-envelope operation. Ratification is an owner governance act -- confirming that
   // an agent-drafted record is true -- so it names a non-authority capability rather than a class.
   requiredCapabilityNonAuth: "owner-ratification",
-  routingState: "raised",
+  // RESOLVED for W1: owner ratified Project 2's primary-repo (id=2, bsvalues/terrafusion_os_1.0) on
+  // ATLAS 2026-08-26. Deliberately narrow -- id=41 (LocalOps) and id=1 (terragroq) left UNRATIFIED.
+  routingState: "resolved",
   blocksAcceptance: true,
-  // Placed with the owner, and orthogonal to the schema/land/deploy chain: it can happen at any
-  // time, in parallel, and depends on nothing.
   ownerRouted: true,
   evidence: [
-    "Zero repo resources are ratified in the canonical store",
-    "Observed checkouts recorded on 2026-08-26 are all UNRATIFIED",
-    "rootCanCertify refuses on every current binding for want of ratification",
+    "Ratified project_resource id=2 bsvalues/terrafusion_os_1.0 for project 2 only",
+    "LocalOps id=41 and terragroq id=1 deliberately untouched",
+    "Repo-level rootCanCertify no longer refuses for want of resource ratification",
   ],
   // The one thing it gates. Route wiring, runtime derivation, Space identity and the verifier are
   // all buildable and verifiable WITHOUT it; only certification is not.

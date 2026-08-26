@@ -1,5 +1,5 @@
 import { db } from "@/lib/db"
-import { project, projectResource, projectResourceCheckout } from "@/lib/db/schema"
+import { project, projectResource, projectResourceCheckout, projectServiceEndpoint } from "@/lib/db/schema"
 import {
   resolveProjectWorkspaceRoot,
   type ResolvedWorkspaceRoot,
@@ -8,6 +8,7 @@ import {
 } from "@/lib/loom/project-workspace-root"
 import { eq, inArray } from "drizzle-orm"
 import { bindW1Workspace, type W1BindingResult } from "@/lib/loom/w1-binding"
+import { bindW1Runtime, type RuntimeBindingResult } from "@/lib/loom/runtime-binding"
 import type { ProjectIdentity } from "@/lib/environment/space-identity"
 
 /**
@@ -209,4 +210,50 @@ export async function declaredProjectIdentity(): Promise<ProjectIdentity | null>
     .where(eq(project.id, projectId))
     .limit(1)
   return row ?? null
+}
+
+/** Load the strict W1 runtime binding for a Project on the serving node. Belonging, not appearance. */
+export async function loadW1Runtime(input: {
+  projectId: number
+  node?: string
+  serviceSelector?: string | null
+}): Promise<RuntimeBindingResult> {
+  const node = input.node ?? servingNode()
+
+  const services = await db
+    .select({
+      id: projectResource.id,
+      resourceKey: projectResource.resourceKey,
+      relationship: projectResource.relationship,
+      type: projectResource.type,
+      canonicalIdentity: projectResource.canonicalIdentity,
+      ratifiedAt: projectResource.ratifiedAt,
+    })
+    .from(projectResource)
+    .where(eq(projectResource.projectId, input.projectId))
+
+  const ids = services.map((s) => s.id)
+  const endpoints =
+    ids.length > 0
+      ? await db
+          .select({
+            projectResourceId: projectServiceEndpoint.projectResourceId,
+            node: projectServiceEndpoint.node,
+            endpoint: projectServiceEndpoint.endpoint,
+            observedProjectId: projectServiceEndpoint.observedProjectId,
+            observedServiceIdentity: projectServiceEndpoint.observedServiceIdentity,
+            observedRevision: projectServiceEndpoint.observedRevision,
+            ratifiedAt: projectServiceEndpoint.ratifiedAt,
+          })
+          .from(projectServiceEndpoint)
+          .where(inArray(projectServiceEndpoint.projectResourceId, ids))
+      : []
+
+  return bindW1Runtime({
+    projectId: input.projectId,
+    services,
+    endpoints,
+    node,
+    serviceSelector: input.serviceSelector ?? null,
+  })
 }
