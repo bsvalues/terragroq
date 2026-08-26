@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 
 import {
+  identitiesMatch,
   resolveProjectWorkspaceRoot,
   rootCanCertify,
   type ResourceCheckoutLike,
@@ -281,5 +282,52 @@ describe("resources are identified the way the canonical store identifies them",
   it("describes an unkeyed resource by its relationship rather than 'null'", () => {
     const r = resolve({ resources: [repo({ resourceKey: null })], checkouts: [] })
     expect(r.unboundReason).toMatch(/Resource primary-repo is not checked out/)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* Identity forms, as they are actually written                        */
+/* ------------------------------------------------------------------ */
+
+describe("a slug and a remote URL name the same repository", () => {
+  // Taken verbatim from the canonical store and from `git remote get-url` on the real checkouts.
+  const SLUG = "bsvalues/terrafusion_os_1.0"
+  const SSH = "git@github.com:bsvalues/terrafusion_os_1.0.git"
+  const HTTPS = "https://github.com/bsvalues/terrafusion_os_1.0.git"
+
+  it.each([
+    [SLUG, SSH],
+    [SLUG, HTTPS],
+    [SSH, HTTPS],
+  ])("%s matches %s", (a, b) => {
+    expect(identitiesMatch(a, b)).toBe(true)
+    expect(identitiesMatch(b, a)).toBe(true)
+  })
+
+  it("does not flag the real OMEN checkout as a mismatch", () => {
+    // Before this fix every correct checkout looked wrong, which would have blocked certification
+    // on exactly the repositories that were right.
+    const r = resolve({
+      resources: [repo({ canonicalIdentity: SLUG })],
+      checkouts: [checkout({ observedIdentity: SSH })],
+    })
+    expect(r.identityMismatch).toBe(false)
+  })
+
+  it("still catches a genuinely different repository", () => {
+    expect(identitiesMatch(SLUG, "git@github.com:bsvalues/terragroq.git")).toBe(false)
+  })
+
+  it("keeps two explicit hosts distinct", () => {
+    // A slug matches any host, but two stated hosts must agree.
+    expect(identitiesMatch("https://gitlab.com/bsvalues/x.git", "https://github.com/bsvalues/x.git")).toBe(
+      false,
+    )
+    expect(identitiesMatch("bsvalues/x", "https://gitlab.com/bsvalues/x.git")).toBe(true)
+  })
+
+  it("refuses to match on emptiness", () => {
+    expect(identitiesMatch("", "")).toBe(false)
+    expect(identitiesMatch(SLUG, "")).toBe(false)
   })
 })

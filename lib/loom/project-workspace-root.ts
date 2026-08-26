@@ -180,21 +180,45 @@ function describe(r: WorkspaceResourceLike): string {
   return r.resourceKey ?? r.relationship ?? `#${r.id}`
 }
 
-/** Repository identities differ cosmetically far more often than they differ meaningfully. */
-function identitiesMatch(a: string, b: string): boolean {
-  return normalise(a) === normalise(b)
+/**
+ * Whether two repository identities name the same repository.
+ *
+ * They are written very differently in practice. The canonical store records a repo resource as the
+ * bare slug `bsvalues/terrafusion_os_1.0`, while a checkout observed on disk reports a full remote:
+ * `git@github.com:bsvalues/terrafusion_os_1.0.git` or the https form. Comparing those as strings --
+ * even after stripping schemes -- makes every correct checkout look like a mismatch, which would
+ * block certification on exactly the repositories that are right.
+ *
+ * So each side is reduced to an optional host plus an owner/repo path, and the host is compared
+ * only when BOTH sides carry one. A slug matches any host; two explicit hosts must agree, so
+ * github.com/a/b and gitlab.com/a/b are still correctly different.
+ */
+export function identitiesMatch(a: string, b: string): boolean {
+  const left = normalise(a)
+  const right = normalise(b)
+  if (left.path !== right.path || left.path === "") return false
+  if (left.host && right.host) return left.host === right.host
+  return true
 }
 
-function normalise(v: string): string {
-  return v
-    .trim()
-    .toLowerCase()
+function normalise(value: string): { host: string | null; path: string } {
+  let v = value.trim().toLowerCase()
+  if (!v) return { host: null, path: "" }
+  v = v
     .replace(/^git\+/, "")
     .replace(/^ssh:\/\/git@/, "")
     .replace(/^git@([^:]+):/, "$1/")
-    .replace(/^https?:\/\//, "")
+    .replace(/^[a-z]+:\/\//, "")
     .replace(/\.git$/, "")
     .replace(/\/+$/, "")
+
+  const segments = v.split("/").filter(Boolean)
+  // A host is a leading segment with a dot in it; a bare slug has none.
+  const hasHost = segments.length > 2 && segments[0].includes(".")
+  return {
+    host: hasHost ? segments[0] : null,
+    path: (hasHost ? segments.slice(1) : segments).slice(-2).join("/"),
+  }
 }
 
 /**
