@@ -346,3 +346,28 @@ export function verifyExecutorSettlement(input: {
   }
   return { ok: true, receipt: r }
 }
+
+/* ------------------------------------------------------------------ */
+/* Revision-aware truth-binding reference (drift guard input)          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A truth-binding reference that ENCODES the currently-expected revision of every bound resource.
+ *
+ * The earlier `binding:{id}:project:{projectId}` form was revision-independent, so a rebound left it
+ * unchanged and the drift guard could not fire on a revision change -- the guard's whole purpose. By
+ * folding the per-resource expected revisions (the head of each lineage) into the reference, ANY
+ * rebound changes the reference, changes the digest, and makes a projection created before the
+ * rebound correctly drift at acquisition.
+ */
+export function formatTruthBindingRef(input: {
+  bindingId: number
+  projectId: number
+  resourceRevisions: Record<string, string>
+}): string {
+  const revs = Object.keys(input.resourceRevisions)
+    .sort()
+    .map((k) => `${k}=${input.resourceRevisions[k]}`)
+    .join(";")
+  return `binding:${input.bindingId}:project:${input.projectId}|rev:${revs}`
+}

@@ -6,12 +6,14 @@ import {
   outcomeQueueItem,
   routedDependency,
   workOrder,
+  workOrderBindingEvent,
   workOrderTruthBinding,
 } from "@/lib/db/schema"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import {
   computeEnvelopeDigest,
   dependencyResolutionFor,
+  formatTruthBindingRef,
   isDependencyProjectable,
   projectDependency,
   verifyProjectionForExecution,
@@ -155,7 +157,17 @@ async function truthBindingReference(workOrderId: number): Promise<string> {
       ),
     )
     .limit(1)
-  return binding ? `binding:${binding.id}:project:${binding.projectId}` : `wo:${workOrderId}:unbound`
+  if (!binding) return `wo:${workOrderId}:unbound`
+  // Fold in the head revision of every resource lineage, so a rebound changes the reference and the
+  // drift guard fires. Ordered by time; last event per resource wins (that is its expected revision).
+  const events = await db
+    .select({ resourceKey: workOrderBindingEvent.resourceKey, sha: workOrderBindingEvent.sha })
+    .from(workOrderBindingEvent)
+    .where(eq(workOrderBindingEvent.bindingId, binding.id))
+    .orderBy(workOrderBindingEvent.at)
+  const resourceRevisions: Record<string, string> = {}
+  for (const e of events) resourceRevisions[e.resourceKey] = e.sha
+  return formatTruthBindingRef({ bindingId: binding.id, projectId: binding.projectId, resourceRevisions })
 }
 
 /* ------------------------------------------------------------------ */

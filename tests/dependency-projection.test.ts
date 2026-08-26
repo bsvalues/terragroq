@@ -340,3 +340,37 @@ describe("verifyExecutorSettlement — LAND fact 2 from structured receipt, not 
     expect(verifyExecutorSettlement({ receipt: r, ...EXPECT })).toMatchObject({ ok: true })
   })
 })
+
+import { formatTruthBindingRef } from "@/lib/outcome-queue/dependency-projection"
+
+describe("revision-aware truth-binding reference — the drift guard can now see a rebound", () => {
+  it("encodes each resource's head revision", () => {
+    const ref = formatTruthBindingRef({
+      bindingId: 1,
+      projectId: 2,
+      resourceRevisions: { "terrafusion-primary-repo": "5a328e72", "williamos-primary-repo": "a6dc845c" },
+    })
+    expect(ref).toBe("binding:1:project:2|rev:terrafusion-primary-repo=5a328e72;williamos-primary-repo=a6dc845c")
+  })
+
+  it("a WilliamOS rebound changes the reference (so the digest drifts)", () => {
+    const before = formatTruthBindingRef({ bindingId: 1, projectId: 2, resourceRevisions: { "williamos-primary-repo": "d0c3bf4f" } })
+    const after = formatTruthBindingRef({ bindingId: 1, projectId: 2, resourceRevisions: { "williamos-primary-repo": "a6dc845c" } })
+    expect(before).not.toBe(after)
+    // and therefore the envelope digest differs
+    const env = { resource: "workspace-runtime", surfaceClass: "runtime_control" as const, capability: "control" }
+    expect(computeEnvelopeDigest(env, before)).not.toBe(computeEnvelopeDigest(env, after))
+  })
+
+  it("is order-independent in resource keys (stable)", () => {
+    const a = formatTruthBindingRef({ bindingId: 1, projectId: 2, resourceRevisions: { b: "2", a: "1" } })
+    const b = formatTruthBindingRef({ bindingId: 1, projectId: 2, resourceRevisions: { a: "1", b: "2" } })
+    expect(a).toBe(b)
+  })
+
+  it("the OLD coarse ref no longer matches the revision-aware one (so #23 is stale)", () => {
+    const coarse = "binding:1:project:2"
+    const fresh = formatTruthBindingRef({ bindingId: 1, projectId: 2, resourceRevisions: { "terrafusion-primary-repo": "5a328e72", "williamos-primary-repo": "a6dc845c" } })
+    expect(coarse).not.toBe(fresh)
+  })
+})

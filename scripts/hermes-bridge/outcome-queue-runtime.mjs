@@ -1327,9 +1327,20 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       const binding = (await pool.query(
         `SELECT id, "projectId" FROM work_order_truth_binding WHERE "workOrderId" = $1 AND status = 'bound' LIMIT 1`,
         [dep.workOrderId])).rows[0]
-      const truthBindingRef = binding
-        ? `binding:${binding.id}:project:${binding.projectId}`
-        : `wo:${dep.workOrderId}:unbound`
+      let truthBindingRef
+      if (!binding) {
+        truthBindingRef = `wo:${dep.workOrderId}:unbound`
+      } else {
+        // Revision-aware, identical to lib/outcome-queue/dependency-projection.ts formatTruthBindingRef:
+        // fold each resource lineage head in, so a rebound drifts the digest.
+        const events = (await pool.query(
+          `SELECT "resourceKey", sha FROM work_order_binding_event WHERE "bindingId" = $1 ORDER BY at ASC`,
+          [binding.id])).rows
+        const latest = {}
+        for (const e of events) latest[e.resourceKey] = e.sha
+        const revs = Object.keys(latest).sort().map((k) => `${k}=${latest[k]}`).join(";")
+        truthBindingRef = `binding:${binding.id}:project:${binding.projectId}|rev:${revs}`
+      }
       return {
         dep: {
           id: Number(dep.id), workOrderId: Number(dep.workOrderId), routingState: dep.routingState,
