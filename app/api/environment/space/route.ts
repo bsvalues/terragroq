@@ -27,20 +27,6 @@ async function admittedAppUrl(request: Request, binding: WorkspaceProjectBinding
   return admission.ok ? admission.url : null
 }
 
-function bindSpine<T extends { spine: { projectId: number | null; projectName: string | null } }>(
-  result: T,
-  binding: WorkspaceProjectBinding,
-): T {
-  return {
-    ...result,
-    spine: {
-      ...result.spine,
-      projectId: binding.projectId,
-      projectName: binding.projectName,
-    },
-  }
-}
-
 export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return reply({ error: "UNAUTHENTICATED" }, 401)
@@ -59,7 +45,15 @@ export async function GET(request: Request) {
       projectRootIdentity: binding.repositoryIdentity,
       newWorldId: crypto.randomUUID,
     })
-    return result ? reply(bindSpine(result, binding)) : reply({ error: "WORLD_NOT_FOUND" }, 404)
+    if (!result) return reply({ error: "WORLD_NOT_FOUND" }, 404)
+    return reply({
+      ...result,
+      spine: {
+        ...result.spine,
+        projectId: binding.projectId,
+        projectName: binding.projectName,
+      },
+    })
   } catch {
     return reply({ error: "SPACE_PERSISTENCE_UNAVAILABLE" }, 503)
   }
@@ -84,7 +78,15 @@ export async function PUT(request: Request) {
       space: body.space,
       workspaceAppUrl,
     })
-    return result ? reply(bindSpine(result, binding)) : reply({ error: "WORLD_NOT_FOUND" }, 404)
+    if (!result) return reply({ error: "WORLD_NOT_FOUND" }, 404)
+    return reply({
+      ...result,
+      spine: {
+        ...result.spine,
+        projectId: binding.projectId,
+        projectName: binding.projectName,
+      },
+    })
   } catch (error) {
     const reason = error instanceof Error && /^(SPACE_|WORLD_)/.test(error.message)
       ? error.message
