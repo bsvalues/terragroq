@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react"
 import { Minus, X } from "lucide-react"
 
+import { geometryChanged, readBorderBoxSize } from "./measure"
 import type { WindowGeometry } from "./types"
 import styles from "./workspace-shell.module.css"
 
@@ -35,11 +36,14 @@ export function WindowFrame({
     const frame = frameRef.current
     if (!frame || typeof ResizeObserver === "undefined") return
     const observer = new ResizeObserver(([entry]) => {
-      const width = Math.round(entry.contentRect.width)
-      const height = Math.round(entry.contentRect.height)
+      // Measure the same box we write. Geometry goes back into inline width/height on a
+      // border-box element, so reading contentRect returned a value 2px under the box it had just
+      // measured and every observation shrank the window a little further. See ./measure.ts.
+      const measured = readBorderBoxSize(entry, frame)
+      if (!measured) return
       const current = geometryRef.current
-      if (Math.abs(width - current.width) < 2 && Math.abs(height - current.height) < 2) return
-      onGeometry({ ...current, width, height })
+      if (!geometryChanged(current, measured)) return
+      onGeometry({ ...current, width: measured.width, height: measured.height })
     })
     observer.observe(frame)
     return () => observer.disconnect()
