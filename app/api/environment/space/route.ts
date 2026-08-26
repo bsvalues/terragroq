@@ -1,12 +1,12 @@
 import { loadOrCreateOwnedSpace, saveOwnedSpace } from "@/lib/environment/space-persistence"
 import { readBoundedJson } from "@/lib/environment/line-guard"
 import { admitWorkspaceApp, williamOsOrigin } from "@/lib/environment/workspace-app"
+import { resolveTerraFusionWorkspaceBinding, type WorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const WORKSPACE_APP_URL = process.env.WILLIAMOS_WORKSPACE_APP_URL?.trim() || null
 const CANONICAL_WILLIAMOS_URL = process.env.BETTER_AUTH_URL?.trim() || null
 const MAX_SPACE_BYTES = 256_000
 
@@ -19,12 +19,26 @@ function validWorldId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && !value.includes("\0")
 }
 
-async function admittedAppUrl(request: Request): Promise<string | null> {
+async function admittedAppUrl(request: Request, binding: WorkspaceProjectBinding): Promise<string | null> {
   const admission = await admitWorkspaceApp(
-    WORKSPACE_APP_URL,
+    binding.workspaceAppUrl,
     williamOsOrigin(CANONICAL_WILLIAMOS_URL, request.url),
   )
   return admission.ok ? admission.url : null
+}
+
+function bindSpine<T extends { spine: { projectId: number | null; projectName: string | null } }>(
+  result: T,
+  binding: WorkspaceProjectBinding,
+): T {
+  return {
+    ...result,
+    spine: {
+      ...result.spine,
+      projectId: binding.projectId,
+      projectName: binding.projectName,
+    },
+  }
 }
 
 export async function GET(request: Request) {
@@ -34,14 +48,18 @@ export async function GET(request: Request) {
   if (requested !== null && !validWorldId(requested)) return reply({ error: "WORLD_ID_INVALID" }, 400)
 
   try {
-    const workspaceAppUrl = await admittedAppUrl(request)
+    const resolved = await resolveTerraFusionWorkspaceBinding(session.user.id)
+    if (!resolved.ok) return reply({ error: resolved.error }, 503)
+    const binding = resolved.binding
+    const workspaceAppUrl = await admittedAppUrl(request, binding)
     const result = await loadOrCreateOwnedSpace({
       userId: session.user.id,
       worldId: requested,
       workspaceAppUrl,
+      projectRootIdentity: binding.repositoryIdentity,
       newWorldId: crypto.randomUUID,
     })
-    return result ? reply(result) : reply({ error: "WORLD_NOT_FOUND" }, 404)
+    return result ? reply(bindSpine(result, binding)) : reply({ error: "WORLD_NOT_FOUND" }, 404)
   } catch {
     return reply({ error: "SPACE_PERSISTENCE_UNAVAILABLE" }, 503)
   }
@@ -56,14 +74,17 @@ export async function PUT(request: Request) {
   if (!validWorldId(body.worldId)) return reply({ error: "WORLD_ID_INVALID" }, 400)
 
   try {
-    const workspaceAppUrl = await admittedAppUrl(request)
+    const resolved = await resolveTerraFusionWorkspaceBinding(session.user.id)
+    if (!resolved.ok) return reply({ error: resolved.error }, 503)
+    const binding = resolved.binding
+    const workspaceAppUrl = await admittedAppUrl(request, binding)
     const result = await saveOwnedSpace({
       userId: session.user.id,
       worldId: body.worldId,
       space: body.space,
       workspaceAppUrl,
     })
-    return result ? reply(result) : reply({ error: "WORLD_NOT_FOUND" }, 404)
+    return result ? reply(bindSpine(result, binding)) : reply({ error: "WORLD_NOT_FOUND" }, 404)
   } catch (error) {
     const reason = error instanceof Error && /^(SPACE_|WORLD_)/.test(error.message)
       ? error.message
