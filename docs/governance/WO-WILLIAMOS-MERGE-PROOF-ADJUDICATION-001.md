@@ -160,3 +160,68 @@ cockpit issuance was unavailable (`~/.williamos/device-credential.json` absent).
 `docs/governance/claude-code-work-context-gate.md`, `local` means **authority was NOT checked and the
 claim was NOT recorded** — it stops drift and scope creep, not a determined forger. This must not be
 read as stronger evidence than it is.
+
+## Second review remediation — 2026-08-25 (fresh Codex review of `87a2d717`)
+
+Three confirmed findings. **Scope amended** to include the orchestration readiness consumer and its
+tests — nothing broader.
+
+### P1 — the adjudicator was propagated to the merge call but not to the path that decides whether
+the merge call is reached
+
+`orchestrator.mjs` still turned `failedChecks` into remediation (`:1586`), broke only on
+`checksGreen && reviewed` (`:1596`), and continuity-walled unless `checksGreen` (`:1619`). So **an
+optional advisory check the contract deliberately calls irrelevant could halt autonomous delivery
+before `mergePullRequest()` ever adjudicated it.**
+
+This is a **Solution Propagation Failure inside this slice**, not a sibling issue: the primitive
+reached one consumer and stopped. The original "replace only the final merge seam" boundary was too
+narrow. ([[local-solution-never-generalized]] catching its own author.)
+
+Admissibility and *settlement* are different questions, and the loop needs the second. Added
+`ADMISSION_STATE` = `ADMISSIBLE | WAITING | REFUSED`, plus `waitingProofs` and `terminalRefusals`:
+
+| condition | state |
+|---|---|
+| all required proofs succeeded | `ADMISSIBLE` |
+| required proof pending or not yet reported | `WAITING` — keep polling, do **not** remediate |
+| required proof failed / did not execute / ambiguous / contract invalid / head unbound | `REFUSED` — terminal |
+| only an **optional** advisory failed or was skipped | `ADMISSIBLE` |
+
+Orchestrator now remediates on `REFUSED` (findings built from `terminalRefusals`), advances on
+`verdict === ADMISSIBLE && reviewed`, and walls on `verdict !== ADMISSIBLE`. **Independent review
+stays orthogonal and separately required.**
+
+### P2 — contract fields were `String()`-coerced before validation
+
+`String(entry?.proofId ?? "")` gave malformed JSON valid-looking semantics: `proofId: 123` became
+`"123"`, `matchName: ["x","y"]` became `"x,y"`. Both then passed every downstream check.
+`readContractField()` now distinguishes **absent** from **wrong type**, emitting
+`ENTRY_NON_STRING_FIELD:<at>:<field>` and never coercing.
+
+### P2 — identity used delimiter concatenation
+
+`` `${kind}|${workflow}|${name}` `` let a name containing `|` collide with a different triple — an
+identity forgery in the field that exists to prevent substitution. Replaced with
+`JSON.stringify([kind, workflow, name])`.
+
+### Fixture correction
+
+`tests/hermes-bridge-orchestrator.test.ts` had a fixture asserting that a failed **`Vercel`** check
+(advisory, not in the required set) drives remediation — it encoded exactly the defect P1 names. Its
+*purpose* (a terminal refusal routes through bounded remediation) is preserved by expressing a failed
+**required** proof instead. Remaining fixtures gained `mergeAdmission` because readiness is no longer
+derived from "every reported check was green".
+
+### Validation
+
+`hermes-proof-adjudication` 44 passed. Five suites importing changed modules — **345 passed,
+1 skipped**. New tests cover: wrong-typed contract fields (number/array/object, absent-vs-wrong-type),
+delimiter-collision identity, and all four settlement states including optional-advisory-failure.
+
+### Receipt re-established
+
+The amended reservation adds `scripts/hermes-bridge/orchestrator.mjs` and
+`tests/hermes-bridge-orchestrator.test.ts`, so the previous `#831` receipt no longer covered the diff
+and was re-issued. That is the gate working as designed: widening scope invalidates the receipt.
+Still **`local` provenance** — authority not checked, claim not recorded.

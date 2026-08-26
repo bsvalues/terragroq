@@ -10,6 +10,7 @@ import {
   isClaudeLaneAvailable,
 } from "./claude-lane-client.mjs"
 import { selectExecutionBackend } from "./execution-backend.mjs"
+import { ADMISSION, ADMISSION_STATE } from "./proof-adjudication.mjs"
 import {
   HERMES_DISPATCH_LANE,
   readProviderStatus,
@@ -1583,17 +1584,22 @@ export function createHermesOrchestrator(options = {}) {
         }
         break
       }
-      if (candidate.checksComplete && candidate.failedChecks?.length > 0) {
-        findings = candidate.failedChecks.map((check) => ({
+      // Merge readiness is decided by the same adjudication the merge gate uses, so an optional
+      // advisory check the contract says is irrelevant can no longer halt delivery before
+      // mergePullRequest() ever adjudicates it. Only a TERMINAL refusal of a required proof
+      // remediates; a required proof still forming (pending or not yet reported) stays a wait.
+      // Independent review remains orthogonal and is still required separately.
+      if (candidate.mergeAdmission?.admissionState === ADMISSION_STATE.REFUSED) {
+        findings = candidate.mergeAdmission.terminalRefusals.map((reason) => ({
           threadId: null,
           isOutdated: false,
-          path: "pull-request checks",
+          path: "pull-request required proofs",
           line: null,
-          body: `${check.name} concluded ${check.state}`,
+          body: `required proof admission refused: ${reason}`,
         }))
         break
       }
-      if (candidate.checksGreen && candidate.reviewed) break
+      if (candidate.mergeAdmission?.verdict === ADMISSION.ADMISSIBLE && candidate.reviewed) break
       await sleep(reviewPollIntervalMs)
       candidate = await lifecycle.inspectPullRequest(prNumber)
       await assertLeaseProjectionHealthy()
@@ -1616,7 +1622,8 @@ export function createHermesOrchestrator(options = {}) {
         nextRemediationRound: remediationRound + 1,
       }
     }
-    if (!candidate.checksGreen || !candidate.reviewed || candidate.unresolvedThreadCount !== 0) {
+    if (candidate.mergeAdmission?.verdict !== ADMISSION.ADMISSIBLE
+      || !candidate.reviewed || candidate.unresolvedThreadCount !== 0) {
       throw Object.assign(new Error("Pull request did not reach a green reviewed state"), {
         code: "HERMES_REVIEW_CONTINUITY_WALL",
       })

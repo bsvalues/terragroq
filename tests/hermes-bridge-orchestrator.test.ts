@@ -25,6 +25,21 @@ import { HERMES_BLOCKED_SCOPE } from "../scripts/hermes-bridge/prompt.mjs"
 import { deriveHermesWorkContract, resolveHermesWorkContract } from "../scripts/hermes-bridge/work-contract.mjs"
 import { createHermesOutcomeQueueRuntime } from "../scripts/hermes-bridge/outcome-queue-runtime.mjs"
 
+// Merge admission fixtures. The orchestrator now decides readiness from the same adjudication the
+// merge gate uses, so a PR fixture must say what the REQUIRED proofs did -- not merely whether every
+// reported check happened to be green.
+const ADMIT = {
+  verdict: "MERGE_ADMISSIBLE", admissionState: "ADMISSIBLE", terminalRefusals: [], waitingProofs: [],
+}
+const WAIT = {
+  verdict: "MERGE_INADMISSIBLE", admissionState: "WAITING", terminalRefusals: [],
+  waitingProofs: ["vitest-deterministic-suite"],
+}
+const refusedAdmission = (reasons: string[]) => ({
+  verdict: "MERGE_INADMISSIBLE", admissionState: "REFUSED", terminalRefusals: reasons, waitingProofs: [],
+})
+
+
 const roots: string[] = []
 
 describe("exact review-recovered abandoned lease", () => {
@@ -240,6 +255,7 @@ function fixture(
   const projectCheckpoint = vi.fn(async () => ({ workOrderId: 77 }))
   const projectLease = vi.fn(async () => ({ workOrderId: 77 }))
   const readApprovedOwnerDecision = vi.fn(async () => null)
+
   let merged = false
   const lifecycle = {
     refreshOriginMain: vi.fn(async () => "a".repeat(40)),
@@ -249,7 +265,7 @@ function fixture(
     resumeOwnedWorktree: vi.fn(),
     discoverPullRequest: vi.fn(async () => null),
     inspectPullRequest: vi.fn(async () => ({
-      state: merged ? "MERGED" : "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+      state: merged ? "MERGED" : "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
       unresolvedThreadCount: 0, headRefOid: "c".repeat(40),
       mergeCommit: merged ? { oid: "b".repeat(40) } : null,
     })),
@@ -2971,7 +2987,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       state: "MERGED",
       baseRefName: "main",
       isDraft: false,
-      checksGreen: true,
+      mergeAdmission: ADMIT, checksGreen: true,
       reviewed: true,
       unresolvedThreadCount: 0,
       headRefOid: "c".repeat(40),
@@ -3165,7 +3181,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       state: "MERGED",
       baseRefName: "main",
       isDraft: false,
-      checksGreen: true,
+      mergeAdmission: ADMIT, checksGreen: true,
       reviewed: true,
       unresolvedThreadCount: 0,
       headRefOid: "c".repeat(40),
@@ -3801,7 +3817,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       await new Promise((resolve) => setTimeout(resolve, 150))
       value.lifecycle.inspectPullRequest.mockResolvedValue({
         state: "MERGED", baseRefName: "main", isDraft: false,
-        checksGreen: true, reviewed: true, unresolvedThreadCount: 0,
+        mergeAdmission: ADMIT, checksGreen: true, reviewed: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
       })
       return { merged: true }
@@ -3979,15 +3995,15 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
       .mockResolvedValueOnce("d".repeat(40))
     value.lifecycle.inspectPullRequest
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
         unresolvedThreadCount: 1, headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
         unresolvedThreadCount: 0, headRefOid: "d".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        state: "MERGED", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
         unresolvedThreadCount: 0, headRefOid: "d".repeat(40), mergeCommit: { oid: "b".repeat(40) },
       })
     value.lifecycle.inspectReviewFindings.mockResolvedValueOnce([{
@@ -4087,20 +4103,20 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     const value = fixture()
     value.lifecycle.inspectPullRequest
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false, reviewed: false,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: WAIT, checksGreen: false, reviewed: false,
         reviewRequested: false, unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false, reviewed: true,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: WAIT, checksGreen: false, reviewed: true,
         reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
         reviewRequested: true, unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        state: "MERGED", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
         unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
       })
 
@@ -4114,22 +4130,22 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     const value = fixture()
     value.lifecycle.inspectPullRequest
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false, reviewed: false,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: WAIT, checksGreen: false, reviewed: false,
         reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 1,
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false, reviewed: true,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: WAIT, checksGreen: false, reviewed: true,
         reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
         reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        state: "MERGED", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
         unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
       })
     value.lifecycle.inspectReviewFindings.mockResolvedValueOnce([{
@@ -4147,24 +4163,24 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     const value = fixture()
     value.lifecycle.inspectPullRequest
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false, reviewed: false,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: WAIT, checksGreen: false, reviewed: false,
         reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 1,
         cleanReviewEvidence: false, headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: false,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: false,
         reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 1,
         cleanReviewEvidence: true, codexReviewFindings: [],
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
         reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 0,
         cleanReviewEvidence: true, codexReviewFindings: [],
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+        state: "MERGED", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
         unresolvedThreadCount: 0, headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
       })
     value.lifecycle.inspectReviewFindings
@@ -4182,30 +4198,31 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     expect(value.lifecycle.resolveReviewThreads).toHaveBeenCalledWith(["PRRT_old"])
   })
 
-  it("routes completed red PR checks through bounded Codex remediation", async () => {
+  it("routes a terminally refused required proof through bounded Codex remediation", async () => {
     const value = fixture()
     value.lifecycle.inspectPullRequest
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: false,
-        checksComplete: true, failedChecks: [{ name: "Vercel", state: "FAILURE" }],
+        state: "OPEN", baseRefName: "main", isDraft: false,
+        mergeAdmission: refusedAdmission(["REQUIRED_PROOF_FAILED:vitest-deterministic-suite"]),
+        checksGreen: false, checksComplete: true, failedChecks: [{ name: "Vercel", state: "FAILURE" }],
         reviewed: false, reviewCompleted: false, reviewRequested: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true,
         checksComplete: true, failedChecks: [], reviewed: true, reviewCompleted: true,
         reviewRequested: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true,
+        state: "MERGED", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true,
         checksComplete: true, failedChecks: [], reviewed: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
       })
 
     await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", prNumber: 500 })
     expect(value.client.runTurn).toHaveBeenCalledTimes(2)
-    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Vercel concluded FAILURE")
+    expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("REQUIRED_PROOF_FAILED:vitest-deterministic-suite")
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("Improve the Hermes page")
     expect(value.client.runTurn.mock.calls[1][0].prompt).toContain("- components/hermes/live-status.tsx")
     expect(value.client.runTurn.mock.calls[1][0].prompt).not.toContain("components/**")
@@ -4216,20 +4233,20 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     const value = fixture()
     value.lifecycle.inspectPullRequest
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true,
         checksComplete: true, failedChecks: [], reviewed: false, reviewCompleted: true,
         codexReviewFindings: ["Preserve the authority predicate before merge."],
         reviewRequested: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true,
+        state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true,
         checksComplete: true, failedChecks: [], reviewed: true, reviewCompleted: true,
         codexReviewFindings: [], reviewRequested: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: null,
       })
       .mockResolvedValueOnce({
-        state: "MERGED", baseRefName: "main", isDraft: false, checksGreen: true,
+        state: "MERGED", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true,
         checksComplete: true, failedChecks: [], reviewed: true, unresolvedThreadCount: 0,
         headRefOid: "c".repeat(40), mergeCommit: { oid: "b".repeat(40) },
       })
@@ -4921,7 +4938,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     let recoveredMerged = false
     value.lifecycle.inspectPullRequest.mockImplementation(async () => ({
       state: recoveredMerged ? "MERGED" : "OPEN", baseRefName: "main", isDraft: false,
-      checksGreen: true, reviewed: true, unresolvedThreadCount: 0, headRefOid: "d".repeat(40),
+      mergeAdmission: ADMIT, checksGreen: true, reviewed: true, unresolvedThreadCount: 0, headRefOid: "d".repeat(40),
       mergeCommit: recoveredMerged ? { oid: "b".repeat(40) } : null,
     }))
     value.lifecycle.mergePullRequest.mockImplementation(async () => {
@@ -4996,7 +5013,7 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
     })
     value.lifecycle.inspectWorkingTreePaths.mockResolvedValueOnce([])
     value.lifecycle.inspectPullRequest.mockResolvedValueOnce({
-      state: "OPEN", baseRefName: "main", isDraft: false, checksGreen: true, reviewed: true,
+      state: "OPEN", baseRefName: "main", isDraft: false, mergeAdmission: ADMIT, checksGreen: true, reviewed: true,
       reviewCompleted: true, reviewRequested: true, unresolvedThreadCount: 1,
       headRefOid: "c".repeat(40), mergeCommit: null,
     })

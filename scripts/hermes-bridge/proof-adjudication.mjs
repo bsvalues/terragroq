@@ -43,6 +43,16 @@ export const ADMISSION = Object.freeze({
   INADMISSIBLE: "MERGE_INADMISSIBLE",
 })
 
+// Admissibility answers "may this merge now". Settlement answers "is this decided yet", which is a
+// different question and the one an orchestration loop needs: a required proof that has not reported
+// during an actively forming check set is a WAIT, not a refusal, while a required proof that failed
+// or demonstrably did not execute is terminal and should stop the loop rather than be polled at.
+export const ADMISSION_STATE = Object.freeze({
+  ADMISSIBLE: "ADMISSIBLE",
+  WAITING: "WAITING",
+  REFUSED: "REFUSED",
+})
+
 export function proofCheckName(check) {
   return String(check?.name ?? check?.context ?? "")
 }
@@ -93,6 +103,28 @@ function checkWorkflowName(check) {
   return normaliseName(check?.workflowName ?? check?.checkSuite?.workflowRun?.workflow?.name)
 }
 
+// Identity is encoded as a JSON tuple, not delimiter concatenation. A check name legitimately
+// containing the delimiter would otherwise be able to collide with a different (kind, workflow, name)
+// triple -- an identity forgery in the field that exists to prevent substitution.
+function encodeIdentity(kind, workflowName, matchName) {
+  return JSON.stringify([String(kind), normaliseName(workflowName), normaliseName(matchName)])
+}
+
+/**
+ * Read a declared contract field, distinguishing ABSENT from WRONG TYPE.
+ *
+ * String() coercion before validation would give malformed JSON valid-looking semantics: a numeric
+ * proofId becomes "123", an array matchName becomes "a,b". Both would then pass every downstream
+ * check. A contract is configuration that decides what merge admission means, so a type error in it
+ * must fail closed rather than be coerced into something plausible.
+ */
+function readContractField(entry, key) {
+  const raw = entry?.[key]
+  if (raw === undefined || raw === null) return { value: "", absent: true, wrongType: false }
+  if (typeof raw !== "string") return { value: "", absent: false, wrongType: true }
+  return { value: raw.trim(), absent: false, wrongType: false }
+}
+
 /**
  * Parse the declared contract, failing CLOSED.
  *
@@ -112,21 +144,34 @@ export function parseContract(contract) {
   const seenIdentities = new Set()
 
   declared.forEach((entry, index) => {
-    const proofId = String(entry?.proofId ?? "").trim()
-    const matchName = String(entry?.matchName ?? "").trim()
-    const kind = String(entry?.kind ?? "").trim()
-    const workflowName = String(entry?.workflowName ?? "").trim()
+    const fields = {
+      proofId: readContractField(entry, "proofId"),
+      matchName: readContractField(entry, "matchName"),
+      kind: readContractField(entry, "kind"),
+      workflowName: readContractField(entry, "workflowName"),
+    }
+    const proofId = fields.proofId.value
+    const matchName = fields.matchName.value
+    const kind = fields.kind.value
+    const workflowName = fields.workflowName.value
     const at = proofId || `#${index}`
 
-    if (!proofId) errors.push(`ENTRY_MISSING_PROOF_ID:#${index}`)
-    if (!matchName) errors.push(`ENTRY_MISSING_MATCH_NAME:${at}`)
-    if (!PROOF_KINDS.has(kind)) errors.push(`ENTRY_INVALID_KIND:${at}`)
-    if (kind === "CheckRun" && !workflowName) errors.push(`ENTRY_MISSING_WORKFLOW_NAME:${at}`)
+    // A wrong-typed field is reported as such and never coerced into a usable value.
+    Object.entries(fields).forEach(([key, field]) => {
+      if (field.wrongType) errors.push(`ENTRY_NON_STRING_FIELD:${at}:${key}`)
+    })
+
+    if (!proofId && !fields.proofId.wrongType) errors.push(`ENTRY_MISSING_PROOF_ID:#${index}`)
+    if (!matchName && !fields.matchName.wrongType) errors.push(`ENTRY_MISSING_MATCH_NAME:${at}`)
+    if (!PROOF_KINDS.has(kind) && !fields.kind.wrongType) errors.push(`ENTRY_INVALID_KIND:${at}`)
+    if (kind === "CheckRun" && !workflowName && !fields.workflowName.wrongType) {
+      errors.push(`ENTRY_MISSING_WORKFLOW_NAME:${at}`)
+    }
     if (proofId && seenIds.has(proofId)) errors.push(`DUPLICATE_PROOF_ID:${proofId}`)
     if (proofId) seenIds.add(proofId)
 
-    const identity = `${kind}|${normaliseName(workflowName)}|${normaliseName(matchName)}`
     if (matchName && PROOF_KINDS.has(kind)) {
+      const identity = encodeIdentity(kind, workflowName, matchName)
       if (seenIdentities.has(identity)) errors.push(`DUPLICATE_PROOF_IDENTITY:${at}`)
       seenIdentities.add(identity)
     }
@@ -152,13 +197,13 @@ export function adjudicateMergeAdmission({ contract, checks, headSha, adjudicate
   const { proofs: declaredProofs, errors: contractErrors } = parseContract(contract)
   const observed = Array.isArray(checks) ? checks : []
 
-  const identityOf = (entry) => `${entry.kind}|${normaliseName(entry.workflowName)}|${normaliseName(entry.matchName)}`
+  const identityOf = (entry) => encodeIdentity(entry.kind, entry.workflowName, entry.matchName)
   const observedIdentity = (check) => {
     const kind = checkKind(check)
     if (!kind) return null
     // A StatusContext carries no workflow, so its identity is (kind, name) with an empty workflow.
     const workflow = kind === "CheckRun" ? checkWorkflowName(check) : ""
-    return `${kind}|${workflow}|${normaliseName(proofCheckName(check))}`
+    return encodeIdentity(kind, workflow, proofCheckName(check))
   }
 
   const requiredIdentities = new Set(declaredProofs.map(identityOf))
@@ -200,15 +245,26 @@ export function adjudicateMergeAdmission({ contract, checks, headSha, adjudicate
   const pendingProofs = requiredResults.filter((r) => r.state === PROOF_STATE.PENDING)
   const failedProofs = requiredResults.filter((r) => r.state === PROOF_STATE.FAILED)
 
+  const waitingProofs = [...missingProofs, ...pendingProofs].map((r) => r.proofId)
   const blockingReasons = []
+  const terminalRefusals = []
   // A malformed contract fails closed. Dropping a bad entry would let a typo delete a required proof.
-  contractErrors.forEach((reason) => blockingReasons.push(`CONTRACT_INVALID:${reason}`))
-  if (!/^[0-9a-f]{40}$/.test(String(headSha ?? ""))) blockingReasons.push("SUBJECT_HEAD_SHA_UNBOUND")
+  contractErrors.forEach((reason) => terminalRefusals.push(`CONTRACT_INVALID:${reason}`))
+  if (!/^[0-9a-f]{40}$/.test(String(headSha ?? ""))) terminalRefusals.push("SUBJECT_HEAD_SHA_UNBOUND")
   missingProofs.forEach((r) => blockingReasons.push(`REQUIRED_PROOF_MISSING:${r.proofId}`))
-  ambiguousProofs.forEach((r) => blockingReasons.push(`REQUIRED_PROOF_AMBIGUOUS:${r.proofId}`))
-  nonExecutedProofs.forEach((r) => blockingReasons.push(`REQUIRED_PROOF_DID_NOT_EXECUTE:${r.proofId}:${r.state}`))
+  ambiguousProofs.forEach((r) => terminalRefusals.push(`REQUIRED_PROOF_AMBIGUOUS:${r.proofId}`))
+  nonExecutedProofs.forEach((r) => terminalRefusals.push(`REQUIRED_PROOF_DID_NOT_EXECUTE:${r.proofId}:${r.state}`))
   pendingProofs.forEach((r) => blockingReasons.push(`REQUIRED_PROOF_PENDING:${r.proofId}`))
-  failedProofs.forEach((r) => blockingReasons.push(`REQUIRED_PROOF_FAILED:${r.proofId}`))
+  failedProofs.forEach((r) => terminalRefusals.push(`REQUIRED_PROOF_FAILED:${r.proofId}`))
+
+  // Every terminal refusal is also a blocking reason; waiting states block admission without being
+  // terminal. Ordering keeps terminal causes first so a truncated message shows the decisive ones.
+  blockingReasons.unshift(...terminalRefusals)
+
+  const verdict = blockingReasons.length === 0 ? ADMISSION.ADMISSIBLE : ADMISSION.INADMISSIBLE
+  const admissionState = verdict === ADMISSION.ADMISSIBLE
+    ? ADMISSION_STATE.ADMISSIBLE
+    : terminalRefusals.length > 0 ? ADMISSION_STATE.REFUSED : ADMISSION_STATE.WAITING
 
   return {
     contractId: String(contract?.contractId ?? ""),
@@ -223,7 +279,10 @@ export function adjudicateMergeAdmission({ contract, checks, headSha, adjudicate
     nonExecutedProofs: nonExecutedProofs.map((r) => ({ proofId: r.proofId, state: r.state })),
     pendingProofs: pendingProofs.map((r) => r.proofId),
     failedProofs: failedProofs.map((r) => r.proofId),
+    waitingProofs,
+    terminalRefusals,
     blockingReasons,
-    verdict: blockingReasons.length === 0 ? ADMISSION.ADMISSIBLE : ADMISSION.INADMISSIBLE,
+    admissionState,
+    verdict,
   }
 }

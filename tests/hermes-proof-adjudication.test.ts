@@ -6,6 +6,7 @@ import {
   adjudicateMergeAdmission,
   classifyProofState,
   parseContract,
+  ADMISSION_STATE,
 } from "../scripts/hermes-bridge/proof-adjudication.mjs"
 import contract from "../config/hermes-bridge/required-proof-set.json"
 
@@ -289,5 +290,122 @@ describe("required proof identity is (kind, workflowName, name)", () => {
     const receipt = adjudicate([...allRequired("SUCCESS"), impostor])
     expect(receipt.verdict).toBe(ADMISSION.ADMISSIBLE)
     expect(receipt.optionalAssurance.map((o: any) => o.name)).toContain(REQUIRED[1].name)
+  })
+})
+
+
+// Review finding 2: a contract field of the wrong TYPE must be rejected, never String()-coerced into
+// something plausible. A numeric proofId or an array matchName would otherwise acquire valid-looking
+// semantics and pass every downstream check.
+describe("contract fields reject wrong types before coercion", () => {
+  const parse = (entry: unknown) => parseContract({ requiredProofs: [entry] })
+
+  it("rejects a numeric proofId rather than stringifying it", () => {
+    const { errors } = parse({ proofId: 123, kind: "CheckRun", workflowName: "ci", matchName: "x" })
+    expect(errors.join(" ")).toContain("ENTRY_NON_STRING_FIELD:#0:proofId")
+    expect(errors.join(" ")).not.toContain("123")
+  })
+
+  it("rejects an array matchName rather than joining it", () => {
+    const { errors } = parse({ proofId: "a", kind: "CheckRun", workflowName: "ci", matchName: ["x", "y"] })
+    expect(errors.join(" ")).toContain("ENTRY_NON_STRING_FIELD:a:matchName")
+  })
+
+  it("rejects an object kind and a numeric workflowName", () => {
+    const { errors } = parse({ proofId: "a", kind: {}, workflowName: 7, matchName: "x" })
+    expect(errors.join(" ")).toContain("ENTRY_NON_STRING_FIELD:a:kind")
+    expect(errors.join(" ")).toContain("ENTRY_NON_STRING_FIELD:a:workflowName")
+  })
+
+  it("still reports a genuinely absent field as MISSING, not as a type error", () => {
+    const { errors } = parse({ kind: "CheckRun", workflowName: "ci", matchName: "x" })
+    expect(errors.join(" ")).toContain("ENTRY_MISSING_PROOF_ID")
+    expect(errors.join(" ")).not.toContain("ENTRY_NON_STRING_FIELD")
+  })
+
+  it("a wrong-typed contract is inadmissible, not silently smaller", () => {
+    const receipt = adjudicateMergeAdmission({
+      contract: { contractId: "T", requiredProofs: [{ proofId: 1, kind: "CheckRun", workflowName: "ci", matchName: "x" }] },
+      checks: allRequired("SUCCESS"), headSha: HEAD, adjudicatedAt: AT,
+    })
+    expect(receipt.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(receipt.admissionState).toBe(ADMISSION_STATE.REFUSED)
+  })
+})
+
+// Review finding 3: identity must be encoded unambiguously. Delimiter concatenation let a name
+// containing the delimiter collide with a different (kind, workflow, name) triple.
+describe("proof identity encoding is collision-free", () => {
+  it("does not let a delimiter in the name forge a different identity", () => {
+    const contractA = {
+      contractId: "T",
+      requiredProofs: [{ proofId: "a", kind: "CheckRun", workflowName: "ci", matchName: "build|extra" }],
+    }
+    // An impostor whose workflow/name split differently would collide under "kind|workflow|name".
+    const impostor = check("extra", "SUCCESS", { workflowName: "ci|build" })
+    const receipt = adjudicateMergeAdmission({
+      contract: contractA, checks: [impostor], headSha: HEAD, adjudicatedAt: AT,
+    })
+    expect(receipt.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(receipt.missingProofs).toContain("a")
+  })
+
+  it("still matches the genuine proof when the name contains a delimiter", () => {
+    const contractA = {
+      contractId: "T",
+      requiredProofs: [{ proofId: "a", kind: "CheckRun", workflowName: "ci", matchName: "build|extra" }],
+    }
+    const genuine = check("build|extra", "SUCCESS", { workflowName: "ci" })
+    const receipt = adjudicateMergeAdmission({
+      contract: contractA, checks: [genuine], headSha: HEAD, adjudicatedAt: AT,
+    })
+    expect(receipt.verdict).toBe(ADMISSION.ADMISSIBLE)
+  })
+
+  it("treats two contract entries differing only by delimiter placement as distinct", () => {
+    const { errors } = parseContract({ requiredProofs: [
+      { proofId: "a", kind: "CheckRun", workflowName: "ci", matchName: "x|y" },
+      { proofId: "b", kind: "CheckRun", workflowName: "ci|x", matchName: "y" },
+    ] })
+    expect(errors.join(" ")).not.toContain("DUPLICATE_PROOF_IDENTITY")
+  })
+})
+
+// Review finding 1: settlement is a different question from admissibility, and it is the one an
+// orchestration loop needs. Waiting must not become remediation; terminal refusal must not be polled.
+describe("admission settlement separates waiting from terminal refusal", () => {
+  it("is WAITING while a required proof is pending", () => {
+    const r = adjudicate([required(0, "IN_PROGRESS"), ...allRequired("SUCCESS").slice(1)])
+    expect(r.admissionState).toBe(ADMISSION_STATE.WAITING)
+    expect(r.waitingProofs).toContain("work-context-receipt")
+    expect(r.terminalRefusals).toEqual([])
+  })
+
+  it("is WAITING while a required proof has not reported at all", () => {
+    const r = adjudicate(allRequired("SUCCESS").slice(1))
+    expect(r.admissionState).toBe(ADMISSION_STATE.WAITING)
+  })
+
+  it("is REFUSED when a required proof failed", () => {
+    const r = adjudicate([required(0, "FAILURE"), ...allRequired("SUCCESS").slice(1)])
+    expect(r.admissionState).toBe(ADMISSION_STATE.REFUSED)
+    expect(r.terminalRefusals.join(" ")).toContain("REQUIRED_PROOF_FAILED")
+  })
+
+  it("is REFUSED when a required proof did not execute", () => {
+    const r = adjudicate([required(0, "SKIPPED"), ...allRequired("SUCCESS").slice(1)])
+    expect(r.admissionState).toBe(ADMISSION_STATE.REFUSED)
+  })
+
+  // The behaviour the orchestrator previously prevented.
+  it("is ADMISSIBLE when only an OPTIONAL advisory check failed or was skipped", () => {
+    const r = adjudicate([
+      ...allRequired("SUCCESS"),
+      check("Accessibility Audit", "FAILURE", { workflowName: "advisory" }),
+      check("CodeRabbit", "SKIPPED", { kind: "StatusContext" }),
+    ])
+    expect(r.admissionState).toBe(ADMISSION_STATE.ADMISSIBLE)
+    expect(r.verdict).toBe(ADMISSION.ADMISSIBLE)
+    expect(r.terminalRefusals).toEqual([])
   })
 })
