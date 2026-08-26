@@ -15,21 +15,17 @@ const MAX_WRITE_BODY_BYTES = MAX_FILE_BYTES + 32_000
 const refuse = (refusal: string, status: number) =>
   Response.json({ error: refusal }, { status, headers: { "cache-control": "no-store" } })
 
-async function projectRoot(userId: string): Promise<string | null> {
-  const resolved = await resolveTerraFusionWorkspaceBinding(userId)
-  return resolved.ok ? resolved.binding.workspaceRoot : null
-}
-
 /** List a directory, or read a file, from inside the selected Project workspace. */
 export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
 
-  const root = await projectRoot(session.user.id)
-  if (!root) return refuse("WORKSPACE_PROJECT_UNBOUND", 503)
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return refuse(projectBinding.error, 503)
+  const binding = projectBinding.binding
 
   const url = new URL(request.url)
-  const resolved = await resolveRealWorkspacePath(root, url.searchParams.get("path") ?? "", fs.realpath)
+  const resolved = await resolveRealWorkspacePath(binding.workspaceRoot, url.searchParams.get("path") ?? "", fs.realpath)
   if (!resolved.ok || !resolved.absolute) return refuse(resolved.refusal ?? "PATH_INVALID", 400)
 
   let stats
@@ -39,10 +35,18 @@ export async function GET(request: Request) {
     return refuse("NOT_FOUND", 404)
   }
 
+  const projectIdentity = {
+    id: binding.projectId,
+    key: binding.projectKey,
+    name: binding.projectName,
+    repository: binding.repositoryIdentity,
+  }
+
   if (stats.isDirectory()) {
     const entries = await fs.readdir(resolved.absolute, { withFileTypes: true })
     return Response.json({
       kind: "directory",
+      project: projectIdentity,
       path: resolved.relative,
       entries: entries
         .filter((entry) => !isIgnoredEntry(entry.name))
@@ -60,10 +64,11 @@ export async function GET(request: Request) {
 
   const bytes = await fs.readFile(resolved.absolute)
   if (looksBinary(bytes)) {
-    return Response.json({ kind: "binary", path: resolved.relative, size: stats.size }, { headers: { "cache-control": "no-store" } })
+    return Response.json({ kind: "binary", project: projectIdentity, path: resolved.relative, size: stats.size }, { headers: { "cache-control": "no-store" } })
   }
   return Response.json({
     kind: "file",
+    project: projectIdentity,
     path: resolved.relative,
     content: bytes.toString("utf8"),
     size: stats.size,
@@ -82,8 +87,9 @@ export async function PUT(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
 
-  const root = await projectRoot(session.user.id)
-  if (!root) return refuse("WORKSPACE_PROJECT_UNBOUND", 503)
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return refuse(projectBinding.error, 503)
+  const binding = projectBinding.binding
 
   const parsed = await readBoundedJson(request, MAX_WRITE_BODY_BYTES)
   if (!parsed.ok) return refuse(parsed.error, parsed.status)
@@ -95,9 +101,17 @@ export async function PUT(request: Request) {
     path: body.path,
     content: body.content,
     modifiedAt: body.modifiedAt,
-  }, workspaceFileWriteDependencies(root))
+  }, workspaceFileWriteDependencies(binding.workspaceRoot))
   if (!result.ok) {
     return Response.json(result, { status: result.status, headers: { "cache-control": "no-store" } })
   }
-  return Response.json(result, { headers: { "cache-control": "no-store" } })
+  return Response.json({
+    ...result,
+    project: {
+      id: binding.projectId,
+      key: binding.projectKey,
+      name: binding.projectName,
+      repository: binding.repositoryIdentity,
+    },
+  }, { headers: { "cache-control": "no-store" } })
 }
