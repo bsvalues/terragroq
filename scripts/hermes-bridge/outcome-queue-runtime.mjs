@@ -17,6 +17,7 @@ import {
   verifyOutcomeQueueWorkOrderBinding,
 } from "./outcome-queue-source.mjs"
 import { readHermesState } from "./state-store.mjs"
+import { resolveExecutionSubject, completeExecutionSubject } from "./dependency-execution-seam.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
 import {
   completeOutcome as completeGoalOutcome,
@@ -1313,6 +1314,64 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   const deferGoal = options.deferGoal ?? deferGoalOutcome
   const resolvePrimary = options.resolvePrimary ?? (() => loadDeclaredPrimary(database.withPool))
   const resolveGoal = options.resolveGoal ?? ((item) => loadLinkedGoal(database.withPool, item))
+
+  // --- Guarded dependency-projection seam (goal path is untouched) -----------------------------
+  // A queue item with canonicalDependencyId is a routed-dependency PROJECTION, not a goal. These
+  // closures give the tested seam its IO; injectable for tests.
+  const loadDependencyContext = options.loadDependencyContext ?? (async (dependencyId) =>
+    database.withPool(async (pool) => {
+      const dep = (await pool.query(
+        `SELECT id, "workOrderId", "routingState", "requiredClass", "requiredCapability", "requiredResource"
+           FROM routed_dependency WHERE id = $1`, [dependencyId])).rows[0]
+      if (!dep) return null
+      const binding = (await pool.query(
+        `SELECT id, "projectId" FROM work_order_truth_binding WHERE "workOrderId" = $1 AND status = 'bound' LIMIT 1`,
+        [dep.workOrderId])).rows[0]
+      const truthBindingRef = binding
+        ? `binding:${binding.id}:project:${binding.projectId}`
+        : `wo:${dep.workOrderId}:unbound`
+      return {
+        dep: {
+          id: Number(dep.id), workOrderId: Number(dep.workOrderId), routingState: dep.routingState,
+          requiredClass: dep.requiredClass, requiredCapability: dep.requiredCapability,
+          requiredResource: dep.requiredResource,
+        },
+        envelope: { resource: dep.requiredResource, surfaceClass: dep.requiredClass, capability: dep.requiredCapability },
+        truthBindingRef,
+      }
+    }))
+
+  const settleDependency = options.settleDependency ?? (async ({ dependencyId, queueResult, evidence }) =>
+    database.withPool(async (pool) => {
+      const passed = String(queueResult).trim().toUpperCase() === "PASS"
+      const routingState = passed ? "resolved" : "refused"
+      const dep = (await pool.query(
+        `SELECT "workOrderId", evidence FROM routed_dependency WHERE id = $1`, [dependencyId])).rows[0]
+      if (!dep) throw new Error("Canonical dependency not found")
+      await pool.query(
+        `UPDATE routed_dependency SET "routingState" = $1, "resolvedAt" = now(),
+           resolution = $2, evidence = $3, "updatedAt" = now() WHERE id = $4`,
+        [routingState, `Settled from queue projection: ${queueResult}`,
+         [...(dep.evidence ?? []), ...(evidence ?? [])], dependencyId])
+      return { routingState, parentWorkOrderId: Number(dep.workOrderId) }
+    }))
+
+  async function resolveDependencySubject(item) {
+    return resolveExecutionSubject(item, { loadDependencyContext })
+  }
+
+  function governedDependencyOutcome(item, subject) {
+    // No fake Goal. An explicit, minimal governed outcome carrying the discriminated subject.
+    return {
+      outcomeKey: item.outcomeKey,
+      userId: item.userId,
+      activeWorkOrderId: item.activeWorkOrderId,
+      authorityGrantRef: item.authorityGrantRef,
+      title: (typeof item.title === "string" && item.title.trim() !== "") ? item.title.trim() : `dependency:${subject.dependencyId}`,
+      command: item.objective ?? "",
+      executionSubject: subject,
+    }
+  }
   const now = options.now ?? (() => new Date())
   const createFindingConsumer = options.createRuntimeFindingConsumer ?? createRuntimeFindingDbConsumer
   const consumeRuntimeFindings = options.consumeRuntimeFindings ?? createFindingConsumer({
@@ -1373,6 +1432,31 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       if (!acquired?.outcome || !acquired.acquired) return null
       const item = acquired.outcome
       try {
+        // Guarded seam: a dependency projection is not a goal. Branch BEFORE resolveGoal so the goal
+        // path is untouched, and re-verify AFTER the lease, before any side effect.
+        if (item?.canonicalDependencyId != null) {
+          const subject = await resolveDependencySubject(item)
+          if (!subject.ok) {
+            await transitionQueue({
+              databaseUrl,
+              userId: item.userId,
+              outcomeKey: item.outcomeKey,
+              fromState: "active",
+              toState: "blocked",
+              expectedVersion: Number(item.version),
+              executionBinding: item.executionBinding,
+              leaseToken: item.leaseToken,
+              fencingToken: Number(item.fencingToken),
+              lifecycleReason: `DEPENDENCY_PROJECTION_${subject.refusal}`,
+              now: now(),
+            })
+            continue
+          }
+          return {
+            ...governedDependencyOutcome(item, subject),
+            queueBinding: persistedBinding(item),
+          }
+        }
         const goal = await resolveGoal(item)
         const governedOutcome = {
           ...governedQueueOutcome(item, goal),
@@ -1414,6 +1498,48 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
 
   async function completeOutcome({ outcomeId, outcome, evidence }) {
     requireExecutionProofContext()
+    // Guarded seam: a dependency projection settles its CANONICAL dependency, then terminalizes the
+    // queue transport. It NEVER routes through completeGoal, and completing the queue item does not
+    // pass W1. Goal outcomes fall through to the existing path unchanged.
+    if (outcome?.executionSubject?.kind === "dependency") {
+      const binding = queueBinding(outcome)
+      const refs = completionEvidence(evidence)
+      if (refs.length === 0) {
+        wall("Queue completion requires reviewed delivery evidence", "HERMES_OUTCOME_QUEUE_EVIDENCE_WALL")
+      }
+      return completeExecutionSubject(
+        { subject: outcome.executionSubject, evidence: refs, queueResult: "PASS" },
+        {
+          completeGoal: async () => { throw new Error("goal completion not applicable to a dependency subject") },
+          settleDependency,
+          terminalizeProjection: async ({ evidence: evRefs }) => {
+            await completeQueue({
+              databaseUrl,
+              ...binding,
+              terminalKey: `hermes:${binding.outcomeKey}:${binding.fencingToken}:dependency`,
+              terminalResult: "COMPLETE",
+              terminalEvidenceRefs: evRefs ?? refs,
+              now: now(),
+            })
+          },
+          releaseProjection: async ({ reason }) => {
+            await transitionQueue({
+              databaseUrl,
+              userId: binding.userId,
+              outcomeKey: binding.outcomeKey,
+              fromState: "active",
+              toState: "blocked",
+              expectedVersion: binding.expectedVersion,
+              executionBinding: binding.executionBinding,
+              leaseToken: binding.leaseToken,
+              fencingToken: binding.fencingToken,
+              lifecycleReason: `DEPENDENCY_${reason}`,
+              now: now(),
+            })
+          },
+        },
+      )
+    }
     if (!outcome?.queueBinding) {
       return completeGoal({ databaseUrl, outcomeId, evidence })
     }
