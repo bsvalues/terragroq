@@ -168,8 +168,10 @@ export const DECLARE_WORKSPACE_RUNTIME_SERVICE: BootstrapDependency = {
 export const PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME: BootstrapDependency = {
   key: "PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME",
   operation:
-    "stand up a real workspace-runtime endpoint on the serving node for the declared service, and " +
-    "write its observed endpoint/project/revision binding into project_service_endpoint",
+    "CHECK the serving-node checkout is at the W1-bound revision; if so, start the declared " +
+    "terrafusion/os-shell service from that exact checkout, observe the real endpoint, and write " +
+    "node + endpoint + observedProjectId + observedRevision into project_service_endpoint; if not, " +
+    "raise ESTABLISH_SERVING_NODE_CHECKOUT and wait",
   requiredResource: "williamos-workspace-runtime",
   // Routed to whoever holds runtime_control (and any runtime_config the service genuinely needs)
   // for this service -- an executor, but not this source actor, whose envelope grants only observe.
@@ -191,7 +193,31 @@ export const PROVISION_AND_OBSERVE_WORKSPACE_RUNTIME: BootstrapDependency = {
     "resurrecting the invented https://192.168.88.9:5199 server, or any improvised dev server, as " +
       "the canonical endpoint",
     "any runtime_config mutation beyond what this service genuinely requires — that is its own dependency",
+    "git pull, branch switch, file copy, or any 'fix' of the serving checkout under runtime_control " +
+      "— a revision mismatch is ESTABLISH_SERVING_NODE_CHECKOUT, a different authority class",
   ],
+}
+
+export const ESTABLISH_SERVING_NODE_CHECKOUT: BootstrapDependency = {
+  key: "ESTABLISH_SERVING_NODE_CHECKOUT",
+  operation:
+    "establish a serving-node checkout of the bound TerraFusion repository at the W1-bound revision",
+  requiredResource: "terrafusion-primary-repo",
+  // A source-tree operation, deliberately NOT runtime_control. Moving a serving checkout to a
+  // revision is writing the working tree, not starting a service, and conflating the two is how a
+  // real endpoint ends up over the wrong revision.
+  requiredClass: "source",
+  requiredCapability: "write",
+  routingState: "raised",
+  blocksAcceptance: true,
+  // CONDITIONAL: raised by PROVISION only when the premise check finds a revision mismatch, so it is
+  // NOT in the always-blocking BOOTSTRAP_DEPENDENCIES list. HERMES was observed at fd294dc3, so a
+  // mismatch against a bound main revision is likely and this will probably be raised.
+  evidence: [
+    "HERMES serving checkout observed at fd294dc3; the other observed TerraFusion checkout was 731b15f0",
+    "runtime_control must not silently synchronize the checkout",
+  ],
+  unlocks: ["provisioning resumes with the serving checkout at the bound revision"],
 }
 
 export const RATIFY_CANONICAL_PROJECT_REPOSITORIES: BootstrapDependency = {
