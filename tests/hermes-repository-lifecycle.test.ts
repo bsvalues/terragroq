@@ -1081,9 +1081,9 @@ describe("Hermes repository lifecycle", () => {
       isDraft: false,
       reviewDecision: "APPROVED",
       statusCheckRollup: [
-        { name: "work context receipt (#831)", conclusion: "SUCCESS" },
-        { name: "vitest (deterministic suite)", conclusion: "SUCCESS" },
-        { name: "production build (next build)", conclusion: "SUCCESS" },
+        { __typename: "CheckRun", name: "work context receipt (#831)", workflowName: "work context", conclusion: "SUCCESS" },
+        { __typename: "CheckRun", name: "vitest (deterministic suite)", workflowName: "ci", conclusion: "SUCCESS" },
+        { __typename: "CheckRun", name: "production build (next build)", workflowName: "ci", conclusion: "SUCCESS" },
         { conclusion: "SUCCESS" }, { state: "SUCCESS" },
       ],
       reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: sha } }],

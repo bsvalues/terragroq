@@ -5,6 +5,7 @@ import {
   PROOF_STATE,
   adjudicateMergeAdmission,
   classifyProofState,
+  parseContract,
 } from "../scripts/hermes-bridge/proof-adjudication.mjs"
 import contract from "../config/hermes-bridge/required-proof-set.json"
 
@@ -12,13 +13,27 @@ const HEAD = "3b5dae61fbfa4c0dc5c86f000f7a0d6d1088d6d7"
 const AT = "2026-08-25T00:00:00.000Z"
 
 const REQUIRED = [
-  "work context receipt (#831)",
-  "vitest (deterministic suite)",
-  "production build (next build)",
+  { name: "work context receipt (#831)", workflowName: "work context" },
+  { name: "vitest (deterministic suite)", workflowName: "ci" },
+  { name: "production build (next build)", workflowName: "ci" },
 ]
 
-const check = (name: string, conclusion: string) => ({ __typename: "CheckRun", name, conclusion })
-const allRequired = (conclusion: string) => REQUIRED.map((name) => check(name, conclusion))
+// Proof identity is (kind, workflowName, name) -- never the display name alone.
+const check = (
+  name: string,
+  conclusion: string,
+  opts: { kind?: string; workflowName?: string } = {},
+) => ({
+  __typename: opts.kind ?? "CheckRun",
+  name,
+  workflowName: opts.workflowName ?? "ci",
+  conclusion,
+})
+
+const required = (i: number, conclusion: string) =>
+  check(REQUIRED[i].name, conclusion, { workflowName: REQUIRED[i].workflowName })
+
+const allRequired = (conclusion: string) => REQUIRED.map((_, i) => required(i, conclusion))
 
 const adjudicate = (checks: unknown[], headSha: string = HEAD) =>
   adjudicateMergeAdmission({ contract, checks, headSha, adjudicatedAt: AT })
@@ -40,7 +55,7 @@ describe("merge admission adjudication — adversarial matrix", () => {
   })
 
   it("refuses a skipped required proof", () => {
-    const checks = [check(REQUIRED[0], "SKIPPED"), ...allRequired("SUCCESS").slice(1)]
+    const checks = [required(0, "SKIPPED"), ...allRequired("SUCCESS").slice(1)]
     const receipt = adjudicate(checks)
     expect(receipt.verdict).toBe(ADMISSION.INADMISSIBLE)
     expect(receipt.nonExecutedProofs).toContainEqual({
@@ -49,26 +64,26 @@ describe("merge admission adjudication — adversarial matrix", () => {
   })
 
   it("refuses a neutral required proof", () => {
-    const checks = [check(REQUIRED[0], "NEUTRAL"), ...allRequired("SUCCESS").slice(1)]
+    const checks = [required(0, "NEUTRAL"), ...allRequired("SUCCESS").slice(1)]
     expect(adjudicate(checks).verdict).toBe(ADMISSION.INADMISSIBLE)
   })
 
   it("refuses a cancelled required proof", () => {
-    const checks = [check(REQUIRED[0], "CANCELLED"), ...allRequired("SUCCESS").slice(1)]
+    const checks = [required(0, "CANCELLED"), ...allRequired("SUCCESS").slice(1)]
     const receipt = adjudicate(checks)
     expect(receipt.verdict).toBe(ADMISSION.INADMISSIBLE)
     expect(receipt.blockingReasons.join(" ")).toContain("DID_NOT_EXECUTE")
   })
 
   it("refuses a pending required proof", () => {
-    const checks = [check(REQUIRED[0], "IN_PROGRESS"), ...allRequired("SUCCESS").slice(1)]
+    const checks = [required(0, "IN_PROGRESS"), ...allRequired("SUCCESS").slice(1)]
     const receipt = adjudicate(checks)
     expect(receipt.verdict).toBe(ADMISSION.INADMISSIBLE)
     expect(receipt.pendingProofs).toContain("work-context-receipt")
   })
 
   it("refuses a failed required proof", () => {
-    const checks = [check(REQUIRED[0], "FAILURE"), ...allRequired("SUCCESS").slice(1)]
+    const checks = [required(0, "FAILURE"), ...allRequired("SUCCESS").slice(1)]
     const receipt = adjudicate(checks)
     expect(receipt.verdict).toBe(ADMISSION.INADMISSIBLE)
     expect(receipt.failedProofs).toContain("work-context-receipt")
@@ -107,8 +122,8 @@ describe("merge admission adjudication — adversarial matrix", () => {
 
   it("refuses duplicate/ambiguous proof identity rather than picking one", () => {
     const checks = [
-      check(REQUIRED[0], "SUCCESS"),
-      check(REQUIRED[0], "FAILURE"),
+      required(0, "SUCCESS"),
+      required(0, "FAILURE"),
       ...allRequired("SUCCESS").slice(1),
     ]
     const receipt = adjudicate(checks)
@@ -119,7 +134,7 @@ describe("merge admission adjudication — adversarial matrix", () => {
   // No proof substitution: a different signal cannot stand in for one that did not run.
   it("refuses substitution of a review or another check for an unexecuted proof", () => {
     const checks = [
-      check(REQUIRED[0], "CANCELLED"),
+      required(0, "CANCELLED"),
       ...allRequired("SUCCESS").slice(1),
       check("CodeRabbit", "SUCCESS"),
       check("Approved by reviewer", "SUCCESS"),
@@ -143,7 +158,7 @@ describe("merge admission adjudication — adversarial matrix", () => {
       adjudicatedAt: AT,
     })
     expect(receipt.verdict).toBe(ADMISSION.INADMISSIBLE)
-    expect(receipt.blockingReasons).toContain("CONTRACT_DECLARES_NO_REQUIRED_PROOFS")
+    expect(receipt.blockingReasons).toContain("CONTRACT_INVALID:CONTRACT_DECLARES_NO_REQUIRED_PROOFS")
   })
 })
 
@@ -179,5 +194,100 @@ describe("receipt binds the decision to its inputs", () => {
       checks: allRequired("SUCCESS"), headSha: HEAD, adjudicatedAt: AT,
     }).contractHash
     expect(a).not.toBe(b)
+  })
+})
+
+// Review finding 1: the contract must fail CLOSED. Silently filtering a malformed entry would let a
+// typo delete a required proof -- fail-open in the component built to fail closed.
+describe("contract validation fails closed", () => {
+  const withProofs = (requiredProofs: unknown[]) =>
+    adjudicateMergeAdmission({
+      contract: { contractId: "T", requiredProofs },
+      checks: allRequired("SUCCESS"), headSha: HEAD, adjudicatedAt: AT,
+    })
+
+  it("refuses an entry missing proofId instead of dropping it", () => {
+    const r = withProofs([{ kind: "CheckRun", workflowName: "ci", matchName: "x" }])
+    expect(r.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(r.blockingReasons.join(" ")).toContain("ENTRY_MISSING_PROOF_ID")
+  })
+
+  it("refuses an entry missing matchName instead of dropping it", () => {
+    const r = withProofs([{ proofId: "a", kind: "CheckRun", workflowName: "ci" }])
+    expect(r.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(r.blockingReasons.join(" ")).toContain("ENTRY_MISSING_MATCH_NAME:a")
+  })
+
+  it("refuses an entry with an invalid kind", () => {
+    const r = withProofs([{ proofId: "a", kind: "Whatever", workflowName: "ci", matchName: "x" }])
+    expect(r.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(r.blockingReasons.join(" ")).toContain("ENTRY_INVALID_KIND:a")
+  })
+
+  it("refuses a CheckRun entry with no workflowName", () => {
+    const r = withProofs([{ proofId: "a", kind: "CheckRun", matchName: "x" }])
+    expect(r.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(r.blockingReasons.join(" ")).toContain("ENTRY_MISSING_WORKFLOW_NAME:a")
+  })
+
+  it("refuses duplicate proof ids", () => {
+    const r = withProofs([
+      { proofId: "a", kind: "CheckRun", workflowName: "ci", matchName: "x" },
+      { proofId: "a", kind: "CheckRun", workflowName: "ci", matchName: "y" },
+    ])
+    expect(r.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(r.blockingReasons.join(" ")).toContain("DUPLICATE_PROOF_ID:a")
+  })
+
+  it("refuses two proof ids resolving to the same identity", () => {
+    const r = withProofs([
+      { proofId: "a", kind: "CheckRun", workflowName: "ci", matchName: "x" },
+      { proofId: "b", kind: "CheckRun", workflowName: "CI", matchName: "X" },
+    ])
+    expect(r.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(r.blockingReasons.join(" ")).toContain("DUPLICATE_PROOF_IDENTITY:b")
+  })
+
+  it("reports every contract error rather than the first", () => {
+    const { errors } = parseContract({ requiredProofs: [{}, {}] })
+    expect(errors.length).toBeGreaterThan(2)
+  })
+
+  it("the shipped contract is valid", () => {
+    expect(parseContract(contract).errors).toEqual([])
+  })
+})
+
+// Review finding 2: display name is not identity. A different workflow, or a StatusContext sharing
+// the name, must not be able to substitute for the real proof.
+describe("required proof identity is (kind, workflowName, name)", () => {
+  it("refuses a same-name CheckRun from a different workflow", () => {
+    const impostor = check(REQUIRED[0].name, "SUCCESS", { workflowName: "some-other-workflow" })
+    const receipt = adjudicate([impostor, ...allRequired("SUCCESS").slice(1)])
+    expect(receipt.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(receipt.missingProofs).toContain("work-context-receipt")
+  })
+
+  it("refuses a same-name StatusContext standing in for a CheckRun proof", () => {
+    const impostor = check(REQUIRED[0].name, "SUCCESS", { kind: "StatusContext" })
+    const receipt = adjudicate([impostor, ...allRequired("SUCCESS").slice(1)])
+    expect(receipt.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(receipt.missingProofs).toContain("work-context-receipt")
+  })
+
+  it("refuses a check carrying no resolvable kind", () => {
+    const receipt = adjudicate([
+      { name: REQUIRED[0].name, workflowName: "work context", conclusion: "SUCCESS" },
+      ...allRequired("SUCCESS").slice(1),
+    ])
+    expect(receipt.verdict).toBe(ADMISSION.INADMISSIBLE)
+    expect(receipt.missingProofs).toContain("work-context-receipt")
+  })
+
+  it("treats a same-name impostor as optional assurance, never as the required proof", () => {
+    const impostor = check(REQUIRED[1].name, "SUCCESS", { workflowName: "not-ci" })
+    const receipt = adjudicate([...allRequired("SUCCESS"), impostor])
+    expect(receipt.verdict).toBe(ADMISSION.ADMISSIBLE)
+    expect(receipt.optionalAssurance.map((o: any) => o.name)).toContain(REQUIRED[1].name)
   })
 })

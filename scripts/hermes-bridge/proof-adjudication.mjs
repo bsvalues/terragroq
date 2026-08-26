@@ -82,12 +82,60 @@ function normaliseName(value) {
   return String(value ?? "").trim().toLowerCase()
 }
 
-function readRequiredProofs(contract) {
+const PROOF_KINDS = new Set(["CheckRun", "StatusContext"])
+
+function checkKind(check) {
+  const kind = String(check?.__typename ?? "")
+  return PROOF_KINDS.has(kind) ? kind : null
+}
+
+function checkWorkflowName(check) {
+  return normaliseName(check?.workflowName ?? check?.checkSuite?.workflowRun?.workflow?.name)
+}
+
+/**
+ * Parse the declared contract, failing CLOSED.
+ *
+ * A malformed entry must never be silently dropped: filtering it out would let a typo delete a
+ * required proof, which is the fail-open case this whole gate exists to prevent. Duplicate proof ids
+ * and duplicate identities are refused for the same reason -- two declarations resolving to one
+ * check would let a single result satisfy two required proofs.
+ *
+ * Proof identity is (kind, workflowName, matchName). Display name alone is not identity: a different
+ * workflow, or a StatusContext sharing the name, could otherwise substitute for the real proof.
+ */
+export function parseContract(contract) {
   const declared = Array.isArray(contract?.requiredProofs) ? contract.requiredProofs : []
-  return declared.map((entry) => ({
-    proofId: String(entry?.proofId ?? ""),
-    matchName: String(entry?.matchName ?? ""),
-  })).filter((entry) => entry.proofId && entry.matchName)
+  const errors = []
+  const proofs = []
+  const seenIds = new Set()
+  const seenIdentities = new Set()
+
+  declared.forEach((entry, index) => {
+    const proofId = String(entry?.proofId ?? "").trim()
+    const matchName = String(entry?.matchName ?? "").trim()
+    const kind = String(entry?.kind ?? "").trim()
+    const workflowName = String(entry?.workflowName ?? "").trim()
+    const at = proofId || `#${index}`
+
+    if (!proofId) errors.push(`ENTRY_MISSING_PROOF_ID:#${index}`)
+    if (!matchName) errors.push(`ENTRY_MISSING_MATCH_NAME:${at}`)
+    if (!PROOF_KINDS.has(kind)) errors.push(`ENTRY_INVALID_KIND:${at}`)
+    if (kind === "CheckRun" && !workflowName) errors.push(`ENTRY_MISSING_WORKFLOW_NAME:${at}`)
+    if (proofId && seenIds.has(proofId)) errors.push(`DUPLICATE_PROOF_ID:${proofId}`)
+    if (proofId) seenIds.add(proofId)
+
+    const identity = `${kind}|${normaliseName(workflowName)}|${normaliseName(matchName)}`
+    if (matchName && PROOF_KINDS.has(kind)) {
+      if (seenIdentities.has(identity)) errors.push(`DUPLICATE_PROOF_IDENTITY:${at}`)
+      seenIdentities.add(identity)
+    }
+
+    proofs.push({ proofId, matchName, kind, workflowName })
+  })
+
+  if (declared.length === 0) errors.push("CONTRACT_DECLARES_NO_REQUIRED_PROOFS")
+  return { proofs, errors }
 }
 
 /**
@@ -101,12 +149,23 @@ function readRequiredProofs(contract) {
  * @returns {object} adjudication receipt
  */
 export function adjudicateMergeAdmission({ contract, checks, headSha, adjudicatedAt } = {}) {
-  const declaredProofs = readRequiredProofs(contract)
+  const { proofs: declaredProofs, errors: contractErrors } = parseContract(contract)
   const observed = Array.isArray(checks) ? checks : []
-  const requiredNames = new Set(declaredProofs.map((entry) => normaliseName(entry.matchName)))
+
+  const identityOf = (entry) => `${entry.kind}|${normaliseName(entry.workflowName)}|${normaliseName(entry.matchName)}`
+  const observedIdentity = (check) => {
+    const kind = checkKind(check)
+    if (!kind) return null
+    // A StatusContext carries no workflow, so its identity is (kind, name) with an empty workflow.
+    const workflow = kind === "CheckRun" ? checkWorkflowName(check) : ""
+    return `${kind}|${workflow}|${normaliseName(proofCheckName(check))}`
+  }
+
+  const requiredIdentities = new Set(declaredProofs.map(identityOf))
 
   const requiredResults = declaredProofs.map((entry) => {
-    const matches = observed.filter((check) => normaliseName(proofCheckName(check)) === normaliseName(entry.matchName))
+    const wanted = identityOf(entry)
+    const matches = observed.filter((check) => observedIdentity(check) === wanted)
     if (matches.length === 0) {
       return { ...entry, state: PROOF_STATE.NOT_REPORTED, satisfied: false, observedState: null }
     }
@@ -124,9 +183,10 @@ export function adjudicateMergeAdmission({ contract, checks, headSha, adjudicate
     }
   })
 
-  // Optional assurance is reported but can never affect admissibility.
+  // Optional assurance is reported but can never affect admissibility. Membership is decided by
+  // full identity, so a check merely sharing a required display name is optional, not required.
   const optionalAssurance = observed
-    .filter((check) => !requiredNames.has(normaliseName(proofCheckName(check))))
+    .filter((check) => !requiredIdentities.has(observedIdentity(check)))
     .map((check) => ({
       name: proofCheckName(check).trim() || "Unnamed check",
       state: classifyProofState(check),
@@ -141,7 +201,8 @@ export function adjudicateMergeAdmission({ contract, checks, headSha, adjudicate
   const failedProofs = requiredResults.filter((r) => r.state === PROOF_STATE.FAILED)
 
   const blockingReasons = []
-  if (declaredProofs.length === 0) blockingReasons.push("CONTRACT_DECLARES_NO_REQUIRED_PROOFS")
+  // A malformed contract fails closed. Dropping a bad entry would let a typo delete a required proof.
+  contractErrors.forEach((reason) => blockingReasons.push(`CONTRACT_INVALID:${reason}`))
   if (!/^[0-9a-f]{40}$/.test(String(headSha ?? ""))) blockingReasons.push("SUBJECT_HEAD_SHA_UNBOUND")
   missingProofs.forEach((r) => blockingReasons.push(`REQUIRED_PROOF_MISSING:${r.proofId}`))
   ambiguousProofs.forEach((r) => blockingReasons.push(`REQUIRED_PROOF_AMBIGUOUS:${r.proofId}`))
@@ -152,6 +213,7 @@ export function adjudicateMergeAdmission({ contract, checks, headSha, adjudicate
   return {
     contractId: String(contract?.contractId ?? ""),
     contractHash: contractHash(contract ?? {}),
+    contractErrors,
     subjectHeadSha: String(headSha ?? ""),
     adjudicatedAt: adjudicatedAt ?? new Date().toISOString(),
     requiredProofs: requiredResults,
