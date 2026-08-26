@@ -23,12 +23,26 @@ describe("canonicalRepoIdentity", () => {
     "ssh://git@github.com/bsvalues/terrafusion_os_1.0.git",
     "git+https://github.com/bsvalues/terrafusion_os_1.0.git",
     "https://github.com/bsvalues/terrafusion_os_1.0/",
-  ])("reduces %s to the canonical slug", (form) => {
-    expect(canonicalRepoIdentity(form)).toBe("bsvalues/terrafusion_os_1.0")
+  ])("reduces %s to the canonical GitHub identity", (form) => {
+    expect(canonicalRepoIdentity(form)).toBe("github.com/bsvalues/terrafusion_os_1.0")
+  })
+
+  it("a bare slug is implicitly GitHub", () => {
+    expect(canonicalRepoIdentity("bsvalues/repo")).toBe("github.com/bsvalues/repo")
   })
 
   it("lowercases for comparison", () => {
-    expect(canonicalRepoIdentity("BSValues/TerraFusion_OS_1.0")).toBe("bsvalues/terrafusion_os_1.0")
+    expect(canonicalRepoIdentity("BSValues/TerraFusion_OS_1.0")).toBe(
+      "github.com/bsvalues/terrafusion_os_1.0",
+    )
+  })
+
+  it("a same-path repo on a FOREIGN host is a different repository", () => {
+    // The premise bug: dropping the host would let a gitlab checkout certify as the canonical
+    // GitHub resource. gitlab.com/bsvalues/repo must not equal the bare (GitHub) slug.
+    expect(canonicalRepoIdentity("https://gitlab.com/bsvalues/repo.git")).toBe("gitlab.com/bsvalues/repo")
+    expect(sameRepository("bsvalues/repo", "https://gitlab.com/bsvalues/repo.git")).toBe(false)
+    expect(sameRepository("https://github.com/bsvalues/repo", "https://gitlab.com/bsvalues/repo")).toBe(false)
   })
 
   it.each([
@@ -101,7 +115,7 @@ describe("bindW1Workspace never falls back to ambient", () => {
       ok: true,
       root: "C:\\Users\\bsval\\terrafusion_os_1.0",
       node: "omen",
-      identity: "bsvalues/terrafusion_os_1.0",
+      identity: "github.com/bsvalues/terrafusion_os_1.0",
       observedRevision: REV,
     })
   })
@@ -141,7 +155,7 @@ describe("bindW1Workspace never falls back to ambient", () => {
   it("refuses REMOTE_MISMATCH when the checkout is a different repository", () => {
     const r = bind({ checkouts: [checkout({ observedIdentity: "git@github.com:bsvalues/terragroq.git" })] })
     expect(r).toMatchObject({ ok: false, refusal: "REMOTE_MISMATCH" })
-    if (!r.ok) expect(r.detail).toMatch(/bsvalues\/terragroq.*not bsvalues\/terrafusion_os_1\.0/)
+    if (!r.ok) expect(r.detail).toMatch(/github\.com\/bsvalues\/terragroq.*not github\.com\/bsvalues\/terrafusion_os_1\.0/)
   })
 
   it("refuses RESOURCE_IDENTITY_UNRECOGNISED for a nonsense canonical identity", () => {
