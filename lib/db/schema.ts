@@ -1533,10 +1533,54 @@ export const projectResourceCheckout = pgTable(
   ],
 )
 
+// Structured, fence-bound proof that a routed dependency was settled BY the executor, not a manual
+// UPDATE. LAND's second fact queries these fields, never settlement prose -- a hand path would have
+// to forge a matching live lease/fence. See lib/outcome-queue/dependency-projection.ts.
+export const dependencySettlementReceipt = pgTable(
+  "dependency_settlement_receipt",
+  {
+    id: serial("id").primaryKey(),
+    canonicalDependencyId: integer("canonicalDependencyId")
+      .notNull()
+      .references(() => routedDependency.id, { onDelete: "cascade" }),
+    projectionQueueItemId: integer("projectionQueueItemId")
+      .notNull()
+      .references(() => outcomeQueueItem.id, { onDelete: "cascade" }),
+    queueTerminalKey: text("queueTerminalKey"),
+    leaseHolder: text("leaseHolder").notNull(),
+    fencingToken: integer("fencingToken").notNull(),
+    executionBinding: text("executionBinding").notNull(),
+    settlementMethod: text("settlementMethod").default("projection_executor").notNull(),
+    routingState: text("routingState").notNull(),
+    bindW1RuntimeBound: boolean("bindW1RuntimeBound").notNull(),
+    observedProjectId: integer("observedProjectId"),
+    observedRevision: text("observedRevision"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("dependency_settlement_receipt_dep_projection_idx").on(
+      table.canonicalDependencyId,
+      table.projectionQueueItemId,
+      table.fencingToken,
+    ),
+    index("dependency_settlement_receipt_dep_idx").on(table.canonicalDependencyId),
+    check(
+      "dependency_settlement_receipt_method_check",
+      sql`${table.settlementMethod} IN ('projection_executor')`,
+    ),
+    check(
+      "dependency_settlement_receipt_routing_check",
+      sql`${table.routingState} IN ('resolved', 'refused')`,
+    ),
+  ],
+)
+
 export type MemoryFact = typeof memoryFact.$inferSelect
 export type Decision = typeof decision.$inferSelect
 export type Doctrine = typeof doctrine.$inferSelect
 export type WorkOrder = typeof workOrder.$inferSelect
+export type DependencySettlementReceipt = typeof dependencySettlementReceipt.$inferSelect
+export type NewDependencySettlementReceipt = typeof dependencySettlementReceipt.$inferInsert
 export type WorkOrderAssignment = typeof workOrderAssignment.$inferSelect
 export type NewWorkOrderAssignment = typeof workOrderAssignment.$inferInsert
 export type WorkOrderTruthBinding = typeof workOrderTruthBinding.$inferSelect

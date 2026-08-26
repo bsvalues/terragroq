@@ -20,6 +20,7 @@
 
 import { envelopePermits, type EnvelopeEntry, type SurfaceClass } from "@/lib/work-orders/authority-surface"
 import type { RoutingState } from "@/lib/work-orders/routed-dependency"
+import { revisionMatches } from "@/lib/work-orders/truth-binding"
 
 /** Dependency states a projection may be created for. A terminal dependency is never projected. */
 export const PROJECTABLE_DEP_STATES: readonly RoutingState[] = ["raised", "routed", "accepted"]
@@ -243,4 +244,105 @@ export function dependencyResolutionFor(queueResult: string): {
 } {
   const passed = queueResult.trim().toUpperCase() === "PASS"
   return { routingState: passed ? "resolved" : "refused", settlesParent: false }
+}
+
+/* ------------------------------------------------------------------ */
+/* Structured settlement receipt — LAND's forge-resistant second fact  */
+/* ------------------------------------------------------------------ */
+
+export const SETTLEMENT_METHOD = "projection_executor" as const
+
+export interface ExecutionFence {
+  projectionQueueItemId: number
+  leaseHolder: string
+  fencingToken: number
+  executionBinding: string
+  queueTerminalKey?: string | null
+}
+
+export interface SettlementEvidence {
+  bindW1RuntimeBound: boolean
+  observedProjectId: number | null
+  observedRevision: string | null
+}
+
+export interface SettlementReceipt {
+  canonicalDependencyId: number
+  projectionQueueItemId: number
+  queueTerminalKey: string | null
+  leaseHolder: string
+  fencingToken: number
+  executionBinding: string
+  settlementMethod: typeof SETTLEMENT_METHOD
+  routingState: Extract<RoutingState, "resolved" | "refused">
+  bindW1RuntimeBound: boolean
+  observedProjectId: number | null
+  observedRevision: string | null
+}
+
+/**
+ * Build the structured settlement receipt. This is what proves the executor ran the graph: the
+ * fence identity is carried from a real leased execution, and a manual settlement cannot produce it
+ * without also fabricating a matching live lease/fence (which the settle operation validates).
+ */
+export function buildSettlementReceipt(input: {
+  dependencyId: number
+  fence: ExecutionFence
+  routingState: Extract<RoutingState, "resolved" | "refused">
+  evidence: SettlementEvidence
+}): SettlementReceipt {
+  return {
+    canonicalDependencyId: input.dependencyId,
+    projectionQueueItemId: input.fence.projectionQueueItemId,
+    queueTerminalKey: input.fence.queueTerminalKey ?? null,
+    leaseHolder: input.fence.leaseHolder,
+    fencingToken: input.fence.fencingToken,
+    executionBinding: input.fence.executionBinding,
+    settlementMethod: SETTLEMENT_METHOD,
+    routingState: input.routingState,
+    bindW1RuntimeBound: input.evidence.bindW1RuntimeBound,
+    observedProjectId: input.evidence.observedProjectId,
+    observedRevision: input.evidence.observedRevision,
+  }
+}
+
+export type SettlementProofRefusal =
+  | "NO_EXECUTOR_RECEIPT"
+  | "WRONG_METHOD"
+  | "NOT_RESOLVED"
+  | "NOT_BOUND"
+  | "WRONG_PROJECT"
+  | "WRONG_REVISION"
+  | "PROJECTION_MISMATCH"
+
+/**
+ * LAND's second fact, as a query over structured receipt fields -- NOT settlement prose.
+ *
+ * There must exist an executor-produced receipt linking this dependency to the expected queue
+ * projection, settled `resolved` under `projection_executor`, with bindW1Runtime = bound at the
+ * exact observed Project and revision. Anything else refuses. A human who started TerraFusion and
+ * hand-updated the dependency row produces no such receipt.
+ */
+export function verifyExecutorSettlement(input: {
+  receipt: SettlementReceipt | null | undefined
+  expectDependencyId: number
+  expectProjectionQueueItemId: number
+  expectProjectId: number
+  expectRevision: string
+}): { ok: true; receipt: SettlementReceipt } | { ok: false; refusal: SettlementProofRefusal } {
+  const r = input.receipt
+  if (!r || r.canonicalDependencyId !== input.expectDependencyId) {
+    return { ok: false, refusal: "NO_EXECUTOR_RECEIPT" }
+  }
+  if (r.settlementMethod !== SETTLEMENT_METHOD) return { ok: false, refusal: "WRONG_METHOD" }
+  if (r.projectionQueueItemId !== input.expectProjectionQueueItemId) {
+    return { ok: false, refusal: "PROJECTION_MISMATCH" }
+  }
+  if (r.routingState !== "resolved") return { ok: false, refusal: "NOT_RESOLVED" }
+  if (!r.bindW1RuntimeBound) return { ok: false, refusal: "NOT_BOUND" }
+  if (r.observedProjectId !== input.expectProjectId) return { ok: false, refusal: "WRONG_PROJECT" }
+  if (!r.observedRevision || !revisionMatches(input.expectRevision, r.observedRevision)) {
+    return { ok: false, refusal: "WRONG_REVISION" }
+  }
+  return { ok: true, receipt: r }
 }

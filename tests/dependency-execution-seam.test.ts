@@ -11,7 +11,7 @@ import {
   verifyProjectionForExecution as tsVerify,
 } from "@/lib/outcome-queue/dependency-projection"
 
-const ENVELOPE = { resource: "workspace-runtime", surfaceClass: "runtime_control", capability: "control" }
+const ENVELOPE = { resource: "workspace-runtime", surfaceClass: "runtime_control" as const, capability: "control" }
 const TB_REF = "binding:1:project:2"
 const DIGEST = seamDigest(ENVELOPE, TB_REF)
 
@@ -193,5 +193,28 @@ describe("completeExecutionSubject", () => {
     expect(settleDependency).not.toHaveBeenCalled()
     expect(terminalizeProjection).not.toHaveBeenCalled()
     expect(releaseProjection).toHaveBeenCalled()
+  })
+})
+
+import { buildSettlementReceipt as seamBuildReceipt } from "@/scripts/hermes-bridge/dependency-execution-seam.mjs"
+import { buildSettlementReceipt as tsBuildReceipt } from "@/lib/outcome-queue/dependency-projection"
+
+describe("settlement receipt parity + fence threading", () => {
+  const fence = { projectionQueueItemId: 23, leaseHolder: "h", fencingToken: 7, executionBinding: "b", queueTerminalKey: "k" }
+  const ev = { bindW1RuntimeBound: true, observedProjectId: 2, observedRevision: "5a328e72" }
+
+  it(".mjs receipt matches the TS receipt", () => {
+    const a = seamBuildReceipt({ dependencyId: 2, fence, routingState: "resolved", evidence: ev })
+    const b = tsBuildReceipt({ dependencyId: 2, fence, routingState: "resolved", evidence: ev })
+    expect(a).toEqual(b)
+  })
+
+  it("completeExecutionSubject threads the fence + settlementEvidence to settleDependency", async () => {
+    const settleDependency = vi.fn(async () => ({ routingState: "resolved", parentWorkOrderId: 55 }))
+    await completeExecutionSubject(
+      { subject: { kind: "dependency", ok: true, dependencyId: 2, workOrderId: 55 }, evidence: ["ev"], queueResult: "PASS" },
+      { completeGoal: vi.fn(), settleDependency, terminalizeProjection: vi.fn(), releaseProjection: vi.fn(), fence, settlementEvidence: ev },
+    )
+    expect(settleDependency).toHaveBeenCalledWith(expect.objectContaining({ fence, settlementEvidence: ev }))
   })
 })

@@ -90,6 +90,29 @@ export function verifyProjectionForExecution({ projection, liveDep, liveEnvelope
   return { ok: true }
 }
 
+export const SETTLEMENT_METHOD = "projection_executor"
+
+/**
+ * Build the structured settlement receipt. Mirrors buildSettlementReceipt in
+ * lib/outcome-queue/dependency-projection.ts (parity-tested). The fence is carried from the real
+ * leased execution; a manual settlement cannot produce it without forging a matching live lease.
+ */
+export function buildSettlementReceipt({ dependencyId, fence, routingState, evidence }) {
+  return {
+    canonicalDependencyId: dependencyId,
+    projectionQueueItemId: fence.projectionQueueItemId,
+    queueTerminalKey: fence.queueTerminalKey ?? null,
+    leaseHolder: fence.leaseHolder,
+    fencingToken: fence.fencingToken,
+    executionBinding: fence.executionBinding,
+    settlementMethod: SETTLEMENT_METHOD,
+    routingState,
+    bindW1RuntimeBound: evidence.bindW1RuntimeBound,
+    observedProjectId: evidence.observedProjectId ?? null,
+    observedRevision: evidence.observedRevision ?? null,
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Subject resolution — the executor boundary branch                   */
 /* ------------------------------------------------------------------ */
@@ -171,6 +194,10 @@ export async function completeExecutionSubject({ subject, evidence, queueResult 
       dependencyId: subject.dependencyId,
       queueResult,
       evidence,
+      // The fence + structured acceptance evidence become the forge-resistant receipt. Without a
+      // real leased fence, settlement cannot produce a valid receipt.
+      fence: ops.fence,
+      settlementEvidence: ops.settlementEvidence,
     })
   } catch (error) {
     // Settlement failed AFTER the work ran. Do not pretend the graph advanced.

@@ -268,3 +268,75 @@ describe("computeEnvelopeDigest", () => {
     expect(computeEnvelopeDigest(ENVELOPE, "binding:2:project:2")).not.toBe(base)
   })
 })
+
+/* ------------------------------------------------------------------ */
+/* Structured settlement receipt — LAND's forge-resistant second fact  */
+/* ------------------------------------------------------------------ */
+
+import { buildSettlementReceipt, verifyExecutorSettlement, SETTLEMENT_METHOD } from "@/lib/outcome-queue/dependency-projection"
+
+const FENCE = {
+  projectionQueueItemId: 23,
+  leaseHolder: "hermes:outcome-queue",
+  fencingToken: 7,
+  executionBinding: "exec-abc",
+  queueTerminalKey: "hermes:routed-dependency:2:7:dependency",
+}
+const EV = { bindW1RuntimeBound: true, observedProjectId: 2, observedRevision: "5a328e728852dc2bb933d704d0daa5c54750728c" }
+
+function goodReceipt() {
+  return buildSettlementReceipt({ dependencyId: 2, fence: FENCE, routingState: "resolved", evidence: EV })
+}
+const EXPECT = {
+  expectDependencyId: 2,
+  expectProjectionQueueItemId: 23,
+  expectProjectId: 2,
+  expectRevision: "5a328e728852dc2bb933d704d0daa5c54750728c",
+}
+
+describe("verifyExecutorSettlement — LAND fact 2 from structured receipt, not prose", () => {
+  it("accepts a valid executor receipt", () => {
+    expect(verifyExecutorSettlement({ receipt: goodReceipt(), ...EXPECT })).toMatchObject({ ok: true })
+  })
+
+  it("the receipt carries the fence and the projection_executor method", () => {
+    const r = goodReceipt()
+    expect(r.settlementMethod).toBe(SETTLEMENT_METHOD)
+    expect(r.fencingToken).toBe(7)
+    expect(r.projectionQueueItemId).toBe(23)
+  })
+
+  it("FORGE-RESISTANCE: no receipt at all refuses (a manual UPDATE produces none)", () => {
+    expect(verifyExecutorSettlement({ receipt: null, ...EXPECT })).toMatchObject({ ok: false, refusal: "NO_EXECUTOR_RECEIPT" })
+  })
+
+  it("refuses a receipt claiming a different settlement method", () => {
+    const r = { ...goodReceipt(), settlementMethod: "manual" as never }
+    expect(verifyExecutorSettlement({ receipt: r, ...EXPECT })).toMatchObject({ ok: false, refusal: "WRONG_METHOD" })
+  })
+
+  it("refuses if the binder did not bind", () => {
+    const r = buildSettlementReceipt({ dependencyId: 2, fence: FENCE, routingState: "resolved", evidence: { ...EV, bindW1RuntimeBound: false } })
+    expect(verifyExecutorSettlement({ receipt: r, ...EXPECT })).toMatchObject({ ok: false, refusal: "NOT_BOUND" })
+  })
+
+  it("refuses the wrong observed Project", () => {
+    const r = buildSettlementReceipt({ dependencyId: 2, fence: FENCE, routingState: "resolved", evidence: { ...EV, observedProjectId: 41 } })
+    expect(verifyExecutorSettlement({ receipt: r, ...EXPECT })).toMatchObject({ ok: false, refusal: "WRONG_PROJECT" })
+  })
+
+  it("refuses the wrong TerraFusion revision", () => {
+    const r = buildSettlementReceipt({ dependencyId: 2, fence: FENCE, routingState: "resolved", evidence: { ...EV, observedRevision: "deadbeef00112233445566778899aabbccddeeff" } })
+    expect(verifyExecutorSettlement({ receipt: r, ...EXPECT })).toMatchObject({ ok: false, refusal: "WRONG_REVISION" })
+  })
+
+  it("refuses a receipt bound to a different projection", () => {
+    const r = buildSettlementReceipt({ dependencyId: 2, fence: { ...FENCE, projectionQueueItemId: 999 }, routingState: "resolved", evidence: EV })
+    expect(verifyExecutorSettlement({ receipt: r, ...EXPECT })).toMatchObject({ ok: false, refusal: "PROJECTION_MISMATCH" })
+  })
+
+  it("accepts an abbreviated revision that prefixes the bound one", () => {
+    const r = buildSettlementReceipt({ dependencyId: 2, fence: FENCE, routingState: "resolved", evidence: { ...EV, observedRevision: "5a328e72" } })
+    expect(verifyExecutorSettlement({ receipt: r, ...EXPECT })).toMatchObject({ ok: true })
+  })
+})

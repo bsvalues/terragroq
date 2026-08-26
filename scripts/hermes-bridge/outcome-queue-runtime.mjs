@@ -17,7 +17,7 @@ import {
   verifyOutcomeQueueWorkOrderBinding,
 } from "./outcome-queue-source.mjs"
 import { readHermesState } from "./state-store.mjs"
-import { resolveExecutionSubject, completeExecutionSubject } from "./dependency-execution-seam.mjs"
+import { resolveExecutionSubject, completeExecutionSubject, buildSettlementReceipt } from "./dependency-execution-seam.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
 import {
   completeOutcome as completeGoalOutcome,
@@ -1341,17 +1341,48 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       }
     }))
 
-  const settleDependency = options.settleDependency ?? (async ({ dependencyId, queueResult, evidence }) =>
+  const settleDependency = options.settleDependency ?? (async ({ dependencyId, queueResult, evidence, fence, settlementEvidence }) =>
     database.withPool(async (pool) => {
       const passed = String(queueResult).trim().toUpperCase() === "PASS"
       const routingState = passed ? "resolved" : "refused"
       const dep = (await pool.query(
         `SELECT "workOrderId", evidence FROM routed_dependency WHERE id = $1`, [dependencyId])).rows[0]
       if (!dep) throw new Error("Canonical dependency not found")
+
+      // Fail closed: a receipt requires a fence that MATCHES the live lease on the projection. A
+      // manual settlement has no such fence, and a stale/forged one will not match the live row.
+      if (!fence || !Number.isSafeInteger(Number(fence.projectionQueueItemId))) {
+        throw new Error("settlement requires an execution fence (projectionQueueItemId)")
+      }
+      const q = (await pool.query(
+        `SELECT id, "leaseHolder", "fencingToken", "executionBinding", "lifecycleState"
+           FROM outcome_queue_item WHERE id = $1`, [fence.projectionQueueItemId])).rows[0]
+      if (!q
+        || q.lifecycleState !== "active"
+        || q.leaseHolder !== fence.leaseHolder
+        || Number(q.fencingToken) !== Number(fence.fencingToken)
+        || q.executionBinding !== fence.executionBinding) {
+        throw new Error("execution fence does not match the live projection lease")
+      }
+
+      const receipt = buildSettlementReceipt({
+        dependencyId, fence, routingState,
+        evidence: settlementEvidence ?? { bindW1RuntimeBound: false, observedProjectId: null, observedRevision: null },
+      })
+      await pool.query(
+        `INSERT INTO dependency_settlement_receipt
+           ("canonicalDependencyId", "projectionQueueItemId", "queueTerminalKey", "leaseHolder",
+            "fencingToken", "executionBinding", "settlementMethod", "routingState",
+            "bindW1RuntimeBound", "observedProjectId", "observedRevision")
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [receipt.canonicalDependencyId, receipt.projectionQueueItemId, receipt.queueTerminalKey,
+         receipt.leaseHolder, receipt.fencingToken, receipt.executionBinding, receipt.settlementMethod,
+         receipt.routingState, receipt.bindW1RuntimeBound, receipt.observedProjectId, receipt.observedRevision])
+
       await pool.query(
         `UPDATE routed_dependency SET "routingState" = $1, "resolvedAt" = now(),
            resolution = $2, evidence = $3, "updatedAt" = now() WHERE id = $4`,
-        [routingState, `Settled from queue projection: ${queueResult}`,
+        [routingState, `Settled by projection_executor (receipt); queue #${fence.projectionQueueItemId}`,
          [...(dep.evidence ?? []), ...(evidence ?? [])], dependencyId])
       return { routingState, parentWorkOrderId: Number(dep.workOrderId) }
     }))
@@ -1361,7 +1392,8 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   }
 
   function governedDependencyOutcome(item, subject) {
-    // No fake Goal. An explicit, minimal governed outcome carrying the discriminated subject.
+    // No fake Goal. An explicit, minimal governed outcome carrying the discriminated subject and the
+    // queue item id, so the settlement receipt can name the exact projection under fence.
     return {
       outcomeKey: item.outcomeKey,
       userId: item.userId,
@@ -1369,7 +1401,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       authorityGrantRef: item.authorityGrantRef,
       title: (typeof item.title === "string" && item.title.trim() !== "") ? item.title.trim() : `dependency:${subject.dependencyId}`,
       command: item.objective ?? "",
-      executionSubject: subject,
+      executionSubject: { ...subject, projectionQueueItemId: Number(item.id) },
     }
   }
   const now = options.now ?? (() => new Date())
@@ -1507,10 +1539,25 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       if (refs.length === 0) {
         wall("Queue completion requires reviewed delivery evidence", "HERMES_OUTCOME_QUEUE_EVIDENCE_WALL")
       }
+      const fence = {
+        projectionQueueItemId: Number(outcome.executionSubject.projectionQueueItemId),
+        leaseHolder: binding.leaseHolder,
+        fencingToken: binding.fencingToken,
+        executionBinding: binding.executionBinding,
+        queueTerminalKey: `hermes:${binding.outcomeKey}:${binding.fencingToken}:dependency`,
+      }
+      // The runtime execution populates the structured acceptance evidence (bindW1Runtime = bound,
+      // observed Project, observed revision). A receipt with bindW1RuntimeBound=false cannot satisfy
+      // LAND's second fact, so the executor must only pass true when the binder actually bound.
+      const settlementEvidence = outcome.executionResult ?? {
+        bindW1RuntimeBound: false, observedProjectId: null, observedRevision: null,
+      }
       return completeExecutionSubject(
         { subject: outcome.executionSubject, evidence: refs, queueResult: "PASS" },
         {
           completeGoal: async () => { throw new Error("goal completion not applicable to a dependency subject") },
+          fence,
+          settlementEvidence,
           settleDependency,
           terminalizeProjection: async ({ evidence: evRefs }) => {
             await completeQueue({
