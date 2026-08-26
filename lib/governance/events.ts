@@ -14,6 +14,14 @@ export const GOVERNANCE_EVENT_TYPES = [
   "WO_READY_FOR_APPROVAL",
   "WO_AUTHORIZED",
   "WO_TRANSITION",
+  // Assignment is a governed act in its own right: authority is not dispatch, so who was offered
+  // work, who took it, and who handed it back belongs in the audit record. A decline in particular
+  // must be legible to the router rather than to a conversation — lib/work-orders/assignment.ts.
+  "WO_ASSIGNMENT_OFFERED",
+  "WO_ASSIGNMENT_ACCEPTED",
+  "WO_ASSIGNMENT_DECLINED",
+  "WO_ASSIGNMENT_RECLAIMED",
+  "WO_ASSIGNMENT_REVOKED",
   "AUTHORITY_GRANTED",
   "AUTHORITY_REVOKED",
   "AUTHORITY_EXPIRED",

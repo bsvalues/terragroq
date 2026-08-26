@@ -1200,10 +1200,69 @@ export const eventLog = pgTable("event_log", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 })
 
+// Who may actually ACT on a work order, as opposed to who owns it. Ownership was standing in for
+// execution rights (WORK_ORDER_DELEGATED_SUBJECT_UNRESOLVED): reads filtered on userId, mutations
+// went through requireOwn, and `agent` never reached a WHERE clause -- so approved agent work was
+// held and truthfully reported as absent. An assignment is also an OFFER until accepted: declining
+// is routine, typed, and ends the assignment rather than the work order. The policy this table
+// carries lives in lib/work-orders/assignment.ts.
+export const workOrderAssignment = pgTable(
+  "work_order_assignment",
+  {
+    id: serial("id").primaryKey(),
+    workOrderId: integer("workOrderId")
+      .notNull()
+      .references(() => workOrder.id, { onDelete: "cascade" }),
+    // The authenticated identity that will act -- not a label, not a catalog name.
+    principal: text("principal").notNull(),
+    // Capability profile (codex | claude-code | copilot | local). A profile, never an identity.
+    agentProfile: text("agentProfile"),
+    role: text("role").default("implementer").notNull(),
+    status: text("status").default("offered").notNull(),
+    // Required when status = 'declined'. Information for the router, not a failure record.
+    declineReason: text("declineReason"),
+    declineDetail: text("declineDetail"),
+    // Accepted work must heartbeat or be reclaimed and re-offered.
+    leaseExpiresAt: timestamp("leaseExpiresAt", { withTimezone: true }),
+    heartbeatAt: timestamp("heartbeatAt", { withTimezone: true }),
+    assignedBy: text("assignedBy"),
+    assignedAt: timestamp("assignedAt", { withTimezone: true }).defaultNow().notNull(),
+    acceptedAt: timestamp("acceptedAt", { withTimezone: true }),
+    declinedAt: timestamp("declinedAt", { withTimezone: true }),
+    releasedAt: timestamp("releasedAt", { withTimezone: true }),
+    reclaimedAt: timestamp("reclaimedAt", { withTimezone: true }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("work_order_assignment_principal_status_idx").on(
+      table.principal,
+      table.status,
+      table.workOrderId,
+    ),
+    index("work_order_assignment_wo_status_idx").on(table.workOrderId, table.status),
+    index("work_order_assignment_lease_idx").on(table.status, table.leaseExpiresAt),
+    check(
+      "work_order_assignment_status_check",
+      sql`${table.status} IN ('offered', 'accepted', 'active', 'declined', 'released', 'revoked')`,
+    ),
+    check(
+      "work_order_assignment_role_check",
+      sql`${table.role} IN ('implementer', 'reviewer', 'collaborator', 'subagent')`,
+    ),
+    check(
+      "work_order_assignment_declined_needs_reason",
+      sql`${table.status} <> 'declined' OR ${table.declineReason} IS NOT NULL`,
+    ),
+  ],
+)
+
 export type MemoryFact = typeof memoryFact.$inferSelect
 export type Decision = typeof decision.$inferSelect
 export type Doctrine = typeof doctrine.$inferSelect
 export type WorkOrder = typeof workOrder.$inferSelect
+export type WorkOrderAssignment = typeof workOrderAssignment.$inferSelect
+export type NewWorkOrderAssignment = typeof workOrderAssignment.$inferInsert
 export type Project = typeof project.$inferSelect
 export type NewProject = typeof project.$inferInsert
 export type ProjectResource = typeof projectResource.$inferSelect

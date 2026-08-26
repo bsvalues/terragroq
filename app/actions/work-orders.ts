@@ -1,7 +1,7 @@
 "use server"
 
 import { db } from "@/lib/db"
-import { workOrder } from "@/lib/db/schema"
+import { workOrder, workOrderAssignment } from "@/lib/db/schema"
 import type { WorkOrder } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
@@ -17,7 +17,13 @@ import { checkAgentPermission } from "@/lib/goal/agent-matrix"
 import { createAuthorityGrant } from "@/app/actions/authority"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { authorityRank } from "@/lib/goal/taxonomy"
-import { and, desc, eq } from "drizzle-orm"
+import {
+  resolveAccess,
+  LIVE_ASSIGNMENT_STATUSES,
+  type AssignmentLike,
+  type WorkOrderAccess,
+} from "@/lib/work-orders/assignment"
+import { and, desc, eq, inArray, or } from "drizzle-orm"
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -43,27 +49,92 @@ function splitList(v?: string | string[]): string[] {
   return arr.map((s) => s.trim()).filter(Boolean)
 }
 
-async function requireOwn(id: number, userId: string): Promise<WorkOrder> {
-  const [row] = await db
-    .select()
-    .from(workOrder)
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
-    .limit(1)
+/**
+ * Load a work order together with what this principal may do with it.
+ *
+ * This replaces `requireOwn(id, userId)`, which asked only "do you own this row?" and threw
+ * "Work order not found" otherwise. Ownership was standing in for execution rights, so approved
+ * work assigned to an agent was held by the server and truthfully reported as absent
+ * (WORK_ORDER_DELEGATED_SUBJECT_UNRESOLVED). The two questions are now asked separately: the owner
+ * still governs, an assigned executor may execute, and nobody gains governance by being handed work.
+ */
+async function loadAccess(
+  id: number,
+  principal: string,
+): Promise<{ wo: WorkOrder; access: WorkOrderAccess }> {
+  const [row] = await db.select().from(workOrder).where(eq(workOrder.id, id)).limit(1)
   if (!row) throw new Error("Work order not found")
-  return row
+
+  const assignments = await db
+    .select({
+      workOrderId: workOrderAssignment.workOrderId,
+      principal: workOrderAssignment.principal,
+      role: workOrderAssignment.role,
+      status: workOrderAssignment.status,
+    })
+    .from(workOrderAssignment)
+    .where(eq(workOrderAssignment.workOrderId, id))
+
+  const access = resolveAccess(row.userId, principal, assignments as AssignmentLike[])
+  // Invisible is indistinguishable from absent, deliberately: not holding an assignment should not
+  // let a principal enumerate someone else's work orders by probing ids.
+  if (!access.visible) throw new Error("Work order not found")
+  return { wo: row, access }
+}
+
+/** Governance acts — approve, gates, delete, contract edits. Assignment never confers these. */
+async function requireGovern(id: number, principal: string): Promise<WorkOrder> {
+  const { wo, access } = await loadAccess(id, principal)
+  if (!access.canGovern) {
+    throw new Error(
+      "Not authorised to govern this work order — assignment carries execution, not authority",
+    )
+  }
+  return wo
+}
+
+/** Execution acts — evidence, results, moving the work along. Owner or assigned implementer. */
+async function requireExecute(id: number, principal: string): Promise<WorkOrder> {
+  const { wo, access } = await loadAccess(id, principal)
+  if (!access.canExecute) {
+    throw new Error(
+      access.basis === "assignment"
+        ? "Assignment is not yet accepted — accept the offer before working it"
+        : "Not authorised to execute this work order",
+    )
+  }
+  return wo
 }
 
 /* ------------------------------------------------------------------ */
 /* Reads                                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Work orders this principal can see: the ones they own, plus the ones they hold a live assignment
+ * on. The second half is the repair — before it, an agent asking the server for its work got an
+ * honest empty list while that work sat in the owner's namespace.
+ */
 export async function getWorkOrders() {
   const userId = await getUserId()
-  return db
-    .select()
-    .from(workOrder)
-    .where(eq(workOrder.userId, userId))
-    .orderBy(desc(workOrder.createdAt))
+
+  const assigned = await db
+    .select({ workOrderId: workOrderAssignment.workOrderId })
+    .from(workOrderAssignment)
+    .where(
+      and(
+        eq(workOrderAssignment.principal, userId),
+        inArray(workOrderAssignment.status, [...LIVE_ASSIGNMENT_STATUSES]),
+      ),
+    )
+
+  const ids = [...new Set(assigned.map((a) => a.workOrderId))]
+  const scope =
+    ids.length > 0
+      ? or(eq(workOrder.userId, userId), inArray(workOrder.id, ids))
+      : eq(workOrder.userId, userId)
+
+  return db.select().from(workOrder).where(scope).orderBy(desc(workOrder.createdAt))
 }
 
 /* ------------------------------------------------------------------ */
@@ -147,7 +218,12 @@ export async function transitionWorkOrder(
   opts?: { approveDoctrine?: boolean; grantAuthority?: boolean },
 ): Promise<TransitionResult> {
   const userId = await getUserId()
-  const wo = await requireOwn(id, userId)
+  // Authorising a WO and certifying its closure are governance acts; everything else on the path
+  // is the work itself, which an accepted implementer may drive.
+  const governing = to === "approved" || to === "closed"
+  const wo = governing
+    ? await requireGovern(id, userId)
+    : await requireExecute(id, userId)
 
   if (!canTransition(wo.status, to)) {
     return {
@@ -221,7 +297,7 @@ export async function transitionWorkOrder(
       completedAt: to === "closed" ? new Date() : wo.completedAt,
       updatedAt: new Date(),
     })
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
+    .where(eq(workOrder.id, id))
 
   // WO-011: authorization above A0 mints a durable AuthorityGrant record — the
   // WO's authorityGranted field is a display mirror, not the source of truth.
@@ -275,7 +351,7 @@ export async function updateWorkOrderContract(
   },
 ) {
   const userId = await getUserId()
-  const wo = await requireOwn(id, userId)
+  const wo = await requireGovern(id, userId)
   if (wo.status !== "draft" && wo.status !== "proposed") {
     throw new Error("Contract can only be edited while the WO is a draft or proposed")
   }
@@ -303,7 +379,7 @@ export async function updateWorkOrderContract(
           : wo.stopConditions,
       updatedAt: new Date(),
     })
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
+    .where(eq(workOrder.id, id))
   await logEvent({
     userId,
     type: "work_order.contract",
@@ -315,12 +391,12 @@ export async function updateWorkOrderContract(
 
 export async function linkWorkOrderEvidence(id: number, evidence: string) {
   const userId = await getUserId()
-  const wo = await requireOwn(id, userId)
+  const wo = await requireExecute(id, userId)
   const next = [...wo.evidence, evidence.trim()].filter(Boolean)
   await db
     .update(workOrder)
     .set({ evidence: next, updatedAt: new Date() })
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
+    .where(eq(workOrder.id, id))
   await logEvent({
     userId,
     type: "work_order.evidence",
@@ -359,7 +435,7 @@ export async function recordWorkOrderResult(
   input: { result: "PASS" | "FAIL" | "PARTIAL"; commitRef?: string; tagRef?: string },
 ) {
   const userId = await getUserId()
-  const wo = await requireOwn(id, userId)
+  const wo = await requireExecute(id, userId)
 
   if (input.commitRef && !wo.commitAllowed) {
     throw new Error("Commit gate is closed — open it before recording a commit ref")
@@ -376,7 +452,7 @@ export async function recordWorkOrderResult(
       tagRef: input.tagRef ?? wo.tagRef,
       updatedAt: new Date(),
     })
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
+    .where(eq(workOrder.id, id))
   await logEvent({
     userId,
     type: "work_order.result",
@@ -394,13 +470,13 @@ export async function setWorkOrderGate(
   open: boolean,
 ) {
   const userId = await getUserId()
-  const wo = await requireOwn(id, userId)
+  const wo = await requireGovern(id, userId)
   const field =
     gate === "commit" ? "commitAllowed" : gate === "tag" ? "tagAllowed" : "pushAllowed"
   await db
     .update(workOrder)
     .set({ [field]: open, updatedAt: new Date() })
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
+    .where(eq(workOrder.id, id))
   await logEvent({
     userId,
     type: "work_order.gate",
@@ -412,9 +488,11 @@ export async function setWorkOrderGate(
 
 export async function deleteWorkOrder(id: number) {
   const userId = await getUserId()
-  await db
-    .delete(workOrder)
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
+  // Ownership used to be enforced only by this statement's WHERE clause. Now that access is
+  // resolved before the write, the guard has to be explicit — deleting is a governance act, and an
+  // assigned executor must never be able to destroy the contract it was handed.
+  await requireGovern(id, userId)
+  await db.delete(workOrder).where(eq(workOrder.id, id))
 }
 
 /* ------------------------------------------------------------------ */
@@ -424,6 +502,6 @@ export async function deleteWorkOrder(id: number) {
 // Server action wrapper so the client can request the report by id.
 export async function getClosureReport(id: number): Promise<string> {
   const userId = await getUserId()
-  const wo = await requireOwn(id, userId)
+  const { wo } = await loadAccess(id, userId)
   return buildClosureReport(wo)
 }
