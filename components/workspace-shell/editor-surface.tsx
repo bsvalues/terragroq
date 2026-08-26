@@ -88,8 +88,8 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
   )
 }
 
-export function EditorSurface({ projectName, space, onEditorChange }: {
-  projectName: string
+export function EditorSurface({ projectName = "TerraFusion", space, onEditorChange }: {
+  projectName?: string
   space: WorkspaceSpace
   onEditorChange: (editor: WorkspaceSpace["editor"], selectedPath: string | null) => void
 }) {
