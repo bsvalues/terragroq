@@ -22,6 +22,12 @@ export const GOVERNANCE_EVENT_TYPES = [
   "WO_ASSIGNMENT_DECLINED",
   "WO_ASSIGNMENT_RECLAIMED",
   "WO_ASSIGNMENT_REVOKED",
+  // What a contract is working on, and whether the thing observed at acceptance was that thing.
+  // A rebind is legitimate movement with a recorded reason; an unrecorded move is what surfaces
+  // later as a failed premise -- see lib/work-orders/truth-binding.ts.
+  "WO_TRUTH_BOUND",
+  "WO_TRUTH_REBOUND",
+  "WO_ACCEPTANCE_ATTEMPTED",
   "AUTHORITY_GRANTED",
   "AUTHORITY_REVOKED",
   "AUTHORITY_EXPIRED",

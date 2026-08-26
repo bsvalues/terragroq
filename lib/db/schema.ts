@@ -1257,12 +1257,147 @@ export const workOrderAssignment = pgTable(
   ],
 )
 
+// What a work order is actually working on. `work_order` could not say -- no projectId, no resource
+// reference, no revision, only path strings -- so a contract could not express "canonical Project X,
+// repo Y, at SHA Z" and correct work against the wrong tree contradicted nothing in the record.
+// Bound at ACTIVATION, because binding first at acceptance discovers a failed premise days late.
+// Rules live in lib/work-orders/truth-binding.ts.
+export const workOrderTruthBinding = pgTable(
+  "work_order_truth_binding",
+  {
+    id: serial("id").primaryKey(),
+    workOrderId: integer("workOrderId")
+      .notNull()
+      .references(() => workOrder.id, { onDelete: "cascade" }),
+    projectId: integer("projectId")
+      .notNull()
+      .references(() => project.id, { onDelete: "restrict" }),
+    // The resource the running application must be served FROM -- derived from the Project, never
+    // an ambient environment URL.
+    runtimeResourceKey: text("runtimeResourceKey"),
+    status: text("status").default("bound").notNull(),
+    boundAt: timestamp("boundAt", { withTimezone: true }).defaultNow().notNull(),
+    boundBy: text("boundBy"),
+    supersededAt: timestamp("supersededAt", { withTimezone: true }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("work_order_truth_binding_project_idx").on(table.projectId, table.status),
+    check(
+      "work_order_truth_binding_status_check",
+      sql`${table.status} IN ('bound', 'superseded')`,
+    ),
+  ],
+)
+
+// canonicalIdentity and ratifiedAt are SNAPSHOTS taken at binding time: if the resource record is
+// later edited, acceptance is still judged against what the contract was activated against.
+export const workOrderBoundResource = pgTable(
+  "work_order_bound_resource",
+  {
+    id: serial("id").primaryKey(),
+    bindingId: integer("bindingId")
+      .notNull()
+      .references(() => workOrderTruthBinding.id, { onDelete: "cascade" }),
+    resourceKey: text("resourceKey").notNull(),
+    projectResourceId: integer("projectResourceId").references(() => projectResource.id, {
+      onDelete: "set null",
+    }),
+    resourceType: text("resourceType").notNull(),
+    canonicalIdentity: text("canonicalIdentity").notNull(),
+    role: text("role").default("source").notNull(),
+    // NULL means the owner has never confirmed this resource record. Work may proceed; acceptance
+    // must say so and cannot certify.
+    ratifiedAt: timestamp("ratifiedAt", { withTimezone: true }),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    unique("work_order_bound_resource_unique").on(table.bindingId, table.resourceKey),
+    check(
+      "work_order_bound_resource_role_check",
+      sql`${table.role} IN ('source', 'runtime', 'data', 'reference')`,
+    ),
+  ],
+)
+
+// The revision lineage. Append-only: movement between revisions is evidence, and rewriting it would
+// defeat the point of binding at activation. bound = base at activation; rebound = moved for a
+// reason outside this contract; successor = a revision this contract produced.
+export const workOrderBindingEvent = pgTable(
+  "work_order_binding_event",
+  {
+    id: serial("id").primaryKey(),
+    bindingId: integer("bindingId")
+      .notNull()
+      .references(() => workOrderTruthBinding.id, { onDelete: "cascade" }),
+    resourceKey: text("resourceKey").notNull(),
+    event: text("event").notNull(),
+    sha: text("sha").notNull(),
+    reason: text("reason"),
+    recordedBy: text("recordedBy"),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("work_order_binding_event_lineage_idx").on(
+      table.bindingId,
+      table.resourceKey,
+      table.at,
+    ),
+    check(
+      "work_order_binding_event_kind_check",
+      sql`${table.event} IN ('bound', 'rebound', 'successor')`,
+    ),
+  ],
+)
+
+// An acceptance ATTEMPT is not the work order's fate. PREMISE_FAILED normally sends the contract
+// back to active to rebind and continue; it is terminal only when the outcome itself has become
+// impossible. `observed` holds what was actually seen, never what was requested.
+export const workOrderAcceptanceAttempt = pgTable(
+  "work_order_acceptance_attempt",
+  {
+    id: serial("id").primaryKey(),
+    workOrderId: integer("workOrderId")
+      .notNull()
+      .references(() => workOrder.id, { onDelete: "cascade" }),
+    bindingId: integer("bindingId").references(() => workOrderTruthBinding.id, {
+      onDelete: "set null",
+    }),
+    disposition: text("disposition").notNull(),
+    reason: text("reason"),
+    verifiedBy: text("verifiedBy").notNull(),
+    // A WilliamOS-owned deterministic verifier is the default and preferred path; a distinct
+    // principal is required only where the risk class needs judgment or separation of duties.
+    verifierKind: text("verifierKind").default("deterministic").notNull(),
+    observed: jsonb("observed"),
+    divergences: jsonb("divergences"),
+    at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index("work_order_acceptance_attempt_wo_idx").on(table.workOrderId, table.at),
+    check(
+      "work_order_acceptance_attempt_disposition_check",
+      sql`${table.disposition} IN ('PASS', 'FAIL', 'PARTIAL', 'PREMISE_FAILED')`,
+    ),
+    check(
+      "work_order_acceptance_attempt_verifier_kind_check",
+      sql`${table.verifierKind} IN ('deterministic', 'principal')`,
+    ),
+  ],
+)
+
 export type MemoryFact = typeof memoryFact.$inferSelect
 export type Decision = typeof decision.$inferSelect
 export type Doctrine = typeof doctrine.$inferSelect
 export type WorkOrder = typeof workOrder.$inferSelect
 export type WorkOrderAssignment = typeof workOrderAssignment.$inferSelect
 export type NewWorkOrderAssignment = typeof workOrderAssignment.$inferInsert
+export type WorkOrderTruthBinding = typeof workOrderTruthBinding.$inferSelect
+export type NewWorkOrderTruthBinding = typeof workOrderTruthBinding.$inferInsert
+export type WorkOrderBoundResource = typeof workOrderBoundResource.$inferSelect
+export type WorkOrderBindingEvent = typeof workOrderBindingEvent.$inferSelect
+export type WorkOrderAcceptanceAttempt = typeof workOrderAcceptanceAttempt.$inferSelect
 export type Project = typeof project.$inferSelect
 export type NewProject = typeof project.$inferInsert
 export type ProjectResource = typeof projectResource.$inferSelect

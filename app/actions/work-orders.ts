@@ -17,6 +17,7 @@ import { checkAgentPermission } from "@/lib/goal/agent-matrix"
 import { createAuthorityGrant } from "@/app/actions/authority"
 import { appendGovernanceEvent } from "@/lib/governance/events"
 import { authorityRank } from "@/lib/goal/taxonomy"
+import { getBindingReadiness } from "@/app/actions/work-order-truth-binding"
 import {
   resolveAccess,
   LIVE_ASSIGNMENT_STATUSES,
@@ -256,6 +257,20 @@ export async function transitionWorkOrder(
         ok: false,
         reason: `Authority ${wo.authorityLevel} requires explicit operator approval to grant`,
         missing: [`Grant ${wo.authorityLevel} authority explicitly`],
+      }
+    }
+  }
+
+  // Truth-binding gate on activation: a contract must be able to say WHAT it is working on before
+  // anyone starts working on it. Binding first at acceptance is too late -- an executor can spend
+  // days on the wrong checkout and discover the failed premise only when it tries to certify.
+  if (to === "active") {
+    const binding = await getBindingReadiness(id)
+    if (!binding.ready) {
+      return {
+        ok: false,
+        reason: "Activation blocked: no canonical truth binding",
+        missing: binding.missing,
       }
     }
   }
