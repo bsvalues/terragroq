@@ -255,12 +255,6 @@ export const projectResource = pgTable(
     // Names the resource these rows describe, e.g. "pacs". Without it the parts of a resource have no
     // handle to resolve by, which is what acceptance run 4 hit.
     resourceKey: text("resourceKey"),
-    // Where this resource is checked out on the machine named by localPathNode. A canonical
-    // identity is global; a checkout path is a fact about ONE machine, and the same resource
-    // legitimately has no checkout on most of them. NULL means "not checked out here", which the
-    // workspace-root resolver reports as an unbound root rather than an error.
-    localPath: text("localPath"),
-    localPathNode: text("localPathNode"),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -1459,6 +1453,42 @@ export const routedDependency = pgTable(
   ],
 )
 
+// Where a canonical resource is checked out, PER NODE. The path is NOT a property of the resource:
+// the same repository is at C:\... on HERMES, /srv/... on AEGIS, elsewhere on OMEN and absent on
+// ATLAS, and project_resource holds one row per canonical identity -- so a path column there could
+// hold exactly one node's answer, which is WILLIAMOS_PROJECT_ROOT rebuilt inside the database.
+// Absence of a row is meaningful and normal: most resources are not checked out on most nodes.
+export const projectResourceCheckout = pgTable(
+  "project_resource_checkout",
+  {
+    id: serial("id").primaryKey(),
+    projectResourceId: integer("projectResourceId")
+      .notNull()
+      .references(() => projectResource.id, { onDelete: "cascade" }),
+    // A path without a node is a path on somebody else's disk.
+    node: text("node").notNull(),
+    path: text("path").notNull(),
+    // What was last actually SEEN there, as opposed to what the resource claims. Kept separately on
+    // purpose: a checkout whose remote does not match the canonical identity is the stale-worktree
+    // failure at its source, and it is only detectable if both are recorded.
+    observedIdentity: text("observedIdentity"),
+    observedRevision: text("observedRevision"),
+    observedAt: timestamp("observedAt", { withTimezone: true }),
+    // An agent may draft this from what it found on disk; until the owner confirms it, anything
+    // derived from it may proceed but cannot certify.
+    ratifiedAt: timestamp("ratifiedAt", { withTimezone: true }),
+    ratifiedBy: text("ratifiedBy"),
+    createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    // Two worktrees of one repo on one machine, one of them stale, with nothing able to say which
+    // the workspace is serving -- exactly the ambiguity this table removes.
+    unique("project_resource_checkout_node_unique").on(table.projectResourceId, table.node),
+    index("project_resource_checkout_node_idx").on(table.node, table.projectResourceId),
+  ],
+)
+
 export type MemoryFact = typeof memoryFact.$inferSelect
 export type Decision = typeof decision.$inferSelect
 export type Doctrine = typeof doctrine.$inferSelect
@@ -1476,6 +1506,8 @@ export type Project = typeof project.$inferSelect
 export type NewProject = typeof project.$inferInsert
 export type ProjectResource = typeof projectResource.$inferSelect
 export type NewProjectResource = typeof projectResource.$inferInsert
+export type ProjectResourceCheckout = typeof projectResourceCheckout.$inferSelect
+export type NewProjectResourceCheckout = typeof projectResourceCheckout.$inferInsert
 export type WorkbenchThread = typeof workbenchThread.$inferSelect
 export type WorkbenchThreadMessage = typeof workbenchThreadMessage.$inferSelect
 export type NewWorkbenchThread = typeof workbenchThread.$inferInsert
