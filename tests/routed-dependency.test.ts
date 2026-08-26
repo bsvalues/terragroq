@@ -27,6 +27,11 @@ import {
   type EnvelopeEntry,
 } from "@/lib/work-orders/authority-surface"
 
+import {
+  BOOTSTRAP_DEPENDENCIES,
+  BOOTSTRAP_INDEPENDENT_WORK,
+} from "@/lib/work-orders/bootstrap-dependencies"
+
 function dep(over: Partial<RoutedDependencyLike> = {}): RoutedDependencyLike {
   return {
     operation: "modify deploy/hermes/start-williamos-live.ps1",
@@ -270,6 +275,16 @@ describe("authority is resource x class x capability", () => {
     expect(bare.problems.join(" ")).toMatch(/bare grant is invalid/i)
   })
 
+  it.each(RESOURCE_SCOPED_CLASSES)("a wildcard DENIAL of %s is fine", (cls) => {
+    // `none` is a denial, not a grant. "* / data / none" says "no data authority anywhere", which
+    // is both meaningful and safe; the scoping rule exists so a grant that actually confers
+    // something cannot be vague about what it confers it over.
+    expect(
+      validateEnvelopeEntry({ resourceKey: ANY_RESOURCE, surfaceClass: cls, capability: "none" })
+        .valid,
+    ).toBe(true)
+  })
+
   it("a wildcard on a non-scoped class is fine", () => {
     expect(
       validateEnvelopeEntry({
@@ -329,5 +344,53 @@ describe("authority is resource x class x capability", () => {
         capability: "write",
       }),
     ).toBe(false)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* The bootstrap outcome's own dependencies                            */
+/* ------------------------------------------------------------------ */
+
+describe("the bootstrap outcome's two live-boundary dependencies", () => {
+  it("both name a real unavailable authority", () => {
+    for (const d of BOOTSTRAP_DEPENDENCIES) {
+      expect(d.requiredClass).toBeTruthy()
+      expect(d.requiredResource).toBeTruthy()
+      expect(d.evidence.length).toBeGreaterThan(0)
+      expect(isSurfaceClass(d.requiredClass!)).toBe(true)
+    }
+  })
+
+  it("both genuinely gate final acceptance", () => {
+    // Neither is cosmetic: without the schema there is nowhere to route anything, and without
+    // delivery no running WilliamOS can reach the repair.
+    expect(BOOTSTRAP_DEPENDENCIES.every((d) => d.blocksAcceptance)).toBe(true)
+  })
+
+  it("and yet the outcome is NOT blocked, because independent work remains", () => {
+    // This is the assertion the whole model is for. Two hard walls are open, both gate acceptance,
+    // and the contract keeps moving. Under the old shape this state was "blocked" and the day ended.
+    const e = evaluateBlocked({
+      dependencies: [...BOOTSTRAP_DEPENDENCIES],
+      anyAcceptancePathExecutable: BOOTSTRAP_INDEPENDENT_WORK.length > 0,
+    })
+    expect(e.blocked).toBe(false)
+    expect(e.blockingDependencies).toHaveLength(2)
+    expect(e.reason).toMatch(/keep working/i)
+  })
+
+  it("becomes blocked only once the independent work is exhausted", () => {
+    // And then it says so honestly, rather than someone deciding it feels stuck.
+    const e = evaluateBlocked({
+      dependencies: [...BOOTSTRAP_DEPENDENCIES],
+      anyAcceptancePathExecutable: false,
+    })
+    expect(e.blocked).toBe(true)
+    expect(e.reason).toMatch(/apply migrations|land branch/i)
+  })
+
+  it("resolving both unblocks without anyone lifting it by hand", () => {
+    const resolved = BOOTSTRAP_DEPENDENCIES.map((d) => ({ ...d, routingState: "resolved" as const }))
+    expect(canUnblock(resolved)).toBe(true)
   })
 })

@@ -97,7 +97,12 @@ export function validateEnvelopeEntry(entry: EnvelopeEntry): EnvelopeValidation 
   if (!isCapabilityOf(entry.surfaceClass, entry.capability)) {
     problems.push(`${entry.capability} is not a capability of ${entry.surfaceClass}`)
   }
+  // `none` is a DENIAL, and a denial needs no resource: `* / data / none` says "no data authority
+  // anywhere", which is both meaningful and safe. The scoping rule exists so that a grant which
+  // actually confers something cannot be vague about what it confers it over.
+  const confersSomething = capabilityRank(entry.surfaceClass, entry.capability) > 0
   if (
+    confersSomething &&
     RESOURCE_SCOPED_CLASSES.includes(entry.surfaceClass) &&
     (!entry.resourceKey?.trim() || entry.resourceKey === ANY_RESOURCE)
   ) {
