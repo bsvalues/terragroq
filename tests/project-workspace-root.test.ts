@@ -16,9 +16,13 @@ const HERMES = "hermes"
 const AEGIS = "aegis"
 const OMEN = "omen"
 
+// Modelled on the canonical store, where a repo resource carries NO resourceKey -- only an id and
+// a relationship of "primary-repo".
 function repo(over: Partial<WorkspaceResourceLike> = {}): WorkspaceResourceLike {
   return {
-    resourceKey: "terrafusion-primary-repo",
+    id: 2,
+    resourceKey: null,
+    relationship: "primary-repo",
     type: "repo",
     canonicalIdentity: REMOTE,
     ratifiedAt: RATIFIED,
@@ -28,7 +32,7 @@ function repo(over: Partial<WorkspaceResourceLike> = {}): WorkspaceResourceLike 
 
 function checkout(over: Partial<ResourceCheckoutLike> = {}): ResourceCheckoutLike {
   return {
-    resourceKey: "terrafusion-primary-repo",
+    projectResourceId: 2,
     node: HERMES,
     path: "C:/williamos/terrafusion_os_1.0",
     observedIdentity: REMOTE,
@@ -116,15 +120,15 @@ describe("a Project-derived root is knowable as such", () => {
 
   it("names which repo when a Project has several", () => {
     const r = resolve({
-      resources: [repo(), repo({ resourceKey: "docs-repo" })],
-      checkouts: [checkout(), checkout({ resourceKey: "docs-repo", path: "C:/docs" })],
-      resourceKey: "docs-repo",
+      resources: [repo(), repo({ id: 9, relationship: "docs-repo" })],
+      checkouts: [checkout(), checkout({ projectResourceId: 9, path: "C:/docs" })],
+      resourceSelector: "docs-repo",
     })
     expect(r).toMatchObject({ root: "C:/docs", provenance: "project" })
   })
 
   it("refuses to GUESS between several repos", () => {
-    const r = resolve({ resources: [repo(), repo({ resourceKey: "docs-repo" })] })
+    const r = resolve({ resources: [repo(), repo({ id: 9, relationship: "docs-repo" })] })
     expect(r.provenance).toBe("ambient")
     expect(r.unboundReason).toMatch(/2 repo resources and the Space names none/)
   })
@@ -133,7 +137,7 @@ describe("a Project-derived root is knowable as such", () => {
     const r = resolve({
       resources: [
         repo(),
-        { resourceKey: "atlas", type: "database", canonicalIdentity: "pg://atlas", ratifiedAt: RATIFIED },
+        { id: 13, resourceKey: "atlas", relationship: "state", type: "database", canonicalIdentity: "pg://atlas", ratifiedAt: RATIFIED },
       ],
     })
     expect(r.provenance).toBe("project")
@@ -234,5 +238,48 @@ describe("certification follows provenance", () => {
       checkouts: [checkout({ observedIdentity: "https://github.com/other/repo.git", ratifiedAt: null })],
     })
     expect(rootCanCertify(r).reason).toMatch(/but the resource is/)
+  })
+})
+
+/* ------------------------------------------------------------------ */
+/* The live store's actual shape                                       */
+/* ------------------------------------------------------------------ */
+
+describe("resources are identified the way the canonical store identifies them", () => {
+  it("resolves a repo whose resourceKey is NULL", () => {
+    // In the canonical store resourceKey is NULL on every repo -- the ten resources that carry one
+    // are all `pacs`. A resolver keyed on it would fall back to ambient for every Project,
+    // silently, which is precisely the defect this file exists to remove.
+    const r = resolve({ resources: [repo({ resourceKey: null })] })
+    expect(r.provenance).toBe("project")
+    expect(r.resourceId).toBe(2)
+  })
+
+  it("selects by relationship, which is what repos actually carry", () => {
+    const r = resolve({
+      resources: [repo(), repo({ id: 9, relationship: "docs-repo" })],
+      checkouts: [checkout(), checkout({ projectResourceId: 9, path: "C:/docs" })],
+      resourceSelector: "primary-repo",
+    })
+    expect(r.root).toBe("C:/williamos/terrafusion_os_1.0")
+  })
+
+  it("still selects by resourceKey when one is present", () => {
+    const r = resolve({
+      resources: [repo({ resourceKey: "pacs" }), repo({ id: 9, relationship: "docs-repo" })],
+      resourceSelector: "pacs",
+    })
+    expect(r.provenance).toBe("project")
+  })
+
+  it("binds checkouts by resource id, never by a key that is usually absent", () => {
+    const r = resolve({ checkouts: [checkout({ projectResourceId: 999 })] })
+    expect(r.provenance).toBe("ambient")
+    expect(r.unboundReason).toMatch(/not checked out on hermes/)
+  })
+
+  it("describes an unkeyed resource by its relationship rather than 'null'", () => {
+    const r = resolve({ resources: [repo({ resourceKey: null })], checkouts: [] })
+    expect(r.unboundReason).toMatch(/Resource primary-repo is not checked out/)
   })
 })

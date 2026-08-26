@@ -30,6 +30,8 @@ export interface ResolvedWorkspaceRoot {
   /** The node this resolution is about. A root means nothing without one. */
   node: string
   projectId: number | null
+  /** project_resource.id — the identifier that is always present. */
+  resourceId: number | null
   resourceKey: string | null
   /** The canonical identity of that resource — the remote a checkout must match. */
   canonicalIdentity: string | null
@@ -47,17 +49,27 @@ export interface ResolvedWorkspaceRoot {
   unboundReason?: string
 }
 
-/** The subset of `project_resource` this needs. */
+/**
+ * The subset of `project_resource` this needs.
+ *
+ * Identified by `id`, not by `resourceKey`. In the canonical store `resourceKey` is NULL on 11 of
+ * 21 resources and on EVERY repo -- the ten that carry one are all `pacs`. A resolver that matched
+ * on it would find nothing and fall back to an ambient root for every Project, silently, which is
+ * the exact defect this file exists to remove. `relationship` (`primary-repo`) is the discriminator
+ * that is actually populated, so selection accepts either.
+ */
 export interface WorkspaceResourceLike {
-  resourceKey: string
+  id: number
+  resourceKey: string | null
+  relationship: string | null
   type: string
   canonicalIdentity: string
   ratifiedAt: Date | null
 }
 
-/** The subset of `project_resource_checkout` this needs. */
+/** The subset of `project_resource_checkout` this needs. Bound by FK, as the table is. */
 export interface ResourceCheckoutLike {
-  resourceKey: string
+  projectResourceId: number
   node: string
   path: string
   observedIdentity: string | null
@@ -73,8 +85,11 @@ export interface ResolveRootInput {
   checkouts: readonly ResourceCheckoutLike[]
   /** The node actually serving this Space. */
   node: string
-  /** Which resource the Space is showing. Defaults to the Project's only repo. */
-  resourceKey?: string | null
+  /**
+   * Which resource the Space is showing: a `resourceKey` OR a `relationship`, whichever the record
+   * actually carries. Defaults to the Project's only repo.
+   */
+  resourceSelector?: string | null
   /** `WILLIAMOS_PROJECT_ROOT`, when set. */
   ambientRoot?: string | null
   /** `process.cwd()`, the last resort. */
@@ -94,6 +109,7 @@ export function resolveProjectWorkspaceRoot(input: ResolveRootInput): ResolvedWo
     provenance: (ambient ? "ambient" : "cwd") as RootProvenance,
     node: input.node,
     projectId: null,
+    resourceId: null,
     resourceKey: null,
     canonicalIdentity: null,
     observedIdentity: null,
@@ -107,16 +123,17 @@ export function resolveProjectWorkspaceRoot(input: ResolveRootInput): ResolvedWo
   if (input.projectId == null) return unbound("No Project bound to this Space")
 
   const repos = input.resources.filter((r) => r.type === "repo")
-  const resource = input.resourceKey
-    ? repos.find((r) => r.resourceKey === input.resourceKey)
+  const selector = input.resourceSelector?.trim() || null
+  const resource = selector
+    ? repos.find((r) => r.resourceKey === selector || r.relationship === selector)
     : repos.length === 1
       ? repos[0]
       : undefined
 
   if (!resource) {
     return unbound(
-      input.resourceKey
-        ? `Project has no repo resource "${input.resourceKey}"`
+      selector
+        ? `Project has no repo resource matching "${selector}"`
         : repos.length === 0
           ? "Project has no repo resource"
           : // Refusing to guess is the point: picking one of several would reintroduce exactly the
@@ -126,13 +143,14 @@ export function resolveProjectWorkspaceRoot(input: ResolveRootInput): ResolvedWo
   }
 
   const checkout = input.checkouts.find(
-    (c) => c.resourceKey === resource.resourceKey && c.node === input.node,
+    (c) => c.projectResourceId === resource.id && c.node === input.node,
   )
 
   if (!checkout) {
     // Normal and meaningful: most resources are not checked out on most nodes.
-    return unbound(`Resource "${resource.resourceKey}" is not checked out on ${input.node}`, {
+    return unbound(`Resource ${describe(resource)} is not checked out on ${input.node}`, {
       projectId: input.projectId,
+      resourceId: resource.id,
       resourceKey: resource.resourceKey,
       canonicalIdentity: resource.canonicalIdentity,
     })
@@ -143,6 +161,7 @@ export function resolveProjectWorkspaceRoot(input: ResolveRootInput): ResolvedWo
     provenance: "project",
     node: input.node,
     projectId: input.projectId,
+    resourceId: resource.id,
     resourceKey: resource.resourceKey,
     canonicalIdentity: resource.canonicalIdentity,
     observedIdentity: checkout.observedIdentity,
@@ -154,6 +173,11 @@ export function resolveProjectWorkspaceRoot(input: ResolveRootInput): ResolvedWo
       checkout.observedIdentity != null &&
       !identitiesMatch(resource.canonicalIdentity, checkout.observedIdentity),
   }
+}
+
+/** A resource has a key only sometimes; it always has an id and usually a relationship. */
+function describe(r: WorkspaceResourceLike): string {
+  return r.resourceKey ?? r.relationship ?? `#${r.id}`
 }
 
 /** Repository identities differ cosmetically far more often than they differ meaningfully. */
@@ -200,7 +224,10 @@ export function rootCanCertify(resolved: ResolvedWorkspaceRoot): {
     }
   }
   if (!resolved.ratified) {
-    return { ok: false, reason: `Checkout of "${resolved.resourceKey}" on ${resolved.node} is not owner-ratified` }
+    return {
+      ok: false,
+      reason: `Checkout of ${resolved.resourceKey ?? `resource ${resolved.resourceId}`} on ${resolved.node} is not owner-ratified`,
+    }
   }
   return { ok: true }
 }
