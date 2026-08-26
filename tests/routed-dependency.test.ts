@@ -28,9 +28,16 @@ import {
 } from "@/lib/work-orders/authority-surface"
 
 import {
+  APPLY_GOVERNANCE_SCHEMA_MIGRATIONS,
   BOOTSTRAP_DEPENDENCIES,
   BOOTSTRAP_INDEPENDENT_WORK,
+  DEPLOY_OUTCOME_ORCHESTRATION_REVISION,
+  LAND_OUTCOME_ORCHESTRATION_REVISION,
+  executableWorkAfter,
+  isActionable,
+  nextActionableDependency,
 } from "@/lib/work-orders/bootstrap-dependencies"
+import { canTransition as canTransitionWorkOrder } from "@/lib/work-orders/lifecycle"
 
 function dep(over: Partial<RoutedDependencyLike> = {}): RoutedDependencyLike {
   return {
@@ -351,46 +358,103 @@ describe("authority is resource x class x capability", () => {
 /* The bootstrap outcome's own dependencies                            */
 /* ------------------------------------------------------------------ */
 
-describe("the bootstrap outcome's two live-boundary dependencies", () => {
-  it("both name a real unavailable authority", () => {
+describe("the bootstrap outcome's three live-boundary dependencies", () => {
+  const ALL = BOOTSTRAP_DEPENDENCIES.map((d) => d.key)
+
+  it("each names a real unavailable authority", () => {
     for (const d of BOOTSTRAP_DEPENDENCIES) {
-      expect(d.requiredClass).toBeTruthy()
+      expect(isSurfaceClass(d.requiredClass!)).toBe(true)
       expect(d.requiredResource).toBeTruthy()
       expect(d.evidence.length).toBeGreaterThan(0)
-      expect(isSurfaceClass(d.requiredClass!)).toBe(true)
+      expect(d.blocksAcceptance).toBe(true)
     }
   })
 
-  it("both genuinely gate final acceptance", () => {
-    // Neither is cosmetic: without the schema there is nowhere to route anything, and without
-    // delivery no running WilliamOS can reach the repair.
-    expect(BOOTSTRAP_DEPENDENCIES.every((d) => d.blocksAcceptance)).toBe(true)
+  it("landing and deploying are SEPARATE authorities", () => {
+    // Collapsing them lets "deploy this known revision" quietly become "and change whatever
+    // configuration is convenient on the way".
+    expect(LAND_OUTCOME_ORCHESTRATION_REVISION.requiredClass).toBe("delivery")
+    expect(DEPLOY_OUTCOME_ORCHESTRATION_REVISION.requiredClass).toBe("runtime_control")
   })
 
-  it("and yet the outcome is NOT blocked, because independent work remains", () => {
-    // This is the assertion the whole model is for. Two hard walls are open, both gate acceptance,
-    // and the contract keeps moving. Under the old shape this state was "blocked" and the day ended.
+  it("deploying explicitly excludes config mutation", () => {
+    // The load-bearing exclusion. Without it the protected surface stops being protected.
+    expect(DEPLOY_OUTCOME_ORCHESTRATION_REVISION.excludes?.join(" ")).toMatch(
+      /runtime_config:write.*SEPARATE routed dependency/,
+    )
+  })
+
+  it("deploying is pinned to the exact landed successor", () => {
+    expect(DEPLOY_OUTCOME_ORCHESTRATION_REVISION.excludes?.join(" ")).toMatch(
+      /any revision other than the exact landed successor/i,
+    )
+  })
+
+  it("the migration is additive only", () => {
+    expect(APPLY_GOVERNANCE_SCHEMA_MIGRATIONS.excludes?.join(" ")).toMatch(/destructive/i)
+  })
+
+  it("orders the boundaries: schema, then land, then deploy", () => {
+    expect(nextActionableDependency([])?.key).toBe("APPLY_GOVERNANCE_SCHEMA_MIGRATIONS")
+    expect(nextActionableDependency(["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS"])?.key).toBe(
+      "LAND_OUTCOME_ORCHESTRATION_REVISION",
+    )
+    expect(
+      nextActionableDependency([
+        "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS",
+        "LAND_OUTCOME_ORCHESTRATION_REVISION",
+      ])?.key,
+    ).toBe("DEPLOY_OUTCOME_ORCHESTRATION_REVISION")
+    expect(nextActionableDependency(ALL)).toBeNull()
+  })
+
+  it("will not land before the schema-dependent source work is possible", () => {
+    // The current branch is a checkpoint, not the final deployable result.
+    expect(isActionable(LAND_OUTCOME_ORCHESTRATION_REVISION, [])).toBe(false)
+    expect(isActionable(DEPLOY_OUTCOME_ORCHESTRATION_REVISION, ["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS"])).toBe(
+      false,
+    )
+  })
+})
+
+describe("blocked describes the present, not the past", () => {
+  it("is blocked NOW, because independent work is genuinely exhausted", () => {
+    // The first honest use of this state. Every path inside the envelope has been walked.
+    expect(BOOTSTRAP_INDEPENDENT_WORK).toEqual([])
     const e = evaluateBlocked({
       dependencies: [...BOOTSTRAP_DEPENDENCIES],
-      anyAcceptancePathExecutable: BOOTSTRAP_INDEPENDENT_WORK.length > 0,
+      anyAcceptancePathExecutable: executableWorkAfter([]).length > 0,
+    })
+    expect(e.blocked).toBe(true)
+    expect(e.blockingDependencies).toHaveLength(3)
+  })
+
+  it("stops being blocked the moment the schema dependency resolves", () => {
+    // It must not stay blocked merely because it once was: resolving the schema makes the
+    // Project-bound route wiring executable again and the work order returns to active.
+    const unlocked = executableWorkAfter(["APPLY_GOVERNANCE_SCHEMA_MIGRATIONS"])
+    expect(unlocked.length).toBeGreaterThan(0)
+
+    const deps = BOOTSTRAP_DEPENDENCIES.map((d) =>
+      d.key === "APPLY_GOVERNANCE_SCHEMA_MIGRATIONS"
+        ? { ...d, routingState: "resolved" as const }
+        : d,
+    )
+    const e = evaluateBlocked({
+      dependencies: deps,
+      anyAcceptancePathExecutable: unlocked.length > 0,
     })
     expect(e.blocked).toBe(false)
-    expect(e.blockingDependencies).toHaveLength(2)
     expect(e.reason).toMatch(/keep working/i)
   })
 
-  it("becomes blocked only once the independent work is exhausted", () => {
-    // And then it says so honestly, rather than someone deciding it feels stuck.
-    const e = evaluateBlocked({
-      dependencies: [...BOOTSTRAP_DEPENDENCIES],
-      anyAcceptancePathExecutable: false,
-    })
-    expect(e.blocked).toBe(true)
-    expect(e.reason).toMatch(/apply migrations|land branch/i)
+  it("returning to active is a legal transition, so the recomputation can be acted on", () => {
+    expect(canTransitionWorkOrder("blocked", "active")).toBe(true)
   })
 
-  it("resolving both unblocks without anyone lifting it by hand", () => {
-    const resolved = BOOTSTRAP_DEPENDENCIES.map((d) => ({ ...d, routingState: "resolved" as const }))
-    expect(canUnblock(resolved)).toBe(true)
+  it("resolving everything unblocks without anyone lifting it by hand", () => {
+    expect(
+      canUnblock(BOOTSTRAP_DEPENDENCIES.map((d) => ({ ...d, routingState: "resolved" as const }))),
+    ).toBe(true)
   })
 })
