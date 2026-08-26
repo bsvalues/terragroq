@@ -1,5 +1,5 @@
 import { db } from "@/lib/db"
-import { projectResource, projectResourceCheckout } from "@/lib/db/schema"
+import { project, projectResource, projectResourceCheckout } from "@/lib/db/schema"
 import {
   resolveProjectWorkspaceRoot,
   type ResolvedWorkspaceRoot,
@@ -8,6 +8,7 @@ import {
 } from "@/lib/loom/project-workspace-root"
 import { eq, inArray } from "drizzle-orm"
 import { bindW1Workspace, type W1BindingResult } from "@/lib/loom/w1-binding"
+import type { ProjectIdentity } from "@/lib/environment/space-identity"
 
 /**
  * Load the rows the workspace-root resolver needs, and resolve.
@@ -193,4 +194,19 @@ export async function resolveLoomRoot(): Promise<LoomRoot | { refused: string; d
     projectId: binding.projectId,
     observedRevision: binding.observedRevision,
   }
+}
+
+/**
+ * The declared Project as an identity record, for Space naming and world matching. Null when no
+ * Project is declared, or the declared id does not resolve to a row.
+ */
+export async function declaredProjectIdentity(): Promise<ProjectIdentity | null> {
+  const projectId = declaredProjectId()
+  if (projectId == null) return null
+  const [row] = await db
+    .select({ id: project.id, key: project.key, name: project.name })
+    .from(project)
+    .where(eq(project.id, projectId))
+    .limit(1)
+  return row ?? null
 }

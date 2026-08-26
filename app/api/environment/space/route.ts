@@ -2,6 +2,7 @@ import { loadOrCreateOwnedSpace, saveOwnedSpace } from "@/lib/environment/space-
 import { readBoundedJson } from "@/lib/environment/line-guard"
 import { admitWorkspaceApp, williamOsOrigin } from "@/lib/environment/workspace-app"
 import { getSession } from "@/lib/session"
+import { declaredProjectIdentity } from "@/lib/loom/load-workspace-root"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -35,11 +36,13 @@ export async function GET(request: Request) {
 
   try {
     const workspaceAppUrl = await admittedAppUrl(request)
+    const project = await declaredProjectIdentity()
     const result = await loadOrCreateOwnedSpace({
       userId: session.user.id,
       worldId: requested,
       workspaceAppUrl,
       newWorldId: crypto.randomUUID,
+      project,
     })
     return result ? reply(result) : reply({ error: "WORLD_NOT_FOUND" }, 404)
   } catch {

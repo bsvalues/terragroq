@@ -1,4 +1,5 @@
 import { and, desc, eq } from "drizzle-orm"
+import { spaceIntentForProject, worldMatchesProject, type ProjectIdentity } from "@/lib/environment/space-identity"
 
 import { db } from "@/lib/db"
 import { workingWorld } from "@/lib/db/schema"
@@ -124,6 +125,24 @@ export async function saveOwnedLineWorld(
   throw new Error("WORLD_PERSISTENCE_BUSY")
 }
 
+/** Whether a stored world row is the Space for a Project, by projectId (regex-free). */
+function latestMatchesProject(row: OwnedWorkingWorldRecord, project: ProjectIdentity): boolean {
+  try {
+    const world = validateWorkingWorld(JSON.parse(row.snapshot))
+    return worldMatchesProject(
+      {
+        projectId: world.spine.projectId,
+        projectName: world.spine.projectName,
+        intent: world.intent,
+        resources: world.resources,
+      },
+      project,
+    )
+  } catch {
+    return false
+  }
+}
+
 function isTerraFusionWorld(row: OwnedWorkingWorldRecord): boolean {
   if (/terrafusion/i.test(row.intent)) return true
   try {
@@ -181,6 +200,10 @@ export async function loadOrCreateOwnedSpace(
     workspaceAppUrl?: string | null
     newWorldId?: () => string
     projectRootIdentity?: string | null
+    // The Project this Space belongs to. When present, world identity is decided by projectId, not
+    // by a string regex, and a new world is named for the Project rather than the literal
+    // "TerraFusion". Absent = legacy behaviour, unchanged.
+    project?: ProjectIdentity | null
   }>,
   store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
 ): Promise<Readonly<{ worldId: string; space: SpaceState; spine: WorldSpine }> | null> {
@@ -189,7 +212,13 @@ export async function loadOrCreateOwnedSpace(
   const latest = exact ? null : await store.findLatestOwned(input.userId)
   // Store implementations may be generic "latest owned" readers. Recheck identity here so an
   // unrelated working world can never silently become the TerraFusion Space.
-  const row = exact ?? (latest && isTerraFusionWorld(latest) ? latest : null)
+  // Identity by Project when we have one; the string regex is legacy-only.
+  const matchesLatest = latest
+    ? input.project
+      ? latestMatchesProject(latest, input.project)
+      : isTerraFusionWorld(latest)
+    : false
+  const row = exact ?? (matchesLatest ? latest : null)
   if (row) {
     const world = validateWorkingWorld(JSON.parse(row.snapshot))
     return { worldId: row.id, space: restoredSpace(world, input.workspaceAppUrl), spine: world.spine }
@@ -197,7 +226,7 @@ export async function loadOrCreateOwnedSpace(
 
   const worldId = (input.newWorldId ?? crypto.randomUUID)()
   const base = createWorkingWorld({
-    intent: "TerraFusion",
+    intent: input.project ? spaceIntentForProject(input.project) : "TerraFusion",
     resources: input.projectRootIdentity ? [input.projectRootIdentity] : [],
   })
   const space = createDefaultSpace(serverRunningAppUrl(base, input.workspaceAppUrl))
