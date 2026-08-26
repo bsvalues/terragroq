@@ -17,6 +17,30 @@ const evaluateCanonicalOutcomePolicy = evaluateOutcomePolicy as unknown as (inpu
   standingAuthority: boolean
 }) => { allowed: boolean }
 
+/**
+ * Repositories execution has actually been provisioned for (#1015).
+ *
+ * The repository an outcome executes in is canonical state: a Project declares exactly one
+ * `primary-repo` resource, and this module already resolved it -- then threw the answer away and
+ * returned the literal `bsvalues/terragroq`, refusing every other project. That is
+ * EXECUTION_REPOSITORY_BINDING_NOT_PROPAGATED, and it is why the LocalOps project could never be
+ * executed: its implementation lives in `bsvalues/terrafusion_os_1.0`.
+ *
+ * The binding now comes from the Project graph. This set answers a separate and deliberately
+ * narrower question: not "what repository does this project declare" but "have we actually
+ * provisioned a governed checkout, credentials and delivery path for it". A Project row naming an
+ * arbitrary GitHub repository must not become the resident kernel's licence to mutate it, so an
+ * unprovisioned target is refused with REPOSITORY_EXECUTION_TARGET_UNAVAILABLE and produces no
+ * workspace and no effects.
+ *
+ * This is an admission boundary, not an identity. It is expected to become a provisioning lookup;
+ * until then it stays an explicit, reviewable list of the repositories we own.
+ */
+export const EXECUTION_PROVISIONED_REPOSITORIES: readonly string[] = [
+  "bsvalues/terragroq",
+  "bsvalues/terrafusion_os_1.0",
+]
+
 export const WORKBENCH_EXECUTION_AUTHORIZATION_VERSION = "workbench-execution-authorization.v1"
 export const WORKBENCH_EXECUTION_GRANT_HOURS = 72
 
@@ -34,6 +58,7 @@ export type WorkbenchExecutionUnavailableReason =
   | "PROJECT_THREAD_OUTCOME_UNAVAILABLE"
   | "REPOSITORY_UNAVAILABLE"
   | "REPOSITORY_AMBIGUOUS"
+  | "REPOSITORY_EXECUTION_TARGET_UNAVAILABLE"
   | "AUTHORITY_INELIGIBLE"
   | "POLICY_INELIGIBLE"
   | "UNTRUSTED_INTENT"
@@ -115,7 +140,8 @@ export type WorkbenchOutcomeExecutionAssessment =
       eligible: true
       reason: "ELIGIBLE"
       goalId: number
-      repository: "bsvalues/terragroq"
+      /** The Project's declared primary repository, resolved -- never assumed. */
+      repository: string
       workContract: Readonly<{
         version: string
         id: string
@@ -274,8 +300,12 @@ export function assessWorkbenchOutcomeExecution(
     resource.type === "repo" && resource.relationship === "primary-repo"
   ))
   if (primaryRepos.length > 1) return { eligible: false, reason: "REPOSITORY_AMBIGUOUS" }
-  if (primaryRepos.length !== 1 || primaryRepos[0].canonicalIdentity !== "bsvalues/terragroq") {
-    return { eligible: false, reason: "REPOSITORY_UNAVAILABLE" }
+  if (primaryRepos.length !== 1) return { eligible: false, reason: "REPOSITORY_UNAVAILABLE" }
+  const repository = primaryRepos[0].canonicalIdentity
+  // Declared is not the same as provisioned. A project may name a repository we have no governed
+  // checkout or delivery path for; that is refused here rather than discovered mid-execution.
+  if (!EXECUTION_PROVISIONED_REPOSITORIES.includes(repository)) {
+    return { eligible: false, reason: "REPOSITORY_EXECUTION_TARGET_UNAVAILABLE" }
   }
   if (goal.authority !== "A2_WRITE_OWN" || outcome.authorityLevel !== "A2_WRITE_OWN"
     || outcome.authoritySubject !== "operator" || outcome.authorityAction !== "outcome:execute") {
@@ -337,14 +367,14 @@ export function assessWorkbenchOutcomeExecution(
       status: goal.status,
     },
     actor: "bsvalues",
-    repository: primaryRepos[0].canonicalIdentity,
+    repository,
     standingAuthority: true,
   })
   if (!policy.allowed) return { eligible: false, reason: "POLICY_INELIGIBLE" }
   if (!workContract) return { eligible: false, reason: "WORK_CONTRACT_UNAVAILABLE" }
   return {
     eligible: true, reason: "ELIGIBLE", goalId: goal.id,
-    repository: "bsvalues/terragroq", workContract,
+    repository, workContract,
     ...(acceptanceIntakeProof ? { acceptanceIntakeProof } : {}),
   }
 }
