@@ -255,6 +255,12 @@ export const projectResource = pgTable(
     // Names the resource these rows describe, e.g. "pacs". Without it the parts of a resource have no
     // handle to resolve by, which is what acceptance run 4 hit.
     resourceKey: text("resourceKey"),
+    // Where this resource is checked out on the machine named by localPathNode. A canonical
+    // identity is global; a checkout path is a fact about ONE machine, and the same resource
+    // legitimately has no checkout on most of them. NULL means "not checked out here", which the
+    // workspace-root resolver reports as an unbound root rather than an error.
+    localPath: text("localPath"),
+    localPathNode: text("localPathNode"),
     createdAt: timestamp("createdAt", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updatedAt", { withTimezone: true }).defaultNow().notNull(),
   },
