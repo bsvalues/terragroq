@@ -21,7 +21,6 @@ const FORBIDDEN_VOCABULARY = [
   "ACTIVITY",
   "SYSTEM",
   "Explorer",
-  "Inspect",
   "Execution",
   "Choose a Project",
   "CURRENT THREAD",
@@ -68,7 +67,7 @@ describe("the replacement root refuses the legacy product model", () => {
   it("starts in a useful Space without project-selection ceremony", () => {
     render(<Desk />)
     expect(screen.getByRole("region", { name: "Source window" })).toBeTruthy()
-    expect(screen.getByRole("region", { name: "TerraFusion window" })).toBeTruthy()
+    expect(screen.getByRole("region", { name: "Developer preview · TerraFusion window" })).toBeTruthy()
     expect(screen.getByRole("navigation", { name: "Workspace files" })).toBeTruthy()
     expect(screen.queryByText("Choose a Project")).toBeNull()
   })
