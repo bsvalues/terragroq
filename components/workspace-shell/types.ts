@@ -44,7 +44,12 @@ export type SpaceEnvelope = Readonly<{
   worldId: string
   space: unknown
   spine?: WorldSpine
+  project?: WorkspaceProject
+  storage?: "server" | "browser"
+  browserStorageKey?: string
 }>
+
+export type WorkspaceProject = Readonly<{ identity: string; name: string }>
 
 export function defaultSpace(viewportWidth = 1440, viewportHeight = 900): WorkspaceSpace {
   const workHeight = Math.max(560, viewportHeight - 58)
@@ -198,6 +203,26 @@ export function normalizeSpace(
       panes: panes.length > 0 ? panes : fallback.editor.panes,
       activePaneId: activePaneIndex === 1 ? "secondary" : "primary",
     },
+  }
+}
+
+/** Recontain every durable window when the desktop viewport changes. */
+export function spaceInViewport(space: WorkspaceSpace, viewport: ViewportBounds): WorkspaceSpace {
+  const contain = (geometry: WindowGeometry) => geometryInViewport(
+    { x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height },
+    geometry as unknown as Record<string, unknown>,
+    geometry,
+    viewport,
+  )
+  return {
+    ...space,
+    windows: {
+      editor: contain(space.windows.editor),
+      "running-app": contain(space.windows["running-app"]),
+    },
+    inspectorWindows: Object.fromEntries(
+      Object.entries(space.inspectorWindows).map(([id, geometry]) => [id, contain(geometry)]),
+    ),
   }
 }
 

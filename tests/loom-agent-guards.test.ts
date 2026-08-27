@@ -57,7 +57,12 @@ describe("work-context coverage across the workroom API", () => {
       const governedFileSeam = route.source.includes("writeGovernedWorkspaceFile")
         && readFileSync(path.join(__dirname, "..", "lib", "loom", "workspace-file-write.ts"), "utf8")
           .includes("authorize: requireWorkContext")
-      expect(directGate || governedFileSeam).toBe(mutates)
+      // W1's human editor save is intentionally not an agent work-context mutation. It is a
+      // separately bounded existing-file adapter that authenticates and asserts the human owner.
+      const manualOwnerFileSeam = route.name === "files"
+        && route.source.includes("writeManualOwnerWorkspaceFile")
+        && route.source.includes("assertOwner")
+      expect(directGate || governedFileSeam || manualOwnerFileSeam).toBe(mutates)
     })
   }
 })

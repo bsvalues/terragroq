@@ -9,7 +9,7 @@ import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { WindowFrame } from "./window-frame"
-import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceToServer, type SpaceEnvelope, type WindowGeometry, type WindowId, type WorkspaceSpace } from "./types"
+import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
 import styles from "./workspace-shell.module.css"
 
 const windowName: Record<WindowId, string> = { editor: "Source", "running-app": "TerraFusion" }
@@ -23,6 +23,9 @@ type LineReply = Readonly<{
 }>
 
 type PersistJob = Readonly<{ worldId: string; revision: number; body: string }>
+type SpaceStorage = "server" | "browser"
+
+const browserSpaceKey = (opaque: string) => `williamos:space:${opaque}`
 
 function inspectorId(surface: Pick<InspectorSurface, "kind" | "subject">): string {
   const source = `${surface.kind}\0${surface.subject}`
@@ -46,8 +49,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineBusy, setLineBusy] = useState(false)
   const [inspectors, setInspectors] = useState<readonly InspectorSurface[]>([])
   const [spine, setSpine] = useState<WorldSpine>(EMPTY_SPINE)
+  const [project, setProject] = useState<WorkspaceProject | null>(null)
+  const [storage, setStorage] = useState<SpaceStorage>("server")
   const stateRef = useRef(space)
   const worldRef = useRef(worldId)
+  const storageRef = useRef<SpaceStorage>(storage)
+  const browserStorageKeyRef = useRef<string | null>(null)
   const lineRef = useRef<HTMLInputElement>(null)
   // Strict Mode replays mount effects. Both passes attach to the same arrival promises so cleanup
   // cannot strand the surviving pass in an opening/working state after the first response arrives.
@@ -61,6 +68,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const drainingPersistRef = useRef(false)
   stateRef.current = space
   worldRef.current = worldId
+  storageRef.current = storage
 
   const materializeSurfaces = useCallback((reply: LineReply) => {
     if (reply.dismiss) {
@@ -125,12 +133,36 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (!response.ok || typeof payload.worldId !== "string" || !payload.space) {
           throw new Error(payload.error ?? `SPACE_${response.status}`)
         }
-        return { worldId: payload.worldId, space: payload.space, spine: payload.spine }
+        return {
+          worldId: payload.worldId,
+          space: payload.space,
+          spine: payload.spine,
+          project: payload.project,
+          storage: payload.storage,
+          browserStorageKey: payload.browserStorageKey,
+        }
     })())
     void request
       .then((payload) => {
         if (cancelled) return
-        const restored = normalizeSpace(payload.space, fallback, {
+        const storageMode = payload.storage === "browser" ? "browser" : "server"
+        const key = storageMode === "browser" && typeof payload.browserStorageKey === "string"
+          && payload.browserStorageKey.length > 0
+          ? browserSpaceKey(payload.browserStorageKey)
+          : null
+        if (storageMode === "browser" && !key) throw new Error("BROWSER_SPACE_KEY_UNAVAILABLE")
+        let storedSpace = payload.space
+        if (storageMode === "browser" && key) {
+          browserStorageKeyRef.current = key
+          try {
+            const saved = window.localStorage.getItem(key)
+            if (saved) storedSpace = (JSON.parse(saved) as { space?: unknown }).space ?? payload.space
+          } catch {
+            // A damaged browser record is discarded in favor of the admitted default Space.
+            window.localStorage.removeItem(key)
+          }
+        }
+        const restored = normalizeSpace(storedSpace, fallback, {
           width: window.innerWidth,
           height: window.innerHeight,
         })
@@ -138,6 +170,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         acknowledgedRevisionRef.current = restored.revision
         setWorldId(payload.worldId)
         setSpace(restored)
+        setStorage(storageMode)
+        if (payload.project) setProject(payload.project)
         if (payload.spine) setSpine(payload.spine)
       })
       .catch((error) => {
@@ -150,6 +184,22 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (!cancelled) setHydrated(true)
       })
     return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    let frame: number | null = null
+    const recontain = () => {
+      if (frame !== null) cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        frame = null
+        setSpace((current) => spaceInViewport(current, { width: window.innerWidth, height: window.innerHeight }))
+      })
+    }
+    window.addEventListener("resize", recontain)
+    return () => {
+      window.removeEventListener("resize", recontain)
+      if (frame !== null) cancelAnimationFrame(frame)
+    }
   }, [])
 
   useEffect(() => {
@@ -193,6 +243,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   const sendPersist = useCallback(async (job: PersistJob, keepalive = false) => {
     try {
+      if (storageRef.current === "browser") {
+        const key = browserStorageKeyRef.current
+        if (!key) throw new Error("BROWSER_SPACE_KEY_UNAVAILABLE")
+        window.localStorage.setItem(key, job.body)
+        acknowledgedRevisionRef.current = job.revision
+        revisionRef.current = Math.max(revisionRef.current, job.revision)
+        setSpace((current) => job.revision > current.revision ? { ...current, revision: job.revision } : current)
+        setPersistenceError(null)
+        return
+      }
       const response = await fetch("/api/environment/space", {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -392,15 +452,19 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }
 
   return (
-    <main className={styles.environment} aria-label="TerraFusion Space">
+    <main className={styles.environment} aria-label={`${project?.name ?? "Workspace"} Space`}>
       <div className={styles.atmosphere} aria-hidden />
       <menu className={styles.menuBar}>
         <span className={styles.wordmark}>W</span>
-        <span className={styles.spaceName} aria-label="Current Space">
-          <Layers3 size={13} aria-hidden /> TerraFusion
+        <span
+          className={styles.spaceName}
+          aria-label="Workspace project"
+          title={project?.identity ?? "Resolving configured workspace"}
+        >
+          <Layers3 size={13} aria-hidden /> {project?.name ?? "Opening workspace"}
         </span>
         <button type="button" className={styles.lineSummon} onClick={() => { setLineOpen(true); requestAnimationFrame(() => lineRef.current?.focus()) }}>
-          <Command size={12} aria-hidden /> Line <kbd>⌘K</kbd>
+          <Command size={12} aria-hidden /> Line <kbd>Ctrl+K</kbd>
         </button>
       </menu>
 
@@ -439,7 +503,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           ) : (
             <div className={styles.appRefusal} role="status">
               <AppWindow size={20} aria-hidden />
-              <span>No admitted running-app endpoint is attached to this Space.</span>
+              <span>Developer preview unavailable. Start or attach the TerraFusion development runtime to preview it here.</span>
             </div>
           )}
         </WindowFrame>
@@ -487,7 +551,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       <footer className={styles.presenceRail}>
         <div className={styles.railContext}>
           <span className={styles.railSpace}>
-            {spine.projectName ?? "TERRAFUSION"}
+            {spine.projectName ?? project?.name ?? "WORKSPACE"}
             {spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""}
             {spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""}
           </span>
@@ -511,8 +575,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             </button>
           ))}
         </div>
-        <span className={persistenceError ? styles.railError : styles.railSaved} title={persistenceError ?? "Space persisted server-side"}>
-          {persistenceError ? persistenceError : hydrated ? "space saved" : "opening space"}
+        <span
+          className={persistenceError ? styles.railError : styles.railSaved}
+          title={persistenceError ?? (storage === "browser" ? "Space saved in this browser" : "Space persisted server-side")}
+        >
+          {persistenceError ? persistenceError : hydrated ? storage === "browser" ? "space saved locally" : "space saved" : "opening space"}
         </span>
       </footer>
     </main>

@@ -83,11 +83,14 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/session", () => ({ getUserId: vi.fn(async () => "owner-a") }))
 
 import {
+  browserSpaceStorageKey,
   databaseSpaceWorkingWorldStore,
+  findLatestProjectOwnedByPage,
   findLatestTerraFusionOwnedByPage,
   loadOrCreateOwnedSpace,
   saveOwnedLineWorld,
   saveOwnedSpace,
+  workspaceProjectFromRoot,
   type OwnedWorkingWorldRecord,
   type SpaceWorkingWorldStore,
 } from "@/lib/environment/space-persistence"
@@ -106,6 +109,15 @@ class MemoryStore implements SpaceWorkingWorldStore {
     return [...this.rows.values()]
       .filter((row) => row.userId === userId)
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null
+  }
+
+  async findLatestOwnedForProject(userId: string, projectIdentity: string) {
+    const ordered = [...this.rows.values()]
+      .filter((row) => row.userId === userId)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+    return findLatestProjectOwnedByPage(projectIdentity, async (offset, limit) => (
+      ordered.slice(offset, offset + limit)
+    ))
   }
 
   async insertOwned(row: OwnedWorkingWorldRecord) {
@@ -201,6 +213,21 @@ function space(runningAppUrl: string | null = "javascript:alert(1)", revision = 
 }
 
 describe("server-owned Space persistence", () => {
+  it("derives separate opaque browser fallback namespaces per user and project", () => {
+    const owner = browserSpaceStorageKey("owner-a", "c:/repos/terrafusion")
+    expect(owner).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    expect(owner).not.toContain("owner-a")
+    expect(browserSpaceStorageKey("owner-b", "c:/repos/terrafusion")).not.toBe(owner)
+    expect(browserSpaceStorageKey("owner-a", "c:/repos/other")).not.toBe(owner)
+  })
+
+  it("derives one stable user-visible project identity from the configured root", () => {
+    expect(workspaceProjectFromRoot("C:\\workspaces\\TerraFusion_OS_1.0\\.")).toEqual({
+      identity: "c:/workspaces/terrafusion_os_1.0",
+      name: "TerraFusion_OS_1.0",
+    })
+  })
+
   it("binds the Line route persistence seam to the shared CAS writer", async () => {
     const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
     const initialRow = {
@@ -281,13 +308,19 @@ describe("server-owned Space persistence", () => {
 
   it("creates a uniquely owned cold-start world and restores it from the server store", async () => {
     const store = new MemoryStore()
+    const project = { identity: "c:/repos/terrafusion", name: "TerraFusion" }
     const opened = await loadOrCreateOwnedSpace({
       userId: "owner-a",
       newWorldId: () => "world-uuid-a",
       workspaceAppUrl: "https://configured.terrafusion.test/",
+      project,
     }, store)
 
-    expect(opened).toMatchObject({ worldId: "world-uuid-a", space: { runningAppUrl: "https://configured.terrafusion.test/" } })
+    expect(opened).toMatchObject({
+      worldId: "world-uuid-a",
+      project,
+      space: { runningAppUrl: "https://configured.terrafusion.test/" },
+    })
     expect(opened?.space.revision).toBe(0)
     expect(opened?.spine).toMatchObject({ execution: "idle", projectId: null })
     expect(store.rows.get("world-uuid-a")?.userId).toBe("owner-a")
@@ -296,8 +329,117 @@ describe("server-owned Space persistence", () => {
       userId: "owner-a",
       newWorldId: () => "must-not-be-used",
       workspaceAppUrl: "https://configured.terrafusion.test/",
+      project,
     }, store)
     expect(restored!.worldId).toBe("world-uuid-a")
+  })
+
+  it("starts a clean bound Space instead of reinterpreting saved paths against another repository", async () => {
+    const store = new MemoryStore()
+    const first = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-a",
+      project: { identity: "c:/repos/terrafusion-a", name: "TerraFusion A" },
+    }, store)
+    await saveOwnedSpace({
+      userId: "owner-a",
+      worldId: first!.worldId,
+      space: space(null, 1),
+      project: first!.project,
+    }, store)
+
+    const second = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-b",
+      project: { identity: "c:/repos/terrafusion-b", name: "TerraFusion B" },
+    }, store)
+
+    expect(second).toMatchObject({
+      worldId: "world-repo-b",
+      project: { identity: "c:/repos/terrafusion-b", name: "TerraFusion B" },
+      space: { openFiles: [], revision: 0 },
+    })
+    expect(JSON.parse(store.rows.get("world-repo-a")!.snapshot).space.openFiles).toEqual([
+      "src/search-ranking.ts", "src/query.ts",
+    ])
+  })
+
+  it("returns to an older bound Space after a different repository became the latest world", async () => {
+    const store = new MemoryStore()
+    const projectA = { identity: "c:/repos/terrafusion-a", name: "TerraFusion A" }
+    const first = await loadOrCreateOwnedSpace({
+      userId: "owner-a", newWorldId: () => "world-repo-a", project: projectA,
+    }, store)
+    await saveOwnedSpace({
+      userId: "owner-a", worldId: first!.worldId, space: space(null, 1), project: projectA,
+    }, store)
+
+    await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-b",
+      project: { identity: "c:/repos/terrafusion-b", name: "TerraFusion B" },
+    }, store)
+
+    const reopened = await loadOrCreateOwnedSpace({
+      userId: "owner-a", newWorldId: () => "must-not-create", project: projectA,
+    }, store)
+    expect(reopened).toMatchObject({
+      worldId: "world-repo-a",
+      space: { revision: 1, openFiles: ["src/search-ranking.ts", "src/query.ts"] },
+    })
+    expect(store.rows.has("must-not-create")).toBe(false)
+  })
+
+  it("restores the same project identity when only its display name changes", async () => {
+    const store = new MemoryStore()
+    await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-a",
+      project: { identity: "c:/repos/terrafusion", name: "Old display name" },
+    }, store)
+
+    const reopened = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "must-not-create",
+      project: { identity: "c:/repos/terrafusion", name: "New display name" },
+    }, store)
+    expect(reopened).toMatchObject({
+      worldId: "world-repo-a",
+      project: { identity: "c:/repos/terrafusion", name: "New display name" },
+    })
+    expect(store.rows.has("must-not-create")).toBe(false)
+  })
+
+  it("refuses an addressed Space when the configured repository no longer matches its binding", async () => {
+    const store = new MemoryStore()
+    await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-a",
+      project: { identity: "c:/repos/terrafusion-a", name: "TerraFusion A" },
+    }, store)
+
+    await expect(loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      worldId: "world-repo-a",
+      project: { identity: "c:/repos/terrafusion-b", name: "TerraFusion B" },
+    }, store)).rejects.toThrow("SPACE_PROJECT_MISMATCH")
+  })
+
+  it("refuses a delayed save after the configured repository changes", async () => {
+    const store = new MemoryStore()
+    const opened = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      newWorldId: () => "world-repo-a",
+      project: { identity: "c:/repos/terrafusion-a", name: "TerraFusion A" },
+    }, store)
+
+    await expect(saveOwnedSpace({
+      userId: "owner-a",
+      worldId: opened!.worldId,
+      space: space(null, 1),
+      project: { identity: "c:/repos/terrafusion-b", name: "TerraFusion B" },
+    }, store)).rejects.toThrow("SPACE_PROJECT_MISMATCH")
+    expect(JSON.parse(store.rows.get("world-repo-a")!.snapshot).space.revision).toBe(0)
   })
 
   it("creates a dedicated TerraFusion world instead of falling back to an unrelated latest world", async () => {

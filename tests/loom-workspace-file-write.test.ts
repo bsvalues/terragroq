@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { writeGovernedWorkspaceFile } from "@/lib/loom/workspace-file-write"
 import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { acknowledgeSavedBuffer } from "@/components/workspace-shell/editor-surface"
+import * as manualOwnerSave from "@/lib/loom/manual-owner-file-save"
 
 const roots: string[] = []
 
@@ -218,6 +219,128 @@ describe("governed manual workspace writes", () => {
     })
 
     expect(result).toEqual({ ok: false, error: "AUDIT_UNAVAILABLE", status: 503 })
+  })
+})
+
+describe("authenticated owner workspace writes", () => {
+  it("writes an existing real workspace file without a governance receipt", async () => {
+    const { root, file } = await fixture()
+    const before = await fs.stat(file)
+    const save = (manualOwnerSave as Record<string, unknown>).writeManualOwnerWorkspaceFile
+
+    expect(typeof save).toBe("function")
+    const result = await (save as (input: unknown, projectRoot: string) => Promise<unknown>)({
+      path: "src/real.ts",
+      content: "export const after = true\n",
+      modifiedAt: before.mtime.toISOString(),
+    }, root)
+
+    expect(result).toMatchObject({ ok: true, path: "src/real.ts", name: "real.ts" })
+    expect(await fs.readFile(file, "utf8")).toBe("export const after = true\n")
+  })
+
+  it("refuses sensitive files before changing their bytes", async () => {
+    const { root } = await fixture()
+    const target = path.join(root, ".env.local")
+    await fs.writeFile(target, "SECRET=before\n", "utf8")
+
+    const result = await manualOwnerSave.writeManualOwnerWorkspaceFile({
+      path: ".env.local",
+      content: "SECRET=after\n",
+    }, root)
+
+    expect(result).toMatchObject({ ok: false, error: "FAILED_SCOPE_COLLISION", status: 409 })
+    expect(await fs.readFile(target, "utf8")).toBe("SECRET=before\n")
+  })
+
+  it("refuses a stale buffer before overwriting a file changed on disk", async () => {
+    const { root, file } = await fixture()
+    const openedAt = (await fs.stat(file)).mtime.toISOString()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await fs.writeFile(file, "external change\n", "utf8")
+
+    const result = await manualOwnerSave.writeManualOwnerWorkspaceFile({
+      path: "src/real.ts",
+      content: "owner edit\n",
+      modifiedAt: openedAt,
+    }, root)
+
+    expect(result).toMatchObject({ ok: false, error: "CHANGED_ON_DISK", status: 409 })
+    expect(await fs.readFile(file, "utf8")).toBe("external change\n")
+  })
+
+  it("does not follow a target replacement after the admitted file handle is open", async () => {
+    const { root, file } = await fixture()
+    const openedAt = (await fs.stat(file)).mtime.toISOString()
+    const displaced = `${file}.displaced`
+
+    const result = await manualOwnerSave.writeManualOwnerWorkspaceFile({
+      path: "src/real.ts",
+      content: "owner edit\n",
+      modifiedAt: openedAt,
+    }, root, {
+      beforeWrite: async () => {
+        await fs.rename(file, displaced)
+        await fs.writeFile(file, "external replacement\n", "utf8")
+      },
+    })
+
+    expect(result).toMatchObject({ ok: false, error: "CHANGED_ON_DISK", status: 409 })
+    expect(await fs.readFile(file, "utf8")).toBe("external replacement\n")
+    expect(await fs.readFile(displaced, "utf8")).toBe("export const before = true\n")
+  })
+
+  it("serializes concurrent manual saves to the same workspace path", async () => {
+    const { root, file } = await fixture()
+    const events: string[] = []
+    let enterFirst!: () => void
+    let releaseFirst!: () => void
+    const firstEntered = new Promise<void>((resolve) => { enterFirst = resolve })
+    const firstReleased = new Promise<void>((resolve) => { releaseFirst = resolve })
+
+    const first = manualOwnerSave.writeManualOwnerWorkspaceFile({
+      path: "src/real.ts", content: "first save\n",
+    }, root, { beforeWrite: async () => {
+      events.push("first")
+      enterFirst()
+      await firstReleased
+    } })
+    await firstEntered
+    const second = manualOwnerSave.writeManualOwnerWorkspaceFile({
+      path: "src/real.ts", content: "second save\n",
+    }, root, { beforeWrite: async () => { events.push("second") } })
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(events).toEqual(["first"])
+    releaseFirst()
+    expect((await Promise.all([first, second])).every((result) => result.ok)).toBe(true)
+    expect(events).toEqual(["first", "second"])
+    expect(await fs.readFile(file, "utf8")).toBe("second save\n")
+  })
+
+  it("refuses an oversized edit before changing the file", async () => {
+    const { root, file } = await fixture()
+
+    const result = await manualOwnerSave.writeManualOwnerWorkspaceFile({
+      path: "src/real.ts",
+      content: "x".repeat(2_000_001),
+    }, root)
+
+    expect(result).toEqual({ ok: false, error: "FILE_TOO_LARGE", status: 413 })
+    expect(await fs.readFile(file, "utf8")).toBe("export const before = true\n")
+  })
+
+  it("refuses an oversized existing file before loading rollback bytes", async () => {
+    const { root, file } = await fixture()
+    await fs.writeFile(file, Buffer.alloc(2_000_001, 0x78))
+
+    const result = await manualOwnerSave.writeManualOwnerWorkspaceFile({
+      path: "src/real.ts",
+      content: "small replacement\n",
+    }, root)
+
+    expect(result).toEqual({ ok: false, error: "FILE_TOO_LARGE", status: 413 })
+    expect((await fs.stat(file)).size).toBe(2_000_001)
   })
 })
 

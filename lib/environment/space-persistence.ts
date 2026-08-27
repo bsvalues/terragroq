@@ -1,4 +1,6 @@
 import { and, desc, eq } from "drizzle-orm"
+import { createHash } from "node:crypto"
+import path from "node:path"
 
 import { db } from "@/lib/db"
 import { workingWorld } from "@/lib/db/schema"
@@ -19,9 +21,47 @@ export type OwnedWorkingWorldRecord = Readonly<{
   updatedAt: Date
 }>
 
+export type WorkspaceProject = Readonly<{ identity: string; name: string }>
+
+/** Opaque, stable browser-fallback namespace bound to one signed-in user and project. */
+export function browserSpaceStorageKey(userId: string, projectIdentity: string): string {
+  return createHash("sha256")
+    .update("williamos-browser-space:v1\0")
+    .update(userId)
+    .update("\0")
+    .update(projectIdentity)
+    .digest("base64url")
+}
+
+const WORKSPACE_ROOT_RESOURCE = "williamos-workspace-root:v1:"
+const WORKSPACE_NAME_RESOURCE = "williamos-workspace-name:v1:"
+
+/** Derive one stable server-owned identity from the configured project root. */
+export function workspaceProjectFromRoot(root: string, configuredName?: string | null): WorkspaceProject {
+  const windowsPath = /^[A-Za-z]:[\\/]/.test(root)
+  const pathFlavor = windowsPath ? path.win32 : path
+  const resolved = pathFlavor.resolve(root)
+  const portable = resolved.replace(/\\/g, "/").replace(/\/$/, "")
+  return {
+    identity: windowsPath || process.platform === "win32" ? portable.toLowerCase() : portable,
+    name: configuredName?.trim() || pathFlavor.basename(resolved),
+  }
+}
+
+function projectResources(project: WorkspaceProject): readonly string[] {
+  return [`${WORKSPACE_ROOT_RESOURCE}${project.identity}`, `${WORKSPACE_NAME_RESOURCE}${project.name}`]
+}
+
+function worldMatchesProject(world: WorkingWorldSnapshot, project: WorkspaceProject): boolean {
+  // The canonical root is identity. The configured display name is mutable presentation metadata
+  // and must not orphan an otherwise valid persisted Space when it changes.
+  return world.resources.includes(`${WORKSPACE_ROOT_RESOURCE}${project.identity}`)
+}
+
 export interface SpaceWorkingWorldStore {
   findOwned(userId: string, worldId: string): Promise<OwnedWorkingWorldRecord | null>
   findLatestOwned(userId: string): Promise<OwnedWorkingWorldRecord | null>
+  findLatestOwnedForProject(userId: string, projectIdentity: string): Promise<OwnedWorkingWorldRecord | null>
   insertOwned(row: OwnedWorkingWorldRecord): Promise<void>
   updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string): Promise<boolean>
 }
@@ -34,6 +74,25 @@ export async function findLatestTerraFusionOwnedByPage(
   for (let offset = 0; ; offset += OWNED_WORLD_PAGE_SIZE) {
     const rows = await readPage(offset, OWNED_WORLD_PAGE_SIZE)
     const match = rows.find((row) => isTerraFusionWorld(row))
+    if (match) return match
+    if (rows.length < OWNED_WORLD_PAGE_SIZE) return null
+  }
+}
+
+export async function findLatestProjectOwnedByPage(
+  projectIdentity: string,
+  readPage: (offset: number, limit: number) => Promise<readonly OwnedWorkingWorldRecord[]>,
+): Promise<OwnedWorkingWorldRecord | null> {
+  const rootResource = `${WORKSPACE_ROOT_RESOURCE}${projectIdentity}`
+  for (let offset = 0; ; offset += OWNED_WORLD_PAGE_SIZE) {
+    const rows = await readPage(offset, OWNED_WORLD_PAGE_SIZE)
+    const match = rows.find((row) => {
+      try {
+        return validateWorkingWorld(JSON.parse(row.snapshot)).resources.includes(rootResource)
+      } catch {
+        return false
+      }
+    })
     if (match) return match
     if (rows.length < OWNED_WORLD_PAGE_SIZE) return null
   }
@@ -52,6 +111,17 @@ export const databaseSpaceWorkingWorldStore: SpaceWorkingWorldStore = {
 
   async findLatestOwned(userId) {
     return findLatestTerraFusionOwnedByPage((offset, limit) => db.select({
+        id: workingWorld.id, userId: workingWorld.userId, intent: workingWorld.intent,
+        snapshot: workingWorld.snapshot, updatedAt: workingWorld.updatedAt,
+      }).from(workingWorld)
+        .where(eq(workingWorld.userId, userId))
+        .orderBy(desc(workingWorld.updatedAt), desc(workingWorld.id))
+        .limit(limit)
+        .offset(offset))
+  },
+
+  async findLatestOwnedForProject(userId, projectIdentity) {
+    return findLatestProjectOwnedByPage(projectIdentity, (offset, limit) => db.select({
         id: workingWorld.id, userId: workingWorld.userId, intent: workingWorld.intent,
         snapshot: workingWorld.snapshot, updatedAt: workingWorld.updatedAt,
       }).from(workingWorld)
@@ -181,24 +251,41 @@ export async function loadOrCreateOwnedSpace(
     workspaceAppUrl?: string | null
     newWorldId?: () => string
     projectRootIdentity?: string | null
+    project?: WorkspaceProject
   }>,
   store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
-): Promise<Readonly<{ worldId: string; space: SpaceState; spine: WorldSpine }> | null> {
+): Promise<Readonly<{ worldId: string; space: SpaceState; spine: WorldSpine; project?: WorkspaceProject }> | null> {
   const exact = input.worldId ? await store.findOwned(input.userId, input.worldId) : null
   if (input.worldId && !exact) return null
-  const latest = exact ? null : await store.findLatestOwned(input.userId)
+  const latest = exact
+    ? null
+    : input.project
+      ? await store.findLatestOwnedForProject(input.userId, input.project.identity)
+      : await store.findLatestOwned(input.userId)
   // Store implementations may be generic "latest owned" readers. Recheck identity here so an
   // unrelated working world can never silently become the TerraFusion Space.
-  const row = exact ?? (latest && isTerraFusionWorld(latest) ? latest : null)
+  let row = exact ?? (latest && isTerraFusionWorld(latest) ? latest : null)
   if (row) {
     const world = validateWorkingWorld(JSON.parse(row.snapshot))
-    return { worldId: row.id, space: restoredSpace(world, input.workspaceAppUrl), spine: world.spine }
+    if (input.project && !worldMatchesProject(world, input.project)) {
+      if (exact) throw new Error("SPACE_PROJECT_MISMATCH")
+      row = null
+    } else {
+      return {
+        worldId: row.id,
+        space: restoredSpace(world, input.workspaceAppUrl),
+        spine: world.spine,
+        ...(input.project ? { project: input.project } : {}),
+      }
+    }
   }
 
   const worldId = (input.newWorldId ?? crypto.randomUUID)()
   const base = createWorkingWorld({
     intent: "TerraFusion",
-    resources: input.projectRootIdentity ? [input.projectRootIdentity] : [],
+    resources: input.project
+      ? projectResources(input.project)
+      : input.projectRootIdentity ? [input.projectRootIdentity] : [],
   })
   const space = createDefaultSpace(serverRunningAppUrl(base, input.workspaceAppUrl))
   const world = validateWorkingWorld({ ...base, space })
@@ -206,7 +293,7 @@ export async function loadOrCreateOwnedSpace(
     id: worldId, userId: input.userId, intent: world.intent,
     snapshot: JSON.stringify(world), updatedAt: new Date(),
   })
-  return { worldId, space, spine: world.spine }
+  return { worldId, space, spine: world.spine, ...(input.project ? { project: input.project } : {}) }
 }
 
 export async function saveOwnedSpace(
@@ -215,9 +302,10 @@ export async function saveOwnedSpace(
     worldId: string
     space: unknown
     workspaceAppUrl?: string | null
+    project?: WorkspaceProject
   }>,
   store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
-): Promise<Readonly<{ worldId: string; space: SpaceState; spine: WorldSpine }> | null> {
+): Promise<Readonly<{ worldId: string; space: SpaceState; spine: WorldSpine; project?: WorkspaceProject }> | null> {
   let row = await store.findOwned(input.userId, input.worldId)
   if (!row) return null
   // URL is intentionally overwritten before validation: it is not browser authority. A malicious
@@ -234,6 +322,9 @@ export async function saveOwnedSpace(
   const maxAttempts = 3
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const world = validateWorkingWorld(JSON.parse(row.snapshot))
+    if (input.project && !worldMatchesProject(world, input.project)) {
+      throw new Error("SPACE_PROJECT_MISMATCH")
+    }
     const persistedRevision = world.space?.revision ?? 0
     if (submitted.revision <= persistedRevision) throw new Error("SPACE_REVISION_STALE")
     const space = validateSpaceState({
@@ -247,7 +338,12 @@ export async function saveOwnedSpace(
       JSON.stringify(updated),
       updated.intent,
       row.snapshot,
-    )) return { worldId: input.worldId, space, spine: updated.spine }
+    )) return {
+      worldId: input.worldId,
+      space,
+      spine: updated.spine,
+      ...(input.project ? { project: input.project } : {}),
+    }
 
     const latest = await store.findOwned(input.userId, input.worldId)
     if (!latest) return null
