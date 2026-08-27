@@ -95,9 +95,6 @@ export function EditorSurface({ space, onEditorChange }: {
   const [roots, setRoots] = useState<readonly Entry[] | null>(null)
   const [treeError, setTreeError] = useState<string | null>(null)
   const [buffers, setBuffers] = useState<Record<string, FileBuffer>>({})
-  const authorityRef = useRef<string | null>(null)
-  const authorityRequest = useRef<Promise<string> | null>(null)
-  const receipts = useRef(new Map<string, string>())
   const loadingFiles = useRef(new Set<string>())
 
   const loadRoots = useCallback(async () => {
@@ -171,71 +168,18 @@ export function EditorSurface({ space, onEditorChange }: {
     updatePanes(panes, openFiles, path, targetPaneId)
   }, [buffers, space.editor.activePaneId, space.editor.openFiles, space.editor.panes, updatePanes])
 
-  const establishAuthority = useCallback(async () => {
-    if (authorityRef.current) return authorityRef.current
-    if (!authorityRequest.current) {
-      authorityRequest.current = fetch("/api/governance/workroom-authority", { method: "POST" })
-        .then(async (response) => {
-          const payload = await response.json()
-          if (!response.ok || !payload.ok || typeof payload.workOrder !== "string") {
-            throw new Error(payload.detail ?? payload.reason ?? payload.error ?? `AUTHORITY_${response.status}`)
-          }
-          authorityRef.current = payload.workOrder
-          return payload.workOrder as string
-        })
-        .finally(() => { authorityRequest.current = null })
-    }
-    return authorityRequest.current
-  }, [])
-
-  const establishReceipt = useCallback(async (path: string, force = false) => {
-    if (!force) {
-      const cached = receipts.current.get(path)
-      if (cached) return cached
-    }
-    const workOrderRef = await establishAuthority()
-    const response = await fetch("/api/governance/work-context", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        workOrderRef,
-        parentOutcome: "OUTCOME-762",
-        reservedPaths: [path],
-        authorityLevel: "A2_WRITE_OWN",
-        existingSubsystem: "integrating",
-        topologySource: "canonical-registry",
-        collisions: [],
-        remainingParentAcceptance: "W1 deployed human-operated chain and W2 remain",
-      }),
-    })
-    const payload = await response.json()
-    if (!response.ok || !payload.ok || typeof payload.receipt !== "string") {
-      throw new Error([payload.failure ?? payload.error ?? `CONTEXT_${response.status}`, payload.detail].filter(Boolean).join(": "))
-    }
-    receipts.current.set(path, payload.receipt)
-    return payload.receipt as string
-  }, [establishAuthority])
-
-  const save = useCallback(async (path: string, retry = true) => {
+  const save = useCallback(async (path: string) => {
     const buffer = buffers[path]
     if (!buffer || buffer.saving || buffer.content === buffer.savedContent) return
     const submittedContent = buffer.content
     setBuffers((current) => ({ ...current, [path]: { ...current[path], saving: true, error: null } }))
     try {
-      const receipt = await establishReceipt(path)
       const response = await fetch("/api/loom/files", {
         method: "PUT",
-        headers: { "content-type": "application/json", "x-williamos-work-context": receipt },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ path, content: submittedContent, modifiedAt: buffer.modifiedAt }),
       })
-      const payload = await response.json()
-      if (response.status === 409 && payload.error !== "CHANGED_ON_DISK" && retry) {
-        receipts.current.delete(path)
-        await establishReceipt(path, true)
-        setBuffers((current) => ({ ...current, [path]: { ...current[path], saving: false } }))
-        await save(path, false)
-        return
-      }
+      const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
         const detail = [payload.error ?? `SAVE_${response.status}`, payload.detail].filter(Boolean).join(": ")
         throw new Error(payload.error === "CHANGED_ON_DISK" ? "CHANGED_ON_DISK: reopen before saving" : detail)
@@ -249,7 +193,7 @@ export function EditorSurface({ space, onEditorChange }: {
         ...current[path], saving: false, error: error instanceof Error ? error.message : "SAVE_REFUSED",
       } }))
     }
-  }, [buffers, establishReceipt])
+  }, [buffers])
 
   const split = useCallback(() => {
     if (space.editor.panes.length > 1) return
@@ -280,7 +224,7 @@ export function EditorSurface({ space, onEditorChange }: {
           <button type="button" onClick={split} disabled={space.editor.panes.length > 1} title="Split editor" aria-label="Split editor">
             <Columns2 size={14} />
           </button>
-          <span className={styles.editorHint}>⌘S save · ⌘Z undo · ⇧⌘Z redo</span>
+          <span className={styles.editorHint}>Ctrl+S save · Ctrl+Z undo · Ctrl+Y redo</span>
         </div>
         <div className={styles.panes} data-split={space.editor.panes.length > 1}>
           {space.editor.panes.map((pane) => {
@@ -332,7 +276,7 @@ export function EditorSurface({ space, onEditorChange }: {
                         onChange={(content) => setBuffers((current) => ({ ...current, [buffer.path]: { ...current[buffer.path], content, error: null } }))}
                         onSelection={(selection) => {
                           const panes = space.editor.panes.map((item) => item.id === pane.id ? { ...item, selection } : item)
-                          updatePanes(panes, space.editor.openFiles, buffer.path)
+                          updatePanes(panes, space.editor.openFiles, buffer.path, pane.id)
                         }}
                         onSave={() => void save(buffer.path)}
                       />

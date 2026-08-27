@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useRef } from "react"
 import { Minus, X } from "lucide-react"
 
 import type { WindowGeometry } from "./types"
@@ -31,19 +31,25 @@ export function WindowFrame({
   const geometryRef = useRef(geometry)
   geometryRef.current = geometry
 
-  useEffect(() => {
+  function trackNativeResize(event: React.PointerEvent<HTMLElement>) {
     const frame = frameRef.current
-    if (!frame || typeof ResizeObserver === "undefined") return
-    const observer = new ResizeObserver(([entry]) => {
-      const width = Math.round(entry.contentRect.width)
-      const height = Math.round(entry.contentRect.height)
+    if (!frame || event.button !== 0) return
+    const initial = frame.getBoundingClientRect()
+    if (event.clientX < initial.right - 18 || event.clientY < initial.bottom - 18) return
+    const finish = () => {
+      const bounds = frame.getBoundingClientRect()
+      const width = Math.round(bounds.width)
+      const height = Math.round(bounds.height)
       const current = geometryRef.current
-      if (Math.abs(width - current.width) < 2 && Math.abs(height - current.height) < 2) return
-      onGeometry({ ...current, width, height })
-    })
-    observer.observe(frame)
-    return () => observer.disconnect()
-  }, [onGeometry])
+      if (Math.abs(width - current.width) >= 2 || Math.abs(height - current.height) >= 2) {
+        onGeometry({ ...current, width, height })
+      }
+      window.removeEventListener("pointerup", finish)
+      window.removeEventListener("pointercancel", finish)
+    }
+    window.addEventListener("pointerup", finish)
+    window.addEventListener("pointercancel", finish)
+  }
 
   function startDrag(event: React.PointerEvent<HTMLElement>) {
     if (event.button !== 0) return
@@ -90,7 +96,7 @@ export function WindowFrame({
         height: geometry.height,
         zIndex: geometry.z,
       }}
-      onPointerDown={onActivate}
+      onPointerDown={(event) => { onActivate(); trackNativeResize(event) }}
       aria-label={`${title} window`}
       data-window-id={id}
     >

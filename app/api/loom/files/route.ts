@@ -2,8 +2,10 @@ import fs from "node:fs/promises"
 
 import { getSession } from "@/lib/session"
 import { readBoundedJson } from "@/lib/environment/line-guard"
+import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
+import { ownerLookup } from "@/lib/governance/owner-lookup"
+import { writeManualOwnerWorkspaceFile } from "@/lib/loom/manual-owner-file-save"
 import { isIgnoredEntry, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
-import { workspaceFileWriteDependencies, writeGovernedWorkspaceFile } from "@/lib/loom/workspace-file-write"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -74,17 +76,25 @@ export async function PUT(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
 
+  const ownerId = await resolveOwnerUserId(ownerLookup(), process.env.WILLIAMOS_OWNER_EMAIL)
+  const owner = assertOwner(session.user.id, ownerId)
+  if (!owner.ok) {
+    return Response.json(
+      { error: owner.failure, detail: owner.detail },
+      { status: owner.failure === "NOT_OWNER" ? 403 : 409, headers: { "cache-control": "no-store" } },
+    )
+  }
+
   const parsed = await readBoundedJson(request, MAX_WRITE_BODY_BYTES)
   if (!parsed.ok) return refuse(parsed.error, parsed.status)
   const body = parsed.value as { path?: unknown; content?: unknown; modifiedAt?: unknown }
   if (typeof body.content !== "string") return refuse("CONTENT_REQUIRED", 400)
 
-  const result = await writeGovernedWorkspaceFile({
-    userId: session.user.id,
+  const result = await writeManualOwnerWorkspaceFile({
     path: body.path,
     content: body.content,
     modifiedAt: body.modifiedAt,
-  }, workspaceFileWriteDependencies(PROJECT_ROOT))
+  }, PROJECT_ROOT)
   if (!result.ok) {
     return Response.json(result, { status: result.status, headers: { "cache-control": "no-store" } })
   }

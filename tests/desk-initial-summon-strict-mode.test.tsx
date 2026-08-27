@@ -16,6 +16,7 @@ vi.mock("next/dynamic", () => ({
 
 afterEach(() => {
   cleanup()
+  window.localStorage.clear()
   vi.unstubAllGlobals()
 })
 
@@ -55,6 +56,7 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
       json: async () => ({
         worldId: "world-strict",
         space: spaceToServer(defaultSpace()),
+        project: { identity: "c:/repos/terrafusion_os_1.0", name: "terrafusion_os_1.0" },
       }),
     })
 
@@ -84,13 +86,102 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
     await waitFor(() => expect(screen.getByText("WO-STRICT-1")).toBeTruthy())
     expect(screen.getAllByText("WO-STRICT-1")).toHaveLength(1)
     expect(screen.getByRole("region", { name: "Source window" })).toBeTruthy()
+    expect(screen.getByLabelText("Workspace project").textContent).toContain("terrafusion_os_1.0")
+    expect(screen.getByLabelText("Workspace project").getAttribute("title")).toBe("c:/repos/terrafusion_os_1.0")
     expect(screen.queryByText("opening space")).toBeNull()
     expect(screen.queryByText("working…")).toBeNull()
+  })
+
+  it("restores a project-bound browser Space when server persistence is unavailable", async () => {
+    const project = { identity: "c:/repos/terrafusion", name: "TerraFusion" }
+    const browserStorageKey = "opaque-owner-project-key"
+    const restored = {
+      ...defaultSpace(),
+      selectedPath: "package.json",
+      editor: {
+        openFiles: ["README.md", "package.json"],
+        panes: [
+          { id: "primary" as const, activePath: "README.md", selection: null },
+          { id: "secondary" as const, activePath: "package.json", selection: null },
+        ],
+        activePaneId: "secondary" as const,
+      },
+    }
+    window.localStorage.setItem(`williamos:space:${browserStorageKey}`, JSON.stringify({
+      worldId: "browser-local",
+      space: spaceToServer(restored),
+    }))
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            worldId: "browser-local",
+            space: spaceToServer(defaultSpace()),
+            project,
+            storage: "browser",
+            browserStorageKey,
+          }),
+        })
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) })
+      }
+      if (url.startsWith("/api/loom/files?path=") && !init?.method) {
+        const path = decodeURIComponent(url.split("=")[1])
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ kind: "file", path, content: `${path}\n`, modifiedAt: "2026-08-27T12:00:00.000Z" }),
+        })
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+
+    await waitFor(() => expect(screen.getAllByLabelText("Source content")).toHaveLength(2))
+    expect(screen.getByLabelText("Workspace project").textContent).toContain("TerraFusion")
+    expect(screen.getByText("space saved locally")).toBeTruthy()
+    expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(2)
+    expect(screen.getAllByRole("tab", { name: "package.json" })).toHaveLength(2)
+  })
+
+  it("does not restore browser fallback state from another signed-in user namespace", async () => {
+    const project = { identity: "c:/repos/terrafusion", name: "TerraFusion" }
+    window.localStorage.setItem("williamos:space:opaque-other-user", JSON.stringify({
+      worldId: "browser-local",
+      space: spaceToServer({ ...defaultSpace(), editor: {
+        openFiles: ["OTHER_USER.md"],
+        panes: [{ id: "primary", activePath: "OTHER_USER.md", selection: null }],
+        activePaneId: "primary",
+      } }),
+    }))
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve({
+        ok: true, status: 200, json: async () => ({
+          worldId: "browser-local", space: spaceToServer(defaultSpace()), project,
+          storage: "browser", browserStorageKey: "opaque-current-user",
+        }),
+      })
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve({
+        ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }),
+      })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+
+    await waitFor(() => expect(screen.getByText("space saved locally")).toBeTruthy())
+    expect(screen.queryByRole("tab", { name: "OTHER_USER.md" })).toBeNull()
   })
 })
 
 describe("EditorSurface in-flight save reconciliation", () => {
-  it("keeps bytes typed after the submitted request dirty when that request completes", async () => {
+  it("saves through the manual owner endpoint and keeps later typing dirty", async () => {
     const saveResponse = deferredResponse()
     const fetchStub = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -105,12 +196,6 @@ describe("EditorSurface in-flight save reconciliation", () => {
             kind: "file", path: "src/real.ts", content: "disk before\n", modifiedAt: "2026-08-25T10:00:00.000Z",
           }),
         })
-      }
-      if (url === "/api/governance/workroom-authority" && init?.method === "POST") {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, workOrder: "WO-W1" }) })
-      }
-      if (url === "/api/governance/work-context" && init?.method === "POST") {
-        return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true, receipt: "receipt-w1" }) })
       }
       if (url === "/api/loom/files" && init?.method === "PUT") return saveResponse.promise
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)

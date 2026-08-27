@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { defaultSpace, normalizeSpace, spaceToServer } from "@/components/workspace-shell/types"
+import { defaultSpace, normalizeSpace, spaceInViewport, spaceToServer } from "@/components/workspace-shell/types"
 import { validateSpaceState } from "@/lib/environment/working-world"
 
 const geometry = (z: number) => ({ x: 100, y: 90, width: 560, height: 480, z, minimized: false })
@@ -72,5 +72,16 @@ describe("browser-to-server Space mapping", () => {
       { id: "primary", activePath: "src/left.ts", selection: { anchor: 2, head: 7 } },
       { id: "secondary", activePath: "src/right.ts", selection: { anchor: 11, head: 19 } },
     ])
+  })
+
+  it("recontains already-open windows after a desktop viewport shrinks", () => {
+    const open = defaultSpace(1440, 900)
+    const resized = spaceInViewport(open, { width: 800, height: 600 })
+
+    for (const window of Object.values(resized.windows)) {
+      expect(window.x).toBeLessThanOrEqual(620)
+      expect(window.x + window.width).toBeGreaterThanOrEqual(180)
+      expect(window.y).toBeLessThanOrEqual(510)
+    }
   })
 })

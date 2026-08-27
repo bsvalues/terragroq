@@ -1,4 +1,10 @@
-import { loadOrCreateOwnedSpace, saveOwnedSpace } from "@/lib/environment/space-persistence"
+import {
+  createDefaultSpace,
+  browserSpaceStorageKey,
+  loadOrCreateOwnedSpace,
+  saveOwnedSpace,
+  workspaceProjectFromRoot,
+} from "@/lib/environment/space-persistence"
 import { readBoundedJson } from "@/lib/environment/line-guard"
 import { admitWorkspaceApp, williamOsOrigin } from "@/lib/environment/workspace-app"
 import { getSession } from "@/lib/session"
@@ -8,6 +14,10 @@ export const runtime = "nodejs"
 
 const WORKSPACE_APP_URL = process.env.WILLIAMOS_WORKSPACE_APP_URL?.trim() || null
 const CANONICAL_WILLIAMOS_URL = process.env.BETTER_AUTH_URL?.trim() || null
+const WORKSPACE_PROJECT = workspaceProjectFromRoot(
+  process.env.WILLIAMOS_PROJECT_ROOT?.trim() || process.cwd(),
+  process.env.WILLIAMOS_PROJECT_NAME,
+)
 const MAX_SPACE_BYTES = 256_000
 
 const reply = (value: unknown, status = 200) => Response.json(value, {
@@ -33,17 +43,26 @@ export async function GET(request: Request) {
   const requested = new URL(request.url).searchParams.get("worldId")
   if (requested !== null && !validWorldId(requested)) return reply({ error: "WORLD_ID_INVALID" }, 400)
 
+  const workspaceAppUrl = await admittedAppUrl(request)
   try {
-    const workspaceAppUrl = await admittedAppUrl(request)
     const result = await loadOrCreateOwnedSpace({
       userId: session.user.id,
       worldId: requested,
       workspaceAppUrl,
+      project: WORKSPACE_PROJECT,
       newWorldId: crypto.randomUUID,
     })
     return result ? reply(result) : reply({ error: "WORLD_NOT_FOUND" }, 404)
   } catch {
-    return reply({ error: "SPACE_PERSISTENCE_UNAVAILABLE" }, 503)
+    // A missing optional persistence relation must not strand the primary browser experience.
+    // The client persists this truthful, project-bound fallback in browser storage and labels it.
+    return reply({
+      worldId: "browser-local",
+      space: createDefaultSpace(workspaceAppUrl),
+      project: WORKSPACE_PROJECT,
+      storage: "browser",
+      browserStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+    })
   }
 }
 
@@ -62,6 +81,7 @@ export async function PUT(request: Request) {
       worldId: body.worldId,
       space: body.space,
       workspaceAppUrl,
+      project: WORKSPACE_PROJECT,
     })
     return result ? reply(result) : reply({ error: "WORLD_NOT_FOUND" }, 404)
   } catch (error) {
