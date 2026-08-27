@@ -1,8 +1,11 @@
 # Claude Code Provider Adapter
 
-Claude Code must first follow the repository entrypoint in [`AGENTS.md`](AGENTS.md) and the controlling
-[`multi-agent operator playbook`](docs/governance/multi-agent-operator-playbook.md). This adapter
-narrows provider behavior; it does not grant authority or establish a competing hierarchy.
+Claude Code must first follow the repository entrypoint in [`AGENTS.md`](AGENTS.md). For product work,
+[`PRODUCT_EXECUTION.md`](PRODUCT_EXECUTION.md) controls product direction, lane scope, priorities, and
+completion. The historical
+[`multi-agent operator playbook`](docs/governance/multi-agent-operator-playbook.md) applies only where
+it does not conflict with that product contract. This adapter narrows provider behavior; it does not
+grant authority or establish a competing hierarchy.
 
 Claude may accept a Work Order only when all of the following are true:
 

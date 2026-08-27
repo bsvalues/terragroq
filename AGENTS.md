@@ -25,6 +25,12 @@ Agents own routine investigation, implementation, testing, browser verification,
 
 Ask William only for a genuinely new material product/policy/authority decision that cannot be resolved inside existing authority.
 
+When the supported Hermes cycle returns stdout beginning with
+`WILLIAMOS_PRIMARY_DECISION_REQUEST:`, that stdout is the complete canonical Primary decision
+request. Stop all tool use and emit that text byte-for-byte as the entire final assistant message,
+with no Markdown fence, prefix, suffix, summary, or paraphrase. This exact assistant message is the
+authenticated presentation record; the next direct owner reply may then be verified and consumed.
+
 ## Product-first execution
 
 The coordinator protects the fixed user-visible acceptance target.
@@ -39,7 +45,7 @@ For UI/UX work, use the browser/product early and repeatedly. Tests and architec
 
 Until the owner changes lanes, W1 is the WilliamOS UI/UX product lane:
 
-`Open TerraFusion Space -> useful workspace -> browse project-bound files -> edit/save -> application pane behaves truthfully -> close/reopen -> same useful Space returns.`
+`Open TerraFusion Space -> real repo/file tree -> open actual file -> edit it -> save actual workspace file -> undo/redo -> open second file -> split/place it beside first -> running TerraFusion stays interactive beside it -> close/reopen WilliamOS -> same Space + files + layout return.`
 
 TerraFusion is a workload used to exercise WilliamOS, not the W1 product-development lane. Do not drift into TerraFusion backend/runtime product work unless the owner explicitly changes lanes or the exact W1 browser step cannot continue and no truthful bounded fixture can unblock it.
 
@@ -69,7 +75,7 @@ Optional providers must not become owner babysitting. If one provider is unavail
 
 Independent assurance is role separation, not vendor dependence.
 
-Historical rejected adapters and safety findings remain rejected where still applicable; quarantine does not reactivate them.
+Historical rejected adapters and safety findings remain rejected where still applicable; quarantine does not reactivate them. Do not retry, wrap, rename, or reuse the rejected nested adapter from issue #357 or the dependency-blocked #358 adapter.
 
 ## Instruction narrowing
 

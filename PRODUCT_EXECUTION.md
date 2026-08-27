@@ -37,7 +37,7 @@ Do not move the finish line because implementation exposed deeper infrastructure
 
 Until the owner changes lanes, the priority is the WilliamOS W1 UI/UX experience:
 
-`Open TerraFusion Space -> useful workspace -> browse real/project-bound files -> edit/save -> application pane behaves truthfully -> close/reopen -> same useful Space returns.`
+`Open TerraFusion Space -> real repo/file tree -> open actual file -> edit it -> save actual workspace file -> undo/redo -> open second file -> split/place it beside first -> running TerraFusion stays interactive beside it -> close/reopen WilliamOS -> same Space + files + layout return.`
 
 The purpose is a WilliamOS interface the owner can actually use.
 
