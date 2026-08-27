@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://william-os.local/schemas/hermes-host-attestation-v1.json",
+  "title": "HERMES_HOST_ATTESTATION v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "artifact", "collectedAt", "collectionCompletedAt", "boundAt", "collectionId", "host", "collector", "authority", "facts", "priorityOverrides", "resense", "binding"],
+  "properties": {
+    "schema": {"const": "hermes-host-attestation/1"},
+    "artifact": {"const": "HERMES_HOST_ATTESTATION"},
+    "collectedAt": {"type": "string", "format": "date-time"},
+    "collectionCompletedAt": {"type": "string", "format": "date-time"},
+    "boundAt": {"type": "string", "format": "date-time"},
+    "collectionId": {"type": "string", "minLength": 1},
+    "host": {
+      "type": "object", "additionalProperties": false,
+      "required": ["hostname", "machineIdentitySha256", "isWindows"],
+      "properties": {
+        "hostname": {"type": "string", "minLength": 1},
+        "machineIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "isWindows": {"const": true}
+      }
+    },
+    "collector": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "version", "sha256", "readOnly"],
+      "properties": {
+        "name": {"const": "collect-hermes-host-attestation.v1.ps1"},
+        "version": {"const": "1.0.0"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "readOnly": {"const": true}
+      }
+    },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["boundary", "elevated", "persistentCredential", "hostMutationAuthorized", "launchNonce", "launchManifestSha256"],
+      "properties": {
+        "boundary": {"const": "single-prestaged-uac-read-only"},
+        "elevated": {"const": true},
+        "persistentCredential": {"const": false},
+        "hostMutationAuthorized": {"const": false},
+        "launchNonce": {"type": "string", "pattern": "^[a-f0-9-]{36}$"},
+        "launchManifestSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "facts": {
+      "type": "array", "minItems": 24, "maxItems": 24,
+      "items": {"$ref": "#/$defs/fact"},
+      "allOf": [
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "os.identity"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "os.updates"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "os.licensing"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "security.bitlocker"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "security.boot"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "security.defender"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "security.firewallProfiles"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "storage.physicalDisks"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "storage.volumes"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "storage.dockerDisk"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "storage.topConsumers"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "storage.growth"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "operations.tasks"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "operations.backups"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "operations.heartbeats"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "network.listeners"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "network.firewallAdmissions"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "network.addressing"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "network.specialPortOwners"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "inference.gpus"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "inference.ollama"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "inference.dockerContainers"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "inference.guardBaseline"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "dr.target"}}}, "minContains": 1, "maxContains": 1}
+      ]
+    },
+    "priorityOverrides": {
+      "type": "array", "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["type", "precedence", "disposition"],
+        "properties": {
+          "type": {"enum": ["HERMES_STORAGE_CRITICAL", "HERMES_DR_TARGET_UNHEALTHY", "HERMES_SECURITY_EXPOSURE_CRITICAL", "HERMES_INFERENCE_GOLDEN_DRIFT"]},
+          "precedence": {"type": "integer", "minimum": 1},
+          "disposition": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "resense": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "factIds"],
+      "properties": {
+        "mode": {"const": "ONLY_STALE_OR_CHANGED_PREREQUISITES"},
+        "factIds": {"type": "array", "items": {"enum": ["os.identity", "os.updates", "os.licensing", "security.bitlocker", "security.boot", "security.defender", "security.firewallProfiles", "storage.physicalDisks", "storage.volumes", "storage.dockerDisk", "storage.topConsumers", "storage.growth", "operations.tasks", "operations.backups", "operations.heartbeats", "network.listeners", "network.firewallAdmissions", "network.addressing", "network.specialPortOwners", "inference.gpus", "inference.ollama", "inference.dockerContainers", "inference.guardBaseline", "dr.target"]}, "uniqueItems": true}
+      }
+    },
+    "binding": {
+      "type": "object", "additionalProperties": false,
+      "required": ["digestAlgorithm", "canonicalization", "sourceDigestSha256", "launchManifestSha256", "launchReceiptSha256", "digestSha256"],
+      "properties": {
+        "digestAlgorithm": {"const": "sha256"},
+        "canonicalization": {"const": "recursive-key-sort-json/1"},
+        "sourceDigestSha256": {"$ref": "#/$defs/sha256"},
+        "launchManifestSha256": {"$ref": "#/$defs/sha256"},
+        "launchReceiptSha256": {"$ref": "#/$defs/sha256"},
+        "digestSha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "fact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "domain", "truth", "value", "provenance", "freshness", "redaction"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][A-Za-z0-9]*(\\.[A-Za-z0-9]+)+$"},
+        "domain": {"type": "string", "minLength": 1},
+        "truth": {"enum": ["OBSERVED", "UNKNOWN", "CONFLICTING", "STALE"]},
+        "value": {},
+        "provenance": {
+          "type": "object", "additionalProperties": false,
+          "required": ["source", "probe", "collectorVersion", "result"],
+          "properties": {
+            "source": {"type": "string", "minLength": 1},
+            "probe": {"type": "string", "minLength": 1},
+            "collectorVersion": {"const": "1.0.0"},
+            "result": {"enum": ["SUCCESS", "READ_ONLY_PROBE_FAILED", "CONTRADICTION_PRESERVED"]}
+          }
+        },
+        "freshness": {
+          "type": "object", "additionalProperties": false,
+          "required": ["class", "boundSeconds", "observedAt", "validUntil"],
+          "properties": {
+            "class": {"enum": ["IDENTITY", "STATIC", "CONFIGURATION", "STATE", "VOLATILE"]},
+            "boundSeconds": {"enum": [31536000, 2592000, 86400, 3600, 300]},
+            "observedAt": {"type": "string", "format": "date-time"},
+            "validUntil": {"type": "string", "format": "date-time"}
+          }
+        },
+        "redaction": {
+          "type": "object", "additionalProperties": false,
+          "required": ["applied", "fields"],
+          "properties": {
+            "applied": {"type": "boolean"},
+            "fields": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+          }
+        }
+      },
+      "allOf": [
+        {"if": {"properties": {"truth": {"const": "UNKNOWN"}}}, "then": {"properties": {"value": {"type": "null"}}}},
+        {"if": {"properties": {"freshness": {"properties": {"class": {"const": "IDENTITY"}}}}}, "then": {"properties": {"freshness": {"properties": {"boundSeconds": {"const": 31536000}}}}}},
+        {"if": {"properties": {"freshness": {"properties": {"class": {"const": "STATIC"}}}}}, "then": {"properties": {"freshness": {"properties": {"boundSeconds": {"const": 2592000}}}}}},
+        {"if": {"properties": {"freshness": {"properties": {"class": {"const": "CONFIGURATION"}}}}}, "then": {"properties": {"freshness": {"properties": {"boundSeconds": {"const": 86400}}}}}},
+        {"if": {"properties": {"freshness": {"properties": {"class": {"const": "STATE"}}}}}, "then": {"properties": {"freshness": {"properties": {"boundSeconds": {"const": 3600}}}}}},
+        {"if": {"properties": {"freshness": {"properties": {"class": {"const": "VOLATILE"}}}}}, "then": {"properties": {"freshness": {"properties": {"boundSeconds": {"const": 300}}}}}}
+      ]
+    }
+  }
+}
