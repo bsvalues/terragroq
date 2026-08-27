@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AppWindow, ArrowUp, Command, Layers3, MessageSquare, PanelRightClose, PanelRightOpen, X } from "lucide-react"
+import { AppWindow, ArrowUp, Command, Layers3, PanelRightClose, PanelRightOpen, X } from "lucide-react"
 
 import type { SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, type WorldSpine } from "@/lib/environment/working-world"
@@ -483,19 +483,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           >
             <Layers3 size={18} strokeWidth={1.7} />
           </button>
-          <button
-            type="button"
-            className={`${experience.railButton} ${experience.railButtonBottom}`}
-            onClick={() => {
-              setContextView("conversation")
-              setLineOpen(true)
-              requestAnimationFrame(() => lineRef.current?.focus())
-            }}
-            aria-label="Open The Line (Ctrl+K)"
-            title="The Line · Ctrl+K"
-          >
-            <Command size={17} strokeWidth={1.7} />
-          </button>
         </div>
       </aside>
 
@@ -588,7 +575,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             aria-label={lineOpen ? "Hide The Line" : "Open The Line"}
             title="The Line · Ctrl+K"
           >
-            <MessageSquare size={15} strokeWidth={1.6} aria-hidden />
+            <Command size={15} strokeWidth={1.6} aria-hidden />
           </button>
           <span className={experience.contextHeaderTitle}>WilliamOS</span>
           <span className={experience.contextHeaderMeta}>{space.selectedPath ? "file context" : "space context"}</span>
