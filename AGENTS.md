@@ -25,6 +25,8 @@ Agents own routine investigation, implementation, testing, browser verification,
 
 Ask William only for a genuinely new material product/policy/authority decision that cannot be resolved inside existing authority.
 
+**Do not ask William to reconfirm a product boundary that is already stated in `PRODUCT_EXECUTION.md`, this file, or a concrete owner decision.** If you discover that your own work drifted from an already-set boundary, correct/revert the drift and continue. Self-correction is not a new owner gate.
+
 When the supported Hermes cycle returns stdout beginning with
 `WILLIAMOS_PRIMARY_DECISION_REQUEST:`, that stdout is the complete canonical Primary decision
 request. Stop all tool use and emit that text byte-for-byte as the entire final assistant message,
@@ -47,7 +49,17 @@ Until the owner changes lanes, W1 is the WilliamOS UI/UX product lane:
 
 `Open TerraFusion Space -> real repo/file tree -> open actual file -> edit it -> save actual workspace file -> undo/redo -> open second file -> split/place it beside first -> running TerraFusion stays interactive beside it -> close/reopen WilliamOS -> same Space + files + layout return.`
 
-TerraFusion is a workload used to exercise WilliamOS, not the W1 product-development lane. Do not drift into TerraFusion backend/runtime product work unless the owner explicitly changes lanes or the exact W1 browser step cannot continue and no truthful bounded fixture can unblock it.
+### Hard product boundary
+
+**WilliamOS is the development cockpit used to build TerraFusion. TerraFusion is the target software project, not WilliamOS's own operator/business UI.**
+
+`running TerraFusion stays interactive beside it` means a developer preview/runtime surface of the software under development. It does not mean building county parcel, appeals, taxpayer, PACS, or other TerraFusion business workflows into WilliamOS itself.
+
+If a real preview is unavailable, use a neutral, explicitly labeled developer preview/degraded fixture. Do not substitute a simulated TerraFusion business-workflow screen and call that the WilliamOS experience.
+
+Do not leave WilliamOS acceptance scaffolding in the TerraFusion repository. Never add comments or fake content to TerraFusion `README.md` or arbitrary project files merely to prove editor/save behavior. Use designated scratch/test surfaces or a disposable worktree, and restore any temporary target-repository mutation automatically.
+
+TerraFusion is a workload used to exercise WilliamOS, not the W1 product-development lane. Do not drift into TerraFusion backend/runtime or business-workflow product work unless the owner explicitly changes lanes or the exact W1 browser step cannot continue and no truthful bounded developer fixture can unblock it.
 
 ## Multi-agent execution
 
@@ -82,6 +94,8 @@ Historical rejected adapters and safety findings remain rejected where still app
 Directory-local `AGENTS.md` files may narrow implementation details for their subtree. They may not:
 
 - override `PRODUCT_EXECUTION.md` product priority/completion rules;
+- redefine WilliamOS as TerraFusion's operator/business UI;
+- turn an already-set product boundary into a new owner confirmation request;
 - redefine quarantined orchestration as the canonical product architecture;
 - expand the active lane;
 - create new authority;
