@@ -133,6 +133,7 @@ export function createResidentHermesOrchestrator(options = {}) {
     env: environment,
     ...(executionBackend ? { executionBackend } : {}),
     selectOutcome: queueRuntime.selectOutcome,
+    executeDependencySubject: queueRuntime.executeDependencySubject,
     markComplete: queueRuntime.completeOutcome,
     markTerminal: queueRuntime.terminalizeOutcome,
     deferOutcome: queueRuntime.deferOutcome,

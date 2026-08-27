@@ -6,6 +6,14 @@ const ALLOWED_LANES = new Set(["docs", "ui", "read_model"])
 const ALLOWED_RISKS = new Set(["low", "R0", "R1"])
 const ALLOWED_AUTHORITIES = new Set(["A0_READ_ONLY", "A1_DRAFT", "A2_WRITE_OWN"])
 
+// D1: capability classes a dependency projection may NEVER execute autonomously, regardless of any
+// grant. Structured (class:capability), NOT lexical. runtime_control:control is deliberately absent —
+// it is exactly what the bounded actuator exists to perform under a concrete scoped grant. This is
+// defence-in-depth; the acquire SQL enforces the same set.
+const DEPENDENCY_HARD_DENY = new Set([
+  "data:destructive", "delivery:release", "secrets:read", "secrets:write", "external:act",
+])
+
 export const PROTECTED_SCOPE_LEXEMES = Object.freeze({
   terrafusion: "terrafusion", terrapilot: "terrapilot", propertyworkbench: "property workbench",
   county: "county", pacs: "pacs", parcel: "parcel", taxpayer: "taxpayer",
@@ -68,6 +76,30 @@ export function blockedOutcomeReasons(outcome) {
   return BLOCKED_SCOPE.filter(([, pattern]) => pattern.test(text)).map(([code]) => code)
 }
 
+/**
+ * D1 — structured policy for a routed-dependency projection. A dependency is NOT a goal: it has no
+ * `lane`, and evaluating it through ALLOWED_LANES / the protected-content regex is a category error
+ * (it produced LANE_NOT_ALLOWED and a 50-minute leaked lease). Its authority is the concrete grant,
+ * verified at acquisition and re-verified by the actuator; policy here only confirms the structured
+ * shape is a well-formed dependency execution whose capability is not hard-denied. It NEVER scans
+ * prose and NEVER emits LANE_NOT_ALLOWED.
+ */
+export function evaluateDependencyPolicy(outcome) {
+  const subject = outcome?.executionSubject
+  if (!subject || subject.kind !== "dependency") return deny("DEPENDENCY_SUBJECT_INVALID")
+  if (subject.ok !== true) return deny("DEPENDENCY_SUBJECT_NOT_OK")
+  const action = outcome.authorityAction
+  if (typeof action !== "string" || !/^[a-z_]+:[a-z_]+$/.test(action)) return deny("DEPENDENCY_CAPABILITY_INVALID")
+  if (DEPENDENCY_HARD_DENY.has(action)) return deny("DEPENDENCY_CAPABILITY_FORBIDDEN", [action])
+  const [cls, cap] = action.split(":")
+  const envelope = subject.envelope ?? {}
+  if (envelope.surfaceClass !== cls || envelope.capability !== cap) return deny("DEPENDENCY_ENVELOPE_MISMATCH")
+  if (!ALLOWED_RISKS.has(outcome.riskClass ?? outcome.risk)) return deny("RISK_NOT_ALLOWED")
+  // Governed dependency execution is allowed. Capability-aware dispatch (D4) then routes it to the
+  // bounded runtime actuator for runtime_control:control, or to the source lanes for source work.
+  return { allowed: true, eligible: true, reasonCode: "DEPENDENCY_POLICY_ALLOWED", details: [], dependency: true }
+}
+
 export function evaluateOutcomePolicy({
   outcome,
   actor,
@@ -80,6 +112,11 @@ export function evaluateOutcomePolicy({
   if (repository !== ALLOWED_REPOSITORY) return deny("REPOSITORY_NOT_ALLOWED")
   if (!ALLOWED_ACTORS.has(actor)) return deny("ACTOR_NOT_ALLOWED")
   if (!outcome || typeof outcome !== "object") return deny("OUTCOME_INVALID")
+  // D1: a dependency projection takes the structured dependency policy, never the goal lane gate.
+  // Goal outcomes have no dependency executionSubject and fall through to the legacy path unchanged.
+  if (outcome.executionSubject?.kind === "dependency") {
+    return evaluateDependencyPolicy(outcome)
+  }
   if (!ALLOWED_LANES.has(outcome.lane) && !exactVerifiedOperatorObjective(outcome)) {
     return deny("LANE_NOT_ALLOWED")
   }

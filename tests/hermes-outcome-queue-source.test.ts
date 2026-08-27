@@ -1697,7 +1697,12 @@ describe("transactional durable outcome queue source", () => {
     expect(sql).toContain(`q."leaseExpiresAt" <= $1::timestamptz`)
     expect(sql).toContain(`q."userId" = $2`)
     expect(sql).not.toMatch(/\$[3-9]/)
-    expect(sql).toContain(`"lifecycleReason" = 'STALE_LEASE_AUTHORIZATION_INELIGIBLE'`)
+    // D3: the block reason is now a CASE — a legacy stale slot keeps STALE_LEASE_AUTHORIZATION_INELIGIBLE;
+    // a dependency projection blocked here (only when NOT still authorized via its grant + origin) gets
+    // the dependency-specific DEPENDENCY_STALE_UNAUTHORIZED. A still-authorized stale dependency is spared.
+    expect(sql).toContain(`'STALE_LEASE_AUTHORIZATION_INELIGIBLE'`)
+    expect(sql).toContain(`'DEPENDENCY_STALE_UNAUTHORIZED'`)
+    expect(sql).toContain(`stale_dep_grant."ref" = q."authorityGrantRef"`)
     expect(sql).toContain(`"fencingToken" = q."fencingToken" + 1`)
     expect(sql).toContain(`"version" = q."version" + 1`)
     expect(sql).toContain(`"executionBinding" = NULL`)

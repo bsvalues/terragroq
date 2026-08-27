@@ -19,6 +19,7 @@ import {
 } from "./outcome-queue-source.mjs"
 import { readHermesState } from "./state-store.mjs"
 import { resolveExecutionSubject, completeExecutionSubject, buildSettlementReceipt } from "./dependency-execution-seam.mjs"
+import { startWorkspaceRuntimeService } from "./runtime-service-actuator.mjs"
 import { createHermesDatabasePool } from "./database-pool.mjs"
 import {
   completeOutcome as completeGoalOutcome,
@@ -1496,6 +1497,94 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     ?? residentCheckpointProvider({ runtimeRoot, readState: options.readHermesState })
   let schemaReady = null
 
+  // D4/D2: run a runtime_control dependency through the bounded actuator, and RELEASE the lease under
+  // its fence on any pre-execution refusal so it never leaks (the 50-minute leak was D2). A source
+  // capability is never sent here; the goal path is untouched.
+  const readCheckoutRevision = options.readCheckoutRevision ?? (async (checkoutPath) => {
+    try {
+      const { execFileSync } = await import("node:child_process")
+      const head = execFileSync("git", ["-C", checkoutPath, "rev-parse", "HEAD"], { encoding: "utf8" })
+      return head.trim() || null
+    } catch { return null }
+  })
+  const loadLaunchContract = options.loadLaunchContract ?? (async () => null) // no governed contract yet
+  const loadW1ServiceBinding = options.loadW1ServiceBinding ?? (async (outcome) =>
+    database.withPool(async (pool) => {
+      const workOrderId = Number(outcome.activeWorkOrderId)
+      const binding = (await pool.query(
+        `SELECT id, "projectId" FROM work_order_truth_binding WHERE "workOrderId" = $1 AND status = 'bound' LIMIT 1`,
+        [workOrderId])).rows[0]
+      const rev = binding ? (await pool.query(
+        `SELECT sha FROM work_order_binding_event WHERE "bindingId" = $1 AND "resourceKey" = 'terrafusion-primary-repo' ORDER BY at DESC LIMIT 1`,
+        [binding.id])).rows[0] : null
+      // Project + bound TerraFusion revision are governed truth-binding facts. Service identity, node,
+      // and serving checkout are the established W1 bindings (constants here; injectable for tests).
+      return {
+        projectId: binding ? Number(binding.projectId) : null,
+        boundRevision: rev?.sha ?? null,
+        serviceIdentity: "terrafusion/os-shell",
+        node: "hermes",
+        checkoutPath: "C:\\TF-wt-w1-serving",
+      }
+    }))
+  const verifyLeaseFence = options.verifyLeaseFence ?? (async (fence) =>
+    database.withPool(async (pool) => {
+      const q = (await pool.query(
+        `SELECT "leaseHolder", "fencingToken", "executionBinding", "lifecycleState" FROM outcome_queue_item WHERE id = $1`,
+        [Number(fence.projectionQueueItemId)])).rows[0]
+      return (q && q.lifecycleState === "active" && q.leaseHolder === fence.leaseHolder
+        && Number(q.fencingToken) === Number(fence.fencingToken) && q.executionBinding === fence.executionBinding)
+        ? { ok: true }
+        : { ok: false, detail: "execution fence does not match the live projection lease" }
+    }))
+  const startRuntimeService = options.startRuntimeService ?? ((request) =>
+    startWorkspaceRuntimeService(request, {
+      readCheckoutRevision,
+      verifyGrant: async (grant) => reverifyDependencyGrant({
+        userId: grant.userId, authorityGrantRef: grant.ref, authorityLevel: grant.authorityLevel,
+        authoritySubject: grant.authoritySubject, outcomeKey: grant.outcomeKey,
+        activeWorkOrderId: grant.workOrderId, authorityAction: grant.authorityAction,
+      }),
+      verifyFence: verifyLeaseFence,
+      loadLaunchContract,
+    }))
+
+  async function releaseDependencyLease(outcome, reason) {
+    const binding = queueBinding(outcome)
+    await transitionQueue({
+      databaseUrl, userId: binding.userId, outcomeKey: binding.outcomeKey, fromState: "active",
+      toState: "blocked", expectedVersion: binding.expectedVersion, executionBinding: binding.executionBinding,
+      leaseToken: binding.leaseToken, fencingToken: binding.fencingToken, lifecycleReason: reason, now: now(),
+    })
+  }
+
+  async function executeDependencySubject(outcome) {
+    const subject = outcome?.executionSubject
+    if (!subject || subject.kind !== "dependency") return { result: "NOT_A_DEPENDENCY" }
+    const capability = outcome.authorityAction
+    // Only runtime_control:control is actuated. Anything else is released, NEVER sent to Codex/Claude.
+    if (capability !== "runtime_control:control") {
+      await releaseDependencyLease(outcome, "DEPENDENCY_CAPABILITY_NOT_ACTUATED")
+      return { result: "DEPENDENCY_ACTUATOR_REFUSED", refusal: "CAPABILITY_NOT_ACTUATED", capability }
+    }
+    const b = await loadW1ServiceBinding(outcome)
+    const request = {
+      operation: "START_WORKSPACE_RUNTIME_SERVICE", capability,
+      serviceIdentity: b.serviceIdentity, projectId: b.projectId, workOrderId: Number(outcome.activeWorkOrderId),
+      node: b.node, checkoutPath: b.checkoutPath, boundRevision: b.boundRevision,
+      expected: { serviceIdentity: b.serviceIdentity, projectId: b.projectId, workOrderId: Number(outcome.activeWorkOrderId), node: b.node, boundRevision: b.boundRevision },
+      grant: { ref: outcome.authorityGrantRef, userId: outcome.userId, authorityLevel: outcome.authorityLevel,
+        authoritySubject: outcome.authoritySubject, outcomeKey: outcome.outcomeKey, workOrderId: Number(outcome.activeWorkOrderId), authorityAction: capability },
+      fence: queueBinding(outcome),
+    }
+    const result = await startRuntimeService(request)
+    if (!result.ok) {
+      await releaseDependencyLease(outcome, `ACTUATOR_${result.refusal}`) // D2: no leaked lease
+      return { result: "DEPENDENCY_ACTUATOR_REFUSED", refusal: result.refusal, detail: result.detail, routeDependency: result.routeDependency ?? null }
+    }
+    return { result: "DEPENDENCY_ACTUATOR_READY", serviceIdentity: request.serviceIdentity }
+  }
+
   function requireExecutionProofContext() {
     if (typeof campaignWindowId !== "string" || campaignWindowId.trim() === "") {
       wall("Trusted resident campaign window is required", "HERMES_CAMPAIGN_WINDOW_REQUIRED")
@@ -2153,6 +2242,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   return {
     selectOutcome,
     completeOutcome,
+    executeDependencySubject,
     terminalizeOutcome,
     deferOutcome,
     renewOutcomeLease,

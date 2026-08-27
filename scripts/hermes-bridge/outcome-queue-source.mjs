@@ -1137,6 +1137,57 @@ const DEPENDENCY_ELIGIBILITY_PREDICATE = `
   )
 `
 
+// D3: re-authorize a STALE dependency projection against its canonical dependency + live WO +
+// concrete scoped grant — the dependency lane's checks, NOT the legacy Workbench-origin/bounded fence.
+// Uses q."activeWorkOrderId" directly (no $8 acquire-time override). A stale dependency that is still
+// authorized under this predicate must NOT be blocked as "ineligible"; it is recoverable through the
+// dependency acquire lane with a new fence.
+const DEPENDENCY_STALE_REAUTH_PREDICATE = `
+  q."canonicalDependencyId" IS NOT NULL
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND q."authorityState" = 'matched'
+  AND EXISTS (
+    SELECT 1
+    FROM "authority_grant" AS stale_dep_grant
+    WHERE stale_dep_grant."userId" = q."userId"
+      AND stale_dep_grant."ref" = q."authorityGrantRef"
+      AND stale_dep_grant."status" = 'active'
+      AND stale_dep_grant."revokedAt" IS NULL
+      AND (
+        stale_dep_grant."expiresAt" IS NULL
+        OR stale_dep_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+      )
+      AND stale_dep_grant."authorityLevel" = q."authorityLevel"
+      AND stale_dep_grant."grantedTo" = q."authoritySubject"
+      AND stale_dep_grant."scope" = q."outcomeKey"
+      AND stale_dep_grant."workOrderId" IS NOT NULL
+      AND stale_dep_grant."workOrderId" = q."activeWorkOrderId"
+      AND NOT EXISTS (
+        SELECT 1 FROM unnest(stale_dep_grant."blockedActions") AS blocked(action)
+        WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
+      )
+      AND (
+        cardinality(stale_dep_grant."allowedActions") = 0
+        OR EXISTS (
+          SELECT 1 FROM unnest(stale_dep_grant."allowedActions") AS allowed(action)
+          WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
+        )
+      )
+  )
+  AND EXISTS (
+    SELECT 1 FROM "routed_dependency" AS stale_dep
+    WHERE stale_dep."id" = q."canonicalDependencyId"
+      AND stale_dep."workOrderId" = q."activeWorkOrderId"
+      AND stale_dep."routingState" IN ('raised', 'routed', 'accepted')
+  )
+  AND EXISTS (
+    SELECT 1 FROM "work_order" AS stale_dep_wo
+    WHERE stale_dep_wo."id" = q."activeWorkOrderId"
+      AND stale_dep_wo."userId" = q."userId"
+      AND stale_dep_wo."status" = 'active'
+  )
+`
+
 export const OUTCOME_QUEUE_SQL = Object.freeze({
   ensureOutcomeQueueItemTable: `
 CREATE TABLE IF NOT EXISTS "outcome_queue_item" (
@@ -2100,18 +2151,25 @@ WITH stale_slot AS MATERIALIZED (
     AND q."lifecycleState" = 'active'
     AND q."leaseExpiresAt" <= $1::timestamptz
     AND q."outcomeKey" NOT IN (${PROTECTED_V1_2_OUTCOME_SQL})
-    AND (
-      NOT (${LIVE_APPROVAL_PREDICATE})
-      OR NOT (
-        (${LIVE_AUTHORITY_PREDICATE})
+    AND NOT (
+      -- legacy goal still authorized (unchanged legacy predicates; a dependency never satisfies these)
+      (
+        (${LIVE_APPROVAL_PREDICATE})
+        AND (${LIVE_AUTHORITY_PREDICATE})
         AND (${EXACT_EXECUTION_ORIGIN_PREDICATE})
       )
+      -- D3: OR a dependency projection still authorized via its concrete grant + origin (dependency
+      -- lane). A still-authorized stale dependency is NOT blocked here; the acquire lane reclaims it.
+      OR (${DEPENDENCY_STALE_REAUTH_PREDICATE})
     )
   FOR UPDATE OF q
 )
 UPDATE "outcome_queue_item" AS q
 SET "lifecycleState" = 'blocked',
-    "lifecycleReason" = 'STALE_LEASE_AUTHORIZATION_INELIGIBLE',
+    "lifecycleReason" = CASE
+      WHEN q."canonicalDependencyId" IS NOT NULL THEN 'DEPENDENCY_STALE_UNAUTHORIZED'
+      ELSE 'STALE_LEASE_AUTHORIZATION_INELIGIBLE'
+    END,
     "executionBinding" = NULL,
     "acquisitionKey" = NULL,
     "leaseHolder" = NULL,

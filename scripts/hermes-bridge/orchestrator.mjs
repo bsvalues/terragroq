@@ -806,6 +806,11 @@ export function createHermesOrchestrator(options = {}) {
     executionBackend,
   })
   const selectOutcome = options.selectOutcome ?? selectNextOutcome
+  // D4: capability-aware dispatch for routed-dependency projections. A dependency never enters the
+  // goal execution machinery (worktree + Codex/Claude); it is executed by the bounded runtime actuator
+  // and its lease released on refusal (D2). Unwired default keeps the goal path safe.
+  const executeDependencySubject = options.executeDependencySubject
+    ?? (async () => ({ result: "DEPENDENCY_EXECUTOR_UNWIRED" }))
   const markComplete = options.markComplete ?? completeOutcome
   const markTerminal = options.markTerminal ?? terminalizeOutcome
   const deferOutcome = options.deferOutcome ?? deferProviderOutcome
@@ -1976,6 +1981,13 @@ export function createHermesOrchestrator(options = {}) {
       standingAuthority: true,
     })
     if (!decision.allowed) return { result: "POLICY_WALL", reasonCode: decision.reasonCode }
+
+    // D4: a routed-dependency projection is executed by the bounded runtime actuator and never enters
+    // the goal execution machinery below (no worktree, no Codex/Claude). Its lease is released under
+    // fence on any pre-execution refusal (D2), so it cannot leak.
+    if (outcome.executionSubject?.kind === "dependency") {
+      return await executeDependencySubject(outcome)
+    }
 
     const outcomeId = String(outcome.id)
     let current = durableExecution ?? state.read().executions[outcomeId]
