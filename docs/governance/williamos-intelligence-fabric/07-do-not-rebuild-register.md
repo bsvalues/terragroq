@@ -2,6 +2,13 @@
 
 This register is a hard pre-execution guard for #964 children. A child may change one of these mechanisms only after current-main evidence proves a defect relevant to the exact Work Order. Convenience, unfamiliarity, or desire for a cleaner abstraction is not sufficient.
 
+The authoritative classifications and exact current-main paths are in the
+[IF-00 collision/component map](03-integration-and-migration-map.md#if-00-collision-and-component-classification-map).
+Allowed classification vocabulary is limited to `REUSE_AS_IS`, `EXTEND_EXISTING`,
+`SUPERSEDE_COMPOSITION_ONLY`, `ADAPT_AT_BOUNDARY`, and `GENUINELY_MISSING`. The last category is
+not general build authority: it is valid only for the named bounded child and must be re-proven at
+that child's fresh base.
+
 | Existing capability | Current owner / precedent | Required treatment |
 | --- | --- | --- |
 | Work/authority lifecycle | Goal/Outcome/Work Order/Decision/Grant/queue machinery | Reuse. Intelligence placement never mints work authority. |
@@ -23,6 +30,19 @@ This register is a hard pre-execution guard for #964 children. A child may chang
 | Device/auth boundary | existing device/passkey/session architecture | Reuse. Elastic worker identity is machine/work identity, not replacement owner auth. |
 | Evidence/Trace/Audit | current evidence/governance/audit records | Integrate. Placement/measurement adds evidence but not a parallel audit universe. |
 | Model local policy | `hermes-free-dev-agent-v2.policy.json` | Preserve exact proven controls until a separately reviewed migration supersedes them. |
+| Commissioned HERMES appliance | `C:\HermesLab\hermes\HERMES-COMMISSIONED.md` / `[[hermes-commissioned]]` | `REUSE_AS_IS`. This canonical 2026-08-27 record supersedes experimental and pre-commissioning local-AI claims. Reference it; do not duplicate or mutate its golden configuration. |
+| Provider-neutral provider contract | `scripts/multi-agent-operator/provider-contract.mjs` + `tests/multi-agent-provider-contract.test.ts` | `EXTEND_EXISTING`. IF-01 must not create a parallel dispatch/status/cancel/artifact/evidence contract. |
+| Reservation ledger and fences | `scripts/multi-agent-operator/reservation-ledger.mjs`, `reservation-set.mjs`, `lane-lease-checkpoint.mjs` | `EXTEND_EXISTING`. Accelerator/model/context reservations must compose these mechanics. |
+| Eligible-set scheduler/DAG | `scripts/multi-agent-operator/eligible-set-scheduler.mjs` + `dag-eligible-resolver.mjs` | `REUSE_AS_IS`. Placement is an input/projection; it is not another scheduler. |
+| Evidence ledger | `scripts/multi-agent-operator/evidence-ledger.mjs` + `lib/fabric/audit.mjs` | `EXTEND_EXISTING`. Inference receipts join existing evidence; they do not create a separate audit universe. |
+| Experience V2 implementation collision record | `docs/governance/williamos-experience-v2-phase0-collision-map.md` | `REUSE_AS_IS`. Cross-reference its current-main findings; do not fork or restate its implementation-lineage authority. |
+
+## First-slice hard stop
+
+The IF-00/IF-01 slice is documentation plus provider-neutral contracts and schema tests. It must not
+change runtime behavior, credentials, provider SDKs/calls, routing, automatic fallback, spend,
+provisioning, persistence, or UI. Discovery of a missing later-phase component records
+`GENUINELY_MISSING`; it does not pull that component into the first slice.
 
 ## Mandatory pre-execution questions
 

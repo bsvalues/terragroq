@@ -1,10 +1,46 @@
 # WilliamOS Intelligence Fabric V1 — Development Package
 
-**Parent issue:** #964 `WILLIAMOS_INTELLIGENCE_FABRIC_V1`
+**Repository:** `bsvalues/terragroq`
+
+**Pull request:** `bsvalues/terragroq#965`
+
+**Parent issue:** `bsvalues/terragroq#964` — `WILLIAMOS_INTELLIGENCE_FABRIC_V1`
 
 **Parent program:** #762
 
-**Status:** DEVELOPMENT PACKAGE / ARCHITECTURE FREEZE INPUT
+**Status:** IF-00 BUILD RECONCILED / IF-01 CONTRACTS IMPLEMENTED — PUBLICATION PENDING
+
+> Repository identity is part of the authority boundary. `bsvalues/terrafusion_os_1.0#965` is an
+> unrelated pull request and must never be used as the source, target, evidence, or lifecycle record
+> for this package.
+
+## IF-00 assurance receipt — 2026-08-27
+
+| Fact | Exact value |
+| --- | --- |
+| Repository | `bsvalues/terragroq` |
+| PR / parent issue | `bsvalues/terragroq#965` / `bsvalues/terragroq#964` |
+| Refresh base (`origin/main`) | `0e4536ea2ae84a39cc5ffb5c6f48aa4e72576152` |
+| Pre-refresh PR head | `666a3d3c34e7ab107bac9728f9945606e120471b` |
+| Pre-refresh merge base | `9dd61c67f325d4e6acdcd09d265400befc2ab0a8` |
+| Pre-refresh divergence | 41 commits ahead / 25 commits behind `origin/main` |
+| Local refresh merge | `e46875bc06e64d9a8fcbff5926a5677f3849b1db` |
+| Post-refresh merge base | `0e4536ea2ae84a39cc5ffb5c6f48aa4e72576152` |
+| Post-refresh divergence | 42 commits ahead / 0 commits behind `origin/main` before this reconciliation |
+| Original package surface | 41 documentation files / 5,508 insertions, all under this directory |
+| Runtime mutation in package | None; documentation only |
+| Canonical HERMES evidence | `C:\HermesLab\hermes\HERMES-COMMISSIONED.md` / `[[hermes-commissioned]]` |
+
+The refresh merge preserves all 41 package files. The remote PR head before publication was the
+recorded pre-refresh head; the local merge SHA is the implementation-base receipt. The governed
+GitHub lane verifies the separately published head rather than rewriting this historical receipt.
+
+The commissioned HERMES record is authoritative for current production hardware, Ollama, model,
+supervision, health, security-boundary, and recovery truth. It replaces the experimental log. Any
+older `WOS-AI-013`, pre-commissioning local-AI consolidation note, or historical package statement
+that says the P40/Ollama lane is merely proposed, absent, or awaiting commissioning is
+**SUPERSEDED_BY_COMMISSIONED_EVIDENCE**. Reference `[[hermes-commissioned]]`; do not copy its mutable
+configuration into this repository.
 
 ## Purpose
 
@@ -52,13 +88,59 @@ AEGIS / tools / review                     capability / placement / lifecycle
 
 ## Package contents
 
-- `01-architecture-contract.md` — component ownership, boundaries, invariants, and non-goals.
-- `02-domain-contracts.md` — normative versioned objects and state machines.
-- `03-integration-and-migration-map.md` — exact existing WilliamOS/HERMES seams to preserve, adapt, or leave untouched.
-- `04-delivery-plan.md` — bounded IF-00 through IF-13 implementation sequence and dependencies.
-- `05-acceptance-and-evaluation.md` — capability evaluation, test matrix, chaos acceptance, and terminal V1 proof.
-- `06-security-threat-model.md` — trust, privacy, cloud, model supply-chain, context, tool, and credential threats.
-- `07-do-not-rebuild-register.md` — hard list of existing mechanisms that new work must integrate rather than duplicate.
+The package remains 41 files including this index. The two series are now path-disjoint, so their
+intentional 11–21 numbering overlap cannot be mistaken for duplicate or replacement documents.
+
+### Intelligence Fabric series
+
+- [01 — Architecture contract](01-architecture-contract.md)
+- [02 — Domain contracts](02-domain-contracts.md)
+- [03 — Integration, migration, and IF-00 collision map](03-integration-and-migration-map.md)
+- [04 — Delivery plan](04-delivery-plan.md)
+- [05 — Acceptance and evaluation](05-acceptance-and-evaluation.md)
+- [06 — Security threat model](06-security-threat-model.md)
+- [07 — DO-NOT-REBUILD register](07-do-not-rebuild-register.md)
+- [08 — FreeToken runtime review](08-freetoken-runtime-review.md)
+- [09 — Whole-fabric topology and placement](09-whole-fabric-topology-and-placement.md)
+- [10 — Efficiency review](10-efficiency-review-2026-08-23.md)
+- [11 — IF-02 whole-fabric discovery acceptance](11-if-02-whole-fabric-discovery-acceptance.md)
+- [12 — Hardware ROI contract](12-hardware-roi-contract.md)
+- [13 — Stage placement acceptance](13-stage-placement-acceptance.md)
+- [14 — Distributed inference maturity ladder](14-distributed-inference-maturity-ladder.md)
+- [15 — Package delta: whole-fabric](15-package-delta-whole-fabric.md)
+- [16 — Whole-fabric review checklist](16-whole-fabric-review-checklist.md)
+- [17 — Whole-fabric chaos cases](17-whole-fabric-chaos-cases.md)
+- [18 — IF-05 fabric benchmark matrix](18-if-05-fabric-benchmark-matrix.md)
+- [19 — Placement efficiency score](19-placement-efficiency-score.md)
+- [20 — Current next actions](20-current-next-actions.md)
+- [21 — Topology truth vs role intent](21-topology-truth-vs-role-intent.md)
+
+### Experience V2 reconciliation series
+
+- [11 — Execution Fabric predecessor reconciliation](experience-v2/11-execution-fabric-predecessor-reconciliation.md)
+- [12 — Evaluation predecessor reconciliation](experience-v2/12-evaluation-predecessor-reconciliation.md)
+- [13 — Context and inference seam reconciliation](experience-v2/13-context-and-inference-seam-reconciliation.md)
+- [14 — Model/runtime registry reconciliation](experience-v2/14-model-runtime-registry-reconciliation.md)
+- [15 — Accelerator residency reconciliation](experience-v2/15-accelerator-residency-reconciliation.md)
+- [16 — Observability/headroom reconciliation](experience-v2/16-observability-headroom-reconciliation.md)
+- [17 — Elastic compute security reconciliation](experience-v2/17-elastic-compute-security-reconciliation.md)
+- [18 — Model supply-chain reconciliation](experience-v2/18-model-supply-chain-reconciliation.md)
+- [19 — Owner-experience invisibility contract](experience-v2/19-owner-experience-invisibility-contract.md)
+- [20 — Personal operating environment](experience-v2/20-williamos-experience-v2-personal-operating-environment.md)
+- [21 — Context compartment and settled-truth reconciliation](experience-v2/21-context-compartment-and-settled-truth-reconciliation.md)
+- [22 — Cache, data gravity, and derived state](experience-v2/22-cache-data-gravity-and-derived-state-reconciliation.md)
+- [23 — Attention, re-entry, and semantic thread](experience-v2/23-attention-reentry-semantic-thread-reconciliation.md)
+- [24 — Current frontend cutover map](experience-v2/24-experience-v2-current-frontend-cutover-map.md)
+- [25 — Native overlay and shell boundary](experience-v2/25-native-overlay-and-shell-boundary.md)
+- [26 — Visual, material, and cross-device contract](experience-v2/26-experience-v2-visual-material-cross-device-contract.md)
+- [27 — System object graph and direct operation](experience-v2/27-system-object-graph-and-direct-operation.md)
+- [28 — Operating modes and policy bundles](experience-v2/28-operating-modes-and-policy-bundles.md)
+- [29 — Command, causality, personalization, and build sequence](experience-v2/29-command-causality-personalization-and-build-sequence.md)
+
+The on-main [Experience V2 Phase 0 collision map](../williamos-experience-v2-phase0-collision-map.md)
+remains the implementation-lineage record for the spec/implementation relationship and prior
+collision research. This package map narrows only the Intelligence Fabric/Experience V2 document
+collision; it does not replace that evidence.
 
 ## Required execution discipline
 
