@@ -1,0 +1,77 @@
+XN-01 — what was actually true on HERMES before anything was changed
+Lane: CROSSNODE-SYNC REPAIR (CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F)
+Measured 2026-08-25, from OMEN over ssh to HERMES (192.168.88.9). Nothing written.
+
+--- volumes: the letter the scripts name does not exist -------------------------------------
+VOL G: label=[HERMES_NVME] freeGB=922.4
+VOL E: label=[System Rese] freeGB=0.1
+VOL D: label=[] freeGB=53.2
+VOL C: label=[] freeGB=87
+F_PROBE_COUNT=0                       <- Get-Volume -DriveLetter F returns nothing
+
+PATH G:\lab-backups              exists=True
+PATH G:\lab-backups\crossnode    exists=True
+PATH G:\lab-backups\hermes-volumes exists=True
+PATH F:\lab-backups              exists=False
+
+The archive did not move. G: IS the disk that used to be F:, and it still holds every backup the
+sync has ever written:
+  G:\lab-backups\crossnode\atlas\20260818_131907 .. 20260823_030001   (5 stamp directories)
+  G:\lab-backups\crossnode\crossnode-sync-task-evidence.json          (last SUCCESS 2026-08-23T11:00Z)
+  G:\lab-backups\hermes-volumes  35 x *.tar.gz, 214 MB total, newest 2026-08-25T02:01
+
+--- scheduled tasks: both red, and one of them lying ----------------------------------------
+TASK HermesCrossNodeBackupSync lastRun=2026-08-24T13:07:07-07:00 lastResult=1  next=04:00
+  ACTION powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\HermesLab\hermes\crossnode-sync.ps1"
+TASK HermesLabHealth           lastRun=2026-08-25T02:10:10-07:00 lastResult=2  next=03:10
+  ACTION powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\HermesLab\hermes\lab-health.ps1"
+TASK HermesVolumeBackup        lastRun=2026-08-25T02:01:01-07:00 lastResult=0   (repaired 2026-08-24)
+TASK HermesModelForgeSync      lastRun=2026-08-25T01:59:59-07:00 lastResult=0   (repaired by #1006)
+Both failing tasks run as HERMES\bs, Interactive, Limited.
+
+--- ATLAS is up, but not where either script says it is -------------------------------------
+PING 192.168.88.8 = True
+PING 192.168.88.5 = False            <- the address both scripts hard-code answers nothing
+
+C:\Users\bs\.williamos\fabric\nodes.json (canonical registry, no BOM):
+  "atlas": { "transport":"ssh", "host":"192.168.88.8", "user":"bs", ...
+             "note": "DHCP lease moved 192.168.88.5 -> 192.168.88.8 on the 2026-08-25 power
+                      cycle; 192.168.88.5 is now held by another device. ..." }
+  "aegis": { "host":"192.168.88.6", "user":"bs", ... }
+
+--- THE HALF THAT IS EASY TO MISS: the transport, not just the address -----------------------
+The two ssh identities available on HERMES do NOT agree about ATLAS.
+
+  C:\Users\bs\.ssh\known_hosts        pins 192.168.88.5, .6, .7 — never .8
+  C:\Users\bs\.williamos\fabric\known_hosts  pins 192.168.88.6, omen, 192.168.88.8
+
+crossnode-sync.ps1 and lab-health.ps1 both used bare `ssh -o BatchMode=yes`, i.e. the first store.
+So repairing ONLY the address would have traded one red task for another:
+
+  [default-88-8] EXIT=255  ERR Host key verification failed.
+  [default-88-5] EXIT=255  ERR ssh: connect to host 192.168.88.5 port 22: Connection timed out
+  [default-aegis] EXIT=0   OUT bs
+
+  fabric identity (-i keys\williamos-fabric -o UserKnownHostsFile=fabric\known_hosts
+                   -o StrictHostKeyChecking=yes -o BatchMode=yes):
+  [fabric-atlas]  EXIT=0   OUT atlas / bs
+                           NIGHTLY: 20260823_030001 20260824_030001 20260825_030001 last-run.json
+                           FROMHERMES_COUNT=61
+                           /dev/sdc1  3.6T  1.2T  2.3T  35% /forge
+  [fabric-aegis]  EXIT=0   OUT bs   /home/bs/health-aegis.sh
+
+ATLAS_REACHABLE at the RESOLVED address: PASS, for ssh and scp, which is all this sync needs.
+(The authority-registry Postgres publish on ATLAS is separately broken — see
+ATLAS-RETURN-SETTLEMENT-002. This sync does not touch Postgres, so it is not blocked on it, and
+this lane did not go near ATLAS-side topology.)
+
+--- pre-change digests, repo == deployed, byte for byte --------------------------------------
+crossnode-sync.ps1              1557d9700b274af26fd380fa8a855f6197eaf20a0c09058280c2e6dd8c8f1c79
+crossnode-sync-lib.ps1          a5a49754a41b7bd3e02483f82a60aba6e8ceffb4a2456390c26cad46dc296978
+lab-health.ps1                  c4f1a146db5144d877beccc1b13eb5cd722d669ff86291e6f6dbf8e50001d3aa
+test-crossnode-sync-receipt.ps1 20583d9cd1350fa0060435c3f61528df123e8920f001ccc4a9d4432d0715c813
+
+--- a probe artifact, recorded so the next reader does not chase it --------------------------
+An inner `ssh` run from a nested ssh session hangs on stdio teardown; the first two ATLAS probes
+timed out for that reason and NOT because ATLAS was down. Every probe and control here is run
+through Start-Process with stdout/stderr redirected to files, which is what makes them terminate.

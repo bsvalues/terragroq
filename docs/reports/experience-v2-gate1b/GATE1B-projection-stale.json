@@ -1,0 +1,324 @@
+{
+  "mode": "stale",
+  "nowMs": 1787620174717,
+  "nowIso": "2026-08-25T01:09:34.717Z",
+  "ttlSeconds": 300,
+  "objects": [
+    {
+      "kind": "NODE",
+      "objectId": "node:omen",
+      "nodeId": "omen",
+      "role": "operator-cockpit-development-burst-compute",
+      "hostname": "OMEN",
+      "truthState": "unknown",
+      "reason": "declared evidence: no live observation has been recorded for this node",
+      "observedAt": "2026-08-09T21:57:00Z",
+      "accelerators": [
+        {
+          "kind": "ACCELERATOR",
+          "objectId": "accelerator:identity-unresolved:omen:gpu0",
+          "canonicalKey": null,
+          "nodeId": "omen",
+          "identity": {
+            "resolved": false,
+            "state": "identity-unresolved",
+            "reason": "no GPU UUID and no PCI bus id: friendly name and slot are not identity",
+            "inheritsHistory": false
+          },
+          "vendor": "NVIDIA",
+          "model": "GeForce RTX 5060 Laptop GPU",
+          "truthState": "unknown",
+          "memory": {
+            "total": {
+              "state": "unknown",
+              "reason": "no vram_source: this record is declared, not observed"
+            },
+            "used": {
+              "state": "unknown",
+              "reason": "used VRAM is only measured by nvidia-smi"
+            },
+            "headroom": {
+              "state": "unknown",
+              "reason": "headroom needs a measured total"
+            }
+          },
+          "capability": "UNKNOWN",
+          "annotations": [
+            "IDENTITY_UNRESOLVED"
+          ]
+        }
+      ],
+      "transport": {
+        "state": "present",
+        "transport": "ssh",
+        "host": "Omen",
+        "user": "bsval",
+        "enrolled": true,
+        "role": "cockpit (managed node, not an autonomous worker)",
+        "roleAgreement": "CONFLICTING"
+      },
+      "promotion": {
+        "promoted": false,
+        "reason": "no observation: promotion requires an observed identity"
+      }
+    },
+    {
+      "kind": "ACCELERATOR",
+      "objectId": "accelerator:identity-unresolved:omen:gpu0",
+      "canonicalKey": null,
+      "nodeId": "omen",
+      "identity": {
+        "resolved": false,
+        "state": "identity-unresolved",
+        "reason": "no GPU UUID and no PCI bus id: friendly name and slot are not identity",
+        "inheritsHistory": false
+      },
+      "vendor": "NVIDIA",
+      "model": "GeForce RTX 5060 Laptop GPU",
+      "truthState": "unknown",
+      "memory": {
+        "total": {
+          "state": "unknown",
+          "reason": "no vram_source: this record is declared, not observed"
+        },
+        "used": {
+          "state": "unknown",
+          "reason": "used VRAM is only measured by nvidia-smi"
+        },
+        "headroom": {
+          "state": "unknown",
+          "reason": "headroom needs a measured total"
+        }
+      },
+      "capability": "UNKNOWN",
+      "annotations": [
+        "IDENTITY_UNRESOLVED"
+      ]
+    },
+    {
+      "kind": "NODE",
+      "objectId": "node:hermes-node",
+      "nodeId": "hermes-node",
+      "role": "local-ai-gpu-execution-worker",
+      "hostname": "HERMES",
+      "truthState": "stale",
+      "reason": "evidence age 301s exceeds ttl 300s",
+      "observedAt": "2026-08-25T01:04:33.7176799Z",
+      "accelerators": [
+        {
+          "kind": "ACCELERATOR",
+          "objectId": "accelerator:uuid:GPU-6d9ae165-7272-a38c-06b1-7276869e980f",
+          "canonicalKey": "accelerator:uuid:GPU-6d9ae165-7272-a38c-06b1-7276869e980f",
+          "nodeId": "hermes-node",
+          "identity": {
+            "resolved": true,
+            "kind": "uuid",
+            "value": "GPU-6d9ae165-7272-a38c-06b1-7276869e980f"
+          },
+          "vendor": "NVIDIA",
+          "model": "NVIDIA GeForce RTX 3050",
+          "truthState": "stale",
+          "memory": {
+            "total": {
+              "state": "measured",
+              "bytes": 6442450944,
+              "source": "nvidia-smi"
+            },
+            "used": {
+              "state": "measured",
+              "bytes": 773849088,
+              "source": "nvidia-smi"
+            },
+            "headroom": {
+              "state": "measured",
+              "bytes": 5668601856,
+              "source": "nvidia-smi"
+            }
+          },
+          "capability": "UNKNOWN",
+          "annotations": []
+        },
+        {
+          "kind": "ACCELERATOR",
+          "objectId": "accelerator:uuid:GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
+          "canonicalKey": "accelerator:uuid:GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
+          "nodeId": "hermes-node",
+          "identity": {
+            "resolved": true,
+            "kind": "uuid",
+            "value": "GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2"
+          },
+          "vendor": "NVIDIA",
+          "model": "Tesla P40",
+          "truthState": "stale",
+          "memory": {
+            "total": {
+              "state": "measured",
+              "bytes": 24159191040,
+              "source": "nvidia-smi"
+            },
+            "used": {
+              "state": "measured",
+              "bytes": 9437184,
+              "source": "nvidia-smi"
+            },
+            "headroom": {
+              "state": "measured",
+              "bytes": 24149753856,
+              "source": "nvidia-smi"
+            }
+          },
+          "capability": "UNKNOWN",
+          "annotations": []
+        }
+      ],
+      "transport": {
+        "state": "present",
+        "transport": "local",
+        "host": null,
+        "user": null,
+        "enrolled": null,
+        "role": "control-plane + WilliamOS/Hermes",
+        "roleAgreement": "CONFLICTING"
+      },
+      "promotion": {
+        "promoted": true,
+        "reason": "observed machine identity matched the reviewed inventory pin"
+      }
+    },
+    {
+      "kind": "ACCELERATOR",
+      "objectId": "accelerator:uuid:GPU-6d9ae165-7272-a38c-06b1-7276869e980f",
+      "canonicalKey": "accelerator:uuid:GPU-6d9ae165-7272-a38c-06b1-7276869e980f",
+      "nodeId": "hermes-node",
+      "identity": {
+        "resolved": true,
+        "kind": "uuid",
+        "value": "GPU-6d9ae165-7272-a38c-06b1-7276869e980f"
+      },
+      "vendor": "NVIDIA",
+      "model": "NVIDIA GeForce RTX 3050",
+      "truthState": "stale",
+      "memory": {
+        "total": {
+          "state": "measured",
+          "bytes": 6442450944,
+          "source": "nvidia-smi"
+        },
+        "used": {
+          "state": "measured",
+          "bytes": 773849088,
+          "source": "nvidia-smi"
+        },
+        "headroom": {
+          "state": "measured",
+          "bytes": 5668601856,
+          "source": "nvidia-smi"
+        }
+      },
+      "capability": "UNKNOWN",
+      "annotations": []
+    },
+    {
+      "kind": "ACCELERATOR",
+      "objectId": "accelerator:uuid:GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
+      "canonicalKey": "accelerator:uuid:GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
+      "nodeId": "hermes-node",
+      "identity": {
+        "resolved": true,
+        "kind": "uuid",
+        "value": "GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2"
+      },
+      "vendor": "NVIDIA",
+      "model": "Tesla P40",
+      "truthState": "stale",
+      "memory": {
+        "total": {
+          "state": "measured",
+          "bytes": 24159191040,
+          "source": "nvidia-smi"
+        },
+        "used": {
+          "state": "measured",
+          "bytes": 9437184,
+          "source": "nvidia-smi"
+        },
+        "headroom": {
+          "state": "measured",
+          "bytes": 24149753856,
+          "source": "nvidia-smi"
+        }
+      },
+      "capability": "UNKNOWN",
+      "annotations": []
+    },
+    {
+      "kind": "NODE",
+      "objectId": "node:atlas",
+      "nodeId": "atlas",
+      "role": "durable-state-forge-retrieval",
+      "hostname": "atlas",
+      "truthState": "unknown",
+      "reason": "declared evidence: no live observation has been recorded for this node",
+      "observedAt": "2026-08-09T21:57:00Z",
+      "accelerators": [],
+      "transport": {
+        "state": "present",
+        "transport": "ssh",
+        "host": "192.168.88.5",
+        "user": "bs",
+        "enrolled": null,
+        "role": "state / DB / RAG",
+        "roleAgreement": "CONFLICTING"
+      },
+      "promotion": {
+        "promoted": false,
+        "reason": "no observation: promotion requires an observed identity"
+      }
+    },
+    {
+      "kind": "NODE",
+      "objectId": "node:aegis",
+      "nodeId": "aegis",
+      "role": "secondary-cpu-batch-ci-worker-storage-pending",
+      "hostname": "aegis",
+      "truthState": "unknown",
+      "reason": "declared evidence: no live observation has been recorded for this node",
+      "observedAt": "2026-08-09T21:57:00Z",
+      "accelerators": [],
+      "transport": {
+        "state": "present",
+        "transport": "ssh",
+        "host": "192.168.88.6",
+        "user": "bs",
+        "enrolled": null,
+        "role": "dev worker",
+        "roleAgreement": "CONFLICTING"
+      },
+      "promotion": {
+        "promoted": false,
+        "reason": "no observation: promotion requires an observed identity"
+      }
+    },
+    {
+      "kind": "NODE",
+      "objectId": "node:azure",
+      "nodeId": "azure",
+      "role": "approved-production-external-capability-envelope",
+      "hostname": "",
+      "truthState": "unknown",
+      "reason": "declared evidence: no live observation has been recorded for this node",
+      "observedAt": "2026-08-09T21:57:00Z",
+      "accelerators": [],
+      "transport": {
+        "state": "unknown",
+        "reason": "no transport record names this node"
+      },
+      "promotion": {
+        "promoted": false,
+        "reason": "no observation: promotion requires an observed identity"
+      }
+    }
+  ],
+  "unverifiedEndpointCandidates": []
+}

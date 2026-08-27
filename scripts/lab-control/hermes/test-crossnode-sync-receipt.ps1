@@ -152,6 +152,89 @@ try {
         (Format-CrossNodeSyncFailure -ExceptionMessage 'MANIFEST_MISMATCH stage=HERMES_TASK_EVIDENCE task evidence timestamps out of order' -DefaultCode 'RECEIPT_PERSIST_FAILED') `
         'manifest publication stage is recorded without validation detail'
 
+    # --- Resolution: where the archive is, and where ATLAS is ---------------------------------
+    # These are the guards the 2026-08-25 repair added, and the reason they are unit-testable at
+    # all is that they take their inputs as parameters. Every one is exercised in its REFUSING
+    # direction here; the accepting direction needs real hardware and a real registry, so it is
+    # proven by live control on HERMES instead. No .ps1 in this repository runs in CI.
+    $fabricProbe = Join-Path $root 'fabric'
+    New-Item -ItemType Directory -Path $fabricProbe | Out-Null
+
+    Assert-ThrowsLike { Resolve-FabricNode -Fabric $fabricProbe -Node 'atlas' } `
+        'FABRIC_REGISTRY_UNREADABLE*nodes.json does not exist*' 'absent registry refuses'
+
+    $nodesProbe = Join-Path $fabricProbe 'nodes.json'
+    [IO.File]::WriteAllText($nodesProbe, '{ not json')
+    Assert-ThrowsLike { Resolve-FabricNode -Fabric $fabricProbe -Node 'atlas' } `
+        'FABRIC_REGISTRY_UNREADABLE*not parseable JSON*' 'unparseable registry refuses'
+
+    [IO.File]::WriteAllText($nodesProbe, '{"aegis":{"host":"192.168.88.6","user":"bs"}}')
+    Assert-ThrowsLike { Resolve-FabricNode -Fabric $fabricProbe -Node 'atlas' } `
+        'FABRIC_REGISTRY_INCOMPLETE*no atlas entry*' 'registry without the asked-for node refuses'
+
+    # A node entry carrying a host but no user must refuse rather than invent one. Under
+    # Set-StrictMode -Version Latest a missing property raises PropertyNotFound, which would
+    # replace this typed refusal with an opaque failure -- so this test is really about the
+    # PSObject.Properties read in Resolve-FabricNode, not only about the message.
+    [IO.File]::WriteAllText($nodesProbe, '{"atlas":{"host":"192.168.88.8"}}')
+    Assert-ThrowsLike { Resolve-FabricNode -Fabric $fabricProbe -Node 'atlas' } `
+        'FABRIC_REGISTRY_INCOMPLETE*both host and user*' 'node entry without a user refuses'
+
+    # A BOM is what Windows PowerShell 5.1 writes by default, and ConvertFrom-Json rejects it. The
+    # registry is maintained by PowerShell tooling, so a reader that chokes on a BOM is a reader
+    # that fails on the exact file it will actually meet.
+    [IO.File]::WriteAllText($nodesProbe, '{"atlas":{"host":"192.168.88.8","user":"bs"}}', (New-Object Text.UTF8Encoding $true))
+    Assert-Equal 'bs@192.168.88.8' (Resolve-AtlasEndpoint -Fabric $fabricProbe) 'BOM-prefixed registry still resolves'
+    $resolvedNode = Resolve-FabricNode -Fabric $fabricProbe -Node 'atlas'
+    Assert-Equal '192.168.88.8' $resolvedNode.Host 'resolved node exposes bare host for ping'
+    Assert-Equal 'bs' $resolvedNode.User 'resolved node exposes user'
+
+    # The transport identity is resolved and refused separately from the address, because on
+    # 2026-08-25 the address was the half everyone noticed and the identity was the half that would
+    # still have failed: the default known_hosts pins the OLD address and has never seen the new one.
+    Assert-ThrowsLike { Resolve-FabricSshIdentity -Fabric $fabricProbe } `
+        'FABRIC_IDENTITY_UNREADABLE*williamos-fabric does not exist*' 'absent fabric key refuses'
+    New-Item -ItemType Directory -Path (Join-Path $fabricProbe 'keys') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $fabricProbe 'keys\williamos-fabric'), 'not-a-real-key')
+    Assert-ThrowsLike { Resolve-FabricSshIdentity -Fabric $fabricProbe } `
+        'FABRIC_IDENTITY_UNREADABLE*known_hosts does not exist*' 'absent known_hosts refuses'
+    [IO.File]::WriteAllText((Join-Path $fabricProbe 'known_hosts'), '# empty')
+    $identity = Resolve-FabricSshIdentity -Fabric $fabricProbe
+    # StrictHostKeyChecking must stay yes. If the registry is ever wrong, the right outcome is a
+    # refused connection, not a backup handed to whatever now holds that address.
+    Assert-Equal $true ($identity.SshOptions -contains 'StrictHostKeyChecking=yes') 'identity pins strict host key checking'
+    Assert-Equal $true ($identity.SshOptions -contains 'BatchMode=yes') 'identity stays non-interactive'
+    Assert-Equal $true ($identity.SshOptions -contains $identity.KeyPath) 'identity names its own key'
+    # Naming the key is not using it. Without IdentitiesOnly=yes, OpenSSH still offers every
+    # agent identity the calling account holds, so the resolved identity is not necessarily the
+    # one that authenticates -- and on an account with several keys the server can exhaust
+    # MaxAuthTries before reaching this one. Asserted because it is invisible when it works.
+    Assert-Equal $true ($identity.SshOptions -contains 'IdentitiesOnly=yes') 'identity is the only one offered'
+    # `scp -n` is DRY RUN in OpenSSH 9.x: it would copy nothing, exit 0, and let the sync log
+    # success over an empty transfer. One option list serves both ssh and scp here, so this asserts
+    # the flag can never reach scp by way of a later edit to the shared list. See XN-03.
+    Assert-Equal $false ($identity.SshOptions -contains '-n') 'no -n on the shared ssh/scp option list'
+
+    # The archive root is resolved by LABEL. The volume provider is injected so both refusals can
+    # run on a machine that has no such disk -- which is the whole point: the accepting path was
+    # what F: used to be, and it is exactly the path that stopped being true without saying so.
+    $oneVolume = { @([pscustomobject]@{ FileSystemLabel = 'HERMES_NVME'; DriveLetter = 'G' }) }
+    Assert-Equal 'G:' (Resolve-ArchiveRoot -Label 'HERMES_NVME' -VolumeProvider $oneVolume) 'single labelled volume resolves to its current letter'
+    Assert-ThrowsLike { Resolve-ArchiveRoot -Label 'NO_SUCH_LABEL_XYZ' -VolumeProvider $oneVolume } `
+        "ARCHIVE_VOLUME_ABSENT*no mounted volume is labelled 'NO_SUCH_LABEL_XYZ'*" 'absent archive volume refuses'
+    $twoVolumes = {
+        @(
+            [pscustomobject]@{ FileSystemLabel = 'HERMES_NVME'; DriveLetter = 'G' },
+            [pscustomobject]@{ FileSystemLabel = 'HERMES_NVME'; DriveLetter = 'H' }
+        )
+    }
+    Assert-ThrowsLike { Resolve-ArchiveRoot -Label 'HERMES_NVME' -VolumeProvider $twoVolumes } `
+        'ARCHIVE_VOLUME_AMBIGUOUS*2 volumes are labelled*' 'duplicate labels refuse rather than guess'
+    # An unlettered volume carrying the label is not addressable, so it must not satisfy the lookup.
+    $unlettered = { @([pscustomobject]@{ FileSystemLabel = 'HERMES_NVME'; DriveLetter = $null }) }
+    Assert-ThrowsLike { Resolve-ArchiveRoot -Label 'HERMES_NVME' -VolumeProvider $unlettered } `
+        'ARCHIVE_VOLUME_ABSENT*' 'unlettered labelled volume does not satisfy the lookup'
+
     $target = Join-Path $root 'crossnode-sync-receipt.json'
     Write-AtomicUtf8File -Path $target -Content $receipt
     Assert-Equal $receipt ([IO.File]::ReadAllText($target)) 'atomic content'

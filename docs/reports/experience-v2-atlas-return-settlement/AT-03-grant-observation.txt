@@ -1,0 +1,56 @@
+OUT-OF-BAND, READ-ONLY OBSERVATION OF THE AUTHORITY REGISTRY
+2026-08-25T01:34 -07:00, via `docker exec williamos-postgres psql`, SELECT statements only.
+
+THIS IS NOT THE GOVERNED AUTHORITY PATH AND WAS NOT USED AS ONE. The settlement verdict in
+AT-07-settlement-run.json comes from the driver's own run through the route's real modules over the
+route's real connection, and that run is recorded exactly as it happened. This observation exists
+because the continuation said: "a grant may exist from prior program records — look before
+concluding." So it was looked at, and what it found is a fact about the registry, not a permission.
+
+=== The table ===
+  to_regclass('public.authority_grant') -> authority_grant
+  row count                             -> 28
+
+=== Every distinct scope in the registry ===
+  #887 · #890 · #891 · #905
+  acceptance:v1-2:authority-blocked · acceptance:v1-2:dependency-blocked
+  campaign:v1-2:queue-evidence-drilldown · campaign:v1-2:runtime-continuity-status
+  goal:GOAL-0006 · goal:GOAL-0011 · goal:GOAL-0017 · goal:GOAL-0018 · goal:GOAL-0023
+  goal:GOAL-0024 · goal:GOAL-0025
+  OUTCOME-762 · outcome:successor:11df1c9e0fde1e8695f29886
+  WO-0027 · WO-0028
+  WO-HERMES-OUTCOME-22 · WO-HERMES-OUTCOME-27 · WO-HERMES-OUTCOME-28 · WO-HERMES-OUTCOME-29
+
+  THERE IS NO SCOPE "#995". Not revoked, not expired — absent.
+
+=== Grants at the required level, for completeness ===
+  A3_WRITE_SHARED grants exist, and all of them are scoped elsewhere:
+    19 | GRANT-0014 | WO-0028 | A3_WRITE_SHARED | active
+    18 | GRANT-0013 | WO-0027 | A3_WRITE_SHARED | active
+    16 | GRANT-0011 | #887    | A3_WRITE_SHARED | active
+    15 | GRANT-0010 | #887    | A3_WRITE_SHARED | active
+  A3_OPERATE_HOST:
+    22 | GRANT-0017 | #905    | A3_OPERATE_HOST | active
+  All 28 rows carry userId = YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ.
+
+=== The actor, corrected ===
+  SELECT id, email FROM "user":
+    YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ     | bsvalues@gmail.com
+    ab9045ac-0a98-428a-9bd8-d49a84bcd9dc | synthetic-operator@williamos.invalid
+
+  The 2026-08-24 runs used `--actor=william`. There is no user with that id. The route's predicate is
+  `"scope" = $1 AND "userId" = $2`, so `--actor=william` would have returned zero rows for the wrong
+  reason — an actor that does not exist, rather than a grant that does not exist. Today's run used
+  the real id, YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ, and is recorded with it.
+
+=== WHAT THIS MEANS, STATED CAREFULLY ===
+The route's lookup for this action is scope "#995" AND userId YCAbP6TPTU1sxkpf4gVl5FcX9Nf4lrwZ.
+Against this registry that lookup returns ZERO ROWS. So even with a perfectly healthy connection,
+the governed path's authority leg refuses — AUTHORITY_NOT_GRANTED_NO_ROWS in the driver's lattice.
+
+There are therefore TWO independent walls in front of this mutation, and the transport one is merely
+the nearer:
+  1. TRANSPORT  — the registry is unreachable by any governed transport (AT-02).
+  2. SUBSTANCE  — no grant authorises `node.stamp-identity` under #995, for anyone (this file).
+
+No grant was minted. None will be. The absence is the finding.

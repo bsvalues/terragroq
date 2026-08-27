@@ -3,17 +3,20 @@ set -euo pipefail
 
 NODE_ID="${1:-}"
 OUTPUT_PATH="${2:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+IDENTITY_CONTRACT_PATH="${3:-$SCRIPT_DIR/../../config/execution-fabric/node-identity-contract.json}"
 if [[ -z "$NODE_ID" ]]; then
-  echo "usage: $0 <node-id> [output-path]" >&2
+  echo "usage: $0 <node-id> [output-path] [identity-contract-path]" >&2
   exit 2
 fi
 
-python3 - "$NODE_ID" "$OUTPUT_PATH" <<'PY'
+python3 - "$NODE_ID" "$OUTPUT_PATH" "$IDENTITY_CONTRACT_PATH" <<'PY'
 import hashlib, json, os, re, shutil, subprocess, sys
 from datetime import datetime, timezone
 
 node_id = sys.argv[1]
 out_path = sys.argv[2]
+identity_contract_path = sys.argv[3]
 observed = datetime.now(timezone.utc).isoformat().replace('+00:00','Z')
 warnings = []
 
@@ -48,7 +51,26 @@ def systemctl_state(unit):
 
 hostname, _ = run(['hostname'])
 canonical_hostname = (hostname or '').strip().lower().split('.')[0]
-canonical_node_ids = {'atlas': 'atlas', 'aegis': 'aegis'}
+# The hostname-to-node-id table is READ from the reviewed identity contract, never restated here.
+# This probe and probe-windows.ps1 each used to carry their own copy, and the assembler a third; a
+# node renamed in one and not the others would quietly stop being the node it was. A missing or
+# wrong-version contract fails the identity wall closed -- an identity check that degrades to
+# "assume yes" when its contract is absent is not a check.
+try:
+    with open(identity_contract_path, 'r', encoding='utf-8') as handle:
+        identity_contract = json.load(handle)
+except Exception as e:
+    raise SystemExit(f'PROBE_IDENTITY_CONTRACT_WALL path={identity_contract_path} error={e}')
+if identity_contract.get('contract') != 'williamos-node-identity/1':
+    raise SystemExit(
+        f"PROBE_IDENTITY_CONTRACT_WALL version={identity_contract.get('contract')}"
+    )
+canonical_node_ids = {
+    str(alias).strip().lower(): canonical_id
+    for canonical_id, entry in (identity_contract.get('nodes') or {}).items()
+    for alias in (entry.get('hostnames') or [])
+    if str(alias).strip()
+}
 canonical_node_id = canonical_node_ids.get(canonical_hostname)
 if not canonical_node_id or node_id != canonical_node_id:
     raise SystemExit(
@@ -145,7 +167,7 @@ else:
 
 gpus = []
 if shutil.which('nvidia-smi'):
-    q = 'uuid,name,pci.bus_id,memory.total,driver_version,temperature.gpu,utilization.gpu'
+    q = 'uuid,name,pci.bus_id,memory.total,memory.used,driver_version,temperature.gpu,utilization.gpu'
     out, err = run(['nvidia-smi',f'--query-gpu={q}','--format=csv,noheader,nounits'])
     if out:
         for line in out.splitlines():
@@ -153,10 +175,13 @@ if shutil.which('nvidia-smi'):
             try:
                 gpus.append({
                     'id': f'gpu-{p[0]}','vendor':'NVIDIA','model':p[1],'pci_bus_id':p[2],'uuid':p[0],
-                    'vram_bytes': int(float(p[3])*1024*1024),'driver_version':p[4],
+                    'vram_bytes': int(float(p[3])*1024*1024),
+                    'vram_used_bytes': int(float(p[4])*1024*1024) if p[4].replace('.','',1).isdigit() else None,
+                    'vram_source': 'nvidia-smi',
+                    'driver_version':p[5],
                     'cuda_version':None,'compute_capability':None,
-                    'temperature_c': float(p[5]) if p[5].replace('.','',1).isdigit() else None,
-                    'utilization_percent': float(p[6]) if p[6].replace('.','',1).isdigit() else None
+                    'temperature_c': float(p[6]) if p[6].replace('.','',1).isdigit() else None,
+                    'utilization_percent': float(p[7]) if p[7].replace('.','',1).isdigit() else None
                 })
             except Exception as e: warnings.append(f'nvidia row parse: {e}')
     elif err: warnings.append(f'nvidia-smi: {err}')

@@ -542,7 +542,6 @@ export async function recordV12AcceptanceAuthority(input: {
     return { status: "RECORDED" as const, version: approved.version }
   })
   revalidatePath("/goal-console")
-  revalidatePath("/decisions")
   revalidatePath("/governance")
   return {
     status: result.status,
@@ -980,7 +979,6 @@ export async function recordV12CampaignOutcomeAuthority(input: {
   })
 
   revalidatePath("/goal-console")
-  revalidatePath("/decisions")
   revalidatePath("/governance")
   return {
     status: result.status,
@@ -1604,7 +1602,6 @@ export async function mutateOutcomeQueue(
   try {
     const result = await runtimeMutation(validated, userId)
     revalidatePath("/goal-console")
-    revalidatePath("/work-orders")
     return {
       status: result.replayed ? "REPLAYED" : "RECORDED",
       message: result.replayed

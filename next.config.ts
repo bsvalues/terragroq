@@ -3,6 +3,36 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
+  /**
+   * Superseded routes keep their addresses.
+   *
+   * The primary experience replacement deleted six legacy pages (/activity, /chat, /decisions,
+   * /projects, /trace, /work-orders) and collapsed the two predecessor environment roots (/env from
+   * #919, /environment from #922) into `/`. Ninety-three links across thirty-five surviving files
+   * still point at those addresses, and every one of them would have become a 404 the moment this
+   * landed -- the deletion would have removed the capability from the operator even though the
+   * environment can summon it.
+   *
+   * So the addresses survive as redirects into the environment, carrying WHICH surface was asked
+   * for. `?summon=` is not a second navigation model: it is the same summon the Line performs,
+   * reached from a link instead of a sentence, and `tests/summoned-route-redirects.test.ts` pins
+   * every pair so a renamed surface cannot silently strand a route.
+   *
+   * /chat carries no surface because the Line replaced it: chat is not a thing you open here, it is
+   * how you speak to the environment.
+   */
+  async redirects() {
+    return [
+      { source: "/work-orders", destination: "/?summon=work-orders", permanent: true },
+      { source: "/decisions", destination: "/?summon=decisions", permanent: true },
+      { source: "/trace", destination: "/?summon=runtime-trace", permanent: true },
+      { source: "/activity", destination: "/?summon=activity", permanent: true },
+      { source: "/projects", destination: "/?summon=project", permanent: true },
+      { source: "/chat", destination: "/", permanent: true },
+      { source: "/env", destination: "/", permanent: true },
+      { source: "/environment", destination: "/", permanent: true },
+    ]
+  },
   async headers() {
     return [
       {

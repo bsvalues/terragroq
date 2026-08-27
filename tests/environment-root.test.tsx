@@ -2,7 +2,7 @@
 import fs from "node:fs"
 import path from "node:path"
 
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { Desk } from "@/components/desk/desk"
@@ -41,7 +41,10 @@ const REFUSED_IMPORTS = [
 ]
 
 const NEW_ROOT_FILES = [
-  "app/environment/page.tsx",
+  // `app/page.tsx`, not `app/environment/page.tsx`: the environment owns `/` now, and the two
+  // predecessor roots redirect to it. Checking a file that no longer exists would have made this
+  // guard throw rather than guard.
+  "app/page.tsx",
   "components/desk/desk.tsx",
   "app/api/environment/line/route.ts",
 ]
@@ -55,15 +58,19 @@ describe("the replacement root refuses the legacy product model", () => {
     }
   })
 
-  it("has exactly one conversational input, ever", () => {
+  it("summons exactly one universal conversational input", () => {
     render(<Desk />)
+    expect(screen.queryByRole("textbox")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: /Line/ }))
     expect(screen.getAllByRole("textbox")).toHaveLength(1)
   })
 
-  it("starts with no selection ceremony: one question, one input, nothing else demanding action", () => {
-    const { container } = render(<Desk />)
-    expect(container.textContent).toContain("What are we working on?")
-    expect(container.querySelectorAll("button, select, nav a")).toHaveLength(0)
+  it("starts in a useful Space without project-selection ceremony", () => {
+    render(<Desk />)
+    expect(screen.getByRole("region", { name: "Source window" })).toBeTruthy()
+    expect(screen.getByRole("region", { name: "TerraFusion window" })).toBeTruthy()
+    expect(screen.getByRole("navigation", { name: "Workspace files" })).toBeTruthy()
+    expect(screen.queryByText("Choose a Project")).toBeNull()
   })
 
   it("imports nothing from the refused legacy modules — checked in source, not trusted to review", () => {
@@ -75,11 +82,11 @@ describe("the replacement root refuses the legacy product model", () => {
     }
   })
 
-  it("never relies on the credentialless client feature for anonymity", () => {
-    // Anonymity is a server guarantee. The client attribute worked in one browser and silently
-    // failed in the owner's, letting the legacy shell invade the environment.
-    const source = fs.readFileSync(path.join(process.cwd(), "components/desk/desk.tsx"), "utf8")
+  it("frames the admitted running app directly instead of using the inert document proxy", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "components/workspace-shell/workspace-shell.tsx"), "utf8")
     expect(source.includes("credentialless")).toBe(false)
-    expect(source.includes("/api/environment/view")).toBe(true)
+    expect(source.includes("src={space.runningAppUrl}")).toBe(true)
+    expect(source.includes("/api/environment/view")).toBe(false)
+    expect(source).toContain("allow-scripts allow-forms")
   })
 })

@@ -272,7 +272,6 @@ export async function createAuthorityGrantWithResult(
   }
 
   revalidatePath("/goal-console")
-  revalidatePath("/work-orders")
   return { grant: row, replayed: created.replayed }
 }
 
@@ -318,5 +317,4 @@ export async function revokeAuthorityGrant(id: number, reason: string): Promise<
     refId: id,
   })
   revalidatePath("/goal-console")
-  revalidatePath("/work-orders")
 }

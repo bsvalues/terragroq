@@ -19,7 +19,7 @@ export const WORK_CONTEXT_HEADER = "x-williamos-work-context"
  * and the current doctrine digest, so a receipt issued ten minutes and three merges ago fails here
  * without anything having to expire it.
  */
-export async function requireWorkContext(): Promise<WorkContextVerdict> {
+export async function requireWorkContext(requestedPath?: string): Promise<WorkContextVerdict> {
   const presented = (await headers()).get(WORK_CONTEXT_HEADER)?.trim()
   if (!presented) {
     return { ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN", detail: "no work context receipt was presented" }
@@ -50,11 +50,50 @@ export async function requireWorkContext(): Promise<WorkContextVerdict> {
 
   // Re-derive from the stored claims plus TODAY's measured truth. If main or doctrine moved, the
   // token no longer matches and the lane must prove context again before its next effect.
-  return verifyWorkContextReceipt(presented, {
+  const verified = verifyWorkContextReceipt(presented, {
     ...stored,
     mainSha: live.mainSha,
     doctrineDigest: live.doctrineDigest,
   })
+  if (!verified.ok || requestedPath === undefined) return verified
+  return reservationCoversRequestedPath(requestedPath, stored.reservedPaths)
+}
+
+type PathScopeVerdict =
+  | Readonly<{ ok: true }>
+  | Readonly<{ ok: false; failure: "FAILED_SCOPE_COLLISION"; detail: string }>
+
+function normalizedRelativePath(value: string): string | null {
+  const candidate = value.trim().replace(/\\/g, "/")
+  if (!candidate || candidate.includes("\0") || candidate.startsWith("/")
+    || candidate.startsWith("//") || /^[A-Za-z]:/.test(candidate)) return null
+  const segments = candidate.split("/").filter((segment) => segment !== "" && segment !== ".")
+  if (segments.length === 0 || segments.some((segment) => segment === "..")) return null
+  return segments.join("/")
+}
+
+/** Bind a proven receipt's declared reservation to the exact mutation path being attempted. */
+export function reservationCoversRequestedPath(
+  requestedPath: string,
+  reservedPaths: readonly string[],
+): PathScopeVerdict {
+  const requested = normalizedRelativePath(requestedPath)
+  if (!requested) {
+    return { ok: false, failure: "FAILED_SCOPE_COLLISION", detail: `${requestedPath} is outside the receipt path reservation` }
+  }
+  for (const rawReservation of reservedPaths) {
+    const slashNormalized = rawReservation.trim().replace(/\\/g, "/")
+    const directory = slashNormalized.endsWith("/") || slashNormalized.endsWith("/**")
+    const withoutGlob = slashNormalized.endsWith("/**") ? slashNormalized.slice(0, -3) : slashNormalized
+    const reserved = normalizedRelativePath(withoutGlob)
+    if (!reserved) continue
+    if (requested === reserved || (directory && requested.startsWith(`${reserved}/`))) return { ok: true }
+  }
+  return {
+    ok: false,
+    failure: "FAILED_SCOPE_COLLISION",
+    detail: `${requested} is outside the receipt path reservation`,
+  }
 }
 
 /** Shape a refusal the same way everywhere, so a blocked lane always learns which premise failed. */

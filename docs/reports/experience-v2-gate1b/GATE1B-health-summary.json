@@ -1,0 +1,106 @@
+{
+  "os": {
+    "family": "windows",
+    "caption": "Microsoft Windows 10 Pro",
+    "version": "10.0.19045",
+    "build": "19045"
+  },
+  "cpus": [
+    {
+      "id": "cpu0",
+      "socket": "SOCKET 2011",
+      "manufacturer": "GenuineIntel",
+      "model": "Intel(R) Core(TM) i7-5960X CPU @ 3.00GHz",
+      "cores": 8,
+      "threads": 16,
+      "max_mhz": 3001,
+      "numa_node": null
+    }
+  ],
+  "dimmCount": 4,
+  "dimmTotalBytes": 34359738368,
+  "disks": [
+    {
+      "id": "disk-2",
+      "model": "Western Digital SN550E",
+      "serialPresent": true,
+      "capacity_bytes": 1000204886016,
+      "smart_overall": "Healthy"
+    },
+    {
+      "id": "disk-0",
+      "model": "Samsung SSD 840 Series",
+      "serialPresent": true,
+      "capacity_bytes": 120034123776,
+      "smart_overall": "Healthy"
+    },
+    {
+      "id": "disk-1",
+      "model": "Samsung SSD 860 EVO 500GB",
+      "serialPresent": true,
+      "capacity_bytes": 500107862016,
+      "smart_overall": "Healthy"
+    }
+  ],
+  "nicCount": 8,
+  "nicsUp": 4,
+  "runtimes": [
+    {
+      "id": "docker",
+      "kind": "docker",
+      "version": "29.7.2",
+      "state": "running",
+      "endpoint": null,
+      "details": {}
+    },
+    {
+      "id": "wsl",
+      "kind": "wsl",
+      "version": null,
+      "state": "running",
+      "endpoint": null,
+      "details": {
+        "observation": "process-state only; wsl.exe status is not invoked because it can block"
+      }
+    },
+    {
+      "id": "ssh",
+      "kind": "ssh",
+      "version": null,
+      "state": "running",
+      "endpoint": null,
+      "details": {
+        "start_type": "Automatic"
+      }
+    }
+  ],
+  "gpuHealth": [
+    {
+      "model": "NVIDIA GeForce RTX 3050",
+      "uuid": "GPU-6d9ae165-7272-a38c-06b1-7276869e980f",
+      "pci_bus_id": "00000000:01:00.0",
+      "driver_version": "560.94",
+      "temperature_c": 32,
+      "utilization_percent": 2,
+      "vram_total_bytes": 6442450944,
+      "vram_used_bytes": 773849088,
+      "vram_source": "nvidia-smi",
+      "cuda_version": null,
+      "compute_capability": null
+    },
+    {
+      "model": "Tesla P40",
+      "uuid": "GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
+      "pci_bus_id": "00000000:02:00.0",
+      "driver_version": "560.94",
+      "temperature_c": 29,
+      "utilization_percent": 0,
+      "vram_total_bytes": 24159191040,
+      "vram_used_bytes": 9437184,
+      "vram_source": "nvidia-smi",
+      "cuda_version": null,
+      "compute_capability": null
+    }
+  ],
+  "warnings": []
+}

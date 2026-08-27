@@ -1,0 +1,63 @@
+XN-04 — the two problems that were there all along, and one that is not this lane's to fix
+Lane: CROSSNODE-SYNC REPAIR (CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F)
+
+`HermesLabHealth` now exits 1 (warn), not 0. That is the honest state and this file is why.
+
+Before the repair the task reported five problems and four of them were false: an absent archive
+disk read as a full one, a healthy ATLAS read as unreachable, AEGIS read as unreachable, and a red
+cross-node task. A monitor with four false alarms in it is a monitor nobody reads, which is how the
+two REAL problems below sat unattended.
+
+--- 1. ATLAS: "no backup in 174h" -- a health check watching an abandoned path -----------------
+TYPED FINDING. Not repaired here.
+
+  /home/bs/health-atlas.sh:67
+    NEWEST=$(ls -t /home/bs/backups/*.tar.gz 2>/dev/null | head -1)
+    ... [ "$BACKUP_AGE_H" -gt 26 ] && { warn; note "no backup in ${BACKUP_AGE_H}h"; }
+
+  Newest file at that path: williamos_pgdata-20260818_030001.tar.gz, 2026-08-18 03:13 -> 174h.
+
+  But ATLAS's backups are not there any more. It writes verified logical dumps to
+  /forge/backups/nightly/<stamp>/, and 20260825_030001 was written today -- this lane replicated
+  it and verified all five files by hash. `crossnode-sync.ps1` itself carries a comment from the
+  2026-08-18 recovery saying exactly this: "Atlas no longer writes a flat /home/bs/backups/*.tar.gz
+  set ... Continuing to copy the old flat directory would still report success while replicating a
+  set nothing writes any more."
+
+  So this is the same class of fault as the one this lane just repaired -- a location written down
+  once and outlived by the thing it named -- one node over, in a shell script on ATLAS. It is
+  reporting a real 7-day-old file at a real path; what it is wrong about is that the path still
+  means "the backup". It should read /forge/backups/nightly/<newest stamp>, or read last-run.json,
+  which sits beside it.
+
+  NOT REPAIRED HERE, and deliberately: it is an ATLAS-side change, this lane's envelope is
+  HERMES-side scripts, and ATLAS-side topology is with the owner (ATLAS-RETURN-SETTLEMENT-002).
+
+--- 2. AEGIS: "spare disk sdd SMART UNKNOWN" ---------------------------------------------------
+PRE-EXISTING. Not this lane's. Present in the 02:10 run before any change here, and reported by
+health-aegis.sh from AEGIS's own SMART sweep:
+  SMART : sda=PASSED sdb=ABSENT_OR_PHANTOM sdc=PASSED sdd=UNKNOWN nvme0n1=PASSED
+AEGIS also reports `Backup : FAIL_CLOSED | reason RESTORE_PROOF_MISSING`, which belongs to the
+`wo/866-aegis-backup-activation` lane and is not touched here.
+
+--- 3. THE RESOLUTION LOGIC NOW EXISTS TWICE ---------------------------------------------------
+TYPED FINDING. Not repaired here.
+
+`sync-models-to-forge.ps1` grew its own `Resolve-AtlasEndpoint` in #1006 (merged as `c3d822fa`),
+reading the same `nodes.json` for the same reason. This lane put `Resolve-FabricNode` in
+`crossnode-sync-lib.ps1`, which `crossnode-sync.ps1` and `lab-health.ps1` share, so there are two
+copies of the same registry read on the same machine.
+
+Not unified here because `sync-models-to-forge.ps1` is #1006's artifact, merged hours ago, and does
+not dot-source this library; taking it would be taking a reservation this lane was not given, and
+would put a freshly-proven archive path back into play to save fifteen lines. The unification is a
+small, clearly-scoped pickup for a lane that holds both files: dot-source the library and delete
+the private copy.
+
+--- WHAT THIS LANE DID NOT TOUCH ---------------------------------------------------------------
+No scheduled task was created, deleted, enabled, disabled, or rescheduled -- two existing tasks
+were STARTED, on their own definitions, and both had already been going to run on their own
+schedules (04:00 and 03:10). No service, container, compose file, GPU setting, firewall rule or
+registry entry on HERMES. Nothing on ATLAS outside what `crossnode-sync.ps1` writes by design:
+/home/bs/from-hermes and its receipt. Nothing on AEGIS. No ATLAS-side topology, no Postgres, no
+authority registry.

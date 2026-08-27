@@ -5,6 +5,7 @@ import path from "node:path"
 import { describe, expect, it } from "vitest"
 
 import { BrokerDenied, brokeredExec, resolveBrokeredNode, auditBrokerAction } from "@/lib/fabric/broker.mjs"
+import { requireLedger } from "@/lib/fabric/audit.mjs"
 
 /** A throwaway fabric root, so tests never touch the real registry or the real ledger. */
 async function fabricRoot(registry: Record<string, unknown>) {
@@ -74,6 +75,54 @@ describe("brokered execution", () => {
       exec: async () => ({ stdout: "", stderr: payload }),
     })
     expect(result.stderr).toBe("disk full")
+  })
+
+  it("refuses a required audit before it touches the node, not after", async () => {
+    // CONT-EXPV2-AUDIT-FAIL-LOUD. The ordering is the whole requirement. Auditing after the fact can
+    // only ever tell the caller that a mutation it has ALREADY made is missing from the record --
+    // that converts a silent unrecorded mutation into a loud one and governs nothing. So a caller
+    // whose evidence is part of its action checks first, and the node is never reached.
+    const root = await fabricRoot(REGISTRY)
+    const absent = path.join(tmpdir(), "no-such-fabric-root-required-abc")
+    let reached = false
+    const exec = async () => { reached = true; return { stdout: "", stderr: "" } }
+
+    await expect(
+      brokeredExec("atlas", "hostname", { fabricRoot: absent, registry: REGISTRY, exec, requireAudit: true }),
+    ).rejects.toThrow(/AUDIT_UNAVAILABLE/)
+    expect(reached).toBe(false)
+
+    // The same call against a real ledger runs and is recorded, so the refusal above is about the
+    // missing ledger and not about `requireAudit` refusing everything.
+    await brokeredExec("atlas", "hostname", { fabricRoot: root, exec, requireAudit: true })
+    expect(reached).toBe(true)
+    expect(await readFile(path.join(root, "audit.log"), "utf8")).toContain("atlas")
+  })
+
+  it("does not let a ledger's absence become permanent once it exists", async () => {
+    // The memo used to cache the answer either way, so "there is no ledger here" was true for the
+    // process lifetime: a ledger created a second later was never noticed, and every action after it
+    // completed unrecorded while the ledger sat there. Only presence is cached now -- a ledger cannot
+    // appear and then un-appear, so caching `true` is sound and caching `false` is a decision to stop
+    // looking.
+    const root = path.join(await mkdtemp(path.join(tmpdir(), "fabric-late-")), "fabric")
+
+    // Absent: skipped, as before, and a required caller is refused.
+    await expect(auditBrokerAction(root, "atlas", "exec", 0, "before")).resolves.toBeUndefined()
+    await expect(requireLedger(root)).rejects.toThrow(/AUDIT_UNAVAILABLE/)
+
+    // The ledger arrives afterwards, in the same process.
+    await mkdir(path.join(root, "keys"), { recursive: true })
+    await writeFile(path.join(root, "nodes.json"), JSON.stringify(REGISTRY), "utf8")
+
+    await expect(requireLedger(root)).resolves.toBeUndefined()
+    await auditBrokerAction(root, "atlas", "exec", 0, "after")
+    const log = await readFile(path.join(root, "audit.log"), "utf8")
+    expect(log).toContain("after")
+    // The call made while the ledger was genuinely absent stays absent. Nothing is back-filled: the
+    // record says what was written when, and inventing the earlier line would be the same lie the
+    // silent skip was telling.
+    expect(log).not.toContain("before")
   })
 
   it("skips a ledger that is absent, and reports one that is broken", async () => {

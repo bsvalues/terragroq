@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://william-os.local/schemas/execution-fabric-registry-v0.2.json",
+  "$id": "https://william-os.local/schemas/execution-fabric-registry-v0.3.json",
   "title": "WilliamOS Execution Fabric Registry",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "generated_at", "scheduler", "nodes"],
   "properties": {
-    "schema_version": {"const": "0.2"},
+    "schema_version": {"const": "0.3"},
     "generated_at": {"type": "string", "format": "date-time"},
     "scheduler": {
       "type": "object",
@@ -82,6 +82,8 @@
         "pci_bus_id": {"type": ["string", "null"]},
         "uuid": {"type": ["string", "null"]},
         "vram_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "vram_used_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "vram_source": {"enum": ["nvidia-smi", "win32-videocontroller", null]},
         "driver_version": {"type": ["string", "null"]},
         "cuda_version": {"type": ["string", "null"]},
         "compute_capability": {"type": ["string", "null"]},

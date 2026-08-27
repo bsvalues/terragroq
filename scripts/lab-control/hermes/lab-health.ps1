@@ -1,4 +1,4 @@
-# One-pane lab health: Hermes local checks + Atlas over SSH. Exit 0=ok, 1=warn, 2=fail.
+﻿# One-pane lab health: Hermes local checks + Atlas over SSH. Exit 0=ok, 1=warn, 2=fail.
 $ErrorActionPreference = "SilentlyContinue"
 $script:overall = "ok"; $script:problems = @()
 function Bump($sev){ if($sev -eq "fail"){$script:overall="fail"; return}; if($sev -eq "warn" -and $script:overall -ne "fail"){$script:overall="warn"} }
@@ -8,12 +8,80 @@ Write-Host ("="*64)
 Write-Host ("  LAB HEALTH  -  {0}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm'))
 Write-Host ("="*64)
 
+# ---------------- RESOLUTION ----------------
+# WHAT THIS SECTION IS FOR: on 2026-08-25 this script was reporting on three things that had all
+# moved out from under it, and reporting confidently.
+#
+#   * It read free space on F:. That letter stopped existing when the NVMe was re-lettered G:, and
+#     the absent-volume branch below substituted 0 GB -- so it printed "F: free : 0.0 GB [WARN]",
+#     which reads as "the disk is full" rather than "there is no such disk". A health check that
+#     mistakes an absent disk for a full one is worse than one that says nothing.
+#   * It pinged and ssh'd 192.168.88.5 for ATLAS. ATLAS's DHCP lease moved to 192.168.88.8 on the
+#     2026-08-25 power cycle, so this reported "ATLAS UNREACHABLE [FAIL]" every ten minutes about
+#     an ATLAS that was up the whole time -- and that FAIL is the whole of HermesLabHealth's
+#     lastResult=2. A monitor that cries wolf at a healthy node trains its reader to ignore it.
+#   * It hard-coded AEGIS at 192.168.88.6 under a comment claiming that value came from the
+#     canonical registry. It did, once, in 2026-08-18. A copy of a registry is not a registry.
+#
+# All three are now resolved from live truth, and a resolution that cannot answer is reported as
+# FAIL rather than silently defaulted -- the same "resolve, then refuse" rule crossnode-sync.ps1
+# and backup-volumes.ps1 follow. `Resolve-*` live in crossnode-sync-lib.ps1 so there is one owner.
+$labLib = Join-Path $PSScriptRoot 'crossnode-sync-lib.ps1'
+if(-not (Test-Path -LiteralPath $labLib -PathType Leaf)){
+  Write-Host "  RESOLUTION: $labLib is missing, so nothing in this lab can be located.   [FAIL]"
+  Write-Host ("  OVERALL: FAIL")
+  exit 2
+}
+. $labLib
+# The library asserts StrictMode for its own callers. This script predates it and deliberately
+# reads properties off health JSON that a degraded node may not send, so its looser contract is
+# restored here on purpose rather than left to collide.
+Set-StrictMode -Off
+$ErrorActionPreference = "SilentlyContinue"
+
+$fabricRoot = "$env:USERPROFILE\.williamos\fabric"
+$archiveVolumeLabel = "HERMES_NVME"
+function Resolve-OrReport($what, [scriptblock]$action){
+  try { & $action } catch {
+    $msg = "$what unresolved: $($_.Exception.Message)"
+    Bump "fail"; P "fail" $msg
+    Write-Host ("  {0}   [FAIL]" -f $msg)
+    $null
+  }
+}
+$archiveRoot = Resolve-OrReport "archive volume '$archiveVolumeLabel'" { Resolve-ArchiveRoot -Label $archiveVolumeLabel }
+$atlasNode   = Resolve-OrReport "atlas address" { Resolve-FabricNode -Fabric $fabricRoot -Node 'atlas' }
+$aegisNode   = Resolve-OrReport "aegis address" { Resolve-FabricNode -Fabric $fabricRoot -Node 'aegis' }
+$fabricSsh   = Resolve-OrReport "fabric ssh identity" { Resolve-FabricSshIdentity -Fabric $fabricRoot }
+# Every remote probe below uses the fabric identity, not the calling account's ~/.ssh. That
+# known_hosts pins 192.168.88.5 and has never seen 192.168.88.8: resolving the new address while
+# keeping the old identity would turn "unreachable" into "Host key verification failed" and change
+# nothing an operator sees. Measured on HERMES 2026-08-25, exit 255 either way.
+#
+# THERE IS DELIBERATELY NO FALLBACK OPTION LIST. If the identity does not resolve, the remote
+# probes DO NOT RUN. A default of BatchMode+ConnectTimeout is not neutral: it hands the probe
+# back to whatever keys and known_hosts the account running this task happens to hold, which is
+# exactly the ambient transport this repair removed. That would contact lab nodes under
+# credentials nobody resolved, and print a node status underneath a resolution that had already
+# failed -- which reads as an answer. Refusing the probe is the honest output, and the FAIL is
+# already recorded by Resolve-OrReport above.
+$sshOpts = $null
+if($fabricSsh){ $sshOpts = @($fabricSsh.SshOptions) }
+
 # ---------------- HERMES ----------------
 Write-Host "`n----- HERMES (AI / runtime) -----"
 $cFree=[math]::Round((Get-Volume C).SizeRemaining/1GB,1)
-$fv=Get-Volume F -ErrorAction SilentlyContinue; $fFree= if($fv){[math]::Round($fv.SizeRemaining/1GB,1)}else{0}
 $s= if($cFree -lt 10){"fail"}elseif($cFree -lt 25){"warn"}else{"ok"}; Bump $s; P $s "Hermes C: $cFree GB"; "  C: free : {0,7} GB   [{1}]" -f $cFree,$s.ToUpper()
-$s= if($fFree -lt 10){"warn"}else{"ok"}; Bump $s; P $s "Hermes F: $fFree GB"; "  F: free : {0,7} GB   [{1}]" -f $fFree,$s.ToUpper()
+# The archive volume is reported under the letter it currently holds, and an absent archive disk
+# is a FAIL that says so -- not a 0 GB reading that looks like a full one. Nothing is backed up
+# anywhere on this machine while this line is red.
+if($archiveRoot){
+  $av=Get-Volume -DriveLetter $archiveRoot.TrimEnd(':') -ErrorAction SilentlyContinue
+  $aFree= if($av){[math]::Round($av.SizeRemaining/1GB,1)}else{0}
+  $s= if($aFree -lt 10){"warn"}else{"ok"}; Bump $s; P $s "Hermes archive $archiveRoot $aFree GB"; "  {0} free: {1,6} GB   [{2}]  (label {3})" -f $archiveRoot,$aFree,$s.ToUpper(),$archiveVolumeLabel
+} else {
+  "  archive : NOT RESOLVED   [FAIL]  (no volume labelled {0})" -f $archiveVolumeLabel
+}
 
 $vhdx="C:\Users\bs\AppData\Local\Docker\wsl\disk\docker_data.vhdx"; $vhdxGB= if(Test-Path $vhdx){[math]::Round((Get-Item $vhdx).Length/1GB,1)}else{"?"}
 $job=Start-Job{docker version --format "{{.Server.Version}}"}; $sv=$null; if(Wait-Job $job -Timeout 12){$sv=(Receive-Job $job)}; Remove-Job $job -Force
@@ -27,7 +95,9 @@ $g = nvidia-smi --query-gpu=name,temperature.gpu,memory.used,memory.total,utiliz
 if($g){ foreach($line in $g){ $p=$line -split ',\s*'; if($p[0] -match '3050'){ $gt=[int]$p[1]; $s= if($gt -gt 85){"warn"}else{"ok"}; Bump $s; "  GPU     : {0} | {1}C | {2}/{3} MB | {4}% util   [{5}]" -f $p[0],$p[1],$p[2],$p[3],$p[4],$s.ToUpper() } } } else { "  GPU     : nvidia-smi n/a" }
 
 # Compute services (this is what Hermes is FOR)
-if(docker ps --filter name=ollama --filter status=running -q 2>$null){ "  Ollama  : running   [OK]" } else { "  Ollama  : DOWN   [FAIL]"; Bump "fail"; P "fail" "Ollama down" }
+# Ollama is a Windows service now (#997), not a container -- ask the API, not Docker.
+$ollamaOk=$false; try{ $null=Invoke-RestMethod http://127.0.0.1:11434/api/version -TimeoutSec 6; $ollamaOk=$true }catch{}
+if($ollamaOk){ "  Ollama  : running (native 127.0.0.1:11434)   [OK]" } else { "  Ollama  : DOWN   [FAIL]"; Bump "fail"; P "fail" "Ollama down" }
 try { $r=Invoke-WebRequest http://localhost:3000/health -TimeoutSec 6 -UseBasicParsing; "  OpenWebUI: HTTP $($r.StatusCode)   [OK]" } catch { "  OpenWebUI: not responding   [WARN]"; Bump "warn"; P "warn" "Open WebUI down" }
 
 foreach($t in @(@("Backup","HermesVolumeBackup"),@("X-sync","HermesCrossNodeBackupSync"))){
@@ -46,9 +116,12 @@ foreach($t in @(@("Backup","HermesVolumeBackup"),@("X-sync","HermesCrossNodeBack
 
 # ---------------- ATLAS ----------------
 Write-Host "`n----- ATLAS (services) -----"
-if(-not (Test-Connection 192.168.88.5 -Count 1 -Quiet)){ "  UNREACHABLE (ping)   [FAIL]"; Bump "fail"; P "fail" "Atlas unreachable" }
+if(-not $atlasNode){ "  ADDRESS UNRESOLVED   [FAIL]" }
+elseif(-not (Test-Connection $atlasNode.Host -Count 1 -Quiet)){ "  UNREACHABLE (ping {0})   [FAIL]" -f $atlasNode.Host; Bump "fail"; P "fail" "Atlas unreachable at $($atlasNode.Host)" }
+elseif(-not $sshOpts){ "  Address : {0}" -f $atlasNode.Endpoint; "  PROBE SKIPPED - no resolved fabric identity   [FAIL]" }
 else {
-  $ajson = ssh -o BatchMode=yes -o ConnectTimeout=8 bs@192.168.88.5 "/home/bs/health-atlas.sh"
+  "  Address : {0}" -f $atlasNode.Endpoint
+  $ajson = ssh @sshOpts $atlasNode.Endpoint "/home/bs/health-atlas.sh"
   $a=$null; try { $a=($ajson -join "`n") | ConvertFrom-Json } catch {}
   if($a){
     $s=$a.status; Bump $s; P $s "Atlas $($a.issues)"
@@ -70,10 +143,14 @@ else {
 
 # ---------------- AEGIS ----------------
 Write-Host "`n----- AEGIS (CPU/CI/backup node) -----"
-$aegisIp = "192.168.88.6"   # canonical fabric registry (nodes.json), live-probed 2026-08-18
-if(-not (Test-Connection $aegisIp -Count 1 -Quiet)){ "  UNREACHABLE (ping)   [FAIL]"; Bump "fail"; P "fail" "Aegis unreachable" }
+# Read from nodes.json on every run rather than copied out of it once. The old literal happened to
+# still be right; ATLAS's did not, and there is no way to tell which is which by looking.
+if(-not $aegisNode){ "  ADDRESS UNRESOLVED   [FAIL]" }
+elseif(-not (Test-Connection $aegisNode.Host -Count 1 -Quiet)){ "  UNREACHABLE (ping {0})   [FAIL]" -f $aegisNode.Host; Bump "fail"; P "fail" "Aegis unreachable at $($aegisNode.Host)" }
+elseif(-not $sshOpts){ "  Address : {0}" -f $aegisNode.Endpoint; "  PROBE SKIPPED - no resolved fabric identity   [FAIL]" }
 else {
-  $gjson = ssh -o BatchMode=yes -o ConnectTimeout=8 bs@$aegisIp "/home/bs/health-aegis.sh"
+  "  Address : {0}" -f $aegisNode.Endpoint
+  $gjson = ssh @sshOpts $aegisNode.Endpoint "/home/bs/health-aegis.sh"
   $g=$null; try { $g=($gjson -join "`n") | ConvertFrom-Json } catch {}
   if($g){
     $s=$g.status; Bump $s; P $s "Aegis $($g.issues)"

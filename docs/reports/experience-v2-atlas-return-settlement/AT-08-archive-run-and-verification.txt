@@ -1,0 +1,93 @@
+THE FIRST REAL ARCHIVE RUN OF THE LIVE MODEL STORE, AND ITS INDEPENDENT VERIFICATION
+2026-08-25T01:59:38 -07:00. Invoked through the HermesModelForgeSync SCHEDULED TASK — the same task
+Windows runs on the 04:30 schedule — rather than by hand, so what ran is the production path.
+
+(A hand invocation over ssh was tried first and hung: a native ssh child launched from inside an ssh
+session inherits the session's stdio and neither side tears down. The scheduled task has no such
+parent, which is both the fix and the more canonical invocation.)
+
+=== ARCHIVE STATE BEFORE ===
+  /forge/models/ollama/models/blobs      : 26 blobs, 9.7 GB
+  /forge/models/ollama/models/manifests  : 3 manifests
+      registry.ollama.ai/library/williamos-qwen3-4b/64k
+      registry.ollama.ai/library/qwen3/4b-instruct
+      registry.ollama.ai/library/qwen2.5-coder/7b
+  /forge free space                      : 2.3 T available of 3.6 T
+
+=== LIVE STORE, as the script resolved it (-ResolveOnly, before the run) ===
+  {"store":"D:\HermesData\ollama","serviceModelsDir":"D:\HermesData\ollama\models",
+   "storeAgrees":true,"blobCount":21,"blobBytes":10360071891,"manifestCount":5,
+   "manifestInstaller":"C:\HermesLab\hermes\install-forge-manifests.sh",
+   "manifestInstallerPresent":true,"remote":"/forge/models/ollama","atlas":"bs@192.168.88.8"}
+
+  10,360,071,891 bytes = 9.65 GB, 21 blobs, 5 manifests. `atlas` was RESOLVED FROM THE REGISTRY.
+
+=== THE RUN ===
+  2026-08-25T01:59:38 OK store=D:\HermesData\ollama copied=0 local=21 remote=26 manifests=5
+    archived-manifests=5 superseded registry.ollama.ai/library/williamos-qwen3-4b/64k installed
+    superseded=1 dest=/forge/models/ollama/models/manifests verified=by-name
+  scheduled task lastResult=0, returned to Ready.
+
+=== copied=0 IS THE HEADLINE, AND IT IS NOT WHAT WAS EXPECTED ===
+The continuation expected this run to move ~9.65 GB, on the reasoning that the live store had never
+been archived. It moved ZERO BYTES OF BLOB DATA, because all 21 blobs of the live store were ALREADY
+in the archive.
+
+That is not the sync having worked. Ollama blobs are content-addressed, and the #997 migration moved
+the same content from the container-era store to D:\HermesData\ollama — so those blobs had been
+archived back when the store the script pointed at still held them (the log's 2026-08-17 line reads
+`OK copied=25 local=25`). The models were protected by an accident of history, not by the mechanism.
+
+What was genuinely NOT protected was the METADATA. The archive held 3 manifests; the live store has
+5. A blob with no manifest naming it is not restorable — the exact "unusable-restore condition" the
+script's own guard is written against. This run archived the two missing manifests
+(llama3.2/3b and snowflake-arctic-embed2/latest) and refreshed a third whose bytes had changed,
+copying the superseded copy aside rather than overwriting it.
+
+So the first real archive run's actual product is: the model store is now restorable. It was not
+before, and no green log line would ever have said so.
+
+=== INDEPENDENT VERIFICATION — not the script's own claim ===
+The script reports `verified=by-name`. That claim was re-derived here from both sides separately:
+  live-store blobs on HERMES  : 21
+  archived blobs on ATLAS     : 26
+  live blobs NOT on ATLAS     : 0  -> NONE
+  archive-only blobs RETAINED : 5  (nothing was deleted)
+      sha256-215a3316f0f10bebc2c8d5b6426d1c6ad06e162187df10e043bafed246894d9a
+      sha256-70636fb8b15a698d6454ff1bc952c9b4e9cc3c139ca18ab8639e2514ac71f351
+      sha256-7101a4a1d9e30ce87a71265e93215173f5e4cc84883e5cf1ef88862547f31fcd
+      sha256-b507b9c2f6ca642bffcd06665ea7c91f235fd32daeefdf875a0f938db05fb315
+      sha256-cc31d9ff2c7076e44c77ce3f286a2f6ab02eaaeaa5133ac75ec01d83ba17da91
+
+  live manifests              : 5
+  archived manifests          : 5
+  live manifests NOT archived : 0  -> NONE
+      registry.ollama.ai/library/llama3.2/3b
+      registry.ollama.ai/library/qwen2.5-coder/7b
+      registry.ollama.ai/library/qwen3/4b-instruct
+      registry.ollama.ai/library/snowflake-arctic-embed2/latest
+      registry.ollama.ai/library/williamos-qwen3-4b/64k
+
+  superseded copies set aside : 1
+      /forge/models/ollama/models/manifests-superseded/20260825T015939-14520/registry.ollama.ai/library/williamos-qwen3-4b/64k
+
+  21 of 21 live blobs present by name. 5 of 5 live manifests present at their expected archive
+  paths. 5 archive-only blobs retained. 1 manifest superseded aside. The additive contract held in
+  both directions: nothing in the archive was removed by this run.
+
+=== SECOND LEG — backup-volumes.ps1, via HermesVolumeBackup ===
+  -ResolveOnly (positive):
+    {"archiveVolumeLabel":"HERMES_NVME","archiveRoot":"G:","backupDir":"G:\lab-backups\hermes-volumes",
+     "backupMount":"G:/lab-backups/hermes-volumes","backupDirExists":true}
+    The label resolved to G: — the letter that broke the old F: path — which is the repair working.
+  -ArchiveVolumeLabel NO_SUCH_LABEL_XYZ (negative):
+    ARCHIVE_VOLUME_ABSENT: no mounted volume is labelled 'NO_SUCH_LABEL_XYZ'. ... Nothing was backed up.
+  docker on HERMES: available (portainer, postgres, redis, open-webui)
+
+  Task run 2026-08-25T02:01:08, lastResult=0, five archives written:
+    2026-08-25 02:01:20     0 MB  terrafusion_..._redis_data-20260825_020108.tar.gz
+    2026-08-25 02:01:19     6 MB  terrafusion_..._postgres_data-20260825_020108.tar.gz
+    2026-08-25 02:01:17    14 MB  terrafusion_..._mongo_data-20260825_020108.tar.gz
+    2026-08-25 02:01:12     0 MB  hermes_redisdata-20260825_020108.tar.gz
+    2026-08-25 02:01:11    11 MB  hermes_pgdata-20260825_020108.tar.gz
+  Sizes match the last good run (2026-08-23), so this is a real snapshot and not an empty one.

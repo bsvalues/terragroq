@@ -5,7 +5,6 @@ import { evidenceRecord, workOrder, type EvidenceRecord } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
 import { and, desc, eq, inArray } from "drizzle-orm"
-import { revalidatePath } from "next/cache"
 
 const MAX_PERSISTED_EVIDENCE_RECORDS = 100
 
@@ -145,6 +144,5 @@ export async function recordEvidence(input: EvidenceInput): Promise<EvidenceReco
     refId: wo.id,
     metadata: { evidenceRef: ref, result: input.result },
   })
-  revalidatePath("/work-orders")
   return row
 }

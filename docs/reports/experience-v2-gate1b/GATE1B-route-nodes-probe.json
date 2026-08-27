@@ -1,0 +1,20 @@
+{
+  "invocation": "brokeredExec",
+  "source": "app/api/fabric/nodes/route.ts WINDOWS_PROBE (verbatim)",
+  "endpoint": "hermes",
+  "startedAt": "2026-08-25T01:08:18.520Z",
+  "finishedAt": "2026-08-25T01:08:19.311Z",
+  "durationMs": 790,
+  "ok": true,
+  "stderr": null,
+  "fields": {
+    "host": "HERMES",
+    "cores": "16",
+    "mem": "11.8/31.9",
+    "uptime": "0 days",
+    "disk": "C:88G D:58G",
+    "gpu": "NVIDIA Tesla P40;NVIDIA GeForce RTX 3050",
+    "containers": "4",
+    "services": "open-webui,portainer,postgres,redis"
+  }
+}

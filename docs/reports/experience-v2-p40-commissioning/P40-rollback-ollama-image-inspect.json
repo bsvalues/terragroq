@@ -1,0 +1,62 @@
+﻿[
+    {
+        "Id": "sha256:9d30908e41144b1f1da89b9d8e33c07e4aeb43ff41a8660241b1686e2cc330ad",
+        "RepoTags": [
+            "ollama/ollama:latest"
+        ],
+        "RepoDigests": [
+            "ollama/ollama@sha256:9d30908e41144b1f1da89b9d8e33c07e4aeb43ff41a8660241b1686e2cc330ad"
+        ],
+        "Comment": "buildkit.dockerfile.v0",
+        "Created": "2026-08-16T17:08:24.754620686Z",
+        "Config": {
+            "ExposedPorts": {
+                "11434/tcp": {}
+            },
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
+                "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+                "NVIDIA_VISIBLE_DEVICES=all",
+                "OLLAMA_HOST=0.0.0.0:11434"
+            ],
+            "Entrypoint": [
+                "/bin/ollama"
+            ],
+            "Cmd": [
+                "serve"
+            ],
+            "Labels": {
+                "org.opencontainers.image.version": "24.04"
+            },
+            "ArgsEscaped": true
+        },
+        "Architecture": "amd64",
+        "Os": "linux",
+        "Size": 3381623915,
+        "RootFS": {
+            "Type": "layers",
+            "Layers": [
+                "sha256:42724e448bf499ec7d4b3c21d6cc68fe665ef677ed393c3dbb5357394e89ff91",
+                "sha256:2fa40086054795d72477c909701613c1aad2abf0b518b835598707ca8d76f7ba",
+                "sha256:9ab4bde1bc2498f4cf6d36bcd0f1fcbd62a2dd57621fc60442feb38cb31ba419",
+                "sha256:f415de545e717189a588ea1330e2bad406388acef1e1fc5a69c95c3b0496cc3a"
+            ]
+        },
+        "Metadata": {
+            "LastTagTime": "2026-08-17T18:10:28.493807154Z"
+        },
+        "Descriptor": {
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "digest": "sha256:9d30908e41144b1f1da89b9d8e33c07e4aeb43ff41a8660241b1686e2cc330ad",
+            "size": 647
+        },
+        "Identity": {
+            "Pull": [
+                {
+                    "Repository": "docker.io/ollama/ollama"
+                }
+            ]
+        }
+    }
+]

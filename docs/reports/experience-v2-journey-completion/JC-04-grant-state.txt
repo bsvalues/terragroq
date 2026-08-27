@@ -1,0 +1,60 @@
+AUTHORITY STATE AT THE END OF THIS LANE, AND WHY NO GRANT WAS MINTED
+Read from ATLAS through the resolved path, 2026-08-25T12:26Z.
+
+=== the state ===
+  authority_grant total                29
+  grants scoped "#995" for the owner    exactly one
+
+  id 32  ref GRANT-0019
+    status           revoked
+    authorityLevel   A3_WRITE_SHARED
+    allowedActions   ["node.stamp-identity"]
+    blockedActions   16 entries
+    expiresAt        stored wall clock 2026-08-25 12:05:06.566 (UTC)
+    revokedAt        stored wall clock 2026-08-25 17:08:59.273 (UTC)
+    revokeReason     "Single-use, exercised. ... Revoked through app/actions/authority.ts
+                      revokeAuthorityGrant so that no standing permission outlives the proof.
+                      Re-authorising is a new owner decision, not a re-run."
+
+NO STANDING PERMISSION EXISTS FOR #995. The lane began with none and ends with none.
+
+=== an incidental corroboration of the timezone defect ===
+JC-session-and-grants.mjs reads this row through the RAW pg client, exactly as the routes did before
+this lane's first commit, and it renders expiresAt as 2026-08-25T19:05:06.566Z -- seven hours later
+than the 12:05:06.566 wall clock actually stored. That is OR-09's measurement reproduced from a
+different session, a different script and a different day's process, and it is what
+CONT-EXPV2-GRANT-EXPIRY-TZ-SKEW describes. This script was deliberately left reading the raw way so
+the defect stays visible in the evidence; the two governed ROUTES now go through
+authorityGrantFactsFromRow and no longer read it this way.
+
+=== why no grant was minted ===
+The continuation packet authorises one re-mint to finish the acceptance test. The acceptance test
+cannot be finished, because no session can be minted for the owner identity (JC-03). Three reasons
+not to mint anyway, in increasing order of seriousness:
+
+1. A grant exists to authorise a specific run. With no run possible, minting produces standing
+   A3_WRITE_SHARED permission under #995 with nothing to spend it on -- the exact state
+   GRANT-0019's own revokeReason says must not outlive the proof.
+
+2. The window would be real. With the timezone defect fixed, a two-hour grant now expires in two
+   hours rather than nine -- but a grant minted now and left unused while waiting for the owner is a
+   live permission sitting in the registry for however long that takes.
+
+3. The canonical recorder REFUSES it, by design. PR #1008's review found that
+   OR-01-record-grant.mjs's replay guard was written on `grantCovers`, and coverage is exactly what
+   revocation removes -- so after GRANT-0019 was revoked, a re-run would have minted a fresh ACTIVE
+   grant with no owner decision behind it. #1008 called that the worst defect in the lane and
+   rewrote the guard to test for the issuance's existence IN ANY STATUS, before --record is
+   consulted, with no override flag. Minting here would mean weakening that guard.
+
+Point 3 is decisive on its own and is the reason this is a report rather than an attempt. Removing
+a safety rail that a previous lane installed, in order to hit a step in my own packet, would be the
+worst thing this lane could do.
+
+=== what the next lane should do ===
+With an owner session in hand, mint under the CONTINUATION-27 constraints unchanged (exact userId,
+exact scope #995, action node.stamp-identity, HERMES as recorded intent, canonical path, bounded),
+run the journey, and revoke. The guard in OR-01-record-grant.mjs will have to be consulted
+deliberately -- it should be given an explicit, recorded owner-authorisation input rather than an
+override flag, so that "this issuance was authorised again" is a fact in the repository rather than
+a switch on a command line.

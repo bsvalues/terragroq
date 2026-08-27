@@ -1,0 +1,14 @@
+{
+  "invocation": "brokeredExec",
+  "broker": "lib/fabric/broker.mjs",
+  "node": "hermes",
+  "action": "power-cap",
+  "requireAudit": true,
+  "command": "$ErrorActionPreference='Continue'\n$P40='GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2'\nWrite-Output '--- ROLLBACK-BEFORE ---'\n& nvidia-smi -i $P40 --query-gpu=uuid,power.limit,enforced.power.limit,power.default_limit,power.min_limit,power.max_limit,temperature.gpu,power.draw --format=csv,noheader 2>&1\nWrite-Output '--- APPLY-150W ---'\n$tmp=[System.IO.Path]::GetTempFileName()\n$p=Start-Process -FilePath 'nvidia-smi' -ArgumentList @('-i',$P40,'-pl','150') -NoNewWindow -Wait -PassThru -RedirectStandardOutput \"$tmp.o\" -RedirectStandardError \"$tmp.e\"\nWrite-Output \"EXIT=$($p.ExitCode)\"\n(Get-Content \"$tmp.o\" -ErrorAction SilentlyContinue) -join \"`n\"\n(Get-Content \"$tmp.e\" -ErrorAction SilentlyContinue) -join \"`n\"\nRemove-Item \"$tmp*\" -ErrorAction SilentlyContinue\nWrite-Output '--- VERIFY-AFTER ---'\n& nvidia-smi -i $P40 --query-gpu=uuid,power.limit,enforced.power.limit,power.default_limit,temperature.gpu,power.draw,ecc.errors.uncorrected.volatile.total,ecc.errors.corrected.volatile.total --format=csv,noheader 2>&1\nWrite-Output '--- RTX-UNTOUCHED ---'\n& nvidia-smi -i GPU-6d9ae165-7272-a38c-06b1-7276869e980f --query-gpu=uuid,power.limit,enforced.power.limit,driver_model.current,display_active --format=csv,noheader 2>&1\nWrite-Output '--- RC ---'\n",
+  "startedAt": "2026-08-25T01:48:00.944Z",
+  "finishedAt": "2026-08-25T01:48:02.459Z",
+  "durationMs": 1514,
+  "ok": true,
+  "stdout": "--- ROLLBACK-BEFORE ---\r\nGPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2, 250.00 W, 250.00 W, 250.00 W, 125.00 W, 250.00 W, 32, 10.74 W\r\n--- APPLY-150W ---\r\nEXIT=0\r\nPower limit for GPU 00000000:02:00.0 was set to 150.00 W from 250.00 W.\nAll done.\r\n\r\n--- VERIFY-AFTER ---\r\nGPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2, 150.00 W, 150.00 W, 250.00 W, 32, 10.64 W, 0, 0\r\n--- RTX-UNTOUCHED ---\r\nGPU-6d9ae165-7272-a38c-06b1-7276869e980f, 70.00 W, 70.00 W, WDDM, Enabled\r\n--- RC ---\r\n",
+  "stderr": null
+}

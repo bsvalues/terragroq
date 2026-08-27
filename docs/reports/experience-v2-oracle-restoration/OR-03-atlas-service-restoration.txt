@@ -1,0 +1,81 @@
+THE AUTHORITY ORACLE AS A CANONICALLY-OWNED ATLAS SERVICE
+Captured on ATLAS 2026-08-25T10:10:29+00:00. Read-only: every mutation described here had already happened.
+
+=== identity, before trusting anything else in this file ===
+  hostname               : atlas
+  /etc/machine-id sha256 : 1406acb70a4fa29a84cacdf9bedef398af99ec6b8d85079632d6f822ddaa0ba1
+  registry.seed.json pin : 1406acb70a4fa29a84cacdf9bedef398af99ec6b8d85079632d6f822ddaa0ba1
+  addresses now          : 192.168.88.8/24 172.17.0.1/16 172.18.0.1/16 172.19.0.1/16 
+
+=== the container is now owned by a file in this repository ===
+  compose project     : williamos-authority-registry
+  compose config file : /opt/williamos/deploy/atlas/williamos-authority-registry/compose.yaml
+  compose service     : registry
+  image               : pgvector/pgvector:pg16
+  command             : [postgres -c hba_file=/etc/williamos/pg_hba.conf]
+  restart policy      : unless-stopped
+  port bindings       : map[5432/tcp:[{0.0.0.0 15432}]]
+  ports MATERIALISED  : map[5432/tcp:[{0.0.0.0 15432}]]
+  networks            : williamos-authority 
+  health              : healthy
+  what #1006 found instead: PortBindings pinned to 192.168.88.5, NetworkSettings.Ports {},
+  Networks {}, no compose labels at all -- a healthy container reachable from nowhere.
+
+=== mounts: the access policy is read-only, the data is not ===
+  volume williamos_pgdata -> /var/lib/postgresql/data rw=true
+  bind /opt/williamos/deploy/atlas/williamos-authority-registry/pg_hba.conf -> /etc/williamos/pg_hba.conf rw=false
+
+=== the data volume predates this lane and was never recreated ===
+  williamos_pgdata created 2026-08-12T17:55:45Z at /var/lib/docker/volumes/williamos_pgdata/_data
+
+=== which access policy the server actually loaded ===
+  hba_file in force : /etc/williamos/pg_hba.conf
+  its sha256        : fef173f7582058cb10ec5336b695954a9e766556d4d90092e9b4b417d5fe6713
+  (compare with deploy/atlas/williamos-authority-registry/pg_hba.conf in the repository)
+  the copy inside the data volume is UNTOUCHED and no longer consulted:
+    now    af0fdb739b67d1a552cd82c19311b813e753d4f651a61e6b563f48b55dca5e74
+    before af0fdb739b67d1a552cd82c19311b813e753d4f651a61e6b563f48b55dca5e74
+
+=== the rules as the SERVER parsed them, not as the file reads ===
+ line_number | type  |   database    |  user_name  |   address    |  auth_method  | error 
+-------------+-------+---------------+-------------+--------------+---------------+-------
+          27 | local | {all}         | {all}       |              | trust         | 
+          28 | local | {replication} | {all}       |              | trust         | 
+          38 | host  | {williamos}   | {williamos} | 192.168.88.9 | scram-sha-256 | 
+          48 | host  | {all}         | {all}       | 0.0.0.0      | reject        | 
+          49 | host  | {all}         | {all}       | ::           | reject        | 
+(5 rows)
+
+The line this replaced was: host all all all scram-sha-256
+-- every database, every role, from anywhere. Harmless only while the publish was broken.
+
+=== the port is listening on every interface, and named none of them ===
+  LISTEN 0      4096         0.0.0.0:15432      0.0.0.0:*          
+
+=== packet-layer allowlist ===
+  POLICY_OK: tcp/15432 allowlisted to: 192.168.88.9/32 (everything else dropped)
+  DOCKER-USER:
+    -N DOCKER-USER
+    -A DOCKER-USER -j WILLIAMOS-AUTHORITY
+  the chain, with the packet counts that prove the rules are consulted:
+    Chain WILLIAMOS-AUTHORITY (1 references)
+     pkts bytes target     prot opt in     out     source               destination         
+      152 26222 RETURN     6    --  *      *       192.168.88.9         0.0.0.0/0            ctorigdstport 15432 ctdir ORIGINAL
+        0     0 DROP       6    --  *      *       0.0.0.0/0            0.0.0.0/0            ctorigdstport 15432 ctdir ORIGINAL
+
+=== the boot owner, so the allowlist survives a power cycle ===
+  enabled : enabled
+  active  : active
+  result  : success
+
+=== deployed definition digests (compare against the repository) ===
+bbf759130a5fc2bfcf64c9670346c4806528ac017c467c6573d1a6c452ce3fba    apply-network-policy.sh
+bbd376d858ed757a509770c1014e3c38e763163d1da87b97db803ae82a77723b    compose.yaml
+b028b17b496293e56f28c41fe7dde0efc1a56fef810abf5135ea472bbae4a671    fabric-callers.json
+fef173f7582058cb10ec5336b695954a9e766556d4d90092e9b4b417d5fe6713    pg_hba.conf
+b3098fb0ff6afea93a67f4cef31c4eea10a6a6482c0ad800f48805ac93554257    README.md
+d5b161ee0f89a07946764fac8c60a60955bb5b14f60ce6fe91865fc2cea621db    williamos-authority-firewall.service
+
+=== the logical backup taken BEFORE the container was replaced ===
+  -rw-rw-r-- 1 bs bs 210366 Aug 25 09:41 williamos-20260825T094136Z.sql.gz
+  b2a39ca49965f65f20106c5740a7e584bb38562b031d9181379459f2412b8fab  /home/bs/backups/williamos-authority-oracle/williamos-20260825T094136Z.sql.gz

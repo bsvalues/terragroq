@@ -171,15 +171,20 @@ describe("AC-11 evidence truth consistency", () => {
     expect(workOrdersAction).toContain("orderBy(desc(workOrder.createdAt))")
   })
 
-  it("defines persisted failure evaluations as the read-only Eval view inside Trace", () => {
-    const tracePage = readFileSync("app/(shell)/trace/page.tsx", "utf8")
-    const tracePanel = readFileSync("components/trace/runtime-trace-panel.tsx", "utf8")
+  it("keeps runtime trace read-only after the route became a surface", () => {
+    // The /trace page guarded a real safety property: a read-only view with no eval runner and no
+    // mutation path. The route is retired, so the property is asserted against the surface that
+    // replaced it - a migration must carry invariants across, not drop them with the page.
+    const desk = readFileSync("components/desk/desk.tsx", "utf8")
+    const line = readFileSync("app/api/environment/line/route.ts", "utf8")
 
-    expect(tracePage).toContain("RuntimeTracePanel")
-    expect(tracePanel).toContain('title="Failure evaluations"')
-    expect(tracePanel).toContain("RUNTIME_FAILURE_EVENT")
-    expect(tracePanel).toContain("No evaluator, replay")
-    expect(tracePanel).not.toMatch(/<button|onClick=|executeEval|runEval/)
+    const renderer = desk.slice(desk.indexOf('surface.kind === "runtime-trace"'))
+      .slice(0, desk.slice(desk.indexOf('surface.kind === "runtime-trace"')).indexOf("if (surface.kind === \"decisions\""))
+    expect(renderer).not.toMatch(/<button|onClick=|executeEval|runEval/)
+
+    // The Line reads runtime truth and never executes or mutates it.
+    expect(line).toContain("getRuntimeExecutions()")
+    expect(line).not.toMatch(/executeEval|runEval/)
   })
 
   it("preserves excluded-scope boundaries without adding an eval, command, runtime control, or mutation path", () => {

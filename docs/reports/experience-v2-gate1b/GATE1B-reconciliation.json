@@ -1,0 +1,59 @@
+{
+  "declared": [
+    {
+      "side": "declared (seed)",
+      "id": "gpu0",
+      "model": "GeForce RTX 3050",
+      "uuid": null,
+      "pci_bus_id": null,
+      "vram_source": null,
+      "canonicalKeyWouldBe": null
+    },
+    {
+      "side": "declared (seed)",
+      "id": "gpu1",
+      "model": "Quadro K2200",
+      "uuid": null,
+      "pci_bus_id": null,
+      "vram_source": null,
+      "canonicalKeyWouldBe": null
+    }
+  ],
+  "observed": [
+    {
+      "side": "observed (brokered probe)",
+      "id": "gpu-GPU-6d9ae165-7272-a38c-06b1-7276869e980f",
+      "model": "NVIDIA GeForce RTX 3050",
+      "uuid": "GPU-6d9ae165-7272-a38c-06b1-7276869e980f",
+      "pci_bus_id": "00000000:01:00.0",
+      "vram_source": "nvidia-smi",
+      "canonicalKey": "accelerator:uuid:GPU-6d9ae165-7272-a38c-06b1-7276869e980f"
+    },
+    {
+      "side": "observed (brokered probe)",
+      "id": "gpu-GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
+      "model": "Tesla P40",
+      "uuid": "GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
+      "pci_bus_id": "00000000:02:00.0",
+      "vram_source": "nvidia-smi",
+      "canonicalKey": "accelerator:uuid:GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2"
+    }
+  ],
+  "declaredCanonicalKeys": [],
+  "observedCanonicalKeys": [
+    "accelerator:uuid:GPU-6d9ae165-7272-a38c-06b1-7276869e980f",
+    "accelerator:uuid:GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2"
+  ],
+  "newIdentities": [
+    "accelerator:uuid:GPU-6d9ae165-7272-a38c-06b1-7276869e980f",
+    "accelerator:uuid:GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2"
+  ],
+  "declaredIdentitiesNotObserved": [],
+  "declaredModelsNotObserved": [
+    "Quadro K2200"
+  ],
+  "inheritance": {
+    "anyObservedKeyEqualsADeclaredKey": false,
+    "note": "declared HERMES GPUs carry uuid:null and pci_bus_id:null, so they have no canonicalKey to inherit"
+  }
+}

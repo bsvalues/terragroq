@@ -1,0 +1,40 @@
+LOCAL FULL-SUITE RUN ON THIS BRANCH, AND THE SAME RUN ON UNMODIFIED MAIN
+Captured on OMEN 2026-08-25. CI is the gate and CI passes; this exists because a reader comparing
+local runs deserves the comparison rather than an assurance.
+
+  main @ c3d822fa   3 files failed | 425 passed | 4 skipped     23 tests failed | 5800 passed
+  this branch       3 files failed | 427 passed | 4 skipped     23 tests failed | 5816 passed
+
+Same three files, same 23 failures. The two extra PASSING files are the two this branch adds.
+tests/lab-dev-preflight.test.ts was additionally run directly against unmodified main and produced
+the identical six failures, so it is pre-existing by observation and not by subtraction.
+
+An earlier run of this branch reported 5 files / 25 tests. It overlapped with other work on this
+machine, and this repository's operating notes record that concurrent suites here time out a
+different unrelated subprocess-spawning file each run. Re-running alone produced what follows.
+
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > prepares only the fixed corpus, source, node, permission, and single-use envelope
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > executes one claim and one fenced lease with exact result bindings
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > rejects replay before lease or evaluator invocation
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > rejects an occupied lease before host collection
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > accepts the monotonic fencing token allocated by the exclusive lease
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > releases the lease after host-attestation or evaluator failure
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > fails closed when live available capacity is below the admitted envelope
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > fails closed on evaluator-reported external provider
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > fails closed on evaluator-reported fallback
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > fails closed on evaluator-reported model drift
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > fails closed on evaluator-reported runtime drift
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > fails closed on evaluator-reported host drift
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > fails closed on evaluator-reported endpoint drift
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > rejects non-monotonic chronology and an unconfirmed lease release
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > rejects completion after the trusted host attestation expires
+ FAIL  tests/execution-fabric-hermes-embedding-bakeoff.test.ts > resident HERMES embedding bake-off adapter > rejects drift in every imported evaluator source before claim
+ FAIL  tests/execution-fabric-pinned-placement.test.ts > Execution Fabric pinned placement recommendations > rejects scheduler drift and capability-specific inference failure without changing authority
+ FAIL  tests/lab-dev-preflight.test.ts > OMEN Stage 5 development preflight > accepts only the fully evidenced disposable configuration flow
+ FAIL  tests/lab-dev-preflight.test.ts > OMEN Stage 5 development preflight > accepts a case-variant GitHub identity from the actual remote
+ FAIL  tests/lab-dev-preflight.test.ts > OMEN Stage 5 development preflight > encodes metadata-only remote probes
+ FAIL  tests/lab-dev-preflight.test.ts > OMEN Stage 5 development preflight > the exact Atlas payload preserves every published host port and fails closed on extras
+ FAIL  tests/lab-dev-preflight.test.ts > OMEN Stage 5 development preflight > the exact Hermes payload preserves starting health and fails closed
+ FAIL  tests/lab-dev-preflight.test.ts > OMEN Stage 5 development preflight > the exact Atlas payload preserves starting health and fails closed
+ Test Files  3 failed | 427 passed | 4 skipped (434)
+      Tests  23 failed | 5816 passed | 46 skipped (5885)

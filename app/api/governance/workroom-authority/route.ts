@@ -6,6 +6,7 @@ import { workOrder } from "@/lib/db/schema"
 import { getSession, getUserId } from "@/lib/session"
 import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
+import { WORKROOM_ALLOWED_FILES, WORKROOM_FORBIDDEN_FILES } from "@/lib/governance/workroom-file-scope"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -28,21 +29,23 @@ export const runtime = "nodejs"
  * hole instead of a narrow authorization path.
  */
 
-const WORKROOM_TITLE = "Workroom lane: files, structured edits, and bounded cockpit operations"
+// This is authority for a signed-in owner's direct workspace operation, not an agent assignment.
+// Keep the title distinct from the retired vendor-bound workroom envelope so an already-approved
+// historical grant cannot be silently reused for the provider-neutral manual-save path.
+const WORKROOM_TITLE = "Workspace manual edits: files and bounded cockpit operations"
 
 const WORKROOM_ENVELOPE = {
   title: WORKROOM_TITLE,
-  description: "Standing envelope for mutations made through the loom workroom under a proven work context.",
+  description: "Standing envelope for authenticated owner mutations made through the workspace under a proven work context.",
   goal: "OUTCOME-762",
   // The receipt scope-matches on the work order ref or the parent outcome; this is the outcome.
   scope: "OUTCOME-762",
   lane: "ui",
-  agent: "claude",
   authorityLevel: "A2_WRITE_OWN",
-  allowedFiles: ["app/", "components/", "lib/", "tests/", "scripts/"].join("\n"),
+  allowedFiles: WORKROOM_ALLOWED_FILES.join("\n"),
   // Approval readiness requires these to be non-empty, and they are the real boundary: the workroom
   // must never reach TLS material or environment secrets.
-  forbiddenFiles: ["C:/ProgramData/WilliamOS/tls/", ".env", ".env.local", "migrations/"].join("\n"),
+  forbiddenFiles: WORKROOM_FORBIDDEN_FILES.join("\n"),
   validators: ["pnpm exec vitest run", "pnpm exec next build"].join("\n"),
   acceptanceCriteria: [
     "Every mutation carries a valid work-context receipt",

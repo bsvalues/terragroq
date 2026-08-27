@@ -1,0 +1,14 @@
+{
+  "invocation": "brokeredExec",
+  "broker": "lib/fabric/broker.mjs",
+  "node": "hermes",
+  "action": "probe",
+  "requireAudit": false,
+  "command": "$ErrorActionPreference='Continue'\n$tmp=[System.IO.Path]::GetTempFileName()\nWrite-Output '--- UBUNTU-NVIDIA-SMI ---'\n$p=Start-Process -FilePath 'wsl.exe' -ArgumentList @('-d','Ubuntu','sh','/mnt/c/Users/bs/p40-commissioning/wslprobe2.sh') -NoNewWindow -Wait -PassThru -RedirectStandardOutput \"$tmp.o\" -RedirectStandardError \"$tmp.e\"\nWrite-Output \"EXIT=$($p.ExitCode)\"\n(Get-Content \"$tmp.o\" -ErrorAction SilentlyContinue) -join \"`n\"\n(Get-Content \"$tmp.e\" -ErrorAction SilentlyContinue) -join \"`n\"\nRemove-Item \"$tmp*\" -ErrorAction SilentlyContinue\nWrite-Output '--- RC ---'\n",
+  "startedAt": "2026-08-25T01:47:01.167Z",
+  "finishedAt": "2026-08-25T01:47:02.495Z",
+  "durationMs": 1327,
+  "ok": true,
+  "stdout": "--- UBUNTU-NVIDIA-SMI ---\r\nEXIT=0\r\n== nvidia-smi -L ==\nGPU 0: NVIDIA GeForce RTX 3050 (UUID: GPU-6d9ae165-7272-a38c-06b1-7276869e980f)\nUnable to determine the device handle for gpu 0000:02:00.0: Unknown Error\nrc=255\n== nvidia-smi full ==\nUnable to determine the device handle for GPU0000:02:00.0: Unknown Error\nrc=0\n== dmesg dxg all ==\n[    0.349338] hv_vmbus: registering driver dxgkrnl\n[    7.696652] misc dxg: dxgk: dxgkio_is_feature_enabled: Ioctl failed: -22\n[    7.713541] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -22\n[    7.714224] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -22\n[    7.714818] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -22\n[    7.715537] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.356671] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.768014] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.768739] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.769382] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.769985] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.770586] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.771142] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.771672] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.772251] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.772818] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.773395] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.773958] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.774495] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\n[    8.775040] misc dxg: dxgk: dxgkio_query_adapter_info: Ioctl failed: -2\r\n\r\n--- RC ---\r\n",
+  "stderr": null
+}

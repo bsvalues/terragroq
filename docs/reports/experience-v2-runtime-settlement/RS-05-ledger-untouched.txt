@@ -1,0 +1,18 @@
+ledger        : C:\Users\bs\.williamos\fabric\audit.log
+bytes         : 1241147
+lines         : 19691
+lastWriteTime : 2026-08-24T21:26:41.1153492-07:00
+
+--- tail 12 ---
+1787629275	hermes	mig-restore-container-stack	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-11d. Bounded attempt to restore the container stack the acceptance-test # reboot took down. # # The cause is established and is not this migr
+1787629445	hermes	mig-bench-150w	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-12. Bounded inference benchmark at the commissioned 150 W envelope, with the # telemetry #997 section 6 asks for and the fail-closed rule fro
+1787629534	hermes	mig-thermal-soak-150w	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-13. The thermal question the 150 W bench raised and could not answer. # # That bench ran 8 iterations, and the card went 54 -> 77 C climbing 
+1787630028	hermes	mig-final-state-and-cleanup	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-14. Soak telemetry, scaffolding removal, and the state HERMES is left in. # # The soak settled the escalation question against escalation. Fr
+1787630278	hermes	mig-process-tree-and-resting-temp	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-15. Two claims that need to be exact rather than approximately right. # # 1. "Exactly one Ollama." Two ollama.exe processes are present. If t
+1787630435	hermes	mig-api-surface-verification	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-16. "Same API contract" is an acceptance condition, and so far this lane has # only exercised part of the surface: /api/version, /api/tags, /
+1787631192	hermes	mig-secondary-owner-audit	rc=1	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-17. Closing CONT-997-SECONDARY-OWNER-CANDIDATES-LISTED-NOT-READ, which the # independent review of report 001 raised and assigned to THIS lan
+1787631240	hermes	mig-secondary-owner-audit	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-17 (retry, narrowed). Closes CONT-997-SECONDARY-OWNER-CANDIDATES-LISTED-NOT-READ, # raised by the independent review of report 001 and assign
+1787631311	hermes	mig-read-affected-scripts	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-18a. Read, in full, the four scripts MIG-17 found that assume Ollama is a # container. Two of them are wired to a scheduled task and now repo
+1787631354	hermes	mig-read-placement-readiness	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-18b. The exact text of the Ollama-dependent region of # hermes-placement-readiness.ps1, so the repair is an exact-string replacement rather t
+1787631436	hermes	mig-repair-broken-health-checks	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-18c. Repair the two AUTOMATED checks this migration broke. # # MIG-17 (closing the gap report 001's review assigned to this lane) found four 
+1787632001	hermes	mig-final-left-state	rc=0	$ErrorActionPreference = 'Continue' # #997 MIGRATION â€” MIG-19. The state HERMES is left in, after the bench and the soak. # The card was driven to the 85 C abort by this lane; confirming it came back 

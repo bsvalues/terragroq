@@ -20,6 +20,14 @@ export interface BrokeredExecOptions {
   timeout?: number
   /** Recorded in the ledger, so a probe reads differently from a mutation. */
   action?: string
+  /**
+   * Treat evidence as part of the action rather than commentary on it.
+   *
+   * Checks the ledger BEFORE the node is touched, so an action that cannot be recorded does not
+   * happen. Off by default: reads, and machines that have never had a fabric directory, are the
+   * common case and neither is a fault.
+   */
+  requireAudit?: boolean
 }
 
 /** Append one action to the lab's single audit log, in the CLI's tab-separated format. */
@@ -29,6 +37,7 @@ export declare function auditBrokerAction(
   action: string,
   rc: number | string,
   detail: string,
+  options?: { required?: boolean },
 ): Promise<void>
 
 export declare function resolveBrokeredNode(

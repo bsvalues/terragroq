@@ -15,6 +15,7 @@
  * taken against a lowered bar measures the bar.
  *
  *   node --no-warnings scripts/runtime-operator/measure-lane-capability.mjs [--dry-run]
+ *   node --no-warnings scripts/runtime-operator/measure-lane-capability.mjs --invalidate-stale-baseline-verdict
  */
 import crypto from "node:crypto"
 import fs from "node:fs"
@@ -51,12 +52,29 @@ const TASK = [
 ].join("\n")
 
 const ALLOWED_PATHS = ["scripts/runtime-operator/worker-lanes.mjs", "tests/**"]
+const TASK_TARGET_PATHS = ["scripts/runtime-operator/worker-lanes.mjs"]
+const REQUIRED_VALIDATION = ["diff-check", "test"]
+const TARGET_ACCELERATOR = Object.freeze({
+  node: "HERMES",
+  uuid: "GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2",
+  processName: "D:\\HermesServices\\ollama\\v0.9.2\\ollama.exe",
+})
 
 const dryRun = process.argv.includes("--dry-run")
+const invalidateStaleBaseline = process.argv.includes("--invalidate-stale-baseline-verdict")
 
 const { buildWorkerPrompt } = await import("./worker-lanes.mjs")
-const { classifyDispatchFailure } = await import("./lane-measurement.mjs")
-const { dispatchHermesLocal, unmountedPolicyVolumes } = await import("./williamos-adapters.mjs")
+const {
+  buildStaleBaselineInvalidation,
+  observeSameRunAccelerator,
+  runMeasurementPrelude,
+  runMeasuredAttempt,
+} = await import("./lane-measurement.mjs")
+const {
+  createWilliamOSAdapters,
+  dispatchHermesLocal,
+  unmountedPolicyVolumes,
+} = await import("./williamos-adapters.mjs")
 const { inspectWorkspaceChanges } = await import("./native-adapters.mjs")
 const { HERMES_KERNEL_POLICY_RELATIVE } = await import("../hermes-bridge/hermes-kernel-client.mjs")
 
@@ -72,28 +90,78 @@ function record(verdict, evidence) {
   console.log(evidence)
 }
 
-// A blocker is named at the boundary where it occurs, never inferred from a downstream symptom.
 const policy = JSON.parse(fs.readFileSync(path.join(REPOSITORY, HERMES_KERNEL_POLICY_RELATIVE), "utf8"))
-const unmounted = unmountedPolicyVolumes(policy)
-if (unmounted.length > 0) {
-  record(
+const { execFile } = await import("node:child_process")
+const { promisify } = await import("node:util")
+const exec = promisify(execFile)
+const git = (args, cwd = REPOSITORY) => exec("git", ["--no-replace-objects", ...args], { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 })
+
+async function sampleAccelerators({ signal }) {
+  const options = { encoding: "utf8", timeout: 3_000, windowsHide: true, signal }
+  const observed = await exec("nvidia-smi", [
+    "-i", TARGET_ACCELERATOR.uuid,
+    "--query-gpu=uuid,name,memory.used,utilization.gpu",
+    "--format=csv,noheader,nounits",
+  ], options)
+  const processes = await exec("nvidia-smi", [
+    "--query-compute-apps=gpu_uuid,process_name,used_gpu_memory",
+    "--format=csv,noheader,nounits",
+  ], options)
+  const applications = processes.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => {
+    const [uuid, processName, processVramMiB] = line.split(",").map((field) => field.trim())
+    return { uuid, processName, processVramMiB: Number(processVramMiB) }
+  })
+  return observed.stdout.trim().split(/\r?\n/).filter(Boolean).flatMap((line) => {
+    const [uuid, model, vramUsedMiB, utilizationPercent] = line.split(",").map((field) => field.trim())
+    return applications.filter((application) => application.uuid === uuid).map((application) => ({
+      uuid,
+      model,
+      vramUsedMiB: Number(vramUsedMiB),
+      utilizationPercent: Number(utilizationPercent),
+      processName: application.processName,
+      processVramMiB: application.processVramMiB,
+    }))
+  })
+}
+
+// Invalidation is a guarded evidence correction, not a measurement attempt. It must run before the
+// generic volume recorder so a missing drive cannot overwrite the settled record it was asked to
+// inspect. Any failed prerequisite throws without calling record().
+const prelude = await runMeasurementPrelude({
+  invalidateStaleBaseline,
+  invalidate: async () => {
+    const capabilityFile = path.join(ROOT, "state", "lane-capability.json")
+    let current
+    try { current = JSON.parse(fs.readFileSync(capabilityFile, "utf8"))?.[LANE] }
+    catch { throw new Error("LANE_CAPABILITY_INVALIDATION_STATE_WALL") }
+    const baselineSha = policy?.placement?.baselineCommit
+    const baselineWorkspace = policy?.placement?.baselineWorkspace
+    const head = (await git(["rev-parse", "HEAD"], baselineWorkspace)).stdout.trim()
+    const dirty = (await git(["status", "--porcelain"], baselineWorkspace)).stdout.trim()
+    if (head !== baselineSha || dirty !== "") throw new Error("LANE_CAPABILITY_INVALIDATION_BASELINE_WALL")
+    const missingTargetPaths = []
+    for (const target of TASK_TARGET_PATHS) {
+      try { await git(["cat-file", "-e", `${baselineSha}:${target}`], baselineWorkspace) }
+      catch { missingTargetPaths.push(target) }
+    }
+    const invalidation = buildStaleBaselineInvalidation({ currentRecord: current, baselineSha, missingTargetPaths })
+    record(invalidation.verdict, invalidation.evidence)
+  },
+  unmounted: unmountedPolicyVolumes(policy),
+  recordVolumeUnavailable: (unmounted) => record(
     `BLOCKED_VOLUME_UNAVAILABLE`,
     `The provider policy pins paths on ${unmounted.map((entry) => entry.volume).join(", ")}, which is not mounted. ` +
       `This says nothing about the lane or the model.`,
-  )
-  process.exit(0)
-}
+  ),
+})
+if (prelude.stop) process.exit(0)
 
 const workspace = path.join(ROOT, "state", "capability-measurement")
 fs.rmSync(workspace, { recursive: true, force: true })
 
-const { execFile } = await import("node:child_process")
-const { promisify } = await import("node:util")
-const exec = promisify(execFile)
-const git = (args, cwd = REPOSITORY) => exec("git", args, { cwd, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 })
-
-await git(["fetch", "origin", "main"])
-const baseSha = (await git(["rev-parse", "origin/main"])).stdout.trim()
+// The checkout is a governed delivery of the requested base. Its HEAD is authoritative for this
+// measurement; origin/main may point at an older bundle ref on a host with no GitHub access.
+const baseSha = (await git(["rev-parse", "HEAD"])).stdout.trim()
 // A previous attempt that died mid-run leaves its worktree registered but gone, and git then refuses
 // the name forever. Prune first: a stale registration is bookkeeping, not a verdict about the lane.
 await git(["worktree", "prune"])
@@ -115,53 +183,75 @@ try {
   }
 
   const started = Date.now()
-  let patchWorkspace
-  try {
-    patchWorkspace = await dispatchHermesLocal({
-      root: ROOT,
-      repositoryPath: REPOSITORY,
-      workOrderId: "capability-measurement-905",
-      workspace,
-      prompt,
-      workContext: null,
-      newId: () => crypto.randomUUID(),
-    })
-  } catch (error) {
-    const message = String(error?.message ?? error)
-    // MEASURED_INCAPABLE is a claim about a model, and it may only be made when the model actually ran.
-    // A crashed invoker or an unreachable provider is an infrastructure boundary wearing a wall's name,
-    // and reading it as incapability is inference from a downstream symptom -- the exact error this
-    // measurement exists to avoid. The first run of this instrument made it: the invoker died because
-    // the inference upstream was unreachable, and the verdict blamed a 4B model that was never asked
-    // a question.
-    const { verdict, aboutTheModel } = classifyDispatchFailure(message)
+  const adapters = createWilliamOSAdapters({ root: ROOT, repositoryPath: REPOSITORY })
+  const outcome = await runMeasuredAttempt({
+    attempt: async () => {
+      let acceleratorEvidence = null
+      let measurementRunId = null
+      const patchWorkspace = await dispatchHermesLocal({
+        root: ROOT,
+        repositoryPath: REPOSITORY,
+        workOrderId: "capability-measurement-905",
+        workspace,
+        prompt,
+        workContext: null,
+        requiredBasePaths: TASK_TARGET_PATHS,
+        observeInvocation: async ({ runId, invoke }) => {
+          measurementRunId = runId
+          const observed = await observeSameRunAccelerator({
+            runId,
+            node: os.hostname(),
+            targetAccelerator: TARGET_ACCELERATOR,
+            attempt: invoke,
+            sampleAccelerators,
+          })
+          acceleratorEvidence = observed.acceleratorEvidence
+          return observed.value
+        },
+        newId: () => crypto.randomUUID(),
+      })
+      // The provider edits its own owned worktree, and leaves the change unstaged and untracked.
+      // Collection is part of the measured attempt, not an afterthought outside its failure boundary.
+      const produced = patchWorkspace ?? workspace
+      try { await git(["add", "-A"], produced) }
+      catch { throw new Error("PATCH_COLLECTION_WALL") }
+      const inspected = await inspectWorkspaceChanges(produced, ALLOWED_PATHS)
+      return { inspected, patchWorkspace: produced, acceleratorEvidence, measurementRunId }
+    },
+    targetAccelerator: TARGET_ACCELERATOR,
+    requiredValidation: REQUIRED_VALIDATION,
+    validate: (request) => adapters.validate(request),
+    recordFailure: ({ verdict, aboutTheModel, message }) => {
+      record(
+        verdict,
+        `The lane produced no usable patch. Wall: ${message}. ` +
+          (aboutTheModel
+            ? `The provider ran and returned without a usable change. `
+            : `This boundary says nothing about whether the model can implement. `) +
+          `Task: the bounded pure-helper task with tests. ` +
+          `Requested base: ${baseSha}. ` +
+          `Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0). Elapsed ${Math.round((Date.now() - started) / 1000)}s.`,
+      )
+    },
+  })
+  if (outcome.ok) {
+    const elapsed = Math.round((Date.now() - started) / 1000)
+    const { inspected, promotion } = outcome.value
+    const accelerator = promotion.acceleratorEvidence
     record(
-      verdict,
-      `The lane produced no patch. Wall: ${message}. ` +
-        (aboutTheModel
-          ? `The provider ran and returned without a usable change. `
-          : `This is an infrastructure boundary and says nothing about whether the model can implement. `) +
-        `Task: the bounded pure-helper task with tests. ` +
-        `Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0). Elapsed ${Math.round((Date.now() - started) / 1000)}s.`,
+      promotion.verdict,
+      `The lane produced a patch that passed the kernel's own walls unmodified: ` +
+        `${inspected.changedPaths.length} file(s) (${inspected.changedPaths.join(", ")}), ${inspected.patchBytes} bytes, ` +
+        `base ${baseSha.slice(0, 12)}, elapsed ${elapsed}s. ` +
+        `Requested validation passed: ${promotion.requiredValidation.join(", ")}. ` +
+        `Same-run accelerator evidence: run ${accelerator.runId}, ${accelerator.model} ${accelerator.uuid}, ` +
+        `${accelerator.vramUsedMiB} MiB resident (${accelerator.processVramMiB} MiB in ${accelerator.processName}) and ` +
+        `${accelerator.utilizationPercent}% utilisation sampled during ${accelerator.sampleStartedAt}..${accelerator.sampleCompletedAt} ` +
+        `within ${accelerator.startedAt}..${accelerator.completedAt}. ` +
+        `Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0), no fallback. ` +
+        `Task: add a pure helper with a stated contract plus vitest cases for all four branches.`,
     )
-    process.exit(0)
   }
-
-  // The provider edits its own owned worktree, and leaves the change unstaged and untracked. Inspecting
-  // with git diff --cached against an unstaged tree reports PATCH_EMPTY_WALL for a lane that just wrote
-  // a correct function -- which this instrument did, once, before this line existed.
-  const produced = patchWorkspace ?? workspace
-  await git(["add", "-A"], produced)
-  const inspected = await inspectWorkspaceChanges(produced, ALLOWED_PATHS)
-  const elapsed = Math.round((Date.now() - started) / 1000)
-  record(
-    "PROVEN",
-    `The lane produced a patch that passed the kernel's own walls unmodified: ` +
-      `${inspected.changedPaths.length} file(s) (${inspected.changedPaths.join(", ")}), ${inspected.patchBytes} bytes, ` +
-      `base ${baseSha.slice(0, 12)}, elapsed ${elapsed}s. ` +
-      `Model: williamos-qwen3-4b:64k (qwen3 4.0B, num_ctx 65536, temperature 0), no fallback. ` +
-      `Task: add a pure helper with a stated contract plus vitest cases for all four branches.`,
-  )
 } finally {
   try { await git(["worktree", "remove", "--force", workspace]) } catch { /* a stale scratch worktree is not the verdict */ }
 }

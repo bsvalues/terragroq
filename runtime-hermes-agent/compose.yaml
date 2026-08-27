@@ -91,6 +91,11 @@ services:
     profiles: ["manual"]
     entrypoint: ["python", "/opt/proxy/inference_proxy.py"]
     container_name: williamos-hermes-inference-proxy
+    environment:
+      # HERMES runs Ollama as a native Windows service on the container host,
+      # not as a sibling Docker service, so it declares its own upstream.
+      HERMES_INFERENCE_UPSTREAM_HOST: host.docker.internal
+      HERMES_INFERENCE_UPSTREAM_PORT: "11434"
     user: "10000:10000"
     networks:
       - inference

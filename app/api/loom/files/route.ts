@@ -1,15 +1,16 @@
 import fs from "node:fs/promises"
-import path from "node:path"
 
 import { getSession } from "@/lib/session"
+import { readBoundedJson } from "@/lib/environment/line-guard"
 import { isIgnoredEntry, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
-import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import { workspaceFileWriteDependencies, writeGovernedWorkspaceFile } from "@/lib/loom/workspace-file-write"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
 const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const MAX_FILE_BYTES = 2_000_000
+const MAX_WRITE_BODY_BYTES = MAX_FILE_BYTES + 32_000
 
 const refuse = (refusal: string, status: number) =>
   Response.json({ error: refusal }, { status, headers: { "cache-control": "no-store" } })
@@ -73,41 +74,19 @@ export async function PUT(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
 
-  // Writing to the checkout is a mutation, so the premise has to have been proven first. Reads stay
-  // open: gating them would push a lane toward working blind rather than toward proving context.
-  const context = await requireWorkContext()
-  if (!context.ok) return workContextRefusal(context)
-
-  let body: { path?: unknown; content?: unknown; modifiedAt?: unknown }
-  try {
-    body = await request.json()
-  } catch {
-    return refuse("BAD_REQUEST", 400)
-  }
+  const parsed = await readBoundedJson(request, MAX_WRITE_BODY_BYTES)
+  if (!parsed.ok) return refuse(parsed.error, parsed.status)
+  const body = parsed.value as { path?: unknown; content?: unknown; modifiedAt?: unknown }
   if (typeof body.content !== "string") return refuse("CONTENT_REQUIRED", 400)
 
-  const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
-  if (!resolved.ok || !resolved.absolute) return refuse(resolved.refusal ?? "PATH_INVALID", 400)
-
-  let current
-  try {
-    current = await fs.stat(resolved.absolute)
-  } catch {
-    return refuse("NOT_FOUND", 404)
+  const result = await writeGovernedWorkspaceFile({
+    userId: session.user.id,
+    path: body.path,
+    content: body.content,
+    modifiedAt: body.modifiedAt,
+  }, workspaceFileWriteDependencies(PROJECT_ROOT))
+  if (!result.ok) {
+    return Response.json(result, { status: result.status, headers: { "cache-control": "no-store" } })
   }
-  if (!current.isFile()) return refuse("NOT_A_FILE", 400)
-
-  if (typeof body.modifiedAt === "string" && current.mtime.toISOString() !== body.modifiedAt) {
-    return Response.json(
-      { error: "CHANGED_ON_DISK", modifiedAt: current.mtime.toISOString() },
-      { status: 409, headers: { "cache-control": "no-store" } },
-    )
-  }
-
-  await fs.writeFile(resolved.absolute, body.content, "utf8")
-  const saved = await fs.stat(resolved.absolute)
-  return Response.json(
-    { ok: true, path: resolved.relative, modifiedAt: saved.mtime.toISOString(), name: path.basename(resolved.absolute) },
-    { headers: { "cache-control": "no-store" } },
-  )
+  return Response.json(result, { headers: { "cache-control": "no-store" } })
 }

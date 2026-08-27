@@ -26,19 +26,6 @@ const goalConsoleSource = readFileSync(
   "components/goal-console/goal-console-view.tsx",
   "utf8",
 )
-const workOrdersSource = readFileSync(
-  "components/work-orders/work-orders-view.tsx",
-  "utf8",
-)
-const traceSource = readFileSync(
-  "components/trace/runtime-trace-panel.tsx",
-  "utf8",
-)
-const tracePageSource = readFileSync("app/(shell)/trace/page.tsx", "utf8")
-const traceQuerySource = readFileSync(
-  "app/(shell)/trace/durable-trace-query.ts",
-  "utf8",
-)
 const auditSource = readFileSync("app/(shell)/audit/page.tsx", "utf8")
 const auditQuerySource = readFileSync(
   "app/(shell)/audit/durable-record-query.ts",
@@ -46,10 +33,6 @@ const auditQuerySource = readFileSync(
 )
 const evidenceRecordPanelSource = readFileSync(
   "components/evidence/durable-record-panels.tsx",
-  "utf8",
-)
-const traceRecordPanelSource = readFileSync(
-  "components/trace/durable-trace-record-panel.tsx",
   "utf8",
 )
 
@@ -286,23 +269,14 @@ describe("Goal Console outcome supporting-record drill-down", () => {
 
   it("loads exact user-scoped Evidence, Trace, and Audit records through bounded reads", () => {
     expect(goalConsoleSource).toContain("DURABLE_RECORD_ANCHORS.goal")
-    expect(workOrdersSource).toContain("DURABLE_RECORD_ANCHORS.workOrder")
-    expect(traceSource).toContain("DURABLE_RECORD_ANCHORS.trace")
     expect(auditSource).toContain("DURABLE_RECORD_ANCHORS.audit")
     expect(auditSource).toContain('id="persisted-evidence-truth-title"')
     expect(auditSource).toContain("getDurableEvidenceRecord")
     expect(auditSource).toContain("getDurableAuditRecord")
-    expect(tracePageSource).toContain("getDurableTraceRecord")
     expect(auditQuerySource).toContain("eq(evidenceRecord.userId, userId)")
     expect(auditQuerySource).toContain("eq(eventLog.userId, userId)")
-    expect(traceQuerySource).toContain("eq(governanceEvent.userId, userId)")
     expect(auditQuerySource).toContain("DURABLE_RECORD_MATCH_LIMIT")
-    expect(traceQuerySource).toContain("DURABLE_TRACE_MATCH_LIMIT")
     expect(auditQuerySource).toContain("matches.length === 1 ? matches[0] : null")
-    expect(traceQuerySource).toContain("matches.length === 1 ? matches[0] : null")
-    expect(traceQuerySource).toContain("RUNTIME_CHECKPOINT_EVENT")
-    expect(traceQuerySource).toContain("RUNTIME_FAILURE_EVENT")
-    expect(traceQuerySource).not.toContain("RUNTIME_LEASE_EVENT")
   })
 
   it("visibly identifies an exact record and fails closed when it cannot resolve", () => {
@@ -311,8 +285,5 @@ describe("Goal Console outcome supporting-record drill-down", () => {
     expect(evidenceRecordPanelSource).toContain("No broader or substitute record was displayed.")
     expect(evidenceRecordPanelSource).toContain("evidence:${record.id}")
     expect(evidenceRecordPanelSource).toContain("audit:${record.id}")
-    expect(traceRecordPanelSource).toContain("Exact durable Trace record")
-    expect(traceRecordPanelSource).toContain("trace:${record.id}")
-    expect(traceRecordPanelSource).toContain("No broader or substitute record was displayed.")
   })
 })

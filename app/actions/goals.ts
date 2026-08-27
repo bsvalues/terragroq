@@ -797,7 +797,6 @@ async function persistGoalOutcome(
   })
   if (!row.goal) return row
   revalidatePath("/goal-console")
-  revalidatePath("/work-orders")
   return row
 }
 
@@ -829,7 +828,6 @@ export async function startGoalOutcome(
   if (!persisted.start) throw new Error("WORKBENCH_OUTCOME_START_RESULT_WALL")
   if (persisted.start.intakeTruth === "persisted") {
     revalidatePath("/")
-    revalidatePath("/projects")
   }
   return persisted.start
 }
@@ -913,7 +911,6 @@ export async function convertGoalToWorkOrder(goalId: number): Promise<{ workOrde
     metadata: { workOrderId: wo.id },
   })
   revalidatePath("/goal-console")
-  revalidatePath("/work-orders")
   return { workOrderId: wo.id }
 }
 

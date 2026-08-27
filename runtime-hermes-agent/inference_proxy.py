@@ -1,11 +1,16 @@
 import http.client
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ALLOWED_MODEL = "williamos-qwen3-4b:64k"
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
-UPSTREAM_HOST = "ollama"
-UPSTREAM_PORT = 11434
+# The upstream is where the inference backend actually runs, which is a
+# deployment fact rather than a property of this proxy: a sibling Docker
+# service in some deployments, the container host in others. The default
+# keeps the Docker-service topology working unchanged.
+UPSTREAM_HOST = os.getenv("HERMES_INFERENCE_UPSTREAM_HOST", "ollama")
+UPSTREAM_PORT = int(os.getenv("HERMES_INFERENCE_UPSTREAM_PORT", "11434"))
 
 
 class InferenceOnlyHandler(BaseHTTPRequestHandler):

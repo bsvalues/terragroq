@@ -1,0 +1,32 @@
+STALE HOST-KEY PINS REPAIRED AFTER THE LEASE MOVE
+2026-08-25T01:44 -07:00, on HERMES, ~/.williamos/fabric/known_hosts.
+
+The trap this closes: the fabric known_hosts already carried an entry for 192.168.88.8 —
+pinned to OMEN's key, left over from when OMEN held that lease (OMEN's own registry note
+records the churn: 'the DHCP lease moved .8 -> .7 -> .8 in a day'). ATLAS now holds .8 and
+presents its own key, so every StrictHostKeyChecking=yes connection to ATLAS — which is what
+sync-models-to-forge.ps1 uses — would have refused on a host key mismatch.
+
+The edit is guarded: it asserts BOTH pins are exactly what it expects before changing
+anything, and refuses otherwise. A backup is preserved. OMEN keeps its 'omen'/'omen.local'
+pins, which is how OMEN is actually addressed.
+
+backup: C:\Users\bs\.williamos\fabric\known_hosts.bak-before-atlas-move-20260825T014444
+=== BEFORE ===
+  # 192.168.88.6:22 SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.18
+  192.168.88.6 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ/ADhMtzZwM46u+K2IK8hiThC/Jk1FD4//ly+ouxZE
+  # 192.168.88.5:22 SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.18
+  192.168.88.5 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICjyggF+E54r8g+P5lEt0+rraj7GjYfvV52rw5yhi9eS
+  # 192.168.88.7:22 SSH-2.0-OpenSSH_for_Windows_9.5
+  192.168.88.8 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYvw5vABw3DADibhjQxsHl7YHl2xt53Kfq7wC3bEFqe
+  omen.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYvw5vABw3DADibhjQxsHl7YHl2xt53Kfq7wC3bEFqe
+  omen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYvw5vABw3DADibhjQxsHl7YHl2xt53Kfq7wC3bEFqe
+precondition OK: .5 pins the ATLAS key, .8 pins OMEN's stale key
+=== AFTER ===
+  # 192.168.88.6:22 SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.18
+  192.168.88.6 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGZ/ADhMtzZwM46u+K2IK8hiThC/Jk1FD4//ly+ouxZE
+  # 192.168.88.7:22 SSH-2.0-OpenSSH_for_Windows_9.5
+  omen.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYvw5vABw3DADibhjQxsHl7YHl2xt53Kfq7wC3bEFqe
+  omen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFYvw5vABw3DADibhjQxsHl7YHl2xt53Kfq7wC3bEFqe
+  # 192.168.88.8:22 atlas -- lease moved from 192.168.88.5 on 2026-08-25; same host key, same machine-id
+  192.168.88.8 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICjyggF+E54r8g+P5lEt0+rraj7GjYfvV52rw5yhi9eS

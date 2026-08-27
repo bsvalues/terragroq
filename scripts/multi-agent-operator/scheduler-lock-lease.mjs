@@ -8,6 +8,13 @@ const WAIT = new Int32Array(new SharedArrayBuffer(4))
 const HASH = /^[a-f0-9]{64}$/
 const OWNER_FIELDS = ["statePath", "pid", "hostname", "nonce", "generation", "issuedAt", "heartbeatAt", "expiresAt", "lockFence"]
 const HEARTBEAT_LIFECYCLE_TIMEOUT_MS = 30_000
+// Floor for the startup-confirmation window. The worker-spawn wait is bounded by the caller's
+// startTimeoutMs, but confirmation was bounded by `heartbeatIntervalMs * 2` alone -- 100ms for
+// every caller in this repository. A saturated shared runner can leave the acquiring thread
+// unscheduled well past that, so confirmation failed while the heartbeat was demonstrably alive,
+// surfacing as HEARTBEAT_START_REQUIRED. Raising heartbeatStartTimeoutMs could not fix it: the
+// Math.min below only ever lowers the window. This floor is what a caller's tolerance can buy.
+const HEARTBEAT_CONFIRMATION_FLOOR_MS = 2_000
 const HEARTBEAT_LIFECYCLE_TIMEOUT_MAX_MS = 60_000
 
 export class SchedulerLockLeaseError extends Error {
@@ -197,7 +204,10 @@ function startHeartbeat(ownerPath, owner, leaseDurationMs, heartbeatIntervalMs, 
     worker,
     control,
     stopTimeoutMs: lifecycle.stopTimeoutMs,
-    confirmationTimeoutMs: Math.min(lifecycle.startTimeoutMs, Math.max(100, heartbeatIntervalMs * 2)),
+    confirmationTimeoutMs: Math.min(
+      lifecycle.startTimeoutMs,
+      Math.max(HEARTBEAT_CONFIRMATION_FLOOR_MS, heartbeatIntervalMs * 2),
+    ),
   }
   const ready = Atomics.wait(control, 1, 0, lifecycle.startTimeoutMs)
   if (ready === "timed-out" || Atomics.load(control, 4) !== 0 || Atomics.load(control, 2) <= owner.generation) {

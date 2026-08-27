@@ -1,0 +1,120 @@
+ATLAS RETURN — STEP 0: BOUNDED-PATIENCE REACHABILITY + CANONICAL REDISCOVERY
+Lane: CONT-EXPV2-ATLAS-RETURN-SETTLEMENT.  Budget opened 2026-08-25T01:18:10-07:00, ~40 min.
+The owner was not asked to check a cable, a switch, or a power state. OWNER_COURIER_ACTIONS = 0.
+
+=== 1. The declared endpoint, polled every ~2 min from OMEN (192.168.88.11) ===
+Target: 192.168.88.5:15432 — the address every prior record names for ATLAS.
+2026-08-25T01:19:12-07:00 attempt=1 tcp15432|ping = False|False
+2026-08-25T01:21:39-07:00 attempt=2 tcp15432|ping = False|False
+2026-08-25T01:24:06-07:00 attempt=3 tcp15432|ping = False|False
+2026-08-25T01:26:33-07:00 attempt=4 tcp15432|ping = False|False
+2026-08-25T01:29:00-07:00 attempt=5 tcp15432|ping = False|False
+2026-08-25T01:31:27-07:00 attempt=6 tcp15432|ping = False|False
+2026-08-25T01:33:54-07:00 attempt=7 tcp15432|ping = False|False
+2026-08-25T01:36:23-07:00 attempt=8 tcp15432|ping = False|False
+2026-08-25T01:38:53-07:00 attempt=9 tcp15432|ping = False|False
+2026-08-25T01:41:20-07:00 attempt=10 tcp15432|ping = False|False
+2026-08-25T01:43:47-07:00 attempt=11 tcp15432|ping = False|False
+2026-08-25T01:46:14-07:00 attempt=12 tcp15432|ping = False|False
+2026-08-25T01:48:41-07:00 attempt=13 tcp15432|ping = False|True
+2026-08-25T01:50:45-07:00 attempt=14 tcp15432|ping = False|False
+2026-08-25T01:53:14-07:00 attempt=15 tcp15432|ping = False|False
+2026-08-25T01:55:41-07:00 attempt=16 tcp15432|ping = False|False
+2026-08-25T01:58:08-07:00 attempt=17 tcp15432|ping = False|False
+2026-08-25T02:00:35-07:00 attempt=18 tcp15432|ping = False|False
+
+15432 never answered in 18 attempts across 41 minutes. NOTE attempt 13 (01:48:41): ICMP from
+192.168.88.5 SUCCEEDED once. An address that answers ping is not an empty address.
+
+=== 2. Probe from HERMES (192.168.88.9), 3 s timeouts, with controls — 01:23:21 ===
+  192.168.88.5:15432 -> TIMEOUT
+  192.168.88.5:5432  -> TIMEOUT
+  192.168.88.5:22    -> TIMEOUT
+  192.168.88.5:3389  -> TIMEOUT
+  192.168.88.5:445   -> TIMEOUT
+  --- controls ---
+  192.168.88.9:22      (live host)        -> OPEN
+  192.168.88.250:15432 (unassigned addr)  -> TIMEOUT
+  ping 192.168.88.5 -> False
+  DNS: "atlas" -> UNRESOLVED, "ATLAS" -> UNRESOLVED
+
+=== 3. THE DISCRIMINATOR — layer 2. Get-NetNeighbor on HERMES, 01:24:44 ===
+An unassigned address cannot answer ARP. A powered host with a closed firewall can.
+  192.168.88.1    58-D8-12-1A-8A-5B   Reachable     <- gateway (control: live)
+  192.168.88.3    8C-90-2D-22-77-08   Stale
+  192.168.88.4    00-BD-3E-3F-29-DB   Reachable
+  192.168.88.5    6A-57-C9-61-83-11   Reachable     <- ANSWERS ARP
+  192.168.88.6    00-00-00-00-00-00   Unreachable   <- AEGIS, genuinely absent
+  192.168.88.7    9A-41-AF-D3-FE-6A   Stale
+  192.168.88.8    18-66-DA-47-A0-33   Stale
+  192.168.88.10   18-66-DA-13-4F-C9   Stale
+  192.168.88.11   10-B6-76-90-3E-7C   Reachable     <- OMEN
+  192.168.88.200  00-00-00-00-00-00   Unreachable   <- control: unassigned
+  192.168.88.250  00-00-00-00-00-00   Unreachable   <- control: unassigned
+  forced re-resolve of .5 after a ping -> 6A-57-C9-61-83-11 state=Reachable
+  OMEN's independent view of .5      -> 6A-57-C9-61-83-11 state=Reachable  (second node, same answer)
+
+192.168.88.5 is OCCUPIED by a live NIC that is not answering IP. Two nodes agree.
+That is the first fact, and on its own it is ambiguous: it is equally consistent with
+"ATLAS is up with a closed firewall" and with "somebody else now holds ATLAS's old lease".
+
+=== 4. Bounded Postgres-port sweep over live ARP neighbours, from HERMES, 01:25:10 ===
+  192.168.88.1    Reachable  15432=TIMEOUT  5432=TIMEOUT  22=OPEN
+  192.168.88.3    Stale      15432=TIMEOUT  5432=TIMEOUT  22=OPEN
+  192.168.88.4    Reachable  15432=TIMEOUT  5432=TIMEOUT  22=TIMEOUT
+  192.168.88.5    Stale      15432=TIMEOUT  5432=TIMEOUT  22=TIMEOUT
+  192.168.88.7    Stale      15432=TIMEOUT  5432=TIMEOUT  22=TIMEOUT
+  192.168.88.8    Stale      15432=TIMEOUT  5432=OPEN     22=OPEN   <- candidate
+  192.168.88.10   Stale      15432=TIMEOUT  5432=TIMEOUT  22=TIMEOUT
+  192.168.88.11   Reachable  15432=TIMEOUT  5432=TIMEOUT  22=OPEN
+
+NOTHING on this LAN listens on 15432. One host offers Postgres: 192.168.88.8.
+
+SSH banners from OMEN, 01:30:10:
+  192.168.88.1:22  SSH-2.0-dropbear_2020.80                  (router)
+  192.168.88.3:22  SSH-2.0-OpenSSH_6.6.0
+  192.168.88.8:22  SSH-2.0-OpenSSH_9.6p1 Ubuntu-3ubuntu13.18 <- Linux, matches ATLAS's family
+  192.168.88.11:22 SSH-2.0-OpenSSH_for_Windows_9.5           (OMEN, self)
+  192.168.88.9:22  SSH-2.0-OpenSSH_for_Windows_9.5           (HERMES)
+  192.168.88.5:22  TIMEOUT
+
+=== 5. CANONICAL IDENTITY — the thing that settles it, not the port that suggested it ===
+config/execution-fabric/registry.seed.json pins node "atlas":
+  identity.machine_id_sha256 = 1406acb70a4fa29a84cacdf9bedef398af99ec6b8d85079632d6f822ddaa0ba1
+  identity.source            = linux-machine-id-sha256
+
+Measured at 192.168.88.8 (2026-08-25T01:31:16-07:00):
+  hostname                   : atlas
+  machine_id_sha256(content) : 1406acb70a4fa29a84cacdf9bedef398af99ec6b8d85079632d6f822ddaa0ba1
+  registry.seed.json pin     : 1406acb70a4fa29a84cacdf9bedef398af99ec6b8d85079632d6f822ddaa0ba1
+                               ^ EXACT MATCH
+  uptime                     : up 10 minutes
+  booted                     : 2026-08-25 08:20:33 (UTC) = 01:20:33 -07:00
+  ipv4                       : lo 127.0.0.1/8 · enp0s25 192.168.88.8/24 · docker0 172.17.0.1/16
+                               · br-cb73825f3810 172.18.0.1/16
+  listening tcp              : 22 111 2049 5432 6379 9001 27017 33297 45433 48987 49175 60077
+                               (NO 15432, on any interface)
+
+=== 6. SECOND, INDEPENDENT IDENTITY PROOF — the host key ===
+Pinned in the fabric known_hosts for the OLD address:
+  192.168.88.5 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICjyggF+E54r8g+P5lEt0+rraj7GjYfvV52rw5yhi9eS
+Scanned live at the NEW address (ssh-keyscan, read-only):
+  192.168.88.8 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICjyggF+E54r8g+P5lEt0+rraj7GjYfvV52rw5yhi9eS
+                           ^ BYTE-IDENTICAL
+
+Two independent proofs — a machine-id that matches the registry's own pin, and a host key that
+matches the key already trusted for the old address. This is a rediscovery, not a host key accepted
+on sight.
+
+=== VERDICT OF STEP 0 =========================================================================
+  ATLAS_REACHABLE — but NOT at the address every record names.
+
+  OLD: 192.168.88.5  (Postgres published on 15432)
+  NEW: 192.168.88.8  (Postgres NOT published on 15432 — see AT-02)
+
+  192.168.88.5 is now held by a DIFFERENT device (MAC 6A-57-C9-61-83-11, locally administered),
+  which answers ARP and answered one ping, and which is not ATLAS.
+
+  Time to rediscovery: 13 minutes of a 40-minute budget. The remaining polls were left running and
+  are recorded above precisely because they kept saying "no" about an address that had stopped
+  being the answer — which is the failure mode this lane was sent to break.

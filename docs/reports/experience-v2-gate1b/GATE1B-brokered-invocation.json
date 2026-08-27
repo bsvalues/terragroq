@@ -1,0 +1,15 @@
+{
+  "invocation": "brokeredExec",
+  "broker": "lib/fabric/broker.mjs",
+  "endpoint": "hermes",
+  "nodeId": "hermes-node",
+  "command": "& 'C:\\Users\\bs\\gate1b-settlement\\scripts\\execution-fabric\\probe-windows.ps1' -NodeId 'hermes-node' -OutputPath 'C:\\Users\\bs\\gate1b-settlement\\.artifacts\\execution-fabric\\hermes-node.json'",
+  "startedAt": "2026-08-25T01:04:33.374Z",
+  "finishedAt": "2026-08-25T01:04:46.632Z",
+  "durationMs": 13246,
+  "ok": true,
+  "stderr": null,
+  "stdoutBytes": 21021,
+  "outputPath": "C:\\Users\\bs\\gate1b-settlement\\.artifacts\\execution-fabric\\hermes-node.json",
+  "outputWritten": true
+}

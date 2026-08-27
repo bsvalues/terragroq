@@ -1,16 +1,32 @@
 "use client"
 
+/**
+ * COMPATIBILITY ONLY — MARKED FOR DELETION.
+ *
+ * This is the legacy dashboard frame: fixed product modes, a permanent Project Explorer nailed left,
+ * Inspector tabs nailed right, a thread timeline as the center of the universe. It is no longer the
+ * application frame. `/` is the working environment (`app/page.tsx` → `components/desk/desk.tsx`).
+ *
+ * Do not add capability here. This file taught every agent that opened the repo that WilliamOS was a
+ * web app with sections plus an AI feature, and that misreading regenerated the same product for a
+ * month — so it is frozen: `tests/primary-experience-contract.test.ts` fails the build if it grows a
+ * new product mode, if a new top-level route appears beside it, or if the root goes back to being a
+ * page hung inside this frame.
+ *
+ * New capability belongs in the environment as a SURFACE the world summons when it is relevant, and
+ * drops when it is not. These routes remain reachable only until their capabilities exist that way;
+ * then this goes.
+ */
+
 import { useEffect, useMemo, useReducer, useRef, useState, useTransition } from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
-import {
-  Activity,
+import {
   ChevronDown,
   ChevronUp,
   CircleDot,
   Command,
-  Cpu,
-  FolderKanban,
+  Cpu,
   Home,
   PanelLeft,
   PanelRight,
@@ -50,8 +66,6 @@ const modes: ReadonlyArray<{
   icon: typeof Home
 }> = [
   { mode: "home", href: "/", label: "Home", icon: Home },
-  { mode: "projects", href: "/projects", label: "Projects", icon: FolderKanban },
-  { mode: "activity", href: "/activity", label: "Activity", icon: Activity },
   { mode: "system", href: "/system", label: "System", icon: Cpu },
 ]
 
@@ -72,8 +86,6 @@ function restorationKey(userId: string): string {
 
 function viewMode(pathname: string): WorkbenchViewMode | null {
   if (pathname === "/") return "home"
-  if (pathname.startsWith("/projects")) return "projects"
-  if (pathname.startsWith("/activity")) return "activity"
   if (pathname.startsWith("/system")) return "system"
   if (pathname.startsWith("/runtime")) return "system"
   return null

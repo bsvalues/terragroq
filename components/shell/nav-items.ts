@@ -1,7 +1,5 @@
-import {
-  Activity,
-  Cpu,
-  FolderKanban,
+import {
+  Cpu,
   LayoutDashboard,
   type LucideIcon,
 } from "lucide-react"
@@ -38,21 +36,7 @@ export const navItems: NavItem[] = [
     icon: LayoutDashboard,
     group: "Cockpit",
     description: "Primary operator briefing.",
-  },
-  {
-    href: "/projects",
-    label: "Projects",
-    icon: FolderKanban,
-    group: "Cockpit",
-    description: "Durable project context.",
-  },
-  {
-    href: "/activity",
-    label: "Activity",
-    icon: Activity,
-    group: "Cockpit",
-    description: "Persisted agent activity.",
-  },
+  },
   {
     href: "/system",
     label: "System",

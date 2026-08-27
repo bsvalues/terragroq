@@ -1,0 +1,61 @@
+THE REPAIRED SYNC SCRIPT: DEPLOY, DIGEST VERIFICATION, AND FIVE LIVE CONTROLS
+2026-08-25T01:45 -07:00, on HERMES.
+
+=== deploy, with the pre-deploy state proven against main first ===
+main blob for scripts/lab-control/hermes/sync-models-to-forge.ps1:
+  40de38009396cc285429eba9767f2c02eea1e444
+live file on HERMES BEFORE this deploy:
+  40de38009396cc285429eba9767f2c02eea1e444   <- byte-identical to main, no drift
+
+transferred bytes : 17026
+transferred blob  : 0b67f75838c342109a60b47e5781470aac58f847
+live BEFORE bytes : 14410
+live BEFORE blob  : 40de38009396cc285429eba9767f2c02eea1e444
+backup preserved  : C:\HermesLab\hermes\sync-models-to-forge.ps1.bak-before-atlas-move-20260825T014515
+live AFTER  bytes : 17026
+live AFTER  blob  : 0b67f75838c342109a60b47e5781470aac58f847
+
+=== controls run against the LIVE deployed file, not the repository copy ===
+(that distinction is not pedantry: #1004's $PSScriptRoot defect was found this way and
+ could not have been found by reading the diff)
+
+=== POSITIVE: resolve from the canonical registry ===
+--- -ResolveOnly ---
+  exit=0
+  {"store":"D:\\HermesData\\ollama","serviceModelsDir":"D:\\HermesData\\ollama\\models","storeAgrees":true,"blobCount":21,"blobBytes":10360071891,"manifestCount":5,"manifestInstaller":"C:\\HermesLab\\hermes\\install-forge-manifests.sh","manifestInstallerPresent":true,"remote":"/forge/models/ollama","atlas":"bs@192.168.88.8"}
+=== NEGATIVE 1: fabric root absent ===
+--- -ResolveOnly -FabricRoot <absent> ---
+  exit=1
+  FABRIC_REGISTRY_UNREADABLE: C:\HermesLab\NO_SUCH_FABRIC_ROOT_XYZ\nodes.json does not exist, so 
+  ATLAS's address cannot be resolved. Refusing rather than falling back to a written-down address 
+  that may now name another machine.
+  At C:\HermesLab\hermes\sync-models-to-forge.ps1:99 char:5
+  + throw "FABRIC_REGISTRY_UNREADABLE: $nodes does not exist, so ATLA ...
+  + ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+=== NEGATIVE 2: registry present but carries no atlas ===
+--- -ResolveOnly -FabricRoot <no atlas> ---
+  exit=1
+  FABRIC_REGISTRY_INCOMPLETE: C:\Users\bs\AppData\Local\Temp\fabric-no-atlas-014541\nodes.json 
+  carries no atlas entry with both host and user, so ATLAS cannot be addressed. Refusing rather than 
+  guessing.
+  At C:\HermesLab\hermes\sync-models-to-forge.ps1:108 char:5
+  + throw "FABRIC_REGISTRY_INCOMPLETE: $nodes carries no atlas entry ...
+  + ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+=== NEGATIVE 3: manifest installer absent (pre-existing guard, still holds) ===
+--- -ResolveOnly -ManifestInstaller <absent> ---
+  exit=1
+  MANIFEST_INSTALLER_MISSING: C:\HermesLab\NO_SUCH_INSTALLER.sh is absent, so the non-destructive 
+  manifest install cannot run. Refusing rather than falling back to deleting the archive's manifest 
+  tree.
+  At C:\HermesLab\hermes\sync-models-to-forge.ps1:160 char:3
+  + throw "MANIFEST_INSTALLER_MISSING: $ManifestInstaller is absent, so ...
+  + ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+=== NEGATIVE 4: service script absent (pre-existing guard, still holds) ===
+--- -ResolveOnly -ServiceScript <absent> ---
+  exit=1
+  SERVICE_CONFIG_UNREADABLE: C:\HermesLab\NO_SUCH_SERVICE.ps1 does not exist, so the live model 
+  store cannot be confirmed. Point -ServiceScript at the canonical Ollama service definition; do not 
+  archive an unverified store.
+  At C:\HermesLab\hermes\sync-models-to-forge.ps1:124 char:5
+  + throw "SERVICE_CONFIG_UNREADABLE: $ServiceScript does not exist, ...
+  + ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

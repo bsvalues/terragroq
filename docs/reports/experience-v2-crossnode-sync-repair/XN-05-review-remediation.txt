@@ -1,0 +1,90 @@
+XN-05 — review remediation, and the one measurement this lane got wrong on the way
+Lane: CROSSNODE-SYNC REPAIR (CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F) · PR #1007
+
+ENVELOPE FOR THIS REMEDIATION. Repository only. No file was deployed to HERMES, no scheduled task
+was created, started, stopped or modified, no process was killed, and nothing was contacted on
+ATLAS or AEGIS. That is not convenience: a §10 Immediate Terminal Stop condition fired in this
+lane's 2026-08-25 run (see XN-03 COLLATERAL, and `Terminal stop condition` in 003), so this
+envelope is terminal for environment action. Everything below ran on OMEN against the working tree.
+
+--- THREADS -----------------------------------------------------------------------------------
+
+T1  P1  XN-03:65      out-of-scope process kill invalidates the discharge     ACCEPTED
+T2  P2  lab-health:61 fallback option list re-admits ambient credentials      ACCEPTED
+T3  P2  sync-lib:160  `-i` does not restrict ssh to the resolved key          ACCEPTED
+T4  P2  003:186       ATLAS health repair routed to the owner                 ACCEPTED
+
+T1 is answered by typing rather than by code: FAILED_TERMINAL / OUT_OF_SCOPE_ENVIRONMENT_MUTATION
+against the execution envelope, the discharge withdrawn, and CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F
+returned to PICKUP_ELIGIBLE in RUNTIME-SETTLEMENT-001. The reviewer's remedy -- repeat the proof in
+a fresh authorized envelope -- is right about the proof and not available to this envelope, which
+cannot authorize its successor. The evidence is retained rather than deleted; §10 lists evidence
+deletion as its own trigger.
+
+--- CONTROLS RUN FOR THIS REMEDIATION -----------------------------------------------------------
+
+RR-01  parse every touched script         PARSE_OK x4
+       [Parser]::ParseFile on crossnode-sync-lib.ps1, crossnode-sync.ps1, lab-health.ps1,
+       test-crossnode-sync-receipt.ps1 -- zero parse errors.
+
+RR-02  unit tests, PowerShell 7 on OMEN   PRODUCER_TESTS_PASS, exit 0
+       Includes the two new assertions: SshOptions carries IdentitiesOnly=yes, and carries no -n.
+
+RR-03  unit tests, Windows PowerShell 5.1 NOT RUN -- environment, not code
+       `powershell.exe` under this shell inherits PowerShell 7's PSModulePath, and Get-FileHash
+       does not resolve. An OMEN sandbox artifact; no 5.1 coverage is claimed from it. HERMES runs
+       5.1 and is where LC-01 covered this.
+
+--- THE MEASUREMENT THIS LANE GOT WRONG ---------------------------------------------------------
+
+Recorded because it was one commit away from shipping, and because it is this program's own
+signature failure committed by the lane that keeps naming it.
+
+While reading the test harness, this lane ran it and read exit=0 from a shell pipeline:
+
+    powershell.exe -NoProfile -File test-crossnode-sync-receipt.ps1 2>&1 | head -40; echo $?
+
+and concluded the harness could fail while reporting success -- "a test suite whose failure signal
+does not reach its caller". A fix was written, with a comment block asserting that both 5.1 and 7
+return 0 on an uncaught terminating error.
+
+The measurement was of `head`, not of PowerShell. `$?` after a pipeline is the last element's
+status. Re-measured without the pipe, capturing the process's own exit:
+
+    out=$(powershell.exe -NoProfile -File exitprobe.ps1 2>&1); echo $?     -> 1
+    out=$(pwsh          -NoProfile -File exitprobe.ps1 2>&1); echo $?     -> 1
+    out=$(pwsh -NoProfile -File test-crossnode-sync-receipt.ps1 2>&1)     -> 0, PRODUCER_TESTS_PASS
+
+Both shells signal failure correctly and the harness passes at 0. The record's LC-01 line was right
+and the finding was not. The change was reverted before commit; only the IdentitiesOnly and -n
+assertions remain in that file.
+
+A second reading of exit=9, from `& $script` inside an interactive pwsh session, was also an
+artifact: $LASTEXITCODE there is left over from the deliberate `cmd.exe /c exit /b 9` negative test
+inside the harness, and it is not the exit code the script returns under -File.
+
+Same class as the F: literal, one layer up: a value read from the wrong place, believed because it
+was measured rather than because it was measured correctly.
+
+--- AND ONE MORE, IN THE REMEDIATION ITSELF ------------------------------------------------------
+
+Rewriting the pull request body to withdraw the discharge, this lane truncated it at the string
+"## Summary by Sourcery" without checking how many of those there were. There were two, and the
+`## Work context` section -- with the WORK_CONTEXT_RECEIPT block inside it -- sat between them. It
+was deleted.
+
+  work context receipt (#831)   fail   9s
+  FAILED_CONTEXT_NOT_PROVEN: the pull request declares no WORK_CONTEXT_RECEIPT block
+
+Recorded rather than quietly restored, for three reasons. It is a governance artifact removed from
+a pull request by the lane that authored it, which is the shape of §10's "evidence deletion" whether
+or not it was meant. It is the second time in one session this lane has taken a measurement -- here,
+"the body ends at the Sourcery summary" -- and acted on it without a second read. And the only
+reason it was caught in seven seconds is that #831 exists and is a required check, which is the
+argument for that check making itself.
+
+Restored byte-for-byte from the pull request's own edit history via the GraphQL `userContentEdits`
+field, not regenerated: re-issuing a receipt would have produced a new token for a work context that
+had not changed, and would have replaced a recovery with a fabrication. The restored block still
+reads `parentOutcome: "... discharge CONT-EXPV2-CROSSNODE-SYNC-STILL-ON-F ..."`, which is what the
+work order said when it was issued. That is left alone. What changed is the outcome, not the order.

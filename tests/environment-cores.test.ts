@@ -105,4 +105,155 @@ describe("S6 — the snapshot holds meaning and refuses chrome", () => {
     expect(world.surfaces).toHaveLength(1)
     expect(world.surfaces[0].because).toBe("rerunning after the fix")
   })
+
+  it("round-trips the owner-authorized durable Space without weakening legacy world validation", () => {
+    const legacy = createWorkingWorld({ intent: "TerraFusion", resources: ["bsvalues/terragroq"] })
+    expect(validateWorkingWorld(JSON.parse(JSON.stringify(legacy)))).toEqual(legacy)
+
+    const persisted = {
+      ...legacy,
+      space: {
+        schemaVersion: 1,
+        revision: 1,
+        windows: [
+          {
+            id: "editor-main",
+            kind: "editor",
+            title: "Source",
+            frame: { x: 48, y: 36, width: 920, height: 700 },
+            z: 2,
+            minimized: false,
+          },
+          {
+            id: "running-app",
+            kind: "running-app",
+            title: "TerraFusion",
+            frame: { x: 840, y: 80, width: 860, height: 640 },
+            z: 1,
+            minimized: true,
+          },
+        ],
+        openFiles: ["src/search-ranking.ts", "src/query.ts"],
+        panes: [
+          { id: "left", filePath: "src/search-ranking.ts" },
+          { id: "right", filePath: "src/query.ts" },
+        ],
+        selection: { filePath: "src/query.ts", anchor: 14, head: 27 },
+        activeWindowId: "editor-main",
+        activePaneId: "right",
+        runningAppUrl: "https://terrafusion.local.test/",
+      },
+    }
+
+    expect(validateWorkingWorld(JSON.parse(JSON.stringify(persisted))).space).toEqual(persisted.space)
+  })
+
+  it("refuses malformed durable Space geometry instead of treating layout as arbitrary JSON", () => {
+    const world = createWorkingWorld({ intent: "TerraFusion" })
+    expect(() => validateWorkingWorld({
+      ...world,
+      space: {
+        schemaVersion: 1,
+        revision: 1,
+        windows: [{
+          id: "editor-main",
+          kind: "editor",
+          title: "Source",
+          frame: { x: 0, y: 0, width: -1, height: 700 },
+          z: 1,
+          minimized: false,
+        }],
+        openFiles: [],
+        panes: [],
+        selection: null,
+        activeWindowId: "editor-main",
+        activePaneId: null,
+        runningAppUrl: null,
+      },
+    })).toThrow(/SPACE_WINDOW_FRAME_INVALID/)
+  })
+
+  it("normalizes safe workspace paths and keeps panes and selection coherent with open files", () => {
+    const world = createWorkingWorld({ intent: "TerraFusion" })
+    const validated = validateWorkingWorld({
+      ...world,
+      space: {
+        schemaVersion: 1,
+        revision: 1,
+        windows: [{ id: "editor", kind: "editor", title: "Source", frame: { x: 0, y: 0, width: 800, height: 600 }, z: 1, minimized: false }],
+        openFiles: ["./src\\a.ts"],
+        panes: [{ id: "main", filePath: "src/a.ts" }],
+        selection: { filePath: "src\\a.ts", anchor: 2, head: 5 },
+        activeWindowId: "editor",
+        activePaneId: "main",
+        runningAppUrl: null,
+      },
+    })
+    expect(validated.space?.openFiles).toEqual(["src/a.ts"])
+    expect(validated.space?.panes[0].filePath).toBe("src/a.ts")
+    expect(validated.space?.selection?.filePath).toBe("src/a.ts")
+  })
+
+  it("refuses escaping, unopened pane files and selection outside the active file", () => {
+    const base = {
+      schemaVersion: 1,
+      revision: 1,
+      windows: [{ id: "editor", kind: "editor", title: "Source", frame: { x: 0, y: 0, width: 800, height: 600 }, z: 1, minimized: false }],
+      openFiles: ["src/a.ts"],
+      panes: [{ id: "main", filePath: "src/a.ts" }],
+      selection: { filePath: "src/a.ts", anchor: 0, head: 0 },
+      activeWindowId: "editor",
+      activePaneId: "main",
+      runningAppUrl: null,
+    }
+    const world = createWorkingWorld({ intent: "TerraFusion" })
+    expect(() => validateWorkingWorld({ ...world, space: { ...base, openFiles: ["../secret"] } }))
+      .toThrow(/SPACE_FILE_PATH_INVALID/)
+    expect(() => validateWorkingWorld({ ...world, space: { ...base, panes: [{ id: "main", filePath: "src/b.ts" }] } }))
+      .toThrow(/SPACE_PANE_FILE_NOT_OPEN/)
+    expect(() => validateWorkingWorld({ ...world, space: { ...base, openFiles: ["src/a.ts", "src/b.ts"], selection: { filePath: "src/b.ts", anchor: 0, head: 0 } } }))
+      .toThrow(/SPACE_SELECTION_NOT_ACTIVE/)
+  })
+
+  it("round-trips reconstructable Inspector identity from the canonical summoned-surface catalogue", () => {
+    const world = createWorkingWorld({ intent: "TerraFusion" })
+    const validated = validateWorkingWorld({
+      ...world,
+      space: {
+        schemaVersion: 1,
+        revision: 1,
+        windows: [{
+          id: "inspector", kind: "inspector", title: "Evidence",
+          frame: { x: 900, y: 60, width: 420, height: 600 }, z: 3, minimized: false,
+          surfaceKind: "evidence", surfaceSubject: "audit:1042",
+        }],
+        openFiles: [], panes: [], selection: null,
+        activeWindowId: "inspector", activePaneId: null, runningAppUrl: null,
+      },
+    })
+    expect(validated.space?.windows[0]).toMatchObject({
+      kind: "inspector", surfaceKind: "evidence", surfaceSubject: "audit:1042",
+    })
+  })
+
+  it("requires canonical bounded identity only on Inspector windows", () => {
+    const base = {
+      id: "inspector", kind: "inspector", title: "Evidence",
+      frame: { x: 900, y: 60, width: 420, height: 600 }, z: 3, minimized: false,
+    }
+    const wrap = (window: Record<string, unknown>) => ({
+      ...createWorkingWorld({ intent: "TerraFusion" }),
+      space: {
+        schemaVersion: 1, revision: 1, windows: [window], openFiles: [], panes: [], selection: null,
+        activeWindowId: window.id, activePaneId: null, runningAppUrl: null,
+      },
+    })
+    expect(() => validateWorkingWorld(wrap(base))).toThrow(/SPACE_INSPECTOR_IDENTITY_REQUIRED/)
+    expect(() => validateWorkingWorld(wrap({ ...base, surfaceKind: "made-up", surfaceSubject: "x" })))
+      .toThrow(/SPACE_INSPECTOR_SURFACE_KIND_INVALID/)
+    expect(() => validateWorkingWorld(wrap({ ...base, surfaceKind: "evidence", surfaceSubject: "x".repeat(1001) })))
+      .toThrow(/SPACE_INSPECTOR_SURFACE_SUBJECT_INVALID/)
+    expect(() => validateWorkingWorld(wrap({ ...base, kind: "editor", surfaceKind: "evidence", surfaceSubject: "audit:1" })))
+      .toThrow(/SPACE_CORE_WINDOW_IDENTITY_FORBIDDEN/)
+  })
 })
