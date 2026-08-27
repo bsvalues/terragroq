@@ -21,6 +21,12 @@ const schemaPath = path.join(ROOT, "config/lab-control/hermes-host-attestation.s
 const canonicalOllamaServicePath = path.join(ROOT, "scripts/lab-control/hermes/ollama-service/hermes-ollama-service.ps1")
 const NOW = new Date("2026-08-27T18:00:00.000Z")
 
+function refreshBoundDigest(bound: any) {
+  const { digestSha256: _omitted, ...binding } = bound.binding
+  bound.binding.digestSha256 = stableDigest({ ...bound, binding })
+  return bound
+}
+
 function valueFor(id: string): unknown {
   if (id === "storage.physicalDisks") return [{ health: "Healthy", operationalStatus: ["Online"], reliabilityState: "OBSERVED", reliabilityEvidence: "EXPOSED", wearPercent: 2, readErrors: 0, writeErrors: 0 }]
   if (id === "storage.volumes") return [{ freePercent: 50 }]
@@ -39,7 +45,7 @@ function valueFor(id: string): unknown {
     { ...GOLDEN.p40, name: "Tesla P40", driver: GOLDEN.p40.driverVersion, driverModelCurrent: "TCC", driverModelPending: "TCC", defaultPowerLimitW: 250, eccModeCurrent: "Enabled", eccModePending: "Enabled", correctedVolatileEcc: 0, uncorrectedVolatileEcc: 0, correctedAggregateEcc: 6, uncorrectedAggregateEcc: 0, temperatureC: 70, role: "FROZEN_LONG_CONTEXT_INFERENCE", computeApps: [] },
     { ...GOLDEN.rtx3050, name: "NVIDIA GeForce RTX 3050", driverModelCurrent: "WDDM", temperatureC: 35, computeApps: [] },
   ]
-  if (id === "inference.ollama") return { exe: GOLDEN.ollama.exe, exeSha256: GOLDEN.ollama.exeSha256, version: GOLDEN.ollama.version, bind: GOLDEN.ollama.bind, configurationAgreement: true, models: [...GOLDEN.ollama.models], safeConfig: { exe: GOLDEN.ollama.exe, exeSha256: GOLDEN.ollama.exeSha256, models: GOLDEN.ollama.modelsPath, host: GOLDEN.ollama.bind, gpuUuid: GOLDEN.ollama.gpuUuid, environment: { ...GOLDEN.ollama.configEnvironment }, serviceScriptSha256: GOLDEN.ollama.serviceScriptSha256, repositoryDoctrineSha256: GOLDEN.ollama.serviceScriptSha256 }, liveEnvironment: { state: "OBSERVED", values: { ...GOLDEN.ollama.liveEnvironment } }, task: { path: "\\", name: "WilliamOS-HERMES-Ollama", state: "Running", execute: "powershell.exe", arguments: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\HermesLab\\hermes\\ollama-service\\hermes-ollama-service.ps1\"", principal: { user: "SYSTEM", runLevel: "Highest" }, triggers: [{ type: "MSFT_TaskBootTrigger", enabled: true }, { type: "MSFT_TaskTimeTrigger", enabled: true, repetitionInterval: "PT2M" }] } }
+  if (id === "inference.ollama") return { exe: GOLDEN.ollama.exe, exeSha256: GOLDEN.ollama.exeSha256, version: GOLDEN.ollama.version, bind: GOLDEN.ollama.bind, pid: 7320, configurationAgreement: true, models: [...GOLDEN.ollama.models], safeConfig: { exe: GOLDEN.ollama.exe, exeSha256: GOLDEN.ollama.exeSha256, models: GOLDEN.ollama.modelsPath, host: GOLDEN.ollama.bind, gpuUuid: GOLDEN.ollama.gpuUuid, environment: { ...GOLDEN.ollama.configEnvironment }, serviceScriptSha256: GOLDEN.ollama.serviceScriptSha256, repositoryDoctrineSha256: GOLDEN.ollama.serviceScriptSha256 }, liveEnvironment: { state: "OBSERVED", values: { ...GOLDEN.ollama.liveEnvironment } }, task: { path: "\\", name: "WilliamOS-HERMES-Ollama", state: "Running", execute: "powershell.exe", arguments: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\HermesLab\\hermes\\ollama-service\\hermes-ollama-service.ps1\"", principal: { user: "SYSTEM", runLevel: "Highest" }, triggers: [{ type: "MSFT_TaskBootTrigger", enabled: true }, { type: "MSFT_TaskTimeTrigger", enabled: true, repetitionInterval: "PT2M" }] } }
   if (id === "inference.dockerContainers") return Object.entries(GOLDEN.containers).map(([name, contract]) => ({ name, ...contract }))
   if (id === "inference.guardBaseline") return { p40EquilibriumC: 68, chassisDeltaC: 35, observedP40C: 70, observedChassisProxyC: 35, observedDeltaC: 35, sampleAgeSeconds: 10, uuid: GOLDEN.p40.uuid, driverModel: "TCC", powerLimitW: 150, overall: "ok", simulated: false, problems: [] }
   if (id === "dr.target") return { capacityAttested: true, accessAttested: true, storageHealthAttested: true, independenceAttested: true, readBackAttested: true }
@@ -182,9 +188,9 @@ describe("binding current HERMES truth", () => {
 
   it.each([
     ["HERMES_STORAGE_CRITICAL", "storage.physicalDisks", [{ health: "Warning", operationalStatus: ["Online"] }]],
-    ["HERMES_SECURITY_EXPOSURE_CRITICAL", "network.specialPortOwners", [{ port: 8080, owner: "UNKNOWN", listeners: [] }]],
+    ["HERMES_SECURITY_EXPOSURE_CRITICAL", "network.specialPortOwners", [{ port: 8080, owner: "UNKNOWN", listeners: [{ address: "0.0.0.0", port: 8080 }] }]],
     ["HERMES_INFERENCE_GOLDEN_DRIFT", "inference.gpus", []],
-    ["HERMES_DR_TARGET_UNHEALTHY", "dr.target", { capacityAttested: true, accessAttested: true, storageHealthAttested: true, independenceAttested: true, readBackAttested: false }],
+    ["HERMES_DR_TARGET_UNHEALTHY", "dr.target", { status: "UNHEALTHY", failureEvidence: [{ kind: "READ_BACK_FAILED" }] }],
   ])("derives %s from bound evidence", (expected, id, value) => {
     const fixture = makeFixture()
     fixture.source.facts.find((fact: any) => fact.id === id)!.value = value
@@ -193,13 +199,12 @@ describe("binding current HERMES truth", () => {
   })
 
   it.each([
-    ["disk reliability unavailable", "storage.physicalDisks", [{ health: "Healthy", operationalStatus: ["Online"], reliabilityState: "UNKNOWN", reliabilityEvidence: "NOT_EXPOSED" }], "HERMES_STORAGE_CRITICAL"],
     ["P40 corrected ECC drift", "inference.gpus", (() => { const rows: any[] = valueFor("inference.gpus") as any[]; rows[0].correctedAggregateEcc = 1; return rows })(), "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["guard baseline drift", "inference.guardBaseline", { ...(valueFor("inference.guardBaseline") as object), chassisDeltaC: 36 }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["guard sample stale", "inference.guardBaseline", { ...(valueFor("inference.guardBaseline") as object), sampleAgeSeconds: 121 }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["P40 start ceiling reached", "inference.gpus", (() => { const rows: any[] = valueFor("inference.gpus") as any[]; rows[0].temperatureC = 80; return rows })(), "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["proxy not durable", "inference.dockerContainers", Object.entries(GOLDEN.containers).map(([name, contract]) => name === "williamos-hermes-inference-proxy" ? { name, state: "exited", restartPolicy: "no" } : { name, ...contract }), "HERMES_INFERENCE_GOLDEN_DRIFT"],
-    ["RTX compute workload", "inference.gpus", (() => { const rows: any[] = valueFor("inference.gpus") as any[]; rows[1].computeApps = [{ process: "C:\\unexpected.exe" }]; return rows })(), "HERMES_INFERENCE_GOLDEN_DRIFT"],
+    ["unrelated P40 compute workload", "inference.gpus", (() => { const rows: any[] = valueFor("inference.gpus") as any[]; rows[0].computeApps = [{ pid: 9000, process: "C:\\unexpected.exe", lineage: [] }]; return rows })(), "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["stale guard heartbeat", "operations.heartbeats", { processes: [], heartbeatFiles: [{ path: "C:\\HermesLab\\hermes\\p40-watch.heartbeat", writtenAt: "2026-08-27T17:40:00.000Z" }] }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["disk read errors", "storage.physicalDisks", [{ health: "Healthy", operationalStatus: ["Online"], reliabilityState: "OBSERVED", reliabilityEvidence: "EXPOSED", readErrors: 1, writeErrors: 0 }], "HERMES_STORAGE_CRITICAL"],
     ["deployed Ollama doctrine mismatch", "inference.ollama", { ...(valueFor("inference.ollama") as object), safeConfig: { ...((valueFor("inference.ollama") as any).safeConfig), serviceScriptSha256: "0".repeat(64) } }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
@@ -217,6 +222,56 @@ describe("binding current HERMES truth", () => {
     const digest = stableDigest(fixture.source)
     const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
     expect(bound.priorityOverrides.map((entry: any) => entry.type)).toContain(expected)
+  })
+
+  it.each([
+    ["missing disk reliability telemetry", "storage.physicalDisks", [{ health: "Healthy", operationalStatus: ["Online"], reliabilityState: "UNKNOWN", reliabilityEvidence: "NOT_EXPOSED", wearPercent: null, readErrors: null, writeErrors: null }], "HERMES_STORAGE_CRITICAL"],
+    ["Secure Boot/TPM hardening gap", "security.boot", { secureBoot: false, tpm: { present: false, ready: false, enabled: false, activated: false } }, "HERMES_SECURITY_EXPOSURE_CRITICAL"],
+    ["Defender hardening gap", "security.defender", { antivirusEnabled: false, realTimeProtectionEnabled: false, behaviorMonitorEnabled: false, tamperProtection: false }, "HERMES_SECURITY_EXPOSURE_CRITICAL"],
+    ["BitLocker hardening gap", "security.bitlocker", [{ mountPoint: "C:", protectionStatus: "Off", volumeStatus: "FullyDecrypted" }], "HERMES_SECURITY_EXPOSURE_CRITICAL"],
+    ["unknown disk health evidence", "storage.physicalDisks", null, "HERMES_STORAGE_CRITICAL"],
+    ["unknown listener ownership evidence", "network.specialPortOwners", null, "HERMES_SECURITY_EXPOSURE_CRITICAL"],
+    ["unattested DR target", "dr.target", null, "HERMES_DR_TARGET_UNHEALTHY"],
+  ])("does not misclassify %s", (_label, id, value, excluded) => {
+    const fixture = makeFixture()
+    const fact = fixture.source.facts.find((entry: any) => entry.id === id)!
+    if (value === null) {
+      fact.truth = "UNKNOWN"
+      fact.value = null
+      fact.provenance.result = "READ_ONLY_PROBE_FAILED"
+    } else {
+      fact.value = value
+    }
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).not.toContain(excluded)
+  })
+
+  it("admits an exact Ollama runner only when its lineage reaches the pinned service", () => {
+    const fixture = makeFixture()
+    const gpus: any[] = fixture.source.facts.find((fact: any) => fact.id === "inference.gpus")!.value as any[]
+    gpus[0].computeApps = [{ pid: 8123, process: "C:\\Windows\\Temp\\ollama-1234\\ollama_llama_server.exe", lineage: [{ pid: 7320, process: "ollama.exe", exe: GOLDEN.ollama.exe }] }]
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).not.toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
+  })
+
+  it("rejects a runner-shaped P40 process without pinned Ollama lineage", () => {
+    const fixture = makeFixture()
+    const gpus: any[] = fixture.source.facts.find((fact: any) => fact.id === "inference.gpus")!.value as any[]
+    gpus[0].computeApps = [{ pid: 8123, process: "C:\\Windows\\Temp\\ollama-1234\\ollama_llama_server.exe", lineage: [{ pid: 7000, process: "unrelated.exe", exe: "C:\\unrelated.exe" }] }]
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
+  })
+
+  it("does not treat ordinary RTX display processes as P40 inference drift", () => {
+    const fixture = makeFixture()
+    const gpus: any[] = fixture.source.facts.find((fact: any) => fact.id === "inference.gpus")!.value as any[]
+    gpus[1].computeApps = [{ pid: 1864, process: "C:\\Windows\\System32\\dwm.exe", lineage: [] }]
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).not.toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
   })
 })
 
@@ -261,6 +316,10 @@ describe("the staged collector remains read-only", () => {
     expect(REQUIRED_FACT_IDS).toHaveLength(24)
     expect(schema.properties.facts.minItems).toBe(24)
     expect(schema.properties.facts.maxItems).toBe(24)
+    const schemaFactIds = schema.properties.facts.allOf.map((rule: any) => rule.contains.properties.id.const)
+    expect([...schemaFactIds].sort()).toEqual([...REQUIRED_FACT_IDS].sort())
+    expect(schema.properties.facts.allOf.every((rule: any) => rule.minContains === 1 && rule.maxContains === 1)).toBe(true)
+    expect([...schema.properties.resense.properties.factIds.items.enum].sort()).toEqual([...REQUIRED_FACT_IDS].sort())
     expect(schema.$defs.fact.properties.freshness.properties.class.enum).toEqual(Object.keys(FRESHNESS_BOUNDS))
   })
 
@@ -282,5 +341,18 @@ describe("collector truth-marker normalization", () => {
     const bound = bindAttestation(fixture.source, { ...fixture, launchReceipt, sourceBytesSha256: digest, now: NOW })
     expect(bound.facts.find((fact: any) => fact.id === "storage.growth")).toMatchObject({ truth: "UNKNOWN", value: null, provenance: { result: "READ_ONLY_PROBE_FAILED" } })
     expect(verifyBoundAttestation(bound, { launchManifest: fixture.launchManifest, launchReceipt, source: fixture.source, sourceBytes: Buffer.from(canonicalize(fixture.source)), now: NOW }).validDigest).toBe(true)
+  })
+})
+
+describe("persisted selective re-sense validation", () => {
+  it.each([
+    ["unknown", ["not.a.fact"]],
+    ["duplicate", ["inference.gpus", "inference.gpus"]],
+  ])("rejects %s fact IDs even under a recomputed artifact digest", (_label, factIds) => {
+    const fixture = makeFixture()
+    const bound = bindAttestation(fixture.source, { ...fixture, now: NOW })
+    bound.resense.factIds = factIds
+    refreshBoundDigest(bound)
+    expect(() => verifyBoundAttestation(bound, { ...fixture, now: NOW })).toThrow(/resense factIds/)
   })
 })

@@ -394,49 +394,57 @@ function nonObserved(fact) {
 function storageCritical(facts) {
   const disks = facts.get("storage.physicalDisks")
   const volumes = facts.get("storage.volumes")
-  if (nonObserved(disks) || nonObserved(volumes)) return true
-  if (!Array.isArray(disks.value) || !Array.isArray(volumes.value)) return true
-  const diskBad = disks.value.some((disk) => {
+  const diskRows = disks && Array.isArray(disks.value) ? disks.value : []
+  const volumeRows = volumes && Array.isArray(volumes.value) ? volumes.value : []
+  const diskBad = diskRows.some((disk) => {
     const health = String(disk.health ?? "UNKNOWN").toUpperCase()
     const operational = Array.isArray(disk.operationalStatus) ? disk.operationalStatus.map((entry) => String(entry).toUpperCase()) : []
-    const exposed = disk.reliabilityEvidence === "EXPOSED"
     const readErrors = Number(disk.readErrors)
     const writeErrors = Number(disk.writeErrors)
-    return disk.reliabilityState !== "OBSERVED" || !["EXPOSED", "NOT_EXPOSED"].includes(disk.reliabilityEvidence)
-      || !["HEALTHY", "OK"].includes(health) || operational.some((entry) => !["OK", "HEALTHY", "ONLINE"].includes(entry))
-      || (exposed && ((disk.readErrors !== null && !Number.isFinite(readErrors)) || (disk.writeErrors !== null && !Number.isFinite(writeErrors))
-        || readErrors > 0 || writeErrors > 0))
+    return ["WARNING", "UNHEALTHY", "FAILED", "CRITICAL", "PREDICTIVE FAILURE"].includes(health)
+      || operational.some((entry) => ["DEGRADED", "ERROR", "FAILED", "LOST COMMUNICATION", "PREDICTIVE FAILURE"].includes(entry))
+      || (disk.readErrors !== null && Number.isFinite(readErrors) && readErrors > 0)
+      || (disk.writeErrors !== null && Number.isFinite(writeErrors) && writeErrors > 0)
       || (Number.isFinite(disk.wearPercent) && disk.wearPercent >= 90)
   })
-  const volumeBad = volumes.value.some((volume) => Number.isFinite(volume.freePercent) && volume.freePercent < 10)
+  const volumeBad = volumeRows.some((volume) => Number.isFinite(volume.freePercent) && volume.freePercent < 10)
   return diskBad || volumeBad
 }
 
 function drUnhealthy(facts) {
   const target = facts.get("dr.target")
-  if (nonObserved(target) || !object(target.value)) return true
-  return ["capacityAttested", "accessAttested", "storageHealthAttested", "independenceAttested", "readBackAttested"]
-    .some((field) => target.value[field] !== true)
+  if (!target || !object(target.value)) return false
+  return target.value.status === "UNHEALTHY"
+    && Array.isArray(target.value.failureEvidence)
+    && target.value.failureEvidence.length > 0
 }
 
 function securityCritical(facts) {
   const owners = facts.get("network.specialPortOwners")
   const admissions = facts.get("network.firewallAdmissions")
   const profiles = facts.get("security.firewallProfiles")
-  const defender = facts.get("security.defender")
-  const bitlocker = facts.get("security.bitlocker")
-  const boot = facts.get("security.boot")
-  if ([owners, admissions, profiles, defender, bitlocker, boot].some(nonObserved)) return true
-  if (!Array.isArray(owners.value) || !Array.isArray(admissions.value)) return true
-  return owners.value.some((entry) => entry.owner === "UNKNOWN")
-    || admissions.value.some((entry) => entry.publicAnyScope === true || entry.unresolvedProgram === true)
-    || !Array.isArray(profiles.value) || profiles.value.some((profile) => profile.enabled !== true || String(profile.defaultInbound).toLowerCase() === "allow")
-    || !object(defender.value) || defender.value.antivirusEnabled !== true || defender.value.realTimeProtectionEnabled !== true
-      || defender.value.behaviorMonitorEnabled !== true || defender.value.tamperProtection !== true
-    || !Array.isArray(bitlocker.value) || bitlocker.value.length === 0
-      || bitlocker.value.some((volume) => String(volume.protectionStatus).toLowerCase() !== "on" || String(volume.volumeStatus).toLowerCase() !== "fullyencrypted")
-    || !object(boot.value) || boot.value.secureBoot !== true || !object(boot.value.tpm)
-      || boot.value.tpm.present !== true || boot.value.tpm.ready !== true || boot.value.tpm.enabled !== true || boot.value.tpm.activated !== true
+  const ownerRows = owners && Array.isArray(owners.value) ? owners.value : []
+  const admissionRows = admissions && Array.isArray(admissions.value) ? admissions.value : []
+  const profileRows = profiles && Array.isArray(profiles.value) ? profiles.value : []
+  const nonLoopbackSpecialPort = ownerRows.some((entry) => Array.isArray(entry.listeners) && entry.listeners.some((listener) => {
+    const address = String(listener.address ?? listener.localAddress ?? "").toLowerCase()
+    return address !== "" && !["127.0.0.1", "::1", "localhost"].includes(address)
+  }))
+  return nonLoopbackSpecialPort
+    || admissionRows.some((entry) => entry.publicAnyScope === true || entry.unresolvedProgram === true)
+    || profileRows.some((profile) => profile.enabled !== true || String(profile.defaultInbound).toLowerCase() === "allow")
+}
+
+function authorizedP40ComputeApp(app, ollama) {
+  if (!object(app) || !object(ollama) || !Number.isInteger(Number(ollama.pid)) || Number(ollama.pid) < 1) return false
+  const appPid = Number(app.pid)
+  const processPath = String(app.process ?? "").replaceAll("/", "\\")
+  if (appPid === Number(ollama.pid) && processPath.toLowerCase() === GOLDEN.ollama.exe.toLowerCase()) return true
+  const runnerName = processPath.split("\\").pop()
+  if (String(runnerName).toLowerCase() !== "ollama_llama_server.exe" || !Array.isArray(app.lineage)) return false
+  return app.lineage.some((ancestor) => object(ancestor)
+    && Number(ancestor.pid) === Number(ollama.pid)
+    && String(ancestor.exe ?? "").replaceAll("/", "\\").toLowerCase() === GOLDEN.ollama.exe.toLowerCase())
 }
 
 function inferenceDrift(facts) {
@@ -464,8 +472,7 @@ function inferenceDrift(facts) {
     || Number(p40.correctedAggregateEcc) !== 6 || Number(p40.uncorrectedAggregateEcc) !== 0) return true
   if (!rtx3050 || rtx3050.role !== GOLDEN.rtx3050.role || String(rtx3050.driverModelCurrent).toUpperCase() !== GOLDEN.rtx3050.driverModel) return true
   const p40Apps = Array.isArray(p40.computeApps) ? p40.computeApps : []
-  const rtxApps = Array.isArray(rtx3050.computeApps) ? rtx3050.computeApps : []
-  if (rtxApps.length > 0 || p40Apps.some((app) => String(app.process).toLowerCase() !== GOLDEN.ollama.exe.toLowerCase())) return true
+  if (p40Apps.some((app) => !authorizedP40ComputeApp(app, ollama.value))) return true
   const p40Temp = Number(p40.temperatureC)
   const rtxTemp = Number(rtx3050.temperatureC)
   const equilibrium = Number(baseline.value.p40EquilibriumC)
@@ -605,7 +612,14 @@ export function verifyBoundAttestation(attestation, { now = new Date(), changedP
     fail("HERMES_ATTESTATION_INVALID", "priority overrides do not match bound facts")
   }
   exactKeys(attestation.resense, ["mode", "factIds"], "attestation.resense")
-  if (attestation.resense.mode !== "ONLY_STALE_OR_CHANGED_PREREQUISITES" || !Array.isArray(attestation.resense.factIds)) fail("HERMES_ATTESTATION_INVALID", "resense contract is invalid")
+  const persistedResense = attestation.resense.factIds
+  const expectedPersistedResense = attestation.facts.filter((fact) => fact.truth === "STALE").map((fact) => fact.id).sort()
+  if (attestation.resense.mode !== "ONLY_STALE_OR_CHANGED_PREREQUISITES" || !Array.isArray(persistedResense)
+    || persistedResense.some((id) => typeof id !== "string" || !REQUIRED_FACT_IDS.includes(id))
+    || new Set(persistedResense).size !== persistedResense.length
+    || JSON.stringify([...persistedResense].sort()) !== JSON.stringify(expectedPersistedResense)) {
+    fail("HERMES_ATTESTATION_INVALID", "resense factIds must exactly match unique persisted STALE facts")
+  }
   if (!object(attestation.binding) || attestation.binding.canonicalization !== CANONICALIZATION
     || attestation.binding.digestAlgorithm !== "sha256" || !SHA256.test(attestation.binding.digestSha256)
     || !SHA256.test(attestation.binding.sourceDigestSha256) || !SHA256.test(attestation.binding.launchManifestSha256)

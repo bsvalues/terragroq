@@ -160,6 +160,25 @@ function Get-SafeProcess([int]$ProcessId) {
   }
 }
 
+function Get-SafeProcessLineage([int]$ProcessId) {
+  $lineage = [System.Collections.Generic.List[object]]::new()
+  $seen = [System.Collections.Generic.HashSet[int]]::new()
+  $current = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+  for ($depth = 0; $current -and $depth -lt 8; $depth++) {
+    $parentId = [int]$current.ParentProcessId
+    if ($parentId -lt 1 -or -not $seen.Add($parentId)) { break }
+    $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $parentId" -ErrorAction SilentlyContinue
+    if (-not $parent) { break }
+    $lineage.Add([ordered]@{
+      pid = $parentId
+      process = Protect-Text ([string]$parent.Name)
+      exe = if ($parent.ExecutablePath) { Protect-Text ([string]$parent.ExecutablePath) } else { 'UNKNOWN' }
+    })
+    $current = $parent
+  }
+  @($lineage)
+}
+
 function Get-DirectoryConsumers([string]$DriveLetter) {
   $root = "$DriveLetter`:"
   if (-not (Test-Path -LiteralPath $root)) { return [ordered]@{ rows = @(); coverageErrors = @(); complete = $true; priorSnapshot = 'UNAVAILABLE' } }
@@ -533,7 +552,8 @@ Add-Fact 'network.specialPortOwners' 'network' 'Bound listener snapshot' 'Correl
 Add-Fact 'inference.gpus' 'inference' 'NVIDIA management interface' 'nvidia-smi query UUID/name/compute-mode/driver-model/power/temp/ECC' 'VOLATILE' {
   $computeApps = @(& $nvidiaSmiExecutable --query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory --format=csv,noheader,nounits 2>$null | ForEach-Object {
     $parts = $_ -split ',\s*'
-    [ordered]@{ gpuUuid = [string]$parts[0]; pid = if ($parts[1] -match '^\d+$') { [int]$parts[1] } else { $null }; process = Protect-Text ([string]$parts[2]); usedMemoryMiB = if ($parts[3] -match '^\d+') { [int64]$parts[3] } else { $null } }
+    $computePid = if ($parts[1] -match '^\d+$') { [int]$parts[1] } else { $null }
+    [ordered]@{ gpuUuid = [string]$parts[0]; pid = $computePid; process = Protect-Text ([string]$parts[2]); usedMemoryMiB = if ($parts[3] -match '^\d+') { [int64]$parts[3] } else { $null }; lineage = if ($computePid) { @(Get-SafeProcessLineage $computePid) } else { @() } }
   })
   @(& $nvidiaSmiExecutable --query-gpu=uuid,name,compute_mode,driver_version,driver_model.current,driver_model.pending,power.limit,power.default_limit,power.max_limit,temperature.gpu,ecc.mode.current,ecc.mode.pending,ecc.errors.corrected.volatile.total,ecc.errors.uncorrected.volatile.total,ecc.errors.corrected.aggregate.total,ecc.errors.uncorrected.aggregate.total --format=csv,noheader,nounits | ForEach-Object {
     $parts = $_ -split ',\s*'

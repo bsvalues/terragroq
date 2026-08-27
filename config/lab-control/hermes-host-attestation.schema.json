@@ -45,7 +45,33 @@
     },
     "facts": {
       "type": "array", "minItems": 24, "maxItems": 24,
-      "items": {"$ref": "#/$defs/fact"}
+      "items": {"$ref": "#/$defs/fact"},
+      "allOf": [
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "os.identity"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "os.updates"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "os.licensing"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "security.bitlocker"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "security.boot"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "security.defender"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "security.firewallProfiles"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "storage.physicalDisks"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "storage.volumes"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "storage.dockerDisk"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "storage.topConsumers"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "storage.growth"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "operations.tasks"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "operations.backups"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "operations.heartbeats"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "network.listeners"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "network.firewallAdmissions"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "network.addressing"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "network.specialPortOwners"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "inference.gpus"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "inference.ollama"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "inference.dockerContainers"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "inference.guardBaseline"}}}, "minContains": 1, "maxContains": 1},
+        {"contains": {"type": "object", "required": ["id"], "properties": {"id": {"const": "dr.target"}}}, "minContains": 1, "maxContains": 1}
+      ]
     },
     "priorityOverrides": {
       "type": "array", "uniqueItems": true,
@@ -64,7 +90,7 @@
       "required": ["mode", "factIds"],
       "properties": {
         "mode": {"const": "ONLY_STALE_OR_CHANGED_PREREQUISITES"},
-        "factIds": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        "factIds": {"type": "array", "items": {"enum": ["os.identity", "os.updates", "os.licensing", "security.bitlocker", "security.boot", "security.defender", "security.firewallProfiles", "storage.physicalDisks", "storage.volumes", "storage.dockerDisk", "storage.topConsumers", "storage.growth", "operations.tasks", "operations.backups", "operations.heartbeats", "network.listeners", "network.firewallAdmissions", "network.addressing", "network.specialPortOwners", "inference.gpus", "inference.ollama", "inference.dockerContainers", "inference.guardBaseline", "dr.target"]}, "uniqueItems": true}
       }
     },
     "binding": {
