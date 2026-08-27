@@ -1584,6 +1584,7 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       return { result: "DEPENDENCY_ACTUATOR_REFUSED", refusal: "CAPABILITY_NOT_ACTUATED", capability }
     }
     const b = await loadW1ServiceBinding(outcome)
+    const lease = queueBinding(outcome)
     const request = {
       operation: "START_WORKSPACE_RUNTIME_SERVICE", capability,
       serviceIdentity: b.serviceIdentity, projectId: b.projectId, workOrderId: Number(outcome.activeWorkOrderId),
@@ -1591,7 +1592,14 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       expected: { serviceIdentity: b.serviceIdentity, projectId: b.projectId, workOrderId: Number(outcome.activeWorkOrderId), node: b.node, boundRevision: b.boundRevision },
       grant: { ref: outcome.authorityGrantRef, userId: outcome.userId, authorityLevel: outcome.authorityLevel,
         authoritySubject: outcome.authoritySubject, outcomeKey: outcome.outcomeKey, workOrderId: Number(outcome.activeWorkOrderId), authorityAction: capability },
-      fence: queueBinding(outcome),
+      // The fence the actuator re-verifies against the live projection lease. projectionQueueItemId is
+      // the queue item id (queueBinding carries lease identity but not the row id).
+      fence: {
+        projectionQueueItemId: Number(outcome.id),
+        leaseHolder: lease.leaseHolder,
+        fencingToken: lease.fencingToken,
+        executionBinding: lease.executionBinding,
+      },
     }
     const result = await startRuntimeService(request)
     if (!result.ok) {

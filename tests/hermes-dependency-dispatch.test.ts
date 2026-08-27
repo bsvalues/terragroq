@@ -94,6 +94,9 @@ describe("D4/D2 — capability dispatch + lease release", () => {
     expect(req.operation).toBe("START_WORKSPACE_RUNTIME_SERVICE")
     expect(req.capability).toBe("runtime_control:control")
     expect(req.command).toBeUndefined() // never carries arbitrary command text
+    // The fence carries the queue-item id (projectionQueueItemId) so the actuator can re-verify the
+    // live lease — a bare lease binding (no row id) produced NaN and a 22P02 in the DB.
+    expect((req.fence as Record<string, unknown>).projectionQueueItemId).toBe(28)
     // D2: lease released under fence, not leaked
     expect(transitionQueue).toHaveBeenCalledOnce()
     const t = (transitionQueue.mock.calls[0] as unknown[])[0] as Record<string, unknown>
