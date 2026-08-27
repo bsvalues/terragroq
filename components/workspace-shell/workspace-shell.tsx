@@ -34,12 +34,32 @@ function inspectorId(surface: Pick<InspectorSurface, "kind" | "subject">): strin
   return `inspector-${(hash >>> 0).toString(36)}`
 }
 
-export function WorkspaceShell({ initialSummon = null }: { initialSummon?: SummonedSurface | null }) {
+export type WorkspaceShellEndpoints = Readonly<{
+  space: string
+  files: string
+  directFixtureWrites?: boolean
+}>
+
+const DEFAULT_ENDPOINTS: WorkspaceShellEndpoints = {
+  space: "/api/environment/space",
+  files: "/api/loom/files",
+}
+
+export function WorkspaceShell({
+  initialSummon = null,
+  endpoints = DEFAULT_ENDPOINTS,
+  fixtureLabel = null,
+}: {
+  initialSummon?: SummonedSurface | null
+  endpoints?: WorkspaceShellEndpoints
+  fixtureLabel?: string | null
+}) {
+  const fixtureMode = endpoints.directFixtureWrites === true
   const [space, setSpace] = useState<WorkspaceSpace>(() => defaultSpace())
   const [worldId, setWorldId] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [persistenceError, setPersistenceError] = useState<string | null>(null)
-  const [lineOpen, setLineOpen] = useState(Boolean(initialSummon))
+  const [lineOpen, setLineOpen] = useState(!fixtureMode && Boolean(initialSummon))
   const [lineInput, setLineInput] = useState("")
   const [lineReply, setLineReply] = useState<string | null>(null)
   const [lastLineSay, setLastLineSay] = useState<string | null>(null)
@@ -120,7 +140,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     let cancelled = false
     const fallback = defaultSpace(window.innerWidth, window.innerHeight)
     const request = (spaceArrival.current ??= (async () => {
-        const response = await fetch("/api/environment/space", { cache: "no-store" })
+        const response = await fetch(endpoints.space, { cache: "no-store" })
         const payload = (await response.json()) as Partial<SpaceEnvelope> & { error?: string }
         if (!response.ok || typeof payload.worldId !== "string" || !payload.space) {
           throw new Error(payload.error ?? `SPACE_${response.status}`)
@@ -150,7 +170,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (!cancelled) setHydrated(true)
       })
     return () => { cancelled = true }
-  }, [])
+  }, [endpoints.space])
 
   useEffect(() => {
     if (!hydrated || !worldId || restorationStarted.current) return
@@ -193,7 +213,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   const sendPersist = useCallback(async (job: PersistJob, keepalive = false) => {
     try {
-      const response = await fetch("/api/environment/space", {
+      const response = await fetch(endpoints.space, {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: job.body,
@@ -216,7 +236,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setPersistenceError(error instanceof Error ? error.message : "SPACE_SAVE_REFUSED")
       }
     }
-  }, [])
+  }, [endpoints.space])
 
   const persist = useCallback((keepalive = false) => {
     const id = worldRef.current
@@ -278,6 +298,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }, [persist])
 
   useEffect(() => {
+    if (fixtureMode) return
     const summonLine = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault()
@@ -290,7 +311,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
     window.addEventListener("keydown", summonLine)
     return () => window.removeEventListener("keydown", summonLine)
-  }, [])
+  }, [fixtureMode])
 
   useEffect(() => {
     if (!initialSummon || !hydrated) return
@@ -399,9 +420,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <span className={styles.spaceName} aria-label="Current Space">
           <Layers3 size={13} aria-hidden /> TerraFusion
         </span>
-        <button type="button" className={styles.lineSummon} onClick={() => { setLineOpen(true); requestAnimationFrame(() => lineRef.current?.focus()) }}>
-          <Command size={12} aria-hidden /> Line <kbd>⌘K</kbd>
-        </button>
+        {fixtureLabel ? <span className={styles.fixtureBadge} role="status">{fixtureLabel}</span> : null}
+        {!fixtureMode ? (
+          <button type="button" className={styles.lineSummon} onClick={() => { setLineOpen(true); requestAnimationFrame(() => lineRef.current?.focus()) }}>
+            <Command size={12} aria-hidden /> Line <kbd>⌘K</kbd>
+          </button>
+        ) : null}
       </menu>
 
       <div className={styles.windowLayer}>
@@ -416,6 +440,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         >
           <EditorSurface
             space={space}
+            filesEndpoint={endpoints.files}
+            directFixtureWrites={endpoints.directFixtureWrites === true}
             onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))}
           />
         </WindowFrame>
@@ -464,7 +490,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         })}
       </div>
 
-      {lineOpen ? (
+      {!fixtureMode && lineOpen ? (
         <div className={styles.lineBackdrop} onPointerDown={(event) => { if (event.target === event.currentTarget) setLineOpen(false) }}>
           <form className={styles.line} onSubmit={submitLine} aria-label="The Line">
             <Command size={16} aria-hidden />

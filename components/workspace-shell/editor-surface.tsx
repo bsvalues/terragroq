@@ -30,11 +30,12 @@ export function acknowledgeSavedBuffer(
   return { ...current, savedContent: submittedContent, modifiedAt, saving: false, error: null }
 }
 
-function TreeNode({ entry, depth, selectedPath, onOpen }: {
+function TreeNode({ entry, depth, selectedPath, onOpen, filesEndpoint }: {
   entry: Entry
   depth: number
   selectedPath: string | null
   onOpen: (path: string) => void
+  filesEndpoint: string
 }) {
   const [expanded, setExpanded] = useState(false)
   const [children, setChildren] = useState<readonly Entry[] | null>(null)
@@ -49,7 +50,7 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
     setLoading(true)
     setFailed(false)
     try {
-      const response = await fetch(`/api/loom/files?path=${encodeURIComponent(entry.path)}`, { cache: "no-store" })
+      const response = await fetch(`${filesEndpoint}?path=${encodeURIComponent(entry.path)}`, { cache: "no-store" })
       const payload = await response.json()
       if (!response.ok || payload.kind !== "directory") throw new Error(payload.error ?? `READ_${response.status}`)
       setChildren(payload.entries ?? [])
@@ -80,7 +81,7 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
           {loading ? <li className={styles.treeNote} style={{ paddingLeft: depth * 13 + 25 }}>opening…</li> : null}
           {failed ? <li className={styles.treeError} style={{ paddingLeft: depth * 13 + 25 }}>directory unavailable</li> : null}
           {(children ?? []).map((child) => (
-            <TreeNode key={child.path} entry={child} depth={depth + 1} selectedPath={selectedPath} onOpen={onOpen} />
+            <TreeNode key={child.path} entry={child} depth={depth + 1} selectedPath={selectedPath} onOpen={onOpen} filesEndpoint={filesEndpoint} />
           ))}
         </ul>
       ) : null}
@@ -88,9 +89,16 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
   )
 }
 
-export function EditorSurface({ space, onEditorChange }: {
+export function EditorSurface({
+  space,
+  onEditorChange,
+  filesEndpoint = "/api/loom/files",
+  directFixtureWrites = false,
+}: {
   space: WorkspaceSpace
   onEditorChange: (editor: WorkspaceSpace["editor"], selectedPath: string | null) => void
+  filesEndpoint?: string
+  directFixtureWrites?: boolean
 }) {
   const [roots, setRoots] = useState<readonly Entry[] | null>(null)
   const [treeError, setTreeError] = useState<string | null>(null)
@@ -103,7 +111,7 @@ export function EditorSurface({ space, onEditorChange }: {
   const loadRoots = useCallback(async () => {
     setTreeError(null)
     try {
-      const response = await fetch("/api/loom/files?path=", { cache: "no-store" })
+      const response = await fetch(`${filesEndpoint}?path=`, { cache: "no-store" })
       const payload = await response.json()
       if (!response.ok || payload.kind !== "directory") throw new Error(payload.error ?? `READ_${response.status}`)
       setRoots(payload.entries ?? [])
@@ -111,7 +119,7 @@ export function EditorSurface({ space, onEditorChange }: {
       setRoots([])
       setTreeError(error instanceof Error ? error.message : "WORKSPACE_UNAVAILABLE")
     }
-  }, [])
+  }, [filesEndpoint])
 
   useEffect(() => { void loadRoots() }, [loadRoots])
 
@@ -119,7 +127,7 @@ export function EditorSurface({ space, onEditorChange }: {
     for (const path of space.editor.openFiles) {
       if (buffers[path] || loadingFiles.current.has(path)) continue
       loadingFiles.current.add(path)
-      void fetch(`/api/loom/files?path=${encodeURIComponent(path)}`, { cache: "no-store" })
+      void fetch(`${filesEndpoint}?path=${encodeURIComponent(path)}`, { cache: "no-store" })
         .then(async (response) => {
           const payload = await response.json()
           if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
@@ -135,7 +143,7 @@ export function EditorSurface({ space, onEditorChange }: {
         .catch((error) => setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE"))
         .finally(() => loadingFiles.current.delete(path))
     }
-  }, [buffers, space.editor.openFiles])
+  }, [buffers, filesEndpoint, space.editor.openFiles])
 
   const updatePanes = useCallback((
     panes: readonly EditorPane[],
@@ -149,7 +157,7 @@ export function EditorSurface({ space, onEditorChange }: {
   const openFile = useCallback(async (path: string, targetPaneId: EditorPane["id"] = space.editor.activePaneId) => {
     if (!buffers[path]) {
       try {
-        const response = await fetch(`/api/loom/files?path=${encodeURIComponent(path)}`, { cache: "no-store" })
+        const response = await fetch(`${filesEndpoint}?path=${encodeURIComponent(path)}`, { cache: "no-store" })
         const payload = await response.json()
         if (!response.ok) throw new Error(payload.error ?? `READ_${response.status}`)
         if (payload.kind === "binary") throw new Error("BINARY_FILE_NOT_EDITABLE")
@@ -169,7 +177,7 @@ export function EditorSurface({ space, onEditorChange }: {
     const openFiles = space.editor.openFiles.includes(path) ? space.editor.openFiles : [...space.editor.openFiles, path]
     const panes = space.editor.panes.map((pane) => pane.id === targetPaneId ? { ...pane, activePath: path, selection: null } : pane)
     updatePanes(panes, openFiles, path, targetPaneId)
-  }, [buffers, space.editor.activePaneId, space.editor.openFiles, space.editor.panes, updatePanes])
+  }, [buffers, filesEndpoint, space.editor.activePaneId, space.editor.openFiles, space.editor.panes, updatePanes])
 
   const establishAuthority = useCallback(async () => {
     if (authorityRef.current) return authorityRef.current
@@ -222,14 +230,17 @@ export function EditorSurface({ space, onEditorChange }: {
     const submittedContent = buffer.content
     setBuffers((current) => ({ ...current, [path]: { ...current[path], saving: true, error: null } }))
     try {
-      const receipt = await establishReceipt(path)
-      const response = await fetch("/api/loom/files", {
+      const receipt = directFixtureWrites ? null : await establishReceipt(path)
+      const response = await fetch(filesEndpoint, {
         method: "PUT",
-        headers: { "content-type": "application/json", "x-williamos-work-context": receipt },
+        headers: {
+          "content-type": "application/json",
+          ...(receipt ? { "x-williamos-work-context": receipt } : {}),
+        },
         body: JSON.stringify({ path, content: submittedContent, modifiedAt: buffer.modifiedAt }),
       })
       const payload = await response.json()
-      if (response.status === 409 && payload.error !== "CHANGED_ON_DISK" && retry) {
+      if (!directFixtureWrites && response.status === 409 && payload.error !== "CHANGED_ON_DISK" && retry) {
         receipts.current.delete(path)
         await establishReceipt(path, true)
         setBuffers((current) => ({ ...current, [path]: { ...current[path], saving: false } }))
@@ -249,7 +260,7 @@ export function EditorSurface({ space, onEditorChange }: {
         ...current[path], saving: false, error: error instanceof Error ? error.message : "SAVE_REFUSED",
       } }))
     }
-  }, [buffers, establishReceipt])
+  }, [buffers, directFixtureWrites, establishReceipt, filesEndpoint])
 
   const split = useCallback(() => {
     if (space.editor.panes.length > 1) return
@@ -271,7 +282,7 @@ export function EditorSurface({ space, onEditorChange }: {
         {treeError ? <div className={styles.inlineRefusal} role="alert">{treeError}</div> : null}
         <ul>
           {(roots ?? []).map((entry) => (
-            <TreeNode key={entry.path} entry={entry} depth={0} selectedPath={space.selectedPath} onOpen={(path) => void openFile(path)} />
+            <TreeNode key={entry.path} entry={entry} depth={0} selectedPath={space.selectedPath} onOpen={(path) => void openFile(path)} filesEndpoint={filesEndpoint} />
           ))}
         </ul>
       </nav>
@@ -280,7 +291,7 @@ export function EditorSurface({ space, onEditorChange }: {
           <button type="button" onClick={split} disabled={space.editor.panes.length > 1} title="Split editor" aria-label="Split editor">
             <Columns2 size={14} />
           </button>
-          <span className={styles.editorHint}>⌘S save · ⌘Z undo · ⇧⌘Z redo</span>
+          <span className={styles.editorHint}>Ctrl/⌘S save · Ctrl/⌘Z undo · Ctrl+Y / ⇧⌘Z redo</span>
         </div>
         <div className={styles.panes} data-split={space.editor.panes.length > 1}>
           {space.editor.panes.map((pane) => {

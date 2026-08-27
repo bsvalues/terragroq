@@ -58,6 +58,19 @@
   cursor: default;
 }
 
+.fixtureBadge {
+  max-width: min(42vw, 560px);
+  overflow: hidden;
+  padding: 2px 7px;
+  border: 1px solid #76573c;
+  border-radius: 999px;
+  color: #e5b98f;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .lineSummon {
   margin-left: auto;
   cursor: pointer;
