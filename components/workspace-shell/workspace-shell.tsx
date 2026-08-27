@@ -9,7 +9,6 @@ import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type WorkspaceProject, type WorkspaceSpace } from "./types"
-import styles from "./workspace-shell.module.css"
 import experience from "./experience-shell.module.css"
 
 type LineReply = Readonly<{
@@ -62,11 +61,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const worldRef = useRef(worldId)
   const storageRef = useRef<SpaceStorage>(storage)
   const browserStorageKeyRef = useRef<string | null>(null)
-  const lineRef = useRef<HTMLTextAreaElement>(null)
+  const lineRef = useRef<HTMLInputElement>(null)
   const messageSequence = useRef(0)
   const workbenchRef = useRef<HTMLDivElement>(null)
-  // Strict Mode replays mount effects. Both passes attach to the same arrival promises so cleanup
-  // cannot strand the surviving pass in an opening/working state after the first response arrives.
   const spaceArrival = useRef<Promise<SpaceEnvelope> | null>(null)
   const summonArrival = useRef<Readonly<{ key: string; request: Promise<LineReply> }> | null>(null)
   const restorationStarted = useRef(false)
@@ -110,7 +107,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const newest = incoming.at(-1)?.id ?? null
     setActiveInspectorId(newest)
     setContextView("inspector")
-    setLineOpen(true)
     setSpace((current) => {
       const highest = Math.max(
         ...Object.values(current.windows).map((window) => window.z),
@@ -464,6 +460,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const previewWeight = Math.max(1, space.windows["running-app"].width)
   const sourcePercent = Math.round((editorWeight / (editorWeight + previewWeight)) * 100)
   const activeInspector = inspectors.find((surface) => surface.id === activeInspectorId) ?? inspectors.at(-1) ?? null
+  const contextExpanded = lineOpen || inspectors.length > 0
   const savedLabel = persistenceError
     ? persistenceError
     : hydrated
@@ -471,7 +468,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       : "Opening"
 
   return (
-    <main className={experience.environment} aria-label={`${project?.name ?? "Workspace"} Space`}>
+    <main
+      className={`${experience.environment} ${contextExpanded ? experience.environmentContextOpen : experience.environmentContextClosed}`}
+      aria-label={`${project?.name ?? "Workspace"} Space`}
+    >
       <aside className={experience.worldRail} aria-label="WilliamOS worlds">
         <div className={experience.worldMark} aria-label="WilliamOS">W</div>
         <div className={experience.worldRailBody}>
@@ -491,8 +491,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
               setLineOpen(true)
               requestAnimationFrame(() => lineRef.current?.focus())
             }}
-            aria-label="Open conversation (Ctrl+K)"
-            title="Conversation · Ctrl+K"
+            aria-label="Open The Line (Ctrl+K)"
+            title="The Line · Ctrl+K"
           >
             <Command size={17} strokeWidth={1.7} />
           </button>
@@ -517,7 +517,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             onClick={() => setLineOpen((current) => !current)}
             aria-label="Toggle conversation and context"
           >
-            {lineOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
+            {contextExpanded ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
           </button>
         </header>
 
@@ -575,9 +575,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         </div>
       </section>
 
-      <aside className={experience.contextRail} data-open={lineOpen} aria-label="Conversation and context">
+      <aside className={experience.contextRail} data-open={contextExpanded} aria-label="Conversation and context">
         <header className={experience.contextHeader}>
-          <MessageSquare size={15} strokeWidth={1.6} aria-hidden />
+          <button
+            type="button"
+            className={experience.contextRailSummon}
+            onClick={() => {
+              setContextView("conversation")
+              setLineOpen((current) => !current)
+              requestAnimationFrame(() => lineRef.current?.focus())
+            }}
+            aria-label={lineOpen ? "Hide The Line" : "Open The Line"}
+            title="The Line · Ctrl+K"
+          >
+            <MessageSquare size={15} strokeWidth={1.6} aria-hidden />
+          </button>
           <span className={experience.contextHeaderTitle}>WilliamOS</span>
           <span className={experience.contextHeaderMeta}>{space.selectedPath ? "file context" : "space context"}</span>
           <button
@@ -661,34 +673,30 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           )}
         </div>
 
-        <form className={experience.composer} onSubmit={submitLine} aria-label="The Line">
-          <div className={experience.composerField}>
-            <textarea
-              ref={lineRef}
-              value={lineInput}
-              onChange={(event) => setLineInput(event.target.value)}
-              onFocus={() => { setLineOpen(true); setContextView("conversation") }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault()
-                  event.currentTarget.form?.requestSubmit()
-                }
-              }}
-              placeholder={space.selectedPath ? `Ask or act on ${space.selectedPath}` : "Ask or direct WilliamOS"}
-              aria-label="The Line"
-              rows={2}
-            />
-            {lineReply ? <output className={experience.composerError}>{lineReply}</output> : null}
-          </div>
-          <button
-            type="submit"
-            className={experience.composerSubmit}
-            disabled={lineBusy || lineInput.trim().length === 0}
-            aria-label={lineBusy ? "WilliamOS is working" : "Send"}
-          >
-            <ArrowUp size={15} strokeWidth={1.8} />
-          </button>
-        </form>
+        {lineOpen ? (
+          <form className={experience.composer} onSubmit={submitLine} aria-label="The Line">
+            <div className={experience.composerField}>
+              <input
+                ref={lineRef}
+                value={lineInput}
+                onChange={(event) => setLineInput(event.target.value)}
+                onFocus={() => { setContextView("conversation"); setLineOpen(true) }}
+                placeholder={space.selectedPath ? `Ask or act on ${space.selectedPath}` : "Ask or direct WilliamOS"}
+                aria-label="The Line"
+                autoComplete="off"
+              />
+              {lineReply ? <output className={experience.composerError}>{lineReply}</output> : null}
+            </div>
+            <button
+              type="submit"
+              className={experience.composerSubmit}
+              disabled={lineBusy || lineInput.trim().length === 0}
+              aria-label={lineBusy ? "WilliamOS is working" : "Send"}
+            >
+              <ArrowUp size={15} strokeWidth={1.8} />
+            </button>
+          </form>
+        ) : null}
       </aside>
     </main>
   )
