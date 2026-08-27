@@ -1396,6 +1396,19 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
            resolution = $2, evidence = $3, "updatedAt" = now() WHERE id = $4`,
         [routingState, `Settled by projection_executor (receipt); queue #${fence.projectionQueueItemId}`,
          [...(dep.evidence ?? []), ...(evidence ?? [])], dependencyId])
+
+      // Consumed-on-use: an exact runtime_control acquisition grant does not outlive the operation it
+      // authorized. Once the dependency settles, revoke the concrete grant so it cannot be reused
+      // before its TTL. Matched by the projector's deterministic ref, bound to this WO. A dependency
+      // with no such grant (e.g. legacy) simply updates zero rows.
+      await pool.query(
+        `UPDATE "authority_grant"
+            SET "status" = 'revoked', "revokedAt" = timezone('UTC', now()),
+                "revokedBy" = 'hermes-outcome-queue',
+                "revokeReason" = 'consumed-on-use: routed dependency settled by projection executor'
+          WHERE "ref" = $1 AND "status" = 'active' AND "workOrderId" = $2`,
+        [`DEP-ACQ-GRANT-${dependencyId}`, Number(dep.workOrderId)])
+
       return { routingState, parentWorkOrderId: Number(dep.workOrderId) }
     }))
 

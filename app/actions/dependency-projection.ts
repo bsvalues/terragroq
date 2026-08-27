@@ -88,7 +88,10 @@ export async function projectDependencyToQueue(dependencyId: number) {
   // The routing role (dep.assignee) records who the dependency was routed to; the projection executes
   // under the resident execution principal, and the authority is a concrete grant to THAT principal.
   const RESIDENT_EXECUTION_PRINCIPAL = "operator"
-  const ACQUISITION_GRANT_TTL_MS = 24 * 60 * 60 * 1000
+  // Short ceiling: an exact runtime_control:control grant is bounded even if it is never acquired.
+  // It is ALSO consumed-on-use — settlement revokes it (see settleDependency in the runtime) — so in
+  // practice it lives only until the operation it authorized settles, minutes not hours.
+  const ACQUISITION_GRANT_TTL_MS = 2 * 60 * 60 * 1000
   const acquisitionGrantRef = `DEP-ACQ-GRANT-${dep.id}`
   const spec = projectDependency({
     dep: projectable,
