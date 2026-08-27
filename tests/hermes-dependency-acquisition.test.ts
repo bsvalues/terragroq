@@ -80,6 +80,24 @@ describe("legacy bounded-authority lane — untouched", () => {
   })
 })
 
+describe("the leased row carries the dependency identity (seam branch depends on it)", () => {
+  it("acquire RETURNING (QUEUE_COLUMNS) includes canonicalDependencyId + envelope columns", () => {
+    // The legacy acquire's WHERE never mentions these columns, so their presence proves the RETURNING
+    // list carries them. Without canonicalDependencyId on the leased row, the runtime cannot tell a
+    // projection from a goal and walls it as HERMES_OUTCOME_QUEUE_GOAL_WALL.
+    for (const col of [
+      `q."canonicalDependencyId"`,
+      `q."envelopeResource"`,
+      `q."envelopeClass"`,
+      `q."envelopeCapability"`,
+      `q."envelopeDigest"`,
+    ]) {
+      expect(legacy).toContain(col)
+      expect(dep).toContain(col)
+    }
+  })
+})
+
 describe("divergence guard — both lanes share identical serialization", () => {
   const SERIALIZATION = [
     `occupied_slot."lifecycleReason" = 'PROVIDER_UNAVAILABLE'`,
