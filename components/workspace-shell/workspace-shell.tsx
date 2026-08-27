@@ -1,18 +1,16 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AppWindow, Braces, Command, Layers3 } from "lucide-react"
+import { AppWindow, ArrowUp, Command, Layers3, MessageSquare, PanelRightClose, PanelRightOpen, X } from "lucide-react"
 
 import type { SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, type WorldSpine } from "@/lib/environment/working-world"
 import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
-import { WindowFrame } from "./window-frame"
-import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
+import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type WorkspaceProject, type WorkspaceSpace } from "./types"
 import styles from "./workspace-shell.module.css"
-
-const windowName: Record<WindowId, string> = { editor: "Source", "running-app": "TerraFusion" }
+import experience from "./experience-shell.module.css"
 
 type LineReply = Readonly<{
   worldId?: string
@@ -22,6 +20,13 @@ type LineReply = Readonly<{
   spine?: WorldSpine
 }>
 
+type ConversationEntry = Readonly<{
+  id: number
+  role: "owner" | "williamos"
+  text: string
+}>
+
+type ContextView = "conversation" | "inspector"
 type PersistJob = Readonly<{ worldId: string; revision: number; body: string }>
 type SpaceStorage = "server" | "browser"
 
@@ -45,9 +50,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineOpen, setLineOpen] = useState(Boolean(initialSummon))
   const [lineInput, setLineInput] = useState("")
   const [lineReply, setLineReply] = useState<string | null>(null)
-  const [lastLineSay, setLastLineSay] = useState<string | null>(null)
   const [lineBusy, setLineBusy] = useState(false)
   const [inspectors, setInspectors] = useState<readonly InspectorSurface[]>([])
+  const [activeInspectorId, setActiveInspectorId] = useState<string | null>(null)
+  const [contextView, setContextView] = useState<ContextView>("conversation")
+  const [conversation, setConversation] = useState<readonly ConversationEntry[]>([])
   const [spine, setSpine] = useState<WorldSpine>(EMPTY_SPINE)
   const [project, setProject] = useState<WorkspaceProject | null>(null)
   const [storage, setStorage] = useState<SpaceStorage>("server")
@@ -55,7 +62,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const worldRef = useRef(worldId)
   const storageRef = useRef<SpaceStorage>(storage)
   const browserStorageKeyRef = useRef<string | null>(null)
-  const lineRef = useRef<HTMLInputElement>(null)
+  const lineRef = useRef<HTMLTextAreaElement>(null)
+  const messageSequence = useRef(0)
+  const workbenchRef = useRef<HTMLDivElement>(null)
   // Strict Mode replays mount effects. Both passes attach to the same arrival promises so cleanup
   // cannot strand the surviving pass in an opening/working state after the first response arrives.
   const spaceArrival = useRef<Promise<SpaceEnvelope> | null>(null)
@@ -69,6 +78,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   stateRef.current = space
   worldRef.current = worldId
   storageRef.current = storage
+
+  const appendConversation = useCallback((role: ConversationEntry["role"], text: string) => {
+    const normalized = text.trim()
+    if (!normalized) return
+    messageSequence.current += 1
+    const entry: ConversationEntry = { id: messageSequence.current, role, text: normalized }
+    setConversation((current) => [...current, entry])
+  }, [])
 
   const materializeSurfaces = useCallback((reply: LineReply) => {
     if (reply.dismiss) {
@@ -90,6 +107,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       incoming.forEach((surface) => byId.set(surface.id, surface))
       return [...byId.values()]
     })
+    const newest = incoming.at(-1)?.id ?? null
+    setActiveInspectorId(newest)
+    setContextView("inspector")
+    setLineOpen(true)
     setSpace((current) => {
       const highest = Math.max(
         ...Object.values(current.windows).map((window) => window.z),
@@ -109,7 +130,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         inspectorSeeds[surface.id] = { kind: surface.kind, subject: surface.subject }
       })
       const active = incoming.at(-1)?.id ?? current.activeWindowId
-      if (active && inspectorWindows[active]) inspectorWindows[active] = { ...inspectorWindows[active], minimized: false, z: highest + incoming.length }
       return { ...current, inspectorWindows, inspectorSeeds, activeWindowId: active }
     })
   }, [inspectors])
@@ -118,29 +138,28 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     if (typeof reply.worldId === "string") setWorldId(reply.worldId)
     if (reply.spine) setSpine(reply.spine)
     const say = typeof reply.say === "string" ? reply.say : ""
-    setLastLineSay(say || null)
+    if (say) appendConversation("williamos", say)
     setLineReply(null)
     materializeSurfaces(reply)
-    setLineOpen(false)
-  }, [materializeSurfaces])
+  }, [appendConversation, materializeSurfaces])
 
   useEffect(() => {
     let cancelled = false
     const fallback = defaultSpace(window.innerWidth, window.innerHeight)
     const request = (spaceArrival.current ??= (async () => {
-        const response = await fetch("/api/environment/space", { cache: "no-store" })
-        const payload = (await response.json()) as Partial<SpaceEnvelope> & { error?: string }
-        if (!response.ok || typeof payload.worldId !== "string" || !payload.space) {
-          throw new Error(payload.error ?? `SPACE_${response.status}`)
-        }
-        return {
-          worldId: payload.worldId,
-          space: payload.space,
-          spine: payload.spine,
-          project: payload.project,
-          storage: payload.storage,
-          browserStorageKey: payload.browserStorageKey,
-        }
+      const response = await fetch("/api/environment/space", { cache: "no-store" })
+      const payload = (await response.json()) as Partial<SpaceEnvelope> & { error?: string }
+      if (!response.ok || typeof payload.worldId !== "string" || !payload.space) {
+        throw new Error(payload.error ?? `SPACE_${response.status}`)
+      }
+      return {
+        worldId: payload.worldId,
+        space: payload.space,
+        spine: payload.spine,
+        project: payload.project,
+        storage: payload.storage,
+        browserStorageKey: payload.browserStorageKey,
+      }
     })())
     void request
       .then((payload) => {
@@ -158,7 +177,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             const saved = window.localStorage.getItem(key)
             if (saved) storedSpace = (JSON.parse(saved) as { space?: unknown }).space ?? payload.space
           } catch {
-            // A damaged browser record is discarded in favor of the admitted default Space.
             window.localStorage.removeItem(key)
           }
         }
@@ -216,7 +234,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (reply.spine) setSpine(reply.spine)
         materializeSurfaces(reply)
       }).catch(() => {
-        // Geometry and identity remain persisted. A failed current read never becomes fabricated payload.
+        // Identity remains persisted. A failed current read never becomes fabricated payload.
       })
     }
   }, [hydrated, materializeSurfaces, worldId])
@@ -270,8 +288,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setPersistenceError(null)
       }
     } catch (error) {
-      // A lower request can finish after a critical higher-revision keepalive. The server correctly
-      // refuses it; that superseded refusal is not the current Space failing to persist.
       if (!keepalive && job.revision >= revisionRef.current) {
         setPersistenceError(error instanceof Error ? error.message : "SPACE_SAVE_REFUSED")
       }
@@ -286,13 +302,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const job: PersistJob = {
       worldId: id,
       revision,
-      // Capture an immutable body now. A later drag, selection, or save cannot mutate an in-flight
-      // request into a state carrying the wrong revision.
       body: JSON.stringify({ worldId: id, space: spaceToServer(stateRef.current, revision) }),
     }
     if (keepalive) {
-      // Critical lifecycle flushes may overlap an older normal write. Revision ordering makes that
-      // safe: once this higher state lands, the server rejects the lower late arrival.
       void sendPersist(job, true)
       return
     }
@@ -342,6 +354,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault()
         setLineReply(null)
+        setContextView("conversation")
         setLineOpen(true)
         requestAnimationFrame(() => lineRef.current?.focus())
       } else if (event.key === "Escape") {
@@ -379,38 +392,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     return () => { cancelled = true }
   }, [acceptLineReply, hydrated, initialSummon, worldId])
 
-  const updateWindow = useCallback((id: WindowId, geometry: WindowGeometry) => {
-    setSpace((current) => ({ ...current, windows: { ...current.windows, [id]: geometry } }))
-  }, [])
-
-  const activate = useCallback((id: WindowId) => {
-    setSpace((current) => {
-      const highest = Math.max(...Object.values(current.windows).map((window) => window.z), ...Object.values(current.inspectorWindows).map((window) => window.z))
-      const chosen = current.windows[id]
-      if (current.activeWindowId === id && chosen.z === highest && !chosen.minimized) return current
-      return {
-        ...current,
-        activeWindowId: id,
-        windows: { ...current.windows, [id]: { ...chosen, minimized: false, z: highest + 1 } },
-      }
-    })
-  }, [])
-
-  const updateInspector = useCallback((id: string, geometry: WindowGeometry) => {
-    setSpace((current) => ({ ...current, inspectorWindows: { ...current.inspectorWindows, [id]: geometry } }))
-  }, [])
-
-  const activateInspector = useCallback((id: string) => {
-    setSpace((current) => {
-      const chosen = current.inspectorWindows[id]
-      if (!chosen) return current
-      const highest = Math.max(...Object.values(current.windows).map((window) => window.z), ...Object.values(current.inspectorWindows).map((window) => window.z))
-      return { ...current, activeWindowId: id, inspectorWindows: { ...current.inspectorWindows, [id]: { ...chosen, minimized: false, z: highest + 1 } } }
-    })
-  }, [])
-
   const dismissInspector = useCallback((id: string) => {
     setInspectors((current) => current.filter((surface) => surface.id !== id))
+    setActiveInspectorId((current) => current === id ? null : current)
     setSpace((current) => {
       const inspectorWindows = { ...current.inspectorWindows }
       const inspectorSeeds = { ...current.inspectorSeeds }
@@ -420,18 +404,44 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     })
   }, [])
 
-  const minimize = useCallback((id: WindowId) => {
-    setSpace((current) => ({
-      ...current,
-      activeWindowId: current.activeWindowId === id ? null : current.activeWindowId,
-      windows: { ...current.windows, [id]: { ...current.windows[id], minimized: true } },
-    }))
-  }, [])
+  function startWorkbenchResize(event: React.PointerEvent<HTMLDivElement>) {
+    const stage = workbenchRef.current
+    if (!stage || event.button !== 0) return
+    event.preventDefault()
+    const handle = event.currentTarget
+    handle.setPointerCapture(event.pointerId)
+
+    const move = (next: PointerEvent) => {
+      const bounds = stage.getBoundingClientRect()
+      if (bounds.width < 760) return
+      const sourceWidth = Math.round(Math.max(380, Math.min(bounds.width - 340, next.clientX - bounds.left)))
+      const previewWidth = Math.round(Math.max(340, bounds.width - sourceWidth - 6))
+      setSpace((current) => ({
+        ...current,
+        windows: {
+          ...current.windows,
+          editor: { ...current.windows.editor, width: sourceWidth },
+          "running-app": { ...current.windows["running-app"], width: previewWidth },
+        },
+      }))
+    }
+    const end = (next: PointerEvent) => {
+      if (handle.hasPointerCapture(next.pointerId)) handle.releasePointerCapture(next.pointerId)
+      handle.removeEventListener("pointermove", move)
+      handle.removeEventListener("pointerup", end)
+      handle.removeEventListener("pointercancel", end)
+    }
+    handle.addEventListener("pointermove", move)
+    handle.addEventListener("pointerup", end)
+    handle.addEventListener("pointercancel", end)
+  }
 
   async function submitLine(event: React.FormEvent) {
     event.preventDefault()
     const text = lineInput.trim()
     if (!text || lineBusy) return
+    appendConversation("owner", text)
+    setLineInput("")
     setLineBusy(true)
     setLineReply(null)
     try {
@@ -443,7 +453,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error ?? `LINE_${response.status}`)
       acceptLineReply(payload as LineReply)
-      setLineInput("")
     } catch (error) {
       setLineReply(error instanceof Error ? error.message : "LINE_UNAVAILABLE")
     } finally {
@@ -451,137 +460,236 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }
 
+  const editorWeight = Math.max(1, space.windows.editor.width)
+  const previewWeight = Math.max(1, space.windows["running-app"].width)
+  const sourcePercent = Math.round((editorWeight / (editorWeight + previewWeight)) * 100)
+  const activeInspector = inspectors.find((surface) => surface.id === activeInspectorId) ?? inspectors.at(-1) ?? null
+  const savedLabel = persistenceError
+    ? persistenceError
+    : hydrated
+      ? storage === "browser" ? "Saved in this browser" : "Saved"
+      : "Opening"
+
   return (
-    <main className={styles.environment} aria-label={`${project?.name ?? "Workspace"} Space`}>
-      <div className={styles.atmosphere} aria-hidden />
-      <menu className={styles.menuBar}>
-        <span className={styles.wordmark}>W</span>
-        <span
-          className={styles.spaceName}
-          aria-label="Workspace project"
-          title={project?.identity ?? "Resolving configured workspace"}
-        >
-          <Layers3 size={13} aria-hidden /> {project?.name ?? "Opening workspace"}
-        </span>
-        <button type="button" className={styles.lineSummon} onClick={() => { setLineOpen(true); requestAnimationFrame(() => lineRef.current?.focus()) }}>
-          <Command size={12} aria-hidden /> Line <kbd>Ctrl+K</kbd>
-        </button>
-      </menu>
-
-      <div className={styles.windowLayer}>
-        <WindowFrame
-          id="editor"
-          title="Source"
-          geometry={space.windows.editor}
-          active={space.activeWindowId === "editor"}
-          onActivate={() => activate("editor")}
-          onGeometry={(geometry) => updateWindow("editor", geometry)}
-          onMinimize={() => minimize("editor")}
-        >
-          <EditorSurface
-            space={space}
-            onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))}
-          />
-        </WindowFrame>
-
-        <WindowFrame
-          id="running-app"
-          title="TerraFusion"
-          geometry={space.windows["running-app"]}
-          active={space.activeWindowId === "running-app"}
-          onActivate={() => activate("running-app")}
-          onGeometry={(geometry) => updateWindow("running-app", geometry)}
-          onMinimize={() => minimize("running-app")}
-        >
-          {space.runningAppUrl ? (
-            <iframe
-              src={space.runningAppUrl}
-              title="Running TerraFusion application"
-              sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"
-              className={styles.runningApp}
-            />
-          ) : (
-            <div className={styles.appRefusal} role="status">
-              <AppWindow size={20} aria-hidden />
-              <span>Developer preview unavailable. Start or attach the TerraFusion development runtime to preview it here.</span>
-            </div>
-          )}
-        </WindowFrame>
-
-        {inspectors.map((surface) => {
-          const geometry = space.inspectorWindows[surface.id]
-          if (!geometry) return null
-          return (
-            <WindowFrame
-              key={surface.id}
-              id={surface.id}
-              title={`Inspector · ${surface.subject}`}
-              geometry={geometry}
-              active={space.activeWindowId === surface.id}
-              onActivate={() => activateInspector(surface.id)}
-              onGeometry={(next) => updateInspector(surface.id, next)}
-              onClose={() => dismissInspector(surface.id)}
-            >
-              <InspectorSurfaceView surface={surface} />
-            </WindowFrame>
-          )
-        })}
-      </div>
-
-      {lineOpen ? (
-        <div className={styles.lineBackdrop} onPointerDown={(event) => { if (event.target === event.currentTarget) setLineOpen(false) }}>
-          <form className={styles.line} onSubmit={submitLine} aria-label="The Line">
-            <Command size={16} aria-hidden />
-            <div className={styles.lineContent}>
-              <input
-                ref={lineRef}
-                value={lineInput}
-                onChange={(event) => setLineInput(event.target.value)}
-                placeholder={space.selectedPath ? `Act on ${space.selectedPath}` : "Ask or direct WilliamOS"}
-                aria-label="The Line"
-                autoFocus
-              />
-              {lineReply ? <output className={styles.lineReply}>{lineReply}</output> : null}
-            </div>
-            <span className={styles.lineState}>{lineBusy ? "working" : "↵"}</span>
-          </form>
+    <main className={experience.environment} aria-label={`${project?.name ?? "Workspace"} Space`}>
+      <aside className={experience.worldRail} aria-label="WilliamOS worlds">
+        <div className={experience.worldMark} aria-label="WilliamOS">W</div>
+        <div className={experience.worldRailBody}>
+          <button
+            type="button"
+            className={`${experience.railButton} ${experience.railButtonActive}`}
+            aria-label={project?.name ?? "Current Space"}
+            title={project?.identity ?? project?.name ?? "Current Space"}
+          >
+            <Layers3 size={18} strokeWidth={1.7} />
+          </button>
+          <button
+            type="button"
+            className={`${experience.railButton} ${experience.railButtonBottom}`}
+            onClick={() => {
+              setContextView("conversation")
+              setLineOpen(true)
+              requestAnimationFrame(() => lineRef.current?.focus())
+            }}
+            aria-label="Open conversation (Ctrl+K)"
+            title="Conversation · Ctrl+K"
+          >
+            <Command size={17} strokeWidth={1.7} />
+          </button>
         </div>
-      ) : null}
+      </aside>
 
-      <footer className={styles.presenceRail}>
-        <div className={styles.railContext}>
-          <span className={styles.railSpace}>
-            {spine.projectName ?? project?.name ?? "WORKSPACE"}
-            {spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""}
-            {spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""}
-          </span>
-          {lastLineSay ? (
-            <button type="button" className={styles.lineRecall} onClick={() => { setLineReply(lastLineSay); setLineOpen(true) }} title={lastLineSay}>
-              {lastLineSay}
+      <section className={experience.world}>
+        <header className={experience.worldHeader}>
+          <div className={experience.worldIdentity}>
+            <span className={experience.worldEyebrow}>Space</span>
+            <h1 className={experience.worldTitle}>{project?.name ?? "Opening workspace"}</h1>
+            <span className={experience.worldPath}>{space.selectedPath ?? project?.identity ?? ""}</span>
+          </div>
+          <div className={experience.worldStatus} title={persistenceError ?? undefined}>
+            <span className={persistenceError ? experience.statusDotError : experience.statusDot} aria-hidden />
+            <span>{savedLabel}</span>
+            {spine.outcomeKey ? <span>{spine.execution}</span> : null}
+          </div>
+          <button
+            type="button"
+            className={experience.contextToggle}
+            onClick={() => setLineOpen((current) => !current)}
+            aria-label="Toggle conversation and context"
+          >
+            {lineOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
+          </button>
+        </header>
+
+        <div
+          ref={workbenchRef}
+          className={experience.workbench}
+          style={{ "--source-percent": `${sourcePercent}%` } as React.CSSProperties}
+        >
+          <section className={experience.sourceRegion} data-window-id="editor" aria-label="Source window">
+            <header className={experience.regionHeader}>
+              <span className={experience.regionHeaderStrong}>Source</span>
+              <span className={experience.regionMeta}>{space.selectedPath ?? "Choose a file from the project"}</span>
+            </header>
+            <div className={experience.sourceBody}>
+              <EditorSurface
+                space={space}
+                onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))}
+              />
+            </div>
+          </section>
+
+          <div
+            className={experience.splitHandle}
+            role="separator"
+            aria-label="Resize source and preview"
+            aria-orientation="vertical"
+            tabIndex={0}
+            onPointerDown={startWorkbenchResize}
+          />
+
+          <section className={experience.previewRegion} data-window-id="running-app" aria-label="TerraFusion window">
+            <header className={experience.regionHeader}>
+              <span className={experience.regionHeaderStrong}>Developer preview</span>
+              <span className={experience.previewState} data-live={Boolean(space.runningAppUrl)}>
+                {space.runningAppUrl ? "Live target" : "Not attached"}
+              </span>
+            </header>
+            <div className={experience.previewBody}>
+              {space.runningAppUrl ? (
+                <iframe
+                  src={space.runningAppUrl}
+                  title="Running TerraFusion application"
+                  sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"
+                  className={experience.runningApp}
+                />
+              ) : (
+                <div className={experience.previewUnavailable} role="status">
+                  <AppWindow size={24} strokeWidth={1.5} aria-hidden />
+                  <h2>Preview is not attached</h2>
+                  <p>The WilliamOS workspace remains fully usable. Attach the TerraFusion development runtime when you want the live target beside the source.</p>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <aside className={experience.contextRail} data-open={lineOpen} aria-label="Conversation and context">
+        <header className={experience.contextHeader}>
+          <MessageSquare size={15} strokeWidth={1.6} aria-hidden />
+          <span className={experience.contextHeaderTitle}>WilliamOS</span>
+          <span className={experience.contextHeaderMeta}>{space.selectedPath ? "file context" : "space context"}</span>
+          <button
+            type="button"
+            className={experience.contextToggle}
+            onClick={() => setLineOpen(false)}
+            aria-label="Close conversation and context"
+          >
+            <PanelRightClose size={17} />
+          </button>
+        </header>
+
+        <nav className={experience.contextTabs} aria-label="Context modes">
+          <button
+            type="button"
+            className={`${experience.contextTab} ${contextView === "conversation" ? experience.contextTabActive : ""}`}
+            onClick={() => setContextView("conversation")}
+          >
+            Conversation
+          </button>
+          {inspectors.length > 0 ? (
+            <button
+              type="button"
+              className={`${experience.contextTab} ${contextView === "inspector" ? experience.contextTabActive : ""}`}
+              onClick={() => setContextView("inspector")}
+            >
+              Context {inspectors.length > 1 ? `· ${inspectors.length}` : ""}
             </button>
           ) : null}
+        </nav>
+
+        <div className={experience.contextBody}>
+          {contextView === "conversation" ? (
+            <div className={experience.conversation}>
+              {conversation.length === 0 ? (
+                <p className={experience.conversationEmpty}>
+                  Conversation stays with the work in front of you. Select a file, inspect the target, or tell WilliamOS what you want to do next.
+                </p>
+              ) : conversation.map((entry) => (
+                <article key={entry.id} className={experience.message} data-role={entry.role}>
+                  <span className={experience.messageRole}>{entry.role === "owner" ? "You" : "WilliamOS"}</span>
+                  <p className={experience.messageText}>{entry.text}</p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className={experience.inspectorPane}>
+              <div className={experience.inspectorList}>
+                {inspectors.map((surface) => (
+                  <button
+                    key={surface.id}
+                    type="button"
+                    className={`${experience.inspectorChoice} ${activeInspector?.id === surface.id ? experience.inspectorChoiceActive : ""}`}
+                    onClick={() => setActiveInspectorId(surface.id)}
+                    title={surface.subject}
+                  >
+                    <span>{surface.subject}</span>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      className={experience.inspectorDismiss}
+                      aria-label={`Close ${surface.subject}`}
+                      onClick={(event) => { event.stopPropagation(); dismissInspector(surface.id) }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          dismissInspector(surface.id)
+                        }
+                      }}
+                    >
+                      <X size={12} />
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className={experience.inspectorBody}>
+                {activeInspector ? <InspectorSurfaceView surface={activeInspector} /> : null}
+              </div>
+            </div>
+          )}
         </div>
-        <div className={styles.dock} aria-label="Dock">
-          {space.dock.map((id) => (
-            <button
-              key={id}
-              type="button"
-              className={`${styles.dockItem} ${space.activeWindowId === id && !space.windows[id].minimized ? styles.dockItemActive : ""}`}
-              onClick={() => activate(id)}
-              aria-label={`${space.windows[id].minimized ? "Restore" : "Focus"} ${windowName[id]}`}
-              title={windowName[id]}
-            >
-              {id === "editor" ? <Braces size={15} /> : <AppWindow size={15} />}
-            </button>
-          ))}
-        </div>
-        <span
-          className={persistenceError ? styles.railError : styles.railSaved}
-          title={persistenceError ?? (storage === "browser" ? "Space saved in this browser" : "Space persisted server-side")}
-        >
-          {persistenceError ? persistenceError : hydrated ? storage === "browser" ? "space saved locally" : "space saved" : "opening space"}
-        </span>
-      </footer>
+
+        <form className={experience.composer} onSubmit={submitLine} aria-label="The Line">
+          <div className={experience.composerField}>
+            <textarea
+              ref={lineRef}
+              value={lineInput}
+              onChange={(event) => setLineInput(event.target.value)}
+              onFocus={() => { setLineOpen(true); setContextView("conversation") }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault()
+                  event.currentTarget.form?.requestSubmit()
+                }
+              }}
+              placeholder={space.selectedPath ? `Ask or act on ${space.selectedPath}` : "Ask or direct WilliamOS"}
+              aria-label="The Line"
+              rows={2}
+            />
+            {lineReply ? <output className={experience.composerError}>{lineReply}</output> : null}
+          </div>
+          <button
+            type="submit"
+            className={experience.composerSubmit}
+            disabled={lineBusy || lineInput.trim().length === 0}
+            aria-label={lineBusy ? "WilliamOS is working" : "Send"}
+          >
+            <ArrowUp size={15} strokeWidth={1.8} />
+          </button>
+        </form>
+      </aside>
     </main>
   )
 }
