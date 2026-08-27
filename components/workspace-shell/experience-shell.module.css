@@ -15,11 +15,19 @@
   height: 100dvh;
   min-height: 520px;
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 348px;
   overflow: hidden;
   color: var(--world-text);
   background: var(--world-bg);
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  transition: grid-template-columns 140ms ease;
+}
+
+.environmentContextOpen {
+  grid-template-columns: 64px minmax(0, 1fr) 348px;
+}
+
+.environmentContextClosed {
+  grid-template-columns: 64px minmax(0, 1fr) 54px;
 }
 
 .worldRail {
@@ -141,7 +149,8 @@
   font-size: 11px;
 }
 
-.statusDot {
+.statusDot,
+.statusDotError {
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -175,7 +184,6 @@
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(420px, var(--source-percent)) 6px minmax(340px, 1fr);
-  padding: 0;
   overflow: hidden;
   background: var(--world-line-soft);
 }
@@ -314,6 +322,7 @@
   min-height: 0;
   display: grid;
   grid-template-rows: 72px 40px minmax(0, 1fr) auto;
+  overflow: hidden;
   border-left: 1px solid var(--world-line-soft);
   background: #141713;
 }
@@ -322,8 +331,28 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 18px;
+  min-width: 0;
+  padding: 0 14px;
   border-bottom: 1px solid var(--world-line-soft);
+}
+
+.contextRailSummon {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 3px;
+  color: var(--world-muted);
+  background: transparent;
+}
+
+.contextRailSummon:hover,
+.contextRailSummon:focus-visible {
+  color: var(--world-text);
+  background: var(--world-surface-raised);
+  outline: none;
 }
 
 .contextHeaderTitle {
@@ -333,9 +362,13 @@
 }
 
 .contextHeaderMeta {
+  min-width: 0;
+  overflow: hidden;
   margin-left: auto;
   color: var(--world-dim);
   font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .contextTabs {
@@ -373,6 +406,25 @@
   overflow: auto;
   scrollbar-color: #343a33 transparent;
   scrollbar-width: thin;
+}
+
+.environmentContextClosed .contextRail {
+  grid-template-rows: 72px minmax(0, 1fr);
+  background: #0e100e;
+}
+
+.environmentContextClosed .contextHeader {
+  justify-content: center;
+  padding: 0;
+}
+
+.environmentContextClosed .contextHeaderTitle,
+.environmentContextClosed .contextHeaderMeta,
+.environmentContextClosed .contextTabs,
+.environmentContextClosed .contextBody,
+.environmentContextClosed .composer,
+.environmentContextClosed .contextToggle {
+  display: none;
 }
 
 .conversation {
@@ -488,27 +540,24 @@
   min-width: 0;
 }
 
-.composer textarea {
+.composer input {
   width: 100%;
-  min-height: 42px;
-  max-height: 120px;
-  resize: vertical;
-  padding: 10px 11px;
+  height: 42px;
+  padding: 0 11px;
   border: 1px solid var(--world-line);
   border-radius: 3px;
   color: var(--world-text);
   background: #111410;
   font: inherit;
   font-size: 12px;
-  line-height: 1.45;
 }
 
-.composer textarea:focus {
+.composer input:focus {
   border-color: #667565;
   outline: none;
 }
 
-.composer textarea::placeholder {
+.composer input::placeholder {
   color: #697168;
 }
 
@@ -520,7 +569,6 @@
 }
 
 .composerSubmit {
-  align-self: end;
   width: 42px;
   height: 42px;
   display: grid;
@@ -541,7 +589,9 @@
 }
 
 @media (max-width: 1180px) {
-  .environment {
+  .environment,
+  .environmentContextOpen,
+  .environmentContextClosed {
     grid-template-columns: 56px minmax(0, 1fr);
   }
 
@@ -552,6 +602,7 @@
     right: 0;
     bottom: 0;
     width: min(390px, calc(100vw - 56px));
+    grid-template-rows: 72px 40px minmax(0, 1fr) auto;
     transform: translateX(100%);
     transition: transform 150ms ease;
     box-shadow: -18px 0 48px rgb(0 0 0 / 30%);
@@ -559,6 +610,22 @@
 
   .contextRail[data-open="true"] {
     transform: translateX(0);
+  }
+
+  .environmentContextClosed .contextRail {
+    grid-template-rows: 72px 40px minmax(0, 1fr) auto;
+  }
+
+  .environmentContextClosed .contextHeader {
+    justify-content: flex-start;
+    padding: 0 14px;
+  }
+
+  .environmentContextClosed .contextHeaderTitle,
+  .environmentContextClosed .contextHeaderMeta,
+  .environmentContextClosed .contextTabs,
+  .environmentContextClosed .contextBody {
+    display: initial;
   }
 
   .contextToggle {
@@ -592,7 +659,9 @@
 }
 
 @media (max-width: 640px) {
-  .environment {
+  .environment,
+  .environmentContextOpen,
+  .environmentContextClosed {
     grid-template-columns: 1fr;
   }
 
@@ -610,6 +679,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .environment,
   .contextRail {
     transition: none;
   }
