@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url"
 
 export const SCHEMA = "hermes-host-attestation/1"
 export const COLLECTOR_SCHEMA = "hermes-host-attestation-source/1"
+export const TARGETED_SCHEMA = "hermes-host-attestation-targeted/1"
+export const TARGETED_COLLECTOR_SCHEMA = "hermes-host-attestation-targeted-source/1"
 export const CANONICALIZATION = "recursive-key-sort-json/1"
 export const TRUTH_STATES = Object.freeze(["OBSERVED", "UNKNOWN", "CONFLICTING", "STALE"])
 export const PRIORITY_TYPES = Object.freeze([
@@ -42,6 +44,19 @@ export const REQUIRED_FACT_IDS = Object.freeze([
   "inference.guardBaseline",
   "dr.target",
 ])
+
+export const SECURITY_INFERENCE_FACT_IDS = Object.freeze([
+  "network.listeners",
+  "network.specialPortOwners",
+  "network.firewallAdmissions",
+  "security.firewallProfiles",
+  "inference.gpus",
+  "inference.ollama",
+  "inference.dockerContainers",
+  "inference.guardBaseline",
+  "operations.tasks",
+  "operations.heartbeats",
+].sort())
 
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/
 const SHA256 = /^[a-f0-9]{64}$/
@@ -291,16 +306,25 @@ function validateFact(fact, index, { allowStale = false } = {}) {
 }
 
 function validateLaunch(source, launchManifest, launchReceipt, sourceBytesSha256) {
-  exactKeys(launchManifest, ["schema", "nonce", "stagedAt", "collectorSha256", "binderSha256", "nodeSha256", "powershellSha256", "nativeExecutables", "expectedUacPrompts", "uacMethod", "persistentCredential", "outputPathSha256"], "launchManifest")
-  if (launchManifest.schema !== "hermes-host-attestation-launch/1" || !/^[a-f0-9-]{36}$/.test(launchManifest.nonce)
+  const targeted = launchManifest.schema === "hermes-host-attestation-launch/2"
+  exactKeys(launchManifest, targeted
+    ? ["schema", "nonce", "stagedAt", "collectorSha256", "binderSha256", "nodeSha256", "powershellSha256", "nativeExecutables", "expectedUacPrompts", "uacMethod", "persistentCredential", "outputPathSha256", "mode", "requestedFactIds"]
+    : ["schema", "nonce", "stagedAt", "collectorSha256", "binderSha256", "nodeSha256", "powershellSha256", "nativeExecutables", "expectedUacPrompts", "uacMethod", "persistentCredential", "outputPathSha256"], "launchManifest")
+  if (!["hermes-host-attestation-launch/1", "hermes-host-attestation-launch/2"].includes(launchManifest.schema) || !/^[a-f0-9-]{36}$/.test(launchManifest.nonce)
     || !SHA256.test(launchManifest.collectorSha256) || !SHA256.test(launchManifest.binderSha256) || !SHA256.test(launchManifest.nodeSha256)
     || !SHA256.test(launchManifest.powershellSha256) || launchManifest.expectedUacPrompts !== 1
     || launchManifest.uacMethod !== "Start-Process/RunAs" || launchManifest.persistentCredential !== false
     || !SHA256.test(launchManifest.outputPathSha256)) {
     fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "launch manifest is invalid")
   }
-  exactKeys(launchManifest.nativeExecutables, Object.keys(TRUSTED_NATIVE_PATHS), "launchManifest.nativeExecutables")
-  for (const [name, expectedPath] of Object.entries(TRUSTED_NATIVE_PATHS)) {
+  if (targeted && (launchManifest.mode !== "SECURITY_INFERENCE" || !Array.isArray(launchManifest.requestedFactIds)
+    || JSON.stringify([...launchManifest.requestedFactIds].sort()) !== JSON.stringify(SECURITY_INFERENCE_FACT_IDS))) {
+    fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "targeted launch manifest does not bind the exact decision closure")
+  }
+  const requiredNativeNames = targeted ? ["docker", "nvidiaSmi"] : Object.keys(TRUSTED_NATIVE_PATHS)
+  exactKeys(launchManifest.nativeExecutables, requiredNativeNames, "launchManifest.nativeExecutables")
+  for (const name of requiredNativeNames) {
+    const expectedPath = TRUSTED_NATIVE_PATHS[name]
     const entry = launchManifest.nativeExecutables[name]
     exactKeys(entry, ["path", "sha256"], `launchManifest.nativeExecutables.${name}`)
     if (String(entry.path).toLowerCase() !== expectedPath.toLowerCase() || !SHA256.test(entry.sha256)) {
@@ -380,6 +404,64 @@ export function validateSource(source, { now = new Date(), launchManifest, launc
   if (completedAt > bindTime + 300000 || launchTimes.receiptAt > bindTime) fail("HERMES_ATTESTATION_INVALID", "collection or receipt completion is implausibly in the future")
   const stale = source.facts.filter((fact) => Date.parse(fact.freshness.validUntil) < bindTime).map((fact) => fact.id)
   if (stale.length > 0) fail("HERMES_ATTESTATION_STALE_BIND", `stale facts require re-sensing: ${stale.join(", ")}`)
+  return source
+}
+
+export function validateTargetedSource(source, { now = new Date(), launchManifest, launchReceipt, sourceBytesSha256 = stableDigest(source) } = {}) {
+  exactKeys(source, ["schema", "artifact", "collector", "authority", "collectionId", "collectedAt", "collectionCompletedAt", "host", "mode", "requestedFactIds", "facts"], "targetedSource")
+  if (source.schema !== TARGETED_COLLECTOR_SCHEMA || source.artifact !== "HERMES_HOST_ATTESTATION" || source.mode !== "SECURITY_INFERENCE") {
+    fail("HERMES_ATTESTATION_INVALID", "targeted source identity is invalid")
+  }
+  if (!Array.isArray(source.requestedFactIds)
+    || JSON.stringify([...source.requestedFactIds].sort()) !== JSON.stringify(SECURITY_INFERENCE_FACT_IDS)) {
+    fail("HERMES_ATTESTATION_INCOMPLETE", "targeted source does not declare the exact decision closure")
+  }
+  exactKeys(source.collector, ["name", "version", "sha256", "readOnly"], "targetedSource.collector")
+  if (source.collector.name !== "collect-hermes-host-attestation.v1.ps1" || source.collector.version !== "1.0.0"
+    || !SHA256.test(source.collector.sha256) || source.collector.readOnly !== true) {
+    fail("HERMES_ATTESTATION_INVALID", "targeted collector identity is invalid")
+  }
+  exactKeys(source.authority, ["boundary", "elevated", "persistentCredential", "hostMutationAuthorized", "launchNonce", "launchManifestSha256"], "targetedSource.authority")
+  if (source.authority.boundary !== "single-prestaged-uac-read-only" || source.authority.elevated !== true
+    || source.authority.persistentCredential !== false || source.authority.hostMutationAuthorized !== false
+    || !SHA256.test(source.authority.launchManifestSha256)) {
+    fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "targeted source did not preserve the one-UAC read-only boundary")
+  }
+  if (!launchManifest || !launchReceipt || launchManifest.schema !== "hermes-host-attestation-launch/2") {
+    fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "targeted launch manifest and receipt are required")
+  }
+  if (!SHA256.test(sourceBytesSha256)) fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "targeted source byte digest is invalid")
+  const launchTimes = validateLaunch(source, launchManifest, launchReceipt, sourceBytesSha256)
+  if (launchManifest.mode !== source.mode
+    || JSON.stringify([...launchManifest.requestedFactIds].sort()) !== JSON.stringify([...source.requestedFactIds].sort())) {
+    fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "targeted source closure differs from the staged request")
+  }
+  text(source.collectionId, "targetedSource.collectionId")
+  if (source.collectionId !== launchManifest.nonce) fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "targeted collectionId must equal the staged nonce")
+  const collectedAt = instant(source.collectedAt, "targetedSource.collectedAt")
+  const completedAt = instant(source.collectionCompletedAt, "targetedSource.collectionCompletedAt")
+  if (completedAt < collectedAt || launchTimes.stagedAt > collectedAt || completedAt > launchTimes.receiptAt) {
+    fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "targeted launch/collection chronology is inconsistent")
+  }
+  exactKeys(source.host, ["hostname", "machineIdentitySha256", "isWindows"], "targetedSource.host")
+  if (String(source.host.hostname).toUpperCase() !== "HERMES" || !SHA256.test(source.host.machineIdentitySha256) || source.host.isWindows !== true) {
+    fail("HERMES_ATTESTATION_INVALID", "targeted host identity is invalid")
+  }
+  if (!Array.isArray(source.facts)) fail("HERMES_ATTESTATION_INVALID", "targeted facts must be an array")
+  const ids = source.facts.map((fact, index) => {
+    const times = validateFact(fact, index)
+    if (times.observedAt < collectedAt || times.observedAt > completedAt) fail("HERMES_ATTESTATION_INVALID", `${fact.id} was observed outside the targeted collection window`)
+    return fact.id
+  })
+  if (new Set(ids).size !== ids.length || JSON.stringify([...ids].sort()) !== JSON.stringify(SECURITY_INFERENCE_FACT_IDS)) {
+    fail("HERMES_ATTESTATION_INCOMPLETE", "targeted fact set is not the exact security/inference prerequisite closure")
+  }
+  const bindTime = now instanceof Date ? now.getTime() : Date.parse(now)
+  if (!Number.isFinite(bindTime) || completedAt > bindTime + 300000 || launchTimes.receiptAt > bindTime) {
+    fail("HERMES_ATTESTATION_INVALID", "targeted bind time is invalid")
+  }
+  const stale = source.facts.filter((fact) => Date.parse(fact.freshness.validUntil) < bindTime).map((fact) => fact.id)
+  if (stale.length > 0) fail("HERMES_ATTESTATION_STALE_BIND", `targeted stale facts require re-sensing: ${stale.join(", ")}`)
   return source
 }
 
@@ -564,6 +646,18 @@ function digestShape(attestation) {
   return { ...attestation, binding }
 }
 
+function requireSourceBytesMatch(source, sourceBytes) {
+  let decoded
+  try {
+    decoded = JSON.parse(Buffer.from(sourceBytes).toString("utf8").replace(/^\uFEFF/, ""))
+  } catch {
+    fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "authenticated source bytes are not valid JSON")
+  }
+  if (canonicalize(decoded) !== canonicalize(source)) {
+    fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "supplied source object does not match authenticated source bytes")
+  }
+}
+
 export function bindAttestation(source, { now = new Date(), launchManifest, launchReceipt, sourceBytesSha256 = stableDigest(source) } = {}) {
   validateSource(source, { now, launchManifest, launchReceipt, sourceBytesSha256 })
   const boundAt = (now instanceof Date ? now : new Date(now)).toISOString()
@@ -593,6 +687,95 @@ export function bindAttestation(source, { now = new Date(), launchManifest, laun
   }
   unsigned.binding.digestSha256 = stableDigest(digestShape(unsigned))
   return unsigned
+}
+
+function targetedPriorityOverrides(facts) {
+  return derivePriorityOverrides(facts).filter((entry) => ["HERMES_SECURITY_EXPOSURE_CRITICAL", "HERMES_INFERENCE_GOLDEN_DRIFT"].includes(entry.type))
+}
+
+export function bindTargetedResense(source, { now = new Date(), launchManifest, launchReceipt, sourceBytesSha256 = stableDigest(source) } = {}) {
+  validateTargetedSource(source, { now, launchManifest, launchReceipt, sourceBytesSha256 })
+  const boundAt = (now instanceof Date ? now : new Date(now)).toISOString()
+  const facts = normalizedCollectorFacts(source.facts).sort((left, right) => left.id.localeCompare(right.id))
+  const unsigned = {
+    schema: TARGETED_SCHEMA,
+    artifact: "HERMES_HOST_TARGETED_RESENSE",
+    mode: "SECURITY_INFERENCE",
+    collectedAt: source.collectedAt,
+    collectionCompletedAt: source.collectionCompletedAt,
+    boundAt,
+    collectionId: source.collectionId,
+    host: source.host,
+    collector: source.collector,
+    authority: source.authority,
+    requestedFactIds: [...SECURITY_INFERENCE_FACT_IDS],
+    facts,
+    priorityOverrides: targetedPriorityOverrides(facts),
+    resense: { mode: "ONLY_STALE_OR_CHANGED_PREREQUISITES", factIds: [] },
+    binding: {
+      digestAlgorithm: "sha256",
+      canonicalization: CANONICALIZATION,
+      sourceDigestSha256: stableDigest(source),
+      launchManifestSha256: stableDigest(launchManifest),
+      launchReceiptSha256: stableDigest(launchReceipt),
+      digestSha256: "",
+    },
+  }
+  unsigned.binding.digestSha256 = stableDigest(digestShape(unsigned))
+  return unsigned
+}
+
+export function verifyTargetedResense(attestation, { now = new Date(), changedPrerequisiteIds = [], launchManifest, launchReceipt, source, sourceBytes } = {}) {
+  if (!object(attestation) || attestation.schema !== TARGETED_SCHEMA || attestation.artifact !== "HERMES_HOST_TARGETED_RESENSE" || attestation.mode !== "SECURITY_INFERENCE") {
+    fail("HERMES_ATTESTATION_INVALID", "targeted artifact identity is invalid")
+  }
+  exactKeys(attestation, ["schema", "artifact", "mode", "collectedAt", "collectionCompletedAt", "boundAt", "collectionId", "host", "collector", "authority", "requestedFactIds", "facts", "priorityOverrides", "resense", "binding"], "targetedAttestation")
+  instant(attestation.collectedAt, "targetedAttestation.collectedAt")
+  instant(attestation.collectionCompletedAt, "targetedAttestation.collectionCompletedAt")
+  instant(attestation.boundAt, "targetedAttestation.boundAt")
+  if (!Array.isArray(attestation.requestedFactIds)
+    || JSON.stringify([...attestation.requestedFactIds].sort()) !== JSON.stringify(SECURITY_INFERENCE_FACT_IDS)
+    || !Array.isArray(attestation.facts)) fail("HERMES_ATTESTATION_INCOMPLETE", "targeted bound closure is invalid")
+  attestation.facts.forEach((fact, index) => validateFact(fact, index, { allowStale: true }))
+  const ids = attestation.facts.map((fact) => fact.id)
+  if (new Set(ids).size !== ids.length || JSON.stringify([...ids].sort()) !== JSON.stringify(SECURITY_INFERENCE_FACT_IDS)) {
+    fail("HERMES_ATTESTATION_INCOMPLETE", "targeted bound fact set is not exact")
+  }
+  if (!Array.isArray(attestation.priorityOverrides)
+    || JSON.stringify(attestation.priorityOverrides) !== JSON.stringify(targetedPriorityOverrides(attestation.facts))) {
+    fail("HERMES_ATTESTATION_INVALID", "targeted priority overrides do not match bound facts")
+  }
+  exactKeys(attestation.resense, ["mode", "factIds"], "targetedAttestation.resense")
+  if (attestation.resense.mode !== "ONLY_STALE_OR_CHANGED_PREREQUISITES" || !Array.isArray(attestation.resense.factIds)
+    || attestation.resense.factIds.length !== 0) fail("HERMES_ATTESTATION_INVALID", "fresh targeted bind must not persist a re-sense list")
+  exactKeys(attestation.binding, ["digestAlgorithm", "canonicalization", "sourceDigestSha256", "launchManifestSha256", "launchReceiptSha256", "digestSha256"], "targetedAttestation.binding")
+  if (attestation.binding.digestAlgorithm !== "sha256" || attestation.binding.canonicalization !== CANONICALIZATION
+    || ![attestation.binding.sourceDigestSha256, attestation.binding.launchManifestSha256, attestation.binding.launchReceiptSha256, attestation.binding.digestSha256].every((value) => SHA256.test(value))
+    || stableDigest(digestShape(attestation)) !== attestation.binding.digestSha256) {
+    fail("HERMES_ATTESTATION_DIGEST_INVALID", "targeted binding digest is invalid")
+  }
+  if (!launchManifest || !launchReceipt || !source || !(Buffer.isBuffer(sourceBytes) || sourceBytes instanceof Uint8Array)) {
+    fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "targeted external evidence is required")
+  }
+  const sourceBytesSha256 = crypto.createHash("sha256").update(sourceBytes).digest("hex")
+  requireSourceBytesMatch(source, sourceBytes)
+  validateTargetedSource(source, { now: new Date(attestation.boundAt), launchManifest, launchReceipt, sourceBytesSha256 })
+  if (stableDigest(source) !== attestation.binding.sourceDigestSha256
+    || stableDigest(launchManifest) !== attestation.binding.launchManifestSha256
+    || stableDigest(launchReceipt) !== attestation.binding.launchReceiptSha256
+    || attestation.collectionId !== source.collectionId
+    || attestation.collectedAt !== source.collectedAt
+    || attestation.collectionCompletedAt !== source.collectionCompletedAt
+    || canonicalize(attestation.host) !== canonicalize(source.host)
+    || canonicalize(attestation.collector) !== canonicalize(source.collector)
+    || canonicalize(attestation.authority) !== canonicalize(source.authority)
+    || canonicalize(attestation.facts) !== canonicalize(normalizedCollectorFacts(source.facts).sort((left, right) => left.id.localeCompare(right.id)))) {
+    fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "targeted packet does not match its source/launch evidence")
+  }
+  const at = now instanceof Date ? now.getTime() : Date.parse(now)
+  const staleFactIds = attestation.facts.filter((fact) => Date.parse(fact.freshness.validUntil) < at).map((fact) => fact.id)
+  const changed = changedPrerequisiteIds.filter((id) => SECURITY_INFERENCE_FACT_IDS.includes(id))
+  return { validDigest: true, fresh: staleFactIds.length === 0, staleFactIds, resenseFactIds: [...new Set([...staleFactIds, ...changed])].sort(), broadResetRequired: false }
 }
 
 export function verifyBoundAttestation(attestation, { now = new Date(), changedPrerequisiteIds = [], launchManifest, launchReceipt, source, sourceBytes } = {}) {
@@ -637,6 +820,7 @@ export function verifyBoundAttestation(attestation, { now = new Date(), changedP
     fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "external source bytes, launch manifest, and receipt are required for verification")
   }
   const sourceBytesSha256 = crypto.createHash("sha256").update(sourceBytes).digest("hex")
+  requireSourceBytesMatch(source, sourceBytes)
   // Revalidate launch/source authority at the original bind instant. Current freshness is assessed
   // separately below so an expired packet yields a selective re-sense list instead of losing provenance.
   validateSource(source, { now: new Date(attestation.boundAt), launchManifest, launchReceipt, sourceBytesSha256 })
@@ -682,8 +866,12 @@ export function runCli(argv = process.argv.slice(2)) {
   const launchManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8").replace(/^\uFEFF/, ""))
   const launchReceipt = JSON.parse(fs.readFileSync(receiptPath, "utf8").replace(/^\uFEFF/, ""))
   const sourceBytesSha256 = crypto.createHash("sha256").update(sourceBytes).digest("hex")
-  const bound = bindAttestation(source, { launchManifest, launchReceipt, sourceBytesSha256 })
-  verifyBoundAttestation(bound, { launchManifest, launchReceipt, source, sourceBytes })
+  const targeted = source.schema === TARGETED_COLLECTOR_SCHEMA
+  const bound = targeted
+    ? bindTargetedResense(source, { launchManifest, launchReceipt, sourceBytesSha256 })
+    : bindAttestation(source, { launchManifest, launchReceipt, sourceBytesSha256 })
+  if (targeted) verifyTargetedResense(bound, { launchManifest, launchReceipt, source, sourceBytes })
+  else verifyBoundAttestation(bound, { launchManifest, launchReceipt, source, sourceBytes })
   fs.writeFileSync(outputPath, `${JSON.stringify(bound, null, 2)}\n`, { encoding: "utf8", flag: "wx" })
   process.stdout.write(`${bound.binding.digestSha256}\n`)
   return bound

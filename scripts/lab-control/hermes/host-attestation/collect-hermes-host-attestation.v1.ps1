@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory = $true)][string]$OutputPath,
   [Parameter(Mandatory = $true)][string]$LaunchManifestPath,
-  [string]$CollectionId = ([Guid]::NewGuid().ToString('D'))
+  [string]$CollectionId = ([Guid]::NewGuid().ToString('D')),
+  [string]$FactIdsCsv = ''
 )
 
 Set-StrictMode -Version Latest
@@ -10,6 +11,11 @@ $collectorVersion = '1.0.0'
 $collectionStarted = (Get-Date).ToUniversalTime()
 $facts = [System.Collections.Generic.List[object]]::new()
 $specialPorts = @(8080, 50080, 50443)
+$securityInferenceFactIds = @(
+  'inference.dockerContainers', 'inference.gpus', 'inference.guardBaseline', 'inference.ollama',
+  'network.firewallAdmissions', 'network.listeners', 'network.specialPortOwners',
+  'operations.heartbeats', 'operations.tasks', 'security.firewallProfiles'
+)
 
 # This collector deliberately does not self-elevate. The pre-staged launcher owns the sole UAC
 # transition, and this process proves that transition happened before inspecting ACL-hidden state.
@@ -22,10 +28,24 @@ if (-not [IO.File]::Exists([IO.Path]::GetFullPath($LaunchManifestPath))) {
   throw 'HERMES_ATTESTATION_LAUNCH_MANIFEST_MISSING'
 }
 $launchManifest = [IO.File]::ReadAllText([IO.Path]::GetFullPath($LaunchManifestPath)) | ConvertFrom-Json
-if ($launchManifest.schema -ne 'hermes-host-attestation-launch/1' -or $launchManifest.expectedUacPrompts -ne 1 `
+if ($launchManifest.schema -notin @('hermes-host-attestation-launch/1','hermes-host-attestation-launch/2') -or $launchManifest.expectedUacPrompts -ne 1 `
   -or $launchManifest.uacMethod -ne 'Start-Process/RunAs' -or $launchManifest.persistentCredential -ne $false) {
   throw 'HERMES_ATTESTATION_LAUNCH_MANIFEST_INVALID'
 }
+$targetedMode = $launchManifest.schema -eq 'hermes-host-attestation-launch/2'
+$requestedFactIds = if ($targetedMode) { @($launchManifest.requestedFactIds | ForEach-Object { [string]$_ }) } else { @() }
+$argumentFactIds = if ($FactIdsCsv) { @($FactIdsCsv -split ',' | Where-Object { $_ } | ForEach-Object { [string]$_.Trim() }) } else { @() }
+if ($targetedMode) {
+  if ($launchManifest.mode -ne 'SECURITY_INFERENCE' -or $requestedFactIds.Count -ne 10 `
+    -or (($requestedFactIds | Sort-Object) -join ',') -cne (($securityInferenceFactIds | Sort-Object) -join ',') `
+    -or (($requestedFactIds | Sort-Object) -join ',') -cne (($argumentFactIds | Sort-Object) -join ',')) {
+    throw 'HERMES_ATTESTATION_TARGETED_REQUEST_MISMATCH'
+  }
+} elseif ($argumentFactIds.Count -ne 0) {
+  throw 'HERMES_ATTESTATION_TARGETED_REQUEST_WITH_V1_MANIFEST'
+}
+$selectedFactIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($factId in $requestedFactIds) { if (-not $selectedFactIds.Add($factId)) { throw 'HERMES_ATTESTATION_TARGETED_DUPLICATE_FACT' } }
 $launchManifestSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $LaunchManifestPath).Hash.ToLowerInvariant()
 
 $resolvedOutput = [IO.Path]::GetFullPath($OutputPath)
@@ -80,7 +100,7 @@ function Get-TrustedExecutable([string]$Name) {
 
 $dockerExecutable = Get-TrustedExecutable 'docker'
 $nvidiaSmiExecutable = Get-TrustedExecutable 'nvidiaSmi'
-$tailscaleExecutable = Get-TrustedExecutable 'tailscale'
+$tailscaleExecutable = if ($targetedMode) { $null } else { Get-TrustedExecutable 'tailscale' }
 
 function Get-FreshnessBound([string]$Class) {
   switch ($Class) {
@@ -103,6 +123,7 @@ function Add-Fact {
     [scriptblock]$Read,
     [string[]]$RedactedFields = @()
   )
+  if ($targetedMode -and -not $selectedFactIds.Contains($Id)) { return }
   $observedAt = (Get-Date).ToUniversalTime()
   $truth = 'OBSERVED'
   $probeResult = 'SUCCESS'
@@ -740,7 +761,7 @@ Add-Fact 'dr.target' 'recovery' 'Local destination evidence only' 'Require capac
 
 # Re-read only the endpoint tuple set at the end. A listener race is preserved as contradictory
 # evidence; it is never flattened into whichever snapshot happened to run last.
-try {
+if (-not $targetedMode -or $selectedFactIds.Contains('network.listeners')) { try {
   $postListeners = @(
     Get-NetTCPConnection -State Listen | ForEach-Object { "TCP|$($_.LocalAddress)|$($_.LocalPort)|$($_.OwningProcess)" }
     Get-NetUDPEndpoint | ForEach-Object { "UDP|$($_.LocalAddress)|$($_.LocalPort)|$($_.OwningProcess)" }
@@ -763,7 +784,7 @@ try {
   $listenerFact['truth'] = 'CONFLICTING'
   $listenerFact['value'] = [ordered]@{ pre = @($listenerSnapshot); post = $null; raceDetected = 'UNKNOWN_POST_PROBE_FAILED' }
   $listenerFact['provenance']['result'] = 'CONTRADICTION_PRESERVED'
-}
+} }
 
 $machineGuid = [string](Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\Cryptography' 'MachineGuid')
 $collectorHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $PSCommandPath).Hash.ToLowerInvariant()
@@ -771,7 +792,7 @@ if ($collectorHash -ne [string]$launchManifest.collectorSha256) { throw 'HERMES_
 if ((Get-Sha256Text $resolvedOutput) -ne [string]$launchManifest.outputPathSha256) { throw 'HERMES_ATTESTATION_OUTPUT_BINDING_MISMATCH' }
 $collectionCompleted = (Get-Date).ToUniversalTime()
 $source = [ordered]@{
-  schema = 'hermes-host-attestation-source/1'
+  schema = if ($targetedMode) { 'hermes-host-attestation-targeted-source/1' } else { 'hermes-host-attestation-source/1' }
   artifact = 'HERMES_HOST_ATTESTATION'
   collector = [ordered]@{ name = 'collect-hermes-host-attestation.v1.ps1'; version = $collectorVersion; sha256 = $collectorHash; readOnly = $true }
   authority = [ordered]@{
@@ -786,8 +807,12 @@ $source = [ordered]@{
   collectedAt = $collectionStarted.ToString('o')
   collectionCompletedAt = $collectionCompleted.ToString('o')
   host = [ordered]@{ hostname = [Environment]::MachineName; machineIdentitySha256 = Get-Sha256Text $machineGuid; isWindows = $true }
-  facts = @($facts)
 }
+if ($targetedMode) {
+  $source['mode'] = 'SECURITY_INFERENCE'
+  $source['requestedFactIds'] = @($requestedFactIds)
+}
+$source['facts'] = @($facts)
 
 $json = ConvertTo-Json -InputObject $source -Depth 20
 $file = [IO.FileStream]::new($resolvedOutput, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)

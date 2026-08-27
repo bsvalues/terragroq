@@ -8,10 +8,13 @@ import {
   FRESHNESS_BOUNDS,
   GOLDEN,
   REQUIRED_FACT_IDS,
+  SECURITY_INFERENCE_FACT_IDS,
   bindAttestation,
+  bindTargetedResense,
   canonicalize,
   stableDigest,
   verifyBoundAttestation,
+  verifyTargetedResense,
 } from "../scripts/lab-control/hermes/host-attestation/bind-hermes-host-attestation.v1.mjs"
 
 const ROOT = process.cwd()
@@ -113,6 +116,98 @@ function makeFixture() {
   const sourceBytes = Buffer.from(canonicalize(source), "utf8")
   return { source, launchManifest, launchReceipt, sourceBytesSha256, sourceBytes }
 }
+
+function makeTargetedFixture() {
+  const full = makeFixture()
+  const { tailscale: _omittedTailscale, ...targetedNativeExecutables } = full.launchManifest.nativeExecutables
+  const launchManifest = {
+    ...full.launchManifest,
+    schema: "hermes-host-attestation-launch/2",
+    mode: "SECURITY_INFERENCE",
+    requestedFactIds: [...SECURITY_INFERENCE_FACT_IDS],
+    nativeExecutables: targetedNativeExecutables,
+  }
+  const source = {
+    ...full.source,
+    schema: "hermes-host-attestation-targeted-source/1",
+    mode: "SECURITY_INFERENCE",
+    requestedFactIds: [...SECURITY_INFERENCE_FACT_IDS],
+    authority: { ...full.source.authority, launchManifestSha256: stableDigest(launchManifest) },
+    facts: full.source.facts.filter((fact: any) => SECURITY_INFERENCE_FACT_IDS.includes(fact.id)),
+  }
+  const sourceBytesSha256 = stableDigest(source)
+  const launchReceipt = {
+    ...full.launchReceipt,
+    manifestSha256: stableDigest(launchManifest),
+    sourceSha256: sourceBytesSha256,
+  }
+  const sourceBytes = Buffer.from(canonicalize(source), "utf8")
+  return { source, launchManifest, launchReceipt, sourceBytesSha256, sourceBytes }
+}
+
+describe("targeted security/inference re-sense", () => {
+  it("binds and verifies exactly the ten-fact decision closure", () => {
+    const fixture = makeTargetedFixture()
+    const bound = bindTargetedResense(fixture.source, { ...fixture, now: NOW })
+    expect(bound.schema).toBe("hermes-host-attestation-targeted/1")
+    expect(bound.facts.map((fact: any) => fact.id).sort()).toEqual([...SECURITY_INFERENCE_FACT_IDS])
+    expect(bound.priorityOverrides).toEqual([])
+    expect(verifyTargetedResense(bound, { ...fixture, now: NOW })).toMatchObject({ validDigest: true, fresh: true, broadResetRequired: false })
+  })
+
+  it("rejects a missing prerequisite even when launch/source declarations agree", () => {
+    const fixture = makeTargetedFixture()
+    fixture.source.facts = fixture.source.facts.filter((fact: any) => fact.id !== "operations.tasks")
+    const digest = stableDigest(fixture.source)
+    fixture.launchReceipt.sourceSha256 = digest
+    expect(() => bindTargetedResense(fixture.source, { ...fixture, sourceBytesSha256: digest, now: NOW })).toThrow(/exact security\/inference prerequisite closure/)
+  })
+
+  it("derives only security and inference decision overrides", () => {
+    const fixture = makeTargetedFixture()
+    const owners = fixture.source.facts.find((fact: any) => fact.id === "network.specialPortOwners")!
+    owners.value = [{ port: 8080, owner: "UNKNOWN", listeners: [{ address: "0.0.0.0", port: 8080 }] }]
+    const gpus = fixture.source.facts.find((fact: any) => fact.id === "inference.gpus")!
+    gpus.value = []
+    const digest = stableDigest(fixture.source)
+    fixture.launchReceipt.sourceSha256 = digest
+    const bound = bindTargetedResense(fixture.source, { ...fixture, sourceBytesSha256: digest, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).toEqual(["HERMES_SECURITY_EXPOSURE_CRITICAL", "HERMES_INFERENCE_GOLDEN_DRIFT"])
+  })
+
+  it.each(["host", "collector", "authority", "collectedAt", "collectionCompletedAt"])(
+    "rejects recomputed targeted artifact metadata not authenticated by the source: %s",
+    (field) => {
+      const fixture = makeTargetedFixture()
+      const bound: any = bindTargetedResense(fixture.source, { ...fixture, now: NOW })
+      bound[field] = typeof bound[field] === "string" ? "2026-08-27T19:34:00.000Z" : { ...bound[field], tampered: true }
+      const { digestSha256: _omitted, ...binding } = bound.binding
+      bound.binding.digestSha256 = stableDigest({ ...bound, binding })
+      expect(() => verifyTargetedResense(bound, { ...fixture, now: NOW })).toThrow(/AUTHORITY_INVALID/)
+    },
+  )
+
+  it("rejects a forged source object paired with authentic collected bytes", () => {
+    const fixture = makeTargetedFixture()
+    fixture.source.facts.find((fact: any) => fact.id === "inference.gpus")!.value = []
+    const bound = bindTargetedResense(fixture.source, { ...fixture, now: NOW })
+    expect(() => verifyTargetedResense(bound, { ...fixture, now: NOW })).toThrow(/AUTHORITY_INVALID/)
+  })
+
+  it("verifies authenticated targeted source bytes with one optional UTF-8 BOM", () => {
+    const fixture = makeTargetedFixture()
+    const sourceBytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(canonicalize(fixture.source), "utf8")])
+    const sourceBytesSha256 = crypto.createHash("sha256").update(sourceBytes).digest("hex")
+    const launchReceipt = { ...fixture.launchReceipt, sourceSha256: sourceBytesSha256 }
+    const bound = bindTargetedResense(fixture.source, { ...fixture, launchReceipt, sourceBytesSha256, now: NOW })
+
+    expect(verifyTargetedResense(bound, { ...fixture, launchReceipt, sourceBytes, now: NOW })).toMatchObject({
+      validDigest: true,
+      fresh: true,
+      broadResetRequired: false,
+    })
+  })
+})
 
 describe("binding current HERMES truth", () => {
   it("binds the exact required fact set to a stable JSON digest and one-UAC receipt", () => {
@@ -311,6 +406,14 @@ describe("the staged collector remains read-only", () => {
     expect(source).toContain("Get-LeasedSha256 $sourceLease")
     expect(source).toContain("Open-ReadLease $receiptPath")
     expect(source).toContain("$env:PSModulePath =")
+  })
+
+  it("pins the targeted collector to the exact ten-fact closure independently of caller arguments", () => {
+    const source = fs.readFileSync(collectorPath, "utf8")
+    const allowlist = source.match(/\$securityInferenceFactIds\s*=\s*@\(([\s\S]*?)\r?\n\)/)![1]
+    const declared = [...allowlist.matchAll(/'([^']+)'/g)].map((match) => match[1])
+    expect([...new Set(declared)].sort()).toEqual([...SECURITY_INFERENCE_FACT_IDS])
+    expect(source).toContain("(($requestedFactIds | Sort-Object) -join ',') -cne (($securityInferenceFactIds | Sort-Object) -join ',')")
   })
 
   it("publishes the exact fact count and explicit freshness classes in the schema", () => {
