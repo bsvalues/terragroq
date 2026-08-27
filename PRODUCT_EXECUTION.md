@@ -41,6 +41,27 @@ Until the owner changes lanes, the priority is the WilliamOS W1 UI/UX experience
 
 The purpose is a WilliamOS interface the owner can actually use.
 
+### W1 product boundary: WilliamOS is the development cockpit
+
+For W1, WilliamOS is the **software-development cockpit used to build TerraFusion**. TerraFusion is the software project being worked on inside WilliamOS.
+
+This means:
+
+- WilliamOS presents the real TerraFusion repository/project context, file tree, editor, saves, undo/redo, tabs, splits, persistence, development feedback, and a developer preview of the software being built.
+- `running TerraFusion stays interactive beside it` means a **developer preview/runtime surface of the target application under development**. It does **not** mean WilliamOS becomes TerraFusion's county/parcel/appeals/operator interface.
+- TerraFusion business workflows, county operations, parcel screens, appeals screens, taxpayer workflows, or similar domain UX must not be redesigned as WilliamOS chrome or used as a stand-in for the WilliamOS product experience.
+- A degraded/fixture preview must remain **developer-oriented and neutral**: for example preview unavailable, build/runtime state, or an explicitly labeled development fixture. Do not use a simulated TerraFusion business-workflow screen as the WilliamOS fixture merely because it is visually plausible.
+- If the real target application is unavailable, keep building the WilliamOS cockpit with a truthful developer-preview placeholder/fixture rather than drifting into TerraFusion product development.
+
+### W1 acceptance must not pollute TerraFusion
+
+WilliamOS acceptance/setup work must not leave test comments, acceptance markers, fake content, or harness artifacts in the TerraFusion repository.
+
+- Do not edit TerraFusion's `README.md` or arbitrary project files merely to prove that save works.
+- Use a designated scratch/test file, a temporary disposable worktree, or another bounded reversible acceptance surface when the purpose is testing WilliamOS itself.
+- If a temporary target-repository edit is required for a test, restore it automatically before reporting completion or continuing unrelated work.
+- Actual TerraFusion source edits are appropriate only when they are the intended software-development task being performed through WilliamOS, not when they are acceptance scaffolding for WilliamOS.
+
 For this lane:
 
 ### Allowed/default work
@@ -52,10 +73,11 @@ For this lane:
 - keyboard/accessibility/responsiveness
 - visual hierarchy and product polish
 - direct browser acceptance and iteration
-- thin adapters or truthful fixtures required to exercise the UI
+- thin adapters or truthful developer-oriented fixtures required to exercise the UI
 
 ### Does not get to hijack this lane
 - TerraFusion backend/product development
+- TerraFusion business-workflow/operator UI work
 - new orchestration architecture
 - database architecture or schema programs
 - authority-model expansion
@@ -65,9 +87,28 @@ For this lane:
 - agent-framework redesign
 - infrastructure cleanup unrelated to the immediate browser journey
 
-TerraFusion is a **workload used to exercise WilliamOS**, not the W1 product-development lane. If a real TerraFusion runtime dependency is unavailable, the UI may use a clearly identified truthful W1 fixture/degraded surface while UI/UX work continues. Do not silently pretend the fixture is production truth.
+TerraFusion is a **software project/workload used to exercise WilliamOS**, not the W1 product-development lane. If a real TerraFusion runtime dependency is unavailable, the UI may use a clearly identified truthful developer fixture/degraded surface while UI/UX work continues. Do not silently pretend the fixture is production truth.
 
-## 4. Quarantine of the orchestration experiment
+## 4. Already-set product boundaries are not owner questions
+
+A product boundary recorded in this contract, `AGENTS.md`, or a concrete owner decision remains in force until the owner changes it.
+
+Agents must **not** stop with `pending your confirmation` merely because they rediscovered, rephrased, or corrected themselves back to an already-set boundary.
+
+If an agent realizes it drifted:
+
+1. stop the wrong local action;
+2. restore/revert any accidental test pollution or incorrect local fixture work that is safe to restore;
+3. record the correction if useful;
+4. continue executing inside the already-set boundary.
+
+Do not turn self-correction into another owner approval gate.
+
+Ask the owner only when the next action would materially **change** the recorded product boundary, scope, policy, spending, protected authority, or another genuinely new owner decision.
+
+`I am stopped here pending your confirmation of the boundary` is incorrect when the boundary is already recorded.
+
+## 5. Quarantine of the orchestration experiment
 
 The existing multi-agent/orchestration/control-plane stack is preserved as historical evidence and a source of selectively reusable components.
 
@@ -84,7 +125,7 @@ Reuse is allowed only when a concrete current product need is better served by a
 
 See `docs/governance/QUARANTINED-ORCHESTRATION.md`.
 
-## 5. Product-first architecture rule
+## 6. Product-first architecture rule
 
 Design outward from the experience:
 
@@ -96,7 +137,7 @@ Do not design inward from the infrastructure:
 
 Simple is preferred over complete. Existing is not automatically canonical. More governance is not automatically safer. More indirection is not automatically architecture.
 
-## 6. Execution in 2026
+## 7. Execution in 2026
 
 Use coding agents as execution capacity, not as paperwork generators.
 
@@ -111,7 +152,7 @@ For substantial product work:
 
 The coordinator's job is to **protect completion**. When an agent discovers an adjacent architecture problem, the coordinator decides whether it blocks the current acceptance target. Agents do not expand the mission by following dependency chains on their own.
 
-## 7. No archaeology loop
+## 8. No archaeology loop
 
 Previously verified facts remain valid until concrete new evidence contradicts them.
 
@@ -119,7 +160,7 @@ Do not restart broad repository archaeology, architecture discovery, governance 
 
 Investigate only the uncertainty that blocks the current acceptance target.
 
-## 8. Priority order
+## 9. Priority order
 
 When multiple useful tasks are available, prefer in this order:
 
@@ -131,19 +172,20 @@ When multiple useful tasks are available, prefer in this order:
 
 A lower-priority item may not displace a higher-priority item merely because it is architecturally interesting.
 
-## 9. Stop conditions for lane drift
+## 10. Stop conditions for lane drift
 
 For the W1 frontend lane, touching any of the following is a mandatory drift check:
 
 - `scripts/hermes-bridge/**`
 - orchestration/queue/authority/governance schemas
 - TerraFusion backend/runtime implementation
+- TerraFusion business/operator UI implementation
 - deployment infrastructure
 - broad CI/CD changes
 
-Before doing so, state internally which exact W1 browser step is impossible without the change and why a truthful fixture/adapter cannot unblock it. If that cannot be demonstrated, do not perform the change in this lane.
+Before doing so, state internally which exact W1 browser step is impossible without the change and why a truthful developer fixture/adapter cannot unblock it. If that cannot be demonstrated, do not perform the change in this lane.
 
-## 10. Reporting
+## 11. Reporting
 
 Report progress in terms of the fixed product outcome:
 - what the user can now do;
@@ -154,7 +196,7 @@ Do not present large amounts of infrastructure work as a substitute for the requ
 
 If the requested experience is unfinished, say **unfinished**.
 
-## 11. Core rule
+## 12. Core rule
 
 > **Never let the control system become the product.**
 
