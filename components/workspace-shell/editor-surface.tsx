@@ -30,6 +30,11 @@ export function acknowledgeSavedBuffer(
   return { ...current, savedContent: submittedContent, modifiedAt, saving: false, error: null }
 }
 
+function fileReadUrl(endpoint: string, filePath: string): string {
+  const separator = endpoint.includes("?") ? "&" : "?"
+  return `${endpoint}${separator}path=${encodeURIComponent(filePath)}`
+}
+
 function TreeNode({ entry, depth, selectedPath, onOpen, filesEndpoint }: {
   entry: Entry
   depth: number
@@ -50,7 +55,7 @@ function TreeNode({ entry, depth, selectedPath, onOpen, filesEndpoint }: {
     setLoading(true)
     setFailed(false)
     try {
-      const response = await fetch(`${filesEndpoint}?path=${encodeURIComponent(entry.path)}`, { cache: "no-store" })
+      const response = await fetch(fileReadUrl(filesEndpoint, entry.path), { cache: "no-store" })
       const payload = await response.json()
       if (!response.ok || payload.kind !== "directory") throw new Error(payload.error ?? `READ_${response.status}`)
       setChildren(payload.entries ?? [])
@@ -111,7 +116,7 @@ export function EditorSurface({
   const loadRoots = useCallback(async () => {
     setTreeError(null)
     try {
-      const response = await fetch(`${filesEndpoint}?path=`, { cache: "no-store" })
+      const response = await fetch(fileReadUrl(filesEndpoint, ""), { cache: "no-store" })
       const payload = await response.json()
       if (!response.ok || payload.kind !== "directory") throw new Error(payload.error ?? `READ_${response.status}`)
       setRoots(payload.entries ?? [])
@@ -127,7 +132,7 @@ export function EditorSurface({
     for (const path of space.editor.openFiles) {
       if (buffers[path] || loadingFiles.current.has(path)) continue
       loadingFiles.current.add(path)
-      void fetch(`${filesEndpoint}?path=${encodeURIComponent(path)}`, { cache: "no-store" })
+      void fetch(fileReadUrl(filesEndpoint, path), { cache: "no-store" })
         .then(async (response) => {
           const payload = await response.json()
           if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
@@ -157,7 +162,7 @@ export function EditorSurface({
   const openFile = useCallback(async (path: string, targetPaneId: EditorPane["id"] = space.editor.activePaneId) => {
     if (!buffers[path]) {
       try {
-        const response = await fetch(`${filesEndpoint}?path=${encodeURIComponent(path)}`, { cache: "no-store" })
+        const response = await fetch(fileReadUrl(filesEndpoint, path), { cache: "no-store" })
         const payload = await response.json()
         if (!response.ok) throw new Error(payload.error ?? `READ_${response.status}`)
         if (payload.kind === "binary") throw new Error("BINARY_FILE_NOT_EDITABLE")

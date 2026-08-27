@@ -1,7 +1,7 @@
 import fs from "node:fs/promises"
 
 import { readBoundedJson } from "@/lib/environment/line-guard"
-import { admitW1LocalFixtureRequest } from "@/lib/environment/w1-local-fixture"
+import { admitW1LocalFixtureRequest, validateW1LocalFixtureHome } from "@/lib/environment/w1-local-fixture"
 import { isIgnoredEntry, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 
 export const dynamic = "force-dynamic"
@@ -12,8 +12,7 @@ const refuse = (error: string, status: number) => Response.json({ error }, { sta
 
 export async function GET(request: Request) {
   const fixture = admitW1LocalFixtureRequest(request)
-  if (!fixture) return refuse("NOT_FOUND", 404)
-  await fs.mkdir(fixture.root, { recursive: true })
+  if (!fixture || !(await validateW1LocalFixtureHome(fixture))) return refuse("NOT_FOUND", 404)
   const requested = new URL(request.url).searchParams.get("path") ?? ""
   const resolved = await resolveRealWorkspacePath(fixture.root, requested, fs.realpath)
   if (!resolved.ok || !resolved.absolute) return refuse(resolved.refusal ?? "PATH_INVALID", 400)
@@ -45,13 +44,12 @@ export async function GET(request: Request) {
 
 export async function PUT(request: Request) {
   const fixture = admitW1LocalFixtureRequest(request)
-  if (!fixture) return refuse("NOT_FOUND", 404)
+  if (!fixture || !(await validateW1LocalFixtureHome(fixture))) return refuse("NOT_FOUND", 404)
   const parsed = await readBoundedJson(request, MAX_FILE_BYTES + 32_000)
   if (!parsed.ok) return refuse(parsed.error, parsed.status)
   const body = parsed.value as { path?: unknown; content?: unknown; modifiedAt?: unknown }
   if (typeof body.content !== "string" || Buffer.byteLength(body.content, "utf8") > MAX_FILE_BYTES) return refuse("CONTENT_INVALID", 400)
   if (typeof body.modifiedAt !== "string") return refuse("MODIFIED_AT_REQUIRED", 400)
-  await fs.mkdir(fixture.root, { recursive: true })
   const resolved = await resolveRealWorkspacePath(fixture.root, body.path, fs.realpath)
   if (!resolved.ok || !resolved.absolute || !resolved.relative) return refuse(resolved.refusal ?? "PATH_INVALID", 400)
   let before
