@@ -1,85 +1,86 @@
 # WilliamOS Agent Entrypoint
 
-This file is a repository entrypoint, not an independent authority source. The controlling
-multi-agent operating doctrine is
-[`docs/governance/multi-agent-operator-playbook.md`](docs/governance/multi-agent-operator-playbook.md),
-as amended by its controlling supersession
-[`docs/governance/sovereign-runtime-and-review-supersession.md`](docs/governance/sovereign-runtime-and-review-supersession.md).
-Where the supersession and any earlier doctrine conflict on runtime status, review sourcing, or
-provider dependence, the supersession governs. Follow the controlling doctrine and the active,
-authority-matched Work Order. If this file and the controlling doctrine conflict, stop the conflicting
-action and follow the doctrine.
+This file is the repository-wide agent entrypoint.
+
+## Controlling product-execution doctrine
+
+For product work, the controlling contract is [`PRODUCT_EXECUTION.md`](PRODUCT_EXECUTION.md).
+
+The older multi-agent/orchestration/control-plane corpus is preserved but **QUARANTINED / NON-CANONICAL FOR PRODUCT DIRECTION**. In particular, do not treat these as the default architecture for new product work even where they still contain historical labels such as `ACTIVE`, `CONTROLLING`, or `TARGET OPERATING MODEL`:
+
+- `docs/governance/multi-agent-operator-playbook.md`
+- `docs/governance/sovereign-runtime-and-review-supersession.md`
+
+See [`docs/governance/QUARANTINED-ORCHESTRATION.md`](docs/governance/QUARANTINED-ORCHESTRATION.md).
+
+If older doctrine conflicts with `PRODUCT_EXECUTION.md` on product priority, lane scope, completion criteria, whether orchestration is required, or whether an adjacent infrastructure defect should interrupt a product lane, **`PRODUCT_EXECUTION.md` governs**.
+
+Safety, security, legal constraints, and explicit owner decisions still govern. Quarantine is not permission to bypass real protections.
 
 ## Owner boundary
 
-William is the owner only. William is not an agent, operator, dispatcher, test runner, Git or
-GitHub operator, credential courier, diagnostic courier, or routine approver.
+William is the owner, not the routine execution worker.
 
-Agents own routine execution inside recorded authority: investigation, implementation, tests,
-branches, commits, pushes, pull requests, review remediation, CI monitoring, authorized merges,
-cleanup, recovery, evidence, and dependent release. Ask William only for a genuinely new authority
-decision identified by the playbook. Do not ask him to run commands, relay output, restart software,
-repair provider access, or make an implementation choice already covered by the active authority.
+Agents own routine investigation, implementation, testing, browser verification, branches, commits, pushes, pull requests, review remediation, CI monitoring, cleanup, and recovery inside granted authority. Do not make William a shell/Git operator, credential courier, diagnostic courier, prompt courier, or routine approver.
 
-Continue through routine problems and report a final verified outcome. Do not turn ordinary status,
-recoverable failures, agent coordination, or already-decided doctrine into back-and-forth with the
-owner.
+Ask William only for a genuinely new material product/policy/authority decision that cannot be resolved inside existing authority.
 
-When the supported Hermes cycle returns stdout beginning with
-`WILLIAMOS_PRIMARY_DECISION_REQUEST:`, that stdout is the complete canonical Primary decision
-request. Stop all tool use and emit that text byte-for-byte as the entire final assistant message,
-with no Markdown fence, prefix, suffix, summary, or paraphrase. This exact assistant message is the
-authenticated presentation record; the next direct owner reply may then be verified and consumed.
+## Product-first execution
 
-## Sovereignty and availability
+The coordinator protects the fixed user-visible acceptance target.
 
-WilliamOS must remain fully useful when every optional external AI, reviewer, SaaS integration, and
-hosted provider is unavailable. External services may improve quality or capability when policy
-allows, but loss, quota exhaustion, rate limiting, outage, billing state, or authentication failure of
-an optional provider must never convert into owner babysitting or halt ordinary sovereign work when an
-eligible local capability exists. Never propose purchasing, upgrading, or paying for a provider in
-response to a rate limit or quota state unless William explicitly asks to buy one.
+A discovered adjacent defect does not automatically expand the mission. Before leaving the active product lane, determine whether the defect directly blocks the current user journey and whether a truthful bounded fixture/adapter can keep the product lane moving. If the product can continue, record the defect and continue the product.
 
-Independent assurance is a role-separation requirement, not a vendor requirement. "Independent review
-required" never means "third-party review service required." Review is sourced through the tiers in
-the supersession, sovereign tiers first.
+Do not allow infrastructure, governance, orchestration, CI, agent architecture, or repository archaeology to consume a user-facing lane merely because those problems are real.
+
+For UI/UX work, use the browser/product early and repeatedly. Tests and architecture do not substitute for a usable interface.
+
+## Current W1 lane
+
+Until the owner changes lanes, W1 is the WilliamOS UI/UX product lane:
+
+`Open TerraFusion Space -> useful workspace -> browse project-bound files -> edit/save -> application pane behaves truthfully -> close/reopen -> same useful Space returns.`
+
+TerraFusion is a workload used to exercise WilliamOS, not the W1 product-development lane. Do not drift into TerraFusion backend/runtime product work unless the owner explicitly changes lanes or the exact W1 browser step cannot continue and no truthful bounded fixture can unblock it.
 
 ## Multi-agent execution
 
-For substantial work, Codex must use bounded native subagent fan-out when independent lanes exist:
+Use coding agents as execution capacity, not paperwork generators.
 
-1. A coordinator decomposes work by dependency and reservation.
-2. Builders receive separate non-overlapping file, contract, and environment reservations.
-3. An independent assurance agent reviews evidence and changes without taking a builder reservation.
-4. The coordinator integrates results, owns the GitHub lifecycle, and continues until the authorized
-   outcome or a typed terminal state.
+For substantial work with independent lanes:
 
-Do not serialize dependency-cleared, non-overlapping work merely because Work Order numbers are
-sequential. Never assign two builders the same reservation. A subagent may not expand scope or mint
-authority.
+1. Keep one coordinator responsible for the fixed acceptance target.
+2. Give builders non-overlapping bounded reservations.
+3. Use separate reviewer/test contexts where useful.
+4. Run independent product lanes in parallel rather than serializing them behind unrelated dependencies.
+5. Integrate and continue until the actual user-facing acceptance target is satisfied or a genuinely unavoidable owner boundary is reached.
 
-Claude Code may run only as a separate provider lane through an already authenticated, supported
-surface. Give it a separate repository or isolated suite reservation, branch/worktree, validation,
-evidence, and reviewer. If Claude is unavailable, classify that lane as provider-unavailable and let
-healthy sovereign lanes continue; do not ask William to launch, authenticate, or repair Claude.
+Agents may not expand scope or mint authority because they discovered an interesting dependency chain.
 
-## Runtime status
+## Continuity / no archaeology loop
 
-The resident local WilliamOS runtime and supervisor are OPERATING through the proven Hermes-to-AEGIS
-execution backend (`scripts/hermes-bridge/execution-backend.mjs`, merged in PR #754) over the
-supported Codex App Server transport: a clean ExecutionBackend boundary with Local and Aegis
-implementations through which the orchestrator delegates workspace, validation, git, and Codex
-execution. This is the independently proven transport the earlier doctrine required before enabling a
-local runtime. Treat HERMES (coordinator) and AEGIS (execution worker) as active, not proposal-only.
+Previously verified facts remain valid until concrete new evidence contradicts them.
 
-What remains rejected is narrow and specific: the nested local `codex exec` adapter evidenced by
-issue #357 is terminal and rejected — do not retry, reactivate, wrap, rename, or reuse it. Issue #358
-stays dependency-blocked. Rejecting the #357 adapter is not a claim that the local runtime is
-disabled; the ExecutionBackend boundary is the accepted execution surface.
+Do not restart broad archaeology, re-derive architecture, or rebuild governance context just because an agent/context changed. Resume from the last verified product state and investigate only the uncertainty blocking the current acceptance target.
+
+## Runtime/provider availability
+
+Optional providers must not become owner babysitting. If one provider is unavailable and another eligible capability exists, continue with the healthy capability.
+
+Independent assurance is role separation, not vendor dependence.
+
+Historical rejected adapters and safety findings remain rejected where still applicable; quarantine does not reactivate them.
 
 ## Instruction narrowing
 
-Directory-local `AGENTS.md` files may narrow implementation details for their subtree. They may not
-redefine the owner boundary, reactivate the rejected #357 nested adapter, weaken reservation
-isolation, suppress native fan-out, or create authority beyond the active Work Order and recorded
-authority evidence.
+Directory-local `AGENTS.md` files may narrow implementation details for their subtree. They may not:
+
+- override `PRODUCT_EXECUTION.md` product priority/completion rules;
+- redefine quarantined orchestration as the canonical product architecture;
+- expand the active lane;
+- create new authority;
+- weaken real security/safety constraints.
+
+## Core rule
+
+> **Never let the control system become the product. Finish the user-visible thing.**
