@@ -402,7 +402,11 @@ function storageCritical(facts) {
     const readErrors = Number(disk.readErrors)
     const writeErrors = Number(disk.writeErrors)
     return ["WARNING", "UNHEALTHY", "FAILED", "CRITICAL", "PREDICTIVE FAILURE"].includes(health)
-      || operational.some((entry) => ["DEGRADED", "ERROR", "FAILED", "LOST COMMUNICATION", "PREDICTIVE FAILURE"].includes(entry))
+      || operational.some((entry) => [
+        "DEGRADED", "STRESSED", "PREDICTIVE FAILURE", "ERROR", "NON-RECOVERABLE ERROR",
+        "NO CONTACT", "LOST COMMUNICATION", "COMMUNICATION LOST", "ABORTED",
+        "SUPPORTING ENTITY IN ERROR", "FAILED", "FAILED MEDIA", "IO ERROR",
+      ].includes(entry))
       || (disk.readErrors !== null && Number.isFinite(readErrors) && readErrors > 0)
       || (disk.writeErrors !== null && Number.isFinite(writeErrors) && writeErrors > 0)
       || (Number.isFinite(disk.wearPercent) && disk.wearPercent >= 90)
