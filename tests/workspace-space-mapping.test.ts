@@ -24,7 +24,7 @@ describe("browser-to-server Space mapping", () => {
     })
 
     expect(mapped.windows.map((window) => window.id)).toEqual([
-      "workspace-editor", "workspace-running-app", "inspector-project",
+      "workspace-editor", "workspace-running-app", "workspace-tests", "workspace-diff", "workspace-terminal", "inspector-project",
     ])
     // An unsupported transient Inspector never becomes an invalid active-window reference.
     expect(mapped.activeWindowId).toBeNull()
@@ -39,6 +39,7 @@ describe("browser-to-server Space mapping", () => {
     const persisted = spaceToServer({
       ...fallback,
       windows: {
+        ...fallback.windows,
         editor: { ...fallback.windows.editor, x: 3_000, y: 2_000, width: 1_600, height: 1_200 },
         "running-app": { ...fallback.windows["running-app"], x: -2_000, y: -400, width: 1_400, height: 1_000 },
       },
@@ -65,7 +66,7 @@ describe("browser-to-server Space mapping", () => {
       expect(window.height).toBeLessThanOrEqual(556)
       expect(window.x).toBeLessThanOrEqual(620)
       expect(window.x + window.width).toBeGreaterThanOrEqual(180)
-      expect(window.y).toBeGreaterThanOrEqual(28)
+      expect(window.y).toBeGreaterThanOrEqual(0)
       expect(window.y).toBeLessThanOrEqual(510)
     }
     expect(restored.editor.panes).toEqual([

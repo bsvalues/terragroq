@@ -1,16 +1,19 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AppWindow, ArrowUp, Command, Layers3, PanelRightClose, PanelRightOpen, X } from "lucide-react"
+import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, TerminalSquare, Users, X } from "lucide-react"
 
 import type { SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, type WorldSpine } from "@/lib/environment/working-world"
 import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
+import { BrainCouncilSurface, REFERENCE_COUNCIL_SESSION, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
-import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type WorkspaceProject, type WorkspaceSpace } from "./types"
+import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
+import { WindowFrame } from "./window-frame"
+import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
 import bridge from "./experience-token-bridge.module.css"
-import experience from "./experience-shell.module.css"
+import spatial from "./experience-spatial.module.css"
 
 type LineReply = Readonly<{
   worldId?: string
@@ -26,9 +29,23 @@ type ConversationEntry = Readonly<{
   text: string
 }>
 
-type ContextView = "conversation" | "inspector"
 type PersistJob = Readonly<{ worldId: string; revision: number; body: string }>
 type SpaceStorage = "server" | "browser"
+type EnvironmentOverlay = "council" | "mission-control" | null
+
+const windowName: Record<WindowId, string> = {
+  editor: "Source",
+  "running-app": "Developer preview",
+  tests: "Tests",
+  diff: "Changes",
+  terminal: "Terminal",
+}
+
+const referenceAgents = [
+  { id: "builder", glyph: "B", role: "Builder", provider: "Codex", status: "implementing", assignment: "Workspace interaction", truth: "fixture" },
+  { id: "reviewer", glyph: "R", role: "Reviewer", provider: "Claude", status: "reviewing", assignment: "Product criticism", truth: "fixture" },
+  { id: "local", glyph: "L", role: "Local", provider: "HERMES", status: "idle", assignment: "Tests and preview", truth: "fixture" },
+] as const
 
 const browserSpaceKey = (opaque: string) => `williamos:space:${opaque}`
 
@@ -52,9 +69,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineReply, setLineReply] = useState<string | null>(null)
   const [lineBusy, setLineBusy] = useState(false)
   const [inspectors, setInspectors] = useState<readonly InspectorSurface[]>([])
-  const [activeInspectorId, setActiveInspectorId] = useState<string | null>(null)
-  const [contextView, setContextView] = useState<ContextView>("conversation")
   const [conversation, setConversation] = useState<readonly ConversationEntry[]>([])
+  const [overlay, setOverlay] = useState<EnvironmentOverlay>(null)
+  const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null)
+  const [councilQuestion, setCouncilQuestion] = useState<string | null>(null)
   const [spine, setSpine] = useState<WorldSpine>(EMPTY_SPINE)
   const [project, setProject] = useState<WorkspaceProject | null>(null)
   const [storage, setStorage] = useState<SpaceStorage>("server")
@@ -64,7 +82,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const browserStorageKeyRef = useRef<string | null>(null)
   const lineRef = useRef<HTMLInputElement>(null)
   const messageSequence = useRef(0)
-  const workbenchRef = useRef<HTMLDivElement>(null)
   const spaceArrival = useRef<Promise<SpaceEnvelope> | null>(null)
   const summonArrival = useRef<Readonly<{ key: string; request: Promise<LineReply> }> | null>(null)
   const restorationStarted = useRef(false)
@@ -89,7 +106,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     if (reply.dismiss) {
       setInspectors((current) => {
         const next = reply.dismiss === "all" ? [] : current.filter((surface) => surface.kind !== reply.dismiss)
-        if (next.length === 0) setContextView("conversation")
         return next
       })
       setSpace((current) => {
@@ -109,9 +125,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       incoming.forEach((surface) => byId.set(surface.id, surface))
       return [...byId.values()]
     })
-    const newest = incoming.at(-1)?.id ?? null
-    setActiveInspectorId(newest)
-    setContextView("inspector")
     setSpace((current) => {
       const highest = Math.max(
         ...Object.values(current.windows).map((window) => window.z),
@@ -355,7 +368,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault()
         setLineReply(null)
-        setContextView("conversation")
         setLineOpen(true)
         requestAnimationFrame(() => lineRef.current?.focus())
       } else if (event.key === "Escape") {
@@ -394,12 +406,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }, [acceptLineReply, hydrated, initialSummon, worldId])
 
   const dismissInspector = useCallback((id: string) => {
-    setInspectors((current) => {
-      const next = current.filter((surface) => surface.id !== id)
-      if (next.length === 0) setContextView("conversation")
-      return next
-    })
-    setActiveInspectorId((current) => current === id ? null : current)
+    setInspectors((current) => current.filter((surface) => surface.id !== id))
     setSpace((current) => {
       const inspectorWindows = { ...current.inspectorWindows }
       const inspectorSeeds = { ...current.inspectorSeeds }
@@ -409,37 +416,61 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     })
   }, [])
 
-  function startWorkbenchResize(event: React.PointerEvent<HTMLDivElement>) {
-    const stage = workbenchRef.current
-    if (!stage || event.button !== 0) return
-    event.preventDefault()
-    const handle = event.currentTarget
-    handle.setPointerCapture(event.pointerId)
+  const updateWindow = useCallback((id: WindowId, geometry: WindowGeometry) => {
+    setSpace((current) => ({ ...current, windows: { ...current.windows, [id]: geometry } }))
+  }, [])
 
-    const move = (next: PointerEvent) => {
-      const bounds = stage.getBoundingClientRect()
-      if (bounds.width < 760) return
-      const sourceWidth = Math.round(Math.max(380, Math.min(bounds.width - 340, next.clientX - bounds.left)))
-      const previewWidth = Math.round(Math.max(340, bounds.width - sourceWidth - 6))
-      setSpace((current) => ({
+  const activate = useCallback((id: WindowId) => {
+    setFocusedAgentId(null)
+    setSpace((current) => {
+      const highest = Math.max(
+        ...Object.values(current.windows).map((window) => window.z),
+        ...Object.values(current.inspectorWindows).map((window) => window.z),
+      )
+      const chosen = current.windows[id]
+      if (current.activeWindowId === id && chosen.z === highest && !chosen.minimized) return current
+      return {
         ...current,
-        windows: {
-          ...current.windows,
-          editor: { ...current.windows.editor, width: sourceWidth },
-          "running-app": { ...current.windows["running-app"], width: previewWidth },
-        },
-      }))
-    }
-    const end = (next: PointerEvent) => {
-      if (handle.hasPointerCapture(next.pointerId)) handle.releasePointerCapture(next.pointerId)
-      handle.removeEventListener("pointermove", move)
-      handle.removeEventListener("pointerup", end)
-      handle.removeEventListener("pointercancel", end)
-    }
-    handle.addEventListener("pointermove", move)
-    handle.addEventListener("pointerup", end)
-    handle.addEventListener("pointercancel", end)
-  }
+        activeWindowId: id,
+        windows: { ...current.windows, [id]: { ...chosen, minimized: false, z: highest + 1 } },
+      }
+    })
+  }, [])
+
+  const minimize = useCallback((id: WindowId) => {
+    setSpace((current) => ({
+      ...current,
+      activeWindowId: current.activeWindowId === id ? null : current.activeWindowId,
+      windows: { ...current.windows, [id]: { ...current.windows[id], minimized: true } },
+    }))
+  }, [])
+
+  const updateInspector = useCallback((id: string, geometry: WindowGeometry) => {
+    setSpace((current) => ({ ...current, inspectorWindows: { ...current.inspectorWindows, [id]: geometry } }))
+  }, [])
+
+  const activateInspector = useCallback((id: string) => {
+    setSpace((current) => {
+      const chosen = current.inspectorWindows[id]
+      if (!chosen) return current
+      const highest = Math.max(
+        ...Object.values(current.windows).map((window) => window.z),
+        ...Object.values(current.inspectorWindows).map((window) => window.z),
+      )
+      return {
+        ...current,
+        activeWindowId: id,
+        inspectorWindows: { ...current.inspectorWindows, [id]: { ...chosen, minimized: false, z: highest + 1 } },
+      }
+    })
+  }, [])
+
+  const openLine = useCallback((prompt = "") => {
+    setLineInput(prompt)
+    setLineReply(null)
+    setLineOpen(true)
+    requestAnimationFrame(() => lineRef.current?.focus())
+  }, [])
 
   async function submitLine(event: React.FormEvent) {
     event.preventDefault()
@@ -447,13 +478,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     if (!text || lineBusy) return
     appendConversation("owner", text)
     setLineInput("")
+    const councilRequest = text.match(/^\/?council\b[\s:—-]*(.*)$/i)
+    if (councilRequest) {
+      setCouncilQuestion(councilRequest[1]?.trim() || `Challenge the current direction for ${selectedLabel}.`)
+      setOverlay("council")
+      setLineOpen(false)
+      return
+    }
     setLineBusy(true)
     setLineReply(null)
     try {
+      const contextualText = `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
       const response = await fetch("/api/environment/line", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ worldId, text }),
+        body: JSON.stringify({ worldId, text: contextualText }),
       })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error ?? `LINE_${response.status}`)
@@ -465,235 +504,213 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }
 
-  const editorWeight = Math.max(1, space.windows.editor.width)
-  const previewWeight = Math.max(1, space.windows["running-app"].width)
-  const sourcePercent = Math.round((editorWeight / (editorWeight + previewWeight)) * 100)
-  const activeInspector = inspectors.find((surface) => surface.id === activeInspectorId) ?? inspectors.at(-1) ?? null
-  const contextExpanded = lineOpen || inspectors.length > 0
   const savedLabel = persistenceError
     ? persistenceError
     : hydrated
-      ? storage === "browser" ? "Saved in this browser" : "Saved"
-      : "Opening"
+      ? storage === "browser" ? "space saved locally" : "space saved"
+      : "opening space"
+  const selectedAgent = referenceAgents.find((agent) => agent.id === focusedAgentId)
+  const selectedKind = selectedAgent ? "agent" as const
+    : space.activeWindowId === "running-app" ? "preview" as const
+    : space.activeWindowId === "diff" ? "diff" as const
+    : space.activeWindowId === "editor" && space.selectedPath ? "file" as const
+    : "space" as const
+  const selectedLabel = selectedAgent ? `${selectedAgent.role} · ${selectedAgent.provider}`
+    : selectedKind === "preview" ? "TerraFusion developer preview"
+    : selectedKind === "diff" ? "Current changes"
+    : selectedKind === "file" ? space.selectedPath!
+    : `${project?.name ?? space.name} Space`
+  const selectedKindLabel = selectedKind === "file" ? "file"
+    : selectedKind === "preview" ? "preview"
+    : selectedKind === "diff" ? "changes"
+    : selectedKind === "agent" ? "agent session"
+    : "Space"
+  const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
+    : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
+    : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge"] as const
+    : selectedKind === "agent" ? ["Talk", "Redirect", "Pause", "Fork", "Review work"] as const
+    : ["Summarize", "Continue", "Delegate", "Council"] as const
+  const worldLine = spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""
+  const workerLine = spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""
+  const williamJudgment = persistenceError
+    ? `Space persistence is refusing writes (${persistenceError}). Inspect that before trusting re-entry.`
+    : !space.runningAppUrl
+      ? "The developer preview is not attached. I would not call the visual loop accepted yet."
+      : space.selectedPath
+        ? `${space.selectedPath} is selected. Review or delegate against that file without restating context.`
+        : "No source object is selected. Choose the work before delegating it."
+
+  const missionWindowKind: Record<WindowId, MissionControlSpaceProjection["windows"][number]["kind"]> = {
+    editor: "source", "running-app": "preview", tests: "tests", diff: "diff", terminal: "terminal",
+  }
+  const currentMissionSpace: MissionControlSpaceProjection = {
+    id: space.id,
+    name: project?.name ?? space.name,
+    focus: space.selectedPath ?? "Development Space",
+    state: space.runningAppUrl ? "live" : "unavailable",
+    truth: "live",
+    windows: (Object.entries(space.windows) as [WindowId, WindowGeometry][]).map(([id, geometry]) => ({
+      id, title: windowName[id], kind: missionWindowKind[id],
+      frame: geometry, minimized: geometry.minimized, active: space.activeWindowId === id,
+      detail: id === "running-app" ? space.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
+    })),
+    agents: spine.worker ? [{
+      id: "live-worker", name: "Resident worker", role: spine.worker.lane,
+      activity: spine.execution, state: isExecutionLive(spine.execution) ? "working" : "idle",
+    }] : [],
+    selectedObject: space.selectedPath,
+    changed: savedLabel,
+  }
+  const missionSpaces: readonly MissionControlSpaceProjection[] = [currentMissionSpace,
+    {
+      id: "fixture-research", name: "Research & Evidence", focus: "Reference projection", state: "paused", truth: "fixture",
+      windows: [
+        { id: "evidence", title: "Evidence", kind: "evidence", frame: { x: 20, y: 30, width: 520, height: 340 }, detail: "3 cited sources" },
+        { id: "document", title: "Investigation", kind: "document", frame: { x: 410, y: 70, width: 620, height: 420 }, detail: "Causal link under review" },
+      ], agents: [], changed: "Illustrative Space · not live runtime state",
+    },
+    {
+      id: "fixture-agents", name: "Agent Operations", focus: "Reference projection", state: "paused", truth: "fixture",
+      windows: [{ id: "sessions", title: "Durable sessions", kind: "agent", frame: { x: 80, y: 50, width: 850, height: 420 }, detail: "Role-first session view" }],
+      agents: referenceAgents.map((agent) => ({ id: agent.id, name: agent.provider, role: agent.role, activity: agent.status, state: agent.status === "idle" ? "idle" : "working" })),
+      changed: "Illustrative Space · sessions are fixtures",
+    },
+  ]
+
+  const utilityContent = (id: "tests" | "diff" | "terminal") => (
+    <div className={spatial.utilitySurface}>
+      <div className={spatial.utilityMeta}>
+        <span>{id === "tests" ? "Focused validation" : id === "diff" ? "Current change" : "Project terminal"}</span>
+        <span>Reference surface · no live adapter attached</span>
+      </div>
+      <div className={spatial.utilityBody}>
+        {id === "tests" ? <>
+          <div className={spatial.utilityRow}><span className={spatial.pass}>✓</span><span>editor save and restore</span><span className={spatial.muted}>passed</span></div>
+          <div className={spatial.utilityRow}><span className={spatial.pass}>✓</span><span>spatial window persistence</span><span className={spatial.muted}>passed</span></div>
+          <div className={spatial.utilityRow}><span className={spatial.fail}>×</span><span>browser owner acceptance</span><span className={spatial.muted}>not run</span></div>
+        </> : id === "diff" ? <>
+          <div className={spatial.removed}>- fixed three-column shell</div>
+          <div className={spatial.added}>+ durable spatial work surfaces</div>
+          <div className={spatial.added}>+ selected-object AI actions</div>
+        </> : <>
+          <div><span className={spatial.terminalPrompt}>terra@workspace %</span> project runtime not attached</div>
+          <div className={spatial.muted}>This developer surface is interactive UI reference state, not fabricated execution.</div>
+        </>}
+      </div>
+    </div>
+  )
+
+  function openObjectAction(action: string) {
+    if (action === "Council") {
+      setCouncilQuestion(`Challenge the current direction for ${selectedLabel}.`)
+      setOverlay("council")
+      return
+    }
+    openLine(`${action} this selected ${selectedKindLabel}: `)
+  }
+
+  function handleCouncilAction(action: CouncilAdvisoryAction) {
+    setOverlay(null)
+    openLine(`Council recommendation · ${action.replaceAll("-", " ")}: `)
+  }
+
+  function inspectWilliamJudgment() {
+    if (persistenceError) {
+      openLine(`Inspect Space persistence error (${persistenceError}): `)
+    } else if (!space.runningAppUrl) {
+      activate("running-app")
+    } else if (space.selectedPath) {
+      activate("editor")
+    } else {
+      openLine(`Inspect William's recommendation for ${selectedLabel}: `)
+    }
+  }
 
   return (
-    <main
-      className={`${experience.environment} ${bridge.tokens} ${contextExpanded ? experience.environmentContextOpen : experience.environmentContextClosed}`}
-      aria-label={`${project?.name ?? "Workspace"} Space`}
-    >
-      <aside className={experience.worldRail} aria-label="WilliamOS worlds">
-        <div className={experience.worldMark} aria-label="WilliamOS">W</div>
-        <div className={experience.worldRailBody}>
-          <button
-            type="button"
-            className={`${experience.railButton} ${experience.railButtonActive}`}
-            aria-label={project?.name ?? "Current Space"}
-            title={project?.identity ?? project?.name ?? "Current Space"}
-          >
-            <Layers3 size={18} strokeWidth={1.7} />
-          </button>
+    <main className={`${spatial.environment} ${bridge.tokens}`} aria-label={`${project?.name ?? "Workspace"} Space`}>
+      <header className={spatial.topBar}>
+        <div className={spatial.identity}>
+          <span className={spatial.mark} aria-label="WilliamOS">W</span>
+          <span className={spatial.spaceIdentity} aria-label="Workspace project" title={project?.identity ?? "Resolving configured workspace"}>
+            <strong>{project?.name ?? "Opening workspace"}</strong>
+            <span className={spatial.spacePath}>{project?.identity ?? ""}</span>
+          </span>
         </div>
-      </aside>
-
-      <section className={experience.world}>
-        <header className={experience.worldHeader}>
-          <div className={experience.worldIdentity}>
-            <span className={experience.worldEyebrow}>Space</span>
-            <h1 className={experience.worldTitle}>{project?.name ?? "Opening workspace"}</h1>
-            <span className={experience.worldPath}>{space.selectedPath ?? project?.identity ?? ""}</span>
-          </div>
-          <div className={experience.worldStatus} title={persistenceError ?? undefined}>
-            <span className={persistenceError ? experience.statusDotError : experience.statusDot} aria-hidden />
-            <span>{savedLabel}</span>
-            {spine.outcomeKey ? <span>{spine.execution}</span> : null}
-          </div>
-          <button
-            type="button"
-            className={experience.contextToggle}
-            onClick={() => setLineOpen((current) => !current)}
-            aria-label="Toggle conversation and context"
-          >
-            {contextExpanded ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
-          </button>
-        </header>
-
-        <div
-          ref={workbenchRef}
-          className={experience.workbench}
-          style={{ "--source-percent": `${sourcePercent}%` } as React.CSSProperties}
-        >
-          <section className={experience.sourceRegion} data-window-id="editor" aria-label="Source window">
-            <header className={experience.regionHeader}>
-              <span className={experience.regionHeaderStrong}>Source</span>
-              <span className={experience.regionMeta}>{space.selectedPath ?? "Choose a file from the project"}</span>
-            </header>
-            <div className={experience.sourceBody}>
-              <EditorSurface
-                space={space}
-                onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))}
-              />
-            </div>
-          </section>
-
-          <div
-            className={experience.splitHandle}
-            role="separator"
-            aria-label="Resize source and preview"
-            aria-orientation="vertical"
-            tabIndex={0}
-            onPointerDown={startWorkbenchResize}
-          />
-
-          <section className={experience.previewRegion} data-window-id="running-app" aria-label="TerraFusion window">
-            <header className={experience.regionHeader}>
-              <span className={experience.regionHeaderStrong}>Developer preview</span>
-              <span className={experience.previewState} data-live={Boolean(space.runningAppUrl)}>
-                {space.runningAppUrl ? "Live target" : "Not attached"}
-              </span>
-            </header>
-            <div className={experience.previewBody}>
-              {space.runningAppUrl ? (
-                <iframe
-                  src={space.runningAppUrl}
-                  title="Running TerraFusion application"
-                  sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"
-                  className={experience.runningApp}
-                />
-              ) : (
-                <div className={experience.previewUnavailable} role="status">
-                  <AppWindow size={24} strokeWidth={1.5} aria-hidden />
-                  <h2>Preview is not attached</h2>
-                  <p>The WilliamOS workspace remains fully usable. Attach the TerraFusion development runtime when you want the live target beside the source.</p>
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
-      </section>
-
-      <aside className={experience.contextRail} data-open={contextExpanded} aria-label="Conversation and context">
-        <header className={experience.contextHeader}>
-          <button
-            type="button"
-            className={experience.contextRailSummon}
-            onClick={() => {
-              setContextView("conversation")
-              setLineOpen((current) => !current)
-              requestAnimationFrame(() => lineRef.current?.focus())
-            }}
-            aria-label={lineOpen ? "Hide The Line" : "Open The Line"}
-            title="The Line · Ctrl+K"
-          >
-            <Command size={15} strokeWidth={1.6} aria-hidden />
-          </button>
-          <span className={experience.contextHeaderTitle}>WilliamOS</span>
-          <span className={experience.contextHeaderMeta}>{space.selectedPath ? "file context" : "space context"}</span>
-          <button
-            type="button"
-            className={experience.contextToggle}
-            onClick={() => setLineOpen(false)}
-            aria-label="Close conversation and context"
-          >
-            <PanelRightClose size={17} />
-          </button>
-        </header>
-
-        <nav className={experience.contextTabs} aria-label="Context modes">
-          <button
-            type="button"
-            className={`${experience.contextTab} ${contextView === "conversation" ? experience.contextTabActive : ""}`}
-            onClick={() => setContextView("conversation")}
-          >
-            Conversation
-          </button>
-          {inspectors.length > 0 ? (
-            <button
-              type="button"
-              className={`${experience.contextTab} ${contextView === "inspector" ? experience.contextTabActive : ""}`}
-              onClick={() => setContextView("inspector")}
-            >
-              Context {inspectors.length > 1 ? `· ${inspectors.length}` : ""}
+        <nav className={spatial.sessionStrip} aria-label="Durable agent sessions">
+          {referenceAgents.map((agent) => (
+            <button key={agent.id} type="button" className={spatial.sessionButton} aria-pressed={focusedAgentId === agent.id} onClick={() => { setFocusedAgentId(agent.id); openLine(`Redirect ${agent.role} · ${agent.provider} on ${selectedLabel}: `) }}>
+              <span className={spatial.sessionGlyph}>{agent.glyph}</span>
+              <span><strong>{agent.role} · {agent.provider}</strong><small>{agent.status} · <em className={spatial.fixtureTag}>reference session</em></small></span>
             </button>
-          ) : null}
+          ))}
         </nav>
+        <div className={spatial.status}><span className={spatial.statusDot} aria-hidden /><span>{worldLine || "Space ready"}{workerLine}</span></div>
+      </header>
 
-        <div className={experience.contextBody}>
-          {contextView === "conversation" ? (
-            <div className={experience.conversation}>
-              {conversation.length === 0 ? (
-                <p className={experience.conversationEmpty}>
-                  Conversation stays with the work in front of you. Select a file, inspect the target, or tell WilliamOS what you want to do next.
-                </p>
-              ) : conversation.map((entry) => (
-                <article key={entry.id} className={experience.message} data-role={entry.role}>
-                  <span className={experience.messageRole}>{entry.role === "owner" ? "You" : "WilliamOS"}</span>
-                  <p className={experience.messageText}>{entry.text}</p>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <div className={experience.inspectorPane}>
-              <div className={experience.inspectorList}>
-                {inspectors.map((surface) => (
-                  <button
-                    key={surface.id}
-                    type="button"
-                    className={`${experience.inspectorChoice} ${activeInspector?.id === surface.id ? experience.inspectorChoiceActive : ""}`}
-                    onClick={() => setActiveInspectorId(surface.id)}
-                    title={surface.subject}
-                  >
-                    <span>{surface.subject}</span>
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      className={experience.inspectorDismiss}
-                      aria-label={`Close ${surface.subject}`}
-                      onClick={(event) => { event.stopPropagation(); dismissInspector(surface.id) }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault()
-                          event.stopPropagation()
-                          dismissInspector(surface.id)
-                        }
-                      }}
-                    >
-                      <X size={12} />
-                    </span>
-                  </button>
-                ))}
-              </div>
-              <div className={experience.inspectorBody}>
-                {activeInspector ? <InspectorSurfaceView surface={activeInspector} /> : null}
-              </div>
-            </div>
-          )}
+      <div className={spatial.objectBar} aria-label="Selected object actions">
+        <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
+        <div className={spatial.objectActions}>
+          {selectedActions.map((action) => (
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" ? spatial.primaryAction : ""}`} onClick={() => openObjectAction(action)}>{action}</button>
+          ))}
         </div>
+      </div>
 
-        {lineOpen ? (
-          <form className={experience.composer} onSubmit={submitLine} aria-label="The Line">
-            <div className={experience.composerField}>
-              <input
-                ref={lineRef}
-                value={lineInput}
-                onChange={(event) => setLineInput(event.target.value)}
-                onFocus={() => { setContextView("conversation"); setLineOpen(true) }}
-                placeholder={space.selectedPath ? `Ask or act on ${space.selectedPath}` : "Ask or direct WilliamOS"}
-                aria-label="The Line"
-                autoComplete="off"
-              />
-              {lineReply ? <output className={experience.composerError}>{lineReply}</output> : null}
-            </div>
-            <button
-              type="submit"
-              className={experience.composerSubmit}
-              disabled={lineBusy || lineInput.trim().length === 0}
-              aria-label={lineBusy ? "WilliamOS is working" : "Send"}
-            >
-              <ArrowUp size={15} strokeWidth={1.8} />
-            </button>
+      <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
+        <WindowFrame id="editor" title="Source" geometry={space.windows.editor} active={space.activeWindowId === "editor"} onActivate={() => activate("editor")} onGeometry={(geometry) => updateWindow("editor", geometry)} onMinimize={() => minimize("editor")}>
+          <EditorSurface space={space} onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))} />
+        </WindowFrame>
+        <WindowFrame id="running-app" title="Developer preview · TerraFusion" geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
+          {space.runningAppUrl ? <iframe src={space.runningAppUrl} title="Running TerraFusion application" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads" className="h-full w-full border-0" /> : (
+            <div className="grid h-full place-content-center gap-3 p-8 text-center" role="status"><AppWindow className="mx-auto text-[#91a48c]" size={26} aria-hidden /><strong>Developer preview unavailable</strong><span className="max-w-md text-xs text-[#8e998b]">Attach the TerraFusion development runtime when you want the real target beside source. WilliamOS remains fully usable; no business workflow is being simulated.</span></div>
+          )}
+        </WindowFrame>
+        {(["tests", "diff", "terminal"] as const).map((id) => (
+          <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)}>
+            {utilityContent(id)}
+          </WindowFrame>
+        ))}
+        {inspectors.map((surface) => {
+          const geometry = space.inspectorWindows[surface.id]
+          if (!geometry) return null
+          return <WindowFrame key={surface.id} id={surface.id} title={`Inspector · ${surface.subject}`} geometry={geometry} active={space.activeWindowId === surface.id} onActivate={() => activateInspector(surface.id)} onGeometry={(next) => updateInspector(surface.id, next)} onMinimize={() => updateInspector(surface.id, { ...geometry, minimized: true })} onClose={() => dismissInspector(surface.id)}><InspectorSurfaceView surface={surface} /></WindowFrame>
+        })}
+      </div>
+
+      <nav className={spatial.dock} aria-label="Surface dock">
+        {space.dock.map((id) => (
+          <button key={id} type="button" className={`${spatial.dockButton} ${space.activeWindowId === id && !space.windows[id].minimized ? spatial.dockButtonActive : ""}`} onClick={() => activate(id)} aria-label={`${space.windows[id].minimized ? "Restore" : "Focus"} ${windowName[id]}`} title={windowName[id]}>
+            {id === "editor" ? <Braces size={15} /> : id === "running-app" ? <AppWindow size={15} /> : id === "tests" ? <FlaskConical size={15} /> : id === "diff" ? <GitCompare size={15} /> : <TerminalSquare size={15} />}
+          </button>
+        ))}
+        <button type="button" className={spatial.dockButton} onClick={() => setOverlay("mission-control")} aria-label="Open Mission Control" title="Mission Control"><Grid2X2 size={15} /></button>
+        <button type="button" className={spatial.dockButton} onClick={() => setOverlay("council")} aria-label="Summon Brain Council" title="Brain Council"><Users size={15} /></button>
+      </nav>
+
+      <footer className={spatial.williamRail} aria-label="William intelligence presence">
+        <span className={spatial.williamOrb} aria-hidden>W</span>
+        <div className={spatial.judgment}><strong>William</strong><p>{williamJudgment}</p></div>
+        <div className={spatial.williamActions}>
+          <button type="button" className={spatial.overlayButton} onClick={inspectWilliamJudgment}>Inspect</button>
+          <button type="button" className={spatial.overlayButton} onClick={() => openLine(`Override William's recommendation for ${selectedLabel}: `)}>Override</button>
+          <button type="button" className={spatial.overlayButton} onClick={() => { setCouncilQuestion(`Challenge William's recommendation: ${williamJudgment}`); setOverlay("council") }}>Ask Council</button>
+          <button type="button" className={spatial.overlayButton} onClick={() => openLine()}>The Line · Ctrl+K</button>
+        </div>
+        <span className={`${spatial.persistence} ${persistenceError ? spatial.persistenceError : ""}`} title={persistenceError ?? undefined}>{savedLabel}</span>
+      </footer>
+
+      {lineOpen ? (
+        <div className={spatial.lineBackdrop} onPointerDown={(event) => { if (event.target === event.currentTarget) setLineOpen(false) }}>
+          <form className={spatial.line} onSubmit={submitLine} aria-label="The Line">
+            <Command size={16} aria-hidden />
+            <div><span className={spatial.lineContext}>{selectedKind} · {selectedLabel}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} placeholder="Ask, change, delegate, or review" aria-label="The Line" autoComplete="off" />{lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
+            <div className={spatial.lineControls}><button type="submit" className={spatial.lineSend} disabled={lineBusy || !lineInput.trim()}>{lineBusy ? "Working" : "Send"}</button><button type="button" className={spatial.lineClose} onClick={() => setLineOpen(false)} aria-label="Close The Line"><X size={14} /></button></div>
           </form>
-        ) : null}
-      </aside>
+        </div>
+      ) : null}
+
+      {overlay === "council" ? <div className={spatial.councilHost}><BrainCouncilSurface selectedContext={{ spaceName: project?.name ?? space.name, kind: selectedKind, label: selectedLabel, detail: "Reference advisory roles bound to the current real Space context and owner question" }} session={{ ...REFERENCE_COUNCIL_SESSION, question: councilQuestion ?? `Challenge the current direction for ${selectedLabel}.` }} onDismiss={() => setOverlay(null)} onAdvisoryAction={(action) => handleCouncilAction(action)} /></div> : null}
+      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={space.id} onEnterSpace={() => setOverlay(null)} onDismiss={() => setOverlay(null)} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
     </main>
   )
 }

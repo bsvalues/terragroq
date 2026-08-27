@@ -1,7 +1,7 @@
 import type { WorldSpine } from "@/lib/environment/working-world"
 import { isSummonedSurface } from "@/lib/environment/summon"
 
-export type WindowId = "editor" | "running-app"
+export type WindowId = "editor" | "running-app" | "tests" | "diff" | "terminal"
 
 export type InspectorSeed = Readonly<{ kind: string; subject: string }>
 
@@ -52,7 +52,7 @@ export type SpaceEnvelope = Readonly<{
 export type WorkspaceProject = Readonly<{ identity: string; name: string }>
 
 export function defaultSpace(viewportWidth = 1440, viewportHeight = 900): WorkspaceSpace {
-  const workHeight = Math.max(560, viewportHeight - 58)
+  const workHeight = Math.max(300, viewportHeight - 171)
   const editorWidth = Math.max(620, Math.round(viewportWidth * 0.64))
   return {
     revision: 0,
@@ -62,24 +62,36 @@ export function defaultSpace(viewportWidth = 1440, viewportHeight = 900): Worksp
     windows: {
       editor: {
         x: 26,
-        y: 38,
+        y: 18,
         width: editorWidth,
-        height: Math.min(720, workHeight - 28),
-        z: 2,
+        height: Math.min(720, workHeight - 22),
+        z: 4,
         minimized: false,
       },
       "running-app": {
         x: Math.max(300, viewportWidth - Math.round(viewportWidth * 0.43) - 26),
-        y: 78,
+        y: 50,
         width: Math.max(520, Math.round(viewportWidth * 0.43)),
-        height: Math.min(650, workHeight - 68),
+        height: Math.min(650, workHeight - 56),
         z: 1,
         minimized: false,
+      },
+      tests: {
+        x: 58, y: Math.max(170, workHeight - 258),
+        width: Math.max(480, Math.round(viewportWidth * 0.38)), height: Math.min(240, workHeight - 12), z: 3, minimized: false,
+      },
+      diff: {
+        x: Math.max(450, Math.round(viewportWidth * 0.42)), y: Math.max(160, workHeight - 248),
+        width: Math.max(460, Math.round(viewportWidth * 0.34)), height: Math.min(230, workHeight - 12), z: 2, minimized: true,
+      },
+      terminal: {
+        x: Math.max(260, Math.round(viewportWidth * 0.23)), y: Math.max(150, workHeight - 268),
+        width: Math.max(520, Math.round(viewportWidth * 0.42)), height: Math.min(250, workHeight - 12), z: 2, minimized: true,
       },
     },
     inspectorWindows: {},
     inspectorSeeds: {},
-    dock: ["editor", "running-app"],
+    dock: ["editor", "running-app", "tests", "diff", "terminal"],
     activeWindowId: "editor",
     selectedPath: null,
     editor: {
@@ -103,11 +115,12 @@ function geometryInViewport(
 ): WindowGeometry {
   const viewportWidth = Math.max(320, finite(viewport.width, 1440))
   const viewportHeight = Math.max(240, finite(viewport.height, 900))
+  const canvasHeight = Math.max(260, viewportHeight - 171)
   const width = Math.min(Math.max(360, viewportWidth - 16), Math.max(360, finite(frame?.width, base.width)))
-  const height = Math.min(Math.max(260, viewportHeight - 44), Math.max(260, finite(frame?.height, base.height)))
+  const height = Math.min(canvasHeight, Math.max(220, finite(frame?.height, base.height)))
   // Keep at least a draggable title-bar segment visible after display/browser size changes.
   const x = Math.min(Math.max(0, viewportWidth - 180), Math.max(-width + 180, finite(frame?.x, base.x)))
-  const y = Math.min(Math.max(28, viewportHeight - 90), Math.max(28, finite(frame?.y, base.y)))
+  const y = Math.min(Math.max(0, canvasHeight - 32), Math.max(0, finite(frame?.y, base.y)))
   return {
     x,
     y,
@@ -129,7 +142,8 @@ export function normalizeSpace(
   const windowsByKind = new Map(rawWindows.flatMap((window) => {
     if (!window || typeof window !== "object") return []
     const item = window as Record<string, unknown>
-    return item.kind === "editor" || item.kind === "running-app" ? [[item.kind, item] as const] : []
+    return item.kind === "editor" || item.kind === "running-app" || item.kind === "tests"
+      || item.kind === "diff" || item.kind === "terminal" ? [[item.kind, item] as const] : []
   }))
   const inspectorWindows = Object.fromEntries(rawWindows.flatMap((window) => {
     if (!window || typeof window !== "object") return []
@@ -176,6 +190,26 @@ export function normalizeSpace(
     }]
   })
   const activePaneIndex = rawPanes.findIndex((pane) => pane && typeof pane === "object" && (pane as Record<string, unknown>).id === rawActivePaneId)
+  const normalizedWindows: Record<WindowId, WindowGeometry> = {
+    editor: normalizeWindow("editor"),
+    "running-app": normalizeWindow("running-app"),
+    tests: normalizeWindow("tests"),
+    diff: normalizeWindow("diff"),
+    terminal: normalizeWindow("terminal"),
+  }
+  const activeWindowId = candidate.activeWindowId === "workspace-editor" ? "editor"
+    : candidate.activeWindowId === "workspace-running-app" ? "running-app"
+    : candidate.activeWindowId === "workspace-tests" ? "tests"
+    : candidate.activeWindowId === "workspace-diff" ? "diff"
+    : candidate.activeWindowId === "workspace-terminal" ? "terminal"
+    : typeof candidate.activeWindowId === "string" && inspectorWindows[candidate.activeWindowId]
+      ? candidate.activeWindowId
+    : candidate.activeWindowId === null ? null : fallback.activeWindowId
+  if (activeWindowId && activeWindowId in normalizedWindows) {
+    const durableId = activeWindowId as WindowId
+    const highest = Math.max(...Object.values(normalizedWindows).map((window) => window.z), ...Object.values(inspectorWindows).map((window) => window.z))
+    normalizedWindows[durableId] = { ...normalizedWindows[durableId], minimized: false, z: highest + 1 }
+  }
   return {
     revision: Number.isSafeInteger(candidate.revision) && (candidate.revision as number) >= 0
       ? candidate.revision as number : fallback.revision,
@@ -184,15 +218,11 @@ export function normalizeSpace(
     runningAppUrl: typeof candidate.runningAppUrl === "string" && candidate.runningAppUrl.length > 0
       ? candidate.runningAppUrl
       : null,
-    windows: { editor: normalizeWindow("editor"), "running-app": normalizeWindow("running-app") },
+    windows: normalizedWindows,
     inspectorWindows,
     inspectorSeeds,
-    dock: ["editor", "running-app"],
-    activeWindowId: candidate.activeWindowId === "workspace-editor" ? "editor"
-      : candidate.activeWindowId === "workspace-running-app" ? "running-app"
-      : typeof candidate.activeWindowId === "string" && inspectorWindows[candidate.activeWindowId]
-        ? candidate.activeWindowId
-      : candidate.activeWindowId === null ? null : fallback.activeWindowId,
+    dock: ["editor", "running-app", "tests", "diff", "terminal"],
+    activeWindowId,
     selectedPath: typeof rawSelection?.filePath === "string"
       ? rawSelection.filePath
       : panes[activePaneIndex]?.selection ? panes[activePaneIndex].activePath : null,
@@ -219,6 +249,9 @@ export function spaceInViewport(space: WorkspaceSpace, viewport: ViewportBounds)
     windows: {
       editor: contain(space.windows.editor),
       "running-app": contain(space.windows["running-app"]),
+      tests: contain(space.windows.tests),
+      diff: contain(space.windows.diff),
+      terminal: contain(space.windows.terminal),
     },
     inspectorWindows: Object.fromEntries(
       Object.entries(space.inspectorWindows).map(([id, geometry]) => [id, contain(geometry)]),
@@ -240,13 +273,18 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
     .filter(([id]) => Boolean(space.inspectorSeeds[id]) && isSummonedSurface(space.inspectorSeeds[id].kind))
     .slice(0, 22)
   const persistedInspectorIds = new Set(persistedInspectors.map(([id]) => id))
+  // A tab restored from the pre-Experience-V2 shape can still be alive while the
+  // upgraded client loads. Persist the windows it actually has; normalizeSpace
+  // will add the new utility windows on the next hydration.
+  const durableWindowIds = (["editor", "running-app", "tests", "diff", "terminal"] as const)
+    .filter((id) => Boolean(space.windows[id]))
   return {
     schemaVersion: 1 as const,
     revision,
-    windows: [...(["editor", "running-app"] as const).map((id) => ({
-      id: id === "editor" ? "workspace-editor" : "workspace-running-app",
+    windows: [...durableWindowIds.map((id) => ({
+      id: id === "editor" ? "workspace-editor" : id === "running-app" ? "workspace-running-app" : `workspace-${id}`,
       kind: id,
-      title: id === "editor" ? "Source" : "TerraFusion",
+      title: id === "editor" ? "Source" : id === "running-app" ? "TerraFusion" : id === "tests" ? "Tests" : id === "diff" ? "Changes" : "Terminal",
       frame: {
         x: space.windows[id].x,
         y: space.windows[id].y,
@@ -281,6 +319,8 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
     } : null,
     activeWindowId: space.activeWindowId === "editor" ? "workspace-editor"
       : space.activeWindowId === "running-app" ? "workspace-running-app"
+        : space.activeWindowId === "tests" || space.activeWindowId === "diff" || space.activeWindowId === "terminal"
+          ? `workspace-${space.activeWindowId}`
         : space.activeWindowId && persistedInspectorIds.has(space.activeWindowId) ? space.activeWindowId : null,
     activePaneId: activePane ? activePane.id === "primary" ? "workspace-pane" : "workspace-pane-secondary" : null,
     runningAppUrl: space.runningAppUrl,

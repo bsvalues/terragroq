@@ -29,6 +29,7 @@ export function WindowFrame({
 }) {
   const frameRef = useRef<HTMLElement>(null)
   const geometryRef = useRef(geometry)
+  const restoreGeometryRef = useRef<WindowGeometry | null>(null)
   geometryRef.current = geometry
 
   function trackNativeResize(event: React.PointerEvent<HTMLElement>) {
@@ -64,8 +65,9 @@ export function WindowFrame({
     header.setPointerCapture(event.pointerId)
 
     const move = (next: PointerEvent) => {
-      const maxX = Math.max(0, window.innerWidth - 180)
-      const maxY = Math.max(28, window.innerHeight - 90)
+      const canvas = frameRef.current?.parentElement
+      const maxX = Math.max(0, (canvas?.clientWidth ?? window.innerWidth) - 180)
+      const maxY = Math.max(28, (canvas?.clientHeight ?? window.innerHeight) - 60)
       onGeometry({
         ...geometryRef.current,
         x: Math.min(maxX, Math.max(-origin.width + 180, origin.x + next.clientX - startX)),
@@ -74,6 +76,14 @@ export function WindowFrame({
     }
     const end = (next: PointerEvent) => {
       if (header.hasPointerCapture(next.pointerId)) header.releasePointerCapture(next.pointerId)
+      const canvas = frameRef.current?.parentElement
+      const bounds = canvas?.getBoundingClientRect()
+      if (canvas && bounds && next.clientX <= bounds.left + 16) {
+        onGeometry({ ...geometryRef.current, x: 6, y: 28, width: Math.max(360, Math.round(canvas.clientWidth / 2) - 9), height: Math.max(260, canvas.clientHeight - 36) })
+      } else if (canvas && bounds && next.clientX >= bounds.right - 16) {
+        const width = Math.max(360, Math.round(canvas.clientWidth / 2) - 9)
+        onGeometry({ ...geometryRef.current, x: Math.max(6, canvas.clientWidth - width - 6), y: 28, width, height: Math.max(260, canvas.clientHeight - 36) })
+      }
       header.removeEventListener("pointermove", move)
       header.removeEventListener("pointerup", end)
       header.removeEventListener("pointercancel", end)
@@ -81,6 +91,24 @@ export function WindowFrame({
     header.addEventListener("pointermove", move)
     header.addEventListener("pointerup", end)
     header.addEventListener("pointercancel", end)
+  }
+
+  function toggleMaximize() {
+    const canvas = frameRef.current?.parentElement
+    if (!canvas) return
+    if (restoreGeometryRef.current) {
+      onGeometry(restoreGeometryRef.current)
+      restoreGeometryRef.current = null
+      return
+    }
+    restoreGeometryRef.current = geometryRef.current
+    onGeometry({
+      ...geometryRef.current,
+      x: 6,
+      y: 28,
+      width: Math.max(360, canvas.clientWidth - 12),
+      height: Math.max(260, canvas.clientHeight - 36),
+    })
   }
 
   if (geometry.minimized) return null
@@ -100,7 +128,7 @@ export function WindowFrame({
       aria-label={`${title} window`}
       data-window-id={id}
     >
-      <header className={styles.windowBar} onPointerDown={startDrag}>
+      <header className={styles.windowBar} onPointerDown={startDrag} onDoubleClick={toggleMaximize}>
         <span className={styles.windowTitle}>{title}</span>
         {onMinimize ? (
           <button type="button" className={styles.windowControl} onClick={onMinimize} aria-label={`Minimize ${title}`}>

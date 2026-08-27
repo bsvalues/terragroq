@@ -7,51 +7,75 @@ const root = process.cwd()
 const read = (file: string) => fs.readFileSync(path.join(root, file), "utf8")
 
 const shell = () => read("components/workspace-shell/workspace-shell.tsx")
-const experienceCss = () => read("components/workspace-shell/experience-shell.module.css")
+const spatialCss = () => read("components/workspace-shell/experience-spatial.module.css")
 
 describe("WilliamOS Experience V2 shell", () => {
-  it("keeps the project world as one continuous work surface, not floating mini-windows", () => {
+  it("preserves a spatial workspace with independently durable work windows", () => {
     const source = shell()
-    expect(source).not.toContain("WindowFrame")
-    expect(source).not.toContain("windowLayer")
-    expect(source).not.toContain("dockItem")
-    expect(source).toContain('className={experience.sourceRegion}')
-    expect(source).toContain('className={experience.previewRegion}')
-    expect(source).toContain('className={experience.contextRail}')
+    expect(source).toContain("WindowFrame")
+    expect(source).toContain('id="editor"')
+    expect(source).toContain('id="running-app"')
+    expect(source).toContain('(["tests", "diff", "terminal"] as const)')
+    expect(source).toContain("windowLayer")
+    expect(source).toContain("dockButton")
+    expect(source).not.toContain("experience.sourceRegion")
+    expect(source).not.toContain("experience.previewRegion")
   })
 
-  it("keeps one summoned Line instead of mounting a permanent chat composer", () => {
+  it("keeps The Line transient and grounds object actions in the selected source", () => {
     const source = shell()
     expect(source.match(/<input\b/g)).toHaveLength(1)
     expect(source).not.toContain("<textarea")
     expect(source).toContain("lineOpen ? (")
     expect(source).toContain('aria-label="The Line"')
+    expect(source).toContain('["Ask", "Change", "Delegate", "Review"] as const')
+    expect(source).toContain('["Inspect", "Debug", "Explain", "Delegate"] as const')
+    expect(source).toContain('["Review", "Improve", "Challenge", "Merge"] as const')
+    expect(source).toContain('["Talk", "Redirect", "Pause", "Fork", "Review work"] as const')
+    expect(source).toContain('["Summarize", "Continue", "Delegate", "Council"] as const')
+    expect(source).toContain("Selected ${selectedKind}: ${selectedLabel}")
+    expect(source).toContain('space.activeWindowId === "running-app" ? "preview"')
+    expect(source).toContain('space.activeWindowId === "diff" ? "diff"')
+    expect(source).toContain("const councilRequest = text.match")
+    expect(source).toContain("question: councilQuestion")
   })
 
-  it("makes context recede when it is not active", () => {
+  it("makes durable agent roles and William's judgment visible without pretending fixtures are live", () => {
     const source = shell()
-    const css = experienceCss()
-    expect(source).toContain("environmentContextClosed")
-    expect(source).toContain("environmentContextOpen")
-    expect(css).toContain(".environmentContextClosed")
-    expect(css).toContain("54px")
-    expect(css).toContain("348px")
+    expect(source).toContain("reference session")
+    expect(source).toContain("williamJudgment")
+    expect(source).toContain('aria-label="William intelligence presence"')
+    expect(source).toContain("Inspect")
+    expect(source).toContain("Override")
+    expect(source).toContain("Ask Council")
   })
 
-  it("does not restore generic AI-gradient visual language", () => {
-    const css = experienceCss()
-    expect(css.toLowerCase()).not.toContain("gradient(")
-    expect(css).not.toContain("--copper")
-    expect(css).not.toContain("--obsidian")
-  })
-
-  it("keeps the target application as a developer preview, never WilliamOS business UI", () => {
+  it("keeps Council advisory and Mission Control spatial", () => {
     const source = shell()
-    expect(source).toContain("Developer preview")
-    expect(source).toContain("Running TerraFusion application")
-    expect(source).toContain("Preview is not attached")
+    expect(source).toContain("BrainCouncilSurface")
+    expect(source).toContain("MissionControlSurface")
+    expect(source).toContain('truth: "live"')
+    expect(source).toContain('truth: "fixture"')
+    expect(source).toContain("Illustrative Space · not live runtime state")
+  })
+
+  it("uses the restrained matte charcoal and sage product language", () => {
+    const css = spatialCss().toLowerCase()
+    expect(css).toContain("#090c09")
+    expect(css).toContain("#8eb181")
+    expect(css).toContain(".williamrail")
+    expect(css).not.toContain("#b8794e")
+    expect(css).not.toContain("#cc8d61")
+  })
+
+  it("keeps TerraFusion inside a neutral developer preview, never WilliamOS business UI", () => {
+    const source = shell().toLowerCase()
+    expect(source).toContain("developer preview")
+    expect(source).toContain("running terrafusion application")
+    expect(source).toContain("developer preview unavailable")
     expect(source).not.toContain("parcel")
     expect(source).not.toContain("appeal")
     expect(source).not.toContain("taxpayer")
+    expect(source).not.toContain("pacs")
   })
 })
