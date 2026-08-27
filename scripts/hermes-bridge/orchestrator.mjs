@@ -1973,6 +1973,13 @@ export function createHermesOrchestrator(options = {}) {
     })
     if (!outcome) return { result: "NO_ELIGIBLE_OUTCOME" }
 
+    // D4: a routed-dependency projection is handled entirely by the runtime actuator path — its own
+    // structured dependency policy, capability dispatch, and lease release (D1/D2/D5). It never enters
+    // the goal policy or the goal execution machinery below (no worktree, no Codex/Claude).
+    if (outcome.executionSubject?.kind === "dependency") {
+      return await executeDependencySubject(outcome)
+    }
+
     const decision = evaluateOutcomePolicy({
       outcome,
       actor: "bsvalues",
@@ -1981,13 +1988,6 @@ export function createHermesOrchestrator(options = {}) {
       standingAuthority: true,
     })
     if (!decision.allowed) return { result: "POLICY_WALL", reasonCode: decision.reasonCode }
-
-    // D4: a routed-dependency projection is executed by the bounded runtime actuator and never enters
-    // the goal execution machinery below (no worktree, no Codex/Claude). Its lease is released under
-    // fence on any pre-execution refusal (D2), so it cannot leak.
-    if (outcome.executionSubject?.kind === "dependency") {
-      return await executeDependencySubject(outcome)
-    }
 
     const outcomeId = String(outcome.id)
     let current = durableExecution ?? state.read().executions[outcomeId]

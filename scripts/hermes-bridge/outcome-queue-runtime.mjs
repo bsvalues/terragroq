@@ -1469,10 +1469,17 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     // No fake Goal. An explicit, minimal governed outcome carrying the discriminated subject and the
     // queue item id, so the settlement receipt can name the exact projection under fence.
     return {
+      id: item.id,
       outcomeKey: item.outcomeKey,
       userId: item.userId,
       activeWorkOrderId: item.activeWorkOrderId,
       authorityGrantRef: item.authorityGrantRef,
+      // The structured authority fields the dependency policy + actuator need. Carried verbatim from
+      // the queue item; never inferred from prose.
+      authorityAction: item.authorityAction,
+      authorityLevel: item.authorityLevel,
+      authoritySubject: item.authoritySubject,
+      riskClass: item.riskClass,
       title: (typeof item.title === "string" && item.title.trim() !== "") ? item.title.trim() : `dependency:${subject.dependencyId}`,
       command: item.objective ?? "",
       executionSubject: { ...subject, projectionQueueItemId: Number(item.id) },
@@ -1561,6 +1568,15 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
   async function executeDependencySubject(outcome) {
     const subject = outcome?.executionSubject
     if (!subject || subject.kind !== "dependency") return { result: "NOT_A_DEPENDENCY" }
+    // Structured dependency policy (D1) FIRST — never LANE_NOT_ALLOWED. On a policy wall, RELEASE the
+    // lease (D2) so a denied dependency cannot leak, then return the typed wall.
+    const decision = evaluateOutcomePolicy({
+      outcome, actor: "bsvalues", repository: "bsvalues/terragroq", enabled: true, standingAuthority: true,
+    })
+    if (!decision.allowed) {
+      await releaseDependencyLease(outcome, `POLICY_${decision.reasonCode}`)
+      return { result: "POLICY_WALL", reasonCode: decision.reasonCode }
+    }
     const capability = outcome.authorityAction
     // Only runtime_control:control is actuated. Anything else is released, NEVER sent to Codex/Claude.
     if (capability !== "runtime_control:control") {

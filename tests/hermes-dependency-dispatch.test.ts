@@ -68,7 +68,7 @@ function depOutcome(over: Record<string, unknown> = {}) {
   return {
     id: 28, userId: "owner", outcomeKey: "routed-dependency:2:r5", activeWorkOrderId: 55,
     authorityGrantRef: "DEP-ACQ-GRANT-2-r5", authorityLevel: "A0_READ_ONLY", authoritySubject: "operator",
-    authorityAction: "runtime_control:control",
+    authorityAction: "runtime_control:control", riskClass: "R1",
     executionSubject: { kind: "dependency", ok: true, dependencyId: 2, workOrderId: 55, envelope: { resource: "workspace-runtime", surfaceClass: "runtime_control", capability: "control" } },
     queueBinding: {
       userId: "owner", outcomeKey: "routed-dependency:2:r5", expectedVersion: 3,
@@ -104,13 +104,31 @@ describe("D4/D2 — capability dispatch + lease release", () => {
     expect(result.routeDependency?.operation).toBe("DEFINE_WORKSPACE_RUNTIME_LAUNCH_CONTRACT")
   })
 
-  it("a non runtime_control:control capability is RELEASED and NEVER sent to the actuator (no Codex)", async () => {
+  it("a non runtime_control:control capability (policy-allowed) is RELEASED and NEVER sent to the actuator (no Codex)", async () => {
     const transitionQueue = vi.fn(async () => ({}))
     const startRuntimeService = vi.fn()
     const runtime = runtimeFor({ transitionQueue, startRuntimeService })
-    const result = await runtime.executeDependencySubject(depOutcome({ authorityAction: "source:write" }))
+    // source:write passes the dependency policy (matching envelope, not hard-denied) but is not actuated.
+    const result = await runtime.executeDependencySubject(depOutcome({
+      authorityAction: "source:write",
+      executionSubject: { kind: "dependency", ok: true, dependencyId: 2, workOrderId: 55, envelope: { resource: "src", surfaceClass: "source", capability: "write" } },
+    }))
     expect(startRuntimeService).not.toHaveBeenCalled()
     expect(transitionQueue).toHaveBeenCalledOnce()
     expect(result.refusal).toBe("CAPABILITY_NOT_ACTUATED")
+  })
+
+  it("a policy-denied dependency (hard-denied capability) is RELEASED, not leaked, and never actuated", async () => {
+    const transitionQueue = vi.fn(async () => ({}))
+    const startRuntimeService = vi.fn()
+    const runtime = runtimeFor({ transitionQueue, startRuntimeService })
+    const result = await runtime.executeDependencySubject(depOutcome({
+      authorityAction: "secrets:read",
+      executionSubject: { kind: "dependency", ok: true, dependencyId: 2, workOrderId: 55, envelope: { resource: "s", surfaceClass: "secrets", capability: "read" } },
+    }))
+    expect(startRuntimeService).not.toHaveBeenCalled()
+    expect(transitionQueue).toHaveBeenCalledOnce()
+    expect(result.result).toBe("POLICY_WALL")
+    expect(result.reasonCode).toBe("DEPENDENCY_CAPABILITY_FORBIDDEN")
   })
 })
