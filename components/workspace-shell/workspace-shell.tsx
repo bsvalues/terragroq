@@ -9,6 +9,7 @@ import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type WorkspaceProject, type WorkspaceSpace } from "./types"
+import bridge from "./experience-token-bridge.module.css"
 import experience from "./experience-shell.module.css"
 
 type LineReply = Readonly<{
@@ -86,7 +87,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   const materializeSurfaces = useCallback((reply: LineReply) => {
     if (reply.dismiss) {
-      setInspectors((current) => reply.dismiss === "all" ? [] : current.filter((surface) => surface.kind !== reply.dismiss))
+      setInspectors((current) => {
+        const next = reply.dismiss === "all" ? [] : current.filter((surface) => surface.kind !== reply.dismiss)
+        if (next.length === 0) setContextView("conversation")
+        return next
+      })
       setSpace((current) => {
         const removedIds = new Set(inspectors.filter((surface) => reply.dismiss === "all" || surface.kind === reply.dismiss).map((surface) => surface.id))
         return {
@@ -389,7 +394,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }, [acceptLineReply, hydrated, initialSummon, worldId])
 
   const dismissInspector = useCallback((id: string) => {
-    setInspectors((current) => current.filter((surface) => surface.id !== id))
+    setInspectors((current) => {
+      const next = current.filter((surface) => surface.id !== id)
+      if (next.length === 0) setContextView("conversation")
+      return next
+    })
     setActiveInspectorId((current) => current === id ? null : current)
     setSpace((current) => {
       const inspectorWindows = { ...current.inspectorWindows }
@@ -469,7 +478,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   return (
     <main
-      className={`${experience.environment} ${contextExpanded ? experience.environmentContextOpen : experience.environmentContextClosed}`}
+      className={`${experience.environment} ${bridge.tokens} ${contextExpanded ? experience.environmentContextOpen : experience.environmentContextClosed}`}
       aria-label={`${project?.name ?? "Workspace"} Space`}
     >
       <aside className={experience.worldRail} aria-label="WilliamOS worlds">
