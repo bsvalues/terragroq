@@ -40,7 +40,11 @@ const TB_REF = "binding:1:project:2"
 
 describe("projectDependency", () => {
   it("projects PROVISION with the resource-scoped envelope, verbatim", () => {
-    const p = projectDependency({ dep: provisionDep(), envelope: ENVELOPE, truthBindingRef: TB_REF, subject: "runtime_control:hermes" })
+    const p = projectDependency({ dep: provisionDep(), envelope: ENVELOPE, truthBindingRef: TB_REF, subject: "operator", authorityGrantRef: "DEP-ACQ-GRANT-2" })
+    // Authenticated principal and the concrete grant ref, NOT a role label or a synthetic envelope ref.
+    expect(p.authoritySubject).toBe("operator")
+    expect(p.authorityGrantRef).toBe("DEP-ACQ-GRANT-2")
+    expect(p.authorityGrantRef).not.toMatch(/^envelope:/)
     expect(p.envelopeClass).toBe("runtime_control")
     expect(p.envelopeCapability).toBe("control")
     expect(p.envelopeResource).toBe("workspace-runtime")
@@ -52,7 +56,7 @@ describe("projectDependency", () => {
   it("NEGATIVE PROOF: no A0-A9 downgrade or translation", () => {
     // The whole point. runtime_control:control is never mapped onto an A-level; authorityLevel stays
     // at the neutral least-privilege sentinel and the real authority is the envelope.
-    const p = projectDependency({ dep: provisionDep(), envelope: ENVELOPE, truthBindingRef: TB_REF, subject: "x" })
+    const p = projectDependency({ dep: provisionDep(), envelope: ENVELOPE, truthBindingRef: TB_REF, subject: "operator", authorityGrantRef: "DEP-ACQ-GRANT-2" })
     expect(p.authorityLevel).toBe(NEUTRAL_AUTHORITY_LEVEL)
     expect(p.authorityLevel).toBe("A0_READ_ONLY")
     expect(p.authorityAction).not.toMatch(/^A[0-9]_/)
@@ -66,7 +70,8 @@ describe("projectDependency", () => {
         dep: provisionDep(),
         envelope: { resource: "workspace-runtime", surfaceClass: "runtime_control", capability: "observe" },
         truthBindingRef: TB_REF,
-        subject: "x",
+        subject: "operator",
+        authorityGrantRef: "DEP-ACQ-GRANT-2",
       }),
     ).toThrow(/does not cover/)
   })
@@ -83,7 +88,7 @@ describe("projectDependency", () => {
 /* ------------------------------------------------------------------ */
 
 function projectionRecord(over: Partial<OutcomeQueueRecord> = {}): OutcomeQueueRecord {
-  const p = projectDependency({ dep: provisionDep(), envelope: ENVELOPE, truthBindingRef: TB_REF, subject: "runtime_control:hermes" })
+  const p = projectDependency({ dep: provisionDep(), envelope: ENVELOPE, truthBindingRef: TB_REF, subject: "operator", authorityGrantRef: "DEP-ACQ-GRANT-2" })
   return {
     userId: "owner",
     outcomeKey: p.outcomeKey,
@@ -131,7 +136,7 @@ describe("the existing outcome-queue engine leases the projection (no new execut
     now: "2026-08-26T01:00:00.000Z",
     allowedRiskClasses: ["R0", "R1"],
     validApprovalDecisionIds: [900],
-    validAuthorityGrantRefs: ["envelope:routed_dependency:2"],
+    validAuthorityGrantRefs: ["DEP-ACQ-GRANT-2"],
   }
 
   it("selectNextOutcome ACTIVATES the projection with no A-level involved", () => {

@@ -114,10 +114,18 @@ export function projectDependency(input: {
   dep: ProjectableDependency
   envelope: DependencyEnvelope
   truthBindingRef: string
+  /** The AUTHENTICATED execution principal the acquisition grant is issued to (grant.grantedTo).
+   *  NOT the routing/assignment role (routed_dependency.assignee): assignment role, authenticated
+   *  principal, and capability envelope are three separate concepts and must not be conflated. */
   subject: string
+  /** Ref of the concrete, active authority_grant materialized ALONGSIDE this projection. The runtime
+   *  acquire gate joins a real grant on this ref (userId, ref, grantedTo, scope, level, action, WO);
+   *  a synthetic authorityState='matched' assertion is never trusted on its own. The caller MUST
+   *  create that grant atomically with the projection. */
+  authorityGrantRef: string
   riskClass?: string
 }): DependencyProjection {
-  const { dep, envelope, truthBindingRef, subject } = input
+  const { dep, envelope, truthBindingRef, subject, authorityGrantRef } = input
   if (!isDependencyProjectable(dep)) {
     throw new Error(`Dependency ${dep.id} (${dep.routingState}) is not projectable`)
   }
@@ -144,7 +152,7 @@ export function projectDependency(input: {
     envelopeDigest: computeEnvelopeDigest(envelope, truthBindingRef),
     authorityAction: `${envelope.surfaceClass}:${envelope.capability}`,
     authoritySubject: subject,
-    authorityGrantRef: `envelope:routed_dependency:${dep.id}`,
+    authorityGrantRef,
     authorityLevel: NEUTRAL_AUTHORITY_LEVEL,
     authorityState: "matched",
     approvalState: "approved",

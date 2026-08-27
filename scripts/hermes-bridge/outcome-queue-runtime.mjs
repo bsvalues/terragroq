@@ -4,6 +4,7 @@ import path from "node:path"
 
 import {
   acquireNextEligibleOutcome,
+  OUTCOME_QUEUE_SQL,
   bindOutcomeQueueWorkOrder,
   completeOutcomeQueueItem,
   deferOutcomeQueueLease,
@@ -1398,8 +1399,56 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
       return { routingState, parentWorkOrderId: Number(dep.workOrderId) }
     }))
 
+  // Post-lease grant reverify (requirement: reverify authority AFTER the lease, before any side
+  // effect). Acquisition already gated on the concrete grant, but the grant could be revoked or
+  // expire between acquire and execute. This re-runs the exact grant match; authorityState='matched'
+  // is never trusted on its own. Injectable for tests.
+  const reverifyDependencyGrant = options.reverifyDependencyGrant ?? (async (item) =>
+    database.withPool(async (pool) => {
+      const at = now()
+      const row = (await pool.query(
+        `SELECT 1
+           FROM "authority_grant"
+          WHERE "userId" = $1
+            AND "ref" = $2
+            AND "status" = 'active'
+            AND "revokedAt" IS NULL
+            AND ("expiresAt" IS NULL OR "expiresAt" AT TIME ZONE 'UTC' > $3::timestamptz)
+            AND "authorityLevel" = $4
+            AND "grantedTo" = $5
+            AND "scope" = $6
+            AND "workOrderId" IS NOT NULL
+            AND "workOrderId" = $7
+            AND NOT EXISTS (
+              SELECT 1 FROM unnest("blockedActions") AS blocked(action)
+              WHERE position(lower(blocked.action) IN lower($8)) > 0
+            )
+            AND (
+              cardinality("allowedActions") = 0
+              OR EXISTS (
+                SELECT 1 FROM unnest("allowedActions") AS allowed(action)
+                WHERE position(lower(allowed.action) IN lower($8)) > 0
+              )
+            )
+          LIMIT 1`,
+        [item.userId, item.authorityGrantRef, at.toISOString(), item.authorityLevel,
+         item.authoritySubject, item.outcomeKey, Number(item.activeWorkOrderId), item.authorityAction])).rows[0]
+      return row
+        ? { ok: true }
+        : { ok: false, refusal: "GRANT_REVOKED", detail: "No active grant backs the projection at execution time" }
+    }))
+
   async function resolveDependencySubject(item) {
-    return resolveExecutionSubject(item, { loadDependencyContext })
+    const subject = await resolveExecutionSubject(item, { loadDependencyContext })
+    // Envelope/truth/dependency verified by the seam; now reverify the concrete authority grant
+    // still stands, before any side effect. A revoked/expired/mismatched grant refuses execution.
+    if (subject.kind === "dependency" && subject.ok) {
+      const grant = await reverifyDependencyGrant(item)
+      if (!grant.ok) {
+        return { kind: "dependency", ok: false, refusal: grant.refusal, detail: grant.detail }
+      }
+    }
+    return subject
   }
 
   function governedDependencyOutcome(item, subject) {
@@ -1458,20 +1507,30 @@ export function createHermesOutcomeQueueRuntime(options = {}) {
     requireExecutionProofContext()
     await ensureReady()
     const primary = await resolvePrimary()
+    const attemptAcquire = (candidateAcquireSql) => acquire({
+      databaseUrl,
+      userId: primary.id,
+      acquisitionKey: randomUUID(),
+      leaseHolder: holderId,
+      leaseToken: randomUUID(),
+      executionBinding: randomUUID(),
+      leaseDurationMs: QUEUE_LEASE_DURATION_MS,
+      campaignWindowId,
+      processIdentity,
+      checkpointProofProvider,
+      candidateAcquireSql,
+      now: now(),
+    })
     for (let rejected = 0; rejected < 100; rejected += 1) {
-      const acquired = await acquire({
-        databaseUrl,
-        userId: primary.id,
-        acquisitionKey: randomUUID(),
-        leaseHolder: holderId,
-        leaseToken: randomUUID(),
-        executionBinding: randomUUID(),
-        leaseDurationMs: QUEUE_LEASE_DURATION_MS,
-        campaignWindowId,
-        processIdentity,
-        checkpointProofProvider,
-        now: now(),
-      })
+      // Two distinct acquisition lanes over the SAME lease/fence machinery. The legacy
+      // bounded-authority lane runs first (goal/outcome work, protected-content fenced). Only if it
+      // finds nothing do we try the grant-backed routed-dependency lane. A goal outcome never enters
+      // the dependency candidate (canonicalDependencyId NULL); a projection never clears the legacy
+      // fence (its authorityAction is runtime_control:* and it has no workbench origin).
+      let acquired = await attemptAcquire(OUTCOME_QUEUE_SQL.acquire)
+      if (!acquired?.outcome || !acquired.acquired) {
+        acquired = await attemptAcquire(OUTCOME_QUEUE_SQL.acquireDependency)
+      }
       if (!acquired?.outcome || !acquired.acquired) return null
       const item = acquired.outcome
       try {

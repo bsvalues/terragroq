@@ -990,6 +990,148 @@ const VALIDATION_RECOVERY_RENEWAL_COUNT_SQL = `(
     )
 )`
 
+/* ------------------------------------------------------------------ */
+/* Routed-dependency acquisition — the v2 grant-backed path            */
+/*                                                                     */
+/* A SEPARATE acquisition gate for outcome_queue_item rows that carry  */
+/* a canonicalDependencyId (routed-dependency PROJECTIONS). It shares  */
+/* the IDENTICAL serialization / lifecycle / one-active-slot / deps    */
+/* machinery as the legacy ELIGIBILITY_PREDICATE, but replaces the two */
+/* legacy-only gates a projection can never (and must not) satisfy:    */
+/*   - OUTCOME_QUEUE_BOUNDED_AUTHORITY_SQL: authoritySubject='operator',*/
+/*     authorityAction='outcome:execute', and a protected-content      */
+/*     regex. That crude lexical fence is REPLACED by a concrete       */
+/*     structured authority grant. Prose is never authority.           */
+/*   - EXACT_EXECUTION_ORIGIN_PREDICATE: a workbench-thread origin. A   */
+/*     projection is rooted in a routed_dependency, not a thread.       */
+/* The legacy path is byte-for-byte untouched: a goal outcome          */
+/* (canonicalDependencyId NULL) never enters this predicate, and a     */
+/* projection never enters the legacy one (its authorityAction is      */
+/* runtime_control:* not outcome:execute, and it has no workbench root).*/
+/* ------------------------------------------------------------------ */
+
+// The concrete authority grant that MUST back a dependency projection. No lexical
+// content fence: the security boundary is the structured resource x capability grant,
+// bound to the exact principal, outcome, work order, level and action. authorityState
+// = 'matched' is NEVER trusted on its own — the matching active grant row must exist.
+const DEPENDENCY_AUTHORITY_PREDICATE = `
+  q."authorityState" = 'matched'
+  AND EXISTS (
+    SELECT 1
+    FROM "authority_grant" AS dep_grant
+    WHERE dep_grant."userId" = q."userId"
+      AND dep_grant."ref" = q."authorityGrantRef"
+      AND dep_grant."status" = 'active'
+      AND dep_grant."revokedAt" IS NULL
+      AND (
+        dep_grant."expiresAt" IS NULL
+        OR dep_grant."expiresAt" AT TIME ZONE 'UTC' > $1::timestamptz
+      )
+      AND dep_grant."authorityLevel" = q."authorityLevel"
+      AND dep_grant."grantedTo" = q."authoritySubject"
+      AND dep_grant."scope" = q."outcomeKey"
+      AND dep_grant."workOrderId" IS NOT NULL
+      AND COALESCE($8, q."activeWorkOrderId") = dep_grant."workOrderId"
+      AND NOT EXISTS (
+        SELECT 1
+        FROM unnest(dep_grant."blockedActions") AS blocked(action)
+        WHERE position(lower(blocked.action) IN lower(q."authorityAction")) > 0
+      )
+      AND (
+        cardinality(dep_grant."allowedActions") = 0
+        OR EXISTS (
+          SELECT 1
+          FROM unnest(dep_grant."allowedActions") AS allowed(action)
+          WHERE position(lower(allowed.action) IN lower(q."authorityAction")) > 0
+        )
+      )
+  )
+`
+
+// The projection must resolve to a LIVE routed dependency whose parent work order is
+// live and matches. Structured origin proof — the dependency analogue of the legacy
+// workbench-thread origin — never inferred from queue text.
+const DEPENDENCY_ORIGIN_PREDICATE = `
+  q."canonicalDependencyId" IS NOT NULL
+  AND EXISTS (
+    SELECT 1
+    FROM "routed_dependency" AS dep
+    WHERE dep."id" = q."canonicalDependencyId"
+      AND dep."workOrderId" = q."activeWorkOrderId"
+      AND dep."routingState" IN ('raised', 'routed', 'accepted')
+  )
+  AND EXISTS (
+    SELECT 1
+    FROM "work_order" AS dep_wo
+    WHERE dep_wo."id" = q."activeWorkOrderId"
+      AND dep_wo."userId" = q."userId"
+      AND dep_wo."status" = 'active'
+  )
+`
+
+// Absolute, STRUCTURED hard-deny: capability classes the resident loop must never
+// autonomously exercise, regardless of any grant. A capability prohibition, NOT lexical
+// matching. runtime_control is deliberately NOT here — it is exactly the class this path
+// authorizes under a concrete scoped grant.
+const DEPENDENCY_HARD_DENY_PREDICATE = `
+  NOT (
+    (q."envelopeClass" = 'data' AND q."envelopeCapability" = 'destructive')
+    OR (q."envelopeClass" = 'delivery' AND q."envelopeCapability" = 'release')
+    OR (q."envelopeClass" = 'secrets' AND q."envelopeCapability" IN ('read', 'write'))
+    OR (q."envelopeClass" = 'external' AND q."envelopeCapability" = 'act')
+  )
+`
+
+// The serialization / lifecycle / one-active-slot / dependency-completion / in-flight
+// blocks below are an INTENTIONAL mirror of ELIGIBILITY_PREDICATE (kept literal so the
+// legacy predicate is not touched). A divergence guard test asserts both acquire queries
+// carry the identical serialization SQL.
+const DEPENDENCY_ELIGIBILITY_PREDICATE = `
+  q."userId" = $2
+  AND q."canonicalDependencyId" IS NOT NULL
+  AND ${LIVE_APPROVAL_PREDICATE}
+  AND ${DEPENDENCY_AUTHORITY_PREDICATE}
+  AND ${DEPENDENCY_ORIGIN_PREDICATE}
+  AND ${DEPENDENCY_HARD_DENY_PREDICATE}
+  AND q."riskClass" IN ('R0', 'R1')
+  AND (
+    q."lifecycleState" = 'approved'
+    OR (
+      q."lifecycleState" = 'active'
+      AND q."leaseExpiresAt" <= $1::timestamptz
+    )
+  )
+  AND (
+    q."lifecycleState" = 'active'
+    OR NOT EXISTS (
+      SELECT 1
+      FROM "outcome_queue_item" AS occupied_slot
+      WHERE occupied_slot."userId" = q."userId"
+        AND occupied_slot."lifecycleState" = 'active'
+        AND NOT (
+          occupied_slot."lifecycleReason" = 'PROVIDER_UNAVAILABLE'
+          AND occupied_slot."leaseExpiresAt" > $1::timestamptz
+        )
+    )
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM unnest(q."dependencyKeys") AS dependency("outcomeKey")
+    LEFT JOIN "outcome_queue_item" AS completed_dependency
+      ON completed_dependency."userId" = q."userId"
+      AND completed_dependency."outcomeKey" = dependency."outcomeKey"
+    WHERE completed_dependency."lifecycleState" IS DISTINCT FROM 'completed'
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM "outcome_queue_item" AS live
+    WHERE live."userId" = q."userId"
+      AND live."lifecycleState" = 'active'
+      AND live."leaseExpiresAt" > $1::timestamptz
+      AND live."lifecycleReason" IS DISTINCT FROM 'PROVIDER_UNAVAILABLE'
+  )
+`
+
 export const OUTCOME_QUEUE_SQL = Object.freeze({
   ensureOutcomeQueueItemTable: `
 CREATE TABLE IF NOT EXISTS "outcome_queue_item" (
@@ -2028,6 +2170,35 @@ WITH candidate AS (
   SELECT q."id"
   FROM "outcome_queue_item" AS q
   WHERE ${ELIGIBILITY_PREDICATE}
+  ORDER BY ${ORDER_BY}
+  FOR UPDATE OF q SKIP LOCKED
+  LIMIT 1
+)
+UPDATE "outcome_queue_item" AS q
+SET "lifecycleState" = 'active',
+    "lifecycleReason" = CASE
+      WHEN q."lifecycleState" = 'active' THEN 'STALE_LEASE_RECOVERED'
+      ELSE NULL
+    END,
+    "activeWorkOrderId" = COALESCE($8, q."activeWorkOrderId"),
+    "executionBinding" = $4,
+    "acquisitionKey" = $3,
+    "leaseHolder" = $5,
+    "leaseToken" = $6,
+    "leaseExpiresAt" = $7::timestamptz,
+    "fencingToken" = q."fencingToken" + 1,
+    "version" = q."version" + 1,
+    "activatedAt" = COALESCE(q."activatedAt", $1::timestamptz),
+    "updatedAt" = $1::timestamptz
+FROM candidate
+WHERE q."id" = candidate."id"
+RETURNING ${QUEUE_COLUMNS}
+`,
+  acquireDependency: `
+WITH candidate AS (
+  SELECT q."id"
+  FROM "outcome_queue_item" AS q
+  WHERE ${DEPENDENCY_ELIGIBILITY_PREDICATE}
   ORDER BY ${ORDER_BY}
   FOR UPDATE OF q SKIP LOCKED
   LIMIT 1
@@ -4371,6 +4542,10 @@ export async function acquireNextEligibleOutcome({
   processIdentity,
   checkpointProofProvider,
   reviewRecoveryContinuationEnvelope: continuationInput = null,
+  // Which candidate query gates acquisition. Defaults to the legacy bounded-authority
+  // acquire; the routed-dependency path passes OUTCOME_QUEUE_SQL.acquireDependency so the
+  // SAME lease/fence/receipt/recovery machinery runs against the grant-backed candidate.
+  candidateAcquireSql = OUTCOME_QUEUE_SQL.acquire,
   now = new Date(),
 } = {}) {
   const user = userScope(userId)
@@ -4726,7 +4901,7 @@ export async function acquireNextEligibleOutcome({
         priorOutcome,
       )
     }
-    const selected = await connection.query(OUTCOME_QUEUE_SQL.acquire, [
+    const selected = await connection.query(candidateAcquireSql, [
       at,
       user,
       key,
@@ -4746,7 +4921,7 @@ export async function acquireNextEligibleOutcome({
     }
     const renewed = await renewExpiredV12CampaignAuthorities(connection, user, at)
     if (renewed.size > 0) {
-      const retried = await connection.query(OUTCOME_QUEUE_SQL.acquire, [
+      const retried = await connection.query(candidateAcquireSql, [
         at,
         user,
         key,

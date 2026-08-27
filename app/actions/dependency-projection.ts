@@ -2,6 +2,7 @@
 
 import { db } from "@/lib/db"
 import {
+  authorityGrant,
   decision,
   outcomeQueueItem,
   routedDependency,
@@ -83,66 +84,93 @@ export async function projectDependencyToQueue(dependencyId: number) {
     surfaceClass: dep.requiredClass as SurfaceClass,
     capability: dep.requiredCapability!,
   }
+  // Assignment role, authenticated principal, and capability envelope are THREE separate concepts.
+  // The routing role (dep.assignee) records who the dependency was routed to; the projection executes
+  // under the resident execution principal, and the authority is a concrete grant to THAT principal.
+  const RESIDENT_EXECUTION_PRINCIPAL = "operator"
+  const ACQUISITION_GRANT_TTL_MS = 24 * 60 * 60 * 1000
+  const acquisitionGrantRef = `DEP-ACQ-GRANT-${dep.id}`
   const spec = projectDependency({
     dep: projectable,
     envelope,
     truthBindingRef,
-    subject: dep.assignee ?? "runtime-actor",
+    subject: RESIDENT_EXECUTION_PRINCIPAL,
+    authorityGrantRef: acquisitionGrantRef,
   })
 
-  // The projection is approved + authority-matched at the ENVELOPE level. It needs a decision row to
-  // satisfy the queue's approval gate; that decision records that the authority is the envelope, not
-  // an A-level.
-  const [approval] = await db
-    .insert(decision)
-    .values({
+  // Grant + approval + projection are created ATOMICALLY. The runtime acquire gate joins a real
+  // authority_grant on (userId, ref, grantedTo, scope, level, action, workOrder); an envelope-only
+  // "matched" assertion is never trusted, so the grant must exist before the projection is live.
+  const { row, approvalId } = await db.transaction(async (tx) => {
+    await tx.insert(authorityGrant).values({
       userId: wo.userId,
-      ref: `AUTHZ-DEP-${dep.id}`,
-      title: `Envelope authorization for routed dependency #${dep.id}`,
-      decision: `Authorize ${spec.authorityAction} over ${spec.envelopeResource} for dependency #${dep.id}. Resource-scoped envelope; not an A-level grant.`,
-      status: "accepted",
-      authority: "binding",
-    })
-    .returning()
-
-  const [row] = await db
-    .insert(outcomeQueueItem)
-    .values({
-      userId: wo.userId,
-      outcomeKey: spec.outcomeKey,
-      title: spec.title,
-      objective: spec.objective,
-      dependencyKeys: [],
-      riskClass: spec.riskClass,
-      approvalState: spec.approvalState,
-      approvedBy: wo.userId,
-      approvedAt: new Date(),
-      approvalDecisionId: approval.id,
-      authorityState: spec.authorityState,
+      ref: acquisitionGrantRef,
+      grantedBy: wo.userId,
+      grantedTo: spec.authoritySubject,
       authorityLevel: spec.authorityLevel,
-      authorityGrantRef: spec.authorityGrantRef,
-      authoritySubject: spec.authoritySubject,
-      authorityAction: spec.authorityAction,
-      lifecycleState: "approved",
-      activeWorkOrderId: spec.parentWorkOrderId,
-      canonicalDependencyId: spec.canonicalDependencyId,
-      envelopeResource: spec.envelopeResource,
-      envelopeClass: spec.envelopeClass,
-      envelopeCapability: spec.envelopeCapability,
-      envelopeDigest: spec.envelopeDigest,
+      scope: spec.outcomeKey,
+      allowedActions: [spec.authorityAction],
+      status: "active",
+      workOrderId: dep.workOrderId,
+      expiresAt: new Date(Date.now() + ACQUISITION_GRANT_TTL_MS),
+      reason: `Acquisition grant for routed dependency #${dep.id} (${spec.outcomeKey}): ${spec.authorityAction}. Routing role (${dep.assignee ?? "-"}) is separate from this authenticated principal (${spec.authoritySubject}).`,
     })
-    .returning()
+
+    // Approval the queue's LIVE_APPROVAL_PREDICATE joins: canonical APPROVE verb, scoped to the exact
+    // outcome key.
+    const [approval] = await tx
+      .insert(decision)
+      .values({
+        userId: wo.userId,
+        ref: `AUTHZ-DEP-${dep.id}`,
+        title: `Approval for routed dependency #${dep.id} projection`,
+        decision: "APPROVE",
+        scope: spec.outcomeKey,
+        status: "accepted",
+        authority: "binding",
+      })
+      .returning()
+
+    const [inserted] = await tx
+      .insert(outcomeQueueItem)
+      .values({
+        userId: wo.userId,
+        outcomeKey: spec.outcomeKey,
+        title: spec.title,
+        objective: spec.objective,
+        dependencyKeys: [],
+        riskClass: spec.riskClass,
+        approvalState: spec.approvalState,
+        approvedBy: wo.userId,
+        approvedAt: new Date(),
+        approvalDecisionId: approval.id,
+        authorityState: spec.authorityState,
+        authorityLevel: spec.authorityLevel,
+        authorityGrantRef: spec.authorityGrantRef,
+        authoritySubject: spec.authoritySubject,
+        authorityAction: spec.authorityAction,
+        lifecycleState: "approved",
+        activeWorkOrderId: spec.parentWorkOrderId,
+        canonicalDependencyId: spec.canonicalDependencyId,
+        envelopeResource: spec.envelopeResource,
+        envelopeClass: spec.envelopeClass,
+        envelopeCapability: spec.envelopeCapability,
+        envelopeDigest: spec.envelopeDigest,
+      })
+      .returning()
+    return { row: inserted, approvalId: approval.id }
+  })
 
   await appendGovernanceEvent({
     userId: wo.userId,
     eventType: "DEPENDENCY_PROJECTED",
     entityType: "routed_dependency",
     entityId: String(dep.id),
-    reason: `Projected dependency #${dep.id} onto outcome_queue_item #${row.id} (${spec.authorityAction}); reused existing executor, no A-level translation`,
-    after: { projectionId: row.id, envelope: spec.authorityAction, approvalDecisionId: approval.id },
+    reason: `Projected dependency #${dep.id} onto outcome_queue_item #${row.id} (${spec.authorityAction}); concrete grant ${acquisitionGrantRef} to ${spec.authoritySubject} materialized atomically`,
+    after: { projectionId: row.id, envelope: spec.authorityAction, approvalDecisionId: approvalId, grantRef: acquisitionGrantRef },
   })
 
-  return { ok: true as const, projectionId: row.id, replayed: false, approvalDecisionId: approval.id }
+  return { ok: true as const, projectionId: row.id, replayed: false, approvalDecisionId: approvalId }
 }
 
 /** A stable reference to the parent work order's active truth binding, for the envelope digest. */
