@@ -26,7 +26,7 @@
       "required": ["name", "version", "sha256", "readOnly"],
       "properties": {
         "name": {"const": "collect-hermes-host-attestation.v1.ps1"},
-        "version": {"const": "1.0.0"},
+        "version": {"enum": ["1.0.0", "1.1.0"]},
         "sha256": {"$ref": "#/$defs/sha256"},
         "readOnly": {"const": true}
       }
@@ -122,7 +122,7 @@
           "properties": {
             "source": {"type": "string", "minLength": 1},
             "probe": {"type": "string", "minLength": 1},
-            "collectorVersion": {"const": "1.0.0"},
+            "collectorVersion": {"enum": ["1.0.0", "1.1.0"]},
             "result": {"enum": ["SUCCESS", "READ_ONLY_PROBE_FAILED", "CONTRADICTION_PRESERVED"]}
           }
         },
