@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { DeveloperToolsSurface } from "@/components/workspace-shell/developer-tools-surface"
+import { loadToolRunHistory } from "@/components/workspace-shell/tool-run-history"
 
 afterEach(() => {
   cleanup()
@@ -150,6 +151,51 @@ describe("Experience V2 developer tools", () => {
     expect(screen.getByText("exit 3", { exact: false })).toBeTruthy()
     const post = fetcher.mock.calls.find(([, init]) => init?.method === "POST")
     expect(JSON.parse(String(post?.[1]?.body))).toEqual({ operation: "repo.status" })
+  })
+
+  it.each([
+    ["CANCELLED", "cancelled"],
+    ["TIMEOUT", "interrupted"],
+    ["OUTPUT_LIMIT", "interrupted"],
+    ["SPAWN_FAILED", "interrupted"],
+    [null, "interrupted"],
+  ] as const)("settles server exit reason %s as %s rather than completed", async (reason, expectedStatus) => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? ndjson({ type: "stdout", text: "bounded bytes\n" }, { type: "exit", code: null, reason })
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+
+    expect(await screen.findByRole("button", { name: new RegExp(`git status.*${expectedStatus}.*saved browser transcript`, "i") })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /git status.*completed.*saved browser transcript/i })).toBeNull()
+  })
+
+  it("binds an active run to its start Space and never injects settlement into a newly selected Space", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const body = new ReadableStream<Uint8Array>({ start(controller) { streamController = controller } })
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? new Response(body, { headers: { "content-type": "application/x-ndjson" } })
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    const view = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    streamController!.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "stdout", text: "old Space bytes\n" })}\n`))
+    expect(await screen.findByText("old Space bytes", { exact: false })).toBeTruthy()
+
+    view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-b" />)
+    await waitFor(() => expect(screen.queryByText("old Space bytes", { exact: false })).toBeNull())
+    streamController!.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "exit", code: 0, reason: null })}\n`))
+    streamController!.close()
+
+    await waitFor(() => expect(loadToolRunHistory(window.localStorage, "server:world-a").runs).toHaveLength(1))
+    expect(loadToolRunHistory(window.localStorage, "server:world-b").runs).toHaveLength(0)
+    expect(screen.queryByText("old Space bytes", { exact: false })).toBeNull()
+    expect(screen.queryByRole("button", { name: /git status.*saved browser transcript/i })).toBeNull()
   })
 
   it("refuses arbitrary commands and extra arguments locally without posting", async () => {

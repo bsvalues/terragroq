@@ -61,6 +61,22 @@ describe("Experience V2 bounded tool transcript history", () => {
     expect(loadToolRunHistory(storage, "server:world-a")).toEqual({ runs: [], error: "TOOL_RUN_HISTORY_CORRUPT" })
   })
 
+  it("rejects persisted completion claims without a numeric process exit and null reason", () => {
+    const storage = new MemoryStorage()
+    const falseCompletion = { ...transcript(0), outcome: { status: "completed", code: null, reason: "TIMEOUT" } }
+    storage.setItem(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ schemaVersion: 1, runs: [falseCompletion] }))
+
+    expect(loadToolRunHistory(storage, "server:world-a")).toEqual({ runs: [], error: "TOOL_RUN_HISTORY_CORRUPT" })
+  })
+
+  it("preserves an exact numeric exit when a server failure reason makes the run interrupted", () => {
+    const storage = new MemoryStorage()
+    const failed = { ...transcript(0), outcome: { status: "interrupted" as const, code: 9, reason: "TIMEOUT" } }
+
+    expect(persistToolRunTranscript(storage, "server:world-a", failed).ok).toBe(true)
+    expect(loadToolRunHistory(storage, "server:world-a").runs[0]?.outcome).toEqual({ status: "interrupted", code: 9, reason: "TIMEOUT" })
+  })
+
   it("keeps twelve newest canonical transcripts and deterministically prunes the oldest", () => {
     const storage = new MemoryStorage()
     for (let index = 0; index < 13; index += 1) {
@@ -83,6 +99,23 @@ describe("Experience V2 bounded tool transcript history", () => {
     expect(new TextEncoder().encode(raw).byteLength).toBeLessThanOrEqual(131_072)
     expect(loaded.runs.at(-1)?.id).toBe("run-11")
     expect(loaded.runs.length).toBeLessThan(12)
+  })
+
+  it("byte-fits one verbose settled run while retaining newest output and terminal metadata", () => {
+    const storage = new MemoryStorage()
+    const verbose = {
+      ...transcript(0),
+      lines: [
+        ...Array.from({ length: 8 }, (_, index) => ({ channel: "stdout" as const, text: `${index}:${"界".repeat(15_000)}` })),
+        { channel: "meta" as const, text: "exit 0" },
+      ],
+    }
+
+    expect(persistToolRunTranscript(storage, "server:world-a", verbose).ok).toBe(true)
+    const saved = loadToolRunHistory(storage, "server:world-a").runs[0]!
+    expect(saved.lines.at(-1)).toEqual({ channel: "meta", text: "exit 0" })
+    expect(saved.lines.at(-2)?.text.startsWith("7:")).toBe(true)
+    expect(saved.lines.some((line) => line.text.startsWith("0:"))).toBe(false)
   })
 
   it("reports quota failure transactionally and preserves unrelated prior history", () => {

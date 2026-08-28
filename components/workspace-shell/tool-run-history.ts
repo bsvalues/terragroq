@@ -2,6 +2,7 @@ import { findLoomOperation } from "@/lib/loom/operations"
 
 export const MAX_TOOL_RUNS = 12
 export const MAX_TOOL_RUN_HISTORY_BYTES = 131_072
+export const MAX_TOOL_RUN_TRANSCRIPT_BYTES = 98_304
 
 export type ToolOutputLine = Readonly<{ channel: "stdout" | "stderr" | "meta"; text: string }>
 export type ToolRunTranscript = Readonly<{
@@ -56,7 +57,7 @@ export function toolRunHistoryStorageKey(scope: string): string {
   return `williamos:tool-runs:v1:${scope}`
 }
 
-export function validateToolRunTranscript(raw: unknown): ToolRunTranscript {
+function validateToolRunTranscriptShape(raw: unknown, enforceByteLimit: boolean): ToolRunTranscript {
   const run = record(raw, "TOOL_RUN_TRANSCRIPT_MALFORMED")
   exactKeys(run, ["schemaVersion", "id", "operationId", "operationLabel", "alias", "startedAt", "endedAt", "outcome", "lines"], "TOOL_RUN_TRANSCRIPT_UNKNOWN_KEY")
   if (run.schemaVersion !== 1) throw new Error("TOOL_RUN_TRANSCRIPT_VERSION")
@@ -65,8 +66,9 @@ export function validateToolRunTranscript(raw: unknown): ToolRunTranscript {
   if (outcome.status !== "completed" && outcome.status !== "cancelled" && outcome.status !== "interrupted") throw new Error("TOOL_RUN_STATUS_INVALID")
   if (outcome.code !== null && !Number.isSafeInteger(outcome.code)) throw new Error("TOOL_RUN_CODE_INVALID")
   if (outcome.reason !== null && (typeof outcome.reason !== "string" || outcome.reason.length > 200 || outcome.reason.includes("\0"))) throw new Error("TOOL_RUN_REASON_INVALID")
-  if (outcome.status === "completed" && outcome.code === null && outcome.reason === null) throw new Error("TOOL_RUN_COMPLETION_INVALID")
-  if (outcome.status !== "completed" && outcome.code !== null) throw new Error("TOOL_RUN_PARTIAL_CODE_INVALID")
+  if (outcome.status === "completed" && (outcome.code === null || outcome.reason !== null)) throw new Error("TOOL_RUN_COMPLETION_INVALID")
+  if (outcome.status === "cancelled" && (outcome.code !== null || outcome.reason !== "CANCELLED")) throw new Error("TOOL_RUN_CANCELLATION_INVALID")
+  if (outcome.status === "interrupted" && (outcome.reason === "CANCELLED" || (outcome.code !== null && outcome.reason === null))) throw new Error("TOOL_RUN_INTERRUPTION_INVALID")
   if (!Array.isArray(run.lines) || run.lines.length > 256) throw new Error("TOOL_RUN_LINES_INVALID")
   const lines = run.lines.map((rawLine) => {
     const line = record(rawLine, "TOOL_RUN_LINE_MALFORMED")
@@ -94,8 +96,24 @@ export function validateToolRunTranscript(raw: unknown): ToolRunTranscript {
     lines,
   }
   if (Date.parse(transcript.endedAt) < Date.parse(transcript.startedAt)) throw new Error("TOOL_RUN_TIME_INVALID")
-  if (bytes(transcript) > 98_304) throw new Error("TOOL_RUN_TRANSCRIPT_TOO_LARGE")
+  if (enforceByteLimit && bytes(transcript) > MAX_TOOL_RUN_TRANSCRIPT_BYTES) throw new Error("TOOL_RUN_TRANSCRIPT_TOO_LARGE")
   return transcript
+}
+
+export function validateToolRunTranscript(raw: unknown): ToolRunTranscript {
+  return validateToolRunTranscriptShape(raw, true)
+}
+
+function fitToolRunTranscript(raw: unknown): ToolRunTranscript {
+  const transcript = validateToolRunTranscriptShape(raw, false)
+  const terminalMeta = transcript.lines.at(-1)?.channel === "meta" ? transcript.lines.at(-1)! : null
+  const output = terminalMeta ? transcript.lines.slice(0, -1) : transcript.lines.slice()
+  let lines = terminalMeta ? [...output, terminalMeta] : output
+  while (bytes({ ...transcript, lines }) > MAX_TOOL_RUN_TRANSCRIPT_BYTES && output.length > 1) {
+    output.shift()
+    lines = terminalMeta ? [...output, terminalMeta] : output.slice()
+  }
+  return validateToolRunTranscript({ ...transcript, lines })
 }
 
 function validateEnvelope(raw: unknown): ToolRunEnvelope {
@@ -127,7 +145,7 @@ export function loadToolRunHistory(storage: ToolRunStorage, scope: string): Tool
 export function persistToolRunTranscript(storage: ToolRunStorage, scope: string, rawRun: unknown): ToolRunHistoryVerdict {
   const prior = loadToolRunHistory(storage, scope)
   if (prior.error) return { ok: false, runs: prior.runs, error: "TOOL_RUN_HISTORY_NOT_SAVED" }
-  const run = validateToolRunTranscript(rawRun)
+  const run = fitToolRunTranscript(rawRun)
   const runs = [...prior.runs.filter((item) => item.id !== run.id), run]
     .sort((left, right) => left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id))
   while (runs.length > MAX_TOOL_RUNS || bytes({ schemaVersion: 1, runs }) > MAX_TOOL_RUN_HISTORY_BYTES) runs.shift()

@@ -7,7 +7,16 @@ import { loadToolRunHistory, persistToolRunTranscript, type ToolOutputLine, type
 
 type DeveloperToolKind = "tests" | "diff" | "terminal"
 type Operation = Readonly<{ id: string; label: string; intent: string; scope: "project" | "runtime"; mutating: boolean }>
-type ActiveRun = { id: string; operationId: string; operationLabel: string; alias: string; startedAt: string; lines: ToolOutputLine[] }
+type ActiveRun = {
+  id: string
+  operationId: string
+  operationLabel: string
+  alias: string
+  startedAt: string
+  lines: ToolOutputLine[]
+  historyScope: string | null
+  historyStorage: Pick<Storage, "getItem" | "setItem"> | null
+}
 
 function terminalAlias(id: string): string | null {
   return LOOM_OPERATIONS.find((operation) => operation.id === id)?.terminalAlias ?? null
@@ -120,6 +129,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
   useEffect(() => {
     setSelectedTranscriptId(null)
     setHistoryVerdict(null)
+    setLines([])
     if (!historyScope || (kind !== "terminal" && kind !== "tests")) { setHistory([]); return }
     try {
       const restored = loadToolRunHistory(historyStorage ?? window.localStorage, historyScope)
@@ -144,16 +154,20 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
       schemaVersion: 1, id: run.id, operationId: run.operationId, operationLabel: run.operationLabel,
       alias: run.alias, startedAt: run.startedAt, endedAt: new Date().toISOString(), outcome, lines: boundedLines(nextLines),
     }
-    const scope = historyScopeRef.current
-    if (!scope) { setHistoryVerdict("Browser transcript not saved: this Space has no durable history scope."); return }
+    const scope = run.historyScope
+    if (!scope) {
+      if (historyScopeRef.current === scope) setHistoryVerdict("Browser transcript not saved: this Space has no durable history scope.")
+      return
+    }
     try {
-      const verdict = persistToolRunTranscript(historyStorageRef.current ?? window.localStorage, scope, transcript)
+      const verdict = persistToolRunTranscript(run.historyStorage ?? window.localStorage, scope, transcript)
+      if (historyScopeRef.current !== scope) return
       if (!verdict.ok) { setHistoryVerdict("Browser transcript not saved."); return }
       setHistory(historyForSurface(verdict.runs, kind))
       setHistoryVerdict(outcome.status === "cancelled" ? "cancelled · saved browser transcript"
         : outcome.status === "interrupted" ? "interrupted · saved browser transcript" : "Transcript saved in this browser.")
     } catch {
-      setHistoryVerdict("Browser transcript not saved.")
+      if (historyScopeRef.current === scope) setHistoryVerdict("Browser transcript not saved.")
     }
   }, [kind])
 
@@ -189,7 +203,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
     const current: ActiveRun = {
       id: `${startedAt}:${++runSequence.current}`, operationId: operation,
       operationLabel: catalogued?.label ?? operations.find((candidate) => candidate.id === operation)?.label ?? operation,
-      alias, startedAt, lines: [],
+      alias, startedAt, lines: [], historyScope: historyScopeRef.current, historyStorage: historyStorageRef.current,
     }
     activeRun.current = current
     setRunning(operation)
@@ -217,12 +231,17 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
           try { event = JSON.parse(entry) } catch { continue }
           if (event.type === "stdout" || event.type === "stderr") {
             current.lines.push({ channel: event.type, text: event.text ?? "" })
-            setLines([...current.lines])
+            if (historyScopeRef.current === current.historyScope) setLines([...current.lines])
           } else if (event.type === "exit") {
             receivedExit = true
             current.lines.push({ channel: "meta", text: event.reason ?? `exit ${event.code}` })
-            setLines([...current.lines])
-            settleRun(current, { status: "completed", code: event.code ?? null, reason: event.reason ?? null }, current.lines)
+            if (historyScopeRef.current === current.historyScope) setLines([...current.lines])
+            const outcome: ToolRunTranscript["outcome"] = event.reason === "CANCELLED"
+              ? { status: "cancelled", code: null, reason: event.reason }
+              : typeof event.code === "number" && event.reason == null
+                ? { status: "completed", code: event.code, reason: null }
+                : { status: "interrupted", code: typeof event.code === "number" ? event.code : null, reason: event.reason ?? null }
+            settleRun(current, outcome, current.lines)
           }
         }
       }
