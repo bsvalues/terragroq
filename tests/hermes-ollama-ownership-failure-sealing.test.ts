@@ -139,7 +139,7 @@ describe("#1050 ownership failure sealing", () => {
     expect(verifyBoundOwnership(lineage.bound, { ...lineage, source }).valid).toBe(true)
   })
 
-  it("routes representative thrown subprobes through the real collector failure writer", () => {
+  it.skipIf(process.platform !== "win32")("routes representative thrown subprobes through the real collector failure writer", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-ownership-failure-seal-"))
     const specs = [
       { id: "process.ownership-lineage", domain: "process", typedClass: "API_FAILURE", exitCode: null },

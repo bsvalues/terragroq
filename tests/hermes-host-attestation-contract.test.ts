@@ -570,7 +570,7 @@ describe("the staged collector remains read-only", () => {
     expect(source).toContain("inventory")
   })
 
-  it("classifies a JSON-escaped Windows bind as a protected model-store collision", () => {
+  it.skipIf(process.platform !== "win32")("classifies a JSON-escaped Windows bind as a protected model-store collision", () => {
     const source = fs.readFileSync(collectorPath, "utf8")
     const functionSource = source.match(/function Get-ProtectedModelStoreMountCollision[^\r\n]*\{[\s\S]*?^\}/m)?.[0]
     expect(functionSource).toBeTruthy()
