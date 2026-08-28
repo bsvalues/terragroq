@@ -128,6 +128,36 @@ describe("Experience V2 selected-file Change", () => {
     expect(diffReads).toBe(4)
   })
 
+  it("restores Source and settles Change when Source is minimized during its active stream", async () => {
+    let fileReads = 0
+    const editStream = deferredNdjson({ type: "started", file: "src/app.ts" })
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        fileReads += 1
+        return Promise.resolve(selectedFile(fileReads === 1 ? "export const before = true\n" : "export const after = true\n"))
+      }
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+    expect(await screen.findByText("Working on src/app.ts.")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Minimize Source" }))
+    expect(screen.queryByLabelText("Source content")).toBeNull()
+    editStream.finish({ type: "done", receipt: { success: true } })
+
+    await waitFor(() => expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const after = true\n"))
+    expect(screen.getByText("+after", { exact: false })).toBeTruthy()
+    expect(screen.getByText("Change applied; source and diff refreshed.")).toBeTruthy()
+  })
+
   it("sends the selected file and owner instruction to the structured edit route, then reloads source and actual diff", async () => {
     let fileReads = 0
     let diffReads = 0

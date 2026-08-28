@@ -596,6 +596,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     changeRefreshKey.current = key
     changeRefreshWaiters.current.set(key, { path, resolve })
     setChangeRefresh({ path, key })
+    activate("editor")
     activate("diff")
   }), [activate])
 
