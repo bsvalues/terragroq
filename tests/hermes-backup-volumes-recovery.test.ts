@@ -13,12 +13,29 @@ describe("HERMES recovery generation producer", () => {
 
   it("emits a bounded appliance config archive into the existing cross-node *.tar.gz stream", () => {
     expect(source).toContain('hermes-appliance-config-$stamp.tar.gz')
-    expect(source).toContain("--exclude=node_modules")
-    expect(source).toContain("--exclude=.next")
-    expect(source).toContain("--exclude=dist")
-    expect(source).toContain("--exclude=.venv")
-    expect(source).toContain("--exclude=.pnpm")
+    expect(source).toContain("$requiredConfig")
+    expect(source).toContain("$optionalConfig")
+    expect(source).toContain("hermes/backup-volumes.ps1")
+    expect(source).toContain("hermes/docker-compose.yml")
+    expect(source).toContain("hermes/p40-guard.ps1")
+    expect(source).toContain("hermes\\ollama-service")
+    expect(source).toContain("hermes-recovery-config-inventory/1")
+    expect(source).toContain("RECOVERY_ALLOWLIST_UNSAFE")
+    expect(source).toContain("RECOVERY_CONFIG_REPARSE_POINT")
+    expect(source).toContain("RECOVERY_CONFIG_PATH_ESCAPE")
+    expect(source).not.toContain("GetRelativePath")
+    expect(source).not.toContain("'-C', $HermesLabRoot")
+    expect(source).not.toContain("'--exclude=node_modules'")
     expect(source).toContain("RECOVERY_TAR_FAILED")
+  })
+
+  it("never admits live secrets, logs, backup copies, or runtime trees into the config archive", () => {
+    expect(source).toContain(".env")
+    expect(source).toContain(".log")
+    expect(source).toContain(".bak")
+    expect(source).not.toContain("williamos-runtime-")
+    expect(source).not.toContain("release-staging")
+    expect(source).not.toContain("node_modules")
   })
 
   it("seals a canary and cryptographic artifact manifest into the same transport generation", () => {

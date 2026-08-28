@@ -59,6 +59,38 @@ function Invoke-CheckedTar {
   }
 }
 
+function Copy-RecoveryFile {
+  param(
+    [Parameter(Mandatory=$true)][string]$RelativePath,
+    [Parameter(Mandatory=$true)][string]$SourceRoot,
+    [Parameter(Mandatory=$true)][string]$StageRoot,
+    [switch]$Optional
+  )
+  if (($RelativePath -match '(^|[\\/])\.env($|\.)' -and $RelativePath -notmatch '(?i)\.env\.example$') -or $RelativePath -match '(?i)(\.log$|\.bak(?:[-.]|$)|heartbeat$)') {
+    throw "RECOVERY_ALLOWLIST_UNSAFE path=$RelativePath"
+  }
+  $source = Join-Path $SourceRoot $RelativePath
+  if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+    if ($Optional) { return $null }
+    throw "RECOVERY_REQUIRED_CONFIG_MISSING path=$RelativePath"
+  }
+  $item = Get-Item -LiteralPath $source -Force -ErrorAction Stop
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "RECOVERY_CONFIG_REPARSE_POINT path=$RelativePath"
+  }
+  if ($item.Length -gt 4MB) {
+    throw "RECOVERY_CONFIG_OVERSIZE path=$RelativePath bytes=$($item.Length)"
+  }
+  $destination = Join-Path $StageRoot $RelativePath
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $destination) | Out-Null
+  Copy-Item -LiteralPath $source -Destination $destination -Force
+  [pscustomobject][ordered]@{
+    path = ($RelativePath -replace '\\', '/')
+    bytes = [int64]$item.Length
+    sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash.ToLowerInvariant()
+  }
+}
+
 $archiveRoot = Resolve-ArchiveRoot -Label $ArchiveVolumeLabel
 $backupDir = Join-Path $archiveRoot "lab-backups\hermes-volumes"
 $backupMount = $backupDir -replace '\\', '/'
@@ -106,29 +138,85 @@ foreach ($v in $vols) {
   }
 }
 
-# Tier-A appliance/config generation. This is the material that lets a replacement HERMES recover
-# its local control/configuration state without hauling reproducible node_modules/.next/build debris.
+# Tier-A appliance/config generation. The live C:\HermesLab root is intentionally a junk drawer;
+# archiving `.` would capture WilliamOS runtime copies, logs, release bundles, and secrets such as
+# hermes/.env. Recovery therefore uses a closed HERMES allowlist and records every included byte.
 if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
   $failed.Add('hermes-appliance-config')
   Write-Host "HermesLab root missing: $HermesLabRoot"
 } else {
   $configArchive = Join-Path $backupDir "hermes-appliance-config-$stamp.tar.gz"
+  $configStage = Join-Path $env:TEMP "hermes-appliance-config-$stamp-$([guid]::NewGuid().ToString('N'))"
   try {
-    Invoke-CheckedTar -Arguments @(
-      '-czf', $configArchive,
-      '-C', $HermesLabRoot,
-      '--exclude=node_modules',
-      '--exclude=.next',
-      '--exclude=dist',
-      '--exclude=.venv',
-      '--exclude=.pnpm',
-      '.'
+    New-Item -ItemType Directory -Force -Path $configStage | Out-Null
+    $requiredConfig = @(
+      'README.md',
+      'SERVICE-MAP.md',
+      'hermes/backup-volumes.ps1',
+      'hermes/crossnode-sync.ps1',
+      'hermes/crossnode-sync-lib.ps1',
+      'hermes/docker-compose.yml',
+      'hermes/hermes-ai.config.json',
+      'hermes/lab-health.ps1',
+      'hermes/p40-guard.json',
+      'hermes/p40-guard.ps1',
+      'hermes/start-hermes.ps1'
     )
+    $optionalConfig = @(
+      'hermes/.env.example',
+      'hermes/HERMES-COMMISSIONED.md',
+      'hermes/hermes-acceptance.ps1',
+      'hermes/hermes-placement.json',
+      'hermes/hermes-placement-readiness.ps1',
+      'hermes/install-hermes-ai-durability.ps1',
+      'hermes/install-p40-watch.ps1',
+      'hermes/repair-durability-tasks.ps1',
+      'hermes/start-ollama.ps1',
+      'hermes/sync-models-to-forge.ps1',
+      'hermes/test-crossnode-sync-receipt.ps1',
+      'hermes/verify-durability-after-reboot.ps1',
+      'aegis/backup-v1.sh'
+    )
+    $configInventory = New-Object System.Collections.Generic.List[object]
+    foreach ($relative in $requiredConfig) {
+      $configInventory.Add((Copy-RecoveryFile -RelativePath $relative -SourceRoot $HermesLabRoot -StageRoot $configStage))
+    }
+    foreach ($relative in $optionalConfig) {
+      $record = Copy-RecoveryFile -RelativePath $relative -SourceRoot $HermesLabRoot -StageRoot $configStage -Optional
+      if ($null -ne $record) { $configInventory.Add($record) }
+    }
+    $ollamaServiceRoot = Join-Path $HermesLabRoot 'hermes\ollama-service'
+    if (Test-Path -LiteralPath $ollamaServiceRoot -PathType Container) {
+      $sourceRootPrefix = [IO.Path]::GetFullPath($HermesLabRoot).TrimEnd('\') + '\'
+      foreach ($file in Get-ChildItem -LiteralPath $ollamaServiceRoot -File -Recurse -Force | Sort-Object FullName) {
+        if ($file.Extension -notin @('.ps1', '.json', '.md')) { continue }
+        $fullName = [IO.Path]::GetFullPath($file.FullName)
+        if (-not $fullName.StartsWith($sourceRootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+          throw "RECOVERY_CONFIG_PATH_ESCAPE path=$fullName"
+        }
+        $relative = $fullName.Substring($sourceRootPrefix.Length)
+        $configInventory.Add((Copy-RecoveryFile -RelativePath $relative -SourceRoot $HermesLabRoot -StageRoot $configStage))
+      }
+    }
+    $inventoryPath = Join-Path $configStage 'recovery-config-inventory.json'
+    [IO.File]::WriteAllText(
+      $inventoryPath,
+      (([pscustomobject][ordered]@{
+        schema = 'hermes-recovery-config-inventory/1'
+        files = @($configInventory | Sort-Object path)
+      } | ConvertTo-Json -Depth 8 -Compress) + "`n"),
+      (New-Object Text.UTF8Encoding($false))
+    )
+    Invoke-CheckedTar -Arguments @('-czf', $configArchive, '-C', $configStage, '.')
     $created.Add((Get-ArtifactRecord -Path $configArchive -Role 'hermes-appliance-config'))
-    Write-Host "appliance config archive: $configArchive"
+    Write-Host "appliance config archive: $configArchive files=$($configInventory.Count)"
   } catch {
     $failed.Add('hermes-appliance-config')
     Write-Host "appliance config FAILED: $($_.Exception.Message)"
+  } finally {
+    if (Test-Path -LiteralPath $configStage) {
+      Remove-Item -LiteralPath $configStage -Recurse -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 
