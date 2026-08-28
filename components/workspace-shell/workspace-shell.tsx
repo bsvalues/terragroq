@@ -874,7 +874,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       frame: geometry, minimized: geometry.minimized, active: space.activeWindowId === id,
       detail: id === "running-app" ? space.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
     })),
-    agents: agentSessions.sessions.map((agent) => ({
+    agents: agentSessions.sessions.filter((agent) => agent.truth === "live").map((agent) => ({
       id: agent.id, name: agent.providerLabel, role: agent.role,
       activity: agent.assignment, state: agent.status === "working" ? "working" : "idle",
     })),
@@ -906,6 +906,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
     if (action === "Delegate") {
       setFocusedAgentId(null)
+      agentSessions.selectSession(null)
       setDelegateContext({ kind: selectedKind, label: selectedLabel, provider: null, role: "Builder", assignment: selectedLabel })
       openLine("", "agent")
       return
@@ -955,6 +956,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           </span>
         </div>
         <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningSessionId={agentSessions.activeSessionId} runningProvider={agentSessions.activeProvider} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
+          agentSessions.selectSession(agent.kind === "durable-session" ? agent.id : null)
           if (agent.mode === "review" && agent.reviewPath) {
             openReviewPath(agent.reviewPath)
             return
@@ -963,6 +965,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           if (agent.kind === "durable-session") {
             setDelegateContext({ kind: "agent", label: `${agent.role} · ${agent.providerLabel}`, provider: agent.providerLabel as AgentProvider, role: agent.role, assignment: agent.assignment })
             openLine("Redirect: ", "agent")
+            setLineReply(agent.lastResult ?? null)
           }
         }} />
         <div className={spatial.status}><span className={spatial.statusDot} aria-hidden /><span>{worldLine || "Space ready"}{workerLine}</span></div>
