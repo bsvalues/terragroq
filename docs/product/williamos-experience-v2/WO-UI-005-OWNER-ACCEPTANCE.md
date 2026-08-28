@@ -13,6 +13,7 @@ Prevent another false finish. The UI is not done because tests, screenshots, or 
 CURRENT_TRUTH:
 - Previous passes repeatedly declared completion around infrastructure or narrow browser journeys while the owner still saw the wrong product.
 - This WO is deliberately owner-visible and product-first.
+- Acceptance follows the capabilities the product truthfully exposes. It does not manufacture prerequisites merely to satisfy a fixture count.
 
 ALLOWED_FILES_OR_AREAS:
 - Experience V2 UI/product surface
@@ -26,6 +27,7 @@ BLOCKED:
 - HERMES/orchestration work
 - TerraFusion backend/product work
 - declaring success from CI alone
+- holding a finished visible UI hostage to an unrelated capability-count prerequisite
 
 OWNER JOURNEY:
 1. Open WilliamOS.
@@ -41,8 +43,10 @@ OWNER JOURNEY:
 11. Inspect/override William's suggestion.
 12. Summon Brain Council for a real strategic question.
 13. Dismiss Council and return to the exact work position.
-14. Open Mission Control, inspect live Spaces, and re-enter TerraFusion without losing place.
+14. Open Mission Control, see every actual live Space plus any clearly disabled reference projections, and re-enter any enterable live Space without losing place.
 15. Close/reopen WilliamOS and recover the useful environment.
+
+If the current product exposes only one live Space, step 14 is satisfied by truthful one-Space Mission Control plus successful re-entry into that live Space. When a later product slice introduces multiple live Spaces, that slice must prove cross-Space re-entry between them.
 
 VISUAL ACCEPTANCE:
 The owner should be able to say all of the following without being coached:
@@ -63,6 +67,7 @@ Reject the build if any are true:
 - permanent chatbot occupying major screen area
 - every function represented as a status card
 - fake agent activity
+- fake live Spaces
 - TerraFusion business UI used as WilliamOS chrome
 - tiny toy windows
 - fixed three-column website pretending to be an OS
@@ -70,12 +75,13 @@ Reject the build if any are true:
 - generic motivational William copy
 
 ACCEPTANCE_CRITERIA:
-- All owner journey steps work in the deployed/browser-accessible product surface.
+- All owner journey steps work in the deployed/browser-accessible product surface, interpreted against actual live product capabilities rather than invented fixtures.
 - Major UI states are browser-reviewed, not inferred from source.
 - Desktop and reduced-width layouts are usable.
 - Keyboard focus, contrast, and motion are reasonable.
 - No unresolved blocking review finding.
 - The product survives at least one full close/reopen cycle with useful continuity.
+- Mission Control never misrepresents reference projections as live Spaces.
 - Owner-visible defects found during acceptance are fixed in this lane before calling it done.
 
 VALIDATION:
