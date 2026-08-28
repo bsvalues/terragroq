@@ -6,6 +6,37 @@ import { validateSpaceState } from "@/lib/environment/working-world"
 const geometry = (z: number) => ({ x: 100, y: 90, width: 560, height: 480, z, minimized: false })
 
 describe("browser-to-server Space mapping", () => {
+  it("opens new desktop Spaces with source, preview, and tests visibly composed", () => {
+    const space = defaultSpace(1440, 900)
+    const source = space.windows.editor
+    const preview = space.windows["running-app"]
+    const tests = space.windows.tests
+
+    expect(source.x + source.width).toBeLessThan(preview.x)
+    expect(preview.x).toBe(tests.x)
+    expect(preview.width).toBe(tests.width)
+    expect(preview.y + preview.height).toBeLessThan(tests.y)
+    expect(tests.y + tests.height).toBeLessThanOrEqual(900 - 171)
+    expect(tests.minimized).toBe(false)
+  })
+
+  it.each([
+    { width: 800, height: 600 },
+    { width: 1440, height: 650 },
+  ])("keeps short or reduced desktop defaults inside $width×$height", ({ width, height }) => {
+    const space = defaultSpace(width, height)
+    const workHeight = Math.max(300, height - 171)
+
+    for (const window of [space.windows.editor, space.windows["running-app"], space.windows.tests]) {
+      expect(window.x).toBeGreaterThanOrEqual(0)
+      expect(window.x + window.width).toBeLessThanOrEqual(width)
+      expect(window.y).toBeGreaterThanOrEqual(0)
+      expect(window.y + window.height).toBeLessThanOrEqual(workHeight)
+    }
+    expect(space.windows["running-app"].minimized).toBe(false)
+    expect(space.windows.tests.minimized).toBe(true)
+  })
+
   it("persists reconstructable summoned Inspectors while transient payload surfaces cannot break core continuity", () => {
     const base = defaultSpace(1400, 900)
     const mapped = spaceToServer({
