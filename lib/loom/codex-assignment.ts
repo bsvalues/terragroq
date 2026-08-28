@@ -15,13 +15,6 @@ import { looksBinary, resolveRealWorkspacePath, resolveWorkspacePath } from "@/l
 export const CODEX_ASSIGNMENT_VERSION = "loom-codex-assignment.v1" as const
 const MAX_TARGET_BYTES = 2_000_000
 const runFile = promisify(execFile)
-const CODEX_IMPLEMENTATION_ACTIONS = ["implement"] as const
-const CODEX_IMPLEMENTATION_BLOCKED_ACTIONS = [
-  "production:mutate",
-  "release:create",
-  "secret:access",
-  "spend:increase",
-] as const
 
 export type CodexAssignmentRecord = Readonly<{
   world: WorkingWorldSnapshot
@@ -248,11 +241,8 @@ function iso(value: unknown): string {
   return String(value ?? "")
 }
 
-function sameCanonicalStrings(left: readonly string[], right: readonly string[]): boolean {
-  const normalize = (values: readonly string[]) => [...new Set(values
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean))].sort()
-  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right))
+function sameNormalizedReservation(left: readonly string[], right: readonly string[]): boolean {
+  return JSON.stringify(normalizedReservation(left)) === JSON.stringify(normalizedReservation(right))
 }
 
 async function loadRecord(userId: string, worldId: string): Promise<CodexAssignmentRecord | null> {
@@ -345,16 +335,18 @@ export async function deriveCodexAssignment(
     || record.workOrder.status !== "active") {
     refuse("the owned Space is not bound to the active outcome and work order")
   }
+  const allowed = normalizedReservation(record.workOrder.allowedFiles)
+  const forbidden = normalizedReservation(record.workOrder.forbiddenFiles)
   if (record.workOrder.authorityGrantId !== record.grant.id
-    || (record.grant.workOrderId !== null && record.grant.workOrderId !== record.workOrder.id)
+    || record.grant.workOrderId !== record.workOrder.id
     || record.grant.userId !== input.userId
     || record.workOrder.agent?.toLowerCase() !== "codex"
-    || record.grant.grantedTo.trim().toLowerCase() !== "codex"
-    || record.workOrder.ref === null
-    || record.grant.scope !== record.workOrder.ref
-    || !sameCanonicalStrings(record.grant.allowedActions, CODEX_IMPLEMENTATION_ACTIONS)
-    || !sameCanonicalStrings(record.grant.blockedActions, CODEX_IMPLEMENTATION_BLOCKED_ACTIONS)) {
+    || record.grant.grantedTo.trim().toLowerCase() !== "codex") {
     refuse("the active grant is not the exact Codex implementation authority for this work order")
+  }
+  if (!sameNormalizedReservation(record.grant.allowedActions, allowed)
+    || !sameNormalizedReservation(record.grant.blockedActions, forbidden)) {
+    refuse("the active grant reservation does not match the active work order")
   }
   const grantFacts = authorityGrantFactsFromRow(record.grant as unknown as Record<string, unknown>)
   if (!isGrantActive(grantFacts).ok
@@ -363,11 +355,8 @@ export async function deriveCodexAssignment(
     || !grantCovers(grantFacts, record.workOrder.authorityLevel as never).ok) {
     refuse("the active grant does not cover A2 implementation authority for the work order")
   }
-  const allowed = normalizedReservation(record.workOrder.allowedFiles)
-  const forbidden = normalizedReservation(record.workOrder.forbiddenFiles)
-  if (allowed.length !== 1 || allowed[0] !== selectedPath
-    || !reservationCoversRequestedPath(selectedPath, allowed).ok) {
-    refuse("the work order does not reserve exactly the selected file")
+  if (allowed.length === 0 || !reservationCoversRequestedPath(selectedPath, allowed).ok) {
+    refuse("the selected file is outside the work order reservation")
   }
   if (forbidden.length > 0 && reservationCoversRequestedPath(selectedPath, forbidden).ok) {
     refuse("the selected file is inside the forbidden reservation")

@@ -86,18 +86,18 @@ function record(overrides: Partial<CodexAssignmentRecord> = {}): CodexAssignment
       id: 9,
       ref: "GRANT-0009",
       userId: "owner-1",
-      workOrderId: null,
+      workOrderId: 41,
       grantedTo: "codex",
       status: "active",
       authorityLevel: "A2_WRITE_OWN",
-      scope: "WO-0041",
-      allowedActions: ["implement"],
-      blockedActions: ["production:mutate", "release:create", "secret:access", "spend:increase"],
+      scope: "Implement the selected source change",
+      allowedActions: ["src/selected.ts"],
+      blockedActions: ["src/forbidden.ts"],
       expiresAt: null,
       revokedAt: null,
       contentHash: "grant-hash",
       createdAt: "2026-08-28T11:00:00.000Z",
-    } as CodexAssignmentRecord["grant"],
+    },
     ...overrides,
   }
 }
@@ -143,25 +143,53 @@ describe("server-derived Codex assignment", () => {
     expect(assignment.binding.grantVersion).toBe("grant-hash")
   })
 
+  it("accepts a normalized multi-path Work Order reservation while promoting only the selected file", async () => {
+    const assignment = await deriveCodexAssignment({
+      userId: "owner-1", worldId: "world-1", projectRoot: "C:/workspace",
+    }, {
+      loadRecord: async () => record({
+        workOrder: {
+          ...record().workOrder,
+          allowedFiles: ["src/selected.ts", "src/other.ts"],
+          forbiddenFiles: ["src/generated/**", "src/forbidden.ts"],
+        },
+        grant: {
+          ...record().grant,
+          allowedActions: ["src\\other.ts", "src/selected.ts"],
+          blockedActions: ["src/forbidden.ts", "src\\generated/**"],
+        },
+      }),
+      inspectTarget: async () => target,
+    })
+
+    expect(assignment.selectedPath).toBe("src/selected.ts")
+    expect(assignment.allowed).toEqual(["src/other.ts", "src/selected.ts"])
+    expect(assignment.forbidden).toEqual(["src/forbidden.ts", "src/generated/**"])
+  })
+
   it.each([
     ["outcome is not active", { outcome: { ...record().outcome, lifecycleState: "approved" } }],
     ["world work order differs", { world: world(), outcome: { ...record().outcome, activeWorkOrderId: 42 } }],
     ["work order is not active", { workOrder: { ...record().workOrder, status: "review" } }],
     ["grant belongs to another owner", { grant: { ...record().grant, userId: "owner-2" } }],
+    ["grant is not bound to the active work order", { grant: { ...record().grant, workOrderId: null } }],
     ["grant is not issued to an implementation-capable role", { grant: { ...record().grant, grantedTo: "reviewer" } }],
     ["grant is below A2 write authority", { grant: { ...record().grant, authorityLevel: "A1_PROPOSE" } }],
     ["grant is revoked", { grant: { ...record().grant, status: "revoked", revokedAt: "2026-08-28T12:10:00.000Z" } }],
-    ["selected path is forbidden by the work order", { workOrder: { ...record().workOrder, forbiddenFiles: ["src/selected.ts"] } }],
+    ["selected path is forbidden by the work order", {
+      workOrder: { ...record().workOrder, forbiddenFiles: ["src/selected.ts"] },
+      grant: { ...record().grant, blockedActions: ["src/selected.ts"] },
+    }],
     ["grant subject is the operator instead of exact Codex", { grant: { ...record().grant, grantedTo: "operator" } }],
-    ["grant action belongs to an unrelated execution surface", { grant: { ...record().grant, allowedActions: ["outcome:execute"] } }],
-    ["grant blocked scope differs from the implementation envelope", {
-      grant: { ...record().grant, blockedActions: ["production:mutate", "secret:access"] },
+    ["grant allowed reservation differs from the active work order", {
+      grant: { ...record().grant, allowedActions: ["src/other.ts"] },
     }],
-    ["grant scope names another work order", {
-      grant: { ...record().grant, scope: "WO-OTHER" } as CodexAssignmentRecord["grant"],
+    ["grant forbidden reservation differs from the active work order", {
+      grant: { ...record().grant, blockedActions: ["src/other-forbidden.ts"] },
     }],
-    ["work order allows more than the exact selected-file reservation", {
-      workOrder: { ...record().workOrder, allowedFiles: ["src/selected.ts", "src/other.ts"] },
+    ["work order has no writable reservation", {
+      workOrder: { ...record().workOrder, allowedFiles: [] },
+      grant: { ...record().grant, allowedActions: [] },
     }],
   ])("fails closed when %s", async (_label, overrides) => {
     await expect(deriveCodexAssignment({
