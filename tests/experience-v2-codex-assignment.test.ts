@@ -87,16 +87,17 @@ function record(overrides: Partial<CodexAssignmentRecord> = {}): CodexAssignment
       ref: "GRANT-0009",
       userId: "owner-1",
       workOrderId: null,
-      grantedTo: "operator",
+      grantedTo: "codex",
       status: "active",
       authorityLevel: "A2_WRITE_OWN",
-      allowedActions: ["outcome:execute"],
-      blockedActions: ["production:mutate", "secret:access"],
+      scope: "WO-0041",
+      allowedActions: ["implement"],
+      blockedActions: ["production:mutate", "release:create", "secret:access", "spend:increase"],
       expiresAt: null,
       revokedAt: null,
       contentHash: "grant-hash",
       createdAt: "2026-08-28T11:00:00.000Z",
-    },
+    } as CodexAssignmentRecord["grant"],
     ...overrides,
   }
 }
@@ -151,6 +152,17 @@ describe("server-derived Codex assignment", () => {
     ["grant is below A2 write authority", { grant: { ...record().grant, authorityLevel: "A1_PROPOSE" } }],
     ["grant is revoked", { grant: { ...record().grant, status: "revoked", revokedAt: "2026-08-28T12:10:00.000Z" } }],
     ["selected path is forbidden by the work order", { workOrder: { ...record().workOrder, forbiddenFiles: ["src/selected.ts"] } }],
+    ["grant subject is the operator instead of exact Codex", { grant: { ...record().grant, grantedTo: "operator" } }],
+    ["grant action belongs to an unrelated execution surface", { grant: { ...record().grant, allowedActions: ["outcome:execute"] } }],
+    ["grant blocked scope differs from the implementation envelope", {
+      grant: { ...record().grant, blockedActions: ["production:mutate", "secret:access"] },
+    }],
+    ["grant scope names another work order", {
+      grant: { ...record().grant, scope: "WO-OTHER" } as CodexAssignmentRecord["grant"],
+    }],
+    ["work order allows more than the exact selected-file reservation", {
+      workOrder: { ...record().workOrder, allowedFiles: ["src/selected.ts", "src/other.ts"] },
+    }],
   ])("fails closed when %s", async (_label, overrides) => {
     await expect(deriveCodexAssignment({
       userId: "owner-1", worldId: "world-1", projectRoot: "C:/workspace",

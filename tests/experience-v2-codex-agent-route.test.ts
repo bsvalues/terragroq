@@ -20,6 +20,7 @@ const seams = vi.hoisted(() => ({
   resumeThread: vi.fn(),
   runTurn: vi.fn(),
   close: vi.fn(),
+  closeAndWait: vi.fn(),
   sanitize: vi.fn(),
   onConstruct: vi.fn(),
   clientOptions: [] as unknown[],
@@ -58,6 +59,10 @@ vi.mock("@/scripts/hermes-bridge/app-server-client.mjs", () => ({
     resumeThread = seams.resumeThread
     runTurn = seams.runTurn
     close = seams.close
+    closeAndWait = () => {
+      seams.close()
+      return seams.closeAndWait()
+    }
   },
   sanitizeAppServerText: (value: unknown) => seams.sanitize(value),
 }))
@@ -84,6 +89,7 @@ describe("durable Codex delegate route", () => {
     seams.clientOptions.length = 0
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
     seams.connect.mockResolvedValue(undefined)
+    seams.closeAndWait.mockResolvedValue(undefined)
     seams.sanitize.mockImplementation((value: unknown) => String(value ?? "")
       .replace(/token-[A-Za-z0-9._-]+/gi, "[REDACTED]"))
     seams.readAccount.mockResolvedValue({ authType: "chatgpt", email: "owner@example.test", requiresOpenaiAuth: false })
@@ -386,6 +392,39 @@ describe("durable Codex delegate route", () => {
     ])
   })
 
+  it("does not clean or promote until the provider child confirms actual exit", async () => {
+    let confirmExit!: () => void
+    const exited = new Promise<void>((resolve) => { confirmExit = resolve })
+    seams.closeAndWait.mockReturnValueOnce(exited)
+
+    const response = await POST(request({ prompt: "Work." }))
+    const outputPromise = events(response)
+    await vi.waitFor(() => expect(seams.closeAndWait).toHaveBeenCalledOnce())
+
+    expect(seams.cleanupIsolatedWorkspace).not.toHaveBeenCalled()
+    expect(seams.writeGovernedWorkspaceFile).not.toHaveBeenCalled()
+    confirmExit()
+
+    const output = await outputPromise
+    expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
+    expect(seams.cleanupIsolatedWorkspace).toHaveBeenCalledOnce()
+    expect(seams.writeGovernedWorkspaceFile).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ["exit error", "APP_SERVER_CLOSE_FAILED"],
+    ["exit timeout", "APP_SERVER_CLOSE_TIMEOUT"],
+  ])("refuses cleanup and promotion when provider close confirmation has an %s", async (_label, code) => {
+    seams.closeAndWait.mockRejectedValueOnce(Object.assign(new Error("provider did not exit"), { code }))
+
+    const output = await events(await POST(request({ prompt: "Work." })))
+
+    expect(output.at(-1)).toEqual({ type: "done", reason: "CODEX_PROVIDER_CLOSE_FAILED", code: null })
+    expect(seams.cleanupIsolatedWorkspace).not.toHaveBeenCalled()
+    expect(seams.writeGovernedWorkspaceFile).not.toHaveBeenCalled()
+    expect(seams.commitLoomCodexSuccess).not.toHaveBeenCalled()
+  })
+
   it("never runs the provider turn when the captured assignment drifts before execution", async () => {
     seams.revalidateCodexAssignment.mockRejectedValueOnce(Object.assign(new Error("Space changed"), {
       code: "CODEX_ASSIGNMENT_STALE",
@@ -523,11 +562,11 @@ describe("durable Codex delegate route", () => {
     await reader.read()
     await reader.cancel()
     await vi.waitFor(() => expect(seams.close).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(seams.recordLoomEnd).toHaveBeenCalledOnce())
 
     expect((seams.runTurn.mock.calls[0][0] as { signal: AbortSignal }).signal.aborted).toBe(true)
     expect(order).toEqual(["interrupt", "close"])
     expect(seams.recordLoomStart).not.toHaveBeenCalled()
-    expect(seams.recordLoomEnd).toHaveBeenCalledOnce()
   })
 
   it("force-closes a provider that does not settle after response cancellation", async () => {

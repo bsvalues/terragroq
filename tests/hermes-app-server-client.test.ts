@@ -15,6 +15,8 @@ class FakeProcess extends EventEmitter {
   stderr = new PassThrough()
   writes: string[] = []
   killed = false
+  exitCode: number | null = null
+  signalCode: string | null = null
   stdin = new Writable({
     write: (chunk, _encoding, done) => {
       this.writes.push(String(chunk))
@@ -161,6 +163,58 @@ describe("CodexAppServerClient", () => {
     const pending = client.connect()
     process.emit("exit", 0, null)
     await expect(pending).rejects.toThrow("Codex App Server exited (0)")
+  })
+
+  it("requests synchronous shutdown but does not confirm close until the child actually exits", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+    let confirmed = false
+
+    const closing = client.closeAndWait(1_000).then(() => { confirmed = true })
+    await Promise.resolve()
+
+    expect(process.killed).toBe(true)
+    expect(confirmed).toBe(false)
+    process.emit("exit", null, "SIGTERM")
+    await closing
+    expect(confirmed).toBe(true)
+  })
+
+  it("rejects close confirmation when the child reports an exit error", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+
+    const closing = client.closeAndWait(1_000)
+    process.emit("error", new Error("process handle failed"))
+
+    await expect(closing).rejects.toMatchObject({ code: "APP_SERVER_CLOSE_FAILED" })
+  })
+
+  it("confirms a captured child whose exit event settled before close confirmation began", async () => {
+    const { client, process } = setup()
+    await connect(client, process)
+    process.exitCode = 0
+    process.emit("exit", 0, null)
+
+    await expect(client.closeAndWait(5)).resolves.toBeUndefined()
+    expect(process.killed).toBe(true)
+  })
+
+  it("bounds close confirmation when the child never exits", async () => {
+    vi.useFakeTimers()
+    try {
+      const { client, process } = setup()
+      await connect(client, process)
+
+      const closing = client.closeAndWait(25)
+      const rejection = expect(closing).rejects.toMatchObject({ code: "APP_SERVER_CLOSE_TIMEOUT" })
+      await vi.advanceTimersByTimeAsync(25)
+
+      await rejection
+      expect(process.killed).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("correlates requests once and ignores duplicate or unknown responses", async () => {

@@ -15,6 +15,13 @@ import { looksBinary, resolveRealWorkspacePath, resolveWorkspacePath } from "@/l
 export const CODEX_ASSIGNMENT_VERSION = "loom-codex-assignment.v1" as const
 const MAX_TARGET_BYTES = 2_000_000
 const runFile = promisify(execFile)
+const CODEX_IMPLEMENTATION_ACTIONS = ["implement"] as const
+const CODEX_IMPLEMENTATION_BLOCKED_ACTIONS = [
+  "production:mutate",
+  "release:create",
+  "secret:access",
+  "spend:increase",
+] as const
 
 export type CodexAssignmentRecord = Readonly<{
   world: WorkingWorldSnapshot
@@ -44,6 +51,7 @@ export type CodexAssignmentRecord = Readonly<{
     grantedTo: string
     status: string
     authorityLevel: string
+    scope: string | null
     allowedActions: readonly string[]
     blockedActions: readonly string[]
     expiresAt: string | Date | null
@@ -148,6 +156,7 @@ function assignmentSnapshot(input: {
       grantedTo: record.grant.grantedTo,
       status: record.grant.status,
       authorityLevel: record.grant.authorityLevel,
+      scope: record.grant.scope,
       expiresAt: record.grant.expiresAt instanceof Date
         ? record.grant.expiresAt.toISOString()
         : record.grant.expiresAt,
@@ -239,6 +248,13 @@ function iso(value: unknown): string {
   return String(value ?? "")
 }
 
+function sameCanonicalStrings(left: readonly string[], right: readonly string[]): boolean {
+  const normalize = (values: readonly string[]) => [...new Set(values
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean))].sort()
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right))
+}
+
 async function loadRecord(userId: string, worldId: string): Promise<CodexAssignmentRecord | null> {
   const result = await pool.query(
     `SELECT world."snapshot" AS "worldSnapshot",
@@ -250,7 +266,8 @@ async function loadRecord(userId: string, worldId: string): Promise<CodexAssignm
       work."updatedAt" AS "workOrderUpdatedAt",
       grant."id" AS "grantId", grant."ref" AS "grantRef", grant."userId" AS "grantUserId",
       grant."workOrderId" AS "grantWorkOrderId", grant."grantedTo", grant."status" AS "grantStatus",
-      grant."authorityLevel" AS "grantAuthorityLevel", grant."allowedActions", grant."blockedActions",
+      grant."authorityLevel" AS "grantAuthorityLevel", grant."scope" AS "grantScope",
+      grant."allowedActions", grant."blockedActions",
       grant."expiresAt", grant."revokedAt", grant."contentHash", grant."createdAt" AS "grantCreatedAt"
     FROM "working_world" world
     LEFT JOIN "outcome_queue_item" outcome
@@ -298,6 +315,7 @@ async function loadRecord(userId: string, worldId: string): Promise<CodexAssignm
       grantedTo: String(row.grantedTo),
       status: String(row.grantStatus),
       authorityLevel: String(row.grantAuthorityLevel),
+      scope: row.grantScope == null ? null : String(row.grantScope),
       allowedActions: Array.isArray(row.allowedActions) ? row.allowedActions as string[] : [],
       blockedActions: Array.isArray(row.blockedActions) ? row.blockedActions as string[] : [],
       expiresAt: row.expiresAt as string | Date | null,
@@ -331,8 +349,12 @@ export async function deriveCodexAssignment(
     || (record.grant.workOrderId !== null && record.grant.workOrderId !== record.workOrder.id)
     || record.grant.userId !== input.userId
     || record.workOrder.agent?.toLowerCase() !== "codex"
-    || !["operator", "codex"].includes(record.grant.grantedTo.toLowerCase())) {
-    refuse("the active grant is not bound to this owner, work order, and an implementation-capable role")
+    || record.grant.grantedTo.trim().toLowerCase() !== "codex"
+    || record.workOrder.ref === null
+    || record.grant.scope !== record.workOrder.ref
+    || !sameCanonicalStrings(record.grant.allowedActions, CODEX_IMPLEMENTATION_ACTIONS)
+    || !sameCanonicalStrings(record.grant.blockedActions, CODEX_IMPLEMENTATION_BLOCKED_ACTIONS)) {
+    refuse("the active grant is not the exact Codex implementation authority for this work order")
   }
   const grantFacts = authorityGrantFactsFromRow(record.grant as unknown as Record<string, unknown>)
   if (!isGrantActive(grantFacts).ok
@@ -343,8 +365,9 @@ export async function deriveCodexAssignment(
   }
   const allowed = normalizedReservation(record.workOrder.allowedFiles)
   const forbidden = normalizedReservation(record.workOrder.forbiddenFiles)
-  if (allowed.length === 0 || !reservationCoversRequestedPath(selectedPath, allowed).ok) {
-    refuse("the selected file is outside the allowed reservation")
+  if (allowed.length !== 1 || allowed[0] !== selectedPath
+    || !reservationCoversRequestedPath(selectedPath, allowed).ok) {
+    refuse("the work order does not reserve exactly the selected file")
   }
   if (forbidden.length > 0 && reservationCoversRequestedPath(selectedPath, forbidden).ok) {
     refuse("the selected file is inside the forbidden reservation")

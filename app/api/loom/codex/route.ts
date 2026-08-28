@@ -39,6 +39,7 @@ const MAX_STREAM_CHARS = 128_000
 const MAX_RESULT_CHARS = 128_000
 const TURN_TIMEOUT_MS = 60 * 60_000
 const FORCED_CLOSE_MS = 1_000
+const PROVIDER_CLOSE_TIMEOUT_MS = 5_000
 
 type CodexClient = InstanceType<typeof CodexAppServerClient>
 
@@ -183,17 +184,25 @@ export async function POST(request: Request) {
   let terminal = false
   let sessionSent = false
   let clientClosed = false
+  let clientClosePromise: Promise<void> | null = null
   let isolatedCleaned = false
   let cancellationRequested = request.signal.aborted
   let promotionInFlight = false
   let successCommitInFlight = false
   let successCommitted = false
   let forcedCloseTimer: ReturnType<typeof setTimeout> | null = null
-  const closeClient = () => {
-    if (clientClosed) return
+  const closeClientAndWait = (): Promise<void> => {
+    if (clientClosePromise) return clientClosePromise
     clientClosed = true
     if (forcedCloseTimer) clearTimeout(forcedCloseTimer)
-    client?.close()
+    clientClosePromise = client
+      ? client.closeAndWait(PROVIDER_CLOSE_TIMEOUT_MS)
+      : Promise.resolve()
+    return clientClosePromise
+  }
+  const closeClient = () => {
+    if (clientClosed) return
+    void closeClientAndWait().catch(() => undefined)
   }
   const cancelTurn = () => {
     // Once promotion begins, cancellation is too late to report as a refusal: the guarded writer
@@ -370,7 +379,7 @@ export async function POST(request: Request) {
           // The provider must be gone and the exact disposable worktree cleanup verified before
           // the real checkout is eligible for its first mutation.
           try {
-            closeClient()
+            await closeClientAndWait()
           } catch {
             throw Object.assign(new Error("Codex App Server could not be closed"), { code: "CODEX_PROVIDER_CLOSE_FAILED" })
           }
@@ -466,12 +475,16 @@ export async function POST(request: Request) {
           done(null, 0)
         } catch (error) {
           let settledError = error
-          try { closeClient() } catch {
+          let providerExitConfirmed = false
+          try {
+            await closeClientAndWait()
+            providerExitConfirmed = true
+          } catch {
             settledError = Object.assign(new Error("Codex App Server could not be closed"), {
               code: "CODEX_PROVIDER_CLOSE_FAILED",
             })
           }
-          if (isolated && !isolatedCleaned) {
+          if (providerExitConfirmed && isolated && !isolatedCleaned) {
             try {
               await cleanupCodexIsolatedWorkspace(isolated)
               isolatedCleaned = true
@@ -505,7 +518,7 @@ export async function POST(request: Request) {
           }
           done(reason, null)
         } finally {
-          closeClient()
+          try { await closeClientAndWait() } catch { /* failure already settled above */ }
         }
       })()
     },
