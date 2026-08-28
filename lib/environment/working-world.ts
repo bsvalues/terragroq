@@ -37,7 +37,7 @@ export type PendingDecision = Readonly<{
 
 export type ValidationMark = Readonly<{ ref: string; at: string }>
 
-export type SpaceWindowKind = "editor" | "running-app" | "line" | "inspector"
+export type SpaceWindowKind = "editor" | "running-app" | "tests" | "diff" | "terminal" | "line" | "inspector"
 
 type SpaceWindowBase = Readonly<{
   id: string
@@ -278,7 +278,7 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
 }
 
 const SPACE_WINDOW_KINDS: ReadonlySet<string> = new Set<SpaceWindowKind>([
-  "editor", "running-app", "line", "inspector",
+  "editor", "running-app", "tests", "diff", "terminal", "line", "inspector",
 ])
 
 function record(value: unknown, error: string): Record<string, unknown> {

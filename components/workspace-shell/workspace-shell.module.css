@@ -795,9 +795,9 @@
 @media (max-width: 760px) {
   .window {
     left: 6px !important;
-    top: 34px !important;
+    top: 6px !important;
     width: calc(100vw - 12px) !important;
-    height: calc(100dvh - 70px) !important;
+    height: calc(100% - 12px) !important;
     max-width: none;
     max-height: none;
     resize: none;

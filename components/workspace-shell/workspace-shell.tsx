@@ -1,18 +1,19 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AppWindow, Braces, Command, Layers3 } from "lucide-react"
+import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, TerminalSquare, Users, X } from "lucide-react"
 
 import type { SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, type WorldSpine } from "@/lib/environment/working-world"
 import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
+import { BrainCouncilSurface, REFERENCE_COUNCIL_SESSION, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
+import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
 import { WindowFrame } from "./window-frame"
 import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
-import styles from "./workspace-shell.module.css"
-
-const windowName: Record<WindowId, string> = { editor: "Source", "running-app": "TerraFusion" }
+import bridge from "./experience-token-bridge.module.css"
+import spatial from "./experience-spatial.module.css"
 
 type LineReply = Readonly<{
   worldId?: string
@@ -22,8 +23,29 @@ type LineReply = Readonly<{
   spine?: WorldSpine
 }>
 
+type ConversationEntry = Readonly<{
+  id: number
+  role: "owner" | "williamos"
+  text: string
+}>
+
 type PersistJob = Readonly<{ worldId: string; revision: number; body: string }>
 type SpaceStorage = "server" | "browser"
+type EnvironmentOverlay = "council" | "mission-control" | null
+
+const windowName: Record<WindowId, string> = {
+  editor: "Source",
+  "running-app": "Developer preview",
+  tests: "Tests",
+  diff: "Changes",
+  terminal: "Terminal",
+}
+
+const referenceAgents = [
+  { id: "builder", glyph: "B", role: "Builder", provider: "Codex", status: "implementing", assignment: "Workspace interaction", truth: "fixture" },
+  { id: "reviewer", glyph: "R", role: "Reviewer", provider: "Claude", status: "reviewing", assignment: "Product criticism", truth: "fixture" },
+  { id: "local", glyph: "L", role: "Local", provider: "HERMES", status: "idle", assignment: "Tests and preview", truth: "fixture" },
+] as const
 
 const browserSpaceKey = (opaque: string) => `williamos:space:${opaque}`
 
@@ -45,9 +67,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineOpen, setLineOpen] = useState(Boolean(initialSummon))
   const [lineInput, setLineInput] = useState("")
   const [lineReply, setLineReply] = useState<string | null>(null)
-  const [lastLineSay, setLastLineSay] = useState<string | null>(null)
   const [lineBusy, setLineBusy] = useState(false)
   const [inspectors, setInspectors] = useState<readonly InspectorSurface[]>([])
+  const [conversation, setConversation] = useState<readonly ConversationEntry[]>([])
+  const [overlay, setOverlay] = useState<EnvironmentOverlay>(null)
+  const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null)
+  const [councilQuestion, setCouncilQuestion] = useState<string | null>(null)
   const [spine, setSpine] = useState<WorldSpine>(EMPTY_SPINE)
   const [project, setProject] = useState<WorkspaceProject | null>(null)
   const [storage, setStorage] = useState<SpaceStorage>("server")
@@ -56,8 +81,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const storageRef = useRef<SpaceStorage>(storage)
   const browserStorageKeyRef = useRef<string | null>(null)
   const lineRef = useRef<HTMLInputElement>(null)
-  // Strict Mode replays mount effects. Both passes attach to the same arrival promises so cleanup
-  // cannot strand the surviving pass in an opening/working state after the first response arrives.
+  const messageSequence = useRef(0)
   const spaceArrival = useRef<Promise<SpaceEnvelope> | null>(null)
   const summonArrival = useRef<Readonly<{ key: string; request: Promise<LineReply> }> | null>(null)
   const restorationStarted = useRef(false)
@@ -70,9 +94,20 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   worldRef.current = worldId
   storageRef.current = storage
 
+  const appendConversation = useCallback((role: ConversationEntry["role"], text: string) => {
+    const normalized = text.trim()
+    if (!normalized) return
+    messageSequence.current += 1
+    const entry: ConversationEntry = { id: messageSequence.current, role, text: normalized }
+    setConversation((current) => [...current, entry])
+  }, [])
+
   const materializeSurfaces = useCallback((reply: LineReply) => {
     if (reply.dismiss) {
-      setInspectors((current) => reply.dismiss === "all" ? [] : current.filter((surface) => surface.kind !== reply.dismiss))
+      setInspectors((current) => {
+        const next = reply.dismiss === "all" ? [] : current.filter((surface) => surface.kind !== reply.dismiss)
+        return next
+      })
       setSpace((current) => {
         const removedIds = new Set(inspectors.filter((surface) => reply.dismiss === "all" || surface.kind === reply.dismiss).map((surface) => surface.id))
         return {
@@ -109,7 +144,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         inspectorSeeds[surface.id] = { kind: surface.kind, subject: surface.subject }
       })
       const active = incoming.at(-1)?.id ?? current.activeWindowId
-      if (active && inspectorWindows[active]) inspectorWindows[active] = { ...inspectorWindows[active], minimized: false, z: highest + incoming.length }
       return { ...current, inspectorWindows, inspectorSeeds, activeWindowId: active }
     })
   }, [inspectors])
@@ -118,29 +152,28 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     if (typeof reply.worldId === "string") setWorldId(reply.worldId)
     if (reply.spine) setSpine(reply.spine)
     const say = typeof reply.say === "string" ? reply.say : ""
-    setLastLineSay(say || null)
+    if (say) appendConversation("williamos", say)
     setLineReply(null)
     materializeSurfaces(reply)
-    setLineOpen(false)
-  }, [materializeSurfaces])
+  }, [appendConversation, materializeSurfaces])
 
   useEffect(() => {
     let cancelled = false
     const fallback = defaultSpace(window.innerWidth, window.innerHeight)
     const request = (spaceArrival.current ??= (async () => {
-        const response = await fetch("/api/environment/space", { cache: "no-store" })
-        const payload = (await response.json()) as Partial<SpaceEnvelope> & { error?: string }
-        if (!response.ok || typeof payload.worldId !== "string" || !payload.space) {
-          throw new Error(payload.error ?? `SPACE_${response.status}`)
-        }
-        return {
-          worldId: payload.worldId,
-          space: payload.space,
-          spine: payload.spine,
-          project: payload.project,
-          storage: payload.storage,
-          browserStorageKey: payload.browserStorageKey,
-        }
+      const response = await fetch("/api/environment/space", { cache: "no-store" })
+      const payload = (await response.json()) as Partial<SpaceEnvelope> & { error?: string }
+      if (!response.ok || typeof payload.worldId !== "string" || !payload.space) {
+        throw new Error(payload.error ?? `SPACE_${response.status}`)
+      }
+      return {
+        worldId: payload.worldId,
+        space: payload.space,
+        spine: payload.spine,
+        project: payload.project,
+        storage: payload.storage,
+        browserStorageKey: payload.browserStorageKey,
+      }
     })())
     void request
       .then((payload) => {
@@ -158,7 +191,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             const saved = window.localStorage.getItem(key)
             if (saved) storedSpace = (JSON.parse(saved) as { space?: unknown }).space ?? payload.space
           } catch {
-            // A damaged browser record is discarded in favor of the admitted default Space.
             window.localStorage.removeItem(key)
           }
         }
@@ -216,7 +248,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (reply.spine) setSpine(reply.spine)
         materializeSurfaces(reply)
       }).catch(() => {
-        // Geometry and identity remain persisted. A failed current read never becomes fabricated payload.
+        // Identity remains persisted. A failed current read never becomes fabricated payload.
       })
     }
   }, [hydrated, materializeSurfaces, worldId])
@@ -270,8 +302,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setPersistenceError(null)
       }
     } catch (error) {
-      // A lower request can finish after a critical higher-revision keepalive. The server correctly
-      // refuses it; that superseded refusal is not the current Space failing to persist.
       if (!keepalive && job.revision >= revisionRef.current) {
         setPersistenceError(error instanceof Error ? error.message : "SPACE_SAVE_REFUSED")
       }
@@ -286,13 +316,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const job: PersistJob = {
       worldId: id,
       revision,
-      // Capture an immutable body now. A later drag, selection, or save cannot mutate an in-flight
-      // request into a state carrying the wrong revision.
       body: JSON.stringify({ worldId: id, space: spaceToServer(stateRef.current, revision) }),
     }
     if (keepalive) {
-      // Critical lifecycle flushes may overlap an older normal write. Revision ordering makes that
-      // safe: once this higher state lands, the server rejects the lower late arrival.
       void sendPersist(job, true)
       return
     }
@@ -379,36 +405,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     return () => { cancelled = true }
   }, [acceptLineReply, hydrated, initialSummon, worldId])
 
-  const updateWindow = useCallback((id: WindowId, geometry: WindowGeometry) => {
-    setSpace((current) => ({ ...current, windows: { ...current.windows, [id]: geometry } }))
-  }, [])
-
-  const activate = useCallback((id: WindowId) => {
-    setSpace((current) => {
-      const highest = Math.max(...Object.values(current.windows).map((window) => window.z), ...Object.values(current.inspectorWindows).map((window) => window.z))
-      const chosen = current.windows[id]
-      if (current.activeWindowId === id && chosen.z === highest && !chosen.minimized) return current
-      return {
-        ...current,
-        activeWindowId: id,
-        windows: { ...current.windows, [id]: { ...chosen, minimized: false, z: highest + 1 } },
-      }
-    })
-  }, [])
-
-  const updateInspector = useCallback((id: string, geometry: WindowGeometry) => {
-    setSpace((current) => ({ ...current, inspectorWindows: { ...current.inspectorWindows, [id]: geometry } }))
-  }, [])
-
-  const activateInspector = useCallback((id: string) => {
-    setSpace((current) => {
-      const chosen = current.inspectorWindows[id]
-      if (!chosen) return current
-      const highest = Math.max(...Object.values(current.windows).map((window) => window.z), ...Object.values(current.inspectorWindows).map((window) => window.z))
-      return { ...current, activeWindowId: id, inspectorWindows: { ...current.inspectorWindows, [id]: { ...chosen, minimized: false, z: highest + 1 } } }
-    })
-  }, [])
-
   const dismissInspector = useCallback((id: string) => {
     setInspectors((current) => current.filter((surface) => surface.id !== id))
     setSpace((current) => {
@@ -420,6 +416,27 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     })
   }, [])
 
+  const updateWindow = useCallback((id: WindowId, geometry: WindowGeometry) => {
+    setSpace((current) => ({ ...current, windows: { ...current.windows, [id]: geometry } }))
+  }, [])
+
+  const activate = useCallback((id: WindowId) => {
+    setFocusedAgentId(null)
+    setSpace((current) => {
+      const highest = Math.max(
+        ...Object.values(current.windows).map((window) => window.z),
+        ...Object.values(current.inspectorWindows).map((window) => window.z),
+      )
+      const chosen = current.windows[id]
+      if (current.activeWindowId === id && chosen.z === highest && !chosen.minimized) return current
+      return {
+        ...current,
+        activeWindowId: id,
+        windows: { ...current.windows, [id]: { ...chosen, minimized: false, z: highest + 1 } },
+      }
+    })
+  }, [])
+
   const minimize = useCallback((id: WindowId) => {
     setSpace((current) => ({
       ...current,
@@ -428,22 +445,58 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }))
   }, [])
 
+  const updateInspector = useCallback((id: string, geometry: WindowGeometry) => {
+    setSpace((current) => ({ ...current, inspectorWindows: { ...current.inspectorWindows, [id]: geometry } }))
+  }, [])
+
+  const activateInspector = useCallback((id: string) => {
+    setSpace((current) => {
+      const chosen = current.inspectorWindows[id]
+      if (!chosen) return current
+      const highest = Math.max(
+        ...Object.values(current.windows).map((window) => window.z),
+        ...Object.values(current.inspectorWindows).map((window) => window.z),
+      )
+      return {
+        ...current,
+        activeWindowId: id,
+        inspectorWindows: { ...current.inspectorWindows, [id]: { ...chosen, minimized: false, z: highest + 1 } },
+      }
+    })
+  }, [])
+
+  const openLine = useCallback((prompt = "") => {
+    setLineInput(prompt)
+    setLineReply(null)
+    setLineOpen(true)
+    requestAnimationFrame(() => lineRef.current?.focus())
+  }, [])
+
   async function submitLine(event: React.FormEvent) {
     event.preventDefault()
     const text = lineInput.trim()
     if (!text || lineBusy) return
+    appendConversation("owner", text)
+    setLineInput("")
+    const councilRequest = text.match(/^\/?council\b[\s:—-]*(.*)$/i)
+    if (councilRequest) {
+      setCouncilQuestion(councilRequest[1]?.trim() || `Challenge the current direction for ${selectedLabel}.`)
+      setOverlay("council")
+      setLineOpen(false)
+      return
+    }
     setLineBusy(true)
     setLineReply(null)
     try {
+      const contextualText = `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
       const response = await fetch("/api/environment/line", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ worldId, text }),
+        body: JSON.stringify({ worldId, text: contextualText }),
       })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error ?? `LINE_${response.status}`)
       acceptLineReply(payload as LineReply)
-      setLineInput("")
     } catch (error) {
       setLineReply(error instanceof Error ? error.message : "LINE_UNAVAILABLE")
     } finally {
@@ -451,137 +504,213 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }
 
+  const savedLabel = persistenceError
+    ? persistenceError
+    : hydrated
+      ? storage === "browser" ? "space saved locally" : "space saved"
+      : "opening space"
+  const selectedAgent = referenceAgents.find((agent) => agent.id === focusedAgentId)
+  const selectedKind = selectedAgent ? "agent" as const
+    : space.activeWindowId === "running-app" ? "preview" as const
+    : space.activeWindowId === "diff" ? "diff" as const
+    : space.activeWindowId === "editor" && space.selectedPath ? "file" as const
+    : "space" as const
+  const selectedLabel = selectedAgent ? `${selectedAgent.role} · ${selectedAgent.provider}`
+    : selectedKind === "preview" ? "TerraFusion developer preview"
+    : selectedKind === "diff" ? "Current changes"
+    : selectedKind === "file" ? space.selectedPath!
+    : `${project?.name ?? space.name} Space`
+  const selectedKindLabel = selectedKind === "file" ? "file"
+    : selectedKind === "preview" ? "preview"
+    : selectedKind === "diff" ? "changes"
+    : selectedKind === "agent" ? "agent session"
+    : "Space"
+  const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
+    : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
+    : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge"] as const
+    : selectedKind === "agent" ? ["Talk", "Redirect", "Pause", "Fork", "Review work"] as const
+    : ["Summarize", "Continue", "Delegate", "Council"] as const
+  const worldLine = spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""
+  const workerLine = spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""
+  const williamJudgment = persistenceError
+    ? `Space persistence is refusing writes (${persistenceError}). Inspect that before trusting re-entry.`
+    : !space.runningAppUrl
+      ? "The developer preview is not attached. I would not call the visual loop accepted yet."
+      : space.selectedPath
+        ? `${space.selectedPath} is selected. Review or delegate against that file without restating context.`
+        : "No source object is selected. Choose the work before delegating it."
+
+  const missionWindowKind: Record<WindowId, MissionControlSpaceProjection["windows"][number]["kind"]> = {
+    editor: "source", "running-app": "preview", tests: "tests", diff: "diff", terminal: "terminal",
+  }
+  const currentMissionSpace: MissionControlSpaceProjection = {
+    id: space.id,
+    name: project?.name ?? space.name,
+    focus: space.selectedPath ?? "Development Space",
+    state: space.runningAppUrl ? "live" : "unavailable",
+    truth: "live",
+    windows: (Object.entries(space.windows) as [WindowId, WindowGeometry][]).map(([id, geometry]) => ({
+      id, title: windowName[id], kind: missionWindowKind[id],
+      frame: geometry, minimized: geometry.minimized, active: space.activeWindowId === id,
+      detail: id === "running-app" ? space.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
+    })),
+    agents: spine.worker ? [{
+      id: "live-worker", name: "Resident worker", role: spine.worker.lane,
+      activity: spine.execution, state: isExecutionLive(spine.execution) ? "working" : "idle",
+    }] : [],
+    selectedObject: space.selectedPath,
+    changed: savedLabel,
+  }
+  const missionSpaces: readonly MissionControlSpaceProjection[] = [currentMissionSpace,
+    {
+      id: "fixture-research", name: "Research & Evidence", focus: "Reference projection", state: "paused", truth: "fixture",
+      windows: [
+        { id: "evidence", title: "Evidence", kind: "evidence", frame: { x: 20, y: 30, width: 520, height: 340 }, detail: "3 cited sources" },
+        { id: "document", title: "Investigation", kind: "document", frame: { x: 410, y: 70, width: 620, height: 420 }, detail: "Causal link under review" },
+      ], agents: [], changed: "Illustrative Space · not live runtime state",
+    },
+    {
+      id: "fixture-agents", name: "Agent Operations", focus: "Reference projection", state: "paused", truth: "fixture",
+      windows: [{ id: "sessions", title: "Durable sessions", kind: "agent", frame: { x: 80, y: 50, width: 850, height: 420 }, detail: "Role-first session view" }],
+      agents: referenceAgents.map((agent) => ({ id: agent.id, name: agent.provider, role: agent.role, activity: agent.status, state: agent.status === "idle" ? "idle" : "working" })),
+      changed: "Illustrative Space · sessions are fixtures",
+    },
+  ]
+
+  const utilityContent = (id: "tests" | "diff" | "terminal") => (
+    <div className={spatial.utilitySurface}>
+      <div className={spatial.utilityMeta}>
+        <span>{id === "tests" ? "Focused validation" : id === "diff" ? "Current change" : "Project terminal"}</span>
+        <span>Reference surface · no live adapter attached</span>
+      </div>
+      <div className={spatial.utilityBody}>
+        {id === "tests" ? <>
+          <div className={spatial.utilityRow}><span className={spatial.pass}>✓</span><span>editor save and restore</span><span className={spatial.muted}>passed</span></div>
+          <div className={spatial.utilityRow}><span className={spatial.pass}>✓</span><span>spatial window persistence</span><span className={spatial.muted}>passed</span></div>
+          <div className={spatial.utilityRow}><span className={spatial.fail}>×</span><span>browser owner acceptance</span><span className={spatial.muted}>not run</span></div>
+        </> : id === "diff" ? <>
+          <div className={spatial.removed}>- fixed three-column shell</div>
+          <div className={spatial.added}>+ durable spatial work surfaces</div>
+          <div className={spatial.added}>+ selected-object AI actions</div>
+        </> : <>
+          <div><span className={spatial.terminalPrompt}>terra@workspace %</span> project runtime not attached</div>
+          <div className={spatial.muted}>This developer surface is interactive UI reference state, not fabricated execution.</div>
+        </>}
+      </div>
+    </div>
+  )
+
+  function openObjectAction(action: string) {
+    if (action === "Council") {
+      setCouncilQuestion(`Challenge the current direction for ${selectedLabel}.`)
+      setOverlay("council")
+      return
+    }
+    openLine(`${action} this selected ${selectedKindLabel}: `)
+  }
+
+  function handleCouncilAction(action: CouncilAdvisoryAction) {
+    setOverlay(null)
+    openLine(`Council recommendation · ${action.replaceAll("-", " ")}: `)
+  }
+
+  function inspectWilliamJudgment() {
+    if (persistenceError) {
+      openLine(`Inspect Space persistence error (${persistenceError}): `)
+    } else if (!space.runningAppUrl) {
+      activate("running-app")
+    } else if (space.selectedPath) {
+      activate("editor")
+    } else {
+      openLine(`Inspect William's recommendation for ${selectedLabel}: `)
+    }
+  }
+
   return (
-    <main className={styles.environment} aria-label={`${project?.name ?? "Workspace"} Space`}>
-      <div className={styles.atmosphere} aria-hidden />
-      <menu className={styles.menuBar}>
-        <span className={styles.wordmark}>W</span>
-        <span
-          className={styles.spaceName}
-          aria-label="Workspace project"
-          title={project?.identity ?? "Resolving configured workspace"}
-        >
-          <Layers3 size={13} aria-hidden /> {project?.name ?? "Opening workspace"}
-        </span>
-        <button type="button" className={styles.lineSummon} onClick={() => { setLineOpen(true); requestAnimationFrame(() => lineRef.current?.focus()) }}>
-          <Command size={12} aria-hidden /> Line <kbd>Ctrl+K</kbd>
-        </button>
-      </menu>
+    <main className={`${spatial.environment} ${bridge.tokens}`} aria-label={`${project?.name ?? "Workspace"} Space`}>
+      <header className={spatial.topBar}>
+        <div className={spatial.identity}>
+          <span className={spatial.mark} aria-label="WilliamOS">W</span>
+          <span className={spatial.spaceIdentity} aria-label="Workspace project" title={project?.identity ?? "Resolving configured workspace"}>
+            <strong>{project?.name ?? "Opening workspace"}</strong>
+            <span className={spatial.spacePath}>{project?.identity ?? ""}</span>
+          </span>
+        </div>
+        <nav className={spatial.sessionStrip} aria-label="Durable agent sessions">
+          {referenceAgents.map((agent) => (
+            <button key={agent.id} type="button" className={spatial.sessionButton} aria-pressed={focusedAgentId === agent.id} onClick={() => { setFocusedAgentId(agent.id); openLine(`Redirect ${agent.role} · ${agent.provider} on ${selectedLabel}: `) }}>
+              <span className={spatial.sessionGlyph}>{agent.glyph}</span>
+              <span><strong>{agent.role} · {agent.provider}</strong><small>{agent.status} · <em className={spatial.fixtureTag}>reference session</em></small></span>
+            </button>
+          ))}
+        </nav>
+        <div className={spatial.status}><span className={spatial.statusDot} aria-hidden /><span>{worldLine || "Space ready"}{workerLine}</span></div>
+      </header>
 
-      <div className={styles.windowLayer}>
-        <WindowFrame
-          id="editor"
-          title="Source"
-          geometry={space.windows.editor}
-          active={space.activeWindowId === "editor"}
-          onActivate={() => activate("editor")}
-          onGeometry={(geometry) => updateWindow("editor", geometry)}
-          onMinimize={() => minimize("editor")}
-        >
-          <EditorSurface
-            space={space}
-            onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))}
-          />
+      <div className={spatial.objectBar} aria-label="Selected object actions">
+        <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
+        <div className={spatial.objectActions}>
+          {selectedActions.map((action) => (
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" ? spatial.primaryAction : ""}`} onClick={() => openObjectAction(action)}>{action}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
+        <WindowFrame id="editor" title="Source" geometry={space.windows.editor} active={space.activeWindowId === "editor"} onActivate={() => activate("editor")} onGeometry={(geometry) => updateWindow("editor", geometry)} onMinimize={() => minimize("editor")}>
+          <EditorSurface space={space} onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))} />
         </WindowFrame>
-
-        <WindowFrame
-          id="running-app"
-          title="TerraFusion"
-          geometry={space.windows["running-app"]}
-          active={space.activeWindowId === "running-app"}
-          onActivate={() => activate("running-app")}
-          onGeometry={(geometry) => updateWindow("running-app", geometry)}
-          onMinimize={() => minimize("running-app")}
-        >
-          {space.runningAppUrl ? (
-            <iframe
-              src={space.runningAppUrl}
-              title="Running TerraFusion application"
-              sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads"
-              className={styles.runningApp}
-            />
-          ) : (
-            <div className={styles.appRefusal} role="status">
-              <AppWindow size={20} aria-hidden />
-              <span>Developer preview unavailable. Start or attach the TerraFusion development runtime to preview it here.</span>
-            </div>
+        <WindowFrame id="running-app" title="Developer preview · TerraFusion" geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
+          {space.runningAppUrl ? <iframe src={space.runningAppUrl} title="Running TerraFusion application" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads" className="h-full w-full border-0" /> : (
+            <div className="grid h-full place-content-center gap-3 p-8 text-center" role="status"><AppWindow className="mx-auto text-[#91a48c]" size={26} aria-hidden /><strong>Developer preview unavailable</strong><span className="max-w-md text-xs text-[#8e998b]">Attach the TerraFusion development runtime when you want the real target beside source. WilliamOS remains fully usable; no business workflow is being simulated.</span></div>
           )}
         </WindowFrame>
-
+        {(["tests", "diff", "terminal"] as const).map((id) => (
+          <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)}>
+            {utilityContent(id)}
+          </WindowFrame>
+        ))}
         {inspectors.map((surface) => {
           const geometry = space.inspectorWindows[surface.id]
           if (!geometry) return null
-          return (
-            <WindowFrame
-              key={surface.id}
-              id={surface.id}
-              title={`Inspector · ${surface.subject}`}
-              geometry={geometry}
-              active={space.activeWindowId === surface.id}
-              onActivate={() => activateInspector(surface.id)}
-              onGeometry={(next) => updateInspector(surface.id, next)}
-              onClose={() => dismissInspector(surface.id)}
-            >
-              <InspectorSurfaceView surface={surface} />
-            </WindowFrame>
-          )
+          return <WindowFrame key={surface.id} id={surface.id} title={`Inspector · ${surface.subject}`} geometry={geometry} active={space.activeWindowId === surface.id} onActivate={() => activateInspector(surface.id)} onGeometry={(next) => updateInspector(surface.id, next)} onMinimize={() => updateInspector(surface.id, { ...geometry, minimized: true })} onClose={() => dismissInspector(surface.id)}><InspectorSurfaceView surface={surface} /></WindowFrame>
         })}
       </div>
 
+      <nav className={spatial.dock} aria-label="Surface dock">
+        {space.dock.map((id) => (
+          <button key={id} type="button" className={`${spatial.dockButton} ${space.activeWindowId === id && !space.windows[id].minimized ? spatial.dockButtonActive : ""}`} onClick={() => activate(id)} aria-label={`${space.windows[id].minimized ? "Restore" : "Focus"} ${windowName[id]}`} title={windowName[id]}>
+            {id === "editor" ? <Braces size={15} /> : id === "running-app" ? <AppWindow size={15} /> : id === "tests" ? <FlaskConical size={15} /> : id === "diff" ? <GitCompare size={15} /> : <TerminalSquare size={15} />}
+          </button>
+        ))}
+        <button type="button" className={spatial.dockButton} onClick={() => setOverlay("mission-control")} aria-label="Open Mission Control" title="Mission Control"><Grid2X2 size={15} /></button>
+        <button type="button" className={spatial.dockButton} onClick={() => setOverlay("council")} aria-label="Summon Brain Council" title="Brain Council"><Users size={15} /></button>
+      </nav>
+
+      <footer className={spatial.williamRail} aria-label="William intelligence presence">
+        <span className={spatial.williamOrb} aria-hidden>W</span>
+        <div className={spatial.judgment}><strong>William</strong><p>{williamJudgment}</p></div>
+        <div className={spatial.williamActions}>
+          <button type="button" className={spatial.overlayButton} onClick={inspectWilliamJudgment}>Inspect</button>
+          <button type="button" className={spatial.overlayButton} onClick={() => openLine(`Override William's recommendation for ${selectedLabel}: `)}>Override</button>
+          <button type="button" className={spatial.overlayButton} onClick={() => { setCouncilQuestion(`Challenge William's recommendation: ${williamJudgment}`); setOverlay("council") }}>Ask Council</button>
+          <button type="button" className={spatial.overlayButton} onClick={() => openLine()}>The Line · Ctrl+K</button>
+        </div>
+        <span className={`${spatial.persistence} ${persistenceError ? spatial.persistenceError : ""}`} title={persistenceError ?? undefined}>{savedLabel}</span>
+      </footer>
+
       {lineOpen ? (
-        <div className={styles.lineBackdrop} onPointerDown={(event) => { if (event.target === event.currentTarget) setLineOpen(false) }}>
-          <form className={styles.line} onSubmit={submitLine} aria-label="The Line">
+        <div className={spatial.lineBackdrop} onPointerDown={(event) => { if (event.target === event.currentTarget) setLineOpen(false) }}>
+          <form className={spatial.line} onSubmit={submitLine} aria-label="The Line">
             <Command size={16} aria-hidden />
-            <div className={styles.lineContent}>
-              <input
-                ref={lineRef}
-                value={lineInput}
-                onChange={(event) => setLineInput(event.target.value)}
-                placeholder={space.selectedPath ? `Act on ${space.selectedPath}` : "Ask or direct WilliamOS"}
-                aria-label="The Line"
-                autoFocus
-              />
-              {lineReply ? <output className={styles.lineReply}>{lineReply}</output> : null}
-            </div>
-            <span className={styles.lineState}>{lineBusy ? "working" : "↵"}</span>
+            <div><span className={spatial.lineContext}>{selectedKind} · {selectedLabel}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} placeholder="Ask, change, delegate, or review" aria-label="The Line" autoComplete="off" />{lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
+            <div className={spatial.lineControls}><button type="submit" className={spatial.lineSend} disabled={lineBusy || !lineInput.trim()}>{lineBusy ? "Working" : "Send"}</button><button type="button" className={spatial.lineClose} onClick={() => setLineOpen(false)} aria-label="Close The Line"><X size={14} /></button></div>
           </form>
         </div>
       ) : null}
 
-      <footer className={styles.presenceRail}>
-        <div className={styles.railContext}>
-          <span className={styles.railSpace}>
-            {spine.projectName ?? project?.name ?? "WORKSPACE"}
-            {spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""}
-            {spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""}
-          </span>
-          {lastLineSay ? (
-            <button type="button" className={styles.lineRecall} onClick={() => { setLineReply(lastLineSay); setLineOpen(true) }} title={lastLineSay}>
-              {lastLineSay}
-            </button>
-          ) : null}
-        </div>
-        <div className={styles.dock} aria-label="Dock">
-          {space.dock.map((id) => (
-            <button
-              key={id}
-              type="button"
-              className={`${styles.dockItem} ${space.activeWindowId === id && !space.windows[id].minimized ? styles.dockItemActive : ""}`}
-              onClick={() => activate(id)}
-              aria-label={`${space.windows[id].minimized ? "Restore" : "Focus"} ${windowName[id]}`}
-              title={windowName[id]}
-            >
-              {id === "editor" ? <Braces size={15} /> : <AppWindow size={15} />}
-            </button>
-          ))}
-        </div>
-        <span
-          className={persistenceError ? styles.railError : styles.railSaved}
-          title={persistenceError ?? (storage === "browser" ? "Space saved in this browser" : "Space persisted server-side")}
-        >
-          {persistenceError ? persistenceError : hydrated ? storage === "browser" ? "space saved locally" : "space saved" : "opening space"}
-        </span>
-      </footer>
+      {overlay === "council" ? <div className={spatial.councilHost}><BrainCouncilSurface selectedContext={{ spaceName: project?.name ?? space.name, kind: selectedKind, label: selectedLabel, detail: "Reference advisory roles bound to the current real Space context and owner question" }} session={{ ...REFERENCE_COUNCIL_SESSION, question: councilQuestion ?? `Challenge the current direction for ${selectedLabel}.` }} onDismiss={() => setOverlay(null)} onAdvisoryAction={(action) => handleCouncilAction(action)} /></div> : null}
+      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={space.id} onEnterSpace={() => setOverlay(null)} onDismiss={() => setOverlay(null)} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
     </main>
   )
 }
