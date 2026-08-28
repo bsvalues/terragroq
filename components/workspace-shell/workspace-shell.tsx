@@ -480,23 +480,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }, [persist])
 
   useEffect(() => {
-    const summonLine = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault()
-        setLineTarget("william")
-        setLineMode("default")
-        setLineReply(null)
-        setLineOpen(true)
-        requestAnimationFrame(() => lineRef.current?.focus())
-      } else if (event.key === "Escape") {
-        setLineOpen(false)
-      }
-    }
-    window.addEventListener("keydown", summonLine)
-    return () => window.removeEventListener("keydown", summonLine)
-  }, [])
-
-  useEffect(() => {
     if (!initialSummon || !hydrated) return
     let cancelled = false
     const key = `${worldId ?? "new"}\0${initialSummon}`
@@ -629,6 +612,25 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     dirty: Boolean(space.selectedPath && dirtyPaths[space.selectedPath]),
     onVerifiedSuccess: refreshVerifiedChange,
   })
+
+  useEffect(() => {
+    const summonLine = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault()
+        if (!change.running) {
+          setLineTarget("william")
+          setLineMode("default")
+          setLineReply(null)
+        }
+        setLineOpen(true)
+        requestAnimationFrame(() => lineRef.current?.focus())
+      } else if (event.key === "Escape" && !change.running) {
+        setLineOpen(false)
+      }
+    }
+    window.addEventListener("keydown", summonLine)
+    return () => window.removeEventListener("keydown", summonLine)
+  }, [change.running])
 
   async function summonCouncil(question: string) {
     setCouncilQuestion(question)

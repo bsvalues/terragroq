@@ -272,6 +272,28 @@ describe("Experience V2 selected-file Change", () => {
     expect(screen.getByRole("button", { name: "Stop change" })).toBeTruthy()
   })
 
+  it("keeps the active Change form and operation path visible when Escape is pressed", async () => {
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/edit" && init?.method === "POST") return new Promise<Response>((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+    expect(await screen.findByRole("button", { name: "Stop change" })).toBeTruthy()
+    fireEvent.keyDown(window, { key: "Escape" })
+
+    expect(screen.getByRole("form", { name: "Change" })).toBeTruthy()
+    expect(screen.getByText("Change · src/app.ts")).toBeTruthy()
+  })
+
   it("preserves a delivered governed receipt when Stop is requested", async () => {
     let requestSignal: AbortSignal | undefined
     const editStream = deferredNdjson(
@@ -328,6 +350,66 @@ describe("Experience V2 selected-file Change", () => {
 
     expect(await screen.findByText("Change was verified, but src/app.ts has unsaved editor changes; source was not refreshed.")).toBeTruthy()
     expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const draft = true\n")
+  })
+
+  it("preserves a draft typed while the verified source reload is still in flight", async () => {
+    const reloadRead = deferredResponse()
+    let fileReads = 0
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        fileReads += 1
+        return fileReads === 1 ? Promise.resolve(selectedFile("export const before = true\n")) : reloadRead.promise
+      }
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+changed" }))
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+    await waitFor(() => expect(fileReads).toBe(2))
+    fireEvent.change(screen.getByLabelText("Source content"), { target: { value: "export const lateDraft = true\n" } })
+    reloadRead.resolve(selectedFile("export const fromDisk = true\n"))
+
+    expect(await screen.findByText("Change was verified, but src/app.ts has unsaved editor changes; source was not refreshed.")).toBeTruthy()
+    expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const lateDraft = true\n")
+  })
+
+  it("settles Change truthfully when manual Refresh replaces the governed diff refresh", async () => {
+    let fileReads = 0
+    let diffReads = 0
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        fileReads += 1
+        return Promise.resolve(selectedFile(fileReads === 1 ? "export const before = true\n" : "export const after = true\n"))
+      }
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
+        diffReads += 1
+        if (diffReads === 1) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+before" }))
+        if (diffReads === 2) return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
+        return Promise.resolve(Response.json({ error: "MANUAL_REFUSED" }, { status: 500 }))
+      }
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+    await waitFor(() => expect(diffReads).toBe(2))
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }))
+
+    expect(await screen.findByText("Change was verified, but source or diff refresh failed.")).toBeTruthy()
+    expect(screen.queryByText("Refreshing source and diff…")).toBeNull()
   })
 
   it("distinguishes a verified mutation from a source or diff refresh failure", async () => {

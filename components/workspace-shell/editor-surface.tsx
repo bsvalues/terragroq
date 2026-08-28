@@ -100,6 +100,7 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
   const [treeError, setTreeError] = useState<string | null>(null)
   const [buffers, setBuffers] = useState<Record<string, FileBuffer>>({})
   const loadingFiles = useRef(new Set<string>())
+  const dirtyBuffers = useRef(new Set<string>())
   const completedReloadKey = useRef(-1)
   const bufferEpoch = useRef(new Map<string, number>())
 
@@ -144,7 +145,7 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
   useEffect(() => {
     if (!reloadPath || completedReloadKey.current === reloadKey) return
     const current = buffers[reloadPath]
-    if (current && current.content !== current.savedContent) {
+    if (dirtyBuffers.current.has(reloadPath) || (current && current.content !== current.savedContent)) {
       completedReloadKey.current = reloadKey
       onReloadSettled?.(reloadPath, reloadKey, "dirty-conflict")
       return
@@ -156,6 +157,7 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
       .then(async (response) => {
         const payload = await response.json()
         if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
+        if (dirtyBuffers.current.has(reloadPath)) return "dirty-conflict" as const
         setBuffers((existing) => (bufferEpoch.current.get(reloadPath) ?? 0) !== epoch ? existing : ({ ...existing, [reloadPath]: {
           path: payload.path,
           content: payload.content,
@@ -164,8 +166,9 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
           saving: false,
           error: null,
         } }))
+        return "refreshed" as const
       })
-      .then(() => onReloadSettled?.(reloadPath, reloadKey, "refreshed"))
+      .then((result) => onReloadSettled?.(reloadPath, reloadKey, result))
       .catch((error) => {
         setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE")
         onReloadSettled?.(reloadPath, reloadKey, "failed")
@@ -233,6 +236,7 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
         ...current,
         [path]: acknowledgeSavedBuffer(current[path], submittedContent, payload.modifiedAt),
       }))
+      dirtyBuffers.current.delete(path)
     } catch (error) {
       setBuffers((current) => ({ ...current, [path]: {
         ...current[path], saving: false, error: error instanceof Error ? error.message : "SAVE_REFUSED",
@@ -318,7 +322,11 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
                         path={buffer.path}
                         value={buffer.content}
                         selection={pane.selection}
-                        onChange={(content) => setBuffers((current) => ({ ...current, [buffer.path]: { ...current[buffer.path], content, error: null } }))}
+                        onChange={(content) => {
+                          if (content === buffer.savedContent) dirtyBuffers.current.delete(buffer.path)
+                          else dirtyBuffers.current.add(buffer.path)
+                          setBuffers((current) => ({ ...current, [buffer.path]: { ...current[buffer.path], content, error: null } }))
+                        }}
                         onSelection={(selection) => {
                           const panes = space.editor.panes.map((item) => item.id === pane.id ? { ...item, selection } : item)
                           updatePanes(panes, space.editor.openFiles, buffer.path, pane.id)

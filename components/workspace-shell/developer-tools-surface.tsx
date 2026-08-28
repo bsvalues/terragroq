@@ -24,6 +24,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0, refr
   const controller = useRef<AbortController | null>(null)
   const diffController = useRef<AbortController | null>(null)
   const completedRefresh = useRef<Readonly<{ key: number; path: string | null }>>({ key: refreshKey, path: null })
+  const governedRefresh = useRef<Readonly<{ key: number; path: string }> | null>(null)
   const output = useRef<HTMLPreElement>(null)
 
   const loadDiff = useCallback(async (path = selectedPath): Promise<"refreshed" | "failed" | "aborted"> => {
@@ -61,10 +62,22 @@ export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0, refr
       void loadDiff()
       return
     }
+    governedRefresh.current = { key: refreshKey, path: refreshPath }
     void loadDiff(refreshPath).then((result) => {
-      if (result !== "aborted") onRefreshSettled?.(refreshPath, refreshKey, result)
+      if (result === "aborted" || governedRefresh.current?.key !== refreshKey || governedRefresh.current.path !== refreshPath) return
+      governedRefresh.current = null
+      onRefreshSettled?.(refreshPath, refreshKey, result)
     })
   }, [kind, loadDiff, onRefreshSettled, refreshKey, refreshPath])
+
+  const refreshDiff = useCallback(() => {
+    const replacement = governedRefresh.current
+    void loadDiff(replacement?.path).then((result) => {
+      if (!replacement || result === "aborted" || governedRefresh.current?.key !== replacement.key || governedRefresh.current.path !== replacement.path) return
+      governedRefresh.current = null
+      onRefreshSettled?.(replacement.path, replacement.key, result)
+    })
+  }, [loadDiff, onRefreshSettled])
 
   useEffect(() => {
     if (kind !== "terminal") return
@@ -148,7 +161,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0, refr
           <>
             <div className={styles.utilityControls}>
               <span className={styles.muted}>{selectedPath ? `HEAD · ${selectedPath}` : "HEAD · working tree"}</span>
-              <button type="button" className={styles.utilityButton} onClick={() => void loadDiff()}>Refresh</button>
+              <button type="button" className={styles.utilityButton} onClick={refreshDiff}>Refresh</button>
             </div>
             {status ? <pre className={styles.utilityOutput}>{status}</pre> : null}
             {error ? <output className={styles.utilityOutput}>Unable to refresh current change: {error}</output> : null}
