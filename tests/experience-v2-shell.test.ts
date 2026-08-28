@@ -36,14 +36,27 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(source).toContain("Selected ${selectedKind}: ${selectedLabel}")
     expect(source).toContain('space.activeWindowId === "running-app" ? "preview"')
     expect(source).toContain('space.activeWindowId === "diff" ? "diff"')
-    expect(source).toContain("const councilRequest = text.match")
-    expect(source).toContain("question: councilQuestion")
+    expect(source).toContain('const councilRequest = lineTarget === "william"')
+    expect(source).toContain("void summonCouncil")
   })
 
-  it("makes durable agent roles and William's judgment visible without pretending fixtures are live", () => {
+  it("projects only real durable sessions and routes delegation into a live agent turn", () => {
     const source = shell()
-    expect(source).toContain("reference session")
+    expect(source).toContain("useExperienceAgentSessions")
+    expect(source).toContain("AgentSessionStrip")
+    expect(source).toContain("runClaudeTurn")
+    expect(source).not.toContain("const referenceAgents")
+    expect(source).not.toContain("reference session")
+  })
+
+  it("keeps William's judgment visible and actionable", () => {
+    const source = shell()
     expect(source).toContain("williamJudgment")
+    expect(source).toContain("/api/environment/judgment")
+    expect(source).toContain("payload.judgment")
+    expect(source).toContain("await persistBarrierRef.current()")
+    expect(source).toContain("judgmentContextKey")
+    expect(source).toContain("setJudgment(null)")
     expect(source).toContain('aria-label="William intelligence presence"')
     expect(source).toContain("Inspect")
     expect(source).toContain("Override")
@@ -53,10 +66,21 @@ describe("WilliamOS Experience V2 shell", () => {
   it("keeps Council advisory and Mission Control spatial", () => {
     const source = shell()
     expect(source).toContain("BrainCouncilSurface")
+    expect(source).toContain("/api/environment/council")
+    expect(source).not.toContain("REFERENCE_COUNCIL_SESSION")
+    expect(source).toContain('selectedAgent?.kind === "durable-session"')
+    expect(source).toContain("Council cannot ground this browser-saved Claude session yet")
     expect(source).toContain("MissionControlSurface")
     expect(source).toContain('truth: "live"')
     expect(source).toContain('truth: "fixture"')
     expect(source).toContain("Illustrative Space · not live runtime state")
+  })
+
+  it("connects the Tests, Changes, and Terminal windows to real workspace operations", () => {
+    const source = shell()
+    expect(source).toContain("DeveloperToolsSurface")
+    expect(source).not.toContain("Reference surface · no live adapter attached")
+    expect(source).not.toContain("project runtime not attached")
   })
 
   it("uses the restrained matte charcoal and sage product language", () => {

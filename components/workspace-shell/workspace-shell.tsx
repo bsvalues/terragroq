@@ -4,10 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, TerminalSquare, Users, X } from "lucide-react"
 
 import type { SummonedSurface } from "@/lib/environment/summon"
-import { EMPTY_SPINE, type WorldSpine } from "@/lib/environment/working-world"
+import { EMPTY_SPINE, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
 import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
-import { BrainCouncilSurface, REFERENCE_COUNCIL_SESSION, type CouncilAdvisoryAction } from "./brain-council-surface"
+import { DeveloperToolsSurface } from "./developer-tools-surface"
+import { AgentSessionStrip, useExperienceAgentSessions } from "./agent-sessions"
+import { BrainCouncilSurface, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
 import { WindowFrame } from "./window-frame"
@@ -32,6 +34,7 @@ type ConversationEntry = Readonly<{
 type PersistJob = Readonly<{ worldId: string; revision: number; body: string }>
 type SpaceStorage = "server" | "browser"
 type EnvironmentOverlay = "council" | "mission-control" | null
+type LineTarget = "william" | "agent"
 
 const windowName: Record<WindowId, string> = {
   editor: "Source",
@@ -41,13 +44,30 @@ const windowName: Record<WindowId, string> = {
   terminal: "Terminal",
 }
 
-const referenceAgents = [
-  { id: "builder", glyph: "B", role: "Builder", provider: "Codex", status: "implementing", assignment: "Workspace interaction", truth: "fixture" },
-  { id: "reviewer", glyph: "R", role: "Reviewer", provider: "Claude", status: "reviewing", assignment: "Product criticism", truth: "fixture" },
-  { id: "local", glyph: "L", role: "Local", provider: "HERMES", status: "idle", assignment: "Tests and preview", truth: "fixture" },
-] as const
-
 const browserSpaceKey = (opaque: string) => `williamos:space:${opaque}`
+
+function williamJudgmentContextKey(space: WorkspaceSpace, spine: WorldSpine): string {
+  return JSON.stringify({
+    project: spine.projectName,
+    execution: spine.execution,
+    selectedPath: space.selectedPath,
+    runningAppUrl: space.runningAppUrl,
+    evidence: spine.evidence.at(-1) ?? null,
+  })
+}
+
+function agentReplyText(payload: Readonly<Record<string, unknown>>): readonly string[] {
+  if (payload.type !== "event" || !payload.event || typeof payload.event !== "object") return []
+  const event = payload.event as Record<string, unknown>
+  if (event.type === "result" && typeof event.result === "string") return [event.result]
+  const message = event.message as { content?: unknown } | undefined
+  if (event.type !== "assistant" || !Array.isArray(message?.content)) return []
+  return message.content.flatMap((block) => {
+    if (!block || typeof block !== "object") return []
+    const record = block as Record<string, unknown>
+    return record.type === "text" && typeof record.text === "string" ? [record.text] : []
+  })
+}
 
 function inspectorId(surface: Pick<InspectorSurface, "kind" | "subject">): string {
   const source = `${surface.kind}\0${surface.subject}`
@@ -68,15 +88,28 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineInput, setLineInput] = useState("")
   const [lineReply, setLineReply] = useState<string | null>(null)
   const [lineBusy, setLineBusy] = useState(false)
+  const [lineTarget, setLineTarget] = useState<LineTarget>("william")
   const [inspectors, setInspectors] = useState<readonly InspectorSurface[]>([])
   const [conversation, setConversation] = useState<readonly ConversationEntry[]>([])
   const [overlay, setOverlay] = useState<EnvironmentOverlay>(null)
   const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null)
   const [councilQuestion, setCouncilQuestion] = useState<string | null>(null)
+  const [councilSession, setCouncilSession] = useState<BrainCouncilSession | null>(null)
+  const [councilBusy, setCouncilBusy] = useState(false)
+  const [councilError, setCouncilError] = useState<string | null>(null)
   const [spine, setSpine] = useState<WorldSpine>(EMPTY_SPINE)
+  const [judgment, setJudgment] = useState<WilliamJudgment | null>(null)
+  const [judgmentBusy, setJudgmentBusy] = useState(false)
+  const [judgmentError, setJudgmentError] = useState<string | null>(null)
   const [project, setProject] = useState<WorkspaceProject | null>(null)
   const [storage, setStorage] = useState<SpaceStorage>("server")
+  const agentSessions = useExperienceAgentSessions({
+    ownerScope: worldId ?? "unhydrated-owner-world",
+    worldScope: project?.identity ?? worldId ?? "unhydrated-project",
+    worker: spine.worker ?? null,
+  })
   const stateRef = useRef(space)
+  const spineRef = useRef(spine)
   const worldRef = useRef(worldId)
   const storageRef = useRef<SpaceStorage>(storage)
   const browserStorageKeyRef = useRef<string | null>(null)
@@ -90,7 +123,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const acknowledgedRevisionRef = useRef(0)
   const pendingPersistRef = useRef<PersistJob | null>(null)
   const drainingPersistRef = useRef(false)
+  const drainPromiseRef = useRef<Promise<void> | null>(null)
+  const persistBarrierRef = useRef<() => Promise<void>>(async () => {})
+  const judgmentRequestedRef = useRef<string | null>(null)
+  const judgmentContextRef = useRef<string | null>(null)
   stateRef.current = space
+  spineRef.current = spine
   worldRef.current = worldId
   storageRef.current = storage
 
@@ -149,6 +187,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }, [inspectors])
 
   const acceptLineReply = useCallback((reply: LineReply) => {
+    // A Line turn can change server-only judgment facts (validation marks, concerns, failures,
+    // intent). Clear the active opinion until it is regenerated from the newly persisted world.
+    judgmentRequestedRef.current = null
+    setJudgment(null)
     if (typeof reply.worldId === "string") setWorldId(reply.worldId)
     if (reply.spine) setSpine(reply.spine)
     const say = typeof reply.say === "string" ? reply.say : ""
@@ -170,6 +212,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         worldId: payload.worldId,
         space: payload.space,
         spine: payload.spine,
+        judgment: payload.judgment,
         project: payload.project,
         storage: payload.storage,
         browserStorageKey: payload.browserStorageKey,
@@ -205,6 +248,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setStorage(storageMode)
         if (payload.project) setProject(payload.project)
         if (payload.spine) setSpine(payload.spine)
+        setJudgment(payload.judgment ?? null)
       })
       .catch((error) => {
         if (!cancelled) {
@@ -217,6 +261,53 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       })
     return () => { cancelled = true }
   }, [])
+
+  const refreshWilliamJudgment = useCallback(async () => {
+    const id = worldRef.current
+    if (!id || storageRef.current !== "server" || judgmentBusy) return
+    setJudgmentBusy(true)
+    setJudgmentError(null)
+    try {
+      await persistBarrierRef.current()
+      const requestContext = williamJudgmentContextKey(stateRef.current, spineRef.current)
+      const response = await fetch("/api/environment/judgment", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worldId: id }),
+        cache: "no-store",
+      })
+      const payload = await response.json() as { error?: string; judgment?: WilliamJudgment }
+      if (!response.ok || !payload.judgment) throw new Error(payload.error ?? `JUDGMENT_${response.status}`)
+      if (worldRef.current !== id || williamJudgmentContextKey(stateRef.current, spineRef.current) !== requestContext) {
+        judgmentRequestedRef.current = null
+        return
+      }
+      setJudgment(payload.judgment)
+    } catch (error) {
+      setJudgmentError(error instanceof Error ? error.message : "JUDGMENT_UNAVAILABLE")
+    } finally {
+      setJudgmentBusy(false)
+    }
+  }, [judgmentBusy])
+
+  useEffect(() => {
+    if (!hydrated || !worldId || storage !== "server" || judgment || judgmentRequestedRef.current === worldId) return
+    judgmentRequestedRef.current = worldId
+    void refreshWilliamJudgment()
+  }, [hydrated, judgment, refreshWilliamJudgment, storage, worldId])
+
+  const judgmentContextKey = williamJudgmentContextKey(space, spine)
+  useEffect(() => {
+    if (!hydrated) return
+    if (judgmentContextRef.current === null) {
+      judgmentContextRef.current = judgmentContextKey
+      return
+    }
+    if (judgmentContextRef.current === judgmentContextKey) return
+    judgmentContextRef.current = judgmentContextKey
+    judgmentRequestedRef.current = null
+    setJudgment(null)
+  }, [hydrated, judgmentContextKey])
 
   useEffect(() => {
     let frame: number | null = null
@@ -308,9 +399,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }, [])
 
-  const persist = useCallback((keepalive = false) => {
+  const persist = useCallback((keepalive = false): Promise<void> => {
     const id = worldRef.current
-    if (!id) return
+    if (!id) return Promise.resolve()
     const revision = nextSpaceRevision(revisionRef.current)
     revisionRef.current = revision
     const job: PersistJob = {
@@ -319,13 +410,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       body: JSON.stringify({ worldId: id, space: spaceToServer(stateRef.current, revision) }),
     }
     if (keepalive) {
-      void sendPersist(job, true)
-      return
+      return sendPersist(job, true)
     }
     pendingPersistRef.current = job
-    if (drainingPersistRef.current) return
+    if (drainingPersistRef.current) return drainPromiseRef.current ?? Promise.resolve()
     drainingPersistRef.current = true
-    void (async () => {
+    const drain = (async () => {
       try {
         while (pendingPersistRef.current) {
           const next = pendingPersistRef.current
@@ -336,7 +426,19 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         drainingPersistRef.current = false
       }
     })()
+    drainPromiseRef.current = drain
+    void drain.finally(() => {
+      if (drainPromiseRef.current === drain) drainPromiseRef.current = null
+    })
+    return drain
   }, [sendPersist])
+  persistBarrierRef.current = async () => {
+    if (persistTimer.current) clearTimeout(persistTimer.current)
+    await persist()
+    if (storageRef.current !== "server" || acknowledgedRevisionRef.current < revisionRef.current) {
+      throw new Error("The current Space must be saved before grounded reasoning can begin.")
+    }
+  }
 
   useEffect(() => {
     if (!hydrated || !worldId) return
@@ -367,6 +469,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const summonLine = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault()
+        setLineTarget("william")
         setLineReply(null)
         setLineOpen(true)
         requestAnimationFrame(() => lineRef.current?.focus())
@@ -465,12 +568,51 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     })
   }, [])
 
-  const openLine = useCallback((prompt = "") => {
+  const openLine = useCallback((prompt = "", target: LineTarget = "william") => {
+    setLineTarget(target)
     setLineInput(prompt)
     setLineReply(null)
     setLineOpen(true)
     requestAnimationFrame(() => lineRef.current?.focus())
   }, [])
+
+  async function summonCouncil(question: string) {
+    setCouncilQuestion(question)
+    setCouncilSession(null)
+    setCouncilError(null)
+    setCouncilBusy(true)
+    setOverlay("council")
+    if (!worldId) {
+      setCouncilError("Council needs an open persistent Space.")
+      setCouncilBusy(false)
+      return
+    }
+    if (selectedAgent?.kind === "durable-session") {
+      setCouncilError("Council cannot ground this browser-saved Claude session yet. Select a persisted Space object or live world worker.")
+      setCouncilBusy(false)
+      return
+    }
+    try {
+      await persistBarrierRef.current()
+      const response = await fetch("/api/environment/council", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          worldId,
+          question,
+          selectedContext: { kind: selectedKind, label: selectedLabel },
+        }),
+        cache: "no-store",
+      })
+      const payload = await response.json() as { error?: string; detail?: string; session?: BrainCouncilSession }
+      if (!response.ok || !payload.session) throw new Error(payload.detail ?? payload.error ?? `COUNCIL_${response.status}`)
+      setCouncilSession(payload.session)
+    } catch (error) {
+      setCouncilError(error instanceof Error ? error.message : "Council inference is unavailable.")
+    } finally {
+      setCouncilBusy(false)
+    }
+  }
 
   async function submitLine(event: React.FormEvent) {
     event.preventDefault()
@@ -478,10 +620,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     if (!text || lineBusy) return
     appendConversation("owner", text)
     setLineInput("")
-    const councilRequest = text.match(/^\/?council\b[\s:—-]*(.*)$/i)
+    const councilRequest = lineTarget === "william" ? text.match(/^\/?council\b[\s:—-]*(.*)$/i) : null
     if (councilRequest) {
-      setCouncilQuestion(councilRequest[1]?.trim() || `Challenge the current direction for ${selectedLabel}.`)
-      setOverlay("council")
+      void summonCouncil(councilRequest[1]?.trim() || `Challenge the current direction for ${selectedLabel}.`)
       setLineOpen(false)
       return
     }
@@ -489,6 +630,17 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineReply(null)
     try {
       const contextualText = `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
+      if (lineTarget === "agent") {
+        const role = selectedAgent?.kind === "durable-session" ? selectedAgent.role : "Builder"
+        const assignment = selectedAgent?.kind === "durable-session" ? selectedAgent.assignment : selectedLabel
+        await agentSessions.runClaudeTurn({
+          role,
+          assignment,
+          prompt: contextualText,
+          onEvent: (payload) => agentReplyText(payload).forEach((reply) => appendConversation("williamos", reply)),
+        })
+        return
+      }
       const response = await fetch("/api/environment/line", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -509,13 +661,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : hydrated
       ? storage === "browser" ? "space saved locally" : "space saved"
       : "opening space"
-  const selectedAgent = referenceAgents.find((agent) => agent.id === focusedAgentId)
+  const selectedAgent = agentSessions.sessions.find((agent) => agent.id === focusedAgentId)
   const selectedKind = selectedAgent ? "agent" as const
     : space.activeWindowId === "running-app" ? "preview" as const
     : space.activeWindowId === "diff" ? "diff" as const
     : space.activeWindowId === "editor" && space.selectedPath ? "file" as const
     : "space" as const
-  const selectedLabel = selectedAgent ? `${selectedAgent.role} · ${selectedAgent.provider}`
+  const selectedLabel = selectedAgent ? `${selectedAgent.role} · ${selectedAgent.providerLabel}`
     : selectedKind === "preview" ? "TerraFusion developer preview"
     : selectedKind === "diff" ? "Current changes"
     : selectedKind === "file" ? space.selectedPath!
@@ -532,13 +684,17 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : ["Summarize", "Continue", "Delegate", "Council"] as const
   const worldLine = spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""
   const workerLine = spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""
-  const williamJudgment = persistenceError
-    ? `Space persistence is refusing writes (${persistenceError}). Inspect that before trusting re-entry.`
+  const williamSafetyFact = persistenceError
+    ? `Space persistence is refusing writes (${persistenceError}).`
     : !space.runningAppUrl
-      ? "The developer preview is not attached. I would not call the visual loop accepted yet."
+      ? "The developer preview is not attached."
       : space.selectedPath
-        ? `${space.selectedPath} is selected. Review or delegate against that file without restating context.`
-        : "No source object is selected. Choose the work before delegating it."
+        ? `${space.selectedPath} is selected.`
+        : "No source object is selected."
+  const williamJudgment = judgment?.recommendation
+    ?? (judgmentBusy
+      ? "William is forming a grounded judgment from the current Space."
+      : `System fact: ${williamSafetyFact} ${judgmentError ? `William judgment unavailable (${judgmentError}).` : "William has not formed a judgment yet."}`)
 
   const missionWindowKind: Record<WindowId, MissionControlSpaceProjection["windows"][number]["kind"]> = {
     editor: "source", "running-app": "preview", tests: "tests", diff: "diff", terminal: "terminal",
@@ -554,10 +710,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       frame: geometry, minimized: geometry.minimized, active: space.activeWindowId === id,
       detail: id === "running-app" ? space.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
     })),
-    agents: spine.worker ? [{
-      id: "live-worker", name: "Resident worker", role: spine.worker.lane,
-      activity: spine.execution, state: isExecutionLive(spine.execution) ? "working" : "idle",
-    }] : [],
+    agents: agentSessions.sessions.map((agent) => ({
+      id: agent.id, name: agent.providerLabel, role: agent.role,
+      activity: agent.assignment, state: agent.status === "working" ? "working" : "idle",
+    })),
     selectedObject: space.selectedPath,
     changed: savedLabel,
   }
@@ -569,49 +725,32 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         { id: "document", title: "Investigation", kind: "document", frame: { x: 410, y: 70, width: 620, height: 420 }, detail: "Causal link under review" },
       ], agents: [], changed: "Illustrative Space · not live runtime state",
     },
-    {
-      id: "fixture-agents", name: "Agent Operations", focus: "Reference projection", state: "paused", truth: "fixture",
-      windows: [{ id: "sessions", title: "Durable sessions", kind: "agent", frame: { x: 80, y: 50, width: 850, height: 420 }, detail: "Role-first session view" }],
-      agents: referenceAgents.map((agent) => ({ id: agent.id, name: agent.provider, role: agent.role, activity: agent.status, state: agent.status === "idle" ? "idle" : "working" })),
-      changed: "Illustrative Space · sessions are fixtures",
-    },
   ]
-
-  const utilityContent = (id: "tests" | "diff" | "terminal") => (
-    <div className={spatial.utilitySurface}>
-      <div className={spatial.utilityMeta}>
-        <span>{id === "tests" ? "Focused validation" : id === "diff" ? "Current change" : "Project terminal"}</span>
-        <span>Reference surface · no live adapter attached</span>
-      </div>
-      <div className={spatial.utilityBody}>
-        {id === "tests" ? <>
-          <div className={spatial.utilityRow}><span className={spatial.pass}>✓</span><span>editor save and restore</span><span className={spatial.muted}>passed</span></div>
-          <div className={spatial.utilityRow}><span className={spatial.pass}>✓</span><span>spatial window persistence</span><span className={spatial.muted}>passed</span></div>
-          <div className={spatial.utilityRow}><span className={spatial.fail}>×</span><span>browser owner acceptance</span><span className={spatial.muted}>not run</span></div>
-        </> : id === "diff" ? <>
-          <div className={spatial.removed}>- fixed three-column shell</div>
-          <div className={spatial.added}>+ durable spatial work surfaces</div>
-          <div className={spatial.added}>+ selected-object AI actions</div>
-        </> : <>
-          <div><span className={spatial.terminalPrompt}>terra@workspace %</span> project runtime not attached</div>
-          <div className={spatial.muted}>This developer surface is interactive UI reference state, not fabricated execution.</div>
-        </>}
-      </div>
-    </div>
-  )
 
   function openObjectAction(action: string) {
     if (action === "Council") {
-      setCouncilQuestion(`Challenge the current direction for ${selectedLabel}.`)
-      setOverlay("council")
+      void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)
+      return
+    }
+    if (action === "Delegate" || (selectedAgent?.kind === "durable-session" && (action === "Talk" || action === "Redirect"))) {
+      openLine(`${action} ${selectedLabel}: `, "agent")
       return
     }
     openLine(`${action} this selected ${selectedKindLabel}: `)
   }
 
   function handleCouncilAction(action: CouncilAdvisoryAction) {
+    const session = councilSession
     setOverlay(null)
-    openLine(`Council recommendation · ${action.replaceAll("-", " ")}: `)
+    if (!session) return
+    if (action === "ask-dissent" || action === "run-another-pass") {
+      const challenge = action === "ask-dissent"
+        ? `Challenge this recommendation with the strongest credible dissent: ${session.recommendation}`
+        : `Run another independent pass on this question, explicitly testing the prior recommendation: ${session.question}`
+      void summonCouncil(challenge)
+      return
+    }
+    openLine(`Council recommendation · ${action.replaceAll("-", " ")} · ${session.recommendation}\nOwner direction: `)
   }
 
   function inspectWilliamJudgment() {
@@ -636,14 +775,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             <span className={spatial.spacePath}>{project?.identity ?? ""}</span>
           </span>
         </div>
-        <nav className={spatial.sessionStrip} aria-label="Durable agent sessions">
-          {referenceAgents.map((agent) => (
-            <button key={agent.id} type="button" className={spatial.sessionButton} aria-pressed={focusedAgentId === agent.id} onClick={() => { setFocusedAgentId(agent.id); openLine(`Redirect ${agent.role} · ${agent.provider} on ${selectedLabel}: `) }}>
-              <span className={spatial.sessionGlyph}>{agent.glyph}</span>
-              <span><strong>{agent.role} · {agent.provider}</strong><small>{agent.status} · <em className={spatial.fixtureTag}>reference session</em></small></span>
-            </button>
-          ))}
-        </nav>
+        <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningSessionId={agentSessions.activeSessionId} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
+          setFocusedAgentId(agent.id)
+          if (agent.kind === "durable-session") openLine(`Redirect ${agent.role} · ${agent.providerLabel} on ${selectedLabel}: `, "agent")
+        }} />
         <div className={spatial.status}><span className={spatial.statusDot} aria-hidden /><span>{worldLine || "Space ready"}{workerLine}</span></div>
       </header>
 
@@ -667,7 +802,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
           <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)}>
-            {utilityContent(id)}
+            <DeveloperToolsSurface kind={id} selectedPath={space.selectedPath} />
           </WindowFrame>
         ))}
         {inspectors.map((surface) => {
@@ -684,7 +819,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           </button>
         ))}
         <button type="button" className={spatial.dockButton} onClick={() => setOverlay("mission-control")} aria-label="Open Mission Control" title="Mission Control"><Grid2X2 size={15} /></button>
-        <button type="button" className={spatial.dockButton} onClick={() => setOverlay("council")} aria-label="Summon Brain Council" title="Brain Council"><Users size={15} /></button>
+        <button type="button" className={spatial.dockButton} onClick={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} aria-label="Summon Brain Council" title="Brain Council"><Users size={15} /></button>
       </nav>
 
       <footer className={spatial.williamRail} aria-label="William intelligence presence">
@@ -692,8 +827,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <div className={spatial.judgment}><strong>William</strong><p>{williamJudgment}</p></div>
         <div className={spatial.williamActions}>
           <button type="button" className={spatial.overlayButton} onClick={inspectWilliamJudgment}>Inspect</button>
+          <button type="button" className={spatial.overlayButton} disabled={judgmentBusy || storage !== "server"} onClick={() => void refreshWilliamJudgment()}>{judgmentBusy ? "Reasoning" : "Think again"}</button>
           <button type="button" className={spatial.overlayButton} onClick={() => openLine(`Override William's recommendation for ${selectedLabel}: `)}>Override</button>
-          <button type="button" className={spatial.overlayButton} onClick={() => { setCouncilQuestion(`Challenge William's recommendation: ${williamJudgment}`); setOverlay("council") }}>Ask Council</button>
+          <button type="button" className={spatial.overlayButton} onClick={() => void summonCouncil(`Challenge William's recommendation: ${williamJudgment}`)}>Ask Council</button>
           <button type="button" className={spatial.overlayButton} onClick={() => openLine()}>The Line · Ctrl+K</button>
         </div>
         <span className={`${spatial.persistence} ${persistenceError ? spatial.persistenceError : ""}`} title={persistenceError ?? undefined}>{savedLabel}</span>
@@ -704,12 +840,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           <form className={spatial.line} onSubmit={submitLine} aria-label="The Line">
             <Command size={16} aria-hidden />
             <div><span className={spatial.lineContext}>{selectedKind} · {selectedLabel}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} placeholder="Ask, change, delegate, or review" aria-label="The Line" autoComplete="off" />{lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
-            <div className={spatial.lineControls}><button type="submit" className={spatial.lineSend} disabled={lineBusy || !lineInput.trim()}>{lineBusy ? "Working" : "Send"}</button><button type="button" className={spatial.lineClose} onClick={() => setLineOpen(false)} aria-label="Close The Line"><X size={14} /></button></div>
+            <div className={spatial.lineControls}><span className={spatial.lineContext}>{lineTarget === "agent" ? "Claude session" : "William"}</span><button type="submit" className={spatial.lineSend} disabled={lineBusy || !lineInput.trim()}>{lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button><button type="button" className={spatial.lineClose} onClick={() => setLineOpen(false)} aria-label="Close The Line"><X size={14} /></button></div>
           </form>
         </div>
       ) : null}
 
-      {overlay === "council" ? <div className={spatial.councilHost}><BrainCouncilSurface selectedContext={{ spaceName: project?.name ?? space.name, kind: selectedKind, label: selectedLabel, detail: "Reference advisory roles bound to the current real Space context and owner question" }} session={{ ...REFERENCE_COUNCIL_SESSION, question: councilQuestion ?? `Challenge the current direction for ${selectedLabel}.` }} onDismiss={() => setOverlay(null)} onAdvisoryAction={(action) => handleCouncilAction(action)} /></div> : null}
+      {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} onDismiss={() => setOverlay(null)} onAdvisoryAction={(action) => handleCouncilAction(action)} /> : <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={() => setOverlay(null)}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{councilBusy ? "Convening five real advisory perspectives…" : "Council unavailable"}</strong><p className={spatial.muted}>{councilError ?? councilQuestion ?? "Preparing the current question."}</p>{councilError && councilQuestion ? <button type="button" className={spatial.utilityButton} onClick={() => void summonCouncil(councilQuestion)}>Try again</button> : null}</div></section>}</div> : null}
       {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={space.id} onEnterSpace={() => setOverlay(null)} onDismiss={() => setOverlay(null)} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
     </main>
   )
