@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, sql } from "drizzle-orm"
 import { createHash } from "node:crypto"
 import path from "node:path"
 
@@ -89,6 +89,8 @@ export interface SpaceWorkingWorldStore {
   findLatestOwned(userId: string): Promise<OwnedWorkingWorldRecord | null>
   findLatestOwnedForProject(userId: string, projectIdentity: string): Promise<OwnedWorkingWorldRecord | null>
   listOwnedForProject?(userId: string, projectIdentity: string): Promise<readonly OwnedWorkingWorldRecord[]>
+  readOwnedPage?(userId: string, offset: number, limit: number): Promise<readonly OwnedWorkingWorldRecord[]>
+  insertOwnedProjectSpace?(userId: string, projectIdentity: string, row: OwnedWorkingWorldRecord): Promise<"created" | "limit">
   insertOwned(row: OwnedWorkingWorldRecord): Promise<void>
   updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string): Promise<boolean>
 }
@@ -166,6 +168,36 @@ export const databaseSpaceWorkingWorldStore: SpaceWorkingWorldStore = {
         .where(eq(workingWorld.userId, userId))
         .orderBy(desc(workingWorld.updatedAt), desc(workingWorld.id))
         .limit(240)
+  },
+
+  async readOwnedPage(userId, offset, limit) {
+    return db.select({
+      id: workingWorld.id, userId: workingWorld.userId, intent: workingWorld.intent,
+      snapshot: workingWorld.snapshot, updatedAt: workingWorld.updatedAt,
+    }).from(workingWorld)
+      .where(eq(workingWorld.userId, userId))
+      .orderBy(desc(workingWorld.updatedAt), desc(workingWorld.id))
+      .limit(limit)
+      .offset(offset)
+  },
+
+  async insertOwnedProjectSpace(userId, projectIdentity, row) {
+    return db.transaction(async (transaction) => {
+      await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`williamos-space:${userId}:${projectIdentity}`}))`)
+      const matches = await collectProjectRowsByPage(projectIdentity, (offset, limit) => transaction.select({
+        id: workingWorld.id, userId: workingWorld.userId, intent: workingWorld.intent,
+        snapshot: workingWorld.snapshot, updatedAt: workingWorld.updatedAt,
+      }).from(workingWorld)
+        .where(eq(workingWorld.userId, userId))
+        .orderBy(desc(workingWorld.updatedAt), desc(workingWorld.id))
+        .limit(limit)
+        .offset(offset))
+      if (matches.length >= MAX_PROJECT_SPACES) return "limit" as const
+      await transaction.insert(workingWorld).values({
+        id: row.id, userId: row.userId, intent: row.intent, snapshot: row.snapshot, updatedAt: row.updatedAt,
+      })
+      return "created" as const
+    })
   },
 
   async insertOwned(row) {
@@ -362,13 +394,43 @@ export function createDefaultSpace(runningAppUrl: string | null): SpaceState {
 }
 
 const MAX_PROJECT_SPACES = 12
+const PROJECT_SCAN_PAGE_SIZE = 50
+const MAX_PROJECT_SCAN_ROWS = 5_000
+
+async function collectProjectRowsByPage(
+  projectIdentity: string,
+  readPage: (offset: number, limit: number) => Promise<readonly OwnedWorkingWorldRecord[]>,
+): Promise<readonly OwnedWorkingWorldRecord[]> {
+  const rootResource = `${WORKSPACE_ROOT_RESOURCE}${projectIdentity}`
+  const matches: OwnedWorkingWorldRecord[] = []
+  for (let offset = 0; offset < MAX_PROJECT_SCAN_ROWS; offset += PROJECT_SCAN_PAGE_SIZE) {
+    const rows = await readPage(offset, PROJECT_SCAN_PAGE_SIZE)
+    for (const row of rows) {
+      try {
+        if (validateWorkingWorld(JSON.parse(row.snapshot)).resources.includes(rootResource)) matches.push(row)
+      } catch {
+        // Corrupt worlds cannot become Space truth.
+      }
+      if (matches.length >= MAX_PROJECT_SPACES) return matches
+    }
+    if (rows.length < PROJECT_SCAN_PAGE_SIZE) return matches
+  }
+  throw new Error("SPACE_COLLECTION_SCAN_LIMIT")
+}
 
 export async function listOwnedProjectSpaces(
-  input: Readonly<{ userId: string; project: WorkspaceProject; workspaceAppUrl?: string | null }>,
+  input: Readonly<{
+    userId: string
+    project: WorkspaceProject
+    workspaceAppUrl?: string | null
+    current?: Readonly<{ worldId: string; name: string; space: unknown }>
+  }>,
   store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
 ): Promise<readonly OwnedSpaceSummary[]> {
-  const rows = await store.listOwnedForProject?.(input.userId, input.project.identity) ?? []
-  return rows.flatMap((row): readonly OwnedSpaceSummary[] => {
+  const rows = store.readOwnedPage
+    ? await collectProjectRowsByPage(input.project.identity, (offset, limit) => store.readOwnedPage!(input.userId, offset, limit))
+    : await store.listOwnedForProject?.(input.userId, input.project.identity) ?? []
+  const summaries = rows.flatMap((row): readonly OwnedSpaceSummary[] => {
     try {
       const world = validateWorkingWorld(JSON.parse(row.snapshot))
       if (!worldMatchesProject(world, input.project)) return []
@@ -381,7 +443,14 @@ export async function listOwnedProjectSpaces(
     } catch {
       return []
     }
-  }).slice(0, MAX_PROJECT_SPACES)
+  })
+  if (!input.current) return summaries.slice(0, MAX_PROJECT_SPACES)
+  const current = summaries.find((item) => item.worldId === input.current!.worldId) ?? {
+    ...input.current,
+    space: validateSpaceState(input.current.space),
+    updatedAt: new Date(0).toISOString(),
+  }
+  return [current, ...summaries.filter((item) => item.worldId !== current.worldId)].slice(0, MAX_PROJECT_SPACES)
 }
 
 function canonicalSpaceName(value: unknown): string {
@@ -408,10 +477,14 @@ export async function createOwnedProjectSpace(
   const base = createWorkingWorld({ intent: name, resources: projectResources(input.project, name) })
   const space = createDefaultSpace(serverRunningAppUrl(base, input.workspaceAppUrl))
   const world = validateWorkingWorld({ ...base, space })
-  await store.insertOwned({
+  const row = {
     id: worldId, userId: input.userId, intent: name,
     snapshot: JSON.stringify(world), updatedAt: new Date(),
-  })
+  }
+  const inserted = store.insertOwnedProjectSpace
+    ? await store.insertOwnedProjectSpace(input.userId, input.project.identity, row)
+    : (await store.insertOwned(row), "created" as const)
+  if (inserted === "limit") throw new Error("SPACE_LIMIT_REACHED")
   return { worldId, name, space, spine: world.spine, judgment: null, project: input.project }
 }
 

@@ -39,6 +39,28 @@ async function admittedAppUrl(request: Request): Promise<string | null> {
   return admission.ok ? admission.url : null
 }
 
+async function collectionMetadata(input: Readonly<{
+  userId: string
+  workspaceAppUrl: string | null
+  current: { worldId: string; name: string; space: unknown }
+}>) {
+  try {
+    return {
+      spaces: await listOwnedProjectSpaces({
+        userId: input.userId, project: WORKSPACE_PROJECT,
+        workspaceAppUrl: input.workspaceAppUrl, current: input.current,
+      }),
+      collectionAvailable: true as const,
+    }
+  } catch {
+    return {
+      spaces: [{ ...input.current, updatedAt: new Date(0).toISOString() }],
+      collectionAvailable: false as const,
+      collectionReason: "SPACE_COLLECTION_UNAVAILABLE" as const,
+    }
+  }
+}
+
 export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return reply({ error: "UNAUTHENTICATED" }, 401)
@@ -55,12 +77,11 @@ export async function GET(request: Request) {
       newWorldId: crypto.randomUUID,
     })
     if (!result) return reply({ error: "WORLD_NOT_FOUND" }, 404)
-    const spaces = await listOwnedProjectSpaces({
-      userId: session.user.id, project: WORKSPACE_PROJECT, workspaceAppUrl,
-    })
+    const collection = await collectionMetadata({ userId: session.user.id, workspaceAppUrl, current: result })
     return reply({
       ...result,
-      spaces,
+      storage: "server",
+      ...collection,
       multiSpaceAvailable: true,
       preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
     })
@@ -100,15 +121,16 @@ export async function POST(request: Request) {
       workspaceAppUrl,
       newWorldId: crypto.randomUUID,
     })
-    const spaces = await listOwnedProjectSpaces({ userId: session.user.id, project: WORKSPACE_PROJECT, workspaceAppUrl })
+    const collection = await collectionMetadata({ userId: session.user.id, workspaceAppUrl, current: result })
     return reply({
-      ...result, spaces, multiSpaceAvailable: true,
+      ...result, storage: "server", ...collection, multiSpaceAvailable: true,
       preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
     }, 201)
   } catch (error) {
-    const reason = error instanceof Error && error.message === "SPACE_NAME_INVALID"
-      ? error.message : "SPACE_PERSISTENCE_UNAVAILABLE"
-    return reply({ error: reason }, reason === "SPACE_NAME_INVALID" ? 400 : 503)
+    const message = error instanceof Error ? error.message : ""
+    if (message === "SPACE_NAME_INVALID") return reply({ error: message }, 400)
+    if (message === "SPACE_LIMIT_REACHED") return reply({ error: message }, 409)
+    return reply({ error: "SPACE_PERSISTENCE_UNAVAILABLE" }, 503)
   }
 }
 

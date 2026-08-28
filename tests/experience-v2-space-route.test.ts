@@ -79,6 +79,30 @@ describe("Experience V2 Space route", () => {
     })
   })
 
+  it("keeps a successful server GET when only collection listing degrades", async () => {
+    seams.list.mockRejectedValueOnce(new Error("list unavailable"))
+    const response = await GET(new Request("http://localhost/api/environment/space?worldId=a"))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      worldId: "a", storage: "server", collectionAvailable: false,
+      collectionReason: "SPACE_COLLECTION_UNAVAILABLE",
+      spaces: [{ worldId: "a", name: "Alpha", space: { revision: 2 } }],
+    })
+  })
+
+  it("returns a committed creation when only post-insert collection listing fails", async () => {
+    seams.list.mockRejectedValueOnce(new Error("list unavailable"))
+    const response = await POST(new Request("http://localhost/api/environment/space", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Beta" }),
+    }))
+    expect(response.status).toBe(201)
+    expect(await response.json()).toMatchObject({
+      worldId: "b", name: "Beta", collectionAvailable: false,
+      collectionReason: "SPACE_COLLECTION_UNAVAILABLE",
+      spaces: [{ worldId: "b", name: "Beta", space: { revision: 0 } }],
+    })
+  })
+
   it("returns 503 when creation persistence fails instead of fabricating a Space", async () => {
     seams.create.mockRejectedValueOnce(new Error("db down"))
     const response = await POST(new Request("http://localhost/api/environment/space", {
@@ -86,5 +110,14 @@ describe("Experience V2 Space route", () => {
     }))
     expect(response.status).toBe(503)
     expect(await response.json()).toEqual({ error: "SPACE_PERSISTENCE_UNAVAILABLE" })
+  })
+
+  it("returns a typed conflict when the bounded project collection already has twelve Spaces", async () => {
+    seams.create.mockRejectedValueOnce(new Error("SPACE_LIMIT_REACHED"))
+    const response = await POST(new Request("http://localhost/api/environment/space", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Thirteen" }),
+    }))
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "SPACE_LIMIT_REACHED" })
   })
 })

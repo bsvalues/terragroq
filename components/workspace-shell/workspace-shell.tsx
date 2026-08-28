@@ -137,6 +137,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [multiSpaceAvailable, setMultiSpaceAvailable] = useState(false)
   const [transitionMessage, setTransitionMessage] = useState<string | null>(null)
   const [switchingSpace, setSwitchingSpace] = useState(false)
+  const [runningTools, setRunningTools] = useState<Readonly<Record<"tests" | "terminal", string | null>>>({ tests: null, terminal: null })
   const agentSessions = useExperienceAgentSessions({
     ownerScope: worldId ?? "unhydrated-owner-world",
     worldScope: project?.identity ?? worldId ?? "unhydrated-project",
@@ -289,14 +290,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       const preferenceKey = typeof envelope.preferenceStorageKey === "string"
         ? `williamos:selected-space:${envelope.preferenceStorageKey}` : null
       if (preferenceKey && envelope.multiSpaceAvailable) {
-        const hinted = window.localStorage.getItem(preferenceKey)
+        const hinted = safeLocalStorageGet(preferenceKey)
         if (hinted && hinted !== envelope.worldId && envelope.spaces?.some((item) => item.worldId === hinted)) {
           const exactResponse = await fetch(`/api/environment/space?worldId=${encodeURIComponent(hinted)}`, { cache: "no-store" })
           const exact = await exactResponse.json() as SpaceEnvelope & { error?: string }
           if (exactResponse.ok && exact.worldId === hinted && exact.space) envelope = exact
-          else window.localStorage.removeItem(preferenceKey)
+          else safeLocalStorageRemove(preferenceKey)
         } else if (hinted && !envelope.spaces?.some((item) => item.worldId === hinted)) {
-          window.localStorage.removeItem(preferenceKey)
+          safeLocalStorageRemove(preferenceKey)
         }
       }
       return envelope
@@ -340,7 +341,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setMultiSpaceAvailable(payload.multiSpaceAvailable === true)
         preferenceStorageKeyRef.current = typeof payload.preferenceStorageKey === "string"
           ? `williamos:selected-space:${payload.preferenceStorageKey}` : null
-        if (preferenceStorageKeyRef.current) window.localStorage.setItem(preferenceStorageKeyRef.current, payload.worldId)
+        if (preferenceStorageKeyRef.current) safeLocalStorageSet(preferenceStorageKeyRef.current, payload.worldId)
         if (payload.project) setProject(payload.project)
         if (payload.spine) setSpine(payload.spine)
         setJudgment(payload.judgment ?? null)
@@ -1007,11 +1008,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const preference = typeof payload.preferenceStorageKey === "string"
       ? `williamos:selected-space:${payload.preferenceStorageKey}` : preferenceStorageKeyRef.current
     preferenceStorageKeyRef.current = preference
-    if (preference) window.localStorage.setItem(preference, payload.worldId)
+    if (preference) safeLocalStorageSet(preference, payload.worldId)
   }
 
   const switchBlockedReason = () => {
     if (Object.values(dirtyPaths).some(Boolean)) return "Save or discard the dirty source before switching Spaces."
+    if (runningTools.tests || runningTools.terminal) return "Stop the active Test or Terminal run before switching Spaces."
+    if (isExecutionLive(spine.execution)) return "Finish or stop the active Space execution before switching Spaces."
     if (change.running || review.running || lineBusy || councilBusy || judgmentBusy || agentSessions.activeSessionId) {
       return "Finish or stop active work before switching Spaces."
     }
@@ -1104,7 +1107,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       id: summary.worldId,
       name: summary.name,
       focus: restored.selectedPath ?? "Preserved work surface",
-      state: "paused",
+      state: "saved",
       truth: "live",
       windows: (Object.entries(restored.windows) as [WindowId, WindowGeometry][]).map(([id, geometry]) => ({
         id, title: windowName[id], kind: missionWindowKind[id], frame: geometry,
@@ -1112,6 +1115,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         detail: id === "running-app" ? restored.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
       })),
       agents: [],
+      agentActivityKnown: false,
       selectedObject: restored.selectedPath,
       changed: "Saved spatial state",
     }
@@ -1223,7 +1227,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
           <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)} minimizeDisabled={id === "diff" && change.running} minimizeDisabledReason={id === "diff" && change.running ? "Changes cannot be minimized while Change is active" : undefined}>
-            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} selectedPath={space.selectedPath} historyScope={id === "diff" ? null : toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} />
+            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} selectedPath={space.selectedPath} historyScope={id === "diff" ? null : toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onRunningChange={id === "diff" ? undefined : (running) => setRunningTools((current) => ({ ...current, [id]: running?.operationId ?? null }))} />
           </WindowFrame>
         ))}
         {inspectors.map((surface) => {
@@ -1272,7 +1276,18 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       ) : null}
 
       {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} historical={councilHistorical} onDismiss={() => setOverlay(null)} onAdvisoryAction={(action) => handleCouncilAction(action)} /> : councilView === "convening" ? <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={() => setOverlay(null)}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{councilBusy ? "Convening five real advisory perspectives…" : "Council unavailable"}</strong><p className={spatial.muted}>{councilError ?? councilQuestion ?? "Preparing the current question."}</p>{councilError && councilQuestion ? <button type="button" className={spatial.utilityButton} onClick={() => void summonCouncil(councilQuestion)}>Try again</button> : null}</div></section> : <CouncilHistoryBrowser history={councilHistory} loading={councilBusy} error={councilError} onDismiss={() => setOverlay(null)} onSelect={(session) => { setCouncilSession(session); setCouncilHistorical(true) }} onNew={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} />}</div> : null}
-      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => setOverlay(null)} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} transitionMessage={transitionMessage} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
+      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => { if (!switchingSpace) setOverlay(null) }} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} transitionMessage={transitionMessage} transitioning={switchingSpace} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
     </main>
   )
+}
+function safeLocalStorageGet(key: string): string | null {
+  try { return window.localStorage.getItem(key) } catch { return null }
+}
+
+function safeLocalStorageSet(key: string, value: string): void {
+  try { window.localStorage.setItem(key, value) } catch { /* selection hints are best-effort */ }
+}
+
+function safeLocalStorageRemove(key: string): void {
+  try { window.localStorage.removeItem(key) } catch { /* selection hints are best-effort */ }
 }

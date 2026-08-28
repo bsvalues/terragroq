@@ -113,6 +113,7 @@ function councilSession(id: string, createdAt: string) {
 
 class MemoryStore implements SpaceWorkingWorldStore {
   readonly rows = new Map<string, OwnedWorkingWorldRecord>()
+  private projectInsertTail: Promise<void> = Promise.resolve()
 
   async findOwned(userId: string, worldId: string) {
     const row = this.rows.get(worldId)
@@ -138,6 +139,26 @@ class MemoryStore implements SpaceWorkingWorldStore {
     return [...this.rows.values()]
       .filter((row) => row.userId === userId)
       .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || b.id.localeCompare(a.id))
+  }
+
+  async readOwnedPage(userId: string, offset: number, limit: number) {
+    return (await this.listOwnedForProject(userId)).slice(offset, offset + limit)
+  }
+
+  insertOwnedProjectSpace(userId: string, projectIdentity: string, row: OwnedWorkingWorldRecord) {
+    let resolve!: (result: "created" | "limit") => void
+    let reject!: (error: unknown) => void
+    const result = new Promise<"created" | "limit">((done, failed) => { resolve = done; reject = failed })
+    this.projectInsertTail = this.projectInsertTail.then(async () => {
+      const projectRows = (await this.listOwnedForProject(userId)).filter((candidate) => {
+        try { return JSON.parse(candidate.snapshot).resources.includes(`williamos-workspace-root:v1:${projectIdentity}`) }
+        catch { return false }
+      })
+      if (projectRows.length >= 12) { resolve("limit"); return }
+      await this.insertOwned(row)
+      resolve("created")
+    }).catch(reject)
+    return result
   }
 
   async insertOwned(row: OwnedWorkingWorldRecord) {
@@ -262,6 +283,34 @@ describe("server-owned Space persistence", () => {
     expect(created.space.openFiles).toEqual([])
     expect(JSON.parse(store.rows.get("server-id")!.snapshot).resources).toContain(`williamos-workspace-root:v1:${project.identity}`)
     await expect(createOwnedProjectSpace({ userId: "owner-a", project, name: "bad\nname" }, store)).rejects.toThrow("SPACE_NAME_INVALID")
+  })
+
+  it("pages beyond 240 newer foreign rows to find the exact project collection", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    const other = workspaceProjectFromRoot("C:\\repos\\Other")
+    for (let index = 0; index < 260; index += 1) {
+      const world = createWorkingWorld({ intent: `foreign-${index}`, resources: [`williamos-workspace-root:v1:${other.identity}`] })
+      store.rows.set(`foreign-${index}`, { id: `foreign-${index}`, userId: "owner-a", intent: world.intent, snapshot: JSON.stringify(world), updatedAt: new Date(10_000 + index) })
+    }
+    const exactWorld = createWorkingWorld({ intent: "Exact", resources: [`williamos-workspace-root:v1:${project.identity}`] })
+    store.rows.set("exact", { id: "exact", userId: "owner-a", intent: "Exact", snapshot: JSON.stringify({ ...exactWorld, space: space(null, 1) }), updatedAt: new Date(1) })
+    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store)).map((item) => item.worldId)).toEqual(["exact"])
+  })
+
+  it("transactionally refuses the thirteenth project Space under concurrent creation", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    for (let index = 0; index < 11; index += 1) {
+      await createOwnedProjectSpace({ userId: "owner-a", project, name: `Space ${index}`, newWorldId: () => `world-${index}` }, store)
+    }
+    const outcomes = await Promise.allSettled([
+      createOwnedProjectSpace({ userId: "owner-a", project, name: "Space eleven", newWorldId: () => "world-11" }, store),
+      createOwnedProjectSpace({ userId: "owner-a", project, name: "Space twelve", newWorldId: () => "world-12" }, store),
+    ])
+    expect(outcomes.filter((item) => item.status === "fulfilled")).toHaveLength(1)
+    expect(outcomes.filter((item) => item.status === "rejected").map((item) => (item as PromiseRejectedResult).reason.message)).toEqual(["SPACE_LIMIT_REACHED"])
+    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store))).toHaveLength(12)
   })
   it("derives separate opaque browser fallback namespaces per user and project", () => {
     const owner = browserSpaceStorageKey("owner-a", "c:/repos/terrafusion")

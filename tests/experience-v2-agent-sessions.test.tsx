@@ -117,6 +117,32 @@ describe("Experience V2 real agent sessions", () => {
     })
   })
 
+  it("projects no prior-Space session on the first render of a new storage scope", async () => {
+    const aId = "123e4567-e89b-42d3-a456-426614174000"
+    const bId = "223e4567-e89b-42d3-a456-426614174000"
+    const descriptor = (sessionId: string, assignment: string) => ({
+      schemaVersion: 1, sessionId, role: "Builder", provider: "Claude", assignment,
+      updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [],
+    })
+    window.localStorage.setItem("williamos:agent-session:owner-a:project-a", JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${aId}`, sessions: [descriptor(aId, "A only")] }))
+    window.localStorage.setItem("williamos:agent-session:owner-b:project-b", JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${bId}`, sessions: [descriptor(bId, "B only")] }))
+    const observed: string[][] = []
+    function Probe({ ownerScope, worldScope }: { ownerScope: string; worldScope: string }) {
+      const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId: ownerScope, worker: null })
+      observed.push(controller.sessions.map((session) => session.assignment))
+      return <span>{controller.sessions.map((session) => session.assignment).join(",") || "No sessions"}</span>
+    }
+    const view = render(<Probe ownerScope="owner-a" worldScope="project-a" />)
+    await screen.findByText("A only")
+    const marker = observed.length
+
+    view.rerender(<Probe ownerScope="owner-b" worldScope="project-b" />)
+
+    expect(observed[marker]).toEqual([])
+    await screen.findByText("B only")
+    expect(screen.queryByText("A only")).toBeNull()
+  })
+
   it("upserts a completed session without replacing unrelated durable sessions and persists only canonical transcript truth", async () => {
     const key = "williamos:agent-session:owner-1:terrafusion"
     const priorId = "123e4567-e89b-42d3-a456-426614174000"
@@ -755,7 +781,7 @@ describe("Experience V2 real agent sessions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
     fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
     const mission = screen.getByRole("dialog", { name: "Mission Control" })
-    expect(within(mission).getAllByText("No active agents")).toHaveLength(2)
+    expect(within(mission).getAllByText("No active agents")).toHaveLength(1)
     expect(within(mission).queryByText(/Codex/)).toBeNull()
   })
 

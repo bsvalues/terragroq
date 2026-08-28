@@ -26,10 +26,11 @@ export type MissionControlSpaceProjection = Readonly<{
   id: string
   name: string
   focus: string
-  state: "live" | "paused" | "unavailable"
+  state: "live" | "saved" | "unavailable"
   truth: "live" | "fixture"
   windows: readonly MissionControlWindowProjection[]
   agents: readonly MissionControlAgentProjection[]
+  agentActivityKnown?: boolean
   selectedObject?: string | null
   changed?: string | null
 }>
@@ -49,11 +50,12 @@ export type MissionControlSurfaceProps = Readonly<{
   multiSpaceAvailable?: boolean
   onCreateSpace?: (name: string) => Promise<boolean | void>
   transitionMessage?: string | null
+  transitioning?: boolean
 }>
 
 const stateLabel: Record<MissionControlSpaceProjection["state"], string> = {
   live: "Live",
-  paused: "Paused",
+  saved: "Saved state",
   unavailable: "Runtime unavailable",
 }
 
@@ -69,10 +71,12 @@ function SpacePreview({
   space,
   current,
   onEnter,
+  disabled,
 }: {
   space: MissionControlSpaceProjection
   current: boolean
   onEnter: () => void
+  disabled?: boolean
 }) {
   const bounds = projectionBounds(space.windows)
   const visibleWindows = space.windows.filter((window) => !window.minimized)
@@ -117,8 +121,8 @@ function SpacePreview({
         <span className={styles.objectState}>
           {space.selectedObject ? `Selected · ${space.selectedObject}` : space.changed ?? "Place preserved"}
         </span>
-        <span className={styles.agents} aria-label={`${space.agents.length} agent sessions`}>
-          {space.agents.length === 0 ? <span>No active agents</span> : space.agents.slice(0, 3).map((agent) => (
+        <span className={styles.agents} aria-label={space.agentActivityKnown === false ? "Agent activity unknown" : `${space.agents.length} agent sessions`}>
+          {space.agentActivityKnown === false ? <span>Agent activity unknown</span> : space.agents.length === 0 ? <span>No active agents</span> : space.agents.slice(0, 3).map((agent) => (
             <span key={agent.id} className={styles.agent} data-state={agent.state} title={`${agent.role} · ${agent.activity}`}>
               <i /> {agent.name} · {agent.activity}
             </span>
@@ -127,7 +131,7 @@ function SpacePreview({
       </span>
   </>
 
-  return <button type="button" className={styles.space} data-current={current} data-state={space.state} onClick={onEnter} aria-label={`Enter ${space.name}${current ? ", current Space" : ""}`}>{content}</button>
+  return <button type="button" className={styles.space} data-current={current} data-state={space.state} onClick={onEnter} disabled={disabled} aria-label={`Enter ${space.name}${current ? ", current Space" : ""}`}>{content}</button>
 }
 
 export function MissionControlSurface({
@@ -139,6 +143,7 @@ export function MissionControlSurface({
   multiSpaceAvailable = false,
   onCreateSpace,
   transitionMessage,
+  transitioning = false,
 }: MissionControlSurfaceProps) {
   const dialogRef = useRef<HTMLElement>(null)
   const [creating, setCreating] = useState(false)
@@ -171,7 +176,7 @@ export function MissionControlSurface({
     const focusable = () => [...(dialog?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])') ?? [])]
     focusable()[0]?.focus()
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !transitioning) {
         event.preventDefault()
         onDismiss()
       } else if (event.key === "Tab") {
@@ -185,7 +190,7 @@ export function MissionControlSurface({
     }
     window.addEventListener("keydown", onKeyDown)
     return () => { window.removeEventListener("keydown", onKeyDown); previous?.focus() }
-  }, [onDismiss])
+  }, [onDismiss, transitioning])
 
   return (
     <section ref={dialogRef} className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="mission-control-title">
@@ -198,7 +203,7 @@ export function MissionControlSurface({
           <span className={styles.spaceCount}>{liveSpaceCount} live {liveSpaceCount === 1 ? "Space" : "Spaces"}</span>
           <button type="button" className={styles.newSpace} disabled={!multiSpaceAvailable || !onCreateSpace || submitting} onClick={() => setCreating(true)}>New Space</button>
         </span>
-        <button type="button" className={styles.dismiss} onClick={onDismiss} aria-label="Dismiss Mission Control">
+        <button type="button" className={styles.dismiss} disabled={transitioning} onClick={onDismiss} aria-label="Dismiss Mission Control">
           <span aria-hidden="true">×</span>
         </button>
       </header>
@@ -228,6 +233,7 @@ export function MissionControlSurface({
             space={space}
             current={space.id === currentSpaceId}
             onEnter={() => onEnterSpace(space.id)}
+            disabled={transitioning}
           />
         ))}
       </main>

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
+import { EMPTY_SPINE } from "@/lib/environment/working-world"
 
 vi.mock("next/dynamic", () => ({
   default: () => function Editor(props: { value: string; onChange: (value: string) => void }) {
@@ -12,7 +13,7 @@ vi.mock("next/dynamic", () => ({
   },
 }))
 
-afterEach(() => { cleanup(); window.localStorage.clear(); vi.unstubAllGlobals() })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); window.localStorage.clear(); vi.unstubAllGlobals() })
 
 const project = { identity: "c:/project", name: "Project" }
 const preferenceStorageKey = "opaque-preference"
@@ -25,9 +26,60 @@ const summaries = [
 const envelope = (id: "a" | "b") => ({
   worldId: id, name: id === "a" ? "Alpha" : "Beta", space: id === "a" ? alpha : beta,
   project, spaces: summaries, multiSpaceAvailable: true, preferenceStorageKey,
+  judgment: { recommendation: "Keep building.", rationale: "Grounded test state.", basis: [], confidence: 0.8, generatedAt: "2026-08-28T10:00:00Z", basisFingerprint: "test", provenance: { provider: "test", model: "fixture" } },
 })
 
 describe("Experience V2 multi-Space re-entry", () => {
+  it("keeps server Space hydration usable when reading the opaque preference hint throws", async () => {
+    const getItem = Storage.prototype.getItem
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (key) {
+      if (key.startsWith("williamos:selected-space:")) throw new DOMException("blocked", "SecurityError")
+      return getItem.call(this, key)
+    })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/environment/space"
+      ? { ok: true, status: 200, json: async () => envelope("a") }
+      : { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }))
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy()
+  })
+
+  it("applies an exact Space switch when writing the best-effort preference hint throws", async () => {
+    const setItem = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function (key, value) {
+      if (key.startsWith("williamos:selected-space:")) throw new DOMException("quota", "QuotaExceededError")
+      return setItem.call(this, key, value)
+    })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/environment/space" && init?.method === "PUT") return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init.body)).space }) }
+      if (url === "/api/environment/space?worldId=b") return { ok: true, status: 200, json: async () => envelope("b") }
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    }))
+    render(<WorkspaceShell />)
+    await waitFor(() => expect(screen.queryByText("Reasoning")).toBeNull())
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+  })
+
+  it("keeps the initial server Space when removing a stale preference hint throws", async () => {
+    window.localStorage.setItem(`williamos:selected-space:${preferenceStorageKey}`, "foreign")
+    const removeItem = Storage.prototype.removeItem
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function (key) {
+      if (key.startsWith("williamos:selected-space:")) throw new DOMException("blocked", "SecurityError")
+      return removeItem.call(this, key)
+    })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/environment/space"
+      ? { ok: true, status: 200, json: async () => envelope("a") }
+      : { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }))
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy()
+  })
+
   it("exact-verifies an opaque last-selected hint before restoring B", async () => {
     window.localStorage.setItem(`williamos:selected-space:${preferenceStorageKey}`, "b")
     const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -91,6 +143,86 @@ describe("Experience V2 multi-Space re-entry", () => {
     expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy()
   })
 
+  it("cannot dismiss Mission Control while a deferred exact switch is in flight", async () => {
+    let resolveB!: (response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void
+    const pendingB = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>((done) => { resolveB = done })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/environment/space" && init?.method === "PUT") return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init.body)).space }) }
+      if (url === "/api/environment/space?worldId=b") return pendingB
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    }))
+    render(<WorkspaceShell />)
+    await waitFor(() => expect(screen.queryByText("Reasoning")).toBeNull())
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
+    await screen.findByText("Restoring the selected Space…")
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect(screen.getByRole("dialog", { name: "Mission Control" })).toBeTruthy()
+    resolveB({ ok: true, status: 200, json: async () => envelope("b") })
+    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+  })
+
+  it("cannot dismiss Mission Control while a deferred Space creation is in flight", async () => {
+    let resolveCreate!: (response: { ok: boolean; status: number; json: () => Promise<unknown> }) => void
+    const pendingCreate = new Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>((done) => { resolveCreate = done })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/environment/space" && init?.method === "PUT") return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init.body)).space }) }
+      if (url === "/api/environment/space" && init?.method === "POST") return pendingCreate
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    }))
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "New Space" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Space name" }), { target: { value: "Gamma" } })
+    fireEvent.submit(screen.getByRole("textbox", { name: "Space name" }).closest("form")!)
+    await screen.findByText("Saving this Space before creating another…")
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect(screen.getByRole("dialog", { name: "Mission Control" })).toBeTruthy()
+    resolveCreate({ ok: true, status: 201, json: async () => ({
+      ...envelope("b"), worldId: "c", name: "Gamma",
+      spaces: [...summaries, { worldId: "c", name: "Gamma", space: beta, updatedAt: "2026-08-28T11:00:00Z" }],
+    }) })
+    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Gamma, current Space" })).toBeTruthy())
+  })
+
+  it("blocks re-entry until the user stops an active Test run", async () => {
+    let settleRun!: (response: Response) => void
+    const pendingRun = new Promise<Response>((done) => { settleRun = done })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/loom/run" && init?.method === "POST") return pendingRun
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    }))
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: /^(Restore|Focus) Tests$/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Run full test suite" }))
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
+    expect(screen.getByText("Stop the active Test or Terminal run before switching Spaces.")).toBeTruthy()
+    settleRun(new Response(`${JSON.stringify({ type: "exit", code: 0, reason: null })}\n`))
+  })
+
+  it("blocks re-entry while canonical Space execution is live", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => ({ ...envelope("a"), judgment: null, spine: { ...EMPTY_SPINE, execution: "implementing" } }) }
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init?.body ?? "{}"))?.space }) }
+    }))
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
+    expect(screen.getByText("Finish or stop the active Space execution before switching Spaces.")).toBeTruthy()
+  })
+
   it("blocks re-entry visibly while the current source has unsaved edits", async () => {
     const dirtySpace = spaceToServer({
       ...defaultSpace(1440, 900, "a", "Alpha"), selectedPath: "src/a.ts",
@@ -122,7 +254,7 @@ describe("Experience V2 multi-Space re-entry", () => {
     })
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => ({ ...envelope("a"), judgment: null }) }
       if (url === "/api/environment/space" && init?.method === "PUT") return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init.body)).space }) }
       if (url === "/api/environment/judgment") return pendingJudgment
       if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }

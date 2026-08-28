@@ -318,6 +318,7 @@ export function useExperienceAgentSessions({
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [activeProvider, setActiveProvider] = useState<AgentProvider | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [loadedStorageKey, setLoadedStorageKey] = useState<string | null>(null)
   const sessionsRef = useRef<readonly DurableAgentSession[]>([])
   const selectedSessionKeyRef = useRef<string | null>(null)
   const verifiedSessionsRef = useRef<readonly DurableAgentSession[]>([])
@@ -383,6 +384,7 @@ export function useExperienceAgentSessions({
     verifiedSessionsRef.current = []
     setVerifiedSessions([])
     setDurableSession(null)
+    setLoadedStorageKey(key)
   }, [invalidateOperation, ownerScope, worldScope])
 
   useEffect(() => () => {
@@ -707,21 +709,28 @@ export function useExperienceAgentSessions({
   const runAgentTurn = useCallback((input: RunAgentTurnInput) => executeTurn({ ...input, mode: "delegate" }), [executeTurn])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
 
+  const currentStorageKey = storageKey(ownerScope, worldScope)
+  const scopeLoaded = loadedStorageKey === currentStorageKey
+  const presentedSavedSessions = scopeLoaded ? savedSessions : []
+  const presentedVerifiedSessions = scopeLoaded ? verifiedSessions : []
+  const presentedActiveSessionId = scopeLoaded ? activeSessionId : null
   const sessions = useMemo(
-    () => projectSessions(worker, savedSessions, verifiedSessions, activeSessionId),
-    [worker, savedSessions, verifiedSessions, activeSessionId],
+    () => scopeLoaded ? projectSessions(worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveSessionId) : [],
+    [scopeLoaded, worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveSessionId],
   )
-  const savedDescriptor = savedSessions.find((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKey) ?? null
-  const descriptorState = durableSession ? "verified" : savedDescriptor ? "unverified" : "none"
+  const presentedSelectedSessionKey = scopeLoaded ? selectedSessionKey : null
+  const presentedDurableSession = scopeLoaded ? durableSession : null
+  const savedDescriptor = presentedSavedSessions.find((session) => sessionKey(session.provider, session.sessionId) === presentedSelectedSessionKey) ?? null
+  const descriptorState = presentedDurableSession ? "verified" : savedDescriptor ? "unverified" : "none"
   return {
     sessions,
-    durableSession,
+    durableSession: presentedDurableSession,
     savedDescriptor,
-    savedSessions,
-    selectedSessionKey,
+    savedSessions: presentedSavedSessions,
+    selectedSessionKey: presentedSelectedSessionKey,
     descriptorState,
-    activeSessionId,
-    activeProvider,
+    activeSessionId: presentedActiveSessionId,
+    activeProvider: scopeLoaded ? activeProvider : null,
     error,
     runAgentTurn,
     runClaudeTurn,

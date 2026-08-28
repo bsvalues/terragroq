@@ -27,7 +27,8 @@ const spaces: readonly MissionControlSpaceProjection[] = [
     id: "research",
     name: "Research & Evidence",
     focus: "investigation",
-    state: "paused",
+    state: "saved",
+    agentActivityKnown: false,
     truth: "live",
     changed: "Three sources added",
     windows: [{ id: "evidence", title: "Evidence", kind: "evidence", frame: { x: 40, y: 40, width: 900, height: 620 } }],
@@ -37,7 +38,7 @@ const spaces: readonly MissionControlSpaceProjection[] = [
     id: "recovery",
     name: "Review & Recovery",
     focus: "validation",
-    state: "paused",
+    state: "saved",
     truth: "live",
     windows: [{ id: "tests", title: "Tests", kind: "tests", frame: { x: 80, y: 90, width: 700, height: 430 }, detail: "runtime unavailable" }],
     agents: [{ id: "local", name: "HERMES", role: "Local execution", activity: "waiting", state: "waiting" }],
@@ -119,6 +120,24 @@ describe("Experience V2 Mission Control", () => {
     await user.click(screen.getByRole("button", { name: "Dismiss Mission Control" }))
     fireEvent.keyDown(window, { key: "Escape" })
     expect(onDismiss).toHaveBeenCalledTimes(2)
+  })
+
+  it("keeps the overview visible while an exact Space transition is in flight", () => {
+    const onDismiss = vi.fn()
+    render(<MissionControlSurface spaces={spaces} currentSpaceId="terrafusion" onEnterSpace={vi.fn()} onDismiss={onDismiss} transitioning transitionMessage="Restoring the selected Space…" />)
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect((screen.getByRole("button", { name: "Dismiss Mission Control" }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole("button", { name: "Enter Research & Evidence" }) as HTMLButtonElement).disabled).toBe(true)
+    expect(onDismiss).not.toHaveBeenCalled()
+  })
+
+  it("labels inactive projections as saved state with unknown agent activity", () => {
+    render(<MissionControlSurface spaces={spaces} currentSpaceId="terrafusion" onEnterSpace={vi.fn()} onDismiss={vi.fn()} />)
+    const research = screen.getByRole("button", { name: "Enter Research & Evidence" })
+    expect(research.textContent).toContain("Saved state")
+    expect(research.textContent).toContain("Agent activity unknown")
+    expect(research.textContent).not.toContain("Paused")
+    expect(research.textContent).not.toContain("No active agents")
   })
 
   it("offers an accessible inline name-only New Space action", async () => {

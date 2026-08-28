@@ -36,7 +36,7 @@ function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick
   return run.historyScope === scope && run.historyStorage === storage
 }
 
-export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled }: {
+export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange }: {
   kind: DeveloperToolKind
   selectedPath: string | null
   historyScope?: string | null
@@ -44,6 +44,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
   refreshKey?: number
   refreshPath?: string | null
   onRefreshSettled?: (path: string, key: number, result: "refreshed" | "failed") => void
+  onRunningChange?: (running: Readonly<{ kind: "tests" | "terminal"; operationId: string }> | null) => void
 }) {
   const [diff, setDiff] = useState("")
   const [status, setStatus] = useState("")
@@ -65,9 +66,15 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
   const completedRefresh = useRef<Readonly<{ key: number; path: string | null }>>({ key: refreshKey, path: null })
   const governedRefresh = useRef<Readonly<{ key: number; path: string }> | null>(null)
   const refreshSettled = useRef(onRefreshSettled)
+  const runningChanged = useRef(onRunningChange)
   const output = useRef<HTMLPreElement>(null)
 
   useEffect(() => { refreshSettled.current = onRefreshSettled }, [onRefreshSettled])
+  useEffect(() => { runningChanged.current = onRunningChange }, [onRunningChange])
+  useEffect(() => {
+    if (kind !== "tests" && kind !== "terminal") return
+    runningChanged.current?.(running ? { kind, operationId: running } : null)
+  }, [kind, running])
   useEffect(() => { historyScopeRef.current = historyScope }, [historyScope])
   useEffect(() => { historyStorageRef.current = historyStorage }, [historyStorage])
 
