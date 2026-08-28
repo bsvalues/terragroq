@@ -584,6 +584,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByRole("group", { name: "Choose agent provider" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Codex" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Claude" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Local" })).toBeTruthy()
     const line = screen.getByRole("form", { name: "The Line" })
     expect((within(line).getByRole("button", { name: "Delegate" }) as HTMLButtonElement).disabled).toBe(true)
 
@@ -1178,6 +1179,128 @@ describe("Experience V2 real agent sessions", () => {
 
     expect(expose!.durableSession).toMatchObject({ provider: "Claude", assignment: "new.ts" })
     expect(JSON.parse(String(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")))).toMatchObject({ sessions: [{ provider: "Claude", assignment: "new.ts" }] })
+  })
+
+  it("persists a Local session and verifies the exact restored identity only after browser-replayed continuity succeeds", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sessionId = "423e4567-e89b-42d3-a456-426614174000"
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" },
+        { type: "delta", text: "First local answer" },
+        { type: "result", text: "First local answer" },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, provider: "Local", mode: "delegate", resumed: true, continuity: "browser-replayed" },
+        { type: "result", text: "Second local answer" },
+        { type: "done", code: 0, reason: null },
+      ))
+    vi.stubGlobal("fetch", fetcher)
+    const first = render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Explain the selected design", prompt: "First local question" })
+    })
+    expect(expose!.durableSession).toMatchObject({ provider: "Local", sessionId })
+    expect(JSON.parse(String(window.localStorage.getItem(key)))).toMatchObject({
+      selectedSessionKey: `Local:${sessionId}`,
+      sessions: [{ provider: "Local", sessionId, completedTurns: [{ ownerPrompt: "First local question", finalResult: "First local answer" }] }],
+    })
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      prompt: "First local question", provider: "local", sessionId: null, resume: false, completedTurns: [],
+    })
+
+    first.unmount()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
+    expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Local:${sessionId}`, truth: "resume-unverified" })])
+
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Explain the selected design", prompt: "Second local question" })
+    })
+
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({
+      provider: "local", sessionId, resume: true,
+      completedTurns: [{ ownerPrompt: "First local question", finalResult: "First local answer", completedAt: expect.any(String) }],
+    })
+    expect(expose!.descriptorState).toBe("verified")
+    expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Local:${sessionId}`, truth: "live", lastResult: "Second local answer" })])
+  })
+
+  it("keeps Local and Claude sessions with the same provider-local UUID as separate durable objects", async () => {
+    const sharedId = "523e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Local:${sharedId}`,
+      sessions: [
+        { schemaVersion: 1, sessionId: sharedId, role: "Builder", provider: "Claude", assignment: "Cloud conversation", updatedAt: "2026-08-28T10:00:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: sharedId, role: "Thinker", provider: "Local", assignment: "Local conversation", updatedAt: "2026-08-28T10:01:00.000Z", completedTurns: [] },
+      ],
+    }))
+
+    render(<Harness />)
+
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(2))
+    expect(expose!.sessions.map((session) => session.id)).toEqual([`Claude:${sharedId}`, `Local:${sharedId}`])
+    expect(expose!.selectedSessionKey).toBe(`Local:${sharedId}`)
+  })
+
+  it("shows Stop for a Local turn and aborts without persisting a partial transcript", async () => {
+    let signal: AbortSignal | undefined
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true })
+      })
+    }))
+    render(<Harness />)
+
+    let turn!: Promise<unknown>
+    act(() => {
+      turn = expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Explain", prompt: "Think locally." })
+    })
+    fireEvent.click(await screen.findByRole("button", { name: "Stop Local turn" }))
+
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" })
+    expect(signal?.aborted).toBe(true)
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+  })
+
+  it("cancels a Local turn when its exact owner or Space scope becomes stale", async () => {
+    const encoder = new TextEncoder()
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`${JSON.stringify({
+          type: "session", sessionId: "623e4567-e89b-42d3-a456-426614174000", provider: "Local",
+          resumed: false, continuity: "new",
+        })}\n`))
+      },
+    }))))
+    const view = render(<Harness />)
+    let turn!: Promise<unknown>
+    act(() => {
+      turn = expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Explain", prompt: "Think locally." })
+    })
+    await waitFor(() => expect(expose!.activeProvider).toBe("Local"))
+
+    view.rerender(<Harness ownerScope="owner-2" worldScope="other-space" worldId="world-2" />)
+
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" })
+    await waitFor(() => expect(expose!.sessions).toEqual([]))
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+    expect(window.localStorage.getItem("williamos:agent-session:owner-2:other-space")).toBeNull()
+  })
+
+  it("refuses an unknown provider locally instead of routing it to the Local endpoint", async () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Mystery" as never, role: "Thinker", assignment: "Explain", prompt: "Work." })
+    })).rejects.toThrow("AGENT_PROVIDER_INVALID")
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it("allows bounded Claude diagnostics after Delegate result without changing success truth", async () => {

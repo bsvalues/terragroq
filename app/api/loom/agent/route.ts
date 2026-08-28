@@ -17,6 +17,48 @@ const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const AGENT_BIN = process.env.WILLIAMOS_AGENT_BIN ?? "claude"
 const AGENT_TIMEOUT_MS = 60 * 60_000
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const MAX_LOCAL_COMPLETED_TURNS = 20
+const MAX_LOCAL_REPLAY_BYTES = 262_144
+
+type LocalCompletedTurn = Readonly<{
+  ownerPrompt: string
+  finalResult: string
+  completedAt: string
+}>
+
+function localText(value: unknown, max: number): string | null {
+  if (typeof value !== "string") return null
+  const text = value.trim()
+  return text && text.length <= max && !text.includes("\0") ? text : null
+}
+
+function parseLocalCompletedTurns(value: unknown): { ok: true; turns: readonly LocalCompletedTurn[] } | { ok: false; error: string } {
+  if (!Array.isArray(value)) return { ok: false, error: "COMPLETED_TURNS_REQUIRED" }
+  if (value.length > MAX_LOCAL_COMPLETED_TURNS) return { ok: false, error: "COMPLETED_TURNS_INVALID" }
+  if (new TextEncoder().encode(JSON.stringify(value)).byteLength > MAX_LOCAL_REPLAY_BYTES) {
+    return { ok: false, error: "COMPLETED_TURNS_TOO_LARGE" }
+  }
+  const turns: LocalCompletedTurn[] = []
+  let priorTime = Number.NEGATIVE_INFINITY
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "COMPLETED_TURNS_INVALID" }
+    const candidate = raw as Record<string, unknown>
+    if (Object.keys(candidate).sort().join("\0") !== "completedAt\0finalResult\0ownerPrompt") {
+      return { ok: false, error: "COMPLETED_TURNS_INVALID" }
+    }
+    const ownerPrompt = localText(candidate.ownerPrompt, 20_000)
+    const finalResult = localText(candidate.finalResult, 200_000)
+    const completedAt = typeof candidate.completedAt === "string" && Number.isFinite(Date.parse(candidate.completedAt))
+      ? candidate.completedAt : null
+    const completedTime = completedAt ? Date.parse(completedAt) : Number.NaN
+    if (!ownerPrompt || !finalResult || !completedAt || completedTime <= priorTime) {
+      return { ok: false, error: "COMPLETED_TURNS_INVALID" }
+    }
+    priorTime = completedTime
+    turns.push({ ownerPrompt, finalResult, completedAt })
+  }
+  return { ok: true, turns }
+}
 
 /**
  * Work with the agent, inside the cockpit, on the real checkout.
@@ -43,6 +85,7 @@ export async function POST(request: Request) {
     focus?: unknown
     provider?: unknown
     model?: unknown
+    completedTurns?: unknown
   }
   try {
     body = await request.json()
@@ -95,11 +138,31 @@ export async function POST(request: Request) {
     return Response.json({ error: "PROMPT_REQUIRED" }, { status: 400 })
   }
 
-  // Local is the default and the fallback; going off the machine has to be asked for.
+  if (!reviewMode && body.provider !== "local" && body.provider !== "cloud") {
+    return Response.json({ error: "PROVIDER_INVALID" }, { status: 400 })
+  }
   const provider = resolveProvider(reviewMode ? "cloud" : body.provider)
   if (provider.id === "local") {
+    if (!localText(prompt, 20_000)) {
+      return Response.json({ error: prompt ? "PROMPT_TOO_LONG" : "PROMPT_REQUIRED" }, { status: 400 })
+    }
+    const resuming = body.resume === true
+    let sessionId: string = randomUUID()
+    let completedTurns: readonly LocalCompletedTurn[] = []
+    if (resuming) {
+      if (body.sessionId === undefined || body.sessionId === null) {
+        return Response.json({ error: "SESSION_ID_REQUIRED" }, { status: 400 })
+      }
+      if (typeof body.sessionId !== "string" || !SESSION_ID.test(body.sessionId)) {
+        return Response.json({ error: "SESSION_ID_INVALID" }, { status: 400 })
+      }
+      const parsed = parseLocalCompletedTurns(body.completedTurns)
+      if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 })
+      sessionId = body.sessionId
+      completedTurns = parsed.turns
+    }
     const model = typeof (body as { model?: unknown }).model === "string" ? (body as { model: string }).model : LOCAL_MODEL
-    return streamLocal(prompt, request.signal, model, session.user.id)
+    return streamLocal(prompt, request.signal, model, session.user.id, sessionId, resuming, completedTurns)
   }
 
   // The id is validated rather than trusted: it reaches a command line, and only this shape can.
@@ -262,7 +325,15 @@ export async function POST(request: Request) {
  * consumes from the cloud path -- the workroom should not care which model is talking, and the
  * operator should not have to learn two transcript formats to compare them.
  */
-async function streamLocal(prompt: string, signal: AbortSignal, model: string, userId: string): Promise<Response> {
+async function streamLocal(
+  prompt: string,
+  signal: AbortSignal,
+  model: string,
+  userId: string,
+  sessionId: string,
+  resuming: boolean,
+  completedTurns: readonly LocalCompletedTurn[],
+): Promise<Response> {
   const encoder = new TextEncoder()
 
   let upstream: Response
@@ -272,7 +343,17 @@ async function streamLocal(prompt: string, signal: AbortSignal, model: string, u
       headers: { "content-type": "application/json" },
       // An unknown name is rejected by the local runtime itself, which already knows exactly which
       // models exist -- duplicating that list here would only let the two disagree.
-      body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }], stream: true }),
+      body: JSON.stringify({
+        model,
+        messages: [
+          ...completedTurns.flatMap((turn) => [
+            { role: "user", content: turn.ownerPrompt },
+            { role: "assistant", content: turn.finalResult },
+          ]),
+          { role: "user", content: prompt },
+        ],
+        stream: true,
+      }),
       signal,
     })
   } catch {
@@ -289,10 +370,22 @@ async function streamLocal(prompt: string, signal: AbortSignal, model: string, u
       const send = (event: Record<string, unknown>) => {
         try { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)) } catch { /* reader gone */ }
       }
-      send({ type: "session", sessionId: null, resumed: false, provider: "local", model })
+      send({
+        type: "session",
+        sessionId,
+        resumed: resuming,
+        provider: "Local",
+        continuity: resuming ? "browser-replayed" : "new",
+        model,
+      })
       // The provider doctrine requires selection to be visible AND recorded; local turns are
       // receipted exactly like external ones so the trail shows which of the two answered.
-      void recordLoomStart({ userId, kind: "agent", subject: model, metadata: { provider: "local", external: false, metered: false } })
+      void recordLoomStart({
+        userId,
+        kind: "agent",
+        subject: sessionId,
+        metadata: { provider: "local", external: false, metered: false, resumed: resuming, continuity: resuming ? "browser-replayed" : "new", model },
+      })
 
       const reader = upstream.body!.getReader()
       const decoder = new TextDecoder()
@@ -317,12 +410,12 @@ async function streamLocal(prompt: string, signal: AbortSignal, model: string, u
             }
           }
         }
-        send({ type: "event", event: { type: "assistant", message: { content: [{ type: "text", text }] } } })
-        void recordLoomEnd({ userId, kind: "agent", subject: model, outcome: { provider: "local", code: 0, characters: text.length } })
+        send({ type: "result", text })
+        void recordLoomEnd({ userId, kind: "agent", subject: sessionId, outcome: { provider: "local", code: 0, characters: text.length } })
         send({ type: "done", reason: null, code: 0 })
       } catch (error) {
         const reason = String((error as Error)?.message ?? "LOCAL_STREAM_FAILED")
-        void recordLoomEnd({ userId, kind: "agent", subject: model, outcome: { provider: "local", reason } })
+        void recordLoomEnd({ userId, kind: "agent", subject: sessionId, outcome: { provider: "local", reason } })
         send({ type: "done", reason })
       } finally {
         try { controller.close() } catch { /* already closed */ }

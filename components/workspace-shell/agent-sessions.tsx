@@ -11,7 +11,7 @@ const MAX_DURABLE_SESSIONS = 12
 const MAX_COMPLETED_TURNS = 20
 const MAX_COLLECTION_BYTES = 262_144
 
-export type AgentProvider = "Codex" | "Claude"
+export type AgentProvider = "Codex" | "Claude" | "Local"
 
 export type CompletedAgentTurn = Readonly<{
   ownerPrompt: string
@@ -128,7 +128,7 @@ function boundedText(value: unknown, max: number): string | null {
 }
 
 function validSessionId(provider: AgentProvider, value: unknown): value is string {
-  return typeof value === "string" && (provider === "Claude" ? CLAUDE_SESSION_ID : CODEX_SESSION_ID).test(value)
+  return typeof value === "string" && (provider === "Codex" ? CODEX_SESSION_ID : CLAUDE_SESSION_ID).test(value)
 }
 
 function parseDescriptor(value: string | null): DurableAgentSession | null {
@@ -143,7 +143,7 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     ? candidate.updatedAt : null
   const reviewPath = candidate.reviewPath === undefined ? undefined : boundedText(candidate.reviewPath, 1_000)
   const completedTurns = candidate.completedTurns === undefined ? [] : parseCompletedTurns(candidate.completedTurns)
-  if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex"
+  if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)
     || !role || !assignment || !updatedAt || (candidate.reviewPath !== undefined && !reviewPath) || !completedTurns) return null
   return {
@@ -421,6 +421,9 @@ export function useExperienceAgentSessions({
   }, [ownerScope, worldScope])
 
   const executeTurn = useCallback(async (input: RunClaudeTurnInput & { provider: AgentProvider }) => {
+    if (input.provider !== "Codex" && input.provider !== "Claude" && input.provider !== "Local") {
+      throw new Error("AGENT_PROVIDER_INVALID")
+    }
     const role = boundedText(input.role, 80)
     const assignment = boundedText(input.assignment, 500)
     const prompt = boundedText(input.prompt, 20_000)
@@ -485,6 +488,12 @@ export function useExperienceAgentSessions({
           prompt,
           sessionId: prior?.sessionId ?? null,
           resume: prior !== null,
+        } : input.provider === "Local" ? {
+          prompt,
+          provider: "local",
+          sessionId: prior?.sessionId ?? null,
+          resume: prior !== null,
+          completedTurns: prior?.completedTurns ?? [],
         } : {
           prompt,
           provider: "cloud",
@@ -529,10 +538,13 @@ export function useExperienceAgentSessions({
           const codexTruth = input.provider !== "Codex" || event.provider === "Codex" && event.mode === "delegate"
           const claudeTruth = input.provider !== "Claude"
             || (event.provider === undefined || event.provider === "Claude") && (event.mode === undefined || event.mode === mode)
+          const localTruth = input.provider !== "Local"
+            || event.provider === "Local" && (event.mode === undefined || event.mode === "delegate")
+              && event.continuity === (prior ? "browser-replayed" : "new")
           const unexpectedReuse = !prior && typeof event.sessionId === "string"
             && sessionsRef.current.some((session) => session.provider === input.provider && session.sessionId === event.sessionId)
           if (!sessionIdValid || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed
-            || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth) {
+            || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth || !localTruth) {
             malformed = true
             return
           }
@@ -585,12 +597,12 @@ export function useExperienceAgentSessions({
           else if (isCurrent()) input.onEvent?.(event)
           return
         }
-        if (input.provider === "Codex" && event.type === "delta") {
+        if ((input.provider === "Codex" || input.provider === "Local") && event.type === "delta") {
           if (!boundedText(event.text, 20_000) || canonicalResultSeen) malformed = true
           else if (isCurrent()) input.onEvent?.(event)
           return
         }
-        if (input.provider === "Codex" && event.type === "result") {
+        if ((input.provider === "Codex" || input.provider === "Local") && event.type === "result") {
           const result = boundedText(event.text, 200_000)
           if (canonicalResultSeen || !result) { malformed = true; return }
           canonicalResultSeen = true
