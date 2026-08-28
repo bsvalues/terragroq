@@ -468,17 +468,21 @@ async function streamLocal(
           const { done, value } = await reader.read()
           if (done) break
           buffer += decoder.decode(value, { stream: true })
-          if (encoder.encode(buffer).byteLength > MAX_LOCAL_FRAME_BYTES) {
-            state.failure = "LOCAL_STREAM_FRAME_TOO_LARGE"
-            break
-          }
           const lines = buffer.split("\n")
           buffer = lines.pop() ?? ""
           for (const line of lines) {
+            if (encoder.encode(line).byteLength > MAX_LOCAL_FRAME_BYTES) {
+              state.failure = "LOCAL_STREAM_FRAME_TOO_LARGE"
+              break read
+            }
             const piece = reduceLocalFrame(state, line)
             // Tokens arrive one at a time; the browser renders the growing answer as it forms.
             if (piece) send({ type: "delta", text: piece })
             if (state.failure) break read
+          }
+          if (encoder.encode(buffer).byteLength > MAX_LOCAL_FRAME_BYTES) {
+            state.failure = "LOCAL_STREAM_FRAME_TOO_LARGE"
+            break
           }
         }
         if (!state.failure) {

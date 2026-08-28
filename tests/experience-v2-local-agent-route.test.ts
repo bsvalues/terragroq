@@ -165,6 +165,25 @@ describe("durable Local model conversation route", () => {
     expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
   })
 
+  it("bounds individual NDJSON frames instead of rejecting one large transport chunk of small frames", async () => {
+    const pieces = Array.from({ length: 9_000 }, () => "small-valid-piece")
+    const raw = `${pieces.map((content) => JSON.stringify({ message: { role: "assistant", content }, done: false })).join("\n")}\n${JSON.stringify({ done: true })}\n`
+    const encoded = new TextEncoder().encode(raw)
+    expect(encoded.byteLength).toBeGreaterThan(262_144)
+    expect(pieces.join("").length).toBeLessThan(200_000)
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoded)
+        controller.close()
+      },
+    }))))
+
+    const output = await events(await POST(request({ provider: "local", prompt: "Explain." })))
+
+    expect(output.find((event) => event.type === "result")).toEqual({ type: "result", text: pieces.join("") })
+    expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
+  })
+
   it.each([
     ["malformed JSON after text", `${JSON.stringify({ message: { content: "partial" }, done: false })}\nnot-json\n`, "LOCAL_STREAM_MALFORMED"],
     ["empty terminal", `${JSON.stringify({ done: true })}\n`, "LOCAL_STREAM_RESULT_REQUIRED"],
