@@ -148,6 +148,41 @@ describe("S6 — the snapshot holds meaning and refuses chrome", () => {
     expect(validateWorkingWorld(JSON.parse(JSON.stringify(persisted))).space).toEqual(persisted.space)
   })
 
+  it("round-trips only a bounded path-bound Review Inspector payload", () => {
+    const world = createWorkingWorld({ intent: "Review TerraFusion source" })
+    const reviewWindow = {
+      id: "review-src-app",
+      kind: "inspector",
+      title: "Review report",
+      frame: { x: 100, y: 90, width: 560, height: 480 },
+      z: 4,
+      minimized: false,
+      surfaceKind: "review",
+      surfaceSubject: "src/app.ts",
+      surfacePayload: "P1: authorization can be bypassed",
+    }
+    const space = {
+      schemaVersion: 1,
+      revision: 1,
+      windows: [reviewWindow],
+      openFiles: ["src/app.ts"],
+      panes: [{ id: "left", filePath: "src/app.ts" }],
+      selection: null,
+      activeWindowId: reviewWindow.id,
+      activePaneId: "left",
+      runningAppUrl: null,
+    }
+
+    expect(validateWorkingWorld({ ...world, space }).space?.windows).toEqual([reviewWindow])
+    expect(() => validateWorkingWorld({
+      ...world,
+      space: {
+        ...space,
+        windows: [{ ...reviewWindow, surfacePayload: "x".repeat(200_001) }],
+      },
+    })).toThrow(/SPACE_REVIEW_PAYLOAD_INVALID/)
+  })
+
   it("refuses malformed durable Space geometry instead of treating layout as arbitrary JSON", () => {
     const world = createWorkingWorld({ intent: "TerraFusion" })
     expect(() => validateWorkingWorld({

@@ -3,7 +3,7 @@ import { isSummonedSurface } from "@/lib/environment/summon"
 
 export type WindowId = "editor" | "running-app" | "tests" | "diff" | "terminal"
 
-export type InspectorSeed = Readonly<{ kind: string; subject: string }>
+export type InspectorSeed = Readonly<{ kind: string; subject: string; payload?: string }>
 
 export type WindowGeometry = Readonly<{
   x: number
@@ -177,7 +177,12 @@ export function normalizeSpace(
     const item = window as Record<string, unknown>
     if (item.kind !== "inspector" || typeof item.id !== "string"
       || typeof item.surfaceKind !== "string" || typeof item.surfaceSubject !== "string") return []
-    return [[item.id, { kind: item.surfaceKind, subject: item.surfaceSubject } satisfies InspectorSeed]]
+    if (item.surfaceKind === "review" && typeof item.surfacePayload !== "string") return []
+    return [[item.id, {
+      kind: item.surfaceKind,
+      subject: item.surfaceSubject,
+      ...(item.surfaceKind === "review" ? { payload: item.surfacePayload as string } : {}),
+    } satisfies InspectorSeed]]
   }))
   const normalizeWindow = (id: WindowId): WindowGeometry => {
     const input = windowsByKind.get(id) as Record<string, unknown> | undefined
@@ -288,7 +293,11 @@ export function nextSpaceRevision(current: number): number {
 export function spaceToServer(space: WorkspaceSpace, revision = space.revision) {
   const activePane = space.editor.panes.find((pane) => pane.id === space.editor.activePaneId) ?? space.editor.panes[0]
   const persistedInspectors = Object.entries(space.inspectorWindows)
-    .filter(([id]) => Boolean(space.inspectorSeeds[id]) && isSummonedSurface(space.inspectorSeeds[id].kind))
+    .filter(([id]) => {
+      const seed = space.inspectorSeeds[id]
+      return Boolean(seed) && (isSummonedSurface(seed.kind)
+        || seed.kind === "review" && typeof seed.payload === "string" && seed.payload.length > 0)
+    })
     .slice(0, 22)
   const persistedInspectorIds = new Set(persistedInspectors.map(([id]) => id))
   // A tab restored from the pre-Experience-V2 shape can still be alive while the
@@ -311,16 +320,20 @@ export function spaceToServer(space: WorkspaceSpace, revision = space.revision) 
       },
       z: Math.max(0, Math.min(10_000, Math.round(space.windows[id].z))),
       minimized: space.windows[id].minimized,
-    })), ...persistedInspectors.map(([id, geometry]) => ({
-      id,
-      kind: "inspector" as const,
-      title: "Inspector",
-      surfaceKind: space.inspectorSeeds[id].kind,
-      surfaceSubject: space.inspectorSeeds[id].subject,
-      frame: { x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height },
-      z: Math.max(0, Math.min(10_000, Math.round(geometry.z))),
-      minimized: geometry.minimized,
-    }))],
+    })), ...persistedInspectors.map(([id, geometry]) => {
+      const seed = space.inspectorSeeds[id]
+      return {
+        id,
+        kind: "inspector" as const,
+        title: seed.kind === "review" ? "Review report" : "Inspector",
+        surfaceKind: seed.kind,
+        surfaceSubject: seed.subject,
+        ...(seed.kind === "review" ? { surfacePayload: seed.payload } : {}),
+        frame: { x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height },
+        z: Math.max(0, Math.min(10_000, Math.round(geometry.z))),
+        minimized: geometry.minimized,
+      }
+    })],
     openFiles: space.editor.openFiles,
     panes: space.editor.panes.map((pane) => ({
       id: pane.id === "primary" ? "workspace-pane" : "workspace-pane-secondary",

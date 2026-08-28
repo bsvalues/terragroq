@@ -13,6 +13,7 @@ export type DurableClaudeSession = Readonly<{
   role: string
   provider: "Claude"
   assignment: string
+  reviewPath?: string
   updatedAt: string
 }>
 
@@ -25,13 +26,19 @@ export type ExperienceAgentSession = Readonly<{
   evidence: string
   truth: "live"
   kind: "durable-session" | "world-worker"
+  mode: "delegate" | "review"
+  reviewPath?: string
 }>
 
 export type RunClaudeTurnInput = Readonly<{
   role: string
   assignment: string
-  prompt: string
+  prompt?: string
+  mode?: "delegate" | "review"
+  path?: string
+  focus?: string
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
+  onReviewComplete?: (report: string) => void
 }>
 
 export type ExperienceAgentSessionController = Readonly<{
@@ -61,15 +68,17 @@ function parseDescriptor(value: string | null): DurableClaudeSession | null {
   const assignment = boundedText(candidate.assignment, 500)
   const updatedAt = typeof candidate.updatedAt === "string" && Number.isFinite(Date.parse(candidate.updatedAt))
     ? candidate.updatedAt : null
+  const reviewPath = candidate.reviewPath === undefined ? undefined : boundedText(candidate.reviewPath, 1_000)
   if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude"
     || typeof candidate.sessionId !== "string" || !SESSION_ID.test(candidate.sessionId)
-    || !role || !assignment || !updatedAt) return null
+    || !role || !assignment || !updatedAt || (candidate.reviewPath !== undefined && !reviewPath)) return null
   return {
     schemaVersion: 1,
     sessionId: candidate.sessionId,
     role,
     provider: "Claude",
     assignment,
+    ...(reviewPath ? { reviewPath } : {}),
     updatedAt,
   }
 }
@@ -98,6 +107,7 @@ function projectSessions(
       evidence: "live world state",
       truth: "live",
       kind: "world-worker",
+      mode: "delegate",
     })
   }
   if (durable) {
@@ -110,6 +120,8 @@ function projectSessions(
       evidence: activeSessionId === durable.sessionId ? "live agent stream" : "resumable session",
       truth: "live",
       kind: "durable-session",
+      mode: durable.reviewPath ? "review" : "delegate",
+      ...(durable.reviewPath ? { reviewPath: durable.reviewPath } : {}),
     })
   }
   return sessions
@@ -129,6 +141,7 @@ export function useExperienceAgentSessions({
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const controller = useRef<AbortController | null>(null)
+  const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null)
   const descriptorRef = useRef<DurableClaudeSession | null>(null)
 
   useEffect(() => {
@@ -146,6 +159,8 @@ export function useExperienceAgentSessions({
   useEffect(() => () => controller.current?.abort(), [])
 
   const stop = useCallback(() => {
+    void readerRef.current?.cancel()
+    readerRef.current = null
     controller.current?.abort()
     controller.current = null
     setActiveSessionId(null)
@@ -155,13 +170,20 @@ export function useExperienceAgentSessions({
     const role = boundedText(input.role, 80)
     const assignment = boundedText(input.assignment, 500)
     const prompt = boundedText(input.prompt, 20_000)
+    const mode = input.mode ?? "delegate"
+    const reviewPath = boundedText(input.path, 1_000)
+    const focus = input.focus === undefined || input.focus === "" ? null : boundedText(input.focus, 2_000)
     if (!role) throw new Error("AGENT_ROLE_REQUIRED")
     if (!assignment) throw new Error("AGENT_ASSIGNMENT_REQUIRED")
-    if (!prompt) throw new Error("AGENT_PROMPT_REQUIRED")
+    if (mode === "delegate" && !prompt) throw new Error("AGENT_PROMPT_REQUIRED")
+    if (mode === "review" && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (controller.current) throw new Error("AGENT_TURN_ALREADY_RUNNING")
 
-    const prior = descriptorRef.current
-    if (prior) {
+    const storedPrior = descriptorRef.current
+    const prior = mode === "review"
+      ? storedPrior?.role === "Reviewer" && storedPrior.reviewPath === reviewPath ? storedPrior : null
+      : storedPrior?.reviewPath ? null : storedPrior
+    if (storedPrior) {
       // While resume is being verified, the saved descriptor is not usable truth. Remove it up
       // front so any terminal refusal naturally recovers to a fresh session on the next turn.
       window.localStorage.removeItem(storageKey(ownerScope, worldScope))
@@ -186,7 +208,14 @@ export function useExperienceAgentSessions({
       const response = await fetch("/api/loom/agent", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
+        body: JSON.stringify(mode === "review" ? {
+          mode: "review",
+          path: reviewPath,
+          ...(focus ? { focus } : {}),
+          provider: "cloud",
+          sessionId: prior?.sessionId ?? null,
+          resume: prior !== null,
+        } : {
           prompt,
           provider: "cloud",
           sessionId: prior?.sessionId ?? null,
@@ -198,29 +227,71 @@ export function useExperienceAgentSessions({
       if (!response.ok || !response.body) throw new Error(`AGENT_START_REFUSED:${response.status}`)
 
       const reader = response.body.getReader()
+      readerRef.current = reader
       const decoder = new TextDecoder()
       let buffer = ""
+      let malformedReview = false
+      let sessionSeen = false
+      let terminalSeen = false
+      let canonicalResultSeen = false
+      let reviewText: string | null = null
       const acceptLine = (line: string) => {
         if (!line.trim()) return
         let event: Record<string, unknown>
-        try { event = JSON.parse(line) as Record<string, unknown> } catch { return }
+        try { event = JSON.parse(line) as Record<string, unknown> } catch { if (mode === "review") malformedReview = true; return }
+        if (mode === "review" && terminalSeen) { malformedReview = true; return }
         input.onEvent?.(event)
-        if (event.type === "session" && typeof event.sessionId === "string" && SESSION_ID.test(event.sessionId)) {
-          accepted = {
-            schemaVersion: 1,
-            sessionId: event.sessionId,
-            role,
-            provider: "Claude",
-            assignment,
-            updatedAt: new Date().toISOString(),
+        if (event.type === "session") {
+          const validSessionId = typeof event.sessionId === "string" && SESSION_ID.test(event.sessionId)
+          const expectedResumed = prior !== null
+          const matchesResumeId = !prior || event.sessionId === prior.sessionId
+          if (mode === "review" && (!validSessionId || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed || !matchesResumeId || sessionSeen)) {
+            malformedReview = true
+            return
           }
-          setActiveSessionId(event.sessionId)
+          if (validSessionId) {
+            sessionSeen = true
+            accepted = {
+              schemaVersion: 1,
+              sessionId: event.sessionId as string,
+              role,
+              provider: "Claude",
+              assignment,
+              ...(mode === "review" ? { reviewPath: reviewPath! } : {}),
+              updatedAt: new Date().toISOString(),
+            }
+            setActiveSessionId(event.sessionId as string)
+          }
+          return
+        }
+        if (mode === "review" && event.type === "event") {
+          if (!sessionSeen || !event.event || typeof event.event !== "object" || Array.isArray(event.event)) { malformedReview = true; return }
+          const payload = event.event as Record<string, unknown>
+          if (payload.type === "result") {
+            const result = boundedText(payload.result, 200_000)
+            if (canonicalResultSeen || payload.subtype !== "success" || payload.is_error === true
+              || payload.session_id !== accepted?.sessionId || !result) {
+              malformedReview = true
+              return
+            }
+            canonicalResultSeen = true
+            reviewText = result
+          }
+          return
+        }
+        if (mode === "review" && event.type === "stderr") {
+          if (!boundedText(event.text, 200_000)) malformedReview = true
+          return
         }
         if (event.type === "done") {
+          if (mode === "review" && (!sessionSeen || terminalSeen || event.reason !== null && typeof event.reason !== "string")) { malformedReview = true; return }
+          terminalSeen = true
           finalOutcome.seen = true
           finalOutcome.code = event.code
           finalOutcome.reason = event.reason
+          return
         }
+        if (mode === "review" && event.type !== "session") malformedReview = true
       }
       for (;;) {
         const { done, value } = await reader.read()
@@ -232,6 +303,8 @@ export function useExperienceAgentSessions({
       }
       buffer += decoder.decode()
       acceptLine(buffer)
+      if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError")
+      if (mode === "review" && (malformedReview || !sessionSeen || !terminalSeen || !canonicalResultSeen || !reviewText)) throw new Error("AGENT_REVIEW_STREAM_INVALID")
       if (!accepted) throw new Error("AGENT_SESSION_ID_MISSING")
       if (!finalOutcome.seen) throw new Error("AGENT_TURN_FAILED:DONE_MISSING")
       const reason = typeof finalOutcome.reason === "string" && finalOutcome.reason.trim()
@@ -243,6 +316,7 @@ export function useExperienceAgentSessions({
       descriptorRef.current = accepted
       setSavedDescriptor(accepted)
       setDurableSession(accepted)
+      if (mode === "review") input.onReviewComplete?.(reviewText!)
       return accepted
     } catch (cause) {
       // A failed resume is no longer evidence that the saved descriptor exists or belongs to this
@@ -264,6 +338,7 @@ export function useExperienceAgentSessions({
       if (error?.name !== "AbortError") setError(cause instanceof Error ? cause.message : "AGENT_UNAVAILABLE")
       throw cause
     } finally {
+      readerRef.current = null
       controller.current = null
       setActiveSessionId(null)
     }
