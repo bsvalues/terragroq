@@ -2,25 +2,12 @@ import fs from "node:fs/promises"
 import path from "node:path"
 
 import { workroomFileScope } from "@/lib/governance/workroom-file-scope"
+import { withPathWriteSerialization } from "@/lib/loom/path-write-serialization"
 import { resolveRealWorkspacePath, resolveWorkspacePath } from "@/lib/loom/workspace"
 
 const MAX_FILE_BYTES = 2_000_000
-const saveTails = new Map<string, Promise<void>>()
 
-async function serializeSave<T>(key: string, work: () => Promise<T>): Promise<T> {
-  const previous = saveTails.get(key) ?? Promise.resolve()
-  let release!: () => void
-  const gate = new Promise<void>((resolve) => { release = resolve })
-  const tail = previous.then(() => gate)
-  saveTails.set(key, tail)
-  await previous
-  try {
-    return await work()
-  } finally {
-    release()
-    if (saveTails.get(key) === tail) saveTails.delete(key)
-  }
-}
+export { withPathWriteSerialization } from "@/lib/loom/path-write-serialization"
 
 function sameFile(left: Awaited<ReturnType<typeof fs.stat>>, right: Awaited<ReturnType<typeof fs.stat>>): boolean {
   // Node exposes stable file IDs on supported Windows and POSIX filesystems. A zero ID is not
@@ -56,12 +43,18 @@ export async function writeManualOwnerWorkspaceFile(
   if (!lexical.ok || !lexical.absolute) {
     return { ok: false, error: lexical.refusal ?? "PATH_INVALID", status: 400 }
   }
-  const lockKey = process.platform === "win32" ? lexical.absolute.toLowerCase() : lexical.absolute
+  const preliminary = await resolveRealWorkspacePath(projectRoot, input.path, fs.realpath)
+  if (!preliminary.ok || !preliminary.absolute) {
+    return { ok: false, error: preliminary.refusal ?? "PATH_INVALID", status: 400 }
+  }
 
-  return serializeSave(lockKey, async () => {
+  return withPathWriteSerialization(preliminary.absolute, async () => {
     const resolved = await resolveRealWorkspacePath(projectRoot, input.path, fs.realpath)
     if (!resolved.ok || !resolved.absolute || resolved.relative === undefined) {
       return { ok: false, error: resolved.refusal ?? "PATH_INVALID", status: 400 }
+    }
+    if (resolved.absolute !== preliminary.absolute) {
+      return { ok: false, error: "CHANGED_ON_DISK", status: 409 }
     }
     const scope = workroomFileScope(resolved.relative)
     if (!scope.ok) return { ok: false, error: "FAILED_SCOPE_COLLISION", detail: scope.detail, status: 409 }

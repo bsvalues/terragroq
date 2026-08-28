@@ -1,4 +1,5 @@
 import { appendGovernanceEvent } from "@/lib/governance/events"
+import { pool } from "@/lib/db"
 
 /**
  * Receipts for everything the workroom actually does.
@@ -21,6 +22,198 @@ export interface LoomRunReceipt {
   /** The operation id, model name, or file path this run concerned. */
   subject: string
   metadata?: Record<string, unknown>
+}
+
+export interface LoomCodexAssignmentReceipt {
+  userId: string
+  threadId: string
+  workspace: string
+  worldId: string
+  spaceRevision: number
+  outcomeId: number
+  outcomeKey: string
+  outcomeVersion: number
+  workOrderId: number
+  workOrderRef: string | null
+  workOrderVersion: string
+  grantId: number
+  grantRef: string | null
+  grantVersion: string
+  allowed: readonly string[]
+  forbidden: readonly string[]
+  reservationVersion: string
+  selectedPath: string
+  assignmentHash: string
+  taskDigest: string
+  taskText: string
+  executionBindingHash: string
+  isolatedBaseSha: string
+  resumed: boolean
+}
+
+function isDigest(value: string, length = 64): boolean {
+  return new RegExp(`^[0-9a-f]{${length}}$`, "i").test(value)
+}
+
+/** Persist the immutable, server-derived assignment before any provider turn can execute. */
+export async function recordLoomCodexAssignment(input: LoomCodexAssignmentReceipt): Promise<void> {
+  if (!input.userId || !input.threadId || !input.worldId || !input.outcomeKey
+    || !input.selectedPath || !input.workspace || input.taskText.length > 32_000
+    || !isDigest(input.assignmentHash) || !isDigest(input.taskDigest)
+    || !isDigest(input.executionBindingHash) || !isDigest(input.reservationVersion)
+    || !isDigest(input.isolatedBaseSha, 40)
+    || !Number.isSafeInteger(input.spaceRevision) || input.spaceRevision < 0
+    || !Number.isSafeInteger(input.outcomeId) || input.outcomeId <= 0
+    || !Number.isSafeInteger(input.outcomeVersion) || input.outcomeVersion < 0
+    || !Number.isSafeInteger(input.workOrderId) || input.workOrderId <= 0
+    || !Number.isSafeInteger(input.grantId) || input.grantId <= 0
+    || input.allowed.some((item) => !item) || input.forbidden.some((item) => !item)) {
+    throw new Error("CODEX_ASSIGNMENT_RECEIPT_INVALID")
+  }
+  const metadata = {
+    assignmentVersion: "loom-codex-assignment.v1",
+    owner: input.userId,
+    provider: "Codex",
+    mode: "delegate",
+    workspace: input.workspace,
+    threadId: input.threadId,
+    resumed: input.resumed,
+    worldId: input.worldId,
+    spaceRevision: input.spaceRevision,
+    outcome: { id: input.outcomeId, key: input.outcomeKey, version: input.outcomeVersion },
+    workOrder: {
+      id: input.workOrderId,
+      ref: input.workOrderRef,
+      version: input.workOrderVersion,
+    },
+    grant: { id: input.grantId, ref: input.grantRef, version: input.grantVersion },
+    reservation: {
+      allowed: [...input.allowed],
+      forbidden: [...input.forbidden],
+      version: input.reservationVersion,
+    },
+    promotionPath: input.selectedPath,
+    assignmentHash: input.assignmentHash,
+    task: { digest: input.taskDigest, text: input.taskText },
+    executionBindingHash: input.executionBindingHash,
+    isolatedBaseSha: input.isolatedBaseSha,
+  }
+  const result = await pool.query(
+    `INSERT INTO "governance_event"
+      ("userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata")
+      VALUES ($1, 'EVIDENCE_RECORDED', 'loom_codex_assignment', $2, 'loom',
+        'Codex delegate assignment committed before execution', $3::jsonb)
+      RETURNING "id"`,
+    [input.userId, input.threadId, JSON.stringify(metadata)],
+  )
+  if (!result.rows[0]?.id) throw new Error("CODEX_ASSIGNMENT_RECEIPT_NOT_DURABLE")
+}
+
+/** Atomically persist the only receipt set that makes a Codex thread resumable. */
+export async function commitLoomCodexSuccess(input: {
+  userId: string
+  threadId: string
+  workspace: string
+  resumed: boolean
+  worldId: string
+  outcomeKey: string
+  workOrderId: number
+  grantId: number
+  assignmentHash: string
+  selectedPath: string
+  promotionDigest: string
+  baseSha: string
+  taskDigest: string
+  executionBindingHash: string
+  promotionAudit: Readonly<{
+    userId: string
+    path: string
+    bytes: number
+    startedAuditId: number
+    outcome: "SAVED"
+    modifiedAt?: string
+  }>
+}): Promise<void> {
+  if (input.promotionAudit.userId !== input.userId
+    || input.promotionAudit.path !== input.selectedPath
+    || input.promotionAudit.outcome !== "SAVED"
+    || !Number.isSafeInteger(input.promotionAudit.startedAuditId) || input.promotionAudit.startedAuditId <= 0
+    || !Number.isSafeInteger(input.promotionAudit.bytes) || input.promotionAudit.bytes < 0
+    || typeof input.promotionAudit.modifiedAt !== "string"
+    || !isDigest(input.assignmentHash) || !isDigest(input.promotionDigest)
+    || !isDigest(input.baseSha, 40) || !isDigest(input.taskDigest)
+    || !isDigest(input.executionBindingHash)) {
+    throw new Error("PROMOTION_AUDIT_MISMATCH")
+  }
+  const client = await pool.connect()
+  const identity = {
+    provider: "Codex",
+    mode: "delegate",
+    workspace: input.workspace,
+    resumed: input.resumed,
+    external: true,
+    metered: true,
+    worldId: input.worldId,
+    outcomeKey: input.outcomeKey,
+    workOrderId: input.workOrderId,
+    grantId: input.grantId,
+    assignmentHash: input.assignmentHash,
+    selectedPath: input.selectedPath,
+    promotionDigest: input.promotionDigest,
+    baseSha: input.baseSha,
+    taskDigest: input.taskDigest,
+    executionBindingHash: input.executionBindingHash,
+  }
+  try {
+    await client.query("BEGIN")
+    await client.query(
+      `INSERT INTO "governance_event"
+        ("userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata")
+        VALUES ($1, 'LOOP_STOPPED', 'loom_manual_file_write', $2, 'loom',
+          'Codex delegate promotion completed', $3::jsonb)`,
+      [input.userId, input.selectedPath, JSON.stringify({
+        operation: "codex_delegate_promotion",
+        path: input.selectedPath,
+        bytes: input.promotionAudit.bytes,
+        modifiedAt: input.promotionAudit.modifiedAt,
+        startedAuditId: input.promotionAudit.startedAuditId,
+        result: "SAVED",
+        assignmentHash: input.assignmentHash,
+        promotionDigest: input.promotionDigest,
+        executionBindingHash: input.executionBindingHash,
+      })],
+    )
+    await client.query(
+      `INSERT INTO "governance_event"
+        ("userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata")
+        VALUES ($1, 'LOOP_STARTED', 'loom_agent', $2, 'loom',
+          'workroom agent: Codex delegate', $3::jsonb)`,
+      [input.userId, input.threadId, JSON.stringify(identity)],
+    )
+    await client.query(
+      `INSERT INTO "governance_event"
+        ("userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata")
+        VALUES ($1, 'LOOP_STOPPED', 'loom_agent', $2, 'loom',
+          'workroom agent finished: Codex delegate', $3::jsonb)`,
+      [input.userId, input.threadId, JSON.stringify({ ...identity, code: 0, reason: null })],
+    )
+    await client.query(
+      `INSERT INTO "governance_event"
+        ("userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata")
+        VALUES ($1, 'EVIDENCE_RECORDED', 'loom_codex_ready', $2, 'loom',
+          'Codex delegate session committed ready', $3::jsonb)`,
+      [input.userId, input.threadId, JSON.stringify({
+        ...identity,
+        committed: true,
+      })],
+    )
+    await client.query("COMMIT")
+  } catch (error) {
+    try { await client.query("ROLLBACK") } catch { /* preserve the original failure */ }
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function recordLoomStart({ userId, kind, subject, metadata }: LoomRunReceipt): Promise<void> {

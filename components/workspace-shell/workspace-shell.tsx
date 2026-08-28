@@ -10,7 +10,7 @@ import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface } from "./developer-tools-surface"
 import { type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, useExperienceAgentSessions } from "./agent-sessions"
+import { AgentSessionStrip, useExperienceAgentSessions, type AgentProvider } from "./agent-sessions"
 import { BrainCouncilSurface, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
@@ -38,6 +38,13 @@ type SpaceStorage = "server" | "browser"
 type EnvironmentOverlay = "council" | "mission-control" | null
 type LineTarget = "william" | "agent"
 type LineMode = "default" | "change" | "review"
+type DelegateContext = Readonly<{
+  kind: "file" | "preview" | "diff" | "space" | "agent"
+  label: string
+  provider: AgentProvider | null
+  role: string
+  assignment: string
+}>
 type ChangeRefresh = Readonly<{ path: string | null; key: number }>
 type ChangeRefreshWaiter = {
   path: string
@@ -67,6 +74,7 @@ function williamJudgmentContextKey(space: WorkspaceSpace, spine: WorldSpine): st
 }
 
 function agentReplyText(payload: Readonly<Record<string, unknown>>): readonly string[] {
+  if ((payload.type === "delta" || payload.type === "result") && typeof payload.text === "string") return [payload.text]
   if (payload.type !== "event" || !payload.event || typeof payload.event !== "object") return []
   const event = payload.event as Record<string, unknown>
   if (event.type === "result" && typeof event.result === "string") return [event.result]
@@ -100,6 +108,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineBusy, setLineBusy] = useState(false)
   const [lineTarget, setLineTarget] = useState<LineTarget>("william")
   const [lineMode, setLineMode] = useState<LineMode>("default")
+  const [delegateContext, setDelegateContext] = useState<DelegateContext | null>(null)
   const [changeTarget, setChangeTarget] = useState<string | null>(null)
   const [reviewTarget, setReviewTarget] = useState<string | null>(null)
   const [dirtyPaths, setDirtyPaths] = useState<Readonly<Record<string, boolean>>>({})
@@ -123,6 +132,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const agentSessions = useExperienceAgentSessions({
     ownerScope: worldId ?? "unhydrated-owner-world",
     worldScope: project?.identity ?? worldId ?? "unhydrated-project",
+    worldId: storage === "server" ? worldId : null,
     worker: spine.worker ?? null,
   })
   const stateRef = useRef(space)
@@ -148,6 +158,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   spineRef.current = spine
   worldRef.current = worldId
   storageRef.current = storage
+
+  useEffect(() => {
+    if (delegateContext?.kind !== "file" || delegateContext.label === space.selectedPath) return
+    // Delegate is an object action. If the selected object changes before dispatch, discard the
+    // stale client intent; the server will derive authority only from the newly persisted Space.
+    setDelegateContext(null)
+    setLineTarget("william")
+    setLineInput("")
+    setLineOpen(false)
+  }, [delegateContext, space.selectedPath])
 
   const appendConversation = useCallback((role: ConversationEntry["role"], text: string) => {
     const normalized = text.trim()
@@ -594,6 +614,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   const openLine = useCallback((prompt = "", target: LineTarget = "william") => {
     setLineTarget(target)
+    if (target === "william") setDelegateContext(null)
     setLineMode("default")
     setLineInput(prompt)
     setLineReply(null)
@@ -642,6 +663,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setChangeTarget(target)
     change.reset(target)
     setLineTarget("william")
+    setDelegateContext(null)
     setLineMode("change")
     setLineInput("")
     setLineReply(null)
@@ -655,6 +677,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setReviewTarget(target)
     review.reset(target)
     setLineTarget("agent")
+    setDelegateContext(null)
     setLineMode("review")
     setLineInput("")
     setLineReply(null)
@@ -668,6 +691,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setReviewTarget(target)
     review.reset(target)
     setLineTarget("agent")
+    setDelegateContext(null)
     setLineMode("review")
     setLineInput("")
     setLineReply(null)
@@ -681,6 +705,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         event.preventDefault()
         if (!change.running && !review.running) {
           setLineTarget("william")
+          setDelegateContext(null)
           setLineMode("default")
           setLineReply(null)
         }
@@ -706,7 +731,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     if (selectedAgent?.kind === "durable-session") {
-      setCouncilError("Council cannot ground this browser-saved Claude session yet. Select a persisted Space object or live world worker.")
+      setCouncilError("Council cannot ground this browser-saved agent session yet. Select a persisted Space object or live world worker.")
       setCouncilBusy(false)
       return
     }
@@ -735,7 +760,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   async function submitLine(event: React.FormEvent) {
     event.preventDefault()
     const text = lineInput.trim()
-    if (lineBusy || change.running || review.running && lineMode !== "review" || lineMode !== "review" && !text) return
+    if (lineBusy || change.running || review.running && lineMode !== "review" || lineMode !== "review" && !text
+      || lineTarget === "agent" && lineMode === "default" && !delegateContext?.provider) return
     if (lineMode === "change") {
       void change.start(text)
       return
@@ -755,16 +781,28 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineBusy(true)
     setLineReply(null)
     try {
-      const contextualText = `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
+      const contextualText = lineTarget === "agent" && delegateContext
+        ? `Owner request: ${text}`
+        : `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
       if (lineTarget === "agent") {
-        const role = selectedAgent?.kind === "durable-session" ? selectedAgent.role : "Builder"
-        const assignment = selectedAgent?.kind === "durable-session" ? selectedAgent.assignment : selectedLabel
-        await agentSessions.runClaudeTurn({
-          role,
-          assignment,
+        if (!delegateContext?.provider) throw new Error("AGENT_PROVIDER_REQUIRED")
+        const promotedPath = delegateContext.provider === "Codex" ? space.selectedPath : null
+        if (promotedPath) await persistBarrierRef.current()
+        await agentSessions.runAgentTurn({
+          provider: delegateContext.provider,
+          role: delegateContext.role,
+          assignment: delegateContext.assignment,
           prompt: contextualText,
           onEvent: (payload) => agentReplyText(payload).forEach((reply) => appendConversation("williamos", reply)),
         })
+        if (promotedPath) {
+          const refreshed = await refreshVerifiedChange(promotedPath)
+          if (refreshed === "dirty-conflict") {
+            setLineReply(`Codex saved ${promotedPath}, but Source has newer unsaved edits. Your buffer was preserved.`)
+          } else if (refreshed === "failed") {
+            setLineReply(`Codex saved ${promotedPath}, but Source or Changes could not refresh.`)
+          }
+        }
         return
       }
       const response = await fetch("/api/environment/line", {
@@ -866,8 +904,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)
       return
     }
-    if (action === "Delegate" || (selectedAgent?.kind === "durable-session" && (action === "Talk" || action === "Redirect"))) {
-      openLine(`${action} ${selectedLabel}: `, "agent")
+    if (action === "Delegate") {
+      setFocusedAgentId(null)
+      setDelegateContext({ kind: selectedKind, label: selectedLabel, provider: null, role: "Builder", assignment: selectedLabel })
+      openLine("", "agent")
+      return
+    }
+    if (selectedAgent?.kind === "durable-session" && (action === "Talk" || action === "Redirect")) {
+      setDelegateContext({ kind: "agent", label: `${selectedAgent.role} · ${selectedAgent.providerLabel}`, provider: selectedAgent.providerLabel as AgentProvider, role: selectedAgent.role, assignment: selectedAgent.assignment })
+      openLine(`${action}: `, "agent")
       return
     }
     openLine(`${action} this selected ${selectedKindLabel}: `)
@@ -909,13 +954,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             <span className={spatial.spacePath}>{project?.identity ?? ""}</span>
           </span>
         </div>
-        <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningSessionId={agentSessions.activeSessionId} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
+        <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningSessionId={agentSessions.activeSessionId} runningProvider={agentSessions.activeProvider} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
           if (agent.mode === "review" && agent.reviewPath) {
             openReviewPath(agent.reviewPath)
             return
           }
           setFocusedAgentId(agent.id)
-          if (agent.kind === "durable-session") openLine(`Redirect ${agent.role} · ${agent.providerLabel} on ${selectedLabel}: `, "agent")
+          if (agent.kind === "durable-session") {
+            setDelegateContext({ kind: "agent", label: `${agent.role} · ${agent.providerLabel}`, provider: agent.providerLabel as AgentProvider, role: agent.role, assignment: agent.assignment })
+            openLine("Redirect: ", "agent")
+          }
         }} />
         <div className={spatial.status}><span className={spatial.statusDot} aria-hidden /><span>{worldLine || "Space ready"}{workerLine}</span></div>
       </header>
@@ -977,8 +1025,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <div className={spatial.lineBackdrop} onPointerDown={(event) => { if (event.target === event.currentTarget && !change.running && !review.running) setLineOpen(false) }}>
           <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? "Change" : lineMode === "review" ? "Review" : "The Line"}>
             <Command size={16} aria-hidden />
-            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
-            <div className={spatial.lineControls}><span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineTarget === "agent" ? "Claude session" : "William"}</span><button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || review.running || lineMode !== "review" && !lineInput.trim()}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>{lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button></div>
+            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
+            <div className={spatial.lineControls}>
+              {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider"><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Codex" } : current)}>Codex</button><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
+              <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
+              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
+              {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
+            </div>
           </form>
         </div>
       ) : null}

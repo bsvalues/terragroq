@@ -24,6 +24,19 @@ export interface LoomThreadDescriptor {
   path: string | null
 }
 
+export interface LoomCodexThreadDescriptor {
+  owner: string
+  provider: string | null
+  mode: string | null
+  workspace: string | null
+  worldId: string | null
+  outcomeKey: string | null
+  workOrderId: number | null
+  grantId: number | null
+  assignmentHash: string | null
+  selectedPath: string | null
+}
+
 /**
  * Decide whether a resume may proceed.
  *
@@ -77,4 +90,49 @@ export async function loomThreadDescriptor(sessionId: string): Promise<LoomThrea
 
 export async function loomThreadOwner(sessionId: string): Promise<string | null> {
   return (await loomThreadDescriptor(sessionId))?.owner ?? null
+}
+
+/**
+ * Read the immutable identity of a durable Codex product session.
+ *
+ * This deliberately does not reuse the legacy Claude descriptor's permissive defaults. A missing
+ * provider, mode, or workspace is not a Codex session: resuming it would replay private history and
+ * grant a workspace-writing agent authority under facts that were never recorded.
+ */
+export async function loomCodexThreadDescriptor(threadId: string): Promise<LoomCodexThreadDescriptor | null> {
+  try {
+    const result = await pool.query(
+      `SELECT "userId", "metadata" FROM "governance_event"
+        WHERE "entityType" = 'loom_codex_ready' AND "entityId" = $1
+          AND "eventType" = 'EVIDENCE_RECORDED'
+        ORDER BY "createdAt" DESC LIMIT 1`,
+      [threadId],
+    )
+    const row = result.rows[0] as { userId?: unknown; metadata?: unknown } | undefined
+    const metadata = row?.metadata && typeof row.metadata === "object"
+      ? row.metadata as Record<string, unknown>
+      : null
+    if (typeof row?.userId !== "string") return null
+    if (metadata?.committed !== true) return null
+    const workOrderId = typeof metadata.workOrderId === "number" && Number.isSafeInteger(metadata.workOrderId)
+      ? metadata.workOrderId
+      : null
+    const grantId = typeof metadata.grantId === "number" && Number.isSafeInteger(metadata.grantId)
+      ? metadata.grantId
+      : null
+    return {
+      owner: row.userId,
+      provider: typeof metadata?.provider === "string" ? metadata.provider : null,
+      mode: typeof metadata?.mode === "string" ? metadata.mode : null,
+      workspace: typeof metadata?.workspace === "string" ? metadata.workspace : null,
+      worldId: typeof metadata?.worldId === "string" ? metadata.worldId : null,
+      outcomeKey: typeof metadata?.outcomeKey === "string" ? metadata.outcomeKey : null,
+      workOrderId,
+      grantId,
+      assignmentHash: typeof metadata?.assignmentHash === "string" ? metadata.assignmentHash : null,
+      selectedPath: typeof metadata?.selectedPath === "string" ? metadata.selectedPath : null,
+    }
+  } catch {
+    return null
+  }
 }

@@ -6,6 +6,7 @@ import { governanceEvent } from "@/lib/db/schema"
 import { requireWorkContext } from "@/lib/governance/work-context-gate"
 import type { WorkContextVerdict } from "@/lib/governance/work-context-receipt"
 import { workroomFileScope } from "@/lib/governance/workroom-file-scope"
+import { withPathWriteSerialization } from "@/lib/loom/path-write-serialization"
 import { resolveRealWorkspacePath, type WorkspacePathResult } from "@/lib/loom/workspace"
 
 const MAX_FILE_BYTES = 2_000_000
@@ -22,6 +23,7 @@ export type WorkspaceFileWriteDependencies = Readonly<{
   resolve: (requested: unknown) => Promise<WorkspacePathResult>
   auditStart: (input: AuditStartInput) => Promise<number>
   auditFinish: (input: AuditFinishInput) => Promise<void>
+  serialize?: <T>(requested: unknown, work: (lockedAbsolute?: string) => Promise<T>) => Promise<T>
   writeFile?: typeof fs.writeFile
 }>
 
@@ -84,6 +86,13 @@ export async function writeGovernedWorkspaceFile(
   dependencies: WorkspaceFileWriteDependencies,
 ): Promise<WorkspaceFileWriteResult> {
   const requestedPath = typeof input.path === "string" ? input.path : ""
+  const serialize = dependencies.serialize
+    ?? (async <T>(requested: unknown, work: (lockedAbsolute?: string) => Promise<T>) => {
+      const preliminary = await dependencies.resolve(requested)
+      if (!preliminary.ok || !preliminary.absolute) return work(undefined)
+      return withPathWriteSerialization(preliminary.absolute, () => work(preliminary.absolute))
+    })
+  return serialize(input.path, async (lockedAbsolute) => {
   const authority = await dependencies.authorize(requestedPath)
   if (!authority.ok) {
     return {
@@ -99,6 +108,9 @@ export async function writeGovernedWorkspaceFile(
   const resolved = await dependencies.resolve(input.path)
   if (!resolved.ok || !resolved.absolute) {
     return { ok: false, error: resolved.refusal ?? "PATH_INVALID", status: 400 }
+  }
+  if (lockedAbsolute && resolved.absolute !== lockedAbsolute) {
+    return { ok: false, error: "CHANGED_ON_DISK", status: 409 }
   }
   const relative = resolved.relative
   if (relative === undefined) return { ok: false, error: "PATH_INVALID", status: 400 }
@@ -117,11 +129,14 @@ export async function writeGovernedWorkspaceFile(
   if (!scope.ok) return { ok: false, error: "FAILED_SCOPE_COLLISION", detail: scope.detail, status: 409 }
   let current
   try {
-    current = await fs.stat(resolved.absolute)
+    current = await fs.lstat(resolved.absolute)
   } catch {
     return { ok: false, error: "NOT_FOUND", status: 404 }
   }
   if (!current.isFile()) return { ok: false, error: "NOT_A_FILE", status: 400 }
+  if (current.isSymbolicLink() || current.nlink !== 1) {
+    return { ok: false, error: "LINK_NOT_ALLOWED", status: 409 }
+  }
   if (current.size > MAX_FILE_BYTES) return { ok: false, error: "FILE_TOO_LARGE", status: 413 }
   if (typeof input.modifiedAt === "string" && current.mtime.toISOString() !== input.modifiedAt) {
     return { ok: false, error: "CHANGED_ON_DISK", status: 409, modifiedAt: current.mtime.toISOString() }
@@ -160,7 +175,10 @@ export async function writeGovernedWorkspaceFile(
   }
   let saved
   try {
-    saved = await fs.stat(resolved.absolute)
+    saved = await fs.lstat(resolved.absolute)
+    if (!saved.isFile() || saved.isSymbolicLink() || saved.nlink !== 1) {
+      throw new Error("TARGET_REPLACED_WITH_LINK")
+    }
     await dependencies.auditFinish({
       userId: input.userId,
       path: relative,
@@ -183,4 +201,5 @@ export async function writeGovernedWorkspaceFile(
     modifiedAt: saved.mtime.toISOString(),
     name: path.basename(resolved.absolute),
   }
+  })
 }
