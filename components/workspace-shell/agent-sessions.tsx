@@ -79,6 +79,16 @@ type ActiveAgentOperation = {
   prior: DurableAgentSession | null
 }
 
+class AgentStartRefusal extends Error {
+  readonly status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = "AgentStartRefusal"
+    this.status = status
+  }
+}
+
 function boundedText(value: unknown, max: number): string | null {
   if (typeof value !== "string") return null
   const text = value.trim()
@@ -306,7 +316,7 @@ export function useExperienceAgentSessions({
         try { refusal = await response.json() as { error?: unknown; detail?: unknown } } catch { /* typed fallback below */ }
         const detail = boundedText(refusal.detail, 1_000)
         const code = boundedText(refusal.error, 200)
-        throw new Error(detail ?? code ?? `AGENT_START_REFUSED:${response.status}`)
+        throw new AgentStartRefusal(response.status, detail ?? code ?? `AGENT_START_REFUSED:${response.status}`)
       }
 
       const reader = response.body.getReader()
@@ -437,7 +447,8 @@ export function useExperienceAgentSessions({
       // A user cancellation is different: it does not disprove an already verified descriptor.
       const error = cause as Error
       if (!isCurrent()) throw cause
-      const terminalResumeRefusal = prior !== null && /^AGENT_START_REFUSED:(401|403|404)$/.test(error?.message ?? "")
+      const terminalResumeRefusal = prior !== null && error instanceof AgentStartRefusal
+        && (error.status === 401 || error.status === 403 || error.status === 404)
       if (error?.name !== "AbortError" && (!prior || terminalResumeRefusal)) {
         window.localStorage.removeItem(operationStorageKey)
         descriptorRef.current = null

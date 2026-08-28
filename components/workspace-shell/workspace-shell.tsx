@@ -786,7 +786,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         : `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
       if (lineTarget === "agent") {
         if (!delegateContext?.provider) throw new Error("AGENT_PROVIDER_REQUIRED")
-        if (delegateContext.provider === "Codex") await persistBarrierRef.current()
+        const promotedPath = delegateContext.provider === "Codex" ? space.selectedPath : null
+        if (promotedPath) await persistBarrierRef.current()
         await agentSessions.runAgentTurn({
           provider: delegateContext.provider,
           role: delegateContext.role,
@@ -794,6 +795,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           prompt: contextualText,
           onEvent: (payload) => agentReplyText(payload).forEach((reply) => appendConversation("williamos", reply)),
         })
+        if (promotedPath) {
+          const refreshed = await refreshVerifiedChange(promotedPath)
+          if (refreshed === "dirty-conflict") {
+            setLineReply(`Codex saved ${promotedPath}, but Source has newer unsaved edits. Your buffer was preserved.`)
+          } else if (refreshed === "failed") {
+            setLineReply(`Codex saved ${promotedPath}, but Source or Changes could not refresh.`)
+          }
+        }
         return
       }
       const response = await fetch("/api/environment/line", {

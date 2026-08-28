@@ -99,6 +99,54 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByText("src/other.ts")).toBeTruthy()
   })
 
+  it("refreshes the exact promoted file and diff after a successful Codex delegation", async () => {
+    const sessionId = "323e4567-e89b-42d3-a456-426614174000"
+    let sourceReads = 0
+    let diffReads = 0
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        sourceReads += 1
+        return Promise.resolve(Response.json({
+          kind: "file", path: "src/app.ts",
+          content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n",
+          modifiedAt: sourceReads === 1 ? "2026-08-28T12:00:00.000Z" : "2026-08-28T12:01:00.000Z",
+        }))
+      }
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({
+        kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z",
+      }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
+        diffReads += 1
+        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+      }
+      if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "result", text: "Updated src/app.ts." },
+        { type: "done", code: 0, reason: null },
+      ))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+    expect((await screen.findByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const version = 1\n")
+
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Update the selected file." } })
+    fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+
+    await waitFor(() => expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const version = 2\n"))
+    expect(sourceReads).toBeGreaterThanOrEqual(2)
+    expect(diffReads).toBeGreaterThanOrEqual(2)
+  })
+
   it("starts a fresh Codex Builder through the Codex route and persists provider-bound truth", async () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174000"
     const seen: Record<string, unknown>[] = []
@@ -619,7 +667,7 @@ describe("Experience V2 real agent sessions", () => {
       updatedAt: "2026-08-27T16:05:00.000Z",
     }))
     const fetcher = vi.fn()
-      .mockResolvedValueOnce(new Response("refused", { status: 403 }))
+      .mockResolvedValueOnce(Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH", detail: "The saved session no longer matches this Space." }, { status: 403 }))
       .mockResolvedValueOnce(ndjson(
         { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: false },
         { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Started fresh." } },
@@ -631,7 +679,7 @@ describe("Experience V2 real agent sessions", () => {
 
     await expect(act(async () => {
       await expose!.runClaudeTurn({ role: "Builder", assignment: "New work", prompt: "Continue." })
-    })).rejects.toThrow("AGENT_START_REFUSED:403")
+    })).rejects.toThrow("The saved session no longer matches this Space.")
 
     expect(window.localStorage.getItem(key)).toBeNull()
     await act(async () => {
