@@ -49,6 +49,14 @@ function Rows({ payload }: { payload: unknown }) {
 }
 
 export function InspectorSurfaceView({ surface }: { surface: InspectorSurface }) {
+  if (surface.kind === "review") {
+    return (
+      <article className={styles.inspectorCode}>
+        <h2>Review report · {surface.subject}</h2>
+        <pre>{display(surface.payload)}</pre>
+      </article>
+    )
+  }
   if (surface.kind === "browser") {
     return (
       <iframe
