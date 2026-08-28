@@ -228,7 +228,7 @@ describe("durable Codex delegate route", () => {
     expect(seams.commitLoomCodexSuccess).toHaveBeenCalledWith(expect.objectContaining({
       userId: "owner-1",
       threadId: "codex-thread-1",
-      workspace: expect.stringMatching(/experience-v2-codex-session$/),
+      workspace: process.cwd(),
       resumed: false,
       worldId: "world-1",
       assignmentHash: "assignment-hash",
