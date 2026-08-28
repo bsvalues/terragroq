@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
@@ -27,12 +27,42 @@ function ndjson(...events: readonly Record<string, unknown>[]): Response {
 function Harness({ worker = null }: { worker?: WorldWorker | null }) {
   const controller = useExperienceAgentSessions({ ownerScope: OWNER_SCOPE, worldScope: WORLD_SCOPE, worker })
   expose = controller
-  return <AgentSessionStrip sessions={controller.sessions} activeSessionId={controller.activeSessionId} />
+  return (
+    <AgentSessionStrip
+      sessions={controller.sessions}
+      runningSessionId={controller.activeSessionId}
+      onStop={controller.stop}
+    />
+  )
 }
 
 let expose: ExperienceAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
+  it("shows a visible Stop control during a Claude turn and aborts its active request", async () => {
+    let requestSignal: AbortSignal | undefined
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true })
+      })
+    }))
+    render(<Harness />)
+
+    let turn!: Promise<unknown>
+    act(() => {
+      turn = expose!.runClaudeTurn({ role: "Builder", assignment: "Change src/app.ts", prompt: "Make the change." })
+    })
+
+    const stop = await screen.findByRole("button", { name: "Stop Claude turn" })
+    expect(requestSignal?.aborted).toBe(false)
+    fireEvent.click(stop)
+
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" })
+    expect(requestSignal?.aborted).toBe(true)
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop Claude turn" })).toBeNull())
+  })
+
   it("projects only the live World Spine worker and never invents provider sessions", () => {
     render(<Harness worker={{ lane: "review", state: "reviewing", since: "2026-08-27T16:00:00Z" }} />)
 

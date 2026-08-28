@@ -162,10 +162,45 @@ describe("Experience V2 persistent William judgment", () => {
       userId: "owner-a", worldId: "world-a", judgment,
       expectedBasisFingerprint: williamJudgmentBasisFingerprint(world),
     }, store)
-    const reopened = await loadOrCreateOwnedSpace({ userId: "owner-a", worldId: "world-a" }, store)
+    const reopened = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      worldId: "world-a",
+      workspaceAppUrl: "https://preview.terrafusion.test/",
+    }, store)
 
     expect(reopened).toMatchObject({ worldId: "world-a", space: { revision: 3 }, judgment })
     expect(JSON.parse(store.rows.get("world-a")!.snapshot).space.selection.filePath).toBe("src/search.ts")
+  })
+
+  it("does not restore a preview-grounded judgment when the admitted preview changed", async () => {
+    const store = new MemoryStore()
+    const attachedWorld = validateWorkingWorld({
+      ...createWorkingWorld({ intent: "TerraFusion" }),
+      space: space(),
+    })
+    const judgment = {
+      recommendation: "Keep the live preview beside the selected source.",
+      rationale: "The developer preview is attached.",
+      basis: [{ key: "preview", label: "Developer preview", value: "attached" }],
+      confidence: 0.82,
+      generatedAt: "2026-08-27T18:00:00.000Z",
+      basisFingerprint: williamJudgmentBasisFingerprint(attachedWorld),
+      provenance: { provider: "williamos-inference", model: "local-model" },
+    } as const
+    const persisted = validateWorkingWorld({ ...attachedWorld, judgment })
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: persisted.intent,
+      snapshot: JSON.stringify(persisted), updatedAt: new Date("2026-08-27T18:01:00.000Z"),
+    })
+
+    const reopened = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      worldId: "world-a",
+      workspaceAppUrl: null,
+    }, store)
+
+    expect(reopened?.space.runningAppUrl).toBeNull()
+    expect(reopened?.judgment).toBeNull()
   })
 
   it("preserves a newer judgment when a stale Line turn saves afterward", async () => {

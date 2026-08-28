@@ -333,11 +333,13 @@ export async function loadOrCreateOwnedSpace(
       if (exact) throw new Error("SPACE_PROJECT_MISMATCH")
       row = null
     } else {
+      const space = restoredSpace(world, input.workspaceAppUrl)
+      const restoredWorld = validateWorkingWorld({ ...world, space })
       return {
         worldId: row.id,
-        space: restoredSpace(world, input.workspaceAppUrl),
+        space,
         spine: world.spine,
-        judgment: world.judgment?.basisFingerprint === williamJudgmentBasisFingerprint(world)
+        judgment: world.judgment?.basisFingerprint === williamJudgmentBasisFingerprint(restoredWorld)
           ? world.judgment
           : null,
         ...(input.project ? { project: input.project } : {}),

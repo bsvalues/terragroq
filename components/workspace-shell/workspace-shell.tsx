@@ -46,6 +46,16 @@ const windowName: Record<WindowId, string> = {
 
 const browserSpaceKey = (opaque: string) => `williamos:space:${opaque}`
 
+function williamJudgmentContextKey(space: WorkspaceSpace, spine: WorldSpine): string {
+  return JSON.stringify({
+    project: spine.projectName,
+    execution: spine.execution,
+    selectedPath: space.selectedPath,
+    runningAppUrl: space.runningAppUrl,
+    evidence: spine.evidence.at(-1) ?? null,
+  })
+}
+
 function agentReplyText(payload: Readonly<Record<string, unknown>>): readonly string[] {
   if (payload.type !== "event" || !payload.event || typeof payload.event !== "object") return []
   const event = payload.event as Record<string, unknown>
@@ -99,6 +109,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     worker: spine.worker ?? null,
   })
   const stateRef = useRef(space)
+  const spineRef = useRef(spine)
   const worldRef = useRef(worldId)
   const storageRef = useRef<SpaceStorage>(storage)
   const browserStorageKeyRef = useRef<string | null>(null)
@@ -117,6 +128,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const judgmentRequestedRef = useRef<string | null>(null)
   const judgmentContextRef = useRef<string | null>(null)
   stateRef.current = space
+  spineRef.current = spine
   worldRef.current = worldId
   storageRef.current = storage
 
@@ -257,6 +269,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setJudgmentError(null)
     try {
       await persistBarrierRef.current()
+      const requestContext = williamJudgmentContextKey(stateRef.current, spineRef.current)
       const response = await fetch("/api/environment/judgment", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -265,6 +278,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       })
       const payload = await response.json() as { error?: string; judgment?: WilliamJudgment }
       if (!response.ok || !payload.judgment) throw new Error(payload.error ?? `JUDGMENT_${response.status}`)
+      if (worldRef.current !== id || williamJudgmentContextKey(stateRef.current, spineRef.current) !== requestContext) {
+        judgmentRequestedRef.current = null
+        return
+      }
       setJudgment(payload.judgment)
     } catch (error) {
       setJudgmentError(error instanceof Error ? error.message : "JUDGMENT_UNAVAILABLE")
@@ -279,13 +296,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     void refreshWilliamJudgment()
   }, [hydrated, judgment, refreshWilliamJudgment, storage, worldId])
 
-  const judgmentContextKey = JSON.stringify({
-    project: spine.projectName,
-    execution: spine.execution,
-    selectedPath: space.selectedPath,
-    runningAppUrl: space.runningAppUrl,
-    evidence: spine.evidence.at(-1) ?? null,
-  })
+  const judgmentContextKey = williamJudgmentContextKey(space, spine)
   useEffect(() => {
     if (!hydrated) return
     if (judgmentContextRef.current === null) {
@@ -764,7 +775,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             <span className={spatial.spacePath}>{project?.identity ?? ""}</span>
           </span>
         </div>
-        <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} className={spatial.sessionStrip} onSelect={(agent) => {
+        <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningSessionId={agentSessions.activeSessionId} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
           setFocusedAgentId(agent.id)
           if (agent.kind === "durable-session") openLine(`Redirect ${agent.role} · ${agent.providerLabel} on ${selectedLabel}: `, "agent")
         }} />

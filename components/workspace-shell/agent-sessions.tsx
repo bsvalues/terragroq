@@ -289,17 +289,31 @@ export function useExperienceAgentSessions({
 export function AgentSessionStrip({
   sessions,
   activeSessionId = null,
+  runningSessionId = null,
+  onStop,
   onSelect,
   className,
 }: {
   sessions: readonly ExperienceAgentSession[]
   activeSessionId?: string | null
+  runningSessionId?: string | null
+  onStop?: () => void
   onSelect?: (session: ExperienceAgentSession) => void
   className?: string
 }) {
-  if (sessions.length === 0) return null
+  if (sessions.length === 0 && !runningSessionId) return null
   return (
     <nav className={className ?? "flex items-center justify-center gap-2"} aria-label="Durable agent sessions">
+      {runningSessionId ? (
+        <button
+          type="button"
+          aria-label="Stop Claude turn"
+          onClick={onStop}
+          className="rounded border border-[#8c4943] bg-[#261413] px-2 py-1 text-[10.5px] font-semibold text-[#f0c4bf]"
+        >
+          Stop
+        </button>
+      ) : null}
       {sessions.map((session) => (
         <button
           key={session.id}
