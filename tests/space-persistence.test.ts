@@ -88,6 +88,8 @@ import {
   findLatestProjectOwnedByPage,
   findLatestTerraFusionOwnedByPage,
   loadOrCreateOwnedSpace,
+  loadOwnedCouncilHistory,
+  saveOwnedCouncilSession,
   saveOwnedLineWorld,
   saveOwnedSpace,
   workspaceProjectFromRoot,
@@ -96,6 +98,16 @@ import {
 } from "@/lib/environment/space-persistence"
 import { createWorkingWorld, withTurn, type SpaceState } from "@/lib/environment/working-world"
 import { POST } from "@/app/api/environment/line/route"
+
+function councilSession(id: string, createdAt: string) {
+  return {
+    id, question: `Question ${id}`, status: "ready" as const, createdAt,
+    context: { spaceName: "TerraFusion", kind: "file" as const, label: "src/App.tsx" },
+    members: [{ id: "architect", role: "Architect", name: "Atlas", provider: "local", model: "model", status: "ready" as const, perspective: "Keep it bounded." }],
+    consensus: "Proceed carefully.", dissent: "One risk.", blindSpot: "Unknown.", recommendation: "Verify it.", confidence: 80,
+    evidence: [{ id: "selected", label: "Selected file", detail: "src/App.tsx" }],
+  }
+}
 
 class MemoryStore implements SpaceWorkingWorldStore {
   readonly rows = new Map<string, OwnedWorkingWorldRecord>()
@@ -640,5 +652,49 @@ describe("server-owned Space persistence", () => {
     }, store)).rejects.toThrow("WORLD_PERSISTENCE_BUSY")
     expect(store.updateAttempts).toBe(3)
     expect(store.rows.get("world-a")?.snapshot).toBe(originalSnapshot)
+  })
+
+  it("persists, deduplicates, and prunes Council history while preserving unrelated world state", async () => {
+    const store = new MemoryStore()
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
+    store.rows.set("world-a", { id: "world-a", userId: "owner-a", intent: initial.intent, snapshot: JSON.stringify(initial), updatedAt: new Date() })
+    for (let index = 0; index < 7; index += 1) {
+      await saveOwnedCouncilSession({ userId: "owner-a", worldId: "world-a", session: councilSession(`c-${index}`, `2026-08-27T10:0${index}:00.000Z`) }, store)
+    }
+    await saveOwnedCouncilSession({ userId: "owner-a", worldId: "world-a", session: councilSession("c-6", "2026-08-27T10:09:00.000Z") }, store)
+
+    const history = await loadOwnedCouncilHistory("owner-a", "world-a", store)
+    expect(history?.map((entry) => entry.id)).toEqual(["c-1", "c-2", "c-3", "c-4", "c-5", "c-6"])
+    expect(history?.at(-1)?.createdAt).toBe("2026-08-27T10:09:00.000Z")
+    expect(JSON.parse(store.rows.get("world-a")!.snapshot).space.revision).toBe(1)
+    expect(await loadOwnedCouncilHistory("owner-b", "world-a", store)).toBeNull()
+  })
+
+  it("retries Council CAS against the latest world instead of replacing concurrent fields", async () => {
+    class CouncilRetryStore extends MemoryStore {
+      attempts = 0
+      override async updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string) {
+        this.attempts += 1
+        if (this.attempts === 1) {
+          const row = this.rows.get(worldId)!
+          this.rows.set(worldId, { ...row, snapshot: JSON.stringify({
+            ...JSON.parse(row.snapshot),
+            openConcerns: ["concurrent"],
+            councilHistory: [councilSession("c-concurrent", "2026-08-27T09:59:00.000Z")],
+          }) })
+          return false
+        }
+        return super.updateOwned(userId, worldId, snapshot, intent, expectedSnapshot)
+      }
+    }
+    const store = new CouncilRetryStore()
+    const initial = createWorkingWorld({ intent: "TerraFusion" })
+    store.rows.set("world-a", { id: "world-a", userId: "owner-a", intent: initial.intent, snapshot: JSON.stringify(initial), updatedAt: new Date() })
+
+    await saveOwnedCouncilSession({ userId: "owner-a", worldId: "world-a", session: councilSession("c-current", "2026-08-27T10:00:00.000Z") }, store)
+
+    expect(store.attempts).toBe(2)
+    expect(JSON.parse(store.rows.get("world-a")!.snapshot).openConcerns).toEqual(["concurrent"])
+    expect(JSON.parse(store.rows.get("world-a")!.snapshot).councilHistory.map((entry: { id: string }) => entry.id)).toEqual(["c-concurrent", "c-current"])
   })
 })

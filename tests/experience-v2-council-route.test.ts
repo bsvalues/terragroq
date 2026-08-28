@@ -3,18 +3,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const harness = vi.hoisted(() => ({
   getUserId: vi.fn(async () => "owner-1"),
   loadOwnedWorkingWorld: vi.fn(),
+  loadOwnedCouncilHistory: vi.fn(),
+  saveOwnedCouncilSession: vi.fn(),
 }))
 
 vi.mock("@/lib/session", () => ({ getUserId: harness.getUserId }))
 vi.mock("@/lib/environment/space-persistence", () => ({
   loadOwnedWorkingWorld: harness.loadOwnedWorkingWorld,
+  loadOwnedCouncilHistory: harness.loadOwnedCouncilHistory,
+  saveOwnedCouncilSession: harness.saveOwnedCouncilSession,
 }))
 vi.mock("@/lib/ai/config", () => ({
   CHAT_MODEL: "test-council-model",
   INFERENCE_BASE_URL: "http://inference.test/v1",
 }))
 
-import { POST } from "@/app/api/environment/council/route"
+import { GET, POST } from "@/app/api/environment/council/route"
 
 const WORLD_ID = "11111111-1111-4111-8111-111111111111"
 
@@ -88,6 +92,8 @@ function successfulInference() {
 beforeEach(() => {
   harness.getUserId.mockReset().mockResolvedValue("owner-1")
   harness.loadOwnedWorkingWorld.mockReset().mockResolvedValue(ownedWorld)
+  harness.loadOwnedCouncilHistory.mockReset().mockResolvedValue([])
+  harness.saveOwnedCouncilSession.mockReset().mockResolvedValue(undefined)
   vi.unstubAllGlobals()
 })
 
@@ -130,6 +136,12 @@ describe("POST /api/environment/council", () => {
       ],
     })
     expect(payload.session.id).toMatch(/^council-/)
+    expect(payload.session.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    expect(harness.saveOwnedCouncilSession).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1",
+      worldId: WORLD_ID,
+      session: expect.objectContaining({ id: payload.session.id }),
+    }))
     expect(payload.session.members).toHaveLength(5)
     expect(payload.session.members.map((member: { role: string }) => member.role)).toEqual([
       "Architect",
@@ -263,5 +275,77 @@ describe("POST /api/environment/council", () => {
 
     expect(response.status).toBe(400)
     expect(await response.json()).toEqual({ error: "INVALID_COUNCIL_REQUEST" })
+  })
+
+  it("does not report success when the completed advisory cannot be persisted", async () => {
+    vi.stubGlobal("fetch", successfulInference())
+    harness.saveOwnedCouncilSession.mockRejectedValue(new Error("WORLD_PERSISTENCE_BUSY"))
+
+    const response = await POST(request({ worldId: WORLD_ID, question: "Council this.", selectedContext }))
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: "COUNCIL_PERSISTENCE_UNAVAILABLE" })
+  })
+
+  it("does not resolve the successful response before persistence commits", async () => {
+    vi.stubGlobal("fetch", successfulInference())
+    let release!: () => void
+    harness.saveOwnedCouncilSession.mockImplementation(() => new Promise<void>((resolve) => { release = resolve }))
+    let settled = false
+    const pending = POST(request({ worldId: WORLD_ID, question: "Council this.", selectedContext })).then((response) => { settled = true; return response })
+    await vi.waitFor(() => expect(harness.saveOwnedCouncilSession).toHaveBeenCalledOnce())
+    expect(settled).toBe(false)
+    release()
+    expect((await pending).status).toBe(200)
+  })
+
+  it("bounds an oversized intent before six-call inference returns and persists the Council session", async () => {
+    const oversizedIntent = "x".repeat(700)
+    harness.loadOwnedWorkingWorld.mockResolvedValue({
+      ...ownedWorld,
+      intent: oversizedIntent,
+      spine: { ...ownedWorld.spine, projectName: null },
+    })
+    vi.stubGlobal("fetch", successfulInference())
+
+    const response = await POST(request({ worldId: WORLD_ID, question: "Council this.", selectedContext }))
+    const payload = await response.json()
+
+    expect(fetch).toHaveBeenCalledTimes(6)
+    expect(response.status).toBe(200)
+    expect(payload.session.context.spaceName).toBe("x".repeat(500))
+    expect(harness.saveOwnedCouncilSession).toHaveBeenCalledWith(expect.objectContaining({
+      session: expect.objectContaining({ context: expect.objectContaining({ spaceName: "x".repeat(500) }) }),
+    }))
+  })
+
+  it("rejects client-supplied session, history, or provenance", async () => {
+    vi.stubGlobal("fetch", vi.fn())
+    for (const extra of [{ session: {} }, { councilHistory: [] }, { provenance: "invented" }]) {
+      const response = await POST(request({ worldId: WORLD_ID, question: "Council this.", selectedContext, ...extra }))
+      expect(response.status).toBe(400)
+    }
+    expect(fetch).not.toHaveBeenCalled()
+  })
+})
+
+describe("GET /api/environment/council", () => {
+  it("returns only the authenticated owner's bounded history", async () => {
+    const history = [{ id: "council-saved" }]
+    harness.loadOwnedCouncilHistory.mockResolvedValue(history)
+
+    const response = await GET(new Request(`http://localhost/api/environment/council?worldId=${WORLD_ID}`))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ history })
+    expect(harness.loadOwnedCouncilHistory).toHaveBeenCalledWith("owner-1", WORLD_ID)
+  })
+
+  it("fails closed for missing, invalid, and unauthenticated worlds", async () => {
+    harness.loadOwnedCouncilHistory.mockResolvedValue(null)
+    expect((await GET(new Request(`http://localhost/api/environment/council?worldId=${WORLD_ID}`))).status).toBe(404)
+    expect((await GET(new Request("http://localhost/api/environment/council?worldId=not-a-world"))).status).toBe(400)
+    harness.getUserId.mockRejectedValue(new Error("Unauthorized"))
+    expect((await GET(new Request(`http://localhost/api/environment/council?worldId=${WORLD_ID}`))).status).toBe(401)
   })
 })

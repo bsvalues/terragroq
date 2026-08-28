@@ -33,6 +33,17 @@ function world(): WorkingWorldSnapshot {
   return createWorkingWorld({ intent: "continue the highest-priority TerraFusion work" })
 }
 
+function largeCouncilSession(id: string) {
+  const fill = "界".repeat(3_900)
+  return {
+    id, question: fill, status: "ready", createdAt: `2026-08-27T10:0${id.at(-1)}:00.000Z`,
+    context: { spaceName: "TerraFusion", kind: "file", label: "src/App.tsx" },
+    members: Array.from({ length: 5 }, (_, index) => ({ id: `role-${index}`, role: `Role ${index}`, name: `Name ${index}`, provider: "local", model: "model", status: index === 4 ? "dissenting" : "ready", perspective: fill })),
+    consensus: fill, dissent: fill, blindSpot: fill, recommendation: fill, confidence: 80,
+    evidence: Array.from({ length: 12 }, (_, index) => ({ id: `e-${index}`, label: `Evidence ${index}`, detail: "界".repeat(1_900) })),
+  }
+}
+
 describe("a mounted world carries the governed spine", () => {
   it("starts honestly empty rather than pretending to hold work", () => {
     // An empty spine is a world with no work in it — not "unknown yet". A workspace that shows work
@@ -63,6 +74,21 @@ describe("a mounted world carries the governed spine", () => {
     const legacy = JSON.parse(JSON.stringify(world())) as Record<string, unknown>
     delete legacy.spine
     expect(validateWorkingWorld(legacy).spine).toEqual(EMPTY_SPINE)
+  })
+
+  it("defaults and migrates durable Council history without losing the world", () => {
+    expect(world().councilHistory).toEqual([])
+    const legacy = JSON.parse(JSON.stringify(world())) as Record<string, unknown>
+    delete legacy.councilHistory
+    expect(validateWorkingWorld(legacy).councilHistory).toEqual([])
+  })
+
+  it("rejects malformed and oversized persisted Council history", () => {
+    expect(() => validateWorkingWorld({ ...world(), councilHistory: [{ id: "invented" }] })).toThrow(/COUNCIL_SESSION/)
+    expect(() => validateWorkingWorld({ ...world(), councilHistory: Array.from({ length: 7 }, () => ({})) })).toThrow(/COUNCIL_HISTORY/)
+    expect(() => validateWorkingWorld({ ...world(), councilHistory: Array.from({ length: 6 }, (_, index) => largeCouncilSession(`c-${index}`)) })).toThrow(/COUNCIL_HISTORY_TOO_LARGE/)
+    expect(() => validateWorkingWorld({ ...world(), councilHistory: [{ ...largeCouncilSession("c-0"), evidence: [{ id: "e", label: "link", detail: "detail", href: "https://invented.example" }] }] })).toThrow(/COUNCIL_SESSION_EVIDENCE_UNKNOWN_KEY/)
+    expect(() => validateWorkingWorld({ ...world(), councilHistory: [{ ...largeCouncilSession("c-0"), createdAt: "August 27, 2026" }] })).toThrow(/COUNCIL_SESSION_CREATED_AT_INVALID/)
   })
 
   it("refuses a malformed or unknown execution state", () => {

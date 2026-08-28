@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto"
 import { z } from "zod"
 
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
+import { validateCouncilSession, type CouncilSession } from "@/lib/environment/council-session"
 import type { WorkingWorldSnapshot } from "@/lib/environment/working-world"
+
+export type { CouncilSession } from "@/lib/environment/council-session"
 
 const selectedContextSchema = z.object({
   kind: z.enum(["space", "file", "preview", "diff", "agent", "selection"]),
@@ -62,36 +65,6 @@ const COUNCIL_ROLES = [
     charge: "Argue the strongest credible dissent and identify failure or recovery risks.",
   },
 ] as const
-
-export type CouncilSession = Readonly<{
-  id: string
-  question: string
-  status: "ready"
-  context: Readonly<{
-    spaceName: string
-    kind: CouncilRequest["selectedContext"]["kind"]
-    label: string
-  }>
-  members: readonly Readonly<{
-    id: string
-    role: string
-    name: string
-    provider: string
-    model: string
-    status: "ready" | "dissenting"
-    perspective: string
-  }>[]
-  consensus: string
-  dissent: string
-  blindSpot: string
-  recommendation: string
-  confidence: number
-  evidence: readonly Readonly<{
-    id: string
-    label: string
-    detail: string
-  }>[]
-}>
 
 export class CouncilInferenceError extends Error {
   constructor(message: string) {
@@ -191,8 +164,14 @@ function activeWindow(world: WorkingWorldSnapshot) {
   return world.space?.windows.find((window) => window.id === world.space?.activeWindowId) ?? null
 }
 
+function groundedSpaceName(world: WorkingWorldSnapshot): string {
+  // Persisted Council context is canonical product data. The Line intent may be substantially
+  // longer than the display identity, so bind and bound it before any inference call.
+  return (world.spine.projectName?.trim() || world.intent.trim()).slice(0, 500)
+}
+
 function groundCouncilContext(input: CouncilRequest, world: WorkingWorldSnapshot): GroundedCouncilContext {
-  const spaceName = world.spine.projectName?.trim() || world.intent.trim()
+  const spaceName = groundedSpaceName(world)
   const requested = input.selectedContext
   let label: string | null = null
 
@@ -284,10 +263,11 @@ export async function conveneCouncil(input: CouncilRequest, world: WorkingWorldS
     "Council synthesis returned invalid structured advice.",
   )
 
-  return {
+  return validateCouncilSession({
     id: `council-${randomUUID()}`,
     question: input.question,
     status: "ready",
+    createdAt: new Date().toISOString(),
     context: {
       spaceName: grounded.spaceName,
       kind: grounded.kind,
@@ -297,5 +277,5 @@ export async function conveneCouncil(input: CouncilRequest, world: WorkingWorldS
     ...synthesis,
     confidence: Math.round(synthesis.confidence),
     evidence: grounded.evidence,
-  }
+  })
 }
