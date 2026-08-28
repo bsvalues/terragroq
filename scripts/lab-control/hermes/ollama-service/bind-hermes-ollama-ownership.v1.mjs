@@ -6,18 +6,39 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 export const LAUNCH_SCHEMA = "hermes-ollama-ownership-launch/1"
-export const RECEIPT_SCHEMA = "hermes-ollama-ownership-launch-receipt/1"
+export const LEGACY_RECEIPT_SCHEMA = "hermes-ollama-ownership-launch-receipt/1"
+export const RECEIPT_SCHEMA = "hermes-ollama-ownership-launch-receipt/2"
 export const SOURCE_SCHEMA = "hermes-ollama-ownership-source/1"
-export const BOUND_SCHEMA = "hermes-ollama-ownership-bound/1"
+export const LEGACY_BOUND_SCHEMA = "hermes-ollama-ownership-bound/1"
+export const BOUND_SCHEMA = "hermes-ollama-ownership-bound/2"
 export const OBSERVATION = "HERMES_OLLAMA_OWNERSHIP_OBSERVATION"
 export const PROBE_FAILURE = "HERMES_OLLAMA_OWNERSHIP_PROBE_FAILURE"
 export const CANONICALIZATION = "recursive-key-sort-json/1"
+export const BOOTSTRAP_CHECKPOINT_MAP_VERSION = "hermes-ollama-ownership-bootstrap-checkpoints/1"
+export const BOOTSTRAP_CHECKPOINT_EXIT_CODES = Object.freeze({
+  BOOTSTRAP_ELEVATION_IDENTITY: 161,
+  BOOTSTRAP_ARGUMENT_PATH_NORMALIZATION: 162,
+  BOOTSTRAP_MANIFEST_EXISTENCE: 163,
+  BOOTSTRAP_MANIFEST_REPARSE_CHECK: 164,
+  BOOTSTRAP_MANIFEST_PARSE: 165,
+  BOOTSTRAP_MANIFEST_SCHEMA_AUTHORITY: 166,
+  BOOTSTRAP_COLLECTOR_DIGEST: 167,
+  BOOTSTRAP_OUTPUT_PATH_BINDING: 168,
+  BOOTSTRAP_DOCKER_DIGEST: 169,
+  BOOTSTRAP_MACHINE_IDENTITY: 170,
+  BOOTSTRAP_LINEAGE_PARENT_EXISTENCE: 171,
+  BOOTSTRAP_LINEAGE_REPARSE_CHECK: 172,
+  BOOTSTRAP_SECURE_SOURCE_DIRECTORY_CREATE: 173,
+  BOOTSTRAP_SECURE_SOURCE_DIRECTORY_ACL_VERIFY: 174,
+  BOOTSTRAP_OUTPUT_NONEXISTENCE: 175,
+  BOOTSTRAP_ENVELOPE_READY: 176,
+})
+const BOOTSTRAP_EXIT_CHECKPOINTS = new Map(Object.entries(BOOTSTRAP_CHECKPOINT_EXIT_CODES).map(([checkpoint, exitCode]) => [exitCode, checkpoint]))
 
 const SHA256 = /^[a-f0-9]{64}$/
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/
 const FAILURE_CLASSES = new Set(["ACCESS_DENIED", "API_FAILURE", "MALFORMED_RESULT", "TOOL_EXIT_NONZERO", "PARSE_FAILURE", "PRECONDITION_FAILED", "UNEXPECTED_EXCEPTION"])
-const OUTER_DISPOSITIONS = new Set(["COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL", "COLLECTOR_SOURCE_UNBINDABLE"])
 const SENSITIVE_KEY = /(?:password|passwd|secret|token|credential|private.?key|connection.?string|authorization|cookie)/i
 const SENSITIVE_VALUE = /(?:password|passwd|pwd|secret|token|api[_-]?key|authorization|cookie)\s*[:=]\s*(?!\[REDACTED\])\S+|(?:bearer|basic)\s+[a-z0-9._~+\/-]+|(?:postgres(?:ql)?|mongodb(?:\+srv)?|redis|https?):\/\/[^/@\s:]+:[^/@\s]+@|-----BEGIN [^-]+PRIVATE KEY-----/i
 
@@ -93,8 +114,12 @@ export function validateLaunch(manifest, receipt) {
   validateHostIdentity(manifest.hostIdentity, "launchManifest.hostIdentity")
   const stagedAt = instant(manifest.stagedAt, "launchManifest.stagedAt")
 
-  exactKeys(receipt, ["schema", "nonce", "manifestSha256", "collectorSha256", "binderSha256", "stagerSha256", "nodeSha256", "powershellSha256", "startedAt", "completedAt", "elevatedProcessId", "exitCode", "uacStartInvocations", "sourcePresent", "sourceSha256", "disposition", "hostIdentity"], "launchReceipt")
-  if (receipt.schema !== RECEIPT_SCHEMA || receipt.nonce !== manifest.nonce || receipt.manifestSha256 !== stableDigest(manifest)
+  const receiptV2 = receipt?.schema === RECEIPT_SCHEMA
+  const receiptV1 = receipt?.schema === LEGACY_RECEIPT_SCHEMA
+  if (!receiptV1 && !receiptV2) fail("HERMES_OWNERSHIP_RECEIPT_INVALID", "receipt schema differs")
+  const receiptKeys = ["schema", "nonce", "manifestSha256", "collectorSha256", "binderSha256", "stagerSha256", "nodeSha256", "powershellSha256", "startedAt", "completedAt", "elevatedProcessId", "exitCode", "uacStartInvocations", "sourcePresent", "sourceSha256", "disposition", "hostIdentity"]
+  exactKeys(receipt, receiptV2 ? [...receiptKeys, "bootstrapMapVersion", "bootstrapCheckpoint", "bootstrapExitCode"] : receiptKeys, "launchReceipt")
+  if (receipt.nonce !== manifest.nonce || receipt.manifestSha256 !== stableDigest(manifest)
     || receipt.collectorSha256 !== manifest.collectorSha256 || receipt.binderSha256 !== manifest.binderSha256
     || receipt.stagerSha256 !== manifest.stagerSha256 || receipt.nodeSha256 !== manifest.nodeSha256
     || receipt.powershellSha256 !== manifest.powershellSha256 || receipt.uacStartInvocations !== 1) {
@@ -110,8 +135,21 @@ export function validateLaunch(manifest, receipt) {
   assertSha(receipt.sourceSha256, "launchReceipt.sourceSha256", true)
   if (receipt.sourcePresent !== (receipt.sourceSha256 !== null)) fail("HERMES_OWNERSHIP_RECEIPT_INVALID", "source presence/digest disagree")
   if (receipt.sourcePresent && receipt.disposition !== "COLLECTOR_SOURCE_PRESENT") fail("HERMES_OWNERSHIP_RECEIPT_INVALID", "source disposition differs")
-  if (!receipt.sourcePresent && receipt.disposition !== "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL") fail("HERMES_OWNERSHIP_RECEIPT_INVALID", "early-death disposition differs")
-  return { stagedAt, startedAt, completedAt }
+  if (receiptV1 && !receipt.sourcePresent && receipt.disposition !== "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL") fail("HERMES_OWNERSHIP_RECEIPT_INVALID", "legacy early-death disposition differs")
+  if (receiptV2) {
+    if (receipt.sourcePresent) {
+      if (receipt.bootstrapMapVersion !== null || receipt.bootstrapCheckpoint !== null || receipt.bootstrapExitCode !== null) fail("HERMES_OWNERSHIP_RECEIPT_INVALID", "source receipt claims bootstrap failure")
+    } else {
+      if (receipt.bootstrapMapVersion !== BOOTSTRAP_CHECKPOINT_MAP_VERSION || !Number.isInteger(receipt.bootstrapExitCode) || receipt.bootstrapExitCode !== receipt.exitCode) fail("HERMES_OWNERSHIP_RECEIPT_INVALID", "bootstrap exit lineage differs")
+      const mappedCheckpoint = BOOTSTRAP_EXIT_CHECKPOINTS.get(receipt.bootstrapExitCode)
+      if (mappedCheckpoint === undefined) {
+        if (receipt.bootstrapCheckpoint !== null || receipt.disposition !== "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL_UNKNOWN") fail("HERMES_OWNERSHIP_RECEIPT_INVALID", "unknown bootstrap exit was classified")
+      } else if (receipt.bootstrapCheckpoint !== mappedCheckpoint || receipt.disposition !== "COLLECTOR_BOOTSTRAP_FAILED") {
+        fail("HERMES_OWNERSHIP_RECEIPT_INVALID", "bootstrap checkpoint mapping differs")
+      }
+    }
+  }
+  return { stagedAt, startedAt, completedAt, receiptV2 }
 }
 
 function validateAuthority(authority, manifest) {
@@ -146,7 +184,7 @@ function validateSource(source, manifest, receipt) {
   exactKeys(source, source.artifact === OBSERVATION ? [...common, "observations"] : [...common, "failure", "partialObservations"], "source")
   if (source.collectionId !== manifest.nonce) fail("HERMES_OWNERSHIP_SOURCE_INVALID", "collection id differs")
   exactKeys(source.collector, ["name", "version", "sha256", "readOnly"], "source.collector")
-  if (source.collector.name !== "diagnose-hermes-ollama-ownership.ps1" || source.collector.version !== "2.0.0" || source.collector.sha256 !== manifest.collectorSha256 || source.collector.readOnly !== true) fail("HERMES_OWNERSHIP_SOURCE_INVALID", "collector identity differs")
+  if (source.collector.name !== "diagnose-hermes-ollama-ownership.ps1" || !["2.0.0", "2.1.0"].includes(source.collector.version) || source.collector.sha256 !== manifest.collectorSha256 || source.collector.readOnly !== true) fail("HERMES_OWNERSHIP_SOURCE_INVALID", "collector identity differs")
   exactKeys(source.launch, ["nonce", "manifestSha256"], "source.launch")
   if (source.launch.nonce !== manifest.nonce || source.launch.manifestSha256 !== stableDigest(manifest)) fail("HERMES_OWNERSHIP_SOURCE_INVALID", "launch binding differs")
   validateHostIdentity(source.hostIdentity, "source.hostIdentity")
@@ -199,21 +237,37 @@ export function bindOwnershipOutcome({ source = null, sourceBytes = null, launch
 
   const boundAt = now.toISOString()
   const authority = { readOnly: true, hostMutationAuthorized: false, hostMutationObserved: false, uacStartInvocations: 1 }
+  const boundSchema = launchTimes.receiptV2 ? BOUND_SCHEMA : LEGACY_BOUND_SCHEMA
   let terminal
   if (validated?.artifact === OBSERVATION) {
     terminal = {
-      schema: BOUND_SCHEMA, artifact: OBSERVATION, boundAt, collectionId: launchManifest.nonce,
+      schema: boundSchema, artifact: OBSERVATION, boundAt, collectionId: launchManifest.nonce,
       hostIdentity: launchManifest.hostIdentity, currentTruthClaim: true, authority,
       observation: validated.observations,
     }
   } else {
-    const failure = validated?.artifact === PROBE_FAILURE
-      ? { disposition: "SEALED_INTERNAL_PROBE_FAILURE", diagnostic: validated.failure, partialObservations: validated.partialObservations }
-      : launchReceipt.sourcePresent
-        ? { disposition: "COLLECTOR_SOURCE_UNBINDABLE", diagnostic: null, partialObservations: [], sourceContractErrorSha256: invalidSourceDigest ?? sha256Bytes(Buffer.from("SOURCE_PARSE_FAILURE")) }
-        : { disposition: "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL", diagnostic: null, partialObservations: [] }
+    let failure
+    if (validated?.artifact === PROBE_FAILURE) {
+      failure = { disposition: "SEALED_INTERNAL_PROBE_FAILURE", diagnostic: validated.failure, partialObservations: validated.partialObservations }
+    } else if (launchReceipt.sourcePresent) {
+      failure = { disposition: "COLLECTOR_SOURCE_UNBINDABLE", diagnostic: null, partialObservations: [], sourceContractErrorSha256: invalidSourceDigest ?? sha256Bytes(Buffer.from("SOURCE_PARSE_FAILURE")) }
+    } else if (launchTimes.receiptV2) {
+      failure = {
+        disposition: launchReceipt.disposition,
+        diagnostic: null,
+        partialObservations: [],
+        bootstrap: {
+          mapVersion: launchReceipt.bootstrapMapVersion,
+          checkpoint: launchReceipt.bootstrapCheckpoint,
+          exitCode: launchReceipt.bootstrapExitCode,
+        },
+      }
+    } else {
+      failure = { disposition: "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL", diagnostic: null, partialObservations: [] }
+    }
+    if (launchTimes.receiptV2 && launchReceipt.sourcePresent) failure = { ...failure, bootstrap: null }
     terminal = {
-      schema: BOUND_SCHEMA, artifact: PROBE_FAILURE, boundAt, collectionId: launchManifest.nonce,
+      schema: boundSchema, artifact: PROBE_FAILURE, boundAt, collectionId: launchManifest.nonce,
       hostIdentity: launchManifest.hostIdentity, currentTruthClaim: false, authority,
       failure: { ...failure, exitCode: launchReceipt.exitCode, elevatedProcessId: launchReceipt.elevatedProcessId },
     }
@@ -223,7 +277,7 @@ export function bindOwnershipOutcome({ source = null, sourceBytes = null, launch
 }
 
 export function verifyBoundOwnership(bound, { source = null, sourceBytes = null, launchManifest, launchReceipt }) {
-  if (!object(bound) || bound.schema !== BOUND_SCHEMA || ![OBSERVATION, PROBE_FAILURE].includes(bound.artifact)) fail("HERMES_OWNERSHIP_BOUND_INVALID", "bound schema differs")
+  if (!object(bound) || ![BOUND_SCHEMA, LEGACY_BOUND_SCHEMA].includes(bound.schema) || ![OBSERVATION, PROBE_FAILURE].includes(bound.artifact)) fail("HERMES_OWNERSHIP_BOUND_INVALID", "bound schema differs")
   if (bound.artifact === PROBE_FAILURE && bound.currentTruthClaim !== false) fail("HERMES_OWNERSHIP_BOUND_INVALID", "failure claims truth")
   if (bound.artifact === OBSERVATION && bound.currentTruthClaim !== true) fail("HERMES_OWNERSHIP_BOUND_INVALID", "observation lacks truth claim")
   exactKeys(bound.binding, ["canonicalization", "collectorSha256", "binderSha256", "stagerSha256", "launchManifestSha256", "launchReceiptSha256", "sourceBytesSha256", "digestSha256"], "bound.binding")
