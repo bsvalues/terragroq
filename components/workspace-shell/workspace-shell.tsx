@@ -605,6 +605,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     dirty: Boolean(changeTarget && dirtyPaths[changeTarget]),
     onVerifiedSuccess: refreshVerifiedChange,
   })
+  const sourceMinimizeDisabledReason = change.running
+    ? "Source cannot be minimized while Change is active"
+    : Object.values(dirtyPaths).some(Boolean)
+      ? "Source cannot be minimized while it has unsaved changes"
+      : undefined
 
   const openChange = useCallback(() => {
     if (change.running) return
@@ -862,7 +867,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       </div>
 
       <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
-        <WindowFrame id="editor" title="Source" geometry={space.windows.editor} active={space.activeWindowId === "editor"} onActivate={() => activate("editor")} onGeometry={(geometry) => updateWindow("editor", geometry)} onMinimize={() => minimize("editor")} minimizeDisabled={change.running}>
+        <WindowFrame id="editor" title="Source" geometry={space.windows.editor} active={space.activeWindowId === "editor"} onActivate={() => activate("editor")} onGeometry={(geometry) => updateWindow("editor", geometry)} onMinimize={() => minimize("editor")} minimizeDisabled={Boolean(sourceMinimizeDisabledReason)} minimizeDisabledReason={sourceMinimizeDisabledReason}>
           <EditorSurface space={space} onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={changeRefresh.path} reloadKey={changeRefresh.key} onReloadSettled={(path, key, result) => settleChangeRefresh("editor", path, key, result)} />
         </WindowFrame>
         <WindowFrame id="running-app" title="Developer preview · TerraFusion" geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
@@ -871,7 +876,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           )}
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
-          <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)}>
+          <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)} minimizeDisabled={id === "diff" && change.running} minimizeDisabledReason={id === "diff" && change.running ? "Changes cannot be minimized while Change is refreshing" : undefined}>
             <DeveloperToolsSurface kind={id} selectedPath={space.selectedPath} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} />
           </WindowFrame>
         ))}

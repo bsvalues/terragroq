@@ -160,7 +160,7 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
       .then(async (response) => {
         const payload = await response.json()
         if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
-        if (dirtyBuffers.current.has(reloadPath)) return "dirty-conflict" as const
+        if (bufferEpoch.current.get(reloadPath) !== epoch || dirtyBuffers.current.has(reloadPath)) return "dirty-conflict" as const
         setBuffers((existing) => (bufferEpoch.current.get(reloadPath) ?? 0) !== epoch ? existing : ({ ...existing, [reloadPath]: {
           path: payload.path,
           content: payload.content,
@@ -235,11 +235,12 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
         const detail = [payload.error ?? `SAVE_${response.status}`, payload.detail].filter(Boolean).join(": ")
         throw new Error(payload.error === "CHANGED_ON_DISK" ? "CHANGED_ON_DISK: reopen before saving" : detail)
       }
-      setBuffers((current) => ({
-        ...current,
-        [path]: acknowledgeSavedBuffer(current[path], submittedContent, payload.modifiedAt),
-      }))
-      dirtyBuffers.current.delete(path)
+      setBuffers((current) => {
+        const acknowledged = acknowledgeSavedBuffer(current[path], submittedContent, payload.modifiedAt)
+        if (acknowledged.content === acknowledged.savedContent) dirtyBuffers.current.delete(path)
+        else dirtyBuffers.current.add(path)
+        return { ...current, [path]: acknowledged }
+      })
     } catch (error) {
       setBuffers((current) => ({ ...current, [path]: {
         ...current[path], saving: false, error: error instanceof Error ? error.message : "SAVE_REFUSED",
@@ -326,6 +327,7 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
                         value={buffer.content}
                         selection={pane.selection}
                         onChange={(content) => {
+                          bufferEpoch.current.set(buffer.path, (bufferEpoch.current.get(buffer.path) ?? 0) + 1)
                           if (content === buffer.savedContent) dirtyBuffers.current.delete(buffer.path)
                           else dirtyBuffers.current.add(buffer.path)
                           setBuffers((current) => ({ ...current, [buffer.path]: { ...current[buffer.path], content, error: null } }))
