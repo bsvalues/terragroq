@@ -89,7 +89,7 @@ describe("#1052 ownership bootstrap diagnostics", () => {
     }
   })
 
-  it.each(Object.entries(BOOTSTRAP_CHECKPOINT_EXIT_CODES))("executes production checkpoint failure %s as exit %i without leaking exception text", (checkpoint, exitCode) => {
+  it.skipIf(process.platform !== "win32").each(Object.entries(BOOTSTRAP_CHECKPOINT_EXIT_CODES))("executes production checkpoint failure %s as exit %i without leaking exception text", (checkpoint, exitCode) => {
     const secret = "Authorization: Bearer bootstrap-secret-must-not-cross"
     const command = [
       `$source = Get-Content -Raw -LiteralPath '${collectorPath.replaceAll("'", "''")}'`,
@@ -106,7 +106,7 @@ describe("#1052 ownership bootstrap diagnostics", () => {
     expect(`${result.stdout}${result.stderr}`).not.toContain(secret)
   })
 
-  it.each([...Object.entries(BOOTSTRAP_CHECKPOINT_EXIT_CODES), ["UNKNOWN", 199] as [string, number]])("executes production stager mapping for %s exit %i", (checkpoint, exitCode) => {
+  it.skipIf(process.platform !== "win32").each([...Object.entries(BOOTSTRAP_CHECKPOINT_EXIT_CODES), ["UNKNOWN", 199] as [string, number]])("executes production stager mapping for %s exit %i", (checkpoint, exitCode) => {
     const command = [
       `$source = Get-Content -Raw -LiteralPath '${stagerPath.replaceAll("'", "''")}'`,
       "$tokens=$null; $errors=$null",
