@@ -1,16 +1,25 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   AgentSessionStrip,
   useExperienceAgentSessions,
-  type ExperienceAgentSessionController,
+  type ProviderNeutralAgentSessionController,
 } from "@/components/workspace-shell/agent-sessions"
+import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
+import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
+import { EMPTY_SPINE } from "@/lib/environment/working-world"
 import type { WorldWorker } from "@/lib/environment/working-world"
 
 const OWNER_SCOPE = "owner-1"
 const WORLD_SCOPE = "terrafusion"
+
+vi.mock("next/dynamic", () => ({
+  default: () => function TestSourceEditor(props: { value: string; onChange: (value: string) => void }) {
+    return <textarea aria-label="Source content" value={props.value} onChange={(event) => props.onChange(event.target.value)} />
+  },
+}))
 
 afterEach(() => {
   cleanup()
@@ -24,21 +33,303 @@ function ndjson(...events: readonly Record<string, unknown>[]): Response {
   })
 }
 
-function Harness({ worker = null }: { worker?: WorldWorker | null }) {
-  const controller = useExperienceAgentSessions({ ownerScope: OWNER_SCOPE, worldScope: WORLD_SCOPE, worker })
+function workspaceResponse() {
+  const space = {
+    ...defaultSpace(), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
+    editor: { openFiles: ["src/app.ts", "src/other.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
+  }
+  return Response.json({ worldId: "browser-world", space: spaceToServer(space), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "browser", browserStorageKey: "codex-delegate-test" })
+}
+
+function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, workContextReceipt = null }: { worker?: WorldWorker | null; ownerScope?: string; worldScope?: string; workContextReceipt?: string | null }) {
+  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worker, workContextReceipt })
   expose = controller
   return (
     <AgentSessionStrip
       sessions={controller.sessions}
       runningSessionId={controller.activeSessionId}
+      runningProvider={controller.activeProvider}
       onStop={controller.stop}
     />
   )
 }
 
-let expose: ExperienceAgentSessionController | null = null
+let expose: ProviderNeutralAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
+  it("requires a fresh provider choice and keeps Delegate bound to its captured selected file", async () => {
+    const sessionId = "323e4567-e89b-42d3-a456-426614174000"
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "delta", text: "Working from src/app.ts." },
+        { type: "result", text: "Completed the captured assignment." },
+        { type: "done", code: 0, reason: null },
+      ))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    expect(screen.getByRole("group", { name: "Choose agent provider" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Codex" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Claude" })).toBeTruthy()
+    const line = screen.getByRole("form", { name: "The Line" })
+    expect((within(line).getByRole("button", { name: "Delegate" }) as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Fix the selected defect." } })
+    fireEvent.click(screen.getByRole("tab", { name: "other.ts" }))
+    fireEvent.click(within(line).getByRole("button", { name: "Delegate" }))
+
+    expect(await screen.findByRole("button", { name: /Builder · Codex · src\/app.ts/i })).toBeTruthy()
+    const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/codex" && init?.method === "POST")
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      prompt: "Selected file: src/app.ts\nOwner request: Fix the selected defect.",
+      sessionId: null,
+      resume: false,
+    })
+    expect(screen.getByText(/Completed the captured assignment/)).toBeTruthy()
+  })
+
+  it("starts a fresh Codex Builder through the Codex route and persists provider-bound truth", async () => {
+    const sessionId = "323e4567-e89b-42d3-a456-426614174000"
+    const seen: Record<string, unknown>[] = []
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+      { type: "delta", text: "Inspecting the selected file." },
+      { type: "result", text: "Implemented the requested change." },
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Codex",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Selected file: src/app.ts\nOwner request: Fix the defect.",
+        onEvent: (event) => seen.push({ ...event }),
+      })
+    })
+
+    expect(screen.getByRole("button", { name: /Builder · Codex · src\/app.ts/i })).toBeTruthy()
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      prompt: "Selected file: src/app.ts\nOwner request: Fix the defect.",
+      sessionId: null,
+      resume: false,
+    })
+    expect(fetcher.mock.calls[0]?.[0]).toBe("/api/loom/codex")
+    expect(seen).toEqual([
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+      { type: "delta", text: "Inspecting the selected file." },
+      { type: "result", text: "Implemented the requested change." },
+      { type: "done", code: 0, reason: null },
+    ])
+    expect(JSON.parse(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")!)).toMatchObject({
+      schemaVersion: 1,
+      sessionId,
+      role: "Builder",
+      provider: "Codex",
+      assignment: "src/app.ts",
+    })
+  })
+
+  it("locks a restored Codex session to Codex when it resumes", async () => {
+    const sessionId = "323e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
+      schemaVersion: 1,
+      sessionId,
+      role: "Builder",
+      provider: "Codex",
+      assignment: "src/app.ts",
+      updatedAt: "2026-08-28T18:00:00.000Z",
+    }))
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true },
+      { type: "result", text: "Continued the existing Codex thread." },
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Codex",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Continue.",
+      })
+    })
+
+    expect(fetcher.mock.calls[0]?.[0]).toBe("/api/loom/codex")
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      prompt: "Continue.",
+      sessionId,
+      resume: true,
+    })
+    expect(expose!.durableSession?.provider).toBe("Codex")
+  })
+
+  it("starts fresh rather than sending a Claude descriptor to Codex", async () => {
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
+      schemaVersion: 1,
+      sessionId: "123e4567-e89b-42d3-a456-426614174000",
+      role: "Builder",
+      provider: "Claude",
+      assignment: "Prior Claude work",
+      updatedAt: "2026-08-28T18:00:00.000Z",
+    }))
+    const sessionId = "323e4567-e89b-42d3-a456-426614174000"
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+      { type: "result", text: "Fresh Codex work." },
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
+
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "New work", prompt: "Start." })
+    })
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ sessionId: null, resume: false })
+    expect(expose!.durableSession?.provider).toBe("Codex")
+  })
+
+  it.each([
+    [
+      "a duplicate session",
+      [
+        { type: "session", sessionId: "323e4567-e89b-42d3-a456-426614174000", provider: "Codex", mode: "delegate", resumed: false },
+        { type: "session", sessionId: "323e4567-e89b-42d3-a456-426614174000", provider: "Codex", mode: "delegate", resumed: false },
+        { type: "result", text: "Looks successful." },
+        { type: "done", code: 0, reason: null },
+      ],
+    ],
+    [
+      "a missing canonical result",
+      [
+        { type: "session", sessionId: "323e4567-e89b-42d3-a456-426614174000", provider: "Codex", mode: "delegate", resumed: false },
+        { type: "done", code: 0, reason: null },
+      ],
+    ],
+    [
+      "a frame after terminal",
+      [
+        { type: "session", sessionId: "323e4567-e89b-42d3-a456-426614174000", provider: "Codex", mode: "delegate", resumed: false },
+        { type: "result", text: "Looks successful." },
+        { type: "done", code: 0, reason: null },
+        { type: "delta", text: "late" },
+      ],
+    ],
+  ])("fails closed on Codex protocol with %s", async (_case, frames) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(...frames)))
+    render(<Harness />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work." })
+    })).rejects.toThrow("AGENT_STREAM_INVALID")
+
+    expect(expose!.sessions).toEqual([])
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+  })
+
+  it("labels Stop with the active Codex provider and aborts its request", async () => {
+    let signal: AbortSignal | undefined
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true })
+      })
+    }))
+    render(<Harness />)
+
+    let turn!: Promise<unknown>
+    act(() => {
+      turn = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work." })
+    })
+    fireEvent.click(await screen.findByRole("button", { name: "Stop Codex turn" }))
+
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" })
+    expect(signal?.aborted).toBe(true)
+  })
+
+  it("surfaces Codex authentication unavailability without creating a session", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "done", code: null, reason: "CODEX_AUTH_REQUIRED" },
+    )))
+    render(<Harness />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work." })
+    })).rejects.toThrow("AGENT_TURN_FAILED:CODEX_AUTH_REQUIRED")
+
+    expect(expose!.sessions).toEqual([])
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+  })
+
+  it("presents an explicitly supplied work-context receipt to the Codex mutation route", async () => {
+    const sessionId = "323e4567-e89b-42d3-a456-426614174000"
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+      { type: "result", text: "Completed." },
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness workContextReceipt="legitimately-issued-receipt" />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work." })
+    })
+
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("x-williamos-work-context")).toBe("legitimately-issued-receipt")
+  })
+
+  it("surfaces a missing work-context refusal without fabricating ready Codex truth", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: "FAILED_CONTEXT_NOT_PROVEN" }, { status: 409 })))
+    render(<Harness />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work." })
+    })).rejects.toThrow("AGENT_START_REFUSED:409")
+    expect(expose!.sessions).toEqual([])
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+  })
+
+  it("cancels a stale Codex turn when the owner or workspace scope changes", async () => {
+    const encoder = new TextEncoder()
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "323e4567-e89b-42d3-a456-426614174000", provider: "Codex", mode: "delegate", resumed: false })}\n`))
+      },
+    }))))
+    const view = render(<Harness />)
+    let turn!: Promise<unknown>
+    act(() => {
+      turn = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work." })
+    })
+    await waitFor(() => expect(expose!.activeProvider).toBe("Codex"))
+
+    view.rerender(<Harness ownerScope="owner-2" worldScope="other-project" />)
+
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" })
+    await waitFor(() => expect(expose!.sessions).toEqual([]))
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+    expect(window.localStorage.getItem("williamos:agent-session:owner-2:other-project")).toBeNull()
+  })
+
   it("shows a visible Stop control during a Claude turn and aborts its active request", async () => {
     let requestSignal: AbortSignal | undefined
     vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
@@ -76,6 +367,7 @@ describe("Experience V2 real agent sessions", () => {
     const fetcher = vi.fn().mockResolvedValue(ndjson(
       { type: "session", sessionId, resumed: false },
       { type: "event", event: { type: "assistant", message: { content: [{ type: "text", text: "I changed the selected file." }] } } },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "I changed the selected file." } },
       { type: "done", code: 0, reason: null },
     ))
     vi.stubGlobal("fetch", fetcher)
@@ -114,6 +406,7 @@ describe("Experience V2 real agent sessions", () => {
     }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
       { type: "session", sessionId, resumed: true },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Continued the review." } },
       { type: "done", code: 0, reason: null },
     ))
     vi.stubGlobal("fetch", fetcher)
@@ -203,6 +496,7 @@ describe("Experience V2 real agent sessions", () => {
       .mockResolvedValueOnce(new Response("refused", { status: 403 }))
       .mockResolvedValueOnce(ndjson(
         { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: false },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Started fresh." } },
         { type: "done", code: 0, reason: null },
       ))
     vi.stubGlobal("fetch", fetcher)
