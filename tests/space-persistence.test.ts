@@ -88,6 +88,8 @@ import {
   findLatestProjectOwnedByPage,
   findLatestTerraFusionOwnedByPage,
   loadOrCreateOwnedSpace,
+  listOwnedProjectSpaces,
+  createOwnedProjectSpace,
   loadOwnedCouncilHistory,
   saveOwnedCouncilSession,
   saveOwnedLineWorld,
@@ -130,6 +132,12 @@ class MemoryStore implements SpaceWorkingWorldStore {
     return findLatestProjectOwnedByPage(projectIdentity, async (offset, limit) => (
       ordered.slice(offset, offset + limit)
     ))
+  }
+
+  async listOwnedForProject(userId: string) {
+    return [...this.rows.values()]
+      .filter((row) => row.userId === userId)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || b.id.localeCompare(a.id))
   }
 
   async insertOwned(row: OwnedWorkingWorldRecord) {
@@ -225,6 +233,36 @@ function space(runningAppUrl: string | null = "javascript:alert(1)", revision = 
 }
 
 describe("server-owned Space persistence", () => {
+  it("lists only valid owner and project Spaces newest first", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    const other = workspaceProjectFromRoot("C:\\repos\\Other")
+    const make = (id: string, userId: string, target: typeof project, updatedAt: string) => {
+      const world = createWorkingWorld({ intent: id, resources: [`williamos-workspace-root:v1:${target.identity}`] })
+      store.rows.set(id, { id, userId, intent: id, snapshot: JSON.stringify({ ...world, space: space(null, 1) }), updatedAt: new Date(updatedAt) })
+    }
+    make("older", "owner-a", project, "2026-08-20T00:00:00Z")
+    make("newer", "owner-a", project, "2026-08-22T00:00:00Z")
+    make("foreign-owner", "owner-b", project, "2026-08-24T00:00:00Z")
+    make("foreign-project", "owner-a", other, "2026-08-23T00:00:00Z")
+    store.rows.set("corrupt", { id: "corrupt", userId: "owner-a", intent: "bad", snapshot: "{", updatedAt: new Date("2026-08-25T00:00:00Z") })
+
+    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store)).map((item) => item.worldId)).toEqual(["newer", "older"])
+  })
+
+  it("creates a fresh server-derived Space from only a canonical name", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    const created = await createOwnedProjectSpace({
+      userId: "owner-a", project, name: "  Release work  ", newWorldId: () => "server-id",
+    }, store)
+    expect(created.worldId).toBe("server-id")
+    expect(created.name).toBe("Release work")
+    expect(created.space.revision).toBe(0)
+    expect(created.space.openFiles).toEqual([])
+    expect(JSON.parse(store.rows.get("server-id")!.snapshot).resources).toContain(`williamos-workspace-root:v1:${project.identity}`)
+    await expect(createOwnedProjectSpace({ userId: "owner-a", project, name: "bad\nname" }, store)).rejects.toThrow("SPACE_NAME_INVALID")
+  })
   it("derives separate opaque browser fallback namespaces per user and project", () => {
     const owner = browserSpaceStorageKey("owner-a", "c:/repos/terrafusion")
     expect(owner).toMatch(/^[A-Za-z0-9_-]{43}$/)

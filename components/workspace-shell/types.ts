@@ -24,8 +24,8 @@ export type EditorPane = Readonly<{
 
 export type WorkspaceSpace = Readonly<{
   revision: number
-  id: "terrafusion"
-  name: "TerraFusion"
+  id: string
+  name: string
   runningAppUrl: string | null
   windows: Record<WindowId, WindowGeometry>
   inspectorWindows: Record<string, WindowGeometry>
@@ -42,17 +42,28 @@ export type WorkspaceSpace = Readonly<{
 
 export type SpaceEnvelope = Readonly<{
   worldId: string
+  name?: string
   space: unknown
   spine?: WorldSpine
   judgment?: WilliamJudgment | null
   project?: WorkspaceProject
   storage?: "server" | "browser"
   browserStorageKey?: string
+  preferenceStorageKey?: string
+  multiSpaceAvailable?: boolean
+  spaces?: readonly SpaceSummary[]
+}>
+
+export type SpaceSummary = Readonly<{
+  worldId: string
+  name: string
+  space: unknown
+  updatedAt: string
 }>
 
 export type WorkspaceProject = Readonly<{ identity: string; name: string }>
 
-export function defaultSpace(viewportWidth = 1440, viewportHeight = 900): WorkspaceSpace {
+export function defaultSpace(viewportWidth = 1440, viewportHeight = 900, id = "terrafusion", name = "TerraFusion"): WorkspaceSpace {
   const workHeight = Math.max(300, viewportHeight - 171)
   const outerGutter = viewportWidth >= 1100 ? 26 : 18
   const surfaceGap = viewportWidth >= 1100 ? 24 : 18
@@ -70,8 +81,8 @@ export function defaultSpace(viewportWidth = 1440, viewportHeight = 900): Worksp
   const testsY = canStackTests ? 18 + previewHeight + 16 : workHeight - 278
   return {
     revision: 0,
-    id: "terrafusion",
-    name: "TerraFusion",
+    id,
+    name,
     runningAppUrl: null,
     windows: {
       editor: {
@@ -236,8 +247,8 @@ export function normalizeSpace(
   return {
     revision: Number.isSafeInteger(candidate.revision) && (candidate.revision as number) >= 0
       ? candidate.revision as number : fallback.revision,
-    id: "terrafusion",
-    name: "TerraFusion",
+    id: fallback.id,
+    name: fallback.name,
     runningAppUrl: typeof candidate.runningAppUrl === "string" && candidate.runningAppUrl.length > 0
       ? candidate.runningAppUrl
       : null,

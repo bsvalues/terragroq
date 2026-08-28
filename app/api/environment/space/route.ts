@@ -1,6 +1,8 @@
 import {
   createDefaultSpace,
   browserSpaceStorageKey,
+  createOwnedProjectSpace,
+  listOwnedProjectSpaces,
   loadOrCreateOwnedSpace,
   saveOwnedSpace,
   workspaceProjectFromRoot,
@@ -52,17 +54,61 @@ export async function GET(request: Request) {
       project: WORKSPACE_PROJECT,
       newWorldId: crypto.randomUUID,
     })
-    return result ? reply(result) : reply({ error: "WORLD_NOT_FOUND" }, 404)
-  } catch {
+    if (!result) return reply({ error: "WORLD_NOT_FOUND" }, 404)
+    const spaces = await listOwnedProjectSpaces({
+      userId: session.user.id, project: WORKSPACE_PROJECT, workspaceAppUrl,
+    })
+    return reply({
+      ...result,
+      spaces,
+      multiSpaceAvailable: true,
+      preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+    })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "SPACE_PERSISTENCE_UNAVAILABLE"
+    if (reason === "SPACE_PROJECT_MISMATCH") return reply({ error: reason }, 400)
+    if (requested !== null) return reply({ error: "SPACE_PERSISTENCE_UNAVAILABLE" }, 503)
     // A missing optional persistence relation must not strand the primary browser experience.
     // The client persists this truthful, project-bound fallback in browser storage and labels it.
+    const fallback = createDefaultSpace(workspaceAppUrl)
     return reply({
       worldId: "browser-local",
-      space: createDefaultSpace(workspaceAppUrl),
+      name: WORKSPACE_PROJECT.name,
+      space: fallback,
       project: WORKSPACE_PROJECT,
       storage: "browser",
       browserStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+      preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+      spaces: [{ worldId: "browser-local", name: WORKSPACE_PROJECT.name, space: fallback, updatedAt: new Date(0).toISOString() }],
+      multiSpaceAvailable: false,
     })
+  }
+}
+
+export async function POST(request: Request) {
+  const session = await getSession()
+  if (!session) return reply({ error: "UNAUTHENTICATED" }, 401)
+  const parsed = await readBoundedJson(request, 2_000)
+  if (!parsed.ok) return reply({ error: parsed.error }, parsed.status)
+  const body = parsed.value as { name?: unknown }
+  try {
+    const workspaceAppUrl = await admittedAppUrl(request)
+    const result = await createOwnedProjectSpace({
+      userId: session.user.id,
+      project: WORKSPACE_PROJECT,
+      name: body.name,
+      workspaceAppUrl,
+      newWorldId: crypto.randomUUID,
+    })
+    const spaces = await listOwnedProjectSpaces({ userId: session.user.id, project: WORKSPACE_PROJECT, workspaceAppUrl })
+    return reply({
+      ...result, spaces, multiSpaceAvailable: true,
+      preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+    }, 201)
+  } catch (error) {
+    const reason = error instanceof Error && error.message === "SPACE_NAME_INVALID"
+      ? error.message : "SPACE_PERSISTENCE_UNAVAILABLE"
+    return reply({ error: reason }, reason === "SPACE_NAME_INVALID" ? 400 : 503)
   }
 }
 

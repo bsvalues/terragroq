@@ -54,6 +54,44 @@
   font-size: 10.5px;
 }
 
+.headerActions { display: flex; align-items: center; gap: 8px; }
+.newSpace,
+.createSpace button {
+  min-height: 32px;
+  border: 1px solid #465246;
+  border-radius: 4px;
+  color: #d5ddd2;
+  background: #171c17;
+  font-size: 10px;
+}
+.newSpace { padding: 0 12px; }
+.newSpace:hover:not(:disabled), .newSpace:focus-visible,
+.createSpace button:hover:not(:disabled), .createSpace button:focus-visible { border-color: #839680; outline: 2px solid #839680; outline-offset: 2px; }
+.newSpace:disabled { cursor: not-allowed; color: #687067; border-color: #293029; }
+.createSpace {
+  position: fixed;
+  z-index: 2;
+  top: 82px;
+  right: 22px;
+  display: grid;
+  grid-template-columns: minmax(180px, 300px) auto auto;
+  align-items: end;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #465246;
+  border-radius: 6px;
+  background: #111511;
+  box-shadow: 0 20px 48px rgb(0 0 0 / 55%);
+}
+.createSpace label { grid-column: 1 / -1; color: #9ca699; font-size: 9px; text-transform: uppercase; letter-spacing: .1em; }
+.createSpace input { min-height: 34px; padding: 0 9px; border: 1px solid #394439; border-radius: 4px; color: #e8ece6; background: #090c09; }
+.createSpace input:focus-visible { outline: 2px solid #839680; outline-offset: 2px; }
+.createSpace button { padding: 0 10px; }
+.createSpace [role="alert"] { grid-column: 1 / -1; color: #d2a27e; font-size: 9px; }
+.degraded,
+.transition { position: fixed; z-index: 1; top: 78px; left: 22px; margin: 0; padding: 7px 10px; border: 1px solid #4c4434; border-radius: 4px; color: #c9ad83; background: #17150f; font-size: 9px; }
+.transition { border-color: #465246; color: #bdc9ba; background: #111511; }
+
 .dismiss {
   width: 34px;
   height: 34px;
@@ -345,6 +383,7 @@
   .overlay { grid-template-rows: 62px minmax(0, 1fr) 90px; }
   .header { grid-template-columns: 1fr auto; padding-inline: 14px; }
   .spaceCount { display: none; }
+  .createSpace { right: 14px; left: 14px; grid-template-columns: 1fr auto auto; }
   .spaceField { grid-template-columns: 1fr; padding: 12px 14px; }
   .william { grid-template-columns: 40px minmax(0, 1fr) auto; padding-inline: 14px; }
   .hint { display: none; }

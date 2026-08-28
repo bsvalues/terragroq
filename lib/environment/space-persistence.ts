@@ -26,6 +26,12 @@ export type OwnedWorkingWorldRecord = Readonly<{
 }>
 
 export type WorkspaceProject = Readonly<{ identity: string; name: string }>
+export type OwnedSpaceSummary = Readonly<{
+  worldId: string
+  name: string
+  space: SpaceState
+  updatedAt: string
+}>
 
 /** Opaque, stable browser-fallback namespace bound to one signed-in user and project. */
 export function browserSpaceStorageKey(userId: string, projectIdentity: string): string {
@@ -39,6 +45,7 @@ export function browserSpaceStorageKey(userId: string, projectIdentity: string):
 
 const WORKSPACE_ROOT_RESOURCE = "williamos-workspace-root:v1:"
 const WORKSPACE_NAME_RESOURCE = "williamos-workspace-name:v1:"
+const SPACE_NAME_RESOURCE = "williamos-space-name:v1:"
 
 /** Derive one stable server-owned identity from the configured project root. */
 export function workspaceProjectFromRoot(root: string, configuredName?: string | null): WorkspaceProject {
@@ -52,8 +59,23 @@ export function workspaceProjectFromRoot(root: string, configuredName?: string |
   }
 }
 
-function projectResources(project: WorkspaceProject): readonly string[] {
-  return [`${WORKSPACE_ROOT_RESOURCE}${project.identity}`, `${WORKSPACE_NAME_RESOURCE}${project.name}`]
+function projectResources(project: WorkspaceProject, spaceName?: string): readonly string[] {
+  return [
+    `${WORKSPACE_ROOT_RESOURCE}${project.identity}`,
+    `${WORKSPACE_NAME_RESOURCE}${project.name}`,
+    ...(spaceName ? [`${SPACE_NAME_RESOURCE}${encodeURIComponent(spaceName)}`] : []),
+  ]
+}
+
+function persistedSpaceName(world: WorkingWorldSnapshot, fallback: string): string {
+  const resource = world.resources.find((value) => value.startsWith(SPACE_NAME_RESOURCE))
+  if (!resource) return fallback
+  try {
+    const name = decodeURIComponent(resource.slice(SPACE_NAME_RESOURCE.length))
+    return canonicalSpaceName(name)
+  } catch {
+    return fallback
+  }
 }
 
 function worldMatchesProject(world: WorkingWorldSnapshot, project: WorkspaceProject): boolean {
@@ -66,6 +88,7 @@ export interface SpaceWorkingWorldStore {
   findOwned(userId: string, worldId: string): Promise<OwnedWorkingWorldRecord | null>
   findLatestOwned(userId: string): Promise<OwnedWorkingWorldRecord | null>
   findLatestOwnedForProject(userId: string, projectIdentity: string): Promise<OwnedWorkingWorldRecord | null>
+  listOwnedForProject?(userId: string, projectIdentity: string): Promise<readonly OwnedWorkingWorldRecord[]>
   insertOwned(row: OwnedWorkingWorldRecord): Promise<void>
   updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string): Promise<boolean>
 }
@@ -133,6 +156,16 @@ export const databaseSpaceWorkingWorldStore: SpaceWorkingWorldStore = {
         .orderBy(desc(workingWorld.updatedAt), desc(workingWorld.id))
         .limit(limit)
         .offset(offset))
+  },
+
+  async listOwnedForProject(userId) {
+    return db.select({
+        id: workingWorld.id, userId: workingWorld.userId, intent: workingWorld.intent,
+        snapshot: workingWorld.snapshot, updatedAt: workingWorld.updatedAt,
+      }).from(workingWorld)
+        .where(eq(workingWorld.userId, userId))
+        .orderBy(desc(workingWorld.updatedAt), desc(workingWorld.id))
+        .limit(240)
   },
 
   async insertOwned(row) {
@@ -328,6 +361,60 @@ export function createDefaultSpace(runningAppUrl: string | null): SpaceState {
   }
 }
 
+const MAX_PROJECT_SPACES = 12
+
+export async function listOwnedProjectSpaces(
+  input: Readonly<{ userId: string; project: WorkspaceProject; workspaceAppUrl?: string | null }>,
+  store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
+): Promise<readonly OwnedSpaceSummary[]> {
+  const rows = await store.listOwnedForProject?.(input.userId, input.project.identity) ?? []
+  return rows.flatMap((row): readonly OwnedSpaceSummary[] => {
+    try {
+      const world = validateWorkingWorld(JSON.parse(row.snapshot))
+      if (!worldMatchesProject(world, input.project)) return []
+      return [{
+        worldId: row.id,
+        name: persistedSpaceName(world, row.intent.trim() || input.project.name),
+        space: restoredSpace(world, input.workspaceAppUrl),
+        updatedAt: row.updatedAt.toISOString(),
+      }]
+    } catch {
+      return []
+    }
+  }).slice(0, MAX_PROJECT_SPACES)
+}
+
+function canonicalSpaceName(value: unknown): string {
+  if (typeof value !== "string") throw new Error("SPACE_NAME_INVALID")
+  const name = value.trim()
+  if (name.length < 1 || name.length > 80 || /[\u0000-\u001f\u007f]/.test(name)) {
+    throw new Error("SPACE_NAME_INVALID")
+  }
+  return name
+}
+
+export async function createOwnedProjectSpace(
+  input: Readonly<{
+    userId: string
+    project: WorkspaceProject
+    name: unknown
+    workspaceAppUrl?: string | null
+    newWorldId?: () => string
+  }>,
+  store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
+): Promise<Readonly<{ worldId: string; name: string; space: SpaceState; spine: WorldSpine; judgment: null; project: WorkspaceProject }>> {
+  const name = canonicalSpaceName(input.name)
+  const worldId = (input.newWorldId ?? crypto.randomUUID)()
+  const base = createWorkingWorld({ intent: name, resources: projectResources(input.project, name) })
+  const space = createDefaultSpace(serverRunningAppUrl(base, input.workspaceAppUrl))
+  const world = validateWorkingWorld({ ...base, space })
+  await store.insertOwned({
+    id: worldId, userId: input.userId, intent: name,
+    snapshot: JSON.stringify(world), updatedAt: new Date(),
+  })
+  return { worldId, name, space, spine: world.spine, judgment: null, project: input.project }
+}
+
 function restoredSpace(world: WorkingWorldSnapshot, configured?: string | null): SpaceState {
   const runningAppUrl = serverRunningAppUrl(world, configured)
   return world.space
@@ -347,6 +434,7 @@ export async function loadOrCreateOwnedSpace(
   store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
 ): Promise<Readonly<{
   worldId: string
+  name: string
   space: SpaceState
   spine: WorldSpine
   judgment: WilliamJudgment | null
@@ -361,7 +449,7 @@ export async function loadOrCreateOwnedSpace(
       : await store.findLatestOwned(input.userId)
   // Store implementations may be generic "latest owned" readers. Recheck identity here so an
   // unrelated working world can never silently become the TerraFusion Space.
-  let row = exact ?? (latest && isTerraFusionWorld(latest) ? latest : null)
+  let row = exact ?? (latest && (input.project || isTerraFusionWorld(latest)) ? latest : null)
   if (row) {
     const world = validateWorkingWorld(JSON.parse(row.snapshot))
     if (input.project && !worldMatchesProject(world, input.project)) {
@@ -372,6 +460,7 @@ export async function loadOrCreateOwnedSpace(
       const restoredWorld = validateWorkingWorld({ ...world, space })
       return {
         worldId: row.id,
+        name: persistedSpaceName(world, row.intent.trim() || input.project?.name || "TerraFusion"),
         space,
         spine: world.spine,
         judgment: world.judgment?.basisFingerprint === williamJudgmentBasisFingerprint(restoredWorld)
@@ -386,7 +475,7 @@ export async function loadOrCreateOwnedSpace(
   const base = createWorkingWorld({
     intent: "TerraFusion",
     resources: input.project
-      ? projectResources(input.project)
+      ? projectResources(input.project, "TerraFusion")
       : input.projectRootIdentity ? [input.projectRootIdentity] : [],
   })
   const space = createDefaultSpace(serverRunningAppUrl(base, input.workspaceAppUrl))
@@ -397,6 +486,7 @@ export async function loadOrCreateOwnedSpace(
   })
   return {
     worldId,
+    name: world.intent,
     space,
     spine: world.spine,
     judgment: world.judgment,

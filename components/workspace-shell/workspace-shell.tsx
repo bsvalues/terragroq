@@ -15,7 +15,7 @@ import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, t
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
 import { WindowFrame } from "./window-frame"
-import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
+import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type SpaceSummary, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
 import bridge from "./experience-token-bridge.module.css"
 import spatial from "./experience-spatial.module.css"
 
@@ -33,7 +33,7 @@ type ConversationEntry = Readonly<{
   text: string
 }>
 
-type PersistJob = Readonly<{ worldId: string; revision: number; body: string }>
+type PersistJob = Readonly<{ worldId: string; revision: number; body: string; storage: SpaceStorage; browserKey: string | null; epoch: number }>
 type SpaceStorage = "server" | "browser"
 type EnvironmentOverlay = "council" | "mission-control" | null
 type CouncilView = "history" | "convening"
@@ -133,6 +133,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [judgmentError, setJudgmentError] = useState<string | null>(null)
   const [project, setProject] = useState<WorkspaceProject | null>(null)
   const [storage, setStorage] = useState<SpaceStorage>("server")
+  const [spaceSummaries, setSpaceSummaries] = useState<readonly SpaceSummary[]>([])
+  const [multiSpaceAvailable, setMultiSpaceAvailable] = useState(false)
+  const [transitionMessage, setTransitionMessage] = useState<string | null>(null)
+  const [switchingSpace, setSwitchingSpace] = useState(false)
   const agentSessions = useExperienceAgentSessions({
     ownerScope: worldId ?? "unhydrated-owner-world",
     worldScope: project?.identity ?? worldId ?? "unhydrated-project",
@@ -144,6 +148,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const worldRef = useRef(worldId)
   const storageRef = useRef<SpaceStorage>(storage)
   const browserStorageKeyRef = useRef<string | null>(null)
+  const preferenceStorageKeyRef = useRef<string | null>(null)
+  const transitionEpochRef = useRef(0)
+  const initialSummonConsumedRef = useRef(false)
   const lineRef = useRef<HTMLInputElement>(null)
   const messageSequence = useRef(0)
   const spaceArrival = useRef<Promise<SpaceEnvelope> | null>(null)
@@ -266,15 +273,33 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       if (!response.ok || typeof payload.worldId !== "string" || !payload.space) {
         throw new Error(payload.error ?? `SPACE_${response.status}`)
       }
-      return {
+      let envelope: SpaceEnvelope = {
         worldId: payload.worldId,
+        name: payload.name,
         space: payload.space,
         spine: payload.spine,
         judgment: payload.judgment,
         project: payload.project,
         storage: payload.storage,
         browserStorageKey: payload.browserStorageKey,
+        preferenceStorageKey: payload.preferenceStorageKey,
+        multiSpaceAvailable: payload.multiSpaceAvailable,
+        spaces: payload.spaces,
       }
+      const preferenceKey = typeof envelope.preferenceStorageKey === "string"
+        ? `williamos:selected-space:${envelope.preferenceStorageKey}` : null
+      if (preferenceKey && envelope.multiSpaceAvailable) {
+        const hinted = window.localStorage.getItem(preferenceKey)
+        if (hinted && hinted !== envelope.worldId && envelope.spaces?.some((item) => item.worldId === hinted)) {
+          const exactResponse = await fetch(`/api/environment/space?worldId=${encodeURIComponent(hinted)}`, { cache: "no-store" })
+          const exact = await exactResponse.json() as SpaceEnvelope & { error?: string }
+          if (exactResponse.ok && exact.worldId === hinted && exact.space) envelope = exact
+          else window.localStorage.removeItem(preferenceKey)
+        } else if (hinted && !envelope.spaces?.some((item) => item.worldId === hinted)) {
+          window.localStorage.removeItem(preferenceKey)
+        }
+      }
+      return envelope
     })())
     void request
       .then((payload) => {
@@ -295,7 +320,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             window.localStorage.removeItem(key)
           }
         }
-        const restored = normalizeSpace(storedSpace, fallback, {
+        const identity = payload.worldId
+        const name = payload.name ?? payload.project?.name ?? "Space"
+        const restored = normalizeSpace(storedSpace, defaultSpace(window.innerWidth, window.innerHeight, identity, name), {
           width: window.innerWidth,
           height: window.innerHeight,
         })
@@ -309,6 +336,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             : [],
         ))
         setStorage(storageMode)
+        setSpaceSummaries(payload.spaces ?? [{ worldId: payload.worldId, name, space: payload.space, updatedAt: new Date(0).toISOString() }])
+        setMultiSpaceAvailable(payload.multiSpaceAvailable === true)
+        preferenceStorageKeyRef.current = typeof payload.preferenceStorageKey === "string"
+          ? `williamos:selected-space:${payload.preferenceStorageKey}` : null
+        if (preferenceStorageKeyRef.current) window.localStorage.setItem(preferenceStorageKeyRef.current, payload.worldId)
         if (payload.project) setProject(payload.project)
         if (payload.spine) setSpine(payload.spine)
         setJudgment(payload.judgment ?? null)
@@ -391,6 +423,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   useEffect(() => {
     if (!hydrated || !worldId || restorationStarted.current) return
     restorationStarted.current = true
+    const restorationWorldId = worldId
+    const restorationEpoch = transitionEpochRef.current
     for (const seed of Object.values(stateRef.current.inspectorSeeds)) {
       if (seed.kind === "review") continue
       void fetch("/api/environment/line", {
@@ -400,6 +434,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       }).then(async (response) => {
         if (!response.ok) return
         const reply = await response.json() as LineReply
+        if (worldRef.current !== restorationWorldId || transitionEpochRef.current !== restorationEpoch) return
         if (reply.spine) setSpine(reply.spine)
         materializeSurfaces(reply)
       }).catch(() => {
@@ -412,12 +447,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const outcomeKey = spine.outcomeKey
     if (!outcomeKey || !isExecutionLive(spine.execution)) return
     let cancelled = false
+    const executionWorldId = worldId
+    const executionEpoch = transitionEpochRef.current
     const timer = setInterval(async () => {
       try {
         const response = await fetch(`/api/environment/execution?outcomeKey=${encodeURIComponent(outcomeKey)}`, { cache: "no-store" })
         if (!response.ok) return
         const live = await response.json() as Pick<WorldSpine, "execution" | "worker" | "evidence">
-        if (cancelled) return
+        if (cancelled || worldRef.current !== executionWorldId || transitionEpochRef.current !== executionEpoch) return
         setSpine((current) => current.outcomeKey === outcomeKey
           ? { ...current, execution: live.execution, worker: live.worker, evidence: live.evidence }
           : current)
@@ -426,14 +463,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       }
     }, 4000)
     return () => { cancelled = true; clearInterval(timer) }
-  }, [spine.execution, spine.outcomeKey])
+  }, [spine.execution, spine.outcomeKey, worldId])
 
   const sendPersist = useCallback(async (job: PersistJob, keepalive = false) => {
     try {
-      if (storageRef.current === "browser") {
-        const key = browserStorageKeyRef.current
+      if (job.storage === "browser") {
+        const key = job.browserKey
         if (!key) throw new Error("BROWSER_SPACE_KEY_UNAVAILABLE")
         window.localStorage.setItem(key, job.body)
+        if (transitionEpochRef.current !== job.epoch || worldRef.current !== job.worldId) return
         acknowledgedRevisionRef.current = job.revision
         revisionRef.current = Math.max(revisionRef.current, job.revision)
         setSpace((current) => job.revision > current.revision ? { ...current, revision: job.revision } : current)
@@ -448,6 +486,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       })
       const payload = await response.json().catch(() => ({})) as { error?: string; space?: unknown }
       if (!response.ok) throw new Error(payload.error ?? `SPACE_SAVE_${response.status}`)
+      if (transitionEpochRef.current !== job.epoch || worldRef.current !== job.worldId) return
       const record = payload.space && typeof payload.space === "object" ? payload.space as Record<string, unknown> : null
       const acknowledged = record && Number.isSafeInteger(record.revision) ? record.revision as number : job.revision
       if (acknowledged >= acknowledgedRevisionRef.current) {
@@ -457,7 +496,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setPersistenceError(null)
       }
     } catch (error) {
-      if (!keepalive && job.revision >= revisionRef.current) {
+      if (!keepalive && transitionEpochRef.current === job.epoch && worldRef.current === job.worldId && job.revision >= revisionRef.current) {
         setPersistenceError(error instanceof Error ? error.message : "SPACE_SAVE_REFUSED")
       }
     }
@@ -472,6 +511,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       worldId: id,
       revision,
       body: JSON.stringify({ worldId: id, space: spaceToServer(stateRef.current, revision) }),
+      storage: storageRef.current,
+      browserKey: browserStorageKeyRef.current,
+      epoch: transitionEpochRef.current,
     }
     if (keepalive) {
       return sendPersist(job, true)
@@ -530,9 +572,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }, [persist])
 
   useEffect(() => {
-    if (!initialSummon || !hydrated) return
+    if (!initialSummon || !hydrated || initialSummonConsumedRef.current) return
+    initialSummonConsumedRef.current = true
     let cancelled = false
-    const key = `${worldId ?? "new"}\0${initialSummon}`
+    const summonWorldId = worldId
+    const summonEpoch = transitionEpochRef.current
+    const key = `initial\0${initialSummon}`
     const existing = summonArrival.current
     const request = existing?.key === key
       ? existing.request
@@ -550,7 +595,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineOpen(true)
     setLineBusy(true)
     void request
-      .then((payload) => { if (!cancelled) acceptLineReply(payload) })
+      .then((payload) => { if (!cancelled && worldRef.current === summonWorldId && transitionEpochRef.current === summonEpoch) acceptLineReply(payload) })
       .catch((error) => { if (!cancelled) setLineReply(error instanceof Error ? error.message : "LINE_UNAVAILABLE") })
       .finally(() => { if (!cancelled) setLineBusy(false) })
     return () => { cancelled = true }
@@ -905,12 +950,134 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       ? "William is forming a grounded judgment from the current Space."
       : `System fact: ${williamSafetyFact} ${judgmentError ? `William judgment unavailable (${judgmentError}).` : "William has not formed a judgment yet."}`)
 
+  const applySpaceEnvelope = (payload: SpaceEnvelope) => {
+    const name = payload.name ?? payload.project?.name ?? "Space"
+    const restored = normalizeSpace(
+      payload.space,
+      defaultSpace(window.innerWidth, window.innerHeight, payload.worldId, name),
+      { width: window.innerWidth, height: window.innerHeight },
+    )
+    transitionEpochRef.current += 1
+    worldRef.current = payload.worldId
+    storageRef.current = payload.storage === "browser" ? "browser" : "server"
+    browserStorageKeyRef.current = payload.storage === "browser" && payload.browserStorageKey
+      ? browserSpaceKey(payload.browserStorageKey) : null
+    revisionRef.current = restored.revision
+    acknowledgedRevisionRef.current = restored.revision
+    pendingPersistRef.current = null
+    restorationStarted.current = false
+    judgmentRequestedRef.current = null
+    judgmentContextRef.current = null
+    setWorldId(payload.worldId)
+    setSpace(restored)
+    setPersistenceError(null)
+    setStorage(storageRef.current)
+    setSpaceSummaries(payload.spaces ?? spaceSummaries)
+    setMultiSpaceAvailable(payload.multiSpaceAvailable === true)
+    setProject(payload.project ?? project)
+    setSpine(payload.spine ?? EMPTY_SPINE)
+    setJudgment(payload.judgment ?? null)
+    setJudgmentError(null)
+    setDirtyPaths({})
+    changeRefreshWaiters.current.clear()
+    setChangeRefresh({ path: null, key: changeRefreshKey.current })
+    setInspectors(Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
+      seed.kind === "review" && typeof seed.payload === "string"
+        ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
+        : [],
+    ))
+    setConversation([])
+    setFocusedAgentId(null)
+    setLineOpen(false)
+    setLineInput("")
+    setLineReply(null)
+    setLineTarget("william")
+    setLineMode("default")
+    setDelegateContext(null)
+    setChangeTarget(null)
+    setReviewTarget(null)
+    change.reset(null)
+    review.reset(null)
+    setCouncilQuestion(null)
+    setCouncilSession(null)
+    setCouncilHistory([])
+    setCouncilHistorical(false)
+    setCouncilView("history")
+    setCouncilError(null)
+    const preference = typeof payload.preferenceStorageKey === "string"
+      ? `williamos:selected-space:${payload.preferenceStorageKey}` : preferenceStorageKeyRef.current
+    preferenceStorageKeyRef.current = preference
+    if (preference) window.localStorage.setItem(preference, payload.worldId)
+  }
+
+  const switchBlockedReason = () => {
+    if (Object.values(dirtyPaths).some(Boolean)) return "Save or discard the dirty source before switching Spaces."
+    if (change.running || review.running || lineBusy || councilBusy || judgmentBusy || agentSessions.activeSessionId) {
+      return "Finish or stop active work before switching Spaces."
+    }
+    return null
+  }
+
+  const flushCurrentSpace = async () => {
+    if (persistTimer.current) { clearTimeout(persistTimer.current); persistTimer.current = null }
+    await persist()
+    if (storageRef.current === "server" && acknowledgedRevisionRef.current < revisionRef.current) {
+      throw new Error("The current Space could not be saved, so WilliamOS kept you here.")
+    }
+  }
+
+  const enterMissionSpace = async (targetWorldId: string) => {
+    if (targetWorldId === worldId) { setOverlay(null); return }
+    const blocked = switchBlockedReason()
+    if (blocked) { setTransitionMessage(blocked); return }
+    if (switchingSpace) return
+    setSwitchingSpace(true)
+    setTransitionMessage("Saving this Space before re-entry…")
+    try {
+      await flushCurrentSpace()
+      setTransitionMessage("Restoring the selected Space…")
+      const response = await fetch(`/api/environment/space?worldId=${encodeURIComponent(targetWorldId)}`, { cache: "no-store" })
+      const payload = await response.json() as SpaceEnvelope & { error?: string }
+      if (!response.ok || payload.worldId !== targetWorldId || !payload.space) throw new Error(payload.error ?? `SPACE_${response.status}`)
+      applySpaceEnvelope(payload)
+      setTransitionMessage(null)
+    } catch (error) {
+      setTransitionMessage(error instanceof Error ? error.message : "Space re-entry failed. Your current Space is unchanged.")
+    } finally {
+      setSwitchingSpace(false)
+    }
+  }
+
+  const createMissionSpace = async (name: string) => {
+    const blocked = switchBlockedReason()
+    if (blocked) { setTransitionMessage(blocked); return false }
+    if (switchingSpace) return false
+    setSwitchingSpace(true)
+    setTransitionMessage("Saving this Space before creating another…")
+    try {
+      await flushCurrentSpace()
+      const response = await fetch("/api/environment/space", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }),
+      })
+      const payload = await response.json() as SpaceEnvelope & { error?: string }
+      if (!response.ok || !payload.worldId || !payload.space) throw new Error(payload.error ?? `SPACE_CREATE_${response.status}`)
+      applySpaceEnvelope(payload)
+      setTransitionMessage(null)
+      return true
+    } catch (error) {
+      setTransitionMessage(error instanceof Error ? error.message : "Space creation failed. Your current Space is unchanged.")
+      return false
+    } finally {
+      setSwitchingSpace(false)
+    }
+  }
+
   const missionWindowKind: Record<WindowId, MissionControlSpaceProjection["windows"][number]["kind"]> = {
     editor: "source", "running-app": "preview", tests: "tests", diff: "diff", terminal: "terminal",
   }
   const currentMissionSpace: MissionControlSpaceProjection = {
-    id: space.id,
-    name: project?.name ?? space.name,
+    id: worldId ?? space.id,
+    name: space.name,
     focus: space.selectedPath ?? "Development Space",
     state: space.runningAppUrl ? "live" : "unavailable",
     truth: "live",
@@ -926,15 +1093,29 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     selectedObject: space.selectedPath,
     changed: savedLabel,
   }
-  const missionSpaces: readonly MissionControlSpaceProjection[] = [currentMissionSpace,
-    {
-      id: "fixture-research", name: "Research & Evidence", focus: "Reference projection", state: "paused", truth: "fixture",
-      windows: [
-        { id: "evidence", title: "Evidence", kind: "evidence", frame: { x: 20, y: 30, width: 520, height: 340 }, detail: "3 cited sources" },
-        { id: "document", title: "Investigation", kind: "document", frame: { x: 410, y: 70, width: 620, height: 420 }, detail: "Causal link under review" },
-      ], agents: [], changed: "Illustrative Space · not live runtime state",
-    },
-  ]
+  const missionSpaces: readonly MissionControlSpaceProjection[] = spaceSummaries.map((summary) => {
+    if (summary.worldId === worldId) return currentMissionSpace
+    const restored = normalizeSpace(
+      summary.space,
+      defaultSpace(window.innerWidth, window.innerHeight, summary.worldId, summary.name),
+      { width: window.innerWidth, height: window.innerHeight },
+    )
+    return {
+      id: summary.worldId,
+      name: summary.name,
+      focus: restored.selectedPath ?? "Preserved work surface",
+      state: "paused",
+      truth: "live",
+      windows: (Object.entries(restored.windows) as [WindowId, WindowGeometry][]).map(([id, geometry]) => ({
+        id, title: windowName[id], kind: missionWindowKind[id], frame: geometry,
+        minimized: geometry.minimized, active: restored.activeWindowId === id,
+        detail: id === "running-app" ? restored.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
+      })),
+      agents: [],
+      selectedObject: restored.selectedPath,
+      changed: "Saved spatial state",
+    }
+  })
 
   function openObjectAction(action: string) {
     if (action === "Change" && selectedKind === "file") {
@@ -1033,7 +1214,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
       <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
         <WindowFrame id="editor" title="Source" geometry={space.windows.editor} active={space.activeWindowId === "editor"} onActivate={() => activate("editor")} onGeometry={(geometry) => updateWindow("editor", geometry)} onMinimize={() => minimize("editor")} minimizeDisabled={Boolean(sourceMinimizeDisabledReason)} minimizeDisabledReason={sourceMinimizeDisabledReason}>
-          <EditorSurface space={space} onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={changeRefresh.path} reloadKey={changeRefresh.key} onReloadSettled={(path, key, result) => settleChangeRefresh("editor", path, key, result)} />
+          <EditorSurface key={worldId ?? "unhydrated"} space={space} onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={changeRefresh.path} reloadKey={changeRefresh.key} onReloadSettled={(path, key, result) => settleChangeRefresh("editor", path, key, result)} />
         </WindowFrame>
         <WindowFrame id="running-app" title="Developer preview · TerraFusion" geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
           {space.runningAppUrl ? <iframe src={space.runningAppUrl} title="Running TerraFusion application" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads" className="h-full w-full border-0" /> : (
@@ -1042,7 +1223,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
           <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)} minimizeDisabled={id === "diff" && change.running} minimizeDisabledReason={id === "diff" && change.running ? "Changes cannot be minimized while Change is active" : undefined}>
-            <DeveloperToolsSurface kind={id} selectedPath={space.selectedPath} historyScope={id === "diff" ? null : toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} />
+            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} selectedPath={space.selectedPath} historyScope={id === "diff" ? null : toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} />
           </WindowFrame>
         ))}
         {inspectors.map((surface) => {
@@ -1091,7 +1272,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       ) : null}
 
       {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} historical={councilHistorical} onDismiss={() => setOverlay(null)} onAdvisoryAction={(action) => handleCouncilAction(action)} /> : councilView === "convening" ? <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={() => setOverlay(null)}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{councilBusy ? "Convening five real advisory perspectives…" : "Council unavailable"}</strong><p className={spatial.muted}>{councilError ?? councilQuestion ?? "Preparing the current question."}</p>{councilError && councilQuestion ? <button type="button" className={spatial.utilityButton} onClick={() => void summonCouncil(councilQuestion)}>Try again</button> : null}</div></section> : <CouncilHistoryBrowser history={councilHistory} loading={councilBusy} error={councilError} onDismiss={() => setOverlay(null)} onSelect={(session) => { setCouncilSession(session); setCouncilHistorical(true) }} onNew={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} />}</div> : null}
-      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={space.id} onEnterSpace={() => setOverlay(null)} onDismiss={() => setOverlay(null)} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
+      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => setOverlay(null)} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} transitionMessage={transitionMessage} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
     </main>
   )
 }

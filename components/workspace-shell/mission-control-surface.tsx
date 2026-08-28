@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState, type FormEvent } from "react"
 
 import styles from "./mission-control-surface.module.css"
 
@@ -46,6 +46,9 @@ export type MissionControlSurfaceProps = Readonly<{
   onEnterSpace: (spaceId: string) => void
   onDismiss: () => void
   williamOverview?: MissionControlWilliamOverview | null
+  multiSpaceAvailable?: boolean
+  onCreateSpace?: (name: string) => Promise<boolean | void>
+  transitionMessage?: string | null
 }>
 
 const stateLabel: Record<MissionControlSpaceProjection["state"], string> = {
@@ -124,9 +127,6 @@ function SpacePreview({
       </span>
   </>
 
-  if (space.truth === "fixture") {
-    return <div className={styles.space} data-current={false} data-state={space.state} aria-label={`${space.name}, reference-only fixture projection`} aria-disabled="true">{content}</div>
-  }
   return <button type="button" className={styles.space} data-current={current} data-state={space.state} onClick={onEnter} aria-label={`Enter ${space.name}${current ? ", current Space" : ""}`}>{content}</button>
 }
 
@@ -136,10 +136,35 @@ export function MissionControlSurface({
   onEnterSpace,
   onDismiss,
   williamOverview,
+  multiSpaceAvailable = false,
+  onCreateSpace,
+  transitionMessage,
 }: MissionControlSurfaceProps) {
   const dialogRef = useRef<HTMLElement>(null)
-  const liveSpaceCount = spaces.filter((space) => space.truth === "live").length
-  const fixtureSpaceCount = spaces.length - liveSpaceCount
+  const [creating, setCreating] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const createFlightRef = useRef(false)
+  const liveSpaceCount = spaces.length
+  const submitCreate = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (createFlightRef.current || !onCreateSpace) return
+    const data = new FormData(event.currentTarget)
+    const name = String(data.get("spaceName") ?? "").trim()
+    if (!name) { setCreateError("Give the Space a name."); return }
+    createFlightRef.current = true
+    setSubmitting(true)
+    setCreateError(null)
+    try {
+      const created = await onCreateSpace(name)
+      if (created !== false) setCreating(false)
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "Space creation failed.")
+    } finally {
+      createFlightRef.current = false
+      setSubmitting(false)
+    }
+  }
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const dialog = dialogRef.current
@@ -169,11 +194,27 @@ export function MissionControlSurface({
           <span className={styles.eyebrow}>Spatial overview</span>
           <h1 id="mission-control-title">Mission Control</h1>
         </div>
-        <span className={styles.spaceCount}>{liveSpaceCount} live {liveSpaceCount === 1 ? "Space" : "Spaces"}{fixtureSpaceCount ? ` · ${fixtureSpaceCount} reference` : ""}</span>
+        <span className={styles.headerActions}>
+          <span className={styles.spaceCount}>{liveSpaceCount} live {liveSpaceCount === 1 ? "Space" : "Spaces"}</span>
+          <button type="button" className={styles.newSpace} disabled={!multiSpaceAvailable || !onCreateSpace || submitting} onClick={() => setCreating(true)}>New Space</button>
+        </span>
         <button type="button" className={styles.dismiss} onClick={onDismiss} aria-label="Dismiss Mission Control">
           <span aria-hidden="true">×</span>
         </button>
       </header>
+
+      {creating ? (
+        <form className={styles.createSpace} onSubmit={submitCreate}>
+          <label htmlFor="mission-space-name">Space name</label>
+          <input id="mission-space-name" name="spaceName" maxLength={80} autoFocus disabled={submitting} />
+          <button type="submit" disabled={submitting}>{submitting ? "Creating…" : "Create Space"}</button>
+          <button type="button" disabled={submitting} onClick={() => setCreating(false)}>Cancel</button>
+          {createError ? <span role="alert">{createError}</span> : null}
+        </form>
+      ) : null}
+
+      {!multiSpaceAvailable ? <p className={styles.degraded}>New Space is unavailable because server persistence is unavailable. This browser-local Space remains usable.</p> : null}
+      {transitionMessage ? <p className={styles.transition} role="status">{transitionMessage}</p> : null}
 
       <main className={styles.spaceField}>
         {spaces.length === 0 ? (
@@ -202,8 +243,7 @@ export function MissionControlSurface({
             </>
           ) : <span>No ambient overview is available.</span>}
         </span>
-        {williamOverview?.truth === "fixture" ? <span className={styles.fixtureLabel}>Illustrative overview</span> : null}
-        <span className={styles.hint}>Select a live Space to return to its exact working context · fixtures are reference-only · Esc to close</span>
+        <span className={styles.hint}>Select a Space to return to its exact working context · Esc to close</span>
       </footer>
     </section>
   )

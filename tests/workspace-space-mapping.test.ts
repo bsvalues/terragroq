@@ -6,6 +6,34 @@ import { validateSpaceState } from "@/lib/environment/working-world"
 const geometry = (z: number) => ({ x: 100, y: 90, width: 560, height: 480, z, minimized: false })
 
 describe("browser-to-server Space mapping", () => {
+  it("keeps server Space identity and place separate across two durable snapshots", () => {
+    const aBase = defaultSpace(1440, 900, "world-a", "Build")
+    const bBase = defaultSpace(1440, 900, "world-b", "Recovery")
+    const a = normalizeSpace(spaceToServer({
+      ...aBase,
+      selectedPath: "src/a.ts",
+      windows: { ...aBase.windows, editor: { ...aBase.windows.editor, x: 37 } },
+      editor: { openFiles: ["src/a.ts"], panes: [{ id: "primary", activePath: "src/a.ts", selection: { anchor: 1, head: 4 } }], activePaneId: "primary" },
+      inspectorWindows: { "inspect-a": geometry(9) },
+      inspectorSeeds: { "inspect-a": { kind: "review", subject: "src/a.ts", payload: "A report" } },
+      activeWindowId: "inspect-a",
+    }), aBase)
+    const b = normalizeSpace(spaceToServer({
+      ...bBase,
+      selectedPath: "src/b.ts",
+      windows: { ...bBase.windows, editor: { ...bBase.windows.editor, x: 211 } },
+      editor: { openFiles: ["src/b.ts"], panes: [{ id: "primary", activePath: "src/b.ts", selection: { anchor: 8, head: 12 } }], activePaneId: "primary" },
+    }), bBase)
+
+    expect(a).toMatchObject({ id: "world-a", name: "Build", selectedPath: "src/a.ts", activeWindowId: "inspect-a" })
+    expect(a.windows.editor.x).toBe(37)
+    expect(a.editor.panes[0].selection).toEqual({ anchor: 1, head: 4 })
+    expect(a.inspectorSeeds["inspect-a"]).toMatchObject({ subject: "src/a.ts", payload: "A report" })
+    expect(b).toMatchObject({ id: "world-b", name: "Recovery", selectedPath: "src/b.ts", activeWindowId: "editor" })
+    expect(b.windows.editor.x).toBe(211)
+    expect(b.editor.openFiles).toEqual(["src/b.ts"])
+  })
+
   it("opens new desktop Spaces with source, preview, and tests visibly composed", () => {
     const space = defaultSpace(1440, 900)
     const source = space.windows.editor
