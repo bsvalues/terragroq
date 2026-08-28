@@ -1,5 +1,6 @@
 param(
-  [Parameter(Mandatory = $true)][string]$OutputDirectory
+  [Parameter(Mandatory = $true)][string]$OutputDirectory,
+  [ValidateSet('FULL','SECURITY_INFERENCE')][string]$Mode = 'FULL'
 )
 
 Set-StrictMode -Version Latest
@@ -23,13 +24,18 @@ if (-not [IO.File]::Exists($powershell)) { throw 'HERMES_ATTESTATION_WINDOWS_POW
 $nativeExecutables = [ordered]@{
   docker = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
   nvidiaSmi = (Join-Path $env:WINDIR 'System32\nvidia-smi.exe')
-  tailscale = 'C:\Program Files\Tailscale\tailscale.exe'
 }
+if ($Mode -eq 'FULL') { $nativeExecutables['tailscale'] = 'C:\Program Files\Tailscale\tailscale.exe' }
 foreach ($toolPath in $nativeExecutables.Values) {
   if (-not [IO.File]::Exists($toolPath)) { throw "HERMES_ATTESTATION_TRUSTED_TOOL_MISSING: $toolPath" }
 }
 
 $nonce = [Guid]::NewGuid().ToString('D')
+$requestedFactIds = if ($Mode -eq 'SECURITY_INFERENCE') { @(
+  'network.listeners', 'network.specialPortOwners', 'network.firewallAdmissions', 'security.firewallProfiles',
+  'inference.gpus', 'inference.ollama', 'inference.dockerContainers', 'inference.guardBaseline',
+  'operations.tasks', 'operations.heartbeats'
+) } else { @() }
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
 $base = "hermes-host-attestation-$stamp-$nonce"
 $rawPath = Join-Path $outputRoot "$base.source.json"
@@ -96,16 +102,18 @@ try {
     binderSha256 = $binderSha256
     collectorSha256 = $collectorSha256
     expectedUacPrompts = 1
-    nativeExecutables = $toolEvidence
-    nodeSha256 = $nodeSha256
-    nonce = $nonce
-    outputPathSha256 = Get-Sha256Text $rawPath
-    persistentCredential = $false
-    powershellSha256 = $powershellSha256
-    schema = 'hermes-host-attestation-launch/1'
-    stagedAt = (Get-Date).ToUniversalTime().ToString('o')
-    uacMethod = 'Start-Process/RunAs'
   }
+  if ($Mode -eq 'SECURITY_INFERENCE') { $manifest['mode'] = $Mode }
+  $manifest['nativeExecutables'] = $toolEvidence
+  $manifest['nodeSha256'] = $nodeSha256
+  $manifest['nonce'] = $nonce
+  $manifest['outputPathSha256'] = Get-Sha256Text $rawPath
+  $manifest['persistentCredential'] = $false
+  $manifest['powershellSha256'] = $powershellSha256
+  if ($Mode -eq 'SECURITY_INFERENCE') { $manifest['requestedFactIds'] = @($requestedFactIds | Sort-Object) }
+  $manifest['schema'] = if ($Mode -eq 'SECURITY_INFERENCE') { 'hermes-host-attestation-launch/2' } else { 'hermes-host-attestation-launch/1' }
+  $manifest['stagedAt'] = (Get-Date).ToUniversalTime().ToString('o')
+  $manifest['uacMethod'] = 'Start-Process/RunAs'
   $manifestJson = ConvertTo-Json -InputObject $manifest -Compress
   Write-NewUtf8 $manifestPath $manifestJson
   $manifestLease = Open-ReadLease $manifestPath; $leases.Add($manifestLease)
@@ -117,6 +125,7 @@ try {
     '-LaunchManifestPath', "`"$manifestPath`"",
     '-CollectionId', $nonce
   )
+  if ($Mode -eq 'SECURITY_INFERENCE') { $arguments += @('-FactIdsCsv', ($requestedFactIds -join ',')) }
   # This is the only elevation primitive. The collector and manifest remain leased read-only until
   # this child exits, and no credential is supplied or retained.
   $priorModulePath = $env:PSModulePath
