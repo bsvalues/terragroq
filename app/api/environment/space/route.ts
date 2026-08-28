@@ -1,6 +1,8 @@
 import {
   createDefaultSpace,
   browserSpaceStorageKey,
+  createOwnedProjectSpace,
+  listOwnedProjectSpaces,
   loadOrCreateOwnedSpace,
   saveOwnedSpace,
   workspaceProjectFromRoot,
@@ -37,6 +39,28 @@ async function admittedAppUrl(request: Request): Promise<string | null> {
   return admission.ok ? admission.url : null
 }
 
+async function collectionMetadata(input: Readonly<{
+  userId: string
+  workspaceAppUrl: string | null
+  current: { worldId: string; name: string; space: unknown }
+}>) {
+  try {
+    return {
+      spaces: await listOwnedProjectSpaces({
+        userId: input.userId, project: WORKSPACE_PROJECT,
+        workspaceAppUrl: input.workspaceAppUrl, current: input.current,
+      }),
+      collectionAvailable: true as const,
+    }
+  } catch {
+    return {
+      spaces: [{ ...input.current, updatedAt: new Date(0).toISOString() }],
+      collectionAvailable: false as const,
+      collectionReason: "SPACE_COLLECTION_UNAVAILABLE" as const,
+    }
+  }
+}
+
 export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return reply({ error: "UNAUTHENTICATED" }, 401)
@@ -52,17 +76,61 @@ export async function GET(request: Request) {
       project: WORKSPACE_PROJECT,
       newWorldId: crypto.randomUUID,
     })
-    return result ? reply(result) : reply({ error: "WORLD_NOT_FOUND" }, 404)
-  } catch {
+    if (!result) return reply({ error: "WORLD_NOT_FOUND" }, 404)
+    const collection = await collectionMetadata({ userId: session.user.id, workspaceAppUrl, current: result })
+    return reply({
+      ...result,
+      storage: "server",
+      ...collection,
+      multiSpaceAvailable: true,
+      preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+    })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "SPACE_PERSISTENCE_UNAVAILABLE"
+    if (reason === "SPACE_PROJECT_MISMATCH") return reply({ error: reason }, 400)
+    if (requested !== null) return reply({ error: "SPACE_PERSISTENCE_UNAVAILABLE" }, 503)
     // A missing optional persistence relation must not strand the primary browser experience.
     // The client persists this truthful, project-bound fallback in browser storage and labels it.
+    const fallback = createDefaultSpace(workspaceAppUrl)
     return reply({
       worldId: "browser-local",
-      space: createDefaultSpace(workspaceAppUrl),
+      name: WORKSPACE_PROJECT.name,
+      space: fallback,
       project: WORKSPACE_PROJECT,
       storage: "browser",
       browserStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+      preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+      spaces: [{ worldId: "browser-local", name: WORKSPACE_PROJECT.name, space: fallback, updatedAt: new Date(0).toISOString() }],
+      multiSpaceAvailable: false,
     })
+  }
+}
+
+export async function POST(request: Request) {
+  const session = await getSession()
+  if (!session) return reply({ error: "UNAUTHENTICATED" }, 401)
+  const parsed = await readBoundedJson(request, 2_000)
+  if (!parsed.ok) return reply({ error: parsed.error }, parsed.status)
+  const body = parsed.value as { name?: unknown }
+  try {
+    const workspaceAppUrl = await admittedAppUrl(request)
+    const result = await createOwnedProjectSpace({
+      userId: session.user.id,
+      project: WORKSPACE_PROJECT,
+      name: body.name,
+      workspaceAppUrl,
+      newWorldId: crypto.randomUUID,
+    })
+    const collection = await collectionMetadata({ userId: session.user.id, workspaceAppUrl, current: result })
+    return reply({
+      ...result, storage: "server", ...collection, multiSpaceAvailable: true,
+      preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+    }, 201)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ""
+    if (message === "SPACE_NAME_INVALID") return reply({ error: message }, 400)
+    if (message === "SPACE_LIMIT_REACHED") return reply({ error: message }, 409)
+    return reply({ error: "SPACE_PERSISTENCE_UNAVAILABLE" }, 503)
   }
 }
 

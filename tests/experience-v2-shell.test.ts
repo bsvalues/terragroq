@@ -83,8 +83,9 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(historyOpen).not.toContain("setSpace(")
     expect(source).toContain("MissionControlSurface")
     expect(source).toContain('truth: "live"')
-    expect(source).toContain('truth: "fixture"')
-    expect(source).toContain("Illustrative Space · not live runtime state")
+    expect(source).not.toContain('truth: "fixture"')
+    expect(source).not.toContain("Illustrative Space · not live runtime state")
+    expect(source).toContain("spaceSummaries.map")
   })
 
   it("connects the Tests, Changes, and Terminal windows to real workspace operations", () => {

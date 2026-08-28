@@ -27,7 +27,8 @@ const spaces: readonly MissionControlSpaceProjection[] = [
     id: "research",
     name: "Research & Evidence",
     focus: "investigation",
-    state: "paused",
+    state: "saved",
+    agentActivityKnown: false,
     truth: "live",
     changed: "Three sources added",
     windows: [{ id: "evidence", title: "Evidence", kind: "evidence", frame: { x: 40, y: 40, width: 900, height: 620 } }],
@@ -37,8 +38,8 @@ const spaces: readonly MissionControlSpaceProjection[] = [
     id: "recovery",
     name: "Review & Recovery",
     focus: "validation",
-    state: "unavailable",
-    truth: "fixture",
+    state: "saved",
+    truth: "live",
     windows: [{ id: "tests", title: "Tests", kind: "tests", frame: { x: 80, y: 90, width: 700, height: 430 }, detail: "runtime unavailable" }],
     agents: [{ id: "local", name: "HERMES", role: "Local execution", activity: "waiting", state: "waiting" }],
   },
@@ -64,6 +65,8 @@ describe("Experience V2 Mission Control", () => {
     expect(screen.getByText("Selected · workspace-shell.tsx")).toBeTruthy()
     expect(screen.getByText("Codex · implementing")).toBeTruthy()
     expect(screen.queryByText(/KPI|Home|System Space|WilliamOS Space/)).toBeNull()
+    expect(screen.getByText("3 Spaces")).toBeTruthy()
+    expect(screen.queryByText("3 live Spaces")).toBeNull()
   })
 
   it("re-enters the exact selected Space id without rewriting its working context", async () => {
@@ -89,22 +92,19 @@ describe("Experience V2 Mission Control", () => {
     })
   })
 
-  it("labels illustrative Space and William projections truthfully", () => {
+  it("renders every supplied Space as a real enterable projection without fixture or KPI copy", () => {
     render(
       <MissionControlSurface
         spaces={spaces}
         currentSpaceId={null}
         onEnterSpace={vi.fn()}
         onDismiss={vi.fn()}
-        williamOverview={{ summary: "One thing may need review.", truth: "fixture" }}
+        williamOverview={{ summary: "One thing may need review.", truth: "live" }}
       />,
     )
 
-    const fixture = screen.getByLabelText("Review & Recovery, reference-only fixture projection")
-    expect(fixture.tagName).toBe("DIV")
-    expect(fixture.textContent).toContain("Fixture projection")
-    expect(screen.getByText("Illustrative overview")).toBeTruthy()
-    expect(screen.getByText("runtime unavailable")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Enter Review & Recovery" })).toBeTruthy()
+    expect(screen.queryByText(/fixture|KPI|Home|System Space/i)).toBeNull()
   })
 
   it("dismisses as an OS-level mode by button or Escape", async () => {
@@ -124,18 +124,59 @@ describe("Experience V2 Mission Control", () => {
     expect(onDismiss).toHaveBeenCalledTimes(2)
   })
 
-  it("keeps an unavailable Space present without inventing runtime state", () => {
+  it("keeps the overview visible while an exact Space transition is in flight", () => {
+    const onDismiss = vi.fn()
+    render(<MissionControlSurface spaces={spaces} currentSpaceId="terrafusion" onEnterSpace={vi.fn()} onDismiss={onDismiss} transitioning transitionMessage="Restoring the selected Space…" />)
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect((screen.getByRole("button", { name: "Dismiss Mission Control" }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole("button", { name: "Enter Research & Evidence" }) as HTMLButtonElement).disabled).toBe(true)
+    expect(onDismiss).not.toHaveBeenCalled()
+  })
+
+  it("labels inactive projections as saved state with unknown agent activity", () => {
+    render(<MissionControlSurface spaces={spaces} currentSpaceId="terrafusion" onEnterSpace={vi.fn()} onDismiss={vi.fn()} />)
+    const research = screen.getByRole("button", { name: "Enter Research & Evidence" })
+    expect(research.textContent).toContain("Saved state")
+    expect(research.textContent).toContain("Agent activity unknown")
+    expect(research.textContent).not.toContain("Paused")
+    expect(research.textContent).not.toContain("No active agents")
+  })
+
+  it("offers an accessible inline name-only New Space action", async () => {
+    const user = userEvent.setup()
+    const onCreateSpace = vi.fn(async () => true)
     render(
       <MissionControlSurface
         spaces={spaces}
         currentSpaceId="terrafusion"
         onEnterSpace={vi.fn()}
         onDismiss={vi.fn()}
+        multiSpaceAvailable
+        onCreateSpace={onCreateSpace}
       />,
     )
+    await user.click(screen.getByRole("button", { name: "New Space" }))
+    await user.type(screen.getByRole("textbox", { name: "Space name" }), "Release verification")
+    await user.click(screen.getByRole("button", { name: "Create Space" }))
+    expect(onCreateSpace).toHaveBeenCalledWith("Release verification")
+  })
 
-    const recovery = screen.getByLabelText("Review & Recovery, reference-only fixture projection")
-    expect(recovery.textContent).toContain("Fixture projection")
-    expect(recovery.textContent).toContain("HERMES · waiting")
+  it("disables New Space truthfully in browser-local degradation", () => {
+    render(<MissionControlSurface spaces={spaces.slice(0, 1)} currentSpaceId="terrafusion" onEnterSpace={vi.fn()} onDismiss={vi.fn()} multiSpaceAvailable={false} onCreateSpace={vi.fn()} />)
+    expect((screen.getByRole("button", { name: "New Space" }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText(/server persistence is unavailable/i)).toBeTruthy()
+  })
+
+  it("keeps New Space submission single-flight under a double submit", async () => {
+    let resolve!: (value: boolean) => void
+    const onCreateSpace = vi.fn(() => new Promise<boolean>((done) => { resolve = done }))
+    render(<MissionControlSurface spaces={spaces} currentSpaceId="terrafusion" onEnterSpace={vi.fn()} onDismiss={vi.fn()} multiSpaceAvailable onCreateSpace={onCreateSpace} />)
+    fireEvent.click(screen.getByRole("button", { name: "New Space" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Space name" }), { target: { value: "Release" } })
+    const form = screen.getByRole("textbox", { name: "Space name" }).closest("form")!
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+    expect(onCreateSpace).toHaveBeenCalledTimes(1)
+    resolve(true)
   })
 })

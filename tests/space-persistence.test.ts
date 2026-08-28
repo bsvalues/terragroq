@@ -88,6 +88,8 @@ import {
   findLatestProjectOwnedByPage,
   findLatestTerraFusionOwnedByPage,
   loadOrCreateOwnedSpace,
+  listOwnedProjectSpaces,
+  createOwnedProjectSpace,
   loadOwnedCouncilHistory,
   saveOwnedCouncilSession,
   saveOwnedLineWorld,
@@ -111,6 +113,7 @@ function councilSession(id: string, createdAt: string) {
 
 class MemoryStore implements SpaceWorkingWorldStore {
   readonly rows = new Map<string, OwnedWorkingWorldRecord>()
+  private projectInsertTail: Promise<void> = Promise.resolve()
 
   async findOwned(userId: string, worldId: string) {
     const row = this.rows.get(worldId)
@@ -130,6 +133,32 @@ class MemoryStore implements SpaceWorkingWorldStore {
     return findLatestProjectOwnedByPage(projectIdentity, async (offset, limit) => (
       ordered.slice(offset, offset + limit)
     ))
+  }
+
+  async listOwnedForProject(userId: string) {
+    return [...this.rows.values()]
+      .filter((row) => row.userId === userId)
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || b.id.localeCompare(a.id))
+  }
+
+  async readOwnedPage(userId: string, offset: number, limit: number) {
+    return (await this.listOwnedForProject(userId)).slice(offset, offset + limit)
+  }
+
+  insertOwnedProjectSpace(userId: string, projectIdentity: string, row: OwnedWorkingWorldRecord) {
+    let resolve!: (result: "created" | "limit") => void
+    let reject!: (error: unknown) => void
+    const result = new Promise<"created" | "limit">((done, failed) => { resolve = done; reject = failed })
+    this.projectInsertTail = this.projectInsertTail.then(async () => {
+      const projectRows = (await this.listOwnedForProject(userId)).filter((candidate) => {
+        try { return JSON.parse(candidate.snapshot).resources.includes(`williamos-workspace-root:v1:${projectIdentity}`) }
+        catch { return false }
+      })
+      if (projectRows.length >= 12) { resolve("limit"); return }
+      await this.insertOwned(row)
+      resolve("created")
+    }).catch(reject)
+    return result
   }
 
   async insertOwned(row: OwnedWorkingWorldRecord) {
@@ -225,6 +254,64 @@ function space(runningAppUrl: string | null = "javascript:alert(1)", revision = 
 }
 
 describe("server-owned Space persistence", () => {
+  it("lists only valid owner and project Spaces newest first", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    const other = workspaceProjectFromRoot("C:\\repos\\Other")
+    const make = (id: string, userId: string, target: typeof project, updatedAt: string) => {
+      const world = createWorkingWorld({ intent: id, resources: [`williamos-workspace-root:v1:${target.identity}`] })
+      store.rows.set(id, { id, userId, intent: id, snapshot: JSON.stringify({ ...world, space: space(null, 1) }), updatedAt: new Date(updatedAt) })
+    }
+    make("older", "owner-a", project, "2026-08-20T00:00:00Z")
+    make("newer", "owner-a", project, "2026-08-22T00:00:00Z")
+    make("foreign-owner", "owner-b", project, "2026-08-24T00:00:00Z")
+    make("foreign-project", "owner-a", other, "2026-08-23T00:00:00Z")
+    store.rows.set("corrupt", { id: "corrupt", userId: "owner-a", intent: "bad", snapshot: "{", updatedAt: new Date("2026-08-25T00:00:00Z") })
+
+    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store)).map((item) => item.worldId)).toEqual(["newer", "older"])
+  })
+
+  it("creates a fresh server-derived Space from only a canonical name", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    const created = await createOwnedProjectSpace({
+      userId: "owner-a", project, name: "  Release work  ", newWorldId: () => "server-id",
+    }, store)
+    expect(created.worldId).toBe("server-id")
+    expect(created.name).toBe("Release work")
+    expect(created.space.revision).toBe(0)
+    expect(created.space.openFiles).toEqual([])
+    expect(JSON.parse(store.rows.get("server-id")!.snapshot).resources).toContain(`williamos-workspace-root:v1:${project.identity}`)
+    await expect(createOwnedProjectSpace({ userId: "owner-a", project, name: "bad\nname" }, store)).rejects.toThrow("SPACE_NAME_INVALID")
+  })
+
+  it("pages beyond 240 newer foreign rows to find the exact project collection", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    const other = workspaceProjectFromRoot("C:\\repos\\Other")
+    for (let index = 0; index < 260; index += 1) {
+      const world = createWorkingWorld({ intent: `foreign-${index}`, resources: [`williamos-workspace-root:v1:${other.identity}`] })
+      store.rows.set(`foreign-${index}`, { id: `foreign-${index}`, userId: "owner-a", intent: world.intent, snapshot: JSON.stringify(world), updatedAt: new Date(10_000 + index) })
+    }
+    const exactWorld = createWorkingWorld({ intent: "Exact", resources: [`williamos-workspace-root:v1:${project.identity}`] })
+    store.rows.set("exact", { id: "exact", userId: "owner-a", intent: "Exact", snapshot: JSON.stringify({ ...exactWorld, space: space(null, 1) }), updatedAt: new Date(1) })
+    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store)).map((item) => item.worldId)).toEqual(["exact"])
+  })
+
+  it("transactionally refuses the thirteenth project Space under concurrent creation", async () => {
+    const store = new MemoryStore()
+    const project = workspaceProjectFromRoot("C:\\repos\\TerraFusion")
+    for (let index = 0; index < 11; index += 1) {
+      await createOwnedProjectSpace({ userId: "owner-a", project, name: `Space ${index}`, newWorldId: () => `world-${index}` }, store)
+    }
+    const outcomes = await Promise.allSettled([
+      createOwnedProjectSpace({ userId: "owner-a", project, name: "Space eleven", newWorldId: () => "world-11" }, store),
+      createOwnedProjectSpace({ userId: "owner-a", project, name: "Space twelve", newWorldId: () => "world-12" }, store),
+    ])
+    expect(outcomes.filter((item) => item.status === "fulfilled")).toHaveLength(1)
+    expect(outcomes.filter((item) => item.status === "rejected").map((item) => (item as PromiseRejectedResult).reason.message)).toEqual(["SPACE_LIMIT_REACHED"])
+    expect((await listOwnedProjectSpaces({ userId: "owner-a", project }, store))).toHaveLength(12)
+  })
   it("derives separate opaque browser fallback namespaces per user and project", () => {
     const owner = browserSpaceStorageKey("owner-a", "c:/repos/terrafusion")
     expect(owner).toMatch(/^[A-Za-z0-9_-]{43}$/)

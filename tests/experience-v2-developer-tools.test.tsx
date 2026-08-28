@@ -78,6 +78,18 @@ describe("Experience V2 developer tools", () => {
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ operation: "tests.run" })
   })
 
+  it("reports the exact running tool identity until streamed settlement", async () => {
+    let resolve!: (response: Response) => void
+    const fetcher = vi.fn(() => new Promise<Response>((done) => { resolve = done }))
+    vi.stubGlobal("fetch", fetcher)
+    const onRunningChange = vi.fn()
+    render(<DeveloperToolsSurface kind="tests" selectedPath={null} onRunningChange={onRunningChange} />)
+    fireEvent.click(screen.getByRole("button", { name: "Run full test suite" }))
+    await waitFor(() => expect(onRunningChange).toHaveBeenCalledWith({ kind: "tests", operationId: "tests.run" }))
+    resolve(ndjson({ type: "exit", code: 0, reason: null }))
+    await waitFor(() => expect(onRunningChange).toHaveBeenLastCalledWith(null))
+  })
+
   it("restores a completed Test run as saved browser transcript rather than current evidence", async () => {
     const fetcher = vi.fn().mockResolvedValue(ndjson(
       { type: "started", operation: "tests.run" },
