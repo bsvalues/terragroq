@@ -9,14 +9,16 @@ const scriptPath = path.join(process.cwd(), "scripts/lab-control/hermes/ollama-s
 describe("#1046 read-only ownership diagnostic", () => {
   it("is digest-bound, elevated, immutable-output, and mutation-free", () => {
     const source = fs.readFileSync(scriptPath, "utf8")
-    expect(source).toContain("HERMES_1046_SCRIPT_DIGEST_MISMATCH")
-    expect(source).toContain("HERMES_1046_ELEVATION_REQUIRED")
+    expect(source).toContain("HERMES_OWNERSHIP_COLLECTOR_DIGEST_MISMATCH")
+    expect(source).toContain("HERMES_OWNERSHIP_ELEVATION_REQUIRED")
     expect(source).toContain("[IO.FileMode]::CreateNew")
-    expect(source).toContain("mutationAllowed = $false")
-    expect(source).toContain("HERMES_1046_OUTPUT_NOT_DEDICATED")
-    expect(source).toContain("HERMES_1046_OUTPUT_REPARSE_REFUSED")
+    expect(source).toContain("hostMutationAuthorized = $false")
+    expect(source).toContain("hostMutationObserved = $false")
+    expect(source).toContain("HERMES_OWNERSHIP_OUTPUT_BINDING_MISMATCH")
+    expect(source).toContain("HERMES_OWNERSHIP_OUTPUT_REPARSE_REFUSED")
     expect(source).toContain("[IO.FileAttributes]::ReadOnly")
-    expect(source).toContain("$outputDigestPath")
+    expect(source).toContain("HERMES_OLLAMA_OWNERSHIP_PROBE_FAILURE")
+    expect(source).toContain("HERMES_OLLAMA_OWNERSHIP_OBSERVATION")
     expect(source).not.toMatch(/^\s*(?:Set-(?!StrictMode)|New-|Remove-|Clear-|Enable-|Disable-|Start-|Stop-|Restart-|Register-|Unregister-|Mount-|Dismount-|Initialize-|Format-|Resize-|Repair-|Update-)[A-Za-z]/m)
     expect(source).not.toMatch(/\b(?:docker|&\s+\$dockerExe)\s+(?:run|start|stop|restart|rm|rmi|pull|build|compose\s+up)\b/i)
     expect(source).not.toMatch(/\b(?:Set-Content|Out-File|Add-Content|Export-Clixml|schtasks\.exe)\b/i)
@@ -31,7 +33,7 @@ describe("#1046 read-only ownership diagnostic", () => {
       "Get-NetTCPConnection",
       "Win32_Service",
       "Win32_StartupCommand",
-      "docker-ollama-residents",
+      "docker.ownership-signals",
       "fileLaunchers",
       "logEvidence",
     ]) expect(source).toContain(marker)
