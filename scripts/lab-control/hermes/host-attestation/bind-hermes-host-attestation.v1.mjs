@@ -10,6 +10,10 @@ export const COLLECTOR_SCHEMA = "hermes-host-attestation-source/1"
 export const TARGETED_SCHEMA = "hermes-host-attestation-targeted/1"
 export const TARGETED_COLLECTOR_SCHEMA = "hermes-host-attestation-targeted-source/1"
 export const CANONICALIZATION = "recursive-key-sort-json/1"
+export const COLLECTOR_VERSION_POLICY = Object.freeze({
+  [COLLECTOR_SCHEMA]: Object.freeze({ boundSchema: SCHEMA, historical: Object.freeze(["1.0.0"]), current: "1.1.0" }),
+  [TARGETED_COLLECTOR_SCHEMA]: Object.freeze({ boundSchema: TARGETED_SCHEMA, historical: Object.freeze(["1.0.0"]), current: "1.1.0" }),
+})
 export const TRUTH_STATES = Object.freeze(["OBSERVED", "UNKNOWN", "CONFLICTING", "STALE"])
 export const PRIORITY_TYPES = Object.freeze([
   "HERMES_STORAGE_CRITICAL",
@@ -256,7 +260,25 @@ export function stableDigest(value) {
   return crypto.createHash("sha256").update(canonicalize(value), "utf8").digest("hex")
 }
 
-function validateFact(fact, index, { allowStale = false } = {}) {
+function supportedCollectorVersions(sourceSchema) {
+  const policy = COLLECTOR_VERSION_POLICY[sourceSchema]
+  if (!policy) fail("HERMES_ATTESTATION_INVALID", `collector source schema ${sourceSchema} has no version policy`)
+  return [...policy.historical, policy.current]
+}
+
+function validateCollector(collector, sourceSchema, label) {
+  exactKeys(collector, ["name", "version", "sha256", "readOnly"], label)
+  const supportedVersions = supportedCollectorVersions(sourceSchema)
+  if (collector.name !== "collect-hermes-host-attestation.v1.ps1"
+    || !supportedVersions.includes(collector.version)
+    || !SHA256.test(collector.sha256)
+    || collector.readOnly !== true) {
+    fail("HERMES_ATTESTATION_INVALID", `${label} is invalid for ${sourceSchema}; collector version must be one of ${supportedVersions.join(", ")}`)
+  }
+  return collector.version
+}
+
+function validateFact(fact, index, { allowStale = false, collectorVersion } = {}) {
   const label = `facts[${index}]`
   exactKeys(fact, ["id", "domain", "truth", "value", "provenance", "freshness", "redaction"], label)
   if (!/^[a-z][A-Za-z0-9]*(?:\.[A-Za-z0-9]+)+$/.test(fact.id)) {
@@ -269,8 +291,8 @@ function validateFact(fact, index, { allowStale = false } = {}) {
   exactKeys(fact.provenance, ["source", "probe", "collectorVersion", "result"], `${label}.provenance`)
   text(fact.provenance.source, `${label}.provenance.source`)
   text(fact.provenance.probe, `${label}.provenance.probe`)
-  if (fact.provenance.collectorVersion !== "1.0.0") {
-    fail("HERMES_ATTESTATION_INVALID", `${label}.provenance.collectorVersion must be 1.0.0`)
+  if (typeof collectorVersion !== "string" || fact.provenance.collectorVersion !== collectorVersion) {
+    fail("HERMES_ATTESTATION_INVALID", `${label}.provenance.collectorVersion must equal the packet collector version`)
   }
   if (!["SUCCESS", "READ_ONLY_PROBE_FAILED", "CONTRADICTION_PRESERVED"].includes(fact.provenance.result)) {
     fail("HERMES_ATTESTATION_INVALID", `${label}.provenance.result is invalid`)
@@ -360,11 +382,7 @@ export function validateSource(source, { now = new Date(), launchManifest, launc
   if (source.schema !== COLLECTOR_SCHEMA || source.artifact !== "HERMES_HOST_ATTESTATION") {
     fail("HERMES_ATTESTATION_INVALID", "source schema or artifact identity is wrong")
   }
-  exactKeys(source.collector, ["name", "version", "sha256", "readOnly"], "source.collector")
-  if (source.collector.name !== "collect-hermes-host-attestation.v1.ps1" || source.collector.version !== "1.0.0"
-    || !SHA256.test(source.collector.sha256) || source.collector.readOnly !== true) {
-    fail("HERMES_ATTESTATION_INVALID", "collector identity is invalid")
-  }
+  const collectorVersion = validateCollector(source.collector, source.schema, "source.collector")
   exactKeys(source.authority, ["boundary", "elevated", "persistentCredential", "hostMutationAuthorized", "launchNonce", "launchManifestSha256"], "source.authority")
   if (source.authority.boundary !== "single-prestaged-uac-read-only"
     || source.authority.elevated !== true
@@ -389,7 +407,7 @@ export function validateSource(source, { now = new Date(), launchManifest, launc
   }
   if (!Array.isArray(source.facts)) fail("HERMES_ATTESTATION_INVALID", "facts must be an array")
   const ids = source.facts.map((fact, index) => {
-    const times = validateFact(fact, index)
+    const times = validateFact(fact, index, { collectorVersion })
     if (times.observedAt < collectedAt || times.observedAt > completedAt) {
       fail("HERMES_ATTESTATION_INVALID", `${fact.id} was observed outside the collection window`)
     }
@@ -416,11 +434,7 @@ export function validateTargetedSource(source, { now = new Date(), launchManifes
     || JSON.stringify([...source.requestedFactIds].sort()) !== JSON.stringify(SECURITY_INFERENCE_FACT_IDS)) {
     fail("HERMES_ATTESTATION_INCOMPLETE", "targeted source does not declare the exact decision closure")
   }
-  exactKeys(source.collector, ["name", "version", "sha256", "readOnly"], "targetedSource.collector")
-  if (source.collector.name !== "collect-hermes-host-attestation.v1.ps1" || source.collector.version !== "1.0.0"
-    || !SHA256.test(source.collector.sha256) || source.collector.readOnly !== true) {
-    fail("HERMES_ATTESTATION_INVALID", "targeted collector identity is invalid")
-  }
+  const collectorVersion = validateCollector(source.collector, source.schema, "targetedSource.collector")
   exactKeys(source.authority, ["boundary", "elevated", "persistentCredential", "hostMutationAuthorized", "launchNonce", "launchManifestSha256"], "targetedSource.authority")
   if (source.authority.boundary !== "single-prestaged-uac-read-only" || source.authority.elevated !== true
     || source.authority.persistentCredential !== false || source.authority.hostMutationAuthorized !== false
@@ -449,7 +463,7 @@ export function validateTargetedSource(source, { now = new Date(), launchManifes
   }
   if (!Array.isArray(source.facts)) fail("HERMES_ATTESTATION_INVALID", "targeted facts must be an array")
   const ids = source.facts.map((fact, index) => {
-    const times = validateFact(fact, index)
+    const times = validateFact(fact, index, { collectorVersion })
     if (times.observedAt < collectedAt || times.observedAt > completedAt) fail("HERMES_ATTESTATION_INVALID", `${fact.id} was observed outside the targeted collection window`)
     return fact.id
   })
@@ -533,6 +547,40 @@ function authorizedP40ComputeApp(app, ollama) {
     && String(ancestor.exe ?? "").replaceAll("/", "\\").toLowerCase() === GOLDEN.ollama.exe.toLowerCase())
 }
 
+export function deriveEccCounterEvents(previous, current) {
+  // NVIDIA defines volatile counters over a driver-load lifetime and aggregate counters as
+  // persistent lifetime counters, while also exposing explicit reset operations for both scopes.
+  // Corrected changes are therefore events/provenance, never a frozen configuration equality.
+  if (!object(current)) return []
+  const events = []
+  const previousEpoch = object(previous?.eccCounterEpoch) ? String(previous.eccCounterEpoch.id ?? "") : ""
+  const currentEpoch = object(current.eccCounterEpoch) ? String(current.eccCounterEpoch.id ?? "") : ""
+  if (previousEpoch && currentEpoch && previousEpoch !== currentEpoch) {
+    events.push({ type: "COUNTER_EPOCH_CHANGED", previousEpoch, currentEpoch, hardFailure: false })
+  }
+  const counterEvent = (field, incrementType, decreaseType) => {
+    const beforeRaw = previous?.[field]
+    const afterRaw = current[field]
+    if (beforeRaw === null || beforeRaw === undefined || afterRaw === null || afterRaw === undefined) return
+    const before = Number(beforeRaw)
+    const after = Number(afterRaw)
+    if (!Number.isFinite(before) || !Number.isFinite(after) || before === after) return
+    if (after > before) events.push({ type: incrementType, field, previous: before, current: after, delta: after - before, hardFailure: false })
+    else events.push({ type: decreaseType, field, previous: before, current: after, hardFailure: false })
+  }
+  counterEvent("correctedVolatileEcc", "CORRECTED_VOLATILE_INCREMENT", "VOLATILE_COUNTER_RELOAD_OR_RESET")
+  counterEvent("correctedAggregateEcc", "CORRECTED_AGGREGATE_INCREMENT", "COUNTER_EPOCH_OR_RESET_DISCONTINUITY")
+  for (const field of ["uncorrectedVolatileEcc", "uncorrectedAggregateEcc"]) {
+    const count = Number(current[field])
+    if (Number.isFinite(count) && count > 0) events.push({ type: "UNCORRECTED_ECC_OBSERVED", field, current: count, hardFailure: true })
+  }
+  return events
+}
+
+function observedEccCounter(value) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
 function inferenceDrift(facts) {
   const gpus = facts.get("inference.gpus")
   const ollama = facts.get("inference.ollama")
@@ -540,7 +588,8 @@ function inferenceDrift(facts) {
   const baseline = facts.get("inference.guardBaseline")
   const tasks = facts.get("operations.tasks")
   const heartbeats = facts.get("operations.heartbeats")
-  if ([gpus, ollama, containers, baseline, tasks, heartbeats].some(nonObserved)) return true
+  if ([gpus, ollama, containers, baseline, heartbeats].some(nonObserved)) return true
+  if (!tasks || ["UNKNOWN", "STALE"].includes(tasks.truth)) return true
   if (!Array.isArray(gpus.value) || !object(ollama.value) || !Array.isArray(containers.value) || !object(baseline.value)) return true
   const p40 = gpus.value.find((gpu) => gpu.uuid === GOLDEN.p40.uuid)
   const rtx3050 = gpus.value.find((gpu) => gpu.uuid === GOLDEN.rtx3050.uuid)
@@ -552,10 +601,9 @@ function inferenceDrift(facts) {
     || String(p40.eccModePending).toUpperCase() !== GOLDEN.p40.eccMode
     || !Number.isFinite(Number(p40.powerLimitW)) || Math.abs(Number(p40.powerLimitW) - GOLDEN.p40.powerLimitW) > 0.5
     || !Number.isFinite(Number(p40.defaultPowerLimitW)) || Math.abs(Number(p40.defaultPowerLimitW) - GOLDEN.p40.defaultPowerLimitW) > 0.5
-    || [p40.correctedVolatileEcc, p40.uncorrectedVolatileEcc, p40.correctedAggregateEcc, p40.uncorrectedAggregateEcc]
-      .some((value) => value === null || !Number.isFinite(Number(value)))
-    || Number(p40.correctedVolatileEcc) !== 0 || Number(p40.uncorrectedVolatileEcc) !== 0
-    || Number(p40.correctedAggregateEcc) !== 6 || Number(p40.uncorrectedAggregateEcc) !== 0) return true
+    || [p40.correctedVolatileEcc, p40.correctedAggregateEcc, p40.uncorrectedVolatileEcc, p40.uncorrectedAggregateEcc]
+      .some((value) => !observedEccCounter(value))
+    || Number(p40.uncorrectedVolatileEcc) !== 0 || Number(p40.uncorrectedAggregateEcc) !== 0) return true
   if (!rtx3050 || rtx3050.role !== GOLDEN.rtx3050.role || String(rtx3050.driverModelCurrent).toUpperCase() !== GOLDEN.rtx3050.driverModel) return true
   const p40Apps = Array.isArray(p40.computeApps) ? p40.computeApps : []
   if (p40Apps.some((app) => !authorizedP40ComputeApp(app, ollama.value))) return true
@@ -600,9 +648,15 @@ function inferenceDrift(facts) {
     || String(ollama.value.task.principal.runLevel).toLowerCase() !== "highest"
     || !exactPowerShellAction(ollama.value.task, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "C:\\HermesLab\\hermes\\ollama-service\\hermes-ollama-service.ps1"])
     || !exactActiveTriggers(ollama.value.task, [["MSFT_TaskBootTrigger"], ["MSFT_TaskTimeTrigger", "PT2M"]], ollama.freshness.observedAt)) return true
-  const observed = Object.fromEntries(containers.value.map((container) => [container.name, container]))
-  if (JSON.stringify(Object.keys(observed).sort()) !== JSON.stringify(Object.keys(GOLDEN.containers).sort())) return true
+  const declaredNames = Object.keys(GOLDEN.containers)
+  if (declaredNames.some((name) => containers.value.filter((container) => container.name === name).length !== 1)) return true
+  const observed = Object.fromEntries(containers.value.filter((container) => declaredNames.includes(container.name)).map((container) => [container.name, container]))
   if (Object.entries(GOLDEN.containers).some(([name, expected]) => observed[name].state !== expected.state || observed[name].restartPolicy !== expected.restartPolicy)) return true
+  const extraContainers = containers.value.filter((container) => !declaredNames.includes(container.name))
+  // Undeclared residents remain doctrine drift elsewhere. They affect inference priority only when
+  // the collector has either proved a protected-path collision or failed to classify that collision.
+  if (extraContainers.some((container) => container.inspectionState !== "OBSERVED" || container.inferenceClassification !== "UNRELATED_RESIDENT"
+    || !Array.isArray(container.inferenceCollisionReasons) || container.inferenceCollisionReasons.length !== 0)) return true
   const expectedGuards = {
     HermesP40Guard: {
       arguments: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:\\HermesLab\\hermes\\p40-guard.ps1", "-Quiet"],
@@ -615,9 +669,17 @@ function inferenceDrift(facts) {
       triggers: [["MSFT_TaskBootTrigger"]],
     },
   }
-  if (!Array.isArray(tasks.value) || Object.entries(expectedGuards).some(([name, expected]) => {
-    const task = tasks.value.find((entry) => entry.name === name)
-    return !task || !rootTaskPath(task) || !expected.state.includes(task.state) || !object(task.principal) || String(task.principal.user).toUpperCase() !== "SYSTEM"
+  const taskRows = Array.isArray(tasks.value) ? tasks.value : object(tasks.value) && Array.isArray(tasks.value.expectedTasks) ? tasks.value.expectedTasks : null
+  if (!Array.isArray(tasks.value)) {
+    const inventory = object(tasks.value?.inventory) ? tasks.value.inventory : null
+    const inventoryFailures = inventory && Array.isArray(inventory.failures) ? inventory.failures : null
+    const inventoryComplete = inventory?.state === "OBSERVED" && inventoryFailures?.length === 0
+    const inventoryIncomplete = ["PARTIAL", "UNKNOWN"].includes(inventory?.state) && inventoryFailures && inventoryFailures.length > 0
+    if ((!inventoryComplete && !inventoryIncomplete) || (tasks.truth === "CONFLICTING") !== Boolean(inventoryIncomplete)) return true
+  } else if (tasks.truth !== "OBSERVED") return true
+  if (!taskRows || Object.entries(expectedGuards).some(([name, expected]) => {
+    const task = taskRows.find((entry) => entry.name === name)
+    return !task || task.evidenceState !== "OBSERVED" || !rootTaskPath(task) || !expected.state.includes(task.state) || !object(task.principal) || String(task.principal.user).toUpperCase() !== "SYSTEM"
       || String(task.principal.runLevel).toLowerCase() !== "highest" || !Array.isArray(task.actions)
       || task.actions.length !== 1 || !exactPowerShellAction(task.actions[0], expected.arguments)
       || !exactActiveTriggers(task, expected.triggers, tasks.freshness.observedAt)
@@ -733,10 +795,11 @@ export function verifyTargetedResense(attestation, { now = new Date(), changedPr
   instant(attestation.collectedAt, "targetedAttestation.collectedAt")
   instant(attestation.collectionCompletedAt, "targetedAttestation.collectionCompletedAt")
   instant(attestation.boundAt, "targetedAttestation.boundAt")
+  const collectorVersion = attestation.collector?.version
   if (!Array.isArray(attestation.requestedFactIds)
     || JSON.stringify([...attestation.requestedFactIds].sort()) !== JSON.stringify(SECURITY_INFERENCE_FACT_IDS)
     || !Array.isArray(attestation.facts)) fail("HERMES_ATTESTATION_INCOMPLETE", "targeted bound closure is invalid")
-  attestation.facts.forEach((fact, index) => validateFact(fact, index, { allowStale: true }))
+  attestation.facts.forEach((fact, index) => validateFact(fact, index, { allowStale: true, collectorVersion }))
   const ids = attestation.facts.map((fact) => fact.id)
   if (new Set(ids).size !== ids.length || JSON.stringify([...ids].sort()) !== JSON.stringify(SECURITY_INFERENCE_FACT_IDS)) {
     fail("HERMES_ATTESTATION_INCOMPLETE", "targeted bound fact set is not exact")
@@ -772,6 +835,7 @@ export function verifyTargetedResense(attestation, { now = new Date(), changedPr
     || canonicalize(attestation.facts) !== canonicalize(normalizedCollectorFacts(source.facts).sort((left, right) => left.id.localeCompare(right.id)))) {
     fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "targeted packet does not match its source/launch evidence")
   }
+  validateCollector(attestation.collector, TARGETED_COLLECTOR_SCHEMA, "targetedAttestation.collector")
   const at = now instanceof Date ? now.getTime() : Date.parse(now)
   const staleFactIds = attestation.facts.filter((fact) => Date.parse(fact.freshness.validUntil) < at).map((fact) => fact.id)
   const changed = changedPrerequisiteIds.filter((id) => SECURITY_INFERENCE_FACT_IDS.includes(id))
@@ -786,8 +850,9 @@ export function verifyBoundAttestation(attestation, { now = new Date(), changedP
   instant(attestation.collectedAt, "attestation.collectedAt")
   instant(attestation.collectionCompletedAt, "attestation.collectionCompletedAt")
   instant(attestation.boundAt, "attestation.boundAt")
+  const collectorVersion = attestation.collector?.version
   if (!Array.isArray(attestation.facts)) fail("HERMES_ATTESTATION_INVALID", "bound facts must be an array")
-  attestation.facts.forEach((fact, index) => validateFact(fact, index, { allowStale: true }))
+  attestation.facts.forEach((fact, index) => validateFact(fact, index, { allowStale: true, collectorVersion }))
   const ids = attestation.facts.map((fact) => fact.id)
   if (new Set(ids).size !== ids.length || ids.length !== REQUIRED_FACT_IDS.length
     || REQUIRED_FACT_IDS.some((id) => !ids.includes(id)) || ids.some((id) => !REQUIRED_FACT_IDS.includes(id))) fail("HERMES_ATTESTATION_INCOMPLETE", "bound fact set is not exact")
@@ -834,6 +899,7 @@ export function verifyBoundAttestation(attestation, { now = new Date(), changedP
     || canonicalize(attestation.facts) !== canonicalize(normalizedCollectorFacts(source.facts).sort((left, right) => left.id.localeCompare(right.id)))) {
     fail("HERMES_ATTESTATION_AUTHORITY_INVALID", "bound packet does not match its external source/launch evidence")
   }
+  validateCollector(attestation.collector, COLLECTOR_SCHEMA, "attestation.collector")
   const at = now instanceof Date ? now.getTime() : Date.parse(now)
   const staleFactIds = attestation.facts.filter((fact) => Date.parse(fact.freshness.validUntil) < at).map((fact) => fact.id)
   const changed = changedPrerequisiteIds.filter((id) => attestation.facts.some((fact) => fact.id === id))

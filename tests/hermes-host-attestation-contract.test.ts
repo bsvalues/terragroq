@@ -1,17 +1,20 @@
 import fs from "node:fs"
 import crypto from "node:crypto"
 import path from "node:path"
+import { execFileSync } from "node:child_process"
 
 import { describe, expect, it } from "vitest"
 
 import {
   FRESHNESS_BOUNDS,
   GOLDEN,
+  COLLECTOR_VERSION_POLICY,
   REQUIRED_FACT_IDS,
   SECURITY_INFERENCE_FACT_IDS,
   bindAttestation,
   bindTargetedResense,
   canonicalize,
+  deriveEccCounterEvents,
   stableDigest,
   verifyBoundAttestation,
   verifyTargetedResense,
@@ -39,20 +42,29 @@ function valueFor(id: string): unknown {
   if (id === "security.defender") return { antivirusEnabled: true, realTimeProtectionEnabled: true, behaviorMonitorEnabled: true, tamperProtection: true }
   if (id === "security.bitlocker") return [{ mountPoint: "C:", protectionStatus: "On", volumeStatus: "FullyEncrypted" }]
   if (id === "security.boot") return { secureBoot: true, tpm: { present: true, ready: true, enabled: true, activated: true } }
-  if (id === "operations.tasks") return [
-    { path: "\\", name: "HermesP40Guard", state: "Ready", principal: { user: "SYSTEM", runLevel: "Highest" }, actions: [{ execute: "powershell.exe", arguments: "-NoProfile -ExecutionPolicy Bypass -File \"C:\\HermesLab\\hermes\\p40-guard.ps1\" -Quiet" }], triggers: [{ type: "MSFT_TaskBootTrigger", enabled: true }, { type: "MSFT_TaskTimeTrigger", enabled: true, repetitionInterval: "PT1H" }], lastResult: 0 },
-    { path: "\\", name: "HermesP40Watch", state: "Running", principal: { user: "SYSTEM", runLevel: "Highest" }, actions: [{ execute: "powershell.exe", arguments: "-NoProfile -ExecutionPolicy Bypass -File \"C:\\HermesLab\\hermes\\p40-guard.ps1\" -Watch -WatchIntervalS 30 -Quiet" }], triggers: [{ type: "MSFT_TaskBootTrigger", enabled: true }], lastResult: 267009 },
-  ]
+  if (id === "operations.tasks") return {
+    expectedTasks: [
+      { evidenceState: "OBSERVED", path: "\\", name: "HermesP40Guard", state: "Ready", principal: { user: "SYSTEM", runLevel: "Highest" }, actions: [{ execute: "powershell.exe", arguments: "-NoProfile -ExecutionPolicy Bypass -File \"C:\\HermesLab\\hermes\\p40-guard.ps1\" -Quiet" }], triggers: [{ type: "MSFT_TaskBootTrigger", enabled: true }, { type: "MSFT_TaskTimeTrigger", enabled: true, repetitionInterval: "PT1H" }], lastResult: 0, failures: [] },
+      { evidenceState: "OBSERVED", path: "\\", name: "HermesP40Watch", state: "Running", principal: { user: "SYSTEM", runLevel: "Highest" }, actions: [{ execute: "powershell.exe", arguments: "-NoProfile -ExecutionPolicy Bypass -File \"C:\\HermesLab\\hermes\\p40-guard.ps1\" -Watch -WatchIntervalS 30 -Quiet" }], triggers: [{ type: "MSFT_TaskBootTrigger", enabled: true }], lastResult: 267009, failures: [] },
+    ],
+    inventory: { state: "OBSERVED", matchingTaskIds: ["\\HermesP40Guard", "\\HermesP40Watch"], failures: [] },
+  }
   if (id === "operations.heartbeats") return { processes: [], heartbeatFiles: [{ path: "C:\\HermesLab\\hermes\\p40-watch.heartbeat", writtenAt: "2026-08-27T17:58:30.000Z" }] }
   if (id === "inference.gpus") return [
-    { ...GOLDEN.p40, name: "Tesla P40", driver: GOLDEN.p40.driverVersion, driverModelCurrent: "TCC", driverModelPending: "TCC", defaultPowerLimitW: 250, eccModeCurrent: "Enabled", eccModePending: "Enabled", correctedVolatileEcc: 0, uncorrectedVolatileEcc: 0, correctedAggregateEcc: 6, uncorrectedAggregateEcc: 0, temperatureC: 70, role: "FROZEN_LONG_CONTEXT_INFERENCE", computeApps: [] },
+    { ...GOLDEN.p40, name: "Tesla P40", driver: GOLDEN.p40.driverVersion, driverModelCurrent: "TCC", driverModelPending: "TCC", defaultPowerLimitW: 250, eccModeCurrent: "Enabled", eccModePending: "Enabled", correctedVolatileEcc: 0, uncorrectedVolatileEcc: 0, correctedAggregateEcc: 0, uncorrectedAggregateEcc: 0, eccCounterEpoch: { id: "epoch-a", basis: "HOST_BOOT_DRIVER_IDENTITY_PROXY" }, temperatureC: 70, role: "FROZEN_LONG_CONTEXT_INFERENCE", computeApps: [] },
     { ...GOLDEN.rtx3050, name: "NVIDIA GeForce RTX 3050", driverModelCurrent: "WDDM", temperatureC: 35, computeApps: [] },
   ]
   if (id === "inference.ollama") return { exe: GOLDEN.ollama.exe, exeSha256: GOLDEN.ollama.exeSha256, version: GOLDEN.ollama.version, bind: GOLDEN.ollama.bind, pid: 7320, configurationAgreement: true, models: [...GOLDEN.ollama.models], safeConfig: { exe: GOLDEN.ollama.exe, exeSha256: GOLDEN.ollama.exeSha256, models: GOLDEN.ollama.modelsPath, host: GOLDEN.ollama.bind, gpuUuid: GOLDEN.ollama.gpuUuid, environment: { ...GOLDEN.ollama.configEnvironment }, serviceScriptSha256: GOLDEN.ollama.serviceScriptSha256, repositoryDoctrineSha256: GOLDEN.ollama.serviceScriptSha256 }, liveEnvironment: { state: "OBSERVED", values: { ...GOLDEN.ollama.liveEnvironment } }, task: { path: "\\", name: "WilliamOS-HERMES-Ollama", state: "Running", execute: "powershell.exe", arguments: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"C:\\HermesLab\\hermes\\ollama-service\\hermes-ollama-service.ps1\"", principal: { user: "SYSTEM", runLevel: "Highest" }, triggers: [{ type: "MSFT_TaskBootTrigger", enabled: true }, { type: "MSFT_TaskTimeTrigger", enabled: true, repetitionInterval: "PT2M" }] } }
-  if (id === "inference.dockerContainers") return Object.entries(GOLDEN.containers).map(([name, contract]) => ({ name, ...contract }))
+  if (id === "inference.dockerContainers") return Object.entries(GOLDEN.containers).map(([name, contract]) => ({ name, ...contract, inferenceClassification: "DECLARED_INFERENCE", inferenceCollisionReasons: [] }))
   if (id === "inference.guardBaseline") return { p40EquilibriumC: 68, chassisDeltaC: 35, observedP40C: 70, observedChassisProxyC: 35, observedDeltaC: 35, sampleAgeSeconds: 10, uuid: GOLDEN.p40.uuid, driverModel: "TCC", powerLimitW: 150, overall: "ok", simulated: false, problems: [] }
   if (id === "dr.target") return { capacityAttested: true, accessAttested: true, storageHealthAttested: true, independenceAttested: true, readBackAttested: true }
   return {}
+}
+
+function taskEvidenceWith(change: (task: any) => any) {
+  const evidence: any = structuredClone(valueFor("operations.tasks"))
+  evidence.expectedTasks = evidence.expectedTasks.map(change)
+  return evidence
 }
 
 function makeFixture() {
@@ -145,7 +157,50 @@ function makeTargetedFixture() {
   return { source, launchManifest, launchReceipt, sourceBytesSha256, sourceBytes }
 }
 
+function useCollectorVersion(fixture: ReturnType<typeof makeFixture> | ReturnType<typeof makeTargetedFixture>, version: string) {
+  fixture.source.collector.version = version
+  for (const fact of fixture.source.facts) fact.provenance.collectorVersion = version
+  fixture.sourceBytesSha256 = stableDigest(fixture.source)
+  fixture.launchReceipt.sourceSha256 = fixture.sourceBytesSha256
+  fixture.sourceBytes = Buffer.from(canonicalize(fixture.source), "utf8")
+  return fixture
+}
+
+function declaredCollectorVersion() {
+  const source = fs.readFileSync(collectorPath, "utf8")
+  const match = source.match(/^\$collectorVersion\s*=\s*'([^']+)'/m)
+  if (!match) throw new Error("collector version declaration is missing")
+  return match[1]
+}
+
 describe("targeted security/inference re-sense", () => {
+  it("binds and verifies the actual collector 1.1.0 contract through targeted source/1 to targeted/1", () => {
+    const version = declaredCollectorVersion()
+    expect(version).toBe("1.1.0")
+    const fixture = useCollectorVersion(makeTargetedFixture(), version)
+    const bound = bindTargetedResense(fixture.source, { ...fixture, now: NOW })
+
+    expect(COLLECTOR_VERSION_POLICY[fixture.source.schema]).toEqual({
+      boundSchema: bound.schema,
+      historical: ["1.0.0"],
+      current: "1.1.0",
+    })
+    expect(bound.collector.version).toBe("1.1.0")
+    expect(bound.facts.every((fact: any) => fact.provenance.collectorVersion === "1.1.0")).toBe(true)
+    expect(verifyTargetedResense(bound, { ...fixture, now: NOW })).toMatchObject({ validDigest: true, fresh: true })
+  })
+
+  it("rejects unrecognized collector versions and fact provenance that disagrees with the packet collector", () => {
+    const unknown = useCollectorVersion(makeTargetedFixture(), "1.2.0")
+    expect(() => bindTargetedResense(unknown.source, { ...unknown, now: NOW })).toThrow(/collector version must be one of 1\.0\.0, 1\.1\.0/)
+
+    const mismatch = useCollectorVersion(makeTargetedFixture(), "1.1.0")
+    mismatch.source.facts[0].provenance.collectorVersion = "1.0.0"
+    mismatch.sourceBytesSha256 = stableDigest(mismatch.source)
+    mismatch.launchReceipt.sourceSha256 = mismatch.sourceBytesSha256
+    expect(() => bindTargetedResense(mismatch.source, { ...mismatch, now: NOW })).toThrow(/must equal the packet collector version/)
+  })
+
   it("binds and verifies exactly the ten-fact decision closure", () => {
     const fixture = makeTargetedFixture()
     const bound = bindTargetedResense(fixture.source, { ...fixture, now: NOW })
@@ -294,10 +349,11 @@ describe("binding current HERMES truth", () => {
   })
 
   it.each([
-    ["P40 corrected ECC drift", "inference.gpus", (() => { const rows: any[] = valueFor("inference.gpus") as any[]; rows[0].correctedAggregateEcc = 1; return rows })(), "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["guard baseline drift", "inference.guardBaseline", { ...(valueFor("inference.guardBaseline") as object), chassisDeltaC: 36 }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["guard sample stale", "inference.guardBaseline", { ...(valueFor("inference.guardBaseline") as object), sampleAgeSeconds: 121 }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["P40 start ceiling reached", "inference.gpus", (() => { const rows: any[] = valueFor("inference.gpus") as any[]; rows[0].temperatureC = 80; return rows })(), "HERMES_INFERENCE_GOLDEN_DRIFT"],
+    ["P40 uncorrected volatile ECC", "inference.gpus", (() => { const rows: any[] = valueFor("inference.gpus") as any[]; rows[0].uncorrectedVolatileEcc = 1; return rows })(), "HERMES_INFERENCE_GOLDEN_DRIFT"],
+    ["P40 uncorrected aggregate ECC", "inference.gpus", (() => { const rows: any[] = valueFor("inference.gpus") as any[]; rows[0].uncorrectedAggregateEcc = 1; return rows })(), "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["proxy not durable", "inference.dockerContainers", Object.entries(GOLDEN.containers).map(([name, contract]) => name === "williamos-hermes-inference-proxy" ? { name, state: "exited", restartPolicy: "no" } : { name, ...contract }), "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["unrelated P40 compute workload", "inference.gpus", (() => { const rows: any[] = valueFor("inference.gpus") as any[]; rows[0].computeApps = [{ pid: 9000, process: "C:\\unexpected.exe", lineage: [] }]; return rows })(), "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["stale guard heartbeat", "operations.heartbeats", { processes: [], heartbeatFiles: [{ path: "C:\\HermesLab\\hermes\\p40-watch.heartbeat", writtenAt: "2026-08-27T17:40:00.000Z" }] }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
@@ -307,12 +363,12 @@ describe("binding current HERMES truth", () => {
     ["deployed Ollama doctrine mismatch", "inference.ollama", { ...(valueFor("inference.ollama") as object), safeConfig: { ...((valueFor("inference.ollama") as any).safeConfig), serviceScriptSha256: "0".repeat(64) } }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["Ollama action executable substitution", "inference.ollama", { ...(valueFor("inference.ollama") as object), task: { ...((valueFor("inference.ollama") as any).task), execute: "cmd.exe" } }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["Ollama action trailing arguments", "inference.ollama", { ...(valueFor("inference.ollama") as object), task: { ...((valueFor("inference.ollama") as any).task), arguments: `${(valueFor("inference.ollama") as any).task.arguments} -EncodedCommand ZQB4AGkAdAA=` } }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
-    ["guard action executable substitution", "operations.tasks", (valueFor("operations.tasks") as any[]).map((task) => task.name === "HermesP40Guard" ? { ...task, actions: [{ ...task.actions[0], execute: "cmd.exe" }] } : task), "HERMES_INFERENCE_GOLDEN_DRIFT"],
-    ["watch action trailing arguments", "operations.tasks", (valueFor("operations.tasks") as any[]).map((task) => task.name === "HermesP40Watch" ? { ...task, actions: [{ ...task.actions[0], arguments: `${task.actions[0].arguments} -Command exit` }] } : task), "HERMES_INFERENCE_GOLDEN_DRIFT"],
+    ["guard action executable substitution", "operations.tasks", taskEvidenceWith((task) => task.name === "HermesP40Guard" ? { ...task, actions: [{ ...task.actions[0], execute: "cmd.exe" }] } : task), "HERMES_INFERENCE_GOLDEN_DRIFT"],
+    ["watch action trailing arguments", "operations.tasks", taskEvidenceWith((task) => task.name === "HermesP40Watch" ? { ...task, actions: [{ ...task.actions[0], arguments: `${task.actions[0].arguments} -Command exit` }] } : task), "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["Ollama extra trigger", "inference.ollama", { ...(valueFor("inference.ollama") as object), task: { ...((valueFor("inference.ollama") as any).task), triggers: [...((valueFor("inference.ollama") as any).task.triggers), { type: "MSFT_TaskTimeTrigger", enabled: true, repetitionInterval: "PT1M" }] } }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
     ["Ollama expired recheck trigger", "inference.ollama", { ...(valueFor("inference.ollama") as object), task: { ...((valueFor("inference.ollama") as any).task), triggers: ((valueFor("inference.ollama") as any).task.triggers).map((trigger: any) => trigger.type === "MSFT_TaskTimeTrigger" ? { ...trigger, endBoundary: "2026-08-27T17:00:00.000Z" } : trigger) } }, "HERMES_INFERENCE_GOLDEN_DRIFT"],
-    ["guard extra trigger", "operations.tasks", (valueFor("operations.tasks") as any[]).map((task) => task.name === "HermesP40Guard" ? { ...task, triggers: [...task.triggers, { type: "MSFT_TaskTimeTrigger", enabled: true, repetitionInterval: "PT5M" }] } : task), "HERMES_INFERENCE_GOLDEN_DRIFT"],
-    ["watch expired boot trigger", "operations.tasks", (valueFor("operations.tasks") as any[]).map((task) => task.name === "HermesP40Watch" ? { ...task, triggers: task.triggers.map((trigger: any) => ({ ...trigger, endBoundary: "2026-08-27T17:00:00.000Z" })) } : task), "HERMES_INFERENCE_GOLDEN_DRIFT"],
+    ["guard extra trigger", "operations.tasks", taskEvidenceWith((task) => task.name === "HermesP40Guard" ? { ...task, triggers: [...task.triggers, { type: "MSFT_TaskTimeTrigger", enabled: true, repetitionInterval: "PT5M" }] } : task), "HERMES_INFERENCE_GOLDEN_DRIFT"],
+    ["watch expired boot trigger", "operations.tasks", taskEvidenceWith((task) => task.name === "HermesP40Watch" ? { ...task, triggers: task.triggers.map((trigger: any) => ({ ...trigger, endBoundary: "2026-08-27T17:00:00.000Z" })) } : task), "HERMES_INFERENCE_GOLDEN_DRIFT"],
   ])("fails closed on %s", (_label, id, value, expected) => {
     const fixture = makeFixture()
     fixture.source.facts.find((fact: any) => fact.id === id)!.value = value
@@ -370,6 +426,95 @@ describe("binding current HERMES truth", () => {
     const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
     expect(bound.priorityOverrides.map((entry: any) => entry.type)).not.toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
   })
+
+  it.each([0, 1, 6, 100])("does not use corrected aggregate ECC=%s as a golden configuration invariant", (correctedAggregateEcc) => {
+    const fixture = makeFixture()
+    const gpus: any[] = fixture.source.facts.find((fact: any) => fact.id === "inference.gpus")!.value
+    gpus[0].correctedAggregateEcc = correctedAggregateEcc
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).not.toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
+  })
+
+  it.each([
+    ["corrected volatile missing", "correctedVolatileEcc", null],
+    ["corrected aggregate malformed", "correctedAggregateEcc", "UNKNOWN"],
+    ["corrected aggregate fractional", "correctedAggregateEcc", 1.5],
+  ])("keeps inference red when %s", (_label, field, value) => {
+    const fixture = makeFixture()
+    const gpus: any[] = fixture.source.facts.find((fact: any) => fact.id === "inference.gpus")!.value
+    gpus[0][field] = value
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
+  })
+
+  it("records corrected ECC changes and decreases as events without claiming health recovery", () => {
+    const base = { uuid: GOLDEN.p40.uuid, eccCounterEpoch: { id: "epoch-a" }, correctedVolatileEcc: 2, correctedAggregateEcc: 6, uncorrectedVolatileEcc: 0, uncorrectedAggregateEcc: 0 }
+    expect(deriveEccCounterEvents(base, { ...base, correctedAggregateEcc: 7 })).toContainEqual(expect.objectContaining({ type: "CORRECTED_AGGREGATE_INCREMENT", delta: 1, hardFailure: false }))
+    expect(deriveEccCounterEvents(base, { ...base, correctedAggregateEcc: 0 })).toContainEqual(expect.objectContaining({ type: "COUNTER_EPOCH_OR_RESET_DISCONTINUITY", previous: 6, current: 0, hardFailure: false }))
+    expect(deriveEccCounterEvents(base, { ...base, eccCounterEpoch: { id: "epoch-b" }, correctedAggregateEcc: 0 })).toContainEqual(expect.objectContaining({ type: "COUNTER_EPOCH_CHANGED", hardFailure: false }))
+    expect(deriveEccCounterEvents(base, { ...base, uncorrectedAggregateEcc: 1 })).toContainEqual(expect.objectContaining({ type: "UNCORRECTED_ECC_OBSERVED", field: "uncorrectedAggregateEcc", current: 1, hardFailure: true }))
+  })
+
+  it("allows task inventory coverage conflict when exact inference guard tasks remain proven", () => {
+    const fixture = makeFixture()
+    const tasks = fixture.source.facts.find((fact: any) => fact.id === "operations.tasks")!
+    tasks.truth = "CONFLICTING"
+    tasks.provenance.result = "CONTRADICTION_PRESERVED"
+    tasks.value.inventory = { state: "PARTIAL", matchingTaskIds: [], failures: [{ subprobe: "Get-ScheduledTask/all", exceptionType: "CimException", fullyQualifiedErrorId: "HRESULT 0x80070005", category: "PermissionDenied", hresult: "0x80070005", nativeErrorCode: 5 }] }
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).not.toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
+  })
+
+  it("fails inference closed when an exact expected guard task probe fails", () => {
+    const fixture = makeFixture()
+    const tasks: any = fixture.source.facts.find((fact: any) => fact.id === "operations.tasks")!
+    tasks.truth = "CONFLICTING"
+    tasks.provenance.result = "CONTRADICTION_PRESERVED"
+    tasks.value.expectedTasks[0] = { name: "HermesP40Guard", evidenceState: "UNKNOWN", failures: [{ subprobe: "Export-ScheduledTask", exceptionType: "CimException", fullyQualifiedErrorId: "AccessDenied", category: "PermissionDenied", hresult: "0x80070005", nativeErrorCode: 5 }] }
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
+  })
+
+  it.each([undefined, null])("requires exact task evidenceState OBSERVED when the value is %s", (evidenceState) => {
+    const fixture = makeFixture()
+    const tasks: any = fixture.source.facts.find((fact: any) => fact.id === "operations.tasks")!
+    if (evidenceState === undefined) delete tasks.value.expectedTasks[0].evidenceState
+    else tasks.value.expectedTasks[0].evidenceState = evidenceState
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
+  })
+
+  it("does not classify a proven unrelated disposable container as inference drift", () => {
+    const fixture = makeFixture()
+    const containers: any[] = fixture.source.facts.find((fact: any) => fact.id === "inference.dockerContainers")!.value
+    containers.push({ name: "tf-rel-evidence", state: "created", restartPolicy: "no", inspectionState: "OBSERVED", inferenceClassification: "UNRELATED_RESIDENT", inferenceCollisionReasons: [] })
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).not.toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
+  })
+
+  it.each(["PROTECTED_GPU_ACCESS", "PROTECTED_MODEL_STORE_MOUNT", "PROTECTED_OLLAMA_PORT", "PROTECTED_INFERENCE_PROXY_PATH"])("keeps an extra container with %s collision in inference drift", (reason) => {
+    const fixture = makeFixture()
+    const containers: any[] = fixture.source.facts.find((fact: any) => fact.id === "inference.dockerContainers")!.value
+    containers.push({ name: "tf-rel-evidence", state: "created", restartPolicy: "no", inspectionState: "OBSERVED", inferenceClassification: "PROTECTED_INFERENCE_COLLISION", inferenceCollisionReasons: [reason] })
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
+  })
+
+  it("fails closed when an extra container has not been collision-classified", () => {
+    const fixture = makeFixture()
+    const containers: any[] = fixture.source.facts.find((fact: any) => fact.id === "inference.dockerContainers")!.value
+    containers.push({ name: "mystery", state: "created", restartPolicy: "no" })
+    const digest = stableDigest(fixture.source)
+    const bound = bindAttestation(fixture.source, { ...fixture, sourceBytesSha256: digest, launchReceipt: { ...fixture.launchReceipt, sourceSha256: digest }, now: NOW })
+    expect(bound.priorityOverrides.map((entry: any) => entry.type)).toContain("HERMES_INFERENCE_GOLDEN_DRIFT")
+  })
 })
 
 describe("the staged collector remains read-only", () => {
@@ -381,7 +526,7 @@ describe("the staged collector remains read-only", () => {
     expect(source).not.toMatch(/\b(?:Set-Content|Out-File|Add-Content|Export-Clixml|schtasks\.exe)\b/i)
     expect(source).not.toMatch(/tailscaleStatus\s*=\s*Protect-Text/)
     expect(source).not.toMatch(/\bxml\s*=\s*Protect-Text/)
-    expect(source).toContain("xmlSha256 = Get-Sha256Text $xml")
+    expect(source).toContain("xmlSha256 = if ($xml) { Get-Sha256Text $xml } else { $null }")
     expect(source).toContain("[IO.FileMode]::CreateNew")
     expect(source).not.toMatch(/Get-Command\s+(?:docker|tailscale|nvidia-smi)/i)
     expect(source).not.toMatch(/&\s*\$pinnedExe/)
@@ -416,6 +561,28 @@ describe("the staged collector remains read-only", () => {
     expect(source).toContain("(($requestedFactIds | Sort-Object) -join ',') -cne (($securityInferenceFactIds | Sort-Object) -join ',')")
   })
 
+  it("extracts literal Ollama variables and preserves classified task subprobe failures", () => {
+    const source = fs.readFileSync(collectorPath, "utf8")
+    expect(source).toContain("[regex]::Escape($Name)")
+    expect(source).not.toContain('"(?m)^`$$Name\\s*=\\s*\'([^\']+)\'"')
+    for (const field of ["subprobe", "exceptionType", "fullyQualifiedErrorId", "category", "hresult", "nativeErrorCode"]) expect(source).toContain(field)
+    expect(source).toContain("expectedTasks")
+    expect(source).toContain("inventory")
+  })
+
+  it("classifies a JSON-escaped Windows bind as a protected model-store collision", () => {
+    const source = fs.readFileSync(collectorPath, "utf8")
+    const functionSource = source.match(/function Get-ProtectedModelStoreMountCollision[^\r\n]*\{[\s\S]*?^\}/m)?.[0]
+    expect(functionSource).toBeTruthy()
+    const mounts = JSON.stringify([{ Type: "bind", Source: "D:\\HermesData\\ollama\\models", Destination: "/root/.ollama/models" }]).replaceAll("'", "''")
+    const command = `$ProgressPreference = 'SilentlyContinue'\n${functionSource}\n$mounts = ConvertFrom-Json '${mounts}'\nGet-ProtectedModelStoreMountCollision $mounts`
+    const classification = execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")], { encoding: "utf8" }).trim()
+
+    expect(classification).toBe("PROTECTED_MODEL_STORE_MOUNT")
+    expect(source).toContain("$modelStoreCollision = Get-ProtectedModelStoreMountCollision $mounts")
+    expect(source).toContain("$collisionReasons.Add($modelStoreCollision)")
+  })
+
   it("publishes the exact fact count and explicit freshness classes in the schema", () => {
     const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"))
     expect(REQUIRED_FACT_IDS).toHaveLength(24)
@@ -426,6 +593,8 @@ describe("the staged collector remains read-only", () => {
     expect(schema.properties.facts.allOf.every((rule: any) => rule.minContains === 1 && rule.maxContains === 1)).toBe(true)
     expect([...schema.properties.resense.properties.factIds.items.enum].sort()).toEqual([...REQUIRED_FACT_IDS].sort())
     expect(schema.$defs.fact.properties.freshness.properties.class.enum).toEqual(Object.keys(FRESHNESS_BOUNDS))
+    expect(schema.properties.collector.properties.version.enum).toEqual(["1.0.0", "1.1.0"])
+    expect(schema.$defs.fact.properties.provenance.properties.collectorVersion.enum).toEqual(["1.0.0", "1.1.0"])
   })
 
   it("pins Ollama doctrine with the collector's BOM/CRLF-normalized UTF-8 digest", () => {

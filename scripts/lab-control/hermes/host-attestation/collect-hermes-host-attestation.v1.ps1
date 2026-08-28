@@ -7,7 +7,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$collectorVersion = '1.0.0'
+$collectorVersion = '1.1.0'
 $collectionStarted = (Get-Date).ToUniversalTime()
 $facts = [System.Collections.Generic.List[object]]::new()
 $specialPorts = @(8080, 50080, 50443)
@@ -86,6 +86,17 @@ function Protect-Text([AllowNull()][string]$Text) {
   return $safe
 }
 
+function Get-ProbeErrorShape([Management.Automation.ErrorRecord]$Record, [string]$Subprobe) {
+  [ordered]@{
+    subprobe = $Subprobe
+    exceptionType = $Record.Exception.GetType().FullName
+    fullyQualifiedErrorId = [string]$Record.FullyQualifiedErrorId
+    category = [string]$Record.CategoryInfo.Category
+    hresult = ('0x{0:X8}' -f ($Record.Exception.HResult -band 0xffffffff))
+    nativeErrorCode = if ($Record.Exception.PSObject.Properties.Name -contains 'NativeErrorCode') { [int]$Record.Exception.NativeErrorCode } else { $null }
+  }
+}
+
 function Get-TrustedExecutable([string]$Name) {
   $entry = $launchManifest.nativeExecutables.PSObject.Properties[$Name]
   if (-not $entry -or -not $entry.Value.path -or [string]$entry.Value.sha256 -notmatch '^[a-f0-9]{64}$') {
@@ -101,6 +112,18 @@ function Get-TrustedExecutable([string]$Name) {
 $dockerExecutable = Get-TrustedExecutable 'docker'
 $nvidiaSmiExecutable = Get-TrustedExecutable 'nvidiaSmi'
 $tailscaleExecutable = if ($targetedMode) { $null } else { Get-TrustedExecutable 'tailscale' }
+
+function Get-DockerInspectJson([string]$ContainerId, [string]$Template, [string]$Field) {
+  $raw = @(& $dockerExecutable inspect --format $Template $ContainerId 2>$null)
+  if ($LASTEXITCODE -ne 0 -or $raw.Count -ne 1 -or -not [string]$raw[0]) { throw "HERMES_ATTESTATION_DOCKER_INSPECT_FAILED: $Field" }
+  $raw[0] | ConvertFrom-Json -ErrorAction Stop
+}
+
+function Get-ProtectedModelStoreMountCollision([AllowNull()][object]$Mounts) {
+  $mountProjection = ((ConvertTo-Json -Compress -Depth 8 $Mounts) -replace '[\\/]+', '/').ToLowerInvariant()
+  if ($mountProjection -match 'd:/hermesdata/ollama/models|/hermesdata/ollama/models') { return 'PROTECTED_MODEL_STORE_MOUNT' }
+  return $null
+}
 
 function Get-FreshnessBound([string]$Class) {
   switch ($Class) {
@@ -415,30 +438,45 @@ Add-Fact 'storage.growth' 'storage' 'Current collection has no prior bound snaps
   [ordered]@{ __truth = 'UNKNOWN'; __value = $null }
 }
 
-Add-Fact 'operations.tasks' 'operations' 'Windows Task Scheduler, including hidden tasks' 'Get-ScheduledTask; Export-ScheduledTask; Get-ScheduledTaskInfo' 'STATE' {
-  $match = '(?i)backup|model.?sync|ollama|guard|watch|watchdog|williamos'
-  @(Get-ScheduledTask | Where-Object {
-    $_.TaskName -match $match -or $_.TaskPath -match $match -or (($_.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ' ') -match '(?i)Hermes|WilliamOS'
-  } | ForEach-Object {
-    $task = $_
-    $info = Get-ScheduledTaskInfo -TaskName $task.TaskName -TaskPath $task.TaskPath
-    $xml = Export-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath
+Add-Fact 'operations.tasks' 'operations' 'Exact inference guard tasks plus separately classified Task Scheduler inventory coverage' 'Exact Get-ScheduledTask/Get-ScheduledTaskInfo/Export-ScheduledTask; independent bulk inventory' 'STATE' {
+  $expectedTasks = @('HermesP40Guard', 'HermesP40Watch')
+  $exactEvidence = @(foreach ($taskName in $expectedTasks) {
+    $failures = [Collections.Generic.List[object]]::new()
+    $task = $null
+    $info = $null
+    $xml = $null
+    try { $task = Get-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction Stop } catch { $failures.Add((Get-ProbeErrorShape $_ "Get-ScheduledTask/$taskName")) }
+    if ($task) {
+      try { $info = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath '\' -ErrorAction Stop } catch { $failures.Add((Get-ProbeErrorShape $_ "Get-ScheduledTaskInfo/$taskName")) }
+      try { $xml = Export-ScheduledTask -TaskName $taskName -TaskPath '\' -ErrorAction Stop } catch { $failures.Add((Get-ProbeErrorShape $_ "Export-ScheduledTask/$taskName")) }
+    }
     [ordered]@{
-      path = [string]$task.TaskPath
-      name = [string]$task.TaskName
-      hidden = [bool]$task.Settings.Hidden
-      state = [string]$task.State
-      principal = [ordered]@{ user = [string]$task.Principal.UserId; runLevel = [string]$task.Principal.RunLevel; logonType = [string]$task.Principal.LogonType }
-      triggers = @($task.Triggers | ForEach-Object {
-        [ordered]@{ type = $_.CimClass.CimClassName; enabled = [bool]$_.Enabled; startBoundary = [string]$_.StartBoundary; endBoundary = [string]$_.EndBoundary; repetitionInterval = if ($_.Repetition) { [string]$_.Repetition.Interval } else { $null } }
-      })
-      actions = @($task.Actions | ForEach-Object { [ordered]@{ execute = Protect-Text ([string]$_.Execute); arguments = Protect-Text ([string]$_.Arguments); workingDirectory = Protect-Text ([string]$_.WorkingDirectory) } })
-      restart = [ordered]@{ count = [int]$task.Settings.RestartCount; interval = [string]$task.Settings.RestartInterval }
-      lastRunAt = if ($info.LastRunTime.Year -gt 1900) { $info.LastRunTime.ToUniversalTime().ToString('o') } else { $null }
-      lastResult = [int64]$info.LastTaskResult
-      xmlSha256 = Get-Sha256Text $xml
+      evidenceState = if ($task -and $info -and $xml -and $failures.Count -eq 0) { 'OBSERVED' } else { 'UNKNOWN' }
+      path = if ($task) { [string]$task.TaskPath } else { '\' }
+      name = $taskName
+      hidden = if ($task) { [bool]$task.Settings.Hidden } else { $null }
+      state = if ($task) { [string]$task.State } else { 'UNKNOWN' }
+      principal = if ($task) { [ordered]@{ user = [string]$task.Principal.UserId; runLevel = [string]$task.Principal.RunLevel; logonType = [string]$task.Principal.LogonType } } else { $null }
+      triggers = if ($task) { @($task.Triggers | ForEach-Object { [ordered]@{ type = $_.CimClass.CimClassName; enabled = [bool]$_.Enabled; startBoundary = [string]$_.StartBoundary; endBoundary = [string]$_.EndBoundary; repetitionInterval = if ($_.Repetition) { [string]$_.Repetition.Interval } else { $null } } }) } else { @() }
+      actions = if ($task) { @($task.Actions | ForEach-Object { [ordered]@{ execute = Protect-Text ([string]$_.Execute); arguments = Protect-Text ([string]$_.Arguments); workingDirectory = Protect-Text ([string]$_.WorkingDirectory) } }) } else { @() }
+      restart = if ($task) { [ordered]@{ count = [int]$task.Settings.RestartCount; interval = [string]$task.Settings.RestartInterval } } else { $null }
+      lastRunAt = if ($info -and $info.LastRunTime.Year -gt 1900) { $info.LastRunTime.ToUniversalTime().ToString('o') } else { $null }
+      lastResult = if ($info) { [int64]$info.LastTaskResult } else { $null }
+      xmlSha256 = if ($xml) { Get-Sha256Text $xml } else { $null }
+      failures = @($failures)
     }
   })
+  $inventoryErrors = @()
+  $inventoryTasks = @()
+  try { $inventoryTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue -ErrorVariable +inventoryErrors) } catch { $inventoryErrors += $_ }
+  $match = '(?i)backup|model.?sync|ollama|guard|watch|watchdog|williamos'
+  $inventory = [ordered]@{
+    state = if ($inventoryErrors.Count -eq 0) { 'OBSERVED' } elseif ($inventoryTasks.Count -gt 0) { 'PARTIAL' } else { 'UNKNOWN' }
+    matchingTaskIds = @($inventoryTasks | Where-Object { $_.TaskName -match $match -or $_.TaskPath -match $match -or (($_.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ' ') -match '(?i)Hermes|WilliamOS' } | ForEach-Object { "$($_.TaskPath)$($_.TaskName)" })
+    failures = @($inventoryErrors | ForEach-Object { Get-ProbeErrorShape $_ 'Get-ScheduledTask/all' })
+  }
+  $value = [ordered]@{ expectedTasks = $exactEvidence; inventory = $inventory }
+  if (($exactEvidence | Where-Object { $_.evidenceState -ne 'OBSERVED' }) -or $inventory.state -ne 'OBSERVED') { [ordered]@{ __truth = 'CONFLICTING'; __value = $value } } else { $value }
 } @('task XML and action fields are scrubbed for credential-shaped values')
 
 Add-Fact 'operations.backups' 'operations' 'Task actions and local backup metadata' 'Get-ScheduledTask backup actions; Get-ChildItem known HERMES backup roots' 'STATE' {
@@ -571,6 +609,8 @@ Add-Fact 'network.specialPortOwners' 'network' 'Bound listener snapshot' 'Correl
 }
 
 Add-Fact 'inference.gpus' 'inference' 'NVIDIA management interface' 'nvidia-smi query UUID/name/compute-mode/driver-model/power/temp/ECC' 'VOLATILE' {
+  $lastBoot = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+  $lastBootUtc = if ($lastBoot -is [DateTime]) { ([DateTime]$lastBoot).ToUniversalTime().ToString('o') } else { [string]$lastBoot }
   $computeApps = @(& $nvidiaSmiExecutable --query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory --format=csv,noheader,nounits 2>$null | ForEach-Object {
     $parts = $_ -split ',\s*'
     $computePid = if ($parts[1] -match '^\d+$') { [int]$parts[1] } else { $null }
@@ -596,6 +636,10 @@ Add-Fact 'inference.gpus' 'inference' 'NVIDIA management interface' 'nvidia-smi 
       uncorrectedVolatileEcc = if ($parts[13] -match '^\d') { [int64]$parts[13] } else { $null }
       correctedAggregateEcc = if ($parts[14] -match '^\d') { [int64]$parts[14] } else { $null }
       uncorrectedAggregateEcc = if ($parts[15] -match '^\d') { [int64]$parts[15] } else { $null }
+      # The installed NVIDIA query help defines volatile as since driver load and aggregate as a
+      # persistent lifetime count; nvidia-smi also exposes explicit reset operations for both.
+      eccCounterSemantics = [ordered]@{ volatileScope = 'DRIVER_LIFETIME'; aggregateScope = 'PERSISTENT_RESETTABLE_LIFETIME' }
+      eccCounterEpoch = [ordered]@{ id = Get-Sha256Text "$($parts[0])|$($parts[3])|$($parts[4])|$lastBootUtc"; basis = 'HOST_BOOT_DRIVER_IDENTITY_PROXY'; hostBootAt = $lastBootUtc; driverVersion = [string]$parts[3]; driverModel = [string]$parts[4] }
       role = if ([string]$parts[0] -eq 'GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2') { 'FROZEN_LONG_CONTEXT_INFERENCE' } elseif ([string]$parts[0] -eq 'GPU-6d9ae165-7272-a38c-06b1-7276869e980f') { 'DISPLAY_CHASSIS_PROXY' } else { 'UNDECLARED' }
       computeApps = @($computeApps | Where-Object { $_.gpuUuid -eq [string]$parts[0] })
     }
@@ -614,7 +658,8 @@ Add-Fact 'inference.ollama' 'inference' 'Frozen repository service doctrine, dep
   $normalizedRepositoryServiceText = $repositoryServiceText.TrimStart([char]0xFEFF) -replace "`r`n", "`n"
   $extract = {
     param([string]$Name)
-    $match = [regex]::Match($serviceText, "(?m)^`$$Name\s*=\s*'([^']+)'")
+    $pattern = '(?m)^\$' + [regex]::Escape($Name) + "\s*=\s*'([^']+)'"
+    $match = [regex]::Match($serviceText, $pattern)
     if ($match.Success) { [string]$match.Groups[1].Value } else { 'UNKNOWN' }
   }
   $pinnedExe = & $extract 'OllamaExe'
@@ -721,11 +766,29 @@ Add-Fact 'inference.ollama' 'inference' 'Frozen repository service doctrine, dep
   } else { $value }
 } @('only allow-listed non-secret Ollama environment names are collected; values are scrubbed')
 
-Add-Fact 'inference.dockerContainers' 'inference' 'Docker Engine read-only CLI' 'docker ps -a; docker inspect restart policy' 'VOLATILE' {
+Add-Fact 'inference.dockerContainers' 'inference' 'Docker Engine read-only CLI' 'docker ps -a; docker inspect restart/device/mount/port/link collision fields' 'VOLATILE' {
+  $declaredInferenceContainers = @('open-webui','portainer','postgres','redis','williamos-hermes-inference-proxy')
   @(& $dockerExecutable ps -a --format '{{json .}}' | ForEach-Object {
     $row = $_ | ConvertFrom-Json
     $restart = (& $dockerExecutable inspect --format '{{.HostConfig.RestartPolicy.Name}}' $row.ID 2>$null).Trim()
-    [ordered]@{ id = [string]$row.ID; name = [string]$row.Names; image = [string]$row.Image; state = ([string]$row.State).ToLowerInvariant(); status = [string]$row.Status; ports = [string]$row.Ports; restartPolicy = if ($restart) { $restart } else { 'UNKNOWN' } }
+    $collisionReasons = [Collections.Generic.List[string]]::new()
+    $inspectionState = 'OBSERVED'
+    try {
+      $deviceRequests = Get-DockerInspectJson ([string]$row.ID) '{{json .HostConfig.DeviceRequests}}' 'deviceRequests'
+      $mounts = Get-DockerInspectJson ([string]$row.ID) '{{json .Mounts}}' 'mounts'
+      $portBindings = Get-DockerInspectJson ([string]$row.ID) '{{json .HostConfig.PortBindings}}' 'portBindings'
+      $links = Get-DockerInspectJson ([string]$row.ID) '{{json .HostConfig.Links}}' 'links'
+      if ((ConvertTo-Json -Compress -Depth 8 $deviceRequests) -match '(?i)nvidia|gpu|GPU-4f7d4396-9304-d12f-7e9b-7f04d1236fc2') { $collisionReasons.Add('PROTECTED_GPU_ACCESS') }
+      $modelStoreCollision = Get-ProtectedModelStoreMountCollision $mounts
+      if ($modelStoreCollision) { $collisionReasons.Add($modelStoreCollision) }
+      if ((ConvertTo-Json -Compress -Depth 8 $portBindings) -match '(?:^|\D)11434(?:\D|$)') { $collisionReasons.Add('PROTECTED_OLLAMA_PORT') }
+      if (([string]$row.Image -match '(?i)williamos-hermes-inference-proxy') -or (ConvertTo-Json -Compress -Depth 8 $links) -match '(?i)williamos-hermes-inference-proxy') { $collisionReasons.Add('PROTECTED_INFERENCE_PROXY_PATH') }
+    } catch {
+      $inspectionState = 'UNKNOWN'
+      $collisionReasons.Add('PROTECTED_COLLISION_INSPECTION_FAILED')
+    }
+    $declared = $declaredInferenceContainers -contains [string]$row.Names
+    [ordered]@{ id = [string]$row.ID; name = [string]$row.Names; image = [string]$row.Image; state = ([string]$row.State).ToLowerInvariant(); status = [string]$row.Status; ports = [string]$row.Ports; restartPolicy = if ($restart) { $restart } else { 'UNKNOWN' }; inspectionState = $inspectionState; inferenceClassification = if ($declared) { 'DECLARED_INFERENCE' } elseif ($collisionReasons.Count -gt 0) { 'PROTECTED_INFERENCE_COLLISION' } else { 'UNRELATED_RESIDENT' }; inferenceCollisionReasons = @($collisionReasons) }
   })
 }
 
