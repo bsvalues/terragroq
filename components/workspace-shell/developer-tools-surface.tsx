@@ -8,7 +8,7 @@ type DeveloperToolKind = "tests" | "diff" | "terminal"
 type OutputLine = Readonly<{ channel: "stdout" | "stderr" | "meta"; text: string }>
 type Operation = Readonly<{ id: string; label: string; intent: string; scope: "project" | "runtime"; mutating: boolean }>
 
-export function DeveloperToolsSurface({ kind, selectedPath }: { kind: DeveloperToolKind; selectedPath: string | null }) {
+export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0 }: { kind: DeveloperToolKind; selectedPath: string | null; refreshKey?: number }) {
   const [diff, setDiff] = useState("")
   const [status, setStatus] = useState("")
   const [operations, setOperations] = useState<readonly Operation[]>([])
@@ -41,7 +41,7 @@ export function DeveloperToolsSurface({ kind, selectedPath }: { kind: DeveloperT
 
   useEffect(() => {
     if (kind === "diff") void loadDiff()
-  }, [kind, loadDiff])
+  }, [kind, loadDiff, refreshKey])
 
   useEffect(() => {
     if (kind !== "terminal") return

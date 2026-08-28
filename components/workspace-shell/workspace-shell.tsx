@@ -8,6 +8,7 @@ import { EMPTY_SPINE, type WilliamJudgment, type WorldSpine } from "@/lib/enviro
 import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface } from "./developer-tools-surface"
+import { useSelectedFileChange } from "./use-selected-file-change"
 import { AgentSessionStrip, useExperienceAgentSessions } from "./agent-sessions"
 import { BrainCouncilSurface, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
@@ -35,6 +36,7 @@ type PersistJob = Readonly<{ worldId: string; revision: number; body: string }>
 type SpaceStorage = "server" | "browser"
 type EnvironmentOverlay = "council" | "mission-control" | null
 type LineTarget = "william" | "agent"
+type LineMode = "default" | "change"
 
 const windowName: Record<WindowId, string> = {
   editor: "Source",
@@ -89,6 +91,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineReply, setLineReply] = useState<string | null>(null)
   const [lineBusy, setLineBusy] = useState(false)
   const [lineTarget, setLineTarget] = useState<LineTarget>("william")
+  const [lineMode, setLineMode] = useState<LineMode>("default")
+  const [dirtyPaths, setDirtyPaths] = useState<Readonly<Record<string, boolean>>>({})
+  const [editorReload, setEditorReload] = useState<Readonly<{ path: string | null; key: number }>>({ path: null, key: 0 })
   const [inspectors, setInspectors] = useState<readonly InspectorSurface[]>([])
   const [conversation, setConversation] = useState<readonly ConversationEntry[]>([])
   const [overlay, setOverlay] = useState<EnvironmentOverlay>(null)
@@ -470,6 +475,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault()
         setLineTarget("william")
+        setLineMode("default")
         setLineReply(null)
         setLineOpen(true)
         requestAnimationFrame(() => lineRef.current?.focus())
@@ -570,11 +576,34 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   const openLine = useCallback((prompt = "", target: LineTarget = "william") => {
     setLineTarget(target)
+    setLineMode("default")
     setLineInput(prompt)
     setLineReply(null)
     setLineOpen(true)
     requestAnimationFrame(() => lineRef.current?.focus())
   }, [])
+
+  const openChange = useCallback(() => {
+    setLineTarget("william")
+    setLineMode("change")
+    setLineInput("")
+    setLineReply(null)
+    setLineOpen(true)
+    requestAnimationFrame(() => lineRef.current?.focus())
+  }, [])
+
+  const onSelectedFileDirtyChange = useCallback((path: string, dirty: boolean) => {
+    setDirtyPaths((current) => current[path] === dirty ? current : { ...current, [path]: dirty })
+  }, [])
+
+  const change = useSelectedFileChange({
+    path: space.selectedPath,
+    dirty: Boolean(space.selectedPath && dirtyPaths[space.selectedPath]),
+    onVerifiedSuccess: async (path) => {
+      setEditorReload((current) => ({ path, key: current.key + 1 }))
+      activate("diff")
+    },
+  })
 
   async function summonCouncil(question: string) {
     setCouncilQuestion(question)
@@ -617,7 +646,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   async function submitLine(event: React.FormEvent) {
     event.preventDefault()
     const text = lineInput.trim()
-    if (!text || lineBusy) return
+    if (!text || lineBusy || change.running) return
+    if (lineMode === "change") {
+      void change.start(text)
+      return
+    }
     appendConversation("owner", text)
     setLineInput("")
     const councilRequest = lineTarget === "william" ? text.match(/^\/?council\b[\s:—-]*(.*)$/i) : null
@@ -728,6 +761,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   ]
 
   function openObjectAction(action: string) {
+    if (action === "Change" && selectedKind === "file") {
+      openChange()
+      return
+    }
     if (action === "Council") {
       void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)
       return
@@ -793,7 +830,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
       <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
         <WindowFrame id="editor" title="Source" geometry={space.windows.editor} active={space.activeWindowId === "editor"} onActivate={() => activate("editor")} onGeometry={(geometry) => updateWindow("editor", geometry)} onMinimize={() => minimize("editor")}>
-          <EditorSurface space={space} onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))} />
+          <EditorSurface space={space} onEditorChange={(editor, selectedPath) => setSpace((current) => ({ ...current, editor, selectedPath }))} onSelectedFileDirtyChange={onSelectedFileDirtyChange} reloadPath={editorReload.path} reloadKey={editorReload.key} />
         </WindowFrame>
         <WindowFrame id="running-app" title="Developer preview · TerraFusion" geometry={space.windows["running-app"]} active={space.activeWindowId === "running-app"} onActivate={() => activate("running-app")} onGeometry={(geometry) => updateWindow("running-app", geometry)} onMinimize={() => minimize("running-app")}>
           {space.runningAppUrl ? <iframe src={space.runningAppUrl} title="Running TerraFusion application" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-downloads" className="h-full w-full border-0" /> : (
@@ -802,7 +839,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
           <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)}>
-            <DeveloperToolsSurface kind={id} selectedPath={space.selectedPath} />
+            <DeveloperToolsSurface kind={id} selectedPath={space.selectedPath} refreshKey={id === "diff" ? editorReload.key : 0} />
           </WindowFrame>
         ))}
         {inspectors.map((surface) => {
@@ -837,10 +874,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
       {lineOpen ? (
         <div className={spatial.lineBackdrop} onPointerDown={(event) => { if (event.target === event.currentTarget) setLineOpen(false) }}>
-          <form className={spatial.line} onSubmit={submitLine} aria-label="The Line">
+          <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? "Change" : "The Line"}>
             <Command size={16} aria-hidden />
-            <div><span className={spatial.lineContext}>{selectedKind} · {selectedLabel}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} placeholder="Ask, change, delegate, or review" aria-label="The Line" autoComplete="off" />{lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
-            <div className={spatial.lineControls}><span className={spatial.lineContext}>{lineTarget === "agent" ? "Claude session" : "William"}</span><button type="submit" className={spatial.lineSend} disabled={lineBusy || !lineInput.trim()}>{lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button><button type="button" className={spatial.lineClose} onClick={() => setLineOpen(false)} aria-label="Close The Line"><X size={14} /></button></div>
+            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${space.selectedPath ?? "no file selected"}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} placeholder={lineMode === "change" ? "Describe the change to make" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
+            <div className={spatial.lineControls}><span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineTarget === "agent" ? "Claude session" : "William"}</span><button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || !lineInput.trim()}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>{lineMode === "change" && change.running ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) change.stop(); setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button></div>
           </form>
         </div>
       ) : null}

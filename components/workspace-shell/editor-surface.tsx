@@ -88,14 +88,19 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
   )
 }
 
-export function EditorSurface({ space, onEditorChange }: {
+export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange, reloadPath = null, reloadKey = 0 }: {
   space: WorkspaceSpace
   onEditorChange: (editor: WorkspaceSpace["editor"], selectedPath: string | null) => void
+  onSelectedFileDirtyChange?: (path: string, dirty: boolean) => void
+  reloadPath?: string | null
+  reloadKey?: number
 }) {
   const [roots, setRoots] = useState<readonly Entry[] | null>(null)
   const [treeError, setTreeError] = useState<string | null>(null)
   const [buffers, setBuffers] = useState<Record<string, FileBuffer>>({})
   const loadingFiles = useRef(new Set<string>())
+  const completedReloadKey = useRef(-1)
+  const bufferEpoch = useRef(new Map<string, number>())
 
   const loadRoots = useCallback(async () => {
     setTreeError(null)
@@ -116,11 +121,12 @@ export function EditorSurface({ space, onEditorChange }: {
     for (const path of space.editor.openFiles) {
       if (buffers[path] || loadingFiles.current.has(path)) continue
       loadingFiles.current.add(path)
+      const epoch = bufferEpoch.current.get(path) ?? 0
       void fetch(`/api/loom/files?path=${encodeURIComponent(path)}`, { cache: "no-store" })
         .then(async (response) => {
           const payload = await response.json()
           if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
-          setBuffers((current) => ({ ...current, [path]: {
+          setBuffers((current) => (bufferEpoch.current.get(path) ?? 0) !== epoch ? current : ({ ...current, [path]: {
             path: payload.path,
             content: payload.content,
             savedContent: payload.content,
@@ -134,6 +140,35 @@ export function EditorSurface({ space, onEditorChange }: {
     }
   }, [buffers, space.editor.openFiles])
 
+  useEffect(() => {
+    if (!reloadPath || reloadPath !== space.selectedPath || completedReloadKey.current === reloadKey) return
+    const current = buffers[reloadPath]
+    if (current && current.content !== current.savedContent) return
+    completedReloadKey.current = reloadKey
+    const epoch = (bufferEpoch.current.get(reloadPath) ?? 0) + 1
+    bufferEpoch.current.set(reloadPath, epoch)
+    void fetch(`/api/loom/files?path=${encodeURIComponent(reloadPath)}`, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json()
+        if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
+        setBuffers((existing) => (bufferEpoch.current.get(reloadPath) ?? 0) !== epoch ? existing : ({ ...existing, [reloadPath]: {
+          path: payload.path,
+          content: payload.content,
+          savedContent: payload.content,
+          modifiedAt: payload.modifiedAt,
+          saving: false,
+          error: null,
+        } }))
+      })
+      .catch((error) => setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE"))
+  }, [buffers, reloadKey, reloadPath, space.selectedPath])
+
+  const selectedBuffer = space.selectedPath ? buffers[space.selectedPath] : null
+  useEffect(() => {
+    if (!space.selectedPath) return
+    onSelectedFileDirtyChange?.(space.selectedPath, Boolean(selectedBuffer && selectedBuffer.content !== selectedBuffer.savedContent))
+  }, [onSelectedFileDirtyChange, selectedBuffer?.content, selectedBuffer?.savedContent, space.selectedPath])
+
   const updatePanes = useCallback((
     panes: readonly EditorPane[],
     openFiles = space.editor.openFiles,
@@ -146,11 +181,12 @@ export function EditorSurface({ space, onEditorChange }: {
   const openFile = useCallback(async (path: string, targetPaneId: EditorPane["id"] = space.editor.activePaneId) => {
     if (!buffers[path]) {
       try {
+        const epoch = bufferEpoch.current.get(path) ?? 0
         const response = await fetch(`/api/loom/files?path=${encodeURIComponent(path)}`, { cache: "no-store" })
         const payload = await response.json()
         if (!response.ok) throw new Error(payload.error ?? `READ_${response.status}`)
         if (payload.kind === "binary") throw new Error("BINARY_FILE_NOT_EDITABLE")
-        setBuffers((current) => ({ ...current, [path]: {
+        setBuffers((current) => (bufferEpoch.current.get(path) ?? 0) !== epoch ? current : ({ ...current, [path]: {
           path: payload.path,
           content: payload.content,
           savedContent: payload.content,
