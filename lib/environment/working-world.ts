@@ -69,6 +69,15 @@ export type SpaceWindow =
       kind: "inspector"
       surfaceKind: SummonedSurface
       surfaceSubject: string
+      surfacePayload?: never
+    }>)
+  | (SpaceWindowBase & Readonly<{
+      kind: "inspector"
+      surfaceKind: "review"
+      /** Immutable workspace-relative source path captured when Review began. */
+      surfaceSubject: string
+      /** Canonical successful Claude result, rendered as plain text by the client. */
+      surfacePayload: string
     }>)
   | (SpaceWindowBase & Readonly<{
       kind: Exclude<SpaceWindowKind, "inspector">
@@ -408,7 +417,7 @@ export function validateSpaceState(raw: unknown): SpaceState {
   const windows = space.windows.map((rawWindow) => {
     const window = record(rawWindow, "SPACE_WINDOW_MALFORMED")
     exactKeys(window, [
-      "id", "kind", "title", "frame", "z", "minimized", "surfaceKind", "surfaceSubject",
+      "id", "kind", "title", "frame", "z", "minimized", "surfaceKind", "surfaceSubject", "surfacePayload",
     ], "SPACE_WINDOW_UNKNOWN_KEY")
     const id = boundedString(window.id, "SPACE_WINDOW_ID_INVALID", 120)
     if (ids.has(id)) throw new Error("SPACE_WINDOW_ID_DUPLICATE")
@@ -418,9 +427,15 @@ export function validateSpaceState(raw: unknown): SpaceState {
       if (window.surfaceKind === undefined || window.surfaceSubject === undefined) {
         throw new Error("SPACE_INSPECTOR_IDENTITY_REQUIRED")
       }
-      if (!isSummonedSurface(window.surfaceKind)) throw new Error("SPACE_INSPECTOR_SURFACE_KIND_INVALID")
-      boundedString(window.surfaceSubject, "SPACE_INSPECTOR_SURFACE_SUBJECT_INVALID", 1000)
-    } else if (window.surfaceKind !== undefined || window.surfaceSubject !== undefined) {
+      if (window.surfaceKind === "review") {
+        workspaceRelativePath(window.surfaceSubject)
+        boundedString(window.surfacePayload, "SPACE_REVIEW_PAYLOAD_INVALID", 200_000)
+      } else {
+        if (!isSummonedSurface(window.surfaceKind)) throw new Error("SPACE_INSPECTOR_SURFACE_KIND_INVALID")
+        boundedString(window.surfaceSubject, "SPACE_INSPECTOR_SURFACE_SUBJECT_INVALID", 1000)
+        if (window.surfacePayload !== undefined) throw new Error("SPACE_INSPECTOR_PAYLOAD_FORBIDDEN")
+      }
+    } else if (window.surfaceKind !== undefined || window.surfaceSubject !== undefined || window.surfacePayload !== undefined) {
       throw new Error("SPACE_CORE_WINDOW_IDENTITY_FORBIDDEN")
     }
     boundedString(window.title, "SPACE_WINDOW_TITLE_INVALID", 200)

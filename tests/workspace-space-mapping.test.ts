@@ -65,6 +65,45 @@ describe("browser-to-server Space mapping", () => {
     })
   })
 
+  it("round-trips a path-bound Review report and its exact Inspector geometry", () => {
+    const base = defaultSpace(1400, 900)
+    const reviewGeometry = { x: 233, y: 117, width: 612, height: 503, z: 19, minimized: false }
+    const mapped = spaceToServer({
+      ...base,
+      inspectorWindows: { "inspector-review": reviewGeometry },
+      inspectorSeeds: {
+        "inspector-review": {
+          kind: "review",
+          subject: "src/app.ts",
+          payload: "P1: authorization can be bypassed",
+        },
+      },
+      activeWindowId: "inspector-review",
+    })
+
+    const validated = validateSpaceState(mapped)
+    expect(validated.windows.at(-1)).toEqual({
+      id: "inspector-review",
+      kind: "inspector",
+      title: "Review report",
+      surfaceKind: "review",
+      surfaceSubject: "src/app.ts",
+      surfacePayload: "P1: authorization can be bypassed",
+      frame: { x: 233, y: 117, width: 612, height: 503 },
+      z: 19,
+      minimized: false,
+    })
+
+    const restored = normalizeSpace(validated, base, { width: 1400, height: 900 })
+    expect(restored.inspectorWindows["inspector-review"]).toEqual(reviewGeometry)
+    expect(restored.inspectorSeeds["inspector-review"]).toEqual({
+      kind: "review",
+      subject: "src/app.ts",
+      payload: "P1: authorization can be bypassed",
+    })
+    expect(restored.activeWindowId).toBe("inspector-review")
+  })
+
   it("reconciles restored geometry to the current viewport and round-trips each pane selection", () => {
     const fallback = defaultSpace(800, 600)
     const persisted = spaceToServer({

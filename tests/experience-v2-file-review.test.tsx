@@ -97,6 +97,57 @@ describe("Experience V2 selected-file Review", () => {
     expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
   })
 
+  it("accepts diagnostic stderr without treating it as Review report content or success truth", async () => {
+    const fetcher = baseFetch(() => stream(
+      { type: "session", sessionId: SESSION_ID, resumed: false },
+      { type: "stderr", text: "Claude diagnostic: retrying transport" },
+      resultEvent("Canonical review report"),
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await openReview("")
+
+    expect(await screen.findByText("Canonical review report")).toBeTruthy()
+    expect(screen.queryByText(/retrying transport/)).toBeNull()
+  })
+
+  it("restores a persisted Review report and Inspector geometry after close and reopen", async () => {
+    vi.stubGlobal("fetch", baseFetch(() => stream(
+      { type: "session", sessionId: SESSION_ID, resumed: false },
+      resultEvent("Durable review report"),
+      { type: "done", code: 0, reason: null },
+    )))
+    const first = render(<WorkspaceShell />)
+    await openReview("")
+    await screen.findByText("Durable review report")
+    const original = screen.getByLabelText("Inspector · src/app.ts window") as HTMLElement
+    const geometry = {
+      left: original.style.left,
+      top: original.style.top,
+      width: original.style.width,
+      height: original.style.height,
+    }
+    await waitFor(() => {
+      const saved = window.localStorage.getItem("williamos:space:file-review-test")
+      expect(saved).toContain("Durable review report")
+    }, { timeout: 2_000 })
+
+    first.unmount()
+    render(<WorkspaceShell />)
+
+    expect(await screen.findByText("Durable review report")).toBeTruthy()
+    const restored = screen.getByLabelText("Inspector · src/app.ts window") as HTMLElement
+    expect({
+      left: restored.style.left,
+      top: restored.style.top,
+      width: restored.style.width,
+      height: restored.style.height,
+    }).toEqual(geometry)
+    expect(fetch).not.toHaveBeenCalledWith("/api/environment/line", expect.anything())
+  })
+
   it("keeps the captured path through selection drift and blocks dismissal while streaming", async () => {
     const pending = deferredStream({ type: "session", sessionId: SESSION_ID, resumed: false })
     vi.stubGlobal("fetch", baseFetch(() => pending.response))

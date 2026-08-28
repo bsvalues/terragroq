@@ -279,6 +279,10 @@ export function useExperienceAgentSessions({
           }
           return
         }
+        if (mode === "review" && event.type === "stderr") {
+          if (!boundedText(event.text, 200_000)) malformedReview = true
+          return
+        }
         if (event.type === "done") {
           if (mode === "review" && (!sessionSeen || terminalSeen || event.reason !== null && typeof event.reason !== "string")) { malformedReview = true; return }
           terminalSeen = true

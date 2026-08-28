@@ -201,7 +201,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           z: highest + index + 1,
           minimized: false,
         }
-        inspectorSeeds[surface.id] = { kind: surface.kind, subject: surface.subject }
+        inspectorSeeds[surface.id] = {
+          kind: surface.kind,
+          subject: surface.subject,
+          ...(surface.kind === "review" && typeof surface.payload === "string"
+            ? { payload: surface.payload }
+            : {}),
+        }
       })
       const active = incoming.at(-1)?.id ?? current.activeWindowId
       return { ...current, inspectorWindows, inspectorSeeds, activeWindowId: active }
@@ -273,6 +279,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         acknowledgedRevisionRef.current = restored.revision
         setWorldId(payload.worldId)
         setSpace(restored)
+        setInspectors(Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
+          seed.kind === "review" && typeof seed.payload === "string"
+            ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
+            : [],
+        ))
         setStorage(storageMode)
         if (payload.project) setProject(payload.project)
         if (payload.spine) setSpine(payload.spine)
@@ -357,6 +368,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     if (!hydrated || !worldId || restorationStarted.current) return
     restorationStarted.current = true
     for (const seed of Object.values(stateRef.current.inspectorSeeds)) {
+      if (seed.kind === "review") continue
       void fetch("/api/environment/line", {
         method: "POST",
         headers: { "content-type": "application/json" },
