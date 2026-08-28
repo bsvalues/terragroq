@@ -214,6 +214,7 @@ describe("Experience V2 selected-file Change", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start change" }))
     const minimize = await screen.findByRole("button", { name: "Minimize Changes" }) as HTMLButtonElement
     expect(minimize.disabled).toBe(true)
+    expect(minimize.title).toBe("Changes cannot be minimized while Change is active")
     fireEvent.click(minimize)
     resolveDiff(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
 
