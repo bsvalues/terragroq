@@ -164,8 +164,14 @@ function activeWindow(world: WorkingWorldSnapshot) {
   return world.space?.windows.find((window) => window.id === world.space?.activeWindowId) ?? null
 }
 
+function groundedSpaceName(world: WorkingWorldSnapshot): string {
+  // Persisted Council context is canonical product data. The Line intent may be substantially
+  // longer than the display identity, so bind and bound it before any inference call.
+  return (world.spine.projectName?.trim() || world.intent.trim()).slice(0, 500)
+}
+
 function groundCouncilContext(input: CouncilRequest, world: WorkingWorldSnapshot): GroundedCouncilContext {
-  const spaceName = world.spine.projectName?.trim() || world.intent.trim()
+  const spaceName = groundedSpaceName(world)
   const requested = input.selectedContext
   let label: string | null = null
 

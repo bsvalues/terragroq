@@ -299,6 +299,26 @@ describe("POST /api/environment/council", () => {
     expect((await pending).status).toBe(200)
   })
 
+  it("bounds an oversized intent before six-call inference returns and persists the Council session", async () => {
+    const oversizedIntent = "x".repeat(700)
+    harness.loadOwnedWorkingWorld.mockResolvedValue({
+      ...ownedWorld,
+      intent: oversizedIntent,
+      spine: { ...ownedWorld.spine, projectName: null },
+    })
+    vi.stubGlobal("fetch", successfulInference())
+
+    const response = await POST(request({ worldId: WORLD_ID, question: "Council this.", selectedContext }))
+    const payload = await response.json()
+
+    expect(fetch).toHaveBeenCalledTimes(6)
+    expect(response.status).toBe(200)
+    expect(payload.session.context.spaceName).toBe("x".repeat(500))
+    expect(harness.saveOwnedCouncilSession).toHaveBeenCalledWith(expect.objectContaining({
+      session: expect.objectContaining({ context: expect.objectContaining({ spaceName: "x".repeat(500) }) }),
+    }))
+  })
+
   it("rejects client-supplied session, history, or provenance", async () => {
     vi.stubGlobal("fetch", vi.fn())
     for (const extra of [{ session: {} }, { councilHistory: [] }, { provenance: "invented" }]) {
