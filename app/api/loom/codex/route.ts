@@ -3,7 +3,7 @@ import path from "node:path"
 import { getSession } from "@/lib/session"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
-import { loomCodexThreadDescriptor } from "@/lib/loom/threads"
+import { commitCodexThreadReady, loomCodexThreadDescriptor } from "@/lib/loom/threads"
 import {
   CodexAppServerClient,
   sanitizeAppServerText,
@@ -19,6 +19,7 @@ const MAX_DELTA_CHARS = 16_000
 const MAX_STREAM_CHARS = 128_000
 const MAX_RESULT_CHARS = 128_000
 const TURN_TIMEOUT_MS = 60 * 60_000
+const FORCED_CLOSE_MS = 1_000
 
 type CodexClient = InstanceType<typeof CodexAppServerClient>
 
@@ -36,6 +37,7 @@ function failureReason(error: unknown): string {
   const code = typeof candidate?.code === "string" ? candidate.code : ""
   if (code === "APP_SERVER_CANCELLED") return "CANCELLED"
   if (code === "CODEX_AUTH_REQUIRED") return code
+  if (code === "CODEX_RECEIPT_FAILED") return code
   const allowed = new Set([
     "APP_SERVER_APPROVAL_REQUIRED",
     "APP_SERVER_USER_INPUT_REQUIRED",
@@ -115,11 +117,30 @@ export async function POST(request: Request) {
   let terminal = false
   let sessionSent = false
   let clientClosed = false
+  let cancellationRequested = request.signal.aborted
+  let forcedCloseTimer: ReturnType<typeof setTimeout> | null = null
   const closeClient = () => {
     if (clientClosed) return
     clientClosed = true
+    if (forcedCloseTimer) clearTimeout(forcedCloseTimer)
     client?.close()
   }
+  const cancelTurn = () => {
+    if (cancellationRequested) {
+      if (!turnAbort.signal.aborted) turnAbort.abort()
+      return
+    }
+    cancellationRequested = true
+    turnAbort.abort()
+    forcedCloseTimer = setTimeout(closeClient, FORCED_CLOSE_MS)
+    forcedCloseTimer.unref?.()
+  }
+  const assertNotCancelled = () => {
+    if (cancellationRequested || turnAbort.signal.aborted) {
+      throw Object.assign(new Error("Codex turn was cancelled"), { code: "APP_SERVER_CANCELLED" })
+    }
+  }
+  if (cancellationRequested) turnAbort.abort()
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -149,7 +170,8 @@ export async function POST(request: Request) {
 
       void (async () => {
         let threadId: string | null = requestedId
-        let recordedReady = false
+        let attemptRecorded = false
+        let committedReady = false
         try {
           client = new CodexAppServerClient({
             cwd: PROJECT_ROOT,
@@ -157,7 +179,9 @@ export async function POST(request: Request) {
             onNotification,
           })
           await client.connect()
+          assertNotCancelled()
           const account = await client.readAccount()
+          assertNotCancelled()
           if (account.requiresOpenaiAuth === true) {
             throw Object.assign(new Error("Codex authentication is unavailable"), { code: "CODEX_AUTH_REQUIRED" })
           }
@@ -180,6 +204,7 @@ export async function POST(request: Request) {
               throw Object.assign(new Error("Codex returned an invalid thread id"), { code: "APP_SERVER_UNSUPPORTED_REQUEST" })
             }
           }
+          assertNotCancelled()
           if (threadId === null) {
             throw Object.assign(new Error("Codex did not return a thread id"), { code: "APP_SERVER_UNSUPPORTED_REQUEST" })
           }
@@ -204,36 +229,61 @@ export async function POST(request: Request) {
             timeoutMs: TURN_TIMEOUT_MS,
             signal: turnAbort.signal,
           })
+          assertNotCancelled()
           if (turn.threadId !== durableThreadId || turn.status !== "completed" || typeof turn.finalText !== "string") {
             throw Object.assign(new Error("Codex returned an invalid terminal result"), { code: "APP_SERVER_TURN_FAILED" })
           }
           const result = sanitizeAppServerText(turn.finalText).slice(0, MAX_RESULT_CHARS)
+          assertNotCancelled()
           if (!result) {
             throw Object.assign(new Error("Codex completed without a result"), { code: "APP_SERVER_TURN_FAILED" })
           }
 
-          // This is the durable descriptor. A failed first turn must not create a resumable session.
-          await recordLoomStart({
-            userId: session.user.id,
-            kind: "agent",
-            subject: durableThreadId,
-            metadata: {
-              provider: "Codex",
-              mode: "delegate",
+          // These are attempt/outcome evidence only. Resumption ignores them; the dedicated
+          // committed-ready event below is the sole durable descriptor.
+          try {
+            await recordLoomStart({
+              userId: session.user.id,
+              kind: "agent",
+              subject: durableThreadId,
+              metadata: {
+                provider: "Codex",
+                mode: "delegate",
+                workspace: PROJECT_ROOT,
+                resumed: resuming,
+                external: true,
+                metered: true,
+              },
+            })
+          } catch {
+            throw Object.assign(new Error("Codex start receipt failed"), { code: "CODEX_RECEIPT_FAILED" })
+          }
+          attemptRecorded = true
+          assertNotCancelled()
+          try {
+            await recordLoomEnd({
+              userId: session.user.id,
+              kind: "agent",
+              subject: durableThreadId,
+              outcome: { provider: "Codex", mode: "delegate", code: 0, reason: null },
+            })
+          } catch {
+            throw Object.assign(new Error("Codex end receipt failed"), { code: "CODEX_RECEIPT_FAILED" })
+          }
+          assertNotCancelled()
+          try {
+            await commitCodexThreadReady({
+              threadId: durableThreadId,
+              owner: session.user.id,
               workspace: PROJECT_ROOT,
-              resumed: resuming,
-              external: true,
-              metered: true,
-            },
-          })
-          recordedReady = true
-          await recordLoomEnd({
-            userId: session.user.id,
-            kind: "agent",
-            subject: durableThreadId,
-            outcome: { provider: "Codex", mode: "delegate", code: 0, reason: null },
-          })
+            })
+          } catch {
+            throw Object.assign(new Error("Codex ready receipt failed"), { code: "CODEX_RECEIPT_FAILED" })
+          }
+          committedReady = true
+          assertNotCancelled()
           send({ type: "result", text: result })
+          assertNotCancelled()
           done(null, 0)
         } catch (error) {
           const reason = failureReason(error)
@@ -248,7 +298,8 @@ export async function POST(request: Request) {
                   mode: "delegate",
                   code: null,
                   reason,
-                  descriptorPersisted: recordedReady,
+                  attemptRecorded,
+                  descriptorPersisted: committedReady,
                 },
               })
             } catch { /* the NDJSON outcome must still settle truthfully */ }
@@ -260,14 +311,12 @@ export async function POST(request: Request) {
       })()
     },
     cancel() {
-      // Abort first: runTurn translates it into turn/interrupt while the transport is still open.
-      turnAbort.abort()
-      closeClient()
+      // Let runTurn send turn/interrupt and settle before closing. A hung provider is still bounded.
+      cancelTurn()
     },
   })
 
-  if (request.signal.aborted) turnAbort.abort()
-  else request.signal.addEventListener("abort", () => turnAbort.abort(), { once: true })
+  if (!request.signal.aborted) request.signal.addEventListener("abort", cancelTurn, { once: true })
 
   return new Response(stream, {
     headers: {

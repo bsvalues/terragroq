@@ -13,6 +13,7 @@ const seams = vi.hoisted(() => ({
   resumeThread: vi.fn(),
   runTurn: vi.fn(),
   close: vi.fn(),
+  sanitize: vi.fn(),
   onConstruct: vi.fn(),
   clientOptions: [] as unknown[],
 }))
@@ -40,8 +41,7 @@ vi.mock("@/scripts/hermes-bridge/app-server-client.mjs", () => ({
     runTurn = seams.runTurn
     close = seams.close
   },
-  sanitizeAppServerText: (value: unknown) => String(value ?? "")
-    .replace(/token-[A-Za-z0-9._-]+/gi, "[REDACTED]"),
+  sanitizeAppServerText: (value: unknown) => seams.sanitize(value),
 }))
 
 import { POST } from "@/app/api/loom/codex/route"
@@ -62,12 +62,14 @@ async function events(response: Response) {
 
 describe("durable Codex delegate route", () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
     seams.clientOptions.length = 0
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
     seams.requireWorkContext.mockResolvedValue({ ok: true })
     seams.workContextRefusal.mockReturnValue(Response.json({ error: "FAILED_CONTEXT_NOT_PROVEN" }, { status: 409 }))
     seams.connect.mockResolvedValue(undefined)
+    seams.sanitize.mockImplementation((value: unknown) => String(value ?? "")
+      .replace(/token-[A-Za-z0-9._-]+/gi, "[REDACTED]"))
     seams.readAccount.mockResolvedValue({ authType: "chatgpt", email: "owner@example.test", requiresOpenaiAuth: false })
     seams.recordLoomStart.mockResolvedValue(undefined)
     seams.recordLoomEnd.mockResolvedValue(undefined)
@@ -80,7 +82,7 @@ describe("durable Codex delegate route", () => {
       finalText: "Implemented the selected change.",
     })
     seams.poolQuery.mockResolvedValue({
-      rows: [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd() } }],
+      rows: [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true } }],
     })
   })
 
@@ -175,7 +177,7 @@ describe("durable Codex delegate route", () => {
     const output = await events(response)
 
     expect(response.status).toBe(200)
-    expect(seams.poolQuery).toHaveBeenCalledWith(expect.stringContaining("loom_agent"), ["codex-thread-1"])
+    expect(seams.poolQuery).toHaveBeenCalledWith(expect.stringContaining("loom_codex_ready"), ["codex-thread-1"])
     expect(seams.resumeThread).toHaveBeenCalledWith("codex-thread-1", {
       cwd: expect.stringMatching(/experience-v2-codex-session$/),
       approvalPolicy: "never",
@@ -189,10 +191,10 @@ describe("durable Codex delegate route", () => {
 
   it.each([
     ["unknown", [], "THREAD_NOT_FOUND"],
-    ["another owner", [{ userId: "owner-2", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd() } }], "THREAD_NOT_YOURS"],
-    ["Claude", [{ userId: "owner-1", metadata: { provider: "Claude", mode: "delegate", workspace: process.cwd() } }], "THREAD_DESCRIPTOR_MISMATCH"],
-    ["review", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "review", workspace: process.cwd() } }], "THREAD_DESCRIPTOR_MISMATCH"],
-    ["different workspace", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: "C:/other" } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["another owner", [{ userId: "owner-2", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true } }], "THREAD_NOT_YOURS"],
+    ["Claude", [{ userId: "owner-1", metadata: { provider: "Claude", mode: "delegate", workspace: process.cwd(), committed: true } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["review", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "review", workspace: process.cwd(), committed: true } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["different workspace", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: "C:/other", committed: true } }], "THREAD_DESCRIPTOR_MISMATCH"],
   ])("refuses a %s descriptor before connecting", async (_label, rows, error) => {
     seams.poolQuery.mockResolvedValueOnce({ rows })
 
@@ -239,19 +241,31 @@ describe("durable Codex delegate route", () => {
     abort.abort()
 
     const output = await events(response)
-    expect(output).toEqual([
-      { type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: false },
-      { type: "done", reason: "CANCELLED", code: null },
-    ])
-    expect(seams.recordLoomEnd).toHaveBeenCalledOnce()
-    expect(seams.recordLoomEnd.mock.calls[0][0].outcome).toMatchObject({ code: null, reason: "CANCELLED" })
+    expect(output.at(-1)).toEqual({ type: "done", reason: "CANCELLED", code: null })
+    expect(output.some((event) => event.type === "result")).toBe(false)
+    // An abort can win before thread/start returns. In that case there is no durable subject to
+    // receipt, but the stream and provider process must still settle without inventing success.
+    if (seams.recordLoomEnd.mock.calls.length > 0) {
+      expect(seams.recordLoomEnd).toHaveBeenCalledOnce()
+      expect(seams.recordLoomEnd.mock.calls[0][0].outcome).toMatchObject({ code: null, reason: "CANCELLED" })
+    }
     expect(seams.close).toHaveBeenCalledOnce()
   })
 
   it("interrupts before closing when the response reader is cancelled", async () => {
+    const order: string[] = []
     seams.runTurn.mockImplementationOnce(({ signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
-      signal.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), { code: "APP_SERVER_CANCELLED" })))
+      if (signal.aborted) {
+        order.push("interrupt")
+        reject(Object.assign(new Error("cancelled"), { code: "APP_SERVER_CANCELLED" }))
+        return
+      }
+      signal.addEventListener("abort", () => {
+        order.push("interrupt")
+        queueMicrotask(() => reject(Object.assign(new Error("cancelled"), { code: "APP_SERVER_CANCELLED" })))
+      })
     }))
+    seams.close.mockImplementation(() => { order.push("close") })
     const response = await POST(request({ prompt: "Work." }))
     const reader = response.body!.getReader()
 
@@ -261,8 +275,64 @@ describe("durable Codex delegate route", () => {
     await vi.waitFor(() => expect(seams.close).toHaveBeenCalledOnce())
 
     expect((seams.runTurn.mock.calls[0][0] as { signal: AbortSignal }).signal.aborted).toBe(true)
+    expect(order).toEqual(["interrupt", "close"])
     expect(seams.recordLoomStart).not.toHaveBeenCalled()
     expect(seams.recordLoomEnd).toHaveBeenCalledOnce()
+  })
+
+  it("force-closes a provider that does not settle after response cancellation", async () => {
+    vi.useFakeTimers()
+    try {
+      seams.runTurn.mockImplementationOnce(() => new Promise(() => {}))
+      const response = await POST(request({ prompt: "Work." }))
+      const reader = response.body!.getReader()
+      await reader.read()
+
+      await reader.cancel()
+      expect(seams.close).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      expect(seams.close).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("does not commit or report success when cancellation lands during the start receipt", async () => {
+    const abort = new AbortController()
+    seams.recordLoomStart.mockImplementationOnce(async () => { abort.abort() })
+
+    const output = await events(await POST(request({ prompt: "Work." }, abort.signal)))
+
+    expect(output.some((event) => event.type === "result")).toBe(false)
+    expect(output.at(-1)).toEqual({ type: "done", reason: "CANCELLED", code: null })
+    expect(seams.poolQuery).not.toHaveBeenCalled()
+  })
+
+  it("does not enter receipt or success transitions when cancellation lands during sanitization", async () => {
+    const abort = new AbortController()
+    seams.sanitize.mockImplementationOnce((value: unknown) => {
+      abort.abort()
+      return String(value ?? "")
+    })
+
+    const output = await events(await POST(request({ prompt: "Work." }, abort.signal)))
+
+    expect(output.some((event) => event.type === "result")).toBe(false)
+    expect(output.at(-1)).toEqual({ type: "done", reason: "CANCELLED", code: null })
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.poolQuery).not.toHaveBeenCalled()
+  })
+
+  it("does not create a committed-ready descriptor when the success end receipt rejects", async () => {
+    seams.recordLoomEnd.mockRejectedValueOnce(new Error("ledger unavailable"))
+
+    const output = await events(await POST(request({ prompt: "Work." })))
+
+    expect(output.some((event) => event.type === "result")).toBe(false)
+    expect(output.at(-1)).toEqual({ type: "done", reason: "CODEX_RECEIPT_FAILED", code: null })
+    expect(seams.recordLoomStart).toHaveBeenCalledOnce()
+    expect(seams.poolQuery).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -285,13 +355,22 @@ describe("durable Codex delegate route", () => {
 })
 
 describe("Codex thread descriptor", () => {
-  it("reads owner, provider, mode, and workspace from the authoritative first start receipt", async () => {
+  it("reads owner, provider, mode, and workspace only from the committed-ready event", async () => {
     seams.poolQuery.mockResolvedValueOnce({
-      rows: [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: "C:/workspace" } }],
+      rows: [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: "C:/workspace", committed: true } }],
     })
 
     await expect(loomCodexThreadDescriptor("codex-thread-1")).resolves.toEqual({
       owner: "owner-1", provider: "Codex", mode: "delegate", workspace: "C:/workspace",
     })
+    expect(seams.poolQuery.mock.calls.at(-1)?.[0]).toContain("loom_codex_ready")
+  })
+
+  it("refuses a malformed ready event that was never marked committed", async () => {
+    seams.poolQuery.mockResolvedValueOnce({
+      rows: [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: "C:/workspace" } }],
+    })
+
+    await expect(loomCodexThreadDescriptor("codex-thread-1")).resolves.toBeNull()
   })
 })

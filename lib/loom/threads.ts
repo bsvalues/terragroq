@@ -31,6 +31,29 @@ export interface LoomCodexThreadDescriptor {
   workspace: string | null
 }
 
+export async function commitCodexThreadReady(input: {
+  threadId: string
+  owner: string
+  workspace: string
+}): Promise<void> {
+  const metadata = {
+    provider: "Codex",
+    mode: "delegate",
+    workspace: input.workspace,
+    committed: true,
+  }
+  // Unlike the best-effort general receipt logger, this write is a product state transition. A
+  // rejected insert must reject the turn; otherwise the browser could report a durable session that
+  // the next request is unable to authenticate and resume.
+  await pool.query(
+    `INSERT INTO "governance_event"
+      ("userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata")
+      VALUES ($1, 'EVIDENCE_RECORDED', 'loom_codex_ready', $2, 'loom',
+        'Codex delegate session committed ready', $3::jsonb)`,
+    [input.owner, input.threadId, JSON.stringify(metadata)],
+  )
+}
+
 /**
  * Decide whether a resume may proceed.
  *
@@ -97,8 +120,9 @@ export async function loomCodexThreadDescriptor(threadId: string): Promise<LoomC
   try {
     const result = await pool.query(
       `SELECT "userId", "metadata" FROM "governance_event"
-        WHERE "entityType" = 'loom_agent' AND "entityId" = $1 AND "eventType" = 'LOOP_STARTED'
-        ORDER BY "createdAt" ASC LIMIT 1`,
+        WHERE "entityType" = 'loom_codex_ready' AND "entityId" = $1
+          AND "eventType" = 'EVIDENCE_RECORDED'
+        ORDER BY "createdAt" DESC LIMIT 1`,
       [threadId],
     )
     const row = result.rows[0] as { userId?: unknown; metadata?: unknown } | undefined
@@ -106,6 +130,7 @@ export async function loomCodexThreadDescriptor(threadId: string): Promise<LoomC
       ? row.metadata as Record<string, unknown>
       : null
     if (typeof row?.userId !== "string") return null
+    if (metadata?.committed !== true) return null
     return {
       owner: row.userId,
       provider: typeof metadata?.provider === "string" ? metadata.provider : null,
