@@ -97,7 +97,7 @@ function inspectorId(surface: Pick<InspectorSurface, "kind" | "subject">): strin
   return `inspector-${(hash >>> 0).toString(36)}`
 }
 
-export function WorkspaceShell({ initialSummon = null, workContextReceipt = null }: { initialSummon?: SummonedSurface | null; workContextReceipt?: string | null }) {
+export function WorkspaceShell({ initialSummon = null }: { initialSummon?: SummonedSurface | null }) {
   const [space, setSpace] = useState<WorkspaceSpace>(() => defaultSpace())
   const [worldId, setWorldId] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
@@ -132,8 +132,8 @@ export function WorkspaceShell({ initialSummon = null, workContextReceipt = null
   const agentSessions = useExperienceAgentSessions({
     ownerScope: worldId ?? "unhydrated-owner-world",
     worldScope: project?.identity ?? worldId ?? "unhydrated-project",
+    worldId: storage === "server" ? worldId : null,
     worker: spine.worker ?? null,
-    workContextReceipt,
   })
   const stateRef = useRef(space)
   const spineRef = useRef(spine)
@@ -158,6 +158,16 @@ export function WorkspaceShell({ initialSummon = null, workContextReceipt = null
   spineRef.current = spine
   worldRef.current = worldId
   storageRef.current = storage
+
+  useEffect(() => {
+    if (delegateContext?.kind !== "file" || delegateContext.label === space.selectedPath) return
+    // Delegate is an object action. If the selected object changes before dispatch, discard the
+    // stale client intent; the server will derive authority only from the newly persisted Space.
+    setDelegateContext(null)
+    setLineTarget("william")
+    setLineInput("")
+    setLineOpen(false)
+  }, [delegateContext, space.selectedPath])
 
   const appendConversation = useCallback((role: ConversationEntry["role"], text: string) => {
     const normalized = text.trim()
@@ -772,10 +782,11 @@ export function WorkspaceShell({ initialSummon = null, workContextReceipt = null
     setLineReply(null)
     try {
       const contextualText = lineTarget === "agent" && delegateContext
-        ? `Selected ${delegateContext.kind}: ${delegateContext.label}\nOwner request: ${text}`
+        ? `Owner request: ${text}`
         : `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
       if (lineTarget === "agent") {
         if (!delegateContext?.provider) throw new Error("AGENT_PROVIDER_REQUIRED")
+        if (delegateContext.provider === "Codex") await persistBarrierRef.current()
         await agentSessions.runAgentTurn({
           provider: delegateContext.provider,
           role: delegateContext.role,

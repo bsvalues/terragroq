@@ -33,16 +33,16 @@ function ndjson(...events: readonly Record<string, unknown>[]): Response {
   })
 }
 
-function workspaceResponse() {
+function workspaceResponse(storage: "server" | "browser" = "browser") {
   const space = {
     ...defaultSpace(), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
     editor: { openFiles: ["src/app.ts", "src/other.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
   }
-  return Response.json({ worldId: "browser-world", space: spaceToServer(space), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "browser", browserStorageKey: "codex-delegate-test" })
+  return Response.json({ worldId: storage === "server" ? "server-world" : "browser-world", space: spaceToServer(space), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage, browserStorageKey: storage === "browser" ? "codex-delegate-test" : null })
 }
 
-function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, workContextReceipt = null }: { worker?: WorldWorker | null; ownerScope?: string; worldScope?: string; workContextReceipt?: string | null }) {
-  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worker, workContextReceipt })
+function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1" }: { worker?: WorldWorker | null; ownerScope?: string; worldScope?: string; worldId?: string | null }) {
+  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, worker })
   expose = controller
   return (
     <AgentSessionStrip
@@ -57,15 +57,20 @@ function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_S
 let expose: ProviderNeutralAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
-  it("requires a fresh provider choice and keeps Delegate bound to its captured selected file", async () => {
+  it("requires a fresh provider choice and cancels stale Delegate intent when selection changes", async () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174000"
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/other.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
         { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
         { type: "delta", text: "Working from src/app.ts." },
@@ -88,16 +93,10 @@ describe("Experience V2 real agent sessions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Codex" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Fix the selected defect." } })
     fireEvent.click(screen.getByRole("tab", { name: "other.ts" }))
-    fireEvent.click(within(line).getByRole("button", { name: "Delegate" }))
+    await waitFor(() => expect(screen.queryByRole("form", { name: "The Line" })).toBeNull())
+    expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/loom/codex")).toBe(false)
 
-    expect(await screen.findByRole("button", { name: /Builder · Codex · src\/app.ts/i })).toBeTruthy()
-    const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/codex" && init?.method === "POST")
-    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
-      prompt: "Selected file: src/app.ts\nOwner request: Fix the selected defect.",
-      sessionId: null,
-      resume: false,
-    })
-    expect(screen.getByText(/Completed the captured assignment/)).toBeTruthy()
+    expect(screen.getByText("src/other.ts")).toBeTruthy()
   })
 
   it("starts a fresh Codex Builder through the Codex route and persists provider-bound truth", async () => {
@@ -124,6 +123,7 @@ describe("Experience V2 real agent sessions", () => {
 
     expect(screen.getByRole("button", { name: /Builder · Codex · src\/app.ts/i })).toBeTruthy()
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      worldId: "world-1",
       prompt: "Selected file: src/app.ts\nOwner request: Fix the defect.",
       sessionId: null,
       resume: false,
@@ -174,6 +174,7 @@ describe("Experience V2 real agent sessions", () => {
 
     expect(fetcher.mock.calls[0]?.[0]).toBe("/api/loom/codex")
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      worldId: "world-1",
       prompt: "Continue.",
       sessionId,
       resume: true,
@@ -312,7 +313,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
   })
 
-  it("presents an explicitly supplied work-context receipt to the Codex mutation route", async () => {
+  it("sends only the persisted Space identity and task request to the Codex mutation route", async () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174000"
     const fetcher = vi.fn().mockResolvedValue(ndjson(
       { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
@@ -320,24 +321,44 @@ describe("Experience V2 real agent sessions", () => {
       { type: "done", code: 0, reason: null },
     ))
     vi.stubGlobal("fetch", fetcher)
-    render(<Harness workContextReceipt="legitimately-issued-receipt" />)
+    render(<Harness worldId="world-authorized" />)
 
     await act(async () => {
       await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work." })
     })
 
-    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("x-williamos-work-context")).toBe("legitimately-issued-receipt")
+    expect(new Headers(fetcher.mock.calls[0]?.[1]?.headers).has("x-williamos-work-context")).toBe(false)
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
+      worldId: "world-authorized",
+      prompt: "Work.",
+      sessionId: null,
+      resume: false,
+    })
   })
 
-  it("surfaces a missing work-context refusal without fabricating ready Codex truth", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ error: "FAILED_CONTEXT_NOT_PROVEN" }, { status: 409 })))
+  it("surfaces a useful server-derived authority refusal without fabricating ready Codex truth", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      error: "CODEX_ASSIGNMENT_PATH_OUT_OF_SCOPE",
+      detail: "That file is outside the current writable scope, so I didn't dispatch it.",
+    }, { status: 409 })))
     render(<Harness />)
 
     await expect(act(async () => {
       await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work." })
-    })).rejects.toThrow("AGENT_START_REFUSED:409")
+    })).rejects.toThrow("That file is outside the current writable scope, so I didn't dispatch it.")
     expect(expose!.sessions).toEqual([])
     expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+  })
+
+  it("refuses a Codex request locally when no persisted Space identity exists", async () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness worldId={null} />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work." })
+    })).rejects.toThrow("AGENT_SPACE_REQUIRED")
+    expect(fetcher).not.toHaveBeenCalled()
   })
 
   it("cancels a stale Codex turn when the owner or workspace scope changes", async () => {

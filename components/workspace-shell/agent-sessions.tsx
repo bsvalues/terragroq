@@ -161,13 +161,13 @@ function projectSessions(
 export function useExperienceAgentSessions({
   ownerScope,
   worldScope,
+  worldId,
   worker,
-  workContextReceipt = null,
 }: {
   ownerScope: string
   worldScope: string
+  worldId: string | null
   worker: WorldWorker | null
-  workContextReceipt?: string | null
 }): ProviderNeutralAgentSessionController {
   const [savedDescriptor, setSavedDescriptor] = useState<DurableAgentSession | null>(null)
   const [durableSession, setDurableSession] = useState<DurableAgentSession | null>(null)
@@ -275,11 +275,10 @@ export function useExperienceAgentSessions({
     }
 
     try {
-      const receipt = workContextReceipt === null ? null : boundedText(workContextReceipt, 500)
-      if (workContextReceipt !== null && !receipt) throw new Error("AGENT_WORK_CONTEXT_INVALID")
+      if (input.provider === "Codex" && !boundedText(worldId, 200)) throw new Error("AGENT_SPACE_REQUIRED")
       const response = await fetch(input.provider === "Codex" ? "/api/loom/codex" : "/api/loom/agent", {
         method: "POST",
-        headers: { "content-type": "application/json", ...(receipt ? { "x-williamos-work-context": receipt } : {}) },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(mode === "review" ? {
           mode: "review",
           path: reviewPath,
@@ -288,6 +287,7 @@ export function useExperienceAgentSessions({
           sessionId: prior?.sessionId ?? null,
           resume: prior !== null,
         } : input.provider === "Codex" ? {
+          worldId,
           prompt,
           sessionId: prior?.sessionId ?? null,
           resume: prior !== null,
@@ -301,7 +301,13 @@ export function useExperienceAgentSessions({
         cache: "no-store",
       })
       if (!isCurrent()) throw new DOMException("Aborted", "AbortError")
-      if (!response.ok || !response.body) throw new Error(`AGENT_START_REFUSED:${response.status}`)
+      if (!response.ok || !response.body) {
+        let refusal: { error?: unknown; detail?: unknown } = {}
+        try { refusal = await response.json() as { error?: unknown; detail?: unknown } } catch { /* typed fallback below */ }
+        const detail = boundedText(refusal.detail, 1_000)
+        const code = boundedText(refusal.error, 200)
+        throw new Error(detail ?? code ?? `AGENT_START_REFUSED:${response.status}`)
+      }
 
       const reader = response.body.getReader()
       if (!isCurrent()) {
@@ -453,7 +459,7 @@ export function useExperienceAgentSessions({
         setActiveProvider(null)
       }
     }
-  }, [ownerScope, workContextReceipt, worldScope])
+  }, [ownerScope, worldId, worldScope])
 
   const runAgentTurn = useCallback((input: RunAgentTurnInput) => executeTurn({ ...input, mode: "delegate" }), [executeTurn])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
