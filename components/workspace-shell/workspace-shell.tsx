@@ -99,6 +99,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineBusy, setLineBusy] = useState(false)
   const [lineTarget, setLineTarget] = useState<LineTarget>("william")
   const [lineMode, setLineMode] = useState<LineMode>("default")
+  const [changeTarget, setChangeTarget] = useState<string | null>(null)
   const [dirtyPaths, setDirtyPaths] = useState<Readonly<Record<string, boolean>>>({})
   const [changeRefresh, setChangeRefresh] = useState<ChangeRefresh>({ path: null, key: 0 })
   const changeRefreshKey = useRef(0)
@@ -575,15 +576,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     requestAnimationFrame(() => lineRef.current?.focus())
   }, [])
 
-  const openChange = useCallback(() => {
-    setLineTarget("william")
-    setLineMode("change")
-    setLineInput("")
-    setLineReply(null)
-    setLineOpen(true)
-    requestAnimationFrame(() => lineRef.current?.focus())
-  }, [])
-
   const onSelectedFileDirtyChange = useCallback((path: string, dirty: boolean) => {
     setDirtyPaths((current) => current[path] === dirty ? current : { ...current, [path]: dirty })
   }, [])
@@ -608,10 +600,23 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }), [activate])
 
   const change = useSelectedFileChange({
-    path: space.selectedPath,
-    dirty: Boolean(space.selectedPath && dirtyPaths[space.selectedPath]),
+    path: changeTarget,
+    dirty: Boolean(changeTarget && dirtyPaths[changeTarget]),
     onVerifiedSuccess: refreshVerifiedChange,
   })
+
+  const openChange = useCallback(() => {
+    if (change.running) return
+    const target = space.selectedPath
+    setChangeTarget(target)
+    change.reset(target)
+    setLineTarget("william")
+    setLineMode("change")
+    setLineInput("")
+    setLineReply(null)
+    setLineOpen(true)
+    requestAnimationFrame(() => lineRef.current?.focus())
+  }, [change.reset, change.running, space.selectedPath])
 
   useEffect(() => {
     const summonLine = (event: KeyboardEvent) => {
@@ -903,8 +908,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <div className={spatial.lineBackdrop} onPointerDown={(event) => { if (event.target === event.currentTarget && !change.running) setLineOpen(false) }}>
           <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? "Change" : "The Line"}>
             <Command size={16} aria-hidden />
-            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? space.selectedPath ?? "no file selected"}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} placeholder={lineMode === "change" ? "Describe the change to make" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
-            <div className={spatial.lineControls}><span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineTarget === "agent" ? "Claude session" : "William"}</span><button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || !lineInput.trim()}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>{lineMode === "change" && change.running ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { change.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button></div>
+            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={lineMode === "change" && change.running} placeholder={lineMode === "change" ? "Describe the change to make" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
+            <div className={spatial.lineControls}><span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineTarget === "agent" ? "Claude session" : "William"}</span><button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || !lineInput.trim()}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>{lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button></div>
           </form>
         </div>
       ) : null}

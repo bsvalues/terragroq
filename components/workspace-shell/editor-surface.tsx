@@ -137,7 +137,10 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
             error: null,
           } }))
         })
-        .catch((error) => setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE"))
+        .catch((error) => {
+          if ((bufferEpoch.current.get(path) ?? 0) !== epoch) return
+          setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE")
+        })
         .finally(() => loadingFiles.current.delete(path))
     }
   }, [buffers, space.editor.openFiles])

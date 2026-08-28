@@ -57,6 +57,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0, refr
 
   useEffect(() => {
     if (kind !== "diff" || (refreshKey === completedRefresh.current.key && refreshPath === completedRefresh.current.path)) return
+    if (refreshKey === completedRefresh.current.key && !refreshPath) return
     completedRefresh.current = { key: refreshKey, path: refreshPath }
     if (!refreshPath) {
       void loadDiff()
