@@ -40,7 +40,7 @@ type CouncilView = "history" | "convening"
 type LineTarget = "william" | "agent"
 type LineMode = "default" | "change" | "review"
 type DelegateContext = Readonly<{
-  kind: "file" | "preview" | "diff" | "space" | "agent"
+  kind: "file" | "preview" | "diff" | "space" | "agent" | "conversation"
   label: string
   provider: AgentProvider | null
   role: string
@@ -946,6 +946,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge"] as const
+    : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk"] as const
     : selectedKind === "agent" ? ["Talk", "Redirect", "Pause", "Fork", "Review work"] as const
     : ["Summarize", "Continue", "Delegate", "Council"] as const
   const worldLine = spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""
@@ -1157,11 +1158,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     if (selectedAgent?.kind === "durable-session" && (action === "Talk" || action === "Redirect")) {
-      setDelegateContext({ kind: "agent", label: `${selectedAgent.role} · ${selectedAgent.providerLabel}`, provider: selectedAgent.providerLabel as AgentProvider, role: selectedAgent.role, assignment: selectedAgent.assignment })
-      openLine(`${action}: `, "agent")
+      const local = selectedAgent.providerLabel === "Local"
+      setDelegateContext(local
+        ? { kind: "conversation", label: "Local model", provider: "Local", role: "Thinker", assignment: "Conversation" }
+        : { kind: "agent", label: `${selectedAgent.role} · ${selectedAgent.providerLabel}`, provider: selectedAgent.providerLabel as AgentProvider, role: selectedAgent.role, assignment: selectedAgent.assignment })
+      openLine(local ? "" : `${action}: `, "agent")
       return
     }
     openLine(`${action} this selected ${selectedKindLabel}: `)
+  }
+
+  function openLocalConversation() {
+    if (!agentSessions.selectSession(null)) return
+    setFocusedAgentId(null)
+    setDelegateContext({ kind: "conversation", label: "Local model", provider: "Local", role: "Thinker", assignment: "Conversation" })
+    openLine("", "agent")
   }
 
   function handleCouncilAction(action: CouncilAdvisoryAction) {
@@ -1214,8 +1225,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           }
           setFocusedAgentId(agent.id)
           if (agent.kind === "durable-session") {
-            setDelegateContext({ kind: "agent", label: `${agent.role} · ${agent.providerLabel}`, provider: agent.providerLabel as AgentProvider, role: agent.role, assignment: agent.assignment })
-            openLine("Redirect: ", "agent")
+            const local = agent.providerLabel === "Local"
+            setDelegateContext(local
+              ? { kind: "conversation", label: "Local model", provider: "Local", role: "Thinker", assignment: "Conversation" }
+              : { kind: "agent", label: `${agent.role} · ${agent.providerLabel}`, provider: agent.providerLabel as AgentProvider, role: agent.role, assignment: agent.assignment })
+            openLine(local ? "" : "Redirect: ", "agent")
             setLineReply(agent.lastResult ?? null)
           }
         }} />
@@ -1270,6 +1284,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           <button type="button" className={spatial.overlayButton} disabled={judgmentBusy || storage !== "server"} onClick={() => void refreshWilliamJudgment()}>{judgmentBusy ? "Reasoning" : "Think again"}</button>
           <button type="button" className={spatial.overlayButton} onClick={() => openLine(`Override William's recommendation for ${selectedLabel}: `)}>Override</button>
           <button type="button" className={spatial.overlayButton} onClick={() => void summonCouncil(`Challenge William's recommendation: ${williamJudgment}`)}>Ask Council</button>
+          <button type="button" className={spatial.overlayButton} onClick={openLocalConversation}>Ask Local</button>
           <button type="button" className={spatial.overlayButton} onClick={() => openLine()}>The Line · Ctrl+K</button>
         </div>
         <span className={`${spatial.persistence} ${persistenceError ? spatial.persistenceError : ""}`} title={persistenceError ?? undefined}>{savedLabel}</span>
@@ -1279,11 +1294,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <div className={spatial.lineBackdrop} onPointerDown={(event) => { if (event.target === event.currentTarget && !change.running && !review.running) setLineOpen(false) }}>
           <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? "Change" : lineMode === "review" ? "Review" : "The Line"}>
             <Command size={16} aria-hidden />
-            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
+            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
             <div className={spatial.lineControls}>
-              {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider"><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Codex" } : current)}>Codex</button><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Claude" } : current)}>Claude</button><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Local" } : current)}>Local</button></div> : null}
-              <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
-              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
+              {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider"><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Codex" } : current)}>Codex</button><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
+              <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
+              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
               {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
             </div>
           </form>

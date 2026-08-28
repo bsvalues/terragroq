@@ -580,11 +580,18 @@ describe("Experience V2 real agent sessions", () => {
     render(<WorkspaceShell />)
     await screen.findByLabelText("Source content")
 
+    fireEvent.click(screen.getByRole("button", { name: "Ask Local" }))
+    expect(screen.queryByRole("group", { name: "Choose agent provider" })).toBeNull()
+    expect(screen.getByText("Local conversation · no workspace mutation")).toBeTruthy()
+    expect(screen.getByRole("textbox", { name: "The Line" }).getAttribute("placeholder")).toBe("Ask the Local model")
+    expect(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Ask Local" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+
     fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
     expect(screen.getByRole("group", { name: "Choose agent provider" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Codex" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Claude" })).toBeTruthy()
-    expect(screen.getByRole("button", { name: "Local" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Local" })).toBeNull()
     const line = screen.getByRole("form", { name: "The Line" })
     expect((within(line).getByRole("button", { name: "Delegate" }) as HTMLButtonElement).disabled).toBe(true)
 
@@ -1200,12 +1207,12 @@ describe("Experience V2 real agent sessions", () => {
     const first = render(<Harness />)
 
     await act(async () => {
-      await expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Explain the selected design", prompt: "First local question" })
+      await expose!.runAgentTurn({ provider: "Local", role: "Builder", assignment: "Change src/app.ts", prompt: "First local question" })
     })
-    expect(expose!.durableSession).toMatchObject({ provider: "Local", sessionId })
+    expect(expose!.durableSession).toMatchObject({ provider: "Local", sessionId, role: "Thinker", assignment: "Conversation" })
     expect(JSON.parse(String(window.localStorage.getItem(key)))).toMatchObject({
       selectedSessionKey: `Local:${sessionId}`,
-      sessions: [{ provider: "Local", sessionId, completedTurns: [{ ownerPrompt: "First local question", finalResult: "First local answer" }] }],
+      sessions: [{ provider: "Local", sessionId, role: "Thinker", assignment: "Conversation", completedTurns: [{ ownerPrompt: "First local question", finalResult: "First local answer" }] }],
     })
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       prompt: "First local question", provider: "local", sessionId: null, resume: false, completedTurns: [],
@@ -1217,7 +1224,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Local:${sessionId}`, truth: "resume-unverified" })])
 
     await act(async () => {
-      await expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Explain the selected design", prompt: "Second local question" })
+      await expose!.runAgentTurn({ provider: "Local", role: "Builder", assignment: "Change src/app.ts", prompt: "Second local question" })
     })
 
     expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({
@@ -1235,7 +1242,7 @@ describe("Experience V2 real agent sessions", () => {
       selectedSessionKey: `Local:${sharedId}`,
       sessions: [
         { schemaVersion: 1, sessionId: sharedId, role: "Builder", provider: "Claude", assignment: "Cloud conversation", updatedAt: "2026-08-28T10:00:00.000Z", completedTurns: [] },
-        { schemaVersion: 1, sessionId: sharedId, role: "Thinker", provider: "Local", assignment: "Local conversation", updatedAt: "2026-08-28T10:01:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: sharedId, role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-28T10:01:00.000Z", completedTurns: [] },
       ],
     }))
 
@@ -1244,6 +1251,32 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(expose!.savedSessions).toHaveLength(2))
     expect(expose!.sessions.map((session) => session.id)).toEqual([`Claude:${sharedId}`, `Local:${sharedId}`])
     expect(expose!.selectedSessionKey).toBe(`Local:${sharedId}`)
+  })
+
+  it.each([
+    "LOCAL_STREAM_MALFORMED",
+    "LOCAL_STREAM_RESULT_REQUIRED",
+    "LOCAL_MODEL_ERROR",
+    "LOCAL_STREAM_TERMINAL_REQUIRED",
+    "LOCAL_STREAM_DUPLICATE_TERMINAL",
+    "LOCAL_STREAM_ROLE_INVALID",
+    "LOCAL_STREAM_FRAME_INVALID",
+    "LOCAL_STREAM_POST_TERMINAL",
+    "LOCAL_STREAM_RESULT_TOO_LARGE",
+    "CANCELLED",
+  ])("does not promote Local failure truth %s into a durable conversation", async (reason) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId: "723e4567-e89b-42d3-a456-426614174000", provider: "Local", resumed: false, continuity: "new" },
+      { type: "done", code: null, reason },
+    )))
+    render(<Harness />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Conversation", prompt: "Think locally." })
+    })).rejects.toThrow(`AGENT_TURN_FAILED:${reason}`)
+
+    expect(expose!.sessions).toEqual([])
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
   })
 
   it("shows Stop for a Local turn and aborts without persisting a partial transcript", async () => {

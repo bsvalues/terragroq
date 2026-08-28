@@ -145,7 +145,8 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
   const completedTurns = candidate.completedTurns === undefined ? [] : parseCompletedTurns(candidate.completedTurns)
   if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)
-    || !role || !assignment || !updatedAt || (candidate.reviewPath !== undefined && !reviewPath) || !completedTurns) return null
+    || !role || !assignment || !updatedAt || (candidate.reviewPath !== undefined && !reviewPath) || !completedTurns
+    || candidate.provider === "Local" && (role !== "Thinker" || assignment !== "Conversation" || reviewPath !== undefined)) return null
   return {
     schemaVersion: 1,
     sessionId: candidate.sessionId,
@@ -281,6 +282,7 @@ function projectSessions(
   }
   durable.forEach((descriptor) => {
     const descriptorKey = sessionKey(descriptor.provider, descriptor.sessionId)
+    const isLocal = descriptor.provider === "Local"
     const isVerified = verified.some((session) => sessionKey(session.provider, session.sessionId) === descriptorKey)
     const isWorking = activeSessionId === descriptorKey && isVerified
     sessions.push({
@@ -288,8 +290,10 @@ function projectSessions(
       role: descriptor.role,
       providerLabel: descriptor.provider,
       assignment: descriptor.assignment,
-      status: isWorking ? "working" : isVerified ? "ready" : "resume unverified",
-      evidence: isWorking ? "live agent stream" : isVerified ? "resumable session" : "saved transcript · server verification required",
+      status: isWorking ? isLocal ? "thinking" : "working" : isVerified ? "ready" : "resume unverified",
+      evidence: isWorking ? isLocal ? "live model response" : "live agent stream"
+        : isVerified ? isLocal ? "resumable conversation" : "resumable session"
+          : isLocal ? "saved conversation · replay verification required" : "saved transcript · server verification required",
       truth: isVerified ? "live" : "resume-unverified",
       kind: "durable-session",
       mode: descriptor.reviewPath ? "review" : "delegate",
@@ -424,8 +428,8 @@ export function useExperienceAgentSessions({
     if (input.provider !== "Codex" && input.provider !== "Claude" && input.provider !== "Local") {
       throw new Error("AGENT_PROVIDER_INVALID")
     }
-    const role = boundedText(input.role, 80)
-    const assignment = boundedText(input.assignment, 500)
+    const role = input.provider === "Local" ? "Thinker" : boundedText(input.role, 80)
+    const assignment = input.provider === "Local" ? "Conversation" : boundedText(input.assignment, 500)
     const prompt = boundedText(input.prompt, 20_000)
     const mode = input.mode ?? "delegate"
     const reviewPath = boundedText(input.path, 1_000)

@@ -52,6 +52,19 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(source).not.toContain("reference session")
   })
 
+  it("keeps Local model use conversation-only and outside Delegate, Change, and Review", () => {
+    const source = shell()
+    expect(source).toContain("Ask Local")
+    expect(source).toContain('role: "Thinker"')
+    expect(source).toContain('assignment: "Conversation"')
+    expect(source).toContain("Local conversation · no workspace mutation")
+    expect(source).toContain('delegateContext?.provider === "Local" ? "Ask the Local model"')
+    const providerChooser = source.slice(source.indexOf('aria-label="Choose agent provider"'), source.indexOf("</div> : null", source.indexOf('aria-label="Choose agent provider"')))
+    expect(providerChooser).toContain("Codex")
+    expect(providerChooser).toContain("Claude")
+    expect(providerChooser).not.toContain('provider: "Local"')
+  })
+
   it("keeps William's judgment visible and actionable", () => {
     const source = shell()
     expect(source).toContain("williamJudgment")

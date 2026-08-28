@@ -38,6 +38,10 @@ function ollama(...chunks: readonly Record<string, unknown>[]) {
   })
 }
 
+function ollamaRaw(text: string) {
+  return new Response(text, { headers: { "content-type": "application/x-ndjson" } })
+}
+
 async function events(response: Response) {
   return (await response.text()).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
 }
@@ -148,5 +152,59 @@ describe("durable Local model conversation route", () => {
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toEqual({ error: "PROMPT_TOO_LONG" })
     expect(upstream).not.toHaveBeenCalled()
+  })
+
+  it("processes a valid unterminated final Ollama frame instead of dropping the tail", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ollamaRaw(
+      `${JSON.stringify({ message: { role: "assistant", content: "Tail result" }, done: true })}`,
+    )))
+
+    const output = await events(await POST(request({ provider: "local", prompt: "Explain." })))
+
+    expect(output).toContainEqual({ type: "result", text: "Tail result" })
+    expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
+  })
+
+  it.each([
+    ["malformed JSON after text", `${JSON.stringify({ message: { content: "partial" }, done: false })}\nnot-json\n`, "LOCAL_STREAM_MALFORMED"],
+    ["empty terminal", `${JSON.stringify({ done: true })}\n`, "LOCAL_STREAM_RESULT_REQUIRED"],
+    ["top-level model error", `${JSON.stringify({ error: "model failed" })}\n`, "LOCAL_MODEL_ERROR"],
+    ["missing terminal", `${JSON.stringify({ message: { content: "partial" }, done: false })}\n`, "LOCAL_STREAM_TERMINAL_REQUIRED"],
+    ["duplicate terminal", `${JSON.stringify({ message: { content: "answer" }, done: true })}\n${JSON.stringify({ done: true })}\n`, "LOCAL_STREAM_DUPLICATE_TERMINAL"],
+    ["unexpected message role", `${JSON.stringify({ message: { role: "user", content: "wrong" }, done: true })}\n`, "LOCAL_STREAM_ROLE_INVALID"],
+    ["unexpected frame", `${JSON.stringify({ status: "ok" })}\n`, "LOCAL_STREAM_FRAME_INVALID"],
+    ["post-terminal data", `${JSON.stringify({ message: { content: "answer" }, done: true })}\n${JSON.stringify({ message: { content: "late" }, done: false })}\n`, "LOCAL_STREAM_POST_TERMINAL"],
+    ["oversized assistant result", `${JSON.stringify({ message: { content: "x".repeat(200_001) }, done: true })}\n`, "LOCAL_STREAM_RESULT_TOO_LARGE"],
+  ])("fails closed on %s with one shared stream and receipt truth", async (_case, raw, reason) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ollamaRaw(raw)))
+
+    const output = await events(await POST(request({ provider: "local", prompt: "Explain." })))
+
+    expect(output.filter((event) => event.type === "done")).toEqual([{ type: "done", code: null, reason }])
+    expect(output.some((event) => event.type === "result")).toBe(false)
+    expect(seams.recordLoomEnd).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "agent",
+      outcome: expect.objectContaining({ provider: "local", reason }),
+    }))
+  })
+
+  it("settles an aborted Local stream as CANCELLED in both the route and receipt", async () => {
+    const abort = new AbortController()
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ message: { content: "partial" }, done: false })}\n`))
+        init?.signal?.addEventListener("abort", () => controller.close(), { once: true })
+      },
+    })))))
+    const response = await POST(request({ provider: "local", prompt: "Explain." }, abort.signal))
+
+    abort.abort()
+    const output = await events(response)
+
+    expect(output.at(-1)).toEqual({ type: "done", code: null, reason: "CANCELLED" })
+    expect(output.some((event) => event.type === "result")).toBe(false)
+    expect(seams.recordLoomEnd).toHaveBeenCalledWith(expect.objectContaining({
+      outcome: expect.objectContaining({ provider: "local", reason: "CANCELLED" }),
+    }))
   })
 })
