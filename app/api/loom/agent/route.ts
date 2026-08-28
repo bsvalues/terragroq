@@ -1,10 +1,13 @@
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 
+import fs from "node:fs/promises"
+
 import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/providers"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { assertThreadResume, loomThreadOwner } from "@/lib/loom/threads"
+import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
 export const dynamic = "force-dynamic"
@@ -31,18 +34,61 @@ export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  let body: { prompt?: unknown; sessionId?: unknown; resume?: unknown }
+  let body: {
+    prompt?: unknown
+    sessionId?: unknown
+    resume?: unknown
+    mode?: unknown
+    path?: unknown
+    focus?: unknown
+    provider?: unknown
+    model?: unknown
+  }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
 
-  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
-  if (!prompt) return Response.json({ error: "PROMPT_REQUIRED" }, { status: 400 })
+  const reviewMode = body.mode === "review"
+  let reviewPath: string | null = null
+  let reviewFocus: string | null = null
+  let prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
+
+  if (reviewMode) {
+    const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
+    if (!resolved.ok || !resolved.relative || resolved.relative === ".") {
+      return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
+    }
+    if ([...resolved.relative].some((character) => {
+      const code = character.charCodeAt(0)
+      return code <= 31 || code === 127
+    })) {
+      return Response.json({ error: "PATH_INVALID" }, { status: 400 })
+    }
+    if (body.focus !== undefined && typeof body.focus !== "string") {
+      return Response.json({ error: "FOCUS_INVALID" }, { status: 400 })
+    }
+    const focus = typeof body.focus === "string" ? body.focus.trim() : ""
+    if (focus.length > 2_000) {
+      return Response.json({ error: "FOCUS_TOO_LONG" }, { status: 400 })
+    }
+    reviewPath = resolved.relative
+    reviewFocus = focus || null
+    prompt = [
+      `Review the selected workspace file: ${reviewPath}`,
+      ...(reviewFocus ? [`Focus: ${reviewFocus}`] : []),
+      "Perform a mechanically read-only code review. Inspect this file and only the relevant read-only context.",
+      "Report actionable findings first, ordered by severity, with exact file and line references.",
+      "Identify correctness, security, reliability, and regression risks. If there are no findings, say so explicitly.",
+      "Do not edit files, run commands, or mutate the workspace.",
+    ].join("\n\n")
+  } else if (!prompt) {
+    return Response.json({ error: "PROMPT_REQUIRED" }, { status: 400 })
+  }
 
   // Local is the default and the fallback; going off the machine has to be asked for.
-  const provider = resolveProvider((body as { provider?: unknown }).provider)
+  const provider = resolveProvider(reviewMode ? "cloud" : body.provider)
   if (provider.id === "local") {
     const model = typeof (body as { model?: unknown }).model === "string" ? (body as { model: string }).model : LOCAL_MODEL
     return streamLocal(prompt, request.signal, model, session.user.id)
@@ -50,6 +96,9 @@ export async function POST(request: Request) {
 
   // The id is validated rather than trusted: it reaches a command line, and only this shape can.
   const requested = typeof body.sessionId === "string" && SESSION_ID.test(body.sessionId) ? body.sessionId : null
+  if (reviewMode && body.resume === true && requested === null) {
+    return Response.json({ error: "SESSION_ID_REQUIRED" }, { status: 400 })
+  }
   const resuming = requested !== null && body.resume === true
   const sessionId = requested ?? randomUUID()
 
@@ -64,21 +113,23 @@ export async function POST(request: Request) {
     return Response.json({ error: resume.failure, detail: resume.detail }, { status: 403, headers: { "cache-control": "no-store" } })
   }
 
-  // This path spawns the CLI with acceptEdits against the real checkout, which makes it the most
-  // powerful mutation surface in the application -- strictly broader than /api/loom/edit, which has
-  // been gated since #831. Leaving it open meant a lane refused a one-line edit could ask the agent
-  // to make the same change, so the gate was decoration. The local path above is deliberately not
-  // gated: it only produces text, and gating conversation pushes operators back to working blind.
-  const context = await requireWorkContext()
-  if (!context.ok) return workContextRefusal(context)
+  // Generic cloud turns spawn the CLI with acceptEdits against the real checkout, which makes them
+  // the most powerful mutation surface in the application -- strictly broader than /api/loom/edit.
+  // Selected-file review is separately constrained to a read-only tool set below, so requiring write
+  // authority for it would make the receipt lie about what the turn can do. The local path above is
+  // also deliberately ungated because it only produces text.
+  if (!reviewMode) {
+    const context = await requireWorkContext()
+    if (!context.ok) return workContextRefusal(context)
+  }
 
   const args = [
     "--print",
     "--output-format", "stream-json",
     "--verbose",
-    // Edits land in the working tree where the operator can see and revert them; this is a
-    // development workspace under version control, not a production host.
-    "--permission-mode", "acceptEdits",
+    // Review is mechanically read-only. Generic agent turns retain their existing builder tools.
+    "--permission-mode", reviewMode ? "plan" : "acceptEdits",
+    ...(reviewMode ? ["--tools", "Read,Grep,Glob"] : []),
     resuming ? "--resume" : "--session-id", sessionId,
     prompt,
   ]
@@ -118,7 +169,13 @@ export async function POST(request: Request) {
           userId: session.user.id,
           kind: "agent",
           subject: sessionId,
-          outcome: { provider: provider.id, external: provider.external, code: event.code ?? null, reason: event.reason ?? null },
+          outcome: {
+            provider: provider.id,
+            external: provider.external,
+            ...(reviewMode ? { mode: "review", path: reviewPath } : {}),
+            code: event.code ?? null,
+            reason: event.reason ?? null,
+          },
         })
         send(event)
         try { controller.close() } catch { /* already closed */ }
@@ -131,7 +188,13 @@ export async function POST(request: Request) {
         userId: session.user.id,
         kind: "agent",
         subject: sessionId,
-        metadata: { provider: provider.id, external: provider.external, metered: provider.metered, resumed: resuming },
+        metadata: {
+          provider: provider.id,
+          external: provider.external,
+          metered: provider.metered,
+          resumed: resuming,
+          ...(reviewMode ? { mode: "review", path: reviewPath, focus: reviewFocus } : {}),
+        },
       })
 
       const timer = setTimeout(() => {
