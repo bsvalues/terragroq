@@ -181,6 +181,38 @@ describe("Experience V2 real agent sessions", () => {
     expect(expose!.durableSession?.provider).toBe("Codex")
   })
 
+  it("accepts and restores the exact Codex route thread-id contract", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sessionId = "codex-thread-1"
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "result", text: "Started the real Codex thread." },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true },
+        { type: "result", text: "Resumed the real Codex thread." },
+        { type: "done", code: 0, reason: null },
+      ))
+    vi.stubGlobal("fetch", fetcher)
+    const first = render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Start." })
+    })
+    expect(JSON.parse(String(window.localStorage.getItem(key)))).toMatchObject({ sessionId, provider: "Codex" })
+    first.unmount()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedDescriptor?.sessionId).toBe(sessionId))
+
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Continue." })
+    })
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ sessionId, resume: true })
+    expect(expose!.durableSession?.sessionId).toBe(sessionId)
+  })
+
   it("starts fresh rather than sending a Claude descriptor to Codex", async () => {
     window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
       schemaVersion: 1,
@@ -328,6 +360,79 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(expose!.sessions).toEqual([]))
     expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
     expect(window.localStorage.getItem("williamos:agent-session:owner-2:other-project")).toBeNull()
+  })
+
+  it("prevents an old stopped turn from clearing or overwriting a newer provider turn", async () => {
+    let settleOldRead!: (value: ReadableStreamReadResult<Uint8Array>) => void
+    const oldReader = {
+      read: vi.fn(() => new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => { settleOldRead = resolve })),
+      cancel: vi.fn().mockResolvedValue(undefined),
+    }
+    const encoder = new TextEncoder()
+    let claudeStream!: ReadableStreamDefaultController<Uint8Array>
+    const claudeResponse = new Response(new ReadableStream<Uint8Array>({ start(controller) { claudeStream = controller } }))
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce({ ok: true, body: { getReader: () => oldReader } })
+      .mockResolvedValueOnce(claudeResponse)
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+
+    let oldTurn!: Promise<unknown>
+    act(() => { oldTurn = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "old.ts", prompt: "Old." }) })
+    fireEvent.click(await screen.findByRole("button", { name: "Stop Codex turn" }))
+    let newTurn!: Promise<unknown>
+    act(() => { newTurn = expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "new.ts", prompt: "New." }) })
+    await screen.findByRole("button", { name: "Stop Claude turn" })
+
+    settleOldRead({ done: true, value: undefined })
+    await expect(oldTurn).rejects.toMatchObject({ name: "AbortError" })
+    expect(expose!.activeProvider).toBe("Claude")
+    expect(screen.getByRole("button", { name: "Stop Claude turn" })).toBeTruthy()
+
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    for (const frame of [
+      { type: "session", sessionId, resumed: false },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "New provider won." } },
+      { type: "done", code: 0, reason: null },
+    ]) claudeStream.enqueue(encoder.encode(`${JSON.stringify(frame)}\n`))
+    claudeStream.close()
+    await act(async () => { await newTurn })
+
+    expect(expose!.durableSession).toMatchObject({ provider: "Claude", assignment: "new.ts" })
+    expect(JSON.parse(String(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")))).toMatchObject({ provider: "Claude", assignment: "new.ts" })
+  })
+
+  it("allows bounded Claude diagnostics after Delegate result without changing success truth", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, resumed: false },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Canonical delegate result" } },
+      { type: "stderr", text: "Claude transport cleanup diagnostic" },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+
+    await act(async () => {
+      await expose!.runClaudeTurn({ role: "Builder", assignment: "src/app.ts", prompt: "Work." })
+    })
+    expect(expose!.durableSession).toMatchObject({ provider: "Claude", assignment: "src/app.ts" })
+  })
+
+  it("allows bounded Claude diagnostics after Review result without replacing its report", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, resumed: false },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Canonical review report" } },
+      { type: "stderr", text: "Claude transport cleanup diagnostic" },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+    let report = ""
+
+    await act(async () => {
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: (text) => { report = text } })
+    })
+    expect(report).toBe("Canonical review report")
   })
 
   it("shows a visible Stop control during a Claude turn and aborts its active request", async () => {
