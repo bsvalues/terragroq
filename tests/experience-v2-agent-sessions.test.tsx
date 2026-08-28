@@ -1235,6 +1235,28 @@ describe("Experience V2 real agent sessions", () => {
     expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Local:${sessionId}`, truth: "live", lastResult: "Second local answer" })])
   })
 
+  it("accepts bounded whitespace-only Local deltas while requiring a nonempty canonical result", async () => {
+    const sessionId = "733e4567-e89b-42d3-a456-426614174000"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" },
+      { type: "delta", text: " \n\t" },
+      { type: "delta", text: "Canonical answer" },
+      { type: "result", text: "Canonical answer" },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Conversation", prompt: "Think locally." })
+    })
+
+    expect(expose!.durableSession).toMatchObject({
+      provider: "Local",
+      sessionId,
+      completedTurns: [{ ownerPrompt: "Think locally.", finalResult: "Canonical answer", completedAt: expect.any(String) }],
+    })
+  })
+
   it("keeps Local and Claude sessions with the same provider-local UUID as separate durable objects", async () => {
     const sharedId = "523e4567-e89b-42d3-a456-426614174000"
     window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({

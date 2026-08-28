@@ -127,6 +127,11 @@ function boundedText(value: unknown, max: number): string | null {
   return text && text.length <= max && !text.includes("\0") ? text : null
 }
 
+function boundedFragment(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length <= max
+    && new TextEncoder().encode(value).byteLength <= max && !value.includes("\0")
+}
+
 function validSessionId(provider: AgentProvider, value: unknown): value is string {
   return typeof value === "string" && (provider === "Codex" ? CODEX_SESSION_ID : CLAUDE_SESSION_ID).test(value)
 }
@@ -602,7 +607,10 @@ export function useExperienceAgentSessions({
           return
         }
         if ((input.provider === "Codex" || input.provider === "Local") && event.type === "delta") {
-          if (!boundedText(event.text, 20_000) || canonicalResultSeen) malformed = true
+          const validDelta = input.provider === "Local"
+            ? boundedFragment(event.text, 20_000)
+            : Boolean(boundedText(event.text, 20_000))
+          if (!validDelta || canonicalResultSeen) malformed = true
           else if (isCurrent()) input.onEvent?.(event)
           return
         }

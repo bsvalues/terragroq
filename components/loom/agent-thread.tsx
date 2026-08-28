@@ -10,6 +10,35 @@ type Entry =
   | { kind: "tool"; name: string; detail: string }
   | { kind: "note"; text: string }
 
+type LocalCompletedTurn = Readonly<{
+  ownerPrompt: string
+  finalResult: string
+  completedAt: string
+}>
+
+const LOCAL_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const MAX_LOCAL_COMPLETED_TURNS = 20
+const MAX_LOCAL_REPLAY_BYTES = 262_144
+
+function boundedLocalText(value: unknown, max: number): string | null {
+  if (typeof value !== "string") return null
+  const text = value.trim()
+  return text && text.length <= max && new TextEncoder().encode(text).byteLength <= max && !text.includes("\0") ? text : null
+}
+
+function boundedLocalFragment(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length <= max
+    && new TextEncoder().encode(value).byteLength <= max && !value.includes("\0")
+}
+
+function appendBoundedLocalTurn(turns: readonly LocalCompletedTurn[], turn: LocalCompletedTurn): readonly LocalCompletedTurn[] {
+  const bounded = [...turns, turn].slice(-MAX_LOCAL_COMPLETED_TURNS)
+  while (bounded.length > 0 && new TextEncoder().encode(JSON.stringify(bounded)).byteLength > MAX_LOCAL_REPLAY_BYTES) {
+    bounded.shift()
+  }
+  return bounded
+}
+
 /**
  * The thread: say what you want, watch the agent do it against the real checkout.
  *
@@ -27,6 +56,7 @@ export function AgentThread() {
   const [model, setModel] = useState<string>("")
   const controller = useRef<AbortController | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
+  const localCompletedTurns = useRef<readonly LocalCompletedTurn[]>([])
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" })
@@ -89,12 +119,22 @@ export function AgentThread() {
 
     const abort = new AbortController()
     controller.current = abort
+    const selectedProvider = provider
+    const requestedSessionId = sessionId
+    const replayTurns = localCompletedTurns.current
     try {
       const response = await fetch("/api/loom/agent", {
         method: "POST",
         headers: { "content-type": "application/json" },
         // Continuing an existing thread keeps the agent's memory of what it already did here.
-        body: JSON.stringify({ prompt: text, sessionId, resume: sessionId !== null, provider, model }),
+        body: JSON.stringify({
+          prompt: text,
+          sessionId: requestedSessionId,
+          resume: requestedSessionId !== null,
+          provider: selectedProvider,
+          model,
+          ...(selectedProvider === "local" && requestedSessionId !== null ? { completedTurns: replayTurns } : {}),
+        }),
         signal: abort.signal,
         cache: "no-store",
       })
@@ -106,32 +146,95 @@ export function AgentThread() {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split("\n")
-        buffer = lines.pop() ?? ""
-        for (const line of lines) {
-          if (!line.trim()) continue
-          let payload: Record<string, unknown>
-          try { payload = JSON.parse(line) } catch { continue }
-          if (payload.type === "session" && typeof payload.sessionId === "string") setSessionId(payload.sessionId)
-          else if (payload.type === "delta" && typeof payload.text === "string") {
-            // The local model streams token by token; append to the answer already forming rather
-            // than starting a new bubble for every fragment.
+      let localMalformed = false
+      let localSessionSeen = false
+      let localResult: string | null = null
+      let localTerminal: { code: number | null; reason: string | null } | null = null
+      const acceptLine = (line: string) => {
+        if (!line.trim()) return
+        let payload: Record<string, unknown>
+        try { payload = JSON.parse(line) } catch {
+          if (selectedProvider === "local") localMalformed = true
+          return
+        }
+        if (selectedProvider === "local") {
+          if (payload.type === "session") {
+            if (localSessionSeen || typeof payload.sessionId !== "string" || !LOCAL_SESSION_ID.test(payload.sessionId)
+              || payload.provider !== "Local" || typeof payload.resumed !== "boolean"
+              || payload.resumed !== (requestedSessionId !== null)) {
+              localMalformed = true
+              return
+            }
+            localSessionSeen = true
+            setSessionId(payload.sessionId)
+            return
+          }
+          if (!localSessionSeen) {
+            localMalformed = true
+            return
+          }
+          if (payload.type === "delta") {
+            if (!boundedLocalFragment(payload.text, 20_000) || localResult !== null || localTerminal !== null) {
+              localMalformed = true
+              return
+            }
             const piece = payload.text
             setEntries((current) => {
               const last = current[current.length - 1]
               if (last?.kind === "agent") return [...current.slice(0, -1), { kind: "agent", text: last.text + piece }]
               return [...current, { kind: "agent", text: piece }]
             })
+            return
           }
-          else if (payload.type === "event") absorb(payload.event as Record<string, unknown>)
-          else if (payload.type === "stderr" && typeof payload.text === "string") push({ kind: "note", text: payload.text })
-          else if (payload.type === "done") {
-            if (payload.reason) push({ kind: "note", text: `— ${String(payload.reason)} —` })
+          if (payload.type === "result") {
+            const result = boundedLocalText(payload.text, 200_000)
+            if (!result || localResult !== null || localTerminal !== null) localMalformed = true
+            else localResult = result
+            return
           }
+          if (payload.type === "done") {
+            const reason = payload.reason === null ? null : boundedLocalText(payload.reason, 500)
+            const code = payload.code === null || typeof payload.code === "number" && Number.isInteger(payload.code)
+              ? payload.code : undefined
+            if (localTerminal !== null || code === undefined || payload.reason !== null && !reason) localMalformed = true
+            else localTerminal = { code, reason }
+            return
+          }
+          localMalformed = true
+          return
+        }
+        if (payload.type === "session" && typeof payload.sessionId === "string") setSessionId(payload.sessionId)
+        else if (payload.type === "delta" && typeof payload.text === "string") {
+          const piece = payload.text
+          setEntries((current) => {
+            const last = current[current.length - 1]
+            if (last?.kind === "agent") return [...current.slice(0, -1), { kind: "agent", text: last.text + piece }]
+            return [...current, { kind: "agent", text: piece }]
+          })
+        }
+        else if (payload.type === "event") absorb(payload.event as Record<string, unknown>)
+        else if (payload.type === "stderr" && typeof payload.text === "string") push({ kind: "note", text: payload.text })
+        else if (payload.type === "done" && payload.reason) push({ kind: "note", text: `— ${String(payload.reason)} —` })
+      }
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+        lines.forEach(acceptLine)
+      }
+      buffer += decoder.decode()
+      acceptLine(buffer)
+      if (selectedProvider === "local") {
+        const settled = localTerminal as { code: number | null; reason: string | null } | null
+        if (settled?.reason) push({ kind: "note", text: `— ${settled.reason} —` })
+        const ownerPrompt = boundedLocalText(text, 20_000)
+        if (!abort.signal.aborted && !localMalformed && localSessionSeen && ownerPrompt && localResult
+          && settled?.code === 0 && settled.reason === null) {
+          const priorTime = replayTurns.length > 0 ? Date.parse(replayTurns[replayTurns.length - 1].completedAt) : Number.NEGATIVE_INFINITY
+          const completedAt = new Date(Math.max(Date.now(), priorTime + 1)).toISOString()
+          localCompletedTurns.current = appendBoundedLocalTurn(replayTurns, { ownerPrompt, finalResult: localResult, completedAt })
         }
       }
     } catch (error) {
