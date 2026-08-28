@@ -25,7 +25,10 @@ export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0, refr
   const diffController = useRef<AbortController | null>(null)
   const completedRefresh = useRef<Readonly<{ key: number; path: string | null }>>({ key: refreshKey, path: null })
   const governedRefresh = useRef<Readonly<{ key: number; path: string }> | null>(null)
+  const refreshSettled = useRef(onRefreshSettled)
   const output = useRef<HTMLPreElement>(null)
+
+  useEffect(() => { refreshSettled.current = onRefreshSettled }, [onRefreshSettled])
 
   const loadDiff = useCallback(async (path = selectedPath): Promise<"refreshed" | "failed" | "aborted"> => {
     diffController.current?.abort()
@@ -58,27 +61,32 @@ export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0, refr
   useEffect(() => {
     if (kind !== "diff" || (refreshKey === completedRefresh.current.key && refreshPath === completedRefresh.current.path)) return
     if (refreshKey === completedRefresh.current.key && !refreshPath) return
-    completedRefresh.current = { key: refreshKey, path: refreshPath }
     if (!refreshPath) {
       void loadDiff()
       return
     }
+    if (governedRefresh.current?.key === refreshKey && governedRefresh.current.path === refreshPath) return
     governedRefresh.current = { key: refreshKey, path: refreshPath }
     void loadDiff(refreshPath).then((result) => {
       if (result === "aborted" || governedRefresh.current?.key !== refreshKey || governedRefresh.current.path !== refreshPath) return
       governedRefresh.current = null
-      onRefreshSettled?.(refreshPath, refreshKey, result)
+      completedRefresh.current = { key: refreshKey, path: refreshPath }
+      refreshSettled.current?.(refreshPath, refreshKey, result)
     })
-  }, [kind, loadDiff, onRefreshSettled, refreshKey, refreshPath])
+    return () => {
+      if (governedRefresh.current?.key === refreshKey && governedRefresh.current.path === refreshPath) governedRefresh.current = null
+    }
+  }, [kind, loadDiff, refreshKey, refreshPath])
 
   const refreshDiff = useCallback(() => {
     const replacement = governedRefresh.current
     void loadDiff(replacement?.path).then((result) => {
       if (!replacement || result === "aborted" || governedRefresh.current?.key !== replacement.key || governedRefresh.current.path !== replacement.path) return
       governedRefresh.current = null
-      onRefreshSettled?.(replacement.path, replacement.key, result)
+      completedRefresh.current = replacement
+      refreshSettled.current?.(replacement.path, replacement.key, result)
     })
-  }, [loadDiff, onRefreshSettled])
+  }, [loadDiff])
 
   useEffect(() => {
     if (kind !== "terminal") return

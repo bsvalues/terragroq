@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { StrictMode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
@@ -95,6 +96,38 @@ async function openChange(task = "Use the verified helper.") {
 }
 
 describe("Experience V2 selected-file Change", () => {
+  it("settles a successful Change when initially minimized Changes mounts under StrictMode", async () => {
+    let fileReads = 0
+    let diffReads = 0
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        fileReads += 1
+        return Promise.resolve(selectedFile(fileReads === 1 ? "export const before = true\n" : "export const after = true\n"))
+      }
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
+        diffReads += 1
+        if (diffReads < 3) {
+          return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
+        }
+        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
+      }
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<StrictMode><WorkspaceShell /></StrictMode>)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+
+    expect(await screen.findByText("Change applied; source and diff refreshed.")).toBeTruthy()
+    expect(screen.getByText("+after", { exact: false })).toBeTruthy()
+    expect(diffReads).toBe(4)
+  })
+
   it("sends the selected file and owner instruction to the structured edit route, then reloads source and actual diff", async () => {
     let fileReads = 0
     let diffReads = 0
