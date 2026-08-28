@@ -66,17 +66,7 @@ const ACTIONS: readonly Readonly<{ id: CouncilAdvisoryAction; label: string; pri
   { id: "approve", label: "Approve recommendation", primary: true },
 ]
 
-export function BrainCouncilSurface({
-  session,
-  onDismiss,
-  onAdvisoryAction,
-  historical = false,
-}: BrainCouncilSurfaceProps) {
-  const dialogRef = useRef<HTMLElement>(null)
-  const [activeMemberId, setActiveMemberId] = useState(session.members[0]?.id ?? "")
-  const activeMember = session.members.find((member) => member.id === activeMemberId) ?? session.members[0]
-  const confidence = Math.max(0, Math.min(100, Math.round(session.confidence)))
-
+function useCouncilDialogFocus(dialogRef: React.RefObject<HTMLElement | null>, onDismiss: () => void) {
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const dialog = dialogRef.current
@@ -97,7 +87,21 @@ export function BrainCouncilSurface({
     }
     window.addEventListener("keydown", onKeyDown)
     return () => { window.removeEventListener("keydown", onKeyDown); previous?.focus() }
-  }, [onDismiss])
+  }, [dialogRef, onDismiss])
+}
+
+export function BrainCouncilSurface({
+  session,
+  onDismiss,
+  onAdvisoryAction,
+  historical = false,
+}: BrainCouncilSurfaceProps) {
+  const dialogRef = useRef<HTMLElement>(null)
+  const [activeMemberId, setActiveMemberId] = useState(session.members[0]?.id ?? "")
+  const activeMember = session.members.find((member) => member.id === activeMemberId) ?? session.members[0]
+  const confidence = Math.max(0, Math.min(100, Math.round(session.confidence)))
+
+  useCouncilDialogFocus(dialogRef, onDismiss)
 
   return (
     <section ref={dialogRef} className={styles.surface} role="dialog" aria-modal="true" aria-label="Brain Council advisory session" data-session-id={session.id}>
@@ -217,8 +221,10 @@ export function BrainCouncilSurface({
 }
 
 export function CouncilHistoryBrowser({ history, onSelect, onNew, onDismiss, loading = false, error = null }: CouncilHistoryBrowserProps) {
+  const dialogRef = useRef<HTMLElement>(null)
+  useCouncilDialogFocus(dialogRef, onDismiss)
   return (
-    <section className={`${styles.surface} ${styles.historySurface}`} role="dialog" aria-modal="true" aria-label="Brain Council history">
+    <section ref={dialogRef} className={`${styles.surface} ${styles.historySurface}`} role="dialog" aria-modal="true" aria-label="Brain Council history">
       <header className={styles.header}>
         <div><span className={styles.eyebrow}>Brain Council</span><h2>Saved advisory sessions</h2><p className={styles.contextDetail}>Inspect prior advice without reconvening or moving your current Space.</p></div>
         <div className={styles.headerActions}><button type="button" className={styles.primaryAction} disabled={loading} onClick={onNew}>New Council</button><button type="button" className={styles.dismiss} onClick={onDismiss} aria-label="Dismiss Brain Council"><X aria-hidden="true" size={17} /></button></div>
