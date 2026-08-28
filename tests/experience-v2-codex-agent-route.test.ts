@@ -178,7 +178,7 @@ describe("durable Codex delegate route", () => {
 
     expect(response.status).toBe(200)
     expect(seams.deriveCodexAssignment).toHaveBeenCalledWith({
-      userId: "owner-1", worldId: "world-1", projectRoot: expect.stringMatching(/experience-v2-codex-session$/),
+      userId: "owner-1", worldId: "world-1", projectRoot: process.cwd(),
     })
     expect(seams.connect).toHaveBeenCalledOnce()
     expect(seams.readAccount).toHaveBeenCalledOnce()

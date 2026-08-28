@@ -187,6 +187,9 @@ export async function inspectCodexIsolatedWorkspace(
   } catch {
     failure("CODEX_ISOLATION_VIOLATION", "the disposable worktree diff could not be inspected")
   }
+  if (status.length === 0) {
+    failure("CODEX_NO_CHANGE", "the provider completed without changing the assigned target")
+  }
   if (status.length !== 1
     || status[0].path !== isolated.selectedPath
     || !/^[ M]{2}$/.test(status[0].status)
