@@ -6,6 +6,8 @@ import { execFileSync, spawnSync } from "node:child_process"
 import { describe, expect, it } from "vitest"
 
 import {
+  BOOTSTRAP_CHECKPOINT_EXIT_CODES,
+  BOOTSTRAP_CHECKPOINT_MAP_VERSION,
   bindOwnershipOutcome,
   canonicalize,
   OBSERVATION,
@@ -47,7 +49,7 @@ function fixture() {
     collectionId: NONCE,
     startedAt: "2026-08-28T12:00:02.000Z",
     completedAt: "2026-08-28T12:00:03.000Z",
-    collector: { name: "diagnose-hermes-ollama-ownership.ps1", version: "2.0.0", sha256: H("1"), readOnly: true },
+    collector: { name: "diagnose-hermes-ollama-ownership.ps1", version: "2.1.0", sha256: H("1"), readOnly: true },
     launch: { nonce: NONCE, manifestSha256: stableDigest(launchManifest) },
     hostIdentity: HOST,
     authority: { elevated: true, persistentCredential: false, readOnly: true, hostMutationAuthorized: false, hostMutationObserved: false },
@@ -75,8 +77,9 @@ function failureShape(overrides: Record<string, unknown> = {}) {
 }
 
 function makeReceipt(launchManifest: ReturnType<typeof fixture>["launchManifest"], sourceBytes: Buffer | null, exitCode: number) {
+  const bootstrapCheckpoint = Object.entries(BOOTSTRAP_CHECKPOINT_EXIT_CODES).find(([, code]) => code === exitCode)?.[0] ?? null
   return {
-    schema: "hermes-ollama-ownership-launch-receipt/1",
+    schema: "hermes-ollama-ownership-launch-receipt/2",
     nonce: NONCE,
     manifestSha256: stableDigest(launchManifest),
     collectorSha256: H("1"),
@@ -91,7 +94,10 @@ function makeReceipt(launchManifest: ReturnType<typeof fixture>["launchManifest"
     uacStartInvocations: 1,
     sourcePresent: sourceBytes !== null,
     sourceSha256: sourceBytes === null ? null : sha256Bytes(sourceBytes),
-    disposition: sourceBytes === null ? "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL" : "COLLECTOR_SOURCE_PRESENT",
+    disposition: sourceBytes !== null ? "COLLECTOR_SOURCE_PRESENT" : bootstrapCheckpoint === null ? "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL_UNKNOWN" : "COLLECTOR_BOOTSTRAP_FAILED",
+    bootstrapMapVersion: sourceBytes === null ? BOOTSTRAP_CHECKPOINT_MAP_VERSION : null,
+    bootstrapCheckpoint: sourceBytes === null ? bootstrapCheckpoint : null,
+    bootstrapExitCode: sourceBytes === null ? exitCode : null,
     hostIdentity: HOST,
   }
 }
@@ -206,7 +212,7 @@ describe("#1050 ownership failure sealing", () => {
     const { launchManifest } = fixture()
     const launchReceipt = makeReceipt(launchManifest, null, 1)
     const bound = bindOwnershipOutcome({ source: null, sourceBytes: null, launchManifest, launchReceipt, now: new Date("2026-08-28T12:00:05.000Z") })
-    expect(bound).toMatchObject({ artifact: PROBE_FAILURE, currentTruthClaim: false, failure: { disposition: "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL", diagnostic: null, exitCode: 1 } })
+    expect(bound).toMatchObject({ artifact: PROBE_FAILURE, currentTruthClaim: false, failure: { disposition: "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL_UNKNOWN", diagnostic: null, bootstrap: { checkpoint: null, exitCode: 1 }, exitCode: 1 } })
     expect(verifyBoundOwnership(bound, { source: null, sourceBytes: null, launchManifest, launchReceipt }).valid).toBe(true)
   })
 
@@ -257,7 +263,7 @@ describe("#1050 ownership failure sealing", () => {
       fs.writeFileSync(receiptPath, canonicalize(launchReceipt))
       const result = spawnSync(process.execPath, [binderPath, sourcePath, manifestPath, receiptPath, boundPath], { encoding: "utf8" })
       expect(result.status).toBe(70)
-      expect(JSON.parse(result.stdout)).toMatchObject({ artifact: PROBE_FAILURE, currentTruthClaim: false, failure: { disposition: "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL", diagnostic: null } })
+      expect(JSON.parse(result.stdout)).toMatchObject({ artifact: PROBE_FAILURE, currentTruthClaim: false, failure: { disposition: "COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL_UNKNOWN", diagnostic: null } })
     } finally {
       fs.rmSync(directory, { recursive: true, force: true })
     }

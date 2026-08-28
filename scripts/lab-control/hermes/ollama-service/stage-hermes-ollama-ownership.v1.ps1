@@ -10,6 +10,34 @@ if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))
   throw 'HERMES_OWNERSHIP_UAC_BOUNDARY_REQUIRED: staging must begin non-elevated'
 }
 
+$bootstrapCheckpointMapVersion = 'hermes-ollama-ownership-bootstrap-checkpoints/1'
+$bootstrapCheckpointExitCodes = [ordered]@{
+  BOOTSTRAP_ELEVATION_IDENTITY = 161
+  BOOTSTRAP_ARGUMENT_PATH_NORMALIZATION = 162
+  BOOTSTRAP_MANIFEST_EXISTENCE = 163
+  BOOTSTRAP_MANIFEST_REPARSE_CHECK = 164
+  BOOTSTRAP_MANIFEST_PARSE = 165
+  BOOTSTRAP_MANIFEST_SCHEMA_AUTHORITY = 166
+  BOOTSTRAP_COLLECTOR_DIGEST = 167
+  BOOTSTRAP_OUTPUT_PATH_BINDING = 168
+  BOOTSTRAP_DOCKER_DIGEST = 169
+  BOOTSTRAP_MACHINE_IDENTITY = 170
+  BOOTSTRAP_LINEAGE_PARENT_EXISTENCE = 171
+  BOOTSTRAP_LINEAGE_REPARSE_CHECK = 172
+  BOOTSTRAP_SECURE_SOURCE_DIRECTORY_CREATE = 173
+  BOOTSTRAP_SECURE_SOURCE_DIRECTORY_ACL_VERIFY = 174
+  BOOTSTRAP_OUTPUT_NONEXISTENCE = 175
+  BOOTSTRAP_ENVELOPE_READY = 176
+}
+
+function Resolve-OwnershipBootstrapDisposition([int]$ExitCode) {
+  $mapped = @($bootstrapCheckpointExitCodes.GetEnumerator() | Where-Object { [int]$_.Value -eq $ExitCode })
+  if ($mapped.Count -eq 1) {
+    return [ordered]@{ mapVersion = $bootstrapCheckpointMapVersion; checkpoint = [string]$mapped[0].Key; exitCode = $ExitCode; disposition = 'COLLECTOR_BOOTSTRAP_FAILED' }
+  }
+  return [ordered]@{ mapVersion = $bootstrapCheckpointMapVersion; checkpoint = $null; exitCode = $ExitCode; disposition = 'COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL_UNKNOWN' }
+}
+
 function Get-Sha256Text([string]$Text) {
   $sha = [Security.Cryptography.SHA256]::Create()
   try { return -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)) | ForEach-Object { $_.ToString('x2') }) }
@@ -180,11 +208,25 @@ try {
     $sourcePresent = $false
   }
   $sourceSha256 = if ($sourceLease) { Get-LeasedSha256 $sourceLease } else { $null }
+  $bootstrapCheckpoint = $null
+  $bootstrapExitCode = $null
+  $bootstrapMapVersion = $null
+  $receiptDisposition = 'COLLECTOR_SOURCE_PRESENT'
+  if (-not $sourcePresent) {
+    $bootstrap = Resolve-OwnershipBootstrapDisposition ([int]$elevated.ExitCode)
+    $bootstrapCheckpoint = $bootstrap.checkpoint
+    $bootstrapExitCode = $bootstrap.exitCode
+    $bootstrapMapVersion = $bootstrap.mapVersion
+    $receiptDisposition = $bootstrap.disposition
+  }
   $receipt = [ordered]@{
     binderSha256 = $binderSha256
+    bootstrapCheckpoint = $bootstrapCheckpoint
+    bootstrapExitCode = $bootstrapExitCode
+    bootstrapMapVersion = $bootstrapMapVersion
     collectorSha256 = $collectorSha256
     completedAt = $completedAt
-    disposition = if ($sourcePresent) { 'COLLECTOR_SOURCE_PRESENT' } else { 'COLLECTOR_DIED_BEFORE_DIAGNOSTIC_SEAL' }
+    disposition = $receiptDisposition
     elevatedProcessId = [int]$elevated.Id
     exitCode = [int]$elevated.ExitCode
     hostIdentity = $hostIdentity
@@ -192,7 +234,7 @@ try {
     nodeSha256 = $nodeSha256
     nonce = $nonce
     powershellSha256 = $powershellSha256
-    schema = 'hermes-ollama-ownership-launch-receipt/1'
+    schema = 'hermes-ollama-ownership-launch-receipt/2'
     sourcePresent = $sourcePresent
     sourceSha256 = $sourceSha256
     stagerSha256 = $stagerSha256

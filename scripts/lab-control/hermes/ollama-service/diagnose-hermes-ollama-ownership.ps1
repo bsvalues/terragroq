@@ -7,9 +7,35 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-  throw 'HERMES_OWNERSHIP_ELEVATION_REQUIRED'
+$script:BootstrapCheckpointMapVersion = 'hermes-ollama-ownership-bootstrap-checkpoints/1'
+$script:BootstrapCheckpointExitCodes = [ordered]@{
+  BOOTSTRAP_ELEVATION_IDENTITY = 161
+  BOOTSTRAP_ARGUMENT_PATH_NORMALIZATION = 162
+  BOOTSTRAP_MANIFEST_EXISTENCE = 163
+  BOOTSTRAP_MANIFEST_REPARSE_CHECK = 164
+  BOOTSTRAP_MANIFEST_PARSE = 165
+  BOOTSTRAP_MANIFEST_SCHEMA_AUTHORITY = 166
+  BOOTSTRAP_COLLECTOR_DIGEST = 167
+  BOOTSTRAP_OUTPUT_PATH_BINDING = 168
+  BOOTSTRAP_DOCKER_DIGEST = 169
+  BOOTSTRAP_MACHINE_IDENTITY = 170
+  BOOTSTRAP_LINEAGE_PARENT_EXISTENCE = 171
+  BOOTSTRAP_LINEAGE_REPARSE_CHECK = 172
+  BOOTSTRAP_SECURE_SOURCE_DIRECTORY_CREATE = 173
+  BOOTSTRAP_SECURE_SOURCE_DIRECTORY_ACL_VERIFY = 174
+  BOOTSTRAP_OUTPUT_NONEXISTENCE = 175
+  BOOTSTRAP_ENVELOPE_READY = 176
+}
+$script:BootstrapCheckpoint = 'BOOTSTRAP_ELEVATION_IDENTITY'
+$script:CollectionStartedAt = (Get-Date).ToUniversalTime().ToString('o')
+$script:CurrentSubprobe = [ordered]@{ id = 'collector.bootstrap'; stage = 'BOOTSTRAP'; domain = 'collector'; toolIdentity = $null }
+$script:PartialObservations = [Collections.Generic.List[object]]::new()
+
+function Invoke-OwnershipBootstrapCheckpoint([string]$Checkpoint, [scriptblock]$Action) {
+  if (-not $script:BootstrapCheckpointExitCodes.Contains($Checkpoint)) { exit 255 }
+  $script:BootstrapCheckpoint = $Checkpoint
+  try { return & $Action }
+  catch { exit [int]$script:BootstrapCheckpointExitCodes[$Checkpoint] }
 }
 
 function Get-Sha256Text([AllowNull()][string]$Value) {
@@ -35,13 +61,17 @@ function New-OwnershipFileSystemSecurity([bool]$Directory) {
 function New-ElevatedSourceDirectory([string]$Path) {
   $security = New-OwnershipFileSystemSecurity $true
   # Windows PowerShell 5.1 exposes the atomic DirectorySecurity overload directly.
-  $directory = [IO.Directory]::CreateDirectory($Path, $security)
-  $actual = $directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access)
+  return [IO.Directory]::CreateDirectory($Path, $security)
+}
+
+function Assert-ElevatedSourceDirectoryAcl([IO.DirectoryInfo]$Directory) {
+  if (($Directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'HERMES_OWNERSHIP_OUTPUT_REPARSE_REFUSED' }
+  $security = New-OwnershipFileSystemSecurity $true
+  $actual = $Directory.GetAccessControl([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access)
   if ($actual.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access) `
     -ne $security.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Access)) {
     throw 'HERMES_OWNERSHIP_SOURCE_DIRECTORY_ACL_MISMATCH'
   }
-  return $directory
 }
 
 function New-ElevatedSourceStream([string]$Path) {
@@ -50,37 +80,87 @@ function New-ElevatedSourceStream([string]$Path) {
   [IO.FileStream]::new($Path, [IO.FileMode]::CreateNew, $rights, [IO.FileShare]::Read, 4096, [IO.FileOptions]::WriteThrough, $security)
 }
 
-$scriptSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $PSCommandPath).Hash.ToLowerInvariant()
-$resolvedOutput = [IO.Path]::GetFullPath($OutputPath)
-$resolvedManifest = [IO.Path]::GetFullPath($LaunchManifestPath)
-if (-not [IO.File]::Exists($resolvedManifest)) { throw 'HERMES_OWNERSHIP_MANIFEST_MISSING' }
-$manifestItem = Get-Item -LiteralPath $resolvedManifest -Force
-if (($manifestItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'HERMES_OWNERSHIP_MANIFEST_REPARSE_REFUSED' }
-$launchManifest = ([IO.File]::ReadAllText($resolvedManifest) -replace '^\uFEFF', '') | ConvertFrom-Json -ErrorAction Stop
-$manifestSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedManifest).Hash.ToLowerInvariant()
-$manifestKeys = @($launchManifest.PSObject.Properties.Name | Sort-Object)
-$expectedManifestKeys = @('authority','binderSha256','boundPathSha256','collectorSha256','dockerSha256','expectedUacPrompts','hostIdentity','nodeSha256','nonce','persistentCredential','powershellSha256','schema','sourcePathSha256','stagedAt','stagerSha256','uacMethod') | Sort-Object
-if (($manifestKeys -join '|') -ne ($expectedManifestKeys -join '|') -or $launchManifest.schema -ne 'hermes-ollama-ownership-launch/1' `
-  -or [string]$launchManifest.nonce -ne $CollectionId -or $launchManifest.expectedUacPrompts -ne 1 `
-  -or $launchManifest.uacMethod -ne 'Start-Process/RunAs' -or $launchManifest.persistentCredential -ne $false `
-  -or $launchManifest.authority.readOnly -ne $true -or $launchManifest.authority.hostMutationAuthorized -ne $false) {
-  throw 'HERMES_OWNERSHIP_MANIFEST_INVALID'
+$principal = Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_ELEVATION_IDENTITY' {
+  $value = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+  if (-not $value.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'HERMES_OWNERSHIP_ELEVATION_REQUIRED' }
+  return $value
 }
-if ($scriptSha256 -ne [string]$launchManifest.collectorSha256) { throw 'HERMES_OWNERSHIP_COLLECTOR_DIGEST_MISMATCH' }
-if ((Get-Sha256Text $resolvedOutput) -ne [string]$launchManifest.sourcePathSha256) { throw 'HERMES_OWNERSHIP_OUTPUT_BINDING_MISMATCH' }
-$dockerExe = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
-if ((Get-FileHash -Algorithm SHA256 -LiteralPath $dockerExe -ErrorAction Stop).Hash.ToLowerInvariant() -ne [string]$launchManifest.dockerSha256) { throw 'HERMES_OWNERSHIP_DOCKER_DIGEST_MISMATCH' }
-$machineGuid = [string](Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid -ErrorAction Stop)
-$hostIdentity = [ordered]@{ computerName = [Environment]::MachineName; machineGuidSha256 = Get-Sha256Text $machineGuid }
-if ($hostIdentity.computerName -cne [string]$launchManifest.hostIdentity.computerName -or $hostIdentity.machineGuidSha256 -ne [string]$launchManifest.hostIdentity.machineGuidSha256) { throw 'HERMES_OWNERSHIP_HOST_IDENTITY_MISMATCH' }
-$outputDirectory = [IO.Path]::GetDirectoryName($resolvedOutput)
-$lineageDirectory = [IO.Path]::GetDirectoryName($outputDirectory)
-if (-not [IO.Directory]::Exists($lineageDirectory)) { throw 'HERMES_OWNERSHIP_OUTPUT_PARENT_MISSING' }
-$lineageDirectoryInfo = Get-Item -LiteralPath $lineageDirectory -Force
-if (($lineageDirectoryInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'HERMES_OWNERSHIP_OUTPUT_REPARSE_REFUSED' }
-$outputDirectoryInfo = New-ElevatedSourceDirectory $outputDirectory
-if (($outputDirectoryInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'HERMES_OWNERSHIP_OUTPUT_REPARSE_REFUSED' }
-if ([IO.File]::Exists($resolvedOutput)) { throw 'HERMES_OWNERSHIP_OUTPUT_EXISTS' }
+$normalizedPaths = Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_ARGUMENT_PATH_NORMALIZATION' {
+  [ordered]@{ output = [IO.Path]::GetFullPath($OutputPath); manifest = [IO.Path]::GetFullPath($LaunchManifestPath) }
+}
+$resolvedOutput = [string]$normalizedPaths.output
+$resolvedManifest = [string]$normalizedPaths.manifest
+Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_MANIFEST_EXISTENCE' {
+  if (-not [IO.File]::Exists($resolvedManifest)) { throw 'HERMES_OWNERSHIP_MANIFEST_MISSING' }
+} | Out-Null
+$manifestItem = Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_MANIFEST_REPARSE_CHECK' {
+  $value = Get-Item -LiteralPath $resolvedManifest -Force
+  if (($value.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'HERMES_OWNERSHIP_MANIFEST_REPARSE_REFUSED' }
+  return $value
+}
+$manifestResult = Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_MANIFEST_PARSE' {
+  [ordered]@{
+    value = ([IO.File]::ReadAllText($resolvedManifest) -replace '^\uFEFF', '') | ConvertFrom-Json -ErrorAction Stop
+    sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedManifest).Hash.ToLowerInvariant()
+  }
+}
+$launchManifest = $manifestResult.value
+$manifestSha256 = [string]$manifestResult.sha256
+Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_MANIFEST_SCHEMA_AUTHORITY' {
+  $manifestKeys = @($launchManifest.PSObject.Properties.Name | Sort-Object)
+  $expectedManifestKeys = @('authority','binderSha256','boundPathSha256','collectorSha256','dockerSha256','expectedUacPrompts','hostIdentity','nodeSha256','nonce','persistentCredential','powershellSha256','schema','sourcePathSha256','stagedAt','stagerSha256','uacMethod') | Sort-Object
+  if (($manifestKeys -join '|') -ne ($expectedManifestKeys -join '|') -or $launchManifest.schema -ne 'hermes-ollama-ownership-launch/1' `
+    -or [string]$launchManifest.nonce -ne $CollectionId -or $launchManifest.expectedUacPrompts -ne 1 `
+    -or $launchManifest.uacMethod -ne 'Start-Process/RunAs' -or $launchManifest.persistentCredential -ne $false `
+    -or $launchManifest.authority.readOnly -ne $true -or $launchManifest.authority.hostMutationAuthorized -ne $false) {
+    throw 'HERMES_OWNERSHIP_MANIFEST_INVALID'
+  }
+} | Out-Null
+$scriptSha256 = Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_COLLECTOR_DIGEST' {
+  $value = (Get-FileHash -Algorithm SHA256 -LiteralPath $PSCommandPath).Hash.ToLowerInvariant()
+  if ($value -ne [string]$launchManifest.collectorSha256) { throw 'HERMES_OWNERSHIP_COLLECTOR_DIGEST_MISMATCH' }
+  return $value
+}
+Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_OUTPUT_PATH_BINDING' {
+  if ((Get-Sha256Text $resolvedOutput) -ne [string]$launchManifest.sourcePathSha256) { throw 'HERMES_OWNERSHIP_OUTPUT_BINDING_MISMATCH' }
+} | Out-Null
+$dockerExe = Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_DOCKER_DIGEST' {
+  $value = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
+  if ((Get-FileHash -Algorithm SHA256 -LiteralPath $value -ErrorAction Stop).Hash.ToLowerInvariant() -ne [string]$launchManifest.dockerSha256) { throw 'HERMES_OWNERSHIP_DOCKER_DIGEST_MISMATCH' }
+  return $value
+}
+$hostIdentity = Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_MACHINE_IDENTITY' {
+  $machineGuid = [string](Get-ItemPropertyValue -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid -ErrorAction Stop)
+  $value = [ordered]@{ computerName = [Environment]::MachineName; machineGuidSha256 = Get-Sha256Text $machineGuid }
+  if ($value.computerName -cne [string]$launchManifest.hostIdentity.computerName -or $value.machineGuidSha256 -ne [string]$launchManifest.hostIdentity.machineGuidSha256) { throw 'HERMES_OWNERSHIP_HOST_IDENTITY_MISMATCH' }
+  return $value
+}
+$lineage = Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_LINEAGE_PARENT_EXISTENCE' {
+  $outputDirectory = [IO.Path]::GetDirectoryName($resolvedOutput)
+  $lineageDirectory = [IO.Path]::GetDirectoryName($outputDirectory)
+  if (-not [IO.Directory]::Exists($lineageDirectory)) { throw 'HERMES_OWNERSHIP_OUTPUT_PARENT_MISSING' }
+  [ordered]@{ outputDirectory = $outputDirectory; lineageDirectory = $lineageDirectory }
+}
+$outputDirectory = [string]$lineage.outputDirectory
+$lineageDirectory = [string]$lineage.lineageDirectory
+Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_LINEAGE_REPARSE_CHECK' {
+  $lineageDirectoryInfo = Get-Item -LiteralPath $lineageDirectory -Force
+  if (($lineageDirectoryInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'HERMES_OWNERSHIP_OUTPUT_REPARSE_REFUSED' }
+} | Out-Null
+$outputDirectoryInfo = Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_SECURE_SOURCE_DIRECTORY_CREATE' {
+  $value = New-ElevatedSourceDirectory $outputDirectory
+  return $value
+}
+Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_SECURE_SOURCE_DIRECTORY_ACL_VERIFY' {
+  Assert-ElevatedSourceDirectoryAcl $outputDirectoryInfo
+} | Out-Null
+Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_OUTPUT_NONEXISTENCE' {
+  if ([IO.File]::Exists($resolvedOutput)) { throw 'HERMES_OWNERSHIP_OUTPUT_EXISTS' }
+} | Out-Null
+Invoke-OwnershipBootstrapCheckpoint 'BOOTSTRAP_ENVELOPE_READY' {
+  if ($null -eq $launchManifest -or $null -eq $hostIdentity -or [string]::IsNullOrWhiteSpace($manifestSha256)) { throw 'HERMES_OWNERSHIP_ENVELOPE_NOT_READY' }
+} | Out-Null
+$script:CurrentSubprobe = [ordered]@{ id = 'collector.envelope'; stage = 'PRECONDITION'; domain = 'collector'; toolIdentity = $null }
 
 function Protect-Text([AllowNull()][string]$Value) {
   if ($null -eq $Value) { return $null }
@@ -130,10 +210,6 @@ function Throw-ProbeFailure([string]$TypedClass, [string]$Message, [AllowNull()]
   throw $exception
 }
 
-$script:CollectionStartedAt = (Get-Date).ToUniversalTime().ToString('o')
-$script:CurrentSubprobe = [ordered]@{ id = 'collector.envelope'; stage = 'PRECONDITION'; domain = 'collector'; toolIdentity = $null }
-$script:PartialObservations = [Collections.Generic.List[object]]::new()
-
 function Enter-OwnershipSubprobe([string]$Id, [string]$Stage, [string]$Domain, [AllowNull()][string]$ToolIdentity = $null) {
   $script:CurrentSubprobe = [ordered]@{ id = $Id; stage = $Stage; domain = $Domain; toolIdentity = $ToolIdentity }
 }
@@ -180,7 +256,7 @@ function New-TerminalPacketBytes([string]$Artifact, [AllowNull()][object]$Observ
     collectionId = $CollectionId
     startedAt = $script:CollectionStartedAt
     completedAt = (Get-Date).ToUniversalTime().ToString('o')
-    collector = [ordered]@{ name = 'diagnose-hermes-ollama-ownership.ps1'; version = '2.0.0'; sha256 = $scriptSha256; readOnly = $true }
+    collector = [ordered]@{ name = 'diagnose-hermes-ollama-ownership.ps1'; version = '2.1.0'; sha256 = $scriptSha256; readOnly = $true }
     launch = [ordered]@{ nonce = $CollectionId; manifestSha256 = $manifestSha256 }
     hostIdentity = $hostIdentity
     authority = [ordered]@{ elevated = $true; persistentCredential = $false; readOnly = $true; hostMutationAuthorized = $false; hostMutationObserved = $false }
