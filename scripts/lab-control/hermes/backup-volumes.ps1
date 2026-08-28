@@ -225,6 +225,9 @@ if (-not (Test-Path -LiteralPath $HermesLabRoot -PathType Container)) {
 # cross-node transport necessarily carries and hashes it with the generation.
 $stage = Join-Path $env:TEMP "hermes-recovery-$stamp-$([guid]::NewGuid().ToString('N'))"
 try {
+  if ($failed.Count -gt 0) {
+    throw "RECOVERY_GENERATION_INCOMPLETE failed=$($failed -join ',')"
+  }
   New-Item -ItemType Directory -Force -Path $stage | Out-Null
   $canaryId = [guid]::NewGuid().ToString('D').ToLowerInvariant()
   $canaryPath = Join-Path $stage 'recovery-canary.txt'

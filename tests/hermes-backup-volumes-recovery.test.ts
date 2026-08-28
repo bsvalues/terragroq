@@ -48,6 +48,10 @@ describe("HERMES recovery generation producer", () => {
   })
 
   it("fails the scheduled producer instead of pruning around a bad current generation", () => {
+    expect(source).toContain('RECOVERY_GENERATION_INCOMPLETE')
+    expect(source.indexOf('RECOVERY_GENERATION_INCOMPLETE')).toBeLessThan(
+      source.indexOf('hermes-recovery-proof-$stamp.tar.gz'),
+    )
     expect(source).toContain('if ($failed.Count -eq 0 -and $old.Count -gt 0)')
     expect(source).toContain('if ($failed.Count -gt 0)')
     expect(source).toContain('exit 1')
