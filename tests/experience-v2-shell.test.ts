@@ -27,7 +27,7 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(source.match(/<input\b/g)).toHaveLength(1)
     expect(source).not.toContain("<textarea")
     expect(source).toContain("lineOpen ? (")
-    expect(source).toContain('aria-label="The Line"')
+    expect(source).toContain('aria-label={lineMode === "change" ? "Change" : "The Line"}')
     expect(source).toContain('["Ask", "Change", "Delegate", "Review"] as const')
     expect(source).toContain('["Inspect", "Debug", "Explain", "Delegate"] as const')
     expect(source).toContain('["Review", "Improve", "Challenge", "Merge"] as const')
