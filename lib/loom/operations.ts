@@ -36,6 +36,8 @@ export interface LoomOperation {
   /** True when running this changes state rather than just reporting it. */
   mutating: boolean
   timeoutMs: number
+  /** Exact human-facing command accepted by the Project Terminal; never parsed as argv. */
+  terminalAlias?: string
 }
 
 export const LOOM_OPERATIONS: readonly LoomOperation[] = [
@@ -48,6 +50,7 @@ export const LOOM_OPERATIONS: readonly LoomOperation[] = [
     scope: "project",
     mutating: false,
     timeoutMs: 60_000,
+    terminalAlias: "git status",
   },
   {
     id: "repo.diff",
@@ -58,6 +61,7 @@ export const LOOM_OPERATIONS: readonly LoomOperation[] = [
     scope: "project",
     mutating: false,
     timeoutMs: 60_000,
+    terminalAlias: "git diff",
   },
   {
     id: "repo.log",
@@ -68,6 +72,7 @@ export const LOOM_OPERATIONS: readonly LoomOperation[] = [
     scope: "project",
     mutating: false,
     timeoutMs: 60_000,
+    terminalAlias: "git log",
   },
   {
     id: "tests.run",
@@ -80,6 +85,7 @@ export const LOOM_OPERATIONS: readonly LoomOperation[] = [
     scope: "project",
     mutating: false,
     timeoutMs: 20 * 60_000,
+    terminalAlias: "test",
   },
   {
     id: "build.run",
@@ -90,6 +96,7 @@ export const LOOM_OPERATIONS: readonly LoomOperation[] = [
     scope: "project",
     mutating: false,
     timeoutMs: 20 * 60_000,
+    terminalAlias: "build",
   },
   {
     id: "service.status",
@@ -138,6 +145,17 @@ export const LOOM_OPERATIONS: readonly LoomOperation[] = [
 export function findLoomOperation(id: unknown): LoomOperation | null {
   if (typeof id !== "string") return null
   return LOOM_OPERATIONS.find((operation) => operation.id === id) ?? null
+}
+
+/** Resolve one whole alias to an existing non-mutating project operation. No token is parsed. */
+export function resolveProjectTerminalAlias(input: unknown): LoomOperation | null {
+  if (typeof input !== "string") return null
+  const alias = input.trim()
+  return LOOM_OPERATIONS.find((operation) => (
+    operation.scope === "project"
+    && operation.mutating === false
+    && operation.terminalAlias === alias
+  )) ?? null
 }
 
 export type LoomOperationRefusal = "UNKNOWN_OPERATION" | "CONFIRMATION_REQUIRED"
