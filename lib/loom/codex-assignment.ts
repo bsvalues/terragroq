@@ -254,19 +254,21 @@ async function loadRecord(userId: string, worldId: string): Promise<CodexAssignm
       work."authorityLevel" AS "workOrderAuthorityLevel", work."authorityGrantId",
       work."agent" AS "workOrderAgent", work."allowedFiles", work."forbiddenFiles",
       work."updatedAt" AS "workOrderUpdatedAt",
-      grant."id" AS "grantId", grant."ref" AS "grantRef", grant."userId" AS "grantUserId",
-      grant."workOrderId" AS "grantWorkOrderId", grant."grantedTo", grant."status" AS "grantStatus",
-      grant."authorityLevel" AS "grantAuthorityLevel", grant."scope" AS "grantScope",
-      grant."allowedActions", grant."blockedActions",
-      grant."expiresAt", grant."revokedAt", grant."contentHash", grant."createdAt" AS "grantCreatedAt"
+      authority_row."id" AS "grantId", authority_row."ref" AS "grantRef",
+      authority_row."userId" AS "grantUserId", authority_row."workOrderId" AS "grantWorkOrderId",
+      authority_row."grantedTo", authority_row."status" AS "grantStatus",
+      authority_row."authorityLevel" AS "grantAuthorityLevel", authority_row."scope" AS "grantScope",
+      authority_row."allowedActions", authority_row."blockedActions",
+      authority_row."expiresAt", authority_row."revokedAt", authority_row."contentHash",
+      authority_row."createdAt" AS "grantCreatedAt"
     FROM "working_world" world
     LEFT JOIN "outcome_queue_item" outcome
       ON outcome."userId" = world."userId"
       AND outcome."outcomeKey" = (world."snapshot"::jsonb #>> '{spine,outcomeKey}')
     LEFT JOIN "work_order" work
       ON work."userId" = world."userId" AND work."id" = outcome."activeWorkOrderId"
-    LEFT JOIN "authority_grant" grant
-      ON grant."userId" = world."userId" AND grant."id" = work."authorityGrantId"
+    LEFT JOIN "authority_grant" authority_row
+      ON authority_row."userId" = world."userId" AND authority_row."id" = work."authorityGrantId"
     WHERE world."userId" = $1 AND world."id" = $2
     LIMIT 1`,
     [userId, worldId],
