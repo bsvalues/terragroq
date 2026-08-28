@@ -15,6 +15,7 @@ import {
   type WorldSpine,
 } from "@/lib/environment/working-world"
 import { williamJudgmentBasisFingerprint } from "@/lib/environment/william-judgment"
+import { addCouncilSession, validateCouncilSession, type CouncilSession } from "@/lib/environment/council-session"
 
 export type OwnedWorkingWorldRecord = Readonly<{
   id: string
@@ -191,6 +192,7 @@ export async function saveOwnedLineWorld(
       ...submitted,
       space: latest.space,
       judgment: latest.judgment,
+      councilHistory: latest.councilHistory,
     })
     const merged = candidate.judgment
       && candidate.judgment.basisFingerprint !== williamJudgmentBasisFingerprint(candidate)
@@ -216,6 +218,39 @@ export async function loadOwnedWorkingWorld(
   const row = await store.findOwned(userId, worldId)
   if (!row) return null
   return validateWorkingWorld(JSON.parse(row.snapshot))
+}
+
+/** Lazily load completed advisory sessions from one exact owned world. */
+export async function loadOwnedCouncilHistory(
+  userId: string,
+  worldId: string,
+  store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
+): Promise<readonly CouncilSession[] | null> {
+  const world = await loadOwnedWorkingWorld(userId, worldId, store)
+  return world?.councilHistory ?? null
+}
+
+/** CAS-add one completed advisory while retaining all concurrent Space and Line state. */
+export async function saveOwnedCouncilSession(
+  input: Readonly<{ userId: string; worldId: string; session: CouncilSession }>,
+  store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
+): Promise<readonly CouncilSession[]> {
+  const session = validateCouncilSession(input.session)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const row = await store.findOwned(input.userId, input.worldId)
+    if (!row) throw new Error("WORLD_NOT_FOUND")
+    const latest = validateWorkingWorld(JSON.parse(row.snapshot))
+    const councilHistory = addCouncilSession(latest.councilHistory, session)
+    const updated = validateWorkingWorld({ ...latest, councilHistory })
+    if (await store.updateOwned(
+      input.userId,
+      input.worldId,
+      JSON.stringify(updated),
+      updated.intent,
+      row.snapshot,
+    )) return councilHistory
+  }
+  throw new Error("WORLD_PERSISTENCE_BUSY")
 }
 
 /** Persist William's latest judgment while preserving every concurrent Space/world field. */

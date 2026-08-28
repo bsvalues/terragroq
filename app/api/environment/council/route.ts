@@ -6,9 +6,29 @@ import {
   CouncilInferenceError,
 } from "@/lib/environment/council"
 import { guardLineRequest, readBoundedJson } from "@/lib/environment/line-guard"
-import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
+import { loadOwnedCouncilHistory, loadOwnedWorkingWorld, saveOwnedCouncilSession } from "@/lib/environment/space-persistence"
 
 export const maxDuration = 300
+
+export async function GET(request: Request) {
+  let userId: string
+  try {
+    userId = await getUserId()
+  } catch {
+    return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+  }
+  const worldId = new URL(request.url).searchParams.get("worldId")
+  if (!worldId || !councilRequestSchema.shape.worldId.safeParse(worldId).success) {
+    return Response.json({ error: "INVALID_WORLD_ID" }, { status: 400 })
+  }
+  try {
+    const history = await loadOwnedCouncilHistory(userId, worldId)
+    if (!history) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
+    return Response.json({ history })
+  } catch {
+    return Response.json({ error: "WORLD_PERSISTENCE_UNAVAILABLE" }, { status: 503 })
+  }
+}
 
 export async function POST(request: Request) {
   const rejection = guardLineRequest(request)
@@ -39,6 +59,11 @@ export async function POST(request: Request) {
 
   try {
     const session = await conveneCouncil(parsedRequest.data, world)
+    try {
+      await saveOwnedCouncilSession({ userId, worldId: parsedRequest.data.worldId, session })
+    } catch {
+      return Response.json({ error: "COUNCIL_PERSISTENCE_UNAVAILABLE" }, { status: 503 })
+    }
     return Response.json({ session })
   } catch (error) {
     if (error instanceof CouncilContextError) {

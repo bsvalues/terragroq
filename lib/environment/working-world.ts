@@ -13,6 +13,7 @@
  */
 
 import { isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
+import { validateCouncilHistory, type CouncilSession } from "@/lib/environment/council-session"
 
 export type SurfaceKind =
   | "browser" | "editor" | "diff" | "tests" | "terminal" | "trace" | "diagram" | "document" | "agent" | "data"
@@ -209,6 +210,8 @@ export type WorkingWorldSnapshot = Readonly<{
   conversation: readonly Readonly<{ role: "owner" | "williamos"; content: string; at: string }>[]
   /** William's latest real model judgment, distinct from deterministic safety facts in the UI. */
   judgment: WilliamJudgment | null
+  /** Completed advisory Council sessions, newest bounded history persisted with this world. */
+  councilHistory: readonly CouncilSession[]
   /** Whether Hermes should continue this work unattended, and where it stands. */
   continuation: "active" | "paused" | "settled"
   /**
@@ -266,6 +269,7 @@ export function createWorkingWorld({
     lastRedValidation: null,
     conversation: [],
     judgment: null,
+    councilHistory: [],
     continuation: "active",
     pendingStartWork: null,
   }
@@ -281,7 +285,7 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
   const allowed = new Set([
     "schemaVersion", "spine", "intent", "assumption", "resources", "branchHeads", "artifacts", "agentWork",
     "surfaces", "openConcerns", "unresolvedFailures", "pendingDecisions", "lastGreenValidation",
-    "lastRedValidation", "conversation", "judgment", "continuation", "pendingStartWork",
+    "lastRedValidation", "conversation", "judgment", "councilHistory", "continuation", "pendingStartWork",
     "space",
   ])
   for (const key of Object.keys(snapshot)) {
@@ -300,6 +304,8 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
   // Additive migration for worlds saved before William's persistent judgment existed.
   if (snapshot.judgment === undefined) snapshot.judgment = null
   if (snapshot.judgment !== null) snapshot.judgment = validateWilliamJudgment(snapshot.judgment)
+  if (snapshot.councilHistory === undefined) snapshot.councilHistory = []
+  snapshot.councilHistory = validateCouncilHistory(snapshot.councilHistory)
 
   if (snapshot.space !== undefined) snapshot.space = validateSpaceState(snapshot.space)
   // The 2026-08-25 owner contract makes a Space's window geometry durable product state. Continue

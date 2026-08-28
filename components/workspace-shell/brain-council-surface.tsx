@@ -10,7 +10,7 @@ export type CouncilMember = Readonly<{
   role: string
   name: string
   provider: string
-  model?: string
+  model: string
   status: "considering" | "ready" | "dissenting"
   perspective: string
 }>
@@ -19,7 +19,6 @@ export type CouncilEvidence = Readonly<{
   id: string
   label: string
   detail: string
-  href?: string
 }>
 
 export type CouncilAdvisoryAction = "request-changes" | "reject" | "approve" | "ask-dissent" | "run-another-pass"
@@ -28,6 +27,7 @@ export type BrainCouncilSession = Readonly<{
   id: string
   question: string
   status: "deliberating" | "ready"
+  createdAt: string
   context: Readonly<{
     spaceName: string
     kind: "space" | "file" | "preview" | "diff" | "agent" | "selection"
@@ -46,6 +46,16 @@ export type BrainCouncilSurfaceProps = Readonly<{
   session: BrainCouncilSession
   onDismiss: () => void
   onAdvisoryAction: (action: CouncilAdvisoryAction, session: BrainCouncilSession) => void
+  historical?: boolean
+}>
+
+export type CouncilHistoryBrowserProps = Readonly<{
+  history: readonly BrainCouncilSession[]
+  onSelect: (session: BrainCouncilSession) => void
+  onNew: () => void
+  onDismiss: () => void
+  loading?: boolean
+  error?: string | null
 }>
 
 const ACTIONS: readonly Readonly<{ id: CouncilAdvisoryAction; label: string; primary?: boolean }>[] = [
@@ -60,6 +70,7 @@ export function BrainCouncilSurface({
   session,
   onDismiss,
   onAdvisoryAction,
+  historical = false,
 }: BrainCouncilSurfaceProps) {
   const dialogRef = useRef<HTMLElement>(null)
   const [activeMemberId, setActiveMemberId] = useState(session.members[0]?.id ?? "")
@@ -92,7 +103,7 @@ export function BrainCouncilSurface({
     <section ref={dialogRef} className={styles.surface} role="dialog" aria-modal="true" aria-label="Brain Council advisory session" data-session-id={session.id}>
       <header className={styles.header}>
         <div>
-          <span className={styles.eyebrow}>Brain Council · advisory session</span>
+          <span className={styles.eyebrow}>Brain Council · {historical ? "saved advisory" : "advisory session"}</span>
           <h2>{session.question}</h2>
           <p className={styles.context}>
             <span>{session.context.spaceName}</span>
@@ -101,10 +112,11 @@ export function BrainCouncilSurface({
             <ChevronRight aria-hidden="true" size={12} />
             <strong>{session.context.label}</strong>
           </p>
+          {historical ? <p className={styles.contextDetail}>Saved {new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(session.createdAt))} UTC · original context and inference provenance</p> : null}
         </div>
         <div className={styles.headerActions}>
           <span className={styles.sessionState} data-status={session.status}>
-            {session.status === "ready" ? "Recommendation ready" : "Council deliberating"}
+            {historical ? "Saved advisory" : session.status === "ready" ? "Recommendation ready" : "Council deliberating"}
           </span>
           <button type="button" className={styles.dismiss} onClick={onDismiss} aria-label="Dismiss Brain Council">
             <X aria-hidden="true" size={17} />
@@ -172,11 +184,7 @@ export function BrainCouncilSurface({
         <aside className={styles.evidence} aria-label="Council evidence">
           <div className={styles.asideHead}><span className={styles.eyebrow}>Evidence pack</span><strong>{session.evidence.length} sources</strong></div>
           <div className={styles.evidenceList}>
-            {session.evidence.map((item) => item.href ? (
-              <a key={item.id} href={item.href} className={styles.evidenceItem}>
-                <strong>{item.label}</strong><span>{item.detail}</span><ChevronRight aria-hidden="true" size={13} />
-              </a>
-            ) : (
+            {session.evidence.map((item) => (
               <div key={item.id} className={styles.evidenceItem}>
                 <strong>{item.label}</strong><span>{item.detail}</span>
               </div>
@@ -204,6 +212,26 @@ export function BrainCouncilSurface({
           ))}
         </div>
       </footer>
+    </section>
+  )
+}
+
+export function CouncilHistoryBrowser({ history, onSelect, onNew, onDismiss, loading = false, error = null }: CouncilHistoryBrowserProps) {
+  return (
+    <section className={`${styles.surface} ${styles.historySurface}`} role="dialog" aria-modal="true" aria-label="Brain Council history">
+      <header className={styles.header}>
+        <div><span className={styles.eyebrow}>Brain Council</span><h2>Saved advisory sessions</h2><p className={styles.contextDetail}>Inspect prior advice without reconvening or moving your current Space.</p></div>
+        <div className={styles.headerActions}><button type="button" className={styles.primaryAction} disabled={loading} onClick={onNew}>New Council</button><button type="button" className={styles.dismiss} onClick={onDismiss} aria-label="Dismiss Brain Council"><X aria-hidden="true" size={17} /></button></div>
+      </header>
+      <div className={styles.historyList} aria-live="polite">
+        {loading ? <p>Loading saved advisory sessions…</p> : error ? <p role="alert">{error}</p> : history.length === 0 ? <p>No saved advisory sessions yet. New Council convenes the current selected context.</p> : history.slice().reverse().map((session) => (
+          <button type="button" key={session.id} className={styles.historyItem} onClick={() => onSelect(session)}>
+            <span><strong>{session.question}</strong><small>{session.context.spaceName} · {session.context.kind} · {session.context.label}</small></span>
+            <span><small>Saved advisory</small><time dateTime={session.createdAt}>{new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(session.createdAt))} UTC</time></span>
+          </button>
+        ))}
+      </div>
+      <footer className={styles.footer}><div className={styles.footerNote}><RotateCcw aria-hidden="true" size={13} /> Opening saved advice does not run inference or change the current Space.</div></footer>
     </section>
   )
 }

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   BrainCouncilSurface,
+  CouncilHistoryBrowser,
   type BrainCouncilSession,
 } from "@/components/workspace-shell/brain-council-surface"
 
@@ -13,6 +14,7 @@ const session: BrainCouncilSession = {
   id: "council-real-session",
   question: "Council the current UX before merge.",
   status: "ready",
+  createdAt: "2026-08-27T18:20:00.000Z",
   context: {
     spaceName: "TerraFusion Build",
     kind: "diff",
@@ -105,5 +107,25 @@ describe("Experience V2 Brain Council surface", () => {
     expect(onDismiss).toHaveBeenCalledOnce()
     expect(onAdvisoryAction).not.toHaveBeenCalled()
     expect(screen.getByText(/current Space and its windows stay in place/i)).toBeTruthy()
+  })
+
+  it("labels restored sessions as saved advisory provenance, never live consensus", () => {
+    render(<BrainCouncilSurface session={session} historical onDismiss={vi.fn()} onAdvisoryAction={vi.fn()} />)
+    expect(screen.getByText("Saved advisory")).toBeTruthy()
+    expect(screen.getByText(/Aug 27, 2026/)).toBeTruthy()
+    expect(screen.queryByText("Recommendation ready")).toBeNull()
+  })
+
+  it("selects saved advice without inference or advisory mutation and offers an explicit new Council", () => {
+    const onSelect = vi.fn()
+    const onNew = vi.fn()
+    const onDismiss = vi.fn()
+    render(<CouncilHistoryBrowser history={[session]} onSelect={onSelect} onNew={onNew} onDismiss={onDismiss} />)
+
+    fireEvent.click(screen.getByRole("button", { name: /Council the current UX before merge/ }))
+    expect(onSelect).toHaveBeenCalledWith(session)
+    expect(onNew).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "New Council" }))
+    expect(onNew).toHaveBeenCalledOnce()
   })
 })

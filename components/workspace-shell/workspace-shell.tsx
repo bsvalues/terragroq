@@ -11,7 +11,7 @@ import { DeveloperToolsSurface } from "./developer-tools-surface"
 import { type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
 import { AgentSessionStrip, AgentTurnCommittedPersistenceError, useExperienceAgentSessions, type AgentProvider } from "./agent-sessions"
-import { BrainCouncilSurface, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
+import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
 import { WindowFrame } from "./window-frame"
@@ -121,6 +121,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null)
   const [councilQuestion, setCouncilQuestion] = useState<string | null>(null)
   const [councilSession, setCouncilSession] = useState<BrainCouncilSession | null>(null)
+  const [councilHistory, setCouncilHistory] = useState<readonly BrainCouncilSession[]>([])
+  const [councilHistorical, setCouncilHistorical] = useState(false)
   const [councilBusy, setCouncilBusy] = useState(false)
   const [councilError, setCouncilError] = useState<string | null>(null)
   const [spine, setSpine] = useState<WorldSpine>(EMPTY_SPINE)
@@ -722,6 +724,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   async function summonCouncil(question: string) {
     setCouncilQuestion(question)
     setCouncilSession(null)
+    setCouncilHistorical(false)
     setCouncilError(null)
     setCouncilBusy(true)
     setOverlay("council")
@@ -750,8 +753,31 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       const payload = await response.json() as { error?: string; detail?: string; session?: BrainCouncilSession }
       if (!response.ok || !payload.session) throw new Error(payload.detail ?? payload.error ?? `COUNCIL_${response.status}`)
       setCouncilSession(payload.session)
+      setCouncilHistory((current) => [...current.filter((entry) => entry.id !== payload.session!.id), payload.session!].slice(-6))
     } catch (error) {
       setCouncilError(error instanceof Error ? error.message : "Council inference is unavailable.")
+    } finally {
+      setCouncilBusy(false)
+    }
+  }
+
+  async function openCouncilHistory() {
+    setOverlay("council")
+    setCouncilSession(null)
+    setCouncilHistorical(false)
+    setCouncilError(null)
+    if (!worldId || storage !== "server") {
+      setCouncilError("Saved Council history needs an open persistent server Space.")
+      return
+    }
+    setCouncilBusy(true)
+    try {
+      const response = await fetch(`/api/environment/council?worldId=${encodeURIComponent(worldId)}`, { cache: "no-store" })
+      const payload = await response.json() as { error?: string; history?: readonly BrainCouncilSession[] }
+      if (!response.ok || !payload.history) throw new Error(payload.error ?? `COUNCIL_HISTORY_${response.status}`)
+      setCouncilHistory(payload.history)
+    } catch (error) {
+      setCouncilError(error instanceof Error ? error.message : "Saved Council history is unavailable.")
     } finally {
       setCouncilBusy(false)
     }
@@ -1022,7 +1048,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           </button>
         ))}
         <button type="button" className={spatial.dockButton} onClick={() => setOverlay("mission-control")} aria-label="Open Mission Control" title="Mission Control"><Grid2X2 size={15} /></button>
-        <button type="button" className={spatial.dockButton} onClick={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} aria-label="Summon Brain Council" title="Brain Council"><Users size={15} /></button>
+        <button type="button" className={spatial.dockButton} onClick={() => void openCouncilHistory()} aria-label="Open Brain Council" title="Brain Council"><Users size={15} /></button>
       </nav>
 
       <footer className={spatial.williamRail} aria-label="William intelligence presence">
@@ -1053,7 +1079,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         </div>
       ) : null}
 
-      {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} onDismiss={() => setOverlay(null)} onAdvisoryAction={(action) => handleCouncilAction(action)} /> : <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={() => setOverlay(null)}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{councilBusy ? "Convening five real advisory perspectives…" : "Council unavailable"}</strong><p className={spatial.muted}>{councilError ?? councilQuestion ?? "Preparing the current question."}</p>{councilError && councilQuestion ? <button type="button" className={spatial.utilityButton} onClick={() => void summonCouncil(councilQuestion)}>Try again</button> : null}</div></section>}</div> : null}
+      {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} historical={councilHistorical} onDismiss={() => setOverlay(null)} onAdvisoryAction={(action) => handleCouncilAction(action)} /> : councilBusy && councilQuestion ? <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={() => setOverlay(null)}>Dismiss</button></header><div className={spatial.utilityBody}><strong>Convening five real advisory perspectives…</strong><p className={spatial.muted}>{councilQuestion}</p></div></section> : <CouncilHistoryBrowser history={councilHistory} loading={councilBusy} error={councilError} onDismiss={() => setOverlay(null)} onSelect={(session) => { setCouncilSession(session); setCouncilHistorical(true) }} onNew={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} />}</div> : null}
       {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={space.id} onEnterSpace={() => setOverlay(null)} onDismiss={() => setOverlay(null)} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
     </main>
   )
