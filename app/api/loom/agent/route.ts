@@ -166,6 +166,7 @@ export async function POST(request: Request) {
   child.stdin.end()
 
   let settled = false
+  let terminate: ((reason: "TIMEOUT" | "CANCELLED") => void) | null = null
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream<Uint8Array>({
@@ -192,6 +193,13 @@ export async function POST(request: Request) {
         send(event)
         try { controller.close() } catch { /* already closed */ }
       }
+      terminate = (reason) => {
+        if (settled) return
+        // Settle the durable outcome before kill can synchronously or asynchronously emit close.
+        // Otherwise close(0) can overwrite an explicit cancellation with a false success receipt.
+        finish({ type: "done", reason })
+        child.kill()
+      }
 
       send({ type: "session", sessionId, resumed: resuming })
       // An external turn is the case the doctrine cares most about: the receipt names the provider
@@ -210,8 +218,7 @@ export async function POST(request: Request) {
       })
 
       const timer = setTimeout(() => {
-        child.kill()
-        finish({ type: "done", reason: "TIMEOUT" })
+        terminate?.("TIMEOUT")
       }, AGENT_TIMEOUT_MS)
 
       // The CLI emits one JSON object per line. Chunks split lines, so partials are buffered and
@@ -231,12 +238,11 @@ export async function POST(request: Request) {
       child.on("close", (code) => finish({ type: "done", reason: null, code }))
 
       request.signal.addEventListener("abort", () => {
-        child.kill()
-        finish({ type: "done", reason: "CANCELLED" })
+        terminate?.("CANCELLED")
       })
     },
     cancel() {
-      child.kill()
+      terminate?.("CANCELLED")
     },
   })
 

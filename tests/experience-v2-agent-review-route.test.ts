@@ -247,10 +247,40 @@ describe("selected-file review route", () => {
     const response = await POST(request({ mode: "review", path: "src/example.ts" }, abort.signal))
 
     abort.abort()
+    child.emit("close", 0)
 
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
     expect(child.kill).toHaveBeenCalledOnce()
     expect(events.at(-1)).toEqual({ type: "done", reason: "CANCELLED" })
+    expect(seams.recordLoomEnd).toHaveBeenCalledOnce()
+    expect(seams.recordLoomEnd.mock.calls[0][0].outcome).toMatchObject({ reason: "CANCELLED", code: null })
+  })
+
+  it("settles a response-body cancellation once as CANCELLED before a later child close", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request({ mode: "review", path: "src/example.ts" }))
+    const reader = response.body!.getReader()
+
+    await reader.cancel()
+    child.emit("close", 0)
+    await Promise.resolve()
+
+    expect(child.kill).toHaveBeenCalledOnce()
+    expect(seams.recordLoomEnd).toHaveBeenCalledOnce()
+    expect(seams.recordLoomEnd).toHaveBeenCalledWith({
+      userId: "owner-1",
+      kind: "agent",
+      subject: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      outcome: {
+        provider: "cloud",
+        external: true,
+        mode: "review",
+        path: "src/example.ts",
+        code: null,
+        reason: "CANCELLED",
+      },
+    })
   })
 
   it("leaves the existing cloud builder contract unchanged", async () => {
