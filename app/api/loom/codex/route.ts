@@ -1,9 +1,28 @@
+import { createHash } from "node:crypto"
 import path from "node:path"
 
 import { getSession } from "@/lib/session"
-import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
-import { commitLoomCodexSuccess, recordLoomEnd } from "@/lib/loom/receipts"
+import {
+  commitLoomCodexSuccess,
+  recordLoomCodexAssignment,
+  recordLoomEnd,
+} from "@/lib/loom/receipts"
 import { loomCodexThreadDescriptor } from "@/lib/loom/threads"
+import {
+  deriveCodexAssignment,
+  revalidateCodexAssignment,
+  type CodexAssignment,
+} from "@/lib/loom/codex-assignment"
+import {
+  cleanupCodexIsolatedWorkspace,
+  createCodexIsolatedWorkspace,
+  inspectCodexIsolatedWorkspace,
+  type CodexIsolatedWorkspace,
+} from "@/lib/loom/codex-isolated-workspace"
+import {
+  workspaceFileWriteDependencies,
+  writeGovernedWorkspaceFile,
+} from "@/lib/loom/workspace-file-write"
 import {
   CodexAppServerClient,
   sanitizeAppServerText,
@@ -38,6 +57,7 @@ function failureReason(error: unknown): string {
   if (code === "APP_SERVER_CANCELLED") return "CANCELLED"
   if (code === "CODEX_AUTH_REQUIRED") return code
   if (code === "CODEX_RECEIPT_FAILED") return code
+  if (/^CODEX_(?:ASSIGNMENT|ISOLATION|CLEANUP|NO_CHANGE|PROMOTION|PROVIDER_CLOSE)/.test(code)) return code
   const allowed = new Set([
     "APP_SERVER_APPROVAL_REQUIRED",
     "APP_SERVER_USER_INPUT_REQUIRED",
@@ -51,6 +71,23 @@ function failureReason(error: unknown): string {
   return allowed.has(code) ? code : "CODEX_UNAVAILABLE"
 }
 
+function delegatedPrompt(assignment: CodexAssignment, prompt: string): string {
+  return [
+    "Execute one bounded WilliamOS Delegate assignment in the disposable checkout.",
+    "Only the exact selected file below is eligible for later promotion into the real checkout.",
+    "Do not create, delete, rename, link, or modify any other path. The server will inspect the whole disposable diff and fail closed.",
+    `World: ${assignment.worldId}`,
+    `Outcome: ${assignment.outcomeKey}`,
+    `Work Order: ${assignment.workOrderId}`,
+    `Authority Grant: ${assignment.grantId}`,
+    `Selected file: ${assignment.selectedPath}`,
+    `Allowed reservation: ${JSON.stringify(assignment.allowed)}`,
+    `Forbidden reservation: ${JSON.stringify(assignment.forbidden)}`,
+    "Operator instruction:",
+    prompt,
+  ].join("\n")
+}
+
 /**
  * Run one real Codex App Server Builder turn in this exact checkout.
  *
@@ -62,11 +99,18 @@ export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  let body: { prompt?: unknown; sessionId?: unknown; resume?: unknown }
+  let body: { worldId?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
+  }
+  if (!body || typeof body !== "object" || Object.keys(body).some((key) => !["worldId", "prompt", "sessionId", "resume"].includes(key))) {
+    return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
+  }
+  const worldId = typeof body.worldId === "string" ? body.worldId.trim() : ""
+  if (!worldId || worldId.length > 200 || worldId.includes("\0")) {
+    return Response.json({ error: "WORLD_ID_REQUIRED" }, { status: 400 })
   }
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
   if (!prompt) return Response.json({ error: "PROMPT_REQUIRED" }, { status: 400 })
@@ -82,8 +126,23 @@ export async function POST(request: Request) {
     return Response.json({ error: "SESSION_ID_REQUIRED" }, { status: 400 })
   }
 
-  const context = await requireWorkContext()
-  if (!context.ok) return workContextRefusal(context)
+  let assignment: CodexAssignment
+  try {
+    assignment = await deriveCodexAssignment({
+      userId: session.user.id,
+      worldId,
+      projectRoot: PROJECT_ROOT,
+    })
+  } catch (error) {
+    const code = typeof (error as { code?: unknown })?.code === "string"
+      ? String((error as { code: string }).code)
+      : "CODEX_ASSIGNMENT_REFUSED"
+    const detail = sanitizeAppServerText((error as { message?: unknown })?.message).slice(0, 500)
+    return Response.json(
+      { error: code, ...(detail ? { detail } : {}) },
+      { status: 409, headers: { "cache-control": "no-store" } },
+    )
+  }
 
   if (resuming) {
     const descriptor = await loomCodexThreadDescriptor(requestedId!)
@@ -102,7 +161,13 @@ export async function POST(request: Request) {
     if (descriptor.provider !== "Codex"
       || descriptor.mode !== "delegate"
       || descriptor.workspace === null
-      || !sameWorkspace(descriptor.workspace, PROJECT_ROOT)) {
+      || !sameWorkspace(descriptor.workspace, PROJECT_ROOT)
+      || descriptor.worldId !== assignment.worldId
+      || descriptor.outcomeKey !== assignment.outcomeKey
+      || descriptor.workOrderId !== assignment.workOrderId
+      || descriptor.grantId !== assignment.grantId
+      || descriptor.assignmentHash !== assignment.assignmentHash
+      || descriptor.selectedPath !== assignment.selectedPath) {
       return Response.json(
         { error: "THREAD_DESCRIPTOR_MISMATCH" },
         { status: 403, headers: { "cache-control": "no-store" } },
@@ -112,12 +177,15 @@ export async function POST(request: Request) {
 
   const encoder = new TextEncoder()
   let client: CodexClient | null = null
+  let isolated: CodexIsolatedWorkspace | null = null
   const turnAbort = new AbortController()
   let streamedCharacters = 0
   let terminal = false
   let sessionSent = false
   let clientClosed = false
+  let isolatedCleaned = false
   let cancellationRequested = request.signal.aborted
+  let promotionInFlight = false
   let successCommitInFlight = false
   let successCommitted = false
   let forcedCloseTimer: ReturnType<typeof setTimeout> | null = null
@@ -128,7 +196,9 @@ export async function POST(request: Request) {
     client?.close()
   }
   const cancelTurn = () => {
-    if (successCommitted) return
+    // Once promotion begins, cancellation is too late to report as a refusal: the guarded writer
+    // must either commit the matching success transaction or restore the original bytes.
+    if (promotionInFlight || successCommitted) return
     if (cancellationRequested) {
       if (!turnAbort.signal.aborted) turnAbort.abort()
       return
@@ -174,8 +244,15 @@ export async function POST(request: Request) {
       void (async () => {
         let threadId: string | null = requestedId
         try {
+          assertNotCancelled()
+          isolated = await createCodexIsolatedWorkspace({
+            projectRoot: PROJECT_ROOT,
+            selectedPath: assignment.selectedPath,
+            initialContent: assignment.target.content,
+          })
+          assertNotCancelled()
           client = new CodexAppServerClient({
-            cwd: PROJECT_ROOT,
+            cwd: isolated.root,
             timeoutMs: TURN_TIMEOUT_MS,
             onNotification,
           })
@@ -188,7 +265,7 @@ export async function POST(request: Request) {
           }
           if (resuming) {
             const restored = await client.resumeThread(requestedId!, {
-              cwd: PROJECT_ROOT,
+              cwd: isolated.root,
               approvalPolicy: "never",
               sandbox: "workspace-write",
             })
@@ -196,7 +273,7 @@ export async function POST(request: Request) {
             threadId = restored
           } else {
             threadId = await client.startThread({
-              cwd: PROJECT_ROOT,
+              cwd: isolated.root,
               approvalPolicy: "never",
               sandbox: "workspace-write",
               ephemeral: false,
@@ -210,18 +287,64 @@ export async function POST(request: Request) {
             throw Object.assign(new Error("Codex did not return a thread id"), { code: "APP_SERVER_UNSUPPORTED_REQUEST" })
           }
           const durableThreadId = threadId
+          const taskDigest = createHash("sha256").update(prompt, "utf8").digest("hex")
+          const taskText = sanitizeAppServerText(prompt).slice(0, MAX_PROMPT_CHARS)
+          const executionBindingHash = createHash("sha256").update([
+            assignment.assignmentHash,
+            durableThreadId,
+            taskDigest,
+            isolated.baseSha,
+          ].join("\0"), "utf8").digest("hex")
+
+          // Authority is checked again after the provider session exists but before it can execute.
+          // The durable receipt binds that actual session and task to the exact approved snapshot.
+          await revalidateCodexAssignment(assignment)
+          assertNotCancelled()
+          try {
+            await recordLoomCodexAssignment({
+              userId: session.user.id,
+              threadId: durableThreadId,
+              workspace: PROJECT_ROOT,
+              worldId: assignment.worldId,
+              spaceRevision: assignment.binding.spaceRevision,
+              outcomeId: assignment.binding.outcomeId,
+              outcomeKey: assignment.outcomeKey,
+              outcomeVersion: assignment.binding.outcomeVersion,
+              workOrderId: assignment.workOrderId,
+              workOrderRef: assignment.binding.workOrderRef,
+              workOrderVersion: assignment.binding.workOrderVersion,
+              grantId: assignment.grantId,
+              grantRef: assignment.binding.grantRef,
+              grantVersion: assignment.binding.grantVersion,
+              allowed: assignment.allowed,
+              forbidden: assignment.forbidden,
+              reservationVersion: assignment.binding.reservationVersion,
+              selectedPath: assignment.selectedPath,
+              assignmentHash: assignment.assignmentHash,
+              taskDigest,
+              taskText,
+              executionBindingHash,
+              isolatedBaseSha: isolated.baseSha,
+              resumed: resuming,
+            })
+          } catch {
+            throw Object.assign(new Error("Codex assignment receipt was not durable"), {
+              code: "CODEX_RECEIPT_FAILED",
+            })
+          }
+          assertNotCancelled()
 
           sessionSent = true
           send({ type: "session", sessionId: durableThreadId, provider: "Codex", mode: "delegate", resumed: resuming })
           const turn = await client.runTurn({
             threadId: durableThreadId,
-            prompt,
+            prompt: delegatedPrompt(assignment, prompt),
             turn: {
               approvalPolicy: "never",
-              runtimeWorkspaceRoots: [PROJECT_ROOT],
+              runtimeWorkspaceRoots: [isolated.root],
               sandboxPolicy: {
                 type: "workspaceWrite",
-                writableRoots: [PROJECT_ROOT],
+                writableRoots: [isolated.root],
                 networkAccess: true,
                 excludeTmpdirEnvVar: true,
                 excludeSlashTmp: true,
@@ -240,26 +363,129 @@ export async function POST(request: Request) {
             throw Object.assign(new Error("Codex completed without a result"), { code: "APP_SERVER_TURN_FAILED" })
           }
 
-          // This transaction is the one durable success transition. Cancellation wins before it.
-          // Once COMMIT returns, success is irrevocable: reporting CANCELLED would leave a valid
-          // ready descriptor behind a false failure frame.
+          const isolatedResult = await inspectCodexIsolatedWorkspace(isolated)
+          const isolatedBaseSha = isolated.baseSha
           assertNotCancelled()
-          successCommitInFlight = true
+
+          // The provider must be gone and the exact disposable worktree cleanup verified before
+          // the real checkout is eligible for its first mutation.
           try {
-            await commitLoomCodexSuccess({
-              userId: session.user.id,
-              threadId: durableThreadId,
-              workspace: PROJECT_ROOT,
-              resumed: resuming,
-            })
+            closeClient()
           } catch {
-            throw Object.assign(new Error("Codex success transaction failed"), { code: "CODEX_RECEIPT_FAILED" })
+            throw Object.assign(new Error("Codex App Server could not be closed"), { code: "CODEX_PROVIDER_CLOSE_FAILED" })
+          }
+          await cleanupCodexIsolatedWorkspace(isolated)
+          isolatedCleaned = true
+          isolated = null
+          assertNotCancelled()
+
+          const baseWriterDependencies = workspaceFileWriteDependencies(PROJECT_ROOT)
+          let successReceiptFailed = false
+          const writerDependencies = {
+            ...baseWriterDependencies,
+            authorize: async (requestedPath: string) => {
+              if (requestedPath !== assignment.selectedPath) {
+                return {
+                  ok: false,
+                  failure: "FAILED_SCOPE_COLLISION" as const,
+                  detail: "promotion requested a path outside the immutable server assignment",
+                }
+              }
+              try {
+                await revalidateCodexAssignment(assignment)
+                return { ok: true }
+              } catch {
+                return {
+                  ok: false,
+                  failure: "FAILED_AUTHORITY_NOT_GRANTED" as const,
+                  detail: "the server assignment or selected target changed before promotion",
+                }
+              }
+            },
+            auditStart: async (audit: Parameters<typeof baseWriterDependencies.auditStart>[0]) => {
+              // Final authority revalidation is still cancellable. The durable promotion-start
+              // audit marks the point after which the writer must settle or restore the file.
+              assertNotCancelled()
+              promotionInFlight = true
+              return baseWriterDependencies.auditStart(audit)
+            },
+            auditFinish: async (audit: Parameters<typeof baseWriterDependencies.auditFinish>[0]) => {
+              if (audit.outcome === "WRITE_FAILED") {
+                await baseWriterDependencies.auditFinish(audit)
+                return
+              }
+              successCommitInFlight = true
+              try {
+                await commitLoomCodexSuccess({
+                  userId: session.user.id,
+                  threadId: durableThreadId,
+                  workspace: PROJECT_ROOT,
+                  resumed: resuming,
+                  worldId: assignment.worldId,
+                  outcomeKey: assignment.outcomeKey,
+                  workOrderId: assignment.workOrderId,
+                  grantId: assignment.grantId,
+                  assignmentHash: assignment.assignmentHash,
+                  selectedPath: assignment.selectedPath,
+                  promotionDigest: isolatedResult.digest,
+                  baseSha: isolatedBaseSha,
+                  taskDigest,
+                  executionBindingHash,
+                  promotionAudit: {
+                    ...audit,
+                    outcome: "SAVED",
+                  },
+                })
+              } catch {
+                successReceiptFailed = true
+                throw Object.assign(new Error("Codex success transaction failed"), { code: "CODEX_RECEIPT_FAILED" })
+              }
+            },
+          }
+
+          // Cancellation can still win during the writer's exact-path/authority checks. The
+          // auditStart override above installs the irreversible boundary immediately before the
+          // first durable promotion side effect.
+          assertNotCancelled()
+          const promoted = await writeGovernedWorkspaceFile({
+            userId: session.user.id,
+            path: assignment.selectedPath,
+            content: isolatedResult.content,
+            modifiedAt: assignment.target.modifiedAt,
+          }, writerDependencies)
+          if (!promoted.ok) {
+            if (successReceiptFailed) {
+              throw Object.assign(new Error("Codex success transaction failed"), { code: "CODEX_RECEIPT_FAILED" })
+            }
+            throw Object.assign(new Error(`Codex promotion failed: ${promoted.error}`), {
+              code: "CODEX_PROMOTION_FAILED",
+            })
           }
           successCommitted = true
           send({ type: "result", text: result })
           done(null, 0)
         } catch (error) {
-          const reason = !successCommitted && cancellationRequested ? "CANCELLED" : failureReason(error)
+          let settledError = error
+          try { closeClient() } catch {
+            settledError = Object.assign(new Error("Codex App Server could not be closed"), {
+              code: "CODEX_PROVIDER_CLOSE_FAILED",
+            })
+          }
+          if (isolated && !isolatedCleaned) {
+            try {
+              await cleanupCodexIsolatedWorkspace(isolated)
+              isolatedCleaned = true
+              isolated = null
+            } catch (cleanupError) {
+              settledError = cleanupError
+            }
+          }
+          const settledReason = failureReason(settledError)
+          const reason = !successCommitted
+            && cancellationRequested
+            && settledReason !== "CODEX_CLEANUP_FAILED"
+            ? "CANCELLED"
+            : settledReason
           if (threadId) {
             try {
               await recordLoomEnd({

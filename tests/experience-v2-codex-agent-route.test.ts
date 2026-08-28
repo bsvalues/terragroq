@@ -2,10 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const seams = vi.hoisted(() => ({
   getSession: vi.fn(),
-  requireWorkContext: vi.fn(),
-  workContextRefusal: vi.fn(),
+  deriveCodexAssignment: vi.fn(),
+  revalidateCodexAssignment: vi.fn(),
+  createIsolatedWorkspace: vi.fn(),
+  inspectIsolatedWorkspace: vi.fn(),
+  cleanupIsolatedWorkspace: vi.fn(),
+  writeGovernedWorkspaceFile: vi.fn(),
+  workspaceFileWriteDependencies: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
+  recordLoomCodexAssignment: vi.fn(),
   commitLoomCodexSuccess: vi.fn(),
   poolQuery: vi.fn(),
   connect: vi.fn(),
@@ -20,13 +26,23 @@ const seams = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
-vi.mock("@/lib/governance/work-context-gate", () => ({
-  requireWorkContext: seams.requireWorkContext,
-  workContextRefusal: seams.workContextRefusal,
+vi.mock("@/lib/loom/codex-assignment", () => ({
+  deriveCodexAssignment: seams.deriveCodexAssignment,
+  revalidateCodexAssignment: seams.revalidateCodexAssignment,
+}))
+vi.mock("@/lib/loom/codex-isolated-workspace", () => ({
+  createCodexIsolatedWorkspace: seams.createIsolatedWorkspace,
+  inspectCodexIsolatedWorkspace: seams.inspectIsolatedWorkspace,
+  cleanupCodexIsolatedWorkspace: seams.cleanupIsolatedWorkspace,
+}))
+vi.mock("@/lib/loom/workspace-file-write", () => ({
+  writeGovernedWorkspaceFile: seams.writeGovernedWorkspaceFile,
+  workspaceFileWriteDependencies: seams.workspaceFileWriteDependencies,
 }))
 vi.mock("@/lib/loom/receipts", () => ({
   recordLoomStart: seams.recordLoomStart,
   recordLoomEnd: seams.recordLoomEnd,
+  recordLoomCodexAssignment: seams.recordLoomCodexAssignment,
   commitLoomCodexSuccess: seams.commitLoomCodexSuccess,
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
@@ -53,7 +69,7 @@ function request(body: Record<string, unknown>, signal?: AbortSignal) {
   return new Request("http://williamos.test/api/loom/codex", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ worldId: "world-1", ...body }),
     signal,
   })
 }
@@ -67,15 +83,72 @@ describe("durable Codex delegate route", () => {
     vi.resetAllMocks()
     seams.clientOptions.length = 0
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
-    seams.requireWorkContext.mockResolvedValue({ ok: true })
-    seams.workContextRefusal.mockReturnValue(Response.json({ error: "FAILED_CONTEXT_NOT_PROVEN" }, { status: 409 }))
     seams.connect.mockResolvedValue(undefined)
     seams.sanitize.mockImplementation((value: unknown) => String(value ?? "")
       .replace(/token-[A-Za-z0-9._-]+/gi, "[REDACTED]"))
     seams.readAccount.mockResolvedValue({ authType: "chatgpt", email: "owner@example.test", requiresOpenaiAuth: false })
     seams.recordLoomStart.mockResolvedValue(undefined)
     seams.recordLoomEnd.mockResolvedValue(undefined)
+    seams.recordLoomCodexAssignment.mockResolvedValue(undefined)
     seams.commitLoomCodexSuccess.mockResolvedValue(undefined)
+    seams.deriveCodexAssignment.mockResolvedValue({
+      owner: "owner-1",
+      worldId: "world-1",
+      projectRoot: process.cwd(),
+      outcomeKey: "OUTCOME-1",
+      workOrderId: 41,
+      grantId: 9,
+      selectedPath: "src/selected.ts",
+      allowed: ["src/selected.ts"],
+      forbidden: ["src/forbidden.ts"],
+      binding: {
+        spaceRevision: 7,
+        outcomeId: 5,
+        outcomeVersion: 3,
+        workOrderRef: "WO-0041",
+        workOrderVersion: "2026-08-28T12:00:00.000Z",
+        grantRef: "GRANT-0009",
+        grantVersion: "grant-hash",
+        reservationVersion: "f".repeat(64),
+      },
+      assignmentHash: "assignment-hash",
+      target: {
+        content: "export const before = true\n",
+        modifiedAt: "2026-08-28T12:00:00.000Z",
+        digest: "before-digest",
+      },
+    })
+    seams.revalidateCodexAssignment.mockResolvedValue(undefined)
+    seams.createIsolatedWorkspace.mockResolvedValue({
+      projectRoot: process.cwd(),
+      runtimeRoot: "C:/Users/owner/.williamos/loom/codex-worktrees",
+      root: "C:/Users/owner/.williamos/loom/codex-worktrees/delegate-1",
+      baseSha: "a".repeat(40),
+      selectedPath: "src/selected.ts",
+      initialContentDigest: "before-digest",
+    })
+    seams.inspectIsolatedWorkspace.mockResolvedValue({
+      content: "export const after = true\n",
+      digest: "after-digest",
+    })
+    seams.cleanupIsolatedWorkspace.mockResolvedValue(undefined)
+    seams.workspaceFileWriteDependencies.mockReturnValue({
+      authorize: vi.fn().mockResolvedValue({ ok: true }),
+      resolve: vi.fn(),
+      auditStart: vi.fn().mockResolvedValue(77),
+      auditFinish: vi.fn().mockResolvedValue(undefined),
+    })
+    seams.writeGovernedWorkspaceFile.mockImplementation(async (_input: unknown, dependencies: {
+      authorize: (path: string) => Promise<unknown>
+      auditFinish: (input: Record<string, unknown>) => Promise<void>
+    }) => {
+      await dependencies.authorize("src/selected.ts")
+      await dependencies.auditFinish({
+        userId: "owner-1", path: "src/selected.ts", bytes: 26, startedAuditId: 77,
+        outcome: "SAVED", modifiedAt: "2026-08-28T12:01:00.000Z",
+      })
+      return { ok: true, path: "src/selected.ts", name: "selected.ts", modifiedAt: "2026-08-28T12:01:00.000Z" }
+    })
     seams.startThread.mockResolvedValue("codex-thread-1")
     seams.resumeThread.mockResolvedValue("codex-thread-1")
     seams.runTurn.mockResolvedValue({
@@ -85,7 +158,11 @@ describe("durable Codex delegate route", () => {
       finalText: "Implemented the selected change.",
     })
     seams.poolQuery.mockResolvedValue({
-      rows: [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true } }],
+      rows: [{ userId: "owner-1", metadata: {
+        provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true,
+        worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9,
+        assignmentHash: "assignment-hash", selectedPath: "src/selected.ts",
+      } }],
     })
   })
 
@@ -94,21 +171,47 @@ describe("durable Codex delegate route", () => {
     const output = await events(response)
 
     expect(response.status).toBe(200)
-    expect(seams.requireWorkContext).toHaveBeenCalledOnce()
+    expect(seams.deriveCodexAssignment).toHaveBeenCalledWith({
+      userId: "owner-1", worldId: "world-1", projectRoot: expect.stringMatching(/experience-v2-codex-session$/),
+    })
     expect(seams.connect).toHaveBeenCalledOnce()
     expect(seams.readAccount).toHaveBeenCalledOnce()
     expect(seams.startThread).toHaveBeenCalledWith({
-      cwd: expect.stringMatching(/experience-v2-codex-session$/),
+      cwd: "C:/Users/owner/.williamos/loom/codex-worktrees/delegate-1",
       approvalPolicy: "never",
       sandbox: "workspace-write",
       ephemeral: false,
     })
+    expect(seams.recordLoomCodexAssignment).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1",
+      threadId: "codex-thread-1",
+      worldId: "world-1",
+      spaceRevision: 7,
+      outcomeId: 5,
+      outcomeKey: "OUTCOME-1",
+      outcomeVersion: 3,
+      workOrderId: 41,
+      workOrderRef: "WO-0041",
+      workOrderVersion: "2026-08-28T12:00:00.000Z",
+      grantId: 9,
+      allowed: ["src/selected.ts"],
+      forbidden: ["src/forbidden.ts"],
+      reservationVersion: "f".repeat(64),
+      selectedPath: "src/selected.ts",
+      assignmentHash: "assignment-hash",
+      taskText: "Implement the selected change.",
+      isolatedBaseSha: "a".repeat(40),
+      resumed: false,
+    }))
     expect(seams.runTurn).toHaveBeenCalledWith(expect.objectContaining({
       threadId: "codex-thread-1",
-      prompt: "Implement the selected change.",
+      prompt: expect.stringContaining("Implement the selected change."),
       turn: expect.objectContaining({
         approvalPolicy: "never",
-        sandboxPolicy: expect.objectContaining({ type: "workspaceWrite" }),
+        sandboxPolicy: expect.objectContaining({
+          type: "workspaceWrite",
+          writableRoots: ["C:/Users/owner/.williamos/loom/codex-worktrees/delegate-1"],
+        }),
       }),
     }))
     expect(output).toEqual([
@@ -121,7 +224,18 @@ describe("durable Codex delegate route", () => {
       threadId: "codex-thread-1",
       workspace: expect.stringMatching(/experience-v2-codex-session$/),
       resumed: false,
+      worldId: "world-1",
+      assignmentHash: "assignment-hash",
+      selectedPath: "src/selected.ts",
+      promotionDigest: "after-digest",
     }))
+    expect(seams.cleanupIsolatedWorkspace).toHaveBeenCalledOnce()
+    expect(seams.writeGovernedWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1",
+      path: "src/selected.ts",
+      content: "export const after = true\n",
+      modifiedAt: "2026-08-28T12:00:00.000Z",
+    }), expect.any(Object))
     expect(seams.close).toHaveBeenCalledOnce()
   })
 
@@ -179,7 +293,7 @@ describe("durable Codex delegate route", () => {
     expect(response.status).toBe(200)
     expect(seams.poolQuery).toHaveBeenCalledWith(expect.stringContaining("loom_codex_ready"), ["codex-thread-1"])
     expect(seams.resumeThread).toHaveBeenCalledWith("codex-thread-1", {
-      cwd: expect.stringMatching(/experience-v2-codex-session$/),
+      cwd: "C:/Users/owner/.williamos/loom/codex-worktrees/delegate-1",
       approvalPolicy: "never",
       sandbox: "workspace-write",
     })
@@ -191,10 +305,11 @@ describe("durable Codex delegate route", () => {
 
   it.each([
     ["unknown", [], "THREAD_NOT_FOUND"],
-    ["another owner", [{ userId: "owner-2", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true } }], "THREAD_NOT_YOURS"],
-    ["Claude", [{ userId: "owner-1", metadata: { provider: "Claude", mode: "delegate", workspace: process.cwd(), committed: true } }], "THREAD_DESCRIPTOR_MISMATCH"],
-    ["review", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "review", workspace: process.cwd(), committed: true } }], "THREAD_DESCRIPTOR_MISMATCH"],
-    ["different workspace", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: "C:/other", committed: true } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["another owner", [{ userId: "owner-2", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: "assignment-hash", selectedPath: "src/selected.ts" } }], "THREAD_NOT_YOURS"],
+    ["Claude", [{ userId: "owner-1", metadata: { provider: "Claude", mode: "delegate", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: "assignment-hash", selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["review", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "review", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: "assignment-hash", selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["different workspace", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: "C:/other", committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: "assignment-hash", selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["stale assignment", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: "older-assignment", selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
   ])("refuses a %s descriptor before connecting", async (_label, rows, error) => {
     seams.poolQuery.mockResolvedValueOnce({ rows })
 
@@ -205,15 +320,129 @@ describe("durable Codex delegate route", () => {
     expect(seams.connect).not.toHaveBeenCalled()
   })
 
-  it("fails closed before connecting when authentication, prompt, or work context is absent", async () => {
+  it("fails closed before connecting when authentication, prompt, or server assignment is absent", async () => {
     seams.getSession.mockResolvedValueOnce(null)
     expect((await POST(request({ prompt: "Work." }))).status).toBe(401)
 
     expect((await POST(request({ prompt: "  " }))).status).toBe(400)
 
-    seams.requireWorkContext.mockResolvedValueOnce({ ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN" })
-    expect((await POST(request({ prompt: "Work." }))).status).toBe(409)
+    seams.deriveCodexAssignment.mockRejectedValueOnce(Object.assign(new Error("no authority"), {
+      code: "CODEX_ASSIGNMENT_REFUSED",
+    }))
+    const refused = await POST(request({ prompt: "Work." }))
+    expect(refused.status).toBe(409)
+    await expect(refused.json()).resolves.toEqual({
+      error: "CODEX_ASSIGNMENT_REFUSED",
+      detail: "no authority",
+    })
     expect(seams.connect).not.toHaveBeenCalled()
+  })
+
+  it("rejects browser-supplied path or authority facts instead of treating them as assignment input", async () => {
+    const selectedPath = await POST(request({ prompt: "Work.", selectedPath: "src/other.ts" }))
+    const receipt = await POST(request({ prompt: "Work.", workContextReceipt: "browser-proof" }))
+
+    expect(selectedPath.status).toBe(400)
+    expect(receipt.status).toBe(400)
+    expect(seams.deriveCodexAssignment).not.toHaveBeenCalled()
+    expect(seams.connect).not.toHaveBeenCalled()
+  })
+
+  it("closes and removes the disposable checkout before exact-path revalidation and promotion", async () => {
+    const order: string[] = []
+    let revalidation = 0
+    seams.close.mockImplementation(() => { order.push("close") })
+    seams.recordLoomCodexAssignment.mockImplementationOnce(async () => { order.push("assignment-receipt") })
+    seams.inspectIsolatedWorkspace.mockImplementationOnce(async () => {
+      order.push("inspect")
+      return { content: "export const after = true\n", digest: "after-digest" }
+    })
+    seams.cleanupIsolatedWorkspace.mockImplementationOnce(async () => { order.push("cleanup") })
+    seams.revalidateCodexAssignment.mockImplementation(async () => {
+      revalidation += 1
+      order.push(revalidation === 1 ? "revalidate-run" : "revalidate-promotion")
+    })
+    seams.writeGovernedWorkspaceFile.mockImplementationOnce(async (_input: unknown, dependencies: {
+      authorize: (path: string) => Promise<unknown>
+      auditFinish: (input: Record<string, unknown>) => Promise<void>
+    }) => {
+      order.push("writer")
+      await dependencies.authorize("src/selected.ts")
+      order.push("write")
+      await dependencies.auditFinish({
+        userId: "owner-1", path: "src/selected.ts", bytes: 26, startedAuditId: 77,
+        outcome: "SAVED", modifiedAt: "2026-08-28T12:01:00.000Z",
+      })
+      return { ok: true, path: "src/selected.ts", name: "selected.ts", modifiedAt: "2026-08-28T12:01:00.000Z" }
+    })
+    seams.commitLoomCodexSuccess.mockImplementationOnce(async () => { order.push("commit") })
+
+    const output = await events(await POST(request({ prompt: "Work." })))
+
+    expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
+    expect(order).toEqual([
+      "revalidate-run", "assignment-receipt", "inspect", "close", "cleanup",
+      "writer", "revalidate-promotion", "write", "commit",
+    ])
+  })
+
+  it("never runs the provider turn when the captured assignment drifts before execution", async () => {
+    seams.revalidateCodexAssignment.mockRejectedValueOnce(Object.assign(new Error("Space changed"), {
+      code: "CODEX_ASSIGNMENT_STALE",
+    }))
+
+    const output = await events(await POST(request({ prompt: "Work." })))
+
+    expect(output.at(-1)).toEqual({ type: "done", reason: "CODEX_ASSIGNMENT_STALE", code: null })
+    expect(seams.recordLoomCodexAssignment).not.toHaveBeenCalled()
+    expect(seams.runTurn).not.toHaveBeenCalled()
+    expect(seams.cleanupIsolatedWorkspace).toHaveBeenCalledOnce()
+  })
+
+  it("never runs the provider turn when the exact assignment receipt is not durable", async () => {
+    seams.recordLoomCodexAssignment.mockRejectedValueOnce(new Error("ledger unavailable"))
+
+    const output = await events(await POST(request({ prompt: "Work." })))
+
+    expect(output.at(-1)).toEqual({ type: "done", reason: "CODEX_RECEIPT_FAILED", code: null })
+    expect(seams.runTurn).not.toHaveBeenCalled()
+    expect(seams.cleanupIsolatedWorkspace).toHaveBeenCalledOnce()
+  })
+
+  it("does not promote or persist ready when disposable cleanup cannot be verified", async () => {
+    seams.cleanupIsolatedWorkspace.mockRejectedValueOnce(Object.assign(new Error("registered"), {
+      code: "CODEX_CLEANUP_FAILED",
+    }))
+
+    const output = await events(await POST(request({ prompt: "Work." })))
+
+    expect(output.at(-1)).toEqual({ type: "done", reason: "CODEX_CLEANUP_FAILED", code: null })
+    expect(seams.writeGovernedWorkspaceFile).not.toHaveBeenCalled()
+    expect(seams.commitLoomCodexSuccess).not.toHaveBeenCalled()
+  })
+
+  it("lets cancellation win while final authority revalidation is still pre-mutation", async () => {
+    const abort = new AbortController()
+    let validation = 0
+    seams.revalidateCodexAssignment.mockImplementation(async () => {
+      validation += 1
+      if (validation === 2) abort.abort()
+    })
+    seams.writeGovernedWorkspaceFile.mockImplementationOnce(async (_input: unknown, dependencies: {
+      authorize: (path: string) => Promise<{ ok: boolean }>
+      auditStart: (input: Record<string, unknown>) => Promise<number>
+    }) => {
+      const authority = await dependencies.authorize("src/selected.ts")
+      if (!authority.ok) return { ok: false, error: "FAILED_AUTHORITY_NOT_GRANTED", status: 409 }
+      await dependencies.auditStart({ userId: "owner-1", path: "src/selected.ts", bytes: 26 })
+      return { ok: false, error: "UNREACHABLE_WRITE", status: 500 }
+    })
+
+    const output = await events(await POST(request({ prompt: "Work." }, abort.signal)))
+
+    expect(output.some((event) => event.type === "result")).toBe(false)
+    expect(output.at(-1)).toEqual({ type: "done", reason: "CANCELLED", code: null })
+    expect(seams.commitLoomCodexSuccess).not.toHaveBeenCalled()
   })
 
   it("reports missing Codex sign-in as a typed product failure without persisting a session", async () => {
@@ -226,6 +455,8 @@ describe("durable Codex delegate route", () => {
     expect(seams.startThread).not.toHaveBeenCalled()
     expect(seams.recordLoomStart).not.toHaveBeenCalled()
     expect(seams.close).toHaveBeenCalledOnce()
+    expect(seams.cleanupIsolatedWorkspace).toHaveBeenCalledOnce()
+    expect(seams.writeGovernedWorkspaceFile).not.toHaveBeenCalled()
   })
 
   it("interrupts the active turn on abort, emits no success result, settles once, and always closes", async () => {
@@ -250,6 +481,25 @@ describe("durable Codex delegate route", () => {
       expect(seams.recordLoomEnd.mock.calls[0][0].outcome).toMatchObject({ code: null, reason: "CANCELLED" })
     }
     expect(seams.close).toHaveBeenCalledOnce()
+  })
+
+  it("surfaces a leaked disposable checkout even when cleanup failure follows cancellation", async () => {
+    seams.runTurn.mockImplementationOnce(({ signal }: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(Object.assign(new Error("cancelled"), {
+        code: "APP_SERVER_CANCELLED",
+      })))
+    }))
+    seams.cleanupIsolatedWorkspace.mockRejectedValueOnce(Object.assign(new Error("still registered"), {
+      code: "CODEX_CLEANUP_FAILED",
+    }))
+    const abort = new AbortController()
+    const response = await POST(request({ prompt: "Work." }, abort.signal))
+    abort.abort()
+
+    const output = await events(response)
+
+    expect(output.at(-1)).toEqual({ type: "done", reason: "CODEX_CLEANUP_FAILED", code: null })
+    expect(seams.writeGovernedWorkspaceFile).not.toHaveBeenCalled()
   })
 
   it("interrupts before closing when the response reader is cancelled", async () => {
@@ -365,17 +615,25 @@ describe("durable Codex delegate route", () => {
     expect(JSON.stringify(output)).not.toContain("token-secret")
     expect(seams.recordLoomStart).not.toHaveBeenCalled()
     expect(seams.close).toHaveBeenCalledOnce()
+    expect(seams.cleanupIsolatedWorkspace).toHaveBeenCalledOnce()
+    expect(seams.writeGovernedWorkspaceFile).not.toHaveBeenCalled()
   })
 })
 
 describe("Codex thread descriptor", () => {
-  it("reads owner, provider, mode, and workspace only from the committed-ready event", async () => {
+  it("reads owner, provider, mode, workspace, and immutable assignment only from the committed-ready event", async () => {
     seams.poolQuery.mockResolvedValueOnce({
-      rows: [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: "C:/workspace", committed: true } }],
+      rows: [{ userId: "owner-1", metadata: {
+        provider: "Codex", mode: "delegate", workspace: "C:/workspace", committed: true,
+        worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9,
+        assignmentHash: "assignment-hash", selectedPath: "src/selected.ts",
+      } }],
     })
 
     await expect(loomCodexThreadDescriptor("codex-thread-1")).resolves.toEqual({
       owner: "owner-1", provider: "Codex", mode: "delegate", workspace: "C:/workspace",
+      worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9,
+      assignmentHash: "assignment-hash", selectedPath: "src/selected.ts",
     })
     expect(seams.poolQuery.mock.calls.at(-1)?.[0]).toContain("loom_codex_ready")
   })

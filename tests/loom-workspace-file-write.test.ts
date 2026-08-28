@@ -57,6 +57,27 @@ describe("governed manual workspace writes", () => {
     expect(await fs.readFile(file, "utf8")).toBe("export const before = true\n")
   })
 
+  it("refuses a hard-linked target before audit or mutation", async () => {
+    const { root, file } = await fixture()
+    const alias = path.join(root, "src", "alias.ts")
+    await fs.link(file, alias)
+    const audit: string[] = []
+
+    const result = await writeGovernedWorkspaceFile({
+      userId: "owner-a", path: "src/real.ts", content: "changed\n",
+    }, {
+      authorize: async () => ({ ok: true }),
+      resolve: (requested) => resolveRealWorkspacePath(root, requested, fs.realpath),
+      auditStart: async () => { audit.push("start"); return 1 },
+      auditFinish: async () => { audit.push("finish") },
+    })
+
+    expect(result).toEqual({ ok: false, error: "LINK_NOT_ALLOWED", status: 409 })
+    expect(await fs.readFile(file, "utf8")).toBe("export const before = true\n")
+    expect(await fs.readFile(alias, "utf8")).toBe("export const before = true\n")
+    expect(audit).toEqual([])
+  })
+
   it.each([
     ".env",
     ".env.local",

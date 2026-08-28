@@ -117,11 +117,14 @@ export async function writeGovernedWorkspaceFile(
   if (!scope.ok) return { ok: false, error: "FAILED_SCOPE_COLLISION", detail: scope.detail, status: 409 }
   let current
   try {
-    current = await fs.stat(resolved.absolute)
+    current = await fs.lstat(resolved.absolute)
   } catch {
     return { ok: false, error: "NOT_FOUND", status: 404 }
   }
   if (!current.isFile()) return { ok: false, error: "NOT_A_FILE", status: 400 }
+  if (current.isSymbolicLink() || current.nlink !== 1) {
+    return { ok: false, error: "LINK_NOT_ALLOWED", status: 409 }
+  }
   if (current.size > MAX_FILE_BYTES) return { ok: false, error: "FILE_TOO_LARGE", status: 413 }
   if (typeof input.modifiedAt === "string" && current.mtime.toISOString() !== input.modifiedAt) {
     return { ok: false, error: "CHANGED_ON_DISK", status: 409, modifiedAt: current.mtime.toISOString() }
@@ -160,7 +163,10 @@ export async function writeGovernedWorkspaceFile(
   }
   let saved
   try {
-    saved = await fs.stat(resolved.absolute)
+    saved = await fs.lstat(resolved.absolute)
+    if (!saved.isFile() || saved.isSymbolicLink() || saved.nlink !== 1) {
+      throw new Error("TARGET_REPLACED_WITH_LINK")
+    }
     await dependencies.auditFinish({
       userId: input.userId,
       path: relative,

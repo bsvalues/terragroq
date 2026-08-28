@@ -29,6 +29,12 @@ export interface LoomCodexThreadDescriptor {
   provider: string | null
   mode: string | null
   workspace: string | null
+  worldId: string | null
+  outcomeKey: string | null
+  workOrderId: number | null
+  grantId: number | null
+  assignmentHash: string | null
+  selectedPath: string | null
 }
 
 /**
@@ -108,11 +114,23 @@ export async function loomCodexThreadDescriptor(threadId: string): Promise<LoomC
       : null
     if (typeof row?.userId !== "string") return null
     if (metadata?.committed !== true) return null
+    const workOrderId = typeof metadata.workOrderId === "number" && Number.isSafeInteger(metadata.workOrderId)
+      ? metadata.workOrderId
+      : null
+    const grantId = typeof metadata.grantId === "number" && Number.isSafeInteger(metadata.grantId)
+      ? metadata.grantId
+      : null
     return {
       owner: row.userId,
       provider: typeof metadata?.provider === "string" ? metadata.provider : null,
       mode: typeof metadata?.mode === "string" ? metadata.mode : null,
       workspace: typeof metadata?.workspace === "string" ? metadata.workspace : null,
+      worldId: typeof metadata?.worldId === "string" ? metadata.worldId : null,
+      outcomeKey: typeof metadata?.outcomeKey === "string" ? metadata.outcomeKey : null,
+      workOrderId,
+      grantId,
+      assignmentHash: typeof metadata?.assignmentHash === "string" ? metadata.assignmentHash : null,
+      selectedPath: typeof metadata?.selectedPath === "string" ? metadata.selectedPath : null,
     }
   } catch {
     return null
