@@ -53,7 +53,20 @@ export type WorkspaceProject = Readonly<{ identity: string; name: string }>
 
 export function defaultSpace(viewportWidth = 1440, viewportHeight = 900): WorkspaceSpace {
   const workHeight = Math.max(300, viewportHeight - 171)
-  const editorWidth = Math.max(620, Math.round(viewportWidth * 0.64))
+  const outerGutter = viewportWidth >= 1100 ? 26 : 18
+  const surfaceGap = viewportWidth >= 1100 ? 24 : 18
+  const availableWidth = viewportWidth - (outerGutter * 2) - surfaceGap
+  const canTileHorizontally = availableWidth >= 720
+  const editorWidth = canTileHorizontally
+    ? Math.max(360, Math.min(Math.round(availableWidth * 0.52), availableWidth - 360))
+    : Math.max(360, viewportWidth - (outerGutter * 2))
+  const companionX = canTileHorizontally ? outerGutter + editorWidth + surfaceGap : outerGutter
+  const companionWidth = canTileHorizontally ? availableWidth - editorWidth : editorWidth
+  const canStackTests = canTileHorizontally && workHeight >= 612
+  const previewHeight = canStackTests
+    ? Math.min(470, workHeight - 312)
+    : workHeight - 36
+  const testsY = canStackTests ? 18 + previewHeight + 16 : workHeight - 278
   return {
     revision: 0,
     id: "terrafusion",
@@ -61,24 +74,28 @@ export function defaultSpace(viewportWidth = 1440, viewportHeight = 900): Worksp
     runningAppUrl: null,
     windows: {
       editor: {
-        x: 26,
+        x: outerGutter,
         y: 18,
         width: editorWidth,
-        height: Math.min(720, workHeight - 22),
+        height: Math.min(720, workHeight - 36),
         z: 4,
         minimized: false,
       },
       "running-app": {
-        x: Math.max(300, viewportWidth - Math.round(viewportWidth * 0.43) - 26),
-        y: 50,
-        width: Math.max(520, Math.round(viewportWidth * 0.43)),
-        height: Math.min(650, workHeight - 56),
+        x: companionX,
+        y: 18,
+        width: companionWidth,
+        height: previewHeight,
         z: 1,
         minimized: false,
       },
       tests: {
-        x: 58, y: Math.max(170, workHeight - 258),
-        width: Math.max(480, Math.round(viewportWidth * 0.38)), height: Math.min(240, workHeight - 12), z: 3, minimized: false,
+        x: companionX,
+        y: testsY,
+        width: companionWidth,
+        height: 260,
+        z: 3,
+        minimized: !canStackTests,
       },
       diff: {
         x: Math.max(450, Math.round(viewportWidth * 0.42)), y: Math.max(160, workHeight - 248),
