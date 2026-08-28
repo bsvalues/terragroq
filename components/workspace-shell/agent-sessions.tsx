@@ -82,7 +82,7 @@ export type ExperienceAgentSessionController = Readonly<{
   activeSessionId: string | null
   error: string | null
   runClaudeTurn: (input: RunClaudeTurnInput) => Promise<DurableClaudeSession>
-  selectSession: (sessionId: string | null) => void
+  selectSession: (sessionId: string | null) => boolean
   stop: () => void
 }>
 
@@ -109,6 +109,15 @@ class AgentStartRefusal extends Error {
     super(message)
     this.name = "AgentStartRefusal"
     this.status = status
+  }
+}
+
+export class AgentTurnCommittedPersistenceError extends Error {
+  readonly committed = true
+
+  constructor(message: string) {
+    super(message)
+    this.name = "AgentTurnCommittedPersistenceError"
   }
 }
 
@@ -202,21 +211,31 @@ function parseCollection(value: string | null): DurableAgentSessionCollection | 
   return { schemaVersion: 3, selectedSessionKey, sessions }
 }
 
-function boundedCollection(sessions: readonly DurableAgentSession[], selectedSessionKey: string | null): DurableAgentSessionCollection {
+function boundedCollection(
+  sessions: readonly DurableAgentSession[],
+  selectedSessionKey: string | null,
+  protectedTurn: Readonly<{ sessionKey: string; completedAt: string }> | null = null,
+): DurableAgentSessionCollection {
   const mutable = sessions.map((session) => ({ ...session, completedTurns: [...(session.completedTurns ?? [])] }))
   const collection = (): DurableAgentSessionCollection => ({ schemaVersion: 3, selectedSessionKey, sessions: mutable })
   while (new TextEncoder().encode(JSON.stringify(collection())).byteLength > MAX_COLLECTION_BYTES) {
     const oldest = mutable.flatMap((session, sessionIndex) => session.completedTurns.map((turn, turnIndex) => ({
       completedAt: turn.completedAt, key: sessionKey(session.provider, session.sessionId), sessionIndex, turnIndex,
-    }))).sort((left, right) => left.completedAt.localeCompare(right.completedAt) || left.key.localeCompare(right.key) || left.turnIndex - right.turnIndex)[0]
+    }))).filter((turn) => !protectedTurn || turn.key !== protectedTurn.sessionKey || turn.completedAt !== protectedTurn.completedAt)
+      .sort((left, right) => left.completedAt.localeCompare(right.completedAt) || left.key.localeCompare(right.key) || left.turnIndex - right.turnIndex)[0]
     if (!oldest) throw new Error("AGENT_SESSION_COLLECTION_TOO_LARGE")
     mutable[oldest.sessionIndex].completedTurns.splice(oldest.turnIndex, 1)
   }
   return collection()
 }
 
-function persistCollection(key: string, sessions: readonly DurableAgentSession[], selectedSessionKey: string | null): DurableAgentSessionCollection {
-  const collection = boundedCollection(sessions, selectedSessionKey)
+function persistCollection(
+  key: string,
+  sessions: readonly DurableAgentSession[],
+  selectedSessionKey: string | null,
+  protectedTurn: Readonly<{ sessionKey: string; completedAt: string }> | null = null,
+): DurableAgentSessionCollection {
+  const collection = boundedCollection(sessions, selectedSessionKey, protectedTurn)
   try {
     if (collection.sessions.length === 0 && collection.selectedSessionKey === null) window.localStorage.removeItem(key)
     else window.localStorage.setItem(key, JSON.stringify(collection))
@@ -263,13 +282,14 @@ function projectSessions(
   durable.forEach((descriptor) => {
     const descriptorKey = sessionKey(descriptor.provider, descriptor.sessionId)
     const isVerified = verified.some((session) => sessionKey(session.provider, session.sessionId) === descriptorKey)
+    const isWorking = activeSessionId === descriptorKey && isVerified
     sessions.push({
       id: descriptorKey,
       role: descriptor.role,
       providerLabel: descriptor.provider,
       assignment: descriptor.assignment,
-      status: activeSessionId === descriptorKey ? "working" : isVerified ? "ready" : "resume unverified",
-      evidence: activeSessionId === descriptorKey ? "live agent stream" : isVerified ? "resumable session" : "saved transcript · server verification required",
+      status: isWorking ? "working" : isVerified ? "ready" : "resume unverified",
+      evidence: isWorking ? "live agent stream" : isVerified ? "resumable session" : "saved transcript · server verification required",
       truth: isVerified ? "live" : "resume-unverified",
       kind: "durable-session",
       mode: descriptor.reviewPath ? "review" : "delegate",
@@ -377,10 +397,10 @@ export function useExperienceAgentSessions({
   }, [invalidateOperation])
 
   const selectSession = useCallback((selectedKey: string | null) => {
-    if (operationRef.current) return
+    if (operationRef.current) return false
     const sessions = sessionsRef.current
     const selected = selectedKey === null ? null : sessions.find((session) => sessionKey(session.provider, session.sessionId) === selectedKey)
-    if (selectedKey !== null && !selected) return
+    if (selectedKey !== null && !selected) return false
     const key = storageKey(ownerScope, worldScope)
     const nextKey = selected ? sessionKey(selected.provider, selected.sessionId) : null
     let persisted: DurableAgentSessionCollection
@@ -388,13 +408,14 @@ export function useExperienceAgentSessions({
       persisted = persistCollection(key, sessions, nextKey)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED")
-      return
+      return false
     }
     sessionsRef.current = persisted.sessions
     selectedSessionKeyRef.current = persisted.selectedSessionKey
     setSavedSessions(persisted.sessions)
     setSelectedSessionKey(persisted.selectedSessionKey)
     setDurableSession(selected && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === nextKey) ? selected : null)
+    return true
   }, [ownerScope, worldScope])
 
   const executeTurn = useCallback(async (input: RunClaudeTurnInput & { provider: AgentProvider }) => {
@@ -611,7 +632,13 @@ export function useExperienceAgentSessions({
       }
       const nextSessions = upsertSession(sessionsRef.current, settledSession)
       const settledKey = sessionKey(settledSession.provider, settledSession.sessionId)
-      const persisted = persistCollection(operationStorageKey, nextSessions, settledKey)
+      let persisted: DurableAgentSessionCollection
+      try {
+        persisted = persistCollection(operationStorageKey, nextSessions, settledKey, { sessionKey: settledKey, completedAt })
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED"
+        throw new AgentTurnCommittedPersistenceError(message)
+      }
       sessionsRef.current = persisted.sessions
       selectedSessionKeyRef.current = persisted.selectedSessionKey
       setSavedSessions(persisted.sessions)
@@ -629,7 +656,7 @@ export function useExperienceAgentSessions({
       // A user cancellation is different: it does not disprove an already verified descriptor.
       const error = cause as Error
       if (!isCurrent()) throw cause
-      if (error?.message === "AGENT_SESSION_PERSISTENCE_FAILED") {
+      if (error instanceof AgentTurnCommittedPersistenceError) {
         sessionsRef.current = operation.priorCollection
         selectedSessionKeyRef.current = operation.priorSelectedSessionKey
         setSavedSessions(operation.priorCollection)
