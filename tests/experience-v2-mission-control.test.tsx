@@ -65,6 +65,8 @@ describe("Experience V2 Mission Control", () => {
     expect(screen.getByText("Selected · workspace-shell.tsx")).toBeTruthy()
     expect(screen.getByText("Codex · implementing")).toBeTruthy()
     expect(screen.queryByText(/KPI|Home|System Space|WilliamOS Space/)).toBeNull()
+    expect(screen.getByText("3 Spaces")).toBeTruthy()
+    expect(screen.queryByText("3 live Spaces")).toBeNull()
   })
 
   it("re-enters the exact selected Space id without rewriting its working context", async () => {

@@ -135,6 +135,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [storage, setStorage] = useState<SpaceStorage>("server")
   const [spaceSummaries, setSpaceSummaries] = useState<readonly SpaceSummary[]>([])
   const [multiSpaceAvailable, setMultiSpaceAvailable] = useState(false)
+  const [spaceCollectionAvailable, setSpaceCollectionAvailable] = useState(true)
+  const [spaceCollectionReason, setSpaceCollectionReason] = useState<string | null>(null)
   const [transitionMessage, setTransitionMessage] = useState<string | null>(null)
   const [switchingSpace, setSwitchingSpace] = useState(false)
   const [runningTools, setRunningTools] = useState<Readonly<Record<"tests" | "terminal", string | null>>>({ tests: null, terminal: null })
@@ -286,6 +288,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         preferenceStorageKey: payload.preferenceStorageKey,
         multiSpaceAvailable: payload.multiSpaceAvailable,
         spaces: payload.spaces,
+        collectionAvailable: payload.collectionAvailable,
+        collectionReason: payload.collectionReason,
       }
       const preferenceKey = typeof envelope.preferenceStorageKey === "string"
         ? `williamos:selected-space:${envelope.preferenceStorageKey}` : null
@@ -339,6 +343,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setStorage(storageMode)
         setSpaceSummaries(payload.spaces ?? [{ worldId: payload.worldId, name, space: payload.space, updatedAt: new Date(0).toISOString() }])
         setMultiSpaceAvailable(payload.multiSpaceAvailable === true)
+        setSpaceCollectionAvailable(payload.collectionAvailable !== false)
+        setSpaceCollectionReason(payload.collectionAvailable === false ? payload.collectionReason ?? "SPACE_COLLECTION_UNAVAILABLE" : null)
         preferenceStorageKeyRef.current = typeof payload.preferenceStorageKey === "string"
           ? `williamos:selected-space:${payload.preferenceStorageKey}` : null
         if (preferenceStorageKeyRef.current) safeLocalStorageSet(preferenceStorageKeyRef.current, payload.worldId)
@@ -973,8 +979,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setSpace(restored)
     setPersistenceError(null)
     setStorage(storageRef.current)
-    setSpaceSummaries(payload.spaces ?? spaceSummaries)
+    setSpaceSummaries((known) => payload.collectionAvailable === false
+      ? mergeSpaceSummaries(known, payload)
+      : payload.spaces ?? known)
     setMultiSpaceAvailable(payload.multiSpaceAvailable === true)
+    setSpaceCollectionAvailable(payload.collectionAvailable !== false)
+    setSpaceCollectionReason(payload.collectionAvailable === false ? payload.collectionReason ?? "SPACE_COLLECTION_UNAVAILABLE" : null)
     setProject(payload.project ?? project)
     setSpine(payload.spine ?? EMPTY_SPINE)
     setJudgment(payload.judgment ?? null)
@@ -1276,12 +1286,26 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       ) : null}
 
       {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} historical={councilHistorical} onDismiss={() => setOverlay(null)} onAdvisoryAction={(action) => handleCouncilAction(action)} /> : councilView === "convening" ? <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={() => setOverlay(null)}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{councilBusy ? "Convening five real advisory perspectives…" : "Council unavailable"}</strong><p className={spatial.muted}>{councilError ?? councilQuestion ?? "Preparing the current question."}</p>{councilError && councilQuestion ? <button type="button" className={spatial.utilityButton} onClick={() => void summonCouncil(councilQuestion)}>Try again</button> : null}</div></section> : <CouncilHistoryBrowser history={councilHistory} loading={councilBusy} error={councilError} onDismiss={() => setOverlay(null)} onSelect={(session) => { setCouncilSession(session); setCouncilHistorical(true) }} onNew={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} />}</div> : null}
-      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => { if (!switchingSpace) setOverlay(null) }} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} transitionMessage={transitionMessage} transitioning={switchingSpace} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
+      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => { if (!switchingSpace) setOverlay(null) }} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} transitionMessage={transitionMessage} transitioning={switchingSpace} collectionAvailable={spaceCollectionAvailable} collectionReason={spaceCollectionReason} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
     </main>
   )
 }
 function safeLocalStorageGet(key: string): string | null {
   try { return window.localStorage.getItem(key) } catch { return null }
+}
+
+function mergeSpaceSummaries(known: readonly SpaceSummary[], payload: SpaceEnvelope): readonly SpaceSummary[] {
+  const merged = new Map(known.map((summary) => [summary.worldId, summary]))
+  const currentName = payload.name ?? payload.project?.name ?? "Space"
+  const incoming = payload.spaces ?? [{
+    worldId: payload.worldId, name: currentName, space: payload.space, updatedAt: new Date(0).toISOString(),
+  }]
+  for (const summary of incoming) merged.set(summary.worldId, summary)
+  if (!merged.has(payload.worldId)) {
+    merged.set(payload.worldId, { worldId: payload.worldId, name: currentName, space: payload.space, updatedAt: new Date(0).toISOString() })
+  }
+  const current = merged.get(payload.worldId)!
+  return [current, ...[...merged.values()].filter((summary) => summary.worldId !== payload.worldId)].slice(0, 12)
 }
 
 function safeLocalStorageSet(key: string, value: string): void {

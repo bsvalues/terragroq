@@ -51,6 +51,8 @@ export type MissionControlSurfaceProps = Readonly<{
   onCreateSpace?: (name: string) => Promise<boolean | void>
   transitionMessage?: string | null
   transitioning?: boolean
+  collectionAvailable?: boolean
+  collectionReason?: string | null
 }>
 
 const stateLabel: Record<MissionControlSpaceProjection["state"], string> = {
@@ -144,13 +146,15 @@ export function MissionControlSurface({
   onCreateSpace,
   transitionMessage,
   transitioning = false,
+  collectionAvailable = true,
+  collectionReason = null,
 }: MissionControlSurfaceProps) {
   const dialogRef = useRef<HTMLElement>(null)
   const [creating, setCreating] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const createFlightRef = useRef(false)
-  const liveSpaceCount = spaces.length
+  const spaceCount = spaces.length
   const submitCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (createFlightRef.current || !onCreateSpace) return
@@ -200,7 +204,7 @@ export function MissionControlSurface({
           <h1 id="mission-control-title">Mission Control</h1>
         </div>
         <span className={styles.headerActions}>
-          <span className={styles.spaceCount}>{liveSpaceCount} live {liveSpaceCount === 1 ? "Space" : "Spaces"}</span>
+          <span className={styles.spaceCount}>{spaceCount} {spaceCount === 1 ? "Space" : "Spaces"}</span>
           <button type="button" className={styles.newSpace} disabled={!multiSpaceAvailable || !onCreateSpace || submitting} onClick={() => setCreating(true)}>New Space</button>
         </span>
         <button type="button" className={styles.dismiss} disabled={transitioning} onClick={onDismiss} aria-label="Dismiss Mission Control">
@@ -219,6 +223,7 @@ export function MissionControlSurface({
       ) : null}
 
       {!multiSpaceAvailable ? <p className={styles.degraded}>New Space is unavailable because server persistence is unavailable. This browser-local Space remains usable.</p> : null}
+      {!collectionAvailable ? <p className={styles.degraded} role="status">Space collection is temporarily unavailable. Known Spaces remain enterable. {collectionReason}</p> : null}
       {transitionMessage ? <p className={styles.transition} role="status">{transitionMessage}</p> : null}
 
       <main className={styles.spaceField}>

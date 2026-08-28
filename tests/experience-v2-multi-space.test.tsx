@@ -30,6 +30,17 @@ const envelope = (id: "a" | "b") => ({
 })
 
 describe("Experience V2 multi-Space re-entry", () => {
+  it("keeps an initial degraded collection truthful as the exact singleton the server returned", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/environment/space"
+      ? { ok: true, status: 200, json: async () => ({ ...envelope("a"), spaces: [summaries[0]], collectionAvailable: false, collectionReason: "SPACE_COLLECTION_UNAVAILABLE" }) }
+      : { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }))
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Enter Beta" })).toBeNull()
+    expect(screen.getByText(/Space collection is temporarily unavailable.*SPACE_COLLECTION_UNAVAILABLE/i)).toBeTruthy()
+  })
+
   it("keeps server Space hydration usable when reading the opaque preference hint throws", async () => {
     const getItem = Storage.prototype.getItem
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (key) {
@@ -123,6 +134,48 @@ describe("Experience V2 multi-Space re-entry", () => {
     await user.click(screen.getByRole("button", { name: "Enter Alpha" }))
     await waitFor(() => expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy())
     expect(order.lastIndexOf("PUT:b")).toBeLessThan(order.lastIndexOf("GET:a"))
+  })
+
+  it("preserves known real Spaces when a committed switch returns degraded singleton collection metadata", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/environment/space" && init?.method === "PUT") return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init.body)).space }) }
+      if (url === "/api/environment/space?worldId=b") return { ok: true, status: 200, json: async () => ({
+        ...envelope("b"), spaces: [summaries[1]], collectionAvailable: false, collectionReason: "SPACE_COLLECTION_UNAVAILABLE",
+      }) }
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    }))
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    expect(screen.getByRole("button", { name: "Enter Alpha" })).toBeTruthy()
+    expect(screen.getByText(/Space collection is temporarily unavailable.*SPACE_COLLECTION_UNAVAILABLE/i)).toBeTruthy()
+  })
+
+  it("preserves known real Spaces when a committed creation returns degraded singleton collection metadata", async () => {
+    const gamma = { worldId: "c", name: "Gamma", space: beta, updatedAt: "2026-08-28T11:00:00Z" }
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/environment/space" && init?.method === "PUT") return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init.body)).space }) }
+      if (url === "/api/environment/space" && init?.method === "POST") return { ok: true, status: 201, json: async () => ({
+        ...envelope("b"), ...gamma, spaces: [gamma], collectionAvailable: false, collectionReason: "SPACE_COLLECTION_UNAVAILABLE",
+      }) }
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    }))
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "New Space" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "Space name" }), { target: { value: "Gamma" } })
+    fireEvent.submit(screen.getByRole("textbox", { name: "Space name" }).closest("form")!)
+    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Gamma, current Space" })).toBeTruthy())
+    expect(screen.getByRole("button", { name: "Enter Alpha" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Enter Beta" })).toBeTruthy()
+    expect(screen.getByText(/Space collection is temporarily unavailable.*SPACE_COLLECTION_UNAVAILABLE/i)).toBeTruthy()
   })
 
   it("keeps A current and Mission Control open when exact B load fails", async () => {

@@ -52,6 +52,8 @@ export type SpaceEnvelope = Readonly<{
   preferenceStorageKey?: string
   multiSpaceAvailable?: boolean
   spaces?: readonly SpaceSummary[]
+  collectionAvailable?: boolean
+  collectionReason?: string
 }>
 
 export type SpaceSummary = Readonly<{
