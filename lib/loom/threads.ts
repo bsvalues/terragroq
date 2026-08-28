@@ -18,6 +18,12 @@ export interface ThreadResumeVerdict {
   detail?: string
 }
 
+export interface LoomThreadDescriptor {
+  owner: string
+  mode: "agent" | "review"
+  path: string | null
+}
+
 /**
  * Decide whether a resume may proceed.
  *
@@ -46,16 +52,29 @@ export function assertThreadResume(input: {
  * An unreadable ledger returns null, which the rule above treats as refusal. A lookup that cannot be
  * performed is not permission to proceed.
  */
-export async function loomThreadOwner(sessionId: string): Promise<string | null> {
+export async function loomThreadDescriptor(sessionId: string): Promise<LoomThreadDescriptor | null> {
   try {
     const result = await pool.query(
-      `SELECT "userId" FROM "governance_event"
-        WHERE "entityType" = 'loom_agent' AND "entityId" = $1
+      `SELECT "userId", "metadata" FROM "governance_event"
+        WHERE "entityType" = 'loom_agent' AND "entityId" = $1 AND "eventType" = 'LOOP_STARTED'
         ORDER BY "createdAt" ASC LIMIT 1`,
       [sessionId],
     )
-    return (result.rows[0]?.userId as string | undefined) ?? null
+    const row = result.rows[0] as { userId?: unknown; metadata?: unknown } | undefined
+    if (typeof row?.userId !== "string") return null
+    const metadata = row.metadata && typeof row.metadata === "object"
+      ? row.metadata as Record<string, unknown>
+      : null
+    return {
+      owner: row.userId,
+      mode: metadata?.mode === "review" ? "review" : "agent",
+      path: typeof metadata?.path === "string" ? metadata.path : null,
+    }
   } catch {
     return null
   }
+}
+
+export async function loomThreadOwner(sessionId: string): Promise<string | null> {
+  return (await loomThreadDescriptor(sessionId))?.owner ?? null
 }

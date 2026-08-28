@@ -6,7 +6,7 @@ import fs from "node:fs/promises"
 import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/providers"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
-import { assertThreadResume, loomThreadOwner } from "@/lib/loom/threads"
+import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
 import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
 
   if (reviewMode) {
     const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
-    if (!resolved.ok || !resolved.relative || resolved.relative === ".") {
+    if (!resolved.ok || !resolved.absolute || !resolved.relative || resolved.relative === ".") {
       return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
     }
     if ([...resolved.relative].some((character) => {
@@ -65,6 +65,14 @@ export async function POST(request: Request) {
       return code <= 31 || code === 127
     })) {
       return Response.json({ error: "PATH_INVALID" }, { status: 400 })
+    }
+    try {
+      const target = await fs.stat(resolved.absolute)
+      if (!target.isFile()) {
+        return Response.json({ error: "REVIEW_FILE_REQUIRED" }, { status: 400 })
+      }
+    } catch {
+      return Response.json({ error: "REVIEW_FILE_REQUIRED" }, { status: 400 })
     }
     if (body.focus !== undefined && typeof body.focus !== "string") {
       return Response.json({ error: "FOCUS_INVALID" }, { status: 400 })
@@ -101,16 +109,20 @@ export async function POST(request: Request) {
   }
   const resuming = requested !== null && body.resume === true
   const sessionId = requested ?? randomUUID()
+  const priorThread = resuming && requested ? await loomThreadDescriptor(requested) : null
 
   // Shape is not ownership. Resuming replays a thread's whole history, so the id has to belong to
   // the caller -- otherwise anyone holding another operator's id can read their conversation.
   const resume = assertThreadResume({
     resuming,
-    owner: resuming && requested ? await loomThreadOwner(requested) : null,
+    owner: priorThread?.owner ?? null,
     userId: session.user.id,
   })
   if (!resume.ok) {
     return Response.json({ error: resume.failure, detail: resume.detail }, { status: 403, headers: { "cache-control": "no-store" } })
+  }
+  if (reviewMode && resuming && (priorThread?.mode !== "review" || priorThread.path !== reviewPath)) {
+    return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
   }
 
   // Generic cloud turns spawn the CLI with acceptEdits against the real checkout, which makes them

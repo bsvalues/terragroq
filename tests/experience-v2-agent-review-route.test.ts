@@ -4,31 +4,33 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const seams = vi.hoisted(() => ({
   spawn: vi.fn(),
+  stat: vi.fn(),
   getSession: vi.fn(),
   resolveRealWorkspacePath: vi.fn(),
   requireWorkContext: vi.fn(),
-  loomThreadOwner: vi.fn(),
+  poolQuery: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
 }))
 
 vi.mock("node:child_process", () => ({ spawn: seams.spawn }))
+vi.mock("node:fs/promises", () => ({
+  default: { realpath: vi.fn(), stat: seams.stat },
+}))
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/loom/workspace", () => ({ resolveRealWorkspacePath: seams.resolveRealWorkspacePath }))
 vi.mock("@/lib/governance/work-context-gate", () => ({
   requireWorkContext: seams.requireWorkContext,
   workContextRefusal: vi.fn(),
 }))
-vi.mock("@/lib/loom/threads", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/loom/threads")>()
-  return { ...actual, loomThreadOwner: seams.loomThreadOwner }
-})
+vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
 vi.mock("@/lib/loom/receipts", () => ({
   recordLoomStart: seams.recordLoomStart,
   recordLoomEnd: seams.recordLoomEnd,
 }))
 
 import { POST } from "@/app/api/loom/agent/route"
+import { loomThreadDescriptor, loomThreadOwner } from "@/lib/loom/threads"
 
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter()
@@ -56,7 +58,10 @@ describe("selected-file review route", () => {
       relative: "src/example.ts",
     })
     seams.requireWorkContext.mockResolvedValue({ ok: true })
-    seams.loomThreadOwner.mockResolvedValue("owner-1")
+    seams.poolQuery.mockResolvedValue({
+      rows: [{ userId: "owner-1", metadata: { mode: "review", path: "src/example.ts" } }],
+    })
+    seams.stat.mockResolvedValue({ isFile: () => true })
   })
 
   it("spawns an exact path-bound Claude review with only read-only tools", async () => {
@@ -133,6 +138,22 @@ describe("selected-file review route", () => {
   })
 
   it.each([
+    ["missing leaf", async () => { throw Object.assign(new Error("missing"), { code: "ENOENT" }) }],
+    ["directory leaf", async () => ({ isFile: () => false })],
+  ])("rejects an existing-path resolver result whose %s is not a regular file", async (_label, statLeaf) => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    seams.stat.mockImplementationOnce(statLeaf)
+
+    const response = await POST(request({ mode: "review", path: "src/example.ts" }))
+    if (response.status === 200) child.emit("close", 0)
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "REVIEW_FILE_REQUIRED" })
+    expect(seams.spawn).not.toHaveBeenCalled()
+  })
+
+  it.each([
     ["non-string", { source: "browser" }, "FOCUS_INVALID"],
     ["overlong", "x".repeat(2001), "FOCUS_TOO_LONG"],
   ])("rejects %s review focus before spawning", async (_label, focus, error) => {
@@ -153,7 +174,7 @@ describe("selected-file review route", () => {
 
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toEqual({ error: "SESSION_ID_REQUIRED" })
-    expect(seams.loomThreadOwner).not.toHaveBeenCalled()
+    expect(seams.poolQuery).not.toHaveBeenCalled()
     expect(seams.spawn).not.toHaveBeenCalled()
   })
 
@@ -169,7 +190,10 @@ describe("selected-file review route", () => {
     }))
 
     expect(response.status).toBe(200)
-    expect(seams.loomThreadOwner).toHaveBeenCalledWith("123e4567-e89b-42d3-a456-426614174000")
+    expect(seams.poolQuery).toHaveBeenCalledWith(
+      expect.stringContaining("loom_agent"),
+      ["123e4567-e89b-42d3-a456-426614174000"],
+    )
     const args = seams.spawn.mock.calls[0][1]
     expect(args).toContain("--resume")
     expect(args).not.toContain("--session-id")
@@ -179,7 +203,9 @@ describe("selected-file review route", () => {
   })
 
   it("refuses a review resume that the existing ownership check does not authenticate", async () => {
-    seams.loomThreadOwner.mockResolvedValueOnce("another-owner")
+    seams.poolQuery.mockResolvedValueOnce({
+      rows: [{ userId: "another-owner", metadata: { mode: "review", path: "src/example.ts" } }],
+    })
 
     const response = await POST(request({
       mode: "review",
@@ -190,6 +216,27 @@ describe("selected-file review route", () => {
 
     expect(response.status).toBe(403)
     await expect(response.json()).resolves.toMatchObject({ error: "THREAD_NOT_YOURS" })
+    expect(seams.spawn).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["Builder session", { mode: "agent", path: null }],
+    ["different-file Reviewer session", { mode: "review", path: "src/other.ts" }],
+  ])("refuses a caller-owned %s as an incompatible review resume", async (_label, metadata) => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata }] })
+
+    const response = await POST(request({
+      mode: "review",
+      path: "src/example.ts",
+      sessionId: "123e4567-e89b-42d3-a456-426614174000",
+      resume: true,
+    }))
+    if (response.status === 200) child.emit("close", 0)
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({ error: "THREAD_DESCRIPTOR_MISMATCH" })
     expect(seams.spawn).not.toHaveBeenCalled()
   })
 
@@ -286,5 +333,35 @@ describe("selected-file review route", () => {
         reason: null,
       },
     })
+  })
+})
+
+describe("durable workroom thread descriptors", () => {
+  it("reads the authoritative first LOOP_STARTED review descriptor", async () => {
+    seams.poolQuery.mockResolvedValueOnce({
+      rows: [{ userId: "owner-1", metadata: { mode: "review", path: "src/example.ts" } }],
+    })
+
+    await expect(loomThreadDescriptor("123e4567-e89b-42d3-a456-426614174000")).resolves.toEqual({
+      owner: "owner-1",
+      mode: "review",
+      path: "src/example.ts",
+    })
+    const [query, values] = seams.poolQuery.mock.calls.at(-1)!
+    expect(query).toContain(`"eventType" = 'LOOP_STARTED'`)
+    expect(query).toContain(`ORDER BY "createdAt" ASC LIMIT 1`)
+    expect(values).toEqual(["123e4567-e89b-42d3-a456-426614174000"])
+  })
+
+  it("keeps legacy generic sessions owner-readable while classifying them as builders", async () => {
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: null }] })
+    await expect(loomThreadDescriptor("123e4567-e89b-42d3-a456-426614174000")).resolves.toEqual({
+      owner: "owner-1",
+      mode: "agent",
+      path: null,
+    })
+
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: null }] })
+    await expect(loomThreadOwner("123e4567-e89b-42d3-a456-426614174000")).resolves.toBe("owner-1")
   })
 })
