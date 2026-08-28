@@ -682,6 +682,13 @@ export function useExperienceAgentSessions({
         setDurableSession(null)
       } else if (prior) {
         persistCollection(operationStorageKey, sessionsRef.current, selectedSessionKeyRef.current)
+        if (error?.name !== "AbortError") {
+          const priorKey = sessionKey(prior.provider, prior.sessionId)
+          const remainingVerified = verifiedSessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
+          verifiedSessionsRef.current = remainingVerified
+          setVerifiedSessions((current) => current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey))
+          setDurableSession(null)
+        }
       } else {
         persistCollection(operationStorageKey, sessionsRef.current, selectedSessionKeyRef.current)
       }
@@ -742,7 +749,12 @@ export function AgentSessionStrip({
 }) {
   if (sessions.length === 0 && !runningSessionId) return null
   return (
-    <nav className={className ?? "flex items-center justify-center gap-2"} aria-label="Durable agent sessions">
+    <nav
+      className={className ?? "flex items-center justify-center gap-2"}
+      aria-label="Durable agent sessions"
+      tabIndex={0}
+      style={{ display: "flex", maxWidth: "60vw", minWidth: 0, overflowX: "auto", flexWrap: "nowrap", justifyContent: "flex-start", scrollbarGutter: "stable" }}
+    >
       {runningSessionId ? (
         <button
           type="button"
@@ -761,6 +773,7 @@ export function AgentSessionStrip({
           aria-label={`${session.role} · ${session.providerLabel} · ${session.assignment}`}
           onClick={() => onSelect?.(session)}
           className="flex min-w-36 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"
+          style={{ flex: "0 0 auto" }}
         >
           <span aria-hidden className="grid size-5 place-items-center rounded-full border border-[#566653] text-[9px]">
             {session.role.slice(0, 1).toUpperCase()}

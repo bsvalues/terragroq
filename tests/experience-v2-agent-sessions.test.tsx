@@ -57,6 +57,32 @@ function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_S
 let expose: ProviderNeutralAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
+  it("keeps all twelve bounded session controls horizontally reachable and selectable", () => {
+    const onSelect = vi.fn()
+    const sessions = Array.from({ length: 12 }, (_, index) => ({
+      id: `Codex:session-${index}`,
+      role: "Builder",
+      providerLabel: "Codex",
+      assignment: `src/session-${index}.ts`,
+      status: "resume unverified",
+      evidence: "saved transcript · server verification required",
+      truth: "resume-unverified" as const,
+      kind: "durable-session" as const,
+      mode: "delegate" as const,
+    }))
+
+    render(<AgentSessionStrip sessions={sessions} onSelect={onSelect} />)
+
+    const strip = screen.getByRole("navigation", { name: "Durable agent sessions" })
+    expect(strip.getAttribute("tabindex")).toBe("0")
+    expect(strip.style.overflowX).toBe("auto")
+    expect(strip.style.flexWrap).toBe("nowrap")
+    const buttons = within(strip).getAllByRole("button")
+    expect(buttons).toHaveLength(12)
+    fireEvent.click(buttons[11])
+    expect(onSelect).toHaveBeenCalledWith(sessions[11])
+  })
+
   it("migrates the legacy v1 descriptor into a selected bounded collection without claiming it is live", async () => {
     const key = "williamos:agent-session:owner-1:terrafusion"
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
@@ -463,6 +489,45 @@ describe("Experience V2 real agent sessions", () => {
     await expect(turn).rejects.toMatchObject({ name: "AbortError" })
   })
 
+  it("demotes a verified resumed session after a recoverable failed turn while preserving its canonical transcript", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, resumed: false },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Canonical first result" } },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, resumed: true },
+        { type: "done", code: null, reason: "TIMEOUT" },
+      ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await act(async () => {
+      await expose!.runClaudeTurn({ role: "Builder", assignment: "src/app.ts", prompt: "Start." })
+    })
+    expect(expose!.sessions).toEqual([expect.objectContaining({ truth: "live", lastResult: "Canonical first result" })])
+
+    let failure: unknown
+    await act(async () => {
+      try {
+        await expose!.runClaudeTurn({ role: "Builder", assignment: "src/app.ts", prompt: "Resume." })
+      } catch (error) {
+        failure = error
+      }
+    })
+    expect(failure).toEqual(expect.objectContaining({ message: "AGENT_TURN_FAILED:TIMEOUT" }))
+
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ sessionId, resume: true })
+    await waitFor(() => expect(expose!.sessions).toEqual([expect.objectContaining({
+      id: `Claude:${sessionId}`,
+      truth: "resume-unverified",
+      status: "resume unverified",
+      lastResult: "Canonical first result",
+    })]))
+    expect(expose!.descriptorState).toBe("unverified")
+  })
+
   it("requires a fresh provider choice and cancels stale Delegate intent when selection changes", async () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174000"
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -600,6 +665,58 @@ describe("Experience V2 real agent sessions", () => {
     expect(diffReads).toBeGreaterThanOrEqual(2)
     expect(screen.getByText("AGENT_SESSION_PERSISTENCE_FAILED")).toBeTruthy()
     expect(window.localStorage.getItem("williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion")).toBeNull()
+  })
+
+  it.each([
+    ["dirty-conflict", true, false, "Codex saved src/app.ts, but Source has newer unsaved edits. Your buffer was preserved. Transcript persistence also failed (AGENT_SESSION_PERSISTENCE_FAILED)."],
+    ["failed refresh", false, true, "Codex saved src/app.ts, but Source or Changes could not refresh. Transcript persistence also failed (AGENT_SESSION_PERSISTENCE_FAILED)."],
+  ])("surfaces both committed transcript persistence failure and %s", async (_case, makeDirty, failRefresh, expected) => {
+    const sessionId = `codex-combined-${failRefresh ? "failed" : "dirty"}`
+    let sourceReads = 0
+    let diffReads = 0
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        sourceReads += 1
+        if (failRefresh && sourceReads > 1) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      }
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
+        diffReads += 1
+        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+      }
+      if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "result", text: "The repository mutation committed." },
+        { type: "done", code: 0, reason: null },
+      ))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+    const source = await screen.findByLabelText("Source content") as HTMLTextAreaElement
+    if (makeDirty) fireEvent.change(source, { target: { value: "owner unsaved buffer\n" } })
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Update the selected file." } })
+    const durableStorage = window.localStorage
+    vi.stubGlobal("localStorage", {
+      getItem: durableStorage.getItem.bind(durableStorage), removeItem: durableStorage.removeItem.bind(durableStorage),
+      clear: durableStorage.clear.bind(durableStorage), key: durableStorage.key.bind(durableStorage),
+      get length() { return durableStorage.length }, setItem() { throw new DOMException("quota", "QuotaExceededError") },
+    })
+
+    fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+
+    expect(await screen.findByText(expected)).toBeTruthy()
+    expect(diffReads).toBeGreaterThanOrEqual(2)
+    expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe(makeDirty ? "owner unsaved buffer\n" : "export const version = 1\n")
   })
 
   it("restores canonical session inspection and excludes unverified hints from live Mission Control", async () => {

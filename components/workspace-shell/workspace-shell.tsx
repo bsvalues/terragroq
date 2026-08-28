@@ -801,15 +801,22 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           if (!(error instanceof AgentTurnCommittedPersistenceError)) throw error
           committedPersistenceError = error
         }
+        let refreshWarning: string | null = null
         if (promotedPath) {
           const refreshed = await refreshVerifiedChange(promotedPath)
           if (refreshed === "dirty-conflict") {
-            setLineReply(`Codex saved ${promotedPath}, but Source has newer unsaved edits. Your buffer was preserved.`)
+            refreshWarning = `Codex saved ${promotedPath}, but Source has newer unsaved edits. Your buffer was preserved.`
           } else if (refreshed === "failed") {
-            setLineReply(`Codex saved ${promotedPath}, but Source or Changes could not refresh.`)
+            refreshWarning = `Codex saved ${promotedPath}, but Source or Changes could not refresh.`
           }
         }
-        if (committedPersistenceError) setLineReply(committedPersistenceError.message)
+        if (committedPersistenceError) {
+          setLineReply(refreshWarning
+            ? `${refreshWarning} Transcript persistence also failed (${committedPersistenceError.message}).`
+            : committedPersistenceError.message)
+        } else if (refreshWarning) {
+          setLineReply(refreshWarning)
+        }
         return
       }
       const response = await fetch("/api/environment/line", {
