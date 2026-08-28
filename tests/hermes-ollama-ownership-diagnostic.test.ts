@@ -49,7 +49,7 @@ describe("#1046 read-only ownership diagnostic", () => {
     for (const marker of ["REDACTED_PRIVATE_KEY", "bearer|basic", "set-cookie", "api[_-]?key", "[REDACTED]"]) expect(source.toLowerCase()).toContain(marker.toLowerCase())
   })
 
-  it("finds a generic Docker resident through port or model-mount ownership signals", () => {
+  it.skipIf(process.platform !== "win32")("finds a generic Docker resident through port or model-mount ownership signals", () => {
     const command = [
       `$source = Get-Content -Raw -LiteralPath '${scriptPath.replaceAll("'", "''")}'`,
       "$tokens = $null; $errors = $null",
