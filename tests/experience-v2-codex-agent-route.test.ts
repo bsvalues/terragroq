@@ -92,7 +92,7 @@ describe("durable Codex delegate route", () => {
     seams.closeAndWait.mockResolvedValue(undefined)
     seams.sanitize.mockImplementation((value: unknown) => String(value ?? "")
       .replace(/token-[A-Za-z0-9._-]+/gi, "[REDACTED]"))
-    seams.readAccount.mockResolvedValue({ authType: "chatgpt", email: "owner@example.test", requiresOpenaiAuth: false })
+    seams.readAccount.mockResolvedValue({ authType: "chatgpt", email: "owner@example.test", requiresOpenaiAuth: true })
     seams.recordLoomStart.mockResolvedValue(undefined)
     seams.recordLoomEnd.mockResolvedValue(undefined)
     seams.recordLoomCodexAssignment.mockResolvedValue(undefined)

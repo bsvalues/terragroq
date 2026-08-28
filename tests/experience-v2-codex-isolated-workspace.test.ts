@@ -10,6 +10,7 @@ import {
   cleanupCodexIsolatedWorkspace,
   createCodexIsolatedWorkspace,
   inspectCodexIsolatedWorkspace,
+  removeCodexDisposableDirectoryWithRetry,
 } from "@/lib/loom/codex-isolated-workspace"
 
 const run = promisify(execFile)
@@ -37,6 +38,46 @@ async function fixture() {
 }
 
 describe("product-local Codex disposable worktree", () => {
+  it("retries only transient directory-release failures with bounded backoff", async () => {
+    const attempts: string[] = []
+    const delays: number[] = []
+    const remove = async (target: string) => {
+      attempts.push(target)
+      if (attempts.length < 3) {
+        const error = new Error("directory handle is still releasing") as NodeJS.ErrnoException
+        error.code = attempts.length === 1 ? "EBUSY" : "EPERM"
+        throw error
+      }
+    }
+
+    await removeCodexDisposableDirectoryWithRetry(
+      "C:\\bounded\\delegate-fixture",
+      remove,
+      async (milliseconds) => { delays.push(milliseconds) },
+    )
+
+    expect(attempts).toEqual([
+      "C:\\bounded\\delegate-fixture",
+      "C:\\bounded\\delegate-fixture",
+      "C:\\bounded\\delegate-fixture",
+    ])
+    expect(delays).toEqual([25, 50])
+  })
+
+  it("does not retry an unexpected cleanup failure", async () => {
+    const remove = async () => {
+      const error = new Error("unexpected cleanup failure") as NodeJS.ErrnoException
+      error.code = "EINVAL"
+      throw error
+    }
+
+    await expect(removeCodexDisposableDirectoryWithRetry(
+      "C:\\bounded\\delegate-fixture",
+      remove,
+      async () => { throw new Error("pause should not run") },
+    )).rejects.toMatchObject({ code: "EINVAL" })
+  })
+
   it("creates a detached worktree seeded with the exact captured target and verifies cleanup", async () => {
     const { projectRoot, runtimeRoot } = await fixture()
     const baseSha = (await run("git", ["-C", projectRoot, "rev-parse", "HEAD"])).stdout.trim()

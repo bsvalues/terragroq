@@ -9,6 +9,7 @@ import { looksBinary, resolveRealWorkspacePath, resolveWorkspacePath } from "@/l
 
 const runFile = promisify(execFile)
 const MAX_FILE_BYTES = 2_000_000
+const WINDOWS_CLEANUP_RETRY_DELAYS_MS = [25, 50, 100, 200, 400] as const
 
 export type CodexIsolatedWorkspace = Readonly<{
   projectRoot: string
@@ -59,6 +60,34 @@ async function git(cwd: string, args: readonly string[]): Promise<string> {
     windowsHide: true,
   })
   return result.stdout
+}
+
+function isTransientCleanupError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return code === "EBUSY" || code === "EPERM" || code === "EACCES" || code === "ENOTEMPTY"
+}
+
+async function wait(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
+}
+
+export async function removeCodexDisposableDirectoryWithRetry(
+  root: string,
+  remove: (target: string) => Promise<void> = async (target) => {
+    await fs.rm(target, { recursive: true, force: true })
+  },
+  pause: (milliseconds: number) => Promise<void> = wait,
+): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await remove(root)
+      return
+    } catch (error) {
+      const delay = WINDOWS_CLEANUP_RETRY_DELAYS_MS[attempt]
+      if (delay === undefined || !isTransientCleanupError(error)) throw error
+      await pause(delay)
+    }
+  }
 }
 
 function productWorktreeRoot(runtimeRoot?: string): string {
@@ -208,7 +237,10 @@ export async function cleanupCodexIsolatedWorkspace(isolated: CodexIsolatedWorks
     await git(isolated.projectRoot, ["worktree", "remove", "--force", isolated.root])
   } catch {
     try {
-      await fs.rm(isolated.root, { recursive: true, force: true })
+      // Windows can release the provider's final worktree handle a few milliseconds after the
+      // child has exited. Git may already have removed its registry entry while leaving an empty
+      // directory behind, so retry only the exact verified product-owned directory.
+      await removeCodexDisposableDirectoryWithRetry(isolated.root)
       await git(isolated.projectRoot, ["worktree", "prune"])
     } catch {
       failure("CODEX_CLEANUP_FAILED", "the disposable worktree could not be removed")

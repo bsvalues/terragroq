@@ -269,7 +269,10 @@ export async function POST(request: Request) {
           assertNotCancelled()
           const account = await client.readAccount()
           assertNotCancelled()
-          if (account.requiresOpenaiAuth === true) {
+          // `requiresOpenaiAuth` describes the App Server's required account class; it is also true
+          // for a healthy signed-in ChatGPT account. Authentication is unavailable only when the
+          // server cannot return an actual account type.
+          if (account.authType === null) {
             throw Object.assign(new Error("Codex authentication is unavailable"), { code: "CODEX_AUTH_REQUIRED" })
           }
           if (resuming) {
