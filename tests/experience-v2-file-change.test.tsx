@@ -128,17 +128,13 @@ describe("Experience V2 selected-file Change", () => {
     expect(diffReads).toBe(4)
   })
 
-  it("restores Source and settles Change when Source is minimized during its active stream", async () => {
-    let fileReads = 0
+  it("keeps a dirty Source draft and settles truthfully when minimization is attempted during Change", async () => {
     const editStream = deferredNdjson({ type: "started", file: "src/app.ts" })
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
-      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
-        fileReads += 1
-        return Promise.resolve(selectedFile(fileReads === 1 ? "export const before = true\n" : "export const after = true\n"))
-      }
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after" }))
       if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
@@ -149,13 +145,20 @@ describe("Experience V2 selected-file Change", () => {
     await openChange()
     fireEvent.click(screen.getByRole("button", { name: "Start change" }))
     expect(await screen.findByText("Working on src/app.ts.")).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Minimize Source" }))
-    expect(screen.queryByLabelText("Source content")).toBeNull()
+    fireEvent.change(screen.getByLabelText("Source content"), { target: { value: "export const draft = true\n" } })
+    const minimize = screen.getByRole("button", { name: "Minimize Source" }) as HTMLButtonElement
+    expect(minimize.disabled).toBe(true)
+    fireEvent.click(minimize)
+    expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const draft = true\n")
     editStream.finish({ type: "done", receipt: { success: true } })
 
-    await waitFor(() => expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const after = true\n"))
+    expect(await screen.findByText("Change was verified, but src/app.ts has unsaved editor changes; source was not refreshed.")).toBeTruthy()
     expect(screen.getByText("+after", { exact: false })).toBeTruthy()
-    expect(screen.getByText("Change applied; source and diff refreshed.")).toBeTruthy()
+    expect(screen.queryByText("Refreshing source and diff…")).toBeNull()
+    expect(screen.queryByText("Change applied; source and diff refreshed.")).toBeNull()
+    expect(minimize.disabled).toBe(false)
+    fireEvent.click(minimize)
+    expect(screen.queryByLabelText("Source content")).toBeNull()
   })
 
   it("sends the selected file and owner instruction to the structured edit route, then reloads source and actual diff", async () => {
