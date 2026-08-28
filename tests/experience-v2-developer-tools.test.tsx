@@ -6,6 +6,7 @@ import { DeveloperToolsSurface } from "@/components/workspace-shell/developer-to
 
 afterEach(() => {
   cleanup()
+  window.localStorage.clear()
   vi.unstubAllGlobals()
 })
 
@@ -13,6 +14,13 @@ function ndjson(...events: readonly Record<string, unknown>[]): Response {
   const body = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`
   return new Response(body, { headers: { "content-type": "application/x-ndjson" } })
 }
+
+const projectOperations = [
+  { id: "repo.status", label: "What has changed", intent: "List files", scope: "project", mutating: false },
+  { id: "repo.diff", label: "Show diff summary", intent: "Show diff", scope: "project", mutating: false },
+  { id: "repo.log", label: "Recent history", intent: "Show log", scope: "project", mutating: false },
+  { id: "build.run", label: "Build the app", intent: "Build", scope: "project", mutating: false },
+]
 
 describe("Experience V2 developer tools", () => {
   it("loads the real selected-file diff and can refresh it", async () => {
@@ -69,6 +77,41 @@ describe("Experience V2 developer tools", () => {
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ operation: "tests.run" })
   })
 
+  it("restores a completed Test run as saved browser transcript rather than current evidence", async () => {
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "started", operation: "tests.run" },
+      { type: "stdout", text: "focused suite green\n" },
+      { type: "exit", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+
+    const first = render(<DeveloperToolsSurface kind="tests" selectedPath={null} historyScope="server:world-a" />)
+    fireEvent.click(screen.getByRole("button", { name: "Run full test suite" }))
+    expect(await screen.findByText("Transcript saved in this browser.")).toBeTruthy()
+    first.unmount()
+
+    render(<DeveloperToolsSurface kind="tests" selectedPath={null} historyScope="server:world-a" />)
+    fireEvent.click(screen.getByRole("button", { name: /test.*completed.*saved browser transcript/i }))
+    expect(screen.getByText("focused suite green", { exact: false })).toBeTruthy()
+    expect(screen.getByText("Saved browser transcript · not live evidence")).toBeTruthy()
+  })
+
+  it("keeps Terminal and Test transcript switchers relevant while preserving their shared bounded history", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? ndjson({ type: "stdout", text: "terminal bytes\n" }, { type: "exit", code: 0, reason: null })
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    const terminal = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(await screen.findByText("Transcript saved in this browser.")).toBeTruthy()
+    terminal.unmount()
+
+    render(<DeveloperToolsSurface kind="tests" selectedPath={null} historyScope="server:world-a" />)
+    expect(screen.queryByRole("button", { name: /git status.*saved browser transcript/i })).toBeNull()
+  })
+
   it("offers only real bounded project operations in the Terminal surface", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ operations: [
       { id: "repo.status", label: "What has changed", intent: "List files", scope: "project", mutating: false },
@@ -82,5 +125,124 @@ describe("Experience V2 developer tools", () => {
     expect(await screen.findByRole("button", { name: "What has changed" })).toBeTruthy()
     expect(screen.queryByRole("button", { name: "Run tests" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Restart" })).toBeNull()
+  })
+
+  it("completes and runs an exact alias from the keyboard while streaming exact exit truth", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? ndjson(
+        { type: "started", operation: "repo.status", label: "What has changed" },
+        { type: "stdout", text: "## main\n" },
+        { type: "stderr", text: "warning\n" },
+        { type: "exit", code: 3, reason: null },
+      )
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git st" } })
+    fireEvent.keyDown(input, { key: "Tab" })
+    expect((input as HTMLInputElement).value).toBe("git status")
+    fireEvent.keyDown(input, { key: "Enter" })
+
+    expect(await screen.findByText("## main", { exact: false })).toBeTruthy()
+    expect(screen.getByText("warning", { exact: false })).toBeTruthy()
+    expect(screen.getByText("exit 3", { exact: false })).toBeTruthy()
+    const post = fetcher.mock.calls.find(([, init]) => init?.method === "POST")
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ operation: "repo.status" })
+  })
+
+  it("refuses arbitrary commands and extra arguments locally without posting", async () => {
+    const fetcher = vi.fn(async () => Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+
+    for (const command of ["rm -rf .", "powershell Get-ChildItem", "git status --short"]) {
+      fireEvent.change(input, { target: { value: command } })
+      fireEvent.keyDown(input, { key: "Enter" })
+      expect(await screen.findByText(`Not run: “${command}” is not a fixed project alias.`)).toBeTruthy()
+    }
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0)
+  })
+
+  it("does not trap keyboard focus when Tab has no unique fixed-alias completion", async () => {
+    const fetcher = vi.fn(async () => Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "unknown" } })
+    const tab = new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })
+
+    input.dispatchEvent(tab)
+
+    expect(tab.defaultPrevented).toBe(false)
+  })
+
+  it("restores a completed saved browser transcript only inside the same Space scope", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? ndjson({ type: "started", operation: "repo.status", label: "What has changed" }, { type: "stdout", text: "saved bytes\n" }, { type: "exit", code: 0, reason: null })
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    const first = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(await screen.findByText("Transcript saved in this browser.")).toBeTruthy()
+    first.unmount()
+
+    const reopened = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    fireEvent.click(await screen.findByRole("button", { name: /git status.*saved browser transcript/i }))
+    expect(screen.getByText("Saved browser transcript · not live evidence")).toBeTruthy()
+    expect(screen.getByText("saved bytes", { exact: false })).toBeTruthy()
+    reopened.unmount()
+
+    render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-b" />)
+    expect(screen.queryByText("saved bytes", { exact: false })).toBeNull()
+    expect(screen.queryByRole("button", { name: /git status.*saved browser transcript/i })).toBeNull()
+  })
+
+  it("persists Stop as cancelled partial output, never as completed evidence", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "started", operation: "repo.status", label: "What has changed" })}\n${JSON.stringify({ type: "stdout", text: "partial bytes\n" })}\n`))
+      },
+    })
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? new Response(body, { headers: { "content-type": "application/x-ndjson" } })
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    const first = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(await screen.findByText("partial bytes", { exact: false })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }))
+    expect(await screen.findByText("cancelled · saved browser transcript", { exact: false })).toBeTruthy()
+    expect(screen.queryByText("server-verified")).toBeNull()
+    first.unmount()
+
+    render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    fireEvent.click(await screen.findByRole("button", { name: /git status.*cancelled/i }))
+    expect(screen.getByText("partial bytes", { exact: false })).toBeTruthy()
+    expect(screen.getByText("Cancelled · not completed or live evidence")).toBeTruthy()
+  })
+
+  it("keeps completed output visible and marks it not saved when browser persistence fails", async () => {
+    const quotaStorage = {
+      getItem: (key: string) => window.localStorage.getItem(key),
+      setItem: () => { throw new DOMException("quota", "QuotaExceededError") },
+    }
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? ndjson({ type: "started", operation: "repo.status", label: "What has changed" }, { type: "stdout", text: "still visible\n" }, { type: "exit", code: 0, reason: null })
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" historyStorage={quotaStorage} />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+
+    expect(await screen.findByText("still visible", { exact: false })).toBeTruthy()
+    expect(screen.getByText("Browser transcript not saved.")).toBeTruthy()
   })
 })
