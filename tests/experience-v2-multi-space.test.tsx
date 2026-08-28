@@ -109,6 +109,49 @@ describe("Experience V2 multi-Space re-entry", () => {
     expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/environment/space?worldId=b")).toBe(true)
   })
 
+  it.each([
+    ["network rejection", async () => { throw new Error("offline") }],
+    ["non-JSON response", async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("invalid json") } })],
+    ["typed refusal", async () => ({ ok: false, status: 404, json: async () => ({ error: "SPACE_NOT_FOUND" }) })],
+  ])("keeps the valid initial Space when the saved-preference exact lookup has a %s", async (_failure, exactLookup) => {
+    window.localStorage.setItem(`williamos:selected-space:${preferenceStorageKey}`, "b")
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/environment/space") return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/environment/space?worldId=b") return exactLookup()
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    }))
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+
+    expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy()
+  })
+
+  it("ownership-checks a saved hint omitted from a degraded singleton collection before restoring it", async () => {
+    window.localStorage.setItem(`williamos:selected-space:${preferenceStorageKey}`, "b")
+    const fetchStub = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/api/environment/space") return { ok: true, status: 200, json: async () => ({
+        ...envelope("a"), spaces: [summaries[0]], collectionAvailable: false, collectionReason: "SPACE_COLLECTION_UNAVAILABLE",
+      }) }
+      if (url === "/api/environment/space?worldId=b") return { ok: true, status: 200, json: async () => ({
+        ...envelope("b"), spaces: [summaries[1]], collectionAvailable: false, collectionReason: "SPACE_COLLECTION_UNAVAILABLE",
+      }) }
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    })
+    vi.stubGlobal("fetch", fetchStub)
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+
+    expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy()
+    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/environment/space?worldId=b")).toBe(true)
+    expect(window.localStorage.getItem(`williamos:selected-space:${preferenceStorageKey}`)).toBe("b")
+  })
+
   it("awaits the exact old-Space PUT acknowledgement before loading B and preserves both places", async () => {
     const order: string[] = []
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

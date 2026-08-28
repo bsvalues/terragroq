@@ -295,12 +295,17 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         ? `williamos:selected-space:${envelope.preferenceStorageKey}` : null
       if (preferenceKey && envelope.multiSpaceAvailable) {
         const hinted = safeLocalStorageGet(preferenceKey)
-        if (hinted && hinted !== envelope.worldId && envelope.spaces?.some((item) => item.worldId === hinted)) {
-          const exactResponse = await fetch(`/api/environment/space?worldId=${encodeURIComponent(hinted)}`, { cache: "no-store" })
-          const exact = await exactResponse.json() as SpaceEnvelope & { error?: string }
-          if (exactResponse.ok && exact.worldId === hinted && exact.space) envelope = exact
-          else safeLocalStorageRemove(preferenceKey)
-        } else if (hinted && !envelope.spaces?.some((item) => item.worldId === hinted)) {
+        const hintedIsListed = envelope.spaces?.some((item) => item.worldId === hinted) === true
+        if (hinted && hinted !== envelope.worldId && (hintedIsListed || envelope.collectionAvailable === false)) {
+          try {
+            const exactResponse = await fetch(`/api/environment/space?worldId=${encodeURIComponent(hinted)}`, { cache: "no-store" })
+            const exact = await exactResponse.json() as SpaceEnvelope & { error?: string }
+            if (exactResponse.ok && exact.worldId === hinted && exact.space) envelope = exact
+            else if (!exactResponse.ok) safeLocalStorageRemove(preferenceKey)
+          } catch {
+            // Selection hints are best-effort. A failed exact lookup cannot discard the valid initial Space.
+          }
+        } else if (hinted && !hintedIsListed) {
           safeLocalStorageRemove(preferenceKey)
         }
       }
