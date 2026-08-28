@@ -124,8 +124,11 @@ describe("Experience V2 selected-file Review", () => {
 
   it.each([
     ["missing session", [{ type: "done", code: 0, reason: null }]],
+    ["session missing resumed truth", [{ type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174000" }, { type: "event", event: { type: "assistant", message: { content: [{ type: "text", text: "untrusted" }] } } }, { type: "done", code: 0, reason: null }]],
+    ["session with malformed resumed truth", [{ type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174000", resumed: "false" }, { type: "event", event: { type: "assistant", message: { content: [{ type: "text", text: "untrusted" }] } } }, { type: "done", code: 0, reason: null }]],
     ["duplicate session", [{ type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174000", resumed: false }, { type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174000", resumed: false }, { type: "done", code: 0, reason: null }]],
     ["nonzero terminal", [{ type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174000", resumed: false }, { type: "done", code: 1, reason: null }]],
+    ["terminal with malformed reason", [{ type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174000", resumed: false }, { type: "event", event: { type: "assistant", message: { content: [{ type: "text", text: "untrusted" }] } } }, { type: "done", code: 0, reason: { code: "REFUSED" } }]],
     ["post-terminal event", [{ type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174000", resumed: false }, { type: "done", code: 0, reason: null }, { type: "event", event: { type: "assistant", message: { content: [{ type: "text", text: "late" }] } } }]],
   ])("does not materialize or project an invalid %s stream", async (_case, events) => {
     vi.stubGlobal("fetch", baseFetch(() => stream(...events)))

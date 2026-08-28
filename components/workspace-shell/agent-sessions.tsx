@@ -235,19 +235,26 @@ export function useExperienceAgentSessions({
         try { event = JSON.parse(line) as Record<string, unknown> } catch { if (mode === "review") malformedReview = true; return }
         if (mode === "review" && terminalSeen) { malformedReview = true; return }
         input.onEvent?.(event)
-        if (event.type === "session" && typeof event.sessionId === "string" && SESSION_ID.test(event.sessionId)) {
-          if (mode === "review" && sessionSeen) { malformedReview = true; return }
-          sessionSeen = true
-          accepted = {
-            schemaVersion: 1,
-            sessionId: event.sessionId,
-            role,
-            provider: "Claude",
-            assignment,
-            ...(mode === "review" ? { reviewPath: reviewPath! } : {}),
-            updatedAt: new Date().toISOString(),
+        if (event.type === "session") {
+          const validSessionId = typeof event.sessionId === "string" && SESSION_ID.test(event.sessionId)
+          if (mode === "review" && (!validSessionId || typeof event.resumed !== "boolean" || sessionSeen)) {
+            malformedReview = true
+            return
           }
-          setActiveSessionId(event.sessionId)
+          if (validSessionId) {
+            sessionSeen = true
+            accepted = {
+              schemaVersion: 1,
+              sessionId: event.sessionId as string,
+              role,
+              provider: "Claude",
+              assignment,
+              ...(mode === "review" ? { reviewPath: reviewPath! } : {}),
+              updatedAt: new Date().toISOString(),
+            }
+            setActiveSessionId(event.sessionId as string)
+          }
+          return
         }
         if (mode === "review" && event.type === "event") {
           if (!sessionSeen || !event.event || typeof event.event !== "object" || Array.isArray(event.event)) { malformedReview = true; return }
@@ -262,7 +269,7 @@ export function useExperienceAgentSessions({
           return
         }
         if (event.type === "done") {
-          if (mode === "review" && (!sessionSeen || terminalSeen)) { malformedReview = true; return }
+          if (mode === "review" && (!sessionSeen || terminalSeen || event.reason !== null && typeof event.reason !== "string")) { malformedReview = true; return }
           terminalSeen = true
           finalOutcome.seen = true
           finalOutcome.code = event.code
