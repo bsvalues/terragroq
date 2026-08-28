@@ -144,17 +144,19 @@ export function loadToolRunHistory(storage: ToolRunStorage, scope: string): Tool
 
 export function persistToolRunTranscript(storage: ToolRunStorage, scope: string, rawRun: unknown): ToolRunHistoryVerdict {
   const prior = loadToolRunHistory(storage, scope)
-  if (prior.error) return { ok: false, runs: prior.runs, error: "TOOL_RUN_HISTORY_NOT_SAVED" }
+  // Corrupt history remains observable through load until a valid settlement can atomically replace it.
+  // It is never carried forward as truth or allowed to permanently poison this scoped store.
+  const priorRuns = prior.error ? [] : prior.runs
   const run = fitToolRunTranscript(rawRun)
-  const runs = [...prior.runs.filter((item) => item.id !== run.id), run]
+  const runs = [...priorRuns.filter((item) => item.id !== run.id), run]
     .sort((left, right) => left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id))
   while (runs.length > MAX_TOOL_RUNS || bytes({ schemaVersion: 1, runs }) > MAX_TOOL_RUN_HISTORY_BYTES) runs.shift()
-  if (!runs.some((item) => item.id === run.id)) return { ok: false, runs: prior.runs, error: "TOOL_RUN_HISTORY_NOT_SAVED" }
+  if (!runs.some((item) => item.id === run.id)) return { ok: false, runs: priorRuns, error: "TOOL_RUN_HISTORY_NOT_SAVED" }
   const envelope = validateEnvelope({ schemaVersion: 1, runs })
   try {
     storage.setItem(toolRunHistoryStorageKey(scope), JSON.stringify(envelope))
     return { ok: true, runs: envelope.runs, error: null }
   } catch {
-    return { ok: false, runs: prior.runs, error: "TOOL_RUN_HISTORY_NOT_SAVED" }
+    return { ok: false, runs: priorRuns, error: "TOOL_RUN_HISTORY_NOT_SAVED" }
   }
 }

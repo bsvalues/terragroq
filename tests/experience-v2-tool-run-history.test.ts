@@ -53,12 +53,31 @@ describe("Experience V2 bounded tool transcript history", () => {
     expect(loadToolRunHistory(storage, "server:world-a")).toEqual({ runs: [], error: "TOOL_RUN_HISTORY_CORRUPT" })
   })
 
+  it("replaces corrupt JSON with the next valid canonical run instead of poisoning saves forever", () => {
+    const storage = new MemoryStorage()
+    storage.setItem(toolRunHistoryStorageKey("server:world-a"), "{not-json")
+
+    expect(persistToolRunTranscript(storage, "server:world-a", transcript(1)).ok).toBe(true)
+    expect(loadToolRunHistory(storage, "server:world-a")).toEqual({ runs: [transcript(1)], error: null })
+  })
+
   it("rejects a structurally valid transcript that invents an operation or display alias", () => {
     const storage = new MemoryStorage()
     const invented = { ...transcript(0), operationId: "shell.run", operationLabel: "Run anything", alias: "rm -rf ." }
     storage.setItem(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ schemaVersion: 1, runs: [invented] }))
 
     expect(loadToolRunHistory(storage, "server:world-a")).toEqual({ runs: [], error: "TOOL_RUN_HISTORY_CORRUPT" })
+  })
+
+  it("replaces a catalog-stale envelope with fresh canonical history and retains no false old truth", () => {
+    const storage = new MemoryStorage()
+    const stale = { ...transcript(0), operationId: "repo.removed", operationLabel: "Removed operation", alias: "old alias" }
+    storage.setItem(toolRunHistoryStorageKey("server:world-a"), JSON.stringify({ schemaVersion: 1, runs: [stale] }))
+
+    expect(persistToolRunTranscript(storage, "server:world-a", transcript(2)).ok).toBe(true)
+    const loaded = loadToolRunHistory(storage, "server:world-a")
+    expect(loaded).toEqual({ runs: [transcript(2)], error: null })
+    expect(loaded.runs.some((run) => run.id === stale.id)).toBe(false)
   })
 
   it("rejects persisted completion claims without a numeric process exit and null reason", () => {
