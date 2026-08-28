@@ -10,7 +10,7 @@ import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface } from "./developer-tools-surface"
 import { type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, useExperienceAgentSessions, type AgentProvider } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, useExperienceAgentSessions, type AgentProvider } from "./agent-sessions"
 import { BrainCouncilSurface, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
@@ -788,20 +788,34 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (!delegateContext?.provider) throw new Error("AGENT_PROVIDER_REQUIRED")
         const promotedPath = delegateContext.provider === "Codex" ? space.selectedPath : null
         if (promotedPath) await persistBarrierRef.current()
-        await agentSessions.runAgentTurn({
-          provider: delegateContext.provider,
-          role: delegateContext.role,
-          assignment: delegateContext.assignment,
-          prompt: contextualText,
-          onEvent: (payload) => agentReplyText(payload).forEach((reply) => appendConversation("williamos", reply)),
-        })
+        let committedPersistenceError: AgentTurnCommittedPersistenceError | null = null
+        try {
+          await agentSessions.runAgentTurn({
+            provider: delegateContext.provider,
+            role: delegateContext.role,
+            assignment: delegateContext.assignment,
+            prompt: contextualText,
+            onEvent: (payload) => agentReplyText(payload).forEach((reply) => appendConversation("williamos", reply)),
+          })
+        } catch (error) {
+          if (!(error instanceof AgentTurnCommittedPersistenceError)) throw error
+          committedPersistenceError = error
+        }
+        let refreshWarning: string | null = null
         if (promotedPath) {
           const refreshed = await refreshVerifiedChange(promotedPath)
           if (refreshed === "dirty-conflict") {
-            setLineReply(`Codex saved ${promotedPath}, but Source has newer unsaved edits. Your buffer was preserved.`)
+            refreshWarning = `Codex saved ${promotedPath}, but Source has newer unsaved edits. Your buffer was preserved.`
           } else if (refreshed === "failed") {
-            setLineReply(`Codex saved ${promotedPath}, but Source or Changes could not refresh.`)
+            refreshWarning = `Codex saved ${promotedPath}, but Source or Changes could not refresh.`
           }
+        }
+        if (committedPersistenceError) {
+          setLineReply(refreshWarning
+            ? `${refreshWarning} Transcript persistence also failed (${committedPersistenceError.message}).`
+            : committedPersistenceError.message)
+        } else if (refreshWarning) {
+          setLineReply(refreshWarning)
         }
         return
       }
@@ -874,7 +888,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       frame: geometry, minimized: geometry.minimized, active: space.activeWindowId === id,
       detail: id === "running-app" ? space.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
     })),
-    agents: agentSessions.sessions.map((agent) => ({
+    agents: agentSessions.sessions.filter((agent) => agent.truth === "live").map((agent) => ({
       id: agent.id, name: agent.providerLabel, role: agent.role,
       activity: agent.assignment, state: agent.status === "working" ? "working" : "idle",
     })),
@@ -905,6 +919,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     if (action === "Delegate") {
+      if (!agentSessions.selectSession(null)) return
       setFocusedAgentId(null)
       setDelegateContext({ kind: selectedKind, label: selectedLabel, provider: null, role: "Builder", assignment: selectedLabel })
       openLine("", "agent")
@@ -955,6 +970,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           </span>
         </div>
         <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningSessionId={agentSessions.activeSessionId} runningProvider={agentSessions.activeProvider} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
+          if (!agentSessions.selectSession(agent.kind === "durable-session" ? agent.id : null)) return
           if (agent.mode === "review" && agent.reviewPath) {
             openReviewPath(agent.reviewPath)
             return
@@ -963,6 +979,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           if (agent.kind === "durable-session") {
             setDelegateContext({ kind: "agent", label: `${agent.role} · ${agent.providerLabel}`, provider: agent.providerLabel as AgentProvider, role: agent.role, assignment: agent.assignment })
             openLine("Redirect: ", "agent")
+            setLineReply(agent.lastResult ?? null)
           }
         }} />
         <div className={spatial.status}><span className={spatial.statusDot} aria-hidden /><span>{worldLine || "Space ready"}{workerLine}</span></div>

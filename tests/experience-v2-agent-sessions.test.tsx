@@ -33,7 +33,7 @@ function ndjson(...events: readonly Record<string, unknown>[]): Response {
   })
 }
 
-function workspaceResponse(storage: "server" | "browser" = "browser") {
+function workspaceResponse(storage: "browser" | "server" = "browser") {
   const space = {
     ...defaultSpace(), selectedPath: "src/app.ts", activeWindowId: "editor" as const,
     editor: { openFiles: ["src/app.ts", "src/other.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
@@ -57,6 +57,477 @@ function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_S
 let expose: ProviderNeutralAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
+  it("keeps all twelve bounded session controls horizontally reachable and selectable", () => {
+    const onSelect = vi.fn()
+    const sessions = Array.from({ length: 12 }, (_, index) => ({
+      id: `Codex:session-${index}`,
+      role: "Builder",
+      providerLabel: "Codex",
+      assignment: `src/session-${index}.ts`,
+      status: "resume unverified",
+      evidence: "saved transcript · server verification required",
+      truth: "resume-unverified" as const,
+      kind: "durable-session" as const,
+      mode: "delegate" as const,
+    }))
+
+    render(<AgentSessionStrip sessions={sessions} onSelect={onSelect} />)
+
+    const strip = screen.getByRole("navigation", { name: "Durable agent sessions" })
+    expect(strip.getAttribute("tabindex")).toBe("0")
+    expect(strip.style.overflowX).toBe("auto")
+    expect(strip.style.flexWrap).toBe("nowrap")
+    const buttons = within(strip).getAllByRole("button")
+    expect(buttons).toHaveLength(12)
+    fireEvent.click(buttons[11])
+    expect(onSelect).toHaveBeenCalledWith(sessions[11])
+  })
+
+  it("migrates the legacy v1 descriptor into a selected bounded collection without claiming it is live", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 1,
+      sessionId,
+      role: "Reviewer",
+      provider: "Claude",
+      assignment: "Review src/app.ts",
+      reviewPath: "src/app.ts",
+      updatedAt: "2026-08-27T16:05:00.000Z",
+    }))
+
+    render(<Harness />)
+
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(1))
+    expect(expose!.selectedSessionKey).toBe(`Claude:${sessionId}`)
+    expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Claude:${sessionId}`, truth: "resume-unverified", status: "resume unverified" })])
+    expect(JSON.parse(String(window.localStorage.getItem(key)))).toEqual({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${sessionId}`,
+      sessions: [{
+        schemaVersion: 1,
+        sessionId,
+        role: "Reviewer",
+        provider: "Claude",
+        assignment: "Review src/app.ts",
+        reviewPath: "src/app.ts",
+        updatedAt: "2026-08-27T16:05:00.000Z",
+        completedTurns: [],
+      }],
+    })
+  })
+
+  it("upserts a completed session without replacing unrelated durable sessions and persists only canonical transcript truth", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const priorId = "123e4567-e89b-42d3-a456-426614174000"
+    const nextId = "323e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 2,
+      selectedSessionId: priorId,
+      sessions: [{ schemaVersion: 1, sessionId: priorId, role: "Reviewer", provider: "Claude", assignment: "Review src/old.ts", reviewPath: "src/old.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] }],
+    }))
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId: nextId, provider: "Codex", mode: "delegate", resumed: false },
+      { type: "delta", text: "ephemeral delta" },
+      { type: "result", text: "Canonical final result" },
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(1))
+
+    act(() => expose!.selectSession(null))
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/new.ts", prompt: "Owner canonical prompt" })
+    })
+
+    const stored = JSON.parse(String(window.localStorage.getItem(key)))
+    expect(stored.selectedSessionKey).toBe(`Codex:${nextId}`)
+    expect(stored.sessions).toHaveLength(2)
+    expect(stored.sessions.map((session: { sessionId: string }) => session.sessionId)).toEqual([priorId, nextId])
+    expect(stored.sessions[1].completedTurns).toEqual([{ ownerPrompt: "Owner canonical prompt", finalResult: "Canonical final result", completedAt: expect.any(String) }])
+    expect(JSON.stringify(stored)).not.toContain("ephemeral delta")
+    expect(JSON.stringify(stored)).not.toContain("stderr")
+    expect(JSON.stringify(stored)).not.toContain("reasoning")
+  })
+
+  it("persists the exact selected restored session and exposes only its canonical final result for inspection", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const firstId = "123e4567-e89b-42d3-a456-426614174000"
+    const secondId = "223e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 2,
+      selectedSessionId: firstId,
+      sessions: [
+        { schemaVersion: 1, sessionId: firstId, role: "Builder", provider: "Claude", assignment: "src/first.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [{ ownerPrompt: "First prompt", finalResult: "First final", completedAt: "2026-08-27T16:05:00.000Z" }] },
+        { schemaVersion: 1, sessionId: secondId, role: "Builder", provider: "Codex", assignment: "src/second.ts", updatedAt: "2026-08-27T16:06:00.000Z", completedTurns: [{ ownerPrompt: "Second prompt", finalResult: "Second final", completedAt: "2026-08-27T16:06:00.000Z" }] },
+      ],
+    }))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions).toHaveLength(2))
+
+    act(() => expose!.selectSession(`Codex:${secondId}`))
+
+    expect(expose!.selectedSessionKey).toBe(`Codex:${secondId}`)
+    expect(expose!.sessions.find((session) => session.id === `Codex:${secondId}`)?.lastResult).toBe("Second final")
+    expect(JSON.parse(String(window.localStorage.getItem(key))).selectedSessionKey).toBe(`Codex:${secondId}`)
+  })
+
+  it("returns a transactional selection verdict and preserves the prior selection when persistence fails", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const firstId = "123e4567-e89b-42d3-a456-426614174000"
+    const secondId = "223e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${firstId}`,
+      sessions: [
+        { schemaVersion: 1, sessionId: firstId, role: "Builder", provider: "Claude", assignment: "src/first.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: secondId, role: "Builder", provider: "Claude", assignment: "src/second.ts", updatedAt: "2026-08-27T16:06:00.000Z", completedTurns: [] },
+      ],
+    }))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.selectedSessionKey).toBe(`Claude:${firstId}`))
+    const durableStorage = window.localStorage
+    vi.stubGlobal("localStorage", {
+      getItem: durableStorage.getItem.bind(durableStorage),
+      removeItem: durableStorage.removeItem.bind(durableStorage),
+      clear: durableStorage.clear.bind(durableStorage),
+      key: durableStorage.key.bind(durableStorage),
+      get length() { return durableStorage.length },
+      setItem() { throw new DOMException("quota", "QuotaExceededError") },
+    })
+
+    let selected: unknown
+    act(() => { selected = expose!.selectSession(`Claude:${secondId}`) })
+
+    expect(selected).toBe(false)
+    expect(expose!.selectedSessionKey).toBe(`Claude:${firstId}`)
+    expect(JSON.parse(String(window.localStorage.getItem(key))).selectedSessionKey).toBe(`Claude:${firstId}`)
+  })
+
+  it("keeps a restored Codex transcript inspectable when missing authority fails resume closed with 409", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sessionId = "codex-thread-owned-snapshot"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 2,
+      selectedSessionId: sessionId,
+      sessions: [{
+        schemaVersion: 1,
+        sessionId,
+        role: "Builder",
+        provider: "Codex",
+        assignment: "src/app.ts",
+        updatedAt: "2026-08-27T16:05:00.000Z",
+        completedTurns: [{ ownerPrompt: "Fix it", finalResult: "Prior canonical result", completedAt: "2026-08-27T16:05:00.000Z" }],
+      }],
+    }))
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("missing work context", { status: 409 })))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions).toHaveLength(1))
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Continue safely" })
+    })).rejects.toThrow("AGENT_START_REFUSED:409")
+
+    expect(expose!.sessions).toEqual([expect.objectContaining({
+      id: `Codex:${sessionId}`,
+      truth: "resume-unverified",
+      lastResult: "Prior canonical result",
+    })])
+    expect(JSON.parse(String(window.localStorage.getItem(key))).sessions).toHaveLength(1)
+  })
+
+  it("does not promote an unverified restored session to live when its resume attempt is stopped", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 1, sessionId, role: "Builder", provider: "Claude", assignment: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z" }))
+    let requestSignal: AbortSignal | undefined
+    vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => requestSignal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }))
+    }))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions[0]).toMatchObject({ id: `Claude:${sessionId}`, truth: "resume-unverified" }))
+
+    let turn!: Promise<unknown>
+    act(() => { turn = expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "src/app.ts", prompt: "Continue." }) })
+    await waitFor(() => expect(requestSignal?.aborted).toBe(false))
+    act(() => expose!.stop())
+
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" })
+    expect(expose!.sessions[0]).toMatchObject({ id: `Claude:${sessionId}`, truth: "resume-unverified" })
+    expect(expose!.descriptorState).toBe("unverified")
+  })
+
+  it("resumes only the selected exact provider mode and path while preserving every other session", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const reviewId = "123e4567-e89b-42d3-a456-426614174000"
+    const builderId = "223e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 2,
+      selectedSessionId: reviewId,
+      sessions: [
+        { schemaVersion: 1, sessionId: reviewId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: builderId, role: "Builder", provider: "Claude", assignment: "src/other.ts", updatedAt: "2026-08-27T16:06:00.000Z", completedTurns: [] },
+      ],
+    }))
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId: reviewId, resumed: true },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: reviewId, result: "Verified review" } },
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(2))
+
+    await act(async () => {
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: () => undefined })
+    })
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ sessionId: reviewId, resume: true, path: "src/app.ts", mode: "review" })
+    expect(expose!.savedSessions).toHaveLength(2)
+    expect(expose!.sessions).toHaveLength(2)
+    expect(expose!.sessions.find((session) => session.id === `Claude:${reviewId}`)).toMatchObject({ truth: "live" })
+    expect(expose!.sessions.find((session) => session.id === `Claude:${builderId}`)).toMatchObject({ truth: "resume-unverified" })
+  })
+
+  it("keeps Claude and Codex sessions with the same provider-local id independently selectable and resumable", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sharedId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${sharedId}`,
+      sessions: [
+        { schemaVersion: 1, sessionId: sharedId, role: "Builder", provider: "Claude", assignment: "src/claude.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: sharedId, role: "Builder", provider: "Codex", assignment: "src/codex.ts", updatedAt: "2026-08-27T16:06:00.000Z", completedTurns: [] },
+      ],
+    }))
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId: sharedId, provider: "Codex", mode: "delegate", resumed: true },
+      { type: "result", text: "Codex resumed independently" },
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions).toHaveLength(2))
+
+    act(() => expose!.selectSession(`Codex:${sharedId}`))
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/codex.ts", prompt: "Continue Codex" })
+    })
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ sessionId: sharedId, resume: true })
+    expect(expose!.savedSessions).toHaveLength(2)
+    expect(expose!.sessions.map((session) => session.id)).toEqual([`Claude:${sharedId}`, `Codex:${sharedId}`])
+    expect(JSON.parse(String(window.localStorage.getItem(key))).selectedSessionKey).toBe(`Codex:${sharedId}`)
+  })
+
+  it("migrates a v1 Claude session then upserts a Codex session with the same provider-local id", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sharedId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 1, sessionId: sharedId, role: "Builder", provider: "Claude", assignment: "src/claude.ts", updatedAt: "2026-08-27T16:05:00.000Z" }))
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId: sharedId, provider: "Codex", mode: "delegate", resumed: false },
+      { type: "result", text: "Codex same-id result" },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.selectedSessionKey).toBe(`Claude:${sharedId}`))
+    act(() => expose!.selectSession(null))
+
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/codex.ts", prompt: "Start Codex" })
+    })
+
+    expect(expose!.savedSessions.map((session) => `${session.provider}:${session.sessionId}`)).toEqual([`Claude:${sharedId}`, `Codex:${sharedId}`])
+  })
+
+  it("removes only the refused provider identity when another provider owns the same local id", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sharedId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${sharedId}`,
+      sessions: [
+        { schemaVersion: 1, sessionId: sharedId, role: "Builder", provider: "Claude", assignment: "src/shared.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: sharedId, role: "Builder", provider: "Codex", assignment: "src/shared.ts", updatedAt: "2026-08-27T16:06:00.000Z", completedTurns: [] },
+      ],
+    }))
+    const fetcher = vi.fn().mockResolvedValue(new Response("gone", { status: 403 }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(2))
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "src/shared.ts", prompt: "Resume Claude" })
+    })).rejects.toThrow("AGENT_START_REFUSED:403")
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ sessionId: sharedId, resume: true })
+    cleanup()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions.map((session) => `${session.provider}:${session.sessionId}`)).toEqual([`Codex:${sharedId}`]))
+    expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Codex:${sharedId}`, truth: "resume-unverified" })])
+  })
+
+  it("fails closed when a provider unexpectedly reuses an existing id for a fresh session", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 1, sessionId, role: "Builder", provider: "Claude", assignment: "src/old.ts", updatedAt: "2026-08-27T16:05:00.000Z" }))
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, resumed: false },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "collision" } },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(1))
+    act(() => expose!.selectSession(null))
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "src/new.ts", prompt: "Start fresh" })
+    })).rejects.toThrow("AGENT_STREAM_INVALID")
+    expect(expose!.savedSessions).toHaveLength(1)
+  })
+
+  it("prunes the globally oldest completed turns until the aggregate collection fits its byte ceiling", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sessions = Array.from({ length: 12 }, (_, sessionIndex) => ({
+      schemaVersion: 1,
+      sessionId: `codex-session-${sessionIndex}`,
+      role: "Builder",
+      provider: "Codex",
+      assignment: `src/${sessionIndex}.ts`,
+      updatedAt: `2026-08-27T16:${String(sessionIndex).padStart(2, "0")}:00.000Z`,
+      completedTurns: Array.from({ length: 20 }, (_, turnIndex) => ({
+        ownerPrompt: `prompt-${sessionIndex}-${turnIndex}`,
+        finalResult: `${sessionIndex}-${turnIndex}-${"x".repeat(2_000)}`,
+        completedAt: `2026-08-27T${String(sessionIndex).padStart(2, "0")}:${String(turnIndex).padStart(2, "0")}:00.000Z`,
+      })),
+    }))
+    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 3, selectedSessionKey: "Codex:codex-session-11", sessions }))
+
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(12))
+
+    const persisted = String(window.localStorage.getItem(key))
+    expect(new TextEncoder().encode(persisted).byteLength).toBeLessThanOrEqual(262_144)
+    expect(persisted).not.toContain("prompt-0-0")
+    expect(persisted).toContain("prompt-11-19")
+  })
+
+  it("keeps the prior collection and UI verdict when localStorage quota rejects a successful turn", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const priorId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 1, sessionId: priorId, role: "Builder", provider: "Claude", assignment: "src/prior.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [{ ownerPrompt: "prior", finalResult: "prior result", completedAt: "2026-08-27T16:05:00.000Z" }] }))
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: false },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "new result" } },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(1))
+    act(() => expose!.selectSession(null))
+    const storedBefore = window.localStorage.getItem(key)
+    const durableStorage = window.localStorage
+    vi.stubGlobal("localStorage", {
+      getItem: durableStorage.getItem.bind(durableStorage),
+      removeItem: durableStorage.removeItem.bind(durableStorage),
+      clear: durableStorage.clear.bind(durableStorage),
+      key: durableStorage.key.bind(durableStorage),
+      get length() { return durableStorage.length },
+      setItem() { throw new DOMException("quota", "QuotaExceededError") },
+    })
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "src/new.ts", prompt: "new prompt" })
+    })).rejects.toThrow("AGENT_SESSION_PERSISTENCE_FAILED")
+
+    expect(window.localStorage.getItem(key)).toBe(storedBefore)
+    expect(expose!.savedSessions).toEqual([expect.objectContaining({ sessionId: priorId, assignment: "src/prior.ts" })])
+    expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Claude:${priorId}`, truth: "resume-unverified", lastResult: "prior result" })])
+  })
+
+  it("fails transactionally rather than pruning the just-completed multibyte canonical result and marking it ready", async () => {
+    const sessionId = "codex-multibyte-result"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+      { type: "result", text: "😀".repeat(100_000) },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/huge.ts", prompt: "Keep the canonical result." })
+    })).rejects.toThrow("AGENT_SESSION_COLLECTION_TOO_LARGE")
+
+    expect(expose!.savedSessions).toEqual([])
+    expect(expose!.sessions).toEqual([])
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+  })
+
+  it("keeps a restored descriptor pending and unverified before a canonical session frame arrives", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
+      schemaVersion: 1, sessionId, role: "Builder", provider: "Claude", assignment: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z",
+    }))
+    let resolveFetch!: (response: Response) => void
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { resolveFetch = resolve })))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(1))
+
+    let turn!: Promise<unknown>
+    act(() => { turn = expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "src/app.ts", prompt: "Resume." }) })
+    await waitFor(() => expect(expose!.activeProvider).toBe("Claude"))
+
+    expect(expose!.sessions).toEqual([expect.objectContaining({
+      id: `Claude:${sessionId}`,
+      truth: "resume-unverified",
+      status: "resume unverified",
+      evidence: "saved transcript · server verification required",
+    })])
+    act(() => expose!.stop())
+    resolveFetch(new Response(null, { status: 499 }))
+    await expect(turn).rejects.toMatchObject({ name: "AbortError" })
+  })
+
+  it("demotes a verified resumed session after a recoverable failed turn while preserving its canonical transcript", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, resumed: false },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Canonical first result" } },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, resumed: true },
+        { type: "done", code: null, reason: "TIMEOUT" },
+      ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await act(async () => {
+      await expose!.runClaudeTurn({ role: "Builder", assignment: "src/app.ts", prompt: "Start." })
+    })
+    expect(expose!.sessions).toEqual([expect.objectContaining({ truth: "live", lastResult: "Canonical first result" })])
+
+    let failure: unknown
+    await act(async () => {
+      try {
+        await expose!.runClaudeTurn({ role: "Builder", assignment: "src/app.ts", prompt: "Resume." })
+      } catch (error) {
+        failure = error
+      }
+    })
+    expect(failure).toEqual(expect.objectContaining({ message: "AGENT_TURN_FAILED:TIMEOUT" }))
+
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ sessionId, resume: true })
+    await waitFor(() => expect(expose!.sessions).toEqual([expect.objectContaining({
+      id: `Claude:${sessionId}`,
+      truth: "resume-unverified",
+      status: "resume unverified",
+      lastResult: "Canonical first result",
+    })]))
+    expect(expose!.descriptorState).toBe("unverified")
+  })
+
   it("requires a fresh provider choice and cancels stale Delegate intent when selection changes", async () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174000"
     const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -147,6 +618,220 @@ describe("Experience V2 real agent sessions", () => {
     expect(diffReads).toBeGreaterThanOrEqual(2)
   })
 
+  it("refreshes the committed Codex promotion while surfacing transcript persistence failure", async () => {
+    const sessionId = "codex-committed-quota"
+    let sourceReads = 0
+    let diffReads = 0
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        sourceReads += 1
+        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      }
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
+        diffReads += 1
+        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+      }
+      if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "result", text: "The repository mutation committed." },
+        { type: "done", code: 0, reason: null },
+      ))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+    expect((await screen.findByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const version = 1\n")
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Update the selected file." } })
+    const durableStorage = window.localStorage
+    vi.stubGlobal("localStorage", {
+      getItem: durableStorage.getItem.bind(durableStorage), removeItem: durableStorage.removeItem.bind(durableStorage),
+      clear: durableStorage.clear.bind(durableStorage), key: durableStorage.key.bind(durableStorage),
+      get length() { return durableStorage.length }, setItem() { throw new DOMException("quota", "QuotaExceededError") },
+    })
+
+    fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+
+    await waitFor(() => expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const version = 2\n"))
+    expect(diffReads).toBeGreaterThanOrEqual(2)
+    expect(screen.getByText("AGENT_SESSION_PERSISTENCE_FAILED")).toBeTruthy()
+    expect(window.localStorage.getItem("williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion")).toBeNull()
+  })
+
+  it.each([
+    ["dirty-conflict", true, false, "Codex saved src/app.ts, but Source has newer unsaved edits. Your buffer was preserved. Transcript persistence also failed (AGENT_SESSION_PERSISTENCE_FAILED)."],
+    ["failed refresh", false, true, "Codex saved src/app.ts, but Source or Changes could not refresh. Transcript persistence also failed (AGENT_SESSION_PERSISTENCE_FAILED)."],
+  ])("surfaces both committed transcript persistence failure and %s", async (_case, makeDirty, failRefresh, expected) => {
+    const sessionId = `codex-combined-${failRefresh ? "failed" : "dirty"}`
+    let sourceReads = 0
+    let diffReads = 0
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        sourceReads += 1
+        if (failRefresh && sourceReads > 1) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      }
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
+        diffReads += 1
+        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+      }
+      if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "result", text: "The repository mutation committed." },
+        { type: "done", code: 0, reason: null },
+      ))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+    const source = await screen.findByLabelText("Source content") as HTMLTextAreaElement
+    if (makeDirty) fireEvent.change(source, { target: { value: "owner unsaved buffer\n" } })
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Update the selected file." } })
+    const durableStorage = window.localStorage
+    vi.stubGlobal("localStorage", {
+      getItem: durableStorage.getItem.bind(durableStorage), removeItem: durableStorage.removeItem.bind(durableStorage),
+      clear: durableStorage.clear.bind(durableStorage), key: durableStorage.key.bind(durableStorage),
+      get length() { return durableStorage.length }, setItem() { throw new DOMException("quota", "QuotaExceededError") },
+    })
+
+    fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+
+    expect(await screen.findByText(expected)).toBeTruthy()
+    expect(diffReads).toBeGreaterThanOrEqual(2)
+    expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe(makeDirty ? "owner unsaved buffer\n" : "export const version = 1\n")
+  })
+
+  it("restores canonical session inspection and excludes unverified hints from live Mission Control", async () => {
+    const sessionId = "codex-restored-thread"
+    const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 2,
+      selectedSessionId: null,
+      sessions: [{
+        schemaVersion: 1,
+        sessionId,
+        role: "Builder",
+        provider: "Codex",
+        assignment: "src/app.ts",
+        updatedAt: "2026-08-27T16:05:00.000Z",
+        completedTurns: [{ ownerPrompt: "Fix it", finalResult: "Restored canonical result", completedAt: "2026-08-27T16:05:00.000Z" }],
+      }],
+    }))
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    const restored = await screen.findByRole("button", { name: /Builder · Codex · src\/app.ts/i })
+    fireEvent.click(restored)
+
+    expect(JSON.parse(String(window.localStorage.getItem(key))).selectedSessionKey).toBe(`Codex:${sessionId}`)
+    expect(screen.getByText("Restored canonical result")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    const mission = screen.getByRole("dialog", { name: "Mission Control" })
+    expect(within(mission).getAllByText("No active agents")).toHaveLength(2)
+    expect(within(mission).queryByText(/Codex/)).toBeNull()
+  })
+
+  it("does not focus a clicked restored session when its selection cannot be persisted", async () => {
+    const firstId = "codex-first"
+    const secondId = "codex-second"
+    const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:${firstId}`,
+      sessions: [
+        { schemaVersion: 1, sessionId: firstId, role: "Builder", provider: "Codex", assignment: "src/first.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [{ ownerPrompt: "First", finalResult: "First result", completedAt: "2026-08-27T16:05:00.000Z" }] },
+        { schemaVersion: 1, sessionId: secondId, role: "Builder", provider: "Codex", assignment: "src/second.ts", updatedAt: "2026-08-27T16:06:00.000Z", completedTurns: [{ ownerPrompt: "Second", finalResult: "Second result", completedAt: "2026-08-27T16:06:00.000Z" }] },
+      ],
+    }))
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+    const first = await screen.findByRole("button", { name: /Builder · Codex · src\/first.ts/i })
+    const second = screen.getByRole("button", { name: /Builder · Codex · src\/second.ts/i })
+    fireEvent.click(first)
+    expect(await screen.findByText("First result")).toBeTruthy()
+    const durableStorage = window.localStorage
+    vi.stubGlobal("localStorage", {
+      getItem: durableStorage.getItem.bind(durableStorage), removeItem: durableStorage.removeItem.bind(durableStorage),
+      clear: durableStorage.clear.bind(durableStorage), key: durableStorage.key.bind(durableStorage),
+      get length() { return durableStorage.length }, setItem() { throw new DOMException("quota", "QuotaExceededError") },
+    })
+
+    fireEvent.click(second)
+
+    expect(first.getAttribute("aria-pressed")).toBe("true")
+    expect(second.getAttribute("aria-pressed")).toBe("false")
+    expect(screen.getByText("First result")).toBeTruthy()
+    expect(screen.queryByText("Second result")).toBeNull()
+  })
+
+  it("does not open a fresh Delegate flow when clearing the saved selection cannot be persisted", async () => {
+    const sessionId = "codex-restored"
+    const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:${sessionId}`,
+      sessions: [{ schemaVersion: 1, sessionId, role: "Builder", provider: "Codex", assignment: "src/old.ts", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [] }],
+    }))
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+    await screen.findByRole("button", { name: /Builder · Codex · src\/old.ts/i })
+    const durableStorage = window.localStorage
+    vi.stubGlobal("localStorage", {
+      getItem: durableStorage.getItem.bind(durableStorage), removeItem: durableStorage.removeItem.bind(durableStorage),
+      clear: durableStorage.clear.bind(durableStorage), key: durableStorage.key.bind(durableStorage),
+      get length() { return durableStorage.length }, setItem() { throw new DOMException("quota", "QuotaExceededError") },
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+
+    expect(screen.queryByRole("form", { name: "The Line" })).toBeNull()
+    expect(JSON.parse(String(window.localStorage.getItem(key))).selectedSessionKey).toBe(`Codex:${sessionId}`)
+  })
+
   it("starts a fresh Codex Builder through the Codex route and persists provider-bound truth", async () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174000"
     const seen: Record<string, unknown>[] = []
@@ -184,11 +869,9 @@ describe("Experience V2 real agent sessions", () => {
       { type: "done", code: 0, reason: null },
     ])
     expect(JSON.parse(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")!)).toMatchObject({
-      schemaVersion: 1,
-      sessionId,
-      role: "Builder",
-      provider: "Codex",
-      assignment: "src/app.ts",
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:${sessionId}`,
+      sessions: [{ sessionId, role: "Builder", provider: "Codex", assignment: "src/app.ts" }],
     })
   })
 
@@ -250,7 +933,7 @@ describe("Experience V2 real agent sessions", () => {
     await act(async () => {
       await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Start." })
     })
-    expect(JSON.parse(String(window.localStorage.getItem(key)))).toMatchObject({ sessionId, provider: "Codex" })
+    expect(JSON.parse(String(window.localStorage.getItem(key)))).toMatchObject({ selectedSessionKey: `Codex:${sessionId}`, sessions: [{ sessionId, provider: "Codex" }] })
     first.unmount()
     render(<Harness />)
     await waitFor(() => expect(expose!.savedDescriptor?.sessionId).toBe(sessionId))
@@ -468,7 +1151,7 @@ describe("Experience V2 real agent sessions", () => {
     await act(async () => { await newTurn })
 
     expect(expose!.durableSession).toMatchObject({ provider: "Claude", assignment: "new.ts" })
-    expect(JSON.parse(String(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")))).toMatchObject({ provider: "Claude", assignment: "new.ts" })
+    expect(JSON.parse(String(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")))).toMatchObject({ sessions: [{ provider: "Claude", assignment: "new.ts" }] })
   })
 
   it("allows bounded Claude diagnostics after Delegate result without changing success truth", async () => {
@@ -560,15 +1243,13 @@ describe("Experience V2 real agent sessions", () => {
       resume: false,
     })
     expect(JSON.parse(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")!)).toMatchObject({
-      schemaVersion: 1,
-      sessionId,
-      role: "Builder",
-      provider: "Claude",
-      assignment: "Change src/app.ts",
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${sessionId}`,
+      sessions: [{ sessionId, role: "Builder", provider: "Claude", assignment: "Change src/app.ts" }],
     })
   })
 
-  it("keeps a restored descriptor unverified and out of the live session strip until resume succeeds", async () => {
+  it("shows a restored descriptor as unverified until resume succeeds", async () => {
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
     window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
       schemaVersion: 1,
@@ -588,7 +1269,8 @@ describe("Experience V2 real agent sessions", () => {
 
     await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
     expect(expose!.savedDescriptor?.sessionId).toBe(sessionId)
-    expect(screen.queryByRole("button", { name: /Reviewer · Claude/i })).toBeNull()
+    expect(screen.getByRole("button", { name: /Reviewer · Claude/i })).toBeTruthy()
+    expect(screen.getByText("resume unverified · saved transcript · server verification required")).toBeTruthy()
     await act(async () => {
       await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", prompt: "Continue the review." })
     })
@@ -656,7 +1338,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.queryByText(/Claude/)).toBeNull()
   })
 
-  it("clears a refused restored descriptor so the next delegation can start fresh", async () => {
+  it("preserves an unrelated restored descriptor when a fresh assignment is refused", async () => {
     const key = "williamos:agent-session:owner-1:terrafusion"
     window.localStorage.setItem(key, JSON.stringify({
       schemaVersion: 1,
@@ -667,7 +1349,7 @@ describe("Experience V2 real agent sessions", () => {
       updatedAt: "2026-08-27T16:05:00.000Z",
     }))
     const fetcher = vi.fn()
-      .mockResolvedValueOnce(Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH", detail: "The saved session no longer matches this Space." }, { status: 403 }))
+      .mockResolvedValueOnce(new Response("refused", { status: 403 }))
       .mockResolvedValueOnce(ndjson(
         { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: false },
         { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Started fresh." } },
@@ -679,9 +1361,12 @@ describe("Experience V2 real agent sessions", () => {
 
     await expect(act(async () => {
       await expose!.runClaudeTurn({ role: "Builder", assignment: "New work", prompt: "Continue." })
-    })).rejects.toThrow("The saved session no longer matches this Space.")
+    })).rejects.toThrow("AGENT_START_REFUSED:403")
 
-    expect(window.localStorage.getItem(key)).toBeNull()
+    expect(JSON.parse(String(window.localStorage.getItem(key)))).toMatchObject({
+      selectedSessionKey: "Claude:123e4567-e89b-42d3-a456-426614174000",
+      sessions: [{ assignment: "Old work" }],
+    })
     await act(async () => {
       await expose!.runClaudeTurn({ role: "Builder", assignment: "Fresh work", prompt: "Start fresh." })
     })
@@ -713,7 +1398,11 @@ describe("Experience V2 real agent sessions", () => {
       await expose!.runClaudeTurn({ role: "Builder", assignment: "Existing work", prompt: "Continue." })
     })).rejects.toThrow("AGENT_TURN_FAILED:TIMEOUT")
 
-    expect(JSON.parse(String(window.localStorage.getItem(key)))).toEqual(descriptor)
+    expect(JSON.parse(String(window.localStorage.getItem(key)))).toEqual({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${descriptor.sessionId}`,
+      sessions: [{ ...descriptor, completedTurns: [] }],
+    })
   })
 
   it("resumes Review only from a matching Reviewer and captured-path descriptor", async () => {
@@ -774,6 +1463,6 @@ describe("Experience V2 real agent sessions", () => {
     await expect(act(async () => {
       await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: () => undefined })
     })).rejects.toThrow("AGENT_REVIEW_STREAM_INVALID")
-    expect(expose!.sessions).toEqual([])
+    expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Claude:${sessionId}`, truth: "resume-unverified" })])
   })
 })

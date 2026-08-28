@@ -7,8 +7,17 @@ import type { WorldWorker } from "@/lib/environment/working-world"
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CODEX_SESSION_ID = /^[A-Za-z0-9._:-]{1,200}$/
 const STORAGE_PREFIX = "williamos:agent-session:"
+const MAX_DURABLE_SESSIONS = 12
+const MAX_COMPLETED_TURNS = 20
+const MAX_COLLECTION_BYTES = 262_144
 
 export type AgentProvider = "Codex" | "Claude"
+
+export type CompletedAgentTurn = Readonly<{
+  ownerPrompt: string
+  finalResult: string
+  completedAt: string
+}>
 
 export type DurableAgentSession = Readonly<{
   schemaVersion: 1
@@ -18,6 +27,13 @@ export type DurableAgentSession = Readonly<{
   assignment: string
   reviewPath?: string
   updatedAt: string
+  completedTurns?: readonly CompletedAgentTurn[]
+}>
+
+type DurableAgentSessionCollection = Readonly<{
+  schemaVersion: 3
+  selectedSessionKey: string | null
+  sessions: readonly DurableAgentSession[]
 }>
 
 // Kept as a source-compatible alias for the already-shipped read-only Review hook.
@@ -30,10 +46,11 @@ export type ExperienceAgentSession = Readonly<{
   assignment: string
   status: string
   evidence: string
-  truth: "live"
+  truth: "live" | "resume-unverified"
   kind: "durable-session" | "world-worker"
   mode: "delegate" | "review"
   reviewPath?: string
+  lastResult?: string
 }>
 
 export type RunClaudeTurnInput = Readonly<{
@@ -59,10 +76,13 @@ export type ExperienceAgentSessionController = Readonly<{
   sessions: readonly ExperienceAgentSession[]
   durableSession: DurableAgentSession | null
   savedDescriptor: DurableAgentSession | null
+  savedSessions: readonly DurableAgentSession[]
+  selectedSessionKey: string | null
   descriptorState: "none" | "unverified" | "verified"
   activeSessionId: string | null
   error: string | null
   runClaudeTurn: (input: RunClaudeTurnInput) => Promise<DurableClaudeSession>
+  selectSession: (sessionId: string | null) => boolean
   stop: () => void
 }>
 
@@ -77,6 +97,9 @@ type ActiveAgentOperation = {
   reader: ReadableStreamDefaultReader<Uint8Array> | null
   storageKey: string
   prior: DurableAgentSession | null
+  priorVerified: boolean
+  priorCollection: readonly DurableAgentSession[]
+  priorSelectedSessionKey: string | null
 }
 
 class AgentStartRefusal extends Error {
@@ -86,6 +109,15 @@ class AgentStartRefusal extends Error {
     super(message)
     this.name = "AgentStartRefusal"
     this.status = status
+  }
+}
+
+export class AgentTurnCommittedPersistenceError extends Error {
+  readonly committed = true
+
+  constructor(message: string) {
+    super(message)
+    this.name = "AgentTurnCommittedPersistenceError"
   }
 }
 
@@ -110,9 +142,10 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
   const updatedAt = typeof candidate.updatedAt === "string" && Number.isFinite(Date.parse(candidate.updatedAt))
     ? candidate.updatedAt : null
   const reviewPath = candidate.reviewPath === undefined ? undefined : boundedText(candidate.reviewPath, 1_000)
+  const completedTurns = candidate.completedTurns === undefined ? [] : parseCompletedTurns(candidate.completedTurns)
   if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex"
     || !validSessionId(candidate.provider, candidate.sessionId)
-    || !role || !assignment || !updatedAt || (candidate.reviewPath !== undefined && !reviewPath)) return null
+    || !role || !assignment || !updatedAt || (candidate.reviewPath !== undefined && !reviewPath) || !completedTurns) return null
   return {
     schemaVersion: 1,
     sessionId: candidate.sessionId,
@@ -121,7 +154,101 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     assignment,
     ...(reviewPath ? { reviewPath } : {}),
     updatedAt,
+    completedTurns,
   }
+}
+
+function sessionKey(provider: AgentProvider, sessionId: string): string {
+  return `${provider}:${sessionId}`
+}
+
+function parseCompletedTurns(value: unknown): readonly CompletedAgentTurn[] | null {
+  if (!Array.isArray(value) || value.length > MAX_COMPLETED_TURNS) return null
+  const turns: CompletedAgentTurn[] = []
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
+    const candidate = raw as Record<string, unknown>
+    const ownerPrompt = boundedText(candidate.ownerPrompt, 20_000)
+    const finalResult = boundedText(candidate.finalResult, 200_000)
+    const completedAt = typeof candidate.completedAt === "string" && Number.isFinite(Date.parse(candidate.completedAt))
+      ? candidate.completedAt : null
+    if (!ownerPrompt || !finalResult || !completedAt) return null
+    turns.push({ ownerPrompt, finalResult, completedAt })
+  }
+  return turns
+}
+
+function parseCollection(value: string | null): DurableAgentSessionCollection | null {
+  if (!value) return { schemaVersion: 3, selectedSessionKey: null, sessions: [] }
+  let raw: unknown
+  try { raw = JSON.parse(value) } catch { return null }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
+  const candidate = raw as Record<string, unknown>
+  if (candidate.schemaVersion === 1) {
+    const legacy = parseDescriptor(value)
+    return legacy ? { schemaVersion: 3, selectedSessionKey: sessionKey(legacy.provider, legacy.sessionId), sessions: [legacy] } : null
+  }
+  if (candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 || !Array.isArray(candidate.sessions)
+    || candidate.sessions.length > MAX_DURABLE_SESSIONS
+    || candidate.schemaVersion === 2 && candidate.selectedSessionId !== null && typeof candidate.selectedSessionId !== "string"
+    || candidate.schemaVersion === 3 && candidate.selectedSessionKey !== null && typeof candidate.selectedSessionKey !== "string") return null
+  const sessions: DurableAgentSession[] = []
+  for (const rawSession of candidate.sessions) {
+    const descriptor = parseDescriptor(JSON.stringify(rawSession))
+    if (!descriptor || sessions.some((session) => sessionKey(session.provider, session.sessionId) === sessionKey(descriptor.provider, descriptor.sessionId))) return null
+    sessions.push(descriptor)
+  }
+  let selectedSessionKey: string | null
+  if (candidate.schemaVersion === 2) {
+    const selectedSessionId = candidate.selectedSessionId as string | null
+    const matches = selectedSessionId === null ? [] : sessions.filter((session) => session.sessionId === selectedSessionId)
+    if (selectedSessionId !== null && matches.length !== 1) return null
+    selectedSessionKey = matches[0] ? sessionKey(matches[0].provider, matches[0].sessionId) : null
+  } else {
+    selectedSessionKey = candidate.selectedSessionKey as string | null
+    if (selectedSessionKey !== null && !sessions.some((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKey)) return null
+  }
+  return { schemaVersion: 3, selectedSessionKey, sessions }
+}
+
+function boundedCollection(
+  sessions: readonly DurableAgentSession[],
+  selectedSessionKey: string | null,
+  protectedTurn: Readonly<{ sessionKey: string; completedAt: string }> | null = null,
+): DurableAgentSessionCollection {
+  const mutable = sessions.map((session) => ({ ...session, completedTurns: [...(session.completedTurns ?? [])] }))
+  const collection = (): DurableAgentSessionCollection => ({ schemaVersion: 3, selectedSessionKey, sessions: mutable })
+  while (new TextEncoder().encode(JSON.stringify(collection())).byteLength > MAX_COLLECTION_BYTES) {
+    const oldest = mutable.flatMap((session, sessionIndex) => session.completedTurns.map((turn, turnIndex) => ({
+      completedAt: turn.completedAt, key: sessionKey(session.provider, session.sessionId), sessionIndex, turnIndex,
+    }))).filter((turn) => !protectedTurn || turn.key !== protectedTurn.sessionKey || turn.completedAt !== protectedTurn.completedAt)
+      .sort((left, right) => left.completedAt.localeCompare(right.completedAt) || left.key.localeCompare(right.key) || left.turnIndex - right.turnIndex)[0]
+    if (!oldest) throw new Error("AGENT_SESSION_COLLECTION_TOO_LARGE")
+    mutable[oldest.sessionIndex].completedTurns.splice(oldest.turnIndex, 1)
+  }
+  return collection()
+}
+
+function persistCollection(
+  key: string,
+  sessions: readonly DurableAgentSession[],
+  selectedSessionKey: string | null,
+  protectedTurn: Readonly<{ sessionKey: string; completedAt: string }> | null = null,
+): DurableAgentSessionCollection {
+  const collection = boundedCollection(sessions, selectedSessionKey, protectedTurn)
+  try {
+    if (collection.sessions.length === 0 && collection.selectedSessionKey === null) window.localStorage.removeItem(key)
+    else window.localStorage.setItem(key, JSON.stringify(collection))
+  } catch {
+    throw new Error("AGENT_SESSION_PERSISTENCE_FAILED")
+  }
+  return collection
+}
+
+function upsertSession(sessions: readonly DurableAgentSession[], next: DurableAgentSession): readonly DurableAgentSession[] {
+  const nextKey = sessionKey(next.provider, next.sessionId)
+  const without = sessions.filter((session) => sessionKey(session.provider, session.sessionId) !== nextKey)
+  return [...without, next].slice(-MAX_DURABLE_SESSIONS)
 }
 
 function storageKey(ownerScope: string, worldScope: string): string {
@@ -134,7 +261,8 @@ function storageKey(ownerScope: string, worldScope: string): string {
 
 function projectSessions(
   worker: WorldWorker | null,
-  durable: DurableAgentSession | null,
+  durable: readonly DurableAgentSession[],
+  verified: readonly DurableAgentSession[],
   activeSessionId: string | null,
 ): readonly ExperienceAgentSession[] {
   const sessions: ExperienceAgentSession[] = []
@@ -151,20 +279,24 @@ function projectSessions(
       mode: "delegate",
     })
   }
-  if (durable) {
+  durable.forEach((descriptor) => {
+    const descriptorKey = sessionKey(descriptor.provider, descriptor.sessionId)
+    const isVerified = verified.some((session) => sessionKey(session.provider, session.sessionId) === descriptorKey)
+    const isWorking = activeSessionId === descriptorKey && isVerified
     sessions.push({
-      id: durable.sessionId,
-      role: durable.role,
-      providerLabel: durable.provider,
-      assignment: durable.assignment,
-      status: activeSessionId === durable.sessionId ? "working" : "ready",
-      evidence: activeSessionId === durable.sessionId ? "live agent stream" : "resumable session",
-      truth: "live",
+      id: descriptorKey,
+      role: descriptor.role,
+      providerLabel: descriptor.provider,
+      assignment: descriptor.assignment,
+      status: isWorking ? "working" : isVerified ? "ready" : "resume unverified",
+      evidence: isWorking ? "live agent stream" : isVerified ? "resumable session" : "saved transcript · server verification required",
+      truth: isVerified ? "live" : "resume-unverified",
       kind: "durable-session",
-      mode: durable.reviewPath ? "review" : "delegate",
-      ...(durable.reviewPath ? { reviewPath: durable.reviewPath } : {}),
+      mode: descriptor.reviewPath ? "review" : "delegate",
+      ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
+      ...(descriptor.completedTurns?.at(-1)?.finalResult ? { lastResult: descriptor.completedTurns.at(-1)!.finalResult } : {}),
     })
-  }
+  })
   return sessions
 }
 
@@ -179,12 +311,16 @@ export function useExperienceAgentSessions({
   worldId: string | null
   worker: WorldWorker | null
 }): ProviderNeutralAgentSessionController {
-  const [savedDescriptor, setSavedDescriptor] = useState<DurableAgentSession | null>(null)
+  const [savedSessions, setSavedSessions] = useState<readonly DurableAgentSession[]>([])
+  const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null)
+  const [verifiedSessions, setVerifiedSessions] = useState<readonly DurableAgentSession[]>([])
   const [durableSession, setDurableSession] = useState<DurableAgentSession | null>(null)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [activeProvider, setActiveProvider] = useState<AgentProvider | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const descriptorRef = useRef<DurableAgentSession | null>(null)
+  const sessionsRef = useRef<readonly DurableAgentSession[]>([])
+  const selectedSessionKeyRef = useRef<string | null>(null)
+  const verifiedSessionsRef = useRef<readonly DurableAgentSession[]>([])
   const operationEpoch = useRef(0)
   const operationRef = useRef<ActiveAgentOperation | null>(null)
 
@@ -194,14 +330,19 @@ export function useExperienceAgentSessions({
     // Invalidation is deliberately first. A cancel/read/finally continuation from this operation
     // can no longer mutate the state or persistence owned by the next turn.
     operationRef.current = null
-    if (operation.prior) {
-      window.localStorage.setItem(operation.storageKey, JSON.stringify(operation.prior))
-      if (restoreVisibleHint) {
-        descriptorRef.current = operation.prior
-        setSavedDescriptor(operation.prior)
-      }
-    } else {
-      window.localStorage.removeItem(operation.storageKey)
+    // The collection is committed only after a successful terminal frame, so cancellation restores
+    // the in-memory snapshot without another storage write that could itself fail or widen truth.
+    sessionsRef.current = operation.priorCollection
+    selectedSessionKeyRef.current = operation.priorSelectedSessionKey
+    if (restoreVisibleHint) {
+      setSavedSessions(operation.priorCollection)
+      setSelectedSessionKey(operation.priorSelectedSessionKey)
+      const verified = operation.prior && operation.priorVerified
+        ? upsertSession(verifiedSessionsRef.current, operation.prior)
+        : verifiedSessionsRef.current
+      verifiedSessionsRef.current = verified
+      setVerifiedSessions(verified)
+      setDurableSession(operation.priorVerified ? operation.prior : null)
     }
     void operation.reader?.cancel()
     operation.abort.abort()
@@ -215,12 +356,32 @@ export function useExperienceAgentSessions({
     invalidateOperation(false)
     const key = storageKey(ownerScope, worldScope)
     const stored = window.localStorage.getItem(key)
-    const descriptor = parseDescriptor(stored)
-    if (stored && !descriptor) window.localStorage.removeItem(key)
+    const collection = parseCollection(stored)
+    if (!collection) {
+      window.localStorage.removeItem(key)
+      sessionsRef.current = []
+      selectedSessionKeyRef.current = null
+      setSavedSessions([])
+      setSelectedSessionKey(null)
+    } else {
+      try {
+        const persisted = persistCollection(key, collection.sessions, collection.selectedSessionKey)
+        sessionsRef.current = persisted.sessions
+        selectedSessionKeyRef.current = persisted.selectedSessionKey
+        setSavedSessions(persisted.sessions)
+        setSelectedSessionKey(persisted.selectedSessionKey)
+      } catch (cause) {
+        sessionsRef.current = []
+        selectedSessionKeyRef.current = null
+        setSavedSessions([])
+        setSelectedSessionKey(null)
+        setError(cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED")
+      }
+    }
     // Browser storage is only a resume hint. The server authenticates ownership and existence when
     // a turn actually resumes; until that turn succeeds, this must not enter the live projection.
-    setSavedDescriptor(descriptor)
-    descriptorRef.current = descriptor
+    verifiedSessionsRef.current = []
+    setVerifiedSessions([])
     setDurableSession(null)
   }, [invalidateOperation, ownerScope, worldScope])
 
@@ -234,6 +395,28 @@ export function useExperienceAgentSessions({
   const stop = useCallback(() => {
     invalidateOperation(true)
   }, [invalidateOperation])
+
+  const selectSession = useCallback((selectedKey: string | null) => {
+    if (operationRef.current) return false
+    const sessions = sessionsRef.current
+    const selected = selectedKey === null ? null : sessions.find((session) => sessionKey(session.provider, session.sessionId) === selectedKey)
+    if (selectedKey !== null && !selected) return false
+    const key = storageKey(ownerScope, worldScope)
+    const nextKey = selected ? sessionKey(selected.provider, selected.sessionId) : null
+    let persisted: DurableAgentSessionCollection
+    try {
+      persisted = persistCollection(key, sessions, nextKey)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED")
+      return false
+    }
+    sessionsRef.current = persisted.sessions
+    selectedSessionKeyRef.current = persisted.selectedSessionKey
+    setSavedSessions(persisted.sessions)
+    setSelectedSessionKey(persisted.selectedSessionKey)
+    setDurableSession(selected && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === nextKey) ? selected : null)
+    return true
+  }, [ownerScope, worldScope])
 
   const executeTurn = useCallback(async (input: RunClaudeTurnInput & { provider: AgentProvider }) => {
     const role = boundedText(input.role, 80)
@@ -249,10 +432,11 @@ export function useExperienceAgentSessions({
     if (mode === "review" && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
     if (operationRef.current) throw new Error("AGENT_TURN_ALREADY_RUNNING")
 
-    const storedPrior = descriptorRef.current
+    const storedPrior = sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKeyRef.current) ?? null
     const prior = mode === "review"
       ? storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer" && storedPrior.reviewPath === reviewPath ? storedPrior : null
-      : storedPrior?.provider === input.provider && !storedPrior.reviewPath ? storedPrior : null
+      : storedPrior?.provider === input.provider && !storedPrior.reviewPath
+        && storedPrior.role === role && storedPrior.assignment === assignment ? storedPrior : null
     const operationStorageKey = storageKey(ownerScope, worldScope)
     const operation: ActiveAgentOperation = {
       epoch: operationEpoch.current + 1,
@@ -260,18 +444,16 @@ export function useExperienceAgentSessions({
       reader: null,
       storageKey: operationStorageKey,
       prior,
+      priorVerified: Boolean(prior && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === sessionKey(prior.provider, prior.sessionId))),
+      priorCollection: sessionsRef.current,
+      priorSelectedSessionKey: selectedSessionKeyRef.current,
     }
     operationEpoch.current = operation.epoch
     operationRef.current = operation
     const isCurrent = () => operationRef.current === operation
-    if (storedPrior) {
-      // While resume is being verified, the saved descriptor is not usable truth. Remove it up
-      // front so any terminal refusal naturally recovers to a fresh session on the next turn.
-      window.localStorage.removeItem(operationStorageKey)
-      descriptorRef.current = null
-      setSavedDescriptor(null)
-    }
-    setActiveSessionId(prior?.sessionId ?? `starting-${input.provider.toLowerCase()}-session`)
+    // A restored descriptor remains a non-live resume hint while the server verifies it. Unrelated
+    // sessions are never removed merely because another turn starts.
+    setActiveSessionId(prior ? sessionKey(prior.provider, prior.sessionId) : `starting-${input.provider.toLowerCase()}-session`)
     setActiveProvider(input.provider)
     // A running or failed turn is not a ready session. Re-earn the live projection at successful
     // completion, including when a previously verified descriptor is being resumed.
@@ -345,8 +527,10 @@ export function useExperienceAgentSessions({
           const codexTruth = input.provider !== "Codex" || event.provider === "Codex" && event.mode === "delegate"
           const claudeTruth = input.provider !== "Claude"
             || (event.provider === undefined || event.provider === "Claude") && (event.mode === undefined || event.mode === mode)
+          const unexpectedReuse = !prior && typeof event.sessionId === "string"
+            && sessionsRef.current.some((session) => session.provider === input.provider && session.sessionId === event.sessionId)
           if (!sessionIdValid || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed
-            || !matchesResumeId || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth) {
+            || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth) {
             malformed = true
             return
           }
@@ -361,7 +545,7 @@ export function useExperienceAgentSessions({
             updatedAt: new Date().toISOString(),
           }
           if (isCurrent()) {
-            setActiveSessionId(event.sessionId as string)
+            setActiveSessionId(sessionKey(input.provider, event.sessionId as string))
             input.onEvent?.(event)
           }
           return
@@ -433,32 +617,80 @@ export function useExperienceAgentSessions({
       if (reason || finalOutcome.code !== 0) {
         throw new Error(`AGENT_TURN_FAILED:${reason ?? `EXIT_${String(finalOutcome.code)}`}`)
       }
-      if (!sessionSeen || !accepted || !canonicalResultSeen || !resultText) throw new Error(mode === "review" ? "AGENT_REVIEW_STREAM_INVALID" : "AGENT_STREAM_INVALID")
+      const acceptedSession = accepted as DurableAgentSession | null
+      if (!sessionSeen || !acceptedSession || !canonicalResultSeen || !resultText) throw new Error(mode === "review" ? "AGENT_REVIEW_STREAM_INVALID" : "AGENT_STREAM_INVALID")
       if (!isCurrent()) throw new DOMException("Aborted", "AbortError")
-      window.localStorage.setItem(operationStorageKey, JSON.stringify(accepted))
-      descriptorRef.current = accepted
-      setSavedDescriptor(accepted)
-      setDurableSession(accepted)
+      const completedAt = new Date().toISOString()
+      const settledSession: DurableAgentSession = {
+        ...acceptedSession,
+        updatedAt: completedAt,
+        completedTurns: [...(prior?.completedTurns ?? []), {
+          ownerPrompt: mode === "review" ? focus ?? `Review ${reviewPath}` : prompt!,
+          finalResult: resultText,
+          completedAt,
+        }].slice(-MAX_COMPLETED_TURNS),
+      }
+      const nextSessions = upsertSession(sessionsRef.current, settledSession)
+      const settledKey = sessionKey(settledSession.provider, settledSession.sessionId)
+      let persisted: DurableAgentSessionCollection
+      try {
+        persisted = persistCollection(operationStorageKey, nextSessions, settledKey, { sessionKey: settledKey, completedAt })
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED"
+        throw new AgentTurnCommittedPersistenceError(message)
+      }
+      sessionsRef.current = persisted.sessions
+      selectedSessionKeyRef.current = persisted.selectedSessionKey
+      setSavedSessions(persisted.sessions)
+      setSelectedSessionKey(persisted.selectedSessionKey)
+      const persistedSession = persisted.sessions.find((session) => sessionKey(session.provider, session.sessionId) === settledKey)!
+      const nextVerified = upsertSession(verifiedSessionsRef.current, persistedSession)
+      verifiedSessionsRef.current = nextVerified
+      setVerifiedSessions(nextVerified)
+      setDurableSession(persistedSession)
       if (mode === "review" && isCurrent()) input.onReviewComplete?.(resultText)
-      return accepted
+      return persistedSession
     } catch (cause) {
       // A failed resume is no longer evidence that the saved descriptor exists or belongs to this
       // authenticated owner. Clear it so the next Delegate can start a fresh truthful session.
       // A user cancellation is different: it does not disprove an already verified descriptor.
       const error = cause as Error
       if (!isCurrent()) throw cause
+      if (error instanceof AgentTurnCommittedPersistenceError) {
+        sessionsRef.current = operation.priorCollection
+        selectedSessionKeyRef.current = operation.priorSelectedSessionKey
+        setSavedSessions(operation.priorCollection)
+        setSelectedSessionKey(operation.priorSelectedSessionKey)
+        setDurableSession(operation.priorVerified ? operation.prior : null)
+        setError(error.message)
+        throw cause
+      }
       const terminalResumeRefusal = prior !== null && error instanceof AgentStartRefusal
         && (error.status === 401 || error.status === 403 || error.status === 404)
-      if (error?.name !== "AbortError" && (!prior || terminalResumeRefusal)) {
-        window.localStorage.removeItem(operationStorageKey)
-        descriptorRef.current = null
-        setSavedDescriptor(null)
+      if (error?.name !== "AbortError" && terminalResumeRefusal && prior) {
+        const priorKey = sessionKey(prior.provider, prior.sessionId)
+        const remaining = sessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
+        const remainingSelected = selectedSessionKeyRef.current === priorKey ? null : selectedSessionKeyRef.current
+        const persisted = persistCollection(operationStorageKey, remaining, remainingSelected)
+        sessionsRef.current = persisted.sessions
+        selectedSessionKeyRef.current = persisted.selectedSessionKey
+        setSavedSessions(persisted.sessions)
+        setSelectedSessionKey(persisted.selectedSessionKey)
+        const remainingVerified = verifiedSessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
+        verifiedSessionsRef.current = remainingVerified
+        setVerifiedSessions(remainingVerified)
+        setDurableSession(null)
       } else if (prior) {
-        window.localStorage.setItem(operationStorageKey, JSON.stringify(prior))
-        descriptorRef.current = prior
-        setSavedDescriptor(prior)
+        persistCollection(operationStorageKey, sessionsRef.current, selectedSessionKeyRef.current)
+        if (error?.name !== "AbortError") {
+          const priorKey = sessionKey(prior.provider, prior.sessionId)
+          const remainingVerified = verifiedSessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
+          verifiedSessionsRef.current = remainingVerified
+          setVerifiedSessions((current) => current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey))
+          setDurableSession(null)
+        }
       } else {
-        window.localStorage.removeItem(operationStorageKey)
+        persistCollection(operationStorageKey, sessionsRef.current, selectedSessionKeyRef.current)
       }
       if (error?.name !== "AbortError") setError(cause instanceof Error ? cause.message : "AGENT_UNAVAILABLE")
       throw cause
@@ -476,20 +708,24 @@ export function useExperienceAgentSessions({
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
 
   const sessions = useMemo(
-    () => projectSessions(worker, durableSession, activeSessionId),
-    [worker, durableSession, activeSessionId],
+    () => projectSessions(worker, savedSessions, verifiedSessions, activeSessionId),
+    [worker, savedSessions, verifiedSessions, activeSessionId],
   )
+  const savedDescriptor = savedSessions.find((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKey) ?? null
   const descriptorState = durableSession ? "verified" : savedDescriptor ? "unverified" : "none"
   return {
     sessions,
     durableSession,
     savedDescriptor,
+    savedSessions,
+    selectedSessionKey,
     descriptorState,
     activeSessionId,
     activeProvider,
     error,
     runAgentTurn,
     runClaudeTurn,
+    selectSession,
     stop,
   }
 }
@@ -513,7 +749,12 @@ export function AgentSessionStrip({
 }) {
   if (sessions.length === 0 && !runningSessionId) return null
   return (
-    <nav className={className ?? "flex items-center justify-center gap-2"} aria-label="Durable agent sessions">
+    <nav
+      className={className ?? "flex items-center justify-center gap-2"}
+      aria-label="Durable agent sessions"
+      tabIndex={0}
+      style={{ display: "flex", maxWidth: "60vw", minWidth: 0, overflowX: "auto", flexWrap: "nowrap", justifyContent: "flex-start", scrollbarGutter: "stable" }}
+    >
       {runningSessionId ? (
         <button
           type="button"
@@ -532,6 +773,7 @@ export function AgentSessionStrip({
           aria-label={`${session.role} · ${session.providerLabel} · ${session.assignment}`}
           onClick={() => onSelect?.(session)}
           className="flex min-w-36 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"
+          style={{ flex: "0 0 auto" }}
         >
           <span aria-hidden className="grid size-5 place-items-center rounded-full border border-[#566653] text-[9px]">
             {session.role.slice(0, 1).toUpperCase()}
