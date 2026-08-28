@@ -14,6 +14,8 @@ export function WindowFrame({
   onActivate,
   onGeometry,
   onMinimize,
+  minimizeDisabled = false,
+  minimizeDisabledReason,
   onClose,
   children,
 }: {
@@ -24,6 +26,8 @@ export function WindowFrame({
   onActivate: () => void
   onGeometry: (next: WindowGeometry) => void
   onMinimize?: () => void
+  minimizeDisabled?: boolean
+  minimizeDisabledReason?: string
   onClose?: () => void
   children: React.ReactNode
 }) {
@@ -131,7 +135,7 @@ export function WindowFrame({
       <header className={styles.windowBar} onPointerDown={startDrag} onDoubleClick={toggleMaximize}>
         <span className={styles.windowTitle}>{title}</span>
         {onMinimize ? (
-          <button type="button" className={styles.windowControl} onClick={onMinimize} aria-label={`Minimize ${title}`}>
+          <button type="button" className={styles.windowControl} onClick={onMinimize} disabled={minimizeDisabled} aria-label={`Minimize ${title}`} title={minimizeDisabledReason ?? `Minimize ${title}`}>
             <Minus size={14} strokeWidth={1.7} />
           </button>
         ) : null}

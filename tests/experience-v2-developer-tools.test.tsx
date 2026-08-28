@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { DeveloperToolsSurface } from "@/components/workspace-shell/developer-tools-surface"
@@ -32,6 +32,25 @@ describe("Experience V2 developer tools", () => {
     }))
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }))
     expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it("clears stale diff output and makes a governed refresh failure visible", async () => {
+    let calls = 0
+    const fetcher = vi.fn(() => {
+      calls += 1
+      return Promise.resolve(calls === 1
+        ? Response.json({ path: "src/app.ts", untracked: false, diff: "-old\n+old" })
+        : Response.json({ error: "DIFF_REFUSED" }, { status: 500 }))
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    const view = render(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" refreshKey={0} />)
+    expect(await screen.findByText("+old", { exact: false })).toBeTruthy()
+    view.rerender(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" refreshKey={1} />)
+
+    expect(screen.queryByText("+old", { exact: false })).toBeNull()
+    expect(await screen.findByText("Unable to refresh current change: DIFF_REFUSED")).toBeTruthy()
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
   })
 
   it("runs the real catalogued test operation and renders its streamed exit", async () => {

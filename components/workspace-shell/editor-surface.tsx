@@ -88,14 +88,21 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
   )
 }
 
-export function EditorSurface({ space, onEditorChange }: {
+export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange, reloadPath = null, reloadKey = 0, onReloadSettled }: {
   space: WorkspaceSpace
   onEditorChange: (editor: WorkspaceSpace["editor"], selectedPath: string | null) => void
+  onSelectedFileDirtyChange?: (path: string, dirty: boolean) => void
+  reloadPath?: string | null
+  reloadKey?: number
+  onReloadSettled?: (path: string, key: number, result: "refreshed" | "dirty-conflict" | "failed") => void
 }) {
   const [roots, setRoots] = useState<readonly Entry[] | null>(null)
   const [treeError, setTreeError] = useState<string | null>(null)
   const [buffers, setBuffers] = useState<Record<string, FileBuffer>>({})
   const loadingFiles = useRef(new Set<string>())
+  const dirtyBuffers = useRef(new Set<string>())
+  const completedReloadKey = useRef(-1)
+  const bufferEpoch = useRef(new Map<string, number>())
 
   const loadRoots = useCallback(async () => {
     setTreeError(null)
@@ -116,11 +123,12 @@ export function EditorSurface({ space, onEditorChange }: {
     for (const path of space.editor.openFiles) {
       if (buffers[path] || loadingFiles.current.has(path)) continue
       loadingFiles.current.add(path)
+      const epoch = bufferEpoch.current.get(path) ?? 0
       void fetch(`/api/loom/files?path=${encodeURIComponent(path)}`, { cache: "no-store" })
         .then(async (response) => {
           const payload = await response.json()
           if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
-          setBuffers((current) => ({ ...current, [path]: {
+          setBuffers((current) => (bufferEpoch.current.get(path) ?? 0) !== epoch ? current : ({ ...current, [path]: {
             path: payload.path,
             content: payload.content,
             savedContent: payload.content,
@@ -129,10 +137,52 @@ export function EditorSurface({ space, onEditorChange }: {
             error: null,
           } }))
         })
-        .catch((error) => setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE"))
+        .catch((error) => {
+          if ((bufferEpoch.current.get(path) ?? 0) !== epoch) return
+          setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE")
+        })
         .finally(() => loadingFiles.current.delete(path))
     }
   }, [buffers, space.editor.openFiles])
+
+  useEffect(() => {
+    if (!reloadPath || completedReloadKey.current === reloadKey) return
+    const current = buffers[reloadPath]
+    if (dirtyBuffers.current.has(reloadPath) || (current && current.content !== current.savedContent)) {
+      completedReloadKey.current = reloadKey
+      onReloadSettled?.(reloadPath, reloadKey, "dirty-conflict")
+      return
+    }
+    completedReloadKey.current = reloadKey
+    const epoch = (bufferEpoch.current.get(reloadPath) ?? 0) + 1
+    bufferEpoch.current.set(reloadPath, epoch)
+    void fetch(`/api/loom/files?path=${encodeURIComponent(reloadPath)}`, { cache: "no-store" })
+      .then(async (response) => {
+        const payload = await response.json()
+        if (!response.ok || payload.kind !== "file") throw new Error(payload.error ?? `READ_${response.status}`)
+        if (bufferEpoch.current.get(reloadPath) !== epoch || dirtyBuffers.current.has(reloadPath)) return "dirty-conflict" as const
+        setBuffers((existing) => (bufferEpoch.current.get(reloadPath) ?? 0) !== epoch ? existing : ({ ...existing, [reloadPath]: {
+          path: payload.path,
+          content: payload.content,
+          savedContent: payload.content,
+          modifiedAt: payload.modifiedAt,
+          saving: false,
+          error: null,
+        } }))
+        return "refreshed" as const
+      })
+      .then((result) => onReloadSettled?.(reloadPath, reloadKey, result))
+      .catch((error) => {
+        setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE")
+        onReloadSettled?.(reloadPath, reloadKey, "failed")
+      })
+  }, [buffers, onReloadSettled, reloadKey, reloadPath])
+
+  const selectedBuffer = space.selectedPath ? buffers[space.selectedPath] : null
+  useEffect(() => {
+    if (!space.selectedPath) return
+    onSelectedFileDirtyChange?.(space.selectedPath, Boolean(selectedBuffer && selectedBuffer.content !== selectedBuffer.savedContent))
+  }, [onSelectedFileDirtyChange, selectedBuffer?.content, selectedBuffer?.savedContent, space.selectedPath])
 
   const updatePanes = useCallback((
     panes: readonly EditorPane[],
@@ -146,11 +196,12 @@ export function EditorSurface({ space, onEditorChange }: {
   const openFile = useCallback(async (path: string, targetPaneId: EditorPane["id"] = space.editor.activePaneId) => {
     if (!buffers[path]) {
       try {
+        const epoch = bufferEpoch.current.get(path) ?? 0
         const response = await fetch(`/api/loom/files?path=${encodeURIComponent(path)}`, { cache: "no-store" })
         const payload = await response.json()
         if (!response.ok) throw new Error(payload.error ?? `READ_${response.status}`)
         if (payload.kind === "binary") throw new Error("BINARY_FILE_NOT_EDITABLE")
-        setBuffers((current) => ({ ...current, [path]: {
+        setBuffers((current) => (bufferEpoch.current.get(path) ?? 0) !== epoch ? current : ({ ...current, [path]: {
           path: payload.path,
           content: payload.content,
           savedContent: payload.content,
@@ -184,10 +235,12 @@ export function EditorSurface({ space, onEditorChange }: {
         const detail = [payload.error ?? `SAVE_${response.status}`, payload.detail].filter(Boolean).join(": ")
         throw new Error(payload.error === "CHANGED_ON_DISK" ? "CHANGED_ON_DISK: reopen before saving" : detail)
       }
-      setBuffers((current) => ({
-        ...current,
-        [path]: acknowledgeSavedBuffer(current[path], submittedContent, payload.modifiedAt),
-      }))
+      setBuffers((current) => {
+        const acknowledged = acknowledgeSavedBuffer(current[path], submittedContent, payload.modifiedAt)
+        if (acknowledged.content === acknowledged.savedContent) dirtyBuffers.current.delete(path)
+        else dirtyBuffers.current.add(path)
+        return { ...current, [path]: acknowledged }
+      })
     } catch (error) {
       setBuffers((current) => ({ ...current, [path]: {
         ...current[path], saving: false, error: error instanceof Error ? error.message : "SAVE_REFUSED",
@@ -273,7 +326,12 @@ export function EditorSurface({ space, onEditorChange }: {
                         path={buffer.path}
                         value={buffer.content}
                         selection={pane.selection}
-                        onChange={(content) => setBuffers((current) => ({ ...current, [buffer.path]: { ...current[buffer.path], content, error: null } }))}
+                        onChange={(content) => {
+                          bufferEpoch.current.set(buffer.path, (bufferEpoch.current.get(buffer.path) ?? 0) + 1)
+                          if (content === buffer.savedContent) dirtyBuffers.current.delete(buffer.path)
+                          else dirtyBuffers.current.add(buffer.path)
+                          setBuffers((current) => ({ ...current, [buffer.path]: { ...current[buffer.path], content, error: null } }))
+                        }}
                         onSelection={(selection) => {
                           const panes = space.editor.panes.map((item) => item.id === pane.id ? { ...item, selection } : item)
                           updatePanes(panes, space.editor.openFiles, buffer.path, pane.id)
