@@ -37,6 +37,23 @@ export type PendingDecision = Readonly<{
 
 export type ValidationMark = Readonly<{ ref: string; at: string }>
 
+export type WilliamJudgmentBasis = Readonly<{
+  key: string
+  label: string
+  value: string
+}>
+
+/** A model-authored opinion whose inspectable basis and provenance are retained with the world. */
+export type WilliamJudgment = Readonly<{
+  recommendation: string
+  rationale: string
+  basis: readonly WilliamJudgmentBasis[]
+  confidence: number
+  generatedAt: string
+  basisFingerprint: string
+  provenance: Readonly<{ provider: string; model: string }>
+}>
+
 export type SpaceWindowKind = "editor" | "running-app" | "tests" | "diff" | "terminal" | "line" | "inspector"
 
 type SpaceWindowBase = Readonly<{
@@ -181,6 +198,8 @@ export type WorkingWorldSnapshot = Readonly<{
   lastRedValidation: ValidationMark | null
   /** Conversational position: the last few turns, oldest first, roles owner|williamos. */
   conversation: readonly Readonly<{ role: "owner" | "williamos"; content: string; at: string }>[]
+  /** William's latest real model judgment, distinct from deterministic safety facts in the UI. */
+  judgment: WilliamJudgment | null
   /** Whether Hermes should continue this work unattended, and where it stands. */
   continuation: "active" | "paused" | "settled"
   /**
@@ -237,6 +256,7 @@ export function createWorkingWorld({
     lastGreenValidation: null,
     lastRedValidation: null,
     conversation: [],
+    judgment: null,
     continuation: "active",
     pendingStartWork: null,
   }
@@ -252,7 +272,7 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
   const allowed = new Set([
     "schemaVersion", "spine", "intent", "assumption", "resources", "branchHeads", "artifacts", "agentWork",
     "surfaces", "openConcerns", "unresolvedFailures", "pendingDecisions", "lastGreenValidation",
-    "lastRedValidation", "conversation", "continuation", "pendingStartWork",
+    "lastRedValidation", "conversation", "judgment", "continuation", "pendingStartWork",
     "space",
   ])
   for (const key of Object.keys(snapshot)) {
@@ -268,6 +288,10 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
   if (!WORLD_EXECUTION_STATES.has(String(spine.execution))) throw new Error("WORLD_SPINE_EXECUTION_UNKNOWN")
   if (!Array.isArray(spine.evidence)) throw new Error("WORLD_SPINE_EVIDENCE_MALFORMED")
 
+  // Additive migration for worlds saved before William's persistent judgment existed.
+  if (snapshot.judgment === undefined) snapshot.judgment = null
+  if (snapshot.judgment !== null) snapshot.judgment = validateWilliamJudgment(snapshot.judgment)
+
   if (snapshot.space !== undefined) snapshot.space = validateSpaceState(snapshot.space)
   // The 2026-08-25 owner contract makes a Space's window geometry durable product state. Continue
   // rejecting layout-shaped keys everywhere else, while validating Space geometry explicitly.
@@ -275,6 +299,61 @@ export function validateWorkingWorld(raw: unknown): WorkingWorldSnapshot {
   delete meaning.space
   assertNoChrome(meaning, "")
   return snapshot as unknown as WorkingWorldSnapshot
+}
+
+function judgmentString(value: unknown, error: string, max: number): string {
+  if (typeof value !== "string" || value.trim() === "" || value.length > max || value.includes("\0")) {
+    throw new Error(error)
+  }
+  return value.trim()
+}
+
+/** Strict persistence boundary for inference-authored judgment data. */
+export function validateWilliamJudgment(raw: unknown): WilliamJudgment {
+  const judgment = record(raw, "WORLD_JUDGMENT_MALFORMED")
+  exactKeys(judgment, [
+    "recommendation", "rationale", "basis", "confidence", "generatedAt", "basisFingerprint", "provenance",
+  ], "WORLD_JUDGMENT_UNKNOWN_KEY")
+  const recommendation = judgmentString(judgment.recommendation, "WORLD_JUDGMENT_RECOMMENDATION_INVALID", 400)
+  const rationale = judgmentString(judgment.rationale, "WORLD_JUDGMENT_RATIONALE_INVALID", 1_200)
+  if (!Array.isArray(judgment.basis) || judgment.basis.length === 0 || judgment.basis.length > 8) {
+    throw new Error("WORLD_JUDGMENT_BASIS_INVALID")
+  }
+  const keys = new Set<string>()
+  const basis = judgment.basis.map((rawBasis) => {
+    const item = record(rawBasis, "WORLD_JUDGMENT_BASIS_MALFORMED")
+    exactKeys(item, ["key", "label", "value"], "WORLD_JUDGMENT_BASIS_UNKNOWN_KEY")
+    const key = judgmentString(item.key, "WORLD_JUDGMENT_BASIS_KEY_INVALID", 80)
+    if (keys.has(key)) throw new Error("WORLD_JUDGMENT_BASIS_DUPLICATE")
+    keys.add(key)
+    return {
+      key,
+      label: judgmentString(item.label, "WORLD_JUDGMENT_BASIS_LABEL_INVALID", 120),
+      value: judgmentString(item.value, "WORLD_JUDGMENT_BASIS_VALUE_INVALID", 500),
+    }
+  })
+  if (typeof judgment.confidence !== "number" || !Number.isFinite(judgment.confidence)
+    || judgment.confidence < 0 || judgment.confidence > 1) {
+    throw new Error("WORLD_JUDGMENT_CONFIDENCE_INVALID")
+  }
+  const generatedAt = judgmentString(judgment.generatedAt, "WORLD_JUDGMENT_TIME_INVALID", 40)
+  if (!Number.isFinite(Date.parse(generatedAt))) throw new Error("WORLD_JUDGMENT_TIME_INVALID")
+  const basisFingerprint = judgmentString(judgment.basisFingerprint, "WORLD_JUDGMENT_FINGERPRINT_INVALID", 64)
+  if (!/^[0-9a-f]{64}$/.test(basisFingerprint)) throw new Error("WORLD_JUDGMENT_FINGERPRINT_INVALID")
+  const provenance = record(judgment.provenance, "WORLD_JUDGMENT_PROVENANCE_MALFORMED")
+  exactKeys(provenance, ["provider", "model"], "WORLD_JUDGMENT_PROVENANCE_UNKNOWN_KEY")
+  return {
+    recommendation,
+    rationale,
+    basis,
+    confidence: judgment.confidence,
+    generatedAt,
+    basisFingerprint,
+    provenance: {
+      provider: judgmentString(provenance.provider, "WORLD_JUDGMENT_PROVIDER_INVALID", 120),
+      model: judgmentString(provenance.model, "WORLD_JUDGMENT_MODEL_INVALID", 200),
+    },
+  }
 }
 
 const SPACE_WINDOW_KINDS: ReadonlySet<string> = new Set<SpaceWindowKind>([

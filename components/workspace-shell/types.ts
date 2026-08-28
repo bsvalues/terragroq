@@ -1,4 +1,4 @@
-import type { WorldSpine } from "@/lib/environment/working-world"
+import type { WilliamJudgment, WorldSpine } from "@/lib/environment/working-world"
 import { isSummonedSurface } from "@/lib/environment/summon"
 
 export type WindowId = "editor" | "running-app" | "tests" | "diff" | "terminal"
@@ -44,6 +44,7 @@ export type SpaceEnvelope = Readonly<{
   worldId: string
   space: unknown
   spine?: WorldSpine
+  judgment?: WilliamJudgment | null
   project?: WorkspaceProject
   storage?: "server" | "browser"
   browserStorageKey?: string

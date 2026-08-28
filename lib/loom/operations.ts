@@ -51,7 +51,7 @@ export const LOOM_OPERATIONS: readonly LoomOperation[] = [
   },
   {
     id: "repo.diff",
-    label: "Show me the diff",
+    label: "Show diff summary",
     intent: "Show the full diff of the working tree against HEAD.",
     command: "git",
     args: ["diff", "--stat", "HEAD"],

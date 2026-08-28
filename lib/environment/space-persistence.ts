@@ -6,12 +6,15 @@ import { db } from "@/lib/db"
 import { workingWorld } from "@/lib/db/schema"
 import {
   createWorkingWorld,
+  validateWilliamJudgment,
   validateSpaceState,
   validateWorkingWorld,
   type SpaceState,
+  type WilliamJudgment,
   type WorkingWorldSnapshot,
   type WorldSpine,
 } from "@/lib/environment/working-world"
+import { williamJudgmentBasisFingerprint } from "@/lib/environment/william-judgment"
 
 export type OwnedWorkingWorldRecord = Readonly<{
   id: string
@@ -182,12 +185,65 @@ export async function saveOwnedLineWorld(
     const row = await store.findOwned(input.userId, input.worldId)
     if (!row) throw new Error("WORLD_NOT_FOUND")
     const latest = validateWorkingWorld(JSON.parse(row.snapshot))
-    const merged = validateWorkingWorld({ ...submitted, space: latest.space })
+    // Space and judgment have independent writers. A Line turn may have loaded before either one;
+    // preserve both latest product-owned fields while applying only the conversational mutation.
+    const candidate = validateWorkingWorld({
+      ...submitted,
+      space: latest.space,
+      judgment: latest.judgment,
+    })
+    const merged = candidate.judgment
+      && candidate.judgment.basisFingerprint !== williamJudgmentBasisFingerprint(candidate)
+      ? validateWorkingWorld({ ...candidate, judgment: null })
+      : candidate
     if (await store.updateOwned(
       input.userId,
       input.worldId,
       JSON.stringify(merged),
       merged.intent,
+      row.snapshot,
+    )) return
+  }
+  throw new Error("WORLD_PERSISTENCE_BUSY")
+}
+
+/** Load one exact owned world for a product adapter without exposing the persistence row. */
+export async function loadOwnedWorkingWorld(
+  userId: string,
+  worldId: string,
+  store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
+): Promise<WorkingWorldSnapshot | null> {
+  const row = await store.findOwned(userId, worldId)
+  if (!row) return null
+  return validateWorkingWorld(JSON.parse(row.snapshot))
+}
+
+/** Persist William's latest judgment while preserving every concurrent Space/world field. */
+export async function saveOwnedJudgment(
+  input: Readonly<{
+    userId: string
+    worldId: string
+    judgment: WilliamJudgment
+    expectedBasisFingerprint: string
+  }>,
+  store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
+): Promise<void> {
+  const judgment = validateWilliamJudgment(input.judgment)
+  const maxAttempts = 3
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const row = await store.findOwned(input.userId, input.worldId)
+    if (!row) throw new Error("WORLD_NOT_FOUND")
+    const latest = validateWorkingWorld(JSON.parse(row.snapshot))
+    if (williamJudgmentBasisFingerprint(latest) !== input.expectedBasisFingerprint
+      || judgment.basisFingerprint !== input.expectedBasisFingerprint) {
+      throw new Error("JUDGMENT_BASIS_STALE")
+    }
+    const updated = validateWorkingWorld({ ...latest, judgment })
+    if (await store.updateOwned(
+      input.userId,
+      input.worldId,
+      JSON.stringify(updated),
+      updated.intent,
       row.snapshot,
     )) return
   }
@@ -254,7 +310,13 @@ export async function loadOrCreateOwnedSpace(
     project?: WorkspaceProject
   }>,
   store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
-): Promise<Readonly<{ worldId: string; space: SpaceState; spine: WorldSpine; project?: WorkspaceProject }> | null> {
+): Promise<Readonly<{
+  worldId: string
+  space: SpaceState
+  spine: WorldSpine
+  judgment: WilliamJudgment | null
+  project?: WorkspaceProject
+}> | null> {
   const exact = input.worldId ? await store.findOwned(input.userId, input.worldId) : null
   if (input.worldId && !exact) return null
   const latest = exact
@@ -275,6 +337,9 @@ export async function loadOrCreateOwnedSpace(
         worldId: row.id,
         space: restoredSpace(world, input.workspaceAppUrl),
         spine: world.spine,
+        judgment: world.judgment?.basisFingerprint === williamJudgmentBasisFingerprint(world)
+          ? world.judgment
+          : null,
         ...(input.project ? { project: input.project } : {}),
       }
     }
@@ -293,7 +358,13 @@ export async function loadOrCreateOwnedSpace(
     id: worldId, userId: input.userId, intent: world.intent,
     snapshot: JSON.stringify(world), updatedAt: new Date(),
   })
-  return { worldId, space, spine: world.spine, ...(input.project ? { project: input.project } : {}) }
+  return {
+    worldId,
+    space,
+    spine: world.spine,
+    judgment: world.judgment,
+    ...(input.project ? { project: input.project } : {}),
+  }
 }
 
 export async function saveOwnedSpace(
@@ -305,7 +376,13 @@ export async function saveOwnedSpace(
     project?: WorkspaceProject
   }>,
   store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
-): Promise<Readonly<{ worldId: string; space: SpaceState; spine: WorldSpine; project?: WorkspaceProject }> | null> {
+): Promise<Readonly<{
+  worldId: string
+  space: SpaceState
+  spine: WorldSpine
+  judgment: WilliamJudgment | null
+  project?: WorkspaceProject
+}> | null> {
   let row = await store.findOwned(input.userId, input.worldId)
   if (!row) return null
   // URL is intentionally overwritten before validation: it is not browser authority. A malicious
@@ -331,7 +408,11 @@ export async function saveOwnedSpace(
       ...submitted,
       runningAppUrl: serverRunningAppUrl(world, input.workspaceAppUrl),
     })
-    const updated = validateWorkingWorld({ ...world, space })
+    const candidate = validateWorkingWorld({ ...world, space })
+    const updated = candidate.judgment
+      && candidate.judgment.basisFingerprint !== williamJudgmentBasisFingerprint(candidate)
+      ? validateWorkingWorld({ ...candidate, judgment: null })
+      : candidate
     if (await store.updateOwned(
       input.userId,
       input.worldId,
@@ -342,6 +423,7 @@ export async function saveOwnedSpace(
       worldId: input.worldId,
       space,
       spine: updated.spine,
+      judgment: updated.judgment,
       ...(input.project ? { project: input.project } : {}),
     }
 

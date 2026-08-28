@@ -5,13 +5,6 @@ import { AlertTriangle, Check, ChevronRight, Eye, RotateCcw, X } from "lucide-re
 
 import styles from "./brain-council-surface.module.css"
 
-export type CouncilSelectedContext = Readonly<{
-  spaceName: string
-  kind: "space" | "file" | "preview" | "diff" | "agent" | "selection"
-  label: string
-  detail?: string
-}>
-
 export type CouncilMember = Readonly<{
   id: string
   role: string
@@ -35,6 +28,11 @@ export type BrainCouncilSession = Readonly<{
   id: string
   question: string
   status: "deliberating" | "ready"
+  context: Readonly<{
+    spaceName: string
+    kind: "space" | "file" | "preview" | "diff" | "agent" | "selection"
+    label: string
+  }>
   members: readonly CouncilMember[]
   consensus: string
   dissent: string
@@ -45,74 +43,10 @@ export type BrainCouncilSession = Readonly<{
 }>
 
 export type BrainCouncilSurfaceProps = Readonly<{
-  selectedContext: CouncilSelectedContext
-  session?: BrainCouncilSession
+  session: BrainCouncilSession
   onDismiss: () => void
   onAdvisoryAction: (action: CouncilAdvisoryAction, session: BrainCouncilSession) => void
 }>
-
-export const REFERENCE_COUNCIL_SESSION: BrainCouncilSession = {
-  id: "reference-ux-council",
-  question: "Is the current WilliamOS experience living, spatial, and directly AI-native?",
-  status: "ready",
-  members: [
-    {
-      id: "architect",
-      role: "Architect",
-      name: "Atlas",
-      provider: "Reference fixture",
-      model: "role simulation",
-      status: "ready",
-      perspective: "Preserve independent spatial work surfaces and reduce chrome that competes with the work.",
-    },
-    {
-      id: "verifier",
-      role: "Verifier",
-      name: "Veritas",
-      provider: "Reference fixture",
-      model: "role simulation",
-      status: "ready",
-      perspective: "AI actions must remain attached to real selected objects and lead to inspectable results.",
-    },
-    {
-      id: "operator",
-      role: "Operator",
-      name: "Nyx",
-      provider: "Reference fixture",
-      model: "role simulation",
-      status: "considering",
-      perspective: "Re-entry and constrained-width behavior should be exercised before this direction is accepted.",
-    },
-    {
-      id: "researcher",
-      role: "Researcher",
-      name: "Orion",
-      provider: "Reference fixture",
-      model: "role simulation",
-      status: "ready",
-      perspective: "Ambient agent presence should stay compact until the owner requests deeper session detail.",
-    },
-    {
-      id: "risk",
-      role: "Recovery / Risk",
-      name: "Phoenix",
-      provider: "Reference fixture",
-      model: "role simulation",
-      status: "dissenting",
-      perspective: "A polished shell can still become status wallpaper if object actions are not proven against real work.",
-    },
-  ],
-  consensus: "Keep spatial windows, ambient durable agents, and intelligence attached to selected work.",
-  dissent: "Visual coherence is not sufficient evidence that the AI actions are useful in a real development loop.",
-  blindSpot: "The current direction has not yet been tested under prolonged work or high agent-session volume.",
-  recommendation: "Proceed with the spatial direction, then require browser proof of object actions and durable re-entry before acceptance.",
-  confidence: 82,
-  evidence: [
-    { id: "selected-work", label: "Selected work", detail: "Current Space, selection, and open work surfaces" },
-    { id: "owner-direction", label: "Owner direction", detail: "AI power must be obvious, usable, and attached to real work" },
-    { id: "browser-proof", label: "Browser proof", detail: "Window behavior, persistence, and development cockpit loop" },
-  ],
-}
 
 const ACTIONS: readonly Readonly<{ id: CouncilAdvisoryAction; label: string; primary?: boolean }>[] = [
   { id: "request-changes", label: "Request changes" },
@@ -123,8 +57,7 @@ const ACTIONS: readonly Readonly<{ id: CouncilAdvisoryAction; label: string; pri
 ]
 
 export function BrainCouncilSurface({
-  selectedContext,
-  session = REFERENCE_COUNCIL_SESSION,
+  session,
   onDismiss,
   onAdvisoryAction,
 }: BrainCouncilSurfaceProps) {
@@ -162,13 +95,12 @@ export function BrainCouncilSurface({
           <span className={styles.eyebrow}>Brain Council · advisory session</span>
           <h2>{session.question}</h2>
           <p className={styles.context}>
-            <span>{selectedContext.spaceName}</span>
+            <span>{session.context.spaceName}</span>
             <ChevronRight aria-hidden="true" size={12} />
-            <span>{selectedContext.kind}</span>
+            <span>{session.context.kind}</span>
             <ChevronRight aria-hidden="true" size={12} />
-            <strong>{selectedContext.label}</strong>
+            <strong>{session.context.label}</strong>
           </p>
-          {selectedContext.detail ? <p className={styles.contextDetail}>{selectedContext.detail}</p> : null}
         </div>
         <div className={styles.headerActions}>
           <span className={styles.sessionState} data-status={session.status}>

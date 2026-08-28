@@ -4,26 +4,57 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   BrainCouncilSurface,
-  REFERENCE_COUNCIL_SESSION,
   type BrainCouncilSession,
 } from "@/components/workspace-shell/brain-council-surface"
 
 afterEach(cleanup)
 
-const context = {
-  spaceName: "TerraFusion Build",
-  kind: "diff" as const,
-  label: "PR #1042 · workspace shell",
-  detail: "12 files changed · owner acceptance pending",
+const session: BrainCouncilSession = {
+  id: "council-real-session",
+  question: "Council the current UX before merge.",
+  status: "ready",
+  context: {
+    spaceName: "TerraFusion Build",
+    kind: "diff",
+    label: "PR #1042 · workspace shell",
+  },
+  members: [
+    {
+      id: "architect",
+      role: "Architect",
+      name: "Atlas",
+      provider: "127.0.0.1:11434",
+      model: "llama3.2:3b",
+      status: "ready",
+      perspective: "Keep the source and preview spatially independent.",
+    },
+    {
+      id: "risk",
+      role: "Recovery / Risk",
+      name: "Phoenix",
+      provider: "127.0.0.1:11434",
+      model: "llama3.2:3b",
+      status: "dissenting",
+      perspective: "The current save and re-entry evidence is incomplete.",
+    },
+  ],
+  consensus: "Preserve the spatial workflow.",
+  dissent: "Re-entry still needs proof.",
+  blindSpot: "No narrow-screen evidence exists.",
+  recommendation: "Prove close and re-entry before merge.",
+  confidence: 78,
+  evidence: [
+    { id: "selected-context", label: "Selected diff", detail: "PR #1042 · workspace shell in TerraFusion Build" },
+    { id: "browser-proof", label: "browser · PASS", detail: "Window behavior passed" },
+  ],
 }
 
-function renderCouncil(session: BrainCouncilSession = REFERENCE_COUNCIL_SESSION) {
+function renderCouncil(currentSession: BrainCouncilSession = session) {
   const onDismiss = vi.fn()
   const onAdvisoryAction = vi.fn()
   render(
     <BrainCouncilSurface
-      selectedContext={context}
-      session={session}
+      session={currentSession}
       onDismiss={onDismiss}
       onAdvisoryAction={onAdvisoryAction}
     />,
@@ -37,7 +68,6 @@ describe("Experience V2 Brain Council surface", () => {
     expect(screen.getByText("TerraFusion Build")).toBeTruthy()
     expect(screen.getByText("diff")).toBeTruthy()
     expect(screen.getByText("PR #1042 · workspace shell")).toBeTruthy()
-    expect(screen.getByText("12 files changed · owner acceptance pending")).toBeTruthy()
   })
 
   it("makes roles primary while keeping provider and model metadata inspectable", () => {
@@ -47,17 +77,17 @@ describe("Experience V2 Brain Council surface", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Recovery \/ Risk/ }))
     expect(screen.getByText("Phoenix")).toBeTruthy()
-    expect(screen.getByText("Reference fixture · role simulation")).toBeTruthy()
-    expect(screen.getByText(/status wallpaper/)).toBeTruthy()
+    expect(screen.getByText("127.0.0.1:11434 · llama3.2:3b")).toBeTruthy()
+    expect(screen.getByText(/save and re-entry evidence is incomplete/)).toBeTruthy()
   })
 
   it("shows disagreement, blind spots, recommendation confidence, and evidence", () => {
     renderCouncil()
     expect(screen.getByRole("heading", { name: "Strongest dissent" })).toBeTruthy()
     expect(screen.getByRole("heading", { name: "Blind spot" })).toBeTruthy()
-    expect(screen.getByLabelText("82% confidence")).toBeTruthy()
+    expect(screen.getByLabelText("78% confidence")).toBeTruthy()
     expect(screen.getByRole("complementary", { name: "Council evidence" })).toBeTruthy()
-    expect(screen.getByText("Owner direction")).toBeTruthy()
+    expect(screen.getByText("browser · PASS")).toBeTruthy()
   })
 
   it("routes owner choices through advisory callbacks without implying execution", () => {
@@ -66,7 +96,7 @@ describe("Experience V2 Brain Council surface", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
     expect(onAdvisoryAction).toHaveBeenCalledOnce()
-    expect(onAdvisoryAction).toHaveBeenCalledWith("approve", REFERENCE_COUNCIL_SESSION)
+    expect(onAdvisoryAction).toHaveBeenCalledWith("approve", session)
   })
 
   it("dismisses the Council without coupling dismissal to advisory actions", () => {

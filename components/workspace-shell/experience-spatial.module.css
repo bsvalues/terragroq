@@ -163,6 +163,29 @@
 .added { color: #9dca91; background: rgb(74 113 66 / 17%); }
 .removed { color: #d18c82; background: rgb(126 66 61 / 17%); }
 .terminalPrompt { color: #a9c4a1; }
+.utilityControls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 9px; }
+.utilityButton, .utilityStop {
+  border: 1px solid #3b4939;
+  border-radius: 5px;
+  padding: 5px 8px;
+  background: #151c15;
+  color: #b9c7b5;
+  font: inherit;
+  cursor: pointer;
+}
+.utilityButton:hover { border-color: #70836b; background: #1a231a; }
+.utilityButton:disabled { cursor: default; opacity: .45; }
+.utilityStop { border-color: #79514a; color: #e0a294; background: #281713; }
+.utilityOutput {
+  display: block;
+  min-height: 70px;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #aeb9aa;
+}
+.utilityOutput [data-channel="stderr"] { color: #d69787; }
+.utilityOutput [data-channel="meta"] { color: #788574; }
 
 .dock {
   position: absolute;
