@@ -8,7 +8,13 @@ type DeveloperToolKind = "tests" | "diff" | "terminal"
 type OutputLine = Readonly<{ channel: "stdout" | "stderr" | "meta"; text: string }>
 type Operation = Readonly<{ id: string; label: string; intent: string; scope: "project" | "runtime"; mutating: boolean }>
 
-export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0 }: { kind: DeveloperToolKind; selectedPath: string | null; refreshKey?: number }) {
+export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0, refreshPath = null, onRefreshSettled }: {
+  kind: DeveloperToolKind
+  selectedPath: string | null
+  refreshKey?: number
+  refreshPath?: string | null
+  onRefreshSettled?: (path: string, key: number, result: "refreshed" | "failed") => void
+}) {
   const [diff, setDiff] = useState("")
   const [status, setStatus] = useState("")
   const [operations, setOperations] = useState<readonly Operation[]>([])
@@ -17,23 +23,28 @@ export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0 }: { 
   const [error, setError] = useState<string | null>(null)
   const controller = useRef<AbortController | null>(null)
   const diffController = useRef<AbortController | null>(null)
+  const completedRefresh = useRef<Readonly<{ key: number; path: string | null }>>({ key: refreshKey, path: null })
   const output = useRef<HTMLPreElement>(null)
 
-  const loadDiff = useCallback(async () => {
+  const loadDiff = useCallback(async (path = selectedPath): Promise<"refreshed" | "failed" | "aborted"> => {
     diffController.current?.abort()
     const abort = new AbortController()
     diffController.current = abort
+    setDiff("")
+    setStatus("")
     setError(null)
-    const query = selectedPath ? `?path=${encodeURIComponent(selectedPath)}` : ""
+    const query = path ? `?path=${encodeURIComponent(path)}` : ""
     try {
       const response = await fetch(`/api/loom/diff${query}`, { cache: "no-store", signal: abort.signal })
       const payload = await response.json() as { error?: string; diff?: string; status?: string; note?: string; untracked?: boolean }
       if (!response.ok) throw new Error(payload.error ?? `DIFF_${response.status}`)
       setDiff(payload.untracked ? payload.note ?? "This file is new." : payload.diff ?? "")
       setStatus(payload.status ?? "")
+      return "refreshed"
     } catch (caught) {
-      if ((caught as Error)?.name === "AbortError") return
+      if ((caught as Error)?.name === "AbortError") return "aborted"
       setError(caught instanceof Error ? caught.message : "DIFF_UNAVAILABLE")
+      return "failed"
     } finally {
       if (diffController.current === abort) diffController.current = null
     }
@@ -41,7 +52,19 @@ export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0 }: { 
 
   useEffect(() => {
     if (kind === "diff") void loadDiff()
-  }, [kind, loadDiff, refreshKey])
+  }, [kind, loadDiff])
+
+  useEffect(() => {
+    if (kind !== "diff" || (refreshKey === completedRefresh.current.key && refreshPath === completedRefresh.current.path)) return
+    completedRefresh.current = { key: refreshKey, path: refreshPath }
+    if (!refreshPath) {
+      void loadDiff()
+      return
+    }
+    void loadDiff(refreshPath).then((result) => {
+      if (result !== "aborted") onRefreshSettled?.(refreshPath, refreshKey, result)
+    })
+  }, [kind, loadDiff, onRefreshSettled, refreshKey, refreshPath])
 
   useEffect(() => {
     if (kind !== "terminal") return
@@ -128,6 +151,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, refreshKey = 0 }: { 
               <button type="button" className={styles.utilityButton} onClick={() => void loadDiff()}>Refresh</button>
             </div>
             {status ? <pre className={styles.utilityOutput}>{status}</pre> : null}
+            {error ? <output className={styles.utilityOutput}>Unable to refresh current change: {error}</output> : null}
             <pre className={styles.utilityOutput}>{diff || (error ? "" : "No changes against HEAD.")}</pre>
           </>
         ) : (

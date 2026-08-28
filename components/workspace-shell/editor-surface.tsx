@@ -88,12 +88,13 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
   )
 }
 
-export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange, reloadPath = null, reloadKey = 0 }: {
+export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange, reloadPath = null, reloadKey = 0, onReloadSettled }: {
   space: WorkspaceSpace
   onEditorChange: (editor: WorkspaceSpace["editor"], selectedPath: string | null) => void
   onSelectedFileDirtyChange?: (path: string, dirty: boolean) => void
   reloadPath?: string | null
   reloadKey?: number
+  onReloadSettled?: (path: string, key: number, result: "refreshed" | "dirty-conflict" | "failed") => void
 }) {
   const [roots, setRoots] = useState<readonly Entry[] | null>(null)
   const [treeError, setTreeError] = useState<string | null>(null)
@@ -141,9 +142,13 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
   }, [buffers, space.editor.openFiles])
 
   useEffect(() => {
-    if (!reloadPath || reloadPath !== space.selectedPath || completedReloadKey.current === reloadKey) return
+    if (!reloadPath || completedReloadKey.current === reloadKey) return
     const current = buffers[reloadPath]
-    if (current && current.content !== current.savedContent) return
+    if (current && current.content !== current.savedContent) {
+      completedReloadKey.current = reloadKey
+      onReloadSettled?.(reloadPath, reloadKey, "dirty-conflict")
+      return
+    }
     completedReloadKey.current = reloadKey
     const epoch = (bufferEpoch.current.get(reloadPath) ?? 0) + 1
     bufferEpoch.current.set(reloadPath, epoch)
@@ -160,8 +165,12 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
           error: null,
         } }))
       })
-      .catch((error) => setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE"))
-  }, [buffers, reloadKey, reloadPath, space.selectedPath])
+      .then(() => onReloadSettled?.(reloadPath, reloadKey, "refreshed"))
+      .catch((error) => {
+        setTreeError(error instanceof Error ? error.message : "FILE_UNAVAILABLE")
+        onReloadSettled?.(reloadPath, reloadKey, "failed")
+      })
+  }, [buffers, onReloadSettled, reloadKey, reloadPath])
 
   const selectedBuffer = space.selectedPath ? buffers[space.selectedPath] : null
   useEffect(() => {

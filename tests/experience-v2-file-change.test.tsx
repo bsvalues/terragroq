@@ -35,8 +35,14 @@ function deferredNdjson(...events: readonly Record<string, unknown>[]) {
   }), { headers: { "content-type": "application/x-ndjson" } })
   return {
     response,
+    send(event: Record<string, unknown>) {
+      controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
+    },
     finish(event: Record<string, unknown>) {
       controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
+      controller.close()
+    },
+    close() {
       controller.close()
     },
   }
@@ -120,7 +126,7 @@ describe("Experience V2 selected-file Change", () => {
     expect(await screen.findByText("applying structured edit")).toBeTruthy()
     editStream.finish({ type: "done", receipt: { success: true } })
     await waitFor(() => expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const after = true\n"))
-    expect(screen.getByText("Change applied and verified.")).toBeTruthy()
+    expect(screen.getByText("Change applied; source and diff refreshed.")).toBeTruthy()
     expect(await screen.findByText("+after", { exact: false })).toBeTruthy()
     const edit = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/edit" && init?.method === "POST")
     expect(JSON.parse(String(edit?.[1]?.body))).toEqual({ path: "src/app.ts", task: "Use the verified helper." })
@@ -151,7 +157,7 @@ describe("Experience V2 selected-file Change", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop change" }))
 
     await waitFor(() => expect(requestSignal?.aborted).toBe(true))
-    expect(screen.getByText("Change cancelled.")).toBeTruthy()
+    expect(screen.getByText("Stop requested. Change outcome is unknown.")).toBeTruthy()
   })
 
   it("does not call a completed stream successful when its receipt refuses the edit", async () => {
@@ -161,7 +167,7 @@ describe("Experience V2 selected-file Change", () => {
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
-      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "done", reason: "REFUSED", receipt: { success: false } }))
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", reason: "REFUSED", receipt: { success: false } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
     vi.stubGlobal("fetch", fetcher)
@@ -227,7 +233,7 @@ describe("Experience V2 selected-file Change", () => {
         return fileReads === 1 ? originalRead.promise : Promise.resolve(selectedFile("export const verified = true\n"))
       }
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+verified" }))
-      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "done", receipt: { success: true } }))
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
     vi.stubGlobal("fetch", fetcher)
@@ -241,5 +247,134 @@ describe("Experience V2 selected-file Change", () => {
     originalRead.resolve(selectedFile("export const stale = true\n"))
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const verified = true\n")
+  })
+
+  it("keeps the Change surface bound to its selected file while the edit is active", async () => {
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/edit" && init?.method === "POST") return new Promise<Response>((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError"))))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+    const form = await screen.findByRole("form", { name: "Change" })
+    fireEvent.pointerDown(form.parentElement!)
+
+    expect(screen.getByRole("form", { name: "Change" })).toBeTruthy()
+    expect(screen.getByText("Change · src/app.ts")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Stop change" })).toBeTruthy()
+  })
+
+  it("preserves a delivered governed receipt when Stop is requested", async () => {
+    let requestSignal: AbortSignal | undefined
+    const editStream = deferredNdjson(
+      { type: "started", file: "src/app.ts", model: "local" },
+      { type: "done", receipt: { success: true } },
+    )
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const refreshed = true\n"))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+refreshed" }))
+      if (url === "/api/loom/edit" && init?.method === "POST") {
+        requestSignal = init.signal ?? undefined
+        return Promise.resolve(editStream.response)
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+    expect(await screen.findByText("Governed receipt received; waiting for stream completion.")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Stop change" }))
+
+    expect(requestSignal?.aborted).toBe(false)
+    editStream.close()
+    expect(await screen.findByText("Change applied; source and diff refreshed.")).toBeTruthy()
+  })
+
+  it("does not overwrite a draft created while Change was active", async () => {
+    const editStream = deferredNdjson({ type: "started", file: "src/app.ts", model: "local" })
+    let fileReads = 0
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        fileReads += 1
+        return Promise.resolve(selectedFile(fileReads === 1 ? "export const before = true\n" : "export const changed = true\n"))
+      }
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+changed" }))
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+    fireEvent.change(screen.getByLabelText("Source content"), { target: { value: "export const draft = true\n" } })
+    editStream.finish({ type: "done", receipt: { success: true } })
+
+    expect(await screen.findByText("Change was verified, but src/app.ts has unsaved editor changes; source was not refreshed.")).toBeTruthy()
+    expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const draft = true\n")
+  })
+
+  it("distinguishes a verified mutation from a source or diff refresh failure", async () => {
+    let fileReads = 0
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        fileReads += 1
+        return Promise.resolve(fileReads === 1 ? selectedFile("export const before = true\n") : Response.json({ error: "READ_REFUSED" }, { status: 500 }))
+      }
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "+changed" }))
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson({ type: "started", file: "src/app.ts" }, { type: "done", receipt: { success: true } }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+
+    expect(await screen.findByText("Change was verified, but source or diff refresh failed.")).toBeTruthy()
+    expect(screen.queryByText("Change applied; source and diff refreshed.")).toBeNull()
+  })
+
+  it("rejects a success receipt when a post-terminal protocol event follows it", async () => {
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(ndjson(
+        { type: "started", file: "src/app.ts" },
+        { type: "done", receipt: { success: true } },
+        { type: "progress", text: "too late" },
+      ))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await openChange()
+    fireEvent.click(screen.getByRole("button", { name: "Start change" }))
+
+    expect(await screen.findByText("Change did not return a valid completion receipt.")).toBeTruthy()
+    expect(screen.queryByText("Change applied; source and diff refreshed.")).toBeNull()
   })
 })

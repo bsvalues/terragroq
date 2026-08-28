@@ -2,15 +2,30 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 
+export type ChangeRefreshResult = "refreshed" | "dirty-conflict" | "failed"
+
 type ChangeState = Readonly<{
   running: boolean
+  path: string | null
   progress: string | null
   outcome: string | null
 }>
 
-type ChangeEvent = Readonly<{ type?: unknown; file?: unknown; text?: unknown; receipt?: unknown }>
+type Receipt = Readonly<{ success: boolean }>
+type ActiveChange = {
+  controller: AbortController
+  path: string
+  started: boolean
+  terminal: Receipt | null
+  malformed: boolean
+  stopRequested: boolean
+}
 
-const idle: ChangeState = { running: false, progress: null, outcome: null }
+const idle: ChangeState = { running: false, path: null, progress: null, outcome: null }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value))
+}
 
 export function useSelectedFileChange({
   path,
@@ -19,49 +34,90 @@ export function useSelectedFileChange({
 }: {
   path: string | null
   dirty: boolean
-  onVerifiedSuccess: (path: string) => Promise<void> | void
+  onVerifiedSuccess: (path: string) => Promise<ChangeRefreshResult> | ChangeRefreshResult
 }) {
-  const controller = useRef<AbortController | null>(null)
+  const active = useRef<ActiveChange | null>(null)
+  const verifiedSuccess = useRef(onVerifiedSuccess)
   const [state, setState] = useState<ChangeState>(idle)
 
+  useEffect(() => { verifiedSuccess.current = onVerifiedSuccess }, [onVerifiedSuccess])
+  useEffect(() => () => active.current?.controller.abort(), [])
+
   const stop = useCallback(() => {
-    const active = controller.current
-    if (!active) return
-    active.abort()
-    controller.current = null
-    setState({ running: false, progress: null, outcome: "Change cancelled." })
+    const operation = active.current
+    if (!operation) return
+    if (operation.terminal) {
+      setState((current) => ({ ...current, progress: "Governed receipt received; waiting for stream completion." }))
+      return
+    }
+    operation.stopRequested = true
+    operation.controller.abort()
+    setState({ running: true, path: operation.path, progress: null, outcome: "Stop requested. Change outcome is unknown." })
   }, [])
 
-  useEffect(() => () => controller.current?.abort(), [])
-
   const start = useCallback(async (task: string) => {
-    if (controller.current) return
+    if (active.current) return
     if (!path) {
-      setState({ running: false, progress: null, outcome: "Select a file before starting Change." })
+      setState({ running: false, path: null, progress: null, outcome: "Select a file before starting Change." })
       return
     }
     if (dirty) {
-      setState({ running: false, progress: null, outcome: `Save ${path} before starting Change.` })
+      setState({ running: false, path, progress: null, outcome: `Save ${path} before starting Change.` })
       return
     }
 
-    const active = new AbortController()
-    controller.current = active
-    setState({ running: true, progress: "Starting Change…", outcome: null })
-    let malformed = false
-    let done = false
-    let verified = false
+    const operation: ActiveChange = {
+      controller: new AbortController(),
+      path,
+      started: false,
+      terminal: null,
+      malformed: false,
+      stopRequested: false,
+    }
+    active.current = operation
+    setState({ running: true, path, progress: "Starting Change…", outcome: null })
 
-    const accept = (event: ChangeEvent) => {
-      if (event.type === "started") {
-        setState((current) => ({ ...current, progress: `Working on ${typeof event.file === "string" ? event.file : path}.` }))
-      } else if (event.type === "progress" && typeof event.text === "string") {
-        const progress = event.text
+    const rejectProtocol = () => { operation.malformed = true }
+    const accept = (value: unknown) => {
+      if (!isRecord(value) || operation.terminal) return rejectProtocol()
+      if (value.type === "started") {
+        if (operation.started || value.file !== operation.path) return rejectProtocol()
+        operation.started = true
+        setState((current) => ({ ...current, progress: `Working on ${operation.path}.` }))
+        return
+      }
+      if (value.type === "progress") {
+        if (!operation.started || typeof value.text !== "string") return rejectProtocol()
+        const progress = value.text
         setState((current) => ({ ...current, progress }))
-      } else if (event.type === "done") {
-        done = true
-        const receipt = event.receipt
-        verified = Boolean(receipt && typeof receipt === "object" && (receipt as { success?: unknown }).success === true)
+        return
+      }
+      if (value.type === "done") {
+        if (!operation.started || !isRecord(value.receipt) || typeof value.receipt.success !== "boolean") return rejectProtocol()
+        operation.terminal = { success: value.receipt.success }
+        setState((current) => ({ ...current, progress: "Governed receipt received; waiting for stream completion." }))
+        return
+      }
+      rejectProtocol()
+    }
+
+    const settle = async () => {
+      if (operation.stopRequested && !operation.terminal) {
+        setState({ running: false, path: operation.path, progress: null, outcome: "Stop requested. Change outcome is unknown." })
+      } else if (operation.malformed || !operation.terminal) {
+        setState({ running: false, path: operation.path, progress: null, outcome: "Change did not return a valid completion receipt." })
+      } else if (!operation.terminal.success) {
+        setState({ running: false, path: operation.path, progress: null, outcome: "Change was not verified." })
+      } else {
+        setState({ running: true, path: operation.path, progress: "Refreshing source and diff…", outcome: null })
+        const refresh = await verifiedSuccess.current(operation.path)
+        if (active.current !== operation) return
+        const outcome = refresh === "refreshed"
+          ? "Change applied; source and diff refreshed."
+          : refresh === "dirty-conflict"
+            ? `Change was verified, but ${operation.path} has unsaved editor changes; source was not refreshed.`
+            : "Change was verified, but source or diff refresh failed."
+        setState({ running: false, path: operation.path, progress: null, outcome })
       }
     }
 
@@ -69,8 +125,8 @@ export function useSelectedFileChange({
       const response = await fetch("/api/loom/edit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path, task }),
-        signal: active.signal,
+        body: JSON.stringify({ path: operation.path, task }),
+        signal: operation.controller.signal,
         cache: "no-store",
       })
       if (!response.ok || !response.body) throw new Error(`CHANGE_${response.status}`)
@@ -78,37 +134,31 @@ export function useSelectedFileChange({
       const decoder = new TextDecoder()
       let buffered = ""
       for (;;) {
-        const { done: streamDone, value } = await reader.read()
-        if (streamDone) break
+        const { done, value } = await reader.read()
+        if (done) break
         buffered += decoder.decode(value, { stream: true })
         const lines = buffered.split("\n")
         buffered = lines.pop() ?? ""
         for (const line of lines) {
           if (!line.trim()) continue
-          try { accept(JSON.parse(line) as ChangeEvent) } catch { malformed = true }
+          try { accept(JSON.parse(line)) } catch { rejectProtocol() }
         }
       }
       buffered += decoder.decode()
       if (buffered.trim()) {
-        try { accept(JSON.parse(buffered) as ChangeEvent) } catch { malformed = true }
+        try { accept(JSON.parse(buffered)) } catch { rejectProtocol() }
       }
-      if (active.signal.aborted || controller.current !== active) return
-      if (malformed || !done) {
-        setState({ running: false, progress: null, outcome: "Change did not return a valid completion receipt." })
-      } else if (!verified) {
-        setState({ running: false, progress: null, outcome: "Change was not verified." })
-      } else {
-        await onVerifiedSuccess(path)
-        if (active.signal.aborted || controller.current !== active) return
-        setState({ running: false, progress: null, outcome: "Change applied and verified." })
-      }
+      await settle()
     } catch (error) {
-      if (active.signal.aborted) return
-      setState({ running: false, progress: null, outcome: error instanceof Error ? `Change failed: ${error.message}` : "Change failed." })
+      if (operation.stopRequested || operation.controller.signal.aborted) {
+        setState({ running: false, path: operation.path, progress: null, outcome: "Stop requested. Change outcome is unknown." })
+      } else {
+        setState({ running: false, path: operation.path, progress: null, outcome: error instanceof Error ? `Change failed: ${error.message}` : "Change failed." })
+      }
     } finally {
-      if (controller.current === active) controller.current = null
+      if (active.current === operation) active.current = null
     }
-  }, [dirty, onVerifiedSuccess, path])
+  }, [dirty, path])
 
   return { ...state, start, stop }
 }
