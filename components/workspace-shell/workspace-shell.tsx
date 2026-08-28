@@ -188,7 +188,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       const inspectorWindows = { ...current.inspectorWindows }
       const inspectorSeeds = { ...current.inspectorSeeds }
       incoming.forEach((surface, index) => {
-        inspectorWindows[surface.id] ??= {
+        const existing = inspectorWindows[surface.id]
+        inspectorWindows[surface.id] = existing ? {
+          ...existing,
+          minimized: false,
+          z: highest + index + 1,
+        } : {
           x: 104 + index * 34,
           y: 72 + index * 30,
           width: 560,
@@ -645,6 +650,19 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     requestAnimationFrame(() => lineRef.current?.focus())
   }, [change.running, review.reset, review.running, space.selectedPath])
 
+  const openReviewPath = useCallback((target: string) => {
+    if (change.running || review.running) return
+    setFocusedAgentId(null)
+    setReviewTarget(target)
+    review.reset(target)
+    setLineTarget("agent")
+    setLineMode("review")
+    setLineInput("")
+    setLineReply(null)
+    setLineOpen(true)
+    requestAnimationFrame(() => lineRef.current?.focus())
+  }, [change.running, review.reset, review.running])
+
   useEffect(() => {
     const summonLine = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -880,6 +898,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           </span>
         </div>
         <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningSessionId={agentSessions.activeSessionId} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
+          if (agent.mode === "review" && agent.reviewPath) {
+            openReviewPath(agent.reviewPath)
+            return
+          }
           setFocusedAgentId(agent.id)
           if (agent.kind === "durable-session") openLine(`Redirect ${agent.role} · ${agent.providerLabel} on ${selectedLabel}: `, "agent")
         }} />
@@ -944,7 +966,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? "Change" : lineMode === "review" ? "Review" : "The Line"}>
             <Command size={16} aria-hidden />
             <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
-            <div className={spatial.lineControls}><span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineTarget === "agent" ? "Claude session" : "William"}</span><button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || review.running}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>{lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button></div>
+            <div className={spatial.lineControls}><span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineTarget === "agent" ? "Claude session" : "William"}</span><button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || review.running || lineMode !== "review" && !lineInput.trim()}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>{lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button></div>
           </form>
         </div>
       ) : null}

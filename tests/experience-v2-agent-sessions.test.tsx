@@ -254,7 +254,7 @@ describe("Experience V2 real agent sessions", () => {
     window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 1, sessionId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z" }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
       { type: "session", sessionId, resumed: true },
-      { type: "event", event: { type: "assistant", message: { content: [{ type: "text", text: "Review report" }] } } },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Review report" } },
       { type: "done", code: 0, reason: null },
     ))
     vi.stubGlobal("fetch", fetcher)
@@ -267,6 +267,7 @@ describe("Experience V2 real agent sessions", () => {
     })
 
     expect(report).toBe("Review report")
+    expect(expose!.sessions[0]).toMatchObject({ mode: "review", reviewPath: "src/app.ts" })
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({ mode: "review", path: "src/app.ts", focus: "Security", provider: "cloud", sessionId, resume: true })
   })
 
@@ -277,7 +278,7 @@ describe("Experience V2 real agent sessions", () => {
     window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({ schemaVersion: 1, sessionId: "123e4567-e89b-42d3-a456-426614174000", role, provider: "Claude", assignment: "Prior work", reviewPath, updatedAt: "2026-08-27T16:05:00.000Z" }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
       { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: false },
-      { type: "event", event: { type: "assistant", message: { content: [{ type: "text", text: "Fresh review" }] } } },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Fresh review" } },
       { type: "done", code: 0, reason: null },
     ))
     vi.stubGlobal("fetch", fetcher)
@@ -289,5 +290,22 @@ describe("Experience V2 real agent sessions", () => {
     })
 
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toMatchObject({ sessionId: null, resume: false })
+  })
+
+  it("rejects a resumed Review whose outer session does not echo the exact requested session", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({ schemaVersion: 1, sessionId, role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-27T16:05:00.000Z" }))
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: true },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Wrong thread" } },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
+
+    await expect(act(async () => {
+      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", onReviewComplete: () => undefined })
+    })).rejects.toThrow("AGENT_REVIEW_STREAM_INVALID")
+    expect(expose!.sessions).toEqual([])
   })
 })

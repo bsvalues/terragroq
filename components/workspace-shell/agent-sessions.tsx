@@ -26,6 +26,8 @@ export type ExperienceAgentSession = Readonly<{
   evidence: string
   truth: "live"
   kind: "durable-session" | "world-worker"
+  mode: "delegate" | "review"
+  reviewPath?: string
 }>
 
 export type RunClaudeTurnInput = Readonly<{
@@ -105,6 +107,7 @@ function projectSessions(
       evidence: "live world state",
       truth: "live",
       kind: "world-worker",
+      mode: "delegate",
     })
   }
   if (durable) {
@@ -117,6 +120,8 @@ function projectSessions(
       evidence: activeSessionId === durable.sessionId ? "live agent stream" : "resumable session",
       truth: "live",
       kind: "durable-session",
+      mode: durable.reviewPath ? "review" : "delegate",
+      ...(durable.reviewPath ? { reviewPath: durable.reviewPath } : {}),
     })
   }
   return sessions
@@ -228,7 +233,8 @@ export function useExperienceAgentSessions({
       let malformedReview = false
       let sessionSeen = false
       let terminalSeen = false
-      const reviewText: string[] = []
+      let canonicalResultSeen = false
+      let reviewText: string | null = null
       const acceptLine = (line: string) => {
         if (!line.trim()) return
         let event: Record<string, unknown>
@@ -237,7 +243,9 @@ export function useExperienceAgentSessions({
         input.onEvent?.(event)
         if (event.type === "session") {
           const validSessionId = typeof event.sessionId === "string" && SESSION_ID.test(event.sessionId)
-          if (mode === "review" && (!validSessionId || typeof event.resumed !== "boolean" || sessionSeen)) {
+          const expectedResumed = prior !== null
+          const matchesResumeId = !prior || event.sessionId === prior.sessionId
+          if (mode === "review" && (!validSessionId || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed || !matchesResumeId || sessionSeen)) {
             malformedReview = true
             return
           }
@@ -259,12 +267,15 @@ export function useExperienceAgentSessions({
         if (mode === "review" && event.type === "event") {
           if (!sessionSeen || !event.event || typeof event.event !== "object" || Array.isArray(event.event)) { malformedReview = true; return }
           const payload = event.event as Record<string, unknown>
-          if (payload.type === "result" && typeof payload.result === "string") reviewText.push(payload.result)
-          const message = payload.message as { content?: unknown } | undefined
-          if (payload.type === "assistant" && Array.isArray(message?.content)) {
-            for (const block of message.content) {
-              if (block && typeof block === "object" && (block as Record<string, unknown>).type === "text" && typeof (block as Record<string, unknown>).text === "string") reviewText.push((block as Record<string, unknown>).text as string)
+          if (payload.type === "result") {
+            const result = boundedText(payload.result, 200_000)
+            if (canonicalResultSeen || payload.subtype !== "success" || payload.is_error === true
+              || payload.session_id !== accepted?.sessionId || !result) {
+              malformedReview = true
+              return
             }
+            canonicalResultSeen = true
+            reviewText = result
           }
           return
         }
@@ -289,7 +300,7 @@ export function useExperienceAgentSessions({
       buffer += decoder.decode()
       acceptLine(buffer)
       if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError")
-      if (mode === "review" && (malformedReview || !sessionSeen || !terminalSeen || reviewText.join("\n").trim() === "")) throw new Error("AGENT_REVIEW_STREAM_INVALID")
+      if (mode === "review" && (malformedReview || !sessionSeen || !terminalSeen || !canonicalResultSeen || !reviewText)) throw new Error("AGENT_REVIEW_STREAM_INVALID")
       if (!accepted) throw new Error("AGENT_SESSION_ID_MISSING")
       if (!finalOutcome.seen) throw new Error("AGENT_TURN_FAILED:DONE_MISSING")
       const reason = typeof finalOutcome.reason === "string" && finalOutcome.reason.trim()
@@ -301,7 +312,7 @@ export function useExperienceAgentSessions({
       descriptorRef.current = accepted
       setSavedDescriptor(accepted)
       setDurableSession(accepted)
-      if (mode === "review") input.onReviewComplete?.(reviewText.join("\n").trim())
+      if (mode === "review") input.onReviewComplete?.(reviewText!)
       return accepted
     } catch (cause) {
       // A failed resume is no longer evidence that the saved descriptor exists or belongs to this
