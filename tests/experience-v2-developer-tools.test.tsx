@@ -198,6 +198,76 @@ describe("Experience V2 developer tools", () => {
     expect(screen.queryByRole("button", { name: /git status.*saved browser transcript/i })).toBeNull()
   })
 
+  it("does not publish Stop settlement from an old active run into the newly selected Space", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const body = new ReadableStream<Uint8Array>({ start(controller) { streamController = controller } })
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? new Response(body, { headers: { "content-type": "application/x-ndjson" } })
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    const view = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    streamController!.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "stdout", text: "old stop bytes\n" })}\n`))
+    expect(await screen.findByText("old stop bytes", { exact: false })).toBeTruthy()
+
+    view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-b" />)
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "Project terminal command" }) as HTMLInputElement).value).toBe(""))
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }))
+    streamController!.close()
+
+    expect(screen.queryByText("old stop bytes", { exact: false })).toBeNull()
+    expect(screen.queryByText("CANCELLED", { exact: false })).toBeNull()
+    expect(loadToolRunHistory(window.localStorage, "server:world-b").runs).toHaveLength(0)
+  })
+
+  it("does not publish old-run EOF interruption into the newly selected Space", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const body = new ReadableStream<Uint8Array>({ start(controller) { streamController = controller } })
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? new Response(body, { headers: { "content-type": "application/x-ndjson" } })
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    const view = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    streamController!.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "stdout", text: "old eof bytes\n" })}\n`))
+    expect(await screen.findByText("old eof bytes", { exact: false })).toBeTruthy()
+
+    view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-b" />)
+    await waitFor(() => expect(screen.queryByText("old eof bytes", { exact: false })).toBeNull())
+    streamController!.close()
+
+    await waitFor(() => expect(screen.queryByText("Running repo.status")).toBeNull())
+    expect(screen.queryByText("INTERRUPTED", { exact: false })).toBeNull()
+    expect(loadToolRunHistory(window.localStorage, "server:world-b").runs).toHaveLength(0)
+  })
+
+  it("does not publish an old-run fetch rejection or command into the newly selected Space", async () => {
+    let rejectPost!: (reason: unknown) => void
+    const post = new Promise<Response>((_resolve, reject) => { rejectPost = reject })
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? post
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    const view = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    await screen.findByText("Running repo.status")
+
+    view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-b" />)
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "Project terminal command" }) as HTMLInputElement).value).toBe(""))
+    rejectPost(new Error("OLD_SPACE_REJECTED"))
+
+    await waitFor(() => expect(screen.queryByText("Running repo.status")).toBeNull())
+    expect(screen.queryByText("OLD_SPACE_REJECTED", { exact: false })).toBeNull()
+    expect(screen.queryByText("INTERRUPTED", { exact: false })).toBeNull()
+    expect(loadToolRunHistory(window.localStorage, "server:world-b").runs).toHaveLength(0)
+  })
+
   it("refuses arbitrary commands and extra arguments locally without posting", async () => {
     const fetcher = vi.fn(async () => Response.json({ operations: projectOperations }))
     vi.stubGlobal("fetch", fetcher)

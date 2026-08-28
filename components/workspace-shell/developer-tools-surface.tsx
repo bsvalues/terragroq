@@ -32,6 +32,10 @@ function historyForSurface(runs: readonly ToolRunTranscript[], kind: DeveloperTo
   return []
 }
 
+function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick<Storage, "getItem" | "setItem"> | null): boolean {
+  return run.historyScope === scope && run.historyStorage === storage
+}
+
 export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled }: {
   kind: DeveloperToolKind
   selectedPath: string | null
@@ -130,6 +134,9 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
     setSelectedTranscriptId(null)
     setHistoryVerdict(null)
     setLines([])
+    setError(null)
+    setCommand("")
+    setCommandVerdict(null)
     if (!historyScope || (kind !== "terminal" && kind !== "tests")) { setHistory([]); return }
     try {
       const restored = loadToolRunHistory(historyStorage ?? window.localStorage, historyScope)
@@ -156,18 +163,18 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
     }
     const scope = run.historyScope
     if (!scope) {
-      if (historyScopeRef.current === scope) setHistoryVerdict("Browser transcript not saved: this Space has no durable history scope.")
+      if (presentationMatches(run, historyScopeRef.current, historyStorageRef.current)) setHistoryVerdict("Browser transcript not saved: this Space has no durable history scope.")
       return
     }
     try {
       const verdict = persistToolRunTranscript(run.historyStorage ?? window.localStorage, scope, transcript)
-      if (historyScopeRef.current !== scope) return
+      if (!presentationMatches(run, historyScopeRef.current, historyStorageRef.current)) return
       if (!verdict.ok) { setHistoryVerdict("Browser transcript not saved."); return }
       setHistory(historyForSurface(verdict.runs, kind))
       setHistoryVerdict(outcome.status === "cancelled" ? "cancelled · saved browser transcript"
         : outcome.status === "interrupted" ? "interrupted · saved browser transcript" : "Transcript saved in this browser.")
     } catch {
-      if (historyScopeRef.current === scope) setHistoryVerdict("Browser transcript not saved.")
+      if (presentationMatches(run, historyScopeRef.current, historyStorageRef.current)) setHistoryVerdict("Browser transcript not saved.")
     }
   }, [kind])
 
@@ -176,7 +183,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
     if (active) {
       const next = [...active.lines, { channel: "meta", text: "CANCELLED" } satisfies ToolOutputLine]
       active.lines = next
-      setLines(next)
+      if (presentationMatches(active, historyScopeRef.current, historyStorageRef.current)) setLines(next)
       settleRun(active, { status: "cancelled", code: null, reason: "CANCELLED" }, next)
     }
     controller.current?.abort()
@@ -231,11 +238,11 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
           try { event = JSON.parse(entry) } catch { continue }
           if (event.type === "stdout" || event.type === "stderr") {
             current.lines.push({ channel: event.type, text: event.text ?? "" })
-            if (historyScopeRef.current === current.historyScope) setLines([...current.lines])
+            if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current)) setLines([...current.lines])
           } else if (event.type === "exit") {
             receivedExit = true
             current.lines.push({ channel: "meta", text: event.reason ?? `exit ${event.code}` })
-            if (historyScopeRef.current === current.historyScope) setLines([...current.lines])
+            if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current)) setLines([...current.lines])
             const outcome: ToolRunTranscript["outcome"] = event.reason === "CANCELLED"
               ? { status: "cancelled", code: null, reason: event.reason }
               : typeof event.code === "number" && event.reason == null
@@ -248,15 +255,16 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
       if (!receivedExit && activeRun.current?.id === current.id) {
         const next = [...current.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
         current.lines = next
-        setLines(next)
+        if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current)) setLines(next)
         settleRun(current, { status: "interrupted", code: null, reason: "INTERRUPTED" }, next)
       }
     } catch (caught) {
       if ((caught as Error)?.name !== "AbortError" && activeRun.current?.id === current.id) {
-        setError(caught instanceof Error ? caught.message : "RUN_UNAVAILABLE")
+        const present = presentationMatches(current, historyScopeRef.current, historyStorageRef.current)
+        if (present) setError(caught instanceof Error ? caught.message : "RUN_UNAVAILABLE")
         const next = [...current.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
         current.lines = next
-        setLines(next)
+        if (present) setLines(next)
         settleRun(current, { status: "interrupted", code: null, reason: "INTERRUPTED" }, next)
       }
     } finally {
