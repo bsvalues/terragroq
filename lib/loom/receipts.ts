@@ -1,4 +1,5 @@
 import { appendGovernanceEvent } from "@/lib/governance/events"
+import { pool } from "@/lib/db"
 
 /**
  * Receipts for everything the workroom actually does.
@@ -21,6 +22,59 @@ export interface LoomRunReceipt {
   /** The operation id, model name, or file path this run concerned. */
   subject: string
   metadata?: Record<string, unknown>
+}
+
+/** Atomically persist the only receipt set that makes a Codex thread resumable. */
+export async function commitLoomCodexSuccess(input: {
+  userId: string
+  threadId: string
+  workspace: string
+  resumed: boolean
+}): Promise<void> {
+  const client = await pool.connect()
+  const identity = {
+    provider: "Codex",
+    mode: "delegate",
+    workspace: input.workspace,
+    resumed: input.resumed,
+    external: true,
+    metered: true,
+  }
+  try {
+    await client.query("BEGIN")
+    await client.query(
+      `INSERT INTO "governance_event"
+        ("userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata")
+        VALUES ($1, 'LOOP_STARTED', 'loom_agent', $2, 'loom',
+          'workroom agent: Codex delegate', $3::jsonb)`,
+      [input.userId, input.threadId, JSON.stringify(identity)],
+    )
+    await client.query(
+      `INSERT INTO "governance_event"
+        ("userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata")
+        VALUES ($1, 'LOOP_STOPPED', 'loom_agent', $2, 'loom',
+          'workroom agent finished: Codex delegate', $3::jsonb)`,
+      [input.userId, input.threadId, JSON.stringify({ ...identity, code: 0, reason: null })],
+    )
+    await client.query(
+      `INSERT INTO "governance_event"
+        ("userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata")
+        VALUES ($1, 'EVIDENCE_RECORDED', 'loom_codex_ready', $2, 'loom',
+          'Codex delegate session committed ready', $3::jsonb)`,
+      [input.userId, input.threadId, JSON.stringify({
+        provider: "Codex",
+        mode: "delegate",
+        workspace: input.workspace,
+        committed: true,
+      })],
+    )
+    await client.query("COMMIT")
+  } catch (error) {
+    try { await client.query("ROLLBACK") } catch { /* preserve the original failure */ }
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 export async function recordLoomStart({ userId, kind, subject, metadata }: LoomRunReceipt): Promise<void> {

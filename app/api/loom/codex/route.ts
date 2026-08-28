@@ -2,8 +2,8 @@ import path from "node:path"
 
 import { getSession } from "@/lib/session"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
-import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
-import { commitCodexThreadReady, loomCodexThreadDescriptor } from "@/lib/loom/threads"
+import { commitLoomCodexSuccess, recordLoomEnd } from "@/lib/loom/receipts"
+import { loomCodexThreadDescriptor } from "@/lib/loom/threads"
 import {
   CodexAppServerClient,
   sanitizeAppServerText,
@@ -118,6 +118,8 @@ export async function POST(request: Request) {
   let sessionSent = false
   let clientClosed = false
   let cancellationRequested = request.signal.aborted
+  let successCommitInFlight = false
+  let successCommitted = false
   let forcedCloseTimer: ReturnType<typeof setTimeout> | null = null
   const closeClient = () => {
     if (clientClosed) return
@@ -126,6 +128,7 @@ export async function POST(request: Request) {
     client?.close()
   }
   const cancelTurn = () => {
+    if (successCommitted) return
     if (cancellationRequested) {
       if (!turnAbort.signal.aborted) turnAbort.abort()
       return
@@ -170,8 +173,6 @@ export async function POST(request: Request) {
 
       void (async () => {
         let threadId: string | null = requestedId
-        let attemptRecorded = false
-        let committedReady = false
         try {
           client = new CodexAppServerClient({
             cwd: PROJECT_ROOT,
@@ -239,54 +240,26 @@ export async function POST(request: Request) {
             throw Object.assign(new Error("Codex completed without a result"), { code: "APP_SERVER_TURN_FAILED" })
           }
 
-          // These are attempt/outcome evidence only. Resumption ignores them; the dedicated
-          // committed-ready event below is the sole durable descriptor.
-          try {
-            await recordLoomStart({
-              userId: session.user.id,
-              kind: "agent",
-              subject: durableThreadId,
-              metadata: {
-                provider: "Codex",
-                mode: "delegate",
-                workspace: PROJECT_ROOT,
-                resumed: resuming,
-                external: true,
-                metered: true,
-              },
-            })
-          } catch {
-            throw Object.assign(new Error("Codex start receipt failed"), { code: "CODEX_RECEIPT_FAILED" })
-          }
-          attemptRecorded = true
+          // This transaction is the one durable success transition. Cancellation wins before it.
+          // Once COMMIT returns, success is irrevocable: reporting CANCELLED would leave a valid
+          // ready descriptor behind a false failure frame.
           assertNotCancelled()
+          successCommitInFlight = true
           try {
-            await recordLoomEnd({
+            await commitLoomCodexSuccess({
               userId: session.user.id,
-              kind: "agent",
-              subject: durableThreadId,
-              outcome: { provider: "Codex", mode: "delegate", code: 0, reason: null },
-            })
-          } catch {
-            throw Object.assign(new Error("Codex end receipt failed"), { code: "CODEX_RECEIPT_FAILED" })
-          }
-          assertNotCancelled()
-          try {
-            await commitCodexThreadReady({
               threadId: durableThreadId,
-              owner: session.user.id,
               workspace: PROJECT_ROOT,
+              resumed: resuming,
             })
           } catch {
-            throw Object.assign(new Error("Codex ready receipt failed"), { code: "CODEX_RECEIPT_FAILED" })
+            throw Object.assign(new Error("Codex success transaction failed"), { code: "CODEX_RECEIPT_FAILED" })
           }
-          committedReady = true
-          assertNotCancelled()
+          successCommitted = true
           send({ type: "result", text: result })
-          assertNotCancelled()
           done(null, 0)
         } catch (error) {
-          const reason = failureReason(error)
+          const reason = !successCommitted && cancellationRequested ? "CANCELLED" : failureReason(error)
           if (threadId) {
             try {
               await recordLoomEnd({
@@ -298,8 +271,8 @@ export async function POST(request: Request) {
                   mode: "delegate",
                   code: null,
                   reason,
-                  attemptRecorded,
-                  descriptorPersisted: committedReady,
+                  successCommitInFlight,
+                  descriptorPersisted: successCommitted,
                 },
               })
             } catch { /* the NDJSON outcome must still settle truthfully */ }

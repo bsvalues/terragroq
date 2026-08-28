@@ -6,6 +6,7 @@ const seams = vi.hoisted(() => ({
   workContextRefusal: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
+  commitLoomCodexSuccess: vi.fn(),
   poolQuery: vi.fn(),
   connect: vi.fn(),
   readAccount: vi.fn(),
@@ -26,6 +27,7 @@ vi.mock("@/lib/governance/work-context-gate", () => ({
 vi.mock("@/lib/loom/receipts", () => ({
   recordLoomStart: seams.recordLoomStart,
   recordLoomEnd: seams.recordLoomEnd,
+  commitLoomCodexSuccess: seams.commitLoomCodexSuccess,
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
 vi.mock("@/scripts/hermes-bridge/app-server-client.mjs", () => ({
@@ -73,6 +75,7 @@ describe("durable Codex delegate route", () => {
     seams.readAccount.mockResolvedValue({ authType: "chatgpt", email: "owner@example.test", requiresOpenaiAuth: false })
     seams.recordLoomStart.mockResolvedValue(undefined)
     seams.recordLoomEnd.mockResolvedValue(undefined)
+    seams.commitLoomCodexSuccess.mockResolvedValue(undefined)
     seams.startThread.mockResolvedValue("codex-thread-1")
     seams.resumeThread.mockResolvedValue("codex-thread-1")
     seams.runTurn.mockResolvedValue({
@@ -113,14 +116,11 @@ describe("durable Codex delegate route", () => {
       { type: "result", text: "Implemented the selected change." },
       { type: "done", reason: null, code: 0 },
     ])
-    expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
+    expect(seams.commitLoomCodexSuccess).toHaveBeenCalledWith(expect.objectContaining({
       userId: "owner-1",
-      kind: "agent",
-      subject: "codex-thread-1",
-      metadata: expect.objectContaining({ provider: "Codex", mode: "delegate" }),
-    }))
-    expect(seams.recordLoomEnd).toHaveBeenCalledWith(expect.objectContaining({
-      outcome: expect.objectContaining({ provider: "Codex", mode: "delegate", code: 0, reason: null }),
+      threadId: "codex-thread-1",
+      workspace: expect.stringMatching(/experience-v2-codex-session$/),
+      resumed: false,
     }))
     expect(seams.close).toHaveBeenCalledOnce()
   })
@@ -298,9 +298,12 @@ describe("durable Codex delegate route", () => {
     }
   })
 
-  it("does not commit or report success when cancellation lands during the start receipt", async () => {
+  it("does not commit or report success when cancellation lands immediately before persistence", async () => {
     const abort = new AbortController()
-    seams.recordLoomStart.mockImplementationOnce(async () => { abort.abort() })
+    seams.sanitize.mockImplementationOnce((value: unknown) => {
+      abort.abort()
+      return String(value ?? "")
+    })
 
     const output = await events(await POST(request({ prompt: "Work." }, abort.signal)))
 
@@ -324,15 +327,26 @@ describe("durable Codex delegate route", () => {
     expect(seams.poolQuery).not.toHaveBeenCalled()
   })
 
-  it("does not create a committed-ready descriptor when the success end receipt rejects", async () => {
-    seams.recordLoomEnd.mockRejectedValueOnce(new Error("ledger unavailable"))
+  it("does not create a committed-ready descriptor when the strict success transaction rejects", async () => {
+    seams.commitLoomCodexSuccess.mockRejectedValueOnce(new Error("transaction rolled back"))
 
     const output = await events(await POST(request({ prompt: "Work." })))
 
     expect(output.some((event) => event.type === "result")).toBe(false)
     expect(output.at(-1)).toEqual({ type: "done", reason: "CODEX_RECEIPT_FAILED", code: null })
-    expect(seams.recordLoomStart).toHaveBeenCalledOnce()
+    expect(seams.commitLoomCodexSuccess).toHaveBeenCalledOnce()
     expect(seams.poolQuery).not.toHaveBeenCalled()
+  })
+
+  it("treats a completed ready transaction as the irrevocable success point", async () => {
+    const abort = new AbortController()
+    seams.commitLoomCodexSuccess.mockImplementationOnce(async () => { abort.abort() })
+
+    const output = await events(await POST(request({ prompt: "Work." }, abort.signal)))
+
+    expect(output).toContainEqual({ type: "result", text: "Implemented the selected change." })
+    expect(output.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
+    expect(seams.commitLoomCodexSuccess).toHaveBeenCalledOnce()
   })
 
   it.each([

@@ -31,29 +31,6 @@ export interface LoomCodexThreadDescriptor {
   workspace: string | null
 }
 
-export async function commitCodexThreadReady(input: {
-  threadId: string
-  owner: string
-  workspace: string
-}): Promise<void> {
-  const metadata = {
-    provider: "Codex",
-    mode: "delegate",
-    workspace: input.workspace,
-    committed: true,
-  }
-  // Unlike the best-effort general receipt logger, this write is a product state transition. A
-  // rejected insert must reject the turn; otherwise the browser could report a durable session that
-  // the next request is unable to authenticate and resume.
-  await pool.query(
-    `INSERT INTO "governance_event"
-      ("userId", "eventType", "entityType", "entityId", "actor", "reason", "metadata")
-      VALUES ($1, 'EVIDENCE_RECORDED', 'loom_codex_ready', $2, 'loom',
-        'Codex delegate session committed ready', $3::jsonb)`,
-    [input.owner, input.threadId, JSON.stringify(metadata)],
-  )
-}
-
 /**
  * Decide whether a resume may proceed.
  *
