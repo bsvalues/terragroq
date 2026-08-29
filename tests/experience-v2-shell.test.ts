@@ -50,6 +50,7 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(source).toContain('aria-label="Choose agent provider"')
     expect(source).toContain('provider: "Codex"')
     expect(source).toContain('provider: "Claude"')
+    expect(source).toContain('delegateContext.provider === "Codex" && delegateContext.kind === "file"')
     expect(source).not.toContain("const referenceAgents")
     expect(source).not.toContain("reference session")
   })

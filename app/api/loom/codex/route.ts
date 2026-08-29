@@ -347,7 +347,15 @@ export async function POST(request: Request) {
           assertNotCancelled()
 
           sessionSent = true
-          send({ type: "session", sessionId: durableThreadId, provider: "Codex", mode: "delegate", resumed: resuming })
+          send({
+            type: "session",
+            sessionId: durableThreadId,
+            provider: "Codex",
+            mode: "delegate",
+            resumed: resuming,
+            selectedPath: assignment.selectedPath,
+            assignmentHash: assignment.assignmentHash,
+          })
           const turn = await client.runTurn({
             threadId: durableThreadId,
             prompt: delegatedPrompt(assignment, prompt),

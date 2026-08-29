@@ -241,17 +241,17 @@ describe("Experience V2 selected-file Review", () => {
     expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
   })
 
-  it("truthfully disables Review work for a restored session without a verified file target", async () => {
-    const agentId = "restored-no-target"
+  it("truthfully disables Review work for a restored successful Claude session without a server-bound file target", async () => {
+    const agentId = "223e4567-e89b-42d3-a456-426614174000"
     const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
     window.localStorage.setItem(key, JSON.stringify({
       schemaVersion: 3,
-      selectedSessionKey: `Codex:${agentId}`,
+      selectedSessionKey: `Claude:${agentId}`,
       sessions: [{
         schemaVersion: 1,
         sessionId: agentId,
         role: "Builder",
-        provider: "Codex",
+        provider: "Claude",
         assignment: "General project work",
         updatedAt: "2026-08-28T12:00:00.000Z",
         completedTurns: [{ ownerPrompt: "Work generally", finalResult: "Done", completedAt: "2026-08-28T12:00:00.000Z" }],
@@ -262,7 +262,7 @@ describe("Experience V2 selected-file Review", () => {
     render(<WorkspaceShell />)
 
     await screen.findByLabelText("Source content")
-    fireEvent.click(await screen.findByRole("button", { name: /Builder · Codex · General project work/ }))
+    fireEvent.click(await screen.findByRole("button", { name: /Builder · Claude · General project work/ }))
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
 
     const unavailable = screen.getByRole("button", { name: "Review work unavailable" }) as HTMLButtonElement

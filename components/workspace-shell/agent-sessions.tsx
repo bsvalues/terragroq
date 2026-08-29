@@ -6,6 +6,7 @@ import type { WorldWorker } from "@/lib/environment/working-world"
 
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CODEX_SESSION_ID = /^[A-Za-z0-9._:-]{1,200}$/
+const ASSIGNMENT_HASH = /^[0-9a-f]{64}$/
 const STORAGE_PREFIX = "williamos:agent-session:"
 const MAX_DURABLE_SESSIONS = 12
 const MAX_COMPLETED_TURNS = 20
@@ -145,6 +146,13 @@ function validSessionId(provider: AgentProvider, value: unknown): value is strin
   return typeof value === "string" && (provider === "Codex" ? CODEX_SESSION_ID : CLAUDE_SESSION_ID).test(value)
 }
 
+class AgentTargetBindingError extends Error {
+  constructor() {
+    super("AGENT_STREAM_INVALID")
+    this.name = "AgentTargetBindingError"
+  }
+}
+
 function canonicalWorkspaceFilePath(value: unknown): string | null {
   if (typeof value !== "string" || value.length === 0 || value.length > 1_000 || value !== value.trim()) return null
   if (/[\\\u0000-\u001f\u007f]/.test(value) || value.startsWith("/") || /^[A-Za-z]:/.test(value)) return null
@@ -186,7 +194,7 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     || !validSessionId(candidate.provider, candidate.sessionId)
     || !role || !assignment || !updatedAt || (candidate.target !== undefined && !target)
     || (candidate.reviewPath !== undefined && !reviewPath) || !completedTurns
-    || target !== undefined && (role !== "Builder" || candidate.provider === "Local" || reviewPath !== undefined)
+    || target !== undefined && (role !== "Builder" || candidate.provider !== "Codex" || reviewPath !== undefined)
     || candidate.provider === "Local" && (role !== "Thinker" || assignment !== "Conversation" || target !== undefined || reviewPath !== undefined)) return null
   return {
     schemaVersion: 1,
@@ -494,7 +502,7 @@ export function useExperienceAgentSessions({
     if (!assignment) throw new Error("AGENT_ASSIGNMENT_REQUIRED")
     if (mode === "delegate" && !prompt) throw new Error("AGENT_PROMPT_REQUIRED")
     if (input.target !== undefined && (!requestedTarget || mode !== "delegate" || role !== "Builder"
-      || input.provider === "Local")) throw new Error("AGENT_TARGET_INVALID")
+      || input.provider !== "Codex")) throw new Error("AGENT_TARGET_INVALID")
     if (mode === "review" && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (mode === "review" && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
     if (operationRef.current) throw new Error("AGENT_TURN_ALREADY_RUNNING")
@@ -586,6 +594,7 @@ export function useExperienceAgentSessions({
       let sessionSeen = false
       let terminalSeen = false
       let canonicalResultSeen = false
+      let targetBindingInvalid = false
       let resultText: string | null = null
       const acceptLine = (line: string) => {
         if (!isCurrent()) return
@@ -605,8 +614,18 @@ export function useExperienceAgentSessions({
               && event.continuity === (prior ? "browser-replayed" : "new")
           const unexpectedReuse = !prior && typeof event.sessionId === "string"
             && sessionsRef.current.some((session) => session.provider === input.provider && session.sessionId === event.sessionId)
+          const capturedTarget = input.provider === "Codex" ? requestedTarget ?? prior?.target ?? null : null
+          const serverSelectedPath = input.provider === "Codex" && capturedTarget
+            ? canonicalWorkspaceFilePath(event.selectedPath)
+            : null
+          const serverAssignmentHash = input.provider === "Codex" && capturedTarget && typeof event.assignmentHash === "string"
+            && ASSIGNMENT_HASH.test(event.assignmentHash) ? event.assignmentHash : null
+          const invalidTargetBinding = Boolean(capturedTarget
+            && (serverSelectedPath !== capturedTarget.path || !serverAssignmentHash))
           if (!sessionIdValid || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed
-            || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth || !localTruth) {
+            || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth || !localTruth
+            || invalidTargetBinding) {
+            if (invalidTargetBinding) targetBindingInvalid = true
             malformed = true
             return
           }
@@ -617,7 +636,7 @@ export function useExperienceAgentSessions({
             role,
             provider: input.provider,
             assignment,
-            ...((prior ? prior.target : requestedTarget) ? { target: (prior ? prior.target : requestedTarget)! } : {}),
+            ...(capturedTarget ? { target: { kind: "file" as const, path: serverSelectedPath! } } : {}),
             ...(mode === "review" ? { reviewPath: reviewPath! } : {}),
             updatedAt: new Date().toISOString(),
           }
@@ -691,7 +710,9 @@ export function useExperienceAgentSessions({
       acceptLine(buffer)
       if (!isCurrent() || operation.abort.signal.aborted) throw new DOMException("Aborted", "AbortError")
       const invalid = malformed || !terminalSeen
-      if (invalid) throw new Error(mode === "review" ? "AGENT_REVIEW_STREAM_INVALID" : "AGENT_STREAM_INVALID")
+      if (invalid) throw targetBindingInvalid
+        ? new AgentTargetBindingError()
+        : new Error(mode === "review" ? "AGENT_REVIEW_STREAM_INVALID" : "AGENT_STREAM_INVALID")
       const reason = typeof finalOutcome.reason === "string" && finalOutcome.reason.trim()
         ? finalOutcome.reason.trim() : null
       if (reason || finalOutcome.code !== 0) {
@@ -745,8 +766,9 @@ export function useExperienceAgentSessions({
         setError(error.message)
         throw cause
       }
-      const terminalResumeRefusal = prior !== null && error instanceof AgentStartRefusal
+      const terminalResumeRefusal = prior !== null && (error instanceof AgentTargetBindingError || error instanceof AgentStartRefusal
         && (error.status === 401 || error.status === 403 || error.status === 404)
+      )
       if (error?.name !== "AbortError" && terminalResumeRefusal && prior) {
         const priorKey = sessionKey(prior.provider, prior.sessionId)
         const remaining = sessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)

@@ -14,6 +14,7 @@ import type { WorldWorker } from "@/lib/environment/working-world"
 
 const OWNER_SCOPE = "owner-1"
 const WORLD_SCOPE = "terrafusion"
+const ASSIGNMENT_HASH = "a".repeat(64)
 
 vi.mock("next/dynamic", () => ({
   default: () => function TestSourceEditor(props: { value: string; onChange: (value: string) => void }) {
@@ -569,7 +570,7 @@ describe("Experience V2 real agent sessions", () => {
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/other.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
         { type: "delta", text: "Working from src/app.ts." },
         { type: "result", text: "Completed the captured assignment." },
         { type: "done", code: 0, reason: null },
@@ -632,7 +633,7 @@ describe("Experience V2 real agent sessions", () => {
         return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
         { type: "result", text: "Updated src/app.ts." },
         { type: "done", code: 0, reason: null },
       ))
@@ -678,7 +679,7 @@ describe("Experience V2 real agent sessions", () => {
         return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
         { type: "result", text: "The repository mutation committed." },
         { type: "done", code: 0, reason: null },
       ))
@@ -731,7 +732,7 @@ describe("Experience V2 real agent sessions", () => {
         return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
         { type: "result", text: "The repository mutation committed." },
         { type: "done", code: 0, reason: null },
       ))
@@ -1457,19 +1458,19 @@ describe("Experience V2 real agent sessions", () => {
     })
   })
 
-  it("persists and restores the exact validated file target earned by a successful agent session", async () => {
-    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+  it("persists and restores only the exact server-bound file target earned by a successful Codex Builder session", async () => {
+    const sessionId = "codex-bound-target"
     const key = "williamos:agent-session:owner-1:terrafusion"
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
-      { type: "session", sessionId, resumed: false },
-      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Changed the captured file." } },
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+      { type: "result", text: "Changed the captured file." },
       { type: "done", code: 0, reason: null },
     )))
     const first = render(<Harness />)
 
     await act(async () => {
       await expose!.runAgentTurn({
-        provider: "Claude",
+        provider: "Codex",
         role: "Builder",
         assignment: "src/app.ts",
         prompt: "Change the captured file.",
@@ -1486,6 +1487,63 @@ describe("Experience V2 real agent sessions", () => {
       truth: "resume-unverified",
       target: { kind: "file", path: "src/app.ts" },
     }))
+  })
+
+  it.each([
+    ["missing selected path", { assignmentHash: ASSIGNMENT_HASH }],
+    ["mismatched selected path", { selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH }],
+    ["noncanonical selected path", { selectedPath: "./src/app.ts", assignmentHash: ASSIGNMENT_HASH }],
+    ["missing assignment hash", { selectedPath: "src/app.ts" }],
+    ["malformed assignment hash", { selectedPath: "src/app.ts", assignmentHash: "browser-proof" }],
+  ])("fails a Codex target-bearing stream with %s evidence without persisting a session", async (_case, binding) => {
+    const sessionId = "codex-invalid-binding"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, ...binding },
+      { type: "result", text: "Unbound result." },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+
+    await expect(act(async () => expose!.runAgentTurn({
+      provider: "Codex",
+      role: "Builder",
+      assignment: "src/app.ts",
+      prompt: "Change the captured file.",
+      target: { kind: "file", path: "src/app.ts" },
+    }))).rejects.toThrow("AGENT_STREAM_INVALID")
+
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+    expect(expose!.sessions).toEqual([])
+  })
+
+  it("requires a resumed Codex target session to re-earn the exact server binding", async () => {
+    const sessionId = "codex-resume-binding"
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:${sessionId}`,
+      sessions: [{
+        schemaVersion: 1, sessionId, role: "Builder", provider: "Codex", assignment: "src/app.ts",
+        target: { kind: "file", path: "src/app.ts" }, updatedAt: "2026-08-27T16:00:00.000Z", completedTurns: [],
+      }],
+    }))
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true },
+      { type: "result", text: "Unbound resumed result." },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(1))
+
+    await expect(act(async () => expose!.runAgentTurn({
+      provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Continue.",
+      target: { kind: "file", path: "src/app.ts" },
+    }))).rejects.toThrow("AGENT_STREAM_INVALID")
+
+    expect(window.localStorage.getItem(key)).toBeNull()
+    cleanup()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions).toEqual([]))
   })
 
   it.each([
@@ -1522,6 +1580,7 @@ describe("Experience V2 real agent sessions", () => {
   })
 
   it.each([
+    ["Claude Builder without a server binding", () => expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "src/app.ts", prompt: "Work.", target: { kind: "file", path: "src/app.ts" } })],
     ["Local conversation", () => expose!.runAgentTurn({ provider: "Local", role: "Builder", assignment: "src/app.ts", prompt: "Think.", target: { kind: "file", path: "src/app.ts" } })],
     ["non-Builder delegate", () => expose!.runAgentTurn({ provider: "Claude", role: "Reviewer", assignment: "src/app.ts", prompt: "Inspect.", target: { kind: "file", path: "src/app.ts" } })],
     ["read-only Review", () => expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", target: { kind: "file", path: "src/app.ts" } })],
@@ -1546,6 +1605,7 @@ describe("Experience V2 real agent sessions", () => {
         { schemaVersion: 1, sessionId: "323e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/review.ts", target: { kind: "file", path: "src/review.ts" }, reviewPath: "src/review.ts", updatedAt: "2026-08-27T16:02:00.000Z" },
         { schemaVersion: 1, sessionId: "423e4567-e89b-42d3-a456-426614174000", role: "Thinker", provider: "Local", assignment: "Conversation", target: { kind: "file", path: "src/local.ts" }, updatedAt: "2026-08-27T16:03:00.000Z" },
         { schemaVersion: 1, sessionId: "523e4567-e89b-42d3-a456-426614174000", role: "Builder", provider: "Claude", assignment: "Bad path", target: { kind: "file", path: "./src/bad.ts" }, updatedAt: "2026-08-27T16:04:00.000Z" },
+        { schemaVersion: 1, sessionId: "623e4567-e89b-42d3-a456-426614174000", role: "Builder", provider: "Claude", assignment: "No server binding", target: { kind: "file", path: "src/claude.ts" }, updatedAt: "2026-08-27T16:05:00.000Z" },
       ],
     }))
 

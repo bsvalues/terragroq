@@ -1007,7 +1007,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             role: delegateContext.role,
             assignment: delegateContext.assignment,
             prompt: contextualText,
-            ...(delegateContext.kind === "file" ? { target: { kind: "file" as const, path: delegateContext.label } } : {}),
+            ...(delegateContext.provider === "Codex" && delegateContext.kind === "file"
+              ? { target: { kind: "file" as const, path: delegateContext.label } }
+              : {}),
             onEvent: () => {},
           })
         } catch (error) {
