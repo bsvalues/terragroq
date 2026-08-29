@@ -1063,11 +1063,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "diff" ? "changes"
     : selectedKind === "agent" ? "agent session"
     : "Space"
+  const pauseAction = agentSessions.activeSessionId === selectedAgent?.id ? "Pause" : "Pause unavailable"
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge"] as const
-    : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk"] as const
-    : selectedKind === "agent" ? ["Talk", "Redirect", "Pause", "Fork", selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
+    : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction] as const
+    : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, "Fork", selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", "Continue", "Delegate", "Council"] as const
   const worldLine = spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""
   const workerLine = spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""
@@ -1264,6 +1265,20 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   })
 
   function openObjectAction(action: string) {
+    if (action === "Pause") {
+      if (selectedAgent?.kind !== "durable-session" || agentSessions.activeSessionId !== selectedAgent.id) return
+      agentSessions.stop()
+      if (lineTarget === "agent") {
+        setLineOpen(false)
+        setLineInput("")
+        setLineReply(null)
+        setLineBusy(false)
+        setDelegateContext(null)
+        setLineTarget("william")
+      }
+      return
+    }
+    if (action === "Pause unavailable") return
     if (action === "Change" && selectedKind === "file") {
       openChange()
       return
@@ -1403,7 +1418,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
       </div>
