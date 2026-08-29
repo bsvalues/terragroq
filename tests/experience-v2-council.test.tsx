@@ -56,6 +56,7 @@ const session: BrainCouncilSession = {
     { id: "selected-context", label: "Selected diff", detail: "PR #1042 · workspace shell in TerraFusion Build" },
     { id: "browser-proof", label: "browser · PASS", detail: "Window behavior passed" },
   ],
+  disposition: null,
 }
 
 function renderCouncil(currentSession: BrainCouncilSession = session) {
@@ -106,6 +107,24 @@ describe("Experience V2 Brain Council surface", () => {
     fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
     expect(onAdvisoryAction).toHaveBeenCalledOnce()
     expect(onAdvisoryAction).toHaveBeenCalledWith("approve", session)
+  })
+
+  it("shows durable owner direction on current and restored advice and prevents a conflicting second choice", () => {
+    const directed = {
+      ...session,
+      disposition: { direction: "request-changes" as const, recordedAt: "2026-08-29T18:00:00.000Z" },
+    }
+    const onAdvisoryAction = vi.fn()
+    const current = render(<BrainCouncilSurface session={directed} onDismiss={vi.fn()} onAdvisoryAction={onAdvisoryAction} />)
+    expect(screen.getByText(/Owner requested changes/)).toBeTruthy()
+    expect(screen.getByText(/records direction only; it does not authorize or dispatch execution/i)).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Approve recommendation" }).hasAttribute("disabled")).toBe(true)
+    current.unmount()
+
+    render(<BrainCouncilSurface session={directed} historical onDismiss={vi.fn()} onAdvisoryAction={onAdvisoryAction} />)
+    expect(screen.getByText(/Owner requested changes/)).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
+    expect(onAdvisoryAction).not.toHaveBeenCalled()
   })
 
   it("dismisses the Council without coupling dismissal to advisory actions", () => {
@@ -186,5 +205,41 @@ describe("Experience V2 Brain Council surface", () => {
     expect(screen.queryByText(session.question)).toBeNull()
     releaseHistory(Response.json({ history: [session] }))
     await waitFor(() => expect(screen.getByRole("button", { name: new RegExp(session.question) })).toBeTruthy())
+  })
+
+  it("records a Council disposition from the Space without opening The Line or dispatching execution", async () => {
+    const directed = {
+      ...session,
+      disposition: { direction: "approve" as const, recordedAt: "2026-08-29T18:00:00.000Z" },
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) {
+        const space = { ...defaultSpace(), selectedPath: "src/App.tsx", activeWindowId: "editor" as const }
+        return Response.json({ worldId: "11111111-1111-4111-8111-111111111111", space: spaceToServer(space), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "server", browserStorageKey: null })
+      }
+      if (url === "/api/environment/space" && init?.method === "PUT") return Response.json({ saved: true })
+      if (url === "/api/environment/council" && init?.method === "POST") return Response.json({ session })
+      if (url === "/api/environment/council" && init?.method === "PATCH") return Response.json({ session: directed })
+      if (url === "/api/environment/judgment") return Response.json({ error: "unavailable" }, { status: 503 })
+      return Response.json({})
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+    await screen.findByRole("button", { name: "Ask Council" })
+    fireEvent.click(screen.getByRole("button", { name: "Ask Council" }))
+    await screen.findByText(session.question)
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
+
+    expect(await screen.findByText(/Owner approved recommendation/)).toBeTruthy()
+    expect(screen.queryByRole("dialog", { name: "The Line" })).toBeNull()
+    const dispositionCall = fetcher.mock.calls.find(([url, init]) => String(url) === "/api/environment/council" && init?.method === "PATCH")
+    expect(JSON.parse(String(dispositionCall?.[1]?.body))).toEqual({
+      worldId: "11111111-1111-4111-8111-111111111111",
+      sessionId: session.id,
+      sessionCreatedAt: session.createdAt,
+      direction: "approve",
+    })
   })
 })

@@ -22,6 +22,7 @@ export type CouncilEvidence = Readonly<{
 }>
 
 export type CouncilAdvisoryAction = "request-changes" | "reject" | "approve" | "ask-dissent" | "run-another-pass"
+export type CouncilDispositionDirection = "request-changes" | "reject" | "approve"
 
 export type BrainCouncilSession = Readonly<{
   id: string
@@ -40,6 +41,7 @@ export type BrainCouncilSession = Readonly<{
   recommendation: string
   confidence: number
   evidence: readonly CouncilEvidence[]
+  disposition: Readonly<{ direction: CouncilDispositionDirection; recordedAt: string }> | null
 }>
 
 export type BrainCouncilSurfaceProps = Readonly<{
@@ -47,6 +49,8 @@ export type BrainCouncilSurfaceProps = Readonly<{
   onDismiss: () => void
   onAdvisoryAction: (action: CouncilAdvisoryAction, session: BrainCouncilSession) => void
   historical?: boolean
+  busy?: boolean
+  error?: string | null
 }>
 
 export type CouncilHistoryBrowserProps = Readonly<{
@@ -65,6 +69,12 @@ const ACTIONS: readonly Readonly<{ id: CouncilAdvisoryAction; label: string; pri
   { id: "run-another-pass", label: "Run another pass" },
   { id: "approve", label: "Approve recommendation", primary: true },
 ]
+
+const DISPOSITION_LABELS: Readonly<Record<CouncilDispositionDirection, string>> = {
+  approve: "Owner approved recommendation",
+  reject: "Owner rejected recommendation",
+  "request-changes": "Owner requested changes",
+}
 
 function useCouncilDialogFocus(dialogRef: React.RefObject<HTMLElement | null>, onDismiss: () => void) {
   useEffect(() => {
@@ -95,6 +105,8 @@ export function BrainCouncilSurface({
   onDismiss,
   onAdvisoryAction,
   historical = false,
+  busy = false,
+  error = null,
 }: BrainCouncilSurfaceProps) {
   const dialogRef = useRef<HTMLElement>(null)
   const [activeMemberId, setActiveMemberId] = useState(session.members[0]?.id ?? "")
@@ -196,19 +208,20 @@ export function BrainCouncilSurface({
           </div>
           <div className={styles.boundary} role="note">
             <AlertTriangle aria-hidden="true" size={14} />
-            <p><strong>Advisory only.</strong> Council recommendations never execute silently. An owner action records direction; separate execution remains explicit and inspectable.</p>
+            <p><strong>Advisory only.</strong> Council recommendations never execute silently. An owner action records direction only; it does not authorize or dispatch execution.</p>
           </div>
         </aside>
       </div>
 
       <footer className={styles.footer}>
-        <div className={styles.footerNote}><RotateCcw aria-hidden="true" size={13} /> Dismiss anytime; the current Space and its windows stay in place.</div>
+        <div className={styles.footerNote} role={error ? "alert" : undefined}><RotateCcw aria-hidden="true" size={13} /> {error ?? (session.disposition ? `${DISPOSITION_LABELS[session.disposition.direction]} · ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(session.disposition.recordedAt))} UTC` : busy ? "Recording owner direction…" : "Dismiss anytime; the current Space and its windows stay in place.")}</div>
         <div className={styles.actions} aria-label="Council advisory actions">
           {ACTIONS.map((action) => (
             <button
               type="button"
               key={action.id}
               className={action.primary ? styles.primaryAction : styles.action}
+              disabled={busy || (Boolean(session.disposition) && (action.id === "approve" || action.id === "reject" || action.id === "request-changes"))}
               onClick={() => onAdvisoryAction(action.id, session)}
             >
               {action.label}

@@ -91,6 +91,7 @@ import {
   listOwnedProjectSpaces,
   createOwnedProjectSpace,
   loadOwnedCouncilHistory,
+  saveOwnedCouncilDisposition,
   saveOwnedCouncilSession,
   saveOwnedLineWorld,
   selectedLineContextFingerprint,
@@ -109,6 +110,7 @@ function councilSession(id: string, createdAt: string) {
     members: [{ id: "architect", role: "Architect", name: "Atlas", provider: "local", model: "model", status: "ready" as const, perspective: "Keep it bounded." }],
     consensus: "Proceed carefully.", dissent: "One risk.", blindSpot: "Unknown.", recommendation: "Verify it.", confidence: 80,
     evidence: [{ id: "selected", label: "Selected file", detail: "src/App.tsx" }],
+    disposition: null,
   }
 }
 
@@ -887,5 +889,53 @@ describe("server-owned Space persistence", () => {
     expect(store.attempts).toBe(2)
     expect(JSON.parse(store.rows.get("world-a")!.snapshot).openConcerns).toEqual(["concurrent"])
     expect(JSON.parse(store.rows.get("world-a")!.snapshot).councilHistory.map((entry: { id: string }) => entry.id)).toEqual(["c-concurrent", "c-current"])
+  })
+
+  it("records owner direction on the exact owned Council session and restores it from history", async () => {
+    const store = new MemoryStore()
+    const initial = {
+      ...createWorkingWorld({ intent: "TerraFusion" }),
+      openConcerns: ["keep this"],
+      councilHistory: [councilSession("c-current", "2026-08-27T10:00:00.000Z")],
+    }
+    store.rows.set("world-a", { id: "world-a", userId: "owner-a", intent: initial.intent, snapshot: JSON.stringify(initial), updatedAt: new Date() })
+
+    const updated = await saveOwnedCouncilDisposition({
+      userId: "owner-a",
+      worldId: "world-a",
+      sessionId: "c-current",
+      sessionCreatedAt: "2026-08-27T10:00:00.000Z",
+      direction: "approve",
+      recordedAt: "2026-08-29T18:00:00.000Z",
+    }, store)
+
+    expect(updated.disposition).toEqual({ direction: "approve", recordedAt: "2026-08-29T18:00:00.000Z" })
+    expect((await loadOwnedCouncilHistory("owner-a", "world-a", store))?.[0]?.disposition).toEqual(updated.disposition)
+    expect(JSON.parse(store.rows.get("world-a")!.snapshot).openConcerns).toEqual(["keep this"])
+  })
+
+  it("makes exact disposition replay idempotent while refusing stale, missing, foreign, and conflicting sessions", async () => {
+    const store = new MemoryStore()
+    const initial = {
+      ...createWorkingWorld({ intent: "TerraFusion" }),
+      councilHistory: [councilSession("c-current", "2026-08-27T10:00:00.000Z")],
+    }
+    store.rows.set("world-a", { id: "world-a", userId: "owner-a", intent: initial.intent, snapshot: JSON.stringify(initial), updatedAt: new Date() })
+    const input = {
+      userId: "owner-a", worldId: "world-a", sessionId: "c-current",
+      sessionCreatedAt: "2026-08-27T10:00:00.000Z", direction: "reject" as const,
+      recordedAt: "2026-08-29T18:00:00.000Z",
+    }
+    await saveOwnedCouncilDisposition(input, store)
+    const committed = store.rows.get("world-a")!.snapshot
+
+    expect((await saveOwnedCouncilDisposition({ ...input, recordedAt: "2026-08-29T18:01:00.000Z" }, store)).disposition)
+      .toEqual({ direction: "reject", recordedAt: "2026-08-29T18:00:00.000Z" })
+    expect(store.rows.get("world-a")!.snapshot).toBe(committed)
+    await expect(saveOwnedCouncilDisposition({ ...input, direction: "approve" }, store)).rejects.toThrow("COUNCIL_DISPOSITION_CONFLICT")
+    await expect(saveOwnedCouncilDisposition({ ...input, sessionCreatedAt: "2026-08-27T10:01:00.000Z" }, store)).rejects.toThrow("COUNCIL_SESSION_STALE")
+    await expect(saveOwnedCouncilDisposition({ ...input, sessionId: "c-missing" }, store)).rejects.toThrow("COUNCIL_SESSION_NOT_FOUND")
+    await expect(saveOwnedCouncilDisposition({ ...input, userId: "owner-b" }, store)).rejects.toThrow("WORLD_NOT_FOUND")
+    expect(store.rows.get("world-a")!.snapshot).toBe(committed)
   })
 })
