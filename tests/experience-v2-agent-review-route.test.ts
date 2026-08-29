@@ -350,7 +350,7 @@ describe("selected-file review route", () => {
       userId: "owner-1",
       kind: "agent",
       subject: "123e4567-e89b-42d3-a456-426614174000",
-      metadata: { provider: "cloud", external: true, metered: true, resumed: false },
+      metadata: { provider: "cloud", external: true, metered: true, resumed: false, mode: "agent" },
     })
 
     child.emit("close", 0)
@@ -407,6 +407,187 @@ describe("selected-file review route", () => {
   })
 })
 
+describe("Claude Builder fork route", () => {
+  const sourceId = "123e4567-e89b-42d3-a456-426614174000"
+  const childId = "223e4567-e89b-42d3-a456-426614174000"
+  const currentReceipt = "current-work-context"
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
+    seams.requireWorkContext.mockResolvedValue({ ok: true, receipt: currentReceipt })
+    seams.poolQuery.mockResolvedValue({ rows: [{
+      userId: "owner-1",
+      metadata: { provider: "cloud", mode: "agent", path: null, workContextReceipt: currentReceipt },
+    }] })
+  })
+
+  it.each([
+    ["empty", "   ", "FORK_PROMPT_REQUIRED"],
+    ["control characters", "Diverge.\u0007", "FORK_PROMPT_INVALID"],
+    ["too many characters", "x".repeat(20_001), "FORK_PROMPT_TOO_LONG"],
+    ["too many UTF-8 bytes", "😀".repeat(9_000), "FORK_PROMPT_TOO_LONG"],
+  ])("refuses a %s prompt before authority or thread lookup", async (_label, prompt, error) => {
+    const response = await POST(request({ mode: "fork", provider: "cloud", sourceSessionId: sourceId, prompt }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error })
+    expect(seams.requireWorkContext).not.toHaveBeenCalled()
+    expect(seams.poolQuery).not.toHaveBeenCalled()
+    expect(seams.spawn).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
+
+  it("derives a distinct child from Claude's canonical init frame before exposing or recording it", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request({
+      mode: "fork",
+      provider: "cloud",
+      sourceSessionId: sourceId,
+      prompt: "Explore the smaller implementation without changing the source thread.",
+    }))
+
+    expect(response.status).toBe(200)
+    expect(seams.spawn.mock.calls[0][1]).toEqual([
+      "--print", "--output-format", "stream-json", "--verbose",
+      "--permission-mode", "acceptEdits",
+      "--resume", sourceId, "--fork-session",
+      "Explore the smaller implementation without changing the source thread.",
+    ])
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "system", subtype: "init", session_id: childId })}\n`))
+    await vi.waitFor(() => expect(seams.recordLoomStart).toHaveBeenCalledWith({
+      userId: "owner-1",
+      kind: "agent",
+      subject: childId,
+      metadata: {
+        provider: "cloud", external: true, metered: true, resumed: false,
+        mode: "agent", workContextReceipt: currentReceipt, forkedFrom: sourceId,
+      },
+    }))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({
+      type: "result", subtype: "success", is_error: false, session_id: childId, result: "Child result",
+    })}\n`))
+    child.emit("close", 0)
+
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events[0]).toEqual({
+      type: "session", sessionId: childId, provider: "Claude", mode: "fork", resumed: false, forkedFrom: sourceId,
+    })
+    expect(events[1]).toEqual({ type: "event", event: { type: "system", subtype: "init", session_id: childId } })
+    expect(events.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
+    expect(seams.recordLoomEnd).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1", kind: "agent", subject: childId,
+      outcome: expect.objectContaining({ forkedFrom: sourceId, code: 0, reason: null }),
+    }))
+  })
+
+  it.each([
+    ["foreign owner", { userId: "owner-2", metadata: { provider: "cloud", mode: "agent", workContextReceipt: currentReceipt } }, "THREAD_NOT_YOURS"],
+    ["wrong provider", { userId: "owner-1", metadata: { provider: "local", mode: "agent", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["review source", { userId: "owner-1", metadata: { provider: "cloud", mode: "review", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["missing recorded mode", { userId: "owner-1", metadata: { provider: "cloud", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["unknown recorded mode", { userId: "owner-1", metadata: { provider: "cloud", mode: "builder", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["malformed recorded mode", { userId: "owner-1", metadata: { provider: "cloud", mode: 7, workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["stale context", { userId: "owner-1", metadata: { provider: "cloud", mode: "agent", workContextReceipt: "old" } }, "THREAD_CONTEXT_MISMATCH"],
+  ])("refuses a %s before spawning", async (_label, row, error) => {
+    seams.poolQuery.mockResolvedValueOnce({ rows: [row] })
+    const response = await POST(request({ mode: "fork", provider: "cloud", sourceSessionId: sourceId, prompt: "Diverge." }))
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ error })
+    expect(seams.spawn).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["same child identity", { type: "system", subtype: "init", session_id: sourceId }, "FORK_SESSION_ID_INVALID"],
+    ["missing canonical init", { type: "result", subtype: "success", session_id: childId, result: "No init" }, "FORK_SESSION_ID_REQUIRED"],
+    ["malformed child identity", { type: "system", subtype: "init", session_id: "not-a-uuid" }, "FORK_SESSION_ID_INVALID"],
+  ])("materializes nothing for %s", async (_label, frame, reason) => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request({ mode: "fork", provider: "cloud", sourceSessionId: sourceId, prompt: "Diverge." }))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify(frame)}\n`))
+    child.emit("close", 0)
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events).toEqual([{ type: "done", reason, code: null }])
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
+
+  it("cancels before canonical child identity without materializing a child", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const abort = new AbortController()
+    const response = await POST(request({ mode: "fork", provider: "cloud", sourceSessionId: sourceId, prompt: "Diverge." }, abort.signal))
+    abort.abort()
+    child.emit("close", 0)
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events).toEqual([{ type: "done", reason: "CANCELLED", code: null }])
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
+
+  it("carries receipt-bound fork lineage through a normal child resume", async () => {
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{
+      userId: "owner-1",
+      metadata: { provider: "cloud", mode: "agent", path: null, workContextReceipt: currentReceipt, forkedFrom: sourceId },
+    }] })
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request({
+      provider: "cloud", prompt: "Continue the child.", sessionId: childId, resume: true,
+    }))
+
+    expect(response.status).toBe(200)
+    expect(seams.spawn.mock.calls[0][1]).toContain("--resume")
+    child.emit("close", 0)
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events[0]).toEqual({
+      type: "session", sessionId: childId, provider: "Claude", mode: "delegate",
+      resumed: true, forkedFrom: sourceId,
+    })
+    expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
+      subject: childId,
+      metadata: expect.objectContaining({ workContextReceipt: currentReceipt, forkedFrom: sourceId }),
+    }))
+  })
+
+  it.each([
+    ["wrong provider", { provider: "local", mode: "agent", path: null, workContextReceipt: currentReceipt }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["missing exact mode", { provider: "cloud", path: null, workContextReceipt: currentReceipt }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["stale work context", { provider: "cloud", mode: "agent", path: null, workContextReceipt: "stale" }, "THREAD_CONTEXT_MISMATCH"],
+  ])("refuses normal child lineage with %s instead of replaying browser authority", async (_label, metadata, error) => {
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: { ...metadata, forkedFrom: sourceId } }] })
+    const response = await POST(request({
+      provider: "cloud", prompt: "Continue the child.", sessionId: childId, resume: true,
+    }))
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ error })
+    expect(seams.spawn).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+  })
+
+  it("keeps a legacy owner-owned generic Claude resume compatible without inventing lineage", async () => {
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: null }] })
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request({
+      provider: "cloud", prompt: "Continue legacy work.", sessionId: childId, resume: true,
+    }))
+
+    expect(response.status).toBe(200)
+    child.emit("close", 0)
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events[0]).toEqual({ type: "session", sessionId: childId, resumed: true })
+    expect(events[0]).not.toHaveProperty("forkedFrom")
+  })
+})
+
 describe("durable workroom thread descriptors", () => {
   it("reads the authoritative first LOOP_STARTED review descriptor", async () => {
     seams.poolQuery.mockResolvedValueOnce({
@@ -424,11 +605,31 @@ describe("durable workroom thread descriptors", () => {
     expect(values).toEqual(["123e4567-e89b-42d3-a456-426614174000"])
   })
 
-  it("keeps legacy generic sessions owner-readable while classifying them as builders", async () => {
+  it("reads bounded Claude provider, work-context, and fork lineage metadata without permissive defaults", async () => {
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{
+      userId: "owner-1",
+      metadata: {
+        provider: "cloud", mode: "agent", path: null,
+        workContextReceipt: "current-work-context",
+        forkedFrom: "123e4567-e89b-42d3-a456-426614174000",
+      },
+    }] })
+
+    await expect(loomThreadDescriptor("223e4567-e89b-42d3-a456-426614174000")).resolves.toEqual({
+      owner: "owner-1",
+      provider: "cloud",
+      mode: "agent",
+      path: null,
+      workContextReceipt: "current-work-context",
+      forkedFrom: "123e4567-e89b-42d3-a456-426614174000",
+    })
+  })
+
+  it("keeps legacy generic sessions owner-readable without manufacturing a recorded mode", async () => {
     seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: null }] })
     await expect(loomThreadDescriptor("123e4567-e89b-42d3-a456-426614174000")).resolves.toEqual({
       owner: "owner-1",
-      mode: "agent",
+      mode: null,
       path: null,
     })
 

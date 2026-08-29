@@ -33,6 +33,7 @@ export type DurableAgentSession = Readonly<{
   assignment: string
   target?: AgentSessionFileTarget
   reviewPath?: string
+  forkedFrom?: string
   updatedAt: string
   completedTurns?: readonly CompletedAgentTurn[]
 }>
@@ -58,6 +59,7 @@ export type ExperienceAgentSession = Readonly<{
   mode: "delegate" | "review"
   target?: AgentSessionFileTarget
   reviewPath?: string
+  forkedFrom?: string
   lastResult?: string
 }>
 
@@ -82,6 +84,13 @@ export type RunAgentTurnInput = Readonly<{
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
 }>
 
+export type ForkClaudeSessionInput = Readonly<{
+  sourceSessionId: string
+  assignment: string
+  prompt: string
+  onEvent?: (event: Readonly<Record<string, unknown>>) => void
+}>
+
 export type ExperienceAgentSessionController = Readonly<{
   sessions: readonly ExperienceAgentSession[]
   durableSession: DurableAgentSession | null
@@ -100,6 +109,7 @@ export type ExperienceAgentSessionController = Readonly<{
 export type ProviderNeutralAgentSessionController = ExperienceAgentSessionController & Readonly<{
   activeProvider: AgentProvider | null
   runAgentTurn: (input: RunAgentTurnInput) => Promise<DurableAgentSession>
+  forkClaudeSession: (input: ForkClaudeSessionInput) => Promise<DurableAgentSession>
 }>
 
 type ActiveAgentOperation = {
@@ -170,10 +180,11 @@ function parseFileTarget(value: unknown): AgentSessionFileTarget | null {
   return path ? { kind: "file", path } : null
 }
 
-function targetBearingSessionIdentity(value: unknown): Readonly<{ key: string; sessionId: string }> | null {
+function optionalMetadataSessionIdentity(value: unknown): Readonly<{ key: string; sessionId: string }> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
-  if (!("target" in candidate) || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
+  if (!("target" in candidate) && !("forkedFrom" in candidate)
+    || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)) return null
   return { key: sessionKey(candidate.provider, candidate.sessionId), sessionId: candidate.sessionId }
 }
@@ -190,12 +201,16 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     ? candidate.updatedAt : null
   const target = candidate.target === undefined ? undefined : parseFileTarget(candidate.target)
   const reviewPath = candidate.reviewPath === undefined ? undefined : boundedText(candidate.reviewPath, 1_000)
+  const forkedFrom = candidate.forkedFrom === undefined ? undefined
+    : typeof candidate.forkedFrom === "string" && CLAUDE_SESSION_ID.test(candidate.forkedFrom) && candidate.forkedFrom !== candidate.sessionId
+      ? candidate.forkedFrom : null
   const completedTurns = candidate.completedTurns === undefined ? [] : parseCompletedTurns(candidate.completedTurns)
   if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)
     || !role || !assignment || !updatedAt || (candidate.target !== undefined && !target)
-    || (candidate.reviewPath !== undefined && !reviewPath) || !completedTurns
+    || (candidate.reviewPath !== undefined && !reviewPath) || (candidate.forkedFrom !== undefined && !forkedFrom) || !completedTurns
     || target !== undefined && (role !== "Builder" || candidate.provider !== "Codex" || reviewPath !== undefined)
+    || forkedFrom !== undefined && (candidate.provider !== "Claude" || role !== "Builder" || reviewPath !== undefined || target !== undefined)
     || candidate.provider === "Local" && (role !== "Thinker" || assignment !== "Conversation" || target !== undefined || reviewPath !== undefined)) return null
   return {
     schemaVersion: 1,
@@ -205,6 +220,7 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     assignment,
     ...(target ? { target } : {}),
     ...(reviewPath ? { reviewPath } : {}),
+    ...(forkedFrom ? { forkedFrom } : {}),
     updatedAt,
     completedTurns,
   }
@@ -250,7 +266,7 @@ function parseCollection(value: string | null): DurableAgentSessionCollection | 
   for (const rawSession of candidate.sessions) {
     const descriptor = parseDescriptor(JSON.stringify(rawSession))
     if (!descriptor) {
-      const skipped = targetBearingSessionIdentity(rawSession)
+      const skipped = optionalMetadataSessionIdentity(rawSession)
       if (!skipped) return null
       skippedTargetKeys.add(skipped.key)
       skippedTargetIds.add(skipped.sessionId)
@@ -315,6 +331,31 @@ function upsertSession(sessions: readonly DurableAgentSession[], next: DurableAg
   return [...without, next].slice(-MAX_DURABLE_SESSIONS)
 }
 
+function persistForkCollection(
+  key: string,
+  sessions: readonly DurableAgentSession[],
+  sourceKey: string,
+  child: DurableAgentSession,
+): DurableAgentSessionCollection {
+  const childKey = sessionKey(child.provider, child.sessionId)
+  let retained = sessions.filter((session) => sessionKey(session.provider, session.sessionId) !== childKey)
+  if (retained.length >= MAX_DURABLE_SESSIONS) {
+    const removable = retained.findIndex((session) => sessionKey(session.provider, session.sessionId) !== sourceKey)
+    if (removable < 0) throw new Error("AGENT_SESSION_COLLECTION_TOO_LARGE")
+    retained = retained.filter((_, index) => index !== removable)
+  }
+  const collection: DurableAgentSessionCollection = {
+    schemaVersion: 3,
+    selectedSessionKey: childKey,
+    sessions: [...retained, child],
+  }
+  if (new TextEncoder().encode(JSON.stringify(collection)).byteLength > MAX_COLLECTION_BYTES) {
+    throw new Error("AGENT_SESSION_COLLECTION_TOO_LARGE")
+  }
+  try { window.localStorage.setItem(key, JSON.stringify(collection)) } catch { throw new Error("AGENT_SESSION_PERSISTENCE_FAILED") }
+  return collection
+}
+
 function storageKey(ownerScope: string, worldScope: string): string {
   const owner = boundedText(ownerScope, 500)
   const world = boundedText(worldScope, 500)
@@ -362,6 +403,7 @@ function projectSessions(
       mode: descriptor.reviewPath ? "review" : "delegate",
       ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
+      ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
       ...(descriptor.completedTurns?.at(-1)?.finalResult ? { lastResult: descriptor.completedTurns.at(-1)!.finalResult } : {}),
     })
   })
@@ -490,7 +532,11 @@ export function useExperienceAgentSessions({
     return true
   }, [ownerScope, worldScope])
 
-  const executeTurn = useCallback(async (input: RunClaudeTurnInput & { provider: AgentProvider }) => {
+  const executeTurn = useCallback(async (input: Omit<RunClaudeTurnInput, "mode"> & {
+    provider: AgentProvider
+    mode?: "delegate" | "review" | "fork"
+    sourceSessionId?: string
+  }) => {
     if (input.provider !== "Codex" && input.provider !== "Claude" && input.provider !== "Local") {
       throw new Error("AGENT_PROVIDER_INVALID")
     }
@@ -498,12 +544,13 @@ export function useExperienceAgentSessions({
     const assignment = input.provider === "Local" ? "Conversation" : boundedText(input.assignment, 500)
     const prompt = boundedText(input.prompt, 20_000)
     const mode = input.mode ?? "delegate"
+    const forkMode = mode === "fork"
     const reviewPath = boundedText(input.path, 1_000)
     const requestedTarget = input.target === undefined ? null : parseFileTarget(input.target)
     const focus = input.focus === undefined || input.focus === "" ? null : boundedText(input.focus, 2_000)
     if (!role) throw new Error("AGENT_ROLE_REQUIRED")
     if (!assignment) throw new Error("AGENT_ASSIGNMENT_REQUIRED")
-    if (mode === "delegate" && !prompt) throw new Error("AGENT_PROMPT_REQUIRED")
+    if ((mode === "delegate" || forkMode) && !prompt) throw new Error("AGENT_PROMPT_REQUIRED")
     if (input.target !== undefined && (!requestedTarget || mode !== "delegate" || role !== "Builder"
       || input.provider !== "Codex")) throw new Error("AGENT_TARGET_INVALID")
     if (mode === "review" && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
@@ -511,7 +558,13 @@ export function useExperienceAgentSessions({
     if (operationRef.current) throw new Error("AGENT_TURN_ALREADY_RUNNING")
 
     const storedPrior = sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKeyRef.current) ?? null
-    const prior = mode === "review"
+    const forkSource = forkMode && input.provider === "Claude" && role === "Builder" && validSessionId("Claude", input.sourceSessionId)
+      && storedPrior?.provider === "Claude" && storedPrior.role === "Builder" && !storedPrior.reviewPath
+      && storedPrior.sessionId === input.sourceSessionId
+      && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === sessionKey(storedPrior.provider, storedPrior.sessionId))
+      ? storedPrior : null
+    if (forkMode && !forkSource) throw new Error("AGENT_FORK_UNAVAILABLE")
+    const prior = forkMode ? null : mode === "review"
       ? storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer" && storedPrior.reviewPath === reviewPath ? storedPrior : null
       : storedPrior?.provider === input.provider && !storedPrior.reviewPath
         && storedPrior.role === role && storedPrior.assignment === assignment ? storedPrior : null
@@ -557,6 +610,11 @@ export function useExperienceAgentSessions({
           provider: "cloud",
           sessionId: prior?.sessionId ?? null,
           resume: prior !== null,
+        } : forkMode ? {
+          mode: "fork",
+          provider: "cloud",
+          sourceSessionId: forkSource!.sessionId,
+          prompt,
         } : input.provider === "Codex" ? {
           worldId,
           prompt,
@@ -618,6 +676,12 @@ export function useExperienceAgentSessions({
               && event.continuity === (prior ? "browser-replayed" : "new")
           const unexpectedReuse = !prior && typeof event.sessionId === "string"
             && sessionsRef.current.some((session) => session.provider === input.provider && session.sessionId === event.sessionId)
+          const forkTruth = !forkMode || event.forkedFrom === forkSource?.sessionId
+          const resumeForkedFrom = !forkMode && input.provider === "Claude" && prior && event.forkedFrom !== undefined
+            && event.provider === "Claude" && event.mode === "delegate"
+            && typeof event.forkedFrom === "string" && CLAUDE_SESSION_ID.test(event.forkedFrom)
+            && event.forkedFrom !== event.sessionId ? event.forkedFrom : null
+          const invalidResumeForkLineage = !forkMode && event.forkedFrom !== undefined && !resumeForkedFrom
           const capturedTarget = input.provider === "Codex" ? requestedTarget ?? prior?.target ?? null : null
           const serverSelectedPath = input.provider === "Codex" && capturedTarget
             ? canonicalWorkspaceFilePath(event.selectedPath)
@@ -628,7 +692,7 @@ export function useExperienceAgentSessions({
             && (serverSelectedPath !== capturedTarget.path || !serverAssignmentHash))
           if (!sessionIdValid || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed
             || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth || !localTruth
-            || invalidTargetBinding) {
+            || !forkTruth || invalidResumeForkLineage || invalidTargetBinding) {
             if (invalidTargetBinding) targetBindingInvalid = true
             malformed = true
             return
@@ -642,6 +706,8 @@ export function useExperienceAgentSessions({
             assignment,
             ...(capturedTarget ? { target: { kind: "file" as const, path: serverSelectedPath! } } : {}),
             ...(mode === "review" ? { reviewPath: reviewPath! } : {}),
+            ...(forkMode ? { forkedFrom: forkSource!.sessionId } : {}),
+            ...(resumeForkedFrom ? { forkedFrom: resumeForkedFrom } : {}),
             updatedAt: new Date().toISOString(),
           }
           if (isCurrent()) {
@@ -737,11 +803,12 @@ export function useExperienceAgentSessions({
           completedAt,
         }].slice(-MAX_COMPLETED_TURNS),
       }
-      const nextSessions = upsertSession(sessionsRef.current, settledSession)
       const settledKey = sessionKey(settledSession.provider, settledSession.sessionId)
       let persisted: DurableAgentSessionCollection
       try {
-        persisted = persistCollection(operationStorageKey, nextSessions, settledKey, { sessionKey: settledKey, completedAt })
+        persisted = forkMode
+          ? persistForkCollection(operationStorageKey, sessionsRef.current, sessionKey(forkSource!.provider, forkSource!.sessionId), settledSession)
+          : persistCollection(operationStorageKey, upsertSession(sessionsRef.current, settledSession), settledKey, { sessionKey: settledKey, completedAt })
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED"
         throw new AgentTurnCommittedPersistenceError(message)
@@ -815,6 +882,9 @@ export function useExperienceAgentSessions({
 
   const runAgentTurn = useCallback((input: RunAgentTurnInput) => executeTurn({ ...input, mode: "delegate" }), [executeTurn])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
+  const forkClaudeSession = useCallback((input: ForkClaudeSessionInput) => executeTurn({
+    ...input, provider: "Claude", role: "Builder", mode: "fork",
+  }), [executeTurn])
 
   const currentStorageKey = storageKey(ownerScope, worldScope)
   const scopeLoaded = loadedStorageKey === currentStorageKey
@@ -843,6 +913,7 @@ export function useExperienceAgentSessions({
     error,
     runAgentTurn,
     runClaudeTurn,
+    forkClaudeSession,
     selectSession,
     stop,
   }
