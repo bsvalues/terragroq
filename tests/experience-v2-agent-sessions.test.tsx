@@ -14,6 +14,7 @@ import type { WorldWorker } from "@/lib/environment/working-world"
 
 const OWNER_SCOPE = "owner-1"
 const WORLD_SCOPE = "terrafusion"
+const ASSIGNMENT_HASH = "a".repeat(64)
 
 vi.mock("next/dynamic", () => ({
   default: () => function TestSourceEditor(props: { value: string; onChange: (value: string) => void }) {
@@ -569,7 +570,7 @@ describe("Experience V2 real agent sessions", () => {
       if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/other.ts", untracked: false, diff: "" }))
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
         { type: "delta", text: "Working from src/app.ts." },
         { type: "result", text: "Completed the captured assignment." },
         { type: "done", code: 0, reason: null },
@@ -632,7 +633,7 @@ describe("Experience V2 real agent sessions", () => {
         return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
         { type: "result", text: "Updated src/app.ts." },
         { type: "done", code: 0, reason: null },
       ))
@@ -650,6 +651,10 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const version = 2\n"))
     expect(sourceReads).toBeGreaterThanOrEqual(2)
     expect(diffReads).toBeGreaterThanOrEqual(2)
+    expect(JSON.parse(String(window.localStorage.getItem("williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion"))).sessions[0].target).toEqual({
+      kind: "file",
+      path: "src/app.ts",
+    })
   })
 
   it("refreshes the committed Codex promotion while surfacing transcript persistence failure", async () => {
@@ -674,7 +679,7 @@ describe("Experience V2 real agent sessions", () => {
         return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
         { type: "result", text: "The repository mutation committed." },
         { type: "done", code: 0, reason: null },
       ))
@@ -727,7 +732,7 @@ describe("Experience V2 real agent sessions", () => {
         return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
       }
       if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
-        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
         { type: "result", text: "The repository mutation committed." },
         { type: "done", code: 0, reason: null },
       ))
@@ -1451,6 +1456,212 @@ describe("Experience V2 real agent sessions", () => {
       selectedSessionKey: `Claude:${sessionId}`,
       sessions: [{ sessionId, role: "Builder", provider: "Claude", assignment: "Change src/app.ts" }],
     })
+  })
+
+  it("persists and restores only the exact server-bound file target earned by a successful Codex Builder session", async () => {
+    const sessionId = "codex-bound-target"
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+      { type: "result", text: "Changed the captured file." },
+      { type: "done", code: 0, reason: null },
+    )))
+    const first = render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Codex",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Change the captured file.",
+        target: { kind: "file", path: "src/app.ts" },
+      })
+    })
+
+    expect(expose!.sessions[0]).toMatchObject({ target: { kind: "file", path: "src/app.ts" } })
+    expect(JSON.parse(String(window.localStorage.getItem(key))).sessions[0].target).toEqual({ kind: "file", path: "src/app.ts" })
+
+    first.unmount()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions[0]).toMatchObject({
+      truth: "resume-unverified",
+      target: { kind: "file", path: "src/app.ts" },
+    }))
+  })
+
+  it.each([
+    ["missing selected path", { assignmentHash: ASSIGNMENT_HASH }],
+    ["mismatched selected path", { selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH }],
+    ["noncanonical selected path", { selectedPath: "./src/app.ts", assignmentHash: ASSIGNMENT_HASH }],
+    ["missing assignment hash", { selectedPath: "src/app.ts" }],
+    ["malformed assignment hash", { selectedPath: "src/app.ts", assignmentHash: "browser-proof" }],
+  ])("fails a Codex target-bearing stream with %s evidence without persisting a session", async (_case, binding) => {
+    const sessionId = "codex-invalid-binding"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, ...binding },
+      { type: "result", text: "Unbound result." },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+
+    await expect(act(async () => expose!.runAgentTurn({
+      provider: "Codex",
+      role: "Builder",
+      assignment: "src/app.ts",
+      prompt: "Change the captured file.",
+      target: { kind: "file", path: "src/app.ts" },
+    }))).rejects.toThrow("AGENT_STREAM_INVALID")
+
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+    expect(expose!.sessions).toEqual([])
+  })
+
+  it("requires a resumed Codex target session to re-earn the exact server binding", async () => {
+    const sessionId = "codex-resume-binding"
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:${sessionId}`,
+      sessions: [{
+        schemaVersion: 1, sessionId, role: "Builder", provider: "Codex", assignment: "src/app.ts",
+        target: { kind: "file", path: "src/app.ts" }, updatedAt: "2026-08-27T16:00:00.000Z", completedTurns: [],
+      }],
+    }))
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true },
+      { type: "result", text: "Unbound resumed result." },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(1))
+
+    await expect(act(async () => expose!.runAgentTurn({
+      provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Continue.",
+      target: { kind: "file", path: "src/app.ts" },
+    }))).rejects.toThrow("AGENT_STREAM_INVALID")
+
+    expect(window.localStorage.getItem(key)).toBeNull()
+    cleanup()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions).toEqual([]))
+  })
+
+  it.each([
+    ["dot-prefixed", "./src/app.ts"],
+    ["backslash", "src\\app.ts"],
+    ["parent segment", "src/../app.ts"],
+    ["current-directory segment", "src/./app.ts"],
+    ["absolute", "/src/app.ts"],
+    ["drive absolute", "C:/repo/src/app.ts"],
+    ["backslash drive absolute", "C:\\repo\\src\\app.ts"],
+    ["UNC", "//server/share/app.ts"],
+    ["backslash UNC", "\\\\server\\share\\app.ts"],
+    ["NUL", "src/\0app.ts"],
+    ["control character", "src/\u001fapp.ts"],
+    ["empty", ""],
+    ["double separator", "src//app.ts"],
+    ["trailing separator", "src/app.ts/"],
+    ["surrounding whitespace", " src/app.ts "],
+  ])("rejects a %s target instead of normalizing or persisting it", async (_case, path) => {
+    vi.stubGlobal("fetch", vi.fn(() => { throw new Error("FETCH_CALLED_FOR_INVALID_TARGET") }))
+    render(<Harness />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Claude",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Change it.",
+        target: { kind: "file", path },
+      })
+    })).rejects.toThrow("AGENT_TARGET_INVALID")
+
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+  })
+
+  it.each([
+    ["Claude Builder without a server binding", () => expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "src/app.ts", prompt: "Work.", target: { kind: "file", path: "src/app.ts" } })],
+    ["Local conversation", () => expose!.runAgentTurn({ provider: "Local", role: "Builder", assignment: "src/app.ts", prompt: "Think.", target: { kind: "file", path: "src/app.ts" } })],
+    ["non-Builder delegate", () => expose!.runAgentTurn({ provider: "Claude", role: "Reviewer", assignment: "src/app.ts", prompt: "Inspect.", target: { kind: "file", path: "src/app.ts" } })],
+    ["read-only Review", () => expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", target: { kind: "file", path: "src/app.ts" } })],
+  ])("refuses target metadata on %s", async (_case, start) => {
+    vi.stubGlobal("fetch", vi.fn(() => { throw new Error("FETCH_CALLED_FOR_INELIGIBLE_TARGET") }))
+    render(<Harness />)
+
+    await expect(act(async () => { await start() })).rejects.toThrow("AGENT_TARGET_INVALID")
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+  })
+
+  it("drops only restored target-policy violations and preserves unrelated valid sessions", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const validId = "123e4567-e89b-42d3-a456-426614174000"
+    const invalidSelectedId = "223e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${invalidSelectedId}`,
+      sessions: [
+        { schemaVersion: 1, sessionId: validId, role: "Builder", provider: "Codex", assignment: "General work", updatedAt: "2026-08-27T16:00:00.000Z" },
+        { schemaVersion: 1, sessionId: invalidSelectedId, role: "Reviewer", provider: "Claude", assignment: "Not a builder", target: { kind: "file", path: "src/reviewer.ts" }, updatedAt: "2026-08-27T16:01:00.000Z" },
+        { schemaVersion: 1, sessionId: "323e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/review.ts", target: { kind: "file", path: "src/review.ts" }, reviewPath: "src/review.ts", updatedAt: "2026-08-27T16:02:00.000Z" },
+        { schemaVersion: 1, sessionId: "423e4567-e89b-42d3-a456-426614174000", role: "Thinker", provider: "Local", assignment: "Conversation", target: { kind: "file", path: "src/local.ts" }, updatedAt: "2026-08-27T16:03:00.000Z" },
+        { schemaVersion: 1, sessionId: "523e4567-e89b-42d3-a456-426614174000", role: "Builder", provider: "Claude", assignment: "Bad path", target: { kind: "file", path: "./src/bad.ts" }, updatedAt: "2026-08-27T16:04:00.000Z" },
+        { schemaVersion: 1, sessionId: "623e4567-e89b-42d3-a456-426614174000", role: "Builder", provider: "Claude", assignment: "No server binding", target: { kind: "file", path: "src/claude.ts" }, updatedAt: "2026-08-27T16:05:00.000Z" },
+      ],
+    }))
+
+    render(<Harness />)
+
+    await waitFor(() => expect(expose!.sessions).toEqual([
+      expect.objectContaining({ id: `Codex:${validId}`, assignment: "General work" }),
+    ]))
+    expect(JSON.parse(String(window.localStorage.getItem(key)))).toEqual({
+      schemaVersion: 3,
+      selectedSessionKey: null,
+      sessions: [{
+        schemaVersion: 1,
+        sessionId: validId,
+        role: "Builder",
+        provider: "Codex",
+        assignment: "General work",
+        updatedAt: "2026-08-27T16:00:00.000Z",
+        completedTurns: [],
+      }],
+    })
+  })
+
+  it("rejects malformed persisted target metadata while retaining legacy sessions without a target", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: "Claude:123e4567-e89b-42d3-a456-426614174000",
+      sessions: [{
+        schemaVersion: 1,
+        sessionId: "123e4567-e89b-42d3-a456-426614174000",
+        role: "Builder",
+        provider: "Claude",
+        assignment: "Legacy work",
+        target: { kind: "file", path: "", inventedAuthority: true },
+        updatedAt: "2026-08-27T16:05:00.000Z",
+      }],
+    }))
+
+    const malformed = render(<Harness />)
+    await waitFor(() => expect(window.localStorage.getItem(key)).toBeNull())
+    expect(expose!.sessions).toEqual([])
+
+    malformed.unmount()
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 1,
+      sessionId: "123e4567-e89b-42d3-a456-426614174000",
+      role: "Builder",
+      provider: "Claude",
+      assignment: "Legacy work",
+      updatedAt: "2026-08-27T16:05:00.000Z",
+    }))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions).toHaveLength(1))
+    expect(expose!.sessions[0]?.assignment).toBe("Legacy work")
+    expect(expose!.sessions[0]?.target).toBeUndefined()
   })
 
   it("shows a restored descriptor as unverified until resume succeeds", async () => {

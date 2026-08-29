@@ -70,6 +70,9 @@ vi.mock("@/scripts/hermes-bridge/app-server-client.mjs", () => ({
 import { POST } from "@/app/api/loom/codex/route"
 import { loomCodexThreadDescriptor } from "@/lib/loom/threads"
 
+const ASSIGNMENT_HASH = "a".repeat(64)
+const STALE_ASSIGNMENT_HASH = "b".repeat(64)
+
 function request(body: Record<string, unknown>, signal?: AbortSignal) {
   return new Request("http://williamos.test/api/loom/codex", {
     method: "POST",
@@ -117,7 +120,7 @@ describe("durable Codex delegate route", () => {
         grantVersion: "grant-hash",
         reservationVersion: "f".repeat(64),
       },
-      assignmentHash: "assignment-hash",
+      assignmentHash: ASSIGNMENT_HASH,
       target: {
         content: "export const before = true\n",
         modifiedAt: "2026-08-28T12:00:00.000Z",
@@ -167,7 +170,7 @@ describe("durable Codex delegate route", () => {
       rows: [{ userId: "owner-1", metadata: {
         provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true,
         worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9,
-        assignmentHash: "assignment-hash", selectedPath: "src/selected.ts",
+        assignmentHash: ASSIGNMENT_HASH, selectedPath: "src/selected.ts",
       } }],
     })
   })
@@ -204,7 +207,7 @@ describe("durable Codex delegate route", () => {
       forbidden: ["src/forbidden.ts"],
       reservationVersion: "f".repeat(64),
       selectedPath: "src/selected.ts",
-      assignmentHash: "assignment-hash",
+      assignmentHash: ASSIGNMENT_HASH,
       taskText: "Implement the selected change.",
       isolatedBaseSha: "a".repeat(40),
       resumed: false,
@@ -221,7 +224,10 @@ describe("durable Codex delegate route", () => {
       }),
     }))
     expect(output).toEqual([
-      { type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: false },
+      {
+        type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: false,
+        selectedPath: "src/selected.ts", assignmentHash: ASSIGNMENT_HASH,
+      },
       { type: "result", text: "Implemented the selected change." },
       { type: "done", reason: null, code: 0 },
     ])
@@ -231,7 +237,7 @@ describe("durable Codex delegate route", () => {
       workspace: process.cwd(),
       resumed: false,
       worldId: "world-1",
-      assignmentHash: "assignment-hash",
+      assignmentHash: ASSIGNMENT_HASH,
       selectedPath: "src/selected.ts",
       promotionDigest: "after-digest",
     }))
@@ -306,16 +312,17 @@ describe("durable Codex delegate route", () => {
     expect(seams.startThread).not.toHaveBeenCalled()
     expect(output[0]).toEqual({
       type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: true,
+      selectedPath: "src/selected.ts", assignmentHash: ASSIGNMENT_HASH,
     })
   })
 
   it.each([
     ["unknown", [], "THREAD_NOT_FOUND"],
-    ["another owner", [{ userId: "owner-2", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: "assignment-hash", selectedPath: "src/selected.ts" } }], "THREAD_NOT_YOURS"],
-    ["Claude", [{ userId: "owner-1", metadata: { provider: "Claude", mode: "delegate", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: "assignment-hash", selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
-    ["review", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "review", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: "assignment-hash", selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
-    ["different workspace", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: "C:/other", committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: "assignment-hash", selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
-    ["stale assignment", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: "older-assignment", selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["another owner", [{ userId: "owner-2", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: ASSIGNMENT_HASH, selectedPath: "src/selected.ts" } }], "THREAD_NOT_YOURS"],
+    ["Claude", [{ userId: "owner-1", metadata: { provider: "Claude", mode: "delegate", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: ASSIGNMENT_HASH, selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["review", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "review", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: ASSIGNMENT_HASH, selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["different workspace", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: "C:/other", committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: ASSIGNMENT_HASH, selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
+    ["stale assignment", [{ userId: "owner-1", metadata: { provider: "Codex", mode: "delegate", workspace: process.cwd(), committed: true, worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9, assignmentHash: STALE_ASSIGNMENT_HASH, selectedPath: "src/selected.ts" } }], "THREAD_DESCRIPTOR_MISMATCH"],
   ])("refuses a %s descriptor before connecting", async (_label, rows, error) => {
     seams.poolQuery.mockResolvedValueOnce({ rows })
 
@@ -444,6 +451,7 @@ describe("durable Codex delegate route", () => {
     const output = await events(await POST(request({ prompt: "Work." })))
 
     expect(output.at(-1)).toEqual({ type: "done", reason: "CODEX_RECEIPT_FAILED", code: null })
+    expect(output.some((frame) => frame.type === "session")).toBe(false)
     expect(seams.runTurn).not.toHaveBeenCalled()
     expect(seams.cleanupIsolatedWorkspace).toHaveBeenCalledOnce()
   })
@@ -665,14 +673,14 @@ describe("Codex thread descriptor", () => {
       rows: [{ userId: "owner-1", metadata: {
         provider: "Codex", mode: "delegate", workspace: "C:/workspace", committed: true,
         worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9,
-        assignmentHash: "assignment-hash", selectedPath: "src/selected.ts",
+        assignmentHash: ASSIGNMENT_HASH, selectedPath: "src/selected.ts",
       } }],
     })
 
     await expect(loomCodexThreadDescriptor("codex-thread-1")).resolves.toEqual({
       owner: "owner-1", provider: "Codex", mode: "delegate", workspace: "C:/workspace",
       worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9,
-      assignmentHash: "assignment-hash", selectedPath: "src/selected.ts",
+      assignmentHash: ASSIGNMENT_HASH, selectedPath: "src/selected.ts",
     })
     expect(seams.poolQuery.mock.calls.at(-1)?.[0]).toContain("loom_codex_ready")
   })
