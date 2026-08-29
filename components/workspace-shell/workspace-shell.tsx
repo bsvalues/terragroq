@@ -1038,6 +1038,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         const promotedPath = delegateContext.provider === "Codex" && delegateContext.kind === "file" ? delegateContext.label : null
         if (promotedPath) await persistBarrierRef.current()
         let committedPersistenceError: AgentTurnCommittedPersistenceError | null = null
+        let persistedFinalPresentation: string | null = null
         try {
           const completed = await agentSessions.runAgentTurn({
             provider: delegateContext.provider,
@@ -1057,7 +1058,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           })
           const completedSessionKey = `${completed.provider}:${completed.sessionId}`
           if (presentationSessionKey === completedSessionKey && agentPresentationIsCurrent()) {
-            setLineReply(agentPresentationText(completed.completedTurns?.at(-1)?.finalResult) ?? "Agent completed.")
+            persistedFinalPresentation = agentPresentationText(completed.completedTurns?.at(-1)?.finalResult) ?? "Agent completed."
+            setLineReply(persistedFinalPresentation)
           }
         } catch (error) {
           if (!(error instanceof AgentTurnCommittedPersistenceError)) throw error
@@ -1072,12 +1074,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             refreshWarning = `Codex saved ${promotedPath}, but Source or Changes could not refresh.`
           }
         }
-        if (committedPersistenceError) {
+        if (committedPersistenceError && agentPresentationIsCurrent()) {
           setLineReply(refreshWarning
             ? `${refreshWarning} Transcript persistence also failed (${committedPersistenceError.message}).`
             : committedPersistenceError.message)
-        } else if (refreshWarning) {
-          setLineReply(refreshWarning)
+        } else if (refreshWarning && persistedFinalPresentation && agentPresentationIsCurrent()) {
+          setLineReply(`${persistedFinalPresentation}\n\nWarning: ${refreshWarning}`)
         }
         return
       }

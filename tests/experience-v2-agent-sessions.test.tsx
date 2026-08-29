@@ -931,7 +931,8 @@ describe("Experience V2 real agent sessions", () => {
       agentStream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" })}\n`))
       agentStream.enqueue(encoder.encode(`${JSON.stringify({ type: "delta", text: "Validated live progress." })}\n`))
     })
-    expect(await screen.findByText("Validated live progress.")).toBeTruthy()
+    expect(await screen.findByText("Agent is working.")).toBeTruthy()
+    expect(screen.queryByText("Validated live progress.")).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
     expect(requestSignal?.aborted).toBe(false)
     expect(cancelled).toBe(false)
@@ -1001,6 +1002,52 @@ describe("Experience V2 real agent sessions", () => {
     expect(diffReads).toBeGreaterThanOrEqual(2)
     expect(screen.getByText("AGENT_SESSION_PERSISTENCE_FAILED")).toBeTruthy()
     expect(window.localStorage.getItem("williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion")).toBeNull()
+  })
+
+  it.each([
+    ["dirty-conflict", true, false, "Codex saved src/app.ts, but Source has newer unsaved edits. Your buffer was preserved."],
+    ["failed refresh", false, true, "Codex saved src/app.ts, but Source or Changes could not refresh."],
+  ])("keeps the canonical persisted final visible with a separate %s warning", async (_case, makeDirty, failRefresh, warning) => {
+    const sessionId = `codex-persisted-${failRefresh ? "failed" : "dirty"}`
+    let sourceReads = 0
+    let diffReads = 0
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) {
+        sourceReads += 1
+        if (failRefresh && sourceReads > 1) return Promise.resolve(Response.json({ error: "read failed" }, { status: 500 }))
+        return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: sourceReads === 1 ? "export const version = 1\n" : "export const version = 2\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      }
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
+        diffReads += 1
+        return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: diffReads === 1 ? "" : "+export const version = 2" }))
+      }
+      if (url === "/api/loom/codex" && init?.method === "POST") return Promise.resolve(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "result", text: "The repository mutation committed." },
+        { type: "done", code: 0, reason: null },
+      ))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+    const source = await screen.findByLabelText("Source content") as HTMLTextAreaElement
+    if (makeDirty) fireEvent.change(source, { target: { value: "owner unsaved buffer\n" } })
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Update the selected file." } })
+    fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+
+    expect(await screen.findByText((content) => content.includes("The repository mutation committed.") && content.includes(warning))).toBeTruthy()
+    expect(diffReads).toBeGreaterThanOrEqual(2)
+    const stored = JSON.parse(String(window.localStorage.getItem("williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion")))
+    expect(stored.sessions[0].completedTurns.at(-1).finalResult).toBe("The repository mutation committed.")
   })
 
   it.each([
@@ -1211,14 +1258,15 @@ describe("Experience V2 real agent sessions", () => {
     })
   })
 
-  it("emits only bounded sanitized provider-neutral presentation and completes after persistence", async () => {
+  it("never forwards provider delta fragments and completes only with the canonical persisted result", async () => {
     const sessionId = "codex-presented-turn"
     const presentations: Array<Record<string, unknown>> = []
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
       { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
-      { type: "delta", text: JSON.stringify({ type: "system", prompt: "hidden" }) },
-      { type: "delta", text: "<thinking>private chain of thought</thinking>" },
-      { type: "delta", text: "Authorization: Bearer secret-token" },
+      { type: "delta", text: "Authoriz" },
+      { type: "delta", text: "ation: Bearer secret-token" },
+      { type: "delta", text: "<think" },
+      { type: "delta", text: "ing>private chain of thought</thinking>" },
       { type: "delta", text: "Inspecting the selected module." },
       { type: "result", text: "Implemented the bounded change." },
       { type: "done", code: 0, reason: null },
@@ -1234,12 +1282,13 @@ describe("Experience V2 real agent sessions", () => {
 
     expect(presentations).toEqual([
       { phase: "working", text: "Agent is working.", provider: "Codex", sessionId },
-      { phase: "live", text: "Inspecting the selected module.", provider: "Codex", sessionId },
       { phase: "complete", text: "Implemented the bounded change.", provider: "Codex", sessionId },
     ])
+    expect(JSON.stringify(presentations)).not.toContain("Authoriz")
     expect(JSON.stringify(presentations)).not.toContain("secret-token")
+    expect(JSON.stringify(presentations)).not.toContain("<think")
     expect(JSON.stringify(presentations)).not.toContain("private chain")
-    expect(JSON.stringify(presentations)).not.toContain('"type":"system"')
+    expect(JSON.stringify(presentations)).not.toContain("Inspecting the selected module.")
   })
 
   it("never labels a partial provider presentation complete when the turn fails", async () => {
@@ -1257,7 +1306,7 @@ describe("Experience V2 real agent sessions", () => {
       onPresentation: (presentation) => presentations.push({ ...presentation }),
     }))).rejects.toThrow("AGENT_TURN_FAILED:TIMEOUT")
 
-    expect(presentations.map((presentation) => presentation.phase)).toEqual(["working", "live"])
+    expect(presentations.map((presentation) => presentation.phase)).toEqual(["working"])
     expect(presentations).not.toContainEqual(expect.objectContaining({ phase: "complete" }))
   })
 

@@ -17,7 +17,7 @@ const MAX_PRESENTATION_BYTES = 4_096
 export type AgentProvider = "Codex" | "Claude" | "Local"
 
 export type AgentTurnPresentation = Readonly<{
-  phase: "working" | "live" | "complete"
+  phase: "working" | "complete"
   text: string
   provider: AgentProvider
   sessionId: string
@@ -799,10 +799,7 @@ export function useExperienceAgentSessions({
             ? boundedFragment(event.text, 20_000)
             : Boolean(boundedText(event.text, 20_000))
           if (!validDelta || canonicalResultSeen) malformed = true
-          else if (isCurrent()) {
-            present("live", event.text as string, accepted!.sessionId)
-            input.onEvent?.(event)
-          }
+          else if (isCurrent()) input.onEvent?.(event)
           return
         }
         if ((input.provider === "Codex" || input.provider === "Local") && event.type === "result") {
