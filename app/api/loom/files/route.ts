@@ -5,7 +5,7 @@ import { readBoundedJson } from "@/lib/environment/line-guard"
 import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
 import { writeManualOwnerWorkspaceFile } from "@/lib/loom/manual-owner-file-save"
-import { isIgnoredEntry, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { isIgnoredEntry, isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -25,6 +25,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url)
   const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, url.searchParams.get("path") ?? "", fs.realpath)
   if (!resolved.ok || !resolved.absolute) return refuse(resolved.refusal ?? "PATH_INVALID", 400)
+  if (isSensitiveWorkspacePath(resolved.relative ?? "")) return refuse("SENSITIVE_PATH", 403)
 
   let stats
   try {

@@ -402,7 +402,7 @@ describe("authenticated owner workspace writes", () => {
       content: "SECRET=after\n",
     }, root)
 
-    expect(result).toMatchObject({ ok: false, error: "FAILED_SCOPE_COLLISION", status: 409 })
+    expect(result).toMatchObject({ ok: false, error: "SENSITIVE_PATH", status: 403 })
     expect(await fs.readFile(target, "utf8")).toBe("SECRET=before\n")
   })
 
