@@ -173,6 +173,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const persistBarrierRef = useRef<() => Promise<void>>(async () => {})
   const judgmentRequestedRef = useRef<string | null>(null)
   const judgmentContextRef = useRef<string | null>(null)
+  const outcomeAssimilationRequestedRef = useRef(new Set<string>())
   stateRef.current = space
   spineRef.current = spine
   worldRef.current = worldId
@@ -390,6 +391,22 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    if (!hydrated || !worldId || storage !== "server" || outcomeAssimilationRequestedRef.current.has(worldId)) return
+    outcomeAssimilationRequestedRef.current.add(worldId)
+    // Assimilation is a silent prerequisite check, not a new authority workflow. The server may
+    // attach authority it already owns for this exact Space, but missing authority cannot make the
+    // rest of WilliamOS unusable or send the owner into Work Order/receipt administration.
+    void Promise.resolve()
+      .then(() => fetch("/api/environment/space/outcome", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worldId }),
+        cache: "no-store",
+      }))
+      .catch(() => undefined)
+  }, [hydrated, storage, worldId])
 
   const refreshWilliamJudgment = useCallback(async () => {
     const id = worldRef.current

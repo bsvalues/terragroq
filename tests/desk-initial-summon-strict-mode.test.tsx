@@ -35,6 +35,13 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
     const fetchStub = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === "/api/environment/space" && !init?.method) return reentry.promise
+      if (url === "/api/environment/space/outcome" && init?.method === "POST") {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          json: async () => ({ status: "MISSING_AUTHORITY" }),
+        })
+      }
       if (url === "/api/environment/line" && init?.method === "POST") return summon.promise
       if (url.startsWith("/api/loom/files")) {
         return Promise.resolve({ ok: true, status: 200, json: async () => ({ entries: [] }) })
@@ -84,6 +91,7 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
     })
 
     await waitFor(() => expect(screen.getByText("WO-STRICT-1")).toBeTruthy())
+    expect(fetchStub.mock.calls.filter(([input]) => String(input) === "/api/environment/space/outcome")).toHaveLength(1)
     expect(screen.getAllByText("WO-STRICT-1")).toHaveLength(1)
     expect(screen.getByRole("region", { name: "Source window" })).toBeTruthy()
     expect(screen.getByLabelText("Workspace project").textContent).toContain("terrafusion_os_1.0")
@@ -111,7 +119,7 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
       worldId: "browser-local",
       space: spaceToServer(restored),
     }))
-    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchStub = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === "/api/environment/space" && !init?.method) {
         return Promise.resolve({
@@ -138,7 +146,8 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
         })
       }
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
-    }))
+    })
+    vi.stubGlobal("fetch", fetchStub)
 
     render(<WorkspaceShell />)
 
@@ -147,6 +156,7 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
     expect(await screen.findByText("space saved locally")).toBeTruthy()
     expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(2)
     expect(screen.getAllByRole("tab", { name: "package.json" })).toHaveLength(2)
+    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/environment/space/outcome")).toBe(false)
   })
 
   it("does not restore browser fallback state from another signed-in user namespace", async () => {
