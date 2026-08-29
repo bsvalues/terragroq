@@ -22,6 +22,8 @@ const MAX_LOCAL_COMPLETED_TURNS = 20
 const MAX_LOCAL_REPLAY_BYTES = 262_144
 const MAX_LOCAL_RESULT_BYTES = 200_000
 const MAX_LOCAL_FRAME_BYTES = 262_144
+const MAX_FORK_PROMPT_CHARACTERS = 20_000
+const MAX_FORK_PROMPT_BYTES = 32_768
 
 type LocalCompletedTurn = Readonly<{
   ownerPrompt: string
@@ -171,6 +173,18 @@ export async function POST(request: Request) {
   let reviewFocus: string | null = null
   let prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
 
+  // A fork prompt becomes an argument to a workspace-writing Claude process. Validate it before
+  // consulting any thread or work-context authority so malformed input cannot exercise those seams.
+  if (forkMode) {
+    if (!prompt) return Response.json({ error: "FORK_PROMPT_REQUIRED" }, { status: 400 })
+    if (/[\u0000-\u001f\u007f]/.test(prompt)) {
+      return Response.json({ error: "FORK_PROMPT_INVALID" }, { status: 400 })
+    }
+    if (prompt.length > MAX_FORK_PROMPT_CHARACTERS || new TextEncoder().encode(prompt).byteLength > MAX_FORK_PROMPT_BYTES) {
+      return Response.json({ error: "FORK_PROMPT_TOO_LONG" }, { status: 400 })
+    }
+  }
+
   if (reviewMode) {
     if (typeof body.path === "string" && isSensitiveWorkspacePath(body.path)) {
       return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
@@ -283,6 +297,7 @@ export async function POST(request: Request) {
   // authority for it would make the receipt lie about what the turn can do. The local path above is
   // also deliberately ungated because it only produces text.
   let workContextReceipt: string | null = null
+  let resumeForkedFrom: string | null = null
   if (!reviewMode) {
     const context = await requireWorkContext()
     if (!context.ok) return workContextRefusal(context)
@@ -292,6 +307,15 @@ export async function POST(request: Request) {
     }
     if (forkMode && priorThread?.workContextReceipt !== workContextReceipt) {
       return Response.json({ error: "THREAD_CONTEXT_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
+    }
+    if (resuming && priorThread?.forkedFrom) {
+      if (!workContextReceipt || priorThread.provider !== "cloud" || priorThread.mode !== "agent" || priorThread.path !== null) {
+        return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
+      }
+      if (priorThread.workContextReceipt !== workContextReceipt) {
+        return Response.json({ error: "THREAD_CONTEXT_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
+      }
+      resumeForkedFrom = priorThread.forkedFrom
     }
   }
 
@@ -348,6 +372,7 @@ export async function POST(request: Request) {
               external: provider.external,
               ...(reviewMode ? { mode: "review", path: reviewPath } : {}),
               ...(forkMode ? { mode: "agent", forkedFrom: forkSourceId } : {}),
+              ...(!forkMode && resumeForkedFrom ? { mode: "agent", forkedFrom: resumeForkedFrom } : {}),
               code: event.code ?? null,
               reason: event.reason ?? null,
             },
@@ -365,7 +390,10 @@ export async function POST(request: Request) {
       }
 
       if (!forkMode) {
-        send({ type: "session", sessionId, resumed: resuming })
+        send({
+          type: "session", sessionId, resumed: resuming,
+          ...(resumeForkedFrom ? { provider: "Claude", mode: "delegate", forkedFrom: resumeForkedFrom } : {}),
+        })
         // An external turn is the case the doctrine cares most about: the receipt names the provider
         // and records that work left the machine.
         void recordLoomStart({
@@ -377,7 +405,11 @@ export async function POST(request: Request) {
             external: provider.external,
             metered: provider.metered,
             resumed: resuming,
-            ...(reviewMode ? { mode: "review", path: reviewPath, focus: reviewFocus } : { mode: "agent", ...(workContextReceipt ? { workContextReceipt } : {}) }),
+            ...(reviewMode ? { mode: "review", path: reviewPath, focus: reviewFocus } : {
+              mode: "agent",
+              ...(workContextReceipt ? { workContextReceipt } : {}),
+              ...(resumeForkedFrom ? { forkedFrom: resumeForkedFrom } : {}),
+            }),
           },
         })
       }

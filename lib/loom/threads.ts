@@ -20,7 +20,7 @@ export interface ThreadResumeVerdict {
 
 export interface LoomThreadDescriptor {
   owner: string
-  mode: "agent" | "review"
+  mode: "agent" | "review" | null
   path: string | null
   provider?: string
   workContextReceipt?: string
@@ -88,7 +88,7 @@ export async function loomThreadDescriptor(sessionId: string): Promise<LoomThrea
       && metadata.forkedFrom !== sessionId ? metadata.forkedFrom : null
     return {
       owner: row.userId,
-      mode: metadata?.mode === "review" ? "review" : "agent",
+      mode: metadata?.mode === "review" || metadata?.mode === "agent" ? metadata.mode : null,
       path: typeof metadata?.path === "string" ? metadata.path : null,
       ...(provider ? { provider } : {}),
       ...(workContextReceipt ? { workContextReceipt } : {}),

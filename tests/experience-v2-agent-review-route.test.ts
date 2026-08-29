@@ -422,6 +422,23 @@ describe("Claude Builder fork route", () => {
     }] })
   })
 
+  it.each([
+    ["empty", "   ", "FORK_PROMPT_REQUIRED"],
+    ["control characters", "Diverge.\u0007", "FORK_PROMPT_INVALID"],
+    ["too many characters", "x".repeat(20_001), "FORK_PROMPT_TOO_LONG"],
+    ["too many UTF-8 bytes", "😀".repeat(9_000), "FORK_PROMPT_TOO_LONG"],
+  ])("refuses a %s prompt before authority or thread lookup", async (_label, prompt, error) => {
+    const response = await POST(request({ mode: "fork", provider: "cloud", sourceSessionId: sourceId, prompt }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error })
+    expect(seams.requireWorkContext).not.toHaveBeenCalled()
+    expect(seams.poolQuery).not.toHaveBeenCalled()
+    expect(seams.spawn).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
+
   it("derives a distinct child from Claude's canonical init frame before exposing or recording it", async () => {
     const child = new FakeChild()
     seams.spawn.mockReturnValue(child)
@@ -472,6 +489,9 @@ describe("Claude Builder fork route", () => {
     ["foreign owner", { userId: "owner-2", metadata: { provider: "cloud", mode: "agent", workContextReceipt: currentReceipt } }, "THREAD_NOT_YOURS"],
     ["wrong provider", { userId: "owner-1", metadata: { provider: "local", mode: "agent", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
     ["review source", { userId: "owner-1", metadata: { provider: "cloud", mode: "review", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["missing recorded mode", { userId: "owner-1", metadata: { provider: "cloud", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["unknown recorded mode", { userId: "owner-1", metadata: { provider: "cloud", mode: "builder", workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["malformed recorded mode", { userId: "owner-1", metadata: { provider: "cloud", mode: 7, workContextReceipt: currentReceipt } }, "THREAD_DESCRIPTOR_MISMATCH"],
     ["stale context", { userId: "owner-1", metadata: { provider: "cloud", mode: "agent", workContextReceipt: "old" } }, "THREAD_CONTEXT_MISMATCH"],
   ])("refuses a %s before spawning", async (_label, row, error) => {
     seams.poolQuery.mockResolvedValueOnce({ rows: [row] })
@@ -509,6 +529,62 @@ describe("Claude Builder fork route", () => {
     expect(events).toEqual([{ type: "done", reason: "CANCELLED", code: null }])
     expect(seams.recordLoomStart).not.toHaveBeenCalled()
     expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
+
+  it("carries receipt-bound fork lineage through a normal child resume", async () => {
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{
+      userId: "owner-1",
+      metadata: { provider: "cloud", mode: "agent", path: null, workContextReceipt: currentReceipt, forkedFrom: sourceId },
+    }] })
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request({
+      provider: "cloud", prompt: "Continue the child.", sessionId: childId, resume: true,
+    }))
+
+    expect(response.status).toBe(200)
+    expect(seams.spawn.mock.calls[0][1]).toContain("--resume")
+    child.emit("close", 0)
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events[0]).toEqual({
+      type: "session", sessionId: childId, provider: "Claude", mode: "delegate",
+      resumed: true, forkedFrom: sourceId,
+    })
+    expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
+      subject: childId,
+      metadata: expect.objectContaining({ workContextReceipt: currentReceipt, forkedFrom: sourceId }),
+    }))
+  })
+
+  it.each([
+    ["wrong provider", { provider: "local", mode: "agent", path: null, workContextReceipt: currentReceipt }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["missing exact mode", { provider: "cloud", path: null, workContextReceipt: currentReceipt }, "THREAD_DESCRIPTOR_MISMATCH"],
+    ["stale work context", { provider: "cloud", mode: "agent", path: null, workContextReceipt: "stale" }, "THREAD_CONTEXT_MISMATCH"],
+  ])("refuses normal child lineage with %s instead of replaying browser authority", async (_label, metadata, error) => {
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: { ...metadata, forkedFrom: sourceId } }] })
+    const response = await POST(request({
+      provider: "cloud", prompt: "Continue the child.", sessionId: childId, resume: true,
+    }))
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toMatchObject({ error })
+    expect(seams.spawn).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+  })
+
+  it("keeps a legacy owner-owned generic Claude resume compatible without inventing lineage", async () => {
+    seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: null }] })
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request({
+      provider: "cloud", prompt: "Continue legacy work.", sessionId: childId, resume: true,
+    }))
+
+    expect(response.status).toBe(200)
+    child.emit("close", 0)
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events[0]).toEqual({ type: "session", sessionId: childId, resumed: true })
+    expect(events[0]).not.toHaveProperty("forkedFrom")
   })
 })
 
@@ -549,11 +625,11 @@ describe("durable workroom thread descriptors", () => {
     })
   })
 
-  it("keeps legacy generic sessions owner-readable while classifying them as builders", async () => {
+  it("keeps legacy generic sessions owner-readable without manufacturing a recorded mode", async () => {
     seams.poolQuery.mockResolvedValueOnce({ rows: [{ userId: "owner-1", metadata: null }] })
     await expect(loomThreadDescriptor("123e4567-e89b-42d3-a456-426614174000")).resolves.toEqual({
       owner: "owner-1",
-      mode: "agent",
+      mode: null,
       path: null,
     })
 

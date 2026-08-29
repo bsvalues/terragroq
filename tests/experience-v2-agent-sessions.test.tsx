@@ -99,7 +99,7 @@ describe("Experience V2 real agent sessions", () => {
         { type: "done", reason: null, code: 0 },
       ))
       .mockResolvedValueOnce(ndjson(
-        { type: "session", sessionId: childId, resumed: true },
+        { type: "session", sessionId: childId, provider: "Claude", mode: "delegate", resumed: true, forkedFrom: sourceId },
         { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: childId, result: "Child continued" } },
         { type: "done", reason: null, code: 0 },
       ))
@@ -139,6 +139,49 @@ describe("Experience V2 real agent sessions", () => {
     expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toMatchObject({
       provider: "cloud", sessionId: childId, resume: true, prompt: "Continue the child.",
     })
+    const afterResume = JSON.parse(String(window.localStorage.getItem(key)))
+    expect(afterResume.sessions.find((session: { sessionId: string }) => session.sessionId === childId)).toMatchObject({
+      forkedFrom: sourceId,
+      completedTurns: [
+        { ownerPrompt: "Try the smaller alternative.", finalResult: "Fork result" },
+        { ownerPrompt: "Continue the child.", finalResult: "Child continued" },
+      ],
+    })
+
+    cleanup()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: `Claude:${childId}`, truth: "resume-unverified", forkedFrom: sourceId }),
+    ])))
+  })
+
+  it("rejects malformed server lineage instead of trusting the restored browser hint", async () => {
+    const sourceId = "123e4567-e89b-42d3-a456-426614174000"
+    const childId = "223e4567-e89b-42d3-a456-426614174000"
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${childId}`,
+      sessions: [{
+        schemaVersion: 1, sessionId: childId, role: "Builder", provider: "Claude",
+        assignment: "Forked approach", forkedFrom: sourceId,
+        updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [],
+      }],
+    }))
+    const before = window.localStorage.getItem(key)
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId: childId, provider: "Claude", mode: "delegate", resumed: true, forkedFrom: childId },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: childId, result: "Should not persist" } },
+      { type: "done", reason: null, code: 0 },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
+
+    await expect(act(async () => expose!.runAgentTurn({
+      provider: "Claude", role: "Builder", assignment: "Forked approach", prompt: "Continue child.",
+    }))).rejects.toThrow("AGENT_STREAM_INVALID")
+    expect(window.localStorage.getItem(key)).toBe(before)
   })
 
   it("refuses to fork an unverified restored Claude hint without touching transport or persistence", async () => {

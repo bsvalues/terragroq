@@ -677,6 +677,11 @@ export function useExperienceAgentSessions({
           const unexpectedReuse = !prior && typeof event.sessionId === "string"
             && sessionsRef.current.some((session) => session.provider === input.provider && session.sessionId === event.sessionId)
           const forkTruth = !forkMode || event.forkedFrom === forkSource?.sessionId
+          const resumeForkedFrom = !forkMode && input.provider === "Claude" && prior && event.forkedFrom !== undefined
+            && event.provider === "Claude" && event.mode === "delegate"
+            && typeof event.forkedFrom === "string" && CLAUDE_SESSION_ID.test(event.forkedFrom)
+            && event.forkedFrom !== event.sessionId ? event.forkedFrom : null
+          const invalidResumeForkLineage = !forkMode && event.forkedFrom !== undefined && !resumeForkedFrom
           const capturedTarget = input.provider === "Codex" ? requestedTarget ?? prior?.target ?? null : null
           const serverSelectedPath = input.provider === "Codex" && capturedTarget
             ? canonicalWorkspaceFilePath(event.selectedPath)
@@ -687,7 +692,7 @@ export function useExperienceAgentSessions({
             && (serverSelectedPath !== capturedTarget.path || !serverAssignmentHash))
           if (!sessionIdValid || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed
             || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth || !localTruth
-            || !forkTruth || invalidTargetBinding) {
+            || !forkTruth || invalidResumeForkLineage || invalidTargetBinding) {
             if (invalidTargetBinding) targetBindingInvalid = true
             malformed = true
             return
@@ -702,6 +707,7 @@ export function useExperienceAgentSessions({
             ...(capturedTarget ? { target: { kind: "file" as const, path: serverSelectedPath! } } : {}),
             ...(mode === "review" ? { reviewPath: reviewPath! } : {}),
             ...(forkMode ? { forkedFrom: forkSource!.sessionId } : {}),
+            ...(resumeForkedFrom ? { forkedFrom: resumeForkedFrom } : {}),
             updatedAt: new Date().toISOString(),
           }
           if (isCurrent()) {
