@@ -170,6 +170,7 @@ type ActiveAgentOperation = {
   accepted: DurableAgentSession | null
   acceptedKey: string | null
   presentation: string
+  selectionGeneration: number
 }
 
 class AgentStartRefusal extends Error {
@@ -385,6 +386,7 @@ function persistForkCollection(
   sessions: readonly DurableAgentSession[],
   sourceKey: string,
   child: DurableAgentSession,
+  selectedSessionKey: string | null,
 ): DurableAgentSessionCollection {
   const childKey = sessionKey(child.provider, child.sessionId)
   let retained = sessions.filter((session) => sessionKey(session.provider, session.sessionId) !== childKey)
@@ -393,10 +395,13 @@ function persistForkCollection(
     if (removable < 0) throw new Error("AGENT_SESSION_COLLECTION_TOO_LARGE")
     retained = retained.filter((_, index) => index !== removable)
   }
+  const nextSessions = [...retained, child]
   const collection: DurableAgentSessionCollection = {
     schemaVersion: 3,
-    selectedSessionKey: childKey,
-    sessions: [...retained, child],
+    selectedSessionKey: nextSessions.some((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKey)
+      ? selectedSessionKey
+      : null,
+    sessions: nextSessions,
   }
   if (new TextEncoder().encode(JSON.stringify(collection)).byteLength > MAX_COLLECTION_BYTES) {
     throw new Error("AGENT_SESSION_COLLECTION_TOO_LARGE")
@@ -503,6 +508,7 @@ export function useExperienceAgentSessions({
   const selectedSessionKeyRef = useRef<string | null>(null)
   const verifiedSessionsRef = useRef<readonly DurableAgentSession[]>([])
   const operationEpoch = useRef(0)
+  const selectionGenerationRef = useRef(0)
   const operationsRef = useRef(new Map<number, ActiveAgentOperation>())
 
   const syncActiveTurns = useCallback(() => {
@@ -596,6 +602,9 @@ export function useExperienceAgentSessions({
     if (selectedKey !== null && !selected) {
       const active = [...operationsRef.current.values()].find((operation) => operation.acceptedKey === selectedKey)
       if (!active?.accepted) return false
+      selectionGenerationRef.current += 1
+      selectedSessionKeyRef.current = selectedKey
+      setSelectedSessionKey(selectedKey)
       setDurableSession(active.accepted)
       return true
     }
@@ -609,6 +618,7 @@ export function useExperienceAgentSessions({
       return false
     }
     sessionsRef.current = persisted.sessions
+    selectionGenerationRef.current += 1
     selectedSessionKeyRef.current = persisted.selectedSessionKey
     setSavedSessions(persisted.sessions)
     setSelectedSessionKey(persisted.selectedSessionKey)
@@ -680,6 +690,7 @@ export function useExperienceAgentSessions({
       accepted: null,
       acceptedKey: null,
       presentation: "Agent is starting.",
+      selectionGeneration: selectionGenerationRef.current,
     }
     operationEpoch.current = operation.epoch
     operationsRef.current.set(operation.epoch, operation)
@@ -824,6 +835,8 @@ export function useExperienceAgentSessions({
             const acceptedSessionKey = sessionKey(input.provider, event.sessionId as string)
             operation.accepted = accepted
             operation.acceptedKey = acceptedSessionKey
+            operation.presentation = "Agent is working."
+            syncActiveTurns()
             present("working", "Agent is working.", event.sessionId as string)
             input.onEvent?.(event)
           }
@@ -915,24 +928,37 @@ export function useExperienceAgentSessions({
         }].slice(-MAX_COMPLETED_TURNS),
       }
       const settledKey = sessionKey(settledSession.provider, settledSession.sessionId)
+      const sessionsWithSettlement = upsertSession(sessionsRef.current, settledSession)
+      const runtimeSelectedKey = selectedSessionKeyRef.current
+      const shouldSelectSettlement = selectionGenerationRef.current === operation.selectionGeneration
+        || runtimeSelectedKey === settledKey
+      const nextSelectedKey = shouldSelectSettlement ? settledKey : runtimeSelectedKey
+      const persistedSelectedKey = sessionsWithSettlement.some((session) => sessionKey(session.provider, session.sessionId) === nextSelectedKey)
+        ? nextSelectedKey
+        : null
       let persisted: DurableAgentSessionCollection
       try {
         persisted = forkMode
-          ? persistForkCollection(operationStorageKey, sessionsRef.current, sessionKey(forkSource!.provider, forkSource!.sessionId), settledSession)
-          : persistCollection(operationStorageKey, upsertSession(sessionsRef.current, settledSession), settledKey, { sessionKey: settledKey, completedAt })
+          ? persistForkCollection(operationStorageKey, sessionsRef.current, sessionKey(forkSource!.provider, forkSource!.sessionId), settledSession, persistedSelectedKey)
+          : persistCollection(operationStorageKey, sessionsWithSettlement, persistedSelectedKey, { sessionKey: settledKey, completedAt })
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED"
         throw new AgentTurnCommittedPersistenceError(message)
       }
       sessionsRef.current = persisted.sessions
-      selectedSessionKeyRef.current = persisted.selectedSessionKey
+      selectedSessionKeyRef.current = nextSelectedKey
       setSavedSessions(persisted.sessions)
-      setSelectedSessionKey(persisted.selectedSessionKey)
+      setSelectedSessionKey(nextSelectedKey)
       const persistedSession = persisted.sessions.find((session) => sessionKey(session.provider, session.sessionId) === settledKey)!
       const nextVerified = upsertSession(verifiedSessionsRef.current, persistedSession)
       verifiedSessionsRef.current = nextVerified
       setVerifiedSessions(nextVerified)
-      setDurableSession(persistedSession)
+      const selectedActive = [...operationsRef.current.values()].find((candidate) => candidate.acceptedKey === nextSelectedKey)?.accepted ?? null
+      const selectedPersisted = persisted.sessions.find((session) => sessionKey(session.provider, session.sessionId) === nextSelectedKey) ?? null
+      const selectedPersistedVerified = selectedPersisted && nextVerified.some((session) => sessionKey(session.provider, session.sessionId) === nextSelectedKey)
+        ? selectedPersisted
+        : null
+      setDurableSession(selectedPersistedVerified ?? selectedActive)
       present("complete", persistedSession.completedTurns?.at(-1)?.finalResult ?? resultText, persistedSession.sessionId)
       if (mode === "review" && isCurrent()) input.onReviewComplete?.(resultText)
       return persistedSession

@@ -149,7 +149,13 @@ describe("Experience V2 real agent sessions", () => {
     act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
     await waitFor(() => expect(streams.has("Review")).toBe(true))
     act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
-    await waitFor(() => expect(expose!.activeSessionIds).toHaveLength(2))
+    await waitFor(() => expect(expose!.activeSessionIds).toEqual([
+      "Codex:codex-stop-isolation",
+      `Claude:${reviewId}`,
+    ]))
+    expect(expose!.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: `Claude:${reviewId}`, role: "Reviewer", status: "working", truth: "live" }),
+    ]))
 
     act(() => expose!.stop(`Claude:${reviewId}`))
     await expect(review).rejects.toMatchObject({ name: "AbortError" })
@@ -165,6 +171,64 @@ describe("Experience V2 real agent sessions", () => {
     expect(expose!.savedSessions).toEqual([
       expect.objectContaining({ provider: "Codex", completedTurns: [expect.objectContaining({ finalResult: "Writer continued safely." })] }),
     ])
+  })
+
+  it("keeps a newer exact active-session selection when another turn settles out of order and redirects it", async () => {
+    const encoder = new TextEncoder()
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = []
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({ start(controller) { streams.push(controller) } })))
+    }))
+    render(<Harness />)
+
+    let writer!: Promise<unknown>
+    act(() => { writer = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Build." }) })
+    await waitFor(() => expect(streams).toHaveLength(1))
+    act(() => streams[0]!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-selection-cas", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
+
+    const reviewId = "623e4567-e89b-42d3-a456-426614174000"
+    let review!: Promise<unknown>
+    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
+    await waitFor(() => expect(streams).toHaveLength(2))
+    act(() => streams[1]!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toContain(`Claude:${reviewId}`))
+
+    act(() => expect(expose!.selectSession(`Claude:${reviewId}`)).toBe(true))
+    expect(expose!.selectedSessionKey).toBe(`Claude:${reviewId}`)
+    expect(expose!.durableSession).toMatchObject({ provider: "Claude", sessionId: reviewId, role: "Reviewer" })
+
+    act(() => {
+      streams[0]!.enqueue(encoder.encode(`${JSON.stringify({ type: "result", text: "Writer settled while Reviewer stayed focused." })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      streams[0]!.close()
+    })
+    await act(async () => { await writer })
+    expect(expose!.selectedSessionKey).toBe(`Claude:${reviewId}`)
+    expect(expose!.durableSession).toMatchObject({ provider: "Claude", sessionId: reviewId, role: "Reviewer" })
+
+    act(() => {
+      streams[1]!.enqueue(encoder.encode(`${JSON.stringify({ type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: reviewId, result: "Reviewer settled last." } })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      streams[1]!.close()
+    })
+    await act(async () => { await review })
+    expect(expose!.selectedSessionKey).toBe(`Claude:${reviewId}`)
+    expect(expose!.savedSessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: "Codex", completedTurns: [expect.objectContaining({ finalResult: "Writer settled while Reviewer stayed focused." })] }),
+      expect.objectContaining({ provider: "Claude", sessionId: reviewId, completedTurns: [expect.objectContaining({ finalResult: "Reviewer settled last." })] }),
+    ]))
+
+    let redirect!: Promise<unknown>
+    act(() => { redirect = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", focus: "Redirect exactly." }) })
+    await waitFor(() => expect(streams).toHaveLength(3))
+    expect(requests[2]).toMatchObject({
+      url: "/api/loom/agent",
+      body: { mode: "review", sessionId: reviewId, resume: true, path: "src/app.ts", focus: "Redirect exactly." },
+    })
+    const redirectTurnId = expose!.activeTurns.find((turn) => turn.provider === "Claude" && turn.role === "Reviewer")?.id
+    expect(redirectTurnId).toMatch(/^starting-claude-/)
+    act(() => expose!.stop(redirectTurnId))
+    await expect(redirect).rejects.toMatchObject({ name: "AbortError" })
   })
 
   it("isolates a provider outage while another exact session continues and settles", async () => {
