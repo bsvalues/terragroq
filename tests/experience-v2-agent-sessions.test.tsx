@@ -605,6 +605,91 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByText("src/other.ts")).toBeTruthy()
   })
 
+  it("pauses only the exact selected running session without persisting a partial turn or leaving an agent Line open", async () => {
+    const sessionId = "codex-pause-session"
+    const key = "williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion"
+    const priorTurn = {
+      ownerPrompt: "Implement the prior bounded change.",
+      finalResult: "Prior canonical result.",
+      completedAt: "2026-08-28T12:00:00.000Z",
+    }
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:${sessionId}`,
+      sessions: [{
+        schemaVersion: 1, sessionId, role: "Builder", provider: "Codex", assignment: "General project work",
+        updatedAt: priorTurn.completedAt, completedTurns: [priorTurn],
+      }],
+    }))
+    const encoder = new TextEncoder()
+    let cancelled = false
+    let requestSignal: AbortSignal | undefined
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+    const agentResponse = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller
+      },
+      cancel() { cancelled = true },
+    }))
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/diff?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/other.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/codex" && init?.method === "POST") {
+        requestSignal = init.signal ?? undefined
+        return Promise.resolve(agentResponse)
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await screen.findByLabelText("Source content")
+    fireEvent.click(await screen.findByRole("button", { name: /Builder · Codex · General project work/ }))
+    const idlePause = screen.getByRole("button", { name: "Pause unavailable" }) as HTMLButtonElement
+    expect(idlePause.disabled).toBe(true)
+    expect(idlePause.title).toBe("Only the selected running session can be paused.")
+
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Continue the bounded work." } })
+    fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+    await screen.findByRole("button", { name: "Stop Codex turn" })
+    const preSessionPause = screen.getByRole("button", { name: "Pause unavailable" }) as HTMLButtonElement
+    expect(preSessionPause.disabled).toBe(true)
+    fireEvent.click(preSessionPause)
+    expect(cancelled).toBe(false)
+    expect(requestSignal?.aborted).toBe(false)
+
+    act(() => {
+      streamController!.enqueue(encoder.encode(`${JSON.stringify({
+        type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true,
+        selectedPath: "src/app.ts", assignmentHash: "a".repeat(64),
+      })}\n`))
+      streamController!.enqueue(encoder.encode(`${JSON.stringify({ type: "delta", text: "Partial work that must not persist." })}\n`))
+    })
+    const pause = await screen.findByRole("button", { name: "Pause" })
+    fireEvent.click(pause)
+
+    await waitFor(() => expect(cancelled).toBe(true))
+    expect(requestSignal?.aborted).toBe(true)
+    await waitFor(() => expect(screen.queryByRole("form", { name: "The Line" })).toBeNull())
+    expect(screen.queryByRole("button", { name: "Stop Codex turn" })).toBeNull()
+    expect((screen.getByRole("button", { name: "Pause unavailable" }) as HTMLButtonElement).disabled).toBe(true)
+    const stored = JSON.parse(String(window.localStorage.getItem(key)))
+    expect(stored.selectedSessionKey).toBe(`Codex:${sessionId}`)
+    expect(stored.sessions).toHaveLength(1)
+    expect(stored.sessions[0].completedTurns).toEqual([priorTurn])
+    expect(stored.sessions[0].completedTurns).not.toContainEqual(expect.objectContaining({ finalResult: expect.stringContaining("Partial work") }))
+    expect(screen.getByRole("button", { name: /Builder · Codex · General project work/ })).toBeTruthy()
+  })
+
   it("refreshes the exact promoted file and diff after a successful Codex delegation", async () => {
     const sessionId = "323e4567-e89b-42d3-a456-426614174000"
     let sourceReads = 0

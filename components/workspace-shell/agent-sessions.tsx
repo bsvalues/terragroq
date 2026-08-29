@@ -90,6 +90,7 @@ export type ExperienceAgentSessionController = Readonly<{
   selectedSessionKey: string | null
   descriptorState: "none" | "unverified" | "verified"
   activeSessionId: string | null
+  pausableSessionId: string | null
   error: string | null
   runClaudeTurn: (input: RunClaudeTurnInput) => Promise<DurableClaudeSession>
   selectSession: (sessionId: string | null) => boolean
@@ -383,6 +384,7 @@ export function useExperienceAgentSessions({
   const [verifiedSessions, setVerifiedSessions] = useState<readonly DurableAgentSession[]>([])
   const [durableSession, setDurableSession] = useState<DurableAgentSession | null>(null)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [pausableSessionId, setPausableSessionId] = useState<string | null>(null)
   const [activeProvider, setActiveProvider] = useState<AgentProvider | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loadedStorageKey, setLoadedStorageKey] = useState<string | null>(null)
@@ -415,6 +417,7 @@ export function useExperienceAgentSessions({
     void operation.reader?.cancel()
     operation.abort.abort()
     setActiveSessionId(null)
+    setPausableSessionId(null)
     setActiveProvider(null)
   }, [])
 
@@ -529,6 +532,7 @@ export function useExperienceAgentSessions({
     // A restored descriptor remains a non-live resume hint while the server verifies it. Unrelated
     // sessions are never removed merely because another turn starts.
     setActiveSessionId(prior ? sessionKey(prior.provider, prior.sessionId) : `starting-${input.provider.toLowerCase()}-session`)
+    setPausableSessionId(null)
     setActiveProvider(input.provider)
     // A running or failed turn is not a ready session. Re-earn the live projection at successful
     // completion, including when a previously verified descriptor is being resumed.
@@ -641,7 +645,9 @@ export function useExperienceAgentSessions({
             updatedAt: new Date().toISOString(),
           }
           if (isCurrent()) {
-            setActiveSessionId(sessionKey(input.provider, event.sessionId as string))
+            const acceptedSessionKey = sessionKey(input.provider, event.sessionId as string)
+            setActiveSessionId(acceptedSessionKey)
+            setPausableSessionId(acceptedSessionKey)
             input.onEvent?.(event)
           }
           return
@@ -801,6 +807,7 @@ export function useExperienceAgentSessions({
         operation.reader = null
         operationRef.current = null
         setActiveSessionId(null)
+        setPausableSessionId(null)
         setActiveProvider(null)
       }
     }
@@ -814,6 +821,7 @@ export function useExperienceAgentSessions({
   const presentedSavedSessions = scopeLoaded ? savedSessions : []
   const presentedVerifiedSessions = scopeLoaded ? verifiedSessions : []
   const presentedActiveSessionId = scopeLoaded ? activeSessionId : null
+  const presentedPausableSessionId = scopeLoaded ? pausableSessionId : null
   const sessions = useMemo(
     () => scopeLoaded ? projectSessions(worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveSessionId) : [],
     [scopeLoaded, worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveSessionId],
@@ -830,6 +838,7 @@ export function useExperienceAgentSessions({
     selectedSessionKey: presentedSelectedSessionKey,
     descriptorState,
     activeSessionId: presentedActiveSessionId,
+    pausableSessionId: presentedPausableSessionId,
     activeProvider: scopeLoaded ? activeProvider : null,
     error,
     runAgentTurn,
