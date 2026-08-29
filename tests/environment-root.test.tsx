@@ -57,11 +57,13 @@ describe("the replacement root refuses the legacy product model", () => {
     }
   })
 
-  it("summons exactly one universal conversational input", () => {
+  it("keeps William present while The Line remains a separate transient input", () => {
     render(<Desk />)
-    expect(screen.queryByRole("textbox")).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: /Line/ }))
     expect(screen.getAllByRole("textbox")).toHaveLength(1)
+    expect(screen.getByRole("textbox", { name: "Message William" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: /Line/ }))
+    expect(screen.getAllByRole("textbox")).toHaveLength(2)
+    expect(screen.getByRole("textbox", { name: "The Line" })).toBeTruthy()
   })
 
   it("starts in a useful Space without project-selection ceremony", () => {

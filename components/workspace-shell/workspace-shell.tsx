@@ -1273,18 +1273,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     openLine(`Council recommendation · ${action.replaceAll("-", " ")} · ${session.recommendation}\nOwner direction: `)
   }
 
-  function inspectWilliamJudgment() {
-    if (persistenceError) {
-      openLine(`Inspect Space persistence error (${persistenceError}): `)
-    } else if (!space.runningAppUrl) {
-      activate("running-app")
-    } else if (space.selectedPath) {
-      activate("editor")
-    } else {
-      openLine(`Inspect William's recommendation for ${selectedLabel}: `)
-    }
-  }
-
   const toolRunHistoryScope = storage === "server" && worldId
     ? `server:${worldId}`
     : storage === "browser" && browserStorageKeyRef.current

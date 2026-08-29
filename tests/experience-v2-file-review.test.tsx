@@ -236,7 +236,7 @@ describe("Experience V2 selected-file Review", () => {
     fireEvent.click(screen.getByRole("button", { name: "Change" }))
     expect((screen.getByRole("button", { name: "Start change" }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
-    fireEvent.click(screen.getByRole("button", { name: "The Line · Ctrl+K" }))
+    fireEvent.click(screen.getByRole("button", { name: /The Line/ }))
     expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
     fireEvent.click(screen.getByRole("button", { name: "Review" }))
