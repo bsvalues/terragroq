@@ -139,4 +139,25 @@ describe("WilliamOS assignment delivery seal issuance", () => {
       }),
     }))).rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
   })
+
+  it("fails closed when authority drifts after Git inspection but before the atomic seal insert", async () => {
+    const order: string[] = []
+    await expect(issueLoomCodexDeliverySeal({
+      userId: "owner-1", threadId: "thread-1", assignmentHash: "a".repeat(64), commitSha: "2".repeat(40),
+    }, dependencies({
+      inspectDelivery: vi.fn().mockImplementation(async () => {
+        order.push("git-inspected")
+        return {
+          repository: "https://github.com/bsvalues/terragroq",
+          baseSha: "1".repeat(40), commitSha: "2".repeat(40), paths: ["lib/governance/owner.ts"],
+          patchDigest: "f".repeat(64), contentDigest: "9".repeat(64),
+        }
+      }),
+      recordSeal: vi.fn().mockImplementation(async () => {
+        order.push("final-authority-fence")
+        throw new DeliverySealError("DELIVERY_SEAL_ASSIGNMENT_STALE", "reservation changed before insert")
+      }),
+    }))).rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
+    expect(order).toEqual(["git-inspected", "final-authority-fence"])
+  })
 })

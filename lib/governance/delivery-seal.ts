@@ -21,6 +21,7 @@ export type WilliamOSDeliverySealPayload = Readonly<{
     assignmentHash: string
     owner: string
     worldId: string
+    spaceRevision: number
     outcome: Readonly<{ id: number; key: string; version: number }>
     workOrder: Readonly<{ id: number; ref: string | null; version: string }>
     grant: Readonly<{ id: number; ref: string | null; version: string }>
@@ -256,6 +257,7 @@ export async function issueLoomCodexDeliverySeal(
       assignmentHash: assignment.assignmentHash,
       owner: assignment.owner,
       worldId: assignment.worldId,
+      spaceRevision: assignment.spaceRevision,
       outcome: assignment.outcome,
       workOrder: assignment.workOrder,
       grant: assignment.grant,
@@ -271,7 +273,8 @@ export async function issueLoomCodexDeliverySeal(
   }
   try {
     await dependencies.recordSeal(input.userId, input.threadId, persisted.eventId, ready.eventId, seal)
-  } catch {
+  } catch (error) {
+    if (error instanceof DeliverySealError) throw error
     fail("DELIVERY_SEAL_NOT_DURABLE", "the signed delivery seal could not be recorded durably")
   }
   return seal
