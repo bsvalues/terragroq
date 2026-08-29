@@ -624,13 +624,10 @@ describe("Experience V2 real agent sessions", () => {
     const encoder = new TextEncoder()
     let cancelled = false
     let requestSignal: AbortSignal | undefined
+    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
     const agentResponse = new Response(new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(encoder.encode(`${JSON.stringify({
-          type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true,
-          selectedPath: "src/app.ts", assignmentHash: "a".repeat(64),
-        })}\n`))
-        controller.enqueue(encoder.encode(`${JSON.stringify({ type: "delta", text: "Partial work that must not persist." })}\n`))
+        streamController = controller
       },
       cancel() { cancelled = true },
     }))
@@ -663,6 +660,20 @@ describe("Experience V2 real agent sessions", () => {
 
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Continue the bounded work." } })
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+    await screen.findByRole("button", { name: "Stop Codex turn" })
+    const preSessionPause = screen.getByRole("button", { name: "Pause unavailable" }) as HTMLButtonElement
+    expect(preSessionPause.disabled).toBe(true)
+    fireEvent.click(preSessionPause)
+    expect(cancelled).toBe(false)
+    expect(requestSignal?.aborted).toBe(false)
+
+    act(() => {
+      streamController!.enqueue(encoder.encode(`${JSON.stringify({
+        type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true,
+        selectedPath: "src/app.ts", assignmentHash: "a".repeat(64),
+      })}\n`))
+      streamController!.enqueue(encoder.encode(`${JSON.stringify({ type: "delta", text: "Partial work that must not persist." })}\n`))
+    })
     const pause = await screen.findByRole("button", { name: "Pause" })
     fireEvent.click(pause)
 

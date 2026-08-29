@@ -1063,7 +1063,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "diff" ? "changes"
     : selectedKind === "agent" ? "agent session"
     : "Space"
-  const pauseAction = agentSessions.activeSessionId === selectedAgent?.id ? "Pause" : "Pause unavailable"
+  const pauseAction = agentSessions.pausableSessionId === selectedAgent?.id ? "Pause" : "Pause unavailable"
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge"] as const
@@ -1266,7 +1266,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   function openObjectAction(action: string) {
     if (action === "Pause") {
-      if (selectedAgent?.kind !== "durable-session" || agentSessions.activeSessionId !== selectedAgent.id) return
+      if (selectedAgent?.kind !== "durable-session" || agentSessions.pausableSessionId !== selectedAgent.id) return
       agentSessions.stop()
       if (lineTarget === "agent") {
         setLineOpen(false)

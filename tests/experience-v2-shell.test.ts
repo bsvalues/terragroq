@@ -31,7 +31,7 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(source).toContain('["Ask", "Change", "Delegate", "Review"] as const')
     expect(source).toContain('["Inspect", "Debug", "Explain", "Delegate"] as const')
     expect(source).toContain('["Review", "Improve", "Challenge", "Merge"] as const')
-    expect(source).toContain('agentSessions.activeSessionId === selectedAgent?.id ? "Pause" : "Pause unavailable"')
+    expect(source).toContain('agentSessions.pausableSessionId === selectedAgent?.id ? "Pause" : "Pause unavailable"')
     expect(source).toContain('["Talk", "Redirect", pauseAction, "Fork", selectedAgent?.target ? "Review work" : "Review work unavailable"] as const')
     expect(source).toContain('disabled={action === "Review work unavailable" || action === "Pause unavailable"}')
     expect(source).toContain('action === "Pause unavailable"')
