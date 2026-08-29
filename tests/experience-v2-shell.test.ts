@@ -67,16 +67,18 @@ describe("WilliamOS Experience V2 shell", () => {
 
   it("keeps William's judgment visible and actionable", () => {
     const source = shell()
+    const rail = read("components/workspace-shell/william-conversation-rail.tsx")
     expect(source).toContain("williamJudgment")
     expect(source).toContain("/api/environment/judgment")
     expect(source).toContain("payload.judgment")
     expect(source).toContain("await persistBarrierRef.current()")
     expect(source).toContain("judgmentContextKey")
     expect(source).toContain("setJudgment(null)")
-    expect(source).toContain('aria-label="William intelligence presence"')
-    expect(source).toContain("Inspect")
-    expect(source).toContain("Override")
-    expect(source).toContain("Ask Council")
+    expect(source).toContain("WilliamConversationRail")
+    expect(rail).toContain('aria-label="William conversation"')
+    expect(rail).toContain('aria-label="William judgment"')
+    expect(rail).toContain("Think again")
+    expect(rail).toContain("Ask Council")
   })
 
   it("keeps Council advisory and Mission Control spatial", () => {

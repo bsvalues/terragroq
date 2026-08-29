@@ -14,8 +14,9 @@ import { AgentSessionStrip, AgentTurnCommittedPersistenceError, useExperienceAge
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
+import { WilliamConversationRail, type WilliamConversationEntry } from "./william-conversation-rail"
 import { WindowFrame } from "./window-frame"
-import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type SpaceSummary, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
+import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type SpaceSummary, type WilliamConversationTurn, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
 import bridge from "./experience-token-bridge.module.css"
 import spatial from "./experience-spatial.module.css"
 
@@ -25,12 +26,6 @@ type LineReply = Readonly<{
   surfaces?: readonly Omit<InspectorSurface, "id">[]
   dismiss?: "all" | string
   spine?: WorldSpine
-}>
-
-type ConversationEntry = Readonly<{
-  id: number
-  role: "owner" | "williamos"
-  text: string
 }>
 
 type PersistJob = Readonly<{ worldId: string; revision: number; body: string; storage: SpaceStorage; browserKey: string | null; epoch: number; keepalive: boolean }>
@@ -74,17 +69,21 @@ function williamJudgmentContextKey(space: WorkspaceSpace, spine: WorldSpine): st
   })
 }
 
-function agentReplyText(payload: Readonly<Record<string, unknown>>): readonly string[] {
-  if ((payload.type === "delta" || payload.type === "result") && typeof payload.text === "string") return [payload.text]
-  if (payload.type !== "event" || !payload.event || typeof payload.event !== "object") return []
-  const event = payload.event as Record<string, unknown>
-  if (event.type === "result" && typeof event.result === "string") return [event.result]
-  const message = event.message as { content?: unknown } | undefined
-  if (event.type !== "assistant" || !Array.isArray(message?.content)) return []
-  return message.content.flatMap((block) => {
-    if (!block || typeof block !== "object") return []
-    const record = block as Record<string, unknown>
-    return record.type === "text" && typeof record.text === "string" ? [record.text] : []
+function ownerTurnText(content: string): string {
+  const request = content.match(/(?:^|\n)Owner request:\s*([\s\S]+)$/i)
+  return request?.[1]?.trim() || content.trim()
+}
+
+function restoredConversation(turns: readonly WilliamConversationTurn[] | undefined): readonly WilliamConversationEntry[] {
+  return (turns ?? []).flatMap((turn, index) => {
+    if ((turn.role !== "owner" && turn.role !== "williamos") || typeof turn.content !== "string" || !turn.content.trim()) return []
+    const at = typeof turn.at === "string" ? turn.at : new Date(0).toISOString()
+    return [{
+      id: `server-${index}-${at}`,
+      role: turn.role,
+      text: turn.role === "owner" ? ownerTurnText(turn.content) : turn.content.trim(),
+      at,
+    } satisfies WilliamConversationEntry]
   })
 }
 
@@ -118,7 +117,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const changeRefreshKey = useRef(0)
   const changeRefreshWaiters = useRef(new Map<number, ChangeRefreshWaiter>())
   const [inspectors, setInspectors] = useState<readonly InspectorSurface[]>([])
-  const [conversation, setConversation] = useState<readonly ConversationEntry[]>([])
+  const [conversation, setConversation] = useState<readonly WilliamConversationEntry[]>([])
+  const [williamInput, setWilliamInput] = useState("")
+  const [williamRailOpen, setWilliamRailOpen] = useState(false)
+  const [williamRailNarrow, setWilliamRailNarrow] = useState(false)
+  const [williamBusy, setWilliamBusy] = useState(false)
+  const [williamError, setWilliamError] = useState<string | null>(null)
   const [overlay, setOverlay] = useState<EnvironmentOverlay>(null)
   const [focusedAgentId, setFocusedAgentId] = useState<string | null>(null)
   const [councilQuestion, setCouncilQuestion] = useState<string | null>(null)
@@ -175,6 +179,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   storageRef.current = storage
 
   useEffect(() => {
+    if (typeof window.matchMedia !== "function") return
+    const query = window.matchMedia("(max-width: 1040px)")
+    const updateWilliamRailViewport = () => setWilliamRailNarrow(query.matches)
+    updateWilliamRailViewport()
+    query.addEventListener("change", updateWilliamRailViewport)
+    return () => query.removeEventListener("change", updateWilliamRailViewport)
+  }, [])
+
+  useEffect(() => {
     if (delegateContext?.kind !== "file" || delegateContext.label === space.selectedPath) return
     // Delegate is an object action. If the selected object changes before dispatch, discard the
     // stale client intent; the server will derive authority only from the newly persisted Space.
@@ -184,11 +197,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineOpen(false)
   }, [delegateContext, space.selectedPath])
 
-  const appendConversation = useCallback((role: ConversationEntry["role"], text: string) => {
+  const appendConversation = useCallback((role: WilliamConversationEntry["role"], text: string) => {
     const normalized = text.trim()
     if (!normalized) return
     messageSequence.current += 1
-    const entry: ConversationEntry = { id: messageSequence.current, role, text: normalized }
+    const entry: WilliamConversationEntry = {
+      id: `client-${messageSequence.current}`,
+      role,
+      text: normalized,
+      at: new Date().toISOString(),
+    }
     setConversation((current) => [...current, entry])
   }, [])
 
@@ -283,6 +301,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         space: payload.space,
         spine: payload.spine,
         judgment: payload.judgment,
+        conversation: payload.conversation,
         project: payload.project,
         storage: payload.storage,
         browserStorageKey: payload.browserStorageKey,
@@ -358,6 +377,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (payload.project) setProject(payload.project)
         if (payload.spine) setSpine(payload.spine)
         setJudgment(payload.judgment ?? null)
+        setConversation(restoredConversation(payload.conversation))
       })
       .catch((error) => {
         if (!cancelled) {
@@ -857,6 +877,56 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }
 
+  const sendWilliamTurn = useCallback(async (text: string): Promise<boolean> => {
+    const normalized = text.trim()
+    if (!normalized || lineBusy || williamBusy) return false
+    appendConversation("owner", normalized)
+    setLineBusy(true)
+    setLineReply(null)
+    setWilliamBusy(true)
+    setWilliamError(null)
+    const requestWorldId = worldRef.current
+    const requestEpoch = transitionEpochRef.current
+    const selectedContextFingerprint = () => {
+      const current = stateRef.current
+      const activePane = current.editor.panes.find((pane) => pane.id === current.editor.activePaneId) ?? null
+      return JSON.stringify({
+        activeWindowId: current.activeWindowId,
+        selectedPath: current.selectedPath,
+        activePaneId: current.editor.activePaneId,
+        activePath: activePane?.activePath ?? null,
+        selection: activePane?.selection ?? null,
+        focusedAgentId,
+      })
+    }
+    const requestContext = selectedContextFingerprint()
+    const requestIsCurrent = () => worldRef.current === requestWorldId
+      && transitionEpochRef.current === requestEpoch
+      && selectedContextFingerprint() === requestContext
+    try {
+      await persistBarrierRef.current()
+      if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
+      const response = await fetch("/api/environment/line", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ worldId: requestWorldId, text: normalized }),
+      })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error ?? `LINE_${response.status}`)
+      if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
+      acceptLineReply(payload as LineReply)
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "LINE_UNAVAILABLE"
+      setLineReply(message)
+      setWilliamError(message)
+      return false
+    } finally {
+      setLineBusy(false)
+      setWilliamBusy(false)
+    }
+  }, [acceptLineReply, agentSessions.sessions, appendConversation, focusedAgentId, lineBusy, williamBusy])
+
   async function submitLine(event: React.FormEvent) {
     event.preventDefault()
     const text = lineInput.trim()
@@ -870,10 +940,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       void review.start(text)
       return
     }
-    appendConversation("owner", text)
     setLineInput("")
     const councilRequest = lineTarget === "william" ? text.match(/^\/?council\b[\s:—-]*(.*)$/i) : null
     if (councilRequest) {
+      appendConversation("owner", text)
       void summonCouncil(councilRequest[1]?.trim() || `Challenge the current direction for ${selectedLabel}.`)
       setLineOpen(false)
       return
@@ -885,6 +955,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         ? `Owner request: ${text}`
         : `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
       if (lineTarget === "agent") {
+        appendConversation("owner", text)
         if (!delegateContext?.provider) throw new Error("AGENT_PROVIDER_REQUIRED")
         const promotedPath = delegateContext.provider === "Codex" ? space.selectedPath : null
         if (promotedPath) await persistBarrierRef.current()
@@ -895,7 +966,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             role: delegateContext.role,
             assignment: delegateContext.assignment,
             prompt: contextualText,
-            onEvent: (payload) => agentReplyText(payload).forEach((reply) => appendConversation("williamos", reply)),
+            onEvent: () => {},
           })
         } catch (error) {
           if (!(error instanceof AgentTurnCommittedPersistenceError)) throw error
@@ -919,14 +990,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         }
         return
       }
-      const response = await fetch("/api/environment/line", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ worldId, text: contextualText }),
-      })
-      const payload = await response.json()
-      if (!response.ok) throw new Error(payload.error ?? `LINE_${response.status}`)
-      acceptLineReply(payload as LineReply)
+      await sendWilliamTurn(text)
     } catch (error) {
       setLineReply(error instanceof Error ? error.message : "LINE_UNAVAILABLE")
     } finally {
@@ -1016,7 +1080,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
         : [],
     ))
-    setConversation([])
+    setConversation(restoredConversation(payload.conversation))
+    setWilliamInput("")
+    setWilliamError(null)
     setFocusedAgentId(null)
     setLineOpen(false)
     setLineInput("")
@@ -1163,6 +1229,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)
       return
     }
+    if (action === "Ask") {
+      setWilliamInput(`About ${selectedLabel}: `)
+      setWilliamRailOpen(true)
+      return
+    }
     if (action === "Delegate") {
       if (!agentSessions.selectSession(null)) return
       setFocusedAgentId(null)
@@ -1200,18 +1271,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     openLine(`Council recommendation · ${action.replaceAll("-", " ")} · ${session.recommendation}\nOwner direction: `)
-  }
-
-  function inspectWilliamJudgment() {
-    if (persistenceError) {
-      openLine(`Inspect Space persistence error (${persistenceError}): `)
-    } else if (!space.runningAppUrl) {
-      activate("running-app")
-    } else if (space.selectedPath) {
-      activate("editor")
-    } else {
-      openLine(`Inspect William's recommendation for ${selectedLabel}: `)
-    }
   }
 
   const toolRunHistoryScope = storage === "server" && worldId
@@ -1289,22 +1348,30 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <button type="button" className={spatial.dockButton} onClick={() => void openCouncilHistory()} aria-label="Open Brain Council" title="Brain Council"><Users size={15} /></button>
       </nav>
 
-      <footer className={spatial.williamRail} aria-label="William intelligence presence">
-        <span className={spatial.williamOrb} aria-hidden>W</span>
-        <div className={spatial.judgment}><strong>William</strong><p>{williamJudgment}</p></div>
-        <div className={spatial.williamActions}>
-          <button type="button" className={spatial.overlayButton} onClick={inspectWilliamJudgment}>Inspect</button>
-          <button type="button" className={spatial.overlayButton} disabled={judgmentBusy || storage !== "server"} onClick={() => void refreshWilliamJudgment()}>{judgmentBusy ? "Reasoning" : "Think again"}</button>
-          <button type="button" className={spatial.overlayButton} onClick={() => openLine(`Override William's recommendation for ${selectedLabel}: `)}>Override</button>
-          <button type="button" className={spatial.overlayButton} onClick={() => void summonCouncil(`Challenge William's recommendation: ${williamJudgment}`)}>Ask Council</button>
-          <button type="button" className={spatial.overlayButton} onClick={openLocalConversation}>Ask Local</button>
-          <button type="button" className={spatial.overlayButton} onClick={() => openLine()}>The Line · Ctrl+K</button>
-        </div>
-        <span className={`${spatial.persistence} ${persistenceError ? spatial.persistenceError : ""}`} title={persistenceError ?? undefined}>{savedLabel}</span>
-      </footer>
+      <WilliamConversationRail
+        conversation={conversation}
+        judgment={williamJudgment}
+        input={williamInput}
+        busy={williamBusy}
+        judgmentBusy={judgmentBusy}
+        canThinkAgain={storage === "server"}
+        error={williamError}
+        open={williamRailOpen}
+        narrow={williamRailNarrow}
+        persistenceLabel={savedLabel}
+        persistenceError={persistenceError}
+        onInput={setWilliamInput}
+        onSubmit={() => { const text = williamInput.trim(); if (!text) return; void sendWilliamTurn(text).then((sent) => { if (sent) setWilliamInput("") }) }}
+        onOpen={() => setWilliamRailOpen(true)}
+        onClose={() => setWilliamRailOpen(false)}
+        onThinkAgain={() => void refreshWilliamJudgment()}
+        onCouncil={() => void summonCouncil(`Challenge William's recommendation: ${williamJudgment}`)}
+        onOpenLocal={openLocalConversation}
+        onOpenLine={() => openLine()}
+      />
 
       {lineOpen ? (
-        <div className={spatial.lineBackdrop} onPointerDown={(event) => { if (event.target === event.currentTarget && !change.running && !review.running) setLineOpen(false) }}>
+        <div className={spatial.lineBackdrop} role="dialog" aria-label="The Line" aria-modal="true" onPointerDown={(event) => { if (event.target === event.currentTarget && !change.running && !review.running) setLineOpen(false) }}>
           <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? "Change" : lineMode === "review" ? "Review" : "The Line"}>
             <Command size={16} aria-hidden />
             <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>

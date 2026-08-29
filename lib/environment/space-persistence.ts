@@ -231,6 +231,8 @@ export async function saveOwnedLineWorld(
     worldId: string
     world: WorkingWorldSnapshot
     isNew: boolean
+    expectedSelectedContext?: string
+    deriveSelectedContext?: (world: WorkingWorldSnapshot) => Promise<string>
   }>,
   store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
 ): Promise<void> {
@@ -263,6 +265,15 @@ export async function saveOwnedLineWorld(
       && candidate.judgment.basisFingerprint !== williamJudgmentBasisFingerprint(candidate)
       ? validateWorkingWorld({ ...candidate, judgment: null })
       : candidate
+    // Re-read any server-owned file version as the final precondition of this CAS attempt. The DB
+    // snapshot comparison below closes concurrent world writes; this callback closes same-path byte
+    // changes that never alter the persisted Space record.
+    if (input.expectedSelectedContext) {
+      const actualSelectedContext = input.deriveSelectedContext
+        ? await input.deriveSelectedContext(latest)
+        : selectedLineContextFingerprint(latest)
+      if (actualSelectedContext !== input.expectedSelectedContext) throw new Error("LINE_CONTEXT_STALE")
+    }
     if (await store.updateOwned(
       input.userId,
       input.worldId,
@@ -272,6 +283,23 @@ export async function saveOwnedLineWorld(
     )) return
   }
   throw new Error("WORLD_PERSISTENCE_BUSY")
+}
+
+/** Canonical revision + selection identity used to fence selected-object Line replies. */
+export function selectedLineContextFingerprint(world: WorkingWorldSnapshot): string {
+  const space = world.space
+  const activePane = space?.panes.find((pane) => pane.id === space.activePaneId) ?? null
+  return JSON.stringify({
+    revision: space?.revision ?? null,
+    activeWindowId: space?.activeWindowId ?? null,
+    activePaneId: space?.activePaneId ?? null,
+    selectedPath: space?.selection?.filePath ?? activePane?.filePath ?? null,
+    selection: space?.selection
+      ? { anchor: space.selection.anchor, head: space.selection.head }
+      : activePane?.selection
+        ? { anchor: activePane.selection.anchor, head: activePane.selection.head }
+        : null,
+  })
 }
 
 /** Load one exact owned world for a product adapter without exposing the persistence row. */
@@ -471,7 +499,15 @@ export async function createOwnedProjectSpace(
     newWorldId?: () => string
   }>,
   store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
-): Promise<Readonly<{ worldId: string; name: string; space: SpaceState; spine: WorldSpine; judgment: null; project: WorkspaceProject }>> {
+): Promise<Readonly<{
+  worldId: string
+  name: string
+  space: SpaceState
+  spine: WorldSpine
+  judgment: null
+  conversation: WorkingWorldSnapshot["conversation"]
+  project: WorkspaceProject
+}>> {
   const name = canonicalSpaceName(input.name)
   const worldId = (input.newWorldId ?? crypto.randomUUID)()
   const base = createWorkingWorld({ intent: name, resources: projectResources(input.project, name) })
@@ -485,7 +521,7 @@ export async function createOwnedProjectSpace(
     ? await store.insertOwnedProjectSpace(input.userId, input.project.identity, row)
     : (await store.insertOwned(row), "created" as const)
   if (inserted === "limit") throw new Error("SPACE_LIMIT_REACHED")
-  return { worldId, name, space, spine: world.spine, judgment: null, project: input.project }
+  return { worldId, name, space, spine: world.spine, judgment: null, conversation: world.conversation, project: input.project }
 }
 
 function restoredSpace(world: WorkingWorldSnapshot, configured?: string | null): SpaceState {
@@ -511,6 +547,7 @@ export async function loadOrCreateOwnedSpace(
   space: SpaceState
   spine: WorldSpine
   judgment: WilliamJudgment | null
+  conversation: WorkingWorldSnapshot["conversation"]
   project?: WorkspaceProject
 }> | null> {
   const exact = input.worldId ? await store.findOwned(input.userId, input.worldId) : null
@@ -539,6 +576,7 @@ export async function loadOrCreateOwnedSpace(
         judgment: world.judgment?.basisFingerprint === williamJudgmentBasisFingerprint(restoredWorld)
           ? world.judgment
           : null,
+        conversation: world.conversation,
         ...(input.project ? { project: input.project } : {}),
       }
     }
@@ -563,6 +601,7 @@ export async function loadOrCreateOwnedSpace(
     space,
     spine: world.spine,
     judgment: world.judgment,
+    conversation: world.conversation,
     ...(input.project ? { project: input.project } : {}),
   }
 }
@@ -581,6 +620,7 @@ export async function saveOwnedSpace(
   space: SpaceState
   spine: WorldSpine
   judgment: WilliamJudgment | null
+  conversation: WorkingWorldSnapshot["conversation"]
   project?: WorkspaceProject
 }> | null> {
   let row = await store.findOwned(input.userId, input.worldId)
@@ -624,6 +664,7 @@ export async function saveOwnedSpace(
       space,
       spine: updated.spine,
       judgment: updated.judgment,
+      conversation: updated.conversation,
       ...(input.project ? { project: input.project } : {}),
     }
 

@@ -40,12 +40,19 @@ export type WorkspaceSpace = Readonly<{
   }>
 }>
 
+export type WilliamConversationTurn = Readonly<{
+  role: "owner" | "williamos"
+  content: string
+  at: string
+}>
+
 export type SpaceEnvelope = Readonly<{
   worldId: string
   name?: string
   space: unknown
   spine?: WorldSpine
   judgment?: WilliamJudgment | null
+  conversation?: readonly WilliamConversationTurn[]
   project?: WorkspaceProject
   storage?: "server" | "browser"
   browserStorageKey?: string
@@ -65,7 +72,16 @@ export type SpaceSummary = Readonly<{
 
 export type WorkspaceProject = Readonly<{ identity: string; name: string }>
 
+export const WILLIAM_RAIL_WIDTH = 348
+export const WILLIAM_RAIL_BREAKPOINT = 1040
+
+export function workspaceCanvasWidth(viewportWidth: number): number {
+  const width = Math.max(320, finite(viewportWidth, 1440))
+  return width > WILLIAM_RAIL_BREAKPOINT ? Math.max(320, width - WILLIAM_RAIL_WIDTH) : width
+}
+
 export function defaultSpace(viewportWidth = 1440, viewportHeight = 900, id = "terrafusion", name = "TerraFusion"): WorkspaceSpace {
+  viewportWidth = workspaceCanvasWidth(viewportWidth)
   const workHeight = Math.max(300, viewportHeight - 171)
   const outerGutter = viewportWidth >= 1100 ? 26 : 18
   const surfaceGap = viewportWidth >= 1100 ? 24 : 18
@@ -144,7 +160,7 @@ function geometryInViewport(
   base: WindowGeometry,
   viewport: ViewportBounds,
 ): WindowGeometry {
-  const viewportWidth = Math.max(320, finite(viewport.width, 1440))
+  const viewportWidth = workspaceCanvasWidth(viewport.width)
   const viewportHeight = Math.max(240, finite(viewport.height, 900))
   const canvasHeight = Math.max(260, viewportHeight - 171)
   const width = Math.min(Math.max(360, viewportWidth - 16), Math.max(360, finite(frame?.width, base.width)))
