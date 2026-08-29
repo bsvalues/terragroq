@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, TerminalSquare, Users, X } from "lucide-react"
 
 import type { SummonedSurface } from "@/lib/environment/summon"
@@ -534,6 +534,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       epoch: transitionEpochRef.current,
       keepalive,
     }
+    // Teardown cannot wait behind an ordinary request: the document may be discarded before that
+    // request settles. The server's monotonic revision gate rejects an older write that loses this
+    // race, while live-page blur saves remain serialized below for the judgment barrier.
+    if (keepalive) return sendPersist(job).then(() => revision)
     pendingPersistRef.current = job
     if (drainingPersistRef.current) {
       return (drainPromiseRef.current ?? Promise.resolve()).then(() => revision)
@@ -564,9 +568,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!hydrated || !worldId) return
     if (persistTimer.current) clearTimeout(persistTimer.current)
+    setPersistencePending(true)
     persistTimer.current = setTimeout(() => void persist(), 420)
     return () => {
       if (persistTimer.current) clearTimeout(persistTimer.current)
@@ -577,14 +582,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   ])
 
   useEffect(() => {
-    const flush = () => void persist(true)
-    const visibility = () => { if (document.visibilityState === "hidden") flush() }
-    window.addEventListener("pagehide", flush)
-    window.addEventListener("blur", flush)
+    const teardownFlush = () => void persist(true)
+    const liveFlush = () => void persist()
+    const visibility = () => { if (document.visibilityState === "hidden") teardownFlush() }
+    window.addEventListener("pagehide", teardownFlush)
+    window.addEventListener("blur", liveFlush)
     document.addEventListener("visibilitychange", visibility)
     return () => {
-      window.removeEventListener("pagehide", flush)
-      window.removeEventListener("blur", flush)
+      window.removeEventListener("pagehide", teardownFlush)
+      window.removeEventListener("blur", liveFlush)
       document.removeEventListener("visibilitychange", visibility)
     }
   }, [persist])

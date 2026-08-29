@@ -144,7 +144,7 @@ describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
 
     await waitFor(() => expect(screen.getAllByLabelText("Source content")).toHaveLength(2))
     expect(screen.getByLabelText("Workspace project").textContent).toContain("TerraFusion")
-    expect(screen.getByText("space saved locally")).toBeTruthy()
+    expect(await screen.findByText("space saved locally")).toBeTruthy()
     expect(screen.getAllByRole("tab", { name: "README.md" })).toHaveLength(2)
     expect(screen.getAllByRole("tab", { name: "package.json" })).toHaveLength(2)
   })

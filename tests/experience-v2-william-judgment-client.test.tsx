@@ -25,6 +25,99 @@ function deferredResponse() {
 }
 
 describe("William judgment client freshness", () => {
+  it("sends the newest Space revision immediately with keepalive during page teardown", async () => {
+    const barrierSave = deferredResponse()
+    const teardownSave = deferredResponse()
+    const requests: Array<{ body: { worldId: string; space: ReturnType<typeof spaceToServer> }; keepalive: boolean }> = []
+    let judgmentRequests = 0
+
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "world-a",
+        space: spaceToServer(defaultSpace()),
+        spine: EMPTY_SPINE,
+        judgment: null,
+        project: { identity: "c:/repos/terrafusion", name: "TerraFusion" },
+      }))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        requests.push({
+          body: JSON.parse(String(init.body)) as { worldId: string; space: ReturnType<typeof spaceToServer> },
+          keepalive: init.keepalive === true,
+        })
+        return requests.length === 1 ? barrierSave.promise : teardownSave.promise
+      }
+      if (url === "/api/environment/judgment" && init?.method === "POST") {
+        judgmentRequests += 1
+        return Promise.resolve(Response.json({ judgment: {
+          recommendation: "Use the latest teardown-safe Space.",
+          rationale: "A newer revision was acknowledged.",
+          basis: [{ key: "space", label: "Space", value: "world-a" }],
+          confidence: 0.9,
+          generatedAt: "2026-08-29T02:00:00.000Z",
+          basisFingerprint: "c".repeat(64),
+          provenance: { provider: "williamos-inference", model: "local-model" },
+        } }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) {
+        return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await waitFor(() => expect(requests).toHaveLength(1))
+    fireEvent(window, new Event("pagehide"))
+    await waitFor(() => expect(requests).toHaveLength(2))
+    expect(requests[1].keepalive).toBe(true)
+
+    teardownSave.resolve(Response.json({ worldId: "world-a", space: requests[1].body.space, spine: EMPTY_SPINE, judgment: null }))
+    barrierSave.resolve(Response.json({ error: "SPACE_REVISION_STALE" }, { status: 409 }))
+    await waitFor(() => expect(judgmentRequests).toBe(1))
+    await screen.findByText("Use the latest teardown-safe Space.")
+  })
+
+  it("marks a changed Space as saving during the debounce before the PUT begins", async () => {
+    let saveRequests = 0
+    const existingJudgment = {
+      recommendation: "Existing judgment.",
+      rationale: "Already persisted.",
+      basis: [{ key: "space", label: "Space", value: "world-a" }],
+      confidence: 0.8,
+      generatedAt: "2026-08-29T02:00:00.000Z",
+      basisFingerprint: "d".repeat(64),
+      provenance: { provider: "williamos-inference", model: "local-model" },
+    }
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "world-a",
+        space: spaceToServer(defaultSpace()),
+        spine: EMPTY_SPINE,
+        judgment: existingJudgment,
+        project: { identity: "c:/repos/terrafusion", name: "TerraFusion" },
+      }))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        saveRequests += 1
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: ReturnType<typeof spaceToServer> }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: existingJudgment }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) {
+        return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await waitFor(() => expect(saveRequests).toBe(1))
+    await screen.findByText("space saved")
+
+    fireEvent.click(screen.getByRole("button", { name: "Focus Tests" }))
+    expect(screen.getByText("saving space")).toBeTruthy()
+    expect(screen.queryByText("space saved")).toBeNull()
+    expect(saveRequests).toBe(1)
+  })
+
   it("serializes a background flush behind the judgment save barrier and labels only acknowledged state as saved", async () => {
     const firstSave = deferredResponse()
     const secondSave = deferredResponse()
