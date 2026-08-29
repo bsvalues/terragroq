@@ -2,6 +2,11 @@ export const MAX_COUNCIL_HISTORY = 6
 export const MAX_COUNCIL_HISTORY_BYTES = 262_144
 
 export type CouncilContextKind = "space" | "file" | "preview" | "diff" | "agent" | "selection"
+export type CouncilDispositionDirection = "approve" | "reject" | "request-changes"
+export type CouncilDisposition = Readonly<{
+  direction: CouncilDispositionDirection
+  recordedAt: string
+}>
 
 export type CouncilSession = Readonly<{
   id: string
@@ -24,6 +29,8 @@ export type CouncilSession = Readonly<{
   recommendation: string
   confidence: number
   evidence: readonly Readonly<{ id: string; label: string; detail: string }>[]
+  /** Owner direction only. This record carries no execution authority and dispatches nothing. */
+  disposition: CouncilDisposition | null
 }>
 
 function record(value: unknown, error: string): Record<string, unknown> {
@@ -43,18 +50,33 @@ function text(value: unknown, max: number, error: string): string {
   return value.trim()
 }
 
-function iso(value: unknown): string {
-  const result = text(value, 40, "COUNCIL_SESSION_CREATED_AT_INVALID")
+function iso(value: unknown, error = "COUNCIL_SESSION_CREATED_AT_INVALID"): string {
+  const result = text(value, 40, error)
   const parsed = Date.parse(result)
-  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== result) throw new Error("COUNCIL_SESSION_CREATED_AT_INVALID")
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== result) throw new Error(error)
   return result
 }
 
+export function validateCouncilDisposition(raw: unknown): CouncilDisposition | null {
+  if (raw === null) return null
+  const disposition = record(raw, "COUNCIL_DISPOSITION_MALFORMED")
+  exactKeys(disposition, ["direction", "recordedAt"], "COUNCIL_DISPOSITION_UNKNOWN_KEY")
+  if (disposition.direction !== "approve" && disposition.direction !== "reject" && disposition.direction !== "request-changes") {
+    throw new Error("COUNCIL_DISPOSITION_DIRECTION_INVALID")
+  }
+  return {
+    direction: disposition.direction,
+    recordedAt: iso(disposition.recordedAt, "COUNCIL_DISPOSITION_RECORDED_AT_INVALID"),
+  }
+}
+
 export function validateCouncilSession(raw: unknown): CouncilSession {
-  const session = record(raw, "COUNCIL_SESSION_MALFORMED")
+  const original = record(raw, "COUNCIL_SESSION_MALFORMED")
+  // Additive migration for advisory sessions persisted before owner direction was durable.
+  const session = original.disposition === undefined ? { ...original, disposition: null } : original
   exactKeys(session, [
     "id", "question", "status", "createdAt", "context", "members", "consensus", "dissent", "blindSpot",
-    "recommendation", "confidence", "evidence",
+    "recommendation", "confidence", "evidence", "disposition",
   ], "COUNCIL_SESSION_UNKNOWN_KEY")
   if (session.status !== "ready") throw new Error("COUNCIL_SESSION_STATUS_INVALID")
   const context = record(session.context, "COUNCIL_SESSION_CONTEXT_MALFORMED")
@@ -113,6 +135,7 @@ export function validateCouncilSession(raw: unknown): CouncilSession {
     recommendation: text(session.recommendation, 4_000, "COUNCIL_SESSION_RECOMMENDATION_INVALID"),
     confidence: Math.round(confidence),
     evidence,
+    disposition: validateCouncilDisposition(session.disposition),
   }
 }
 
@@ -139,5 +162,23 @@ export function addCouncilSession(history: readonly CouncilSession[], rawSession
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
   while (next.length > MAX_COUNCIL_HISTORY || byteLength(next) > MAX_COUNCIL_HISTORY_BYTES) next.shift()
   if (!next.some((item) => item.id === session.id)) throw new Error("COUNCIL_SESSION_TOO_LARGE")
+  return validateCouncilHistory(next)
+}
+
+/** Replace one exact target while deterministically pruning the oldest non-target advice for bytes. */
+export function replaceCouncilSessionBounded(
+  history: readonly CouncilSession[],
+  rawSession: unknown,
+): readonly CouncilSession[] {
+  const session = validateCouncilSession(rawSession)
+  if (!history.some((item) => item.id === session.id)) throw new Error("COUNCIL_SESSION_NOT_FOUND")
+  const next = history
+    .map((item) => item.id === session.id ? session : item)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+  while (byteLength(next) > MAX_COUNCIL_HISTORY_BYTES) {
+    const oldestNonTarget = next.findIndex((item) => item.id !== session.id)
+    if (oldestNonTarget < 0) throw new Error("COUNCIL_SESSION_TOO_LARGE")
+    next.splice(oldestNonTarget, 1)
+  }
   return validateCouncilHistory(next)
 }

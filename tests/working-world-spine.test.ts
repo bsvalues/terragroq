@@ -83,6 +83,28 @@ describe("a mounted world carries the governed spine", () => {
     expect(validateWorkingWorld(legacy).councilHistory).toEqual([])
   })
 
+  it("migrates saved Council sessions to no owner disposition and validates recorded direction", () => {
+    const legacySession = largeCouncilSession("c-0")
+    const migrated = validateWorkingWorld({ ...world(), councilHistory: [legacySession] })
+    expect(migrated.councilHistory[0]?.disposition).toBeNull()
+
+    const directed = validateWorkingWorld({
+      ...world(),
+      councilHistory: [{
+        ...legacySession,
+        disposition: { direction: "request-changes", recordedAt: "2026-08-29T18:00:00.000Z" },
+      }],
+    })
+    expect(directed.councilHistory[0]?.disposition).toEqual({
+      direction: "request-changes",
+      recordedAt: "2026-08-29T18:00:00.000Z",
+    })
+    expect(() => validateWorkingWorld({
+      ...world(),
+      councilHistory: [{ ...legacySession, disposition: { direction: "execute", recordedAt: "2026-08-29T18:00:00.000Z" } }],
+    })).toThrow("COUNCIL_DISPOSITION_DIRECTION_INVALID")
+  })
+
   it("rejects malformed and oversized persisted Council history", () => {
     expect(() => validateWorkingWorld({ ...world(), councilHistory: [{ id: "invented" }] })).toThrow(/COUNCIL_SESSION/)
     expect(() => validateWorkingWorld({ ...world(), councilHistory: Array.from({ length: 7 }, () => ({})) })).toThrow(/COUNCIL_HISTORY/)

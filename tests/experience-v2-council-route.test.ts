@@ -5,6 +5,7 @@ const harness = vi.hoisted(() => ({
   loadOwnedWorkingWorld: vi.fn(),
   loadOwnedCouncilHistory: vi.fn(),
   saveOwnedCouncilSession: vi.fn(),
+  saveOwnedCouncilDisposition: vi.fn(),
 }))
 
 vi.mock("@/lib/session", () => ({ getUserId: harness.getUserId }))
@@ -12,13 +13,14 @@ vi.mock("@/lib/environment/space-persistence", () => ({
   loadOwnedWorkingWorld: harness.loadOwnedWorkingWorld,
   loadOwnedCouncilHistory: harness.loadOwnedCouncilHistory,
   saveOwnedCouncilSession: harness.saveOwnedCouncilSession,
+  saveOwnedCouncilDisposition: harness.saveOwnedCouncilDisposition,
 }))
 vi.mock("@/lib/ai/config", () => ({
   CHAT_MODEL: "test-council-model",
   INFERENCE_BASE_URL: "http://127.0.0.1:11434/v1",
 }))
 
-import { GET, POST } from "@/app/api/environment/council/route"
+import { GET, PATCH, POST } from "@/app/api/environment/council/route"
 
 const WORLD_ID = "11111111-1111-4111-8111-111111111111"
 
@@ -63,6 +65,14 @@ function request(body: unknown, headers: Record<string, string> = {}) {
   })
 }
 
+function patchRequest(body: unknown, headers: Record<string, string> = {}) {
+  return new Request("http://localhost/api/environment/council", {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  })
+}
+
 function inferenceReply(content: unknown, ok = true) {
   return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(content) } }] }), {
     status: ok ? 200 : 503,
@@ -94,6 +104,11 @@ beforeEach(() => {
   harness.loadOwnedWorkingWorld.mockReset().mockResolvedValue(ownedWorld)
   harness.loadOwnedCouncilHistory.mockReset().mockResolvedValue([])
   harness.saveOwnedCouncilSession.mockReset().mockResolvedValue(undefined)
+  harness.saveOwnedCouncilDisposition.mockReset().mockResolvedValue({
+    id: "council-saved",
+    createdAt: "2026-08-27T18:20:00.000Z",
+    disposition: { direction: "approve", recordedAt: "2026-08-29T18:00:00.000Z" },
+  })
   vi.unstubAllGlobals()
 })
 
@@ -348,5 +363,65 @@ describe("GET /api/environment/council", () => {
     expect((await GET(new Request("http://localhost/api/environment/council?worldId=not-a-world"))).status).toBe(400)
     harness.getUserId.mockRejectedValue(new Error("Unauthorized"))
     expect((await GET(new Request(`http://localhost/api/environment/council?worldId=${WORLD_ID}`))).status).toBe(401)
+  })
+})
+
+describe("PATCH /api/environment/council", () => {
+  const body = {
+    worldId: WORLD_ID,
+    sessionId: "council-saved",
+    sessionCreatedAt: "2026-08-27T18:20:00.000Z",
+    direction: "approve",
+  }
+
+  it("records owner direction against the exact owned session without accepting execution claims", async () => {
+    const response = await PATCH(patchRequest(body))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ session: expect.objectContaining({ disposition: expect.objectContaining({ direction: "approve" }) }) })
+    expect(harness.saveOwnedCouncilDisposition).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1",
+      worldId: WORLD_ID,
+      sessionId: "council-saved",
+      sessionCreatedAt: "2026-08-27T18:20:00.000Z",
+      direction: "approve",
+      recordedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    }))
+    expect(harness.saveOwnedCouncilSession).not.toHaveBeenCalled()
+
+    expect((await PATCH(patchRequest({ ...body, execute: true }))).status).toBe(400)
+    expect((await PATCH(patchRequest({ ...body, authority: "owner" }))).status).toBe(400)
+  })
+
+  it("fails closed for stale, missing, foreign, conflicting, and unauthenticated sessions", async () => {
+    for (const [error, status] of [
+      ["COUNCIL_SESSION_STALE", 409],
+      ["COUNCIL_SESSION_NOT_FOUND", 404],
+      ["WORLD_NOT_FOUND", 404],
+    ] as const) {
+      harness.saveOwnedCouncilDisposition.mockRejectedValueOnce(new Error(error))
+      const response = await PATCH(patchRequest(body))
+      expect(response.status).toBe(status)
+      expect(await response.json()).toEqual({ error })
+    }
+    harness.getUserId.mockRejectedValueOnce(new Error("Unauthorized"))
+    expect((await PATCH(patchRequest(body))).status).toBe(401)
+    expect((await PATCH(patchRequest({ ...body, direction: "delegate" }))).status).toBe(400)
+  })
+
+  it("returns the exact canonical saved session on a conflicting disposition without mutating it", async () => {
+    const canonical = {
+      id: "council-saved",
+      createdAt: "2026-08-27T18:20:00.000Z",
+      disposition: { direction: "reject", recordedAt: "2026-08-29T17:59:00.000Z" },
+    }
+    harness.saveOwnedCouncilDisposition.mockRejectedValueOnce(new Error("COUNCIL_DISPOSITION_CONFLICT"))
+    harness.loadOwnedCouncilHistory.mockResolvedValueOnce([canonical])
+
+    const response = await PATCH(patchRequest(body))
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "COUNCIL_DISPOSITION_CONFLICT", session: canonical })
+    expect(harness.loadOwnedCouncilHistory).toHaveBeenCalledWith("owner-1", WORLD_ID)
   })
 })

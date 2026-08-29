@@ -6,9 +6,22 @@ import {
   CouncilInferenceError,
 } from "@/lib/environment/council"
 import { guardLineRequest, readBoundedJson } from "@/lib/environment/line-guard"
-import { loadOwnedCouncilHistory, loadOwnedWorkingWorld, saveOwnedCouncilSession } from "@/lib/environment/space-persistence"
+import {
+  loadOwnedCouncilHistory,
+  loadOwnedWorkingWorld,
+  saveOwnedCouncilDisposition,
+  saveOwnedCouncilSession,
+} from "@/lib/environment/space-persistence"
+import { z } from "zod"
 
 export const maxDuration = 300
+
+const dispositionRequestSchema = z.object({
+  worldId: councilRequestSchema.shape.worldId,
+  sessionId: z.string().trim().min(1).max(200),
+  sessionCreatedAt: z.string().datetime({ offset: true }),
+  direction: z.enum(["approve", "reject", "request-changes"]),
+}).strict()
 
 export async function GET(request: Request) {
   let userId: string
@@ -73,5 +86,51 @@ export async function POST(request: Request) {
       return Response.json({ error: "COUNCIL_INFERENCE_FAILED", detail: error.message }, { status: 502 })
     }
     return Response.json({ error: "COUNCIL_INFERENCE_FAILED", detail: "Council inference failed." }, { status: 502 })
+  }
+}
+
+export async function PATCH(request: Request) {
+  const rejection = guardLineRequest(request)
+  if (rejection) return Response.json({ error: rejection.error }, { status: rejection.status })
+
+  let userId: string
+  try {
+    userId = await getUserId()
+  } catch {
+    return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+  }
+  const parsedBody = await readBoundedJson(request)
+  if (!parsedBody.ok) return Response.json({ error: parsedBody.error }, { status: parsedBody.status })
+  const parsed = dispositionRequestSchema.safeParse(parsedBody.value)
+  if (!parsed.success) return Response.json({ error: "INVALID_COUNCIL_DISPOSITION" }, { status: 400 })
+
+  try {
+    const session = await saveOwnedCouncilDisposition({
+      userId,
+      ...parsed.data,
+      recordedAt: new Date().toISOString(),
+    })
+    return Response.json({ session })
+  } catch (error) {
+    const code = error instanceof Error ? error.message : ""
+    if (code === "WORLD_NOT_FOUND" || code === "COUNCIL_SESSION_NOT_FOUND") {
+      return Response.json({ error: code }, { status: 404 })
+    }
+    if (code === "COUNCIL_DISPOSITION_CONFLICT") {
+      try {
+        const history = await loadOwnedCouncilHistory(userId, parsed.data.worldId)
+        const session = history?.find((item) => item.id === parsed.data.sessionId
+          && item.createdAt === parsed.data.sessionCreatedAt
+          && item.disposition !== null)
+        if (session) return Response.json({ error: code, session }, { status: 409 })
+      } catch {
+        // The mutation remains refused even when canonical conflict refresh is unavailable.
+      }
+      return Response.json({ error: code }, { status: 409 })
+    }
+    if (code === "COUNCIL_SESSION_STALE") {
+      return Response.json({ error: code }, { status: 409 })
+    }
+    return Response.json({ error: "COUNCIL_PERSISTENCE_UNAVAILABLE" }, { status: 503 })
   }
 }

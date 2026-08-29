@@ -11,7 +11,7 @@
   min-width: 660px;
   min-height: 500px;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   overflow: hidden;
   color: var(--council-text);
   background: var(--council-bg);
@@ -155,6 +155,8 @@ a.evidenceItem:hover, a.evidenceItem:focus-visible { background: var(--council-r
 
 .footer { display: flex; align-items: center; gap: 14px; padding: 10px 12px; border-top: 1px solid var(--council-line); background: #101310; }
 .footerNote { display: flex; align-items: center; gap: 6px; color: #758074; font-size: 9px; }
+.dispositionStatus { padding: 8px 12px; border-top: 1px solid #394539; color: #c7d5c3; background: #151b15; font-size: 10px; line-height: 1.4; }
+.dispositionStatus[role="alert"] { border-color: #6a4d3e; color: #e2b69f; background: #1d1512; }
 .actions { margin-left: auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
 .action, .primaryAction { min-height: 29px; padding: 0 9px; border: 1px solid #3b453b; border-radius: 3px; color: #aeb7ac; background: #171b17; font-size: 9px; }
 .action:hover, .action:focus-visible { color: white; border-color: #566356; outline: none; }

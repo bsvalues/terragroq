@@ -15,7 +15,14 @@ import {
   type WorldSpine,
 } from "@/lib/environment/working-world"
 import { williamJudgmentBasisFingerprint } from "@/lib/environment/william-judgment"
-import { addCouncilSession, validateCouncilSession, type CouncilSession } from "@/lib/environment/council-session"
+import {
+  addCouncilSession,
+  replaceCouncilSessionBounded,
+  validateCouncilDisposition,
+  validateCouncilSession,
+  type CouncilDispositionDirection,
+  type CouncilSession,
+} from "@/lib/environment/council-session"
 
 export type OwnedWorkingWorldRecord = Readonly<{
   id: string
@@ -342,6 +349,48 @@ export async function saveOwnedCouncilSession(
       updated.intent,
       row.snapshot,
     )) return councilHistory
+  }
+  throw new Error("WORLD_PERSISTENCE_BUSY")
+}
+
+/**
+ * CAS-record owner direction on one exact persisted advisory. Direction is data only: this mutation
+ * neither creates execution authority nor dispatches work.
+ */
+export async function saveOwnedCouncilDisposition(
+  input: Readonly<{
+    userId: string
+    worldId: string
+    sessionId: string
+    sessionCreatedAt: string
+    direction: CouncilDispositionDirection
+    recordedAt: string
+  }>,
+  store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
+): Promise<CouncilSession> {
+  const disposition = validateCouncilDisposition({ direction: input.direction, recordedAt: input.recordedAt })!
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const row = await store.findOwned(input.userId, input.worldId)
+    if (!row) throw new Error("WORLD_NOT_FOUND")
+    const latest = validateWorkingWorld(JSON.parse(row.snapshot))
+    const index = latest.councilHistory.findIndex((session) => session.id === input.sessionId)
+    if (index < 0) throw new Error("COUNCIL_SESSION_NOT_FOUND")
+    const existing = latest.councilHistory[index]!
+    if (existing.createdAt !== input.sessionCreatedAt) throw new Error("COUNCIL_SESSION_STALE")
+    if (existing.disposition) {
+      if (existing.disposition.direction !== disposition.direction) throw new Error("COUNCIL_DISPOSITION_CONFLICT")
+      return existing
+    }
+    const directed = validateCouncilSession({ ...existing, disposition })
+    const councilHistory = replaceCouncilSessionBounded(latest.councilHistory, directed)
+    const updated = validateWorkingWorld({ ...latest, councilHistory })
+    if (await store.updateOwned(
+      input.userId,
+      input.worldId,
+      JSON.stringify(updated),
+      updated.intent,
+      row.snapshot,
+    )) return directed
   }
   throw new Error("WORLD_PERSISTENCE_BUSY")
 }

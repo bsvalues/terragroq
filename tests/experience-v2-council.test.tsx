@@ -56,6 +56,7 @@ const session: BrainCouncilSession = {
     { id: "selected-context", label: "Selected diff", detail: "PR #1042 · workspace shell in TerraFusion Build" },
     { id: "browser-proof", label: "browser · PASS", detail: "Window behavior passed" },
   ],
+  disposition: null,
 }
 
 function renderCouncil(currentSession: BrainCouncilSession = session) {
@@ -106,6 +107,40 @@ describe("Experience V2 Brain Council surface", () => {
     fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
     expect(onAdvisoryAction).toHaveBeenCalledOnce()
     expect(onAdvisoryAction).toHaveBeenCalledWith("approve", session)
+  })
+
+  it("shows durable owner direction on current and restored advice and prevents a conflicting second choice", () => {
+    const directed = {
+      ...session,
+      disposition: { direction: "request-changes" as const, recordedAt: "2026-08-29T18:00:00.000Z" },
+    }
+    const onAdvisoryAction = vi.fn()
+    const current = render(<BrainCouncilSurface session={directed} onDismiss={vi.fn()} onAdvisoryAction={onAdvisoryAction} />)
+    expect(screen.getByText(/Owner requested changes/)).toBeTruthy()
+    expect(screen.getByText(/records direction only; it does not authorize or dispatch execution/i)).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Approve recommendation" }).hasAttribute("disabled")).toBe(true)
+    current.unmount()
+
+    render(<BrainCouncilSurface session={directed} historical onDismiss={vi.fn()} onAdvisoryAction={onAdvisoryAction} />)
+    expect(screen.getByText(/Owner requested changes/)).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
+    expect(onAdvisoryAction).not.toHaveBeenCalled()
+  })
+
+  it("keeps disposition loading, success, and error live-announced outside the responsive footer note", () => {
+    const view = render(<BrainCouncilSurface session={session} busy onDismiss={vi.fn()} onAdvisoryAction={vi.fn()} />)
+    let status = screen.getByRole("status")
+    expect(status.textContent).toMatch(/Recording owner direction/)
+    expect(status.getAttribute("aria-live")).toBe("polite")
+    expect(status.hasAttribute("data-council-disposition-status")).toBe(true)
+
+    view.rerender(<BrainCouncilSurface session={{ ...session, disposition: { direction: "approve", recordedAt: "2026-08-29T18:00:00.000Z" } }} onDismiss={vi.fn()} onAdvisoryAction={vi.fn()} />)
+    status = screen.getByRole("status")
+    expect(status.textContent).toMatch(/Owner approved recommendation/)
+
+    view.rerender(<BrainCouncilSurface session={session} error="COUNCIL_DISPOSITION_CONFLICT" onDismiss={vi.fn()} onAdvisoryAction={vi.fn()} />)
+    expect(screen.getByRole("alert").textContent).toContain("COUNCIL_DISPOSITION_CONFLICT")
+    expect(screen.getByRole("alert").hasAttribute("data-council-disposition-status")).toBe(true)
   })
 
   it("dismisses the Council without coupling dismissal to advisory actions", () => {
@@ -186,5 +221,117 @@ describe("Experience V2 Brain Council surface", () => {
     expect(screen.queryByText(session.question)).toBeNull()
     releaseHistory(Response.json({ history: [session] }))
     await waitFor(() => expect(screen.getByRole("button", { name: new RegExp(session.question) })).toBeTruthy())
+  })
+
+  it("records a Council disposition from the Space without opening The Line or dispatching execution", async () => {
+    const directed = {
+      ...session,
+      disposition: { direction: "approve" as const, recordedAt: "2026-08-29T18:00:00.000Z" },
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) {
+        const space = { ...defaultSpace(), selectedPath: "src/App.tsx", activeWindowId: "editor" as const }
+        return Response.json({ worldId: "11111111-1111-4111-8111-111111111111", space: spaceToServer(space), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "server", browserStorageKey: null })
+      }
+      if (url === "/api/environment/space" && init?.method === "PUT") return Response.json({ saved: true })
+      if (url === "/api/environment/council" && init?.method === "POST") return Response.json({ session })
+      if (url === "/api/environment/council" && init?.method === "PATCH") return Response.json({ session: directed })
+      if (url === "/api/environment/judgment") return Response.json({ error: "unavailable" }, { status: 503 })
+      return Response.json({})
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+    await screen.findByRole("button", { name: "Ask Council" })
+    fireEvent.click(screen.getByRole("button", { name: "Ask Council" }))
+    await screen.findByText(session.question)
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
+
+    expect(await screen.findByText(/Owner approved recommendation/)).toBeTruthy()
+    expect(screen.queryByRole("dialog", { name: "The Line" })).toBeNull()
+    const dispositionCall = fetcher.mock.calls.find(([url, init]) => String(url) === "/api/environment/council" && init?.method === "PATCH")
+    expect(JSON.parse(String(dispositionCall?.[1]?.body))).toEqual({
+      worldId: "11111111-1111-4111-8111-111111111111",
+      sessionId: session.id,
+      sessionCreatedAt: session.createdAt,
+      direction: "approve",
+    })
+  })
+
+  it("does not let a delayed disposition overwrite history selection or clear the newer history load", async () => {
+    let releasePatch!: (response: Response) => void
+    let releaseHistory!: (response: Response) => void
+    const patchResponse = new Promise<Response>((resolve) => { releasePatch = resolve })
+    const historyResponse = new Promise<Response>((resolve) => { releaseHistory = resolve })
+    const saved = {
+      ...session,
+      id: "council-newer-history",
+      question: "Saved newer advice",
+      createdAt: "2026-08-29T17:00:00.000Z",
+      disposition: { direction: "reject" as const, recordedAt: "2026-08-29T17:30:00.000Z" },
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) {
+        const space = { ...defaultSpace(), selectedPath: "src/App.tsx", activeWindowId: "editor" as const }
+        return Response.json({ worldId: "11111111-1111-4111-8111-111111111111", space: spaceToServer(space), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "server", browserStorageKey: null })
+      }
+      if (url === "/api/environment/space" && init?.method === "PUT") return Response.json({ saved: true })
+      if (url === "/api/environment/council" && init?.method === "POST") return Response.json({ session })
+      if (url === "/api/environment/council" && init?.method === "PATCH") return patchResponse
+      if (url.startsWith("/api/environment/council?worldId=")) return historyResponse
+      if (url === "/api/environment/judgment") return Response.json({ error: "unavailable" }, { status: 503 })
+      return Response.json({})
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+    await screen.findByRole("button", { name: "Ask Council" })
+    fireEvent.click(screen.getByRole("button", { name: "Ask Council" }))
+    await screen.findByText(session.question)
+    fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
+    await screen.findByText(/Recording owner direction/)
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Brain Council" }))
+    fireEvent.click(screen.getByRole("button", { name: "Open Brain Council" }))
+    expect(await screen.findByText("Loading saved advisory sessions…")).toBeTruthy()
+
+    releasePatch(Response.json({ session: { ...session, disposition: { direction: "approve", recordedAt: "2026-08-29T18:00:00.000Z" } } }))
+    await Promise.resolve()
+    expect(screen.getByText("Loading saved advisory sessions…")).toBeTruthy()
+    expect(screen.queryByText(/Owner approved recommendation/)).toBeNull()
+
+    releaseHistory(Response.json({ history: [saved] }))
+    fireEvent.click(await screen.findByRole("button", { name: /Saved newer advice/ }))
+    expect(await screen.findByText(/Owner rejected recommendation/)).toBeTruthy()
+  })
+
+  it("replaces a conflicting choice with the canonical saved disposition without dispatching", async () => {
+    const canonical = {
+      ...session,
+      disposition: { direction: "reject" as const, recordedAt: "2026-08-29T17:59:00.000Z" },
+    }
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) {
+        const space = { ...defaultSpace(), selectedPath: "src/App.tsx", activeWindowId: "editor" as const }
+        return Response.json({ worldId: "11111111-1111-4111-8111-111111111111", space: spaceToServer(space), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage: "server", browserStorageKey: null })
+      }
+      if (url === "/api/environment/space" && init?.method === "PUT") return Response.json({ saved: true })
+      if (url === "/api/environment/council" && init?.method === "POST") return Response.json({ session })
+      if (url === "/api/environment/council" && init?.method === "PATCH") return Response.json({ error: "COUNCIL_DISPOSITION_CONFLICT", session: canonical }, { status: 409 })
+      if (url === "/api/environment/judgment") return Response.json({ error: "unavailable" }, { status: 503 })
+      return Response.json({})
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+    await screen.findByRole("button", { name: "Ask Council" })
+    fireEvent.click(screen.getByRole("button", { name: "Ask Council" }))
+    await screen.findByText(session.question)
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
+
+    expect(await screen.findByText("COUNCIL_DISPOSITION_CONFLICT")).toBeTruthy()
+    expect(await screen.findByText(/Owner rejected recommendation/)).toBeTruthy()
+    expect(screen.queryByRole("dialog", { name: "The Line" })).toBeNull()
   })
 })
