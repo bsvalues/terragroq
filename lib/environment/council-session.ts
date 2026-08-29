@@ -164,3 +164,21 @@ export function addCouncilSession(history: readonly CouncilSession[], rawSession
   if (!next.some((item) => item.id === session.id)) throw new Error("COUNCIL_SESSION_TOO_LARGE")
   return validateCouncilHistory(next)
 }
+
+/** Replace one exact target while deterministically pruning the oldest non-target advice for bytes. */
+export function replaceCouncilSessionBounded(
+  history: readonly CouncilSession[],
+  rawSession: unknown,
+): readonly CouncilSession[] {
+  const session = validateCouncilSession(rawSession)
+  if (!history.some((item) => item.id === session.id)) throw new Error("COUNCIL_SESSION_NOT_FOUND")
+  const next = history
+    .map((item) => item.id === session.id ? session : item)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+  while (byteLength(next) > MAX_COUNCIL_HISTORY_BYTES) {
+    const oldestNonTarget = next.findIndex((item) => item.id !== session.id)
+    if (oldestNonTarget < 0) throw new Error("COUNCIL_SESSION_TOO_LARGE")
+    next.splice(oldestNonTarget, 1)
+  }
+  return validateCouncilHistory(next)
+}

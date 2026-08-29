@@ -396,7 +396,6 @@ describe("PATCH /api/environment/council", () => {
   it("fails closed for stale, missing, foreign, conflicting, and unauthenticated sessions", async () => {
     for (const [error, status] of [
       ["COUNCIL_SESSION_STALE", 409],
-      ["COUNCIL_DISPOSITION_CONFLICT", 409],
       ["COUNCIL_SESSION_NOT_FOUND", 404],
       ["WORLD_NOT_FOUND", 404],
     ] as const) {
@@ -408,5 +407,21 @@ describe("PATCH /api/environment/council", () => {
     harness.getUserId.mockRejectedValueOnce(new Error("Unauthorized"))
     expect((await PATCH(patchRequest(body))).status).toBe(401)
     expect((await PATCH(patchRequest({ ...body, direction: "delegate" }))).status).toBe(400)
+  })
+
+  it("returns the exact canonical saved session on a conflicting disposition without mutating it", async () => {
+    const canonical = {
+      id: "council-saved",
+      createdAt: "2026-08-27T18:20:00.000Z",
+      disposition: { direction: "reject", recordedAt: "2026-08-29T17:59:00.000Z" },
+    }
+    harness.saveOwnedCouncilDisposition.mockRejectedValueOnce(new Error("COUNCIL_DISPOSITION_CONFLICT"))
+    harness.loadOwnedCouncilHistory.mockResolvedValueOnce([canonical])
+
+    const response = await PATCH(patchRequest(body))
+
+    expect(response.status).toBe(409)
+    expect(await response.json()).toEqual({ error: "COUNCIL_DISPOSITION_CONFLICT", session: canonical })
+    expect(harness.loadOwnedCouncilHistory).toHaveBeenCalledWith("owner-1", WORLD_ID)
   })
 })

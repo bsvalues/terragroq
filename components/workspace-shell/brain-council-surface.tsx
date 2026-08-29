@@ -112,6 +112,9 @@ export function BrainCouncilSurface({
   const [activeMemberId, setActiveMemberId] = useState(session.members[0]?.id ?? "")
   const activeMember = session.members.find((member) => member.id === activeMemberId) ?? session.members[0]
   const confidence = Math.max(0, Math.min(100, Math.round(session.confidence)))
+  const dispositionStatus = session.disposition
+    ? `${DISPOSITION_LABELS[session.disposition.direction]} · ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(session.disposition.recordedAt))} UTC`
+    : busy ? "Recording owner direction…" : null
 
   useCouncilDialogFocus(dialogRef, onDismiss)
 
@@ -213,8 +216,29 @@ export function BrainCouncilSurface({
         </aside>
       </div>
 
+      {error ? (
+        <div
+          className={styles.dispositionStatus}
+          role="alert"
+          aria-live="assertive"
+          data-council-disposition-status
+        >
+          {error}
+        </div>
+      ) : null}
+      {dispositionStatus ? (
+        <div
+          className={styles.dispositionStatus}
+          role="status"
+          aria-live="polite"
+          data-council-disposition-status
+        >
+          {dispositionStatus}
+        </div>
+      ) : null}
+
       <footer className={styles.footer}>
-        <div className={styles.footerNote} role={error ? "alert" : undefined}><RotateCcw aria-hidden="true" size={13} /> {error ?? (session.disposition ? `${DISPOSITION_LABELS[session.disposition.direction]} · ${new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }).format(new Date(session.disposition.recordedAt))} UTC` : busy ? "Recording owner direction…" : "Dismiss anytime; the current Space and its windows stay in place.")}</div>
+        <div className={styles.footerNote}><RotateCcw aria-hidden="true" size={13} /> Dismiss anytime; the current Space and its windows stay in place.</div>
         <div className={styles.actions} aria-label="Council advisory actions">
           {ACTIONS.map((action) => (
             <button

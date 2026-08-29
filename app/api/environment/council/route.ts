@@ -116,7 +116,19 @@ export async function PATCH(request: Request) {
     if (code === "WORLD_NOT_FOUND" || code === "COUNCIL_SESSION_NOT_FOUND") {
       return Response.json({ error: code }, { status: 404 })
     }
-    if (code === "COUNCIL_SESSION_STALE" || code === "COUNCIL_DISPOSITION_CONFLICT") {
+    if (code === "COUNCIL_DISPOSITION_CONFLICT") {
+      try {
+        const history = await loadOwnedCouncilHistory(userId, parsed.data.worldId)
+        const session = history?.find((item) => item.id === parsed.data.sessionId
+          && item.createdAt === parsed.data.sessionCreatedAt
+          && item.disposition !== null)
+        if (session) return Response.json({ error: code, session }, { status: 409 })
+      } catch {
+        // The mutation remains refused even when canonical conflict refresh is unavailable.
+      }
+      return Response.json({ error: code }, { status: 409 })
+    }
+    if (code === "COUNCIL_SESSION_STALE") {
       return Response.json({ error: code }, { status: 409 })
     }
     return Response.json({ error: "COUNCIL_PERSISTENCE_UNAVAILABLE" }, { status: 503 })

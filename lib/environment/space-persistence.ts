@@ -17,6 +17,7 @@ import {
 import { williamJudgmentBasisFingerprint } from "@/lib/environment/william-judgment"
 import {
   addCouncilSession,
+  replaceCouncilSessionBounded,
   validateCouncilDisposition,
   validateCouncilSession,
   type CouncilDispositionDirection,
@@ -381,7 +382,7 @@ export async function saveOwnedCouncilDisposition(
       return existing
     }
     const directed = validateCouncilSession({ ...existing, disposition })
-    const councilHistory = latest.councilHistory.map((session, sessionIndex) => sessionIndex === index ? directed : session)
+    const councilHistory = replaceCouncilSessionBounded(latest.councilHistory, directed)
     const updated = validateWorkingWorld({ ...latest, councilHistory })
     if (await store.updateOwned(
       input.userId,

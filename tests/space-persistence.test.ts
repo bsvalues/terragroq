@@ -938,4 +938,41 @@ describe("server-owned Space persistence", () => {
     await expect(saveOwnedCouncilDisposition({ ...input, userId: "owner-b" }, store)).rejects.toThrow("WORLD_NOT_FOUND")
     expect(store.rows.get("world-a")!.snapshot).toBe(committed)
   })
+
+  it("prunes only older non-target advice when disposition metadata crosses the bounded-history byte limit", async () => {
+    const store = new MemoryStore()
+    const fill = "x".repeat(2_843)
+    const nearLimit = Array.from({ length: 5 }, (_, index) => ({
+      id: `large-${index}`,
+      question: fill,
+      status: "ready" as const,
+      createdAt: `2026-08-27T10:0${index}:00.000Z`,
+      context: { spaceName: "T", kind: "file" as const, label: "x" },
+      members: Array.from({ length: 5 }, (_, member) => ({ id: `r-${member}`, role: "R", name: "N", provider: "p", model: "m", status: "ready" as const, perspective: fill })),
+      consensus: fill,
+      dissent: fill,
+      blindSpot: fill,
+      recommendation: fill,
+      confidence: 80,
+      evidence: Array.from({ length: 12 }, (_, evidence) => ({ id: `e-${evidence}`, label: "E", detail: "x".repeat(1_900) })),
+      disposition: null,
+    }))
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), councilHistory: nearLimit }
+    store.rows.set("world-a", { id: "world-a", userId: "owner-a", intent: initial.intent, snapshot: JSON.stringify(initial), updatedAt: new Date() })
+
+    const target = await saveOwnedCouncilDisposition({
+      userId: "owner-a",
+      worldId: "world-a",
+      sessionId: "large-0",
+      sessionCreatedAt: "2026-08-27T10:00:00.000Z",
+      direction: "request-changes",
+      recordedAt: "2026-08-29T18:00:00.000Z",
+    }, store)
+    const history = await loadOwnedCouncilHistory("owner-a", "world-a", store)
+
+    expect(target.id).toBe("large-0")
+    expect(target.disposition?.direction).toBe("request-changes")
+    expect(history?.map((entry) => entry.id)).toEqual(["large-0", "large-2", "large-3", "large-4"])
+    expect(history?.[0]).toEqual(target)
+  })
 })
