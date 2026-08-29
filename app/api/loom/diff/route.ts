@@ -4,7 +4,7 @@ import { promisify } from "node:util"
 import fs from "node:fs/promises"
 
 import { getSession } from "@/lib/session"
-import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
 
 export const dynamic = "force-dynamic"
@@ -29,9 +29,15 @@ export async function GET(request: Request) {
 
   const requested = new URL(request.url).searchParams.get("path")
   const scoped = requested !== null && requested !== ""
+  if (scoped && requested && isSensitiveWorkspacePath(requested)) {
+    return Response.json({ error: "SENSITIVE_PATH" }, { status: 400 })
+  }
   const resolved = scoped ? await resolveRealWorkspacePath(PROJECT_ROOT, requested, fs.realpath) : null
   if (scoped && (!resolved?.ok || !resolved.relative)) {
     return Response.json({ error: resolved?.refusal ?? "PATH_INVALID" }, { status: 400 })
+  }
+  if (scoped && resolved?.relative && isSensitiveWorkspacePath(resolved.relative)) {
+    return Response.json({ error: "SENSITIVE_PATH" }, { status: 400 })
   }
 
   const options = { cwd: PROJECT_ROOT, maxBuffer: MAX_DIFF_BYTES, windowsHide: true } as const

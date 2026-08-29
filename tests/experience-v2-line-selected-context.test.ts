@@ -179,4 +179,58 @@ describe("server-derived Line selected-object grounding", () => {
     const saved = harness.save.mock.calls[0]?.[0] as { expectedSelectedContext?: string }
     expect(saved.expectedSelectedContext).toContain("diff-version-a")
   })
+
+  it("fences an ignored binary selected file when only its tail changes beyond the presentation cap", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "williamos-line-full-file-hash-"))
+    roots.push(root)
+    await fs.mkdir(path.join(root, "generated"), { recursive: true })
+    const selected = path.join(root, "generated", "large.bin")
+    const original = Buffer.alloc(96 * 1024, 65)
+    original[0] = 0
+    await fs.writeFile(selected, original)
+    const space: SpaceState = {
+      schemaVersion: 1,
+      revision: 10,
+      windows: [
+        { id: "workspace-editor", kind: "editor", title: "Source", frame: { x: 24, y: 18, width: 800, height: 600 }, z: 4, minimized: false },
+        { id: "workspace-diff", kind: "diff", title: "Changes", frame: { x: 48, y: 40, width: 700, height: 520 }, z: 5, minimized: false },
+      ],
+      openFiles: ["generated/large.bin"],
+      panes: [{ id: "primary", filePath: "generated/large.bin", selection: { anchor: 0, head: 0 } }],
+      selection: { filePath: "generated/large.bin", anchor: 0, head: 0 },
+      activeWindowId: "workspace-diff",
+      activePaneId: "primary",
+      runningAppUrl: null,
+    }
+    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    const diff = {
+      path: "generated/large.bin", state: "untracked", status: "", patch: "", baseHash: "base-a",
+      patchHash: createHash("sha256").update("").digest("hex"), fingerprint: "untracked-version", reason: null,
+    }
+    harness.diff.mockResolvedValue(diff)
+    harness.save.mockImplementationOnce(async (input: {
+      expectedSelectedContext?: string
+      deriveSelectedContext?: (world: ReturnType<typeof createWorkingWorld> & { space: SpaceState }) => Promise<string>
+    }) => {
+      const changed = Buffer.from(original)
+      changed[changed.length - 1] = 66
+      await fs.writeFile(selected, changed)
+      const latest = JSON.parse(harness.snapshot) as ReturnType<typeof createWorkingWorld> & { space: SpaceState }
+      if (await input.deriveSelectedContext?.(latest) !== input.expectedSelectedContext) throw new Error("LINE_CONTEXT_STALE")
+    })
+    process.env.WILLIAMOS_PROJECT_ROOT = root
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ choices: [{ message: { content: "Stale binary review" } }] })))
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "Review the current ignored binary change" }),
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "LINE_CONTEXT_STALE" })
+    const saved = harness.save.mock.calls[0]?.[0] as { expectedSelectedContext?: string }
+    expect(saved.expectedSelectedContext).toContain(createHash("sha256").update(original).digest("hex"))
+  })
 })

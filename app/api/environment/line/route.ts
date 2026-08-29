@@ -544,20 +544,34 @@ async function deriveSelectedFileGrounding(
     return unavailable(selectedPath, "PATH_UNAVAILABLE", `${label} Content unavailable: the persisted path is outside the readable workspace.`)
   }
   if (isSensitiveWorkspacePath(resolved.relative)) return unavailable(resolved.relative, "SENSITIVE_PATH", `${label} Content unavailable: the selected path is sensitive.`)
-  let handle: fs.promises.FileHandle | null = null
   try {
-    handle = await fs.promises.open(resolved.absolute, "r")
-    const bytes = Buffer.alloc(SELECTED_FILE_CONTEXT_BYTES + 1)
-    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0)
-    const sample = bytes.subarray(0, bytesRead)
-    const sha256 = createHash("sha256").update(sample).digest("hex")
+    // Hash the entire file even when its content cannot be presented. A prefix hash made ignored,
+    // untracked, binary, and oversized files vulnerable to invisible tail changes during inference.
+    const hash = createHash("sha256")
+    const retained: Buffer[] = []
+    let retainedBytes = 0
+    let totalBytes = 0
+    for await (const value of fs.createReadStream(resolved.absolute)) {
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
+      hash.update(chunk)
+      totalBytes += chunk.length
+      const remaining = SELECTED_FILE_CONTEXT_BYTES + 1 - retainedBytes
+      if (remaining > 0) {
+        const bounded = chunk.subarray(0, remaining)
+        retained.push(bounded)
+        retainedBytes += bounded.length
+      }
+    }
+    const sample = Buffer.concat(retained, retainedBytes)
+    const sha256 = hash.digest("hex")
     const version = (unavailableReason: string | null) => JSON.stringify({
       path: resolved.relative,
       sha256,
-      boundedBytes: bytesRead,
+      boundedBytes: retainedBytes,
+      totalBytes,
       unavailableReason,
     })
-    if (bytesRead > SELECTED_FILE_CONTEXT_BYTES) {
+    if (totalBytes > SELECTED_FILE_CONTEXT_BYTES) {
       return { facts: `${label} Content unavailable: the selected file exceeds the grounding limit.`, version: version("FILE_TOO_LARGE") }
     }
     if (looksBinary(sample)) return { facts: `${label} Content unavailable: the selected file is binary.`, version: version("BINARY_FILE") }
@@ -567,8 +581,6 @@ async function deriveSelectedFileGrounding(
     }
   } catch {
     return unavailable(resolved.relative, "FILE_UNREADABLE", `${label} Content unavailable: the selected file could not be read.`)
-  } finally {
-    await handle?.close().catch(() => undefined)
   }
 }
 
