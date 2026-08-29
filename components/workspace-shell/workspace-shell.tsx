@@ -998,7 +998,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       if (lineTarget === "agent") {
         appendConversation("owner", text)
         if (!delegateContext?.provider) throw new Error("AGENT_PROVIDER_REQUIRED")
-        const promotedPath = delegateContext.provider === "Codex" ? space.selectedPath : null
+        const promotedPath = delegateContext.provider === "Codex" && delegateContext.kind === "file" ? delegateContext.label : null
         if (promotedPath) await persistBarrierRef.current()
         let committedPersistenceError: AgentTurnCommittedPersistenceError | null = null
         try {
@@ -1007,6 +1007,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             role: delegateContext.role,
             assignment: delegateContext.assignment,
             prompt: contextualText,
+            ...(delegateContext.kind === "file" ? { target: { kind: "file" as const, path: delegateContext.label } } : {}),
             onEvent: () => {},
           })
         } catch (error) {
@@ -1064,7 +1065,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge"] as const
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk"] as const
-    : selectedKind === "agent" ? ["Talk", "Redirect", "Pause", "Fork", "Review work"] as const
+    : selectedKind === "agent" ? ["Talk", "Redirect", "Pause", "Fork", selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", "Continue", "Delegate", "Council"] as const
   const worldLine = spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""
   const workerLine = spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""
@@ -1285,6 +1286,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       openLine("", "agent")
       return
     }
+    if (action === "Review work" && selectedAgent?.kind === "durable-session" && selectedAgent.target) {
+      openReviewPath(selectedAgent.target.path)
+      return
+    }
     if (selectedAgent?.kind === "durable-session" && (action === "Talk" || action === "Redirect")) {
       const local = selectedAgent.providerLabel === "Local"
       setDelegateContext(local
@@ -1396,7 +1401,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" ? spatial.primaryAction : ""}`} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
       </div>

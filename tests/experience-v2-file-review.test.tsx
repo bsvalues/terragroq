@@ -201,6 +201,77 @@ describe("Experience V2 selected-file Review", () => {
     expect(screen.queryByRole("textbox", { name: "The Line" })).toBeNull()
   })
 
+  it("reviews a restored agent's exact persisted file target instead of the currently selected file", async () => {
+    const agentId = "restored-codex-agent"
+    const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:${agentId}`,
+      sessions: [{
+        schemaVersion: 1,
+        sessionId: agentId,
+        role: "Builder",
+        provider: "Codex",
+        assignment: "Implement src/app.ts",
+        target: { kind: "file", path: "src/app.ts" },
+        updatedAt: "2026-08-28T12:00:00.000Z",
+        completedTurns: [{ ownerPrompt: "Implement it", finalResult: "Implemented it", completedAt: "2026-08-28T12:00:00.000Z" }],
+      }],
+    }))
+    const fetcher = baseFetch(() => stream(
+      { type: "session", sessionId: SESSION_ID, resumed: false },
+      resultEvent("Independent review of the agent's work"),
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await screen.findByLabelText("Source content")
+    fireEvent.click(screen.getByRole("tab", { name: "other.ts" }))
+    fireEvent.click(await screen.findByRole("button", { name: /Builder · Codex · Implement src\/app.ts/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    fireEvent.click(screen.getByRole("button", { name: "Review work" }))
+
+    expect(screen.getByText("Review · src/app.ts")).toBeTruthy()
+    expect(screen.queryByText("Review · src/other.ts")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }))
+    expect(await screen.findByText("Independent review of the agent's work")).toBeTruthy()
+    const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
+    expect(JSON.parse(String(request?.[1]?.body))).toMatchObject({ mode: "review", path: "src/app.ts" })
+    expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
+  })
+
+  it("truthfully disables Review work for a restored session without a verified file target", async () => {
+    const agentId = "restored-no-target"
+    const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:${agentId}`,
+      sessions: [{
+        schemaVersion: 1,
+        sessionId: agentId,
+        role: "Builder",
+        provider: "Codex",
+        assignment: "General project work",
+        updatedAt: "2026-08-28T12:00:00.000Z",
+        completedTurns: [{ ownerPrompt: "Work generally", finalResult: "Done", completedAt: "2026-08-28T12:00:00.000Z" }],
+      }],
+    }))
+    const fetcher = baseFetch(() => { throw new Error("review must not start") })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await screen.findByLabelText("Source content")
+    fireEvent.click(await screen.findByRole("button", { name: /Builder · Codex · General project work/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+
+    const unavailable = screen.getByRole("button", { name: "Review work unavailable" }) as HTMLButtonElement
+    expect(unavailable.disabled).toBe(true)
+    expect(screen.queryByRole("textbox", { name: "The Line" })).toBeNull()
+    expect(screen.queryByRole("textbox", { name: "Review focus" })).toBeNull()
+    expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line" || String(input) === "/api/loom/agent")).toBe(false)
+  })
+
   it("restores, raises, and updates a minimized inspector when the same file is reviewed again", async () => {
     let turns = 0
     vi.stubGlobal("fetch", baseFetch(() => {

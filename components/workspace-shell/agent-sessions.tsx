@@ -19,12 +19,18 @@ export type CompletedAgentTurn = Readonly<{
   completedAt: string
 }>
 
+export type AgentSessionFileTarget = Readonly<{
+  kind: "file"
+  path: string
+}>
+
 export type DurableAgentSession = Readonly<{
   schemaVersion: 1
   sessionId: string
   role: string
   provider: AgentProvider
   assignment: string
+  target?: AgentSessionFileTarget
   reviewPath?: string
   updatedAt: string
   completedTurns?: readonly CompletedAgentTurn[]
@@ -49,6 +55,7 @@ export type ExperienceAgentSession = Readonly<{
   truth: "live" | "resume-unverified"
   kind: "durable-session" | "world-worker"
   mode: "delegate" | "review"
+  target?: AgentSessionFileTarget
   reviewPath?: string
   lastResult?: string
 }>
@@ -62,6 +69,7 @@ export type RunClaudeTurnInput = Readonly<{
   focus?: string
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
   onReviewComplete?: (report: string) => void
+  target?: AgentSessionFileTarget
 }>
 
 export type RunAgentTurnInput = Readonly<{
@@ -69,6 +77,7 @@ export type RunAgentTurnInput = Readonly<{
   role: string
   assignment: string
   prompt: string
+  target?: AgentSessionFileTarget
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
 }>
 
@@ -136,6 +145,14 @@ function validSessionId(provider: AgentProvider, value: unknown): value is strin
   return typeof value === "string" && (provider === "Codex" ? CODEX_SESSION_ID : CLAUDE_SESSION_ID).test(value)
 }
 
+function parseFileTarget(value: unknown): AgentSessionFileTarget | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  if (Object.keys(candidate).length !== 2 || candidate.kind !== "file") return null
+  const path = boundedText(candidate.path, 1_000)
+  return path ? { kind: "file", path } : null
+}
+
 function parseDescriptor(value: string | null): DurableAgentSession | null {
   if (!value) return null
   let raw: unknown
@@ -146,18 +163,21 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
   const assignment = boundedText(candidate.assignment, 500)
   const updatedAt = typeof candidate.updatedAt === "string" && Number.isFinite(Date.parse(candidate.updatedAt))
     ? candidate.updatedAt : null
+  const target = candidate.target === undefined ? undefined : parseFileTarget(candidate.target)
   const reviewPath = candidate.reviewPath === undefined ? undefined : boundedText(candidate.reviewPath, 1_000)
   const completedTurns = candidate.completedTurns === undefined ? [] : parseCompletedTurns(candidate.completedTurns)
   if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)
-    || !role || !assignment || !updatedAt || (candidate.reviewPath !== undefined && !reviewPath) || !completedTurns
-    || candidate.provider === "Local" && (role !== "Thinker" || assignment !== "Conversation" || reviewPath !== undefined)) return null
+    || !role || !assignment || !updatedAt || (candidate.target !== undefined && !target)
+    || (candidate.reviewPath !== undefined && !reviewPath) || !completedTurns
+    || candidate.provider === "Local" && (role !== "Thinker" || assignment !== "Conversation" || target !== undefined || reviewPath !== undefined)) return null
   return {
     schemaVersion: 1,
     sessionId: candidate.sessionId,
     role,
     provider: candidate.provider,
     assignment,
+    ...(target ? { target } : {}),
     ...(reviewPath ? { reviewPath } : {}),
     updatedAt,
     completedTurns,
@@ -302,6 +322,7 @@ function projectSessions(
       truth: isVerified ? "live" : "resume-unverified",
       kind: "durable-session",
       mode: descriptor.reviewPath ? "review" : "delegate",
+      ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
       ...(descriptor.completedTurns?.at(-1)?.finalResult ? { lastResult: descriptor.completedTurns.at(-1)!.finalResult } : {}),
     })
@@ -438,10 +459,12 @@ export function useExperienceAgentSessions({
     const prompt = boundedText(input.prompt, 20_000)
     const mode = input.mode ?? "delegate"
     const reviewPath = boundedText(input.path, 1_000)
+    const requestedTarget = input.target === undefined ? null : parseFileTarget(input.target)
     const focus = input.focus === undefined || input.focus === "" ? null : boundedText(input.focus, 2_000)
     if (!role) throw new Error("AGENT_ROLE_REQUIRED")
     if (!assignment) throw new Error("AGENT_ASSIGNMENT_REQUIRED")
     if (mode === "delegate" && !prompt) throw new Error("AGENT_PROMPT_REQUIRED")
+    if (input.target !== undefined && !requestedTarget) throw new Error("AGENT_TARGET_INVALID")
     if (mode === "review" && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (mode === "review" && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
     if (operationRef.current) throw new Error("AGENT_TURN_ALREADY_RUNNING")
@@ -564,6 +587,7 @@ export function useExperienceAgentSessions({
             role,
             provider: input.provider,
             assignment,
+            ...((prior ? prior.target : requestedTarget) ? { target: (prior ? prior.target : requestedTarget)! } : {}),
             ...(mode === "review" ? { reviewPath: reviewPath! } : {}),
             updatedAt: new Date().toISOString(),
           }

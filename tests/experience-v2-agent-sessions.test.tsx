@@ -650,6 +650,10 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const version = 2\n"))
     expect(sourceReads).toBeGreaterThanOrEqual(2)
     expect(diffReads).toBeGreaterThanOrEqual(2)
+    expect(JSON.parse(String(window.localStorage.getItem("williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion"))).sessions[0].target).toEqual({
+      kind: "file",
+      path: "src/app.ts",
+    })
   })
 
   it("refreshes the committed Codex promotion while surfacing transcript persistence failure", async () => {
@@ -1451,6 +1455,72 @@ describe("Experience V2 real agent sessions", () => {
       selectedSessionKey: `Claude:${sessionId}`,
       sessions: [{ sessionId, role: "Builder", provider: "Claude", assignment: "Change src/app.ts" }],
     })
+  })
+
+  it("persists and restores the exact validated file target earned by a successful agent session", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, resumed: false },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Changed the captured file." } },
+      { type: "done", code: 0, reason: null },
+    )))
+    const first = render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Claude",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Change the captured file.",
+        target: { kind: "file", path: "src/app.ts" },
+      })
+    })
+
+    expect(expose!.sessions[0]).toMatchObject({ target: { kind: "file", path: "src/app.ts" } })
+    expect(JSON.parse(String(window.localStorage.getItem(key))).sessions[0].target).toEqual({ kind: "file", path: "src/app.ts" })
+
+    first.unmount()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions[0]).toMatchObject({
+      truth: "resume-unverified",
+      target: { kind: "file", path: "src/app.ts" },
+    }))
+  })
+
+  it("rejects malformed persisted target metadata while retaining legacy sessions without a target", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: "Claude:123e4567-e89b-42d3-a456-426614174000",
+      sessions: [{
+        schemaVersion: 1,
+        sessionId: "123e4567-e89b-42d3-a456-426614174000",
+        role: "Builder",
+        provider: "Claude",
+        assignment: "Legacy work",
+        target: { kind: "file", path: "", inventedAuthority: true },
+        updatedAt: "2026-08-27T16:05:00.000Z",
+      }],
+    }))
+
+    const malformed = render(<Harness />)
+    await waitFor(() => expect(window.localStorage.getItem(key)).toBeNull())
+    expect(expose!.sessions).toEqual([])
+
+    malformed.unmount()
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 1,
+      sessionId: "123e4567-e89b-42d3-a456-426614174000",
+      role: "Builder",
+      provider: "Claude",
+      assignment: "Legacy work",
+      updatedAt: "2026-08-27T16:05:00.000Z",
+    }))
+    render(<Harness />)
+    await waitFor(() => expect(expose!.sessions).toHaveLength(1))
+    expect(expose!.sessions[0]?.assignment).toBe("Legacy work")
+    expect(expose!.sessions[0]?.target).toBeUndefined()
   })
 
   it("shows a restored descriptor as unverified until resume succeeds", async () => {
