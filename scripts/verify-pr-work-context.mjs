@@ -1,93 +1,89 @@
 import { execFileSync } from "node:child_process"
+import { createPublicKey } from "node:crypto"
 import fs from "node:fs"
+import { register } from "node:module"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
 
-import { reviewPullRequestReceipt, RECEIPT_BLOCK } from "../lib/governance/pr-receipt.ts"
-import { measureDoctrineDigest } from "../lib/governance/work-context-live.ts"
-import { parseDeclaredReceipt } from "../lib/governance/pr-receipt.ts"
+import {
+  DELIVERY_SEAL_BLOCK,
+  parseDeclaredDeliverySeals,
+  reviewPullRequestReceipt,
+} from "../lib/governance/pr-receipt.ts"
 
-/**
- * Reviewer-side enforcement of #831, acceptance criterion 8.
- *
- * A green suite is not a proven premise. The route gate already refuses unproven mutations made
- * through the application, but a lane that commits straight to a branch never touches it -- which is
- * how most work actually arrives. This is the half that sees those.
- *
- * It runs on the pull request, re-derives the token from the declared claims, measures the doctrine
- * itself rather than believing the claim, and checks the diff against the declared reservation. What
- * it cannot check is the authority grant: that lives in a database no runner can reach, and it is
- * enforced at issuance instead. Better to name the gap than imply a completeness this does not have.
- *
- * Every refusal prints a recovery route, because #831 is explicit that the gate must never convert a
- * model mistake into a new owner question.
- */
+register(
+  pathToFileURL(path.join(process.cwd(), "scripts", "governance", "ts-alias-loader.mjs")).href,
+  import.meta.url,
+)
+const { inspectGitDelivery } = await import("../lib/governance/delivery-seal-runtime.ts")
 
 const event = process.env.GITHUB_EVENT_PATH ? JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")) : {}
 const pr = event.pull_request ?? {}
-const author = pr.user?.login ?? ""
 const base = pr.base?.ref ?? "main"
+const root = process.cwd()
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim()
 const lines = (out) => out.split("\n").map((line) => line.trim()).filter(Boolean)
 
-function fail(verdict) {
-  console.error(`\n${verdict.failure}: ${verdict.detail}`)
-  console.error(`\nRecovery: ${verdict.recovery}`)
-  console.error(
-    `\nThis check enforces #831 acceptance criterion 8: a reviewer rejects a pull request with no valid` +
-      ` ${RECEIPT_BLOCK} even when the tests are green.\n`,
-  )
+function fail(failure, detail, recovery) {
+  console.error(`\n${failure}: ${detail}`)
+  console.error(`\nRecovery: ${recovery}`)
+  console.error(`\nGitHub verifies WilliamOS delivery; it does not mint work authority or accept client-authored receipts.\n`)
   process.exit(1)
 }
 
-// Who authored a pull request cannot decide whether the gate applies here.
-//
-// Every agent in this lab creates pull requests with the owner's gh credentials, so a builder lane
-// and the owner are the same GitHub identity. An author-based exemption would therefore exempt
-// exactly the lanes #831 exists to gate, while looking like it worked. It would be a gate that never
-// fires.
-//
-// So the gate applies to every pull request, and the way out is an explicit, auditable claim rather
-// than an identity check. An agent could write the marker too -- nothing here can stop that -- but a
-// written claim is permanent and attributable, which is the standard the doctrine already sets for
-// the things a machine cannot verify.
-const EXEMPT = /^WORK_CONTEXT_EXEMPT:\s*(.+)$/m
-const exemption = EXEMPT.exec(pr.body ?? "")
-if (exemption) {
-  console.log(`exempted by an explicit claim in the pull request body: ${exemption[1].trim()}`)
-  console.log(`author: ${author || "unknown"}. This is recorded, not verified.`)
-  process.exit(0)
-}
-
-git("fetch", "--quiet", "origin", base)
-const changedFiles = lines(git("diff", "--name-only", `origin/${base}...HEAD`))
-
-const declared = parseDeclaredReceipt(pr.body)
-// The anchor is the main SHA the receipt was issued against. Files that moved on main since then are
-// what decides staleness -- not the fact that main moved at all, which would kill every receipt on
-// the next unrelated merge and make the gate something lanes route around.
-let mainMovedFiles = []
-if (declared?.facts?.mainSha) {
+function configuredPublicKeys() {
+  const raw = process.env.WILLIAMOS_DELIVERY_SEAL_PUBLIC_KEYS_JSON?.trim()
+  if (!raw) return {}
   try {
-    mainMovedFiles = lines(git("diff", "--name-only", `${declared.facts.mainSha}..origin/${base}`))
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
+    return Object.fromEntries(Object.entries(parsed).map(([keyId, encoded]) => {
+      if (typeof encoded !== "string" || !encoded) throw new Error("invalid public key")
+      const key = createPublicKey({ key: Buffer.from(encoded, "base64"), format: "der", type: "spki" })
+      if (key.asymmetricKeyType !== "ed25519") throw new Error("public key is not Ed25519")
+      return [keyId, key]
+    }))
   } catch {
-    // An unresolvable anchor is not a pass. It means the receipt names a commit this repository does
-    // not have, which is exactly the stale-or-fabricated case.
-    fail({
-      failure: "FAILED_STALE_MAIN",
-      detail: `the receipt's anchor ${declared.facts.mainSha} is not a commit in this repository`,
-      recovery: "Fetch current main, re-establish context against a real commit, and re-issue the receipt.",
-    })
+    return {}
   }
 }
 
-const { digest } = await measureDoctrineDigest()
+git("fetch", "--quiet", "origin", base)
+const headSha = git("rev-parse", "HEAD").toLowerCase()
+const changedFiles = lines(git("diff", "--name-only", `origin/${base}...HEAD`))
+const seals = parseDeclaredDeliverySeals(pr.body)
+const patchDigests = {}
+let repository
+
+for (const seal of seals) {
+  try {
+    const measured = await inspectGitDelivery(
+      root,
+      seal.payload.delivery.baseSha,
+      headSha,
+      seal.payload.delivery.paths,
+    )
+    repository ??= measured.repository
+    patchDigests[[...measured.paths].sort().join("\0")] = measured.patchDigest
+  } catch (error) {
+    fail(
+      "FAILED_RECEIPT_MISMATCH",
+      `the exact sealed assignment patch could not be measured: ${error?.message ?? error}`,
+      "Deliver the unchanged output of the existing Space assignment, or ask WilliamOS to seal the current exact output.",
+    )
+  }
+}
+
 const verdict = reviewPullRequestReceipt({
   body: pr.body,
   changedFiles,
-  mainMovedFiles,
-  liveDoctrineDigest: digest,
+  headSha,
+  repository,
+  patchDigests,
+  publicKeys: configuredPublicKeys(),
 })
+if (!verdict.ok) fail(verdict.failure, verdict.detail, verdict.recovery)
 
-if (!verdict.ok) fail(verdict)
-console.log(`work context proven for ${declared.facts.workOrderRef} against ${declared.facts.mainSha.slice(0, 10)}.`)
-console.log(`${changedFiles.length} changed file(s), all inside the declared reservation.`)
+console.log(`${DELIVERY_SEAL_BLOCK} verified for exact head ${headSha.slice(0, 10)}.`)
+console.log(`${changedFiles.length} changed file(s), all covered by WilliamOS-issued Space assignments.`)
