@@ -84,6 +84,111 @@ describe("Experience V2 real agent sessions", () => {
     expect(onSelect).toHaveBeenCalledWith(sessions[11])
   })
 
+  it("forks only the exact verified idle Claude Builder, preserves its transcript, and resumes the selected child", async () => {
+    const sourceId = "123e4567-e89b-42d3-a456-426614174000"
+    const childId = "223e4567-e89b-42d3-a456-426614174000"
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId: sourceId, resumed: false },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sourceId, result: "Source result" } },
+        { type: "done", reason: null, code: 0 },
+      ))
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId: childId, provider: "Claude", mode: "fork", resumed: false, forkedFrom: sourceId },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: childId, result: "Fork result" } },
+        { type: "done", reason: null, code: 0 },
+      ))
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId: childId, resumed: true },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: childId, result: "Child continued" } },
+        { type: "done", reason: null, code: 0 },
+      ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "Original approach", prompt: "Build the source." })
+    })
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const beforeFork = JSON.parse(String(window.localStorage.getItem(key)))
+    const sourceBefore = structuredClone(beforeFork.sessions.find((session: { sessionId: string }) => session.sessionId === sourceId))
+
+    await act(async () => {
+      await expose!.forkClaudeSession({
+        sourceSessionId: sourceId,
+        assignment: "Original approach",
+        prompt: "Try the smaller alternative.",
+      })
+    })
+
+    const afterFork = JSON.parse(String(window.localStorage.getItem(key)))
+    expect(afterFork.sessions.find((session: { sessionId: string }) => session.sessionId === sourceId)).toEqual(sourceBefore)
+    expect(afterFork.sessions.find((session: { sessionId: string }) => session.sessionId === childId)).toMatchObject({
+      provider: "Claude", role: "Builder", assignment: "Original approach", forkedFrom: sourceId,
+      completedTurns: [{ ownerPrompt: "Try the smaller alternative.", finalResult: "Fork result" }],
+    })
+    expect(afterFork.selectedSessionKey).toBe(`Claude:${childId}`)
+    expect(expose!.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: `Claude:${sourceId}`, truth: "live" }),
+      expect.objectContaining({ id: `Claude:${childId}`, truth: "live", forkedFrom: sourceId }),
+    ]))
+
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "Original approach", prompt: "Continue the child." })
+    })
+    expect(JSON.parse(String(fetcher.mock.calls[2]?.[1]?.body))).toMatchObject({
+      provider: "cloud", sessionId: childId, resume: true, prompt: "Continue the child.",
+    })
+  })
+
+  it("refuses to fork an unverified restored Claude hint without touching transport or persistence", async () => {
+    const sourceId = "123e4567-e89b-42d3-a456-426614174000"
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const persisted = JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${sourceId}`,
+      sessions: [{
+        schemaVersion: 1, sessionId: sourceId, role: "Builder", provider: "Claude",
+        assignment: "Original approach", updatedAt: "2026-08-27T16:05:00.000Z", completedTurns: [],
+      }],
+    })
+    window.localStorage.setItem(key, persisted)
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
+
+    await expect(act(async () => expose!.forkClaudeSession({
+      sourceSessionId: sourceId, assignment: "Original approach", prompt: "Try another path.",
+    }))).rejects.toThrow("AGENT_FORK_UNAVAILABLE")
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem(key)).toBe(persisted)
+  })
+
+  it("materializes no child and leaves the verified source byte-for-byte intact when fork startup fails", async () => {
+    const sourceId = "123e4567-e89b-42d3-a456-426614174000"
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId: sourceId, resumed: false },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sourceId, result: "Source result" } },
+        { type: "done", reason: null, code: 0 },
+      ))
+      .mockResolvedValueOnce(ndjson({ type: "done", reason: "FORK_SESSION_ID_INVALID", code: null }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await act(async () => {
+      await expose!.runAgentTurn({ provider: "Claude", role: "Builder", assignment: "Original approach", prompt: "Build source." })
+    })
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const before = window.localStorage.getItem(key)
+
+    await expect(act(async () => expose!.forkClaudeSession({
+      sourceSessionId: sourceId, assignment: "Original approach", prompt: "Diverge.",
+    }))).rejects.toThrow("AGENT_TURN_FAILED:FORK_SESSION_ID_INVALID")
+    expect(window.localStorage.getItem(key)).toBe(before)
+    expect(expose!.sessions).toEqual([expect.objectContaining({ id: `Claude:${sourceId}`, truth: "live" })])
+  })
+
   it("migrates the legacy v1 descriptor into a selected bounded collection without claiming it is live", async () => {
     const key = "williamos:agent-session:owner-1:terrafusion"
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"

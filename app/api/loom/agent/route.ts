@@ -157,6 +157,7 @@ export async function POST(request: Request) {
     provider?: unknown
     model?: unknown
     completedTurns?: unknown
+    sourceSessionId?: unknown
   }
   try {
     body = await request.json()
@@ -165,6 +166,7 @@ export async function POST(request: Request) {
   }
 
   const reviewMode = body.mode === "review"
+  const forkMode = body.mode === "fork"
   let reviewPath: string | null = null
   let reviewFocus: string | null = null
   let prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
@@ -218,6 +220,9 @@ export async function POST(request: Request) {
   if (!reviewMode && body.provider !== "local" && body.provider !== "cloud") {
     return Response.json({ error: "PROVIDER_INVALID" }, { status: 400 })
   }
+  if (forkMode && body.provider !== "cloud") {
+    return Response.json({ error: "FORK_PROVIDER_INVALID" }, { status: 400 })
+  }
   const provider = resolveProvider(reviewMode ? "cloud" : body.provider)
   if (provider.id === "local") {
     if (!localText(prompt, 20_000)) {
@@ -244,18 +249,24 @@ export async function POST(request: Request) {
   }
 
   // The id is validated rather than trusted: it reaches a command line, and only this shape can.
+  const forkSourceId = forkMode && typeof body.sourceSessionId === "string" && SESSION_ID.test(body.sourceSessionId)
+    ? body.sourceSessionId : null
+  if (forkMode && forkSourceId === null) {
+    return Response.json({ error: "FORK_SOURCE_REQUIRED" }, { status: 400 })
+  }
   const requested = typeof body.sessionId === "string" && SESSION_ID.test(body.sessionId) ? body.sessionId : null
   if (reviewMode && body.resume === true && requested === null) {
     return Response.json({ error: "SESSION_ID_REQUIRED" }, { status: 400 })
   }
-  const resuming = requested !== null && body.resume === true
-  const sessionId = requested ?? randomUUID()
-  const priorThread = resuming && requested ? await loomThreadDescriptor(requested) : null
+  const resuming = !forkMode && requested !== null && body.resume === true
+  let sessionId: string | null = forkMode ? null : requested ?? randomUUID()
+  const priorThreadId = forkSourceId ?? (resuming ? requested : null)
+  const priorThread = priorThreadId ? await loomThreadDescriptor(priorThreadId) : null
 
   // Shape is not ownership. Resuming replays a thread's whole history, so the id has to belong to
   // the caller -- otherwise anyone holding another operator's id can read their conversation.
   const resume = assertThreadResume({
-    resuming,
+    resuming: resuming || forkMode,
     owner: priorThread?.owner ?? null,
     userId: session.user.id,
   })
@@ -271,9 +282,17 @@ export async function POST(request: Request) {
   // Selected-file review is separately constrained to a read-only tool set below, so requiring write
   // authority for it would make the receipt lie about what the turn can do. The local path above is
   // also deliberately ungated because it only produces text.
+  let workContextReceipt: string | null = null
   if (!reviewMode) {
     const context = await requireWorkContext()
     if (!context.ok) return workContextRefusal(context)
+    workContextReceipt = typeof context.receipt === "string" && context.receipt ? context.receipt : null
+    if (forkMode && (!workContextReceipt || priorThread?.provider !== "cloud" || priorThread.mode !== "agent" || priorThread.path !== null)) {
+      return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
+    }
+    if (forkMode && priorThread?.workContextReceipt !== workContextReceipt) {
+      return Response.json({ error: "THREAD_CONTEXT_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
+    }
   }
 
   const args = [
@@ -283,7 +302,7 @@ export async function POST(request: Request) {
     // Review is mechanically read-only. Generic agent turns retain their existing builder tools.
     "--permission-mode", reviewMode ? "plan" : "acceptEdits",
     ...(reviewMode ? ["--tools", "Read,Grep,Glob"] : []),
-    resuming ? "--resume" : "--session-id", sessionId,
+    ...(forkMode ? ["--resume", forkSourceId!, "--fork-session"] : [resuming ? "--resume" : "--session-id", sessionId!]),
     prompt,
   ]
 
@@ -319,18 +338,21 @@ export async function POST(request: Request) {
         if (settled) return
         settled = true
         clearTimeout(timer)
-        void recordLoomEnd({
-          userId: session.user.id,
-          kind: "agent",
-          subject: sessionId,
-          outcome: {
-            provider: provider.id,
-            external: provider.external,
-            ...(reviewMode ? { mode: "review", path: reviewPath } : {}),
-            code: event.code ?? null,
-            reason: event.reason ?? null,
-          },
-        })
+        if (sessionId) {
+          void recordLoomEnd({
+            userId: session.user.id,
+            kind: "agent",
+            subject: sessionId,
+            outcome: {
+              provider: provider.id,
+              external: provider.external,
+              ...(reviewMode ? { mode: "review", path: reviewPath } : {}),
+              ...(forkMode ? { mode: "agent", forkedFrom: forkSourceId } : {}),
+              code: event.code ?? null,
+              reason: event.reason ?? null,
+            },
+          })
+        }
         send(event)
         try { controller.close() } catch { /* already closed */ }
       }
@@ -338,25 +360,27 @@ export async function POST(request: Request) {
         if (settled) return
         // Settle the durable outcome before kill can synchronously or asynchronously emit close.
         // Otherwise close(0) can overwrite an explicit cancellation with a false success receipt.
-        finish({ type: "done", reason })
+        finish(forkMode ? { type: "done", reason, code: null } : { type: "done", reason })
         child.kill()
       }
 
-      send({ type: "session", sessionId, resumed: resuming })
-      // An external turn is the case the doctrine cares most about: the receipt names the provider
-      // and records that work left the machine.
-      void recordLoomStart({
-        userId: session.user.id,
-        kind: "agent",
-        subject: sessionId,
-        metadata: {
-          provider: provider.id,
-          external: provider.external,
-          metered: provider.metered,
-          resumed: resuming,
-          ...(reviewMode ? { mode: "review", path: reviewPath, focus: reviewFocus } : {}),
-        },
-      })
+      if (!forkMode) {
+        send({ type: "session", sessionId, resumed: resuming })
+        // An external turn is the case the doctrine cares most about: the receipt names the provider
+        // and records that work left the machine.
+        void recordLoomStart({
+          userId: session.user.id,
+          kind: "agent",
+          subject: sessionId!,
+          metadata: {
+            provider: provider.id,
+            external: provider.external,
+            metered: provider.metered,
+            resumed: resuming,
+            ...(reviewMode ? { mode: "review", path: reviewPath, focus: reviewFocus } : { mode: "agent", ...(workContextReceipt ? { workContextReceipt } : {}) }),
+          },
+        })
+      }
 
       const timer = setTimeout(() => {
         terminate?.("TIMEOUT")
@@ -365,18 +389,71 @@ export async function POST(request: Request) {
       // The CLI emits one JSON object per line. Chunks split lines, so partials are buffered and
       // only complete lines are forwarded -- a half-parsed event would look like agent output.
       let buffer = ""
+      let outputQueue = Promise.resolve()
+      const forwardLine = async (line: string) => {
+        if (!line.trim() || settled) return
+        let event: Record<string, unknown>
+        try { event = JSON.parse(line) as Record<string, unknown> } catch {
+          if (forkMode && !sessionId) {
+            finish({ type: "done", reason: "FORK_SESSION_ID_REQUIRED", code: null })
+            child.kill()
+            return
+          }
+          send({ type: "raw", text: line })
+          return
+        }
+        if (forkMode && !sessionId) {
+          if (event.type !== "system" || event.subtype !== "init") {
+            finish({ type: "done", reason: "FORK_SESSION_ID_REQUIRED", code: null })
+            child.kill()
+            return
+          }
+          const childSessionId = typeof event.session_id === "string" && SESSION_ID.test(event.session_id)
+            && event.session_id !== forkSourceId ? event.session_id : null
+          if (!childSessionId) {
+            finish({ type: "done", reason: "FORK_SESSION_ID_INVALID", code: null })
+            child.kill()
+            return
+          }
+          try {
+            await recordLoomStart({
+              userId: session.user.id,
+              kind: "agent",
+              subject: childSessionId,
+              metadata: {
+                provider: provider.id, external: provider.external, metered: provider.metered,
+                resumed: false, mode: "agent", workContextReceipt, forkedFrom: forkSourceId,
+              },
+            })
+          } catch {
+            finish({ type: "done", reason: "FORK_IDENTITY_NOT_DURABLE", code: null })
+            child.kill()
+            return
+          }
+          if (settled) return
+          sessionId = childSessionId
+          send({ type: "session", sessionId: childSessionId, provider: "Claude", mode: "fork", resumed: false, forkedFrom: forkSourceId })
+        }
+        send({ type: "event", event })
+      }
       child.stdout.on("data", (chunk: Buffer) => {
         buffer += chunk.toString("utf8")
         const lines = buffer.split("\n")
         buffer = lines.pop() ?? ""
-        for (const line of lines) {
-          if (!line.trim()) continue
-          try { send({ type: "event", event: JSON.parse(line) }) } catch { send({ type: "raw", text: line }) }
-        }
+        outputQueue = outputQueue.then(async () => {
+          for (const line of lines) await forwardLine(line)
+        })
       })
-      child.stderr.on("data", (chunk: Buffer) => send({ type: "stderr", text: chunk.toString("utf8") }))
+      child.stderr.on("data", (chunk: Buffer) => { if (!forkMode || sessionId) send({ type: "stderr", text: chunk.toString("utf8") }) })
       child.on("error", (error) => finish({ type: "done", reason: String(error?.message ?? "AGENT_UNAVAILABLE") }))
-      child.on("close", (code) => finish({ type: "done", reason: null, code }))
+      child.on("close", (code) => {
+        const tail = buffer
+        buffer = ""
+        outputQueue = outputQueue.then(() => forwardLine(tail)).then(() => {
+          if (forkMode && !sessionId) finish({ type: "done", reason: "FORK_SESSION_ID_REQUIRED", code: null })
+          else finish({ type: "done", reason: null, code })
+        })
+      })
 
       request.signal.addEventListener("abort", () => {
         terminate?.("CANCELLED")

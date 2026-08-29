@@ -22,6 +22,9 @@ export interface LoomThreadDescriptor {
   owner: string
   mode: "agent" | "review"
   path: string | null
+  provider?: string
+  workContextReceipt?: string
+  forkedFrom?: string
 }
 
 export interface LoomCodexThreadDescriptor {
@@ -78,14 +81,27 @@ export async function loomThreadDescriptor(sessionId: string): Promise<LoomThrea
     const metadata = row.metadata && typeof row.metadata === "object"
       ? row.metadata as Record<string, unknown>
       : null
+    const provider = boundedMetadataString(metadata?.provider, 40)
+    const workContextReceipt = boundedMetadataString(metadata?.workContextReceipt, 500)
+    const forkedFrom = typeof metadata?.forkedFrom === "string"
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(metadata.forkedFrom)
+      && metadata.forkedFrom !== sessionId ? metadata.forkedFrom : null
     return {
       owner: row.userId,
       mode: metadata?.mode === "review" ? "review" : "agent",
       path: typeof metadata?.path === "string" ? metadata.path : null,
+      ...(provider ? { provider } : {}),
+      ...(workContextReceipt ? { workContextReceipt } : {}),
+      ...(forkedFrom ? { forkedFrom } : {}),
     }
   } catch {
     return null
   }
+}
+
+function boundedMetadataString(value: unknown, max: number): string | null {
+  if (typeof value !== "string" || value !== value.trim() || !value || value.length > max || /[\u0000-\u001f\u007f]/.test(value)) return null
+  return value
 }
 
 export async function loomThreadOwner(sessionId: string): Promise<string | null> {

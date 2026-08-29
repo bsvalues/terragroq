@@ -33,7 +33,7 @@ type SpaceStorage = "server" | "browser"
 type EnvironmentOverlay = "council" | "mission-control" | null
 type CouncilView = "history" | "convening"
 type LineTarget = "william" | "agent"
-type LineMode = "default" | "change" | "review"
+type LineMode = "default" | "change" | "review" | "fork"
 type DelegateContext = Readonly<{
   kind: "file" | "preview" | "diff" | "space" | "agent" | "conversation"
   label: string
@@ -41,6 +41,7 @@ type DelegateContext = Readonly<{
   role: string
   assignment: string
 }>
+type ForkContext = Readonly<{ sourceSessionId: string; assignment: string; label: string }>
 type ChangeRefresh = Readonly<{ path: string | null; key: number }>
 type ChangeRefreshWaiter = {
   path: string
@@ -110,6 +111,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineTarget, setLineTarget] = useState<LineTarget>("william")
   const [lineMode, setLineMode] = useState<LineMode>("default")
   const [delegateContext, setDelegateContext] = useState<DelegateContext | null>(null)
+  const [forkContext, setForkContext] = useState<ForkContext | null>(null)
   const [changeTarget, setChangeTarget] = useState<string | null>(null)
   const [reviewTarget, setReviewTarget] = useState<string | null>(null)
   const [dirtyPaths, setDirtyPaths] = useState<Readonly<Record<string, boolean>>>({})
@@ -727,6 +729,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   const openLine = useCallback((prompt = "", target: LineTarget = "william") => {
     setLineTarget(target)
+    setForkContext(null)
     if (target === "william") setDelegateContext(null)
     setLineMode("default")
     setLineInput(prompt)
@@ -777,6 +780,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     change.reset(target)
     setLineTarget("william")
     setDelegateContext(null)
+    setForkContext(null)
     setLineMode("change")
     setLineInput("")
     setLineReply(null)
@@ -791,6 +795,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     review.reset(target)
     setLineTarget("agent")
     setDelegateContext(null)
+    setForkContext(null)
     setLineMode("review")
     setLineInput("")
     setLineReply(null)
@@ -805,6 +810,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     review.reset(target)
     setLineTarget("agent")
     setDelegateContext(null)
+    setForkContext(null)
     setLineMode("review")
     setLineInput("")
     setLineReply(null)
@@ -819,6 +825,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         if (!change.running && !review.running) {
           setLineTarget("william")
           setDelegateContext(null)
+          setForkContext(null)
           setLineMode("default")
           setLineReply(null)
         }
@@ -997,6 +1004,23 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         : `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
       if (lineTarget === "agent") {
         appendConversation("owner", text)
+        if (lineMode === "fork") {
+          if (!forkContext) throw new Error("AGENT_FORK_UNAVAILABLE")
+          const child = await agentSessions.forkClaudeSession({
+            sourceSessionId: forkContext.sourceSessionId,
+            assignment: forkContext.assignment,
+            prompt: text,
+          })
+          setFocusedAgentId(`Claude:${child.sessionId}`)
+          setDelegateContext({
+            kind: "agent", label: `${child.role} · Claude`, provider: "Claude",
+            role: child.role, assignment: child.assignment,
+          })
+          setForkContext(null)
+          setLineMode("default")
+          setLineReply(child.completedTurns?.at(-1)?.finalResult ?? null)
+          return
+        }
         if (!delegateContext?.provider) throw new Error("AGENT_PROVIDER_REQUIRED")
         const promotedPath = delegateContext.provider === "Codex" && delegateContext.kind === "file" ? delegateContext.label : null
         if (promotedPath) await persistBarrierRef.current()
@@ -1064,11 +1088,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "agent" ? "agent session"
     : "Space"
   const pauseAction = agentSessions.pausableSessionId === selectedAgent?.id ? "Pause" : "Pause unavailable"
+  const forkEligible = selectedAgent?.kind === "durable-session" && selectedAgent?.truth === "live" && selectedAgent.providerLabel === "Claude" && selectedAgent.role === "Builder" && selectedAgent.mode === "delegate"
+  const forkAction = forkEligible && agentSessions.activeSessionId === null ? "Fork" : "Fork unavailable"
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge"] as const
-    : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction] as const
-    : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, "Fork", selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
+    : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction, forkAction] as const
+    : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", "Continue", "Delegate", "Council"] as const
   const worldLine = spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""
   const workerLine = spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""
@@ -1279,6 +1305,23 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     if (action === "Pause unavailable") return
+    if (action === "Fork") {
+      if (!forkEligible || agentSessions.activeSessionId !== null || !selectedAgent?.id.startsWith("Claude:")) return
+      setForkContext({
+        sourceSessionId: selectedAgent.id.slice("Claude:".length),
+        assignment: selectedAgent.assignment,
+        label: `${selectedAgent.role} · Claude`,
+      })
+      setDelegateContext(null)
+      setLineTarget("agent")
+      setLineMode("fork")
+      setLineInput("")
+      setLineReply(null)
+      setLineOpen(true)
+      requestAnimationFrame(() => lineRef.current?.focus())
+      return
+    }
+    if (action === "Fork unavailable") return
     if (action === "Change" && selectedKind === "file") {
       openChange()
       return
@@ -1418,7 +1461,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable" || action === "Fork unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
       </div>
@@ -1478,13 +1521,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
       {lineOpen ? (
         <div className={spatial.lineBackdrop} role="dialog" aria-label="The Line" aria-modal="true" onPointerDown={(event) => { if (event.target === event.currentTarget && !change.running && !review.running) setLineOpen(false) }}>
-          <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? "Change" : lineMode === "review" ? "Review" : "The Line"}>
+          <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? "Change" : lineMode === "review" ? "Review" : lineMode === "fork" ? "Fork session" : "The Line"}>
             <Command size={16} aria-hidden />
-            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
+            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
             <div className={spatial.lineControls}>
               {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider"><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Codex" } : current)}>Codex</button><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
-              <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
-              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
+              <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineMode === "fork" ? "Claude fork · source remains unchanged" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
+              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
               {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
             </div>
           </form>
