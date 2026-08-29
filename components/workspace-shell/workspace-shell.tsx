@@ -10,7 +10,7 @@ import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface } from "./developer-tools-surface"
 import { type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, AgentTurnCommittedPersistenceError, useExperienceAgentSessions, type AgentProvider } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, useExperienceAgentSessions, type AgentProvider } from "./agent-sessions"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
@@ -160,6 +160,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const browserStorageKeyRef = useRef<string | null>(null)
   const preferenceStorageKeyRef = useRef<string | null>(null)
   const transitionEpochRef = useRef(0)
+  const agentPresentationEpochRef = useRef(0)
   const councilViewEpochRef = useRef(0)
   const councilSessionRef = useRef(councilSession)
   const initialSummonConsumedRef = useRef(false)
@@ -728,6 +729,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }, [])
 
   const openLine = useCallback((prompt = "", target: LineTarget = "william") => {
+    agentPresentationEpochRef.current += 1
     setLineTarget(target)
     setForkContext(null)
     if (target === "william") setDelegateContext(null)
@@ -998,6 +1000,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
     setLineBusy(true)
     setLineReply(null)
+    let agentPresentationIsCurrent: (() => boolean) | null = null
     try {
       const contextualText = lineTarget === "agent" && delegateContext
         ? `Owner request: ${text}`
@@ -1018,15 +1021,26 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           })
           setForkContext(null)
           setLineMode("default")
-          setLineReply(child.completedTurns?.at(-1)?.finalResult ?? null)
+          setLineReply(agentPresentationText(child.completedTurns?.at(-1)?.finalResult) ?? "Agent completed.")
           return
         }
         if (!delegateContext?.provider) throw new Error("AGENT_PROVIDER_REQUIRED")
+        const presentationEpoch = agentPresentationEpochRef.current + 1
+        agentPresentationEpochRef.current = presentationEpoch
+        const presentationTransitionEpoch = transitionEpochRef.current
+        const presentationWorldId = worldRef.current
+        const presentationProvider = delegateContext.provider
+        let presentationSessionKey: string | null = null
+        agentPresentationIsCurrent = () => agentPresentationEpochRef.current === presentationEpoch
+          && transitionEpochRef.current === presentationTransitionEpoch
+          && worldRef.current === presentationWorldId
+        setLineReply("Agent is working.")
         const promotedPath = delegateContext.provider === "Codex" && delegateContext.kind === "file" ? delegateContext.label : null
         if (promotedPath) await persistBarrierRef.current()
         let committedPersistenceError: AgentTurnCommittedPersistenceError | null = null
+        let persistedFinalPresentation: string | null = null
         try {
-          await agentSessions.runAgentTurn({
+          const completed = await agentSessions.runAgentTurn({
             provider: delegateContext.provider,
             role: delegateContext.role,
             assignment: delegateContext.assignment,
@@ -1034,8 +1048,19 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             ...(delegateContext.provider === "Codex" && delegateContext.kind === "file"
               ? { target: { kind: "file" as const, path: delegateContext.label } }
               : {}),
-            onEvent: () => {},
+            onPresentation: (presentation) => {
+              if (presentation.provider !== presentationProvider) return
+              const presentedSessionKey = `${presentation.provider}:${presentation.sessionId}`
+              if (presentationSessionKey === null) presentationSessionKey = presentedSessionKey
+              if (presentationSessionKey !== presentedSessionKey || !agentPresentationIsCurrent?.()) return
+              setLineReply(presentation.text)
+            },
           })
+          const completedSessionKey = `${completed.provider}:${completed.sessionId}`
+          if (presentationSessionKey === completedSessionKey && agentPresentationIsCurrent()) {
+            persistedFinalPresentation = agentPresentationText(completed.completedTurns?.at(-1)?.finalResult) ?? "Agent completed."
+            setLineReply(persistedFinalPresentation)
+          }
         } catch (error) {
           if (!(error instanceof AgentTurnCommittedPersistenceError)) throw error
           committedPersistenceError = error
@@ -1049,18 +1074,24 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             refreshWarning = `Codex saved ${promotedPath}, but Source or Changes could not refresh.`
           }
         }
-        if (committedPersistenceError) {
+        if (committedPersistenceError && agentPresentationIsCurrent()) {
           setLineReply(refreshWarning
             ? `${refreshWarning} Transcript persistence also failed (${committedPersistenceError.message}).`
             : committedPersistenceError.message)
-        } else if (refreshWarning) {
-          setLineReply(refreshWarning)
+        } else if (refreshWarning && persistedFinalPresentation && agentPresentationIsCurrent()) {
+          setLineReply(`${persistedFinalPresentation}\n\nWarning: ${refreshWarning}`)
         }
         return
       }
       await sendWilliamTurn(text)
     } catch (error) {
-      setLineReply(error instanceof Error ? error.message : "LINE_UNAVAILABLE")
+      if (lineTarget !== "agent") {
+        setLineReply(error instanceof Error ? error.message : "LINE_UNAVAILABLE")
+      } else if (!agentPresentationIsCurrent || agentPresentationIsCurrent()) {
+        setLineReply(error instanceof AgentTurnCommittedPersistenceError
+          ? error.message
+          : error instanceof DOMException && error.name === "AbortError" ? "Agent turn stopped." : "Agent turn unavailable.")
+      }
     } finally {
       setLineBusy(false)
     }
@@ -1451,7 +1482,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
               ? { kind: "conversation", label: "Local model", provider: "Local", role: "Thinker", assignment: "Conversation" }
               : { kind: "agent", label: `${agent.role} · ${agent.providerLabel}`, provider: agent.providerLabel as AgentProvider, role: agent.role, assignment: agent.assignment })
             openLine(local ? "" : "Redirect: ", "agent")
-            setLineReply(agent.lastResult ?? null)
+            setLineReply(agent.lastResult ? agentPresentationText(agent.lastResult) ?? "Saved agent result is hidden from presentation." : null)
           }
         }} />
         <div className={spatial.status}><span className={spatial.statusDot} aria-hidden /><span>{worldLine || "Space ready"}{workerLine}</span></div>
