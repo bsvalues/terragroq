@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, TerminalSquare, Users, X } from "lucide-react"
 
 import type { SummonedSurface } from "@/lib/environment/summon"
@@ -33,7 +33,7 @@ type ConversationEntry = Readonly<{
   text: string
 }>
 
-type PersistJob = Readonly<{ worldId: string; revision: number; body: string; storage: SpaceStorage; browserKey: string | null; epoch: number }>
+type PersistJob = Readonly<{ worldId: string; revision: number; body: string; storage: SpaceStorage; browserKey: string | null; epoch: number; keepalive: boolean }>
 type SpaceStorage = "server" | "browser"
 type EnvironmentOverlay = "council" | "mission-control" | null
 type CouncilView = "history" | "convening"
@@ -103,6 +103,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [worldId, setWorldId] = useState<string | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [persistenceError, setPersistenceError] = useState<string | null>(null)
+  const [persistencePending, setPersistencePending] = useState(false)
   const [lineOpen, setLineOpen] = useState(Boolean(initialSummon))
   const [lineInput, setLineInput] = useState("")
   const [lineReply, setLineReply] = useState<string | null>(null)
@@ -338,6 +339,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         })
         revisionRef.current = restored.revision
         acknowledgedRevisionRef.current = restored.revision
+        setPersistencePending(false)
         setWorldId(payload.worldId)
         setSpace(restored)
         setInspectors(Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
@@ -477,7 +479,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     return () => { cancelled = true; clearInterval(timer) }
   }, [spine.execution, spine.outcomeKey, worldId])
 
-  const sendPersist = useCallback(async (job: PersistJob, keepalive = false) => {
+  const sendPersist = useCallback(async (job: PersistJob) => {
     try {
       if (job.storage === "browser") {
         const key = job.browserKey
@@ -488,13 +490,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         revisionRef.current = Math.max(revisionRef.current, job.revision)
         setSpace((current) => job.revision > current.revision ? { ...current, revision: job.revision } : current)
         setPersistenceError(null)
+        if (job.revision >= revisionRef.current) setPersistencePending(false)
         return
       }
       const response = await fetch("/api/environment/space", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: job.body,
-        keepalive,
+        keepalive: job.keepalive,
       })
       const payload = await response.json().catch(() => ({})) as { error?: string; space?: unknown }
       if (!response.ok) throw new Error(payload.error ?? `SPACE_SAVE_${response.status}`)
@@ -506,19 +509,22 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         revisionRef.current = Math.max(revisionRef.current, acknowledged)
         setSpace((current) => acknowledged > current.revision ? { ...current, revision: acknowledged } : current)
         setPersistenceError(null)
+        if (acknowledged >= revisionRef.current) setPersistencePending(false)
       }
     } catch (error) {
-      if (!keepalive && transitionEpochRef.current === job.epoch && worldRef.current === job.worldId && job.revision >= revisionRef.current) {
+      if (transitionEpochRef.current === job.epoch && worldRef.current === job.worldId && job.revision >= revisionRef.current) {
         setPersistenceError(error instanceof Error ? error.message : "SPACE_SAVE_REFUSED")
+        setPersistencePending(false)
       }
     }
   }, [])
 
-  const persist = useCallback((keepalive = false): Promise<void> => {
+  const persist = useCallback((keepalive = false): Promise<number> => {
     const id = worldRef.current
-    if (!id) return Promise.resolve()
+    if (!id) return Promise.resolve(acknowledgedRevisionRef.current)
     const revision = nextSpaceRevision(revisionRef.current)
     revisionRef.current = revision
+    setPersistencePending(true)
     const job: PersistJob = {
       worldId: id,
       revision,
@@ -526,12 +532,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       storage: storageRef.current,
       browserKey: browserStorageKeyRef.current,
       epoch: transitionEpochRef.current,
+      keepalive,
     }
-    if (keepalive) {
-      return sendPersist(job, true)
-    }
+    // Teardown cannot wait behind an ordinary request: the document may be discarded before that
+    // request settles. The server's monotonic revision gate rejects an older write that loses this
+    // race, while live-page blur saves remain serialized below for the judgment barrier.
+    if (keepalive) return sendPersist(job).then(() => revision)
     pendingPersistRef.current = job
-    if (drainingPersistRef.current) return drainPromiseRef.current ?? Promise.resolve()
+    if (drainingPersistRef.current) {
+      return (drainPromiseRef.current ?? Promise.resolve()).then(() => revision)
+    }
     drainingPersistRef.current = true
     const drain = (async () => {
       try {
@@ -548,19 +558,20 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     void drain.finally(() => {
       if (drainPromiseRef.current === drain) drainPromiseRef.current = null
     })
-    return drain
+    return drain.then(() => revision)
   }, [sendPersist])
   persistBarrierRef.current = async () => {
     if (persistTimer.current) clearTimeout(persistTimer.current)
-    await persist()
-    if (storageRef.current !== "server" || acknowledgedRevisionRef.current < revisionRef.current) {
+    const requiredRevision = await persist()
+    if (storageRef.current !== "server" || acknowledgedRevisionRef.current < requiredRevision) {
       throw new Error("The current Space must be saved before grounded reasoning can begin.")
     }
   }
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!hydrated || !worldId) return
     if (persistTimer.current) clearTimeout(persistTimer.current)
+    setPersistencePending(true)
     persistTimer.current = setTimeout(() => void persist(), 420)
     return () => {
       if (persistTimer.current) clearTimeout(persistTimer.current)
@@ -571,14 +582,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   ])
 
   useEffect(() => {
-    const flush = () => void persist(true)
-    const visibility = () => { if (document.visibilityState === "hidden") flush() }
-    window.addEventListener("pagehide", flush)
-    window.addEventListener("blur", flush)
+    const teardownFlush = () => void persist(true)
+    const liveFlush = () => void persist()
+    const visibility = () => { if (document.visibilityState === "hidden") teardownFlush() }
+    window.addEventListener("pagehide", teardownFlush)
+    window.addEventListener("blur", liveFlush)
     document.addEventListener("visibilitychange", visibility)
     return () => {
-      window.removeEventListener("pagehide", flush)
-      window.removeEventListener("blur", flush)
+      window.removeEventListener("pagehide", teardownFlush)
+      window.removeEventListener("blur", liveFlush)
       document.removeEventListener("visibilitychange", visibility)
     }
   }, [persist])
@@ -925,7 +937,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const savedLabel = persistenceError
     ? persistenceError
     : hydrated
-      ? storage === "browser" ? "space saved locally" : "space saved"
+      ? persistencePending ? "saving space" : storage === "browser" ? "space saved locally" : "space saved"
       : "opening space"
   const selectedAgent = agentSessions.sessions.find((agent) => agent.id === focusedAgentId)
   const selectedKind = selectedAgent ? "agent" as const
@@ -984,6 +996,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setWorldId(payload.worldId)
     setSpace(restored)
     setPersistenceError(null)
+    setPersistencePending(false)
     setStorage(storageRef.current)
     setSpaceSummaries((known) => payload.collectionAvailable === false
       ? mergeSpaceSummaries(known, payload)
