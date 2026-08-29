@@ -138,10 +138,13 @@ function harness(seed: Partial<State> = {}): {
           observedEffects.push(`lock-work-orders:${ids.join(",")}`)
           return draft.workOrders.filter((row) => ids.includes(row.id)).map(copyWorkOrder)
         },
-        readAudit: async (operationId) => {
-          draft.effects.push(`read-audit:${operationId}`)
-          observedEffects.push(`read-audit:${operationId}`)
-          return { governance: [...draft.governance], mirrors: [...draft.mirrors] }
+        readAudit: async (operationId, userId?: string) => {
+          draft.effects.push(`read-audit:${operationId}:${userId ?? "unscoped"}`)
+          observedEffects.push(`read-audit:${operationId}:${userId ?? "unscoped"}`)
+          return {
+            governance: draft.governance.filter((event) => userId === undefined || event.userId === userId),
+            mirrors: draft.mirrors.filter((event) => userId === undefined || event.userId === userId),
+          }
         },
         revokeGrant: async (expected, at) => {
           draft.effects.push(`revoke-grant:${expected.id}`)
@@ -207,7 +210,7 @@ describe("Experience V2 ceremonial authority retirement", () => {
     expect(observedEffects).toEqual([
       "lock-grants:13,14",
       "lock-work-orders:17,18",
-      `read-audit:${OPERATION_ID}`,
+      `read-audit:${OPERATION_ID}:${OWNER}`,
       "revoke-grant:13",
       "revoke-grant:14",
       "abort-work-order:17",
@@ -263,7 +266,7 @@ describe("Experience V2 ceremonial authority retirement", () => {
     expect(first.state.effects).toEqual([
       "lock-grants:13,14",
       "lock-work-orders:17,18",
-      `read-audit:${OPERATION_ID}`,
+      `read-audit:${OPERATION_ID}:${OWNER}`,
     ])
   })
 
@@ -283,6 +286,20 @@ describe("Experience V2 ceremonial authority retirement", () => {
     retired.observedEffects.length = 0
     await expectCode(retireCeremonialContexts({ userId: OWNER }, retired.dependencies), "AUDIT_INCOMPLETE")
     expectNoMutationAttempt(retired.observedEffects)
+  })
+
+  it("ignores another tenant's rows with the fixed operation id while retaining owner audit strictness", async () => {
+    const completed = harness()
+    await retireCeremonialContexts({ userId: OWNER }, completed.dependencies)
+    const foreignAudit = completed.state.governance.map((event) => ({ ...event, userId: "foreign-owner" }))
+    const foreignMirrors = completed.state.mirrors.map((event) => ({ ...event, userId: "foreign-owner" }))
+    const candidate = harness({ governance: foreignAudit, mirrors: foreignMirrors })
+
+    await expect(retireCeremonialContexts({ userId: OWNER }, candidate.dependencies)).resolves.toMatchObject({
+      status: "RETIRED",
+      operationId: OPERATION_ID,
+    })
+    expect(candidate.observedEffects).toContain(`read-audit:${OPERATION_ID}:${OWNER}`)
   })
 
   it("rolls back all changes when any compare-and-swap loses its race", async () => {

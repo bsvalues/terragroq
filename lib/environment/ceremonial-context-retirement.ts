@@ -74,7 +74,7 @@ export type CeremonialContextRetirementTransaction = Readonly<{
   now: () => Promise<Date>
   lockGrants: (ids: readonly number[]) => Promise<readonly CeremonialContextGrant[]>
   lockWorkOrders: (ids: readonly number[]) => Promise<readonly CeremonialContextWorkOrder[]>
-  readAudit: (operationId: string) => Promise<Readonly<{
+  readAudit: (operationId: string, userId: string) => Promise<Readonly<{
     governance: readonly CeremonialContextAudit[]
     mirrors: readonly CeremonialContextAudit[]
   }>>
@@ -428,7 +428,7 @@ const productionDependencies: CeremonialContextRetirementDependencies = {
         closedAt: parseUtcWallText(row.closedAt, "CLOSED_AT"),
       }))
     },
-    readAudit: async (operationId) => {
+    readAudit: async (operationId, userId) => {
       const governanceRows = await transaction.select({
         userId: governanceEvent.userId,
         eventType: governanceEvent.eventType,
@@ -439,8 +439,10 @@ const productionDependencies: CeremonialContextRetirementDependencies = {
         beforeHash: governanceEvent.beforeHash,
         afterHash: governanceEvent.afterHash,
         metadata: governanceEvent.metadata,
-      }).from(governanceEvent).where(
+      }).from(governanceEvent).where(and(
+        eq(governanceEvent.userId, userId),
         sql`${governanceEvent.metadata}->>'operationId' = ${operationId}`,
+      ),
       ).orderBy(asc(governanceEvent.id))
       const mirrorRows = await transaction.select({
         userId: eventLog.userId,
@@ -449,8 +451,10 @@ const productionDependencies: CeremonialContextRetirementDependencies = {
         register: eventLog.register,
         refId: eventLog.refId,
         metadata: eventLog.metadata,
-      }).from(eventLog).where(
+      }).from(eventLog).where(and(
+        eq(eventLog.userId, userId),
         sql`${eventLog.metadata}->>'operationId' = ${operationId}`,
+      ),
       ).orderBy(asc(eventLog.id))
       return {
         governance: governanceRows.map((row, index) => {
@@ -605,7 +609,7 @@ export async function retireCeremonialContexts(
         activeWorkOrderExact(row, EXPECTED_WORK_ORDERS[index]) || retiredWorkOrderExact(row, EXPECTED_WORK_ORDERS[index]))
     if (!active && !retired) error(eachRecognized ? "TARGET_MIXED" : "TARGET_DRIFTED")
 
-    const audits = await transaction.readAudit(CEREMONIAL_CONTEXT_RETIREMENT_OPERATION_ID)
+    const audits = await transaction.readAudit(CEREMONIAL_CONTEXT_RETIREMENT_OPERATION_ID, OWNER_USER_ID)
     if (retired) {
       const retiredAt = sharedRetirementInstant(orderedGrants, orderedWorks)
       if (!retiredAt) error("TARGET_DRIFTED")
