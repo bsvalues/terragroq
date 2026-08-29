@@ -79,6 +79,42 @@ describe("durable Local model conversation route", () => {
     expect(seams.requireWorkContext).not.toHaveBeenCalled()
   })
 
+  it("uses an installed chat model when the server default is absent without overriding an explicit choice", async () => {
+    const upstream = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "model not found" }), { status: 404 }))
+      .mockResolvedValueOnce(Response.json({ models: [
+        { name: "nomic-embed-text:latest", size: 274_302_450 },
+        { name: "qwen2.5:14b-instruct-q4_K_M", size: 8_988_124_069 },
+        { name: "qwen2.5:7b-instruct", size: 4_683_087_332 },
+      ] }))
+      .mockResolvedValueOnce(ollama({ message: { role: "assistant", content: "Recovered locally." }, done: true }))
+    vi.stubGlobal("fetch", upstream)
+
+    const response = await POST(request({ provider: "local", prompt: "Explain this design." }))
+    const output = await events(response)
+
+    expect(response.status).toBe(200)
+    expect(upstream.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://127.0.0.1:11434/api/chat",
+      "http://127.0.0.1:11434/api/tags",
+      "http://127.0.0.1:11434/api/chat",
+    ])
+    expect(JSON.parse(String(upstream.mock.calls[2]?.[1]?.body)).model).toBe("qwen2.5:7b-instruct")
+    expect(output[0]).toMatchObject({ type: "session", model: "qwen2.5:7b-instruct" })
+    expect(output).toContainEqual({ type: "result", text: "Recovered locally." })
+  })
+
+  it("does not replace an explicitly selected missing model", async () => {
+    const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "model not found" }), { status: 404 }))
+    vi.stubGlobal("fetch", upstream)
+
+    const response = await POST(request({ provider: "local", model: "owner-selected:latest", prompt: "Explain this design." }))
+
+    expect(response.status).toBe(503)
+    await expect(response.json()).resolves.toEqual({ error: "LOCAL_MODEL_REFUSED", status: 404, model: "owner-selected:latest" })
+    expect(upstream).toHaveBeenCalledOnce()
+  })
+
   it("reconstructs exact alternating browser-replayed continuity before the new owner prompt", async () => {
     const completedTurns = [
       { ownerPrompt: "First question", finalResult: "First answer", completedAt: "2026-08-28T10:00:00.000Z" },

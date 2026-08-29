@@ -24,7 +24,7 @@ export async function GET() {
     const payload = (await response.json()) as {
       models?: Array<{ name?: string; size?: number; details?: { parameter_size?: string; context_length?: number } }>
     }
-    const models = (payload.models ?? [])
+    const installed = (payload.models ?? [])
       // Embedding models cannot hold a conversation; offering one would look like a broken chat.
       .filter((model) => typeof model.name === "string" && !/embed/i.test(model.name))
       .map((model) => ({
@@ -32,10 +32,21 @@ export async function GET() {
         parameters: model.details?.parameter_size ?? null,
         context: model.details?.context_length ?? null,
         gigabytes: typeof model.size === "number" ? Math.round((model.size / 1e9) * 10) / 10 : null,
+        bytes: typeof model.size === "number" && Number.isFinite(model.size) ? model.size : Number.POSITIVE_INFINITY,
+      }))
+    const defaultModel = installed.some((model) => model.name === LOCAL_MODEL)
+      ? LOCAL_MODEL
+      : [...installed].sort((left, right) => left.bytes - right.bytes || left.name.localeCompare(right.name))[0]?.name ?? LOCAL_MODEL
+    const models = installed
+      .map((model) => ({
+        name: model.name,
+        parameters: model.parameters,
+        context: model.context,
+        gigabytes: model.gigabytes,
       }))
       .sort((a, b) => a.name.localeCompare(b.name))
 
-    return Response.json({ models, default: LOCAL_MODEL }, { headers: { "cache-control": "no-store" } })
+    return Response.json({ models, default: defaultModel }, { headers: { "cache-control": "no-store" } })
   } catch {
     // A stopped local runtime is reported as such rather than as an empty list, which would read as
     // "you have no models" and send the operator looking in the wrong place.

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 
 import { getSession } from "@/lib/session"
+import { resolveOllamaChatModel } from "@/lib/ai/ollama-models"
 import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/providers"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
@@ -231,8 +232,9 @@ export async function POST(request: Request) {
       sessionId = body.sessionId
       completedTurns = parsed.turns
     }
-    const model = typeof (body as { model?: unknown }).model === "string" ? (body as { model: string }).model : LOCAL_MODEL
-    return streamLocal(prompt, request.signal, model, session.user.id, sessionId, resuming, completedTurns)
+    const requestedModel = typeof body.model === "string" ? body.model.trim() : ""
+    const model = requestedModel || LOCAL_MODEL
+    return streamLocal(prompt, request.signal, model, session.user.id, sessionId, resuming, completedTurns, !requestedModel)
   }
 
   // The id is validated rather than trusted: it reaches a command line, and only this shape can.
@@ -403,36 +405,46 @@ async function streamLocal(
   sessionId: string,
   resuming: boolean,
   completedTurns: readonly LocalCompletedTurn[],
+  mayResolveDefault: boolean,
 ): Promise<Response> {
   const encoder = new TextEncoder()
 
   let upstream: Response
+  let selectedModel = model
+  const requestTurn = (candidate: string) => fetch(`${LOCAL_ENDPOINT}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    // An unknown explicit name is rejected by the local runtime itself. Only an absent compiled
+    // default may be replaced with another model Ollama proves is already installed.
+    body: JSON.stringify({
+      model: candidate,
+      messages: [
+        ...completedTurns.flatMap((turn) => [
+          { role: "user", content: turn.ownerPrompt },
+          { role: "assistant", content: turn.finalResult },
+        ]),
+        { role: "user", content: prompt },
+      ],
+      stream: true,
+    }),
+    signal,
+  })
   try {
-    upstream = await fetch(`${LOCAL_ENDPOINT}/api/chat`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      // An unknown name is rejected by the local runtime itself, which already knows exactly which
-      // models exist -- duplicating that list here would only let the two disagree.
-      body: JSON.stringify({
-        model,
-        messages: [
-          ...completedTurns.flatMap((turn) => [
-            { role: "user", content: turn.ownerPrompt },
-            { role: "assistant", content: turn.finalResult },
-          ]),
-          { role: "user", content: prompt },
-        ],
-        stream: true,
-      }),
-      signal,
-    })
+    upstream = await requestTurn(selectedModel)
+    if (upstream.status === 404 && mayResolveDefault) {
+      const installed = await resolveOllamaChatModel(LOCAL_ENDPOINT, selectedModel)
+      if (installed.available && installed.model && installed.model !== selectedModel) {
+        selectedModel = installed.model
+        upstream = await requestTurn(selectedModel)
+      }
+    }
   } catch {
     // Naming the model and the endpoint matters: "the local model is not running" is actionable,
     // where a bare failure sends the operator looking for a bug in the cockpit.
-    return Response.json({ error: "LOCAL_MODEL_UNAVAILABLE", model, endpoint: LOCAL_ENDPOINT }, { status: 503 })
+    return Response.json({ error: "LOCAL_MODEL_UNAVAILABLE", model: selectedModel, endpoint: LOCAL_ENDPOINT }, { status: 503 })
   }
   if (!upstream.ok || !upstream.body) {
-    return Response.json({ error: "LOCAL_MODEL_REFUSED", status: upstream.status, model }, { status: 503 })
+    return Response.json({ error: "LOCAL_MODEL_REFUSED", status: upstream.status, model: selectedModel }, { status: 503 })
   }
 
   const stream = new ReadableStream<Uint8Array>({
@@ -446,7 +458,7 @@ async function streamLocal(
         resumed: resuming,
         provider: "Local",
         continuity: resuming ? "browser-replayed" : "new",
-        model,
+        model: selectedModel,
       })
       // The provider doctrine requires selection to be visible AND recorded; local turns are
       // receipted exactly like external ones so the trail shows which of the two answered.
@@ -454,7 +466,7 @@ async function streamLocal(
         userId,
         kind: "agent",
         subject: sessionId,
-        metadata: { provider: "local", external: false, metered: false, resumed: resuming, continuity: resuming ? "browser-replayed" : "new", model },
+        metadata: { provider: "local", external: false, metered: false, resumed: resuming, continuity: resuming ? "browser-replayed" : "new", model: selectedModel },
       })
 
       const reader = upstream.body!.getReader()
