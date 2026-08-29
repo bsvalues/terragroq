@@ -1,21 +1,13 @@
 import { execFileSync } from "node:child_process"
 import { createPublicKey } from "node:crypto"
 import fs from "node:fs"
-import { register } from "node:module"
-import path from "node:path"
-import { pathToFileURL } from "node:url"
 
 import {
   DELIVERY_SEAL_BLOCK,
   parseDeclaredDeliverySeals,
   reviewPullRequestReceipt,
 } from "../lib/governance/pr-receipt.ts"
-
-register(
-  pathToFileURL(path.join(process.cwd(), "scripts", "governance", "ts-alias-loader.mjs")).href,
-  import.meta.url,
-)
-const { inspectGitDelivery } = await import("../lib/governance/delivery-seal-runtime.ts")
+import { inspectGitDelivery } from "../lib/governance/git-delivery.ts"
 
 const event = process.env.GITHUB_EVENT_PATH ? JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")) : {}
 const pr = event.pull_request ?? {}
