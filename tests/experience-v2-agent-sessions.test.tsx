@@ -882,12 +882,76 @@ describe("Experience V2 real agent sessions", () => {
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
 
     await waitFor(() => expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe("export const version = 2\n"))
+    expect(await screen.findByText("Updated src/app.ts.")).toBeTruthy()
     expect(sourceReads).toBeGreaterThanOrEqual(2)
     expect(diffReads).toBeGreaterThanOrEqual(2)
     expect(JSON.parse(String(window.localStorage.getItem("williamos:agent-session:server-world:c%3A%2Frepos%2Fterrafusion"))).sessions[0].target).toEqual({
       kind: "file",
       path: "src/app.ts",
     })
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    fireEvent.click(screen.getByRole("button", { name: /Builder · Codex · src\/app.ts/i }))
+    expect(screen.getByText("Updated src/app.ts.")).toBeTruthy()
+  })
+
+  it("keeps agent work running when The Line closes and fences its late presentation from another Line", async () => {
+    const sessionId = "423e4567-e89b-42d3-a456-426614174000"
+    const encoder = new TextEncoder()
+    let agentStream!: ReadableStreamDefaultController<Uint8Array>
+    let requestSignal: AbortSignal | undefined
+    let cancelled = false
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { agentStream = controller },
+      cancel() { cancelled = true },
+    }))
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/agent" && init?.method === "POST") {
+        requestSignal = init.signal ?? undefined
+        return Promise.resolve(response)
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    fireEvent.click(screen.getByRole("button", { name: "Ask Local" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Explain the current work." } })
+    fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Ask Local" }))
+
+    act(() => {
+      agentStream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" })}\n`))
+      agentStream.enqueue(encoder.encode(`${JSON.stringify({ type: "delta", text: "Validated live progress." })}\n`))
+    })
+    expect(await screen.findByText("Validated live progress.")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    expect(requestSignal?.aborted).toBe(false)
+    expect(cancelled).toBe(false)
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask Local" }))
+    act(() => {
+      agentStream.enqueue(encoder.encode(`${JSON.stringify({ type: "delta", text: "Late old-operation progress." })}\n`))
+    })
+    expect(screen.queryByText("Late old-operation progress.")).toBeNull()
+
+    act(() => {
+      agentStream.enqueue(encoder.encode(`${JSON.stringify({ type: "result", text: "Canonical persisted local result." })}\n`))
+      agentStream.enqueue(encoder.encode(`${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      agentStream.close()
+    })
+    const saved = await screen.findByRole("button", { name: /Thinker · Local · Conversation/i })
+    const close = screen.queryByRole("button", { name: "Close The Line" })
+    if (close) fireEvent.click(close)
+    fireEvent.click(saved)
+    expect(await screen.findByText("Canonical persisted local result.")).toBeTruthy()
   })
 
   it("refreshes the committed Codex promotion while surfacing transcript persistence failure", async () => {
@@ -1145,6 +1209,56 @@ describe("Experience V2 real agent sessions", () => {
       selectedSessionKey: `Codex:${sessionId}`,
       sessions: [{ sessionId, role: "Builder", provider: "Codex", assignment: "src/app.ts" }],
     })
+  })
+
+  it("emits only bounded sanitized provider-neutral presentation and completes after persistence", async () => {
+    const sessionId = "codex-presented-turn"
+    const presentations: Array<Record<string, unknown>> = []
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+      { type: "delta", text: JSON.stringify({ type: "system", prompt: "hidden" }) },
+      { type: "delta", text: "<thinking>private chain of thought</thinking>" },
+      { type: "delta", text: "Authorization: Bearer secret-token" },
+      { type: "delta", text: "Inspecting the selected module." },
+      { type: "result", text: "Implemented the bounded change." },
+      { type: "done", code: 0, reason: null },
+    )))
+    render(<Harness />)
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work.",
+        onPresentation: (presentation) => presentations.push({ ...presentation }),
+      })
+    })
+
+    expect(presentations).toEqual([
+      { phase: "working", text: "Agent is working.", provider: "Codex", sessionId },
+      { phase: "live", text: "Inspecting the selected module.", provider: "Codex", sessionId },
+      { phase: "complete", text: "Implemented the bounded change.", provider: "Codex", sessionId },
+    ])
+    expect(JSON.stringify(presentations)).not.toContain("secret-token")
+    expect(JSON.stringify(presentations)).not.toContain("private chain")
+    expect(JSON.stringify(presentations)).not.toContain('"type":"system"')
+  })
+
+  it("never labels a partial provider presentation complete when the turn fails", async () => {
+    const sessionId = "codex-failed-presentation"
+    const presentations: Array<Record<string, unknown>> = []
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(ndjson(
+      { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+      { type: "delta", text: "Partial validated progress." },
+      { type: "done", code: null, reason: "TIMEOUT" },
+    )))
+    render(<Harness />)
+
+    await expect(act(async () => expose!.runAgentTurn({
+      provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Work.",
+      onPresentation: (presentation) => presentations.push({ ...presentation }),
+    }))).rejects.toThrow("AGENT_TURN_FAILED:TIMEOUT")
+
+    expect(presentations.map((presentation) => presentation.phase)).toEqual(["working", "live"])
+    expect(presentations).not.toContainEqual(expect.objectContaining({ phase: "complete" }))
   })
 
   it("locks a restored Codex session to Codex when it resumes", async () => {

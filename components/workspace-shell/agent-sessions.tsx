@@ -11,8 +11,17 @@ const STORAGE_PREFIX = "williamos:agent-session:"
 const MAX_DURABLE_SESSIONS = 12
 const MAX_COMPLETED_TURNS = 20
 const MAX_COLLECTION_BYTES = 262_144
+const MAX_PRESENTATION_CHARACTERS = 2_000
+const MAX_PRESENTATION_BYTES = 4_096
 
 export type AgentProvider = "Codex" | "Claude" | "Local"
+
+export type AgentTurnPresentation = Readonly<{
+  phase: "working" | "live" | "complete"
+  text: string
+  provider: AgentProvider
+  sessionId: string
+}>
 
 export type CompletedAgentTurn = Readonly<{
   ownerPrompt: string
@@ -71,6 +80,7 @@ export type RunClaudeTurnInput = Readonly<{
   path?: string
   focus?: string
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
+  onPresentation?: (presentation: AgentTurnPresentation) => void
   onReviewComplete?: (report: string) => void
   target?: AgentSessionFileTarget
 }>
@@ -82,6 +92,7 @@ export type RunAgentTurnInput = Readonly<{
   prompt: string
   target?: AgentSessionFileTarget
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
+  onPresentation?: (presentation: AgentTurnPresentation) => void
 }>
 
 export type ForkClaudeSessionInput = Readonly<{
@@ -89,7 +100,25 @@ export type ForkClaudeSessionInput = Readonly<{
   assignment: string
   prompt: string
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
+  onPresentation?: (presentation: AgentTurnPresentation) => void
 }>
+
+export function agentPresentationText(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const text = value.trim()
+  if (!text || text.length > MAX_PRESENTATION_CHARACTERS
+    || new TextEncoder().encode(text).byteLength > MAX_PRESENTATION_BYTES
+    || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)
+    || /<\/?(?:thinking|analysis|reasoning)\b|chain[- ]of[- ]thought|system prompt/i.test(text)
+    || /authorization\s*:|bearer\s+[a-z0-9._~+\/-]{6,}|(?:sk|ghp|github_pat|xox[baprs])[-_][a-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(?:api[_ -]?key|password|secret|token)\s*[:=]/i.test(text)) return null
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text) as unknown
+      if (parsed && typeof parsed === "object") return null
+    } catch { /* ordinary prose may begin with punctuation */ }
+  }
+  return text
+}
 
 export type ExperienceAgentSessionController = Readonly<{
   sessions: readonly ExperienceAgentSession[]
@@ -597,6 +626,19 @@ export function useExperienceAgentSessions({
       code: undefined,
       reason: undefined,
     }
+    const present = (phase: AgentTurnPresentation["phase"], text: string, sessionId: string) => {
+      if (mode !== "delegate" || !isCurrent()) return
+      const safeText = phase === "working" ? "Agent is working." : agentPresentationText(text)
+      if (!safeText && phase !== "complete") return
+      try {
+        input.onPresentation?.({
+          phase,
+          text: safeText ?? "Agent completed.",
+          provider: input.provider,
+          sessionId,
+        })
+      } catch { /* presentation cannot affect transport or persistence truth */ }
+    }
 
     try {
       if (input.provider === "Codex" && !boundedText(worldId, 200)) throw new Error("AGENT_SPACE_REQUIRED")
@@ -714,6 +756,7 @@ export function useExperienceAgentSessions({
             const acceptedSessionKey = sessionKey(input.provider, event.sessionId as string)
             setActiveSessionId(acceptedSessionKey)
             setPausableSessionId(acceptedSessionKey)
+            present("working", "Agent is working.", event.sessionId as string)
             input.onEvent?.(event)
           }
           return
@@ -756,7 +799,10 @@ export function useExperienceAgentSessions({
             ? boundedFragment(event.text, 20_000)
             : Boolean(boundedText(event.text, 20_000))
           if (!validDelta || canonicalResultSeen) malformed = true
-          else if (isCurrent()) input.onEvent?.(event)
+          else if (isCurrent()) {
+            present("live", event.text as string, accepted!.sessionId)
+            input.onEvent?.(event)
+          }
           return
         }
         if ((input.provider === "Codex" || input.provider === "Local") && event.type === "result") {
@@ -822,6 +868,7 @@ export function useExperienceAgentSessions({
       verifiedSessionsRef.current = nextVerified
       setVerifiedSessions(nextVerified)
       setDurableSession(persistedSession)
+      present("complete", persistedSession.completedTurns?.at(-1)?.finalResult ?? resultText, persistedSession.sessionId)
       if (mode === "review" && isCurrent()) input.onReviewComplete?.(resultText)
       return persistedSession
     } catch (cause) {
