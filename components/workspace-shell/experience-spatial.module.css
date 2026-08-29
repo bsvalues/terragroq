@@ -134,7 +134,7 @@
 .windowLayer {
   position: absolute;
   z-index: 1;
-  inset: 89px 0 82px;
+  inset: 89px 348px 0 0;
   overflow: hidden;
 }
 
@@ -190,8 +190,8 @@
 .dock {
   position: absolute;
   z-index: 12000;
-  right: 18px;
-  bottom: 86px;
+  right: 366px;
+  bottom: 18px;
   gap: 5px;
   padding: 5px;
   border: 1px solid #303a2f;
@@ -214,21 +214,145 @@
 .dockButton:focus-visible { color: #e5ebe2; background: #1c241b; }
 .dockButtonActive { border-color: #5d7159; color: #dce9d8; background: #182017; }
 
-.williamRail {
+.williamConversationRail {
   position: absolute;
   z-index: 11500;
   right: 0;
+  top: 89px;
   bottom: 0;
-  left: 0;
-  min-height: 82px;
+  width: 348px;
   display: grid;
-  grid-template-columns: auto minmax(280px, 1fr) auto auto;
-  align-items: center;
-  gap: 13px;
-  padding: 10px 16px;
-  border-top: 1px solid #2c352a;
-  background: rgb(10 14 10 / 96%);
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
+  border-left: 1px solid #2c352a;
+  background: rgb(10 14 10 / 98%);
+  box-shadow: -20px 0 60px rgb(0 0 0 / 22%);
 }
+
+.williamConversationHeader {
+  min-height: 62px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 13px;
+  border-bottom: 1px solid #283027;
+}
+
+.williamConversationHeader div { display: grid; gap: 2px; }
+.williamConversationHeader strong { color: #e1e9de; font-size: 12px; }
+.williamConversationHeader span:not(.williamOrb) { color: #7f8d7b; font-family: var(--font-geist-mono), monospace; font-size: 9px; }
+.williamRailClose {
+  width: 28px;
+  height: 28px;
+  display: none;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #8e9a8a;
+  background: transparent;
+}
+
+.williamJudgmentCard {
+  margin: 12px 12px 7px;
+  padding: 11px;
+  border: 1px solid #344032;
+  border-radius: 6px;
+  background: linear-gradient(145deg, #151d14, #101510);
+}
+
+.williamJudgmentCard > span { color: #7f8e7b; font-family: var(--font-geist-mono), monospace; font-size: 8.5px; letter-spacing: .05em; text-transform: uppercase; }
+.williamJudgmentCard p { margin: 7px 0 10px; color: #bec9ba; font-size: 10.5px; line-height: 1.5; }
+.williamJudgmentCard div { display: flex; gap: 5px; }
+.williamJudgmentCard button,
+.williamLineButton,
+.williamSendButton {
+  border: 1px solid #40503d;
+  border-radius: 4px;
+  padding: 5px 7px;
+  color: #b9c6b5;
+  background: #151c14;
+  font-size: 9.5px;
+}
+
+.williamJudgmentCard button:hover,
+.williamJudgmentCard button:focus-visible,
+.williamLineButton:hover,
+.williamLineButton:focus-visible { border-color: #71816d; color: #eef3eb; }
+
+.williamConversationHistory {
+  position: relative;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 13px 18px 28px;
+  scroll-behavior: smooth;
+}
+
+.williamConversationHistory::before {
+  content: "";
+  position: absolute;
+  top: 16px;
+  bottom: 18px;
+  left: 15px;
+  width: 1px;
+  background: linear-gradient(#71876d, #2f3a2d 78%, transparent);
+}
+
+.ownerTurn,
+.williamTurn { position: relative; margin: 0 0 15px; }
+.ownerTurn::before,
+.williamTurn::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: -17px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid #71806d;
+  border-radius: 50%;
+  background: #0d120d;
+}
+.williamTurn::before { border-color: #9ebb95; background: #617a5c; box-shadow: 0 0 0 3px rgb(116 149 107 / 9%); }
+.ownerTurn > span,
+.williamTurn > span { color: #778474; font-family: var(--font-geist-mono), monospace; font-size: 8.5px; }
+.ownerTurn p,
+.williamTurn p { margin: 4px 0 0; color: #aab5a6; font-size: 10.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.williamTurn p { color: #d0d9cd; }
+
+.williamConversationEmpty { padding: 18px 5px; }
+.williamConversationEmpty strong { color: #c5d0c1; font-size: 11px; }
+.williamConversationEmpty p { margin: 6px 0 0; color: #7e897b; font-size: 10px; line-height: 1.5; }
+.williamThinking { display: flex; align-items: center; gap: 8px; color: #91a28d; font-size: 9.5px; }
+.williamThinking i { width: 7px; height: 7px; border-radius: 50%; background: #94b68b; box-shadow: 0 0 0 4px rgb(148 182 139 / 8%); }
+
+.williamComposer { padding: 10px 12px; border-top: 1px solid #293228; background: #0d120d; }
+.williamComposer label { display: block; margin-bottom: 6px; color: #879582; font-family: var(--font-geist-mono), monospace; font-size: 8.5px; }
+.williamComposer textarea {
+  width: 100%;
+  resize: none;
+  border: 1px solid #384536;
+  border-radius: 5px;
+  outline: none;
+  padding: 9px;
+  color: #e6ece3;
+  background: #111711;
+  font: 11px/1.5 var(--font-geist-sans), sans-serif;
+}
+.williamComposer textarea:focus { border-color: #7c9277; box-shadow: 0 0 0 2px rgb(124 146 119 / 10%); }
+.williamComposer > div:last-child { display: flex; justify-content: space-between; gap: 8px; margin-top: 7px; }
+.williamLineButton,
+.williamSendButton { display: flex; align-items: center; gap: 6px; }
+.williamLineButton kbd { color: #758172; font: 8px var(--font-geist-mono), monospace; }
+.williamSendButton { border-color: #63785f; color: #e4eee1; background: #1a2519; }
+.williamSendButton:disabled { opacity: .45; }
+.williamConversationError { margin-bottom: 7px; padding: 7px; border-left: 2px solid #a96b5d; color: #dda393; background: #21130f; font-size: 9.5px; line-height: 1.4; }
+.williamSecondaryActions { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 12px 3px; color: #667262; font: 8.5px var(--font-geist-mono), monospace; }
+.williamSecondaryActions button { border: 0; padding: 3px 0; color: #849180; background: transparent; font: inherit; }
+.williamSecondaryActions button:hover,
+.williamSecondaryActions button:focus-visible { color: #c9d4c5; }
+.williamRailPersistence,
+.williamRailPersistenceError { padding: 5px 12px 7px; color: #657161; font: 8.5px var(--font-geist-mono), monospace; text-align: right; }
+.williamRailPersistenceError { color: #d79480; }
+.williamDrawerTrigger { display: none; }
 
 .williamOrb {
   width: 38px;
@@ -244,13 +368,7 @@
   font-weight: 700;
 }
 
-.judgment { min-width: 0; }
-.judgment strong { display: block; margin-bottom: 3px; color: #dfe7dc; font-size: 11px; }
-.judgment p { margin: 0; overflow: hidden; color: #a6b2a2; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.williamActions { gap: 5px; }
 .overlayButton { padding: 7px 9px; border-color: #354033; }
-.persistence { color: #869182; font-family: var(--font-geist-mono), monospace; font-size: 9.5px; }
-.persistenceError { color: #d79480; }
 
 .lineBackdrop {
   position: absolute;
@@ -259,7 +377,7 @@
   display: grid;
   align-items: end;
   justify-items: center;
-  padding-bottom: 112px;
+  padding-bottom: 24px;
   background: rgb(3 5 3 / 34%);
   backdrop-filter: blur(2px);
 }
@@ -294,12 +412,31 @@
   box-shadow: 0 30px 110px rgb(0 0 0 / 70%);
 }
 
-@media (max-width: 1050px) {
+@media (max-width: 1040px) {
   .topBar { grid-template-columns: minmax(220px, 1fr) auto; }
   .sessionStrip { display: none; }
   .spacePath { display: none; }
-  .williamRail { grid-template-columns: auto minmax(180px, 1fr) auto; }
-  .williamActions { display: none; }
+  .windowLayer { right: 0; }
+  .dock { right: 18px; }
+  .williamConversationRail { z-index: 17000; width: min(370px, calc(100vw - 28px)); transform: translateX(102%); transition: transform 180ms ease; }
+  .williamConversationRail[data-open="true"] { transform: translateX(0); }
+  .williamRailClose { display: grid; }
+  .williamDrawerTrigger {
+    position: absolute;
+    z-index: 12000;
+    right: 18px;
+    bottom: 62px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid #53654f;
+    border-radius: 6px;
+    color: #d7e3d3;
+    background: #182117;
+    box-shadow: 0 12px 36px rgb(0 0 0 / 36%);
+    font-size: 10px;
+  }
 }
 
 @media (max-width: 720px) {
@@ -309,10 +446,10 @@
   .objectLabel { max-width: 34vw; }
   .objectActions { max-width: 62vw; overflow-x: auto; }
   .objectActions .action { flex: 0 0 auto; }
-  .windowLayer { inset: 85px 0 92px; }
-  .williamRail { min-height: 92px; padding: 10px; }
-  .judgment p { white-space: normal; }
-  .dock { right: 8px; bottom: 98px; }
+  .windowLayer { inset: 85px 0 0; }
+  .williamConversationRail { top: 85px; }
+  .williamDrawerTrigger { right: 8px; bottom: 52px; }
+  .dock { right: 8px; bottom: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

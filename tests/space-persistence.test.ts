@@ -93,12 +93,13 @@ import {
   loadOwnedCouncilHistory,
   saveOwnedCouncilSession,
   saveOwnedLineWorld,
+  selectedLineContextFingerprint,
   saveOwnedSpace,
   workspaceProjectFromRoot,
   type OwnedWorkingWorldRecord,
   type SpaceWorkingWorldStore,
 } from "@/lib/environment/space-persistence"
-import { createWorkingWorld, withTurn, type SpaceState } from "@/lib/environment/working-world"
+import { createWorkingWorld, withTurn, type SpaceState, type WorkingWorldSnapshot } from "@/lib/environment/working-world"
 import { POST } from "@/app/api/environment/line/route"
 
 function councilSession(id: string, createdAt: string) {
@@ -433,6 +434,37 @@ describe("server-owned Space persistence", () => {
     expect(restored!.worldId).toBe("world-uuid-a")
   })
 
+  it("restores the durable William conversation with its owned Space", async () => {
+    const store = new MemoryStore()
+    const project = { identity: "c:/repos/terrafusion", name: "TerraFusion" }
+    const world = withTurn(
+      withTurn(createWorkingWorld({
+        intent: "TerraFusion",
+        resources: ["williamos-workspace-root:v1:c:/repos/terrafusion"],
+      }), "owner", "What changed in the selected file?"),
+      "williamos",
+      "The save path is now revision-bound.",
+    )
+    store.rows.set("world-conversation", {
+      id: "world-conversation",
+      userId: "owner-a",
+      intent: world.intent,
+      snapshot: JSON.stringify({ ...world, space: space(null, 3) }),
+      updatedAt: new Date("2026-08-29T09:00:00Z"),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      worldId: "world-conversation",
+      project,
+    }, store)
+
+    expect(restored?.conversation.map(({ role, content }) => ({ role, content }))).toEqual([
+      { role: "owner", content: "What changed in the selected file?" },
+      { role: "williamos", content: "The save path is now revision-bound." },
+    ])
+  })
+
   it("starts a clean bound Space instead of reinterpreting saved paths against another repository", async () => {
     const store = new MemoryStore()
     const first = await loadOrCreateOwnedSpace({
@@ -699,6 +731,78 @@ describe("server-owned Space persistence", () => {
     expect(persisted.conversation.at(-1)).toMatchObject({ content: "show current work" })
     expect(persisted.space.revision).toBe(2)
     expect(persisted.space.windows.find((window: { id: string }) => window.id === "editor").frame.x).toBe(333)
+  })
+
+  it("refuses a stale Line reply when the persisted selected context changes during inference", async () => {
+    const store = new LineBarrierStore()
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: initial.intent,
+      snapshot: JSON.stringify(initial), updatedAt: new Date("2026-08-25T10:00:00Z"),
+    })
+    const answered = withTurn(
+      withTurn(initial, "owner", "show current work", () => "2026-08-25T10:01:00Z"),
+      "williamos",
+      "A reply bound to the old selection.",
+      () => "2026-08-25T10:01:01Z",
+    )
+    const lineSave = saveOwnedLineWorld({
+      userId: "owner-a",
+      worldId: "world-a",
+      world: answered,
+      isNew: false,
+      expectedSelectedContext: selectedLineContextFingerprint(initial),
+    }, store)
+    await store.lineWaiting
+
+    const moved = {
+      ...space(null, 2),
+      selection: { filePath: "src/search-ranking.ts", anchor: 2, head: 8 },
+      activePaneId: "left",
+      activeWindowId: "editor",
+    }
+    await saveOwnedSpace({ userId: "owner-a", worldId: "world-a", space: moved }, store)
+    store.releaseAfterSpaceCommit()
+
+    await expect(lineSave).rejects.toThrow("LINE_CONTEXT_STALE")
+    const reopened = await loadOrCreateOwnedSpace({ userId: "owner-a", worldId: "world-a" }, store)
+    expect(reopened?.space.revision).toBe(2)
+    expect(reopened?.conversation).toEqual([])
+  })
+
+  it("refuses a Line reply when the authoritative bytes change at the same persisted selection", async () => {
+    const store = new MemoryStore()
+    const initial = { ...createWorkingWorld({ intent: "TerraFusion" }), space: space(null, 1) }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: initial.intent,
+      snapshot: JSON.stringify(initial), updatedAt: new Date("2026-08-25T10:00:00Z"),
+    })
+    let selectedVersion = "sha256:before"
+    const deriveSelectedContext = async (world: WorkingWorldSnapshot) => JSON.stringify({
+      persisted: selectedLineContextFingerprint(world),
+      path: "src/query.ts",
+      version: selectedVersion,
+    })
+    const expectedSelectedContext = await deriveSelectedContext(initial)
+    const answered = withTurn(
+      withTurn(initial, "owner", "Explain this file"),
+      "williamos",
+      "A reply grounded in the old bytes.",
+    )
+
+    selectedVersion = "sha256:after"
+    await expect(saveOwnedLineWorld({
+      userId: "owner-a",
+      worldId: "world-a",
+      world: answered,
+      isNew: false,
+      expectedSelectedContext,
+      deriveSelectedContext,
+    }, store)).rejects.toThrow("LINE_CONTEXT_STALE")
+
+    const reopened = await loadOrCreateOwnedSpace({ userId: "owner-a", worldId: "world-a" }, store)
+    expect(reopened?.conversation).toEqual([])
+    expect(reopened?.space.selection?.filePath).toBe("src/query.ts")
   })
 
   it("lets a later Space save preserve a Line turn committed first", async () => {

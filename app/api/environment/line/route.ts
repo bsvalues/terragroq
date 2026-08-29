@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process"
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -11,7 +12,7 @@ import { decision as decisionTable, evidenceRecord, project, workingWorld } from
 import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
-import { saveOwnedLineWorld } from "@/lib/environment/space-persistence"
+import { saveOwnedLineWorld, selectedLineContextFingerprint } from "@/lib/environment/space-persistence"
 import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { getWorkOrders } from "@/app/actions/work-orders"
@@ -27,6 +28,7 @@ import {
   mentionsSupersession,
 } from "@/lib/environment/decision-intent"
 import { isContinueIntent } from "@/lib/environment/start-work"
+import { isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { classifyDismissal, classifySummon, isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
@@ -267,8 +269,15 @@ async function loadWorld(userId: string, worldId: string): Promise<WorkingWorldS
   }
 }
 
-async function saveWorld(userId: string, worldId: string, world: WorkingWorldSnapshot, isNew: boolean): Promise<void> {
-  await saveOwnedLineWorld({ userId, worldId, world, isNew })
+async function saveWorld(
+  userId: string,
+  worldId: string,
+  world: WorkingWorldSnapshot,
+  isNew: boolean,
+  expectedSelectedContext?: string,
+  deriveSelectedContext?: (world: WorkingWorldSnapshot) => Promise<string>,
+): Promise<void> {
+  await saveOwnedLineWorld({ userId, worldId, world, isNew, expectedSelectedContext, deriveSelectedContext })
 }
 
 /** Bounded, honest conversation with the sovereign model. */
@@ -508,6 +517,60 @@ async function converse(world: WorkingWorldSnapshot, text: string, facts: string
   }
 }
 
+const SELECTED_FILE_CONTEXT_BYTES = 64 * 1024
+
+/**
+ * Ground William from the selected object already persisted in the owned world. The owner message
+ * is deliberately not an input to this function: prose may discuss any path, but it cannot select
+ * a different host file for the server to read.
+ */
+async function deriveSelectedObjectGrounding(
+  world: WorkingWorldSnapshot,
+  projectRoot: string | null = PROJECT_ROOT,
+): Promise<Readonly<{ facts: string; version: string }>> {
+  const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId)
+  const selectedPath = world.space?.selection?.filePath ?? activePane?.filePath ?? null
+  const unavailable = (pathValue: string | null, reason: string, facts: string) => ({
+    facts,
+    version: JSON.stringify({ path: pathValue, sha256: null, boundedBytes: 0, unavailableReason: reason }),
+  })
+  if (!selectedPath) return unavailable(null, "NO_FILE_SELECTED", "Selected object (server-derived): no file is selected in the persisted Space.")
+  const label = `Selected object (server-derived): file ${JSON.stringify(selectedPath)}.`
+  if (!projectRoot) return unavailable(selectedPath, "PROJECT_ROOT_UNAVAILABLE", `${label} Content unavailable: the server project root is not configured.`)
+  if (isSensitiveWorkspacePath(selectedPath)) return unavailable(selectedPath, "SENSITIVE_PATH", `${label} Content unavailable: the selected path is sensitive.`)
+  const resolved = await resolveRealWorkspacePath(projectRoot, selectedPath, fs.promises.realpath)
+  if (!resolved.ok || !resolved.absolute || !resolved.relative) {
+    return unavailable(selectedPath, "PATH_UNAVAILABLE", `${label} Content unavailable: the persisted path is outside the readable workspace.`)
+  }
+  if (isSensitiveWorkspacePath(resolved.relative)) return unavailable(resolved.relative, "SENSITIVE_PATH", `${label} Content unavailable: the selected path is sensitive.`)
+  let handle: fs.promises.FileHandle | null = null
+  try {
+    handle = await fs.promises.open(resolved.absolute, "r")
+    const bytes = Buffer.alloc(SELECTED_FILE_CONTEXT_BYTES + 1)
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0)
+    const sample = bytes.subarray(0, bytesRead)
+    const sha256 = createHash("sha256").update(sample).digest("hex")
+    const version = (unavailableReason: string | null) => JSON.stringify({
+      path: resolved.relative,
+      sha256,
+      boundedBytes: bytesRead,
+      unavailableReason,
+    })
+    if (bytesRead > SELECTED_FILE_CONTEXT_BYTES) {
+      return { facts: `${label} Content unavailable: the selected file exceeds the grounding limit.`, version: version("FILE_TOO_LARGE") }
+    }
+    if (looksBinary(sample)) return { facts: `${label} Content unavailable: the selected file is binary.`, version: version("BINARY_FILE") }
+    return {
+      facts: `${label}\nAuthoritative selected file version: sha256:${sha256}.\nAuthoritative selected file content:\n--- BEGIN ${resolved.relative} ---\n${sample.toString("utf8")}\n--- END ${resolved.relative} ---`,
+      version: version(null),
+    }
+  } catch {
+    return unavailable(resolved.relative, "FILE_UNREADABLE", `${label} Content unavailable: the selected file could not be read.`)
+  } finally {
+    await handle?.close().catch(() => undefined)
+  }
+}
+
 export async function POST(request: Request) {
   // A cookie-authenticated, state-changing, model-fanning endpoint: refuse the cross-site CSRF
   // shape and oversized bodies before doing any work. See lib/environment/line-guard.ts.
@@ -581,6 +644,8 @@ export async function POST(request: Request) {
     let updated = withTurn(world, "owner", text)
     let say: string
     let surfaces: SurfaceDirective[] = []
+    let expectedSelectedContext: string | undefined
+    let deriveSelectedContext: ((world: WorkingWorldSnapshot) => Promise<string>) | undefined
     if (isContinueIntent(text) && world.pendingStartWork) {
       // The transition: start the EXACT retained selection — no re-resolve, no re-read. The
       // authorization is an atomic revalidate-and-act; a stale selection fails closed. Clear the
@@ -711,11 +776,30 @@ export async function POST(request: Request) {
         // A current-work read retains its exact selection for a later "continue it".
         if ("retained" in grounded) updated = { ...updated, pendingStartWork: grounded.retained ?? null }
       } else {
-        say = await converse(updated, text, groundingFacts(await loadProjects(userId)))
+        const selectedObject = await deriveSelectedObjectGrounding(world)
+        expectedSelectedContext = JSON.stringify({
+          persisted: selectedLineContextFingerprint(world),
+          selectedObject: selectedObject.version,
+        })
+        deriveSelectedContext = async (latest) => {
+          const latestSelectedObject = await deriveSelectedObjectGrounding(latest)
+          return JSON.stringify({
+            persisted: selectedLineContextFingerprint(latest),
+            selectedObject: latestSelectedObject.version,
+          })
+        }
+        say = await converse(updated, text, `${groundingFacts(await loadProjects(userId))} ${selectedObject.facts}`)
       }
     }
     updated = withTurn(updated, "williamos", say)
-    await saveWorld(userId, requestedWorldId, updated, false)
+    try {
+      await saveWorld(userId, requestedWorldId, updated, false, expectedSelectedContext, deriveSelectedContext)
+    } catch (error) {
+      if (error instanceof Error && error.message === "LINE_CONTEXT_STALE") {
+        return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
+      }
+      throw error
+    }
     return Response.json({ worldId: requestedWorldId, say, surfaces, spine: updated.spine } satisfies LineReply)
   }
 
