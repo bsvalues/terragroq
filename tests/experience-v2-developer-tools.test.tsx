@@ -80,6 +80,102 @@ describe("Experience V2 developer tools", () => {
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2))
   })
 
+  it("restores the last real Changes response in the same Space as a saved browser snapshot", async () => {
+    let resolveReopen!: (response: Response) => void
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({ path: "src/app.ts", untracked: false, diff: "-before\n+after", status: " M src/app.ts" }))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveReopen = resolve }))
+    vi.stubGlobal("fetch", fetcher)
+
+    const first = render(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" historyScope="server:world-a" />)
+    expect(await screen.findByText("+after", { exact: false })).toBeTruthy()
+    expect(window.localStorage.length).toBe(1)
+    first.unmount()
+
+    render(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" historyScope="server:world-a" />)
+    expect(screen.getByText("+after", { exact: false })).toBeTruthy()
+    expect(screen.getByText("Saved browser snapshot · not live evidence")).toBeTruthy()
+
+    resolveReopen(Response.json({ path: "src/app.ts", untracked: false, diff: "-after\n+current", status: " M src/app.ts" }))
+    expect(await screen.findByText("+current", { exact: false })).toBeTruthy()
+  })
+
+  it("never restores a Changes browser snapshot into another Space", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({ path: "src/app.ts", untracked: false, diff: "-private\n+world-a-only", status: " M src/app.ts" }))
+      .mockImplementationOnce(() => new Promise<Response>(() => {}))
+    vi.stubGlobal("fetch", fetcher)
+
+    const view = render(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" historyScope="server:world-a" />)
+    expect(await screen.findByText("+world-a-only", { exact: false })).toBeTruthy()
+    expect(window.localStorage.length).toBe(1)
+
+    view.rerender(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" historyScope="server:world-b" />)
+    expect(screen.queryByText("world-a-only", { exact: false })).toBeNull()
+    expect(screen.queryByText("Saved browser snapshot · not live evidence")).toBeNull()
+  })
+
+  it("replaces a restored Changes snapshot with current live workspace truth on Refresh", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({ path: "src/app.ts", untracked: false, diff: "-one\n+saved", status: " M src/app.ts" }))
+      .mockImplementationOnce(() => new Promise<Response>(() => {}))
+      .mockResolvedValueOnce(Response.json({ path: "src/app.ts", untracked: false, diff: "-saved\n+live-refresh", status: "MM src/app.ts" }))
+    vi.stubGlobal("fetch", fetcher)
+
+    const first = render(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" historyScope="server:world-a" />)
+    expect(await screen.findByText("+saved", { exact: false })).toBeTruthy()
+    expect(window.localStorage.length).toBe(1)
+    first.unmount()
+
+    render(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" historyScope="server:world-a" />)
+    expect(screen.getByText("Saved browser snapshot · not live evidence")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }))
+
+    expect(await screen.findByText("+live-refresh", { exact: false })).toBeTruthy()
+    expect(screen.queryByText("Saved browser snapshot · not live evidence")).toBeNull()
+  })
+
+  it("reports when a live Changes snapshot cannot be saved in browser storage", async () => {
+    const quotaStorage = {
+      getItem: () => null,
+      setItem: () => { throw new DOMException("quota", "QuotaExceededError") },
+    }
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({
+      path: "src/app.ts", untracked: false, diff: "-before\n+live-only", status: " M src/app.ts",
+    })))
+
+    render(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" historyScope="server:world-a" historyStorage={quotaStorage} />)
+
+    expect(await screen.findByText("+live-only", { exact: false })).toBeTruthy()
+    expect(screen.getByText("Changes snapshot not saved in this browser.")).toBeTruthy()
+  })
+
+  it("reports and ignores a corrupt saved Changes snapshot", async () => {
+    const corruptStorage = {
+      getItem: () => "{not-json",
+      setItem: () => undefined,
+    }
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => new Promise<Response>(() => {})))
+
+    render(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" historyScope="server:world-a" historyStorage={corruptStorage} />)
+
+    expect(screen.getByText("Saved Changes snapshot was corrupt and was not loaded.")).toBeTruthy()
+    expect(screen.queryByText("Saved browser snapshot · not live evidence")).toBeNull()
+  })
+
+  it("reports when saved Changes snapshot storage cannot be read", async () => {
+    const unavailableStorage = {
+      getItem: () => { throw new DOMException("blocked", "SecurityError") },
+      setItem: () => undefined,
+    }
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => new Promise<Response>(() => {})))
+
+    render(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" historyScope="server:world-a" historyStorage={unavailableStorage} />)
+
+    expect(screen.getByText("Saved Changes snapshot history is unavailable.")).toBeTruthy()
+    expect(screen.queryByText("Saved browser snapshot · not live evidence")).toBeNull()
+  })
+
   it("runs the real catalogued test operation and renders its streamed exit", async () => {
     const fetcher = vi.fn().mockResolvedValue(ndjson(
       { type: "started", operation: "tests.run" },

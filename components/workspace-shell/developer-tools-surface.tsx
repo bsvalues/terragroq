@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { LOOM_OPERATIONS, resolveProjectTerminalAlias } from "@/lib/loom/operations"
 import styles from "./experience-spatial.module.css"
+import { loadDiffBrowserSnapshot, persistDiffBrowserSnapshot } from "./diff-snapshot-history"
 import { loadToolRunHistory, persistToolRunTranscript, type ToolOutputLine, type ToolRunTranscript } from "./tool-run-history"
 
 type DeveloperToolKind = "tests" | "diff" | "terminal"
@@ -49,6 +50,8 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
 }) {
   const [diff, setDiff] = useState("")
   const [status, setStatus] = useState("")
+  const [diffSnapshot, setDiffSnapshot] = useState(false)
+  const [diffHistoryVerdict, setDiffHistoryVerdict] = useState<string | null>(null)
   const [operations, setOperations] = useState<readonly Operation[]>([])
   const [lines, setLines] = useState<readonly ToolOutputLine[]>([])
   const [running, setRunning] = useState<string | null>(null)
@@ -79,20 +82,40 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
   useEffect(() => { historyScopeRef.current = historyScope }, [historyScope])
   useEffect(() => { historyStorageRef.current = historyStorage }, [historyStorage])
 
-  const loadDiff = useCallback(async (path = selectedPath): Promise<"refreshed" | "failed" | "aborted"> => {
+  const loadDiff = useCallback(async (path = selectedPath, preserveSavedSnapshot = false): Promise<"refreshed" | "failed" | "aborted"> => {
     diffController.current?.abort()
     const abort = new AbortController()
     diffController.current = abort
-    setDiff("")
-    setStatus("")
+    if (!preserveSavedSnapshot) {
+      setDiff("")
+      setStatus("")
+      setDiffSnapshot(false)
+    }
     setError(null)
     const query = path ? `?path=${encodeURIComponent(path)}` : ""
+    const scope = historyScopeRef.current
+    const snapshotStorage = historyStorageRef.current
     try {
       const response = await fetch(`/api/loom/diff${query}`, { cache: "no-store", signal: abort.signal })
       const payload = await response.json() as { error?: string; diff?: string; status?: string; note?: string; untracked?: boolean }
       if (!response.ok) throw new Error(payload.error ?? `DIFF_${response.status}`)
-      setDiff(payload.untracked ? payload.note ?? "This file is new." : payload.diff ?? "")
-      setStatus(payload.status ?? "")
+      const nextDiff = payload.untracked ? payload.note ?? "This file is new." : payload.diff ?? ""
+      const nextStatus = payload.status ?? ""
+      setDiff(nextDiff)
+      setStatus(nextStatus)
+      setDiffSnapshot(false)
+      if (scope) {
+        const saved = persistDiffBrowserSnapshot(snapshotStorage ?? window.localStorage, scope, {
+          schemaVersion: 1,
+          path: path ?? null,
+          diff: nextDiff,
+          status: nextStatus,
+          capturedAt: new Date().toISOString(),
+        })
+        if (historyScopeRef.current === scope && historyStorageRef.current === snapshotStorage) {
+          setDiffHistoryVerdict(saved ? null : "Changes snapshot not saved in this browser.")
+        }
+      }
       return "refreshed"
     } catch (caught) {
       if ((caught as Error)?.name === "AbortError") return "aborted"
@@ -103,7 +126,33 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
     }
   }, [selectedPath])
 
-  useEffect(() => { if (kind === "diff") void loadDiff() }, [kind, loadDiff])
+  useEffect(() => {
+    if (kind !== "diff") return
+    setDiff("")
+    setStatus("")
+    setDiffSnapshot(false)
+    setDiffHistoryVerdict(null)
+    setError(null)
+    if (!historyScope) return
+    try {
+      const restored = loadDiffBrowserSnapshot(historyStorage ?? window.localStorage, historyScope)
+      if (restored.error) {
+        setDiffHistoryVerdict(restored.error === "DIFF_SNAPSHOT_UNAVAILABLE"
+          ? "Saved Changes snapshot history is unavailable."
+          : "Saved Changes snapshot was corrupt and was not loaded.")
+        return
+      }
+      const snapshot = restored.snapshot
+      if (!snapshot || snapshot.path !== selectedPath) return
+      setDiff(snapshot.diff)
+      setStatus(snapshot.status)
+      setDiffSnapshot(true)
+    } catch {
+      // Browser persistence is optional; current workspace truth can still load.
+    }
+  }, [historyScope, historyStorage, kind, selectedPath])
+
+  useEffect(() => { if (kind === "diff") void loadDiff(undefined, true) }, [historyScope, historyStorage, kind, loadDiff])
 
   useEffect(() => {
     if (kind !== "diff" || (refreshKey === completedRefresh.current.key && refreshPath === completedRefresh.current.path)) return
@@ -307,7 +356,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
 
   return (
     <section className={styles.utilitySurface} aria-label={title}>
-      <header className={styles.utilityMeta}><span>{title}</span><span>{running ? `Running ${running}` : error ? error : "Live workspace state"}</span></header>
+      <header className={styles.utilityMeta}><span>{title}</span><span>{running ? `Running ${running}` : error ? error : kind === "diff" && diffSnapshot ? "Saved browser snapshot · not live evidence" : "Live workspace state"}</span></header>
       <div className={styles.utilityBody}>
         {kind === "diff" ? <>
           <div className={styles.utilityControls}>
@@ -316,6 +365,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
           </div>
           {status ? <pre className={styles.utilityOutput}>{status}</pre> : null}
           {error ? <output className={styles.utilityOutput}>Unable to refresh current change: {error}</output> : null}
+          {diffHistoryVerdict ? <output className={styles.muted}>{diffHistoryVerdict}</output> : null}
           <pre className={styles.utilityOutput}>{diff || (error ? "" : "No changes against HEAD.")}</pre>
         </> : <>
           {kind === "terminal" ? <form className={styles.utilityControls} onSubmit={(event) => { event.preventDefault(); executeCommand() }}>
