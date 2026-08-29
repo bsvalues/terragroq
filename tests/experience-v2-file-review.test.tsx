@@ -314,18 +314,51 @@ describe("Experience V2 selected-file Review", () => {
     expect((screen.getByRole("button", { name: "Start review" }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it("stops the exact accepted Reviewer without stopping another concurrent turn", async () => {
+    let turn: RunClaudeTurnInput | null = null
+    const stop = vi.fn()
+    const sessions: ExperienceAgentSessionController = {
+      sessions: [], durableSession: null, savedDescriptor: null, savedSessions: [], selectedSessionKey: null,
+      descriptorState: "none", activeSessionId: "Codex:writer", pausableSessionId: "Codex:writer",
+      activeSessionIds: ["Codex:writer", `Claude:${SESSION_ID}`],
+      pausableSessionIds: ["Codex:writer", `Claude:${SESSION_ID}`],
+      activeTurns: [
+        { id: "Codex:writer", provider: "Codex", role: "Builder", sessionId: "writer", presentation: "Agent is working.", descriptor: null },
+        { id: `Claude:${SESSION_ID}`, provider: "Claude", role: "Reviewer", sessionId: SESSION_ID, presentation: "Agent is working.", descriptor: null },
+      ],
+      error: null,
+      runClaudeTurn(input) { turn = input; return new Promise(() => undefined) },
+      selectSession: () => false,
+      stop,
+    }
+    function Harness() {
+      const review = useSelectedFileReview({ path: "src/app.ts", sessions, onReport: () => undefined })
+      return <><button onClick={() => void review.start("")}>Start</button><button onClick={review.stop}>Stop</button></>
+    }
+    render(<Harness />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Start" }))
+    act(() => turn?.onEvent?.({ type: "session", sessionId: SESSION_ID, provider: "Claude", mode: "review", resumed: false }))
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }))
+
+    expect(stop).toHaveBeenCalledWith(`Claude:${SESSION_ID}`)
+    expect(stop).not.toHaveBeenCalledWith("Codex:writer")
+  })
+
   it("suppresses a stale older completion after a newer Review has started", async () => {
     const turns: RunClaudeTurnInput[] = []
     const resolvers: Array<(value: DurableClaudeSession) => void> = []
     const rejectors: Array<(reason: unknown) => void> = []
     let activeTurn = -1
     const sessions: ExperienceAgentSessionController = {
-      sessions: [], durableSession: null, savedDescriptor: null, descriptorState: "none", activeSessionId: null, error: null,
+      sessions: [], durableSession: null, savedDescriptor: null, savedSessions: [], selectedSessionKey: null,
+      descriptorState: "none", activeSessionId: null, pausableSessionId: null, activeSessionIds: [], pausableSessionIds: [], activeTurns: [], error: null,
       runClaudeTurn(input) {
         activeTurn = turns.length
         turns.push(input)
         return new Promise((resolve, reject) => { resolvers.push(resolve); rejectors.push(reject) })
       },
+      selectSession: () => false,
       stop() { if (activeTurn >= 0) rejectors[activeTurn]?.(new DOMException("Aborted", "AbortError")) },
     }
     function Harness() {

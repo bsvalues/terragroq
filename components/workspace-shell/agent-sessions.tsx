@@ -70,6 +70,16 @@ export type ExperienceAgentSession = Readonly<{
   reviewPath?: string
   forkedFrom?: string
   lastResult?: string
+  presentation?: string
+}>
+
+export type ActiveAgentTurn = Readonly<{
+  id: string
+  provider: AgentProvider
+  role: string
+  sessionId: string | null
+  presentation: string
+  descriptor: DurableAgentSession | null
 }>
 
 export type RunClaudeTurnInput = Readonly<{
@@ -129,10 +139,13 @@ export type ExperienceAgentSessionController = Readonly<{
   descriptorState: "none" | "unverified" | "verified"
   activeSessionId: string | null
   pausableSessionId: string | null
+  activeSessionIds: readonly string[]
+  pausableSessionIds: readonly string[]
+  activeTurns: readonly ActiveAgentTurn[]
   error: string | null
   runClaudeTurn: (input: RunClaudeTurnInput) => Promise<DurableClaudeSession>
   selectSession: (sessionId: string | null) => boolean
-  stop: () => void
+  stop: (sessionId?: string) => void
 }>
 
 export type ProviderNeutralAgentSessionController = ExperienceAgentSessionController & Readonly<{
@@ -150,6 +163,15 @@ type ActiveAgentOperation = {
   priorVerified: boolean
   priorCollection: readonly DurableAgentSession[]
   priorSelectedSessionKey: string | null
+  provider: AgentProvider
+  role: string
+  mode: "delegate" | "review" | "fork"
+  lane: "writer" | "reviewer" | "thinker" | null
+  accepted: DurableAgentSession | null
+  acceptedKey: string | null
+  presentation: string
+  selectionGeneration: number
+  selectionFallbackKey: string | null
 }
 
 class AgentStartRefusal extends Error {
@@ -365,6 +387,7 @@ function persistForkCollection(
   sessions: readonly DurableAgentSession[],
   sourceKey: string,
   child: DurableAgentSession,
+  selectedSessionKey: string | null,
 ): DurableAgentSessionCollection {
   const childKey = sessionKey(child.provider, child.sessionId)
   let retained = sessions.filter((session) => sessionKey(session.provider, session.sessionId) !== childKey)
@@ -373,10 +396,13 @@ function persistForkCollection(
     if (removable < 0) throw new Error("AGENT_SESSION_COLLECTION_TOO_LARGE")
     retained = retained.filter((_, index) => index !== removable)
   }
+  const nextSessions = [...retained, child]
   const collection: DurableAgentSessionCollection = {
     schemaVersion: 3,
-    selectedSessionKey: childKey,
-    sessions: [...retained, child],
+    selectedSessionKey: nextSessions.some((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKey)
+      ? selectedSessionKey
+      : null,
+    sessions: nextSessions,
   }
   if (new TextEncoder().encode(JSON.stringify(collection)).byteLength > MAX_COLLECTION_BYTES) {
     throw new Error("AGENT_SESSION_COLLECTION_TOO_LARGE")
@@ -397,7 +423,7 @@ function projectSessions(
   worker: WorldWorker | null,
   durable: readonly DurableAgentSession[],
   verified: readonly DurableAgentSession[],
-  activeSessionId: string | null,
+  activeTurns: readonly ActiveAgentTurn[],
 ): readonly ExperienceAgentSession[] {
   const sessions: ExperienceAgentSession[] = []
   if (worker) {
@@ -417,7 +443,8 @@ function projectSessions(
     const descriptorKey = sessionKey(descriptor.provider, descriptor.sessionId)
     const isLocal = descriptor.provider === "Local"
     const isVerified = verified.some((session) => sessionKey(session.provider, session.sessionId) === descriptorKey)
-    const isWorking = activeSessionId === descriptorKey && isVerified
+    const active = activeTurns.find((turn) => turn.id === descriptorKey)
+    const isWorking = Boolean(active)
     sessions.push({
       id: descriptorKey,
       role: descriptor.role,
@@ -427,13 +454,34 @@ function projectSessions(
       evidence: isWorking ? isLocal ? "live model response" : "live agent stream"
         : isVerified ? isLocal ? "resumable conversation" : "resumable session"
           : isLocal ? "saved conversation · replay verification required" : "saved transcript · server verification required",
-      truth: isVerified ? "live" : "resume-unverified",
+      truth: isVerified || active ? "live" : "resume-unverified",
       kind: "durable-session",
       mode: descriptor.reviewPath ? "review" : "delegate",
       ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
       ...(descriptor.completedTurns?.at(-1)?.finalResult ? { lastResult: descriptor.completedTurns.at(-1)!.finalResult } : {}),
+      ...(active ? { presentation: active.presentation } : {}),
+    })
+  })
+  activeTurns.forEach((turn) => {
+    if (!turn.sessionId || sessions.some((session) => session.id === turn.id)) return
+    const descriptor = turn.descriptor
+    if (!descriptor) return
+    sessions.push({
+      id: turn.id,
+      role: descriptor.role,
+      providerLabel: descriptor.provider,
+      assignment: descriptor.assignment,
+      status: descriptor.provider === "Local" ? "thinking" : "working",
+      evidence: descriptor.provider === "Local" ? "live model response" : "live agent stream",
+      truth: "live",
+      kind: "durable-session",
+      mode: descriptor.reviewPath ? "review" : "delegate",
+      ...(descriptor.target ? { target: descriptor.target } : {}),
+      ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
+      ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
+      presentation: turn.presentation,
     })
   })
   return sessions
@@ -454,48 +502,77 @@ export function useExperienceAgentSessions({
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null)
   const [verifiedSessions, setVerifiedSessions] = useState<readonly DurableAgentSession[]>([])
   const [durableSession, setDurableSession] = useState<DurableAgentSession | null>(null)
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
-  const [pausableSessionId, setPausableSessionId] = useState<string | null>(null)
-  const [activeProvider, setActiveProvider] = useState<AgentProvider | null>(null)
+  const [activeTurns, setActiveTurns] = useState<readonly ActiveAgentTurn[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loadedStorageKey, setLoadedStorageKey] = useState<string | null>(null)
   const sessionsRef = useRef<readonly DurableAgentSession[]>([])
   const selectedSessionKeyRef = useRef<string | null>(null)
   const verifiedSessionsRef = useRef<readonly DurableAgentSession[]>([])
   const operationEpoch = useRef(0)
-  const operationRef = useRef<ActiveAgentOperation | null>(null)
+  const selectionGenerationRef = useRef(0)
+  const operationsRef = useRef(new Map<number, ActiveAgentOperation>())
 
-  const invalidateOperation = useCallback((restoreVisibleHint: boolean) => {
-    const operation = operationRef.current
-    if (!operation) return
+  const syncActiveTurns = useCallback(() => {
+    setActiveTurns([...operationsRef.current.values()].map((operation) => ({
+      id: operation.acceptedKey ?? `starting-${operation.provider.toLowerCase()}-${operation.epoch}`,
+      provider: operation.provider,
+      role: operation.role,
+      sessionId: operation.accepted?.sessionId ?? null,
+      presentation: operation.presentation,
+      descriptor: operation.accepted,
+    })))
+  }, [])
+
+  const repairInvalidatedSelection = useCallback((operation: ActiveAgentOperation) => {
+    const invalidatedKey = operation.acceptedKey
+    if (!invalidatedKey || selectedSessionKeyRef.current !== invalidatedKey) return
+    const exactDurable = sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === invalidatedKey) ?? null
+    const fallbackKey = exactDurable ? invalidatedKey : operation.selectionFallbackKey
+    const fallback = fallbackKey
+      ? sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === fallbackKey) ?? null
+      : null
+    const nextSelectedKey = fallback ? sessionKey(fallback.provider, fallback.sessionId) : null
+    try {
+      const persisted = persistCollection(operation.storageKey, sessionsRef.current, nextSelectedKey)
+      sessionsRef.current = persisted.sessions
+      setSavedSessions(persisted.sessions)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED")
+    }
+    selectionGenerationRef.current += 1
+    selectedSessionKeyRef.current = nextSelectedKey
+    setSelectedSessionKey(nextSelectedKey)
+    const verifiedFallback = fallback && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === nextSelectedKey)
+      ? fallback
+      : null
+    setDurableSession(verifiedFallback)
+  }, [])
+
+  const invalidateOperation = useCallback((operation: ActiveAgentOperation) => {
+    if (operationsRef.current.get(operation.epoch) !== operation) return
     // Invalidation is deliberately first. A cancel/read/finally continuation from this operation
     // can no longer mutate the state or persistence owned by the next turn.
-    operationRef.current = null
-    // The collection is committed only after a successful terminal frame, so cancellation restores
-    // the in-memory snapshot without another storage write that could itself fail or widen truth.
-    sessionsRef.current = operation.priorCollection
-    selectedSessionKeyRef.current = operation.priorSelectedSessionKey
-    if (restoreVisibleHint) {
-      setSavedSessions(operation.priorCollection)
-      setSelectedSessionKey(operation.priorSelectedSessionKey)
-      const verified = operation.prior && operation.priorVerified
-        ? upsertSession(verifiedSessionsRef.current, operation.prior)
-        : verifiedSessionsRef.current
-      verifiedSessionsRef.current = verified
-      setVerifiedSessions(verified)
-      setDurableSession(operation.priorVerified ? operation.prior : null)
-    }
+    operationsRef.current.delete(operation.epoch)
+    repairInvalidatedSelection(operation)
     void operation.reader?.cancel()
     operation.abort.abort()
-    setActiveSessionId(null)
-    setPausableSessionId(null)
-    setActiveProvider(null)
-  }, [])
+    syncActiveTurns()
+  }, [repairInvalidatedSelection, syncActiveTurns])
+
+  const invalidateAllOperations = useCallback(() => {
+    const operations = [...operationsRef.current.values()]
+    operationsRef.current.clear()
+    operations.forEach((operation) => {
+      void operation.reader?.cancel()
+      operation.abort.abort()
+    })
+    syncActiveTurns()
+  }, [syncActiveTurns])
 
   useEffect(() => {
     // A turn is owned by the exact authenticated owner/workspace scope in which it began. Never let
     // a late frame from that scope materialize a ready session after the shell has moved elsewhere.
-    invalidateOperation(false)
+    invalidateAllOperations()
     const key = storageKey(ownerScope, worldScope)
     const stored = window.localStorage.getItem(key)
     const collection = parseCollection(stored)
@@ -526,24 +603,39 @@ export function useExperienceAgentSessions({
     setVerifiedSessions([])
     setDurableSession(null)
     setLoadedStorageKey(key)
-  }, [invalidateOperation, ownerScope, worldScope])
+  }, [invalidateAllOperations, ownerScope, worldScope])
 
   useEffect(() => () => {
-    const operation = operationRef.current
-    operationRef.current = null
-    void operation?.reader?.cancel()
-    operation?.abort.abort()
+    const operations = [...operationsRef.current.values()]
+    operationsRef.current.clear()
+    operations.forEach((operation) => {
+      void operation.reader?.cancel()
+      operation.abort.abort()
+    })
   }, [])
 
-  const stop = useCallback(() => {
-    invalidateOperation(true)
+  const stop = useCallback((sessionId?: string) => {
+    const operations = [...operationsRef.current.values()]
+    const operation = sessionId
+      ? operations.find((candidate) => candidate.acceptedKey === sessionId
+        || `starting-${candidate.provider.toLowerCase()}-${candidate.epoch}` === sessionId)
+      : operations.length === 1 ? operations[0] : null
+    if (operation) invalidateOperation(operation)
   }, [invalidateOperation])
 
   const selectSession = useCallback((selectedKey: string | null) => {
-    if (operationRef.current) return false
     const sessions = sessionsRef.current
     const selected = selectedKey === null ? null : sessions.find((session) => sessionKey(session.provider, session.sessionId) === selectedKey)
-    if (selectedKey !== null && !selected) return false
+    if (selectedKey !== null && !selected) {
+      const active = [...operationsRef.current.values()].find((operation) => operation.acceptedKey === selectedKey)
+      if (!active?.accepted) return false
+      active.selectionFallbackKey = selectedSessionKeyRef.current
+      selectionGenerationRef.current += 1
+      selectedSessionKeyRef.current = selectedKey
+      setSelectedSessionKey(selectedKey)
+      setDurableSession(active.accepted)
+      return true
+    }
     const key = storageKey(ownerScope, worldScope)
     const nextKey = selected ? sessionKey(selected.provider, selected.sessionId) : null
     let persisted: DurableAgentSessionCollection
@@ -554,6 +646,7 @@ export function useExperienceAgentSessions({
       return false
     }
     sessionsRef.current = persisted.sessions
+    selectionGenerationRef.current += 1
     selectedSessionKeyRef.current = persisted.selectedSessionKey
     setSavedSessions(persisted.sessions)
     setSelectedSessionKey(persisted.selectedSessionKey)
@@ -584,7 +677,6 @@ export function useExperienceAgentSessions({
       || input.provider !== "Codex")) throw new Error("AGENT_TARGET_INVALID")
     if (mode === "review" && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (mode === "review" && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
-    if (operationRef.current) throw new Error("AGENT_TURN_ALREADY_RUNNING")
 
     const storedPrior = sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKeyRef.current) ?? null
     const forkSource = forkMode && input.provider === "Claude" && role === "Builder" && validSessionId("Claude", input.sourceSessionId)
@@ -597,6 +689,18 @@ export function useExperienceAgentSessions({
       ? storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer" && storedPrior.reviewPath === reviewPath ? storedPrior : null
       : storedPrior?.provider === input.provider && !storedPrior.reviewPath
         && storedPrior.role === role && storedPrior.assignment === assignment ? storedPrior : null
+    const lane: ActiveAgentOperation["lane"] = input.provider === "Codex" && role === "Builder" && mode === "delegate" ? "writer"
+      : input.provider === "Claude" && role === "Reviewer" && mode === "review" ? "reviewer"
+        : input.provider === "Local" && mode === "delegate" ? "thinker" : null
+    const running = [...operationsRef.current.values()]
+    const priorKey = prior ? sessionKey(prior.provider, prior.sessionId) : null
+    if (priorKey && running.some((candidate) => candidate.acceptedKey === priorKey
+      || candidate.prior && sessionKey(candidate.prior.provider, candidate.prior.sessionId) === priorKey)) {
+      throw new Error("AGENT_SESSION_ALREADY_RUNNING")
+    }
+    if (running.length > 0 && (!lane || running.some((candidate) => !candidate.lane || candidate.lane === lane))) {
+      throw new Error("AGENT_TURN_ALREADY_RUNNING")
+    }
     const operationStorageKey = storageKey(ownerScope, worldScope)
     const operation: ActiveAgentOperation = {
       epoch: operationEpoch.current + 1,
@@ -607,19 +711,21 @@ export function useExperienceAgentSessions({
       priorVerified: Boolean(prior && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === sessionKey(prior.provider, prior.sessionId))),
       priorCollection: sessionsRef.current,
       priorSelectedSessionKey: selectedSessionKeyRef.current,
+      provider: input.provider,
+      role,
+      mode,
+      lane,
+      accepted: null,
+      acceptedKey: null,
+      presentation: "Agent is starting.",
+      selectionGeneration: selectionGenerationRef.current,
+      selectionFallbackKey: selectedSessionKeyRef.current,
     }
     operationEpoch.current = operation.epoch
-    operationRef.current = operation
-    const isCurrent = () => operationRef.current === operation
-    // A restored descriptor remains a non-live resume hint while the server verifies it. Unrelated
-    // sessions are never removed merely because another turn starts.
-    setActiveSessionId(prior ? sessionKey(prior.provider, prior.sessionId) : `starting-${input.provider.toLowerCase()}-session`)
-    setPausableSessionId(null)
-    setActiveProvider(input.provider)
-    // A running or failed turn is not a ready session. Re-earn the live projection at successful
-    // completion, including when a previously verified descriptor is being resumed.
-    setDurableSession(null)
-    setError(null)
+    operationsRef.current.set(operation.epoch, operation)
+    syncActiveTurns()
+    const isCurrent = () => operationsRef.current.get(operation.epoch) === operation
+    if (running.length === 0) setError(null)
     let accepted: DurableAgentSession | null = null
     const finalOutcome: { seen: boolean; code: unknown; reason: unknown } = {
       seen: false,
@@ -630,6 +736,8 @@ export function useExperienceAgentSessions({
       if (mode !== "delegate" || !isCurrent()) return
       const safeText = phase === "working" ? "Agent is working." : agentPresentationText(text)
       if (!safeText && phase !== "complete") return
+      operation.presentation = safeText ?? "Agent completed."
+      syncActiveTurns()
       try {
         input.onPresentation?.({
           phase,
@@ -754,8 +862,10 @@ export function useExperienceAgentSessions({
           }
           if (isCurrent()) {
             const acceptedSessionKey = sessionKey(input.provider, event.sessionId as string)
-            setActiveSessionId(acceptedSessionKey)
-            setPausableSessionId(acceptedSessionKey)
+            operation.accepted = accepted
+            operation.acceptedKey = acceptedSessionKey
+            operation.presentation = "Agent is working."
+            syncActiveTurns()
             present("working", "Agent is working.", event.sessionId as string)
             input.onEvent?.(event)
           }
@@ -847,24 +957,37 @@ export function useExperienceAgentSessions({
         }].slice(-MAX_COMPLETED_TURNS),
       }
       const settledKey = sessionKey(settledSession.provider, settledSession.sessionId)
+      const sessionsWithSettlement = upsertSession(sessionsRef.current, settledSession)
+      const runtimeSelectedKey = selectedSessionKeyRef.current
+      const shouldSelectSettlement = selectionGenerationRef.current === operation.selectionGeneration
+        || runtimeSelectedKey === settledKey
+      const nextSelectedKey = shouldSelectSettlement ? settledKey : runtimeSelectedKey
+      const persistedSelectedKey = sessionsWithSettlement.some((session) => sessionKey(session.provider, session.sessionId) === nextSelectedKey)
+        ? nextSelectedKey
+        : null
       let persisted: DurableAgentSessionCollection
       try {
         persisted = forkMode
-          ? persistForkCollection(operationStorageKey, sessionsRef.current, sessionKey(forkSource!.provider, forkSource!.sessionId), settledSession)
-          : persistCollection(operationStorageKey, upsertSession(sessionsRef.current, settledSession), settledKey, { sessionKey: settledKey, completedAt })
+          ? persistForkCollection(operationStorageKey, sessionsRef.current, sessionKey(forkSource!.provider, forkSource!.sessionId), settledSession, persistedSelectedKey)
+          : persistCollection(operationStorageKey, sessionsWithSettlement, persistedSelectedKey, { sessionKey: settledKey, completedAt })
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED"
         throw new AgentTurnCommittedPersistenceError(message)
       }
       sessionsRef.current = persisted.sessions
-      selectedSessionKeyRef.current = persisted.selectedSessionKey
+      selectedSessionKeyRef.current = nextSelectedKey
       setSavedSessions(persisted.sessions)
-      setSelectedSessionKey(persisted.selectedSessionKey)
+      setSelectedSessionKey(nextSelectedKey)
       const persistedSession = persisted.sessions.find((session) => sessionKey(session.provider, session.sessionId) === settledKey)!
       const nextVerified = upsertSession(verifiedSessionsRef.current, persistedSession)
       verifiedSessionsRef.current = nextVerified
       setVerifiedSessions(nextVerified)
-      setDurableSession(persistedSession)
+      const selectedActive = [...operationsRef.current.values()].find((candidate) => candidate.acceptedKey === nextSelectedKey)?.accepted ?? null
+      const selectedPersisted = persisted.sessions.find((session) => sessionKey(session.provider, session.sessionId) === nextSelectedKey) ?? null
+      const selectedPersistedVerified = selectedPersisted && nextVerified.some((session) => sessionKey(session.provider, session.sessionId) === nextSelectedKey)
+        ? selectedPersisted
+        : null
+      setDurableSession(selectedPersistedVerified ?? selectedActive)
       present("complete", persistedSession.completedTurns?.at(-1)?.finalResult ?? resultText, persistedSession.sessionId)
       if (mode === "review" && isCurrent()) input.onReviewComplete?.(resultText)
       return persistedSession
@@ -875,11 +998,7 @@ export function useExperienceAgentSessions({
       const error = cause as Error
       if (!isCurrent()) throw cause
       if (error instanceof AgentTurnCommittedPersistenceError) {
-        sessionsRef.current = operation.priorCollection
-        selectedSessionKeyRef.current = operation.priorSelectedSessionKey
-        setSavedSessions(operation.priorCollection)
-        setSelectedSessionKey(operation.priorSelectedSessionKey)
-        setDurableSession(operation.priorVerified ? operation.prior : null)
+        repairInvalidatedSelection(operation)
         setError(error.message)
         throw cause
       }
@@ -900,7 +1019,6 @@ export function useExperienceAgentSessions({
         setVerifiedSessions(remainingVerified)
         setDurableSession(null)
       } else if (prior) {
-        persistCollection(operationStorageKey, sessionsRef.current, selectedSessionKeyRef.current)
         if (error?.name !== "AbortError") {
           const priorKey = sessionKey(prior.provider, prior.sessionId)
           const remainingVerified = verifiedSessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
@@ -908,21 +1026,18 @@ export function useExperienceAgentSessions({
           setVerifiedSessions((current) => current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey))
           setDurableSession(null)
         }
-      } else {
-        persistCollection(operationStorageKey, sessionsRef.current, selectedSessionKeyRef.current)
       }
+      repairInvalidatedSelection(operation)
       if (error?.name !== "AbortError") setError(cause instanceof Error ? cause.message : "AGENT_UNAVAILABLE")
       throw cause
     } finally {
       if (isCurrent()) {
         operation.reader = null
-        operationRef.current = null
-        setActiveSessionId(null)
-        setPausableSessionId(null)
-        setActiveProvider(null)
+        operationsRef.current.delete(operation.epoch)
+        syncActiveTurns()
       }
     }
-  }, [ownerScope, worldId, worldScope])
+  }, [ownerScope, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
 
   const runAgentTurn = useCallback((input: RunAgentTurnInput) => executeTurn({ ...input, mode: "delegate" }), [executeTurn])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
@@ -934,11 +1049,12 @@ export function useExperienceAgentSessions({
   const scopeLoaded = loadedStorageKey === currentStorageKey
   const presentedSavedSessions = scopeLoaded ? savedSessions : []
   const presentedVerifiedSessions = scopeLoaded ? verifiedSessions : []
-  const presentedActiveSessionId = scopeLoaded ? activeSessionId : null
-  const presentedPausableSessionId = scopeLoaded ? pausableSessionId : null
+  const presentedActiveTurns = scopeLoaded ? activeTurns : []
+  const presentedActiveSessionIds = presentedActiveTurns.map((turn) => turn.id)
+  const presentedPausableSessionIds = presentedActiveTurns.filter((turn) => turn.sessionId !== null).map((turn) => turn.id)
   const sessions = useMemo(
-    () => scopeLoaded ? projectSessions(worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveSessionId) : [],
-    [scopeLoaded, worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveSessionId],
+    () => scopeLoaded ? projectSessions(worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveTurns) : [],
+    [scopeLoaded, worker, presentedSavedSessions, presentedVerifiedSessions, presentedActiveTurns],
   )
   const presentedSelectedSessionKey = scopeLoaded ? selectedSessionKey : null
   const presentedDurableSession = scopeLoaded ? durableSession : null
@@ -951,9 +1067,12 @@ export function useExperienceAgentSessions({
     savedSessions: presentedSavedSessions,
     selectedSessionKey: presentedSelectedSessionKey,
     descriptorState,
-    activeSessionId: presentedActiveSessionId,
-    pausableSessionId: presentedPausableSessionId,
-    activeProvider: scopeLoaded ? activeProvider : null,
+    activeSessionId: presentedActiveSessionIds[0] ?? null,
+    pausableSessionId: presentedPausableSessionIds[0] ?? null,
+    activeSessionIds: presentedActiveSessionIds,
+    pausableSessionIds: presentedPausableSessionIds,
+    activeTurns: presentedActiveTurns,
+    activeProvider: presentedActiveTurns[0]?.provider ?? null,
     error,
     runAgentTurn,
     runClaudeTurn,
@@ -968,6 +1087,7 @@ export function AgentSessionStrip({
   activeSessionId = null,
   runningSessionId = null,
   runningProvider = null,
+  runningTurns = [],
   onStop,
   onSelect,
   className,
@@ -976,11 +1096,12 @@ export function AgentSessionStrip({
   activeSessionId?: string | null
   runningSessionId?: string | null
   runningProvider?: AgentProvider | null
-  onStop?: () => void
+  runningTurns?: readonly ActiveAgentTurn[]
+  onStop?: (sessionId?: string) => void
   onSelect?: (session: ExperienceAgentSession) => void
   className?: string
 }) {
-  if (sessions.length === 0 && !runningSessionId) return null
+  if (sessions.length === 0 && !runningSessionId && runningTurns.length === 0) return null
   return (
     <nav
       className={className ?? "flex items-center justify-center gap-2"}
@@ -988,11 +1109,22 @@ export function AgentSessionStrip({
       tabIndex={0}
       style={{ display: "flex", maxWidth: "60vw", minWidth: 0, overflowX: "auto", flexWrap: "nowrap", justifyContent: "flex-start", scrollbarGutter: "stable" }}
     >
-      {runningSessionId ? (
+      {runningTurns.map((turn) => (
+        <button
+          key={`stop:${turn.id}`}
+          type="button"
+          aria-label={`Stop ${turn.provider} ${turn.role} turn`}
+          onClick={() => onStop?.(turn.id)}
+          className="rounded border border-[#8c4943] bg-[#261413] px-2 py-1 text-[10.5px] font-semibold text-[#f0c4bf]"
+        >
+          Stop
+        </button>
+      ))}
+      {runningTurns.length === 0 && runningSessionId ? (
         <button
           type="button"
           aria-label={`Stop ${runningProvider ?? "agent"} turn`}
-          onClick={onStop}
+          onClick={() => onStop?.()}
           className="rounded border border-[#8c4943] bg-[#261413] px-2 py-1 text-[10.5px] font-semibold text-[#f0c4bf]"
         >
           Stop

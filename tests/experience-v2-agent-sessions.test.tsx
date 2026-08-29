@@ -58,6 +58,368 @@ function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_S
 let expose: ProviderNeutralAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
+  it("runs one Codex Builder, Claude Reviewer, and Local Thinker concurrently and preserves out-of-order settlements", async () => {
+    const encoder = new TextEncoder()
+    const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { provider?: string; mode?: string }
+      const lane = String(input) === "/api/loom/codex" ? "Codex" : body.mode === "review" ? "Review" : "Local"
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({ start(controller) { streams.set(lane, controller) } })))
+    }))
+    render(<Harness />)
+
+    let codex!: Promise<unknown>
+    act(() => { codex = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Build." }) })
+    await waitFor(() => expect(streams.has("Codex")).toBe(true))
+    act(() => streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-concurrent", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
+
+    let review!: Promise<unknown>
+    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
+    await waitFor(() => expect(streams.has("Review")).toBe(true))
+    const reviewId = "123e4567-e89b-42d3-a456-426614174000"
+    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+
+    let local!: Promise<unknown>
+    act(() => { local = expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Conversation", prompt: "Think." }) })
+    await waitFor(() => expect(streams.has("Local")).toBe(true))
+    const localId = "223e4567-e89b-42d3-a456-426614174000"
+    act(() => streams.get("Local")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: localId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" })}\n`)))
+
+    await waitFor(() => expect(expose!.activeSessionIds).toEqual([
+      "Codex:codex-concurrent", `Claude:${reviewId}`, `Local:${localId}`,
+    ]))
+    expect(expose!.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "Codex:codex-concurrent", status: "working" }),
+      expect.objectContaining({ id: `Claude:${reviewId}`, status: "working" }),
+      expect.objectContaining({ id: `Local:${localId}`, status: "thinking" }),
+    ]))
+
+    act(() => {
+      streams.get("Local")!.enqueue(encoder.encode(`${JSON.stringify({ type: "result", text: "Local settled first." })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      streams.get("Local")!.close()
+    })
+    await act(async () => { await local })
+    act(() => {
+      streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "result", text: "Codex settled second." })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      streams.get("Codex")!.close()
+    })
+    await act(async () => { await codex })
+    act(() => {
+      streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: reviewId, result: "Review settled last." } })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      streams.get("Review")!.close()
+    })
+    await act(async () => { await review })
+
+    const stored = JSON.parse(String(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")))
+    expect(stored.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: "Codex", completedTurns: [expect.objectContaining({ finalResult: "Codex settled second." })] }),
+      expect.objectContaining({ provider: "Claude", completedTurns: [expect.objectContaining({ finalResult: "Review settled last." })] }),
+      expect.objectContaining({ provider: "Local", completedTurns: [expect.objectContaining({ finalResult: "Local settled first." })] }),
+    ]))
+    expect(expose!.activeSessionIds).toEqual([])
+
+    cleanup()
+    render(<Harness />)
+    await waitFor(() => expect(expose!.savedSessions).toHaveLength(3))
+    expect(expose!.savedSessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: "Codex", completedTurns: [expect.objectContaining({ finalResult: "Codex settled second." })] }),
+      expect.objectContaining({ provider: "Claude", completedTurns: [expect.objectContaining({ finalResult: "Review settled last." })] }),
+      expect.objectContaining({ provider: "Local", completedTurns: [expect.objectContaining({ finalResult: "Local settled first." })] }),
+    ]))
+  })
+
+  it("stops only the exact selected concurrent session while the other provider continues", async () => {
+    const encoder = new TextEncoder()
+    const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
+    const signals = new Map<string, AbortSignal>()
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { mode?: string }
+      const lane = String(input) === "/api/loom/codex" ? "Codex" : body.mode === "review" ? "Review" : "Local"
+      signals.set(lane, init!.signal as AbortSignal)
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({ start(controller) { streams.set(lane, controller) } })))
+    }))
+    render(<Harness />)
+    let codex!: Promise<unknown>
+    act(() => { codex = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Build." }) })
+    await waitFor(() => expect(streams.has("Codex")).toBe(true))
+    act(() => streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-stop-isolation", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
+
+    const reviewId = "323e4567-e89b-42d3-a456-426614174000"
+    let review!: Promise<unknown>
+    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
+    await waitFor(() => expect(streams.has("Review")).toBe(true))
+    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toEqual([
+      "Codex:codex-stop-isolation",
+      `Claude:${reviewId}`,
+    ]))
+    expect(expose!.sessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: `Claude:${reviewId}`, role: "Reviewer", status: "working", truth: "live" }),
+    ]))
+
+    act(() => expose!.stop(`Claude:${reviewId}`))
+    await expect(review).rejects.toMatchObject({ name: "AbortError" })
+    expect(signals.get("Review")?.aborted).toBe(true)
+    expect(signals.get("Codex")?.aborted).toBe(false)
+    expect(expose!.activeSessionIds).toEqual(["Codex:codex-stop-isolation"])
+
+    act(() => {
+      streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "result", text: "Writer continued safely." })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      streams.get("Codex")!.close()
+    })
+    await act(async () => { await codex })
+    expect(expose!.savedSessions).toEqual([
+      expect.objectContaining({ provider: "Codex", completedTurns: [expect.objectContaining({ finalResult: "Writer continued safely." })] }),
+    ])
+  })
+
+  it("keeps a newer exact active-session selection when another turn settles out of order and redirects it", async () => {
+    const encoder = new TextEncoder()
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = []
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> })
+      return Promise.resolve(new Response(new ReadableStream<Uint8Array>({ start(controller) { streams.push(controller) } })))
+    }))
+    render(<Harness />)
+
+    let writer!: Promise<unknown>
+    act(() => { writer = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Build." }) })
+    await waitFor(() => expect(streams).toHaveLength(1))
+    act(() => streams[0]!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-selection-cas", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
+
+    const reviewId = "623e4567-e89b-42d3-a456-426614174000"
+    let review!: Promise<unknown>
+    act(() => { review = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts" }) })
+    await waitFor(() => expect(streams).toHaveLength(2))
+    act(() => streams[1]!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toContain(`Claude:${reviewId}`))
+
+    act(() => expect(expose!.selectSession(`Claude:${reviewId}`)).toBe(true))
+    expect(expose!.selectedSessionKey).toBe(`Claude:${reviewId}`)
+    expect(expose!.durableSession).toMatchObject({ provider: "Claude", sessionId: reviewId, role: "Reviewer" })
+
+    act(() => {
+      streams[0]!.enqueue(encoder.encode(`${JSON.stringify({ type: "result", text: "Writer settled while Reviewer stayed focused." })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      streams[0]!.close()
+    })
+    await act(async () => { await writer })
+    expect(expose!.selectedSessionKey).toBe(`Claude:${reviewId}`)
+    expect(expose!.durableSession).toMatchObject({ provider: "Claude", sessionId: reviewId, role: "Reviewer" })
+
+    act(() => {
+      streams[1]!.enqueue(encoder.encode(`${JSON.stringify({ type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: reviewId, result: "Reviewer settled last." } })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      streams[1]!.close()
+    })
+    await act(async () => { await review })
+    expect(expose!.selectedSessionKey).toBe(`Claude:${reviewId}`)
+    expect(expose!.savedSessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: "Codex", completedTurns: [expect.objectContaining({ finalResult: "Writer settled while Reviewer stayed focused." })] }),
+      expect.objectContaining({ provider: "Claude", sessionId: reviewId, completedTurns: [expect.objectContaining({ finalResult: "Reviewer settled last." })] }),
+    ]))
+
+    let redirect!: Promise<unknown>
+    act(() => { redirect = expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", focus: "Redirect exactly." }) })
+    await waitFor(() => expect(streams).toHaveLength(3))
+    expect(requests[2]).toMatchObject({
+      url: "/api/loom/agent",
+      body: { mode: "review", sessionId: reviewId, resume: true, path: "src/app.ts", focus: "Redirect exactly." },
+    })
+    const redirectTurnId = expose!.activeTurns.find((turn) => turn.provider === "Claude" && turn.role === "Reviewer")?.id
+    expect(redirectTurnId).toMatch(/^starting-claude-/)
+    act(() => expose!.stop(redirectTurnId))
+    await expect(redirect).rejects.toMatchObject({ name: "AbortError" })
+  })
+
+  it("restores the exact verified durable selection when a selected fresh turn is stopped", async () => {
+    const localId = "723e4567-e89b-42d3-a456-426614174000"
+    const encoder = new TextEncoder()
+    let writerStream!: ReadableStreamDefaultController<Uint8Array>
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId: localId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" },
+        { type: "result", text: "Verified prior result." },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({ start(controller) { writerStream = controller } })))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await act(async () => { await expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Conversation", prompt: "Establish prior." }) })
+    expect(expose!.selectedSessionKey).toBe(`Local:${localId}`)
+    expect(expose!.descriptorState).toBe("verified")
+
+    let writer!: Promise<unknown>
+    act(() => { writer = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/new.ts", prompt: "Build new." }) })
+    act(() => writerStream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-stopped-fresh", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toContain("Codex:codex-stopped-fresh"))
+    act(() => expect(expose!.selectSession("Codex:codex-stopped-fresh")).toBe(true))
+    expect(expose!.selectedSessionKey).toBe("Codex:codex-stopped-fresh")
+
+    act(() => expose!.stop("Codex:codex-stopped-fresh"))
+    await expect(writer).rejects.toMatchObject({ name: "AbortError" })
+
+    expect(expose!.selectedSessionKey).toBe(`Local:${localId}`)
+    expect(expose!.descriptorState).toBe("verified")
+    expect(expose!.durableSession).toMatchObject({
+      provider: "Local", sessionId: localId,
+      completedTurns: [expect.objectContaining({ finalResult: "Verified prior result." })],
+    })
+    expect(expose!.savedSessions).toEqual([expect.objectContaining({ provider: "Local", sessionId: localId })])
+    expect(expose!.sessions.some((session) => session.id === "Codex:codex-stopped-fresh")).toBe(false)
+  })
+
+  it("preserves the exact verified prior transcript when its accepted resume is stopped", async () => {
+    const sessionId = "codex-verified-resume-stop"
+    const encoder = new TextEncoder()
+    let resumeStream!: ReadableStreamDefaultController<Uint8Array>
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "result", text: "Verified prior transcript." },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({ start(controller) { resumeStream = controller } }))))
+    render(<Harness />)
+    await act(async () => { await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "First." }) })
+    const prior = expose!.durableSession
+
+    let resume!: Promise<unknown>
+    act(() => { resume = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Continue." }) })
+    act(() => resumeStream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toContain(`Codex:${sessionId}`))
+    act(() => expose!.stop(`Codex:${sessionId}`))
+    await expect(resume).rejects.toMatchObject({ name: "AbortError" })
+
+    expect(expose!.selectedSessionKey).toBe(`Codex:${sessionId}`)
+    expect(expose!.descriptorState).toBe("verified")
+    expect(expose!.durableSession).toEqual(prior)
+    expect(expose!.savedSessions).toEqual([expect.objectContaining({
+      sessionId,
+      completedTurns: [expect.objectContaining({ finalResult: "Verified prior transcript." })],
+    })])
+  })
+
+  it("clears a selected accepted identity when its terminal failure persisted no durable session", async () => {
+    const encoder = new TextEncoder()
+    let stream!: ReadableStreamDefaultController<Uint8Array>
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller } })))))
+    render(<Harness />)
+
+    let writer!: Promise<unknown>
+    act(() => { writer = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/failing.ts", prompt: "Try." }) })
+    act(() => stream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-terminal-failure", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toContain("Codex:codex-terminal-failure"))
+    act(() => expect(expose!.selectSession("Codex:codex-terminal-failure")).toBe(true))
+
+    act(() => {
+      stream.enqueue(encoder.encode(`${JSON.stringify({ type: "done", code: 1, reason: "PROVIDER_FAILED" })}\n`))
+      stream.close()
+    })
+    await expect(writer).rejects.toThrow("AGENT_TURN_FAILED:PROVIDER_FAILED")
+
+    await waitFor(() => expect(expose!.selectedSessionKey).toBeNull())
+    expect(expose!.durableSession).toBeNull()
+    expect(expose!.savedDescriptor).toBeNull()
+    expect(expose!.descriptorState).toBe("none")
+    expect(expose!.savedSessions).toEqual([])
+    expect(expose!.sessions).toEqual([])
+  })
+
+  it("isolates a provider outage while another exact session continues and settles", async () => {
+    const encoder = new TextEncoder()
+    let codexStream!: ReadableStreamDefaultController<Uint8Array>
+    let codexSignal!: AbortSignal
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/loom/codex") {
+        codexSignal = init!.signal as AbortSignal
+        return Promise.resolve(new Response(new ReadableStream<Uint8Array>({ start(controller) { codexStream = controller } })))
+      }
+      return Promise.resolve(Response.json({ error: "LOCAL_UNAVAILABLE" }, { status: 503 }))
+    }))
+    render(<Harness />)
+
+    let codex!: Promise<unknown>
+    act(() => { codex = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Build." }) })
+    act(() => codexStream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-outage-isolation", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toEqual(["Codex:codex-outage-isolation"]))
+
+    await expect(expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Conversation", prompt: "Think." }))
+      .rejects.toThrow("LOCAL_UNAVAILABLE")
+    expect(codexSignal.aborted).toBe(false)
+    expect(expose!.activeSessionIds).toEqual(["Codex:codex-outage-isolation"])
+
+    act(() => {
+      codexStream.enqueue(encoder.encode(`${JSON.stringify({ type: "result", text: "Writer survived the Local outage." })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      codexStream.close()
+    })
+    await act(async () => { await codex })
+    expect(expose!.savedSessions).toEqual([
+      expect.objectContaining({ provider: "Codex", completedTurns: [expect.objectContaining({ finalResult: "Writer survived the Local outage." })] }),
+    ])
+  })
+
+  it("refuses a second turn for the same durable session while its exact resume is active", async () => {
+    const sessionId = "codex-same-session"
+    const encoder = new TextEncoder()
+    let resumeStream!: ReadableStreamDefaultController<Uint8Array>
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "result", text: "First turn." },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({ start(controller) { resumeStream = controller } })))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await act(async () => { await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "First." }) })
+
+    let resume!: Promise<unknown>
+    act(() => { resume = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Resume." }) })
+    act(() => resumeStream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toEqual([`Codex:${sessionId}`]))
+    expect(expose!.sessions.find((session) => session.id === `Codex:${sessionId}`)).toMatchObject({
+      status: "working",
+      truth: "live",
+      presentation: "Agent is working.",
+    })
+
+    await expect(expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Duplicate." }))
+      .rejects.toThrow("AGENT_SESSION_ALREADY_RUNNING")
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    act(() => expose!.stop(`Codex:${sessionId}`))
+    await expect(resume).rejects.toMatchObject({ name: "AbortError" })
+  })
+
+  it("projects an exact server-accepted restored turn as live while it is running", async () => {
+    const sessionId = "codex-restored-live"
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:${sessionId}`,
+      sessions: [{
+        schemaVersion: 1, sessionId, role: "Builder", provider: "Codex", assignment: "src/app.ts",
+        updatedAt: "2026-08-29T12:00:00.000Z", completedTurns: [],
+      }],
+    }))
+    const encoder = new TextEncoder()
+    let responseStream!: ReadableStreamDefaultController<Uint8Array>
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({
+      start(controller) { responseStream = controller },
+    })))))
+    render(<Harness />)
+
+    let resume!: Promise<unknown>
+    act(() => { resume = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Continue." }) })
+    act(() => responseStream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true })}\n`)))
+
+    await waitFor(() => expect(expose!.sessions.find((session) => session.id === `Codex:${sessionId}`)).toMatchObject({
+      status: "working",
+      truth: "live",
+      presentation: "Agent is working.",
+    }))
+    act(() => expose!.stop(`Codex:${sessionId}`))
+    await expect(resume).rejects.toMatchObject({ name: "AbortError" })
+  })
+
   it("keeps all twelve bounded session controls horizontally reachable and selectable", () => {
     const onSelect = vi.fn()
     const sessions = Array.from({ length: 12 }, (_, index) => ({
@@ -82,6 +444,108 @@ describe("Experience V2 real agent sessions", () => {
     expect(buttons).toHaveLength(12)
     fireEvent.click(buttons[11])
     expect(onSelect).toHaveBeenCalledWith(sessions[11])
+  })
+
+  it("presents and stops each concurrent turn by its exact session identity", () => {
+    const onSelect = vi.fn()
+    const onStop = vi.fn()
+    const sessions = [
+      { id: "Codex:writer", role: "Builder", providerLabel: "Codex", assignment: "src/app.ts", status: "working", evidence: "live agent stream", truth: "live" as const, kind: "durable-session" as const, mode: "delegate" as const, presentation: "Agent is working." },
+      { id: "Claude:reviewer", role: "Reviewer", providerLabel: "Claude", assignment: "Review src/app.ts", status: "working", evidence: "live agent stream", truth: "live" as const, kind: "durable-session" as const, mode: "review" as const, presentation: "Agent is working." },
+      { id: "Local:thinker", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "thinking", evidence: "live model response", truth: "live" as const, kind: "durable-session" as const, mode: "delegate" as const, presentation: "Agent is working." },
+    ]
+    render(<AgentSessionStrip
+      sessions={sessions}
+      runningTurns={[
+        { id: "Codex:writer", provider: "Codex", role: "Builder", sessionId: "writer", presentation: "Agent is working.", descriptor: null },
+        { id: "Claude:reviewer", provider: "Claude", role: "Reviewer", sessionId: "reviewer", presentation: "Agent is working.", descriptor: null },
+        { id: "Local:thinker", provider: "Local", role: "Thinker", sessionId: "thinker", presentation: "Agent is working.", descriptor: null },
+      ]}
+      onStop={onStop}
+      onSelect={onSelect}
+    />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop Claude Reviewer turn" }))
+    expect(onStop).toHaveBeenCalledWith("Claude:reviewer")
+    fireEvent.click(screen.getByRole("button", { name: "Thinker · Local · Conversation" }))
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "Local:thinker", presentation: "Agent is working." }))
+  })
+
+  it("launches the bounded writer, reviewer, and thinker lanes from one live Space", async () => {
+    const encoder = new TextEncoder()
+    const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse("server"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine: EMPTY_SPINE, judgment: null }))
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if ((url === "/api/loom/codex" || url === "/api/loom/agent") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { mode?: string; provider?: string }
+        const lane = url === "/api/loom/codex" ? "Codex" : body.mode === "review" ? "Review" : "Local"
+        return Promise.resolve(new Response(new ReadableStream<Uint8Array>({ start(controller) { streams.set(lane, controller) } })))
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+
+    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Codex" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Build safely." } })
+    fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
+    await waitFor(() => expect(streams.has("Codex")).toBe(true))
+    act(() => streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-ui-concurrent", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH })}\n`)))
+    await screen.findByRole("button", { name: "Stop Codex Builder turn" })
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+
+    fireEvent.click(screen.getByRole("button", { name: "Review" }))
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }))
+    await waitFor(() => expect(streams.has("Review")).toBe(true))
+    const reviewId = "423e4567-e89b-42d3-a456-426614174000"
+    act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
+    await screen.findByRole("button", { name: "Stop Claude Reviewer turn" })
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask Local" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Think alongside them." } })
+    const askLocal = within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Ask Local" }) as HTMLButtonElement
+    expect(askLocal.disabled).toBe(false)
+    fireEvent.click(askLocal)
+    await waitFor(() => expect(streams.has("Local")).toBe(true))
+    act(() => {
+      streams.get("Codex")!.enqueue(encoder.encode(`${JSON.stringify({ type: "result", text: "Writer done first." })}\n${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+      streams.get("Codex")!.close()
+    })
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop Codex Builder turn" })).toBeNull())
+    expect((within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Thinking" }) as HTMLButtonElement).disabled).toBe(true)
+    const localId = "523e4567-e89b-42d3-a456-426614174000"
+    act(() => streams.get("Local")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: localId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" })}\n`)))
+
+    expect(await screen.findByRole("button", { name: "Stop Local Thinker turn" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: /Builder · Codex · src\/app.ts/i })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/i }))
+    expect(screen.getByText("Reviewer · Claude")).toBeTruthy()
+    const pause = screen.getByRole("button", { name: "Pause" })
+    fireEvent.click(pause)
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Stop Claude Reviewer turn" })).toBeNull())
+    expect(screen.queryByRole("button", { name: "Stop Codex Builder turn" })).toBeNull()
+    expect(screen.getByRole("button", { name: "Stop Local Thinker turn" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: /Thinker · Local · Conversation/i })).toBeTruthy()
+
+    act(() => {
+      streams.forEach((stream, lane) => {
+        if (lane === "Review" || lane === "Codex") return
+        stream.enqueue(encoder.encode(`${JSON.stringify({ type: "result", text: "Thinker done." })}\n`))
+        stream.enqueue(encoder.encode(`${JSON.stringify({ type: "done", code: 0, reason: null })}\n`))
+        stream.close()
+      })
+    })
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Stop .* turn/ })).toBeNull())
   })
 
   it("forks only the exact verified idle Claude Builder, preserves its transcript, and resumes the selected child", async () => {
@@ -808,7 +1272,7 @@ describe("Experience V2 real agent sessions", () => {
 
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Continue the bounded work." } })
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Delegate" }))
-    await screen.findByRole("button", { name: "Stop Codex turn" })
+    await screen.findByRole("button", { name: "Stop Codex Builder turn" })
     const preSessionPause = screen.getByRole("button", { name: "Pause unavailable" }) as HTMLButtonElement
     expect(preSessionPause.disabled).toBe(true)
     fireEvent.click(preSessionPause)
@@ -828,7 +1292,7 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(cancelled).toBe(true))
     expect(requestSignal?.aborted).toBe(true)
     await waitFor(() => expect(screen.queryByRole("form", { name: "The Line" })).toBeNull())
-    expect(screen.queryByRole("button", { name: "Stop Codex turn" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Stop Codex Builder turn" })).toBeNull()
     expect((screen.getByRole("button", { name: "Pause unavailable" }) as HTMLButtonElement).disabled).toBe(true)
     const stored = JSON.parse(String(window.localStorage.getItem(key)))
     expect(stored.selectedSessionKey).toBe(`Codex:${sessionId}`)
@@ -933,6 +1397,7 @@ describe("Experience V2 real agent sessions", () => {
     })
     expect(await screen.findByText("Agent is working.")).toBeTruthy()
     expect(screen.queryByText("Validated live progress.")).toBeNull()
+    expect(screen.getByRole("button", { name: "Stop Local Thinker turn" })).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
     expect(requestSignal?.aborted).toBe(false)
     expect(cancelled).toBe(false)
