@@ -8,7 +8,7 @@ import { resolveOllamaChatModel } from "@/lib/ai/ollama-models"
 import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/providers"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
-import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
 export const dynamic = "force-dynamic"
@@ -170,9 +170,15 @@ export async function POST(request: Request) {
   let prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
 
   if (reviewMode) {
+    if (typeof body.path === "string" && isSensitiveWorkspacePath(body.path)) {
+      return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
+    }
     const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
     if (!resolved.ok || !resolved.absolute || !resolved.relative || resolved.relative === ".") {
       return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
+    }
+    if (isSensitiveWorkspacePath(resolved.relative)) {
+      return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
     }
     if ([...resolved.relative].some((character) => {
       const code = character.charCodeAt(0)

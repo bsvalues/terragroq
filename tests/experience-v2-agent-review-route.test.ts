@@ -18,7 +18,10 @@ vi.mock("node:fs/promises", () => ({
   default: { realpath: vi.fn(), stat: seams.stat },
 }))
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
-vi.mock("@/lib/loom/workspace", () => ({ resolveRealWorkspacePath: seams.resolveRealWorkspacePath }))
+vi.mock("@/lib/loom/workspace", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/loom/workspace")>(),
+  resolveRealWorkspacePath: seams.resolveRealWorkspacePath,
+}))
 vi.mock("@/lib/governance/work-context-gate", () => ({
   requireWorkContext: seams.requireWorkContext,
   workContextRefusal: vi.fn(),
@@ -105,6 +108,44 @@ describe("selected-file review route", () => {
 
     child.emit("close", 0)
     await response.text()
+  })
+
+  it.each([".env.local", "keys/id_rsa.bak"])("refuses sensitive review path %s before filesystem access or Claude spawn", async (selectedPath) => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+
+    const response = await POST(request({ mode: "review", path: selectedPath }))
+    if (response.status === 200) {
+      child.emit("close", 0)
+      await response.text()
+    }
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({ error: "SENSITIVE_PATH" })
+    expect(seams.resolveRealWorkspacePath).not.toHaveBeenCalled()
+    expect(seams.stat).not.toHaveBeenCalled()
+    expect(seams.spawn).not.toHaveBeenCalled()
+  })
+
+  it("refuses a safe-looking alias whose canonical review path is sensitive before file access or spawn", async () => {
+    seams.resolveRealWorkspacePath.mockResolvedValueOnce({
+      ok: true,
+      absolute: "C:/workspace/keys/id_dsa.bak",
+      relative: "keys/id_dsa.bak",
+    })
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+
+    const response = await POST(request({ mode: "review", path: "safe-link" }))
+    if (response.status === 200) {
+      child.emit("close", 0)
+      await response.text()
+    }
+
+    expect(response.status).toBe(403)
+    await expect(response.json()).resolves.toEqual({ error: "SENSITIVE_PATH" })
+    expect(seams.stat).not.toHaveBeenCalled()
+    expect(seams.spawn).not.toHaveBeenCalled()
   })
 
   it.each([

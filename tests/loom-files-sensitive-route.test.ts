@@ -12,6 +12,7 @@ vi.mock("@/lib/session", () => ({ getSession: sessionMocks.getSession }))
 vi.mock("node:fs/promises", () => ({ default: fsMocks }))
 
 import { GET } from "@/app/api/loom/files/route"
+import { isSensitiveWorkspacePath } from "@/lib/loom/workspace"
 
 const fileEntry = (name: string) => ({ name, isDirectory: () => false })
 
@@ -25,6 +26,26 @@ describe("workspace file API sensitive-path boundary", () => {
       size: 0,
       mtime: new Date("2026-08-28T12:00:00.000Z"),
     })
+  })
+
+  it.each([
+    ["id_rsa", true],
+    ["id_rsa.bak", true],
+    ["id_rsa_backup", true],
+    ["id_dsa", true],
+    ["id_dsa.old", true],
+    ["id_ecdsa", true],
+    ["id_ecdsa-legacy", true],
+    ["id_ed25519.bak", true],
+    ["keys/ID_ECDSA.BAK", true],
+    ["id_rsa.pub", false],
+    ["id_dsa.pub", false],
+    ["id_ecdsa.pub", false],
+    ["id_ed25519.pub", false],
+    ["id_rsa.bak.pub", false],
+    ["identity_rsa.ts", false],
+  ])("classifies canonical private-key path %s as sensitive=%s", (candidate, sensitive) => {
+    expect(isSensitiveWorkspacePath(candidate)).toBe(sensitive)
   })
 
   it("hides secret env variants from a directory while preserving the documented example", async () => {

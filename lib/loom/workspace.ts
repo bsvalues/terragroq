@@ -116,13 +116,14 @@ export function isIgnoredEntry(name: string): boolean {
 export function isSensitiveWorkspacePath(relativePath: string): boolean {
   const name = relativePath.replace(/\\/g, "/").split("/").filter(Boolean).at(-1)?.toLowerCase() ?? ""
   if (name === ".env.example") return false
-  return name === ".env"
+  const environmentFile = name === ".env"
     || name.endsWith(".env")
     || name.startsWith(".env.")
     || name.endsWith(".env.local")
-    || [".pem", ".key", ".p12", ".pfx"].some((extension) => name.endsWith(extension))
-    || name === "id_rsa"
-    || name === "id_ed25519"
+  if (environmentFile) return true
+  if (name.endsWith(".pub")) return false
+  return [".pem", ".key", ".p12", ".pfx"].some((extension) => name.endsWith(extension))
+    || /^id_(?:rsa|dsa|ecdsa|ed25519)(?:[._-].+)?$/.test(name)
 }
 
 /**
