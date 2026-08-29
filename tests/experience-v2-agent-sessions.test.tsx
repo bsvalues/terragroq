@@ -231,6 +231,100 @@ describe("Experience V2 real agent sessions", () => {
     await expect(redirect).rejects.toMatchObject({ name: "AbortError" })
   })
 
+  it("restores the exact verified durable selection when a selected fresh turn is stopped", async () => {
+    const localId = "723e4567-e89b-42d3-a456-426614174000"
+    const encoder = new TextEncoder()
+    let writerStream!: ReadableStreamDefaultController<Uint8Array>
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId: localId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" },
+        { type: "result", text: "Verified prior result." },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({ start(controller) { writerStream = controller } })))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await act(async () => { await expose!.runAgentTurn({ provider: "Local", role: "Thinker", assignment: "Conversation", prompt: "Establish prior." }) })
+    expect(expose!.selectedSessionKey).toBe(`Local:${localId}`)
+    expect(expose!.descriptorState).toBe("verified")
+
+    let writer!: Promise<unknown>
+    act(() => { writer = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/new.ts", prompt: "Build new." }) })
+    act(() => writerStream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-stopped-fresh", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toContain("Codex:codex-stopped-fresh"))
+    act(() => expect(expose!.selectSession("Codex:codex-stopped-fresh")).toBe(true))
+    expect(expose!.selectedSessionKey).toBe("Codex:codex-stopped-fresh")
+
+    act(() => expose!.stop("Codex:codex-stopped-fresh"))
+    await expect(writer).rejects.toMatchObject({ name: "AbortError" })
+
+    expect(expose!.selectedSessionKey).toBe(`Local:${localId}`)
+    expect(expose!.descriptorState).toBe("verified")
+    expect(expose!.durableSession).toMatchObject({
+      provider: "Local", sessionId: localId,
+      completedTurns: [expect.objectContaining({ finalResult: "Verified prior result." })],
+    })
+    expect(expose!.savedSessions).toEqual([expect.objectContaining({ provider: "Local", sessionId: localId })])
+    expect(expose!.sessions.some((session) => session.id === "Codex:codex-stopped-fresh")).toBe(false)
+  })
+
+  it("preserves the exact verified prior transcript when its accepted resume is stopped", async () => {
+    const sessionId = "codex-verified-resume-stop"
+    const encoder = new TextEncoder()
+    let resumeStream!: ReadableStreamDefaultController<Uint8Array>
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: false },
+        { type: "result", text: "Verified prior transcript." },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({ start(controller) { resumeStream = controller } }))))
+    render(<Harness />)
+    await act(async () => { await expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "First." }) })
+    const prior = expose!.durableSession
+
+    let resume!: Promise<unknown>
+    act(() => { resume = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/app.ts", prompt: "Continue." }) })
+    act(() => resumeStream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId, provider: "Codex", mode: "delegate", resumed: true })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toContain(`Codex:${sessionId}`))
+    act(() => expose!.stop(`Codex:${sessionId}`))
+    await expect(resume).rejects.toMatchObject({ name: "AbortError" })
+
+    expect(expose!.selectedSessionKey).toBe(`Codex:${sessionId}`)
+    expect(expose!.descriptorState).toBe("verified")
+    expect(expose!.durableSession).toEqual(prior)
+    expect(expose!.savedSessions).toEqual([expect.objectContaining({
+      sessionId,
+      completedTurns: [expect.objectContaining({ finalResult: "Verified prior transcript." })],
+    })])
+  })
+
+  it("clears a selected accepted identity when its terminal failure persisted no durable session", async () => {
+    const encoder = new TextEncoder()
+    let stream!: ReadableStreamDefaultController<Uint8Array>
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller } })))))
+    render(<Harness />)
+
+    let writer!: Promise<unknown>
+    act(() => { writer = expose!.runAgentTurn({ provider: "Codex", role: "Builder", assignment: "src/failing.ts", prompt: "Try." }) })
+    act(() => stream.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: "codex-terminal-failure", provider: "Codex", mode: "delegate", resumed: false })}\n`)))
+    await waitFor(() => expect(expose!.activeSessionIds).toContain("Codex:codex-terminal-failure"))
+    act(() => expect(expose!.selectSession("Codex:codex-terminal-failure")).toBe(true))
+
+    act(() => {
+      stream.enqueue(encoder.encode(`${JSON.stringify({ type: "done", code: 1, reason: "PROVIDER_FAILED" })}\n`))
+      stream.close()
+    })
+    await expect(writer).rejects.toThrow("AGENT_TURN_FAILED:PROVIDER_FAILED")
+
+    await waitFor(() => expect(expose!.selectedSessionKey).toBeNull())
+    expect(expose!.durableSession).toBeNull()
+    expect(expose!.savedDescriptor).toBeNull()
+    expect(expose!.descriptorState).toBe("none")
+    expect(expose!.savedSessions).toEqual([])
+    expect(expose!.sessions).toEqual([])
+  })
+
   it("isolates a provider outage while another exact session continues and settles", async () => {
     const encoder = new TextEncoder()
     let codexStream!: ReadableStreamDefaultController<Uint8Array>

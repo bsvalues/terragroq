@@ -171,6 +171,7 @@ type ActiveAgentOperation = {
   acceptedKey: string | null
   presentation: string
   selectionGeneration: number
+  selectionFallbackKey: string | null
 }
 
 class AgentStartRefusal extends Error {
@@ -522,15 +523,41 @@ export function useExperienceAgentSessions({
     })))
   }, [])
 
+  const repairInvalidatedSelection = useCallback((operation: ActiveAgentOperation) => {
+    const invalidatedKey = operation.acceptedKey
+    if (!invalidatedKey || selectedSessionKeyRef.current !== invalidatedKey) return
+    const exactDurable = sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === invalidatedKey) ?? null
+    const fallbackKey = exactDurable ? invalidatedKey : operation.selectionFallbackKey
+    const fallback = fallbackKey
+      ? sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === fallbackKey) ?? null
+      : null
+    const nextSelectedKey = fallback ? sessionKey(fallback.provider, fallback.sessionId) : null
+    try {
+      const persisted = persistCollection(operation.storageKey, sessionsRef.current, nextSelectedKey)
+      sessionsRef.current = persisted.sessions
+      setSavedSessions(persisted.sessions)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED")
+    }
+    selectionGenerationRef.current += 1
+    selectedSessionKeyRef.current = nextSelectedKey
+    setSelectedSessionKey(nextSelectedKey)
+    const verifiedFallback = fallback && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === nextSelectedKey)
+      ? fallback
+      : null
+    setDurableSession(verifiedFallback)
+  }, [])
+
   const invalidateOperation = useCallback((operation: ActiveAgentOperation) => {
     if (operationsRef.current.get(operation.epoch) !== operation) return
     // Invalidation is deliberately first. A cancel/read/finally continuation from this operation
     // can no longer mutate the state or persistence owned by the next turn.
     operationsRef.current.delete(operation.epoch)
+    repairInvalidatedSelection(operation)
     void operation.reader?.cancel()
     operation.abort.abort()
     syncActiveTurns()
-  }, [syncActiveTurns])
+  }, [repairInvalidatedSelection, syncActiveTurns])
 
   const invalidateAllOperations = useCallback(() => {
     const operations = [...operationsRef.current.values()]
@@ -602,6 +629,7 @@ export function useExperienceAgentSessions({
     if (selectedKey !== null && !selected) {
       const active = [...operationsRef.current.values()].find((operation) => operation.acceptedKey === selectedKey)
       if (!active?.accepted) return false
+      active.selectionFallbackKey = selectedSessionKeyRef.current
       selectionGenerationRef.current += 1
       selectedSessionKeyRef.current = selectedKey
       setSelectedSessionKey(selectedKey)
@@ -691,6 +719,7 @@ export function useExperienceAgentSessions({
       acceptedKey: null,
       presentation: "Agent is starting.",
       selectionGeneration: selectionGenerationRef.current,
+      selectionFallbackKey: selectedSessionKeyRef.current,
     }
     operationEpoch.current = operation.epoch
     operationsRef.current.set(operation.epoch, operation)
@@ -969,6 +998,7 @@ export function useExperienceAgentSessions({
       const error = cause as Error
       if (!isCurrent()) throw cause
       if (error instanceof AgentTurnCommittedPersistenceError) {
+        repairInvalidatedSelection(operation)
         setError(error.message)
         throw cause
       }
@@ -997,6 +1027,7 @@ export function useExperienceAgentSessions({
           setDurableSession(null)
         }
       }
+      repairInvalidatedSelection(operation)
       if (error?.name !== "AbortError") setError(cause instanceof Error ? cause.message : "AGENT_UNAVAILABLE")
       throw cause
     } finally {
@@ -1006,7 +1037,7 @@ export function useExperienceAgentSessions({
         syncActiveTurns()
       }
     }
-  }, [ownerScope, syncActiveTurns, worldId, worldScope])
+  }, [ownerScope, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
 
   const runAgentTurn = useCallback((input: RunAgentTurnInput) => executeTurn({ ...input, mode: "delegate" }), [executeTurn])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
