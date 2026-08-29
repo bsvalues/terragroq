@@ -29,6 +29,7 @@ import {
 } from "@/lib/environment/decision-intent"
 import { isContinueIntent } from "@/lib/environment/start-work"
 import { isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { deriveWorkspaceFileDiff, type WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
 import { classifyDismissal, classifySummon, isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
@@ -524,7 +525,7 @@ const SELECTED_FILE_CONTEXT_BYTES = 64 * 1024
  * is deliberately not an input to this function: prose may discuss any path, but it cannot select
  * a different host file for the server to read.
  */
-async function deriveSelectedObjectGrounding(
+async function deriveSelectedFileGrounding(
   world: WorkingWorldSnapshot,
   projectRoot: string | null = PROJECT_ROOT,
 ): Promise<Readonly<{ facts: string; version: string }>> {
@@ -568,6 +569,46 @@ async function deriveSelectedObjectGrounding(
     return unavailable(resolved.relative, "FILE_UNREADABLE", `${label} Content unavailable: the selected file could not be read.`)
   } finally {
     await handle?.close().catch(() => undefined)
+  }
+}
+
+function describeSelectedDiff(snapshot: WorkspaceFileDiffSnapshot): string {
+  const identity = `Current patch (server-derived) for ${JSON.stringify(snapshot.path)}. Git state: ${snapshot.state}.`
+  if (snapshot.state === "modified") {
+    return `${identity}\nBase commit: ${snapshot.baseHash}. Patch sha256: ${snapshot.patchHash}.\nGit status:\n${snapshot.status || "(no status entry)"}\n--- BEGIN CURRENT PATCH ---\n${snapshot.patch}\n--- END CURRENT PATCH ---`
+  }
+  if (snapshot.state === "clean") return `${identity}\nBase commit: ${snapshot.baseHash}. Patch sha256: ${snapshot.patchHash}. No changes exist against HEAD.`
+  if (snapshot.state === "untracked") return `${identity}\nBase commit: ${snapshot.baseHash}. The file is untracked, so no tracked patch exists; use the authoritative selected file content above.`
+  if (snapshot.state === "oversize") return `${identity} Patch content unavailable: it exceeds the grounding limit.`
+  return `${identity} Patch content unavailable: Git is not available for this workspace.`
+}
+
+/** Add current Git truth only when the persisted selected object is the Changes surface. */
+async function deriveSelectedObjectGrounding(
+  world: WorkingWorldSnapshot,
+  projectRoot: string | null = PROJECT_ROOT,
+): Promise<Readonly<{ facts: string; version: string }>> {
+  const file = await deriveSelectedFileGrounding(world, projectRoot)
+  const activeWindow = world.space?.windows.find((window) => window.id === world.space?.activeWindowId)
+  if (activeWindow?.kind !== "diff") return file
+
+  const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId)
+  const selectedPath = world.space?.selection?.filePath ?? activePane?.filePath ?? null
+  const unavailable = (reason: string) => ({
+    facts: `${file.facts}\nCurrent patch (server-derived) unavailable: ${reason}`,
+    version: JSON.stringify({ file: file.version, diff: reason }),
+  })
+  if (!selectedPath) return unavailable("NO_FILE_SELECTED")
+  if (!projectRoot) return unavailable("PROJECT_ROOT_UNAVAILABLE")
+  if (isSensitiveWorkspacePath(selectedPath)) return unavailable("SENSITIVE_PATH")
+  const resolved = await resolveRealWorkspacePath(projectRoot, selectedPath, fs.promises.realpath)
+  if (!resolved.ok || !resolved.relative || isSensitiveWorkspacePath(resolved.relative)) {
+    return unavailable(resolved.refusal ?? "PATH_UNAVAILABLE")
+  }
+  const diff = await deriveWorkspaceFileDiff(projectRoot, resolved.relative)
+  return {
+    facts: `${file.facts}\n${describeSelectedDiff(diff)}`,
+    version: JSON.stringify({ file: file.version, diff: diff.fingerprint }),
   }
 }
 

@@ -1124,7 +1124,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const forkAction = forkEligible && agentSessions.activeSessionIds.length === 0 ? "Fork" : "Fork unavailable"
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
-    : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge"] as const
+    : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge unavailable"] as const
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction, forkAction] as const
     : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", "Continue", "Delegate", "Council"] as const
@@ -1323,6 +1323,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   })
 
   function openObjectAction(action: string) {
+    if (action === "Merge unavailable") return
     if (action === "Pause") {
       if (selectedAgent?.kind !== "durable-session" || !agentSessions.pausableSessionIds.includes(selectedAgent.id)) return
       agentSessions.stop(selectedAgent.id)
@@ -1360,6 +1361,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
     if (action === "Review" && selectedKind === "file") {
       openReview()
+      return
+    }
+    if (selectedKind === "diff" && (action === "Review" || action === "Improve" || action === "Challenge")) {
+      openLine(`${action} the exact current patch for the selected file.`)
       return
     }
     if (action === "Council") {
@@ -1501,7 +1506,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable" || action === "Fork unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
       </div>

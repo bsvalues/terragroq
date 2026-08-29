@@ -5,6 +5,7 @@ import fs from "node:fs/promises"
 
 import { getSession } from "@/lib/session"
 import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -37,17 +38,25 @@ export async function GET(request: Request) {
 
   try {
     if (scoped && resolved?.relative) {
-      const tracked = await run("git", ["ls-files", "--error-unmatch", "--", resolved.relative], options)
-        .then(() => true)
-        .catch(() => false)
-      if (!tracked) {
+      const snapshot = await deriveWorkspaceFileDiff(PROJECT_ROOT, resolved.relative)
+      if (snapshot.state === "git-unavailable") {
+        return Response.json({ error: "GIT_UNAVAILABLE", state: snapshot.state, path: snapshot.path }, { status: 503 })
+      }
+      if (snapshot.state === "oversize") {
+        return Response.json({
+          ...snapshot,
+          untracked: false,
+          diff: "",
+          note: "The current patch exceeds the Changes grounding limit.",
+        }, { headers: { "cache-control": "no-store" } })
+      }
+      if (snapshot.state === "untracked") {
         return Response.json(
-          { path: resolved.relative, untracked: true, diff: "", note: "This file is new — it is not in git yet." },
+          { ...snapshot, untracked: true, diff: "", note: "This file is new — it is not in git yet." },
           { headers: { "cache-control": "no-store" } },
         )
       }
-      const { stdout } = await run("git", ["diff", "--patch", "--no-color", "HEAD", "--", resolved.relative], options)
-      return Response.json({ path: resolved.relative, untracked: false, diff: stdout }, { headers: { "cache-control": "no-store" } })
+      return Response.json({ ...snapshot, untracked: false, diff: snapshot.patch }, { headers: { "cache-control": "no-store" } })
     }
 
     const [{ stdout: diff }, { stdout: status }] = await Promise.all([
