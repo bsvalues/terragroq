@@ -15,7 +15,7 @@ vi.mock("@/lib/environment/space-persistence", () => ({
 }))
 vi.mock("@/lib/ai/config", () => ({
   CHAT_MODEL: "test-council-model",
-  INFERENCE_BASE_URL: "http://inference.test/v1",
+  INFERENCE_BASE_URL: "http://127.0.0.1:11434/v1",
 }))
 
 import { GET, POST } from "@/app/api/environment/council/route"
@@ -78,7 +78,7 @@ function successfulInference() {
     "The selected source is the only supplied evidence; avoid broader claims.",
     "The unsaved navigation change can be lost during re-entry.",
   ]
-  const replies = perspectives.map((perspective) => inferenceReply({ perspective }))
+  const replies = [Response.json({ models: [{ name: "qwen2.5:7b-instruct", size: 4_683_087_332 }] }), ...perspectives.map((perspective) => inferenceReply({ perspective }))]
   replies.push(inferenceReply({
     consensus: "Preserve the spatial source and preview workflow.",
     dissent: "Re-entry is not proven while the navigation change is unsaved.",
@@ -153,19 +153,19 @@ describe("POST /api/environment/council", () => {
     expect(payload.session.members).toEqual(expect.arrayContaining([
       expect.objectContaining({
         role: "Architect",
-        provider: "inference.test",
-        model: "test-council-model",
+        provider: "127.0.0.1:11434",
+        model: "qwen2.5:7b-instruct",
         perspective: "Keep the source and preview spatially independent.",
       }),
       expect.objectContaining({
         role: "Recovery / Risk",
         status: "dissenting",
-        provider: "inference.test",
-        model: "test-council-model",
+        provider: "127.0.0.1:11434",
+        model: "qwen2.5:7b-instruct",
         perspective: "The unsaved navigation change can be lost during re-entry.",
       }),
     ]))
-    const firstInferenceBody = JSON.parse(String((fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]?.body))
+    const firstInferenceBody = JSON.parse(String((fetch as ReturnType<typeof vi.fn>).mock.calls[1]?.[1]?.body))
     expect(firstInferenceBody.messages[1].content).toContain("Selected Space: TerraFusion Server Space")
     expect(firstInferenceBody.messages[1].content).toContain("Current outcome: Finish Experience V2")
     expect(firstInferenceBody.messages[1].content).toContain("Execution: validating")
@@ -187,6 +187,7 @@ describe("POST /api/environment/council", () => {
 
   it("fails truthfully when a role does not return a valid perspective", async () => {
     const replies = [
+      Response.json({ models: [{ name: "test-council-model", size: 1_000 }] }),
       inferenceReply({ perspective: "Architecture view" }),
       inferenceReply({ perspective: "Verification view" }),
       inferenceReply({}),
@@ -311,7 +312,7 @@ describe("POST /api/environment/council", () => {
     const response = await POST(request({ worldId: WORLD_ID, question: "Council this.", selectedContext }))
     const payload = await response.json()
 
-    expect(fetch).toHaveBeenCalledTimes(6)
+    expect(fetch).toHaveBeenCalledTimes(7)
     expect(response.status).toBe(200)
     expect(payload.session.context.spaceName).toBe("x".repeat(500))
     expect(harness.saveOwnedCouncilSession).toHaveBeenCalledWith(expect.objectContaining({

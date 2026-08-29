@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 
 import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL } from "@/lib/loom/providers"
-import { resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/receipts"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
@@ -46,9 +46,15 @@ export async function POST(request: Request) {
   const task = typeof body.task === "string" ? body.task.trim() : ""
   if (!task) return Response.json({ error: "TASK_REQUIRED" }, { status: 400 })
 
+  if (typeof body.path === "string" && isSensitiveWorkspacePath(body.path)) {
+    return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
+  }
   const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
   if (!resolved.ok || !resolved.relative) {
     return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
+  }
+  if (isSensitiveWorkspacePath(resolved.relative)) {
+    return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
   }
 
   const model = typeof body.model === "string" && body.model ? body.model : LOCAL_MODEL

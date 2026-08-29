@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { z } from "zod"
 
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
+import { isLoopbackInferenceBase, resolveOllamaChatModel } from "@/lib/ai/ollama-models"
 import { validateCouncilSession, type CouncilSession } from "@/lib/environment/council-session"
 import type { WorkingWorldSnapshot } from "@/lib/environment/working-world"
 
@@ -110,6 +111,7 @@ async function inferJson<T>(
   prompt: string,
   schema: z.ZodType<T>,
   invalidMessage: string,
+  model: string,
 ): Promise<T> {
   let response: Response
   try {
@@ -121,7 +123,7 @@ async function inferJson<T>(
         ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
       },
       body: JSON.stringify({
-        model: CHAT_MODEL,
+        model,
         messages: [
           {
             role: "system",
@@ -232,19 +234,30 @@ export async function conveneCouncil(input: CouncilRequest, world: WorkingWorldS
   const grounded = groundCouncilContext(input, world)
   const context = contextPrompt(input, grounded)
   const provider = inferenceProvider()
+  let model = CHAT_MODEL
+  if (isLoopbackInferenceBase(INFERENCE_BASE_URL)) {
+    const installed = await resolveOllamaChatModel(INFERENCE_BASE_URL, CHAT_MODEL)
+    if (!installed.available || !installed.model) {
+      throw new CouncilInferenceError(installed.detail === "LOCAL_CHAT_MODEL_UNAVAILABLE"
+        ? "No local chat model is installed for Council."
+        : "Local Council inference is unavailable.")
+    }
+    model = installed.model
+  }
 
   const perspectives = await Promise.all(COUNCIL_ROLES.map(async (member) => {
     const result = await inferJson(
       `${context}\n\nYour role: ${member.role}. ${member.charge}\nReturn exactly: {"perspective":"your evidence-grounded advisory view"}`,
       roleResponseSchema,
       `${member.role} returned an invalid perspective.`,
+      model,
     )
     return {
       id: member.id,
       role: member.role,
       name: member.name,
       provider,
-      model: CHAT_MODEL,
+      model,
       status: member.id === "risk" ? "dissenting" as const : "ready" as const,
       perspective: result.perspective,
     }
@@ -261,6 +274,7 @@ export async function conveneCouncil(input: CouncilRequest, world: WorkingWorldS
     ].join("\n\n"),
     synthesisResponseSchema,
     "Council synthesis returned invalid structured advice.",
+    model,
   )
 
   return validateCouncilSession({

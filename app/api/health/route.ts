@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server"
 import { getAuthReadiness } from "@/lib/auth-readiness"
 import { buildRuntimeStatus } from "@/lib/ai/runtime"
+import { INFERENCE_BASE_URL } from "@/lib/ai/config"
+import { isLoopbackInferenceBase, resolveOllamaChatModel } from "@/lib/ai/ollama-models"
 import { getBuildProvenance } from "@/lib/build-provenance"
 
 export const dynamic = "force-dynamic"
@@ -13,6 +15,9 @@ type Check = {
 
 export async function GET() {
   const runtime = buildRuntimeStatus()
+  const liveRuntime = isLoopbackInferenceBase(INFERENCE_BASE_URL)
+    ? await resolveOllamaChatModel(INFERENCE_BASE_URL, runtime.chatModel)
+    : { available: true, model: runtime.chatModel, detail: null }
   const readiness = await getAuthReadiness({ probeDatabase: true })
 
   const databaseProbe = readiness.checks.databaseConnectivity ?? readiness.checks.databaseUrl
@@ -47,8 +52,9 @@ export async function GET() {
         database,
         auth,
         runtime: {
-          ok: true,
-          chatModel: runtime.chatModel,
+          ok: liveRuntime.available,
+          chatModel: liveRuntime.model,
+          ...(liveRuntime.detail ? { detail: liveRuntime.detail } : {}),
           embeddingModel: runtime.embeddingModel,
           gateway: runtime.gateway,
           provider: runtime.provider,

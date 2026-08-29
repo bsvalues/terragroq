@@ -3,7 +3,7 @@ import path from "node:path"
 
 import { workroomFileScope } from "@/lib/governance/workroom-file-scope"
 import { withPathWriteSerialization } from "@/lib/loom/path-write-serialization"
-import { resolveRealWorkspacePath, resolveWorkspacePath } from "@/lib/loom/workspace"
+import { isSensitiveWorkspacePath, resolveRealWorkspacePath, resolveWorkspacePath } from "@/lib/loom/workspace"
 
 const MAX_FILE_BYTES = 2_000_000
 
@@ -42,6 +42,9 @@ export async function writeManualOwnerWorkspaceFile(
   const lexical = resolveWorkspacePath(projectRoot, input.path)
   if (!lexical.ok || !lexical.absolute) {
     return { ok: false, error: lexical.refusal ?? "PATH_INVALID", status: 400 }
+  }
+  if (isSensitiveWorkspacePath(lexical.relative ?? "")) {
+    return { ok: false, error: "SENSITIVE_PATH", status: 403 }
   }
   const preliminary = await resolveRealWorkspacePath(projectRoot, input.path, fs.realpath)
   if (!preliminary.ok || !preliminary.absolute) {
