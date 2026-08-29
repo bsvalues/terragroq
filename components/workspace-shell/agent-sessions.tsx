@@ -145,12 +145,28 @@ function validSessionId(provider: AgentProvider, value: unknown): value is strin
   return typeof value === "string" && (provider === "Codex" ? CODEX_SESSION_ID : CLAUDE_SESSION_ID).test(value)
 }
 
+function canonicalWorkspaceFilePath(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1_000 || value !== value.trim()) return null
+  if (/[\\\u0000-\u001f\u007f]/.test(value) || value.startsWith("/") || /^[A-Za-z]:/.test(value)) return null
+  const segments = value.split("/")
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) return null
+  return value
+}
+
 function parseFileTarget(value: unknown): AgentSessionFileTarget | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
   if (Object.keys(candidate).length !== 2 || candidate.kind !== "file") return null
-  const path = boundedText(candidate.path, 1_000)
+  const path = canonicalWorkspaceFilePath(candidate.path)
   return path ? { kind: "file", path } : null
+}
+
+function targetBearingSessionIdentity(value: unknown): Readonly<{ key: string; sessionId: string }> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  if (!("target" in candidate) || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
+    || !validSessionId(candidate.provider, candidate.sessionId)) return null
+  return { key: sessionKey(candidate.provider, candidate.sessionId), sessionId: candidate.sessionId }
 }
 
 function parseDescriptor(value: string | null): DurableAgentSession | null {
@@ -170,6 +186,7 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     || !validSessionId(candidate.provider, candidate.sessionId)
     || !role || !assignment || !updatedAt || (candidate.target !== undefined && !target)
     || (candidate.reviewPath !== undefined && !reviewPath) || !completedTurns
+    || target !== undefined && (role !== "Builder" || candidate.provider === "Local" || reviewPath !== undefined)
     || candidate.provider === "Local" && (role !== "Thinker" || assignment !== "Conversation" || target !== undefined || reviewPath !== undefined)) return null
   return {
     schemaVersion: 1,
@@ -219,20 +236,32 @@ function parseCollection(value: string | null): DurableAgentSessionCollection | 
     || candidate.schemaVersion === 2 && candidate.selectedSessionId !== null && typeof candidate.selectedSessionId !== "string"
     || candidate.schemaVersion === 3 && candidate.selectedSessionKey !== null && typeof candidate.selectedSessionKey !== "string") return null
   const sessions: DurableAgentSession[] = []
+  const skippedTargetKeys = new Set<string>()
+  const skippedTargetIds = new Set<string>()
   for (const rawSession of candidate.sessions) {
     const descriptor = parseDescriptor(JSON.stringify(rawSession))
-    if (!descriptor || sessions.some((session) => sessionKey(session.provider, session.sessionId) === sessionKey(descriptor.provider, descriptor.sessionId))) return null
+    if (!descriptor) {
+      const skipped = targetBearingSessionIdentity(rawSession)
+      if (!skipped) return null
+      skippedTargetKeys.add(skipped.key)
+      skippedTargetIds.add(skipped.sessionId)
+      continue
+    }
+    if (sessions.some((session) => sessionKey(session.provider, session.sessionId) === sessionKey(descriptor.provider, descriptor.sessionId))) return null
     sessions.push(descriptor)
   }
   let selectedSessionKey: string | null
   if (candidate.schemaVersion === 2) {
     const selectedSessionId = candidate.selectedSessionId as string | null
     const matches = selectedSessionId === null ? [] : sessions.filter((session) => session.sessionId === selectedSessionId)
-    if (selectedSessionId !== null && matches.length !== 1) return null
+    if (selectedSessionId !== null && matches.length !== 1 && !skippedTargetIds.has(selectedSessionId)) return null
     selectedSessionKey = matches[0] ? sessionKey(matches[0].provider, matches[0].sessionId) : null
   } else {
     selectedSessionKey = candidate.selectedSessionKey as string | null
-    if (selectedSessionKey !== null && !sessions.some((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKey)) return null
+    if (selectedSessionKey !== null && !sessions.some((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKey)) {
+      if (!skippedTargetKeys.has(selectedSessionKey)) return null
+      selectedSessionKey = null
+    }
   }
   return { schemaVersion: 3, selectedSessionKey, sessions }
 }
@@ -464,7 +493,8 @@ export function useExperienceAgentSessions({
     if (!role) throw new Error("AGENT_ROLE_REQUIRED")
     if (!assignment) throw new Error("AGENT_ASSIGNMENT_REQUIRED")
     if (mode === "delegate" && !prompt) throw new Error("AGENT_PROMPT_REQUIRED")
-    if (input.target !== undefined && !requestedTarget) throw new Error("AGENT_TARGET_INVALID")
+    if (input.target !== undefined && (!requestedTarget || mode !== "delegate" || role !== "Builder"
+      || input.provider === "Local")) throw new Error("AGENT_TARGET_INVALID")
     if (mode === "review" && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (mode === "review" && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
     if (operationRef.current) throw new Error("AGENT_TURN_ALREADY_RUNNING")

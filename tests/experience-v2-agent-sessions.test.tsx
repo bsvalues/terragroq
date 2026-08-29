@@ -1488,6 +1488,87 @@ describe("Experience V2 real agent sessions", () => {
     }))
   })
 
+  it.each([
+    ["dot-prefixed", "./src/app.ts"],
+    ["backslash", "src\\app.ts"],
+    ["parent segment", "src/../app.ts"],
+    ["current-directory segment", "src/./app.ts"],
+    ["absolute", "/src/app.ts"],
+    ["drive absolute", "C:/repo/src/app.ts"],
+    ["backslash drive absolute", "C:\\repo\\src\\app.ts"],
+    ["UNC", "//server/share/app.ts"],
+    ["backslash UNC", "\\\\server\\share\\app.ts"],
+    ["NUL", "src/\0app.ts"],
+    ["control character", "src/\u001fapp.ts"],
+    ["empty", ""],
+    ["double separator", "src//app.ts"],
+    ["trailing separator", "src/app.ts/"],
+    ["surrounding whitespace", " src/app.ts "],
+  ])("rejects a %s target instead of normalizing or persisting it", async (_case, path) => {
+    vi.stubGlobal("fetch", vi.fn(() => { throw new Error("FETCH_CALLED_FOR_INVALID_TARGET") }))
+    render(<Harness />)
+
+    await expect(act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Claude",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Change it.",
+        target: { kind: "file", path },
+      })
+    })).rejects.toThrow("AGENT_TARGET_INVALID")
+
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+  })
+
+  it.each([
+    ["Local conversation", () => expose!.runAgentTurn({ provider: "Local", role: "Builder", assignment: "src/app.ts", prompt: "Think.", target: { kind: "file", path: "src/app.ts" } })],
+    ["non-Builder delegate", () => expose!.runAgentTurn({ provider: "Claude", role: "Reviewer", assignment: "src/app.ts", prompt: "Inspect.", target: { kind: "file", path: "src/app.ts" } })],
+    ["read-only Review", () => expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", mode: "review", path: "src/app.ts", target: { kind: "file", path: "src/app.ts" } })],
+  ])("refuses target metadata on %s", async (_case, start) => {
+    vi.stubGlobal("fetch", vi.fn(() => { throw new Error("FETCH_CALLED_FOR_INELIGIBLE_TARGET") }))
+    render(<Harness />)
+
+    await expect(act(async () => { await start() })).rejects.toThrow("AGENT_TARGET_INVALID")
+    expect(window.localStorage.getItem("williamos:agent-session:owner-1:terrafusion")).toBeNull()
+  })
+
+  it("drops only restored target-policy violations and preserves unrelated valid sessions", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const validId = "123e4567-e89b-42d3-a456-426614174000"
+    const invalidSelectedId = "223e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${invalidSelectedId}`,
+      sessions: [
+        { schemaVersion: 1, sessionId: validId, role: "Builder", provider: "Codex", assignment: "General work", updatedAt: "2026-08-27T16:00:00.000Z" },
+        { schemaVersion: 1, sessionId: invalidSelectedId, role: "Reviewer", provider: "Claude", assignment: "Not a builder", target: { kind: "file", path: "src/reviewer.ts" }, updatedAt: "2026-08-27T16:01:00.000Z" },
+        { schemaVersion: 1, sessionId: "323e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/review.ts", target: { kind: "file", path: "src/review.ts" }, reviewPath: "src/review.ts", updatedAt: "2026-08-27T16:02:00.000Z" },
+        { schemaVersion: 1, sessionId: "423e4567-e89b-42d3-a456-426614174000", role: "Thinker", provider: "Local", assignment: "Conversation", target: { kind: "file", path: "src/local.ts" }, updatedAt: "2026-08-27T16:03:00.000Z" },
+        { schemaVersion: 1, sessionId: "523e4567-e89b-42d3-a456-426614174000", role: "Builder", provider: "Claude", assignment: "Bad path", target: { kind: "file", path: "./src/bad.ts" }, updatedAt: "2026-08-27T16:04:00.000Z" },
+      ],
+    }))
+
+    render(<Harness />)
+
+    await waitFor(() => expect(expose!.sessions).toEqual([
+      expect.objectContaining({ id: `Codex:${validId}`, assignment: "General work" }),
+    ]))
+    expect(JSON.parse(String(window.localStorage.getItem(key)))).toEqual({
+      schemaVersion: 3,
+      selectedSessionKey: null,
+      sessions: [{
+        schemaVersion: 1,
+        sessionId: validId,
+        role: "Builder",
+        provider: "Codex",
+        assignment: "General work",
+        updatedAt: "2026-08-27T16:00:00.000Z",
+        completedTurns: [],
+      }],
+    })
+  })
+
   it("rejects malformed persisted target metadata while retaining legacy sessions without a target", async () => {
     const key = "williamos:agent-session:owner-1:terrafusion"
     window.localStorage.setItem(key, JSON.stringify({
