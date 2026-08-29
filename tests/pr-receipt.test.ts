@@ -16,6 +16,9 @@ const facts: WorkContextFacts = {
   topologySource: "canonical-registry",
   collisions: [],
   remainingParentAcceptance: "usable cockpit still requires the four-node baseline",
+  workOrderVersion: "w".repeat(64),
+  grantVersion: "g".repeat(64),
+  reservationVersion: "r".repeat(64),
 }
 
 function body(token: string, declared: WorkContextFacts = facts) {
@@ -101,6 +104,12 @@ describe("reviewing a pull request", () => {
     const verdict = reviewPullRequestReceipt({ body: body("0".repeat(64)), ...green })
     expect(verdict.ok).toBe(false)
     expect(verdict.failure).toBe("FAILED_RECEIPT_MISMATCH")
+  })
+
+  it("fails a legacy v1 declaration closed instead of crashing the validator", () => {
+    const { workOrderVersion: _work, grantVersion: _grant, reservationVersion: _reservation, ...legacy } = facts
+    const verdict = reviewPullRequestReceipt({ body: body("0".repeat(64), legacy as WorkContextFacts), ...green })
+    expect(verdict).toMatchObject({ ok: false, failure: "FAILED_RECEIPT_MISMATCH" })
   })
 
   it("catches claims edited after issuance", () => {

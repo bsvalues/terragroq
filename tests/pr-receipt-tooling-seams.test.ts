@@ -19,6 +19,9 @@ const FACTS = {
   collisions: [],
   remainingParentAcceptance: "the parent still needs this",
   reservedPaths: ["scripts/runtime-operator/"],
+  workOrderVersion: "w".repeat(64),
+  grantVersion: "g".repeat(64),
+  reservationVersion: "r".repeat(64),
 } as const
 
 function block(payload: unknown) {

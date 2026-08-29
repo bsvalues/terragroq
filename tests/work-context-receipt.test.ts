@@ -24,6 +24,9 @@ const proven: WorkContextFacts = {
   topologySource: "canonical-registry",
   collisions: [],
   remainingParentAcceptance: "usable cockpit still requires the four-node baseline",
+  workOrderVersion: "w".repeat(64),
+  grantVersion: "g".repeat(64),
+  reservationVersion: "r".repeat(64),
 }
 
 describe("work context receipt", () => {
@@ -97,6 +100,11 @@ describe("work context receipt", () => {
   it("goes stale when the work order changes underneath the lane", () => {
     const issued = issueWorkContextReceipt(proven)
     expect(verifyWorkContextReceipt(issued.receipt, { ...proven, authorityLevel: "A4_SCHEMA" }).ok).toBe(false)
+  })
+
+  it.each(["workOrderVersion", "grantVersion", "reservationVersion"] as const)("binds the receipt to %s", (field) => {
+    const issued = issueWorkContextReceipt(proven)
+    expect(verifyWorkContextReceipt(issued.receipt, { ...proven, [field]: "x".repeat(64) }).ok).toBe(false)
   })
 
   it("tells a stale receipt apart from a doctored one, because the remedies differ", () => {

@@ -19,7 +19,7 @@ import { AUTHORITY_LEVELS } from "../goal/taxonomy.ts"
  * mechanism, because a second way to express authority is how two sources of truth get created.
  */
 
-export const WORK_CONTEXT_RECEIPT_VERSION = "work-context-receipt.v1" as const
+export const WORK_CONTEXT_RECEIPT_VERSION = "work-context-receipt.v2" as const
 
 /** Facts the lane must prove before its first mutation. Every field is required. */
 export interface WorkContextFacts {
@@ -42,6 +42,10 @@ export interface WorkContextFacts {
   collisions: readonly string[]
   /** What of the parent outcome remains after this child settles. */
   remainingParentAcceptance: string
+  /** Immutable snapshots of the exact server-derived authority used at issuance. */
+  workOrderVersion: string
+  grantVersion: string
+  reservationVersion: string
 }
 
 export type WorkContextFailure =
@@ -93,6 +97,9 @@ export function issueWorkContextReceipt(facts: WorkContextFacts): WorkContextVer
   if (!NON_EMPTY(facts.doctrineDigest)) {
     return { ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN", detail: "controlling instruction chain not read" }
   }
+  if (!NON_EMPTY(facts.workOrderVersion) || !NON_EMPTY(facts.grantVersion) || !NON_EMPTY(facts.reservationVersion)) {
+    return { ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN", detail: "authority snapshot versions are missing" }
+  }
   if (facts.existingSubsystem !== "none-found" && facts.existingSubsystem !== "integrating" && facts.existingSubsystem !== "superseding") {
     return { ok: false, failure: "FAILED_EXISTING_SUBSYSTEM_NOT_RECONCILED", detail: "no subsystem search recorded" }
   }
@@ -127,6 +134,11 @@ export function receiptToken(facts: WorkContextFacts): string {
     // Order must not change the token: a reservation is a set, not a sequence.
     reservedPaths: [...facts.reservedPaths].map((p) => p.trim()).sort(),
     remainingParentAcceptance: facts.remainingParentAcceptance.trim(),
+    // Legacy/malformed declarations are reviewed before `issueWorkContextReceipt`; keep token
+    // derivation total so the PR validator can fail them closed instead of crashing CI.
+    workOrderVersion: typeof facts.workOrderVersion === "string" ? facts.workOrderVersion.trim() : "",
+    grantVersion: typeof facts.grantVersion === "string" ? facts.grantVersion.trim() : "",
+    reservationVersion: typeof facts.reservationVersion === "string" ? facts.reservationVersion.trim() : "",
   })
 }
 
