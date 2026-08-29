@@ -1,4 +1,5 @@
 import { issuePersistedCodexDeliverySeal } from "@/lib/governance/delivery-seal-runtime"
+import { guardLineRequest, readBoundedJson } from "@/lib/environment/line-guard"
 import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
@@ -6,12 +7,18 @@ export const runtime = "nodejs"
 
 const HASH = /^[0-9a-f]{64}$/i
 const COMMIT = /^[0-9a-f]{40}$/i
+const MAX_DELIVERY_SEAL_REQUEST_BYTES = 2_000
 
 export async function POST(request: Request) {
+  const rejection = guardLineRequest(request)
+  if (rejection) return Response.json({ error: rejection.error }, { status: rejection.status })
+
+  const parsed = await readBoundedJson(request, MAX_DELIVERY_SEAL_REQUEST_BYTES)
+  if (!parsed.ok) return Response.json({ error: parsed.error }, { status: parsed.status })
+
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
-  let body: unknown
-  try { body = await request.json() } catch { return Response.json({ error: "DELIVERY_SEAL_REQUEST_INVALID" }, { status: 400 }) }
+  const body = parsed.value
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return Response.json({ error: "DELIVERY_SEAL_REQUEST_INVALID" }, { status: 400 })
   }

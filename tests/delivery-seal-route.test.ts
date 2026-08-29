@@ -30,6 +30,23 @@ describe("delivery seal route", () => {
     expect(seams.issue).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ["cross-origin", { headers: { "content-type": "application/json", host: "localhost", origin: "https://evil.example" }, body: "{}", status: 403, error: "CROSS_ORIGIN_REFUSED" }],
+    ["wrong content type", { headers: { "content-type": "text/plain", host: "localhost" }, body: "{}", status: 415, error: "UNSUPPORTED_MEDIA_TYPE" }],
+    ["oversized body", { headers: { "content-type": "application/json", host: "localhost" }, body: JSON.stringify({ padding: "x".repeat(2_100) }), status: 413, error: "MESSAGE_TOO_LARGE" }],
+    ["malformed JSON", { headers: { "content-type": "application/json", host: "localhost" }, body: "{not-json", status: 400, error: "INVALID_BODY" }],
+  ])("rejects %s before authentication or delivery issuance", async (_label, input) => {
+    const response = await POST(new Request("http://localhost/api/governance/delivery-seal", {
+      method: "POST",
+      headers: input.headers,
+      body: input.body,
+    }))
+    expect(response.status).toBe(input.status)
+    expect(await response.json()).toEqual({ error: input.error })
+    expect(seams.getSession).not.toHaveBeenCalled()
+    expect(seams.issue).not.toHaveBeenCalled()
+  })
+
   it("returns the WilliamOS-issued seal for the authenticated owner's existing assignment", async () => {
     const seal = { payload: { version: "williamos-delivery-seal.v1" }, signature: "signed" }
     seams.issue.mockResolvedValue(seal)
