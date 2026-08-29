@@ -11,7 +11,7 @@ type ReviewState = Readonly<{
   outcome: string | null
 }>
 
-type ActiveReview = { id: number; path: string; stopRequested: boolean }
+type ActiveReview = { id: number; path: string; stopRequested: boolean; sessionKey: string | null }
 
 const idle: ReviewState = { running: false, path: null, progress: null, outcome: null }
 
@@ -28,9 +28,17 @@ export function useSelectedFileReview({
   const active = useRef<ActiveReview | null>(null)
   const sequence = useRef(0)
   const report = useRef(onReport)
+  const sessionController = useRef(sessions)
 
   useEffect(() => { report.current = onReport }, [onReport])
-  useEffect(() => () => sessions.stop(), [sessions.stop])
+  useEffect(() => { sessionController.current = sessions }, [sessions])
+  useEffect(() => () => {
+    const operation = active.current
+    if (!operation) return
+    const controller = sessionController.current
+    const turnId = operation.sessionKey ?? controller.activeTurns.find((turn) => turn.provider === "Claude" && turn.role === "Reviewer")?.id
+    controller.stop(turnId)
+  }, [])
 
   const reset = useCallback((nextPath: string | null) => {
     if (active.current) return
@@ -41,7 +49,8 @@ export function useSelectedFileReview({
     const operation = active.current
     if (!operation) return
     operation.stopRequested = true
-    sessions.stop()
+    const turnId = operation.sessionKey ?? sessions.activeTurns.find((turn) => turn.provider === "Claude" && turn.role === "Reviewer")?.id
+    sessions.stop(turnId)
     setState({ running: true, path: operation.path, progress: null, outcome: "Stop requested. Review outcome is unknown." })
   }, [sessions])
 
@@ -51,7 +60,7 @@ export function useSelectedFileReview({
       setState({ running: false, path: null, progress: null, outcome: "Select a file before starting Review." })
       return
     }
-    const operation: ActiveReview = { id: ++sequence.current, path, stopRequested: false }
+    const operation: ActiveReview = { id: ++sequence.current, path, stopRequested: false, sessionKey: null }
     active.current = operation
     setState({ running: true, path: operation.path, progress: "Starting read-only Review…", outcome: null })
     try {
@@ -63,7 +72,10 @@ export function useSelectedFileReview({
         ...(focus.trim() ? { focus: focus.trim() } : {}),
         onEvent: (event) => {
           if (active.current !== operation || operation.stopRequested) return
-          if (event.type === "session") setState((current) => ({ ...current, progress: `Reviewing ${operation.path}…` }))
+          if (event.type === "session" && typeof event.sessionId === "string") {
+            operation.sessionKey = `Claude:${event.sessionId}`
+            setState((current) => ({ ...current, progress: `Reviewing ${operation.path}…` }))
+          }
         },
         onReviewComplete: (text) => {
           if (active.current !== operation || operation.stopRequested) return

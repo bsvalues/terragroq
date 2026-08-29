@@ -980,7 +980,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   async function submitLine(event: React.FormEvent) {
     event.preventDefault()
     const text = lineInput.trim()
-    if (lineBusy || change.running || review.running && lineMode !== "review" || lineMode !== "review" && !text
+    if (lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !text
       || lineTarget === "agent" && lineMode === "default" && !delegateContext?.provider) return
     if (lineMode === "change") {
       void change.start(text)
@@ -1054,6 +1054,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
               if (presentationSessionKey === null) presentationSessionKey = presentedSessionKey
               if (presentationSessionKey !== presentedSessionKey || !agentPresentationIsCurrent?.()) return
               setLineReply(presentation.text)
+              if (presentation.phase === "working") setLineBusy(false)
             },
           })
           const completedSessionKey = `${completed.provider}:${completed.sessionId}`
@@ -1093,7 +1094,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           : error instanceof DOMException && error.name === "AbortError" ? "Agent turn stopped." : "Agent turn unavailable.")
       }
     } finally {
-      setLineBusy(false)
+      if (!agentPresentationIsCurrent || agentPresentationIsCurrent()) setLineBusy(false)
     }
   }
 
@@ -1118,9 +1119,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "diff" ? "changes"
     : selectedKind === "agent" ? "agent session"
     : "Space"
-  const pauseAction = agentSessions.pausableSessionId === selectedAgent?.id ? "Pause" : "Pause unavailable"
+  const pauseAction = selectedAgent && agentSessions.pausableSessionIds.includes(selectedAgent.id) ? "Pause" : "Pause unavailable"
   const forkEligible = selectedAgent?.kind === "durable-session" && selectedAgent?.truth === "live" && selectedAgent.providerLabel === "Claude" && selectedAgent.role === "Builder" && selectedAgent.mode === "delegate"
-  const forkAction = forkEligible && agentSessions.activeSessionId === null ? "Fork" : "Fork unavailable"
+  const forkAction = forkEligible && agentSessions.activeSessionIds.length === 0 ? "Fork" : "Fork unavailable"
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge"] as const
@@ -1215,7 +1216,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     if (Object.values(dirtyPaths).some(Boolean)) return "Save or discard the dirty source before switching Spaces."
     if (runningTools.tests || runningTools.terminal) return "Stop the active Test or Terminal run before switching Spaces."
     if (isExecutionLive(spine.execution)) return "Finish or stop the active Space execution before switching Spaces."
-    if (change.running || review.running || lineBusy || councilBusy || judgmentBusy || agentSessions.activeSessionId) {
+    if (change.running || review.running || lineBusy || councilBusy || judgmentBusy || agentSessions.activeSessionIds.length > 0) {
       return "Finish or stop active work before switching Spaces."
     }
     return null
@@ -1323,8 +1324,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   function openObjectAction(action: string) {
     if (action === "Pause") {
-      if (selectedAgent?.kind !== "durable-session" || agentSessions.pausableSessionId !== selectedAgent.id) return
-      agentSessions.stop()
+      if (selectedAgent?.kind !== "durable-session" || !agentSessions.pausableSessionIds.includes(selectedAgent.id)) return
+      agentSessions.stop(selectedAgent.id)
       if (lineTarget === "agent") {
         setLineOpen(false)
         setLineInput("")
@@ -1337,7 +1338,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
     if (action === "Pause unavailable") return
     if (action === "Fork") {
-      if (!forkEligible || agentSessions.activeSessionId !== null || !selectedAgent?.id.startsWith("Claude:")) return
+      if (!forkEligible || agentSessions.activeSessionIds.length !== 0 || !selectedAgent?.id.startsWith("Claude:")) return
       setForkContext({
         sourceSessionId: selectedAgent.id.slice("Claude:".length),
         assignment: selectedAgent.assignment,
@@ -1469,8 +1470,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             <span className={spatial.spacePath}>{project?.identity ?? ""}</span>
           </span>
         </div>
-        <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningSessionId={agentSessions.activeSessionId} runningProvider={agentSessions.activeProvider} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
+        <AgentSessionStrip sessions={agentSessions.sessions} activeSessionId={focusedAgentId} runningTurns={agentSessions.activeTurns} onStop={agentSessions.stop} className={spatial.sessionStrip} onSelect={(agent) => {
           if (!agentSessions.selectSession(agent.kind === "durable-session" ? agent.id : null)) return
+          const running = agentSessions.activeSessionIds.includes(agent.id)
+          if (running && agent.kind === "durable-session") {
+            setFocusedAgentId(agent.id)
+            setDelegateContext({ kind: "agent", label: `${agent.role} · ${agent.providerLabel}`, provider: agent.providerLabel as AgentProvider, role: agent.role, assignment: agent.assignment })
+            openLine("", "agent")
+            setLineReply(agent.presentation ?? "Agent is working.")
+            return
+          }
           if (agent.mode === "review" && agent.reviewPath) {
             openReviewPath(agent.reviewPath)
             return
@@ -1558,8 +1567,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             <div className={spatial.lineControls}>
               {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider"><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Codex" } : current)}>Codex</button><button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
               <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineMode === "fork" ? "Claude fork · source remains unchanged" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
-              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
-              {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
+              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
+              {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (lineMode === "review" && review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
             </div>
           </form>
         </div>
