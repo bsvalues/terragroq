@@ -24,6 +24,24 @@ const projectOperations = [
 ]
 
 describe("Experience V2 developer tools", () => {
+  it("does not expose a covered inactive Test action as runnable", async () => {
+    const fetcher = vi.fn().mockResolvedValue(ndjson(
+      { type: "stdout", text: "suite started\n" },
+      { type: "exit", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+
+    const view = render(<DeveloperToolsSurface kind="tests" selectedPath={null} active={false} />)
+    const runButton = screen.getByRole("button", { name: "Run full test suite" })
+    expect((runButton as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText("Focus Tests before running validation.")).toBeTruthy()
+
+    view.rerender(<DeveloperToolsSurface kind="tests" selectedPath={null} active />)
+    expect((runButton as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(runButton)
+    expect(await screen.findByText("suite started", { exact: false })).toBeTruthy()
+  })
+
   it("loads the real selected-file diff and can refresh it", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       path: "src/app.ts",

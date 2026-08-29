@@ -36,9 +36,10 @@ function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick
   return run.historyScope === scope && run.historyStorage === storage
 }
 
-export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange }: {
+export function DeveloperToolsSurface({ kind, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange }: {
   kind: DeveloperToolKind
   selectedPath: string | null
+  active?: boolean
   historyScope?: string | null
   historyStorage?: Pick<Storage, "getItem" | "setItem"> | null
   refreshKey?: number
@@ -329,7 +330,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
             <button type="submit" className={styles.utilityButton} disabled={running !== null}>Run</button>
           </form> : null}
           <div className={styles.utilityControls}>
-            {kind === "tests" ? <button type="button" className={styles.utilityButton} disabled={running !== null} onClick={() => void run("tests.run", "test")}>Run full test suite</button>
+            {kind === "tests" ? <button type="button" className={styles.utilityButton} disabled={running !== null || !active} onClick={() => void run("tests.run", "test")}>Run full test suite</button>
               : operations.map((operation) => <button key={operation.id} type="button" aria-label={operation.label} className={styles.utilityButton}
                 disabled={running !== null} title={operation.intent} onClick={() => { const alias = terminalAlias(operation.id); if (alias) { setCommand(alias); void run(operation.id, alias) } }}>{operation.label}</button>)}
             {running ? <button type="button" className={styles.utilityStop} onClick={stop}>Stop</button> : null}
@@ -344,7 +345,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, historyScope = null,
           {transcriptTruth ? <p className={styles.muted}>{transcriptTruth}</p> : null}
           {!selectedTranscript && historyVerdict ? <output className={styles.muted}>{historyVerdict}</output> : null}
           <pre ref={output} className={styles.utilityOutput} aria-live="polite">{visibleLines.length === 0
-            ? kind === "tests" ? "Tests have not run in this Space yet." : "Type one fixed alias. Tab completes; Enter runs. No shell text is accepted."
+            ? kind === "tests" ? active ? "Tests have not run in this Space yet." : "Focus Tests before running validation." : "Type one fixed alias. Tab completes; Enter runs. No shell text is accepted."
             : visibleLines.map((line, index) => <span key={index} data-channel={line.channel}>{line.text}</span>)}</pre>
         </>}
       </div>

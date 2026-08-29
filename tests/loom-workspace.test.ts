@@ -1,4 +1,5 @@
 import path from "node:path"
+import { spawnSync } from "node:child_process"
 
 import { describe, expect, it } from "vitest"
 
@@ -87,6 +88,25 @@ describe("operation catalogue", () => {
       expect(["git", "node", "powershell"]).toContain(operation.command)
       expect(operation.args.every((argument) => typeof argument === "string")).toBe(true)
     }
+  })
+
+  it("starts the catalogued Test operation with the installed Vitest CLI", () => {
+    const operation = LOOM_OPERATIONS.find((candidate) => candidate.id === "tests.run")
+    expect(operation).toBeDefined()
+
+    const result = spawnSync(process.execPath, [
+      ...operation!.args,
+      "--passWithNoTests",
+      "tests/__catalogue_smoke_never__.test.ts",
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+      timeout: 30_000,
+    })
+
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(0)
   })
 })
 

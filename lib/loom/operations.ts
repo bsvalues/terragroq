@@ -81,7 +81,7 @@ export const LOOM_OPERATIONS: readonly LoomOperation[] = [
     // node is spawned directly rather than through pnpm: Windows refuses to run .cmd shims without
     // a shell, and introducing a shell would create the interpolation point this design avoids.
     command: "node",
-    args: ["node_modules/vitest/vitest.mjs", "run", "--reporter=basic"],
+    args: ["node_modules/vitest/vitest.mjs", "run", "--reporter=default"],
     scope: "project",
     mutating: false,
     timeoutMs: 20 * 60_000,
