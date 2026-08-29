@@ -1,193 +1,146 @@
+import { generateKeyPairSync, sign, type KeyObject } from "node:crypto"
+
 import { describe, expect, it } from "vitest"
 
-import { parseDeclaredReceipt, reviewPullRequestReceipt } from "../lib/governance/pr-receipt"
-import { receiptToken, type WorkContextFacts } from "../lib/governance/work-context-receipt"
+import {
+  parseDeclaredDeliverySeals,
+  parseDeclaredReceipt,
+  reviewPullRequestReceipt,
+} from "@/lib/governance/pr-receipt"
 
-const DOCTRINE = "d".repeat(64)
-
-const facts: WorkContextFacts = {
-  mainSha: "6f0e1022aa11bb22cc33dd44ee55ff6677889900",
-  workOrderRef: "WO-831-REVIEWER",
-  parentOutcome: "OUTCOME-762",
-  reservedPaths: ["lib/governance/"],
-  authorityLevel: "A2_WRITE_OWN",
-  doctrineDigest: DOCTRINE,
-  existingSubsystem: "integrating",
-  topologySource: "canonical-registry",
-  collisions: [],
-  remainingParentAcceptance: "usable cockpit still requires the four-node baseline",
+function canonical(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null"
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+  const row = value as Record<string, unknown>
+  return `{${Object.keys(row).sort().map((key) => `${JSON.stringify(key)}:${canonical(row[key])}`).join(",")}}`
 }
 
-function body(token: string, declared: WorkContextFacts = facts) {
-  return [
-    "Some ordinary pull request prose.",
-    "",
-    "```WORK_CONTEXT_RECEIPT",
-    JSON.stringify({ token, facts: declared }, null, 2),
-    "```",
-  ].join("\n")
+function fixture(path = "lib/governance/owner.ts", patchDigest = "f".repeat(64), keys?: { privateKey: KeyObject; publicKey: KeyObject }) {
+  const pair = keys ?? generateKeyPairSync("ed25519")
+  const payload = {
+    version: "williamos-delivery-seal.v1",
+    issuer: "WilliamOS",
+    keyId: "test-key",
+    issuedAt: "2026-08-29T20:00:00.000Z",
+    assignment: {
+      assignmentHash: "a".repeat(64), owner: "owner-1", worldId: "world-1",
+      outcome: { id: 5, key: "WILLIAMOS_EXPERIENCE_V2", version: 7 },
+      workOrder: { id: 41, ref: "WO-0041", version: "work-v1" },
+      grant: { id: 9, ref: "GRANT-0009", version: "grant-v1" },
+      reservation: { allowed: [path], forbidden: [], version: "c".repeat(64) },
+      task: { digest: "d".repeat(64), text: `Deliver ${path}.` },
+      session: { threadId: `thread-${path}`, executionBindingHash: "e".repeat(64) },
+    },
+    delivery: {
+      repository: "https://github.com/bsvalues/terragroq",
+      baseSha: "1".repeat(40), commitSha: "2".repeat(40), paths: [path], patchDigest,
+    },
+  } as const
+  const signature = sign(null, Buffer.from(canonical(payload)), pair.privateKey).toString("base64url")
+  const block = ["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify({ payload, signature }, null, 2), "```"].join("\n")
+  return { block, seal: { payload, signature }, keys: pair }
 }
 
-const valid = () => body(receiptToken(facts))
-
-const green = {
-  changedFiles: ["lib/governance/owner.ts"],
-  mainMovedFiles: ["components/Chart.tsx"],
-  liveDoctrineDigest: DOCTRINE,
+function review(block: string, changedFiles = ["lib/governance/owner.ts"], patchDigests = { "lib/governance/owner.ts": "f".repeat(64) }, publicKey?: KeyObject) {
+  return reviewPullRequestReceipt({
+    body: block,
+    changedFiles,
+    headSha: "2".repeat(40),
+    patchDigests,
+    publicKeys: { "test-key": publicKey ?? fixture().keys.publicKey },
+  })
 }
 
-describe("finding the receipt", () => {
-  it("reads a fenced block", () => {
-    expect(parseDeclaredReceipt(valid())?.facts.workOrderRef).toBe("WO-831-REVIEWER")
+describe("WilliamOS delivery seal review", () => {
+  it("accepts a WilliamOS-signed seal bound to the exact PR head, patch, and changed path", () => {
+    const signed = fixture()
+    expect(review(signed.block, undefined, undefined, signed.keys.publicKey)).toEqual({ ok: true })
   })
 
-  it("is not satisfied by prose that merely mentions one", () => {
-    // "Mentions the word receipt" must never be enough; the body is written by humans and agents both.
-    expect(parseDeclaredReceipt("I established a WORK_CONTEXT_RECEIPT before starting, honest.")).toBeNull()
-  })
-
-  it("rejects a malformed block rather than guessing at it", () => {
-    expect(parseDeclaredReceipt("```WORK_CONTEXT_RECEIPT" + String.fromCharCode(10) + "{not json" + String.fromCharCode(10) + "```")).toBeNull()
-  })
-})
-
-describe("reviewing a pull request", () => {
-  it("admits a valid receipt whose reservation covers the diff", () => {
-    expect(reviewPullRequestReceipt({ body: valid(), ...green })).toEqual({ ok: true })
-  })
-
-  it("admits an exact reserved markdown file without treating the extension as doctrine", () => {
-    const markdownFacts = {
-      ...facts,
-      reservedPaths: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
-    }
+  it("accepts multiple existing assignments only when together they cover the complete PR diff", () => {
+    const keys = generateKeyPairSync("ed25519")
+    const first = fixture("app/a.ts", "a".repeat(64), keys)
+    const second = fixture("lib/b.ts", "b".repeat(64), keys)
     expect(reviewPullRequestReceipt({
-      body: body(receiptToken(markdownFacts), markdownFacts),
-      changedFiles: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
-      mainMovedFiles: [],
-      liveDoctrineDigest: DOCTRINE,
+      body: `${first.block}\n\n${second.block}`,
+      changedFiles: ["app/a.ts", "lib/b.ts"],
+      headSha: "2".repeat(40),
+      patchDigests: { "app/a.ts": "a".repeat(64), "lib/b.ts": "b".repeat(64) },
+      publicKeys: { "test-key": keys.publicKey },
     })).toEqual({ ok: true })
   })
 
-  it.each([
-    "docs/reports/WO-OUTCOME-762-911-runtime-reliability-notes.md",
-    "docs/reports/WO-OUTCOME-762-911-runtime-reliability.md.bak",
-    "docs/governance/multi-agent-operator-playbook.md",
-  ])("does not widen an exact markdown reservation to %s", (changedFile) => {
-    const markdownFacts = {
-      ...facts,
-      reservedPaths: ["docs/reports/WO-OUTCOME-762-911-runtime-reliability.md"],
-    }
-    const verdict = reviewPullRequestReceipt({
-      body: body(receiptToken(markdownFacts), markdownFacts),
-      changedFiles: [changedFile],
-      mainMovedFiles: [],
-      liveDoctrineDigest: DOCTRINE,
+  it("rejects a signature after any assignment or delivery claim is edited", () => {
+    const signed = fixture()
+    const edited = JSON.parse(JSON.stringify(signed.seal))
+    edited.payload.assignment.reservation.allowed.push("app/**")
+    const body = ["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify(edited), "```"].join("\n")
+    expect(review(body, undefined, undefined, signed.keys.publicKey)).toMatchObject({
+      ok: false, failure: "FAILED_RECEIPT_MISMATCH",
     })
-    expect(verdict.ok).toBe(false)
-    expect(verdict.failure).toBe("FAILED_SCOPE_ESCAPE")
-    expect(verdict.detail).toContain(changedFile)
   })
 
-  it("rejects a pull request with no receipt, however green it is", () => {
-    // This is acceptance criterion 8 of #831, and the entire point: tests passing is not a premise.
-    const verdict = reviewPullRequestReceipt({ body: "Looks good, all tests pass.", ...green })
-    expect(verdict.ok).toBe(false)
-    expect(verdict.failure).toBe("FAILED_CONTEXT_NOT_PROVEN")
-    expect(verdict.recovery).toBeTruthy()
+  it("rejects a seal signed by a key that is not the repository-configured WilliamOS verifier", () => {
+    const signed = fixture()
+    const foreign = generateKeyPairSync("ed25519")
+    expect(review(signed.block, undefined, undefined, foreign.publicKey)).toMatchObject({
+      ok: false, failure: "FAILED_RECEIPT_MISMATCH",
+    })
   })
 
-  it("rejects a token that was never issued for the declared claims", () => {
-    const verdict = reviewPullRequestReceipt({ body: body("0".repeat(64)), ...green })
-    expect(verdict.ok).toBe(false)
-    expect(verdict.failure).toBe("FAILED_RECEIPT_MISMATCH")
+  it("rejects a seal for an older PR head", () => {
+    const signed = fixture()
+    expect(reviewPullRequestReceipt({
+      body: signed.block, changedFiles: ["lib/governance/owner.ts"], headSha: "3".repeat(40),
+      patchDigests: { "lib/governance/owner.ts": "f".repeat(64) }, publicKeys: { "test-key": signed.keys.publicKey },
+    })).toMatchObject({ ok: false, failure: "FAILED_STALE_MAIN" })
   })
 
-  it("catches claims edited after issuance", () => {
-    // A lane widening its own reservation after the fact is exactly the tamper this must see.
-    const widened = { ...facts, reservedPaths: ["lib/", "app/"] }
-    const verdict = reviewPullRequestReceipt({ body: body(receiptToken(facts), widened), ...green })
-    expect(verdict.ok).toBe(false)
-    expect(verdict.failure).toBe("FAILED_RECEIPT_MISMATCH")
-  })
-
-  it("survives unrelated churn on main", () => {
-    const verdict = reviewPullRequestReceipt({
-      body: valid(),
+  it("rejects a seal copied from a different repository", () => {
+    const signed = fixture()
+    expect(reviewPullRequestReceipt({
+      body: signed.block,
       changedFiles: ["lib/governance/owner.ts"],
-      mainMovedFiles: ["components/Chart.tsx", "README.md", "app/page.tsx"],
-      liveDoctrineDigest: DOCTRINE,
-    })
-    expect(verdict.ok).toBe(true)
+      headSha: "2".repeat(40),
+      repository: "https://github.com/elsewhere/other-repo",
+      patchDigests: { "lib/governance/owner.ts": "f".repeat(64) },
+      publicKeys: { "test-key": signed.keys.publicKey },
+    } as never)).toMatchObject({ ok: false, failure: "FAILED_RECEIPT_MISMATCH" })
   })
 
-  it("goes stale when main moved inside the reservation, and names the file", () => {
-    const verdict = reviewPullRequestReceipt({
-      body: valid(),
-      changedFiles: ["lib/governance/owner.ts"],
-      mainMovedFiles: ["lib/governance/authority.ts"],
-      liveDoctrineDigest: DOCTRINE,
-    })
-    expect(verdict.ok).toBe(false)
-    expect(verdict.failure).toBe("FAILED_STALE_MAIN")
-    expect(verdict.detail).toContain("lib/governance/authority.ts")
+  it("rejects a changed patch even when the file name and head claim are unchanged", () => {
+    const signed = fixture()
+    expect(review(signed.block, undefined, { "lib/governance/owner.ts": "0".repeat(64) }, signed.keys.publicKey))
+      .toMatchObject({ ok: false, failure: "FAILED_RECEIPT_MISMATCH" })
   })
 
-  it("goes stale when the doctrine moved, and says so rather than blaming the token", () => {
-    const verdict = reviewPullRequestReceipt({ ...green, body: valid(), liveDoctrineDigest: "e".repeat(64) })
-    expect(verdict.ok).toBe(false)
-    expect(verdict.failure).toBe("FAILED_STALE_MAIN")
-    expect(verdict.detail).toContain("doctrine")
+  it("rejects every PR path that no signed assignment covers", () => {
+    const signed = fixture()
+    expect(review(
+      signed.block,
+      ["lib/governance/owner.ts", "app/escape.ts"],
+      { "lib/governance/owner.ts": "f".repeat(64) },
+      signed.keys.publicKey,
+    )).toMatchObject({ ok: false, failure: "FAILED_SCOPE_ESCAPE" })
   })
 
-  it("rejects a diff that escapes the declared reservation", () => {
-    const verdict = reviewPullRequestReceipt({
-      body: valid(),
-      changedFiles: ["lib/governance/owner.ts", "scripts/deploy-hermes-runtime.ps1"],
-      mainMovedFiles: [],
-      liveDoctrineDigest: DOCTRINE,
-    })
-    expect(verdict.ok).toBe(false)
-    expect(verdict.failure).toBe("FAILED_SCOPE_ESCAPE")
-    expect(verdict.detail).toContain("scripts/deploy-hermes-runtime.ps1")
+  it("fails closed when repository public verification material is absent", () => {
+    const signed = fixture()
+    expect(reviewPullRequestReceipt({
+      body: signed.block, changedFiles: ["lib/governance/owner.ts"], headSha: "2".repeat(40), patchDigests: {}, publicKeys: {},
+    })).toMatchObject({ ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN" })
   })
 
-  it("carries a recovery route on every refusal, so no failure becomes an owner question", () => {
-    const refusals = [
-      reviewPullRequestReceipt({ body: null, ...green }),
-      reviewPullRequestReceipt({ body: body("0".repeat(64)), ...green }),
-      reviewPullRequestReceipt({ ...green, body: valid(), liveDoctrineDigest: "e".repeat(64) }),
-    ]
-    for (const refusal of refusals) {
-      expect(refusal.ok).toBe(false)
-      expect(refusal.recovery).toBeTruthy()
-    }
+  it("rejects legacy client-authored and self-hashed work-context receipts", () => {
+    const legacy = ["```WORK_CONTEXT_RECEIPT", JSON.stringify({ token: "self-hash", facts: { reservedPaths: ["app/**"] } }), "```"].join("\n")
+    expect(parseDeclaredReceipt(legacy)).not.toBeNull()
+    expect(reviewPullRequestReceipt({ body: legacy, changedFiles: [] })).toMatchObject({
+      ok: false, failure: "FAILED_CONTEXT_NOT_PROVEN", detail: expect.stringContaining("retired"),
+    })
   })
-})
 
-describe("scope check accepts the readonly reservation type it is actually given (#930 build break)", () => {
-  // work-context-receipt types reservedPaths as `readonly string[]`, and #930 began passing it
-  // straight into the scope check. The parameter was `string[]`, so `next build` stopped compiling
-  // while vitest stayed green -- CI has no build step. This locks the runtime contract; the build
-  // gate added in ci.yml locks the type. A frozen array is the strongest readonly witness.
-  const readonlyFacts: WorkContextFacts = { ...facts, reservedPaths: Object.freeze(["lib/governance/"]) as readonly string[] }
-  it("permits a changed file inside a frozen reservation", () => {
-    const verdict = reviewPullRequestReceipt({
-      body: body(receiptToken(readonlyFacts), readonlyFacts),
-      changedFiles: ["lib/governance/owner.ts"],
-      mainMovedFiles: ["components/Chart.tsx"],
-      liveDoctrineDigest: DOCTRINE,
-    })
-    expect(verdict.ok).toBe(true)
-  })
-  it("still catches a file outside the frozen reservation", () => {
-    const verdict = reviewPullRequestReceipt({
-      body: body(receiptToken(readonlyFacts), readonlyFacts),
-      changedFiles: ["app/secret.ts"],
-      mainMovedFiles: ["components/Chart.tsx"],
-      liveDoctrineDigest: DOCTRINE,
-    })
-    expect(verdict.ok).toBe(false)
-    expect(verdict.failure).toBe("FAILED_SCOPE_ESCAPE")
+  it("does not treat prose or malformed blocks as signed delivery evidence", () => {
+    expect(parseDeclaredDeliverySeals("WilliamOS issued a seal, honest.")).toEqual([])
+    expect(parseDeclaredDeliverySeals("```WILLIAMOS_DELIVERY_SEAL\n{not json\n```")).toEqual([])
   })
 })
