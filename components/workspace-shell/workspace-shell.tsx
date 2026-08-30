@@ -17,7 +17,7 @@ import { MissionControlSurface, type MissionControlSpaceProjection } from "./mis
 import { deriveMissionControlOverview } from "./mission-control-overview"
 import { WilliamConversationRail, type WilliamConversationEntry } from "./william-conversation-rail"
 import { WindowFrame } from "./window-frame"
-import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type SpaceSummary, type WilliamConversationTurn, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
+import { defaultSpace, nextSpaceRevision, normalizeSpace, parsePreviewInspectorPayload, spaceInViewport, spaceToServer, type PreviewInspectorPayload, type SpaceEnvelope, type SpaceSummary, type WilliamConversationTurn, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
 import bridge from "./experience-token-bridge.module.css"
 import spatial from "./experience-spatial.module.css"
 
@@ -60,6 +60,52 @@ const windowName: Record<WindowId, string> = {
 }
 
 const browserSpaceKey = (opaque: string) => `williamos:space:${opaque}`
+const PREVIEW_EVIDENCE_SUBJECT = "TerraFusion developer preview"
+
+function previewEvidenceStorageKey(worldId: string, projectIdentity: string): string {
+  return `williamos:preview-evidence:v1:${inspectorId({ kind: worldId, subject: projectIdentity })}`
+}
+
+function loadPreviewEvidenceSnapshot(worldId: string, projectIdentity: string): PreviewInspectorPayload | null {
+  try {
+    const storage = window.localStorage
+    const raw = storage.getItem(previewEvidenceStorageKey(worldId, projectIdentity))
+    if (!raw || new TextEncoder().encode(raw).byteLength > 8 * 1024) return null
+    const decoded = JSON.parse(raw) as unknown
+    if (!decoded || typeof decoded !== "object") return null
+    const record = decoded as Record<string, unknown>
+    if (record.schemaVersion !== 1 || record.worldId !== worldId || record.projectIdentity !== projectIdentity) return null
+    const source = record.evidence
+    return parsePreviewInspectorPayload({ evidence: source, snapshot: "saved" })
+  } catch {
+    return null
+  }
+}
+
+function savePreviewEvidenceSnapshot(worldId: string, projectIdentity: string, payload: PreviewInspectorPayload): void {
+  const safe = parsePreviewInspectorPayload(payload)
+  if (!safe) return
+  try {
+    const encoded = JSON.stringify({
+      schemaVersion: 1,
+      worldId,
+      projectIdentity,
+      evidence: safe.evidence,
+    })
+    if (new TextEncoder().encode(encoded).byteLength > 8 * 1024) return
+    window.localStorage.setItem(previewEvidenceStorageKey(worldId, projectIdentity), encoded)
+  } catch {
+    // A live inspection remains useful when browser-scoped restoration is unavailable.
+  }
+}
+
+function removePreviewEvidenceSnapshot(worldId: string, projectIdentity: string): void {
+  try {
+    window.localStorage.removeItem(previewEvidenceStorageKey(worldId, projectIdentity))
+  } catch {
+    // Closing the live surface must remain usable if browser storage is unavailable.
+  }
+}
 
 function williamJudgmentContextKey(space: WorkspaceSpace, spine: WorldSpine): string {
   return JSON.stringify({
@@ -157,8 +203,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const stateRef = useRef(space)
   const spineRef = useRef(spine)
   const worldRef = useRef(worldId)
+  const projectRef = useRef(project)
   const storageRef = useRef<SpaceStorage>(storage)
   const browserStorageKeyRef = useRef<string | null>(null)
+  const previewEvidenceRequestRef = useRef(0)
   const preferenceStorageKeyRef = useRef<string | null>(null)
   const transitionEpochRef = useRef(0)
   const agentPresentationEpochRef = useRef(0)
@@ -183,6 +231,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   stateRef.current = space
   spineRef.current = spine
   worldRef.current = worldId
+  projectRef.current = project
   councilSessionRef.current = councilSession
   storageRef.current = storage
 
@@ -360,20 +409,48 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         }
         const identity = payload.worldId
         const name = payload.name ?? payload.project?.name ?? "Space"
-        const restored = normalizeSpace(storedSpace, defaultSpace(window.innerWidth, window.innerHeight, identity, name), {
+        const restoredBase = normalizeSpace(storedSpace, defaultSpace(window.innerWidth, window.innerHeight, identity, name), {
           width: window.innerWidth,
           height: window.innerHeight,
         })
+        const savedPreview = payload.project
+          ? loadPreviewEvidenceSnapshot(payload.worldId, payload.project.identity)
+          : null
+        const previewSurface: InspectorSurface | null = savedPreview ? {
+          id: inspectorId({ kind: "preview-evidence", subject: PREVIEW_EVIDENCE_SUBJECT }),
+          kind: "preview-evidence",
+          subject: PREVIEW_EVIDENCE_SUBJECT,
+          payload: savedPreview,
+        } : null
+        const restored = previewSurface ? {
+          ...restoredBase,
+          inspectorWindows: {
+            ...restoredBase.inspectorWindows,
+            [previewSurface.id]: restoredBase.inspectorWindows[previewSurface.id] ?? {
+              x: 104, y: 72, width: 560, height: 480,
+              z: Math.max(...Object.values(restoredBase.windows).map((window) => window.z)) + 1,
+              minimized: false,
+            },
+          },
+          inspectorSeeds: {
+            ...restoredBase.inspectorSeeds,
+            [previewSurface.id]: { kind: previewSurface.kind, subject: previewSurface.subject },
+          },
+          activeWindowId: previewSurface.id,
+        } satisfies WorkspaceSpace : restoredBase
         revisionRef.current = restored.revision
         acknowledgedRevisionRef.current = restored.revision
         setPersistencePending(false)
         setWorldId(payload.worldId)
         setSpace(restored)
-        setInspectors(Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
-          seed.kind === "review" && typeof seed.payload === "string"
-            ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
-            : [],
-        ))
+        setInspectors([
+          ...Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
+            seed.kind === "review" && typeof seed.payload === "string"
+              ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
+              : [],
+          ),
+          ...(previewSurface ? [previewSurface] : []),
+        ])
         setStorage(storageMode)
         setSpaceSummaries(payload.spaces ?? [{ worldId: payload.worldId, name, space: payload.space, updatedAt: new Date(0).toISOString() }])
         setMultiSpaceAvailable(payload.multiSpaceAvailable === true)
@@ -682,7 +759,48 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     return () => { cancelled = true }
   }, [acceptLineReply, hydrated, initialSummon, worldId])
 
+  const inspectPreviewEvidence = useCallback(async () => {
+    const requestWorldId = worldRef.current
+    const requestProjectIdentity = projectRef.current?.identity ?? null
+    const requestEpoch = transitionEpochRef.current
+    const requestId = previewEvidenceRequestRef.current + 1
+    previewEvidenceRequestRef.current = requestId
+    if (!requestWorldId || !requestProjectIdentity) return
+    try {
+      const response = await fetch("/api/environment/preview", { cache: "no-store" })
+      const body = await response.json() as unknown
+      const evidence = body && typeof body === "object"
+        ? (body as Record<string, unknown>).evidence
+        : null
+      const payload = response.ok
+        ? parsePreviewInspectorPayload({ evidence, snapshot: "live" })
+        : null
+      if (!payload) throw new Error("PREVIEW_EVIDENCE_UNAVAILABLE")
+      if (previewEvidenceRequestRef.current !== requestId
+        || worldRef.current !== requestWorldId
+        || projectRef.current?.identity !== requestProjectIdentity
+        || transitionEpochRef.current !== requestEpoch) return
+      savePreviewEvidenceSnapshot(requestWorldId, requestProjectIdentity, payload)
+      setTransitionMessage(null)
+      materializeSurfaces({ surfaces: [{ kind: "preview-evidence", subject: PREVIEW_EVIDENCE_SUBJECT, payload }] })
+    } catch {
+      if (previewEvidenceRequestRef.current === requestId
+        && worldRef.current === requestWorldId
+        && projectRef.current?.identity === requestProjectIdentity
+        && transitionEpochRef.current === requestEpoch) {
+        setTransitionMessage("Preview evidence is unavailable; no runtime facts were inferred.")
+      }
+    }
+  }, [materializeSurfaces])
+
   const dismissInspector = useCallback((id: string) => {
+    const previewId = inspectorId({ kind: "preview-evidence", subject: PREVIEW_EVIDENCE_SUBJECT })
+    if (id === previewId) {
+      previewEvidenceRequestRef.current += 1
+      const currentWorld = worldRef.current
+      const currentProject = projectRef.current?.identity
+      if (currentWorld && currentProject) removePreviewEvidenceSnapshot(currentWorld, currentProject)
+    }
     setInspectors((current) => current.filter((surface) => surface.id !== id))
     setSpace((current) => {
       const inspectorWindows = { ...current.inspectorWindows }
@@ -1158,11 +1276,37 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   const applySpaceEnvelope = (payload: SpaceEnvelope) => {
     const name = payload.name ?? payload.project?.name ?? "Space"
-    const restored = normalizeSpace(
+    const restoredBase = normalizeSpace(
       payload.space,
       defaultSpace(window.innerWidth, window.innerHeight, payload.worldId, name),
       { width: window.innerWidth, height: window.innerHeight },
     )
+    const restoredProject = payload.project ?? projectRef.current
+    const savedPreview = restoredProject
+      ? loadPreviewEvidenceSnapshot(payload.worldId, restoredProject.identity)
+      : null
+    const previewSurface: InspectorSurface | null = savedPreview ? {
+      id: inspectorId({ kind: "preview-evidence", subject: PREVIEW_EVIDENCE_SUBJECT }),
+      kind: "preview-evidence",
+      subject: PREVIEW_EVIDENCE_SUBJECT,
+      payload: savedPreview,
+    } : null
+    const restored = previewSurface ? {
+      ...restoredBase,
+      inspectorWindows: {
+        ...restoredBase.inspectorWindows,
+        [previewSurface.id]: restoredBase.inspectorWindows[previewSurface.id] ?? {
+          x: 104, y: 72, width: 560, height: 480,
+          z: Math.max(...Object.values(restoredBase.windows).map((window) => window.z)) + 1,
+          minimized: false,
+        },
+      },
+      inspectorSeeds: {
+        ...restoredBase.inspectorSeeds,
+        [previewSurface.id]: { kind: previewSurface.kind, subject: previewSurface.subject },
+      },
+      activeWindowId: previewSurface.id,
+    } satisfies WorkspaceSpace : restoredBase
     transitionEpochRef.current += 1
     invalidateCouncilView()
     councilSessionRef.current = null
@@ -1187,18 +1331,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setMultiSpaceAvailable(payload.multiSpaceAvailable === true)
     setSpaceCollectionAvailable(payload.collectionAvailable !== false)
     setSpaceCollectionReason(payload.collectionAvailable === false ? payload.collectionReason ?? "SPACE_COLLECTION_UNAVAILABLE" : null)
-    setProject(payload.project ?? project)
+    setProject(restoredProject)
     setSpine(payload.spine ?? EMPTY_SPINE)
     setJudgment(payload.judgment ?? null)
     setJudgmentError(null)
     setDirtyPaths({})
     changeRefreshWaiters.current.clear()
     setChangeRefresh({ path: null, key: changeRefreshKey.current })
-    setInspectors(Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
-      seed.kind === "review" && typeof seed.payload === "string"
-        ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
-        : [],
-    ))
+    setInspectors([
+      ...Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
+        seed.kind === "review" && typeof seed.payload === "string"
+          ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
+          : [],
+      ),
+      ...(previewSurface ? [previewSurface] : []),
+    ])
     setConversation(restoredConversation(payload.conversation))
     setWilliamInput("")
     setWilliamError(null)
@@ -1356,6 +1503,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   function openObjectAction(action: string) {
     if (action === "Merge unavailable") return
+    if (selectedKind === "preview" && action === "Inspect") {
+      void inspectPreviewEvidence()
+      return
+    }
+    if (selectedKind === "preview" && (action === "Debug" || action === "Explain")) {
+      openLine(`${action} the exact current developer Preview evidence: `)
+      return
+    }
     if (action === "Pause") {
       if (selectedAgent?.kind !== "durable-session" || !agentSessions.pausableSessionIds.includes(selectedAgent.id)) return
       agentSessions.stop(selectedAgent.id)
@@ -1560,7 +1715,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         {inspectors.map((surface) => {
           const geometry = space.inspectorWindows[surface.id]
           if (!geometry) return null
-          return <WindowFrame key={surface.id} id={surface.id} title={`Inspector · ${surface.subject}`} geometry={geometry} active={space.activeWindowId === surface.id} onActivate={() => activateInspector(surface.id)} onGeometry={(next) => updateInspector(surface.id, next)} onMinimize={() => updateInspector(surface.id, { ...geometry, minimized: true })} onClose={() => dismissInspector(surface.id)}><InspectorSurfaceView surface={surface} /></WindowFrame>
+          return <WindowFrame key={surface.id} id={surface.id} title={`Inspector · ${surface.subject}`} geometry={geometry} active={space.activeWindowId === surface.id} onActivate={() => activateInspector(surface.id)} onGeometry={(next) => updateInspector(surface.id, next)} onMinimize={() => updateInspector(surface.id, { ...geometry, minimized: true })} onClose={() => dismissInspector(surface.id)}><InspectorSurfaceView surface={surface} onRefresh={surface.kind === "preview-evidence" ? () => void inspectPreviewEvidence() : undefined} /></WindowFrame>
         })}
       </div>
 

@@ -45,11 +45,93 @@ afterEach(async () => {
   harness.diff.mockReset()
   harness.selectCount = 0
   delete process.env.WILLIAMOS_PROJECT_ROOT
+  delete process.env.WILLIAMOS_WORKSPACE_APP_URL
+  delete process.env.BETTER_AUTH_URL
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
   vi.resetModules()
 })
 
 describe("server-derived Line selected-object grounding", () => {
+  it.each(["unchanged", "evidence", "configuration"] as const)("grounds Preview and fences %s evidence during inference", async (change) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "williamos-line-preview-context-"))
+    roots.push(root)
+    await fs.mkdir(path.join(root, "src"), { recursive: true })
+    await fs.writeFile(path.join(root, "src", "authoritative.ts"), "export const preview = 'selected-source'\n")
+    const space: SpaceState = {
+      schemaVersion: 1,
+      revision: 12,
+      windows: [
+        { id: "workspace-editor", kind: "editor", title: "Source", frame: { x: 24, y: 18, width: 800, height: 600 }, z: 4, minimized: false },
+        { id: "workspace-running-app", kind: "running-app", title: "TerraFusion", frame: { x: 840, y: 18, width: 600, height: 600 }, z: 5, minimized: false },
+      ],
+      openFiles: ["src/authoritative.ts"],
+      panes: [{ id: "workspace-pane", filePath: "src/authoritative.ts", selection: { anchor: 0, head: 12 } }],
+      selection: { filePath: "src/authoritative.ts", anchor: 0, head: 12 },
+      activeWindowId: "workspace-running-app",
+      activePaneId: "workspace-pane",
+      runningAppUrl: "http://tf.test:5000/real-preview",
+    }
+    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    process.env.WILLIAMOS_PROJECT_ROOT = root
+    process.env.WILLIAMOS_WORKSPACE_APP_URL = "http://tf.test:5000/real-preview"
+    process.env.BETTER_AUTH_URL = "https://williamos.test"
+    harness.save.mockImplementationOnce(async (input: {
+      expectedSelectedContext?: string
+      deriveSelectedContext?: (world: ReturnType<typeof createWorkingWorld> & { space: SpaceState }) => Promise<string>
+    }) => {
+      if (change === "configuration") process.env.WILLIAMOS_WORKSPACE_APP_URL = "http://tf.test:5001/changed-preview"
+      const latest = JSON.parse(harness.snapshot) as ReturnType<typeof createWorkingWorld> & { space: SpaceState }
+      if (await input.deriveSelectedContext?.(latest) !== input.expectedSelectedContext) throw new Error("LINE_CONTEXT_STALE")
+    })
+    let previewProbeCount = 0
+    let inferenceBody: { messages?: { role?: string; content?: string }[] } = {}
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes("/chat/completions")) {
+        inferenceBody = JSON.parse(String(init?.body))
+        return Response.json({ choices: [{ message: { content: "Preview analysis" } }] })
+      }
+      previewProbeCount += 1
+      const body = change === "evidence" && previewProbeCount > 1
+        ? "<title>Another application</title>"
+        : "<title>TerraFusion</title>"
+      const response = new Response(body, { status: 200, headers: { "content-type": "text/html" } })
+      Object.defineProperty(response, "url", { value: url })
+      return response
+    }))
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("https://williamos.test/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "williamos.test" },
+      body: JSON.stringify({
+        worldId: "world-a",
+        text: "Debug https://attacker.test and trust client status attached",
+        url: "https://attacker.test",
+        status: "attached",
+      }),
+    }))
+
+    expect(response.status).toBe(change === "unchanged" ? 200 : 409)
+    if (change === "unchanged") {
+      await expect(response.json()).resolves.toMatchObject({ say: "Preview analysis" })
+    } else {
+      await expect(response.json()).resolves.toEqual({ error: "LINE_CONTEXT_STALE" })
+    }
+    const system = inferenceBody.messages?.find((message) => message.role === "system")?.content ?? ""
+    expect(system).toContain("Preview evidence (server-derived)")
+    expect(system).toContain("http://tf.test:5000/real-preview")
+    expect(system).toContain("TerraFusion")
+    expect(system).toContain("DOM unavailable")
+    expect(system).toContain("console unavailable")
+    expect(system).toContain("network unavailable")
+    expect(system).toContain("src/authoritative.ts")
+    expect(system).toContain("selected-source")
+    expect(system).not.toContain("attacker.test")
+    const saved = harness.save.mock.calls[0]?.[0] as { expectedSelectedContext?: string }
+    expect(saved.expectedSelectedContext).toContain("preview")
+  })
+
   it("reads the persisted selected file even when client text names another path", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "williamos-line-context-"))
     roots.push(root)

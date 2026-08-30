@@ -5,6 +5,122 @@ export type WindowId = "editor" | "running-app" | "tests" | "diff" | "terminal"
 
 export type InspectorSeed = Readonly<{ kind: string; subject: string; payload?: string }>
 
+export type PreviewEvidenceReason = "NOT_CONFIGURED" | "UNREACHABLE" | "IDENTITY_MISMATCH" | "EMBEDDING_REFUSED"
+
+export type PreviewEvidenceSnapshot = Readonly<{
+  schemaVersion: 1
+  status: "attached" | "unavailable"
+  reason: PreviewEvidenceReason | null
+  configuredUrl: string | null
+  admittedUrl: string | null
+  origin: string | null
+  identity: "TerraFusion" | "unverified"
+  reachable: boolean
+  frameable: boolean
+  checkedAt: string
+  limitations: Readonly<{ dom: "unavailable"; console: "unavailable"; network: "unavailable" }>
+  fingerprint: string
+}>
+
+export type PreviewInspectorPayload = Readonly<{
+  evidence: PreviewEvidenceSnapshot
+  snapshot: "live" | "saved"
+}>
+
+const PREVIEW_INSPECTOR_PAYLOAD_BYTES = 8 * 1024
+
+function canonicalHttpUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 2_048) return null
+  try {
+    const parsed = new URL(value)
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.hash) return null
+    return parsed.toString() === value ? value : null
+  } catch {
+    return null
+  }
+}
+
+function canonicalHttpOrigin(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 2_048) return null
+  try {
+    const parsed = new URL(value)
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password
+      || parsed.hash || parsed.search || parsed.pathname !== "/") return null
+    return parsed.origin === value ? value : null
+  } catch {
+    return null
+  }
+}
+
+/** Copy only the bounded, non-sensitive Preview evidence contract into browser state. */
+export function parsePreviewInspectorPayload(value: unknown): PreviewInspectorPayload | null {
+  let encoded: string
+  try {
+    encoded = JSON.stringify(value)
+  } catch {
+    return null
+  }
+  if (new TextEncoder().encode(encoded).byteLength > PREVIEW_INSPECTOR_PAYLOAD_BYTES
+    || !value || typeof value !== "object") return null
+  const candidate = value as Record<string, unknown>
+  if (candidate.snapshot !== "live" && candidate.snapshot !== "saved") return null
+  if (!candidate.evidence || typeof candidate.evidence !== "object") return null
+  const evidence = candidate.evidence as Record<string, unknown>
+  const configuredUrl = evidence.configuredUrl === null ? null : canonicalHttpUrl(evidence.configuredUrl)
+  const admittedUrl = evidence.admittedUrl === null ? null : canonicalHttpUrl(evidence.admittedUrl)
+  const origin = evidence.origin === null ? null : canonicalHttpOrigin(evidence.origin)
+  const reason = evidence.reason
+  const limitations = evidence.limitations
+  const checkedAt = typeof evidence.checkedAt === "string" ? evidence.checkedAt : ""
+  const checked = new Date(checkedAt)
+  const common = evidence.schemaVersion === 1
+    && (evidence.status === "attached" || evidence.status === "unavailable")
+    && (reason === null || reason === "NOT_CONFIGURED" || reason === "UNREACHABLE"
+      || reason === "IDENTITY_MISMATCH" || reason === "EMBEDDING_REFUSED")
+    && (evidence.configuredUrl === null || configuredUrl !== null)
+    && (evidence.admittedUrl === null || admittedUrl !== null)
+    && (evidence.origin === null || origin !== null)
+    && (evidence.identity === "TerraFusion" || evidence.identity === "unverified")
+    && typeof evidence.reachable === "boolean"
+    && typeof evidence.frameable === "boolean"
+    && checkedAt.length <= 40 && !Number.isNaN(checked.getTime()) && checked.toISOString() === checkedAt
+    && limitations && typeof limitations === "object"
+    && (limitations as Record<string, unknown>).dom === "unavailable"
+    && (limitations as Record<string, unknown>).console === "unavailable"
+    && (limitations as Record<string, unknown>).network === "unavailable"
+    && typeof evidence.fingerprint === "string" && /^[a-f0-9]{64}$/.test(evidence.fingerprint)
+  if (!common) return null
+
+  const attached = evidence.status === "attached" && reason === null && configuredUrl !== null
+    && admittedUrl !== null && origin !== null && evidence.identity === "TerraFusion"
+    && evidence.reachable === true && evidence.frameable === true
+  const unavailable = evidence.status === "unavailable" && admittedUrl === null && evidence.identity === "unverified" && (
+    (reason === "NOT_CONFIGURED" && configuredUrl === null && origin === null && evidence.reachable === false && evidence.frameable === false)
+    || (reason === "UNREACHABLE" && configuredUrl !== null && origin !== null && evidence.reachable === false && evidence.frameable === false)
+    || (reason === "IDENTITY_MISMATCH" && configuredUrl !== null && origin !== null && evidence.reachable === true && evidence.frameable === true)
+    || (reason === "EMBEDDING_REFUSED" && configuredUrl !== null && origin !== null && evidence.reachable === true && evidence.frameable === false)
+  )
+  if (!attached && !unavailable) return null
+
+  return {
+    snapshot: candidate.snapshot,
+    evidence: {
+      schemaVersion: 1,
+      status: evidence.status,
+      reason: reason as PreviewEvidenceReason | null,
+      configuredUrl,
+      admittedUrl,
+      origin,
+      identity: evidence.identity,
+      reachable: evidence.reachable,
+      frameable: evidence.frameable,
+      checkedAt,
+      limitations: { dom: "unavailable", console: "unavailable", network: "unavailable" },
+      fingerprint: evidence.fingerprint,
+    } as PreviewEvidenceSnapshot,
+  }
+}
+
 export type WindowGeometry = Readonly<{
   x: number
   y: number

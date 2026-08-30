@@ -1,6 +1,7 @@
 "use client"
 
 import styles from "./workspace-shell.module.css"
+import { parsePreviewInspectorPayload } from "./types"
 
 export type InspectorSurface = Readonly<{
   id: string
@@ -48,7 +49,31 @@ function Rows({ payload }: { payload: unknown }) {
   )
 }
 
-export function InspectorSurfaceView({ surface }: { surface: InspectorSurface }) {
+export function InspectorSurfaceView({ surface, onRefresh }: { surface: InspectorSurface; onRefresh?: () => void }) {
+  if (surface.kind === "preview-evidence") {
+    const payload = parsePreviewInspectorPayload(surface.payload)
+    if (!payload) return <div className={styles.inspectorEmpty}>Preview evidence snapshot unavailable.</div>
+    const { evidence } = payload
+    return (
+      <article className={styles.inspectorRows}>
+        <h2>Preview evidence · {surface.subject}</h2>
+        <p><strong>{payload.snapshot === "saved" ? "Saved snapshot" : "Live check"}</strong></p>
+        <dl>
+          <div><dt>Status</dt><dd>{evidence.status}</dd></div>
+          <div><dt>Reason</dt><dd>{evidence.reason ?? "—"}</dd></div>
+          <div><dt>Configured URL</dt><dd>{evidence.configuredUrl ?? "—"}</dd></div>
+          <div><dt>Admitted URL</dt><dd>{evidence.admittedUrl ?? "—"}</dd></div>
+          <div><dt>Origin</dt><dd>{evidence.origin ?? "—"}</dd></div>
+          <div><dt>Identity</dt><dd>{evidence.identity}</dd></div>
+          <div><dt>Reachable</dt><dd>{String(evidence.reachable)}</dd></div>
+          <div><dt>Frameable</dt><dd>{String(evidence.frameable)}</dd></div>
+          <div><dt>Checked</dt><dd>{evidence.checkedAt}</dd></div>
+        </dl>
+        <p>DOM unavailable · console unavailable · network unavailable</p>
+        {onRefresh ? <button type="button" aria-label="Refresh Preview evidence" onClick={onRefresh}>Refresh evidence</button> : null}
+      </article>
+    )
+  }
   if (surface.kind === "review") {
     return (
       <article className={styles.inspectorCode}>

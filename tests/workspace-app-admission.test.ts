@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { admitWorkspaceApp, williamOsOrigin } from "@/lib/environment/workspace-app"
+import { admitWorkspaceApp, inspectWorkspaceApp, williamOsOrigin } from "@/lib/environment/workspace-app"
 
 function htmlResponse(body = "<title>TerraFusion</title>", init: ResponseInit = {}, url = "http://tf.test:5000/") {
   const response = new Response(body, {
@@ -53,5 +53,69 @@ describe("running workspace app admission", () => {
   it("accepts an explicit TerraFusion identity header without reading identity from presentation", async () => {
     const fetcher = vi.fn(async () => htmlResponse("<main>ready</main>", { headers: { "x-williamos-workspace-app": "terrafusion" } })) as unknown as typeof fetch
     await expect(admitWorkspaceApp("http://tf.test:5000", "https://williamos.test", fetcher)).resolves.toMatchObject({ ok: true })
+  })
+
+  it("returns bounded exact attached Preview evidence without raw response material", async () => {
+    const fetcher = vi.fn(async () => htmlResponse(
+      "<html><title>TerraFusion secret-build-marker</title></html>",
+      { headers: { "x-private-runtime-token": "must-not-escape" } },
+      "http://tf.test:5000/app",
+    )) as unknown as typeof fetch
+
+    const evidence = await inspectWorkspaceApp(
+      "http://tf.test:5000/app#client-fragment",
+      "https://williamos.test",
+      fetcher,
+      () => new Date("2026-08-30T02:00:00.000Z"),
+    )
+
+    expect(evidence).toEqual({
+      schemaVersion: 1,
+      status: "attached",
+      reason: null,
+      configuredUrl: "http://tf.test:5000/app",
+      admittedUrl: "http://tf.test:5000/app",
+      origin: "http://tf.test:5000",
+      identity: "TerraFusion",
+      reachable: true,
+      frameable: true,
+      checkedAt: "2026-08-30T02:00:00.000Z",
+      limitations: { dom: "unavailable", console: "unavailable", network: "unavailable" },
+      fingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+    })
+    expect(JSON.stringify(evidence)).not.toContain("secret-build-marker")
+    expect(JSON.stringify(evidence)).not.toContain("must-not-escape")
+  })
+
+  it.each([
+    ["not configured", null, vi.fn(), "NOT_CONFIGURED", false, false],
+    ["unreachable", "http://tf.test:5000", vi.fn(async () => { throw new Error("private socket detail") }), "UNREACHABLE", false, false],
+    ["identity mismatch", "http://tf.test:5000", vi.fn(async () => htmlResponse("<title>Other app private body</title>")), "IDENTITY_MISMATCH", true, true],
+    ["embedding refused", "http://tf.test:5000", vi.fn(async () => htmlResponse(undefined, { headers: { "x-frame-options": "DENY" } })), "EMBEDDING_REFUSED", true, false],
+  ] as const)("returns typed safe evidence when Preview is %s", async (_case, configured, fetcher, reason, reachable, frameable) => {
+    const evidence = await inspectWorkspaceApp(
+      configured,
+      "https://williamos.test",
+      fetcher as unknown as typeof fetch,
+      () => new Date("2026-08-30T02:01:00.000Z"),
+    )
+
+    expect(evidence).toMatchObject({
+      status: "unavailable", reason, reachable, frameable,
+      admittedUrl: null, identity: "unverified",
+      checkedAt: "2026-08-30T02:01:00.000Z",
+    })
+    expect(JSON.stringify(evidence)).not.toContain("private")
+  })
+
+  it("keeps its semantic fingerprint stable across checks and changes it when evidence changes", async () => {
+    const attached = vi.fn(async () => htmlResponse()) as unknown as typeof fetch
+    const first = await inspectWorkspaceApp("http://tf.test:5000", "https://williamos.test", attached, () => new Date("2026-08-30T02:02:00.000Z"))
+    const later = await inspectWorkspaceApp("http://tf.test:5000", "https://williamos.test", attached, () => new Date("2026-08-30T02:03:00.000Z"))
+    const changed = await inspectWorkspaceApp("http://tf.test:5001", "https://williamos.test", vi.fn(async () => { throw new Error("down") }) as unknown as typeof fetch)
+
+    expect(later.checkedAt).not.toBe(first.checkedAt)
+    expect(later.fingerprint).toBe(first.fingerprint)
+    expect(changed.fingerprint).not.toBe(first.fingerprint)
   })
 })
