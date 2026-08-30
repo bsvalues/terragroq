@@ -1,12 +1,14 @@
 "use client"
 
 import styles from "./workspace-shell.module.css"
+import { validateWilliamJudgment } from "@/lib/environment/working-world"
 import { parsePreviewInspectorPayload } from "./types"
 
 export type InspectorSurface = Readonly<{
   id: string
   kind: string
   subject: string
+  identity?: string
   payload?: unknown
 }>
 
@@ -50,6 +52,34 @@ function Rows({ payload }: { payload: unknown }) {
 }
 
 export function InspectorSurfaceView({ surface, onRefresh }: { surface: InspectorSurface; onRefresh?: () => void }) {
+  if (surface.kind === "william-judgment") {
+    try {
+      const snapshot = validateWilliamJudgment(surface.payload)
+      return (
+        <article className={styles.inspectorRows} aria-label="William judgment basis snapshot">
+          <h2>William judgment · basis</h2>
+          <p><strong>Snapshot generated then · not current live truth</strong></p>
+          <dl>
+            <div><dt>Recommendation</dt><dd>{snapshot.recommendation}</dd></div>
+            <div><dt>Rationale</dt><dd>{snapshot.rationale}</dd></div>
+            <div><dt>Confidence</dt><dd>{Math.round(snapshot.confidence * 100)}%</dd></div>
+            <div><dt>Generated at</dt><dd>{snapshot.generatedAt}</dd></div>
+            <div><dt>Provider</dt><dd>{snapshot.provenance.provider}</dd></div>
+            <div><dt>Model</dt><dd>{snapshot.provenance.model}</dd></div>
+            <div><dt>Basis fingerprint</dt><dd>{snapshot.basisFingerprint}</dd></div>
+          </dl>
+          <h3>Recorded basis</h3>
+          {snapshot.basis.map((item) => (
+            <dl key={item.key}>
+              <div><dt>{item.label}</dt><dd>{item.value}</dd></div>
+            </dl>
+          ))}
+        </article>
+      )
+    } catch {
+      return <div className={styles.inspectorEmpty}>William judgment basis snapshot unavailable.</div>
+    }
+  }
   if (surface.kind === "preview-evidence") {
     const payload = parsePreviewInspectorPayload(surface.payload)
     if (!payload) return <div className={styles.inspectorEmpty}>Preview evidence snapshot unavailable.</div>
