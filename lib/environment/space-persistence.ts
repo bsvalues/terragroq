@@ -99,7 +99,7 @@ export interface SpaceWorkingWorldStore {
   readOwnedPage?(userId: string, offset: number, limit: number): Promise<readonly OwnedWorkingWorldRecord[]>
   insertOwnedProjectSpace?(userId: string, projectIdentity: string, row: OwnedWorkingWorldRecord): Promise<"created" | "limit">
   insertOwned(row: OwnedWorkingWorldRecord): Promise<void>
-  updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string): Promise<boolean>
+  updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string): Promise<boolean | Date>
 }
 
 const OWNED_WORLD_PAGE_SIZE = 20
@@ -215,15 +215,16 @@ export const databaseSpaceWorkingWorldStore: SpaceWorkingWorldStore = {
   },
 
   async updateOwned(userId, worldId, snapshot, intent, expectedSnapshot) {
+    const updatedAt = new Date()
     const rows = await db.update(workingWorld)
-      .set({ snapshot, intent, updatedAt: new Date() })
+      .set({ snapshot, intent, updatedAt })
       .where(and(
         eq(workingWorld.userId, userId),
         eq(workingWorld.id, worldId),
         eq(workingWorld.snapshot, expectedSnapshot),
       ))
-      .returning({ id: workingWorld.id })
-    return rows.length === 1
+      .returning({ updatedAt: workingWorld.updatedAt })
+    return rows.length === 1 ? rows[0]?.updatedAt ?? updatedAt : false
   },
 }
 
@@ -670,6 +671,7 @@ export async function saveOwnedSpace(
   spine: WorldSpine
   judgment: WilliamJudgment | null
   conversation: WorkingWorldSnapshot["conversation"]
+  updatedAt: string
   project?: WorkspaceProject
 }> | null> {
   let row = await store.findOwned(input.userId, input.worldId)
@@ -702,19 +704,34 @@ export async function saveOwnedSpace(
       && candidate.judgment.basisFingerprint !== williamJudgmentBasisFingerprint(candidate)
       ? validateWorkingWorld({ ...candidate, judgment: null })
       : candidate
-    if (await store.updateOwned(
+    const serialized = JSON.stringify(updated)
+    const writeResult = await store.updateOwned(
       input.userId,
       input.worldId,
-      JSON.stringify(updated),
+      serialized,
       updated.intent,
       row.snapshot,
-    )) return {
-      worldId: input.worldId,
-      space,
-      spine: updated.spine,
-      judgment: updated.judgment,
-      conversation: updated.conversation,
-      ...(input.project ? { project: input.project } : {}),
+    )
+    if (writeResult) {
+      let persistedAt = writeResult instanceof Date ? writeResult : null
+      // Preserve compatibility with injected stores that still return boolean success while making
+      // the production database seam return its exact committed timestamp in the same statement.
+      if (!persistedAt) {
+        const persisted = await store.findOwned(input.userId, input.worldId)
+        if (persisted?.snapshot === serialized) persistedAt = persisted.updatedAt
+      }
+      if (!persistedAt || !Number.isFinite(persistedAt.getTime())) {
+        throw new Error("SPACE_PERSISTENCE_TIMESTAMP_UNAVAILABLE")
+      }
+      return {
+        worldId: input.worldId,
+        space,
+        spine: updated.spine,
+        judgment: updated.judgment,
+        conversation: updated.conversation,
+        updatedAt: persistedAt.toISOString(),
+        ...(input.project ? { project: input.project } : {}),
+      }
     }
 
     const latest = await store.findOwned(input.userId, input.worldId)

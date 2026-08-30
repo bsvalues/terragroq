@@ -23,7 +23,7 @@ vi.mock("@/lib/environment/workspace-app", () => ({
   williamOsOrigin: () => "http://localhost",
 }))
 
-import { GET, POST } from "@/app/api/environment/space/route"
+import { GET, POST, PUT } from "@/app/api/environment/space/route"
 
 const current = { worldId: "a", name: "Alpha", space: { revision: 2 }, spine: {}, judgment: null, project: { identity: "c:/project", name: "Project" } }
 
@@ -100,6 +100,26 @@ describe("Experience V2 Space route", () => {
       worldId: "b", name: "Beta", collectionAvailable: false,
       collectionReason: "SPACE_COLLECTION_UNAVAILABLE",
       spaces: [{ worldId: "b", name: "Beta", space: { revision: 0 } }],
+    })
+  })
+
+  it("returns the exact server-authored persistence timestamp without dropping existing save fields", async () => {
+    seams.save.mockResolvedValueOnce({
+      ...current,
+      updatedAt: "2026-08-29T18:42:03.456Z",
+      conversation: [{ role: "owner", text: "Keep building." }],
+    })
+    const response = await PUT(new Request("http://localhost/api/environment/space", {
+      method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ worldId: "a", space: { revision: 3 } }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      worldId: "a",
+      space: { revision: 2 },
+      updatedAt: "2026-08-29T18:42:03.456Z",
+      conversation: [{ role: "owner", text: "Keep building." }],
     })
   })
 

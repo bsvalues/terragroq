@@ -20,6 +20,7 @@ export type MissionControlAgentProjection = MissionAgentSessionProjection
 export type MissionControlSpaceProjection = Readonly<{
   id: string
   name: string
+  updatedAt?: string | null
   focus: string
   state: "live" | "saved" | "unavailable"
   truth: "live" | "fixture"
