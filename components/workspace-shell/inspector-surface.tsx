@@ -62,7 +62,8 @@ export function InspectorSurfaceView({ surface, onRefresh }: { surface: Inspecto
           <dl>
             <div><dt>Recommendation</dt><dd>{snapshot.recommendation}</dd></div>
             <div><dt>Rationale</dt><dd>{snapshot.rationale}</dd></div>
-            <div><dt>Confidence</dt><dd>{Math.round(snapshot.confidence * 100)}%</dd></div>
+            <div><dt>Confidence</dt><dd>{String(snapshot.confidence)}</dd></div>
+            <div><dt>Confidence percentage</dt><dd>{Math.round(snapshot.confidence * 10_000) / 100}%</dd></div>
             <div><dt>Generated at</dt><dd>{snapshot.generatedAt}</dd></div>
             <div><dt>Provider</dt><dd>{snapshot.provenance.provider}</dd></div>
             <div><dt>Model</dt><dd>{snapshot.provenance.model}</dd></div>

@@ -35,6 +35,18 @@ const nextJudgment: WilliamJudgment = {
   provenance: { provider: "williamos-inference", model: "local-grounded-model-v2" },
 }
 
+const fnvCollisionFirst: WilliamJudgment = {
+  ...firstJudgment,
+  rationale: "First collision-bound snapshot.",
+  basisFingerprint: "0000000000000000000000000000000000000000000000000000000000019f8a",
+}
+
+const fnvCollisionNext: WilliamJudgment = {
+  ...firstJudgment,
+  rationale: "Second collision-bound snapshot.",
+  basisFingerprint: "0000000000000000000000000000000000000000000000000000000000089aa0",
+}
+
 function envelope(judgment: unknown = firstJudgment, storage: "server" | "browser" = "server") {
   const space = defaultSpace(1440, 900, "world-a", "TerraFusion")
   return {
@@ -48,7 +60,7 @@ function envelope(judgment: unknown = firstJudgment, storage: "server" | "browse
   }
 }
 
-function workspaceFetch(options: { regenerated?: boolean; initial?: unknown; storage?: "server" | "browser" } = {}) {
+function workspaceFetch(options: { regenerated?: boolean; regeneratedJudgment?: WilliamJudgment; initial?: unknown; storage?: "server" | "browser" } = {}) {
   let current = Object.prototype.hasOwnProperty.call(options, "initial") ? options.initial : firstJudgment
   const calls: string[] = []
   const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -60,8 +72,8 @@ function workspaceFetch(options: { regenerated?: boolean; initial?: unknown; sto
       return Response.json({ ...envelope(current, options.storage), worldId: body.worldId, space: body.space })
     }
     if (url === "/api/environment/judgment" && init?.method === "POST" && options.regenerated) {
-      current = nextJudgment
-      return Response.json({ judgment: nextJudgment })
+      current = options.regeneratedJudgment ?? nextJudgment
+      return Response.json({ judgment: current })
     }
     if (url === "/api/loom/files?path=" && !init?.method) return Response.json({ kind: "directory", entries: [] })
     if (url === "/api/loom/files?path=src%2Fworkspace-shell.tsx" && !init?.method) {
@@ -143,6 +155,108 @@ describe("William judgment Inspector", () => {
     expect(screen.getAllByRole("region", { name: "Inspector · William judgment window" })).toHaveLength(2)
     expect(screen.getByText(firstJudgment.rationale)).toBeTruthy()
     expect(screen.getByText(nextJudgment.rationale)).toBeTruthy()
+  })
+
+  it("keeps exact judgments distinct when their legacy 32-bit inspector hashes collide", async () => {
+    const { fetcher, calls } = workspaceFetch({
+      initial: fnvCollisionFirst,
+      regenerated: true,
+      regeneratedJudgment: fnvCollisionNext,
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await screen.findByText(fnvCollisionFirst.recommendation)
+    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    await screen.findByText(fnvCollisionFirst.rationale)
+    fireEvent.click(screen.getByRole("button", { name: "Think again" }))
+    await waitFor(() => expect(calls).toContain("POST /api/environment/judgment"))
+    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+
+    expect(await screen.findByText(fnvCollisionNext.basisFingerprint)).toBeTruthy()
+    expect(screen.getAllByRole("region", { name: "Inspector · William judgment window" })).toHaveLength(2)
+    expect(screen.getByText(fnvCollisionFirst.rationale)).toBeTruthy()
+    expect(screen.getByText(fnvCollisionNext.rationale)).toBeTruthy()
+  })
+
+  it("returns from an exact Inspector refocus to the immediately prior Tests window", async () => {
+    const { fetcher } = workspaceFetch()
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await screen.findByText(firstJudgment.recommendation)
+    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    await screen.findByRole("region", { name: "Inspector · William judgment window" })
+    fireEvent.click(screen.getByRole("button", { name: "Focus Tests" }))
+    const testsWindow = screen.getByRole("region", { name: "Tests window" })
+    const focusedTestsClass = testsWindow.getAttribute("class")
+    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    fireEvent.click(screen.getByRole("button", { name: "Close Inspector · William judgment" }))
+
+    expect(testsWindow.getAttribute("class")).toBe(focusedTestsClass)
+  })
+
+  it("does not reuse an Inspector return target across a Space transition", async () => {
+    const alpha = defaultSpace(1440, 900, "world-a", "Alpha")
+    const beta = defaultSpace(1440, 900, "world-b", "Beta")
+    const spaces = [
+      { worldId: "world-a", name: "Alpha", space: spaceToServer(alpha), updatedAt: "2026-08-30T07:00:00.000Z" },
+      { worldId: "world-b", name: "Beta", space: spaceToServer(beta), updatedAt: "2026-08-30T07:01:00.000Z" },
+    ]
+    const spaceEnvelope = (worldId: "world-a" | "world-b") => ({
+      worldId,
+      name: worldId === "world-a" ? "Alpha" : "Beta",
+      space: worldId === "world-a" ? spaces[0].space : spaces[1].space,
+      spaces,
+      multiSpaceAvailable: true,
+      collectionAvailable: true,
+      preferenceStorageKey: "judgment-inspector-space-preference",
+      project: { identity: "c:/repos/terrafusion", name: "TerraFusion" },
+      spine: EMPTY_SPINE,
+      judgment: firstJudgment,
+      storage: "server" as const,
+    })
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope("world-a"))
+      if (url === "/api/environment/space?worldId=world-b" && !init?.method) return Response.json(spaceEnvelope("world-b"))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: "world-a" | "world-b"; space: unknown }
+        return Response.json({ ...spaceEnvelope(body.worldId), space: body.space })
+      }
+      if (url === "/api/loom/files?path=" && !init?.method) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await screen.findByText(firstJudgment.recommendation)
+    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    await screen.findByRole("region", { name: "Inspector · William judgment window" })
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    fireEvent.click(await screen.findByRole("button", { name: "Enter Beta" }))
+    await waitFor(() => expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/space?worldId=world-b")).toBe(true))
+    await screen.findByRole("button", { name: "Enter Beta, current Space" })
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "Focus Tests" }))
+    const testsWindow = screen.getByRole("region", { name: "Tests window" })
+    const focusedTestsClass = testsWindow.getAttribute("class")
+    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    fireEvent.click(screen.getByRole("button", { name: "Close Inspector · William judgment" }))
+
+    expect(testsWindow.getAttribute("class")).toBe(focusedTestsClass)
+  })
+
+  it("renders the exact stored confidence without rounding loss", async () => {
+    const exactConfidence = { ...firstJudgment, confidence: 0.8449 }
+    const { fetcher } = workspaceFetch({ initial: exactConfidence })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await screen.findByText(exactConfidence.recommendation)
+    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    const inspector = await screen.findByRole("region", { name: "Inspector · William judgment window" })
+    expect(inspector.textContent).toContain("0.8449")
   })
 
   it.each([null, { ...firstJudgment, basis: [] }, { ...firstJudgment, basisFingerprint: "not-a-fingerprint" }])(

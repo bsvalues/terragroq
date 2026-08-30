@@ -289,8 +289,13 @@ function williamJudgmentInspectorSurface(value: unknown): InspectorSurface | nul
   const snapshot = inspectableWilliamJudgment(value)
   if (!snapshot) return null
   const identity = `${snapshot.generatedAt}:${snapshot.basisFingerprint}`
-  const base = { kind: "william-judgment", subject: "William judgment", identity }
-  return { ...base, id: inspectorId(base), payload: snapshot }
+  return {
+    id: `inspector-william-judgment:${encodeURIComponent(snapshot.generatedAt)}:${snapshot.basisFingerprint}`,
+    kind: "william-judgment",
+    subject: "William judgment",
+    identity,
+    payload: snapshot,
+  }
 }
 
 export function WorkspaceShell({ initialSummon = null }: { initialSummon?: SummonedSurface | null }) {
@@ -960,12 +965,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const openWilliamJudgmentInspector = useCallback(() => {
     const surface = williamJudgmentInspectorSurface(judgment)
     if (!surface) return
-    const isNew = !inspectorReturnWindowRef.current.has(surface.id)
-    if (isNew) inspectorReturnWindowRef.current.set(surface.id, stateRef.current.activeWindowId)
-    setInspectors((current) => current.some((entry) => entry.id === surface.id)
+    setInspectors((current) => current.some((entry) => entry.kind === surface.kind && entry.identity === surface.identity)
       ? current
       : [...current, surface])
     setSpace((current) => {
+      if (current.activeWindowId !== surface.id) {
+        inspectorReturnWindowRef.current.set(surface.id, current.activeWindowId)
+      }
       const highest = Math.max(
         ...Object.values(current.windows).map((window) => window.z),
         ...Object.values(current.inspectorWindows).map((window) => window.z),
@@ -1842,6 +1848,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     // before advancing the epoch so delayed provider frames cannot refresh or present in the next
     // Space, even though ordinary reset intentionally ignores an active operation.
     change.invalidate()
+    inspectorReturnWindowRef.current.clear()
     const name = payload.name ?? payload.project?.name ?? "Space"
     const restoredBase = normalizeSpace(
       payload.space,
