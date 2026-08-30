@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -140,6 +140,27 @@ describe("Experience V2 Mission Control", () => {
     expect(research.textContent).toContain("Agent activity unknown")
     expect(research.textContent).not.toContain("Paused")
     expect(research.textContent).not.toContain("No active agents")
+  })
+
+  it("shows an honest agent count, saved truth, and overflow beyond the three visible details", () => {
+    const manyAgents: MissionControlSpaceProjection = {
+      ...spaces[1],
+      agentActivityKnown: true,
+      agents: [
+        { id: "one", name: "Codex", role: "Builder", activity: "Build one", state: "waiting", truth: "resume-unverified" },
+        { id: "two", name: "Claude", role: "Reviewer", activity: "Review two", state: "waiting", truth: "resume-unverified" },
+        { id: "three", name: "Local", role: "Thinker", activity: "Conversation", state: "waiting", truth: "resume-unverified" },
+        { id: "four", name: "Codex", role: "Builder", activity: "Build four", state: "waiting", truth: "resume-unverified" },
+        { id: "five", name: "Claude", role: "Reviewer", activity: "Review five", state: "waiting", truth: "resume-unverified" },
+      ],
+    }
+    render(<MissionControlSurface spaces={[manyAgents]} currentSpaceId={null} onEnterSpace={vi.fn()} onDismiss={vi.fn()} />)
+
+    const card = screen.getByRole("button", { name: "Enter Research & Evidence" })
+    expect(within(card).getByLabelText("5 agent sessions")).toBeTruthy()
+    expect(card.textContent).toContain("Saved · resume unverified")
+    expect(card.textContent).toContain("+2 more")
+    expect(card.textContent).not.toContain("Build four")
   })
 
   it("offers an accessible inline name-only New Space action", async () => {

@@ -10,7 +10,7 @@ import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface } from "./developer-tools-surface"
 import { type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, useExperienceAgentSessions, type AgentProvider } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, useExperienceAgentSessions, type AgentProvider } from "./agent-sessions"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
@@ -1290,10 +1290,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       frame: geometry, minimized: geometry.minimized, active: space.activeWindowId === id,
       detail: id === "running-app" ? space.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
     })),
-    agents: agentSessions.sessions.filter((agent) => agent.truth === "live").map((agent) => ({
-      id: agent.id, name: agent.providerLabel, role: agent.role,
-      activity: agent.assignment, state: agent.status === "working" ? "working" : "idle",
-    })),
+    agents: projectMissionAgentSessions(agentSessions.sessions, true),
     selectedObject: space.selectedPath,
     changed: savedLabel,
   }
@@ -1304,6 +1301,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       defaultSpace(window.innerWidth, window.innerHeight, summary.worldId, summary.name),
       { width: window.innerWidth, height: window.innerHeight },
     )
+    const savedAgents = project
+      ? loadSavedAgentSessionProjection(summary.worldId, project.identity)
+      : { state: "missing" as const, sessions: [] }
     return {
       id: summary.worldId,
       name: summary.name,
@@ -1315,8 +1315,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         minimized: geometry.minimized, active: restored.activeWindowId === id,
         detail: id === "running-app" ? restored.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
       })),
-      agents: [],
-      agentActivityKnown: false,
+      agents: projectMissionAgentSessions(savedAgents.sessions, false),
+      agentActivityKnown: savedAgents.state === "available",
       selectedObject: restored.selectedPath,
       changed: "Saved spatial state",
     }

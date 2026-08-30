@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react"
 
+import type { MissionAgentSessionProjection } from "./agent-sessions"
 import styles from "./mission-control-surface.module.css"
 
 export type MissionControlWindowProjection = Readonly<{
@@ -14,13 +15,7 @@ export type MissionControlWindowProjection = Readonly<{
   detail?: string
 }>
 
-export type MissionControlAgentProjection = Readonly<{
-  id: string
-  name: string
-  role: string
-  activity: string
-  state: "working" | "waiting" | "blocked" | "idle"
-}>
+export type MissionControlAgentProjection = MissionAgentSessionProjection
 
 export type MissionControlSpaceProjection = Readonly<{
   id: string
@@ -126,9 +121,10 @@ function SpacePreview({
         <span className={styles.agents} aria-label={space.agentActivityKnown === false ? "Agent activity unknown" : `${space.agents.length} agent sessions`}>
           {space.agentActivityKnown === false ? <span>Agent activity unknown</span> : space.agents.length === 0 ? <span>No active agents</span> : space.agents.slice(0, 3).map((agent) => (
             <span key={agent.id} className={styles.agent} data-state={agent.state} title={`${agent.role} · ${agent.activity}`}>
-              <i /> {agent.name} · {agent.activity}
+              <i /> {agent.name} · {agent.activity}{agent.truth === "resume-unverified" ? <small className={styles.agentTruth}>Saved · resume unverified</small> : null}
             </span>
           ))}
+          {space.agentActivityKnown !== false && space.agents.length > 3 ? <span className={styles.agentOverflow}>+{space.agents.length - 3} more</span> : null}
         </span>
       </span>
   </>

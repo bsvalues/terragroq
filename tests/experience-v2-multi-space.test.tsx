@@ -41,6 +41,39 @@ describe("Experience V2 multi-Space re-entry", () => {
     expect(screen.getByText(/Space collection is temporarily unavailable.*SPACE_COLLECTION_UNAVAILABLE/i)).toBeTruthy()
   })
 
+  it("projects current restored hints and inactive owned Space sessions as saved resume-unverified truth", async () => {
+    const currentId = "123e4567-e89b-42d3-a456-426614174000"
+    const inactiveId = "223e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem("williamos:agent-session:a:c%3A%2Fproject", JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:build-current`,
+      sessions: [{ schemaVersion: 1, sessionId: "build-current", role: "Builder", provider: "Codex", assignment: "Build current Space", updatedAt: "2026-08-29T10:00:00.000Z", completedTurns: [] }],
+    }))
+    window.localStorage.setItem("williamos:agent-session:b:c%3A%2Fproject", JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${inactiveId}`,
+      sessions: [
+        { schemaVersion: 1, sessionId: inactiveId, role: "Reviewer", provider: "Claude", assignment: "Review inactive Space", reviewPath: "src/app.ts", updatedAt: "2026-08-29T10:01:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: currentId, role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-29T10:02:00.000Z", completedTurns: [] },
+      ],
+    }))
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/environment/space"
+      ? { ok: true, status: 200, json: async () => envelope("a") }
+      : { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }))
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+
+    const current = screen.getByRole("button", { name: "Enter Alpha, current Space" })
+    const inactive = screen.getByRole("button", { name: "Enter Beta" })
+    expect(current.textContent).toContain("Codex · Build current Space")
+    expect(current.textContent).toContain("Saved · resume unverified")
+    expect(inactive.textContent).toContain("Claude · Review inactive Space")
+    expect(inactive.textContent).toContain("Local · Conversation")
+    expect(inactive.textContent).toContain("Saved · resume unverified")
+    expect(inactive.textContent).not.toContain("Live agent")
+  })
+
   it("keeps server Space hydration usable when reading the opaque preference hint throws", async () => {
     const getItem = Storage.prototype.getItem
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (key) {

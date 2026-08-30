@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
   AgentSessionStrip,
+  loadSavedAgentSessionProjection,
+  projectMissionAgentSessions,
   useExperienceAgentSessions,
+  type ExperienceAgentSession,
   type ProviderNeutralAgentSessionController,
 } from "@/components/workspace-shell/agent-sessions"
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
@@ -58,6 +61,57 @@ function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_S
 let expose: ProviderNeutralAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
+  it("loads bounded inactive-Space session hints read-only and marks every one resume-unverified", () => {
+    const first = "123e4567-e89b-42d3-a456-426614174000"
+    const second = "223e4567-e89b-42d3-a456-426614174000"
+    const key = "williamos:agent-session:space-b:c%3A%2Fproject"
+    const stored = JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${first}`,
+      sessions: [
+        { schemaVersion: 1, sessionId: first, role: "Reviewer", provider: "Claude", assignment: "Review current work", reviewPath: "src/app.ts", updatedAt: "2026-08-29T10:00:00.000Z", completedTurns: [] },
+        { schemaVersion: 1, sessionId: second, role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-29T10:01:00.000Z", completedTurns: [] },
+      ],
+    })
+    window.localStorage.setItem(key, stored)
+
+    const projection = loadSavedAgentSessionProjection("space-b", "c:/project")
+
+    expect(projection.state).toBe("available")
+    expect(projection.sessions).toEqual([
+      expect.objectContaining({ id: `Claude:${first}`, role: "Reviewer", truth: "resume-unverified", status: "resume unverified" }),
+      expect.objectContaining({ id: `Local:${second}`, role: "Thinker", truth: "resume-unverified", status: "resume unverified" }),
+    ])
+    expect(window.localStorage.getItem(key)).toBe(stored)
+  })
+
+  it.each([
+    ["missing", null],
+    ["corrupt", ""],
+    ["corrupt", "{not-json"],
+    ["oversized", "x".repeat(262_145)],
+  ] as const)("reports %s inactive-Space storage as explicit unknown truth", (state, stored) => {
+    const key = "williamos:agent-session:space-b:c%3A%2Fproject"
+    if (stored !== null) window.localStorage.setItem(key, stored)
+
+    expect(loadSavedAgentSessionProjection("space-b", "c:/project")).toEqual({ state, sessions: [] })
+  })
+
+  it("projects exact live turns ahead of duplicate saved hints with sanitized activity and Local thinking active", () => {
+    const sessions: readonly ExperienceAgentSession[] = [
+      { id: "Codex:build-1", role: "Builder", providerLabel: "Codex", assignment: "Build workspace", status: "resume unverified", evidence: "saved transcript", truth: "resume-unverified", kind: "durable-session", mode: "delegate" },
+      { id: "Codex:build-1", role: "Builder", providerLabel: "Codex", assignment: "Build workspace", status: "working", evidence: "live agent stream", truth: "live", kind: "durable-session", mode: "delegate", presentation: "Builder validating the patch." },
+      { id: "Local:123e4567-e89b-42d3-a456-426614174000", role: "Thinker", providerLabel: "Local", assignment: "Conversation", status: "thinking", evidence: "live model response", truth: "live", kind: "durable-session", mode: "delegate", presentation: "<thinking>hidden secret</thinking>" },
+      { id: "Claude:223e4567-e89b-42d3-a456-426614174000", role: "Reviewer", providerLabel: "Claude", assignment: "Review current work", status: "resume unverified", evidence: "saved transcript", truth: "resume-unverified", kind: "durable-session", mode: "review" },
+    ]
+
+    expect(projectMissionAgentSessions(sessions, true)).toEqual([
+      { id: "Codex:build-1", name: "Codex", role: "Builder", activity: "Builder validating the patch.", state: "working", truth: "live" },
+      { id: "Local:123e4567-e89b-42d3-a456-426614174000", name: "Local", role: "Thinker", activity: "Conversation", state: "working", truth: "live" },
+      { id: "Claude:223e4567-e89b-42d3-a456-426614174000", name: "Claude", role: "Reviewer", activity: "Review current work", state: "waiting", truth: "resume-unverified" },
+    ])
+  })
+
   it("runs one Codex Builder, Claude Reviewer, and Local Thinker concurrently and preserves out-of-order settlements", async () => {
     const encoder = new TextEncoder()
     const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>()
@@ -1567,7 +1621,7 @@ describe("Experience V2 real agent sessions", () => {
     expect((screen.getByLabelText("Source content") as HTMLTextAreaElement).value).toBe(makeDirty ? "owner unsaved buffer\n" : "export const version = 1\n")
   })
 
-  it("restores canonical session inspection and excludes unverified hints from live Mission Control", async () => {
+  it("restores canonical session inspection and labels its Mission Control hint saved and unverified", async () => {
     const sessionId = "codex-restored-thread"
     const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
     window.localStorage.setItem(key, JSON.stringify({
@@ -1603,8 +1657,9 @@ describe("Experience V2 real agent sessions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
     fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
     const mission = screen.getByRole("dialog", { name: "Mission Control" })
-    expect(within(mission).getAllByText("No active agents")).toHaveLength(1)
-    expect(within(mission).queryByText(/Codex/)).toBeNull()
+    expect(within(mission).getByText(/Codex/)).toBeTruthy()
+    expect(within(mission).getByText("Saved · resume unverified")).toBeTruthy()
+    expect(within(mission).queryByText("No active agents")).toBeNull()
   })
 
   it("does not focus a clicked restored session when its selection cannot be persisted", async () => {

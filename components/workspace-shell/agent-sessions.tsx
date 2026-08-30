@@ -73,6 +73,20 @@ export type ExperienceAgentSession = Readonly<{
   presentation?: string
 }>
 
+export type MissionAgentSessionProjection = Readonly<{
+  id: string
+  name: string
+  role: string
+  activity: string
+  state: "working" | "waiting" | "blocked" | "idle"
+  truth?: "live" | "resume-unverified"
+}>
+
+export type SavedAgentSessionProjection = Readonly<{
+  state: "available" | "missing" | "corrupt" | "oversized"
+  sessions: readonly ExperienceAgentSession[]
+}>
+
 export type ActiveAgentTurn = Readonly<{
   id: string
   provider: AgentProvider
@@ -485,6 +499,52 @@ function projectSessions(
     })
   })
   return sessions
+}
+
+/** Read a different owned Space's browser-scoped resume hints without mutating or verifying them. */
+export function loadSavedAgentSessionProjection(
+  ownerScope: string,
+  worldScope: string,
+  storage: Pick<Storage, "getItem"> = window.localStorage,
+): SavedAgentSessionProjection {
+  const key = storageKey(ownerScope, worldScope)
+  let stored: string | null
+  try { stored = storage.getItem(key) } catch { return { state: "corrupt", sessions: [] } }
+  if (stored === null) return { state: "missing", sessions: [] }
+  if (stored.length === 0) return { state: "corrupt", sessions: [] }
+  if (stored.length > MAX_COLLECTION_BYTES
+    || new TextEncoder().encode(stored).byteLength > MAX_COLLECTION_BYTES) {
+    return { state: "oversized", sessions: [] }
+  }
+  const collection = parseCollection(stored)
+  if (!collection) return { state: "corrupt", sessions: [] }
+  return { state: "available", sessions: projectSessions(null, collection.sessions, [], []) }
+}
+
+/** Produce bounded Mission Control copy. Current live truth wins any duplicate saved hint. */
+export function projectMissionAgentSessions(
+  sessions: readonly ExperienceAgentSession[],
+  current: boolean,
+): readonly MissionAgentSessionProjection[] {
+  const projected = new Map<string, MissionAgentSessionProjection>()
+  for (const session of sessions) {
+    const truth = current && session.truth === "live" ? "live" : "resume-unverified"
+    const candidate: MissionAgentSessionProjection = {
+      id: session.id,
+      name: session.providerLabel,
+      role: session.role,
+      activity: agentPresentationText(current ? session.presentation : null)
+        ?? agentPresentationText(session.assignment)
+        ?? "Bounded assignment",
+      state: truth === "resume-unverified"
+        ? "waiting"
+        : session.status === "working" || session.status === "thinking" ? "working" : "idle",
+      truth,
+    }
+    const existing = projected.get(session.id)
+    if (!existing || existing.truth !== "live" && candidate.truth === "live") projected.set(session.id, candidate)
+  }
+  return [...projected.values()]
 }
 
 export function useExperienceAgentSessions({
