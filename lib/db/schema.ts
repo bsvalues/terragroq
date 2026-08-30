@@ -18,6 +18,7 @@ import {
 
 import { fromUtcWallDriver, toUtcWallDriver } from "@/lib/db/utc-wall-timestamp"
 import type { HistoricalDoctrineProvenance } from "@/lib/history/historical-doctrine"
+import type { HistoricalProjectContextProvenance } from "@/lib/history/historical-project-context"
 
 // The conversion itself lives in `lib/db/utc-wall-timestamp.ts` so that the raw-`pg` readers of these
 // same columns can share it. While it was a closure here, they could not, and read the stored UTC wall
@@ -439,18 +440,85 @@ export const workbenchThreadMessage = pgTable(
 /* RAG corpus                                                          */
 /* ------------------------------------------------------------------ */
 
-export const document = pgTable("document", {
-  id: serial("id").primaryKey(),
-  userId: text("userId").notNull(),
-  title: text("title").notNull(),
-  source: text("source"),
-  mimeType: text("mimeType").default("text/plain").notNull(),
-  content: text("content").notNull(),
-  chunkCount: integer("chunkCount").default(0).notNull(),
-  status: text("status").default("indexed").notNull(),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
-})
+export const document = pgTable(
+  "document",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    title: text("title").notNull(),
+    source: text("source"),
+    mimeType: text("mimeType").default("text/plain").notNull(),
+    content: text("content").notNull(),
+    chunkCount: integer("chunkCount").default(0).notNull(),
+    status: text("status").default("indexed").notNull(),
+    projectId: integer("projectId"),
+    threadId: text("threadId"),
+    historicalCandidateId: text("historicalCandidateId"),
+    historicalClaimId: text("historicalClaimId"),
+    historicalProvenance: jsonb("historicalProvenance").$type<HistoricalProjectContextProvenance>(),
+    privacy: text("privacy"),
+    authority: text("authority"),
+    executionMode: text("executionMode"),
+    archivedAt: timestamp("archivedAt", { withTimezone: true }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("document_historical_candidate_user_idx")
+      .on(table.userId, table.historicalCandidateId)
+      .where(sql`${table.historicalCandidateId} IS NOT NULL`),
+    foreignKey({
+      columns: [table.userId, table.projectId],
+      foreignColumns: [project.userId, project.id],
+      name: "document_historical_user_project_fk",
+    }).onDelete("restrict"),
+    foreignKey({
+      columns: [table.userId, table.threadId],
+      foreignColumns: [workbenchThread.userId, workbenchThread.id],
+      name: "document_historical_user_thread_fk",
+    }).onDelete("restrict"),
+    check(
+      "document_historical_identity_check",
+      sql`(
+        ${table.historicalCandidateId} IS NULL
+        AND ${table.historicalClaimId} IS NULL
+        AND ${table.historicalProvenance} IS NULL
+        AND ${table.projectId} IS NULL
+        AND ${table.threadId} IS NULL
+        AND ${table.privacy} IS NULL
+        AND ${table.authority} IS NULL
+        AND ${table.executionMode} IS NULL
+        AND ${table.archivedAt} IS NULL
+        AND ${table.status} NOT IN ('private_project_context', 'archived_private_project_context')
+      ) OR (
+        ${table.historicalCandidateId} IS NOT NULL
+        AND ${table.historicalClaimId} IS NOT NULL
+        AND ${table.historicalProvenance} IS NOT NULL
+        AND ${table.projectId} IS NOT NULL
+        AND ${table.privacy} IS NOT NULL
+        AND ${table.authority} IS NOT NULL
+        AND ${table.executionMode} IS NOT NULL
+        AND ${table.status} IN ('private_project_context', 'archived_private_project_context')
+      )`,
+    ),
+    check(
+      "document_historical_safety_check",
+      sql`${table.historicalCandidateId} IS NULL OR (
+        ${table.chunkCount} = 0
+        AND ${table.privacy} = 'private'
+        AND ${table.authority} = 'historical_non_authoritative'
+        AND ${table.executionMode} = 'non_executing'
+        AND COALESCE(${table.historicalProvenance}->>'privacy', '') = 'private'
+        AND COALESCE(${table.historicalProvenance}->>'authority', '') = 'historical_non_authoritative'
+        AND COALESCE(${table.historicalProvenance}->>'executionMode', '') = 'non_executing'
+        AND (
+          (${table.status} = 'private_project_context' AND ${table.archivedAt} IS NULL)
+          OR (${table.status} = 'archived_private_project_context' AND ${table.archivedAt} IS NOT NULL)
+        )
+      )`,
+    ),
+  ],
+)
 
 export const documentChunk = pgTable("document_chunk", {
   id: serial("id").primaryKey(),
