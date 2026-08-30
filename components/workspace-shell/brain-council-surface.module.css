@@ -149,6 +149,9 @@
 .evidenceItem span { grid-column: 1; color: #7e897d; font-size: 9px; line-height: 1.45; }
 .evidenceItem svg { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: #788577; }
 a.evidenceItem:hover, a.evidenceItem:focus-visible { background: var(--council-raised); outline: none; }
+.evidenceAction { grid-column: 1 / -1; justify-self: start; min-height: 27px; margin-top: 6px; padding: 0 9px; border: 1px solid #455345; border-radius: 3px; color: #bdc9ba; background: #171d17; font-size: 9px; }
+.evidenceAction:hover { color: white; border-color: #667763; background: #202820; }
+.evidenceAction:focus-visible { color: white; border-color: #788b74; background: #202820; outline: 2px solid #82947e; outline-offset: 2px; }
 .boundary { display: flex; align-items: flex-start; gap: 8px; margin: auto 10px 10px; padding: 10px; border: 1px solid #594b37; color: #baa989; background: #1b1711; }
 .boundary svg { flex: 0 0 auto; margin-top: 2px; }
 .boundary p { margin: 0; font-size: 9px; line-height: 1.5; }

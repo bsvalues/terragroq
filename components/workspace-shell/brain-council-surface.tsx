@@ -206,6 +206,11 @@ export function BrainCouncilSurface({
             {session.evidence.map((item) => (
               <div key={item.id} className={styles.evidenceItem}>
                 <strong>{item.label}</strong><span>{item.detail}</span>
+                {!historical && item.id === "selected-context" ? (
+                  <button type="button" className={styles.evidenceAction} onClick={onDismiss}>
+                    Return to selected context
+                  </button>
+                ) : null}
               </div>
             ))}
           </div>

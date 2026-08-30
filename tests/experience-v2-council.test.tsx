@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("next/dynamic", () => ({
@@ -149,6 +150,64 @@ describe("Experience V2 Brain Council surface", () => {
     expect(onDismiss).toHaveBeenCalledOnce()
     expect(onAdvisoryAction).not.toHaveBeenCalled()
     expect(screen.getByText(/current Space and its windows stay in place/i)).toBeTruthy()
+  })
+
+  it("returns from current selected-context evidence by dismissing only the Council overlay", () => {
+    const { onDismiss, onAdvisoryAction } = renderCouncil()
+
+    fireEvent.click(screen.getByRole("button", { name: "Return to selected context" }))
+
+    expect(onDismiss).toHaveBeenCalledOnce()
+    expect(onAdvisoryAction).not.toHaveBeenCalled()
+  })
+
+  it("keeps arbitrary and world evidence passive and never exposes the return action in saved advice", () => {
+    const evidenceSession = {
+      ...session,
+      evidence: [
+        ...session.evidence,
+        { id: "world-evidence-spine", label: "Owned outcome", detail: "Experience V2 remains active" },
+        { id: "arbitrary-evidence", label: "Review note", detail: "No navigation target is implied" },
+      ],
+    }
+    const view = render(
+      <BrainCouncilSurface session={evidenceSession} onDismiss={vi.fn()} onAdvisoryAction={vi.fn()} />,
+    )
+
+    expect(screen.getAllByRole("button", { name: "Return to selected context" })).toHaveLength(1)
+    expect(screen.getByText("Owned outcome")).toBeTruthy()
+    expect(screen.getByText("Review note")).toBeTruthy()
+
+    view.rerender(
+      <BrainCouncilSurface historical session={evidenceSession} onDismiss={vi.fn()} onAdvisoryAction={vi.fn()} />,
+    )
+    expect(screen.queryByRole("button", { name: "Return to selected context" })).toBeNull()
+    expect(screen.getByText("Selected diff")).toBeTruthy()
+    expect(screen.getByText("Owned outcome")).toBeTruthy()
+    expect(screen.getByText("Review note")).toBeTruthy()
+  })
+
+  it("supports keyboard return and restores focus to the Council trigger after dismissal", async () => {
+    const user = userEvent.setup()
+    const onDismiss = vi.fn()
+    const onAdvisoryAction = vi.fn()
+    const view = render(<button type="button">Open Council</button>)
+    screen.getByRole("button", { name: "Open Council" }).focus()
+    view.rerender(
+      <>
+        <button type="button">Open Council</button>
+        <BrainCouncilSurface session={session} onDismiss={onDismiss} onAdvisoryAction={onAdvisoryAction} />
+      </>,
+    )
+
+    const returnAction = screen.getByRole("button", { name: "Return to selected context" })
+    returnAction.focus()
+    await user.keyboard("{Enter}")
+    expect(onDismiss).toHaveBeenCalledOnce()
+    expect(onAdvisoryAction).not.toHaveBeenCalled()
+
+    view.rerender(<button type="button">Open Council</button>)
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Open Council" }))
   })
 
   it("labels restored sessions as saved advisory provenance, never live consensus", () => {
