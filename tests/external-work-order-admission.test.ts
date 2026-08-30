@@ -98,6 +98,7 @@ describe("external Work Order digest-bound confirmation boundary", () => {
     })).toThrow("EXTERNAL_PROVENANCE_INVALID")
   })
 
+  // Private packet text must never be logged.
   it("bounds internal failure diagnostics without copying authority packet text", () => {
     const cause = Object.assign(new Error("sql params: authorityEvidence=owner-secret"), { code: "23505" })
     const failure = new Error("packet objective: private-plan", { cause })

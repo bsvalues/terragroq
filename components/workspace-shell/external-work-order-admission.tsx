@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 
 // The server digest binds the owner's explicit admission.
+// Preview must precede explicit, digest-bound admission.
 const CONFIRMATION = "ADMIT_EXTERNAL_WORK_ORDER" as const
 
 type AdmissionStep = "capture" | "review" | "complete"

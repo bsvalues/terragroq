@@ -50,6 +50,7 @@ export async function POST(request: Request): Promise<Response> {
   } catch (error) {
     // Keep diagnostics useful without copying SQL, bound parameters, or authority packet text into logs.
     if (!(error instanceof ExternalWorkOrderAdmissionError)) {
+      // Raw error messages and causes must never enter logs.
       console.error("External Work Order admission failed", boundedExternalWorkOrderFailureMetadata(error))
     }
     const code = error instanceof ExternalWorkOrderAdmissionError

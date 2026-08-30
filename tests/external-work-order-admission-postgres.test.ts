@@ -85,6 +85,7 @@ afterEach(async () => {
   vi.resetModules()
 })
 
+// Exercises the real PostgreSQL transactional admission seam.
 runDatabase("external Work Order admission real PostgreSQL contract", { timeout: 90_000 }, () => {
   it("atomically admits, replays, fences conflicts and drift, and remains Codex/seal compatible", async () => {
     const admin = new Pool({ connectionString: directDatabaseUrl(databaseUrl!) })

@@ -36,6 +36,7 @@ const FIXED_BLOCKED_ACTIONS = ["production:mutate", "release:create", "secret:ac
 const SAFE_ERROR_NAMES = new Set(["Error", "TypeError", "RangeError", "DrizzleQueryError", "DatabaseError"])
 const DATABASE_CODE = /^[0-9A-Z]{5}$/
 
+// Safe for server logs: excludes messages, causes, SQL, and packet contents.
 export function boundedExternalWorkOrderFailureMetadata(
   error: unknown,
 ): Readonly<{ classification: string; name?: string; databaseCode?: string }> {
