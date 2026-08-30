@@ -142,6 +142,7 @@ export async function transitionWorkOrder(
   opts?: { approveDoctrine?: boolean; grantAuthority?: boolean },
 ): Promise<TransitionResult> {
   const userId = await getUserId()
+  // Preserve one canonical lifecycle and Doctrine gate through the shared helper.
   const result = await db.transaction((transaction) => transitionWorkOrderInTransaction({
     transaction, userId, workOrderId: id, to, now: new Date(),
     grantAuthority: opts?.grantAuthority, approveDoctrine: opts?.approveDoctrine,

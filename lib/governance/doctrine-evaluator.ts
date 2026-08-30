@@ -1,3 +1,4 @@
+// Doctrine precedence is forbidden, then requires approval, then allowed.
 export type DoctrineVerdict = Readonly<{
   verdict: "allowed" | "forbidden" | "requires_approval" | "unspecified"
   matches: readonly Readonly<{ ref: string | null; title: string; reason: string }>[]

@@ -85,7 +85,7 @@ afterEach(async () => {
   vi.resetModules()
 })
 
-runDatabase("external Work Order admission PostgreSQL contract", { timeout: 90_000 }, () => {
+runDatabase("external Work Order admission real PostgreSQL contract", { timeout: 90_000 }, () => {
   it("atomically admits, replays, fences conflicts and drift, and remains Codex/seal compatible", async () => {
     const admin = new Pool({ connectionString: directDatabaseUrl(databaseUrl!) })
     const schema = `external_wo_${randomUUID().replaceAll("-", "")}`

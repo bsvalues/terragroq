@@ -237,6 +237,7 @@ export type { DoctrineVerdict } from "@/lib/governance/doctrine-evaluator"
 // Validate a free-text action description against active doctrine. Forbidden
 // wins over requires-approval, which wins over explicitly allowed.
 // This public server action delegates to the same deterministic evaluator used by transactional Work Order activation.
+// This keeps interactive and transactional Doctrine verdicts aligned.
 export async function validateAction(action: string): Promise<DoctrineVerdict> {
   const userId = await getUserId()
   const rules = await getActiveDoctrine(userId)

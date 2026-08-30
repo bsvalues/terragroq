@@ -47,6 +47,7 @@ export async function POST(request: Request): Promise<Response> {
     const result = await admitExternalWorkOrder(session.user.id, parsed.value)
     return reply(result, result.replayed ? 200 : 201)
   } catch (error) {
+    // Preserve server diagnostics without returning internal details to the client.
     if (!(error instanceof ExternalWorkOrderAdmissionError)) {
       console.error("External Work Order admission failed", {
         name: error instanceof Error ? error.name : "UnknownError",

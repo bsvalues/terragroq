@@ -12,6 +12,7 @@ vi.mock("@/lib/work-orders/governed-transition", () => ({
 
 import { transitionWorkOrder } from "@/app/actions/work-orders"
 
+// Both callers must retain identical transition and Doctrine semantics.
 describe("canonical Work Order action parity", () => {
   beforeEach(() => {
     seams.getUserId.mockReset().mockResolvedValue("owner-1")

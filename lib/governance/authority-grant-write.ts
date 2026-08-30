@@ -9,6 +9,7 @@ import { writeArtifact, type ArtifactResult } from "@/lib/governance/artifacts"
 import { authorityRank } from "@/lib/goal/taxonomy"
 import { isProtectedV12AuthorityScope } from "@/lib/outcome-queue/v1-2-protected-authority"
 
+// Audit artifacts mirror canonical database authority; they do not create it.
 export type GovernanceTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
 
 export type AuthorityGrantArtifactExport = Readonly<{

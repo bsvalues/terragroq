@@ -25,7 +25,7 @@ const packet = () => ({
   pullRequest: { number: 1111, headSha: "a".repeat(40) },
 })
 
-describe("external Work Order confirmation boundary", () => {
+describe("external Work Order digest-bound confirmation boundary", () => {
   beforeEach(() => seams.transaction.mockReset())
 
   it("previews a deterministic normalized immutable packet digest without writing", () => {

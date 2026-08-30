@@ -287,6 +287,7 @@ export async function admitExternalWorkOrder(
     `external-provenance-digest:${provenanceDigest}`,
   ]
 
+  // Canonical authority rows and the Space binding commit as one unit.
   const committed = await db.transaction(async (transaction) => {
     await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${userId}:external-work-order-admission`}))`)
     const receipts = await transaction.select().from(outcomeQueueMutationReceipt).where(and(

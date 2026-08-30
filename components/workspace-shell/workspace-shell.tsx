@@ -2532,6 +2532,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       <div className={spatial.objectBar} aria-label="Selected object actions">
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
+          {/* External admission is available only for a persisted server Space. */}
           {selectedKind === "space" ? <ExternalWorkOrderAdmission
             worldId={worldId}
             persisted={storage === "server" && hydrated && !persistencePending && !persistenceError}

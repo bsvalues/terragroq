@@ -12,6 +12,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 
+// The server digest binds the owner's explicit admission.
 const CONFIRMATION = "ADMIT_EXTERNAL_WORK_ORDER" as const
 
 type AdmissionStep = "capture" | "review" | "complete"
