@@ -10,9 +10,9 @@ import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
 import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
-import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
+import { encodeDiffReviewInspectorPayload, InspectorSurfaceView, inspectorSurfaceWindowTitle, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
 import { deriveMissionControlOverview } from "./mission-control-overview"
 import { WilliamConversationRail, type WilliamConversationEntry } from "./william-conversation-rail"
@@ -53,6 +53,8 @@ type ReviewerDelegateContext = Readonly<{
   reviewPath: string
   sessionId: string
   requiredSessionKey: string
+  mode: "review" | "diff-review"
+  diffReview?: AgentSessionDiffReview
 }>
 type ContinueDelegateContext = Readonly<{
   kind: "continue"
@@ -88,6 +90,7 @@ export type LineObjectBinding =
 type ForkContext = Readonly<{ sourceSessionId: string; assignment: string; label: string }>
 type ChangeRefresh = Readonly<{ path: string | null; key: number }>
 type CapturedDiffImprove = Readonly<{ path: string; fingerprint: string; worldId: string; transitionEpoch: number }>
+type CapturedDiffReview = Readonly<{ path: string; fingerprint: string; worldId: string; transitionEpoch: number }>
 type ChangeRefreshWaiter = {
   path: string
   resolve: (result: ChangeRefreshResult) => void
@@ -134,7 +137,7 @@ export function lineObjectBindingFingerprint(binding: LineObjectBinding | null):
 }
 
 function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefined): ReviewerDelegateContext | null {
-  if (!agent || agent.kind !== "durable-session" || agent.mode !== "review"
+  if (!agent || agent.kind !== "durable-session" || agent.mode !== "review" && agent.mode !== "diff-review"
     || agent.providerLabel !== "Claude" || agent.role !== "Reviewer" || !agent.reviewPath
     || !CLAUDE_REVIEW_SESSION_KEY.test(agent.id)) return null
   return {
@@ -146,12 +149,14 @@ function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefine
     reviewPath: agent.reviewPath,
     sessionId: agent.id.slice("Claude:".length),
     requiredSessionKey: agent.id,
+    mode: agent.mode,
+    ...(agent.diffReview ? { diffReview: agent.diffReview } : {}),
   }
 }
 
 function durableSessionDelegateContext(agent: ExperienceAgentSession | null | undefined): ReviewerDelegateContext | StandardDelegateContext | null {
   if (!agent || agent.kind !== "durable-session") return null
-  if (agent.mode === "review") return reviewerDelegateContext(agent)
+  if (agent.mode === "review" || agent.mode === "diff-review") return reviewerDelegateContext(agent)
   const provider = agent.providerLabel
   if (provider !== "Codex" && provider !== "Claude" && provider !== "Local") return null
   const requiredSessionKey = agent.id
@@ -319,6 +324,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [changeTarget, setChangeTarget] = useState<string | null>(null)
   const [changeIntent, setChangeIntent] = useState<"change" | "improve-diff">("change")
   const [capturedDiffImprove, setCapturedDiffImprove] = useState<CapturedDiffImprove | null>(null)
+  const [capturedDiffReview, setCapturedDiffReview] = useState<CapturedDiffReview | null>(null)
   const [liveDiffContext, setLiveDiffContext] = useState<(LiveDiffContext & { worldId: string }) | null>(null)
   const liveDiffContextRef = useRef<(LiveDiffContext & { worldId: string }) | null>(null)
   const [reviewTarget, setReviewTarget] = useState<string | null>(null)
@@ -493,8 +499,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     })
   }, [inspectors])
 
-  const materializeReviewReport = useCallback((path: string, report: string) => {
-    materializeSurfaces({ surfaces: [{ kind: "review", subject: path, payload: report }] })
+  const materializeReviewReport = useCallback((path: string, report: string, binding?: AgentSessionDiffReview) => {
+    materializeSurfaces({ surfaces: [{
+      kind: "review",
+      subject: path,
+      ...(binding ? { identity: `${binding.worldId}:${binding.fingerprint}` } : {}),
+      payload: binding ? encodeDiffReviewInspectorPayload(binding, report) : report,
+    }] })
   }, [materializeSurfaces])
 
   const review = useSelectedFileReview({ path: reviewTarget, sessions: agentSessions, onReport: materializeReviewReport })
@@ -1129,6 +1140,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     const target = space.selectedPath
     setChangeIntent("change")
     setCapturedDiffImprove(null)
+    setCapturedDiffReview(null)
     setChangeTarget(target)
     change.reset(target)
     setLineTarget("william")
@@ -1168,9 +1180,36 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     requestAnimationFrame(() => lineRef.current?.focus())
   }, [change.reset, change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.running, space.activeWindowId, space.selectedPath, storage, worldId])
 
+  const openDiffReview = useCallback(() => {
+    if (change.running || review.running || storage !== "server" || persistencePending || persistenceError
+      || !worldId || !space.selectedPath || space.activeWindowId !== "diff"
+      || dirtyPaths[space.selectedPath] || !liveDiffContext || liveDiffContext.worldId !== worldId
+      || liveDiffContext.path !== space.selectedPath) return
+    const captured = {
+      path: liveDiffContext.path,
+      fingerprint: liveDiffContext.fingerprint,
+      worldId,
+      transitionEpoch: transitionEpochRef.current,
+    }
+    setCapturedDiffReview(captured)
+    setCapturedDiffImprove(null)
+    setReviewTarget(captured.path)
+    review.reset(captured.path)
+    setLineTarget("agent")
+    setDelegateContext(null)
+    setForkContext(null)
+    setLineMode("review")
+    setLineInput("")
+    setLineReply(null)
+    setLineTargetPickerOpen(false)
+    setLineOpen(true)
+    requestAnimationFrame(() => lineRef.current?.focus())
+  }, [change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.reset, review.running, space.activeWindowId, space.selectedPath, storage, worldId])
+
   const openReview = useCallback(() => {
     if (change.running || review.running) return
     const target = space.selectedPath
+    setCapturedDiffReview(null)
     setReviewTarget(target)
     review.reset(target)
     setLineTarget("agent")
@@ -1187,6 +1226,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const openReviewPath = useCallback((target: string) => {
     if (change.running || review.running) return
     setFocusedAgentId(null)
+    setCapturedDiffReview(null)
     setReviewTarget(target)
     review.reset(target)
     setLineTarget("agent")
@@ -1412,7 +1452,38 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     if (lineMode === "review") {
-      void review.start(text)
+      const captured = capturedDiffReview
+      if (!captured) {
+        void review.start(text)
+        return
+      }
+      const reviewIdentityIsCurrent = () => {
+        const current = stateRef.current
+        const live = liveDiffContextRef.current
+        return Boolean(worldRef.current === captured.worldId
+          && transitionEpochRef.current === captured.transitionEpoch
+          && storageRef.current === "server"
+          && current.activeWindowId === "diff" && current.selectedPath === captured.path
+          && !dirtyPathsRef.current[captured.path]
+          && (!live || live.worldId === captured.worldId && live.path === captured.path
+            && live.fingerprint === captured.fingerprint)
+          && !persistenceErrorRef.current)
+      }
+      if (!reviewIdentityIsCurrent()) {
+        review.reset(captured.path)
+        setLineReply("The live change changed. Reopen Review from the current Changes surface.")
+        return
+      }
+      void review.start(text, {
+        worldId: captured.worldId,
+        path: captured.path,
+        fingerprint: captured.fingerprint,
+        isCurrent: reviewIdentityIsCurrent,
+        beforeStart: async () => {
+          await persistBarrierRef.current()
+          if (!reviewIdentityIsCurrent()) throw new Error("DIFF_CONTEXT_STALE")
+        },
+      })
       return
     }
     setLineInput("")
@@ -1497,8 +1568,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           const exactKey = `Claude:${reviewerAgentContext.sessionId}`
           const exactSession = agentSessions.sessions.find((candidate) => candidate.id === exactKey)
           if (focusedAgentId !== exactKey || agentSessions.selectedSessionKey !== exactKey
-            || exactSession?.kind !== "durable-session" || exactSession.mode !== "review"
-            || exactSession.reviewPath !== reviewerAgentContext.reviewPath) {
+            || exactSession?.kind !== "durable-session" || exactSession.mode !== reviewerAgentContext.mode
+            || exactSession.reviewPath !== reviewerAgentContext.reviewPath
+            || reviewerAgentContext.mode === "diff-review" && (
+              !reviewerAgentContext.diffReview || !exactSession.diffReview
+              || lineSessionDescriptorFingerprint(exactSession.diffReview) !== lineSessionDescriptorFingerprint(reviewerAgentContext.diffReview)
+            )) {
             throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
           }
         }
@@ -1571,8 +1646,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             ? await agentSessions.runClaudeTurn({
               role: "Reviewer",
               assignment: reviewerAgentContext.assignment,
-              mode: "review",
+              mode: reviewerAgentContext.mode,
               path: reviewerAgentContext.reviewPath,
+              ...(reviewerAgentContext.diffReview ? {
+                worldId: reviewerAgentContext.diffReview.worldId,
+                expectedDiffFingerprint: reviewerAgentContext.diffReview.fingerprint,
+              } : {}),
               focus: text,
               requiredSessionKey: reviewerAgentContext.requiredSessionKey,
             })
@@ -1814,9 +1893,17 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   )
   const continueAction = spaceContinueCandidate ? "Continue" : "Continue unavailable"
   const continueUnavailableMessage = spaceContinueUnavailableMessage(agentSessions.collectionState)
+  const diffReviewUnavailableReason = selectedKind !== "diff" ? null
+    : storage !== "server" ? "Review requires a server-bound Space with durable persistence."
+      : persistenceError ? `Review is unavailable because Space persistence is refusing writes (${persistenceError}).`
+        : !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+            || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
+            ? "Review needs the exact live modified patch for the saved selected file."
+            : persistencePending ? "Review waits until the current Space is durably saved."
+              : null
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
-    : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge unavailable"] as const
+    : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", "Challenge", "Merge unavailable"] as const
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction, forkAction] as const
     : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", continueAction, "Delegate", "Council"] as const
@@ -2177,7 +2264,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       openDiffImprove()
       return
     }
-    if (selectedKind === "diff" && (action === "Review" || action === "Challenge")) {
+    if (selectedKind === "diff" && action === "Review") {
+      openDiffReview()
+      return
+    }
+    if (selectedKind === "diff" && action === "Review unavailable") return
+    if (selectedKind === "diff" && action === "Challenge") {
       openLine(`${action} the exact current patch for the selected file.`)
       return
     }
@@ -2211,7 +2303,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         return
       }
       setDelegateContext(exactContext)
-      openLine(selectedAgent.providerLabel === "Local" || selectedAgent.mode === "review" ? "" : `${action}: `, "agent")
+      openLine(selectedAgent.providerLabel === "Local" || selectedAgent.mode === "review" || selectedAgent.mode === "diff-review" ? "" : `${action}: `, "agent")
       return
     }
     openLine(`${action} this selected ${selectedKindLabel}: `)
@@ -2337,7 +2429,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? diffReviewUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
         {selectedKind === "space" && !spaceContinueCandidate ? <span role="status">{continueUnavailableMessage}</span> : null}
@@ -2364,7 +2456,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         {inspectors.map((surface) => {
           const geometry = space.inspectorWindows[surface.id]
           if (!geometry) return null
-          return <WindowFrame key={surface.id} id={surface.id} title={`Inspector · ${surface.subject}`} geometry={geometry} active={space.activeWindowId === surface.id} onActivate={() => activateInspector(surface.id)} onGeometry={(next) => updateInspector(surface.id, next)} onMinimize={() => updateInspector(surface.id, { ...geometry, minimized: true })} onClose={() => dismissInspector(surface.id)}><InspectorSurfaceView surface={surface} onRefresh={surface.kind === "preview-evidence" ? () => void inspectPreviewEvidence() : undefined} /></WindowFrame>
+          return <WindowFrame key={surface.id} id={surface.id} title={inspectorSurfaceWindowTitle(surface)} geometry={geometry} active={space.activeWindowId === surface.id} onActivate={() => activateInspector(surface.id)} onGeometry={(next) => updateInspector(surface.id, next)} onMinimize={() => updateInspector(surface.id, { ...geometry, minimized: true })} onClose={() => dismissInspector(surface.id)}><InspectorSurfaceView surface={surface} onRefresh={surface.kind === "preview-evidence" ? () => void inspectPreviewEvidence() : undefined} /></WindowFrame>
         })}
       </div>
 
@@ -2417,7 +2509,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
                 }}>William</button>
                 {verifiedLineSessionTargets.map((target) => <button key={target.sessionKey} type="button" className={spatial.lineClose} aria-pressed={delegateContext?.kind === "line-session" && delegateContext.sessionKey === target.sessionKey} aria-label={`${target.label} · session ${target.descriptor.sessionId}`} title={`${target.label} · session ${target.descriptor.sessionId}`} onClick={() => selectLineSessionTarget(target)}>{target.label}</button>)}
               </div> : null}
-              <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
+              <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? capturedDiffReview ? `Review current change · ${review.path ?? "no file selected"}` : `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
             </div>
             <div className={spatial.lineControls}>
               {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider">{delegateContext.kind === "preview" ? <button type="button" className={spatial.lineClose} disabled aria-label="Codex unavailable" title="Preview diagnostic transport is not available for Codex yet.">Codex unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Codex" } : current)}>Codex</button>}<button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}

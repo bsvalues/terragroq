@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 
 import fs from "node:fs/promises"
 
+import { pool } from "@/lib/db"
 import { getSession } from "@/lib/session"
 import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import { inspectWorkspaceApp, williamOsOrigin, type WorkspacePreviewEvidence } from "@/lib/environment/workspace-app"
@@ -11,6 +12,7 @@ import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/provide
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import type { WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
 export const dynamic = "force-dynamic"
@@ -27,6 +29,105 @@ const MAX_LOCAL_FRAME_BYTES = 262_144
 const MAX_FORK_PROMPT_CHARACTERS = 20_000
 const MAX_FORK_PROMPT_BYTES = 32_768
 const PREVIEW_FINGERPRINT = /^[0-9a-f]{64}$/
+const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+const SHA256 = /^[0-9a-f]{64}$/
+const MAX_DIFF_REVIEW_FINGERPRINT_BYTES = 16_384
+const MAX_DIFF_REVIEW_FOCUS_CHARACTERS = 2_000
+const MAX_DIFF_REVIEW_RESULT_BYTES = 200_000
+// Claude receives the grounded review packet as one Windows argv value. Keep the complete prompt
+// comfortably below CreateProcess' command-line ceiling rather than inheriting the 2 MB UI cap.
+const MAX_DIFF_REVIEW_PATCH_BYTES = 20_000
+const MAX_DIFF_REVIEW_PROMPT_UNITS = 24_000
+
+type DiffReviewIdentity = Readonly<{
+  worldId: string
+  path: string
+  fingerprint: string
+  baseHash: string
+  indexHash: string
+  patchHash: string
+}>
+
+type DiffReviewThreadRecord = Readonly<{
+  owner: string
+  metadata: Record<string, unknown> | null
+}>
+
+function selectedWorldPath(world: NonNullable<Awaited<ReturnType<typeof loadOwnedWorkingWorld>>>): string | null {
+  const space = world.space
+  if (!space) return null
+  const activePane = space.panes.find((pane) => pane.id === space.activePaneId) ?? null
+  return space.selection?.filePath ?? activePane?.filePath ?? null
+}
+
+function hasActiveDiff(world: NonNullable<Awaited<ReturnType<typeof loadOwnedWorkingWorld>>>): boolean {
+  const space = world.space
+  if (!space) return false
+  const active = space.windows.find((window) => window.id === space.activeWindowId)
+  return Boolean(active && active.kind === "diff" && !active.minimized)
+}
+
+function diffReviewIdentity(snapshot: WorkspaceFileDiffSnapshot): DiffReviewIdentity | null {
+  if (snapshot.state !== "modified" || snapshot.reason !== null || !snapshot.patch
+    || Buffer.byteLength(snapshot.patch, "utf8") > MAX_DIFF_REVIEW_PATCH_BYTES
+    || !GIT_OBJECT_ID.test(snapshot.baseHash ?? "") || !SHA256.test(snapshot.indexHash ?? "")
+    || !SHA256.test(snapshot.patchHash ?? "")) return null
+  return {
+    worldId: "",
+    path: snapshot.path,
+    fingerprint: snapshot.fingerprint,
+    baseHash: snapshot.baseHash!,
+    indexHash: snapshot.indexHash!,
+    patchHash: snapshot.patchHash!,
+  }
+}
+
+function sameDiffReviewIdentity(left: DiffReviewIdentity, right: DiffReviewIdentity): boolean {
+  return left.worldId === right.worldId && left.path === right.path && left.fingerprint === right.fingerprint
+    && left.baseHash === right.baseHash && left.indexHash === right.indexHash && left.patchHash === right.patchHash
+}
+
+function diffReviewPrompt(snapshot: WorkspaceFileDiffSnapshot, focus: string | null): string {
+  return [
+    `Review the exact server-derived diff for: ${snapshot.path}`,
+    ...(focus ? [`Focus: ${focus}`] : []),
+    `Base hash: ${snapshot.baseHash}`,
+    `Index hash: ${snapshot.indexHash}`,
+    `Patch hash: ${snapshot.patchHash}`,
+    "The patch below is the bounded server-derived Git truth for this turn. Treat no client-authored patch or hash as evidence.",
+    snapshot.patch,
+    "Report actionable findings first, ordered by severity, with exact file and line references. If there are no findings, say so explicitly.",
+    "This is a mechanically read-only review. Use only Read, Grep, and Glob. Do not use Bash, edit files, or mutate the workspace.",
+  ].join("\n\n")
+}
+
+async function diffReviewThreadRecord(sessionId: string): Promise<DiffReviewThreadRecord | null> {
+  try {
+    const result = await pool.query(
+      `SELECT "userId", "metadata" FROM "governance_event"
+        WHERE "entityType" = 'loom_agent' AND "entityId" = $1 AND "eventType" = 'LOOP_STARTED'
+        ORDER BY "createdAt" ASC LIMIT 1`,
+      [sessionId],
+    )
+    const row = result.rows[0] as { userId?: unknown; metadata?: unknown } | undefined
+    if (typeof row?.userId !== "string") return null
+    return {
+      owner: row.userId,
+      metadata: row.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+        ? row.metadata as Record<string, unknown>
+        : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+async function deriveDiffReviewSnapshot(path: string): Promise<WorkspaceFileDiffSnapshot> {
+  // Keep the Git adapter out of legacy agent/review/preview module initialization. Besides avoiding
+  // unnecessary process machinery for those routes, this means only diff-review can reach Git.
+  const { deriveWorkspaceFileDiff } = await import("@/lib/loom/workspace-diff")
+  return deriveWorkspaceFileDiff(PROJECT_ROOT, path)
+}
 
 function previewPrompt(evidence: WorkspacePreviewEvidence, ownerPrompt: string): string {
   return [
@@ -184,6 +285,7 @@ export async function POST(request: Request) {
     completedTurns?: unknown
     sourceSessionId?: unknown
     worldId?: unknown
+    expectedDiffFingerprint?: unknown
   }
   try {
     body = await request.json()
@@ -192,11 +294,82 @@ export async function POST(request: Request) {
   }
 
   const reviewMode = body.mode === "review"
+  const diffReviewMode = body.mode === "diff-review"
   const forkMode = body.mode === "fork"
   const previewMode = body.mode === "preview"
   let reviewPath: string | null = null
   let reviewFocus: string | null = null
   let prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
+
+  let diffReviewWorldId: string | null = null
+  let diffReviewContext: DiffReviewIdentity | null = null
+  let diffReviewPatch: string | null = null
+  if (diffReviewMode) {
+    if (body.provider !== undefined && body.provider !== "cloud") {
+      return Response.json({ error: "DIFF_REVIEW_PROVIDER_INVALID" }, { status: 400 })
+    }
+    if (typeof body.worldId !== "string" || body.worldId !== body.worldId.trim() || !body.worldId
+      || body.worldId.length > 200 || /[\u0000-\u001f\u007f]/.test(body.worldId)) {
+      return Response.json({ error: "DIFF_REVIEW_WORLD_REQUIRED" }, { status: 400 })
+    }
+    if (typeof body.expectedDiffFingerprint !== "string" || !body.expectedDiffFingerprint
+      || body.expectedDiffFingerprint.length > MAX_DIFF_REVIEW_FINGERPRINT_BYTES
+      || Buffer.byteLength(body.expectedDiffFingerprint, "utf8") > MAX_DIFF_REVIEW_FINGERPRINT_BYTES
+      || /[\u0000\u007f]/.test(body.expectedDiffFingerprint)) {
+      return Response.json({ error: "DIFF_REVIEW_FINGERPRINT_REQUIRED" }, { status: 400 })
+    }
+    if (body.focus !== undefined && typeof body.focus !== "string") {
+      return Response.json({ error: "FOCUS_INVALID" }, { status: 400 })
+    }
+    const focus = typeof body.focus === "string" ? body.focus.trim() : ""
+    if (focus.length > MAX_DIFF_REVIEW_FOCUS_CHARACTERS || /[\u0000-\u001f\u007f]/.test(focus)) {
+      return Response.json({ error: focus.length > MAX_DIFF_REVIEW_FOCUS_CHARACTERS ? "FOCUS_TOO_LONG" : "FOCUS_INVALID" }, { status: 400 })
+    }
+    if (typeof body.path === "string" && isSensitiveWorkspacePath(body.path)) {
+      return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
+    }
+    const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
+    if (!resolved.ok || !resolved.absolute || !resolved.relative || resolved.relative === ".") {
+      return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
+    }
+    if (/[\u0000-\u001f\u007f]/.test(resolved.relative)) {
+      return Response.json({ error: "PATH_INVALID" }, { status: 400 })
+    }
+    if (isSensitiveWorkspacePath(resolved.relative)) {
+      return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
+    }
+    diffReviewWorldId = body.worldId
+    const world = await loadOwnedWorkingWorld(session.user.id, diffReviewWorldId)
+    if (!world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
+    if (!hasActiveDiff(world)) {
+      return Response.json({ error: "DIFF_REVIEW_NOT_ACTIVE" }, { status: 409 })
+    }
+    // Both the browser path and the persisted selection must already be the exact canonical path.
+    // A syntactic alias is not allowed to inherit authority merely because it resolves to the same file.
+    if (body.path !== resolved.relative || selectedWorldPath(world) !== resolved.relative) {
+      return Response.json({ error: "DIFF_REVIEW_PATH_STALE" }, { status: 409 })
+    }
+    const snapshot = await deriveDiffReviewSnapshot(resolved.relative)
+    if (snapshot.state === "oversize" || Buffer.byteLength(snapshot.patch, "utf8") > MAX_DIFF_REVIEW_PATCH_BYTES) {
+      return Response.json({ error: "DIFF_REVIEW_PATCH_UNAVAILABLE" }, { status: 413 })
+    }
+    const identity = diffReviewIdentity(snapshot)
+    if (!identity) {
+      return Response.json({ error: "DIFF_REVIEW_DIFF_REQUIRED" }, { status: 409 })
+    }
+    if (snapshot.path !== resolved.relative || snapshot.fingerprint !== body.expectedDiffFingerprint) {
+      return Response.json({ error: "DIFF_REVIEW_CONTEXT_STALE" }, { status: 409 })
+    }
+    diffReviewContext = { ...identity, worldId: diffReviewWorldId }
+    diffReviewPatch = snapshot.patch
+    reviewPath = resolved.relative
+    reviewFocus = focus || null
+    prompt = diffReviewPrompt(snapshot, reviewFocus)
+    if (prompt.length > MAX_DIFF_REVIEW_PROMPT_UNITS
+      || Buffer.byteLength(prompt, "utf8") > MAX_DIFF_REVIEW_PROMPT_UNITS) {
+      return Response.json({ error: "DIFF_REVIEW_PATCH_UNAVAILABLE" }, { status: 413 })
+    }
+  }
 
   let previewWorldId: string | null = null
   let previewEvidence: WorkspacePreviewEvidence | null = null
@@ -282,17 +455,17 @@ export async function POST(request: Request) {
       "Identify correctness, security, reliability, and regression risks. If there are no findings, say so explicitly.",
       "Do not edit files, run commands, or mutate the workspace.",
     ].join("\n\n")
-  } else if (!prompt) {
+  } else if (!diffReviewMode && !prompt) {
     return Response.json({ error: "PROMPT_REQUIRED" }, { status: 400 })
   }
 
-  if (!reviewMode && body.provider !== "local" && body.provider !== "cloud") {
+  if (!reviewMode && !diffReviewMode && body.provider !== "local" && body.provider !== "cloud") {
     return Response.json({ error: "PROVIDER_INVALID" }, { status: 400 })
   }
   if (forkMode && body.provider !== "cloud") {
     return Response.json({ error: "FORK_PROVIDER_INVALID" }, { status: 400 })
   }
-  const provider = resolveProvider(reviewMode ? "cloud" : body.provider)
+  const provider = resolveProvider(reviewMode || diffReviewMode ? "cloud" : body.provider)
   if (provider.id === "local") {
     if (!localText(prompt, 20_000)) {
       return Response.json({ error: prompt ? "PROMPT_TOO_LONG" : "PROMPT_REQUIRED" }, { status: 400 })
@@ -324,19 +497,22 @@ export async function POST(request: Request) {
     return Response.json({ error: "FORK_SOURCE_REQUIRED" }, { status: 400 })
   }
   const requested = typeof body.sessionId === "string" && SESSION_ID.test(body.sessionId) ? body.sessionId : null
-  if (reviewMode && body.resume === true && requested === null) {
+  if ((reviewMode || diffReviewMode) && body.resume === true && requested === null) {
     return Response.json({ error: "SESSION_ID_REQUIRED" }, { status: 400 })
   }
   const resuming = !forkMode && requested !== null && body.resume === true
   let sessionId: string | null = forkMode ? null : requested ?? randomUUID()
   const priorThreadId = forkSourceId ?? (resuming ? requested : null)
-  const priorThread = priorThreadId ? await loomThreadDescriptor(priorThreadId) : null
+  const priorThread = priorThreadId && !diffReviewMode ? await loomThreadDescriptor(priorThreadId) : null
+  const priorDiffReviewThread = diffReviewMode && resuming && priorThreadId
+    ? await diffReviewThreadRecord(priorThreadId)
+    : null
 
   // Shape is not ownership. Resuming replays a thread's whole history, so the id has to belong to
   // the caller -- otherwise anyone holding another operator's id can read their conversation.
   const resume = assertThreadResume({
     resuming: resuming || forkMode,
-    owner: priorThread?.owner ?? null,
+    owner: diffReviewMode ? priorDiffReviewThread?.owner ?? null : priorThread?.owner ?? null,
     userId: session.user.id,
   })
   if (!resume.ok) {
@@ -345,11 +521,21 @@ export async function POST(request: Request) {
   if (reviewMode && resuming && (priorThread?.mode !== "review" || priorThread.path !== reviewPath)) {
     return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
   }
+  if (diffReviewMode && resuming) {
+    const metadata = priorDiffReviewThread?.metadata
+    if (!metadata || metadata.provider !== "cloud" || metadata.mode !== "diff-review"
+      || metadata.worldId !== diffReviewContext!.worldId || metadata.path !== diffReviewContext!.path
+      || metadata.fingerprint !== diffReviewContext!.fingerprint
+      || metadata.baseHash !== diffReviewContext!.baseHash || metadata.indexHash !== diffReviewContext!.indexHash
+      || metadata.patchHash !== diffReviewContext!.patchHash) {
+      return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
+    }
+  }
   if (previewMode && resuming && (priorThread?.provider !== "cloud" || priorThread.mode !== "preview"
     || priorThread.worldId !== previewWorldId || !priorThread.evidenceFingerprint)) {
     return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
   }
-  if (!previewMode && !reviewMode && resuming && priorThread?.mode === "preview") {
+  if (!previewMode && !reviewMode && !diffReviewMode && resuming && priorThread?.mode === "preview") {
     return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
   }
 
@@ -360,7 +546,7 @@ export async function POST(request: Request) {
   // also deliberately ungated because it only produces text.
   let workContextReceipt: string | null = null
   let resumeForkedFrom: string | null = null
-  if (!reviewMode && !previewMode) {
+  if (!reviewMode && !previewMode && !diffReviewMode) {
     const context = await requireWorkContext()
     if (!context.ok) return workContextRefusal(context)
     workContextReceipt = typeof context.receipt === "string" && context.receipt ? context.receipt : null
@@ -381,13 +567,32 @@ export async function POST(request: Request) {
     }
   }
 
+  // Resume lookup and every earlier await can race the live Space or Git state. Re-earn the exact
+  // selected Diff immediately before constructing/spawning the provider process; no provider work
+  // begins from a context that was merely true at request admission.
+  if (diffReviewMode) {
+    const currentWorld = await loadOwnedWorkingWorld(session.user.id, diffReviewContext!.worldId)
+    if (!currentWorld || !hasActiveDiff(currentWorld)
+      || selectedWorldPath(currentWorld) !== diffReviewContext!.path) {
+      return Response.json({ error: "DIFF_REVIEW_CONTEXT_STALE" }, { status: 409 })
+    }
+    const currentSnapshot = await deriveDiffReviewSnapshot(diffReviewContext!.path)
+    const currentIdentity = diffReviewIdentity(currentSnapshot)
+    if (!currentIdentity || currentSnapshot.patch !== diffReviewPatch || !sameDiffReviewIdentity(
+      diffReviewContext!,
+      { ...currentIdentity, worldId: diffReviewContext!.worldId },
+    )) {
+      return Response.json({ error: "DIFF_REVIEW_CONTEXT_STALE" }, { status: 409 })
+    }
+  }
+
   const args = [
     "--print",
     "--output-format", "stream-json",
     "--verbose",
     // Review is mechanically read-only. Generic agent turns retain their existing builder tools.
-    "--permission-mode", reviewMode || previewMode ? "plan" : "acceptEdits",
-    ...(reviewMode ? ["--tools", "Read,Grep,Glob"] : previewMode ? ["--tools", ""] : []),
+    "--permission-mode", reviewMode || previewMode || diffReviewMode ? "plan" : "acceptEdits",
+    ...(reviewMode || diffReviewMode ? ["--tools", "Read,Grep,Glob"] : previewMode ? ["--tools", ""] : []),
     ...(forkMode ? ["--resume", forkSourceId!, "--fork-session"] : [resuming ? "--resume" : "--session-id", sessionId!]),
     prompt,
   ]
@@ -430,6 +635,9 @@ export async function POST(request: Request) {
       let timer: ReturnType<typeof setTimeout> | null = null
       let previewSessionInitialized = false
       let previewIdentityEstablished = false
+      let diffReviewSessionInitialized = false
+      let diffReviewIdentityEstablished = false
+      let diffReviewCompletedAt: string | null = null
       const send = (event: Record<string, unknown>) => {
         try { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)) } catch { /* reader gone */ }
       }
@@ -437,7 +645,7 @@ export async function POST(request: Request) {
         if (settled) return
         settled = true
         if (timer) clearTimeout(timer)
-        if (sessionId && (!previewMode || previewIdentityEstablished)) {
+        if (sessionId && (!previewMode || previewIdentityEstablished) && (!diffReviewMode || diffReviewIdentityEstablished)) {
           void recordLoomEnd({
             userId: session.user.id,
             kind: "agent",
@@ -447,6 +655,9 @@ export async function POST(request: Request) {
               external: provider.external,
               ...(reviewMode ? { mode: "review", path: reviewPath } : {}),
               ...(previewMode ? { mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint } : {}),
+              ...(diffReviewMode ? {
+                mode: "diff-review", ...diffReviewContext!, completedAt: diffReviewCompletedAt,
+              } : {}),
               ...(forkMode ? { mode: "agent", forkedFrom: forkSourceId } : {}),
               ...(!forkMode && resumeForkedFrom ? { mode: "agent", forkedFrom: resumeForkedFrom } : {}),
               code: event.code ?? null,
@@ -461,16 +672,16 @@ export async function POST(request: Request) {
         if (settled) return
         // Settle the durable outcome before kill can synchronously or asynchronously emit close.
         // Otherwise close(0) can overwrite an explicit cancellation with a false success receipt.
-        finish(forkMode ? { type: "done", reason, code: null } : { type: "done", reason })
+        finish(forkMode || diffReviewMode ? { type: "done", reason, code: null } : { type: "done", reason })
         child.kill()
       }
 
-      deliverChildError = (error) => finish(previewMode
+      deliverChildError = (error) => finish(previewMode || diffReviewMode
         ? { type: "done", reason: "AGENT_UNAVAILABLE", code: null }
         : { type: "done", reason: String(error?.message ?? "AGENT_UNAVAILABLE") })
       if (earlyChildError) queueMicrotask(() => deliverChildError?.(earlyChildError!))
 
-      if (!forkMode && !previewMode) {
+      if (!forkMode && !previewMode && !diffReviewMode) {
         send({
           type: "session", sessionId, resumed: resuming,
           ...(previewMode ? { provider: "Claude", mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint } : {}),
@@ -505,12 +716,13 @@ export async function POST(request: Request) {
       let buffer = ""
       let outputQueue = Promise.resolve()
       let previewResultEvent: Record<string, unknown> | null = null
+      let diffReviewResultEvent: Record<string, unknown> | null = null
       const forwardLine = async (line: string) => {
         if (!line.trim() || settled) return
         let event: Record<string, unknown>
         try { event = JSON.parse(line) as Record<string, unknown> } catch {
-          if (previewMode) {
-            finish({ type: "done", reason: "PREVIEW_STREAM_INVALID", code: null })
+          if (previewMode || diffReviewMode) {
+            finish({ type: "done", reason: diffReviewMode ? "DIFF_REVIEW_STREAM_INVALID" : "PREVIEW_STREAM_INVALID", code: null })
             child.kill()
             return
           }
@@ -585,6 +797,33 @@ export async function POST(request: Request) {
           // tool, raw, and diagnostic provider payloads are never exposed through this surface.
           return
         }
+        if (diffReviewMode) {
+          if (!diffReviewSessionInitialized) {
+            if (event.type !== "system" || event.subtype !== "init") {
+              finish({ type: "done", reason: "DIFF_REVIEW_SESSION_INIT_REQUIRED", code: null })
+              child.kill()
+              return
+            }
+            if (event.session_id !== sessionId) {
+              finish({ type: "done", reason: "DIFF_REVIEW_SESSION_ID_INVALID", code: null })
+              child.kill()
+              return
+            }
+            diffReviewSessionInitialized = true
+            return
+          }
+          if (event.type === "result") {
+            if (diffReviewResultEvent) {
+              finish({ type: "done", reason: "DIFF_REVIEW_STREAM_INVALID", code: null })
+              child.kill()
+              return
+            }
+            diffReviewResultEvent = event
+          }
+          // Intermediate assistant/tool/raw/diagnostic output stays buffered and unobservable. Only
+          // one canonical terminal result may cross the terminal context CAS below.
+          return
+        }
         send({ type: "event", event })
       }
       child.stdout.on("data", (chunk: Buffer) => {
@@ -595,7 +834,7 @@ export async function POST(request: Request) {
           for (const line of lines) await forwardLine(line)
         })
       })
-      child.stderr.on("data", (chunk: Buffer) => { if (!previewMode && (!forkMode || sessionId)) send({ type: "stderr", text: chunk.toString("utf8") }) })
+      child.stderr.on("data", (chunk: Buffer) => { if (!previewMode && !diffReviewMode && (!forkMode || sessionId)) send({ type: "stderr", text: chunk.toString("utf8") }) })
       child.on("close", (code) => {
         const tail = buffer
         buffer = ""
@@ -647,6 +886,59 @@ export async function POST(request: Request) {
               worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint,
             })
             if (!settled) send({ type: "event", event: previewResultEvent })
+            finish({ type: "done", reason: null, code })
+          } else if (diffReviewMode && !diffReviewSessionInitialized) {
+            finish({ type: "done", reason: "DIFF_REVIEW_SESSION_INIT_REQUIRED", code: null })
+          } else if (diffReviewMode) {
+            const resultText = typeof diffReviewResultEvent?.result === "string" ? diffReviewResultEvent.result.trim() : ""
+            const successfulResult = code === 0
+              && diffReviewResultEvent?.type === "result"
+              && diffReviewResultEvent.subtype === "success"
+              && diffReviewResultEvent.is_error === false
+              && diffReviewResultEvent.session_id === sessionId
+              && Boolean(resultText)
+              && Buffer.byteLength(resultText, "utf8") <= MAX_DIFF_REVIEW_RESULT_BYTES
+            if (!successfulResult) {
+              finish({ type: "done", reason: "AGENT_UNAVAILABLE", code })
+              return
+            }
+            const currentWorld = await loadOwnedWorkingWorld(session.user.id, diffReviewContext!.worldId)
+            if (!currentWorld || !hasActiveDiff(currentWorld)
+              || selectedWorldPath(currentWorld) !== diffReviewContext!.path) {
+              finish({ type: "done", reason: "DIFF_REVIEW_CONTEXT_STALE", code: null })
+              return
+            }
+            const currentSnapshot = await deriveDiffReviewSnapshot(diffReviewContext!.path)
+            const currentIdentity = diffReviewIdentity(currentSnapshot)
+            if (!currentIdentity || currentSnapshot.patch !== diffReviewPatch || !sameDiffReviewIdentity(
+              diffReviewContext!,
+              { ...currentIdentity, worldId: diffReviewContext!.worldId },
+            )) {
+              finish({ type: "done", reason: "DIFF_REVIEW_CONTEXT_STALE", code: null })
+              return
+            }
+            diffReviewCompletedAt = new Date().toISOString()
+            try {
+              await recordLoomStart({
+                userId: session.user.id,
+                kind: "agent",
+                subject: sessionId!,
+                metadata: {
+                  provider: provider.id, external: provider.external, metered: provider.metered,
+                  resumed: resuming, mode: "diff-review", ...diffReviewContext!, completedAt: diffReviewCompletedAt,
+                },
+              })
+            } catch {
+              finish({ type: "done", reason: "DIFF_REVIEW_SESSION_IDENTITY_NOT_DURABLE", code: null })
+              return
+            }
+            if (settled) return
+            diffReviewIdentityEstablished = true
+            send({
+              type: "session", sessionId, resumed: resuming, provider: "Claude", mode: "diff-review",
+              ...diffReviewContext!, completedAt: diffReviewCompletedAt,
+            })
+            if (!settled) send({ type: "event", event: diffReviewResultEvent })
             finish({ type: "done", reason: null, code })
           } else finish({ type: "done", reason: null, code })
         })
