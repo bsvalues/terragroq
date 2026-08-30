@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
@@ -224,6 +224,71 @@ describe("Experience V2 transient durable-agent transcript", () => {
     expect(within(line).getByText("Builder is checking the revision fence.")).toBeTruthy()
     expect(within(history).queryByText("Builder is checking the revision fence.")).toBeNull()
     expect(within(history).getByText("Added the revision comparison and focused regression.")).toBeTruthy()
+  })
+
+  it("never paints a durable canonical final twice while a deferred live turn settles", async () => {
+    const finalResult = "Canonical deferred settlement result."
+    const prior = savedSessions[0]
+    let settle!: () => void
+    harness.controller.continueSession = vi.fn(({ prompt, onPresentation }: {
+      prompt: string
+      onPresentation?: (presentation: { phase: "working" | "complete"; text: string; provider: "Codex"; sessionId: string }) => void
+    }) => new Promise((resolve) => {
+      settle = () => {
+        const completed = {
+          ...prior,
+          updatedAt: "2026-08-30T13:10:00.000Z",
+          completedTurns: [...prior.completedTurns, {
+            ownerPrompt: prompt,
+            finalResult,
+            completedAt: "2026-08-30T13:10:00.000Z",
+          }],
+        }
+        harness.controller.savedSessions = harness.controller.savedSessions.map((session: typeof prior) => (
+          session.provider === completed.provider && session.sessionId === completed.sessionId ? completed : session
+        ))
+        harness.controller.sessions = harness.controller.sessions.map((session: ReturnType<typeof projection>) => (
+          session.id === `Codex:${CODEX}`
+            ? { ...session, status: "ready", presentation: undefined, lastResult: finalResult }
+            : session
+        ))
+        onPresentation?.({ phase: "complete", text: finalResult, provider: "Codex", sessionId: CODEX })
+        resolve(completed)
+      }
+    }))
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    const targets = screen.getByRole("group", { name: "Line targets" })
+    fireEvent.click(within(targets).getByRole("button", { name: new RegExp(CODEX) }))
+    const line = screen.getByRole("dialog", { name: "The Line" })
+    fireEvent.change(within(line).getByRole("textbox", { name: "The Line" }), { target: { value: "Settle this exact session." } })
+    fireEvent.click(within(line).getByRole("button", { name: "Continue session" }))
+    expect(within(line).getByText("Agent is starting.")).toBeTruthy()
+
+    let maxCanonicalAdditionsInOneDelivery = 0
+    let canonicalLineReplyPainted = false
+    const observer = new MutationObserver((records) => {
+      const canonicalAdditions = records.flatMap((record) => Array.from(record.addedNodes))
+        .filter((node) => node.textContent?.includes(finalResult)).length
+      maxCanonicalAdditionsInOneDelivery = Math.max(maxCanonicalAdditionsInOneDelivery, canonicalAdditions)
+      canonicalLineReplyPainted ||= records.some((record) => (
+        record.type === "characterData"
+        && record.target.textContent === finalResult
+        && record.target.parentElement?.tagName === "OUTPUT"
+      ))
+    })
+    observer.observe(line, { childList: true, characterData: true, subtree: true })
+
+    await act(async () => { settle() })
+    await waitFor(() => expect(within(line).getAllByText(finalResult)).toHaveLength(1))
+    await Promise.resolve()
+    observer.disconnect()
+
+    expect(maxCanonicalAdditionsInOneDelivery).toBeLessThanOrEqual(1)
+    expect(canonicalLineReplyPainted).toBe(false)
+    expect(harness.controller.continueSession).toHaveBeenCalledTimes(1)
   })
 
   it("removes transcript detail when The Line closes without changing the current Space", async () => {
