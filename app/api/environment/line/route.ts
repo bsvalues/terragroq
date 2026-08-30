@@ -849,6 +849,35 @@ export async function POST(request: Request) {
     const world = await loadWorld(userId, requestedWorldId)
     if (!world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
 
+    // A typed selected-Space operation is the complete read-only operation, not prose for the
+    // generic classifier chain. Handle it before Continue, decision, dismissal, summon and
+    // current-work classifiers so editing its prompt cannot dispatch or mutate some other product
+    // capability. The browser selects the operation; every fact still comes from this exact owned
+    // world and is re-derived at the persistence CAS boundary.
+    if (lineContext === "space-summary") {
+      let updated = withTurn(world, "owner", text)
+      const spaceSummary = deriveSpaceGrounding(world)
+      const expectedSelectedContext = JSON.stringify({
+        persisted: selectedLineContextFingerprint(world),
+        spaceSummary: spaceSummary.version,
+      })
+      const deriveSelectedContext = async (latest: WorkingWorldSnapshot) => JSON.stringify({
+        persisted: selectedLineContextFingerprint(latest),
+        spaceSummary: deriveSpaceGrounding(latest).version,
+      })
+      const say = await converse(updated, text, spaceSummary.facts)
+      updated = withTurn(updated, "williamos", say)
+      try {
+        await saveWorld(userId, requestedWorldId, updated, false, expectedSelectedContext, deriveSelectedContext)
+      } catch (error) {
+        if (error instanceof Error && error.message === "LINE_CONTEXT_STALE") {
+          return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
+        }
+        throw error
+      }
+      return Response.json({ worldId: requestedWorldId, say, surfaces: [], spine: updated.spine } satisfies LineReply)
+    }
+
     let updated = withTurn(world, "owner", text)
     let say: string
     let surfaces: SurfaceDirective[] = []
@@ -984,36 +1013,23 @@ export async function POST(request: Request) {
         // A current-work read retains its exact selection for a later "continue it".
         if ("retained" in grounded) updated = { ...updated, pendingStartWork: grounded.retained ?? null }
       } else {
-        if (lineContext === "space-summary") {
-          const spaceSummary = deriveSpaceGrounding(world)
-          expectedSelectedContext = JSON.stringify({
-            persisted: selectedLineContextFingerprint(world),
-            spaceSummary: spaceSummary.version,
-          })
-          deriveSelectedContext = async (latest) => JSON.stringify({
-            persisted: selectedLineContextFingerprint(latest),
-            spaceSummary: deriveSpaceGrounding(latest).version,
-          })
-          say = await converse(updated, text, spaceSummary.facts)
-        } else {
-          const previewOrigin = williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url)
-          const selectedObject = await deriveSelectedObjectGrounding(world, PROJECT_ROOT, previewOrigin)
-          if (selectedObject.changesSelected && !selectedObject.exact) {
-            return Response.json({ error: "LINE_CONTEXT_UNAVAILABLE" }, { status: 409 })
-          }
-          expectedSelectedContext = JSON.stringify({
-            persisted: selectedLineContextFingerprint(world),
-            selectedObject: selectedObject.version,
-          })
-          deriveSelectedContext = async (latest) => {
-            const latestSelectedObject = await deriveSelectedObjectGrounding(latest, PROJECT_ROOT, previewOrigin)
-            return JSON.stringify({
-              persisted: selectedLineContextFingerprint(latest),
-              selectedObject: latestSelectedObject.version,
-            })
-          }
-          say = await converse(updated, text, `${groundingFacts(await loadProjects(userId))} ${selectedObject.facts}`)
+        const previewOrigin = williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url)
+        const selectedObject = await deriveSelectedObjectGrounding(world, PROJECT_ROOT, previewOrigin)
+        if (selectedObject.changesSelected && !selectedObject.exact) {
+          return Response.json({ error: "LINE_CONTEXT_UNAVAILABLE" }, { status: 409 })
         }
+        expectedSelectedContext = JSON.stringify({
+          persisted: selectedLineContextFingerprint(world),
+          selectedObject: selectedObject.version,
+        })
+        deriveSelectedContext = async (latest) => {
+          const latestSelectedObject = await deriveSelectedObjectGrounding(latest, PROJECT_ROOT, previewOrigin)
+          return JSON.stringify({
+            persisted: selectedLineContextFingerprint(latest),
+            selectedObject: latestSelectedObject.version,
+          })
+        }
+        say = await converse(updated, text, `${groundingFacts(await loadProjects(userId))} ${selectedObject.facts}`)
       }
     }
     updated = withTurn(updated, "williamos", say)

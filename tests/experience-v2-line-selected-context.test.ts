@@ -8,7 +8,17 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { createWorkingWorld, type SpaceState, type WorkingWorldSnapshot } from "@/lib/environment/working-world"
 
-const harness = vi.hoisted(() => ({ snapshot: "", selectCount: 0, save: vi.fn(), diff: vi.fn() }))
+const harness = vi.hoisted(() => ({
+  snapshot: "",
+  selectCount: 0,
+  decisionExists: false,
+  save: vi.fn(),
+  diff: vi.fn(),
+  answerCurrentWork: vi.fn(),
+  startRetainedWork: vi.fn(),
+  createDecision: vi.fn(),
+  supersedeDecision: vi.fn(),
+}))
 
 vi.mock("@/lib/session", () => ({ getUserId: vi.fn(async () => "owner-a") }))
 vi.mock("@/lib/environment/space-persistence", async (importOriginal) => ({
@@ -19,11 +29,22 @@ vi.mock("@/lib/loom/workspace-diff", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/loom/workspace-diff")>(),
   deriveWorkspaceFileDiff: harness.diff,
 }))
+vi.mock("@/lib/environment/current-work-db", () => ({
+  answerCurrentWork: harness.answerCurrentWork,
+  startRetainedWork: harness.startRetainedWork,
+}))
+vi.mock("@/app/actions/decisions", () => ({
+  createDecision: harness.createDecision,
+  supersedeDecision: harness.supersedeDecision,
+  getDecisions: vi.fn(async () => []),
+}))
 vi.mock("@/lib/db", () => ({
   db: {
     select: vi.fn(() => {
       harness.selectCount += 1
-      const rows = harness.selectCount === 1 ? [{ snapshot: harness.snapshot }] : []
+      const rows = harness.selectCount === 1
+        ? [{ snapshot: harness.snapshot }]
+        : harness.decisionExists ? [{ id: 7 }] : []
       const query = {
         from: () => query,
         where: () => query,
@@ -43,7 +64,12 @@ afterEach(async () => {
   vi.unstubAllGlobals()
   harness.save.mockReset()
   harness.diff.mockReset()
+  harness.answerCurrentWork.mockReset()
+  harness.startRetainedWork.mockReset()
+  harness.createDecision.mockReset()
+  harness.supersedeDecision.mockReset()
   harness.selectCount = 0
+  harness.decisionExists = false
   delete process.env.WILLIAMOS_PROJECT_ROOT
   delete process.env.WILLIAMOS_WORKSPACE_APP_URL
   delete process.env.BETTER_AUTH_URL
@@ -52,6 +78,146 @@ afterEach(async () => {
 })
 
 describe("server-derived Line selected-object grounding", () => {
+  it.each([
+    "continue",
+    "record a decision: ship the changed workflow",
+    "record a decision superseding ADR-0007: ship the replacement",
+    "drop all surfaces",
+    "show me the projects",
+    "what am I working on now?",
+  ])("treats typed Space summary as the whole read-only operation before classifiers: %s", async (text) => {
+    const world: WorkingWorldSnapshot = {
+      ...createWorkingWorld({ intent: "Finish Experience V2" }),
+      space: {
+        schemaVersion: 1,
+        revision: 4,
+        windows: [],
+        openFiles: [],
+        panes: [],
+        selection: null,
+        activeWindowId: null,
+        activePaneId: null,
+        runningAppUrl: null,
+      },
+      pendingStartWork: {
+        projectId: 41,
+        projectName: "TerraFusion",
+        threadId: "thread-owned",
+        outcomeKey: "EXPERIENCE_V2",
+        outcomeTitle: "Finish Experience V2",
+        activeWorkOrderId: 1087,
+      },
+    }
+    harness.snapshot = JSON.stringify(world)
+    harness.decisionExists = text.includes("superseding")
+    harness.save.mockImplementationOnce(async (input: {
+      expectedSelectedContext?: string
+      deriveSelectedContext?: (latest: WorkingWorldSnapshot) => Promise<string>
+    }) => {
+      expect(await input.deriveSelectedContext?.(world)).toBe(input.expectedSelectedContext)
+    })
+    const inference = vi.fn(async () => Response.json({ choices: [{ message: { content: "Read-only Space summary" } }] }))
+    vi.stubGlobal("fetch", inference)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text, lineContext: "space-summary" }),
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ say: "Read-only Space summary" })
+    expect(inference).toHaveBeenCalledTimes(1)
+    expect(harness.startRetainedWork).not.toHaveBeenCalled()
+    expect(harness.answerCurrentWork).not.toHaveBeenCalled()
+    expect(harness.createDecision).not.toHaveBeenCalled()
+    expect(harness.supersedeDecision).not.toHaveBeenCalled()
+    expect(harness.selectCount).toBe(1)
+  })
+
+  it("preserves generic null-context Continue behavior", async () => {
+    const world: WorkingWorldSnapshot = {
+      ...createWorkingWorld({ intent: "Finish Experience V2" }),
+      pendingStartWork: {
+        projectId: 41,
+        projectName: "TerraFusion",
+        threadId: "thread-owned",
+        outcomeKey: "EXPERIENCE_V2",
+        outcomeTitle: "Finish Experience V2",
+        activeWorkOrderId: 1087,
+      },
+    }
+    harness.snapshot = JSON.stringify(world)
+    harness.startRetainedWork.mockResolvedValueOnce({ say: "Generic Continue preserved", authorized: false, trace: { status: "refused" } })
+    harness.save.mockResolvedValueOnce(undefined)
+    const inference = vi.fn()
+    vi.stubGlobal("fetch", inference)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "continue" }),
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({ say: "Generic Continue preserved" })
+    expect(harness.startRetainedWork).toHaveBeenCalledTimes(1)
+    expect(inference).not.toHaveBeenCalled()
+  })
+
+  it("projects a persisted minimized active Inspector as minimized and not active", async () => {
+    const world: WorkingWorldSnapshot = {
+      ...createWorkingWorld({ intent: "Inspect the current Space" }),
+      space: {
+        schemaVersion: 1,
+        revision: 8,
+        windows: [{
+          id: "inspector-owned",
+          kind: "inspector",
+          title: "Inspector · Evidence",
+          frame: { x: 20, y: 20, width: 500, height: 400 },
+          z: 9,
+          minimized: true,
+          surfaceKind: "evidence",
+          surfaceSubject: "EXPERIENCE_V2",
+        }],
+        openFiles: [],
+        panes: [],
+        selection: null,
+        activeWindowId: "inspector-owned",
+        activePaneId: null,
+        runningAppUrl: null,
+      },
+    }
+    harness.snapshot = JSON.stringify(world)
+    harness.save.mockImplementationOnce(async (input: {
+      expectedSelectedContext?: string
+      deriveSelectedContext?: (latest: WorkingWorldSnapshot) => Promise<string>
+    }) => {
+      expect(await input.deriveSelectedContext?.(world)).toBe(input.expectedSelectedContext)
+    })
+    let system = ""
+    vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { messages?: { role?: string; content?: string }[] }
+      system = body.messages?.find((message) => message.role === "system")?.content ?? ""
+      return Response.json({ choices: [{ message: { content: "Inspector summary" } }] })
+    }))
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "Summarize", lineContext: "space-summary" }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(system).toContain('"id": "inspector-owned"')
+    expect(system).toContain('"state": "minimized"')
+    expect(system).toContain('"active": false')
+  })
+
   it.each([
     ["unchanged", 200],
     ["space", 409],

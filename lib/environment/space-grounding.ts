@@ -22,14 +22,17 @@ export function deriveSpaceGrounding(world: WorkingWorldSnapshot): SpaceGroundin
     },
     space: space ? {
       revision: space.revision,
-      surfaces: space.windows.map((window) => ({
-        id: window.id,
-        kind: window.kind,
-        title: window.title,
-        state: window.id === space.activeWindowId ? "active" : window.minimized ? "minimized" : "open",
-        active: window.id === space.activeWindowId,
-        minimized: window.minimized,
-      })),
+      surfaces: space.windows.map((window) => {
+        const active = !window.minimized && window.id === space.activeWindowId
+        return {
+          id: window.id,
+          kind: window.kind,
+          title: window.title,
+          state: window.minimized ? "minimized" : active ? "active" : "open",
+          active,
+          minimized: window.minimized,
+        }
+      }),
       selectedPath: space.selection?.filePath ?? activePane?.filePath ?? null,
       selection: space.selection
         ? { anchor: space.selection.anchor, head: space.selection.head }
