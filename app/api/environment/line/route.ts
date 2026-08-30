@@ -29,6 +29,7 @@ import {
 } from "@/lib/environment/decision-intent"
 import { isContinueIntent } from "@/lib/environment/start-work"
 import { isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { deriveWorkspaceFileDiff, type WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
 import { classifyDismissal, classifySummon, isSummonedSurface, type SummonedSurface } from "@/lib/environment/summon"
 import type { RetainedStartWork } from "@/lib/environment/working-world"
 import { exceedsLineCap, guardLineRequest, isMalformedWorldId, readBoundedJson } from "@/lib/environment/line-guard"
@@ -518,56 +519,238 @@ async function converse(world: WorkingWorldSnapshot, text: string, facts: string
 }
 
 const SELECTED_FILE_CONTEXT_BYTES = 64 * 1024
+const MAX_SELECTED_FILE_IDENTITY_BYTES = 32 * 1024 * 1024
+const SELECTED_FILE_IDENTITY_TIMEOUT_MS = 5_000
+
+class SelectedFileIdentityDeadlineError extends Error {
+  constructor() {
+    super("Selected file identity deadline exceeded")
+    this.name = "SelectedFileIdentityDeadlineError"
+  }
+}
+
+function withinSelectedFileIdentityDeadline<T>(
+  operation: Promise<T>,
+  deadline: number,
+  onLateValue?: (value: T) => void,
+): Promise<T> {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) {
+    void operation.then(onLateValue, () => undefined)
+    return Promise.reject(new SelectedFileIdentityDeadlineError())
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      settled = true
+      reject(new SelectedFileIdentityDeadlineError())
+    }, remaining)
+    timer.unref?.()
+    void operation.then(
+      (value) => {
+        if (settled) {
+          onLateValue?.(value)
+          return
+        }
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
+type SelectedObjectGrounding = Readonly<{
+  facts: string
+  version: string
+  exact: boolean
+  changesSelected: boolean
+}>
 
 /**
  * Ground William from the selected object already persisted in the owned world. The owner message
  * is deliberately not an input to this function: prose may discuss any path, but it cannot select
  * a different host file for the server to read.
  */
-async function deriveSelectedObjectGrounding(
+async function deriveSelectedFileGrounding(
   world: WorkingWorldSnapshot,
   projectRoot: string | null = PROJECT_ROOT,
-): Promise<Readonly<{ facts: string; version: string }>> {
+): Promise<SelectedObjectGrounding> {
   const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId)
   const selectedPath = world.space?.selection?.filePath ?? activePane?.filePath ?? null
   const unavailable = (pathValue: string | null, reason: string, facts: string) => ({
     facts,
     version: JSON.stringify({ path: pathValue, sha256: null, boundedBytes: 0, unavailableReason: reason }),
+    exact: false,
+    changesSelected: false,
   })
   if (!selectedPath) return unavailable(null, "NO_FILE_SELECTED", "Selected object (server-derived): no file is selected in the persisted Space.")
   const label = `Selected object (server-derived): file ${JSON.stringify(selectedPath)}.`
   if (!projectRoot) return unavailable(selectedPath, "PROJECT_ROOT_UNAVAILABLE", `${label} Content unavailable: the server project root is not configured.`)
   if (isSensitiveWorkspacePath(selectedPath)) return unavailable(selectedPath, "SENSITIVE_PATH", `${label} Content unavailable: the selected path is sensitive.`)
-  const resolved = await resolveRealWorkspacePath(projectRoot, selectedPath, fs.promises.realpath)
-  if (!resolved.ok || !resolved.absolute || !resolved.relative) {
-    return unavailable(selectedPath, "PATH_UNAVAILABLE", `${label} Content unavailable: the persisted path is outside the readable workspace.`)
-  }
-  if (isSensitiveWorkspacePath(resolved.relative)) return unavailable(resolved.relative, "SENSITIVE_PATH", `${label} Content unavailable: the selected path is sensitive.`)
+  const identityDeadline = Date.now() + SELECTED_FILE_IDENTITY_TIMEOUT_MS
   let handle: fs.promises.FileHandle | null = null
+  let identityTimeout: ReturnType<typeof setTimeout> | null = null
+  const identityAbort = new AbortController()
+  let resolvedPath = selectedPath
   try {
-    handle = await fs.promises.open(resolved.absolute, "r")
-    const bytes = Buffer.alloc(SELECTED_FILE_CONTEXT_BYTES + 1)
-    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0)
-    const sample = bytes.subarray(0, bytesRead)
-    const sha256 = createHash("sha256").update(sample).digest("hex")
+    const resolved = await withinSelectedFileIdentityDeadline(
+      resolveRealWorkspacePath(projectRoot, selectedPath, fs.promises.realpath),
+      identityDeadline,
+    )
+    if (!resolved.ok || !resolved.absolute || !resolved.relative) {
+      return unavailable(selectedPath, "PATH_UNAVAILABLE", `${label} Content unavailable: the persisted path is outside the readable workspace.`)
+    }
+    resolvedPath = resolved.relative
+    if (isSensitiveWorkspacePath(resolved.relative)) return unavailable(resolved.relative, "SENSITIVE_PATH", `${label} Content unavailable: the selected path is sensitive.`)
+
+    // Reject special objects and over-limit files before opening them. On POSIX the open itself is
+    // additionally nonblocking and refuses symlinks, and fstat closes the lstat/open race.
+    const beforeOpen = await withinSelectedFileIdentityDeadline(
+      fs.promises.lstat(resolved.absolute),
+      identityDeadline,
+    )
+    if (!beforeOpen.isFile()) return unavailable(resolved.relative, "FILE_NOT_REGULAR", `${label} Content unavailable: the selected object is not a regular file.`)
+    if (beforeOpen.size > MAX_SELECTED_FILE_IDENTITY_BYTES) {
+      return unavailable(resolved.relative, "FILE_IDENTITY_TOO_LARGE", `${label} Content unavailable: the selected file exceeds the identity limit.`)
+    }
+
+    // Hash the entire file even when its content cannot be presented. A prefix hash made ignored,
+    // untracked, binary, and oversized files vulnerable to invisible tail changes during inference.
+    const posixOnlyFlags = process.platform === "win32"
+      ? 0
+      : ((fs.constants as Record<string, number>).O_NONBLOCK ?? 0)
+        | ((fs.constants as Record<string, number>).O_NOFOLLOW ?? 0)
+    handle = await withinSelectedFileIdentityDeadline(
+      fs.promises.open(resolved.absolute, fs.constants.O_RDONLY | posixOnlyFlags),
+      identityDeadline,
+      (lateHandle) => { void lateHandle.close().catch(() => undefined) },
+    )
+    const before = await withinSelectedFileIdentityDeadline(handle.stat(), identityDeadline)
+    if (!before.isFile()) return unavailable(resolved.relative, "FILE_NOT_REGULAR", `${label} Content unavailable: the selected object is not a regular file.`)
+    if (before.size > MAX_SELECTED_FILE_IDENTITY_BYTES) {
+      return unavailable(resolved.relative, "FILE_IDENTITY_TOO_LARGE", `${label} Content unavailable: the selected file exceeds the identity limit.`)
+    }
+    if (
+      beforeOpen.dev !== 0
+      && beforeOpen.ino !== 0
+      && (before.dev !== beforeOpen.dev || before.ino !== beforeOpen.ino)
+    ) {
+      return unavailable(resolved.relative, "FILE_IDENTITY_CHANGED", `${label} Content unavailable: the selected file changed before its identity was read.`)
+    }
+    const hash = createHash("sha256")
+    const retained: Buffer[] = []
+    let retainedBytes = 0
+    let totalBytes = 0
+    const remainingIdentityTime = identityDeadline - Date.now()
+    if (remainingIdentityTime <= 0) throw new SelectedFileIdentityDeadlineError()
+    identityTimeout = setTimeout(() => identityAbort.abort(), remainingIdentityTime)
+    identityTimeout.unref?.()
+    const stream = fs.createReadStream("", {
+      fd: handle.fd,
+      autoClose: false,
+      highWaterMark: 64 * 1024,
+      signal: identityAbort.signal,
+    })
+    for await (const value of stream) {
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
+      totalBytes += chunk.length
+      if (totalBytes > MAX_SELECTED_FILE_IDENTITY_BYTES) {
+        identityAbort.abort()
+        return unavailable(resolved.relative, "FILE_IDENTITY_TOO_LARGE", `${label} Content unavailable: the selected file exceeds the identity limit.`)
+      }
+      hash.update(chunk)
+      const remaining = SELECTED_FILE_CONTEXT_BYTES + 1 - retainedBytes
+      if (remaining > 0) {
+        const bounded = chunk.subarray(0, remaining)
+        retained.push(bounded)
+        retainedBytes += bounded.length
+      }
+    }
+    const after = await withinSelectedFileIdentityDeadline(handle.stat(), identityDeadline)
+    if (before.size !== totalBytes || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+      return unavailable(resolved.relative, "FILE_IDENTITY_CHANGED", `${label} Content unavailable: the selected file changed while its identity was read.`)
+    }
+    const sample = Buffer.concat(retained, retainedBytes)
+    const sha256 = hash.digest("hex")
     const version = (unavailableReason: string | null) => JSON.stringify({
       path: resolved.relative,
       sha256,
-      boundedBytes: bytesRead,
+      boundedBytes: retainedBytes,
+      totalBytes,
       unavailableReason,
     })
-    if (bytesRead > SELECTED_FILE_CONTEXT_BYTES) {
-      return { facts: `${label} Content unavailable: the selected file exceeds the grounding limit.`, version: version("FILE_TOO_LARGE") }
+    if (totalBytes > SELECTED_FILE_CONTEXT_BYTES) {
+      return { facts: `${label} Content unavailable: the selected file exceeds the grounding limit.`, version: version("FILE_TOO_LARGE"), exact: true, changesSelected: false }
     }
-    if (looksBinary(sample)) return { facts: `${label} Content unavailable: the selected file is binary.`, version: version("BINARY_FILE") }
+    if (looksBinary(sample)) return { facts: `${label} Content unavailable: the selected file is binary.`, version: version("BINARY_FILE"), exact: true, changesSelected: false }
     return {
       facts: `${label}\nAuthoritative selected file version: sha256:${sha256}.\nAuthoritative selected file content:\n--- BEGIN ${resolved.relative} ---\n${sample.toString("utf8")}\n--- END ${resolved.relative} ---`,
       version: version(null),
+      exact: true,
+      changesSelected: false,
     }
-  } catch {
-    return unavailable(resolved.relative, "FILE_UNREADABLE", `${label} Content unavailable: the selected file could not be read.`)
+  } catch (error) {
+    if (identityAbort.signal.aborted || error instanceof SelectedFileIdentityDeadlineError) {
+      return unavailable(resolvedPath, "FILE_IDENTITY_TIMEOUT", `${label} Content unavailable: exact file identity timed out.`)
+    }
+    return unavailable(resolvedPath, "FILE_UNREADABLE", `${label} Content unavailable: the selected file could not be read.`)
   } finally {
-    await handle?.close().catch(() => undefined)
+    if (identityTimeout) clearTimeout(identityTimeout)
+    if (handle) {
+      await withinSelectedFileIdentityDeadline(handle.close(), identityDeadline).catch(() => undefined)
+    }
+  }
+}
+
+function describeSelectedDiff(snapshot: WorkspaceFileDiffSnapshot): string {
+  const identity = `Current patch (server-derived) for ${JSON.stringify(snapshot.path)}. Git state: ${snapshot.state}.`
+  if (snapshot.state === "modified") {
+    return `${identity}\nBase commit: ${snapshot.baseHash}. Patch sha256: ${snapshot.patchHash}.\nGit status:\n${snapshot.status || "(no status entry)"}\n--- BEGIN CURRENT PATCH ---\n${snapshot.patch}\n--- END CURRENT PATCH ---`
+  }
+  if (snapshot.state === "clean") return `${identity}\nBase commit: ${snapshot.baseHash}. Patch sha256: ${snapshot.patchHash}. No changes exist against HEAD.`
+  if (snapshot.state === "untracked") return `${identity}\nBase commit: ${snapshot.baseHash}. The file is untracked, so no tracked patch exists; use the authoritative selected file content above.`
+  if (snapshot.state === "oversize") return `${identity} Patch content unavailable: it exceeds the grounding limit.`
+  return `${identity} Patch content unavailable: Git is not available for this workspace.`
+}
+
+/** Add current Git truth only when the persisted selected object is the Changes surface. */
+async function deriveSelectedObjectGrounding(
+  world: WorkingWorldSnapshot,
+  projectRoot: string | null = PROJECT_ROOT,
+): Promise<SelectedObjectGrounding> {
+  const file = await deriveSelectedFileGrounding(world, projectRoot)
+  const activeWindow = world.space?.windows.find((window) => window.id === world.space?.activeWindowId)
+  if (activeWindow?.kind !== "diff") return file
+  if (!file.exact) return { ...file, changesSelected: true }
+
+  const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId)
+  const selectedPath = world.space?.selection?.filePath ?? activePane?.filePath ?? null
+  const unavailable = (reason: string) => ({
+    facts: `${file.facts}\nCurrent patch (server-derived) unavailable: ${reason}`,
+    version: JSON.stringify({ file: file.version, diff: reason }),
+    exact: false,
+    changesSelected: true,
+  })
+  if (!selectedPath) return unavailable("NO_FILE_SELECTED")
+  if (!projectRoot) return unavailable("PROJECT_ROOT_UNAVAILABLE")
+  if (isSensitiveWorkspacePath(selectedPath)) return unavailable("SENSITIVE_PATH")
+  const resolved = await resolveRealWorkspacePath(projectRoot, selectedPath, fs.promises.realpath)
+  if (!resolved.ok || !resolved.relative || isSensitiveWorkspacePath(resolved.relative)) {
+    return unavailable(resolved.refusal ?? "PATH_UNAVAILABLE")
+  }
+  const diff = await deriveWorkspaceFileDiff(projectRoot, resolved.relative)
+  return {
+    facts: `${file.facts}\n${describeSelectedDiff(diff)}`,
+    version: JSON.stringify({ file: file.version, diff: diff.fingerprint }),
+    exact: diff.baseHash !== null && diff.indexHash !== null && diff.patchHash !== null && diff.state !== "git-unavailable",
+    changesSelected: true,
   }
 }
 
@@ -777,6 +960,9 @@ export async function POST(request: Request) {
         if ("retained" in grounded) updated = { ...updated, pendingStartWork: grounded.retained ?? null }
       } else {
         const selectedObject = await deriveSelectedObjectGrounding(world)
+        if (selectedObject.changesSelected && !selectedObject.exact) {
+          return Response.json({ error: "LINE_CONTEXT_UNAVAILABLE" }, { status: 409 })
+        }
         expectedSelectedContext = JSON.stringify({
           persisted: selectedLineContextFingerprint(world),
           selectedObject: selectedObject.version,
