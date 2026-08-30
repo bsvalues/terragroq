@@ -353,6 +353,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const preferenceStorageKeyRef = useRef<string | null>(null)
   const transitionEpochRef = useRef(0)
   const agentPresentationEpochRef = useRef(0)
+  const agentSavedSessionsRef = useRef(agentSessions.savedSessions)
   const councilViewEpochRef = useRef(0)
   const councilSessionRef = useRef(councilSession)
   const initialSummonConsumedRef = useRef(false)
@@ -379,6 +380,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   storageRef.current = storage
   persistenceErrorRef.current = persistenceError
   persistencePendingRef.current = persistencePending
+  agentSavedSessionsRef.current = agentSessions.savedSessions
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return
@@ -1396,6 +1398,17 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         const presentationWorldId = worldRef.current
         const presentationProvider = delegateContext.provider
         const exactResumeSessionKey = resumeSessionKey(delegateContext)
+        const exactResumeDescriptor = exactResumeSessionKey
+          ? agentSessions.savedSessions.find((candidate) => (
+            lineSessionKey(candidate.provider, candidate.sessionId) === exactResumeSessionKey
+          )) ?? null
+          : null
+        const resumeDescriptorFingerprintAtDispatch = exactResumeDescriptor
+          ? lineSessionDescriptorFingerprint(exactResumeDescriptor)
+          : null
+        const resumeCollectionFingerprintAtDispatch = exactResumeSessionKey
+          ? lineSessionCollectionFingerprint(agentSessions.savedSessions)
+          : null
         let presentationSessionKey: string | null = exactResumeSessionKey
         agentPresentationIsCurrent = () => agentPresentationEpochRef.current === presentationEpoch
           && transitionEpochRef.current === presentationTransitionEpoch
@@ -1459,6 +1472,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
                 : false
           if (!commonMatches || !modeMatches) throw new Error("AGENT_RESUME_SESSION_MISMATCH")
         }
+        if (exactResumeSessionKey && (agentSessions.collectionState !== "available" || !exactResumeDescriptor)) {
+          throw new Error("AGENT_RESUME_SESSION_MISMATCH")
+        }
         if (exactResumeSessionKey) {
           if (resumeSessionInFlightKeys.includes(exactResumeSessionKey)
             || agentSessions.activeSessionIds.includes(exactResumeSessionKey)) {
@@ -1513,20 +1529,29 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
                 : {}),
             })
           const completedSessionKey = `${completed.provider}:${completed.sessionId}`
-          if (delegateContext.kind === "line-session" && completedSessionKey === delegateContext.sessionKey) {
+          if (exactResumeSessionKey && completedSessionKey === exactResumeSessionKey
+            && resumeDescriptorFingerprintAtDispatch && resumeCollectionFingerprintAtDispatch) {
+            const latestCollection = agentSavedSessionsRef.current
             const reboundCollection = agentSessions.savedSessions.map((candidate) => (
               lineSessionKey(candidate.provider, candidate.sessionId) === completedSessionKey ? completed : candidate
             ))
-            setDelegateContext((current) => current?.kind === "line-session"
-              && current.sessionKey === completedSessionKey
-              && current.worldId === delegateContext.worldId
-              && current.transitionEpoch === delegateContext.transitionEpoch
-              ? {
-                ...current,
-                descriptorFingerprint: lineSessionDescriptorFingerprint(completed),
-                collectionFingerprint: lineSessionCollectionFingerprint(reboundCollection),
-              }
-              : current)
+            const reboundCollectionFingerprint = lineSessionCollectionFingerprint(reboundCollection)
+            const latestCollectionFingerprint = lineSessionCollectionFingerprint(latestCollection)
+            if (latestCollectionFingerprint === resumeCollectionFingerprintAtDispatch
+              || latestCollectionFingerprint === reboundCollectionFingerprint) {
+              setDelegateContext((current) => current?.kind === "line-session"
+                && current.sessionKey === completedSessionKey
+                && current.worldId === presentationWorldId
+                && current.transitionEpoch === presentationTransitionEpoch
+                && current.descriptorFingerprint === resumeDescriptorFingerprintAtDispatch
+                && current.collectionFingerprint === resumeCollectionFingerprintAtDispatch
+                ? {
+                  ...current,
+                  descriptorFingerprint: lineSessionDescriptorFingerprint(completed),
+                  collectionFingerprint: reboundCollectionFingerprint,
+                }
+                : current)
+            }
           }
           if (presentationSessionKey === completedSessionKey && agentPresentationIsCurrent()) {
             persistedFinalPresentation = agentPresentationText(completed.completedTurns?.at(-1)?.finalResult) ?? "Agent completed."

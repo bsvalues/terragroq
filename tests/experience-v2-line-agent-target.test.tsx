@@ -306,20 +306,23 @@ describe("Experience V2 Line durable-session targets", () => {
   })
 
   it.each([
-    { name: "Codex Builder", provider: "Codex" as const, sessionId: BUILDER, role: "Builder", assignment: "Build the bounded file", mode: "delegate" as const, method: "runAgentTurn" as const },
-    { name: "Preview debugger", provider: "Claude" as const, sessionId: PREVIEW, role: "Preview debugger", assignment: "Developer Preview diagnosis", mode: "preview" as const, method: "runPreviewDiagnostic" as const },
-    { name: "Local Thinker", provider: "Local" as const, sessionId: LOCAL, role: "Thinker", assignment: "Conversation", mode: "delegate" as const, method: "runAgentTurn" as const },
-  ])("reattaches pre-init $name Talk through its exact durable identity", async ({ provider, sessionId, role, assignment, mode, method }) => {
+    { name: "Codex Builder", provider: "Codex" as const, sessionId: BUILDER, role: "Builder", assignment: "Build the bounded file", mode: "delegate" as const, method: "runAgentTurn" as const, reviewPath: null },
+    { name: "Preview debugger", provider: "Claude" as const, sessionId: PREVIEW, role: "Preview debugger", assignment: "Developer Preview diagnosis", mode: "preview" as const, method: "runPreviewDiagnostic" as const, reviewPath: null },
+    { name: "Local Thinker", provider: "Local" as const, sessionId: LOCAL, role: "Thinker", assignment: "Conversation", mode: "delegate" as const, method: "runAgentTurn" as const, reviewPath: null },
+    { name: "Claude Reviewer", provider: "Claude" as const, sessionId: FIRST, role: "Reviewer", assignment: "Review src/app.ts", mode: "review" as const, method: "runClaudeTurn" as const, reviewPath: "src/app.ts" },
+  ])("reattaches and canonically rebinds a batched pre-init $name Talk", async ({ provider, sessionId, role, assignment, mode, method, reviewPath }) => {
     const exactKey = `${provider}:${sessionId}`
     const durable = {
       schemaVersion: 1 as const, sessionId, role, provider, assignment,
       ...(mode === "preview" ? { preview: { worldId: "browser-world", evidenceFingerprint: "preview-fingerprint" } } : {}),
+      ...(reviewPath ? { reviewPath } : {}),
       updatedAt: "2026-08-30T12:00:00.000Z", completedTurns: [],
     }
     const projection = {
       id: exactKey, role, providerLabel: provider, assignment, status: "ready", evidence: "saved transcript",
       truth: "live" as const, kind: "durable-session" as const, mode,
       ...(mode === "preview" ? { preview: durable.preview } : {}),
+      ...(reviewPath ? { reviewPath } : {}),
     }
     harness.controller.savedSessions = [durable]
     harness.controller.savedDescriptor = durable
@@ -346,8 +349,33 @@ describe("Experience V2 Line durable-session targets", () => {
     fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
     expect(harness.controller[method]).toHaveBeenCalledTimes(1)
 
-    settle(durable)
+    const completed = {
+      ...durable,
+      updatedAt: "2026-08-30T12:01:00.000Z",
+      completedTurns: [{ ownerPrompt: `Continue ${role}.`, finalResult: `Batched ${role} result.`, completedAt: "2026-08-30T12:01:00.000Z" }],
+    }
+    harness.controller.savedSessions = [completed]
+    harness.controller.savedDescriptor = completed
+    harness.controller.durableSession = completed
+    harness.controller.sessions = [{ ...projection, lastResult: `Batched ${role} result.` }]
+    settle(completed)
     await waitFor(() => expect(screen.getByRole("button", { name: "Continue session" })).toBeTruthy())
+
+    const followedUp = {
+      ...completed,
+      updatedAt: "2026-08-30T12:02:00.000Z",
+      completedTurns: [...completed.completedTurns, { ownerPrompt: `Follow up ${role}.`, finalResult: `Followed up ${role}.`, completedAt: "2026-08-30T12:02:00.000Z" }],
+    }
+    harness.controller.continueSession = vi.fn(async ({ sessionKey }: any) => {
+      expect(sessionKey).toBe(exactKey)
+      harness.controller.savedSessions = [followedUp]
+      harness.controller.sessions = [{ ...projection, lastResult: `Followed up ${role}.` }]
+      return followedUp
+    })
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: `Follow up ${role}.` } })
+    fireEvent.click(screen.getByRole("button", { name: "Continue session" }))
+    await waitFor(() => expect(harness.controller.continueSession).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText("Agent turn unavailable.")).toBeNull()
   })
 
   it("rebinds canonical fingerprints after a successful continuation so the same selected target can continue again", async () => {
