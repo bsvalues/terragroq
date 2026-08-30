@@ -34,6 +34,11 @@ export type MissionControlSpaceProjection = Readonly<{
 export type MissionControlWilliamOverview = Readonly<{
   summary: string
   attention?: string | null
+  attentionAction?: Readonly<{
+    kind: "inspect-current-space-persistence"
+    spaceId: string
+    label: string
+  }> | null
   truth: "live" | "fixture"
 }>
 
@@ -158,6 +163,17 @@ export function MissionControlSurface({
   const [createError, setCreateError] = useState<string | null>(null)
   const createFlightRef = useRef(false)
   const spaceCount = spaces.length
+  const currentLiveSpace = spaces.find((space) => (
+    space.id === currentSpaceId && space.state === "live" && space.truth === "live"
+  )) ?? null
+  const proposedAttentionAction = williamOverview?.attentionAction
+  const expectedAttentionLabel = currentLiveSpace ? `Inspect ${currentLiveSpace.name} persistence` : null
+  const attentionAction = proposedAttentionAction?.kind === "inspect-current-space-persistence"
+    && proposedAttentionAction.spaceId === currentSpaceId
+    && proposedAttentionAction.spaceId === currentLiveSpace?.id
+    && proposedAttentionAction.label === expectedAttentionLabel
+    ? proposedAttentionAction
+    : null
   const submitCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (createFlightRef.current || !onCreateSpace) return
@@ -257,6 +273,16 @@ export function MissionControlSurface({
             </>
           ) : <span>No ambient overview is available.</span>}
         </span>
+        {attentionAction ? (
+          <button
+            type="button"
+            className={styles.attentionAction}
+            disabled={transitioning}
+            onClick={() => onEnterSpace(attentionAction.spaceId)}
+          >
+            {attentionAction.label}
+          </button>
+        ) : null}
         <span className={styles.hint}>Select a Space to return to its exact working context · Esc to close</span>
       </footer>
     </section>
