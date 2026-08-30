@@ -2,13 +2,16 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
+import { WorkspaceShell, lineObjectBindingFingerprint } from "@/components/workspace-shell/workspace-shell"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { EMPTY_SPINE } from "@/lib/environment/working-world"
 
 const FIRST = "123e4567-e89b-42d3-a456-426614174000"
 const SECOND = "223e4567-e89b-42d3-a456-426614174000"
 const UNVERIFIED = "323e4567-e89b-42d3-a456-426614174000"
+const COLLISION = "423e4567-e89b-42d3-a456-426614174000"
+
+let liveDiff = { path: "src/app.ts", state: "clean", fingerprint: "clean-diff", untracked: false, diff: "", status: "" }
 
 const harness = vi.hoisted(() => ({ controller: null as any }))
 
@@ -46,7 +49,7 @@ function fetcher() {
     if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
     if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
     if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n" }))
-    if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+    if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json(liveDiff))
     throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
   })
 }
@@ -82,9 +85,10 @@ function projected(sessionId: string, assignment: string, truth: "live" | "resum
 }
 
 beforeEach(() => {
-  const saved = [descriptor(FIRST, "Review src/app.ts"), descriptor(SECOND, "Review src/other.ts"), descriptor(UNVERIFIED, "Review src/unverified.ts")]
+  liveDiff = { path: "src/app.ts", state: "clean", fingerprint: "clean-diff", untracked: false, diff: "", status: "" }
+  const saved = [descriptor(FIRST, "Review src/app.ts"), descriptor(SECOND, "Review src/other.ts"), descriptor(COLLISION, "Review src/app.ts"), descriptor(UNVERIFIED, "Review src/unverified.ts")]
   harness.controller = {
-    sessions: [projected(FIRST, "Review src/app.ts"), projected(SECOND, "Review src/other.ts"), projected(UNVERIFIED, "Review src/unverified.ts", "resume-unverified")],
+    sessions: [projected(FIRST, "Review src/app.ts"), projected(SECOND, "Review src/other.ts"), projected(COLLISION, "Review src/app.ts"), projected(UNVERIFIED, "Review src/unverified.ts", "resume-unverified")],
     durableSession: saved[0], savedDescriptor: saved[0], savedSessions: saved,
     collectionState: "available", selectedSessionKey: `Claude:${FIRST}`, descriptorState: "verified",
     activeSessionId: null, pausableSessionId: null, activeSessionIds: [], pausableSessionIds: [], activeTurns: [], activeProvider: null, error: null,
@@ -106,6 +110,13 @@ afterEach(() => {
 })
 
 describe("Experience V2 Line durable-session targets", () => {
+  it("structurally distinguishes same-role agent objects and exact diff identities", () => {
+    expect(lineObjectBindingFingerprint({ kind: "agent-session", sessionKey: `Claude:${FIRST}` }))
+      .not.toBe(lineObjectBindingFingerprint({ kind: "agent-session", sessionKey: `Claude:${SECOND}` }))
+    expect(lineObjectBindingFingerprint({ kind: "diff", path: "src/app.ts", fingerprint: "diff-a" }))
+      .not.toBe(lineObjectBindingFingerprint({ kind: "diff", path: "src/app.ts", fingerprint: "diff-b" }))
+  })
+
   it("keeps William default and lists each verified exact-world session role-first without projecting unverified hints", async () => {
     vi.stubGlobal("fetch", fetcher())
     render(<WorkspaceShell />)
@@ -116,8 +127,11 @@ describe("Experience V2 Line durable-session targets", () => {
     const targets = screen.getByRole("group", { name: "Line targets" })
     expect(targets).toBeTruthy()
     expect(screen.getByRole("button", { name: "William" }).getAttribute("aria-pressed")).toBe("true")
-    expect(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/app\\.ts · .*${FIRST.slice(-6)}`) })).toBeTruthy()
-    expect(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/other\\.ts · .*${SECOND.slice(-6)}`) })).toBeTruthy()
+    expect(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/app\\.ts.*${FIRST}`) })).toBeTruthy()
+    expect(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/other\\.ts.*${SECOND}`) })).toBeTruthy()
+    const colliding = [FIRST, COLLISION].map((id) => screen.getByRole("button", { name: new RegExp(`Review src/app\\.ts.*${id}`) }))
+    expect(new Set(colliding.map((button) => button.getAttribute("aria-label"))).size).toBe(2)
+    expect(colliding.every((button) => button.getAttribute("title")?.includes(idFor(button, [FIRST, COLLISION])))).toBe(true)
     expect(screen.queryByText(/unverified\.ts/)).toBeNull()
   })
 
@@ -128,7 +142,7 @@ describe("Experience V2 Line durable-session targets", () => {
     await screen.findByLabelText("Source content")
     fireEvent.keyDown(window, { key: "k", ctrlKey: true })
 
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/other\\.ts · .*${SECOND.slice(-6)}`) }))
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/other\\.ts.*${SECOND}`) }))
     expect(screen.getByText((text, element) => element?.tagName === "SPAN" && /Reviewer · Claude · Review src\/other\.ts/.test(text))).toBeTruthy()
     expect(screen.getByText((text, element) => element?.tagName === "SPAN" && /src\/app\.ts · TerraFusion Space/.test(text))).toBeTruthy()
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Recheck this exact review." } })
@@ -150,7 +164,7 @@ describe("Experience V2 Line durable-session targets", () => {
     render(<WorkspaceShell />)
     await screen.findByLabelText("Source content")
     fireEvent.keyDown(window, { key: "k", ctrlKey: true })
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/app\\.ts · .*${FIRST.slice(-6)}`) }))
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/app\\.ts.*${FIRST}`) }))
 
     harness.controller.savedSessions = [descriptor(SECOND, "Review src/other.ts")]
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Do not guess." } })
@@ -172,7 +186,7 @@ describe("Experience V2 Line durable-session targets", () => {
     const view = render(<WorkspaceShell />)
     await screen.findByLabelText("Source content")
     fireEvent.keyDown(window, { key: "k", ctrlKey: true })
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/app\\.ts · .*${FIRST.slice(-6)}`) }))
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/app\\.ts.*${FIRST}`) }))
 
     expect(screen.getByText("Reviewer is checking the saved assignment.")).toBeTruthy()
     expect((screen.getByRole("button", { name: "Session working" }) as HTMLButtonElement).disabled).toBe(true)
@@ -190,7 +204,7 @@ describe("Experience V2 Line durable-session targets", () => {
     expect(harness.controller.stop).not.toHaveBeenCalled()
     fireEvent.keyDown(window, { key: "k", ctrlKey: true })
     expect(screen.queryByText("Canonical settled Reviewer answer.")).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/app\\.ts · .*${FIRST.slice(-6)}`) }))
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/app\\.ts.*${FIRST}`) }))
     expect(screen.getByText("Canonical settled Reviewer answer.")).toBeTruthy()
   })
 
@@ -205,4 +219,83 @@ describe("Experience V2 Line durable-session targets", () => {
     expect(targets.querySelectorAll("button")).toHaveLength(1)
     expect(screen.getByRole("button", { name: "William" }).getAttribute("aria-pressed")).toBe("true")
   })
+
+  it("reattaches the exact pre-init continuation as starting and cannot dispatch it twice", async () => {
+    let settle!: (value: any) => void
+    harness.controller.continueSession = vi.fn(() => new Promise((resolve) => { settle = resolve }))
+    vi.stubGlobal("fetch", fetcher())
+    const view = render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(FIRST) }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Start exact continuation." } })
+    fireEvent.click(screen.getByRole("button", { name: "Continue session" }))
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(FIRST) }))
+    expect(screen.getByText("Agent is starting.")).toBeTruthy()
+    expect((screen.getByRole("button", { name: "Session working" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Do not duplicate." } })
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+    expect(harness.controller.continueSession).toHaveBeenCalledTimes(1)
+
+    const completed = { ...harness.controller.savedSessions[0], completedTurns: [...harness.controller.savedSessions[0].completedTurns, { ownerPrompt: "Start exact continuation.", finalResult: "Settled exact continuation.", completedAt: "2026-08-30T12:02:00.000Z" }] }
+    harness.controller.savedSessions = [completed, ...harness.controller.savedSessions.slice(1)]
+    harness.controller.sessions = harness.controller.sessions.map((session: any) => session.id === `Claude:${FIRST}` ? { ...session, lastResult: "Settled exact continuation." } : session)
+    settle(completed)
+    view.rerender(<WorkspaceShell />)
+    expect(await screen.findByText("Settled exact continuation.")).toBeTruthy()
+  })
+
+  it("rebinds canonical fingerprints after a successful continuation so the same selected target can continue again", async () => {
+    let turn = 0
+    harness.controller.continueSession = vi.fn(async ({ sessionKey, prompt, onPresentation }: any) => {
+      turn += 1
+      const prior = harness.controller.savedSessions.find((candidate: any) => `Claude:${candidate.sessionId}` === sessionKey)
+      const result = `Canonical follow-up ${turn}`
+      const completed = { ...prior, updatedAt: `2026-08-30T12:0${turn}:00.000Z`, completedTurns: [...prior.completedTurns, { ownerPrompt: prompt, finalResult: result, completedAt: `2026-08-30T12:0${turn}:00.000Z` }] }
+      harness.controller.savedSessions = harness.controller.savedSessions.map((candidate: any) => candidate.sessionId === completed.sessionId ? completed : candidate)
+      harness.controller.sessions = harness.controller.sessions.map((session: any) => session.id === sessionKey ? { ...session, lastResult: result } : session)
+      onPresentation?.({ phase: "complete", text: result, provider: "Claude", sessionId: completed.sessionId })
+      return completed
+    })
+    vi.stubGlobal("fetch", fetcher())
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(FIRST) }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "First follow-up." } })
+    fireEvent.click(screen.getByRole("button", { name: "Continue session" }))
+    expect(await screen.findByText("Canonical follow-up 1")).toBeTruthy()
+
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Second follow-up." } })
+    fireEvent.click(screen.getByRole("button", { name: "Continue session" }))
+    expect(await screen.findByText("Canonical follow-up 2")).toBeTruthy()
+    expect(harness.controller.continueSession).toHaveBeenCalledTimes(2)
+  })
+
+  it("fails closed when the selected Changes path or fingerprint drifts after target capture", async () => {
+    liveDiff = { path: "src/app.ts", state: "modified", fingerprint: "diff-a", untracked: false, diff: "+a", status: " M src/app.ts" }
+    vi.stubGlobal("fetch", fetcher())
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    fireEvent.click(screen.getByRole("button", { name: "Restore Changes" }))
+    await screen.findByText("+a")
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(FIRST) }))
+
+    liveDiff = { ...liveDiff, fingerprint: "diff-b", diff: "+b" }
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }))
+    await screen.findByText("+b")
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Must refuse stale diff." } })
+    fireEvent.click(screen.getByRole("button", { name: "Continue session" }))
+
+    expect(await screen.findByText("Agent turn unavailable.")).toBeTruthy()
+    expect(harness.controller.continueSession).not.toHaveBeenCalled()
+  })
 })
+
+function idFor(button: HTMLElement, ids: readonly string[]): string {
+  return ids.find((id) => button.getAttribute("aria-label")?.includes(id)) ?? "missing"
+}

@@ -73,10 +73,17 @@ type LineSessionDelegateContext = Readonly<{
   transitionEpoch: number
   collectionFingerprint: string
   descriptorFingerprint: string
+  objectBinding: LineObjectBinding
   objectContext: string
   spaceContext: string
 }>
 type DelegateContext = StandardDelegateContext | ReviewerDelegateContext | ContinueDelegateContext | LineSessionDelegateContext
+export type LineObjectBinding =
+  | Readonly<{ kind: "agent-session"; sessionKey: string }>
+  | Readonly<{ kind: "file"; path: string }>
+  | Readonly<{ kind: "diff"; path: string; fingerprint: string }>
+  | Readonly<{ kind: "preview"; worldId: string; evidenceFingerprint: string }>
+  | Readonly<{ kind: "space"; worldId: string; revision: number }>
 type ForkContext = Readonly<{ sourceSessionId: string; assignment: string; label: string }>
 type ChangeRefresh = Readonly<{ path: string | null; key: number }>
 type CapturedDiffImprove = Readonly<{ path: string; fingerprint: string; worldId: string; transitionEpoch: number }>
@@ -119,6 +126,10 @@ function lineSessionCollectionFingerprint(sessions: readonly unknown[]): string 
   return JSON.stringify([...sessions]
     .map((session) => lineSessionDescriptorFingerprint(session))
     .sort())
+}
+
+export function lineObjectBindingFingerprint(binding: LineObjectBinding | null): string {
+  return JSON.stringify(binding)
 }
 
 function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefined): ReviewerDelegateContext | null {
@@ -234,6 +245,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineContext, setLineContext] = useState<LineContext>(null)
   const [lineMode, setLineMode] = useState<LineMode>("default")
   const [lineTargetPickerOpen, setLineTargetPickerOpen] = useState(false)
+  const [lineSessionInFlightKeys, setLineSessionInFlightKeys] = useState<readonly string[]>([])
+  const [lineSessionObservedRunningKey, setLineSessionObservedRunningKey] = useState<string | null>(null)
   const [delegateContext, setDelegateContext] = useState<DelegateContext | null>(null)
   const [forkContext, setForkContext] = useState<ForkContext | null>(null)
   const [changeTarget, setChangeTarget] = useState<string | null>(null)
@@ -1306,6 +1319,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineBusy(true)
     setLineReply(null)
     let agentPresentationIsCurrent: (() => boolean) | null = null
+    let lineSessionDispatchKey: string | null = null
     try {
       const contextualText = lineTarget === "agent" && delegateContext
         ? `Owner request: ${text}`
@@ -1358,10 +1372,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             || exactDescriptor.role !== delegateContext.role
             || exactDescriptor.assignment !== delegateContext.assignment
             || exactProjection?.truth !== "live"
-            || `${selectedKindLabel} · ${selectedLabel}` !== delegateContext.objectContext
-            || `${project?.name ?? space.name} Space` !== delegateContext.spaceContext) {
+            || lineSessionInFlightKeys.includes(delegateContext.sessionKey)
+            || agentSessions.activeSessionIds.includes(delegateContext.sessionKey)
+            || lineObjectBindingFingerprint(currentLineObjectBinding()) !== lineObjectBindingFingerprint(delegateContext.objectBinding)) {
             throw new Error("AGENT_LINE_SESSION_STALE")
           }
+          lineSessionDispatchKey = delegateContext.sessionKey
+          setLineSessionInFlightKeys((current) => current.includes(delegateContext.sessionKey)
+            ? current
+            : [...current, delegateContext.sessionKey])
         }
         if (reviewerAgentContext) {
           const exactKey = `Claude:${reviewerAgentContext.sessionId}`
@@ -1416,6 +1435,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
                 : {}),
             })
           const completedSessionKey = `${completed.provider}:${completed.sessionId}`
+          if (delegateContext.kind === "line-session" && completedSessionKey === delegateContext.sessionKey) {
+            const reboundCollection = agentSessions.savedSessions.map((candidate) => (
+              lineSessionKey(candidate.provider, candidate.sessionId) === completedSessionKey ? completed : candidate
+            ))
+            setDelegateContext((current) => current?.kind === "line-session"
+              && current.sessionKey === completedSessionKey
+              && current.worldId === delegateContext.worldId
+              && current.transitionEpoch === delegateContext.transitionEpoch
+              ? {
+                ...current,
+                descriptorFingerprint: lineSessionDescriptorFingerprint(completed),
+                collectionFingerprint: lineSessionCollectionFingerprint(reboundCollection),
+              }
+              : current)
+          }
           if (presentationSessionKey === completedSessionKey && agentPresentationIsCurrent()) {
             persistedFinalPresentation = agentPresentationText(completed.completedTurns?.at(-1)?.finalResult) ?? "Agent completed."
             setLineReply(persistedFinalPresentation)
@@ -1452,6 +1486,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           : error instanceof DOMException && error.name === "AbortError" ? "Agent turn stopped." : "Agent turn unavailable.")
       }
     } finally {
+      if (lineSessionDispatchKey) {
+        setLineSessionInFlightKeys((current) => current.filter((key) => key !== lineSessionDispatchKey))
+      }
       if (!agentPresentationIsCurrent || agentPresentationIsCurrent()) setLineBusy(false)
     }
   }
@@ -1477,6 +1514,25 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "diff" ? "changes"
     : selectedKind === "agent" ? "agent session"
     : "Space"
+
+  function currentLineObjectBinding(): LineObjectBinding | null {
+    if (selectedKind === "agent") return selectedAgent ? { kind: "agent-session", sessionKey: selectedAgent.id } : null
+    if (selectedKind === "file") return space.selectedPath ? { kind: "file", path: space.selectedPath } : null
+    if (selectedKind === "diff") {
+      const live = liveDiffContextRef.current
+      return live && live.worldId === worldId && live.path === space.selectedPath
+        ? { kind: "diff", path: live.path, fingerprint: live.fingerprint }
+        : null
+    }
+    if (selectedKind === "preview") {
+      if (!worldId || !project) return null
+      const live = inspectors.flatMap((surface) => surface.kind === "preview-evidence"
+        ? [parsePreviewInspectorPayload(surface.payload)] : []).filter(Boolean).at(-1)
+        ?? loadPreviewEvidenceSnapshot(worldId, project.identity)
+      return live ? { kind: "preview", worldId, evidenceFingerprint: live.evidence.fingerprint } : null
+    }
+    return worldId ? { kind: "space", worldId, revision: space.revision } : null
+  }
   const verifiedLineSessionTargets = agentSessions.collectionState === "available"
     ? agentSessions.savedSessions.flatMap((descriptor) => {
       const sessionKey = lineSessionKey(descriptor.provider, descriptor.sessionId)
@@ -1501,20 +1557,42 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       candidate.id === delegateContext.sessionKey && candidate.truth === "live"
     ))
     if (!projection) return
+    if (lineSessionInFlightKeys.includes(delegateContext.sessionKey)
+      && !agentSessions.activeSessionIds.includes(delegateContext.sessionKey)) {
+      setLineReply("Agent is starting.")
+      return
+    }
     if (agentSessions.activeSessionIds.includes(delegateContext.sessionKey)) {
+      setLineSessionObservedRunningKey(delegateContext.sessionKey)
       setLineReply(projection.presentation ?? "Agent is working.")
       return
     }
     if (projection.lastResult) {
+      if (lineSessionObservedRunningKey === delegateContext.sessionKey) {
+        const descriptor = agentSessions.savedSessions.find((candidate) => (
+          lineSessionKey(candidate.provider, candidate.sessionId) === delegateContext.sessionKey
+        ))
+        if (descriptor) {
+          setDelegateContext((current) => current?.kind === "line-session" && current.sessionKey === delegateContext.sessionKey
+            ? {
+              ...current,
+              descriptorFingerprint: lineSessionDescriptorFingerprint(descriptor),
+              collectionFingerprint: lineSessionCollectionFingerprint(agentSessions.savedSessions),
+            }
+            : current)
+        }
+        setLineSessionObservedRunningKey(null)
+      }
       setLineReply(projection.lastResult)
       setLineBusy(false)
     }
-  }, [agentSessions.activeSessionIds, agentSessions.sessions, delegateContext, lineOpen, lineTarget])
+  }, [agentSessions.activeSessionIds, agentSessions.savedSessions, agentSessions.sessions, delegateContext, lineOpen, lineSessionInFlightKeys, lineSessionObservedRunningKey, lineTarget])
 
   function selectLineSessionTarget(target: (typeof verifiedLineSessionTargets)[number]) {
     const capturedWorldId = worldRef.current
+    const objectBinding = currentLineObjectBinding()
     if (!capturedWorldId || agentSessions.collectionState !== "available"
-      || !agentSessions.selectSession(target.sessionKey)) return
+      || !objectBinding || !agentSessions.selectSession(target.sessionKey)) return
     agentPresentationEpochRef.current += 1
     setLineTarget("agent")
     setLineContext(null)
@@ -1534,11 +1612,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       transitionEpoch: transitionEpochRef.current,
       collectionFingerprint: lineSessionCollectionFingerprint(agentSessions.savedSessions),
       descriptorFingerprint: lineSessionDescriptorFingerprint(target.descriptor),
+      objectBinding,
       objectContext: `${selectedKindLabel} · ${selectedLabel}`,
       spaceContext: `${project?.name ?? space.name} Space`,
     })
-    setLineReply(agentSessions.activeSessionIds.includes(target.sessionKey)
-      ? target.projection.presentation ?? "Agent is working."
+    const active = agentSessions.activeSessionIds.includes(target.sessionKey)
+    setLineSessionObservedRunningKey(active ? target.sessionKey : null)
+    setLineReply(lineSessionInFlightKeys.includes(target.sessionKey) && !active
+      ? "Agent is starting."
+      : active ? target.projection.presentation ?? "Agent is working."
       : target.projection.lastResult ?? "Verified durable session selected.")
   }
   const pauseAction = selectedAgent && agentSessions.pausableSessionIds.includes(selectedAgent.id) ? "Pause" : "Pause unavailable"
@@ -2156,14 +2238,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
                   setLineBusy(false)
                   setLineReply(null)
                 }}>William</button>
-                {verifiedLineSessionTargets.map((target) => <button key={target.sessionKey} type="button" className={spatial.lineClose} aria-pressed={delegateContext?.kind === "line-session" && delegateContext.sessionKey === target.sessionKey} aria-label={target.label} onClick={() => selectLineSessionTarget(target)}>{target.label}</button>)}
+                {verifiedLineSessionTargets.map((target) => <button key={target.sessionKey} type="button" className={spatial.lineClose} aria-pressed={delegateContext?.kind === "line-session" && delegateContext.sessionKey === target.sessionKey} aria-label={`${target.label} · session ${target.descriptor.sessionId}`} title={`${target.label} · session ${target.descriptor.sessionId}`} onClick={() => selectLineSessionTarget(target)}>{target.label}</button>)}
               </div> : null}
               <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
             </div>
             <div className={spatial.lineControls}>
               {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider">{delegateContext.kind === "preview" ? <button type="button" className={spatial.lineClose} disabled aria-label="Codex unavailable" title="Preview diagnostic transport is not available for Codex yet.">Codex unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Codex" } : current)}>Codex</button>}<button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
               <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineMode === "fork" ? "Claude fork · source remains unchanged" : reviewerAgentContext ? "Read-only Reviewer session" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
-              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && (!delegateContext?.provider || delegateContext.kind === "line-session" && agentSessions.activeSessionIds.includes(delegateContext.sessionKey))}>{lineMode === "change" ? change.running ? changeIntent === "improve-diff" ? "Improving" : "Changing" : changeIntent === "improve-diff" ? "Start improvement" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : delegateContext?.kind === "continue" || delegateContext?.kind === "line-session" ? delegateContext.kind === "line-session" && agentSessions.activeSessionIds.includes(delegateContext.sessionKey) ? "Session working" : lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
+              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && (!delegateContext?.provider || delegateContext.kind === "line-session" && (agentSessions.activeSessionIds.includes(delegateContext.sessionKey) || lineSessionInFlightKeys.includes(delegateContext.sessionKey)))}>{lineMode === "change" ? change.running ? changeIntent === "improve-diff" ? "Improving" : "Changing" : changeIntent === "improve-diff" ? "Start improvement" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : delegateContext?.kind === "continue" || delegateContext?.kind === "line-session" ? delegateContext.kind === "line-session" && (agentSessions.activeSessionIds.includes(delegateContext.sessionKey) || lineSessionInFlightKeys.includes(delegateContext.sessionKey)) ? "Session working" : lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
               {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>{changeIntent === "improve-diff" ? "Stop improvement" : "Stop change"}</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (lineMode === "review" && review.running) { if (review.canStop) review.stop(); return } if (lineTarget === "agent") { agentPresentationEpochRef.current += 1; setLineBusy(false) } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
             </div>
           </form>
