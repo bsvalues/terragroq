@@ -3,7 +3,11 @@ import { Pool } from "pg"
 import { describe, expect, it } from "vitest"
 
 import { buildHistoricalProjectContextInsert, getHistoricalProjectContextCatalog } from "@/lib/history/historical-project-context"
-import { loadHistoricalMigrationBundle, runHistoricalMigrations } from "@/scripts/db/historical-migration-runner.mjs"
+import {
+  loadHistoricalMigrationBundle,
+  probeHistoricalSchema,
+  runHistoricalMigrations,
+} from "@/scripts/db/historical-migration-runner.mjs"
 import {
   countW24Hits,
   executeHistoricalPromotion,
@@ -130,6 +134,27 @@ async function insertProjectContextFixture(
 }
 
 runDatabase("historical nine-record executor on isolated PostgreSQL", { timeout: 90_000 }, () => {
+  it("does not inspect visible pg_catalog aggregates as migration functions", async () => {
+    const schema = `historical_probe_${randomUUID().replaceAll("-", "")}`
+    const admin = new Pool({ connectionString: directDatabaseUrl(databaseUrl!), max: 2 })
+    let pool: Pool | null = null
+    try {
+      await admin.query(`CREATE SCHEMA "${schema}"`)
+      const parsed = new URL(directDatabaseUrl(databaseUrl!))
+      parsed.searchParams.set("options", `-csearch_path=pg_catalog,${schema}`)
+      pool = new Pool({ connectionString: parsed.toString(), max: 2 })
+
+      await expect(probeHistoricalSchema(pool)).resolves.toMatchObject({
+        baseSchemaReady: false,
+        historicalPromotionReady: false,
+      })
+    } finally {
+      await pool?.end()
+      await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+      await admin.end()
+    }
+  })
+
   it("walls semantic partial schemas before committing any migration repair", async () => {
     const admin = new Pool({ connectionString: directDatabaseUrl(databaseUrl!), max: 2 })
     const schemas: string[] = []

@@ -64,7 +64,13 @@ SELECT jsonb_build_object(
   )) FROM pg_indexes WHERE schemaname = current_schema()), '[]'::jsonb),
   'functions', COALESCE((SELECT jsonb_agg(jsonb_build_object(
     'name', p.proname, 'definition', pg_get_functiondef(p.oid)
-  )) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = current_schema()), '[]'::jsonb),
+  )) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = current_schema() AND p.prokind = 'f' AND (
+        (p.proname = 'lock_historical_document_chunk_invariant'
+          AND p.proargtypes = '23 25'::oidvector AND p.prorettype = 'void'::regtype)
+        OR (p.proname IN ('reject_historical_document_chunk', 'reject_historical_document_with_chunks')
+          AND p.pronargs = 0 AND p.prorettype = 'trigger'::regtype)
+      )), '[]'::jsonb),
   'triggers', COALESCE((SELECT jsonb_agg(jsonb_build_object(
     'tableName', c.relname, 'name', t.tgname, 'definition', pg_get_triggerdef(t.oid),
     'enabled', t.tgenabled
