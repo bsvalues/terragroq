@@ -308,6 +308,81 @@ describe("Experience V2 selected-file Review", () => {
     expect(screen.getByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/ })).toBeTruthy()
   })
 
+  it("keeps a running Reviewer bound through re-selection, exact Stop, and the next read-only Redirect", async () => {
+    const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
+    const prior = {
+      schemaVersion: 1,
+      sessionId: SESSION_ID,
+      role: "Reviewer",
+      provider: "Claude",
+      assignment: "Review src/app.ts",
+      reviewPath: "src/app.ts",
+      updatedAt: "2026-08-28T12:00:00.000Z",
+      completedTurns: [{ ownerPrompt: "Initial review.", finalResult: "Saved report", completedAt: "2026-08-28T12:00:00.000Z" }],
+    }
+    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${SESSION_ID}`, sessions: [prior] }))
+    const pending = deferredStream({ type: "session", sessionId: SESSION_ID, provider: "Claude", mode: "review", resumed: true })
+    let signal: AbortSignal | null = null
+    let reviewCalls = 0
+    const fetcher = baseFetch((init) => {
+      reviewCalls += 1
+      if (reviewCalls === 1) {
+        signal = init.signal as AbortSignal
+        return pending.response
+      }
+      return stream(
+        { type: "session", sessionId: SESSION_ID, provider: "Claude", mode: "review", resumed: true },
+        resultEvent("Redirect completed on the same Reviewer."),
+        { type: "done", code: 0, reason: null },
+      )
+    })
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await screen.findByLabelText("Source content")
+    fireEvent.click(await screen.findByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Talk" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Inspect while running." } })
+    fireEvent.click(screen.getByRole("button", { name: "Send to Reviewer" }))
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy())
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/ }))
+    expect(screen.getByText("Reviewer · Claude · src/app.ts · read-only")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }))
+    await waitFor(() => expect(signal?.aborted).toBe(true))
+
+    fireEvent.click(await screen.findByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Redirect" }))
+    expect(screen.getByText("Reviewer · Claude · src/app.ts · read-only")).toBeTruthy()
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Recheck without changing files." } })
+    fireEvent.click(screen.getByRole("button", { name: "Send to Reviewer" }))
+
+    expect(await screen.findByText("Redirect completed on the same Reviewer.")).toBeTruthy()
+    const agentRequests = fetcher.mock.calls.filter(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
+    expect(agentRequests).toHaveLength(2)
+    expect(JSON.parse(String(agentRequests[1]?.[1]?.body))).toEqual({
+      mode: "review",
+      path: "src/app.ts",
+      focus: "Recheck without changing files.",
+      provider: "cloud",
+      sessionId: SESSION_ID,
+      resume: true,
+    })
+    expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
+    expect(JSON.parse(String(window.localStorage.getItem(key))).sessions).toEqual([
+      expect.objectContaining({
+        sessionId: SESSION_ID,
+        role: "Reviewer",
+        reviewPath: "src/app.ts",
+        completedTurns: [
+          expect.objectContaining({ finalResult: "Saved report" }),
+          expect.objectContaining({ finalResult: "Redirect completed on the same Reviewer." }),
+        ],
+      }),
+    ])
+  })
+
   it("reviews a restored agent's exact persisted file target instead of the currently selected file", async () => {
     const agentId = "restored-codex-agent"
     const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"

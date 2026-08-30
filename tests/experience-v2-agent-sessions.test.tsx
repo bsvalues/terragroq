@@ -2676,14 +2676,14 @@ describe("Experience V2 real agent sessions", () => {
     expect(expose!.sessions[0]?.target).toBeUndefined()
   })
 
-  it("shows a restored descriptor as unverified until resume succeeds", async () => {
+  it("shows a restored Builder descriptor as unverified until resume succeeds", async () => {
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
     window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
       schemaVersion: 1,
       sessionId,
-      role: "Reviewer",
+      role: "Builder",
       provider: "Claude",
-      assignment: "Review src/app.ts",
+      assignment: "Build src/app.ts",
       updatedAt: "2026-08-27T16:05:00.000Z",
     }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
@@ -2696,17 +2696,17 @@ describe("Experience V2 real agent sessions", () => {
 
     await waitFor(() => expect(expose!.descriptorState).toBe("unverified"))
     expect(expose!.savedDescriptor?.sessionId).toBe(sessionId)
-    expect(screen.getByRole("button", { name: /Reviewer · Claude/i })).toBeTruthy()
+    expect(screen.getByRole("button", { name: /Builder · Claude/i })).toBeTruthy()
     expect(screen.getByText("resume unverified · saved transcript · server verification required")).toBeTruthy()
     await act(async () => {
-      await expose!.runClaudeTurn({ role: "Reviewer", assignment: "Review src/app.ts", prompt: "Continue the review." })
+      await expose!.runClaudeTurn({ role: "Builder", assignment: "Build src/app.ts", prompt: "Continue the work." })
     })
 
-    expect(screen.getByRole("button", { name: /Reviewer · Claude/i })).toBeTruthy()
+    expect(screen.getByRole("button", { name: /Builder · Claude/i })).toBeTruthy()
     expect(screen.getByText("ready · resumable session")).toBeTruthy()
     expect(expose!.descriptorState).toBe("verified")
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
-      prompt: "Continue the review.",
+      prompt: "Continue the work.",
       provider: "cloud",
       sessionId,
       resume: true,
@@ -2856,10 +2856,99 @@ describe("Experience V2 real agent sessions", () => {
   })
 
   it.each([
-    ["Builder", "src/app.ts"],
+    ["Claude Builder carrying reviewPath", { provider: "Claude", role: "Builder", assignment: "Build src/app.ts", reviewPath: "src/app.ts" }],
+    ["Claude Reviewer missing reviewPath", { provider: "Claude", role: "Reviewer", assignment: "Review src/app.ts" }],
+    ["Codex Reviewer carrying reviewPath", { provider: "Codex", role: "Reviewer", assignment: "Review src/app.ts", reviewPath: "src/app.ts" }],
+    ["Local Reviewer carrying reviewPath", { provider: "Local", role: "Reviewer", assignment: "Review src/app.ts", reviewPath: "src/app.ts" }],
+  ] as const)("rejects impossible restored review metadata: %s", async (_label, metadata) => {
+    const sessionId = metadata.provider === "Codex" ? "codex-impossible-review" : "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `${metadata.provider}:${sessionId}`,
+      sessions: [{
+        schemaVersion: 1,
+        sessionId,
+        ...metadata,
+        updatedAt: "2026-08-29T10:00:00.000Z",
+        completedTurns: [],
+      }],
+    }))
+
+    render(<Harness />)
+
+    await waitFor(() => expect(expose!.collectionState).toBe("partial"))
+    expect(expose!.savedSessions).toEqual([])
+    expect(expose!.sessions).toEqual([])
+  })
+
+  it("requires the exact durable Reviewer prior before a bound Talk or Redirect can issue a request", async () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.collectionState).toBe("missing"))
+
+    await expect(expose!.runClaudeTurn({
+      role: "Reviewer",
+      assignment: "Review src/app.ts",
+      mode: "review",
+      path: "src/app.ts",
+      focus: "Continue exactly.",
+      requiredSessionKey: "Claude:123e4567-e89b-42d3-a456-426614174000",
+    })).rejects.toThrow("AGENT_REVIEW_PRIOR_REQUIRED")
+
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(expose!.activeTurns).toEqual([])
+    expect(expose!.savedSessions).toEqual([])
+  })
+
+  it("refuses a mismatched bound Reviewer prior instead of starting a new review", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${sessionId}`,
+      sessions: [{
+        schemaVersion: 1,
+        sessionId,
+        role: "Reviewer",
+        provider: "Claude",
+        assignment: "Review src/app.ts",
+        reviewPath: "src/app.ts",
+        updatedAt: "2026-08-29T10:00:00.000Z",
+        completedTurns: [],
+      }],
+    }))
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.selectedSessionKey).toBe(`Claude:${sessionId}`))
+
+    await expect(expose!.runClaudeTurn({
+      role: "Reviewer",
+      assignment: "Review src/other.ts",
+      mode: "review",
+      path: "src/other.ts",
+      focus: "Redirect exactly.",
+      requiredSessionKey: `Claude:${sessionId}`,
+    })).rejects.toThrow("AGENT_REVIEW_SESSION_MISMATCH")
+
+    await expect(expose!.runClaudeTurn({
+      role: "Builder",
+      assignment: "Review src/app.ts",
+      mode: "review",
+      path: "src/app.ts",
+      focus: "Do not reinterpret this as Builder work.",
+      requiredSessionKey: `Claude:${sessionId}`,
+    })).rejects.toThrow("AGENT_REVIEW_ROLE_INVALID")
+
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(expose!.savedSessions).toEqual([expect.objectContaining({ sessionId, reviewPath: "src/app.ts" })])
+  })
+
+  it.each([
+    ["Builder", undefined],
     ["Reviewer", "src/other.ts"],
-  ])("starts Review fresh rather than resuming a %s/%s descriptor", async (role, reviewPath) => {
-    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({ schemaVersion: 1, sessionId: "123e4567-e89b-42d3-a456-426614174000", role, provider: "Claude", assignment: "Prior work", reviewPath, updatedAt: "2026-08-27T16:05:00.000Z" }))
+  ])("starts Review fresh rather than resuming a valid but incompatible %s descriptor", async (role, reviewPath) => {
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({ schemaVersion: 1, sessionId: "123e4567-e89b-42d3-a456-426614174000", role, provider: "Claude", assignment: "Prior work", ...(reviewPath ? { reviewPath } : {}), updatedAt: "2026-08-27T16:05:00.000Z" }))
     const fetcher = vi.fn().mockResolvedValue(ndjson(
       { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", resumed: false },
       { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Fresh review" } },
