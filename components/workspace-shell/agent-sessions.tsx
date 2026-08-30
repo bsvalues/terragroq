@@ -34,6 +34,11 @@ export type AgentSessionFileTarget = Readonly<{
   path: string
 }>
 
+export type AgentSessionPreview = Readonly<{
+  worldId: string
+  evidenceFingerprint: string
+}>
+
 export type DurableAgentSession = Readonly<{
   schemaVersion: 1
   sessionId: string
@@ -43,6 +48,7 @@ export type DurableAgentSession = Readonly<{
   target?: AgentSessionFileTarget
   reviewPath?: string
   forkedFrom?: string
+  preview?: AgentSessionPreview
   updatedAt: string
   completedTurns?: readonly CompletedAgentTurn[]
 }>
@@ -65,10 +71,11 @@ export type ExperienceAgentSession = Readonly<{
   evidence: string
   truth: "live" | "resume-unverified"
   kind: "durable-session" | "world-worker"
-  mode: "delegate" | "review"
+  mode: "delegate" | "review" | "preview"
   target?: AgentSessionFileTarget
   reviewPath?: string
   forkedFrom?: string
+  preview?: AgentSessionPreview
   lastResult?: string
   presentation?: string
 }>
@@ -121,6 +128,12 @@ export type RunAgentTurnInput = Readonly<{
   onPresentation?: (presentation: AgentTurnPresentation) => void
 }>
 
+export type RunPreviewDiagnosticInput = Readonly<{
+  prompt: string
+  onEvent?: (event: Readonly<Record<string, unknown>>) => void
+  onPresentation?: (presentation: AgentTurnPresentation) => void
+}>
+
 export type ForkClaudeSessionInput = Readonly<{
   sourceSessionId: string
   assignment: string
@@ -161,6 +174,7 @@ export type ExperienceAgentSessionController = Readonly<{
   activeTurns: readonly ActiveAgentTurn[]
   error: string | null
   runClaudeTurn: (input: RunClaudeTurnInput) => Promise<DurableClaudeSession>
+  runPreviewDiagnostic: (input: RunPreviewDiagnosticInput) => Promise<DurableClaudeSession>
   selectSession: (sessionId: string | null) => boolean
   stop: (sessionId?: string) => void
 }>
@@ -182,7 +196,7 @@ type ActiveAgentOperation = {
   priorSelectedSessionKey: string | null
   provider: AgentProvider
   role: string
-  mode: "delegate" | "review" | "fork"
+  mode: "delegate" | "review" | "fork" | "preview"
   lane: "writer" | "reviewer" | "thinker" | null
   accepted: DurableAgentSession | null
   acceptedKey: string | null
@@ -248,10 +262,19 @@ function parseFileTarget(value: unknown): AgentSessionFileTarget | null {
   return path ? { kind: "file", path } : null
 }
 
+function parsePreview(value: unknown): AgentSessionPreview | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  const worldId = boundedText(candidate.worldId, 200)
+  const evidenceFingerprint = typeof candidate.evidenceFingerprint === "string" && ASSIGNMENT_HASH.test(candidate.evidenceFingerprint)
+    ? candidate.evidenceFingerprint : null
+  return Object.keys(candidate).length === 2 && worldId && evidenceFingerprint ? { worldId, evidenceFingerprint } : null
+}
+
 function optionalMetadataSessionIdentity(value: unknown): Readonly<{ key: string; sessionId: string }> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
-  if (!("target" in candidate) && !("forkedFrom" in candidate)
+  if (!("target" in candidate) && !("forkedFrom" in candidate) && !("preview" in candidate)
     || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)) return null
   return { key: sessionKey(candidate.provider, candidate.sessionId), sessionId: candidate.sessionId }
@@ -273,13 +296,16 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     : typeof candidate.forkedFrom === "string" && CLAUDE_SESSION_ID.test(candidate.forkedFrom) && candidate.forkedFrom !== candidate.sessionId
       ? candidate.forkedFrom : null
   const completedTurns = candidate.completedTurns === undefined ? [] : parseCompletedTurns(candidate.completedTurns)
+  const preview = candidate.preview === undefined ? undefined : parsePreview(candidate.preview)
   if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)
     || !role || !assignment || !updatedAt || (candidate.target !== undefined && !target)
     || (candidate.reviewPath !== undefined && !reviewPath) || (candidate.forkedFrom !== undefined && !forkedFrom) || !completedTurns
     || target !== undefined && (role !== "Builder" || candidate.provider !== "Codex" || reviewPath !== undefined)
-    || forkedFrom !== undefined && (candidate.provider !== "Claude" || role !== "Builder" || reviewPath !== undefined || target !== undefined)
-    || candidate.provider === "Local" && (role !== "Thinker" || assignment !== "Conversation" || target !== undefined || reviewPath !== undefined)) return null
+    || (candidate.preview !== undefined && !preview)
+    || forkedFrom !== undefined && (candidate.provider !== "Claude" || role !== "Builder" || reviewPath !== undefined || target !== undefined || preview !== undefined)
+    || preview !== undefined && (candidate.provider !== "Claude" || role !== "Preview debugger" || target !== undefined || reviewPath !== undefined || forkedFrom !== undefined)
+    || candidate.provider === "Local" && (role !== "Thinker" || assignment !== "Conversation" || target !== undefined || reviewPath !== undefined || preview !== undefined)) return null
   return {
     schemaVersion: 1,
     sessionId: candidate.sessionId,
@@ -289,6 +315,7 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     ...(target ? { target } : {}),
     ...(reviewPath ? { reviewPath } : {}),
     ...(forkedFrom ? { forkedFrom } : {}),
+    ...(preview ? { preview } : {}),
     updatedAt,
     completedTurns,
   }
@@ -480,10 +507,11 @@ function projectSessions(
           : isLocal ? "saved conversation · replay verification required" : "saved transcript · server verification required",
       truth: isVerified || active ? "live" : "resume-unverified",
       kind: "durable-session",
-      mode: descriptor.reviewPath ? "review" : "delegate",
+      mode: descriptor.preview ? "preview" : descriptor.reviewPath ? "review" : "delegate",
       ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
+      ...(descriptor.preview ? { preview: descriptor.preview } : {}),
       ...(descriptor.completedTurns?.at(-1)?.finalResult ? { lastResult: descriptor.completedTurns.at(-1)!.finalResult } : {}),
       ...(active ? { presentation: active.presentation } : {}),
     })
@@ -501,10 +529,11 @@ function projectSessions(
       evidence: descriptor.provider === "Local" ? "live model response" : "live agent stream",
       truth: "live",
       kind: "durable-session",
-      mode: descriptor.reviewPath ? "review" : "delegate",
+      mode: descriptor.preview ? "preview" : descriptor.reviewPath ? "review" : "delegate",
       ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
+      ...(descriptor.preview ? { preview: descriptor.preview } : {}),
       presentation: turn.presentation,
     })
   })
@@ -783,7 +812,7 @@ export function useExperienceAgentSessions({
 
   const executeTurn = useCallback(async (input: Omit<RunClaudeTurnInput, "mode"> & {
     provider: AgentProvider
-    mode?: "delegate" | "review" | "fork"
+    mode?: "delegate" | "review" | "fork" | "preview"
     sourceSessionId?: string
   }) => {
     if (input.provider !== "Codex" && input.provider !== "Claude" && input.provider !== "Local") {
@@ -794,6 +823,7 @@ export function useExperienceAgentSessions({
     const prompt = boundedText(input.prompt, 20_000)
     const mode = input.mode ?? "delegate"
     const forkMode = mode === "fork"
+    const previewMode = mode === "preview"
     const reviewPath = boundedText(input.path, 1_000)
     const requestedTarget = input.target === undefined ? null : parseFileTarget(input.target)
     const focus = input.focus === undefined || input.focus === "" ? null : boundedText(input.focus, 2_000)
@@ -804,8 +834,12 @@ export function useExperienceAgentSessions({
       || input.provider !== "Codex")) throw new Error("AGENT_TARGET_INVALID")
     if (mode === "review" && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (mode === "review" && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
+    if (previewMode && (input.provider !== "Claude" || role !== "Preview debugger")) throw new Error("AGENT_PREVIEW_PROVIDER_INVALID")
 
     const storedPrior = sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKeyRef.current) ?? null
+    if (previewMode && storedPrior?.preview && storedPrior.preview.worldId !== worldId) {
+      throw new Error("AGENT_PREVIEW_SESSION_SCOPE_MISMATCH")
+    }
     const forkSource = forkMode && input.provider === "Claude" && role === "Builder" && validSessionId("Claude", input.sourceSessionId)
       && storedPrior?.provider === "Claude" && storedPrior.role === "Builder" && !storedPrior.reviewPath
       && storedPrior.sessionId === input.sourceSessionId
@@ -814,10 +848,14 @@ export function useExperienceAgentSessions({
     if (forkMode && !forkSource) throw new Error("AGENT_FORK_UNAVAILABLE")
     const prior = forkMode ? null : mode === "review"
       ? storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer" && storedPrior.reviewPath === reviewPath ? storedPrior : null
+      : previewMode
+        ? storedPrior?.provider === "Claude" && storedPrior.role === "Preview debugger" && storedPrior.preview?.worldId === worldId ? storedPrior : null
       : storedPrior?.provider === input.provider && !storedPrior.reviewPath
+        && !storedPrior.preview
         && storedPrior.role === role && storedPrior.assignment === assignment ? storedPrior : null
     const lane: ActiveAgentOperation["lane"] = input.provider === "Codex" && role === "Builder" && mode === "delegate" ? "writer"
       : input.provider === "Claude" && role === "Reviewer" && mode === "review" ? "reviewer"
+        : previewMode ? "reviewer"
         : input.provider === "Local" && mode === "delegate" ? "thinker" : null
     const running = [...operationsRef.current.values()]
     const priorKey = prior ? sessionKey(prior.provider, prior.sessionId) : null
@@ -860,7 +898,7 @@ export function useExperienceAgentSessions({
       reason: undefined,
     }
     const present = (phase: AgentTurnPresentation["phase"], text: string, sessionId: string) => {
-      if (mode !== "delegate" || !isCurrent()) return
+      if (mode !== "delegate" && mode !== "preview" || !isCurrent()) return
       const safeText = phase === "working" ? "Agent is working." : agentPresentationText(text)
       if (!safeText && phase !== "complete") return
       operation.presentation = safeText ?? "Agent completed."
@@ -884,6 +922,13 @@ export function useExperienceAgentSessions({
           mode: "review",
           path: reviewPath,
           ...(focus ? { focus } : {}),
+          provider: "cloud",
+          sessionId: prior?.sessionId ?? null,
+          resume: prior !== null,
+        } : previewMode ? {
+          mode: "preview",
+          worldId,
+          prompt,
           provider: "cloud",
           sessionId: prior?.sessionId ?? null,
           resume: prior !== null,
@@ -967,9 +1012,14 @@ export function useExperienceAgentSessions({
             && ASSIGNMENT_HASH.test(event.assignmentHash) ? event.assignmentHash : null
           const invalidTargetBinding = Boolean(capturedTarget
             && (serverSelectedPath !== capturedTarget.path || !serverAssignmentHash))
+          const previewWorldId = previewMode ? boundedText(event.worldId, 200) : null
+          const previewFingerprint = previewMode && typeof event.evidenceFingerprint === "string" && ASSIGNMENT_HASH.test(event.evidenceFingerprint)
+            ? event.evidenceFingerprint : null
+          const invalidPreviewBinding = previewMode && (event.provider !== "Claude" || event.mode !== "preview"
+            || previewWorldId !== worldId || !previewFingerprint)
           if (!sessionIdValid || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed
             || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth || !localTruth
-            || !forkTruth || invalidResumeForkLineage || invalidTargetBinding) {
+            || !forkTruth || invalidResumeForkLineage || invalidTargetBinding || invalidPreviewBinding) {
             if (invalidTargetBinding) targetBindingInvalid = true
             malformed = true
             return
@@ -985,6 +1035,7 @@ export function useExperienceAgentSessions({
             ...(mode === "review" ? { reviewPath: reviewPath! } : {}),
             ...(forkMode ? { forkedFrom: forkSource!.sessionId } : {}),
             ...(resumeForkedFrom ? { forkedFrom: resumeForkedFrom } : {}),
+            ...(previewMode ? { preview: { worldId: previewWorldId!, evidenceFingerprint: previewFingerprint! } } : {}),
             updatedAt: new Date().toISOString(),
           }
           if (isCurrent()) {
@@ -1168,6 +1219,9 @@ export function useExperienceAgentSessions({
 
   const runAgentTurn = useCallback((input: RunAgentTurnInput) => executeTurn({ ...input, mode: "delegate" }), [executeTurn])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
+  const runPreviewDiagnostic = useCallback((input: RunPreviewDiagnosticInput) => executeTurn({
+    ...input, provider: "Claude", role: "Preview debugger", assignment: "Developer Preview diagnosis", mode: "preview",
+  }), [executeTurn])
   const forkClaudeSession = useCallback((input: ForkClaudeSessionInput) => executeTurn({
     ...input, provider: "Claude", role: "Builder", mode: "fork",
   }), [executeTurn])
@@ -1204,6 +1258,7 @@ export function useExperienceAgentSessions({
     activeProvider: presentedActiveTurns[0]?.provider ?? null,
     error,
     runAgentTurn,
+    runPreviewDiagnostic,
     runClaudeTurn,
     forkClaudeSession,
     selectSession,

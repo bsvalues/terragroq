@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 
 import { getSession } from "@/lib/session"
+import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
+import { inspectWorkspaceApp, williamOsOrigin, type WorkspacePreviewEvidence } from "@/lib/environment/workspace-app"
 import { resolveOllamaChatModel } from "@/lib/ai/ollama-models"
 import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/providers"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
@@ -24,6 +26,27 @@ const MAX_LOCAL_RESULT_BYTES = 200_000
 const MAX_LOCAL_FRAME_BYTES = 262_144
 const MAX_FORK_PROMPT_CHARACTERS = 20_000
 const MAX_FORK_PROMPT_BYTES = 32_768
+const PREVIEW_FINGERPRINT = /^[0-9a-f]{64}$/
+
+function previewPrompt(evidence: WorkspacePreviewEvidence, ownerPrompt: string): string {
+  return [
+    "You are the read-only Preview debugger for the current WilliamOS Space.",
+    `Owner request: ${ownerPrompt}`,
+    "Use only the following server-derived Preview evidence. Do not infer browser DOM, console, or network observations.",
+    `Status: ${evidence.status}`,
+    `Reason: ${evidence.reason ?? "none"}`,
+    `Configured URL: ${evidence.configuredUrl ?? "unavailable"}`,
+    `Admitted URL: ${evidence.admittedUrl ?? "unavailable"}`,
+    `Origin: ${evidence.origin ?? "unavailable"}`,
+    `Identity: ${evidence.identity}`,
+    `Reachable: ${String(evidence.reachable)}`,
+    `Frameable: ${String(evidence.frameable)}`,
+    `Checked at: ${evidence.checkedAt}`,
+    `Evidence fingerprint: ${evidence.fingerprint}`,
+    "Limitations: DOM unavailable; console unavailable; network unavailable.",
+    "Explain likely causes and bounded next diagnostic steps. Do not edit files, run commands, or mutate the workspace.",
+  ].join("\n\n")
+}
 
 type LocalCompletedTurn = Readonly<{
   ownerPrompt: string
@@ -160,6 +183,7 @@ export async function POST(request: Request) {
     model?: unknown
     completedTurns?: unknown
     sourceSessionId?: unknown
+    worldId?: unknown
   }
   try {
     body = await request.json()
@@ -169,9 +193,40 @@ export async function POST(request: Request) {
 
   const reviewMode = body.mode === "review"
   const forkMode = body.mode === "fork"
+  const previewMode = body.mode === "preview"
   let reviewPath: string | null = null
   let reviewFocus: string | null = null
   let prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
+
+  let previewWorldId: string | null = null
+  let previewEvidence: WorkspacePreviewEvidence | null = null
+  if (previewMode) {
+    if (body.provider !== "cloud") return Response.json({ error: "PREVIEW_PROVIDER_INVALID" }, { status: 400 })
+    if (typeof body.worldId !== "string" || body.worldId !== body.worldId.trim() || !body.worldId
+      || body.worldId.length > 200 || /[\u0000-\u001f\u007f]/.test(body.worldId)) {
+      return Response.json({ error: "PREVIEW_WORLD_REQUIRED" }, { status: 400 })
+    }
+    if (!prompt || prompt.length > MAX_FORK_PROMPT_CHARACTERS
+      || new TextEncoder().encode(prompt).byteLength > MAX_FORK_PROMPT_BYTES
+      || /[\u0000-\u001f\u007f]/.test(prompt)) {
+      return Response.json({ error: prompt ? "PREVIEW_PROMPT_INVALID" : "PROMPT_REQUIRED" }, { status: 400 })
+    }
+    previewWorldId = body.worldId
+    const world = await loadOwnedWorkingWorld(session.user.id, previewWorldId)
+    if (!world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
+    const active = world.space?.windows.find((window) => window.id === world.space!.activeWindowId)
+    if (!active || active.kind !== "running-app") {
+      return Response.json({ error: "PREVIEW_NOT_ACTIVE" }, { status: 409 })
+    }
+    previewEvidence = await inspectWorkspaceApp(
+      process.env.WILLIAMOS_WORKSPACE_APP_URL?.trim() || null,
+      williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url),
+    )
+    if (!PREVIEW_FINGERPRINT.test(previewEvidence.fingerprint)) {
+      return Response.json({ error: "PREVIEW_EVIDENCE_INVALID" }, { status: 503 })
+    }
+    prompt = previewPrompt(previewEvidence, prompt)
+  }
 
   // A fork prompt becomes an argument to a workspace-writing Claude process. Validate it before
   // consulting any thread or work-context authority so malformed input cannot exercise those seams.
@@ -290,6 +345,13 @@ export async function POST(request: Request) {
   if (reviewMode && resuming && (priorThread?.mode !== "review" || priorThread.path !== reviewPath)) {
     return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
   }
+  if (previewMode && resuming && (priorThread?.provider !== "cloud" || priorThread.mode !== "preview"
+    || priorThread.worldId !== previewWorldId || !priorThread.evidenceFingerprint)) {
+    return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
+  }
+  if (!previewMode && !reviewMode && resuming && priorThread?.mode === "preview") {
+    return Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403, headers: { "cache-control": "no-store" } })
+  }
 
   // Generic cloud turns spawn the CLI with acceptEdits against the real checkout, which makes them
   // the most powerful mutation surface in the application -- strictly broader than /api/loom/edit.
@@ -298,7 +360,7 @@ export async function POST(request: Request) {
   // also deliberately ungated because it only produces text.
   let workContextReceipt: string | null = null
   let resumeForkedFrom: string | null = null
-  if (!reviewMode) {
+  if (!reviewMode && !previewMode) {
     const context = await requireWorkContext()
     if (!context.ok) return workContextRefusal(context)
     workContextReceipt = typeof context.receipt === "string" && context.receipt ? context.receipt : null
@@ -324,8 +386,8 @@ export async function POST(request: Request) {
     "--output-format", "stream-json",
     "--verbose",
     // Review is mechanically read-only. Generic agent turns retain their existing builder tools.
-    "--permission-mode", reviewMode ? "plan" : "acceptEdits",
-    ...(reviewMode ? ["--tools", "Read,Grep,Glob"] : []),
+    "--permission-mode", reviewMode || previewMode ? "plan" : "acceptEdits",
+    ...(reviewMode ? ["--tools", "Read,Grep,Glob"] : previewMode ? ["--tools", ""] : []),
     ...(forkMode ? ["--resume", forkSourceId!, "--fork-session"] : [resuming ? "--resume" : "--session-id", sessionId!]),
     prompt,
   ]
@@ -349,6 +411,23 @@ export async function POST(request: Request) {
   // Closing it immediately tells the CLI there is nothing coming.
   child.stdin.end()
 
+  if (previewMode) {
+    try {
+      await recordLoomStart({
+        userId: session.user.id,
+        kind: "agent",
+        subject: sessionId!,
+        metadata: {
+          provider: provider.id, external: provider.external, metered: provider.metered, resumed: resuming,
+          mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint,
+        },
+      })
+    } catch {
+      child.kill()
+      return Response.json({ error: "PREVIEW_SESSION_IDENTITY_NOT_DURABLE" }, { status: 503 })
+    }
+  }
+
   let settled = false
   let terminate: ((reason: "TIMEOUT" | "CANCELLED") => void) | null = null
   const encoder = new TextEncoder()
@@ -371,6 +450,7 @@ export async function POST(request: Request) {
               provider: provider.id,
               external: provider.external,
               ...(reviewMode ? { mode: "review", path: reviewPath } : {}),
+              ...(previewMode ? { mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint } : {}),
               ...(forkMode ? { mode: "agent", forkedFrom: forkSourceId } : {}),
               ...(!forkMode && resumeForkedFrom ? { mode: "agent", forkedFrom: resumeForkedFrom } : {}),
               code: event.code ?? null,
@@ -392,11 +472,12 @@ export async function POST(request: Request) {
       if (!forkMode) {
         send({
           type: "session", sessionId, resumed: resuming,
+          ...(previewMode ? { provider: "Claude", mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint } : {}),
           ...(resumeForkedFrom ? { provider: "Claude", mode: "delegate", forkedFrom: resumeForkedFrom } : {}),
         })
         // An external turn is the case the doctrine cares most about: the receipt names the provider
         // and records that work left the machine.
-        void recordLoomStart({
+        if (!previewMode) void recordLoomStart({
           userId: session.user.id,
           kind: "agent",
           subject: sessionId!,
@@ -422,6 +503,7 @@ export async function POST(request: Request) {
       // only complete lines are forwarded -- a half-parsed event would look like agent output.
       let buffer = ""
       let outputQueue = Promise.resolve()
+      let previewResultEvent: Record<string, unknown> | null = null
       const forwardLine = async (line: string) => {
         if (!line.trim() || settled) return
         let event: Record<string, unknown>
@@ -466,6 +548,15 @@ export async function POST(request: Request) {
           sessionId = childSessionId
           send({ type: "session", sessionId: childSessionId, provider: "Claude", mode: "fork", resumed: false, forkedFrom: forkSourceId })
         }
+        if (previewMode && event.type === "result") {
+          if (previewResultEvent) {
+            finish({ type: "done", reason: "PREVIEW_STREAM_INVALID", code: null })
+            child.kill()
+            return
+          }
+          previewResultEvent = event
+          return
+        }
         send({ type: "event", event })
       }
       child.stdout.on("data", (chunk: Buffer) => {
@@ -481,9 +572,26 @@ export async function POST(request: Request) {
       child.on("close", (code) => {
         const tail = buffer
         buffer = ""
-        outputQueue = outputQueue.then(() => forwardLine(tail)).then(() => {
+        outputQueue = outputQueue.then(() => forwardLine(tail)).then(async () => {
           if (forkMode && !sessionId) finish({ type: "done", reason: "FORK_SESSION_ID_REQUIRED", code: null })
-          else finish({ type: "done", reason: null, code })
+          else if (previewMode && code === 0 && previewResultEvent) {
+            const currentWorld = await loadOwnedWorkingWorld(session.user.id, previewWorldId!)
+            const currentActive = currentWorld?.space?.windows.find((window) => window.id === currentWorld.space!.activeWindowId)
+            if (!currentActive || currentActive.kind !== "running-app") {
+              finish({ type: "done", reason: "PREVIEW_CONTEXT_STALE", code: null })
+              return
+            }
+            const currentEvidence = await inspectWorkspaceApp(
+              process.env.WILLIAMOS_WORKSPACE_APP_URL?.trim() || null,
+              williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url),
+            )
+            if (currentEvidence.fingerprint !== previewEvidence!.fingerprint) {
+              finish({ type: "done", reason: "PREVIEW_CONTEXT_STALE", code: null })
+              return
+            }
+            if (!settled) send({ type: "event", event: previewResultEvent })
+            finish({ type: "done", reason: null, code })
+          } else finish({ type: "done", reason: null, code })
         })
       })
 

@@ -147,4 +147,125 @@ describe("Experience V2 Preview evidence interaction", () => {
     expect(line.value).toBe(`${action} the exact current developer Preview evidence: `)
     expect(screen.getByRole("dialog", { name: "The Line" })).toBeTruthy()
   })
+
+  it("delegates Preview only to a durable read-only Claude Preview debugger", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    const baseFetch = installFetch(() => attached)
+    let previewTurns = 0
+    const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== "/api/loom/agent") return baseFetch(input, init)
+      previewTurns += 1
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+      expect(body).toEqual(previewTurns === 1 ? {
+        mode: "preview", provider: "cloud", worldId: "world-a", prompt: "Explain the failed frame.",
+        sessionId: null, resume: false,
+      } : {
+        mode: "preview", provider: "cloud", worldId: "world-a", prompt: "Continue the diagnosis.",
+        sessionId, resume: true,
+      })
+      const frames = [
+        { type: "session", sessionId, resumed: previewTurns > 1, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: "a".repeat(64) },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: previewTurns > 1 ? "The same read-only diagnosis resumed." : "The frame is reachable and admitted." } },
+        { type: "done", reason: null, code: 0 },
+      ]
+      return new Response(frames.map((frame) => `${JSON.stringify(frame)}\n`).join(""), { status: 200 })
+    })
+    vi.stubGlobal("fetch", fetchStub)
+    const first = render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    const codex = screen.getByRole("button", { name: "Codex unavailable" }) as HTMLButtonElement
+    expect(codex.disabled).toBe(true)
+    expect(codex.title).toContain("Preview diagnostic transport")
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Explain the failed frame." } })
+    fireEvent.click(screen.getAllByRole("button", { name: "Delegate" }).at(-1)!)
+
+    expect(await screen.findByText("Preview debugger · Claude")).toBeTruthy()
+    expect(await screen.findByText("The frame is reachable and admitted.")).toBeTruthy()
+    const stored = [...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!))
+      .find((value) => value?.includes(sessionId))
+    expect(stored).toContain('"preview":{"worldId":"world-a","evidenceFingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}')
+
+    first.unmount()
+    render(<WorkspaceShell />)
+    expect(await screen.findByText(/resume unverified/)).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: /Preview debugger · Claude · Developer Preview diagnosis/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Redirect" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Continue the diagnosis." } })
+    fireEvent.click(screen.getAllByRole("button", { name: "Delegate" }).at(-1)!)
+    expect(await screen.findByText("The same read-only diagnosis resumed.")).toBeTruthy()
+    expect(previewTurns).toBe(2)
+  })
+
+  it("keeps provider-unavailable Preview delegation truthful without materializing a session", async () => {
+    const baseFetch = installFetch(() => attached)
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== "/api/loom/agent") return baseFetch(input, init)
+      return Response.json({ error: "AGENT_UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Diagnose without browser instrumentation." } })
+    fireEvent.click(screen.getAllByRole("button", { name: "Delegate" }).at(-1)!)
+
+    expect(await screen.findByText("Agent turn unavailable.")).toBeTruthy()
+    expect(screen.queryByRole("navigation", { name: "Durable agent sessions" })).toBeNull()
+    expect([...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!))
+      .some((value) => value?.includes("Preview debugger"))).toBe(false)
+  })
+
+  it("fails closed when the server session frame names a foreign Preview world", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    const baseFetch = installFetch(() => attached)
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== "/api/loom/agent") return baseFetch(input, init)
+      return ndjsonResponse([
+        { type: "session", sessionId, resumed: false, provider: "Claude", mode: "preview", worldId: "world-b", evidenceFingerprint: "a".repeat(64) },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Foreign result" } },
+        { type: "done", reason: null, code: 0 },
+      ])
+    }))
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Delegate" }))
+    fireEvent.click(screen.getByRole("button", { name: "Claude" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Diagnose." } })
+    fireEvent.click(screen.getAllByRole("button", { name: "Delegate" }).at(-1)!)
+
+    expect(await screen.findByText("Agent turn unavailable.")).toBeTruthy()
+    expect(screen.queryByText("Foreign result")).toBeNull()
+    expect([...Array(window.localStorage.length)].map((_, index) => window.localStorage.getItem(window.localStorage.key(index)!))
+      .some((value) => value?.includes(sessionId))).toBe(false)
+  })
+
+  it("refuses to resume a restored Preview descriptor bound to another world", async () => {
+    const sessionId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem("williamos:agent-session:world-a:c%3A%2Frepos%2Fterrafusion", JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${sessionId}`,
+      sessions: [{
+        schemaVersion: 1, sessionId, role: "Preview debugger", provider: "Claude", assignment: "Developer Preview diagnosis",
+        preview: { worldId: "world-b", evidenceFingerprint: "a".repeat(64) },
+        updatedAt: "2026-08-30T03:00:00.000Z", completedTurns: [],
+      }],
+    }))
+    const baseFetch = installFetch(() => attached)
+    const fetchStub = vi.fn(baseFetch)
+    vi.stubGlobal("fetch", fetchStub)
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: /Preview debugger · Claude · Developer Preview diagnosis/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Redirect" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Continue." } })
+    fireEvent.click(screen.getAllByRole("button", { name: "Delegate" }).at(-1)!)
+
+    expect(await screen.findByText("Agent turn unavailable.")).toBeTruthy()
+    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/loom/agent")).toBe(false)
+  })
 })
+
+function ndjsonResponse(frames: readonly Record<string, unknown>[]) {
+  return new Response(frames.map((frame) => `${JSON.stringify(frame)}\n`).join(""), { status: 200 })
+}
