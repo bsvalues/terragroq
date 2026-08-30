@@ -1,4 +1,5 @@
 import fs from "node:fs/promises"
+import nodeFs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createHash } from "node:crypto"
@@ -37,6 +38,8 @@ vi.mock("@/lib/db", () => ({
 const roots: string[] = []
 
 afterEach(async () => {
+  vi.useRealTimers()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
   harness.save.mockReset()
   harness.diff.mockReset()
@@ -305,12 +308,65 @@ describe("server-derived Line selected-object grounding", () => {
     process.env.WILLIAMOS_PROJECT_ROOT = root
     const inference = vi.fn(async () => Response.json({ choices: [{ message: { content: "must not run" } }] }))
     vi.stubGlobal("fetch", inference)
+    const open = vi.spyOn(nodeFs.promises, "open")
     const { POST } = await import("@/app/api/environment/line/route")
 
     const response = await POST(new Request("http://localhost/api/environment/line", {
       method: "POST", headers: { "content-type": "application/json", host: "localhost" },
       body: JSON.stringify({ worldId: "world-a", text: "Review the current change" }),
     }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "LINE_CONTEXT_UNAVAILABLE" })
+    expect(inference).not.toHaveBeenCalled()
+    expect(open).not.toHaveBeenCalled()
+    expect(harness.diff).not.toHaveBeenCalled()
+    expect(harness.save).not.toHaveBeenCalled()
+  })
+
+  it("bounds a delayed selected-file open within the total identity deadline", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "williamos-line-delayed-open-"))
+    roots.push(root)
+    await fs.mkdir(path.join(root, "src"), { recursive: true })
+    const selected = path.join(root, "src", "slow.ts")
+    await fs.writeFile(selected, "export const slow = true\n")
+    const selectedStat = await fs.lstat(selected)
+    const delayedHandle = await fs.open(selected, "r")
+    const space: SpaceState = {
+      schemaVersion: 1, revision: 13,
+      windows: [
+        { id: "workspace-editor", kind: "editor", title: "Source", frame: { x: 24, y: 18, width: 800, height: 600 }, z: 4, minimized: false },
+        { id: "workspace-diff", kind: "diff", title: "Changes", frame: { x: 48, y: 40, width: 700, height: 520 }, z: 5, minimized: false },
+      ],
+      openFiles: ["src/slow.ts"], panes: [{ id: "primary", filePath: "src/slow.ts" }],
+      selection: { filePath: "src/slow.ts", anchor: 0, head: 0 }, activeWindowId: "workspace-diff", activePaneId: "primary", runningAppUrl: null,
+    }
+    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    harness.diff.mockResolvedValue({
+      path: "src/slow.ts", state: "modified", status: " M src/slow.ts", patch: "+slow\n",
+      baseHash: "base", indexHash: "index", patchHash: "patch", fingerprint: "diff", reason: null,
+    })
+    process.env.WILLIAMOS_PROJECT_ROOT = root
+    const inference = vi.fn(async () => Response.json({ choices: [{ message: { content: "must not run" } }] }))
+    vi.stubGlobal("fetch", inference)
+    vi.useFakeTimers()
+    vi.spyOn(nodeFs.promises, "realpath")
+      .mockResolvedValueOnce(root)
+      .mockResolvedValueOnce(selected)
+    vi.spyOn(nodeFs.promises, "lstat").mockResolvedValue(selectedStat)
+    const open = vi.spyOn(nodeFs.promises, "open").mockImplementation(() => new Promise((resolve) => {
+      setTimeout(() => resolve(delayedHandle), 6_000)
+    }) as ReturnType<typeof nodeFs.promises.open>)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const pending = POST(new Request("http://localhost/api/environment/line", {
+      method: "POST", headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "Review the current change" }),
+    }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(open).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(6_000)
+    const response = await pending
 
     expect(response.status).toBe(409)
     await expect(response.json()).resolves.toEqual({ error: "LINE_CONTEXT_UNAVAILABLE" })

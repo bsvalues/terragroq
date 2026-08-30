@@ -522,6 +522,50 @@ const SELECTED_FILE_CONTEXT_BYTES = 64 * 1024
 const MAX_SELECTED_FILE_IDENTITY_BYTES = 32 * 1024 * 1024
 const SELECTED_FILE_IDENTITY_TIMEOUT_MS = 5_000
 
+class SelectedFileIdentityDeadlineError extends Error {
+  constructor() {
+    super("Selected file identity deadline exceeded")
+    this.name = "SelectedFileIdentityDeadlineError"
+  }
+}
+
+function withinSelectedFileIdentityDeadline<T>(
+  operation: Promise<T>,
+  deadline: number,
+  onLateValue?: (value: T) => void,
+): Promise<T> {
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) {
+    void operation.then(onLateValue, () => undefined)
+    return Promise.reject(new SelectedFileIdentityDeadlineError())
+  }
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      settled = true
+      reject(new SelectedFileIdentityDeadlineError())
+    }, remaining)
+    timer.unref?.()
+    void operation.then(
+      (value) => {
+        if (settled) {
+          onLateValue?.(value)
+          return
+        }
+        settled = true
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
 type SelectedObjectGrounding = Readonly<{
   facts: string
   version: string
@@ -550,28 +594,63 @@ async function deriveSelectedFileGrounding(
   const label = `Selected object (server-derived): file ${JSON.stringify(selectedPath)}.`
   if (!projectRoot) return unavailable(selectedPath, "PROJECT_ROOT_UNAVAILABLE", `${label} Content unavailable: the server project root is not configured.`)
   if (isSensitiveWorkspacePath(selectedPath)) return unavailable(selectedPath, "SENSITIVE_PATH", `${label} Content unavailable: the selected path is sensitive.`)
-  const resolved = await resolveRealWorkspacePath(projectRoot, selectedPath, fs.promises.realpath)
-  if (!resolved.ok || !resolved.absolute || !resolved.relative) {
-    return unavailable(selectedPath, "PATH_UNAVAILABLE", `${label} Content unavailable: the persisted path is outside the readable workspace.`)
-  }
-  if (isSensitiveWorkspacePath(resolved.relative)) return unavailable(resolved.relative, "SENSITIVE_PATH", `${label} Content unavailable: the selected path is sensitive.`)
+  const identityDeadline = Date.now() + SELECTED_FILE_IDENTITY_TIMEOUT_MS
   let handle: fs.promises.FileHandle | null = null
   let identityTimeout: ReturnType<typeof setTimeout> | null = null
   const identityAbort = new AbortController()
+  let resolvedPath = selectedPath
   try {
+    const resolved = await withinSelectedFileIdentityDeadline(
+      resolveRealWorkspacePath(projectRoot, selectedPath, fs.promises.realpath),
+      identityDeadline,
+    )
+    if (!resolved.ok || !resolved.absolute || !resolved.relative) {
+      return unavailable(selectedPath, "PATH_UNAVAILABLE", `${label} Content unavailable: the persisted path is outside the readable workspace.`)
+    }
+    resolvedPath = resolved.relative
+    if (isSensitiveWorkspacePath(resolved.relative)) return unavailable(resolved.relative, "SENSITIVE_PATH", `${label} Content unavailable: the selected path is sensitive.`)
+
+    // Reject special objects and over-limit files before opening them. On POSIX the open itself is
+    // additionally nonblocking and refuses symlinks, and fstat closes the lstat/open race.
+    const beforeOpen = await withinSelectedFileIdentityDeadline(
+      fs.promises.lstat(resolved.absolute),
+      identityDeadline,
+    )
+    if (!beforeOpen.isFile()) return unavailable(resolved.relative, "FILE_NOT_REGULAR", `${label} Content unavailable: the selected object is not a regular file.`)
+    if (beforeOpen.size > MAX_SELECTED_FILE_IDENTITY_BYTES) {
+      return unavailable(resolved.relative, "FILE_IDENTITY_TOO_LARGE", `${label} Content unavailable: the selected file exceeds the identity limit.`)
+    }
+
     // Hash the entire file even when its content cannot be presented. A prefix hash made ignored,
     // untracked, binary, and oversized files vulnerable to invisible tail changes during inference.
-    handle = await fs.promises.open(resolved.absolute, "r")
-    const before = await handle.stat()
+    const posixOnlyFlags = process.platform === "win32"
+      ? 0
+      : ((fs.constants as Record<string, number>).O_NONBLOCK ?? 0)
+        | ((fs.constants as Record<string, number>).O_NOFOLLOW ?? 0)
+    handle = await withinSelectedFileIdentityDeadline(
+      fs.promises.open(resolved.absolute, fs.constants.O_RDONLY | posixOnlyFlags),
+      identityDeadline,
+      (lateHandle) => { void lateHandle.close().catch(() => undefined) },
+    )
+    const before = await withinSelectedFileIdentityDeadline(handle.stat(), identityDeadline)
     if (!before.isFile()) return unavailable(resolved.relative, "FILE_NOT_REGULAR", `${label} Content unavailable: the selected object is not a regular file.`)
     if (before.size > MAX_SELECTED_FILE_IDENTITY_BYTES) {
       return unavailable(resolved.relative, "FILE_IDENTITY_TOO_LARGE", `${label} Content unavailable: the selected file exceeds the identity limit.`)
+    }
+    if (
+      beforeOpen.dev !== 0
+      && beforeOpen.ino !== 0
+      && (before.dev !== beforeOpen.dev || before.ino !== beforeOpen.ino)
+    ) {
+      return unavailable(resolved.relative, "FILE_IDENTITY_CHANGED", `${label} Content unavailable: the selected file changed before its identity was read.`)
     }
     const hash = createHash("sha256")
     const retained: Buffer[] = []
     let retainedBytes = 0
     let totalBytes = 0
-    identityTimeout = setTimeout(() => identityAbort.abort(), SELECTED_FILE_IDENTITY_TIMEOUT_MS)
+    const remainingIdentityTime = identityDeadline - Date.now()
+    if (remainingIdentityTime <= 0) throw new SelectedFileIdentityDeadlineError()
+    identityTimeout = setTimeout(() => identityAbort.abort(), remainingIdentityTime)
     identityTimeout.unref?.()
     const stream = fs.createReadStream("", {
       fd: handle.fd,
@@ -594,7 +673,7 @@ async function deriveSelectedFileGrounding(
         retainedBytes += bounded.length
       }
     }
-    const after = await handle.stat()
+    const after = await withinSelectedFileIdentityDeadline(handle.stat(), identityDeadline)
     if (before.size !== totalBytes || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
       return unavailable(resolved.relative, "FILE_IDENTITY_CHANGED", `${label} Content unavailable: the selected file changed while its identity was read.`)
     }
@@ -617,14 +696,16 @@ async function deriveSelectedFileGrounding(
       exact: true,
       changesSelected: false,
     }
-  } catch {
-    if (identityAbort.signal.aborted) {
-      return unavailable(resolved.relative, "FILE_IDENTITY_TIMEOUT", `${label} Content unavailable: exact file identity timed out.`)
+  } catch (error) {
+    if (identityAbort.signal.aborted || error instanceof SelectedFileIdentityDeadlineError) {
+      return unavailable(resolvedPath, "FILE_IDENTITY_TIMEOUT", `${label} Content unavailable: exact file identity timed out.`)
     }
-    return unavailable(resolved.relative, "FILE_UNREADABLE", `${label} Content unavailable: the selected file could not be read.`)
+    return unavailable(resolvedPath, "FILE_UNREADABLE", `${label} Content unavailable: the selected file could not be read.`)
   } finally {
     if (identityTimeout) clearTimeout(identityTimeout)
-    await handle?.close().catch(() => undefined)
+    if (handle) {
+      await withinSelectedFileIdentityDeadline(handle.close(), identityDeadline).catch(() => undefined)
+    }
   }
 }
 
