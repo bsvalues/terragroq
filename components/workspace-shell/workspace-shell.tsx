@@ -10,7 +10,7 @@ import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface } from "./developer-tools-surface"
 import { type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, useExperienceAgentSessions, type AgentProvider, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
@@ -53,7 +53,15 @@ type ReviewerDelegateContext = Readonly<{
   sessionId: string
   requiredSessionKey: string
 }>
-type DelegateContext = StandardDelegateContext | ReviewerDelegateContext
+type ContinueDelegateContext = Readonly<{
+  kind: "continue"
+  label: string
+  provider: AgentProvider
+  role: string
+  assignment: string
+  sessionKey: string
+}>
+type DelegateContext = StandardDelegateContext | ReviewerDelegateContext | ContinueDelegateContext
 type ForkContext = Readonly<{ sourceSessionId: string; assignment: string; label: string }>
 type ChangeRefresh = Readonly<{ path: string | null; key: number }>
 type ChangeRefreshWaiter = {
@@ -1196,7 +1204,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         const presentationTransitionEpoch = transitionEpochRef.current
         const presentationWorldId = worldRef.current
         const presentationProvider = delegateContext.provider
-        let presentationSessionKey: string | null = reviewerAgentContext ? `Claude:${reviewerAgentContext.sessionId}` : null
+        let presentationSessionKey: string | null = delegateContext.kind === "continue"
+          ? delegateContext.sessionKey
+          : reviewerAgentContext ? `Claude:${reviewerAgentContext.sessionId}` : null
         agentPresentationIsCurrent = () => agentPresentationEpochRef.current === presentationEpoch
           && transitionEpochRef.current === presentationTransitionEpoch
           && worldRef.current === presentationWorldId
@@ -1226,7 +1236,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
               if (presentation.phase === "working") setLineBusy(false)
             },
           }
-          const completed = reviewerAgentContext
+          const completed = delegateContext.kind === "continue"
+            ? await agentSessions.continueSession({
+              sessionKey: delegateContext.sessionKey,
+              prompt: text,
+              onPresentation: turn.onPresentation,
+            })
+            : reviewerAgentContext
             ? await agentSessions.runClaudeTurn({
               role: "Reviewer",
               assignment: reviewerAgentContext.assignment,
@@ -1311,12 +1327,18 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const pauseAction = selectedAgent && agentSessions.pausableSessionIds.includes(selectedAgent.id) ? "Pause" : "Pause unavailable"
   const forkEligible = selectedAgent?.kind === "durable-session" && selectedAgent?.truth === "live" && selectedAgent.providerLabel === "Claude" && selectedAgent.role === "Builder" && selectedAgent.mode === "delegate"
   const forkAction = forkEligible && agentSessions.activeSessionIds.length === 0 ? "Fork" : "Fork unavailable"
+  const spaceContinueCandidate = selectSpaceContinueCandidate(
+    agentSessions.collectionState,
+    agentSessions.savedSessions,
+    agentSessions.selectedSessionKey,
+  )
+  const continueAction = spaceContinueCandidate ? "Continue" : "Continue unavailable"
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge unavailable"] as const
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction, forkAction] as const
     : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
-    : ["Summarize", "Continue", "Delegate", "Council"] as const
+    : ["Summarize", continueAction, "Delegate", "Council"] as const
   const worldLine = spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""
   const workerLine = spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""
   const williamSafetyFact = persistenceError
@@ -1565,6 +1587,39 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       openLine("Summarize this exact current Space: ", "william", "space-summary")
       return
     }
+    if (selectedKind === "space" && action === "Continue") {
+      const candidate = spaceContinueCandidate
+      if (!candidate) return
+      const key = `${candidate.provider}:${candidate.sessionId}`
+      const projected = agentSessions.sessions.find((session) => session.id === key)
+      if (!projected || !agentSessions.selectSession(key)) return
+      setFocusedAgentId(key)
+      if (agentSessions.activeSessionIds.includes(key)) {
+        const reviewerContext = reviewerDelegateContext(projected)
+        const local = projected.providerLabel === "Local"
+        setDelegateContext(reviewerContext
+          ?? (projected.mode === "preview"
+            ? { kind: "preview", label: "TerraFusion developer preview", provider: "Claude", role: "Preview debugger", assignment: "Developer Preview diagnosis" }
+            : local
+              ? { kind: "conversation", label: "Local model", provider: "Local", role: "Thinker", assignment: "Conversation" }
+              : { kind: "agent", label: `${projected.role} · ${projected.providerLabel}`, provider: projected.providerLabel as AgentProvider, role: projected.role, assignment: projected.assignment }))
+        openLine("", "agent")
+        setLineReply(projected.presentation ?? "Agent is working.")
+        return
+      }
+      setDelegateContext({
+        kind: "continue",
+        label: `${candidate.role} · ${candidate.provider} · ${candidate.assignment}`,
+        provider: candidate.provider,
+        role: candidate.role,
+        assignment: candidate.assignment,
+        sessionKey: key,
+      })
+      openLine("", "agent")
+      setLineReply("Saved session · verification pending")
+      return
+    }
+    if (action === "Continue unavailable") return
     if (selectedKind === "preview" && action === "Inspect") {
       void inspectPreviewEvidence()
       return
@@ -1776,9 +1831,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? "No durable session exists in this Space; use Delegate." : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
+        {selectedKind === "space" && !spaceContinueCandidate ? <span role="status">No durable session exists in this Space; use Delegate.</span> : null}
       </div>
 
       <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
@@ -1838,11 +1894,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <div className={spatial.lineBackdrop} role="dialog" aria-label="The Line" aria-modal="true" onPointerDown={(event) => { if (event.target === event.currentTarget && !change.running && !review.running) setLineOpen(false) }}>
           <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? "Change" : lineMode === "review" ? "Review" : lineMode === "fork" ? "Fork session" : "The Line"}>
             <Command size={16} aria-hidden />
-            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
+            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
             <div className={spatial.lineControls}>
               {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider">{delegateContext.kind === "preview" ? <button type="button" className={spatial.lineClose} disabled aria-label="Codex unavailable" title="Preview diagnostic transport is not available for Codex yet.">Codex unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Codex" } : current)}>Codex</button>}<button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
               <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineMode === "fork" ? "Claude fork · source remains unchanged" : reviewerAgentContext ? "Read-only Reviewer session" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
-              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
+              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : delegateContext?.kind === "continue" ? lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
               {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (lineMode === "review" && review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
             </div>
           </form>
