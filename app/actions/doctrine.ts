@@ -145,7 +145,7 @@ export async function promoteHistoricalDoctrineInput(candidateId: string) {
       summary: `Recorded non-authoritative historical Doctrine input ${candidate.claimId}`,
       register: "doctrine",
       refId: created.id,
-      metadata: null,
+      metadata: { candidateId },
     })
     return { row: created, replayed: false }
   })
@@ -202,7 +202,7 @@ export async function archiveHistoricalDoctrineInput(candidateId: string) {
       summary: `Archived non-authoritative historical Doctrine input ${candidate.claimId}`,
       register: "doctrine",
       refId: archived.id,
-      metadata: null,
+      metadata: { candidateId },
     })
     return { row: archived, replayed: false }
   })

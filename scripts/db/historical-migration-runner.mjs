@@ -121,7 +121,7 @@ export function classifyHistoricalSchemaCatalog(catalog) {
     entry.name === name && fragments.every((fragment) => normalizeDefinition(entry.definition).includes(fragment))
   ))
   const triggerMatches = (tableName, name, fragments) => triggers.some((entry) => (
-    entry.tableName === tableName && entry.name === name && entry.enabled !== "D"
+    entry.tableName === tableName && entry.name === name && ["O", "A"].includes(entry.enabled)
       && fragments.every((fragment) => normalizeDefinition(entry.definition).includes(fragment))
   ))
 

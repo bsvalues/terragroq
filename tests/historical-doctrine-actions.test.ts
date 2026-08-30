@@ -224,6 +224,7 @@ describe("historical Doctrine actions", () => {
       type: "doctrine.historical_input_created",
       register: "doctrine",
       refId: created.row.id,
+      metadata: { candidateId: candidate.candidateId },
     })])
     expect(String(harness.events[0].summary)).not.toMatch(/ratif|activat/i)
   })
@@ -257,6 +258,7 @@ describe("historical Doctrine actions", () => {
     expect(replay).toMatchObject({ replayed: true, row: { active: false, status: "historical_archived" } })
     expect(harness.events).toEqual([expect.objectContaining({
       type: "doctrine.historical_input_archived",
+      metadata: { candidateId: "HKR-ada454f7cb889228" },
     })])
   })
 

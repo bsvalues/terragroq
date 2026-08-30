@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto"
+import { drizzle } from "drizzle-orm/node-postgres"
 import { Pool } from "pg"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
+import * as databaseSchema from "@/lib/db/schema"
+import { getHistoricalDoctrineCatalog } from "@/lib/history/historical-doctrine"
 import { buildHistoricalProjectContextInsert, getHistoricalProjectContextCatalog } from "@/lib/history/historical-project-context"
 import {
   loadHistoricalMigrationBundle,
@@ -155,6 +158,50 @@ runDatabase("historical nine-record executor on isolated PostgreSQL", { timeout:
     }
   })
 
+  it("replays action-created Doctrine state through executor plan, apply, and archive", async () => {
+    const schema = `historical_action_executor_${randomUUID().replaceAll("-", "")}`
+    const admin = new Pool({ connectionString: directDatabaseUrl(databaseUrl!), max: 2 })
+    let pool: Pool | null = null
+    try {
+      await admin.query(`CREATE SCHEMA "${schema}"`)
+      pool = new Pool({ connectionString: schemaDatabaseUrl(databaseUrl!, schema), max: 4 })
+      await pool.query(BASE_SCHEMA_DDL)
+      await runHistoricalMigrations({ pool, apply: true })
+      await seedTenant(pool, "tenant-action-executor")
+
+      const actionDatabase = drizzle(pool, { schema: databaseSchema })
+      vi.doMock("@/lib/db", () => ({ db: actionDatabase }))
+      vi.doMock("@/lib/session", () => ({ getUserId: vi.fn(async () => "tenant-action-executor") }))
+      vi.doMock("next/cache", () => ({ revalidatePath: vi.fn() }))
+      vi.resetModules()
+      const actions = await import("@/app/actions/doctrine")
+
+      for (const candidate of getHistoricalDoctrineCatalog()) {
+        await expect(actions.promoteHistoricalDoctrineInput(candidate.candidateId))
+          .resolves.toMatchObject({ replayed: false, row: { historicalCandidateId: candidate.candidateId } })
+      }
+      await expect(pool.query(`SELECT metadata->>'candidateId' AS "candidateId" FROM event_log
+        WHERE "userId" = $1 ORDER BY id`, ["tenant-action-executor"]))
+        .resolves.toMatchObject({ rows: getHistoricalDoctrineCatalog().map(({ candidateId }) => ({ candidateId })) })
+
+      await expect(executeHistoricalPromotion({ pool, userId: "tenant-action-executor", mode: "plan" }))
+        .resolves.toMatchObject({ status: "DRY_RUN", counts: { existing: 3, planned: 6, total: 9 } })
+      await expect(executeHistoricalPromotion({ pool, userId: "tenant-action-executor", mode: "apply" }))
+        .resolves.toMatchObject({ status: "APPLIED", counts: { created: 6, replayed: 3, events: 6, total: 9 } })
+      await expect(executeHistoricalPromotion({ pool, userId: "tenant-action-executor", mode: "apply" }))
+        .resolves.toMatchObject({ status: "APPLIED", counts: { created: 0, replayed: 9, events: 0, total: 9 } })
+      await expect(executeHistoricalPromotion({ pool, userId: "tenant-action-executor", mode: "archive" }))
+        .resolves.toMatchObject({ status: "ARCHIVED", counts: { archived: 9, replayed: 0, events: 9, total: 9 } })
+    } finally {
+      vi.doUnmock("@/lib/db")
+      vi.doUnmock("@/lib/session")
+      vi.doUnmock("next/cache")
+      await pool?.end()
+      await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+      await admin.end()
+    }
+  })
+
   it("walls semantic partial schemas before committing any migration repair", async () => {
     const admin = new Pool({ connectionString: directDatabaseUrl(databaseUrl!), max: 2 })
     const schemas: string[] = []
@@ -226,6 +273,15 @@ runDatabase("historical nine-record executor on isolated PostgreSQL", { timeout:
       await expect(partial0014.query(`SELECT indexdef ILIKE 'CREATE UNIQUE INDEX%' AS unique
         FROM pg_indexes WHERE schemaname = current_schema() AND indexname = 'doctrine_historical_candidate_user_idx'`))
         .resolves.toMatchObject({ rows: [{ unique: false }] })
+
+      const replicaTrigger = await fixture("historical_replica_trigger")
+      await applyRaw(replicaTrigger, ["0003", "0005", "0010", "0014"])
+      await replicaTrigger.query(`ALTER TABLE document ENABLE REPLICA TRIGGER document_reject_historical_with_chunks`)
+      await expect(runHistoricalMigrations({ pool: replicaTrigger, apply: false }))
+        .rejects.toThrow("HISTORICAL_MIGRATION_PARTIAL_SCHEMA:0014")
+      await replicaTrigger.query(`ALTER TABLE document ENABLE ALWAYS TRIGGER document_reject_historical_with_chunks`)
+      await expect(runHistoricalMigrations({ pool: replicaTrigger, apply: false }))
+        .resolves.toMatchObject({ status: "DRY_RUN", plan: [{ action: "skip" }, { action: "skip" }, { action: "skip" }, { action: "skip" }] })
     } finally {
       await Promise.all(pools.map((pool) => pool.end()))
       for (const schema of schemas) await admin.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
