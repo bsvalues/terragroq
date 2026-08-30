@@ -75,6 +75,36 @@ describe("combined historical promotion plan", () => {
     })).toThrow(`HISTORICAL_PROMOTION_DUPLICATE_CLAIM:${doctrine[0].claimId}`)
   })
 
+  it("rejects substituted identities even when catalog counts and ownership still match", () => {
+    const doctrine = getHistoricalDoctrineCatalog()
+    const projectContext = getHistoricalProjectContextCatalog()
+
+    expect(() => buildHistoricalPromotionPlan({
+      doctrine: doctrine.map((candidate, index) => index === 0
+        ? { ...candidate, candidateId: "HKR-substituted-doctrine" }
+        : candidate),
+      projectContext,
+    })).toThrow("HISTORICAL_PROMOTION_IDENTITY_SET_INVALID:doctrine")
+    expect(() => buildHistoricalPromotionPlan({
+      doctrine,
+      projectContext: projectContext.map((candidate, index) => index === 5
+        ? { ...candidate, candidateId: "HKR-substituted-project-context" }
+        : candidate),
+    })).toThrow("HISTORICAL_PROMOTION_IDENTITY_SET_INVALID:private_project_context")
+  })
+
+  it("rejects the W24 blob even when its candidate, claim, and digest are disguised", () => {
+    const doctrine = getHistoricalDoctrineCatalog()
+    const projectContext = getHistoricalProjectContextCatalog()
+
+    expect(() => buildHistoricalPromotionPlan({
+      doctrine: doctrine.map((candidate, index) => index === 0
+        ? { ...candidate, provenance: { ...candidate.provenance, blobId: W24_REJECTION.blobId } }
+        : candidate),
+      projectContext,
+    })).toThrow("HISTORICAL_PROMOTION_W24_CATALOG_FORBIDDEN")
+  })
+
   it("validates exactly nine least-authority active states with W24 absent", () => {
     const plan = buildHistoricalPromotionPlan()
     const rows = plan.records.map((record) => ({

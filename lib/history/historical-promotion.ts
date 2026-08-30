@@ -17,6 +17,21 @@ export const W24_REJECTION = Object.freeze({
   state: "FROZEN_EXTERNAL_HISTORICAL_EVIDENCE_NO_CURRENT_MUTATION",
 } as const)
 
+const APPROVED_DOCTRINE_IDS = Object.freeze([
+  "HKR-32a0add1327ffadd",
+  "HKR-ada454f7cb889228",
+  "HKR-d200030578f50efe",
+])
+
+const APPROVED_PROJECT_CONTEXT_IDS = Object.freeze([
+  "HKR-eabf2e0c67a8a0f4",
+  "HKR-f2ae70ee3f7b4bda",
+  "HKR-0cd458c5fd967816",
+  "HKR-ae689745256df0d2",
+  "HKR-c823a84feb4a7e52",
+  "HKR-31831586c5a2811b",
+])
+
 type Catalogs = {
   doctrine: HistoricalDoctrineCandidate[]
   projectContext: HistoricalProjectContextCandidate[]
@@ -39,7 +54,6 @@ export function buildHistoricalPromotionPlan(catalogs?: Partial<Catalogs>) {
   if (doctrine.length !== 3 || projectContext.length !== 6) {
     throw new Error(`HISTORICAL_PROMOTION_COUNT_INVALID:${doctrine.length}+${projectContext.length}`)
   }
-
   const records: HistoricalPromotionRecord[] = [
     ...doctrine.map((candidate) => ({ owner: "doctrine" as const, candidate })),
     ...projectContext.map((candidate) => ({ owner: "private_project_context" as const, candidate })),
@@ -57,9 +71,16 @@ export function buildHistoricalPromotionPlan(catalogs?: Partial<Catalogs>) {
     candidateIds.add(candidate.candidateId)
     claimIds.add(candidate.claimId)
   }
+  if (doctrine.some((candidate, index) => candidate.candidateId !== APPROVED_DOCTRINE_IDS[index])) {
+    throw new Error("HISTORICAL_PROMOTION_IDENTITY_SET_INVALID:doctrine")
+  }
+  if (projectContext.some((candidate, index) => candidate.candidateId !== APPROVED_PROJECT_CONTEXT_IDS[index])) {
+    throw new Error("HISTORICAL_PROMOTION_IDENTITY_SET_INVALID:private_project_context")
+  }
   if (candidateIds.has(W24_REJECTION.candidateId)
     || claimIds.has(W24_REJECTION.claimId)
-    || records.some((record) => record.candidate.provenance.rawSha256 === W24_REJECTION.rawSha256)) {
+    || records.some((record) => record.candidate.provenance.rawSha256 === W24_REJECTION.rawSha256
+      || record.candidate.provenance.blobId === W24_REJECTION.blobId)) {
     throw new Error("HISTORICAL_PROMOTION_W24_CATALOG_FORBIDDEN")
   }
 

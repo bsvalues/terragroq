@@ -8,11 +8,13 @@ import {
   validateHistoricalPromotionStatus,
 } from "../../lib/history/historical-promotion.ts"
 import {
+  HISTORICAL_DOCTRINE_ARCHIVED_STATE,
   assertHistoricalDoctrineReplay,
   buildHistoricalDoctrineArchiveUpdate,
   buildHistoricalDoctrineInsert,
 } from "../../lib/history/historical-doctrine.ts"
 import {
+  HISTORICAL_PROJECT_CONTEXT_ARCHIVED_STATE,
   assertHistoricalProjectContextReplay,
   buildHistoricalProjectContextArchiveUpdate,
   buildHistoricalProjectContextInsert,
@@ -34,6 +36,26 @@ const W24_COUNT_QUERIES = Object.freeze({
   document: `SELECT count(*)::int AS count FROM document WHERE "userId" = $1 AND ("historicalCandidateId" = $2 OR "historicalProvenance"->>'rawSha256' = $3 OR title IN ($2,$3) OR source IN ($2,$3) OR content IN ($2,$3))`,
   eventLog: `SELECT count(*)::int AS count FROM event_log WHERE "userId" = $1 AND (metadata->>'candidateId' = $2 OR metadata->>'rawSha256' = $3 OR summary IN ($2,$3))`,
 })
+
+const EVENT_TYPES = Object.freeze({
+  doctrine: Object.freeze({
+    created: "doctrine.historical_input_created",
+    archived: "doctrine.historical_input_archived",
+    register: "doctrine",
+  }),
+  private_project_context: Object.freeze({
+    created: "document.historical_project_context_created",
+    archived: "document.historical_project_context_archived",
+    register: "corpus",
+  }),
+})
+
+const HISTORICAL_EVENT_TYPES = Object.freeze([
+  EVENT_TYPES.doctrine.created,
+  EVENT_TYPES.doctrine.archived,
+  EVENT_TYPES.private_project_context.created,
+  EVENT_TYPES.private_project_context.archived,
+])
 
 function tenant(value) {
   const userId = String(value ?? "").trim()
@@ -124,17 +146,18 @@ function publicRecord(owner, candidate, status) {
   }
 }
 
-async function loadExistingPromotionRows(client, userId, plan) {
+async function loadExistingPromotionRows(client, userId, plan, { lock = false } = {}) {
   const expectedByCandidateId = new Map(plan.records.map((record) => [record.candidate.candidateId, record]))
   const expectedByClaimId = new Map(plan.records.map((record) => [record.candidate.claimId, record]))
   const candidateIds = [...expectedByCandidateId.keys()]
   const claimIds = [...expectedByClaimId.keys()]
+  const lockClause = lock ? " FOR UPDATE" : ""
   const doctrineExisting = await client.query(
-    'SELECT * FROM doctrine WHERE "userId" = $1 AND ("historicalCandidateId" = ANY($2::text[]) OR "historicalClaimId" = ANY($3::text[]))',
+    'SELECT * FROM doctrine WHERE "userId" = $1 AND ("historicalCandidateId" = ANY($2::text[]) OR "historicalClaimId" = ANY($3::text[]))' + lockClause,
     [userId, candidateIds, claimIds],
   )
   const documentsExisting = await client.query(
-    'SELECT * FROM document WHERE "userId" = $1 AND ("historicalCandidateId" = ANY($2::text[]) OR "historicalClaimId" = ANY($3::text[]))',
+    'SELECT * FROM document WHERE "userId" = $1 AND ("historicalCandidateId" = ANY($2::text[]) OR "historicalClaimId" = ANY($3::text[]))' + lockClause,
     [userId, candidateIds, claimIds],
   )
   for (const row of doctrineExisting.rows) {
@@ -162,8 +185,65 @@ async function loadExistingPromotionRows(client, userId, plan) {
   return { doctrineById, documentsById }
 }
 
+function rowForRecord(record, rows) {
+  return record.owner === "doctrine"
+    ? rows.doctrineById.get(record.candidate.candidateId)
+    : rows.documentsById.get(record.candidate.candidateId)
+}
+
+async function loadPromotionEvents(client, userId, plan, rows) {
+  const candidateIds = plan.records.map((record) => record.candidate.candidateId)
+  const doctrineIds = [...rows.doctrineById.values()].map((row) => row.id)
+  const documentIds = [...rows.documentsById.values()].map((row) => row.id)
+  return (await client.query(`
+    SELECT id, type, register, "refId", metadata
+    FROM event_log
+    WHERE "userId" = $1
+      AND type = ANY($2::text[])
+      AND (
+        metadata->>'candidateId' = ANY($3::text[])
+        OR (register = 'doctrine' AND "refId" = ANY($4::int[]))
+        OR (register = 'corpus' AND "refId" = ANY($5::int[]))
+      )
+  `, [userId, HISTORICAL_EVENT_TYPES, candidateIds, doctrineIds, documentIds])).rows
+}
+
+function validatePromotionEvents(plan, rows, events, expectedArchiveCount) {
+  for (const record of plan.records) {
+    const candidateId = record.candidate.candidateId
+    const row = rowForRecord(record, rows)
+    const spec = EVENT_TYPES[record.owner]
+    const relevant = events.filter((event) =>
+      event.metadata?.candidateId === candidateId
+      || (row && event.register === spec.register && Number(event.refId) === Number(row.id)))
+    const expectations = [
+      ["created", row ? 1 : 0],
+      ["archived", row ? expectedArchiveCount(record, row) : 0],
+    ]
+    for (const [phase, expectedCount] of expectations) {
+      const typed = relevant.filter((event) => event.type === spec[phase])
+      const exact = typed.filter((event) => row
+        && event.register === spec.register
+        && Number(event.refId) === Number(row.id)
+        && event.metadata?.candidateId === candidateId)
+      if (typed.length !== exact.length) {
+        throw new Error(`HISTORICAL_PROMOTION_EVENT_MISMATCH:${candidateId}:${phase}`)
+      }
+      if (exact.length !== expectedCount) {
+        throw new Error(`HISTORICAL_PROMOTION_EVENT_COUNT_INVALID:${candidateId}:${phase}:${exact.length}`)
+      }
+    }
+  }
+}
+
+async function validatePersistedPromotionEvents(client, userId, plan, rows, expectedArchiveCount) {
+  const events = await loadPromotionEvents(client, userId, plan, rows)
+  validatePromotionEvents(plan, rows, events, expectedArchiveCount)
+}
+
 async function inspectPromotionState(client, userId, projects, plan) {
-  const { doctrineById, documentsById } = await loadExistingPromotionRows(client, userId, plan)
+  const rows = await loadExistingPromotionRows(client, userId, plan)
+  const { doctrineById, documentsById } = rows
   const records = []
   let existing = 0
   for (const candidate of plan.doctrine) {
@@ -192,11 +272,14 @@ async function inspectPromotionState(client, userId, projects, plan) {
     }
     records.push(publicRecord("private_project_context", candidate, row?.status ?? "planned"))
   }
+  await validatePersistedPromotionEvents(client, userId, plan, rows, () => 0)
   return { records, existing }
 }
 
 async function applyNine(client, userId, projects, plan) {
-  const { doctrineById, documentsById } = await loadExistingPromotionRows(client, userId, plan)
+  const rows = await loadExistingPromotionRows(client, userId, plan, { lock: true })
+  const { doctrineById, documentsById } = rows
+  await validatePersistedPromotionEvents(client, userId, plan, rows, () => 0)
   const records = []
   let created = 0
   let replayed = 0
@@ -253,21 +336,28 @@ async function applyNine(client, userId, projects, plan) {
     }
     records.push(publicRecord("private_project_context", candidate, row.status))
   }
+  const persisted = await loadExistingPromotionRows(client, userId, plan, { lock: true })
+  await validatePersistedPromotionEvents(client, userId, plan, persisted, () => 0)
   return { records, counts: { created, replayed, events, total: 9 } }
 }
 
 async function archiveNine(client, userId, projects, plan) {
+  const existing = await loadExistingPromotionRows(client, userId, plan, { lock: true })
+  for (const record of plan.records) {
+    if (!rowForRecord(record, existing)) {
+      const prefix = record.owner === "doctrine" ? "HISTORICAL_DOCTRINE" : "HISTORICAL_PROJECT_CONTEXT"
+      throw new Error(`${prefix}_NOT_FOUND:${record.candidate.candidateId}`)
+    }
+  }
+  await validatePersistedPromotionEvents(client, userId, plan, existing, (_record, row) =>
+    row.status === HISTORICAL_DOCTRINE_ARCHIVED_STATE
+      || row.status === HISTORICAL_PROJECT_CONTEXT_ARCHIVED_STATE ? 1 : 0)
   const records = []
   let archived = 0
   let replayed = 0
   let events = 0
   for (const candidate of plan.doctrine) {
-    const result = await client.query(
-      'SELECT * FROM doctrine WHERE "userId" = $1 AND "historicalCandidateId" = $2',
-      [userId, candidate.candidateId],
-    )
-    const row = result.rows[0]
-    if (!row) throw new Error(`HISTORICAL_DOCTRINE_NOT_FOUND:${candidate.candidateId}`)
+    const row = existing.doctrineById.get(candidate.candidateId)
     assertHistoricalDoctrineReplay(row, candidate)
     const update = buildHistoricalDoctrineArchiveUpdate(row)
     if (!update) {
@@ -294,12 +384,7 @@ async function archiveNine(client, userId, projects, plan) {
   }
 
   for (const candidate of plan.projectContext) {
-    const result = await client.query(
-      'SELECT * FROM document WHERE "userId" = $1 AND "historicalCandidateId" = $2',
-      [userId, candidate.candidateId],
-    )
-    const row = result.rows[0]
-    if (!row) throw new Error(`HISTORICAL_PROJECT_CONTEXT_NOT_FOUND:${candidate.candidateId}`)
+    const row = existing.documentsById.get(candidate.candidateId)
     assertHistoricalProjectContextReplay(row, candidate, {
       userId,
       projectId: projects.get(candidate.targetProjectKey),
@@ -328,10 +413,12 @@ async function archiveNine(client, userId, projects, plan) {
     }
     records.push(publicRecord("private_project_context", candidate, row.status))
   }
+  const persisted = await loadExistingPromotionRows(client, userId, plan, { lock: true })
+  await validatePersistedPromotionEvents(client, userId, plan, persisted, () => 1)
   return { records, counts: { archived, replayed, events, total: 9 } }
 }
 
-export async function executeHistoricalPromotion({ client, userId: rawUserId, mode = "plan" }) {
+async function executeHistoricalPromotionOnConnection({ client, userId: rawUserId, mode = "plan" }) {
   if (!["plan", "apply", "archive"].includes(mode)) {
     throw new Error(`HISTORICAL_PROMOTION_MODE_INVALID:${mode}`)
   }
@@ -355,6 +442,10 @@ export async function executeHistoricalPromotion({ client, userId: rawUserId, mo
 
   await client.query("BEGIN")
   try {
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext('williamos:historical-promotion'), hashtext($1))",
+      [userId],
+    )
     const projects = await requireTenantAndProjects(client, userId)
     const w24 = await countW24Hits(client, userId)
     if (w24.canonicalHits !== 0 || w24.eventHits !== 0) {
@@ -383,6 +474,21 @@ export async function executeHistoricalPromotion({ client, userId: rawUserId, mo
   }
 }
 
+export async function executeHistoricalPromotion({ pool, userId, mode = "plan" }) {
+  if (!pool || typeof pool.connect !== "function") {
+    throw new Error("HISTORICAL_PROMOTION_POOL_REQUIRED")
+  }
+  const client = await pool.connect()
+  if (!client || typeof client.query !== "function" || typeof client.release !== "function") {
+    throw new Error("HISTORICAL_PROMOTION_DEDICATED_CONNECTION_REQUIRED")
+  }
+  try {
+    return await executeHistoricalPromotionOnConnection({ client, userId, mode })
+  } finally {
+    client.release()
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2)
   if (args.length > 1 || (args.length === 1 && !["--apply", "--archive"].includes(args[0]))) {
@@ -392,13 +498,12 @@ async function main() {
   if (!databaseUrl) throw new Error("DATABASE_URL_REQUIRED")
   const userId = tenant(process.env.WILLIAMOS_HISTORICAL_PROMOTION_USER_ID)
   const mode = args[0] === "--apply" ? "apply" : args[0] === "--archive" ? "archive" : "plan"
-  const { Client } = await import("pg")
-  const client = new Client({ connectionString: databaseUrl })
-  await client.connect()
+  const { Pool } = await import("pg")
+  const pool = new Pool({ connectionString: databaseUrl, max: 2 })
   try {
-    console.log(JSON.stringify(await executeHistoricalPromotion({ client, userId, mode })))
+    console.log(JSON.stringify(await executeHistoricalPromotion({ pool, userId, mode })))
   } finally {
-    await client.end()
+    await pool.end()
   }
 }
 
