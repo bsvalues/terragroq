@@ -7,6 +7,7 @@ const harness = vi.hoisted(() => ({
   rows: [] as Record<string, unknown>[],
   events: [] as Record<string, unknown>[],
   revalidated: [] as string[],
+  failEventInsert: false,
   getUserId: vi.fn(async () => "tenant-a"),
 }))
 
@@ -67,8 +68,34 @@ const database = {
     return chain
   }),
   insert: vi.fn((table: unknown) => {
-    if (getTableName(table as never) !== "doctrine") throw new Error("unexpected table")
+    const tableName = getTableName(table as never)
+    if (tableName !== "doctrine" && tableName !== "event_log") throw new Error("unexpected table")
     let value: Record<string, unknown>
+    let committed = false
+    const commit = () => {
+      if (committed) return null
+      if (tableName === "event_log") {
+        if (harness.failEventInsert) throw new Error("SIMULATED_HISTORICAL_EVENT_FAILURE")
+        const event = { id: harness.events.length + 1, ...value }
+        harness.events.push(event)
+        committed = true
+        return event
+      }
+      const collision = harness.rows.find((row) => (
+        row.userId === value.userId
+        && row.historicalCandidateId === value.historicalCandidateId
+      ))
+      if (collision) return null
+      const row = {
+        id: harness.rows.length + 1,
+        createdAt: new Date("2026-08-30T00:00:00.000Z"),
+        updatedAt: new Date("2026-08-30T00:00:00.000Z"),
+        ...value,
+      }
+      harness.rows.push(row)
+      committed = true
+      return row
+    }
     const chain = {
       values(next: Record<string, unknown>) {
         value = next
@@ -78,19 +105,11 @@ const database = {
         return chain
       },
       returning() {
-        const collision = harness.rows.find((row) => (
-          row.userId === value.userId
-          && row.historicalCandidateId === value.historicalCandidateId
-        ))
-        if (collision) return Promise.resolve([])
-        const row = {
-          id: harness.rows.length + 1,
-          createdAt: new Date("2026-08-30T00:00:00.000Z"),
-          updatedAt: new Date("2026-08-30T00:00:00.000Z"),
-          ...value,
-        }
-        harness.rows.push(row)
-        return Promise.resolve([{ ...row }])
+        const row = commit()
+        return Promise.resolve(row ? [{ ...row }] : [])
+      },
+      then(resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) {
+        return Promise.resolve().then(commit).then(resolve, reject)
       },
     }
     return chain
@@ -141,12 +160,14 @@ const database = {
     }
     return chain
   }),
+  transaction: vi.fn(),
 }
 
 vi.doMock("@/lib/db", () => ({ db: database }))
 vi.doMock("@/lib/session", () => ({ getUserId: harness.getUserId }))
 vi.doMock("@/lib/registers/events", () => ({
   logEvent: vi.fn(async (event: Record<string, unknown>) => {
+    if (harness.failEventInsert) throw new Error("SIMULATED_HISTORICAL_EVENT_FAILURE")
     harness.events.push(event)
   }),
 }))
@@ -171,8 +192,20 @@ beforeEach(async () => {
   harness.rows.length = 0
   harness.events.length = 0
   harness.revalidated.length = 0
+  harness.failEventInsert = false
   harness.getUserId.mockClear()
   vi.clearAllMocks()
+  database.transaction.mockImplementation(async (callback: (transaction: typeof database) => Promise<unknown>) => {
+    const rowSnapshot = harness.rows.map((row) => ({ ...row }))
+    const eventSnapshot = harness.events.map((event) => ({ ...event }))
+    try {
+      return await callback(database)
+    } catch (error) {
+      harness.rows.splice(0, harness.rows.length, ...rowSnapshot)
+      harness.events.splice(0, harness.events.length, ...eventSnapshot)
+      throw error
+    }
+  })
   vi.resetModules()
   doctrineActions = await import("@/app/actions/doctrine")
 })
@@ -225,6 +258,31 @@ describe("historical Doctrine actions", () => {
     expect(harness.events).toEqual([expect.objectContaining({
       type: "doctrine.historical_input_archived",
     })])
+  })
+
+  it("rolls promotion back when its required historical event cannot persist", async () => {
+    harness.failEventInsert = true
+
+    await expect(doctrineActions.promoteHistoricalDoctrineInput("HKR-32a0add1327ffadd"))
+      .rejects.toThrow("SIMULATED_HISTORICAL_EVENT_FAILURE")
+
+    expect(harness.rows).toEqual([])
+    expect(harness.events).toEqual([])
+  })
+
+  it("rolls archive back when its required historical event cannot persist", async () => {
+    harness.rows.push(storedHistoricalRow(1))
+    harness.failEventInsert = true
+
+    await expect(doctrineActions.archiveHistoricalDoctrineInput("HKR-ada454f7cb889228"))
+      .rejects.toThrow("SIMULATED_HISTORICAL_EVENT_FAILURE")
+
+    expect(harness.rows).toHaveLength(1)
+    expect(harness.rows[0]).toMatchObject({
+      status: "historical_input",
+      active: false,
+    })
+    expect(harness.events).toEqual([])
   })
 
   it("refuses toggle, evidence-link, supersede, and delete mutations for historical rows", async () => {

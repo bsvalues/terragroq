@@ -1,4 +1,6 @@
-import { getTableConfig } from "drizzle-orm/pg-core"
+import { readFileSync } from "node:fs"
+import type { SQL } from "drizzle-orm"
+import { getTableConfig, PgDialect } from "drizzle-orm/pg-core"
 import { describe, expect, it } from "vitest"
 
 import { doctrine } from "@/lib/db/schema"
@@ -27,6 +29,109 @@ describe("historical Doctrine schema", () => {
       "doctrine_historical_identity_check",
       "doctrine_historical_safety_check",
     ]))
+  })
+
+  it("encodes tenant-scoped partial uniqueness and the complete safety predicates", () => {
+    const config = getTableConfig(doctrine)
+    const dialect = new PgDialect()
+    const render = (expression: SQL | undefined) => expression
+      ? dialect.sqlToQuery(expression).sql.replaceAll(/\s+/g, " ").toLowerCase()
+      : ""
+    const candidateIndex = config.indexes.find((entry) => (
+      entry.config.name === "doctrine_historical_candidate_user_idx"
+    ))
+    const checks = new Map(config.checks.map((entry) => [entry.name, render(entry.value)]))
+
+    expect(candidateIndex?.config.unique).toBe(true)
+    expect(candidateIndex?.config.columns.map((column) => (
+      column as { name?: string }
+    ).name)).toEqual([
+      "userId",
+      "historicalCandidateId",
+    ])
+    expect(render(candidateIndex?.config.where)).toContain('"doctrine"."historicalcandidateid" is not null')
+
+    const identity = checks.get("doctrine_historical_identity_check") ?? ""
+    expect(identity).toContain('"doctrine"."historicalcandidateid" is null')
+    expect(identity).toContain('"doctrine"."historicalclaimid" is null')
+    expect(identity).toContain('"doctrine"."historicalprovenance" is null')
+    expect(identity).toContain("not in ('historical_input', 'historical_archived')")
+    expect(identity).toContain('"doctrine"."historicalcandidateid" is not null')
+    expect(identity).toContain("in ('historical_input', 'historical_archived')")
+
+    const safety = checks.get("doctrine_historical_safety_check") ?? ""
+    for (const predicate of [
+      '"doctrine"."active" = false',
+      '"doctrine"."priority" = 0',
+      'cardinality("doctrine"."allowed") = 0',
+      'cardinality("doctrine"."forbidden") = 0',
+      'cardinality("doctrine"."requiresapproval") = 0',
+      '"doctrine"."locked" = false',
+      '"doctrine"."supersedesid" is null',
+      '"doctrine"."supersededbyid" is null',
+      "coalesce(",
+      "authority",
+      "historical_non_authoritative",
+    ]) {
+      expect(safety).toContain(predicate)
+    }
+  })
+
+  it("keeps migration 0014 additive and safe to replay", () => {
+    const migration = readFileSync("migrations/0014-historical-knowledge-promotion.sql", "utf8")
+    const normalized = migration.replaceAll(/\s+/g, " ")
+
+    expect(migration.match(/ADD COLUMN IF NOT EXISTS/g)).toHaveLength(3)
+    expect(normalized).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS "doctrine_historical_candidate_user_idx" ON "doctrine" ("userId", "historicalCandidateId") WHERE "historicalCandidateId" IS NOT NULL',
+    )
+    for (const constraint of [
+      "doctrine_historical_identity_check",
+      "doctrine_historical_safety_check",
+    ]) {
+      expect(migration).toMatch(new RegExp(
+        `IF NOT EXISTS \\(\\s*SELECT 1[\\s\\S]*conname = '${constraint}'[\\s\\S]*ADD CONSTRAINT "${constraint}"`,
+      ))
+    }
+    for (const predicate of [
+      '"historicalCandidateId" IS NULL',
+      '"historicalClaimId" IS NULL',
+      '"historicalProvenance" IS NULL',
+      '"status" NOT IN (\'historical_input\', \'historical_archived\')',
+      '"historicalCandidateId" IS NOT NULL',
+      '"status" IN (\'historical_input\', \'historical_archived\')',
+      '"active" = false',
+      '"priority" = 0',
+      'cardinality("allowed") = 0',
+      'cardinality("forbidden") = 0',
+      'cardinality("requiresApproval") = 0',
+      '"locked" = false',
+      '"supersedesId" IS NULL',
+      '"supersededById" IS NULL',
+      "COALESCE(\"historicalProvenance\"->>'authority', '') = 'historical_non_authoritative'",
+      "historical_non_authoritative",
+    ]) {
+      expect(normalized).toContain(predicate)
+    }
+
+    const replaySafeOperations = [
+      ...Array.from(migration.matchAll(/ADD COLUMN IF NOT EXISTS "([^"]+)"/g), (match) => `column:${match[1]}`),
+      ...Array.from(migration.matchAll(/CREATE UNIQUE INDEX IF NOT EXISTS "([^"]+)"/g), (match) => `index:${match[1]}`),
+      ...Array.from(migration.matchAll(/WHERE conname = '([^']+)'/g), (match) => `constraint:${match[1]}`),
+    ]
+    expect(replaySafeOperations).toEqual([
+      "column:historicalCandidateId",
+      "column:historicalClaimId",
+      "column:historicalProvenance",
+      "index:doctrine_historical_candidate_user_idx",
+      "constraint:doctrine_historical_identity_check",
+      "constraint:doctrine_historical_safety_check",
+    ])
+    const applied = new Set<string>()
+    for (let replay = 0; replay < 2; replay++) {
+      replaySafeOperations.forEach((operation) => applied.add(operation))
+    }
+    expect([...applied]).toEqual(replaySafeOperations)
   })
 })
 
@@ -116,6 +221,55 @@ describe("historical Doctrine catalog and lifecycle", () => {
       },
       candidate,
     )).toThrow(`HISTORICAL_DOCTRINE_COLLISION:${candidate.candidateId}`)
+    expect(() => assertHistoricalDoctrineReplay(
+      {
+        ...exact,
+        historicalProvenance: { ...candidate.provenance, rawPrivateBody: "must-not-persist" },
+      },
+      candidate,
+    )).toThrow(`HISTORICAL_DOCTRINE_COLLISION:${candidate.candidateId}`)
+  })
+
+  it("accepts valid ordinary and historical shapes while rejecting the safety matrix", () => {
+    expect(() => assertGenericDoctrineMutationAllowed({
+      historicalCandidateId: null,
+      status: "active",
+    })).not.toThrow()
+
+    const candidate = getHistoricalDoctrineCatalog()[0]
+    const valid = buildHistoricalDoctrineInsert("tenant-a", candidate)
+    expect(assertHistoricalDoctrineReplay(valid, candidate)).toBe(valid)
+
+    const invalidRows = [
+      { ...valid, active: true },
+      { ...valid, priority: 1 },
+      { ...valid, allowed: ["mutate"] },
+      { ...valid, forbidden: ["mutate"] },
+      { ...valid, requiresApproval: ["mutate"] },
+      { ...valid, locked: true },
+      { ...valid, supersedesId: 1 },
+      { ...valid, supersededById: 1 },
+      { ...valid, historicalCandidateId: null },
+      { ...valid, historicalClaimId: null },
+      { ...valid, historicalProvenance: null },
+      { ...valid, status: "active" },
+      {
+        ...valid,
+        historicalProvenance: { ...candidate.provenance, authority: "binding" },
+      },
+      {
+        ...valid,
+        historicalProvenance: Object.fromEntries(
+          Object.entries(candidate.provenance).filter(([key]) => key !== "sourceTree"),
+        ),
+      },
+    ]
+
+    for (const row of invalidRows) {
+      expect(() => assertHistoricalDoctrineReplay(row, candidate)).toThrow(
+        `HISTORICAL_DOCTRINE_COLLISION:${candidate.candidateId}`,
+      )
+    }
   })
 
   it("archives without activation and treats a repeated archive as a no-op", () => {

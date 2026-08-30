@@ -54,6 +54,16 @@ const SHARED_PROVENANCE = {
   authority: HISTORICAL_DOCTRINE_AUTHORITY,
 } as const
 
+const HISTORICAL_DOCTRINE_PROVENANCE_KEYS = [
+  "authority",
+  "blobId",
+  "disposition",
+  "provenanceCommits",
+  "rawSha256",
+  "sourceCommit",
+  "sourceTree",
+] as const
+
 const HISTORICAL_DOCTRINE_CATALOG: readonly HistoricalDoctrineCandidate[] = [
   {
     candidateId: "HKR-32a0add1327ffadd",
@@ -148,7 +158,12 @@ function provenanceMatches(
   actual: HistoricalDoctrineStoredRow["historicalProvenance"],
   expected: HistoricalDoctrineProvenance,
 ) {
-  if (!actual) return false
+  if (!actual || Array.isArray(actual)) return false
+  const actualKeys = Object.keys(actual).sort()
+  if (actualKeys.length !== HISTORICAL_DOCTRINE_PROVENANCE_KEYS.length
+    || actualKeys.some((key, index) => key !== HISTORICAL_DOCTRINE_PROVENANCE_KEYS[index])) {
+    return false
+  }
   return actual.sourceCommit === expected.sourceCommit
     && actual.sourceTree === expected.sourceTree
     && Array.isArray(actual.provenanceCommits)

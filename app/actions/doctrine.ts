@@ -1,7 +1,7 @@
 "use server"
 
 import { db } from "@/lib/db"
-import { doctrine } from "@/lib/db/schema"
+import { doctrine, eventLog } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
 import {
@@ -106,87 +106,108 @@ async function nextRuleRef(userId: string): Promise<string> {
 /* Writes                                                            */
 /* ------------------------------------------------------------------ */
 
-async function getHistoricalDoctrineRow(userId: string, candidateId: string) {
-  const [row] = await db
-    .select()
-    .from(doctrine)
-    .where(and(
-      eq(doctrine.userId, userId),
-      eq(doctrine.historicalCandidateId, candidateId),
-    ))
-  return row
-}
-
 export async function promoteHistoricalDoctrineInput(candidateId: string) {
   const userId = await getUserId()
   const candidate = getHistoricalDoctrineCandidate(candidateId)
-  const existing = await getHistoricalDoctrineRow(userId, candidateId)
-  if (existing) {
-    return { row: assertHistoricalDoctrineReplay(existing, candidate), replayed: true }
-  }
+  const result = await db.transaction(async (transaction) => {
+    const [existing] = await transaction
+      .select()
+      .from(doctrine)
+      .where(and(
+        eq(doctrine.userId, userId),
+        eq(doctrine.historicalCandidateId, candidateId),
+      ))
+    if (existing) {
+      return { row: assertHistoricalDoctrineReplay(existing, candidate), replayed: true }
+    }
 
-  const [created] = await db
-    .insert(doctrine)
-    .values(buildHistoricalDoctrineInsert(userId, candidate))
-    .onConflictDoNothing()
-    .returning()
+    const [created] = await transaction
+      .insert(doctrine)
+      .values(buildHistoricalDoctrineInsert(userId, candidate))
+      .onConflictDoNothing()
+      .returning()
 
-  if (!created) {
-    const replay = await getHistoricalDoctrineRow(userId, candidateId)
-    if (!replay) throw new Error(`HISTORICAL_DOCTRINE_PROMOTION_CONFLICT:${candidateId}`)
-    return { row: assertHistoricalDoctrineReplay(replay, candidate), replayed: true }
-  }
+    if (!created) {
+      const [replay] = await transaction
+        .select()
+        .from(doctrine)
+        .where(and(
+          eq(doctrine.userId, userId),
+          eq(doctrine.historicalCandidateId, candidateId),
+        ))
+      if (!replay) throw new Error(`HISTORICAL_DOCTRINE_PROMOTION_CONFLICT:${candidateId}`)
+      return { row: assertHistoricalDoctrineReplay(replay, candidate), replayed: true }
+    }
 
-  await logEvent({
-    userId,
-    type: "doctrine.historical_input_created",
-    summary: `Recorded non-authoritative historical Doctrine input ${candidate.claimId}`,
-    register: "doctrine",
-    refId: created.id,
+    await transaction.insert(eventLog).values({
+      userId,
+      type: "doctrine.historical_input_created",
+      summary: `Recorded non-authoritative historical Doctrine input ${candidate.claimId}`,
+      register: "doctrine",
+      refId: created.id,
+      metadata: null,
+    })
+    return { row: created, replayed: false }
   })
-  revalidatePath("/doctrine")
-  return { row: created, replayed: false }
+  if (!result.replayed) revalidatePath("/doctrine")
+  return result
 }
 
 export async function archiveHistoricalDoctrineInput(candidateId: string) {
   const userId = await getUserId()
   const candidate = getHistoricalDoctrineCandidate(candidateId)
-  const existing = await getHistoricalDoctrineRow(userId, candidateId)
-  if (!existing) throw new Error(`HISTORICAL_DOCTRINE_NOT_FOUND:${candidateId}`)
-  assertHistoricalDoctrineReplay(existing, candidate)
+  const result = await db.transaction(async (transaction) => {
+    const [existing] = await transaction
+      .select()
+      .from(doctrine)
+      .where(and(
+        eq(doctrine.userId, userId),
+        eq(doctrine.historicalCandidateId, candidateId),
+      ))
+    if (!existing) throw new Error(`HISTORICAL_DOCTRINE_NOT_FOUND:${candidateId}`)
+    assertHistoricalDoctrineReplay(existing, candidate)
 
-  const update = buildHistoricalDoctrineArchiveUpdate(existing)
-  if (!update) return { row: existing, replayed: true }
+    const update = buildHistoricalDoctrineArchiveUpdate(existing)
+    if (!update) return { row: existing, replayed: true }
 
-  const [archived] = await db
-    .update(doctrine)
-    .set({ ...update, updatedAt: new Date() })
-    .where(and(
-      eq(doctrine.userId, userId),
-      eq(doctrine.historicalCandidateId, candidateId),
-      eq(doctrine.status, "historical_input"),
-    ))
-    .returning()
+    const [archived] = await transaction
+      .update(doctrine)
+      .set({ ...update, updatedAt: new Date() })
+      .where(and(
+        eq(doctrine.userId, userId),
+        eq(doctrine.historicalCandidateId, candidateId),
+        eq(doctrine.status, "historical_input"),
+      ))
+      .returning()
 
-  if (!archived) {
-    const replay = await getHistoricalDoctrineRow(userId, candidateId)
-    if (!replay) throw new Error(`HISTORICAL_DOCTRINE_ARCHIVE_CONFLICT:${candidateId}`)
-    assertHistoricalDoctrineReplay(replay, candidate)
-    if (replay.status !== "historical_archived") {
-      throw new Error(`HISTORICAL_DOCTRINE_ARCHIVE_CONFLICT:${candidateId}`)
+    if (!archived) {
+      const [replay] = await transaction
+        .select()
+        .from(doctrine)
+        .where(and(
+          eq(doctrine.userId, userId),
+          eq(doctrine.historicalCandidateId, candidateId),
+        ))
+      if (!replay) throw new Error(`HISTORICAL_DOCTRINE_ARCHIVE_CONFLICT:${candidateId}`)
+      assertHistoricalDoctrineReplay(replay, candidate)
+      if (replay.status !== "historical_archived") {
+        throw new Error(`HISTORICAL_DOCTRINE_ARCHIVE_CONFLICT:${candidateId}`)
+      }
+      return { row: replay, replayed: true }
     }
-    return { row: replay, replayed: true }
-  }
 
-  await logEvent({
-    userId,
-    type: "doctrine.historical_input_archived",
-    summary: `Archived non-authoritative historical Doctrine input ${candidate.claimId}`,
-    register: "doctrine",
-    refId: archived.id,
+    await transaction.insert(eventLog).values({
+      userId,
+      type: "doctrine.historical_input_archived",
+      summary: `Archived non-authoritative historical Doctrine input ${candidate.claimId}`,
+      register: "doctrine",
+      refId: archived.id,
+      metadata: null,
+    })
+    return { row: archived, replayed: false }
   })
-  revalidatePath("/doctrine")
-  return { row: archived, replayed: false }
+  if (!result.replayed) revalidatePath("/doctrine")
+  return result
 }
 
 export async function createDoctrine(input: {
