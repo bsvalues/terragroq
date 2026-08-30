@@ -1,5 +1,6 @@
 import {
   admitExternalWorkOrder,
+  boundedExternalWorkOrderFailureMetadata,
   ExternalWorkOrderAdmissionError,
   previewExternalWorkOrderAdmission,
 } from "@/lib/environment/external-work-order-admission"
@@ -47,15 +48,9 @@ export async function POST(request: Request): Promise<Response> {
     const result = await admitExternalWorkOrder(session.user.id, parsed.value)
     return reply(result, result.replayed ? 200 : 201)
   } catch (error) {
-    // Preserve server diagnostics without returning internal details to the client.
+    // Keep diagnostics useful without copying SQL, bound parameters, or authority packet text into logs.
     if (!(error instanceof ExternalWorkOrderAdmissionError)) {
-      console.error("External Work Order admission failed", {
-        name: error instanceof Error ? error.name : "UnknownError",
-        message: error instanceof Error ? error.message : "Unknown failure",
-        cause: error instanceof Error && error.cause instanceof Error
-          ? { name: error.cause.name, message: error.cause.message }
-          : undefined,
-      })
+      console.error("External Work Order admission failed", boundedExternalWorkOrderFailureMetadata(error))
     }
     const code = error instanceof ExternalWorkOrderAdmissionError
       ? error.code

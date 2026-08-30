@@ -33,6 +33,22 @@ export const EXTERNAL_WORK_ORDER_ADMISSION_OPERATION = "space.external_work_orde
 export const EXTERNAL_WORK_ORDER_ADMISSION_VERSION = "space-external-work-order-admission.v1"
 const GRANT_HOURS = 72
 const FIXED_BLOCKED_ACTIONS = ["production:mutate", "release:create", "secret:access", "spend:increase"] as const
+const SAFE_ERROR_NAMES = new Set(["Error", "TypeError", "RangeError", "DrizzleQueryError", "DatabaseError"])
+const DATABASE_CODE = /^[0-9A-Z]{5}$/
+
+export function boundedExternalWorkOrderFailureMetadata(
+  error: unknown,
+): Readonly<{ classification: string; name?: string; databaseCode?: string }> {
+  const candidate = error instanceof Error ? error : undefined
+  const cause = candidate?.cause instanceof Error ? candidate.cause : undefined
+  const rawCode = (candidate as (Error & { code?: unknown }) | undefined)?.code
+    ?? (cause as (Error & { code?: unknown }) | undefined)?.code
+  return {
+    classification: "EXTERNAL_WORK_ORDER_ADMISSION_INTERNAL_FAILURE",
+    ...(candidate && SAFE_ERROR_NAMES.has(candidate.name) ? { name: candidate.name } : {}),
+    ...(typeof rawCode === "string" && DATABASE_CODE.test(rawCode) ? { databaseCode: rawCode } : {}),
+  }
+}
 
 export type ExternalWorkOrderPacket = Readonly<{
   source: "github" | "other"

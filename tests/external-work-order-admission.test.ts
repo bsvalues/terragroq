@@ -6,6 +6,7 @@ vi.mock("@/lib/db", () => ({ db: { transaction: seams.transaction } }))
 
 import {
   admitExternalWorkOrder,
+  boundedExternalWorkOrderFailureMetadata,
   ExternalWorkOrderAdmissionError,
   normalizeExternalWorkOrderAdmissionInput,
   previewExternalWorkOrderAdmission,
@@ -95,5 +96,18 @@ describe("external Work Order digest-bound confirmation boundary", () => {
         ...packet(), reservedPaths: ["app/**"], forbiddenPaths: ["app/**"],
       },
     })).toThrow("EXTERNAL_PROVENANCE_INVALID")
+  })
+
+  it("bounds internal failure diagnostics without copying authority packet text", () => {
+    const cause = Object.assign(new Error("sql params: authorityEvidence=owner-secret"), { code: "23505" })
+    const failure = new Error("packet objective: private-plan", { cause })
+
+    expect(boundedExternalWorkOrderFailureMetadata(failure)).toEqual({
+      classification: "EXTERNAL_WORK_ORDER_ADMISSION_INTERNAL_FAILURE",
+      name: "Error",
+      databaseCode: "23505",
+    })
+    expect(JSON.stringify(boundedExternalWorkOrderFailureMetadata(failure))).not.toContain("owner-secret")
+    expect(JSON.stringify(boundedExternalWorkOrderFailureMetadata(failure))).not.toContain("private-plan")
   })
 })
