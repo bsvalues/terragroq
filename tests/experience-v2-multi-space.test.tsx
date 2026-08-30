@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -262,6 +262,7 @@ describe("Experience V2 multi-Space re-entry", () => {
       if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => initial }
       if (url === "/api/environment/space" && init?.method === "PUT") return {
         ok: true, status: 200, json: async () => ({
+          worldId: "a",
           space: JSON.parse(String(init.body)).space,
           updatedAt: "2026-08-29T11:12:13.456Z",
         }),
@@ -300,6 +301,46 @@ describe("Experience V2 multi-Space re-entry", () => {
     await waitFor(() => expect(screen.getAllByText(/SPACE_PERSISTENCE_UNAVAILABLE/).length).toBeGreaterThan(0))
     expect(screen.getByText(/Most recent Space: Beta\./)).toBeTruthy()
     expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy()
+  })
+
+  it.each([
+    ["foreign world", (body: { worldId: string; space: typeof alpha }) => ({ worldId: "foreign", space: body.space })],
+    ["missing revision", (body: { worldId: string; space: typeof alpha }) => ({ worldId: body.worldId, space: {} })],
+    ["mismatched revision", (body: { worldId: string; space: typeof alpha }) => ({
+      worldId: body.worldId, space: { ...body.space, revision: body.space.revision + 1 },
+    })],
+  ])("does not promote Mission recency from a %s save acknowledgement", async (_case, responseShape) => {
+    const olderAlpha = { ...summaries[0], updatedAt: "2026-08-28T08:00:00Z" }
+    const newerBeta = { ...summaries[1], updatedAt: "2026-08-29T11:00:00.000Z" }
+    let saveBody!: { worldId: string; space: typeof alpha }
+    let resolveSave!: (response: Response) => void
+    let markSaveStarted!: () => void
+    const saveStarted = new Promise<void>((resolve) => { markSaveStarted = resolve })
+    const saveResponse = new Promise<Response>((resolve) => { resolveSave = resolve })
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        ...envelope("a"), spaces: [olderAlpha, newerBeta],
+      }))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        saveBody = JSON.parse(String(init.body))
+        markSaveStarted()
+        return saveResponse
+      }
+      if (url.startsWith("/api/loom/files")) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      return Promise.resolve(Response.json({ error: "UNAVAILABLE" }, { status: 503 }))
+    }))
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    await screen.findByText(/Alpha is saving\./)
+    await saveStarted
+    await act(async () => {
+      resolveSave(Response.json({ ...responseShape(saveBody), updatedAt: "2026-08-29T12:00:00.000Z" }))
+      await saveResponse
+    })
+    await waitFor(() => expect(screen.queryByText(/Alpha is saving\./)).toBeNull())
+    expect(screen.getByText(/Most recent Space: Beta\./)).toBeTruthy()
   })
 
   it("uses the acknowledged local write time for successful browser-only persistence", async () => {

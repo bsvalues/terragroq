@@ -547,16 +547,18 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         body: job.body,
         keepalive: job.keepalive,
       })
-      const payload = await response.json().catch(() => ({})) as { error?: string; space?: unknown; updatedAt?: unknown }
+      const payload = await response.json().catch(() => ({})) as { error?: string; worldId?: unknown; space?: unknown; updatedAt?: unknown }
       if (!response.ok) throw new Error(payload.error ?? `SPACE_SAVE_${response.status}`)
       if (transitionEpochRef.current !== job.epoch || worldRef.current !== job.worldId) return
       const record = payload.space && typeof payload.space === "object" ? payload.space as Record<string, unknown> : null
       const acknowledged = record && Number.isSafeInteger(record.revision) ? record.revision as number : job.revision
+      const exactRecencyAcknowledgement = payload.worldId === job.worldId && record?.revision === job.revision
       if (acknowledged >= acknowledgedRevisionRef.current) {
         acknowledgedRevisionRef.current = acknowledged
         revisionRef.current = Math.max(revisionRef.current, acknowledged)
         setSpace((current) => acknowledged > current.revision ? { ...current, revision: acknowledged } : current)
-        if (typeof payload.updatedAt === "string"
+        if (exactRecencyAcknowledgement
+          && typeof payload.updatedAt === "string"
           && Number.isFinite(Date.parse(payload.updatedAt))
           && new Date(payload.updatedAt).toISOString() === payload.updatedAt) {
           setSpaceSummaries((current) => current.map((summary) => summary.worldId === job.worldId
