@@ -5,7 +5,7 @@ export type WindowId = "editor" | "running-app" | "tests" | "diff" | "terminal"
 
 export type InspectorSeed = Readonly<{ kind: string; subject: string; payload?: string }>
 
-export type PreviewEvidenceReason = "NOT_CONFIGURED" | "UNREACHABLE" | "IDENTITY_MISMATCH" | "EMBEDDING_REFUSED"
+export type PreviewEvidenceReason = "NOT_CONFIGURED" | "URL_INVALID" | "UNREACHABLE" | "IDENTITY_MISMATCH" | "EMBEDDING_REFUSED"
 
 export type PreviewEvidenceSnapshot = Readonly<{
   schemaVersion: 1
@@ -33,7 +33,7 @@ function canonicalHttpUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.length > 2_048) return null
   try {
     const parsed = new URL(value)
-    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.hash) return null
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username || parsed.password || parsed.search || parsed.hash) return null
     return parsed.toString() === value ? value : null
   } catch {
     return null
@@ -75,7 +75,7 @@ export function parsePreviewInspectorPayload(value: unknown): PreviewInspectorPa
   const checked = new Date(checkedAt)
   const common = evidence.schemaVersion === 1
     && (evidence.status === "attached" || evidence.status === "unavailable")
-    && (reason === null || reason === "NOT_CONFIGURED" || reason === "UNREACHABLE"
+    && (reason === null || reason === "NOT_CONFIGURED" || reason === "URL_INVALID" || reason === "UNREACHABLE"
       || reason === "IDENTITY_MISMATCH" || reason === "EMBEDDING_REFUSED")
     && (evidence.configuredUrl === null || configuredUrl !== null)
     && (evidence.admittedUrl === null || admittedUrl !== null)
@@ -95,7 +95,7 @@ export function parsePreviewInspectorPayload(value: unknown): PreviewInspectorPa
     && admittedUrl !== null && origin !== null && evidence.identity === "TerraFusion"
     && evidence.reachable === true && evidence.frameable === true
   const unavailable = evidence.status === "unavailable" && admittedUrl === null && evidence.identity === "unverified" && (
-    (reason === "NOT_CONFIGURED" && configuredUrl === null && origin === null && evidence.reachable === false && evidence.frameable === false)
+    ((reason === "NOT_CONFIGURED" || reason === "URL_INVALID") && configuredUrl === null && origin === null && evidence.reachable === false && evidence.frameable === false)
     || (reason === "UNREACHABLE" && configuredUrl !== null && origin !== null && evidence.reachable === false && evidence.frameable === false)
     || (reason === "IDENTITY_MISMATCH" && configuredUrl !== null && origin !== null && evidence.reachable === true && evidence.frameable === true)
     || (reason === "EMBEDDING_REFUSED" && configuredUrl !== null && origin !== null && evidence.reachable === true && evidence.frameable === false)

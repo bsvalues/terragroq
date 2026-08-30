@@ -63,6 +63,21 @@ describe("Experience V2 Preview evidence interaction", () => {
       snapshot: "saved",
     })
     expect(parsePreviewInspectorPayload({ evidence: { ...attached, configuredUrl: "http://user:secret@tf.test/app" }, snapshot: "saved" })).toBeNull()
+    expect(parsePreviewInspectorPayload({ evidence: { ...attached, configuredUrl: "http://tf.test/app?token=secret" }, snapshot: "saved" })).toBeNull()
+    expect(parsePreviewInspectorPayload({
+      evidence: {
+        ...attached,
+        status: "unavailable",
+        reason: "URL_INVALID",
+        configuredUrl: null,
+        admittedUrl: null,
+        origin: null,
+        identity: "unverified",
+        reachable: false,
+        frameable: false,
+      },
+      snapshot: "saved",
+    })?.evidence.reason).toBe("URL_INVALID")
     expect(parsePreviewInspectorPayload({ evidence: { ...attached, status: "unavailable" }, snapshot: "saved" })).toBeNull()
     expect(parsePreviewInspectorPayload({ evidence: attached, snapshot: "saved", padding: "x".repeat(9_000) })).toBeNull()
   })

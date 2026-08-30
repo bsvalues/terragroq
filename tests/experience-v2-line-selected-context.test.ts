@@ -52,7 +52,7 @@ afterEach(async () => {
 })
 
 describe("server-derived Line selected-object grounding", () => {
-  it.each(["unchanged", "evidence", "configuration"] as const)("grounds Preview and fences %s evidence during inference", async (change) => {
+  it.each(["unchanged", "evidence", "configuration", "secret-configuration", "secret-to-valid"] as const)("grounds Preview and fences %s evidence during inference", async (change) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "williamos-line-preview-context-"))
     roots.push(root)
     await fs.mkdir(path.join(root, "src"), { recursive: true })
@@ -73,13 +73,16 @@ describe("server-derived Line selected-object grounding", () => {
     }
     harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
     process.env.WILLIAMOS_PROJECT_ROOT = root
-    process.env.WILLIAMOS_WORKSPACE_APP_URL = "http://tf.test:5000/real-preview"
+    process.env.WILLIAMOS_WORKSPACE_APP_URL = change === "secret-configuration" || change === "secret-to-valid"
+      ? "http://tf.test:5000/real-preview?token=server-secret"
+      : "http://tf.test:5000/real-preview"
     process.env.BETTER_AUTH_URL = "https://williamos.test"
     harness.save.mockImplementationOnce(async (input: {
       expectedSelectedContext?: string
       deriveSelectedContext?: (world: ReturnType<typeof createWorkingWorld> & { space: SpaceState }) => Promise<string>
     }) => {
       if (change === "configuration") process.env.WILLIAMOS_WORKSPACE_APP_URL = "http://tf.test:5001/changed-preview"
+      if (change === "secret-to-valid") process.env.WILLIAMOS_WORKSPACE_APP_URL = "http://tf.test:5000/real-preview"
       const latest = JSON.parse(harness.snapshot) as ReturnType<typeof createWorkingWorld> & { space: SpaceState }
       if (await input.deriveSelectedContext?.(latest) !== input.expectedSelectedContext) throw new Error("LINE_CONTEXT_STALE")
     })
@@ -112,15 +115,22 @@ describe("server-derived Line selected-object grounding", () => {
       }),
     }))
 
-    expect(response.status).toBe(change === "unchanged" ? 200 : 409)
-    if (change === "unchanged") {
+    const succeeds = change === "unchanged" || change === "secret-configuration"
+    expect(response.status).toBe(succeeds ? 200 : 409)
+    if (succeeds) {
       await expect(response.json()).resolves.toMatchObject({ say: "Preview analysis" })
     } else {
       await expect(response.json()).resolves.toEqual({ error: "LINE_CONTEXT_STALE" })
     }
     const system = inferenceBody.messages?.find((message) => message.role === "system")?.content ?? ""
     expect(system).toContain("Preview evidence (server-derived)")
-    expect(system).toContain("http://tf.test:5000/real-preview")
+    if (change === "secret-configuration" || change === "secret-to-valid") {
+      expect(system).toContain("URL_INVALID")
+      expect(system).not.toContain("server-secret")
+      expect(system).not.toContain("?token=")
+    } else {
+      expect(system).toContain("http://tf.test:5000/real-preview")
+    }
     expect(system).toContain("TerraFusion")
     expect(system).toContain("DOM unavailable")
     expect(system).toContain("console unavailable")

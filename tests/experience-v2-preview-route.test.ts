@@ -65,4 +65,28 @@ describe("Experience V2 Preview evidence route", () => {
     await expect(response.json()).resolves.toEqual({ error: "UNAUTHENTICATED" })
     expect(probe).not.toHaveBeenCalled()
   })
+
+  it("returns typed URL_INVALID without probing or exposing a configured query secret", async () => {
+    process.env.WILLIAMOS_WORKSPACE_APP_URL = "http://tf.test:5000/app?token=server-secret"
+    const probe = vi.fn(async () => htmlResponse())
+    vi.stubGlobal("fetch", probe)
+    const { GET } = await import("@/app/api/environment/preview/route")
+
+    const response = await GET(new Request("https://williamos.test/api/environment/preview"))
+    const payload = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(payload).toMatchObject({ evidence: {
+      status: "unavailable",
+      reason: "URL_INVALID",
+      configuredUrl: null,
+      admittedUrl: null,
+      origin: null,
+      reachable: false,
+      frameable: false,
+    } })
+    expect(JSON.stringify(payload)).not.toContain("server-secret")
+    expect(JSON.stringify(payload)).not.toContain("?token=")
+    expect(probe).not.toHaveBeenCalled()
+  })
 })
