@@ -62,6 +62,118 @@ function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_S
 let expose: ProviderNeutralAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
+  it.each([
+    {
+      label: "Codex Builder",
+      descriptor: { schemaVersion: 1, sessionId: "codex-continue", role: "Builder", provider: "Codex", assignment: "Build src/app.ts", target: { kind: "file", path: "src/app.ts" }, updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
+      url: "/api/loom/codex",
+      body: { worldId: "world-1", prompt: "Continue exactly.", sessionId: "codex-continue", resume: true },
+      events: [
+        { type: "session", sessionId: "codex-continue", provider: "Codex", mode: "delegate", resumed: true, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "result", text: "Codex continued." }, { type: "done", code: 0, reason: null },
+      ],
+    },
+    {
+      label: "Claude Builder",
+      descriptor: { schemaVersion: 1, sessionId: "123e4567-e89b-42d3-a456-426614174000", role: "Builder", provider: "Claude", assignment: "Build interaction", updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
+      url: "/api/loom/agent",
+      body: { prompt: "Continue exactly.", provider: "cloud", sessionId: "123e4567-e89b-42d3-a456-426614174000", resume: true },
+      events: [
+        { type: "session", sessionId: "123e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "delegate", resumed: true },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "123e4567-e89b-42d3-a456-426614174000", result: "Claude continued." } },
+        { type: "done", code: 0, reason: null },
+      ],
+    },
+    {
+      label: "Claude Reviewer",
+      descriptor: { schemaVersion: 1, sessionId: "223e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Review src/app.ts", reviewPath: "src/app.ts", updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
+      url: "/api/loom/agent",
+      body: { mode: "review", path: "src/app.ts", focus: "Continue exactly.", provider: "cloud", sessionId: "223e4567-e89b-42d3-a456-426614174000", resume: true },
+      events: [
+        { type: "session", sessionId: "223e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "review", resumed: true },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "223e4567-e89b-42d3-a456-426614174000", result: "Review continued." } },
+        { type: "done", code: 0, reason: null },
+      ],
+    },
+    {
+      label: "Local Thinker",
+      descriptor: { schemaVersion: 1, sessionId: "323e4567-e89b-42d3-a456-426614174000", role: "Thinker", provider: "Local", assignment: "Conversation", updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
+      url: "/api/loom/agent",
+      body: { prompt: "Continue exactly.", provider: "local", sessionId: "323e4567-e89b-42d3-a456-426614174000", resume: true, completedTurns: [] },
+      events: [
+        { type: "session", sessionId: "323e4567-e89b-42d3-a456-426614174000", provider: "Local", mode: "delegate", resumed: true, continuity: "browser-replayed" },
+        { type: "result", text: "Local continued." }, { type: "done", code: 0, reason: null },
+      ],
+    },
+    {
+      label: "Preview debugger",
+      descriptor: { schemaVersion: 1, sessionId: "423e4567-e89b-42d3-a456-426614174000", role: "Preview debugger", provider: "Claude", assignment: "Developer Preview diagnosis", preview: { worldId: "world-1", evidenceFingerprint: ASSIGNMENT_HASH }, updatedAt: "2026-08-30T05:00:00.000Z", completedTurns: [] },
+      url: "/api/loom/agent",
+      body: { mode: "preview", worldId: "world-1", prompt: "Continue exactly.", provider: "cloud", sessionId: "423e4567-e89b-42d3-a456-426614174000", resume: true },
+      events: [
+        { type: "session", sessionId: "423e4567-e89b-42d3-a456-426614174000", provider: "Claude", mode: "preview", resumed: true, worldId: "world-1", evidenceFingerprint: ASSIGNMENT_HASH },
+        { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: "423e4567-e89b-42d3-a456-426614174000", result: "Preview diagnosis continued." } },
+        { type: "done", code: 0, reason: null },
+      ],
+    },
+  ] as const)("continues the exact existing $label through its mode-specific transport", async ({ descriptor, url, body, events }) => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const sessionKey = `${descriptor.provider}:${descriptor.sessionId}`
+    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 3, selectedSessionKey: sessionKey, sessions: [descriptor] }))
+    const fetcher = vi.fn().mockResolvedValue(ndjson(...events))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.selectedSessionKey).toBe(sessionKey))
+
+    await act(async () => { await expose!.continueSession({ sessionKey, prompt: "Continue exactly." }) })
+
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe(url)
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(body)
+    const stored = JSON.parse(String(window.localStorage.getItem(key)))
+    expect(stored.sessions).toEqual([expect.objectContaining({
+      provider: descriptor.provider,
+      sessionId: descriptor.sessionId,
+      completedTurns: [expect.objectContaining({ ownerPrompt: "Continue exactly." })],
+    })])
+  })
+
+  it("fails a missing or foreign exact Continue candidate before dispatch", async () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness worldScope="other-space" />)
+    await waitFor(() => expect(expose!.collectionState).toBe("missing"))
+
+    await expect(expose!.continueSession({
+      sessionKey: "Claude:123e4567-e89b-42d3-a456-426614174000",
+      prompt: "Do not start fresh.",
+    })).rejects.toThrow("AGENT_CONTINUE_SESSION_UNAVAILABLE")
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(expose!.savedSessions).toEqual([])
+  })
+
+  it("preserves the prior transcript when exact Continue is refused", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    const descriptor = {
+      schemaVersion: 1, sessionId: "codex-refused-continue", role: "Builder", provider: "Codex", assignment: "Build src/app.ts",
+      updatedAt: "2026-08-30T05:00:00.000Z",
+      completedTurns: [{ ownerPrompt: "Build.", finalResult: "Saved result", completedAt: "2026-08-30T05:00:00.000Z" }],
+    }
+    const stored = JSON.stringify({ schemaVersion: 3, selectedSessionKey: "Codex:codex-refused-continue", sessions: [descriptor] })
+    window.localStorage.setItem(key, stored)
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403 }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.selectedSessionKey).toBe("Codex:codex-refused-continue"))
+
+    await expect(expose!.continueSession({
+      sessionKey: "Codex:codex-refused-continue", prompt: "Continue exactly.",
+    })).rejects.toThrow("THREAD_DESCRIPTOR_MISMATCH")
+
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(window.localStorage.getItem(key)).toBe(stored)
+    expect(expose!.savedSessions).toEqual([expect.objectContaining({ completedTurns: [expect.objectContaining({ finalResult: "Saved result" })] })])
+  })
+
   it("loads bounded inactive-Space session hints read-only and marks every one resume-unverified", () => {
     const first = "123e4567-e89b-42d3-a456-426614174000"
     const second = "223e4567-e89b-42d3-a456-426614174000"

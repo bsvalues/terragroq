@@ -143,6 +143,13 @@ export type ForkClaudeSessionInput = Readonly<{
   onPresentation?: (presentation: AgentTurnPresentation) => void
 }>
 
+export type ContinueAgentSessionInput = Readonly<{
+  sessionKey: string
+  prompt: string
+  onEvent?: (event: Readonly<Record<string, unknown>>) => void
+  onPresentation?: (presentation: AgentTurnPresentation) => void
+}>
+
 export function agentPresentationText(value: unknown): string | null {
   if (typeof value !== "string") return null
   const text = value.trim()
@@ -184,6 +191,7 @@ export type ProviderNeutralAgentSessionController = ExperienceAgentSessionContro
   activeProvider: AgentProvider | null
   runAgentTurn: (input: RunAgentTurnInput) => Promise<DurableAgentSession>
   forkClaudeSession: (input: ForkClaudeSessionInput) => Promise<DurableAgentSession>
+  continueSession: (input: ContinueAgentSessionInput) => Promise<DurableAgentSession>
 }>
 
 type ActiveAgentOperation = {
@@ -327,6 +335,22 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
 
 function sessionKey(provider: AgentProvider, sessionId: string): string {
   return `${provider}:${sessionId}`
+}
+
+export function selectSpaceContinueCandidate(
+  collectionState: AgentSessionCollectionState,
+  sessions: readonly DurableAgentSession[],
+  selectedKey: string | null,
+): DurableAgentSession | null {
+  if (collectionState !== "available") return null
+  const selected = selectedKey
+    ? sessions.find((session) => sessionKey(session.provider, session.sessionId) === selectedKey) ?? null
+    : null
+  if (selected) return selected
+  return [...sessions].sort((left, right) => {
+    const updated = Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
+    return updated || sessionKey(left.provider, left.sessionId).localeCompare(sessionKey(right.provider, right.sessionId))
+  })[0] ?? null
 }
 
 function parseCompletedTurns(value: unknown): readonly CompletedAgentTurn[] | null {
@@ -818,6 +842,7 @@ export function useExperienceAgentSessions({
     provider: AgentProvider
     mode?: "delegate" | "review" | "fork" | "preview"
     sourceSessionId?: string
+    exactContinuation?: boolean
   }) => {
     if (input.provider !== "Codex" && input.provider !== "Claude" && input.provider !== "Local") {
       throw new Error("AGENT_PROVIDER_INVALID")
@@ -840,10 +865,14 @@ export function useExperienceAgentSessions({
     if (mode === "review" && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (mode === "review" && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
     if (mode === "review" && role !== "Reviewer") throw new Error("AGENT_REVIEW_ROLE_INVALID")
-    if (input.requiredSessionKey !== undefined && (!requiredSessionKey || !/^Claude:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requiredSessionKey))) {
-      throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
+    const requiredId = requiredSessionKey?.slice(`${input.provider}:`.length) ?? null
+    const requiredKeyValid = Boolean(requiredSessionKey?.startsWith(`${input.provider}:`)
+      && validSessionId(input.provider, requiredId))
+    if (input.requiredSessionKey !== undefined && (!requiredSessionKey || !requiredKeyValid)) {
+      throw new Error(input.exactContinuation ? "AGENT_CONTINUE_SESSION_UNAVAILABLE" : "AGENT_REVIEW_SESSION_MISMATCH")
     }
-    if (requiredSessionKey && mode !== "review") throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
+    if (input.exactContinuation && !requiredSessionKey) throw new Error("AGENT_CONTINUE_SESSION_UNAVAILABLE")
+    if (requiredSessionKey && !input.exactContinuation && mode !== "review") throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
     if (previewMode && (input.provider !== "Claude" || role !== "Preview debugger")) throw new Error("AGENT_PREVIEW_PROVIDER_INVALID")
 
     const operationStorageKey = storageKey(ownerScope, worldScope)
@@ -852,14 +881,24 @@ export function useExperienceAgentSessions({
       ? sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === requiredSessionKey) ?? null
       : null
     if (requiredSessionKey && (!requiredPrior || loadedStorageKey !== operationStorageKey)) {
-      throw new Error("AGENT_REVIEW_PRIOR_REQUIRED")
+      throw new Error(input.exactContinuation ? "AGENT_CONTINUE_SESSION_UNAVAILABLE" : "AGENT_REVIEW_PRIOR_REQUIRED")
     }
+    const continuationMetadataMismatch = input.exactContinuation && requiredPrior && (
+      requiredPrior.provider !== input.provider
+      || requiredPrior.role !== role
+      || requiredPrior.assignment !== assignment
+      || (mode === "review" ? requiredPrior.reviewPath !== reviewPath : Boolean(requiredPrior.reviewPath))
+      || (previewMode ? requiredPrior.preview?.worldId !== worldId : Boolean(requiredPrior.preview))
+      || (requestedTarget ? requiredPrior.target?.path !== requestedTarget.path : Boolean(requiredPrior.target))
+    )
     if (requiredSessionKey && (selectedSessionKeyRef.current !== requiredSessionKey
-      || requiredPrior?.provider !== "Claude"
-      || requiredPrior.role !== "Reviewer"
-      || requiredPrior.reviewPath !== reviewPath
-      || requiredPrior.assignment !== assignment)) {
-      throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
+      || continuationMetadataMismatch
+      || !input.exactContinuation && (
+        requiredPrior?.provider !== "Claude"
+        || requiredPrior.role !== "Reviewer"
+        || requiredPrior.reviewPath !== reviewPath
+        || requiredPrior.assignment !== assignment))) {
+      throw new Error(input.exactContinuation ? "AGENT_CONTINUE_SESSION_UNAVAILABLE" : "AGENT_REVIEW_SESSION_MISMATCH")
     }
     if (previewMode && storedPrior?.preview && storedPrior.preview.worldId !== worldId) {
       throw new Error("AGENT_PREVIEW_SESSION_SCOPE_MISMATCH")
@@ -870,7 +909,7 @@ export function useExperienceAgentSessions({
       && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === sessionKey(storedPrior.provider, storedPrior.sessionId))
       ? storedPrior : null
     if (forkMode && !forkSource) throw new Error("AGENT_FORK_UNAVAILABLE")
-    const prior = forkMode ? null : mode === "review"
+    const prior = input.exactContinuation ? requiredPrior : forkMode ? null : mode === "review"
       ? requiredPrior ?? (storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer" && storedPrior.reviewPath === reviewPath ? storedPrior : null)
       : previewMode
         ? storedPrior?.provider === "Claude" && storedPrior.role === "Preview debugger" && storedPrior.preview?.worldId === worldId ? storedPrior : null
@@ -1039,7 +1078,8 @@ export function useExperienceAgentSessions({
           const previewFingerprint = previewMode && typeof event.evidenceFingerprint === "string" && ASSIGNMENT_HASH.test(event.evidenceFingerprint)
             ? event.evidenceFingerprint : null
           const invalidPreviewBinding = previewMode && (event.provider !== "Claude" || event.mode !== "preview"
-            || previewWorldId !== worldId || !previewFingerprint)
+            || previewWorldId !== worldId || !previewFingerprint
+            || input.exactContinuation && previewFingerprint !== prior?.preview?.evidenceFingerprint)
           if (!sessionIdValid || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed
             || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth || !localTruth
             || !forkTruth || invalidResumeForkLineage || invalidTargetBinding || invalidPreviewBinding) {
@@ -1207,7 +1247,7 @@ export function useExperienceAgentSessions({
       const terminalResumeRefusal = prior !== null && (error instanceof AgentTargetBindingError || error instanceof AgentStartRefusal
         && (error.status === 401 || error.status === 403 || error.status === 404)
       )
-      if (error?.name !== "AbortError" && terminalResumeRefusal && prior && mode !== "review") {
+      if (error?.name !== "AbortError" && terminalResumeRefusal && prior && mode !== "review" && !input.exactContinuation) {
         const priorKey = sessionKey(prior.provider, prior.sessionId)
         const remaining = sessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
         const remainingSelected = selectedSessionKeyRef.current === priorKey ? null : selectedSessionKeyRef.current
@@ -1249,6 +1289,29 @@ export function useExperienceAgentSessions({
   const forkClaudeSession = useCallback((input: ForkClaudeSessionInput) => executeTurn({
     ...input, provider: "Claude", role: "Builder", mode: "fork",
   }), [executeTurn])
+  const continueSession = useCallback((input: ContinueAgentSessionInput) => {
+    const exactKey = boundedText(input.sessionKey, 200)
+    const operationStorageKey = storageKey(ownerScope, worldScope)
+    const prior = exactKey && loadedStorageKey === operationStorageKey && selectedSessionKeyRef.current === exactKey
+      ? sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === exactKey) ?? null
+      : null
+    if (!prior || !exactKey) return Promise.reject(new Error("AGENT_CONTINUE_SESSION_UNAVAILABLE"))
+    const mode = prior.preview ? "preview" as const : prior.reviewPath ? "review" as const : "delegate" as const
+    return executeTurn({
+      provider: prior.provider,
+      role: prior.role,
+      assignment: prior.assignment,
+      prompt: mode === "review" ? undefined : input.prompt,
+      focus: mode === "review" ? input.prompt : undefined,
+      path: prior.reviewPath,
+      target: prior.target,
+      mode,
+      requiredSessionKey: exactKey,
+      exactContinuation: true,
+      onEvent: input.onEvent,
+      onPresentation: input.onPresentation,
+    })
+  }, [executeTurn, loadedStorageKey, ownerScope, worldScope])
 
   const currentStorageKey = storageKey(ownerScope, worldScope)
   const scopeLoaded = loadedStorageKey === currentStorageKey
@@ -1285,6 +1348,7 @@ export function useExperienceAgentSessions({
     runPreviewDiagnostic,
     runClaudeTurn,
     forkClaudeSession,
+    continueSession,
     selectSession,
     stop,
   }
