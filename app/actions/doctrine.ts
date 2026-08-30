@@ -238,7 +238,7 @@ export type { DoctrineVerdict } from "@/lib/governance/doctrine-evaluator"
 // wins over requires-approval, which wins over explicitly allowed.
 // This public server action delegates to the same deterministic evaluator used by transactional Work Order activation.
 // This keeps interactive and transactional Doctrine verdicts aligned.
-// The shared Doctrine evaluator remains the single admission-policy seam.
+// The shared Doctrine evaluator remains the only admission-policy seam.
 export async function validateAction(action: string): Promise<DoctrineVerdict> {
   const userId = await getUserId()
   const rules = await getActiveDoctrine(userId)

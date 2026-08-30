@@ -142,7 +142,7 @@ export async function transitionWorkOrder(
   opts?: { approveDoctrine?: boolean; grantAuthority?: boolean },
 ): Promise<TransitionResult> {
   const userId = await getUserId()
-  // Governed transitions delegate to the shared lifecycle seam.
+  // Governed transitions continue through the shared lifecycle seam.
   const result = await db.transaction((transaction) => transitionWorkOrderInTransaction({
     transaction, userId, workOrderId: id, to, now: new Date(),
     grantAuthority: opts?.grantAuthority, approveDoctrine: opts?.approveDoctrine,
