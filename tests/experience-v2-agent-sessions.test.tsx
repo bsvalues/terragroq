@@ -665,6 +665,65 @@ describe("Experience V2 real agent sessions", () => {
     expect(onSelect).toHaveBeenCalledWith(sessions[11])
   })
 
+  it("renders three compact truthful levels and bounds long assignments without hiding their full value", () => {
+    const longAssignment = "Diagnose the exact TerraFusion developer preview attachment failure while preserving the current source selection and reporting only verified runtime evidence"
+    const sessions: readonly ExperienceAgentSession[] = [
+      {
+        id: "Codex:assignment-builder",
+        role: "Builder",
+        providerLabel: "Codex",
+        assignment: "Implement exact save conflict recovery",
+        status: "working",
+        evidence: "live agent stream",
+        truth: "live",
+        kind: "durable-session",
+        mode: "delegate",
+      },
+      {
+        id: "Claude:assignment-reviewer",
+        role: "Reviewer",
+        providerLabel: "Claude",
+        assignment: "Review components/workspace-shell/workspace-shell.tsx",
+        status: "ready",
+        evidence: "verified transcript",
+        truth: "verified",
+        kind: "durable-session",
+        mode: "review",
+      },
+      {
+        id: "Local:assignment-thinker",
+        role: "Thinker",
+        providerLabel: "Local",
+        assignment: longAssignment,
+        status: "resume unverified",
+        evidence: "saved transcript · server verification required",
+        truth: "resume-unverified",
+        kind: "durable-session",
+        mode: "delegate",
+      },
+    ]
+
+    render(<AgentSessionStrip sessions={sessions} />)
+
+    for (const session of sessions) {
+      const chip = screen.getByRole("button", {
+        name: `${session.role} · ${session.providerLabel} · ${session.assignment}`,
+      })
+      expect(chip.querySelector('[data-agent-session-level="identity"]')?.textContent).toBe(`${session.role} · ${session.providerLabel}`)
+      const assignment = chip.querySelector('[data-agent-session-level="assignment"]') as HTMLElement | null
+      expect(assignment?.textContent).toBe(session.assignment)
+      expect(assignment?.getAttribute("title")).toBe(session.assignment)
+      expect(assignment?.className).toContain("truncate")
+      expect(chip.querySelector('[data-agent-session-level="truth"]')?.textContent).toBe(`${session.status} · ${session.evidence}`)
+      expect(chip.className).toContain("w-48")
+      expect(chip.className).toContain("max-w-48")
+    }
+
+    expect(screen.getByText("Implement exact save conflict recovery")).toBeTruthy()
+    expect(screen.getByText("Review components/workspace-shell/workspace-shell.tsx")).toBeTruthy()
+    expect(screen.getByText(longAssignment)).toBeTruthy()
+  })
+
   it("presents and stops each concurrent turn by its exact session identity", () => {
     const onSelect = vi.fn()
     const onStop = vi.fn()

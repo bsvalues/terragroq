@@ -1494,15 +1494,30 @@ export function AgentSessionStrip({
           aria-pressed={activeSessionId === session.id}
           aria-label={`${session.role} · ${session.providerLabel} · ${session.assignment}`}
           onClick={() => onSelect?.(session)}
-          className="flex min-w-36 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"
+          className="flex w-48 max-w-48 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"
           style={{ flex: "0 0 auto" }}
         >
-          <span aria-hidden className="grid size-5 place-items-center rounded-full border border-[#566653] text-[9px]">
+          <span aria-hidden className="grid size-5 shrink-0 place-items-center rounded-full border border-[#566653] text-[9px]">
             {session.role.slice(0, 1).toUpperCase()}
           </span>
-          <span className="grid gap-px">
-            <strong className="text-[10.5px]">{session.role} · {session.providerLabel}</strong>
-            <small className="text-[9.5px] text-[#8f9a8c]">{session.status} · {session.evidence}</small>
+          <span className="grid min-w-0 flex-1 gap-px">
+            <strong data-agent-session-level="identity" className="truncate text-[10.5px]">
+              {session.role} · {session.providerLabel}
+            </strong>
+            <span
+              data-agent-session-level="assignment"
+              title={session.assignment}
+              className="block truncate text-[9.5px] text-[#c7d0c3]"
+            >
+              {session.assignment}
+            </span>
+            <small
+              data-agent-session-level="truth"
+              title={`${session.status} · ${session.evidence}`}
+              className="truncate text-[9.5px] text-[#8f9a8c]"
+            >
+              {session.status} · {session.evidence}
+            </small>
           </span>
         </button>
       ))}
