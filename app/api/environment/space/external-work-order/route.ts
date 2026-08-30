@@ -48,6 +48,7 @@ export async function POST(request: Request): Promise<Response> {
     const result = await admitExternalWorkOrder(session.user.id, parsed.value)
     return reply(result, result.replayed ? 200 : 201)
   } catch (error) {
+    // Internal failures return a fixed public error while sanitized diagnostics stay server-side.
     // Keep diagnostics useful without copying SQL, bound parameters, or authority packet text into logs.
     if (!(error instanceof ExternalWorkOrderAdmissionError)) {
       // Raw error messages and causes must never enter logs.
