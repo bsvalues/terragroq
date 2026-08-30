@@ -158,16 +158,20 @@ runDatabase("historical private Project/Thread PostgreSQL contract", { timeout: 
           authority = 'historical_non_authoritative',
           "executionMode" = 'non_executing'
         WHERE id = 20
-      `, [provenance])
+      `, [provenance]).then(
+        (value) => ({ value, error: null as unknown }),
+        (error: unknown) => ({ value: null, error }),
+      )
 
       await new Promise((resolve) => setTimeout(resolve, 150))
       await chunkClient.query("COMMIT")
       chunkClient.release()
       chunkClient = null
 
-      let conversionError: unknown = null
+      const conversionResult = await conversion
+      let conversionError: unknown = conversionResult.error
       try {
-        await conversion
+        if (conversionResult.error) throw conversionResult.error
         await conversionClient.query("COMMIT")
       } catch (error) {
         conversionError = error
