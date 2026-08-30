@@ -13,6 +13,7 @@ import { getUserId } from "@/lib/session"
 import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
 import { saveOwnedLineWorld, selectedLineContextFingerprint } from "@/lib/environment/space-persistence"
+import { inspectWorkspaceApp, williamOsOrigin, type WorkspacePreviewEvidence } from "@/lib/environment/workspace-app"
 import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { getWorkOrders } from "@/app/actions/work-orders"
@@ -720,13 +721,35 @@ function describeSelectedDiff(snapshot: WorkspaceFileDiffSnapshot): string {
   return `${identity} Patch content unavailable: Git is not available for this workspace.`
 }
 
+function describePreviewEvidence(evidence: WorkspacePreviewEvidence): string {
+  return [
+    `Preview evidence (server-derived): status ${evidence.status}; reason ${evidence.reason ?? "none"}.`,
+    `Configured URL: ${JSON.stringify(evidence.configuredUrl)}. Admitted URL: ${JSON.stringify(evidence.admittedUrl)}. Origin: ${JSON.stringify(evidence.origin)}.`,
+    `Identity: ${evidence.identity}. Reachable: ${evidence.reachable ? "yes" : "no"}. Frameable: ${evidence.frameable ? "yes" : "no"}. Checked at: ${evidence.checkedAt}.`,
+    "Inspection limits: DOM unavailable; console unavailable; network unavailable. No DOM, console, or network telemetry was observed.",
+  ].join("\n")
+}
+
 /** Add current Git truth only when the persisted selected object is the Changes surface. */
 async function deriveSelectedObjectGrounding(
   world: WorkingWorldSnapshot,
   projectRoot: string | null = PROJECT_ROOT,
+  previewWilliamOrigin: string | null = null,
 ): Promise<SelectedObjectGrounding> {
   const file = await deriveSelectedFileGrounding(world, projectRoot)
   const activeWindow = world.space?.windows.find((window) => window.id === world.space?.activeWindowId)
+  if (activeWindow?.kind === "running-app") {
+    const preview = await inspectWorkspaceApp(
+      process.env.WILLIAMOS_WORKSPACE_APP_URL?.trim() || null,
+      previewWilliamOrigin ?? SELF_ORIGIN,
+    )
+    return {
+      facts: `${describePreviewEvidence(preview)}\n${file.facts}`,
+      version: JSON.stringify({ preview: preview.fingerprint, file: file.version }),
+      exact: file.exact,
+      changesSelected: false,
+    }
+  }
   if (activeWindow?.kind !== "diff") return file
   if (!file.exact) return { ...file, changesSelected: true }
 
@@ -959,7 +982,8 @@ export async function POST(request: Request) {
         // A current-work read retains its exact selection for a later "continue it".
         if ("retained" in grounded) updated = { ...updated, pendingStartWork: grounded.retained ?? null }
       } else {
-        const selectedObject = await deriveSelectedObjectGrounding(world)
+        const previewOrigin = williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url)
+        const selectedObject = await deriveSelectedObjectGrounding(world, PROJECT_ROOT, previewOrigin)
         if (selectedObject.changesSelected && !selectedObject.exact) {
           return Response.json({ error: "LINE_CONTEXT_UNAVAILABLE" }, { status: 409 })
         }
@@ -968,7 +992,7 @@ export async function POST(request: Request) {
           selectedObject: selectedObject.version,
         })
         deriveSelectedContext = async (latest) => {
-          const latestSelectedObject = await deriveSelectedObjectGrounding(latest)
+          const latestSelectedObject = await deriveSelectedObjectGrounding(latest, PROJECT_ROOT, previewOrigin)
           return JSON.stringify({
             persisted: selectedLineContextFingerprint(latest),
             selectedObject: latestSelectedObject.version,
