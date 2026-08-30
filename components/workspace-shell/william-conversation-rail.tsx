@@ -96,7 +96,7 @@ export function WilliamConversationRail({
           <div>
             <button type="button" onClick={onThinkAgain} disabled={!canThinkAgain || judgmentBusy}>{judgmentBusy ? "Reasoning" : "Think again"}</button>
             {canInspectJudgment ? <button type="button" onClick={onInspectJudgment} aria-label="Inspect judgment basis">Inspect basis</button> : null}
-            {canOverrideJudgment ? <button type="button" onClick={() => { onOverrideJudgment(); requestAnimationFrame(() => composerRef.current?.focus()) }} aria-label="Override William judgment">Override</button> : null}
+            {canOverrideJudgment ? <button type="button" onClick={() => { onOverrideJudgment(); requestAnimationFrame(() => composerRef.current?.focus()) }} aria-label="Override William judgment" disabled={busy || judgmentBusy}>Override</button> : null}
             <button type="button" onClick={onCouncil}>Ask Council</button>
           </div>
         </section>

@@ -65,6 +65,75 @@ function spaceEnvelope() {
 }
 
 describe("durable William conversation rail", () => {
+  it("disables Override while an existing William turn is pending and dispatches nothing else", async () => {
+    let resolveLine!: (response: Response) => void
+    const lineResponse = new Promise<Response>((resolve) => { resolveLine = resolve })
+    const lineBodies: Array<{ worldId: string; text: string }> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineBodies.push(JSON.parse(String(init.body)) as { worldId: string; text: string })
+        return lineResponse
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    const composer = await screen.findByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement
+    await userEvent.type(composer, "Finish the earlier turn")
+    await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
+    await waitFor(() => expect(lineBodies).toHaveLength(1))
+
+    const override = screen.getByRole("button", { name: "Override William judgment" }) as HTMLButtonElement
+    expect(override.disabled).toBe(true)
+    await userEvent.click(override)
+    expect(composer.value).toBe("Finish the earlier turn")
+    expect(lineBodies).toEqual([{ worldId: "world-a", text: "Finish the earlier turn" }])
+
+    resolveLine(Response.json({ worldId: "world-a", say: "Earlier turn complete.", spine: EMPTY_SPINE }))
+    await screen.findByText("Earlier turn complete.")
+  })
+
+  it("does not let a successful older turn clear a newer unsent draft", async () => {
+    let resolveLine!: (response: Response) => void
+    const lineResponse = new Promise<Response>((resolve) => { resolveLine = resolve })
+    const lineBodies: Array<{ worldId: string; text: string }> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineBodies.push(JSON.parse(String(init.body)) as { worldId: string; text: string })
+        return lineResponse
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    const composer = await screen.findByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement
+    await userEvent.type(composer, "Finish the earlier turn")
+    await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
+    await waitFor(() => expect(lineBodies).toHaveLength(1))
+
+    fireEvent.change(composer, { target: { value: "Newer unsent draft" } })
+    expect(composer.value).toBe("Newer unsent draft")
+    resolveLine(Response.json({ worldId: "world-a", say: "Earlier turn complete.", spine: EMPTY_SPINE }))
+
+    await screen.findByText("Earlier turn complete.")
+    expect(composer.value).toBe("Newer unsent draft")
+    expect(lineBodies).toEqual([{ worldId: "world-a", text: "Finish the earlier turn" }])
+  })
+
   it("opens a focused editable override draft for the exact validated judgment and sends it through William", async () => {
     const lineBodies: Array<{ worldId: string; text: string }> = []
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

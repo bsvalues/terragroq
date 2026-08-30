@@ -2515,7 +2515,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         persistenceLabel={savedLabel}
         persistenceError={persistenceError}
         onInput={setWilliamInput}
-        onSubmit={() => { const text = williamInput.trim(); if (!text) return; void sendWilliamTurn(text).then((sent) => { if (sent) setWilliamInput("") }) }}
+        onSubmit={() => {
+          const submittedDraft = williamInput
+          const text = submittedDraft.trim()
+          if (!text) return
+          void sendWilliamTurn(text).then((sent) => {
+            if (sent) setWilliamInput((current) => current === submittedDraft ? "" : current)
+          })
+        }}
         onOpen={() => setWilliamRailOpen(true)}
         onClose={() => setWilliamRailOpen(false)}
         onThinkAgain={() => void refreshWilliamJudgment()}
