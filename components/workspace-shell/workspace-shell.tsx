@@ -14,6 +14,7 @@ import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentatio
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
+import { deriveMissionControlOverview } from "./mission-control-overview"
 import { WilliamConversationRail, type WilliamConversationEntry } from "./william-conversation-rail"
 import { WindowFrame } from "./window-frame"
 import { defaultSpace, nextSpaceRevision, normalizeSpace, spaceInViewport, spaceToServer, type SpaceEnvelope, type SpaceSummary, type WilliamConversationTurn, type WindowGeometry, type WindowId, type WorkspaceProject, type WorkspaceSpace } from "./types"
@@ -1286,6 +1287,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const currentMissionSpace: MissionControlSpaceProjection = {
     id: worldId ?? space.id,
     name: space.name,
+    updatedAt: spaceSummaries.find((summary) => summary.worldId === worldId)?.updatedAt ?? null,
     focus: space.selectedPath ?? "Development Space",
     state: space.runningAppUrl ? "live" : "unavailable",
     truth: "live",
@@ -1312,6 +1314,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     return {
       id: summary.worldId,
       name: summary.name,
+      updatedAt: summary.updatedAt,
       focus: restored.selectedPath ?? "Preserved work surface",
       state: "saved",
       truth: "live",
@@ -1325,6 +1328,17 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       selectedObject: restored.selectedPath,
       changed: "Saved spatial state",
     }
+  })
+  const missionOverview = deriveMissionControlOverview({
+    spaces: missionSpaces,
+    currentSpaceId: worldId,
+    currentSpaceJudgment: judgment?.recommendation ?? null,
+    collectionAvailable: spaceCollectionAvailable,
+    collectionReason: spaceCollectionReason,
+    persistence: {
+      state: persistenceError ? "failed" : persistencePending ? "saving" : "saved",
+      error: persistenceError,
+    },
   })
 
   function openObjectAction(action: string) {
@@ -1585,7 +1599,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       ) : null}
 
       {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} historical={councilHistorical} busy={councilBusy} error={councilError} onDismiss={dismissCouncil} onAdvisoryAction={(action) => void handleCouncilAction(action)} /> : councilView === "convening" ? <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={dismissCouncil}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{councilBusy ? "Convening five real advisory perspectives…" : "Council unavailable"}</strong><p className={spatial.muted}>{councilError ?? councilQuestion ?? "Preparing the current question."}</p>{councilError && councilQuestion ? <button type="button" className={spatial.utilityButton} onClick={() => void summonCouncil(councilQuestion)}>Try again</button> : null}</div></section> : <CouncilHistoryBrowser history={councilHistory} loading={councilBusy} error={councilError} onDismiss={dismissCouncil} onSelect={selectCouncilHistory} onNew={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} />}</div> : null}
-      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => { if (!switchingSpace) setOverlay(null) }} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} transitionMessage={transitionMessage} transitioning={switchingSpace} collectionAvailable={spaceCollectionAvailable} collectionReason={spaceCollectionReason} williamOverview={{ summary: williamJudgment, attention: persistenceError || !space.runningAppUrl ? "One visible acceptance condition still needs attention." : null, truth: "live" }} /> : null}
+      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => { if (!switchingSpace) setOverlay(null) }} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} transitionMessage={transitionMessage} transitioning={switchingSpace} collectionAvailable={spaceCollectionAvailable} collectionReason={spaceCollectionReason} williamOverview={missionOverview} /> : null}
     </main>
   )
 }

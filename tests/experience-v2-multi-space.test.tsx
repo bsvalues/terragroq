@@ -227,6 +227,30 @@ describe("Experience V2 multi-Space re-entry", () => {
     expect(window.localStorage.getItem(`williamos:selected-space:${preferenceStorageKey}`)).toBe("b")
   })
 
+  it("recomputes the real Mission overview on re-entry without retaining the prior Space judgment", async () => {
+    const alphaEnvelope = { ...envelope("a"), judgment: { ...envelope("a").judgment, recommendation: "Alpha judgment." } }
+    const betaEnvelope = { ...envelope("b"), judgment: { ...envelope("b").judgment, recommendation: "Beta judgment." } }
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => alphaEnvelope }
+      if (url === "/api/environment/space" && init?.method === "PUT") return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init.body)).space }) }
+      if (url === "/api/environment/space?worldId=b") return { ok: true, status: 200, json: async () => betaEnvelope }
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    }))
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByText(/Current Space: Alpha\./)).toBeTruthy()
+    expect(screen.getByText(/Current-Space judgment: Alpha judgment\./)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
+    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+    expect(screen.getByText(/Current Space: Beta\./)).toBeTruthy()
+    expect(screen.getByText(/Current-Space judgment: Beta judgment\./)).toBeTruthy()
+    expect(screen.queryByText(/Alpha judgment/)).toBeNull()
+  })
+
   it("awaits the exact old-Space PUT acknowledgement before loading B and preserves both places", async () => {
     const order: string[] = []
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -360,6 +384,7 @@ describe("Experience V2 multi-Space re-entry", () => {
       spaces: [...summaries, { worldId: "c", name: "Gamma", space: beta, updatedAt: "2026-08-28T11:00:00Z" }],
     }) })
     await waitFor(() => expect(screen.getByRole("button", { name: "Enter Gamma, current Space" })).toBeTruthy())
+    expect(screen.getByText(/Current Space: Gamma\./)).toBeTruthy()
   })
 
   it("blocks re-entry until the user stops an active Test run", async () => {
