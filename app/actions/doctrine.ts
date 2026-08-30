@@ -4,6 +4,14 @@ import { db } from "@/lib/db"
 import { doctrine } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
+import {
+  assertGenericDoctrineMutationAllowed,
+  assertHistoricalDoctrineReplay,
+  buildHistoricalDoctrineArchiveUpdate,
+  buildHistoricalDoctrineInsert,
+  getHistoricalDoctrineCandidate,
+  getHistoricalDoctrineCatalog,
+} from "@/lib/history/historical-doctrine"
 import { and, desc, eq, ilike, or } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
@@ -55,6 +63,26 @@ export async function searchDoctrine(query: string) {
     .orderBy(desc(doctrine.priority), desc(doctrine.createdAt))
 }
 
+// Historical inputs remain a separate, non-authoritative lifecycle even though
+// Doctrine owns their durable records.
+export async function getHistoricalDoctrineInputs() {
+  const userId = await getUserId()
+  const rows = await db
+    .select()
+    .from(doctrine)
+    .where(eq(doctrine.userId, userId))
+  const byCandidateId = new Map(
+    rows
+      .filter((row) => row.historicalCandidateId !== null)
+      .map((row) => [row.historicalCandidateId, row]),
+  )
+
+  return getHistoricalDoctrineCatalog().flatMap((candidate) => {
+    const row = byCandidateId.get(candidate.candidateId)
+    return row ? [assertHistoricalDoctrineReplay(row, candidate)] : []
+  })
+}
+
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
 /* ------------------------------------------------------------------ */
@@ -77,6 +105,89 @@ async function nextRuleRef(userId: string): Promise<string> {
 /* ------------------------------------------------------------------ */
 /* Writes                                                            */
 /* ------------------------------------------------------------------ */
+
+async function getHistoricalDoctrineRow(userId: string, candidateId: string) {
+  const [row] = await db
+    .select()
+    .from(doctrine)
+    .where(and(
+      eq(doctrine.userId, userId),
+      eq(doctrine.historicalCandidateId, candidateId),
+    ))
+  return row
+}
+
+export async function promoteHistoricalDoctrineInput(candidateId: string) {
+  const userId = await getUserId()
+  const candidate = getHistoricalDoctrineCandidate(candidateId)
+  const existing = await getHistoricalDoctrineRow(userId, candidateId)
+  if (existing) {
+    return { row: assertHistoricalDoctrineReplay(existing, candidate), replayed: true }
+  }
+
+  const [created] = await db
+    .insert(doctrine)
+    .values(buildHistoricalDoctrineInsert(userId, candidate))
+    .onConflictDoNothing()
+    .returning()
+
+  if (!created) {
+    const replay = await getHistoricalDoctrineRow(userId, candidateId)
+    if (!replay) throw new Error(`HISTORICAL_DOCTRINE_PROMOTION_CONFLICT:${candidateId}`)
+    return { row: assertHistoricalDoctrineReplay(replay, candidate), replayed: true }
+  }
+
+  await logEvent({
+    userId,
+    type: "doctrine.historical_input_created",
+    summary: `Recorded non-authoritative historical Doctrine input ${candidate.claimId}`,
+    register: "doctrine",
+    refId: created.id,
+  })
+  revalidatePath("/doctrine")
+  return { row: created, replayed: false }
+}
+
+export async function archiveHistoricalDoctrineInput(candidateId: string) {
+  const userId = await getUserId()
+  const candidate = getHistoricalDoctrineCandidate(candidateId)
+  const existing = await getHistoricalDoctrineRow(userId, candidateId)
+  if (!existing) throw new Error(`HISTORICAL_DOCTRINE_NOT_FOUND:${candidateId}`)
+  assertHistoricalDoctrineReplay(existing, candidate)
+
+  const update = buildHistoricalDoctrineArchiveUpdate(existing)
+  if (!update) return { row: existing, replayed: true }
+
+  const [archived] = await db
+    .update(doctrine)
+    .set({ ...update, updatedAt: new Date() })
+    .where(and(
+      eq(doctrine.userId, userId),
+      eq(doctrine.historicalCandidateId, candidateId),
+      eq(doctrine.status, "historical_input"),
+    ))
+    .returning()
+
+  if (!archived) {
+    const replay = await getHistoricalDoctrineRow(userId, candidateId)
+    if (!replay) throw new Error(`HISTORICAL_DOCTRINE_ARCHIVE_CONFLICT:${candidateId}`)
+    assertHistoricalDoctrineReplay(replay, candidate)
+    if (replay.status !== "historical_archived") {
+      throw new Error(`HISTORICAL_DOCTRINE_ARCHIVE_CONFLICT:${candidateId}`)
+    }
+    return { row: replay, replayed: true }
+  }
+
+  await logEvent({
+    userId,
+    type: "doctrine.historical_input_archived",
+    summary: `Archived non-authoritative historical Doctrine input ${candidate.claimId}`,
+    register: "doctrine",
+    refId: archived.id,
+  })
+  revalidatePath("/doctrine")
+  return { row: archived, replayed: false }
+}
 
 export async function createDoctrine(input: {
   title: string
@@ -121,6 +232,12 @@ export async function createDoctrine(input: {
 
 export async function toggleDoctrine(id: number, active: boolean) {
   const userId = await getUserId()
+  const [row] = await db
+    .select()
+    .from(doctrine)
+    .where(and(eq(doctrine.id, id), eq(doctrine.userId, userId)))
+  if (!row) return
+  assertGenericDoctrineMutationAllowed(row)
   await db
     .update(doctrine)
     .set({ active, updatedAt: new Date() })
@@ -135,6 +252,7 @@ export async function linkDoctrineEvidence(id: number, evidence: string) {
     .from(doctrine)
     .where(and(eq(doctrine.id, id), eq(doctrine.userId, userId)))
   if (!row) throw new Error("Doctrine not found")
+  assertGenericDoctrineMutationAllowed(row)
   const next = [...row.evidence, evidence.trim()].filter(Boolean)
   await db
     .update(doctrine)
@@ -171,6 +289,7 @@ export async function supersedeDoctrine(
     .from(doctrine)
     .where(and(eq(doctrine.id, oldId), eq(doctrine.userId, userId)))
   if (!old) throw new Error("Doctrine not found")
+  assertGenericDoctrineMutationAllowed(old)
 
   const ref = await nextRuleRef(userId)
   const [next] = await db
@@ -215,9 +334,10 @@ export async function supersedeDoctrine(
 export async function deleteDoctrine(id: number) {
   const userId = await getUserId()
   const [row] = await db
-    .select({ locked: doctrine.locked })
+    .select()
     .from(doctrine)
     .where(and(eq(doctrine.id, id), eq(doctrine.userId, userId)))
+  if (row) assertGenericDoctrineMutationAllowed(row)
   if (row?.locked) {
     throw new Error("Locked governance doctrine cannot be deleted; supersede it instead")
   }

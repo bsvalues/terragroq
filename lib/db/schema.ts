@@ -17,6 +17,7 @@ import {
 } from "drizzle-orm/pg-core"
 
 import { fromUtcWallDriver, toUtcWallDriver } from "@/lib/db/utc-wall-timestamp"
+import type { HistoricalDoctrineProvenance } from "@/lib/history/historical-doctrine"
 
 // The conversion itself lives in `lib/db/utc-wall-timestamp.ts` so that the raw-`pg` readers of these
 // same columns can share it. While it was a closure here, they could not, and read the stored UTC wall
@@ -137,29 +138,68 @@ export const decision = pgTable("decision", {
 })
 
 // Doctrine: machine-readable operating rules that govern behavior.
-// status: active | superseded | retired
-export const doctrine = pgTable("doctrine", {
-  id: serial("id").primaryKey(),
-  userId: text("userId").notNull(),
-  ref: text("ref"), // RULE-0001 style human reference
-  title: text("title").notNull(),
-  statement: text("statement").notNull(),
-  category: text("category").default("principle").notNull(), // principle | policy | guardrail
-  scope: text("scope"),
-  status: text("status").default("active").notNull(),
-  priority: integer("priority").default(0).notNull(),
-  active: boolean("active").default(true).notNull(),
-  allowed: text("allowed").array().default([]).notNull(),
-  forbidden: text("forbidden").array().default([]).notNull(),
-  requiresApproval: text("requiresApproval").array().default([]).notNull(),
-  evidence: text("evidence").array().default([]).notNull(),
-  owner: text("owner").default("Bill").notNull(),
-  locked: boolean("locked").default(false).notNull(), // seeded doctrine
-  supersedesId: integer("supersedesId"),
-  supersededById: integer("supersededById"),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
-})
+// status: active | superseded | retired | historical_input | historical_archived
+export const doctrine = pgTable(
+  "doctrine",
+  {
+    id: serial("id").primaryKey(),
+    userId: text("userId").notNull(),
+    ref: text("ref"), // RULE-0001 style human reference
+    title: text("title").notNull(),
+    statement: text("statement").notNull(),
+    category: text("category").default("principle").notNull(), // principle | policy | guardrail
+    scope: text("scope"),
+    status: text("status").default("active").notNull(),
+    priority: integer("priority").default(0).notNull(),
+    active: boolean("active").default(true).notNull(),
+    allowed: text("allowed").array().default([]).notNull(),
+    forbidden: text("forbidden").array().default([]).notNull(),
+    requiresApproval: text("requiresApproval").array().default([]).notNull(),
+    evidence: text("evidence").array().default([]).notNull(),
+    owner: text("owner").default("Bill").notNull(),
+    locked: boolean("locked").default(false).notNull(), // seeded doctrine
+    supersedesId: integer("supersedesId"),
+    supersededById: integer("supersededById"),
+    historicalCandidateId: text("historicalCandidateId"),
+    historicalClaimId: text("historicalClaimId"),
+    historicalProvenance: jsonb("historicalProvenance").$type<HistoricalDoctrineProvenance>(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("doctrine_historical_candidate_user_idx")
+      .on(table.userId, table.historicalCandidateId)
+      .where(sql`${table.historicalCandidateId} IS NOT NULL`),
+    check(
+      "doctrine_historical_identity_check",
+      sql`(
+        ${table.historicalCandidateId} IS NULL
+        AND ${table.historicalClaimId} IS NULL
+        AND ${table.historicalProvenance} IS NULL
+        AND ${table.status} NOT IN ('historical_input', 'historical_archived')
+      ) OR (
+        ${table.historicalCandidateId} IS NOT NULL
+        AND ${table.historicalClaimId} IS NOT NULL
+        AND ${table.historicalProvenance} IS NOT NULL
+        AND ${table.status} IN ('historical_input', 'historical_archived')
+      )`,
+    ),
+    check(
+      "doctrine_historical_safety_check",
+      sql`${table.historicalCandidateId} IS NULL OR (
+        ${table.active} = false
+        AND ${table.priority} = 0
+        AND cardinality(${table.allowed}) = 0
+        AND cardinality(${table.forbidden}) = 0
+        AND cardinality(${table.requiresApproval}) = 0
+        AND ${table.locked} = false
+        AND ${table.supersedesId} IS NULL
+        AND ${table.supersededById} IS NULL
+        AND COALESCE(${table.historicalProvenance}->>'authority', '') = 'historical_non_authoritative'
+      )`,
+    ),
+  ],
+)
 
 // Work Orders: governed units of work (Track E — Work Order Engine).
 // status lifecycle (8): draft | proposed | approved | active | blocked | review | closed | aborted
