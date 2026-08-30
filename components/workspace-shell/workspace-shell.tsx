@@ -44,6 +44,12 @@ type StandardDelegateContext = Readonly<{
   role: string
   assignment: string
   requiredSessionKey?: string
+  previewDebugBinding?: Readonly<{
+    worldId: string
+    transitionEpoch: number
+    revision: number
+    runningAppUrl: string | null
+  }>
 }>
 type ReviewerDelegateContext = Readonly<{
   kind: "reviewer"
@@ -1532,6 +1538,18 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         ? `Owner request: ${text}`
         : `Selected ${selectedKind}: ${selectedLabel}\nOwner request: ${text}`
       if (lineTarget === "agent") {
+        if (delegateContext?.kind === "preview" && delegateContext.previewDebugBinding) {
+          const binding = delegateContext.previewDebugBinding
+          const current = stateRef.current
+          if (worldRef.current !== binding.worldId
+            || transitionEpochRef.current !== binding.transitionEpoch
+            || current.revision !== binding.revision
+            || current.runningAppUrl !== binding.runningAppUrl
+            || current.activeWindowId !== "running-app"
+            || current.windows["running-app"].minimized) {
+            throw new Error("PREVIEW_DEBUG_CONTEXT_STALE")
+          }
+        }
         appendConversation("owner", text)
         if (lineMode === "fork") {
           if (!forkContext) throw new Error("AGENT_FORK_UNAVAILABLE")
@@ -2292,8 +2310,27 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       void inspectPreviewEvidence()
       return
     }
-    if (selectedKind === "preview" && (action === "Debug" || action === "Explain")) {
-      openLine(`${action} the exact current developer Preview evidence: `)
+    if (selectedKind === "preview" && action === "Debug") {
+      if (!worldId || !agentSessions.selectSession(null)) return
+      setFocusedAgentId(null)
+      setDelegateContext({
+        kind: "preview",
+        label: selectedLabel,
+        provider: "Claude",
+        role: "Preview debugger",
+        assignment: "Developer Preview diagnosis",
+        previewDebugBinding: {
+          worldId,
+          transitionEpoch: transitionEpochRef.current,
+          revision: space.revision,
+          runningAppUrl: space.runningAppUrl,
+        },
+      })
+      openLine("", "agent")
+      return
+    }
+    if (selectedKind === "preview" && action === "Explain") {
+      openLine("Explain the exact current developer Preview evidence: ")
       return
     }
     if (action === "Pause") {
@@ -2595,12 +2632,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
                 {verifiedLineSessionTargets.map((target) => <button key={target.sessionKey} type="button" className={spatial.lineClose} aria-pressed={delegateContext?.kind === "line-session" && delegateContext.sessionKey === target.sessionKey} aria-label={`${target.label} · session ${target.descriptor.sessionId}`} title={`${target.label} · session ${target.descriptor.sessionId}`} onClick={() => selectLineSessionTarget(target)}>{target.label}</button>)}
               </div> : null}
               {lineTranscriptSession ? <AgentTranscriptHistory key={lineTranscriptSession.sessionKey} {...lineTranscriptSession} /> : null}
-              <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? capturedDiffReview ? `Review current change · ${review.path ?? "no file selected"}` : `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ?? lineTerminalReply ? <output className={spatial.lineReply}>{lineReply ?? lineTerminalReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
+              <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? capturedDiffReview ? `Review current change · ${review.path ?? "no file selected"}` : `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Preview debugger · Claude · read-only" : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Describe the bounded diagnostic focus" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ?? lineTerminalReply ? <output className={spatial.lineReply}>{lineReply ?? lineTerminalReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
             </div>
             <div className={spatial.lineControls}>
               {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider">{delegateContext.kind === "preview" ? <button type="button" className={spatial.lineClose} disabled aria-label="Codex unavailable" title="Preview diagnostic transport is not available for Codex yet.">Codex unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Codex" } : current)}>Codex</button>}<button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
-              <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineMode === "fork" ? "Claude fork · source remains unchanged" : reviewerAgentContext ? "Read-only Reviewer session" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
-              <button type="submit" className={spatial.lineSend} disabled={lineBusy || currentResumeSessionIsActive || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? changeIntent === "improve-diff" ? "Improving" : "Changing" : changeIntent === "improve-diff" ? "Start improvement" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : currentResumeSessionIsActive ? "Session working" : delegateContext?.kind === "continue" || delegateContext?.kind === "line-session" ? lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
+              <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineMode === "fork" ? "Claude fork · source remains unchanged" : reviewerAgentContext ? "Read-only Reviewer session" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Read-only Preview debugger session" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
+              <button type="submit" className={spatial.lineSend} disabled={lineBusy || currentResumeSessionIsActive || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? changeIntent === "improve-diff" ? "Improving" : "Changing" : changeIntent === "improve-diff" ? "Start improvement" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : currentResumeSessionIsActive ? "Session working" : delegateContext?.kind === "continue" || delegateContext?.kind === "line-session" ? lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? lineBusy ? "Preview debugger working" : "Send" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
               {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>{changeIntent === "improve-diff" ? "Stop improvement" : "Stop change"}</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (lineMode === "review" && review.running) { if (review.canStop) review.stop(); return } if (lineTarget === "agent") { agentPresentationEpochRef.current += 1; setLineBusy(false) } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
             </div>
           </form>
