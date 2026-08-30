@@ -617,6 +617,17 @@ export function useExperienceAgentSessions({
   const selectionGenerationRef = useRef(0)
   const operationsRef = useRef(new Map<number, ActiveAgentOperation>())
 
+  const persistCanonicalCollection = useCallback((write: () => DurableAgentSessionCollection) => {
+    try {
+      const persisted = write()
+      setCollectionState("available")
+      return persisted
+    } catch (cause) {
+      setCollectionState((current) => current === "partial" ? "partial" : "unavailable")
+      throw cause
+    }
+  }, [])
+
   const syncActiveTurns = useCallback(() => {
     setActiveTurns([...operationsRef.current.values()].map((operation) => ({
       id: operation.acceptedKey ?? `starting-${operation.provider.toLowerCase()}-${operation.epoch}`,
@@ -638,7 +649,7 @@ export function useExperienceAgentSessions({
       : null
     const nextSelectedKey = fallback ? sessionKey(fallback.provider, fallback.sessionId) : null
     try {
-      const persisted = persistCollection(operation.storageKey, sessionsRef.current, nextSelectedKey)
+      const persisted = persistCanonicalCollection(() => persistCollection(operation.storageKey, sessionsRef.current, nextSelectedKey))
       sessionsRef.current = persisted.sessions
       setSavedSessions(persisted.sessions)
     } catch (cause) {
@@ -651,7 +662,7 @@ export function useExperienceAgentSessions({
       ? fallback
       : null
     setDurableSession(verifiedFallback)
-  }, [])
+  }, [persistCanonicalCollection])
 
   const invalidateOperation = useCallback((operation: ActiveAgentOperation) => {
     if (operationsRef.current.get(operation.epoch) !== operation) return
@@ -699,7 +710,7 @@ export function useExperienceAgentSessions({
       setSelectedSessionKey(null)
     } else {
       try {
-        const persisted = persistCollection(key, collection.sessions, collection.selectedSessionKey)
+        const persisted = persistCanonicalCollection(() => persistCollection(key, collection.sessions, collection.selectedSessionKey))
         sessionsRef.current = persisted.sessions
         selectedSessionKeyRef.current = persisted.selectedSessionKey
         setSavedSessions(persisted.sessions)
@@ -719,7 +730,7 @@ export function useExperienceAgentSessions({
     setVerifiedSessions([])
     setDurableSession(null)
     setLoadedStorageKey(key)
-  }, [invalidateAllOperations, ownerScope, worldScope])
+  }, [invalidateAllOperations, ownerScope, persistCanonicalCollection, worldScope])
 
   useEffect(() => () => {
     const operations = [...operationsRef.current.values()]
@@ -756,7 +767,7 @@ export function useExperienceAgentSessions({
     const nextKey = selected ? sessionKey(selected.provider, selected.sessionId) : null
     let persisted: DurableAgentSessionCollection
     try {
-      persisted = persistCollection(key, sessions, nextKey)
+      persisted = persistCanonicalCollection(() => persistCollection(key, sessions, nextKey))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED")
       return false
@@ -768,7 +779,7 @@ export function useExperienceAgentSessions({
     setSelectedSessionKey(persisted.selectedSessionKey)
     setDurableSession(selected && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === nextKey) ? selected : null)
     return true
-  }, [ownerScope, worldScope])
+  }, [ownerScope, persistCanonicalCollection, worldScope])
 
   const executeTurn = useCallback(async (input: Omit<RunClaudeTurnInput, "mode"> & {
     provider: AgentProvider
@@ -1083,9 +1094,9 @@ export function useExperienceAgentSessions({
         : null
       let persisted: DurableAgentSessionCollection
       try {
-        persisted = forkMode
+        persisted = persistCanonicalCollection(() => forkMode
           ? persistForkCollection(operationStorageKey, sessionsRef.current, sessionKey(forkSource!.provider, forkSource!.sessionId), settledSession, persistedSelectedKey)
-          : persistCollection(operationStorageKey, sessionsWithSettlement, persistedSelectedKey, { sessionKey: settledKey, completedAt })
+          : persistCollection(operationStorageKey, sessionsWithSettlement, persistedSelectedKey, { sessionKey: settledKey, completedAt }))
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED"
         throw new AgentTurnCommittedPersistenceError(message)
@@ -1125,7 +1136,7 @@ export function useExperienceAgentSessions({
         const priorKey = sessionKey(prior.provider, prior.sessionId)
         const remaining = sessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
         const remainingSelected = selectedSessionKeyRef.current === priorKey ? null : selectedSessionKeyRef.current
-        const persisted = persistCollection(operationStorageKey, remaining, remainingSelected)
+        const persisted = persistCanonicalCollection(() => persistCollection(operationStorageKey, remaining, remainingSelected))
         sessionsRef.current = persisted.sessions
         selectedSessionKeyRef.current = persisted.selectedSessionKey
         setSavedSessions(persisted.sessions)
@@ -1153,7 +1164,7 @@ export function useExperienceAgentSessions({
         syncActiveTurns()
       }
     }
-  }, [ownerScope, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
+  }, [ownerScope, persistCanonicalCollection, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
 
   const runAgentTurn = useCallback((input: RunAgentTurnInput) => executeTurn({ ...input, mode: "delegate" }), [executeTurn])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])

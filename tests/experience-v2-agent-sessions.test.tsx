@@ -1714,6 +1714,59 @@ describe("Experience V2 real agent sessions", () => {
     expect(within(mission).queryByText("No active agents")).toBeNull()
   })
 
+  it.each([
+    ["partial", 2],
+    ["oversized", 1],
+  ] as const)("promotes %s restored truth only after a successful canonical persistence and gives Mission the exact %i-session count", async (initialState, expectedCount) => {
+    const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
+    if (initialState === "partial") {
+      window.localStorage.setItem(key, JSON.stringify({
+        schemaVersion: 3,
+        selectedSessionKey: null,
+        sessions: [
+          { schemaVersion: 1, sessionId: "codex-valid", role: "Builder", provider: "Codex", assignment: "Existing valid work", updatedAt: "2026-08-29T10:00:00.000Z", completedTurns: [] },
+          { schemaVersion: 1, sessionId: "123e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Invalid target", target: { kind: "file", path: "src/app.ts" }, updatedAt: "2026-08-29T10:01:00.000Z", completedTurns: [] },
+        ],
+      }))
+    } else {
+      window.localStorage.setItem(key, "x".repeat(262_145))
+    }
+    const localId = "223e4567-e89b-42d3-a456-426614174000"
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/app.ts", content: "export const app = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/files?path=src%2Fother.ts" && !init?.method) return Promise.resolve(Response.json({ kind: "file", path: "src/other.ts", content: "export const other = true\n", modifiedAt: "2026-08-28T12:00:00.000Z" }))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({ path: "src/app.ts", untracked: false, diff: "" }))
+      if (url === "/api/loom/agent" && init?.method === "POST") return Promise.resolve(ndjson(
+        { type: "session", sessionId: localId, provider: "Local", mode: "delegate", resumed: false, continuity: "new" },
+        { type: "result", text: "Canonical local result." },
+        { type: "done", code: 0, reason: null },
+      ))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    expect(within(screen.getByRole("dialog", { name: "Mission Control" })).getByText("Agent activity unknown")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "Ask Local" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Establish canonical saved truth." } })
+    fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Ask Local" }))
+    await screen.findByRole("button", { name: /Thinker · Local · Conversation/i })
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+
+    const mission = screen.getByRole("dialog", { name: "Mission Control" })
+    expect(within(mission).getByLabelText(`${expectedCount} agent sessions`)).toBeTruthy()
+    expect(within(mission).queryByText("Agent activity unknown")).toBeNull()
+    expect(within(mission).getByText(/Local/)).toBeTruthy()
+    if (initialState === "partial") expect(within(mission).getByText(/Codex/)).toBeTruthy()
+    const persisted = JSON.parse(String(window.localStorage.getItem(key))) as { sessions: readonly { sessionId: string }[] }
+    expect(persisted.sessions).toHaveLength(expectedCount)
+    expect(persisted.sessions.some((session) => session.sessionId === "123e4567-e89b-42d3-a456-426614174000")).toBe(false)
+  })
+
   it("does not focus a clicked restored session when its selection cannot be persisted", async () => {
     const firstId = "codex-first"
     const secondId = "codex-second"
