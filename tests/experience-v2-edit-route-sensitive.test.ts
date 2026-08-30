@@ -136,8 +136,10 @@ describe("selected-file Change sensitive-path boundary", () => {
     const response = await POST(improveRequest())
     expect(response.status).toBe(200)
     expect(seams.loadOwnedWorkingWorld).toHaveBeenCalledWith("owner-1", "world-a")
-    expect(seams.deriveWorkspaceFileDiff).toHaveBeenCalledWith(expect.any(String), "src/app.ts")
-    expect(seams.deriveWorkspaceFileDiff.mock.invocationCallOrder[0]).toBeLessThan(seams.spawn.mock.invocationCallOrder[0])
+    expect(seams.deriveWorkspaceFileDiff).toHaveBeenCalledTimes(2)
+    expect(seams.deriveWorkspaceFileDiff).toHaveBeenNthCalledWith(1, expect.any(String), "src/app.ts")
+    expect(seams.deriveWorkspaceFileDiff).toHaveBeenNthCalledWith(2, expect.any(String), "src/app.ts")
+    expect(seams.deriveWorkspaceFileDiff.mock.invocationCallOrder[1]).toBeLessThan(seams.spawn.mock.invocationCallOrder[0])
     child.stdout.emit("data", Buffer.from(JSON.stringify({ success: true })))
     child.emit("close", 0)
     await response.text()
@@ -214,5 +216,39 @@ describe("selected-file Change sensitive-path boundary", () => {
     await expect(response.json()).resolves.toEqual({ error: "DIFF_CONTEXT_STALE" })
     expect(seams.deriveWorkspaceFileDiff).toHaveBeenCalledTimes(1)
     expect(seams.spawn).not.toHaveBeenCalled()
+  })
+
+  it("refuses when the exact diff changes while the terminal owned Space is loading", async () => {
+    seams.loadOwnedWorkingWorld
+      .mockResolvedValueOnce({
+        space: {
+          activeWindowId: "workspace-diff",
+          windows: [{ id: "workspace-diff", minimized: false }],
+          selection: { filePath: "src/app.ts", anchor: 0, head: 0 },
+        },
+      })
+      .mockImplementationOnce(async () => {
+        seams.deriveWorkspaceFileDiff.mockResolvedValueOnce({
+          ...liveDiffSnapshot,
+          patch: "-current\n+changed-during-world-load",
+          patchHash: "changed-patch",
+          fingerprint: "changed-during-world-load",
+        })
+        return {
+          space: {
+            activeWindowId: "workspace-diff",
+            windows: [{ id: "workspace-diff", minimized: false }],
+            selection: { filePath: "src/app.ts", anchor: 0, head: 0 },
+          },
+        }
+      })
+
+    const response = await POST(improveRequest())
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "DIFF_CONTEXT_STALE" })
+    expect(seams.deriveWorkspaceFileDiff).toHaveBeenCalledTimes(2)
+    expect(seams.spawn).not.toHaveBeenCalled()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
   })
 })

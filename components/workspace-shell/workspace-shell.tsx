@@ -8,7 +8,7 @@ import { EMPTY_SPINE, type WilliamJudgment, type WorldSpine } from "@/lib/enviro
 import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
-import { type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
+import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
 import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
@@ -64,7 +64,7 @@ type ContinueDelegateContext = Readonly<{
 type DelegateContext = StandardDelegateContext | ReviewerDelegateContext | ContinueDelegateContext
 type ForkContext = Readonly<{ sourceSessionId: string; assignment: string; label: string }>
 type ChangeRefresh = Readonly<{ path: string | null; key: number }>
-type CapturedDiffImprove = Readonly<{ path: string; fingerprint: string; worldId: string }>
+type CapturedDiffImprove = Readonly<{ path: string; fingerprint: string; worldId: string; transitionEpoch: number }>
 type ChangeRefreshWaiter = {
   path: string
   resolve: (result: ChangeRefreshResult) => void
@@ -257,6 +257,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const worldRef = useRef(worldId)
   const projectRef = useRef(project)
   const storageRef = useRef<SpaceStorage>(storage)
+  const persistenceErrorRef = useRef<string | null>(persistenceError)
+  const persistencePendingRef = useRef(persistencePending)
   const browserStorageKeyRef = useRef<string | null>(null)
   const previewEvidenceRequestRef = useRef(0)
   const preferenceStorageKeyRef = useRef<string | null>(null)
@@ -286,6 +288,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   projectRef.current = project
   councilSessionRef.current = councilSession
   storageRef.current = storage
+  persistenceErrorRef.current = persistenceError
+  persistencePendingRef.current = persistencePending
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return
@@ -953,10 +957,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     activate("diff")
   }), [activate])
 
+  const isChangeScopeCurrent = useCallback((scope: ChangeOperationScope) => (
+    worldRef.current === scope.worldId && transitionEpochRef.current === scope.transitionEpoch
+  ), [])
+
   const change = useSelectedFileChange({
     path: changeTarget,
     dirty: Boolean(changeTarget && dirtyPaths[changeTarget]),
     onVerifiedSuccess: refreshVerifiedChange,
+    isOperationScopeCurrent: isChangeScopeCurrent,
   })
   const sourceMinimizeDisabledReason = change.running
     ? "Source cannot be minimized while Change is active"
@@ -982,10 +991,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }, [change.reset, change.running, review.running, space.selectedPath])
 
   const openDiffImprove = useCallback(() => {
-    if (change.running || review.running || !worldId || !space.selectedPath || space.activeWindowId !== "diff"
+    if (change.running || review.running || storage !== "server" || persistencePending || persistenceError
+      || !worldId || !space.selectedPath || space.activeWindowId !== "diff"
       || dirtyPaths[space.selectedPath] || !liveDiffContext || liveDiffContext.worldId !== worldId
       || liveDiffContext.path !== space.selectedPath) return
-    const captured = { path: liveDiffContext.path, fingerprint: liveDiffContext.fingerprint, worldId }
+    const captured = {
+      path: liveDiffContext.path,
+      fingerprint: liveDiffContext.fingerprint,
+      worldId,
+      transitionEpoch: transitionEpochRef.current,
+    }
     setChangeIntent("improve-diff")
     setCapturedDiffImprove(captured)
     setChangeTarget(captured.path)
@@ -998,7 +1013,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineReply(null)
     setLineOpen(true)
     requestAnimationFrame(() => lineRef.current?.focus())
-  }, [change.reset, change.running, dirtyPaths, liveDiffContext, review.running, space.activeWindowId, space.selectedPath, worldId])
+  }, [change.reset, change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.running, space.activeWindowId, space.selectedPath, storage, worldId])
 
   const openReview = useCallback(() => {
     if (change.running || review.running) return
@@ -1202,17 +1217,19 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           change.refuse("The live change changed. Reopen Improve from the current Changes surface.")
           return
         }
-        const improveIsCurrent = () => {
+        const improveIdentityIsCurrent = () => {
           const current = stateRef.current
           const live = liveDiffContextRef.current
           return Boolean(worldRef.current === captured.worldId
+            && transitionEpochRef.current === captured.transitionEpoch
+            && storageRef.current === "server"
             && current.activeWindowId === "diff" && current.selectedPath === captured.path
             && !dirtyPathsRef.current[captured.path]
             && live?.worldId === captured.worldId
             && live.path === captured.path
             && live.fingerprint === captured.fingerprint)
         }
-        if (!improveIsCurrent()) {
+        if (!improveIdentityIsCurrent() || persistencePendingRef.current || persistenceErrorRef.current) {
           change.refuse("The live change changed. Reopen Improve from the current Changes surface.")
           return
         }
@@ -1222,8 +1239,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           expectedDiffFingerprint: captured.fingerprint,
         }, storageRef.current === "server" ? async () => {
           await persistBarrierRef.current()
-          if (!improveIsCurrent()) throw new Error("DIFF_CONTEXT_STALE")
-        } : undefined)
+          if (!improveIdentityIsCurrent() || persistenceErrorRef.current) throw new Error("DIFF_CONTEXT_STALE")
+        } : undefined, {
+          worldId: captured.worldId,
+          transitionEpoch: captured.transitionEpoch,
+        })
         return
       }
       void change.start(text)
@@ -1409,10 +1429,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction, forkAction] as const
     : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", continueAction, "Delegate", "Council"] as const
-  const improveUnavailableReason = selectedKind === "diff" && (
-    !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
-      || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
-  ) ? "Improve needs the exact live modified patch for the saved selected file." : null
+  const improveUnavailableReason = selectedKind !== "diff" ? null
+    : storage !== "server" ? "Improve requires a server-bound Space with durable persistence."
+      : persistenceError ? `Improve is unavailable because Space persistence is refusing writes (${persistenceError}).`
+        : persistencePending ? "Improve waits until the current Space is durably saved."
+          : !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+            || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
+            ? "Improve needs the exact live modified patch for the saved selected file."
+            : null
   const worldLine = spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""
   const workerLine = spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""
   const williamSafetyFact = persistenceError
@@ -1428,6 +1452,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       : `System fact: ${williamSafetyFact} ${judgmentError ? `William judgment unavailable (${judgmentError}).` : "William has not formed a judgment yet."}`)
 
   const applySpaceEnvelope = (payload: SpaceEnvelope) => {
+    // A terminal result belongs only to the exact Space/transition that started it. Invalidate
+    // before advancing the epoch so delayed provider frames cannot refresh or present in the next
+    // Space, even though ordinary reset intentionally ignores an active operation.
+    change.invalidate()
     const name = payload.name ?? payload.project?.name ?? "Space"
     const restoredBase = normalizeSpace(
       payload.space,

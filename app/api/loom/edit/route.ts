@@ -88,6 +88,13 @@ export async function POST(request: Request) {
       || terminalDiff.minimized || terminalPath !== resolved.relative) {
       return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
     }
+    // Loading the terminal owned Space is itself an await boundary. Re-derive Git identity after it
+    // and immediately before spawn so a patch/index/HEAD change during that load cannot cross the
+    // mutation boundary under the earlier fingerprint.
+    const terminalDiffSnapshot = await deriveWorkspaceFileDiff(PROJECT_ROOT, resolved.relative)
+    if (terminalDiffSnapshot.state !== "modified" || terminalDiffSnapshot.fingerprint !== expectedDiffFingerprint) {
+      return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
+    }
   }
 
   const model = typeof body.model === "string" && body.model ? body.model : LOCAL_MODEL
