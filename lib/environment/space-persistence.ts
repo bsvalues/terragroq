@@ -576,9 +576,31 @@ export async function createOwnedProjectSpace(
 
 function restoredSpace(world: WorkingWorldSnapshot, configured?: string | null): SpaceState {
   const runningAppUrl = serverRunningAppUrl(world, configured)
-  return world.space
-    ? validateSpaceState({ ...world.space, runningAppUrl })
-    : createDefaultSpace(runningAppUrl)
+  if (!world.space) return createDefaultSpace(runningAppUrl)
+
+  const persisted = validateSpaceState(world.space)
+  const preview = persisted.windows.find((window) => window.kind === "running-app")
+  const newlyAdmittedMinimizedPreview = persisted.runningAppUrl === null
+    && runningAppUrl !== null
+    && preview?.minimized === true
+  if (!newlyAdmittedMinimizedPreview || !preview) {
+    return validateSpaceState({ ...persisted, runningAppUrl })
+  }
+
+  const highestZ = Math.max(0, ...persisted.windows.map((window) => window.z))
+  const promotedZ = Math.min(10_000, highestZ + 1)
+  const windows = persisted.windows.map((window) => {
+    if (window.id === preview.id) return { ...window, minimized: false, z: promotedZ }
+    // A valid persisted surface may already occupy the maximum allowed z. Move only that exact
+    // tie down one layer so the newly attached Preview is truthfully on top.
+    return promotedZ === highestZ && window.z === highestZ ? { ...window, z: highestZ - 1 } : window
+  })
+  return validateSpaceState({
+    ...persisted,
+    windows,
+    activeWindowId: preview.id,
+    runningAppUrl,
+  })
 }
 
 export async function loadOrCreateOwnedSpace(

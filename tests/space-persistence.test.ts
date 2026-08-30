@@ -627,6 +627,120 @@ describe("server-owned Space persistence", () => {
     expect(reopened!.spine).toMatchObject({ projectId: 42, projectName: "TerraFusion", execution: "implementing" })
   })
 
+  it("promotes a newly admitted minimized Preview exactly once during server restore", async () => {
+    const store = new MemoryStore()
+    const persisted = space(null, 4)
+    const world = { ...createWorkingWorld({ intent: "TerraFusion" }), space: persisted }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date("2026-08-30T10:00:00Z"),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({
+      userId: "owner-a",
+      worldId: "world-a",
+      workspaceAppUrl: "https://admitted.terrafusion.test/app",
+    }, store)
+
+    const preview = restored!.space.windows.find((window) => window.kind === "running-app")!
+    const persistedPreview = persisted.windows.find((window) => window.kind === "running-app")!
+    expect(preview).toEqual({ ...persistedPreview, minimized: false, z: 6 })
+    expect(preview.frame).toEqual(persistedPreview.frame)
+    expect(restored!.space.activeWindowId).toBe(preview.id)
+    expect(restored!.space.runningAppUrl).toBe("https://admitted.terrafusion.test/app")
+    expect(restored!.space.windows.filter((window) => window.id !== preview.id))
+      .toEqual(persisted.windows.filter((window) => window.id !== preview.id))
+    expect(JSON.parse(store.rows.get("world-a")!.snapshot).space).toEqual(persisted)
+  })
+
+  it("does not disturb visible Preview layout or focus when an app is newly admitted", async () => {
+    const store = new MemoryStore()
+    const persisted = {
+      ...space(null, 4),
+      windows: space(null, 4).windows.map((window) => window.kind === "running-app"
+        ? { ...window, minimized: false }
+        : window),
+    }
+    const world = { ...createWorkingWorld({ intent: "TerraFusion" }), space: persisted }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date("2026-08-30T10:00:00Z"),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({
+      userId: "owner-a", worldId: "world-a", workspaceAppUrl: "https://admitted.terrafusion.test/app",
+    }, store)
+
+    expect(restored!.space).toEqual({ ...persisted, runningAppUrl: "https://admitted.terrafusion.test/app" })
+  })
+
+  it.each([
+    ["the same", "https://admitted.terrafusion.test/app"],
+    ["a changed", "https://admitted.terrafusion.test/next"],
+  ])("preserves an intentional minimized Preview when restoring %s admitted URL", async (_label, workspaceAppUrl) => {
+    const store = new MemoryStore()
+    const persisted = space("https://admitted.terrafusion.test/app", 4)
+    const world = { ...createWorkingWorld({ intent: "TerraFusion" }), space: persisted }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date("2026-08-30T10:00:00Z"),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({ userId: "owner-a", worldId: "world-a", workspaceAppUrl }, store)
+
+    expect(restored!.space).toEqual({ ...persisted, runningAppUrl: workspaceAppUrl })
+  })
+
+  it("leaves layout untouched when no Preview URL is admitted", async () => {
+    const store = new MemoryStore()
+    const persisted = space(null, 4)
+    const world = { ...createWorkingWorld({ intent: "TerraFusion" }), space: persisted }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date("2026-08-30T10:00:00Z"),
+    })
+
+    const restored = await loadOrCreateOwnedSpace({ userId: "owner-a", worldId: "world-a", workspaceAppUrl: null }, store)
+
+    expect(restored!.space).toEqual(persisted)
+  })
+
+  it("keeps a later intentional Preview minimize durable after the one-time promotion", async () => {
+    const store = new MemoryStore()
+    const persisted = space(null, 4)
+    const world = { ...createWorkingWorld({ intent: "TerraFusion" }), space: persisted }
+    store.rows.set("world-a", {
+      id: "world-a", userId: "owner-a", intent: world.intent,
+      snapshot: JSON.stringify(world), updatedAt: new Date("2026-08-30T10:00:00Z"),
+    })
+    const configured = "https://admitted.terrafusion.test/app"
+    const promoted = await loadOrCreateOwnedSpace({
+      userId: "owner-a", worldId: "world-a", workspaceAppUrl: configured,
+    }, store)
+    const previewId = promoted!.space.windows.find((window) => window.kind === "running-app")!.id
+    const intentionallyMinimized = {
+      ...promoted!.space,
+      revision: promoted!.space.revision + 1,
+      windows: promoted!.space.windows.map((window) => window.id === previewId
+        ? { ...window, minimized: true }
+        : window),
+      activeWindowId: "editor",
+      runningAppUrl: "https://browser-must-not-control.invalid/",
+    }
+
+    const saved = await saveOwnedSpace({
+      userId: "owner-a", worldId: "world-a", space: intentionallyMinimized, workspaceAppUrl: configured,
+    }, store)
+    const reopened = await loadOrCreateOwnedSpace({
+      userId: "owner-a", worldId: "world-a", workspaceAppUrl: configured,
+    }, store)
+
+    expect(saved!.space.runningAppUrl).toBe(configured)
+    expect(reopened!.space.windows.find((window) => window.id === previewId)?.minimized).toBe(true)
+    expect(reopened!.space.activeWindowId).toBe("editor")
+    expect(reopened!.space.runningAppUrl).toBe(configured)
+  })
+
   it("does not update another owner's world", async () => {
     const store = new MemoryStore()
     const world = createWorkingWorld({ intent: "TerraFusion" })

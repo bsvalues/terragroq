@@ -38,11 +38,14 @@ const attached = {
   fingerprint: "a".repeat(64),
 }
 
-function installFetch(previewEvidence: () => typeof attached | { [key: string]: unknown }) {
+function installFetch(
+  previewEvidence: () => typeof attached | { [key: string]: unknown },
+  currentSpace: () => typeof previewSpace = () => previewSpace,
+) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url === "/api/environment/space" && !init?.method) return Response.json({
-      worldId: "world-a", name: "TerraFusion", space: previewSpace, project, storage: "server",
+      worldId: "world-a", name: "TerraFusion", space: currentSpace(), project, storage: "server",
       spine: EMPTY_SPINE,
       judgment: { recommendation: "Keep building.", rationale: "Grounded.", basis: [], confidence: 0.8, generatedAt: "2026-08-30T03:00:00.000Z", basisFingerprint: "b".repeat(64), provenance: { provider: "test", model: "test" } },
     })
@@ -57,6 +60,46 @@ function installFetch(previewEvidence: () => typeof attached | { [key: string]: 
 }
 
 describe("Experience V2 Preview evidence interaction", () => {
+  it("shows the newly reattached Preview once and later respects an intentional durable minimize", async () => {
+    const base = defaultSpace(1440, 900, "world-a", "TerraFusion")
+    const promoted = spaceToServer({
+      ...base,
+      activeWindowId: "running-app",
+      runningAppUrl: "http://tf.test:5000/app",
+      windows: {
+        ...base.windows,
+        "running-app": { ...base.windows["running-app"], minimized: false, z: 6 },
+      },
+    })
+    const intentionallyMinimized = spaceToServer({
+      ...base,
+      revision: 2,
+      activeWindowId: "editor",
+      runningAppUrl: "http://tf.test:5000/app",
+      windows: {
+        ...base.windows,
+        "running-app": { ...base.windows["running-app"], minimized: true, z: 6 },
+      },
+    })
+    let serverSpace = promoted
+    vi.stubGlobal("fetch", installFetch(() => attached, () => serverSpace))
+
+    const first = render(<WorkspaceShell />)
+    expect(await screen.findByRole("region", { name: "Source window" })).toBeTruthy()
+    expect(screen.getByTitle("Running TerraFusion application").getAttribute("src")).toBe("http://tf.test:5000/app")
+    expect(screen.getByRole("button", { name: "Minimize Developer preview · TerraFusion" })).toBeTruthy()
+    first.unmount()
+    window.localStorage.clear()
+
+    serverSpace = intentionallyMinimized
+    render(<WorkspaceShell />)
+    expect(await screen.findByRole("button", { name: "Restore Developer preview" })).toBeTruthy()
+    expect(screen.queryByTitle("Running TerraFusion application")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Restore Developer preview" }))
+    expect((await screen.findByTitle("Running TerraFusion application")).getAttribute("src")).toBe("http://tf.test:5000/app")
+    expect(screen.getByRole("button", { name: "Minimize Developer preview · TerraFusion" })).toBeTruthy()
+  })
+
   it("round-trips only a bounded canonical Preview evidence snapshot", () => {
     expect(parsePreviewInspectorPayload({ evidence: attached, snapshot: "saved" })).toEqual({
       evidence: attached,
