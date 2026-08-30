@@ -108,6 +108,16 @@ DO $historical_document_constraints$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'workbench_thread'::regclass
+      AND conname = 'workbench_thread_user_project_id_unique'
+  ) THEN
+    ALTER TABLE "workbench_thread"
+      ADD CONSTRAINT "workbench_thread_user_project_id_unique"
+      UNIQUE ("userId", "projectId", "id");
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
     WHERE conrelid = 'document'::regclass
       AND conname = 'document_historical_user_project_fk'
   ) THEN
@@ -116,14 +126,24 @@ BEGIN
       FOREIGN KEY ("userId", "projectId") REFERENCES "project"("userId", "id") ON DELETE RESTRICT;
   END IF;
 
-  IF NOT EXISTS (
+  IF EXISTS (
     SELECT 1 FROM pg_constraint
     WHERE conrelid = 'document'::regclass
       AND conname = 'document_historical_user_thread_fk'
   ) THEN
     ALTER TABLE "document"
-      ADD CONSTRAINT "document_historical_user_thread_fk"
-      FOREIGN KEY ("userId", "threadId") REFERENCES "workbench_thread"("userId", "id") ON DELETE RESTRICT;
+      DROP CONSTRAINT "document_historical_user_thread_fk";
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'document'::regclass
+      AND conname = 'document_historical_user_project_thread_fk'
+  ) THEN
+    ALTER TABLE "document"
+      ADD CONSTRAINT "document_historical_user_project_thread_fk"
+      FOREIGN KEY ("userId", "projectId", "threadId")
+      REFERENCES "workbench_thread"("userId", "projectId", "id") ON DELETE RESTRICT;
   END IF;
 
   IF NOT EXISTS (
@@ -182,11 +202,27 @@ BEGIN
 END
 $historical_document_constraints$;
 
+CREATE OR REPLACE FUNCTION "lock_historical_document_chunk_invariant"(
+  "documentId" integer,
+  "schemaName" text
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $lock_historical_document_chunk_invariant_body$
+BEGIN
+  PERFORM pg_advisory_xact_lock(
+    hashtext('williamos:historical-document-chunk:' || "schemaName"),
+    "documentId"
+  );
+END
+$lock_historical_document_chunk_invariant_body$;
+
 CREATE OR REPLACE FUNCTION "reject_historical_document_chunk"()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $reject_historical_document_chunk_body$
 BEGIN
+  PERFORM "lock_historical_document_chunk_invariant"(NEW."documentId", TG_TABLE_SCHEMA);
   IF EXISTS (
     SELECT 1
     FROM "document" d
@@ -207,6 +243,7 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $reject_historical_document_with_chunks_body$
 BEGIN
+  PERFORM "lock_historical_document_chunk_invariant"(NEW."id", TG_TABLE_SCHEMA);
   IF (
     NEW."historicalCandidateId" IS NOT NULL
     OR NEW."status" IN ('private_project_context', 'archived_private_project_context')

@@ -333,6 +333,11 @@ export const workbenchThread = pgTable(
   },
   (table) => [
     unique("workbench_thread_user_id_unique").on(table.userId, table.id),
+    unique("workbench_thread_user_project_id_unique").on(
+      table.userId,
+      table.projectId,
+      table.id,
+    ),
     foreignKey({
       columns: [table.userId, table.projectId],
       foreignColumns: [project.userId, project.id],
@@ -473,9 +478,13 @@ export const document = pgTable(
       name: "document_historical_user_project_fk",
     }).onDelete("restrict"),
     foreignKey({
-      columns: [table.userId, table.threadId],
-      foreignColumns: [workbenchThread.userId, workbenchThread.id],
-      name: "document_historical_user_thread_fk",
+      columns: [table.userId, table.projectId, table.threadId],
+      foreignColumns: [
+        workbenchThread.userId,
+        workbenchThread.projectId,
+        workbenchThread.id,
+      ],
+      name: "document_historical_user_project_thread_fk",
     }).onDelete("restrict"),
     check(
       "document_historical_identity_check",

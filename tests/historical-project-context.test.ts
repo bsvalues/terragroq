@@ -3,7 +3,7 @@ import type { SQL } from "drizzle-orm"
 import { getTableConfig, PgDialect } from "drizzle-orm/pg-core"
 import { describe, expect, it } from "vitest"
 
-import { document } from "@/lib/db/schema"
+import { document, workbenchThread } from "@/lib/db/schema"
 import {
   assertGenericDocumentDeletionAllowed,
   assertHistoricalProjectContextReplay,
@@ -189,8 +189,25 @@ describe("historical private Project/Thread context", () => {
     ))).toBe(true)
     expect(config.foreignKeys.map((entry) => entry.getName())).toEqual(expect.arrayContaining([
       "document_historical_user_project_fk",
-      "document_historical_user_thread_fk",
+      "document_historical_user_project_thread_fk",
     ]))
+    expect(config.foreignKeys.map((entry) => entry.getName()))
+      .not.toContain("document_historical_user_thread_fk")
+    const threadBinding = config.foreignKeys.find((entry) => (
+      entry.getName() === "document_historical_user_project_thread_fk"
+    ))?.reference()
+    expect(threadBinding?.columns.map((column) => column.name)).toEqual([
+      "userId",
+      "projectId",
+      "threadId",
+    ])
+    expect(threadBinding?.foreignColumns.map((column) => column.name)).toEqual([
+      "userId",
+      "projectId",
+      "id",
+    ])
+    expect(getTableConfig(workbenchThread).uniqueConstraints.map((entry) => entry.name))
+      .toContain("workbench_thread_user_project_id_unique")
     const checks = new Map(config.checks.map((entry) => [entry.name, render(entry.value)]))
     expect(checks.get("document_historical_identity_check")).toContain("private_project_context")
     const safety = checks.get("document_historical_safety_check") ?? ""
@@ -227,7 +244,8 @@ describe("historical private Project/Thread context", () => {
     expect(normalized).toContain('CREATE UNIQUE INDEX "document_historical_candidate_user_idx" ON "document" ("userId", "historicalCandidateId") WHERE "historicalCandidateId" IS NOT NULL')
     for (const constraint of [
       "document_historical_user_project_fk",
-      "document_historical_user_thread_fk",
+      "workbench_thread_user_project_id_unique",
+      "document_historical_user_project_thread_fk",
       "document_historical_identity_check",
       "document_historical_safety_check",
     ]) {
@@ -235,11 +253,16 @@ describe("historical private Project/Thread context", () => {
       expect(normalized).toContain(`ADD CONSTRAINT "${constraint}"`)
     }
     expect(normalized).toContain('FOREIGN KEY ("userId", "projectId") REFERENCES "project"("userId", "id") ON DELETE RESTRICT')
-    expect(normalized).toContain('FOREIGN KEY ("userId", "threadId") REFERENCES "workbench_thread"("userId", "id") ON DELETE RESTRICT')
+    expect(normalized).toContain('UNIQUE ("userId", "projectId", "id")')
+    expect(normalized).toContain('FOREIGN KEY ("userId", "projectId", "threadId") REFERENCES "workbench_thread"("userId", "projectId", "id") ON DELETE RESTRICT')
     expect(normalized).toContain('CREATE OR REPLACE FUNCTION "reject_historical_document_chunk"()')
     expect(normalized).toContain("d.\"status\" IN ('private_project_context', 'archived_private_project_context')")
     expect(normalized).toContain('CREATE TRIGGER "document_chunk_reject_historical_insert" BEFORE INSERT OR UPDATE OF "documentId" ON "document_chunk"')
     expect(normalized).toContain('CREATE OR REPLACE FUNCTION "reject_historical_document_with_chunks"()')
     expect(normalized).toContain('CREATE TRIGGER "document_reject_historical_with_chunks" BEFORE INSERT OR UPDATE OF "status", "historicalCandidateId", "chunkCount" ON "document"')
+    expect(normalized).toMatch(/CREATE OR REPLACE FUNCTION "lock_historical_document_chunk_invariant"\( "documentId" integer, "schemaName" text \)/)
+    expect(normalized.match(/"lock_historical_document_chunk_invariant"\(NEW\."(?:documentId|id)", TG_TABLE_SCHEMA\)/g))
+      .toHaveLength(2)
+    expect(normalized.match(/pg_advisory_xact_lock/g)).toHaveLength(1)
   })
 })
