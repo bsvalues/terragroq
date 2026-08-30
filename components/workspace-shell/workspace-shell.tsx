@@ -1953,6 +1953,12 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       ? "William is forming a grounded judgment from the current Space."
       : `System fact: ${williamSafetyFact} ${judgmentError ? `William judgment unavailable (${judgmentError}).` : "William has not formed a judgment yet."}`)
   const currentInspectableJudgment = inspectableWilliamJudgment(judgment)
+  const overrideWilliamJudgment = useCallback(() => {
+    const current = inspectableWilliamJudgment(judgment)
+    if (!current) return
+    setWilliamRailOpen(true)
+    setWilliamInput(`Override William's recommendation:\n> ${current.recommendation}\n\nReason: `)
+  }, [judgment])
 
   const applySpaceEnvelope = (payload: SpaceEnvelope) => {
     // A terminal result belongs only to the exact Space/transition that started it. Invalidate
@@ -2502,17 +2508,26 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         judgmentBusy={judgmentBusy}
         canThinkAgain={storage === "server"}
         canInspectJudgment={Boolean(currentInspectableJudgment)}
+        canOverrideJudgment={Boolean(currentInspectableJudgment)}
         error={williamError}
         open={williamRailOpen}
         narrow={williamRailNarrow}
         persistenceLabel={savedLabel}
         persistenceError={persistenceError}
         onInput={setWilliamInput}
-        onSubmit={() => { const text = williamInput.trim(); if (!text) return; void sendWilliamTurn(text).then((sent) => { if (sent) setWilliamInput("") }) }}
+        onSubmit={() => {
+          const submittedDraft = williamInput
+          const text = submittedDraft.trim()
+          if (!text) return
+          void sendWilliamTurn(text).then((sent) => {
+            if (sent) setWilliamInput((current) => current === submittedDraft ? "" : current)
+          })
+        }}
         onOpen={() => setWilliamRailOpen(true)}
         onClose={() => setWilliamRailOpen(false)}
         onThinkAgain={() => void refreshWilliamJudgment()}
         onInspectJudgment={openWilliamJudgmentInspector}
+        onOverrideJudgment={overrideWilliamJudgment}
         onCouncil={() => void summonCouncil(`Challenge William's recommendation: ${williamJudgment}`)}
         onOpenLocal={openLocalConversation}
         onOpenLine={() => openLine()}

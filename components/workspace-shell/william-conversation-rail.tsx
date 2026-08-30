@@ -20,6 +20,7 @@ export function WilliamConversationRail({
   judgmentBusy,
   canThinkAgain,
   canInspectJudgment,
+  canOverrideJudgment,
   error,
   open,
   narrow,
@@ -31,6 +32,7 @@ export function WilliamConversationRail({
   onClose,
   onThinkAgain,
   onInspectJudgment,
+  onOverrideJudgment,
   onCouncil,
   onOpenLocal,
   onOpenLine,
@@ -42,6 +44,7 @@ export function WilliamConversationRail({
   judgmentBusy: boolean
   canThinkAgain: boolean
   canInspectJudgment: boolean
+  canOverrideJudgment: boolean
   error: string | null
   open: boolean
   narrow: boolean
@@ -53,12 +56,14 @@ export function WilliamConversationRail({
   onClose: () => void
   onThinkAgain: () => void
   onInspectJudgment: () => void
+  onOverrideJudgment: () => void
   onCouncil: () => void
   onOpenLocal: () => void
   onOpenLine: () => void
 }>) {
   const historyRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const composerRef = useRef<HTMLTextAreaElement>(null)
   const drawerHidden = narrow && !open
 
   useEffect(() => {
@@ -91,6 +96,7 @@ export function WilliamConversationRail({
           <div>
             <button type="button" onClick={onThinkAgain} disabled={!canThinkAgain || judgmentBusy}>{judgmentBusy ? "Reasoning" : "Think again"}</button>
             {canInspectJudgment ? <button type="button" onClick={onInspectJudgment} aria-label="Inspect judgment basis">Inspect basis</button> : null}
+            {canOverrideJudgment ? <button type="button" onClick={() => { onOverrideJudgment(); requestAnimationFrame(() => composerRef.current?.focus()) }} aria-label="Override William judgment" disabled={busy || judgmentBusy}>Override</button> : null}
             <button type="button" onClick={onCouncil}>Ask Council</button>
           </div>
         </section>
@@ -114,6 +120,7 @@ export function WilliamConversationRail({
           {error ? <div className={spatial.williamConversationError} role="alert">{error} Your question is still here.</div> : null}
           <label htmlFor="william-message">Message William</label>
           <textarea
+            ref={composerRef}
             id="william-message"
             value={input}
             onChange={(event) => onInput(event.target.value)}
