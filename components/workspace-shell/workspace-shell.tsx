@@ -529,10 +529,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         const key = job.browserKey
         if (!key) throw new Error("BROWSER_SPACE_KEY_UNAVAILABLE")
         window.localStorage.setItem(key, job.body)
+        const acknowledgedAt = new Date().toISOString()
         if (transitionEpochRef.current !== job.epoch || worldRef.current !== job.worldId) return
         acknowledgedRevisionRef.current = job.revision
         revisionRef.current = Math.max(revisionRef.current, job.revision)
         setSpace((current) => job.revision > current.revision ? { ...current, revision: job.revision } : current)
+        setSpaceSummaries((current) => current.map((summary) => summary.worldId === job.worldId
+          ? { ...summary, updatedAt: acknowledgedAt }
+          : summary))
         setPersistenceError(null)
         if (job.revision >= revisionRef.current) setPersistencePending(false)
         return
@@ -543,7 +547,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         body: job.body,
         keepalive: job.keepalive,
       })
-      const payload = await response.json().catch(() => ({})) as { error?: string; space?: unknown }
+      const payload = await response.json().catch(() => ({})) as { error?: string; space?: unknown; updatedAt?: unknown }
       if (!response.ok) throw new Error(payload.error ?? `SPACE_SAVE_${response.status}`)
       if (transitionEpochRef.current !== job.epoch || worldRef.current !== job.worldId) return
       const record = payload.space && typeof payload.space === "object" ? payload.space as Record<string, unknown> : null
@@ -552,6 +556,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         acknowledgedRevisionRef.current = acknowledged
         revisionRef.current = Math.max(revisionRef.current, acknowledged)
         setSpace((current) => acknowledged > current.revision ? { ...current, revision: acknowledged } : current)
+        if (typeof payload.updatedAt === "string"
+          && Number.isFinite(Date.parse(payload.updatedAt))
+          && new Date(payload.updatedAt).toISOString() === payload.updatedAt) {
+          setSpaceSummaries((current) => current.map((summary) => summary.worldId === job.worldId
+            ? { ...summary, updatedAt: payload.updatedAt as string }
+            : summary))
+        }
         setPersistenceError(null)
         if (acknowledged >= revisionRef.current) setPersistencePending(false)
       }

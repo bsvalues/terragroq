@@ -251,6 +251,108 @@ describe("Experience V2 multi-Space re-entry", () => {
     expect(screen.queryByText(/Alpha judgment/)).toBeNull()
   })
 
+  it("promotes an older current Space to most recent only after its exact successful save acknowledgement", async () => {
+    const olderAlpha = { ...summaries[0], updatedAt: "2026-08-28T08:00:00Z" }
+    const newerBeta = { ...summaries[1], updatedAt: "2026-08-28T09:00:00Z" }
+    const initial = { ...envelope("a"), spaces: [olderAlpha, newerBeta] }
+    let releaseBeta!: () => void
+    const betaWait = new Promise<void>((resolve) => { releaseBeta = resolve })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => initial }
+      if (url === "/api/environment/space" && init?.method === "PUT") return {
+        ok: true, status: 200, json: async () => ({
+          space: JSON.parse(String(init.body)).space,
+          updatedAt: "2026-08-29T11:12:13.456Z",
+        }),
+      }
+      if (url === "/api/environment/space?worldId=b") {
+        await betaWait
+        return { ok: true, status: 200, json: async () => envelope("b") }
+      }
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    }))
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByText(/Most recent Space: Beta\./)).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
+    await waitFor(() => expect(screen.getByText(/Most recent Space: Alpha\./)).toBeTruthy())
+    releaseBeta()
+    await waitFor(() => expect(screen.getByRole("button", { name: "Enter Beta, current Space" })).toBeTruthy())
+  })
+
+  it("does not reorder recency when the current Space save fails", async () => {
+    const olderAlpha = { ...summaries[0], updatedAt: "2026-08-28T08:00:00Z" }
+    const newerBeta = { ...summaries[1], updatedAt: "2026-08-28T09:00:00Z" }
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => ({ ...envelope("a"), spaces: [olderAlpha, newerBeta] }) }
+      if (url === "/api/environment/space" && init?.method === "PUT") return { ok: false, status: 503, json: async () => ({ error: "SPACE_PERSISTENCE_UNAVAILABLE" }) }
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    }))
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
+    await waitFor(() => expect(screen.getAllByText(/SPACE_PERSISTENCE_UNAVAILABLE/).length).toBeGreaterThan(0))
+    expect(screen.getByText(/Most recent Space: Beta\./)).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy()
+  })
+
+  it("uses the acknowledged local write time for successful browser-only persistence", async () => {
+    const olderAlpha = { ...summaries[0], updatedAt: "2026-08-28T08:00:00Z" }
+    const newerBeta = { ...summaries[1], updatedAt: "2026-08-28T09:00:00Z" }
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/environment/space"
+      ? { ok: true, status: 200, json: async () => ({
+        ...envelope("a"), storage: "browser", browserStorageKey: "browser-alpha",
+        spaces: [olderAlpha, newerBeta], multiSpaceAvailable: false,
+      }) }
+      : { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }))
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByText(/Most recent Space: Beta\./)).toBeTruthy()
+    await waitFor(() => expect(screen.getByText(/Most recent Space: Alpha\./)).toBeTruthy())
+    expect(window.localStorage.getItem("williamos:space:browser-alpha")).not.toBeNull()
+  })
+
+  it("does not let a stale older save acknowledgement rewrite Space recency", async () => {
+    const olderAlpha = { ...summaries[0], updatedAt: "2026-08-28T08:00:00Z" }
+    const newerBeta = { ...summaries[1], updatedAt: "2026-08-29T11:00:00.000Z" }
+    const saves: Array<{
+      body: { worldId: string; space: typeof alpha }
+      resolve: (response: Response) => void
+    }> = []
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        ...envelope("a"), spaces: [olderAlpha, newerBeta],
+      }))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        let resolve!: (response: Response) => void
+        const response = new Promise<Response>((done) => { resolve = done })
+        saves.push({ body: JSON.parse(String(init.body)), resolve })
+        return response
+      }
+      if (url.startsWith("/api/loom/files")) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      return Promise.resolve(Response.json({ error: "UNAVAILABLE" }, { status: 503 }))
+    }))
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    await waitFor(() => expect(saves).toHaveLength(1))
+    fireEvent(window, new Event("pagehide"))
+    await waitFor(() => expect(saves).toHaveLength(2))
+
+    saves[1].resolve(Response.json({ space: saves[1].body.space, updatedAt: "2026-08-29T10:00:00.000Z" }))
+    await waitFor(() => expect(screen.getByText(/Most recent Space: Beta\./)).toBeTruthy())
+    saves[0].resolve(Response.json({ space: saves[0].body.space, updatedAt: "2026-08-29T12:00:00.000Z" }))
+    await waitFor(() => expect(screen.getByText(/Most recent Space: Beta\./)).toBeTruthy())
+  })
+
   it("awaits the exact old-Space PUT acknowledgement before loading B and preserves both places", async () => {
     const order: string[] = []
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

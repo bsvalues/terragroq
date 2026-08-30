@@ -172,8 +172,9 @@ class MemoryStore implements SpaceWorkingWorldStore {
   async updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string) {
     const row = await this.findOwned(userId, worldId)
     if (!row || row.snapshot !== expectedSnapshot) return false
-    this.rows.set(worldId, { ...row, snapshot, intent, updatedAt: new Date(row.updatedAt.getTime() + 1) })
-    return true
+    const updatedAt = new Date(row.updatedAt.getTime() + 1)
+    this.rows.set(worldId, { ...row, snapshot, intent, updatedAt })
+    return updatedAt
   }
 }
 
@@ -616,6 +617,7 @@ describe("server-owned Space persistence", () => {
       workspaceAppUrl: "https://admitted.terrafusion.test/",
     }, store)
     expect(saved?.space.runningAppUrl).toBe("https://admitted.terrafusion.test/")
+    expect(saved?.updatedAt).toBe(store.rows.get("world-a")?.updatedAt.toISOString())
 
     const reopened = await loadOrCreateOwnedSpace({
       userId: "owner-a", worldId: "world-a", newWorldId: () => "unused",
