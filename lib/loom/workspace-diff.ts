@@ -6,6 +6,8 @@ export const MAX_WORKSPACE_PATCH_BYTES = 2_000_000
 export const MAX_WORKSPACE_PATCH_STREAM_BYTES = 32_000_000
 const MAX_WORKSPACE_PATCH_STDERR_BYTES = 64_000
 const WORKSPACE_PATCH_TIMEOUT_MS = 30_000
+const MAX_WORKSPACE_INDEX_BYTES = 64_000
+const WORKSPACE_INDEX_TIMEOUT_MS = 5_000
 
 export type WorkspaceFileDiffState = "modified" | "clean" | "untracked" | "oversize" | "git-unavailable"
 
@@ -15,6 +17,7 @@ export type WorkspaceFileDiffSnapshot = Readonly<{
   status: string
   patch: string
   baseHash: string | null
+  indexHash: string | null
   patchHash: string | null
   fingerprint: string
   reason: "PATCH_TOO_LARGE" | "PATCH_RESOURCE_LIMIT" | "GIT_UNAVAILABLE" | null
@@ -24,7 +27,7 @@ type GitResult = Readonly<{ stdout: string; stderr?: string }>
 export type FixedGitRunner = (
   file: string,
   args: readonly string[],
-  options: Readonly<{ cwd: string; encoding: "utf8"; maxBuffer: number; windowsHide: true }>,
+  options: Readonly<{ cwd: string; encoding: "utf8"; maxBuffer: number; timeout: number; windowsHide: true }>,
 ) => Promise<GitResult>
 
 export type GitPatchStreamResult = Readonly<{
@@ -138,8 +141,20 @@ function fingerprint(input: Omit<WorkspaceFileDiffSnapshot, "fingerprint" | "pat
 }
 
 function unavailable(path: string): WorkspaceFileDiffSnapshot {
-  const identity = { path, state: "git-unavailable" as const, status: "", baseHash: null, patchHash: null }
+  const identity = { path, state: "git-unavailable" as const, status: "", baseHash: null, indexHash: null, patchHash: null }
   return { ...identity, patch: "", fingerprint: fingerprint(identity), reason: "GIT_UNAVAILABLE" }
+}
+
+function exactIndexHash(raw: string, relativePath: string): string | null {
+  if (!raw.endsWith("\0") || Buffer.byteLength(raw, "utf8") > MAX_WORKSPACE_INDEX_BYTES) return null
+  const entries = raw.split("\0").filter(Boolean)
+  if (entries.length === 0) return null
+  for (const entry of entries) {
+    const separator = entry.indexOf("\t")
+    if (separator < 0 || entry.slice(separator + 1) !== relativePath) return null
+    if (!/^[0-7]{6} (?:[0-9a-f]{40}|[0-9a-f]{64}) [0-3]$/.test(entry.slice(0, separator))) return null
+  }
+  return createHash("sha256").update(raw).digest("hex")
 }
 
 /**
@@ -156,6 +171,7 @@ export async function deriveWorkspaceFileDiff(
     cwd: projectRoot,
     encoding: "utf8" as const,
     maxBuffer: MAX_WORKSPACE_PATCH_BYTES + 1,
+    timeout: WORKSPACE_INDEX_TIMEOUT_MS,
     windowsHide: true as const,
   }
   let status = ""
@@ -182,10 +198,24 @@ export async function deriveWorkspaceFileDiff(
   }
 
   if (!tracked) {
+    const indexHash = createHash("sha256").update("").digest("hex")
     const patchHash = createHash("sha256").update("").digest("hex")
-    const identity = { path: relativePath, state: "untracked" as const, status, baseHash, patchHash }
+    const identity = { path: relativePath, state: "untracked" as const, status, baseHash, indexHash, patchHash }
     return { ...identity, patch: "", fingerprint: fingerprint(identity), reason: null }
   }
+
+  let indexHash: string | null = null
+  try {
+    const index = await run(
+      "git",
+      ["ls-files", "--stage", "-z", "--", relativePath],
+      { ...options, maxBuffer: MAX_WORKSPACE_INDEX_BYTES, timeout: WORKSPACE_INDEX_TIMEOUT_MS },
+    )
+    indexHash = exactIndexHash(index.stdout, relativePath)
+  } catch {
+    indexHash = null
+  }
+  if (!indexHash) return unavailable(relativePath)
 
   let streamed: GitPatchStreamResult
   try {
@@ -204,14 +234,14 @@ export async function deriveWorkspaceFileDiff(
     return unavailable(relativePath)
   }
   if (streamed.resourceLimited) {
-    const identity = { path: relativePath, state: "oversize" as const, status, baseHash, patchHash: null }
+    const identity = { path: relativePath, state: "oversize" as const, status, baseHash, indexHash, patchHash: null }
     return { ...identity, patch: "", fingerprint: fingerprint(identity), reason: "PATCH_RESOURCE_LIMIT" }
   }
   if (streamed.oversize) {
-    const identity = { path: relativePath, state: "oversize" as const, status, baseHash, patchHash: streamed.patchHash }
+    const identity = { path: relativePath, state: "oversize" as const, status, baseHash, indexHash, patchHash: streamed.patchHash }
     return { ...identity, patch: "", fingerprint: fingerprint(identity), reason: "PATCH_TOO_LARGE" }
   }
   const state = streamed.patch.length > 0 || status.length > 0 ? "modified" as const : "clean" as const
-  const identity = { path: relativePath, state, status, baseHash, patchHash: streamed.patchHash }
+  const identity = { path: relativePath, state, status, baseHash, indexHash, patchHash: streamed.patchHash }
   return { ...identity, patch: streamed.patch, fingerprint: fingerprint(identity), reason: null }
 }

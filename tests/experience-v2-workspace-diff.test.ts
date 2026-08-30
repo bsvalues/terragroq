@@ -13,6 +13,7 @@ const execute = promisify(execFile)
 const roots: string[] = []
 
 afterEach(async () => {
+  delete process.env.WILLIAMOS_PROJECT_ROOT
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
 })
 
@@ -20,13 +21,15 @@ describe("server-derived workspace diff grounding", () => {
   it("derives a bounded tracked patch and fingerprint from fixed git argv", async () => {
     const run = vi.fn(async (_file: string, args: readonly string[]) => {
       if (args[0] === "status") return { stdout: " M src/app.ts\n", stderr: "" }
-      if (args[0] === "ls-files") return { stdout: "src/app.ts\n", stderr: "" }
+      if (args[0] === "ls-files" && args[1] === "--error-unmatch") return { stdout: "src/app.ts\n", stderr: "" }
+      if (args[0] === "ls-files" && args[1] === "--stage") return { stdout: `100644 ${"1".repeat(40)} 0\tsrc/app.ts\0`, stderr: "" }
       if (args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" }
       throw new Error(`unexpected argv: ${args.join(" ")}`)
     })
     const stream = vi.fn(async () => ({
       patch: "diff --git a/src/app.ts b/src/app.ts\n-old\n+new\n",
       patchHash: "a".repeat(64),
+      indexHash: expect.stringMatching(/^[a-f0-9]{64}$/),
       totalBytes: 52,
       oversize: false,
       resourceLimited: false,
@@ -47,6 +50,7 @@ describe("server-derived workspace diff grounding", () => {
       ["status", "--porcelain=v1", "--untracked-files=all", "--", "src/app.ts"],
       ["ls-files", "--error-unmatch", "--", "src/app.ts"],
       ["rev-parse", "--verify", "HEAD"],
+      ["ls-files", "--stage", "-z", "--", "src/app.ts"],
     ])
     expect(stream).toHaveBeenCalledWith("git", ["diff", "--patch", "--no-color", "abc123", "--", "src/app.ts"], expect.objectContaining({ cwd: "C:\\repo" }))
   })
@@ -55,7 +59,8 @@ describe("server-derived workspace diff grounding", () => {
     let head = "base-before"
     const run = vi.fn(async (_file: string, args: readonly string[]) => {
       if (args[0] === "status") return { stdout: " M src/app.ts\n", stderr: "" }
-      if (args[0] === "ls-files") return { stdout: "src/app.ts\n", stderr: "" }
+      if (args[0] === "ls-files" && args[1] === "--error-unmatch") return { stdout: "src/app.ts\n", stderr: "" }
+      if (args[0] === "ls-files" && args[1] === "--stage") return { stdout: `100644 ${"1".repeat(40)} 0\tsrc/app.ts\0`, stderr: "" }
       if (args[0] === "rev-parse") { const resolved = head; head = "base-after"; return { stdout: `${resolved}\n`, stderr: "" } }
       throw new Error("unexpected")
     })
@@ -75,10 +80,11 @@ describe("server-derived workspace diff grounding", () => {
   ])("reports $name truth explicitly", async ({ status, tracked, patch, state }) => {
     const run = vi.fn(async (_file: string, args: readonly string[]) => {
       if (args[0] === "status") return { stdout: status, stderr: "" }
-      if (args[0] === "ls-files") {
+      if (args[0] === "ls-files" && args[1] === "--error-unmatch") {
         if (!tracked) throw Object.assign(new Error("not tracked"), { code: 1 })
         return { stdout: "src/app.ts\n", stderr: "" }
       }
+      if (args[0] === "ls-files" && args[1] === "--stage") return { stdout: `100644 ${"1".repeat(40)} 0\tsrc/app.ts\0`, stderr: "" }
       if (args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" }
       throw new Error("unexpected")
     })
@@ -97,7 +103,8 @@ describe("server-derived workspace diff grounding", () => {
   it("types an oversized patch without returning partial patch content", async () => {
     const run = vi.fn(async (_file: string, args: readonly string[]) => {
       if (args[0] === "status") return { stdout: " M src/app.ts\n", stderr: "" }
-      if (args[0] === "ls-files") return { stdout: "src/app.ts\n", stderr: "" }
+      if (args[0] === "ls-files" && args[1] === "--error-unmatch") return { stdout: "src/app.ts\n", stderr: "" }
+      if (args[0] === "ls-files" && args[1] === "--stage") return { stdout: `100644 ${"1".repeat(40)} 0\tsrc/app.ts\0`, stderr: "" }
       if (args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" }
       throw new Error("unexpected")
     })
@@ -122,6 +129,22 @@ describe("server-derived workspace diff grounding", () => {
       patchHash: null,
       reason: "GIT_UNAVAILABLE",
     }))
+  })
+
+  it("fails closed when the bounded exact index identity is malformed", async () => {
+    const run = vi.fn(async (_file: string, args: readonly string[]) => {
+      if (args[0] === "status") return { stdout: "MM src/app.ts\n", stderr: "" }
+      if (args[0] === "ls-files" && args[1] === "--error-unmatch") return { stdout: "src/app.ts\n", stderr: "" }
+      if (args[0] === "rev-parse") return { stdout: "abc123\n", stderr: "" }
+      if (args[0] === "ls-files" && args[1] === "--stage") return { stdout: "unbounded-or-malformed", stderr: "" }
+      throw new Error("unexpected")
+    })
+    const stream = vi.fn()
+
+    await expect(deriveWorkspaceFileDiff("C:\\repo", "src/app.ts", run, stream)).resolves.toEqual(expect.objectContaining({
+      state: "git-unavailable", indexHash: null,
+    }))
+    expect(stream).not.toHaveBeenCalled()
   })
 
   it("hashes the complete real patch while returning only bounded patch text", async () => {
@@ -197,5 +220,49 @@ describe("server-derived workspace diff grounding", () => {
     expect(derive).not.toHaveBeenCalled()
     vi.doUnmock("@/lib/session")
     vi.doUnmock("@/lib/loom/workspace-diff")
+  })
+
+  it.each([
+    "http://localhost/api/loom/diff",
+    "http://localhost/api/loom/diff?path=",
+  ])("refuses unscoped whole-repository diff %s without metadata", async (url) => {
+    const derive = vi.fn()
+    vi.resetModules()
+    vi.doMock("@/lib/session", () => ({ getSession: vi.fn(async () => ({ user: { id: "owner-a" } })) }))
+    vi.doMock("@/lib/loom/workspace-diff", () => ({ deriveWorkspaceFileDiff: derive }))
+    const { GET } = await import("@/app/api/loom/diff/route")
+
+    const response = await GET(new Request(url))
+    const payload = await response.json() as Record<string, unknown>
+
+    expect(response.status).toBe(400)
+    expect(payload).toEqual({ error: "DIFF_PATH_REQUIRED" })
+    expect(payload).not.toHaveProperty("patch")
+    expect(payload).not.toHaveProperty("diff")
+    expect(payload).not.toHaveProperty("status")
+    expect(payload).not.toHaveProperty("patchHash")
+    expect(derive).not.toHaveBeenCalled()
+    vi.doUnmock("@/lib/session")
+    vi.doUnmock("@/lib/loom/workspace-diff")
+  })
+
+  it("never exposes a tracked sensitive file through an unscoped repository request", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "williamos-unscoped-sensitive-diff-"))
+    roots.push(root)
+    await execute("git", ["init", "--quiet"], { cwd: root, windowsHide: true })
+    await fs.writeFile(path.join(root, ".env"), "SECRET_MUST_NOT_LEAVE_SERVER=true\n")
+    await execute("git", ["add", "--", ".env"], { cwd: root, windowsHide: true, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } })
+    process.env.WILLIAMOS_PROJECT_ROOT = root
+    vi.resetModules()
+    vi.doMock("@/lib/session", () => ({ getSession: vi.fn(async () => ({ user: { id: "owner-a" } })) }))
+    const { GET } = await import("@/app/api/loom/diff/route")
+
+    const response = await GET(new Request("http://localhost/api/loom/diff"))
+    const raw = await response.text()
+
+    expect(response.status).toBe(400)
+    expect(JSON.parse(raw)).toEqual({ error: "DIFF_PATH_REQUIRED" })
+    expect(raw).not.toContain("SECRET_MUST_NOT_LEAVE_SERVER")
+    vi.doUnmock("@/lib/session")
   })
 })

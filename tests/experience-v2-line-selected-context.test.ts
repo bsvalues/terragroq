@@ -138,7 +138,7 @@ describe("server-derived Line selected-object grounding", () => {
     const first = {
       path: "src/authoritative.ts", state: "modified", status: " M src/authoritative.ts",
       patch: "diff --git a/src/authoritative.ts b/src/authoritative.ts\n-old\n+server-derived-patch\n",
-      baseHash: "base-a", patchHash: "patch-a", fingerprint: "diff-version-a", reason: null,
+      baseHash: "base-a", indexHash: "index-a", patchHash: "patch-a", fingerprint: "diff-version-a", reason: null,
     }
     harness.diff.mockResolvedValueOnce(first).mockResolvedValueOnce({ ...first, patchHash: "patch-b", fingerprint: "diff-version-b" })
     harness.save.mockImplementationOnce(async (input: {
@@ -205,7 +205,7 @@ describe("server-derived Line selected-object grounding", () => {
     harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
     const diff = {
       path: "generated/large.bin", state: "untracked", status: "", patch: "", baseHash: "base-a",
-      patchHash: createHash("sha256").update("").digest("hex"), fingerprint: "untracked-version", reason: null,
+      indexHash: createHash("sha256").update("").digest("hex"), patchHash: createHash("sha256").update("").digest("hex"), fingerprint: "untracked-version", reason: null,
     }
     harness.diff.mockResolvedValue(diff)
     harness.save.mockImplementationOnce(async (input: {
@@ -232,5 +232,90 @@ describe("server-derived Line selected-object grounding", () => {
     await expect(response.json()).resolves.toEqual({ error: "LINE_CONTEXT_STALE" })
     const saved = harness.save.mock.calls[0]?.[0] as { expectedSelectedContext?: string }
     expect(saved.expectedSelectedContext).toContain(createHash("sha256").update(original).digest("hex"))
+  })
+
+  it("rejects the same MM status and patch when the exact staged index identity changes", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "williamos-line-index-context-"))
+    roots.push(root)
+    await fs.mkdir(path.join(root, "src"), { recursive: true })
+    await fs.writeFile(path.join(root, "src", "authoritative.ts"), "export const value = 'worktree'\n")
+    const space: SpaceState = {
+      schemaVersion: 1, revision: 11,
+      windows: [
+        { id: "workspace-editor", kind: "editor", title: "Source", frame: { x: 24, y: 18, width: 800, height: 600 }, z: 4, minimized: false },
+        { id: "workspace-diff", kind: "diff", title: "Changes", frame: { x: 48, y: 40, width: 700, height: 520 }, z: 5, minimized: false },
+      ],
+      openFiles: ["src/authoritative.ts"], panes: [{ id: "primary", filePath: "src/authoritative.ts" }],
+      selection: { filePath: "src/authoritative.ts", anchor: 0, head: 0 }, activeWindowId: "workspace-diff", activePaneId: "primary", runningAppUrl: null,
+    }
+    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    const first = {
+      path: "src/authoritative.ts", state: "modified", status: "MM src/authoritative.ts",
+      patch: "+same-worktree\n", baseHash: "base-a", indexHash: "index-a", patchHash: "patch-same",
+      fingerprint: JSON.stringify({ baseHash: "base-a", indexHash: "index-a", patchHash: "patch-same" }), reason: null,
+    }
+    harness.diff.mockResolvedValueOnce(first).mockResolvedValueOnce({
+      ...first, indexHash: "index-b",
+      fingerprint: JSON.stringify({ baseHash: "base-a", indexHash: "index-b", patchHash: "patch-same" }),
+    })
+    harness.save.mockImplementationOnce(async (input: {
+      expectedSelectedContext?: string
+      deriveSelectedContext?: (world: ReturnType<typeof createWorkingWorld> & { space: SpaceState }) => Promise<string>
+    }) => {
+      const latest = JSON.parse(harness.snapshot) as ReturnType<typeof createWorkingWorld> & { space: SpaceState }
+      if (await input.deriveSelectedContext?.(latest) !== input.expectedSelectedContext) throw new Error("LINE_CONTEXT_STALE")
+    })
+    process.env.WILLIAMOS_PROJECT_ROOT = root
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ choices: [{ message: { content: "Stale staged review" } }] })))
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST", headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "Review the current staged change" }),
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "LINE_CONTEXT_STALE" })
+    const saved = harness.save.mock.calls[0]?.[0] as { expectedSelectedContext?: string }
+    expect(saved.expectedSelectedContext).toContain("index-a")
+  })
+
+  it.each(["huge", "directory"])("refuses %s selected-file identity before inference or persistence", async (kind) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "williamos-line-identity-refusal-"))
+    roots.push(root)
+    await fs.mkdir(path.join(root, "generated"), { recursive: true })
+    const selected = path.join(root, "generated", kind === "huge" ? "huge.txt" : "special")
+    if (kind === "huge") {
+      await fs.writeFile(selected, "bounded-prefix")
+      await fs.truncate(selected, 40 * 1024 * 1024)
+    } else {
+      await fs.mkdir(selected)
+    }
+    const selectedPath = `generated/${path.basename(selected)}`
+    const space: SpaceState = {
+      schemaVersion: 1, revision: 12,
+      windows: [
+        { id: "workspace-editor", kind: "editor", title: "Source", frame: { x: 24, y: 18, width: 800, height: 600 }, z: 4, minimized: false },
+        { id: "workspace-diff", kind: "diff", title: "Changes", frame: { x: 48, y: 40, width: 700, height: 520 }, z: 5, minimized: false },
+      ],
+      openFiles: [selectedPath], panes: [{ id: "primary", filePath: selectedPath }],
+      selection: { filePath: selectedPath, anchor: 0, head: 0 }, activeWindowId: "workspace-diff", activePaneId: "primary", runningAppUrl: null,
+    }
+    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
+    process.env.WILLIAMOS_PROJECT_ROOT = root
+    const inference = vi.fn(async () => Response.json({ choices: [{ message: { content: "must not run" } }] }))
+    vi.stubGlobal("fetch", inference)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST", headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "Review the current change" }),
+    }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "LINE_CONTEXT_UNAVAILABLE" })
+    expect(inference).not.toHaveBeenCalled()
+    expect(harness.diff).not.toHaveBeenCalled()
+    expect(harness.save).not.toHaveBeenCalled()
   })
 })

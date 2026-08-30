@@ -519,6 +519,15 @@ async function converse(world: WorkingWorldSnapshot, text: string, facts: string
 }
 
 const SELECTED_FILE_CONTEXT_BYTES = 64 * 1024
+const MAX_SELECTED_FILE_IDENTITY_BYTES = 32 * 1024 * 1024
+const SELECTED_FILE_IDENTITY_TIMEOUT_MS = 5_000
+
+type SelectedObjectGrounding = Readonly<{
+  facts: string
+  version: string
+  exact: boolean
+  changesSelected: boolean
+}>
 
 /**
  * Ground William from the selected object already persisted in the owned world. The owner message
@@ -528,12 +537,14 @@ const SELECTED_FILE_CONTEXT_BYTES = 64 * 1024
 async function deriveSelectedFileGrounding(
   world: WorkingWorldSnapshot,
   projectRoot: string | null = PROJECT_ROOT,
-): Promise<Readonly<{ facts: string; version: string }>> {
+): Promise<SelectedObjectGrounding> {
   const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId)
   const selectedPath = world.space?.selection?.filePath ?? activePane?.filePath ?? null
   const unavailable = (pathValue: string | null, reason: string, facts: string) => ({
     facts,
     version: JSON.stringify({ path: pathValue, sha256: null, boundedBytes: 0, unavailableReason: reason }),
+    exact: false,
+    changesSelected: false,
   })
   if (!selectedPath) return unavailable(null, "NO_FILE_SELECTED", "Selected object (server-derived): no file is selected in the persisted Space.")
   const label = `Selected object (server-derived): file ${JSON.stringify(selectedPath)}.`
@@ -544,23 +555,48 @@ async function deriveSelectedFileGrounding(
     return unavailable(selectedPath, "PATH_UNAVAILABLE", `${label} Content unavailable: the persisted path is outside the readable workspace.`)
   }
   if (isSensitiveWorkspacePath(resolved.relative)) return unavailable(resolved.relative, "SENSITIVE_PATH", `${label} Content unavailable: the selected path is sensitive.`)
+  let handle: fs.promises.FileHandle | null = null
+  let identityTimeout: ReturnType<typeof setTimeout> | null = null
+  const identityAbort = new AbortController()
   try {
     // Hash the entire file even when its content cannot be presented. A prefix hash made ignored,
     // untracked, binary, and oversized files vulnerable to invisible tail changes during inference.
+    handle = await fs.promises.open(resolved.absolute, "r")
+    const before = await handle.stat()
+    if (!before.isFile()) return unavailable(resolved.relative, "FILE_NOT_REGULAR", `${label} Content unavailable: the selected object is not a regular file.`)
+    if (before.size > MAX_SELECTED_FILE_IDENTITY_BYTES) {
+      return unavailable(resolved.relative, "FILE_IDENTITY_TOO_LARGE", `${label} Content unavailable: the selected file exceeds the identity limit.`)
+    }
     const hash = createHash("sha256")
     const retained: Buffer[] = []
     let retainedBytes = 0
     let totalBytes = 0
-    for await (const value of fs.createReadStream(resolved.absolute)) {
+    identityTimeout = setTimeout(() => identityAbort.abort(), SELECTED_FILE_IDENTITY_TIMEOUT_MS)
+    identityTimeout.unref?.()
+    const stream = fs.createReadStream("", {
+      fd: handle.fd,
+      autoClose: false,
+      highWaterMark: 64 * 1024,
+      signal: identityAbort.signal,
+    })
+    for await (const value of stream) {
       const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
-      hash.update(chunk)
       totalBytes += chunk.length
+      if (totalBytes > MAX_SELECTED_FILE_IDENTITY_BYTES) {
+        identityAbort.abort()
+        return unavailable(resolved.relative, "FILE_IDENTITY_TOO_LARGE", `${label} Content unavailable: the selected file exceeds the identity limit.`)
+      }
+      hash.update(chunk)
       const remaining = SELECTED_FILE_CONTEXT_BYTES + 1 - retainedBytes
       if (remaining > 0) {
         const bounded = chunk.subarray(0, remaining)
         retained.push(bounded)
         retainedBytes += bounded.length
       }
+    }
+    const after = await handle.stat()
+    if (before.size !== totalBytes || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+      return unavailable(resolved.relative, "FILE_IDENTITY_CHANGED", `${label} Content unavailable: the selected file changed while its identity was read.`)
     }
     const sample = Buffer.concat(retained, retainedBytes)
     const sha256 = hash.digest("hex")
@@ -572,15 +608,23 @@ async function deriveSelectedFileGrounding(
       unavailableReason,
     })
     if (totalBytes > SELECTED_FILE_CONTEXT_BYTES) {
-      return { facts: `${label} Content unavailable: the selected file exceeds the grounding limit.`, version: version("FILE_TOO_LARGE") }
+      return { facts: `${label} Content unavailable: the selected file exceeds the grounding limit.`, version: version("FILE_TOO_LARGE"), exact: true, changesSelected: false }
     }
-    if (looksBinary(sample)) return { facts: `${label} Content unavailable: the selected file is binary.`, version: version("BINARY_FILE") }
+    if (looksBinary(sample)) return { facts: `${label} Content unavailable: the selected file is binary.`, version: version("BINARY_FILE"), exact: true, changesSelected: false }
     return {
       facts: `${label}\nAuthoritative selected file version: sha256:${sha256}.\nAuthoritative selected file content:\n--- BEGIN ${resolved.relative} ---\n${sample.toString("utf8")}\n--- END ${resolved.relative} ---`,
       version: version(null),
+      exact: true,
+      changesSelected: false,
     }
   } catch {
+    if (identityAbort.signal.aborted) {
+      return unavailable(resolved.relative, "FILE_IDENTITY_TIMEOUT", `${label} Content unavailable: exact file identity timed out.`)
+    }
     return unavailable(resolved.relative, "FILE_UNREADABLE", `${label} Content unavailable: the selected file could not be read.`)
+  } finally {
+    if (identityTimeout) clearTimeout(identityTimeout)
+    await handle?.close().catch(() => undefined)
   }
 }
 
@@ -599,16 +643,19 @@ function describeSelectedDiff(snapshot: WorkspaceFileDiffSnapshot): string {
 async function deriveSelectedObjectGrounding(
   world: WorkingWorldSnapshot,
   projectRoot: string | null = PROJECT_ROOT,
-): Promise<Readonly<{ facts: string; version: string }>> {
+): Promise<SelectedObjectGrounding> {
   const file = await deriveSelectedFileGrounding(world, projectRoot)
   const activeWindow = world.space?.windows.find((window) => window.id === world.space?.activeWindowId)
   if (activeWindow?.kind !== "diff") return file
+  if (!file.exact) return { ...file, changesSelected: true }
 
   const activePane = world.space?.panes.find((pane) => pane.id === world.space?.activePaneId)
   const selectedPath = world.space?.selection?.filePath ?? activePane?.filePath ?? null
   const unavailable = (reason: string) => ({
     facts: `${file.facts}\nCurrent patch (server-derived) unavailable: ${reason}`,
     version: JSON.stringify({ file: file.version, diff: reason }),
+    exact: false,
+    changesSelected: true,
   })
   if (!selectedPath) return unavailable("NO_FILE_SELECTED")
   if (!projectRoot) return unavailable("PROJECT_ROOT_UNAVAILABLE")
@@ -621,6 +668,8 @@ async function deriveSelectedObjectGrounding(
   return {
     facts: `${file.facts}\n${describeSelectedDiff(diff)}`,
     version: JSON.stringify({ file: file.version, diff: diff.fingerprint }),
+    exact: diff.baseHash !== null && diff.indexHash !== null && diff.patchHash !== null && diff.state !== "git-unavailable",
+    changesSelected: true,
   }
 }
 
@@ -830,6 +879,9 @@ export async function POST(request: Request) {
         if ("retained" in grounded) updated = { ...updated, pendingStartWork: grounded.retained ?? null }
       } else {
         const selectedObject = await deriveSelectedObjectGrounding(world)
+        if (selectedObject.changesSelected && !selectedObject.exact) {
+          return Response.json({ error: "LINE_CONTEXT_UNAVAILABLE" }, { status: 409 })
+        }
         expectedSelectedContext = JSON.stringify({
           persisted: selectedLineContextFingerprint(world),
           selectedObject: selectedObject.version,
