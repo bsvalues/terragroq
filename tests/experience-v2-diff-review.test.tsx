@@ -193,6 +193,26 @@ describe("Experience V2 current Changes Review", () => {
     })).toBe(`Inspector · Current changes · ${PATH}`)
   })
 
+  it("truncates a large astral-emoji report at the maximal complete code-point boundary", () => {
+    const emoji = "😀"
+    const notice = "\n\n[Report truncated in Inspector; full result remains in the durable Reviewer transcript.]"
+    const payload = encodeDiffReviewInspectorPayload(diffReviewBinding, emoji.repeat(60_000))
+    const decoded = JSON.parse(payload) as { report: string }
+    const prefix = decoded.report.slice(0, -notice.length)
+    const oneMoreCodePoint = JSON.stringify({
+      schemaVersion: 1,
+      kind: "diff-review",
+      binding: diffReviewBinding,
+      report: `${prefix}${emoji}${notice}`,
+    })
+
+    expect(decoded.report.endsWith(notice)).toBe(true)
+    expect(new TextEncoder().encode(payload).byteLength).toBeLessThanOrEqual(200_000)
+    expect(new TextEncoder().encode(oneMoreCodePoint).byteLength).toBeGreaterThan(200_000)
+    expect(prefix).not.toContain("\uFFFD")
+    expect(Array.from(prefix).every((codePoint) => codePoint === emoji)).toBe(true)
+  })
+
   it("uses collision-free exact Diff Review Inspector identity and dedupes only exact replay", () => {
     const legacyCollisionFirst = "14b2bb25c5"
     const legacyCollisionNext = "12c1fd6b15uj"

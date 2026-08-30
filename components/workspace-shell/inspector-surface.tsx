@@ -32,13 +32,13 @@ export function encodeDiffReviewInspectorPayload(binding: AgentSessionDiffReview
   const complete = serializedDiffReviewPayload(binding, report)
   if (textEncoder.encode(complete).byteLength <= MAX_PERSISTED_REVIEW_PAYLOAD_BYTES) return complete
 
+  const codePoints = Array.from(report)
   let lower = 0
-  let upper = report.length
+  let upper = codePoints.length
   let accepted = serializedDiffReviewPayload(binding, DIFF_REVIEW_TRUNCATION_NOTICE)
   while (lower <= upper) {
-    let middle = Math.floor((lower + upper) / 2)
-    if (middle > 0 && /[\uD800-\uDBFF]/.test(report[middle - 1] ?? "")) middle -= 1
-    const candidate = serializedDiffReviewPayload(binding, `${report.slice(0, middle)}${DIFF_REVIEW_TRUNCATION_NOTICE}`)
+    const middle = Math.floor((lower + upper) / 2)
+    const candidate = serializedDiffReviewPayload(binding, `${codePoints.slice(0, middle).join("")}${DIFF_REVIEW_TRUNCATION_NOTICE}`)
     if (textEncoder.encode(candidate).byteLength <= MAX_PERSISTED_REVIEW_PAYLOAD_BYTES) {
       accepted = candidate
       lower = middle + 1
