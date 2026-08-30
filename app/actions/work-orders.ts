@@ -135,7 +135,8 @@ export type TransitionResult =
 
 // Governed status transition. Validates the transition graph and enforces the
 // playbook's two gates: the approval-readiness gate (§9.2) on AUTHORIZED and
-// the doctrine gate on activation.
+// the doctrine gate on activation. External admission cannot bypass these
+// canonical Work Order transitions.
 export async function transitionWorkOrder(
   id: number,
   to: WoStatus,
