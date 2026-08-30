@@ -428,6 +428,7 @@ export async function POST(request: Request) {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let timer: ReturnType<typeof setTimeout> | null = null
+      let previewSessionInitialized = false
       let previewIdentityEstablished = false
       const send = (event: Record<string, unknown>) => {
         try { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)) } catch { /* reader gone */ }
@@ -554,7 +555,7 @@ export async function POST(request: Request) {
           send({ type: "session", sessionId: childSessionId, provider: "Claude", mode: "fork", resumed: false, forkedFrom: forkSourceId })
         }
         if (previewMode) {
-          if (!previewIdentityEstablished) {
+          if (!previewSessionInitialized) {
             if (event.type !== "system" || event.subtype !== "init") {
               finish({ type: "done", reason: "PREVIEW_SESSION_INIT_REQUIRED", code: null })
               child.kill()
@@ -565,27 +566,10 @@ export async function POST(request: Request) {
               child.kill()
               return
             }
-            try {
-              await recordLoomStart({
-                userId: session.user.id,
-                kind: "agent",
-                subject: sessionId!,
-                metadata: {
-                  provider: provider.id, external: provider.external, metered: provider.metered, resumed: resuming,
-                  mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint,
-                },
-              })
-            } catch {
-              finish({ type: "done", reason: "PREVIEW_SESSION_IDENTITY_NOT_DURABLE", code: null })
-              child.kill()
-              return
-            }
-            if (settled) return
-            previewIdentityEstablished = true
-            send({
-              type: "session", sessionId, resumed: resuming, provider: "Claude", mode: "preview",
-              worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint,
-            })
+            // Claude's init only proves the requested process identity. Preview does not publish or
+            // make that identity durable until the turn succeeds and its exact evidence still owns
+            // the active surface at terminal CAS.
+            previewSessionInitialized = true
             return
           }
           if (event.type === "result") {
@@ -617,8 +601,17 @@ export async function POST(request: Request) {
         buffer = ""
         outputQueue = outputQueue.then(() => forwardLine(tail)).then(async () => {
           if (forkMode && !sessionId) finish({ type: "done", reason: "FORK_SESSION_ID_REQUIRED", code: null })
-          else if (previewMode && !previewIdentityEstablished) finish({ type: "done", reason: "PREVIEW_SESSION_INIT_REQUIRED", code: null })
-          else if (previewMode && code === 0 && previewResultEvent) {
+          else if (previewMode && !previewSessionInitialized) finish({ type: "done", reason: "PREVIEW_SESSION_INIT_REQUIRED", code: null })
+          else if (previewMode) {
+            const successfulResult = code === 0
+              && previewResultEvent?.type === "result"
+              && previewResultEvent.subtype === "success"
+              && previewResultEvent.is_error === false
+              && previewResultEvent.session_id === sessionId
+            if (!successfulResult) {
+              finish({ type: "done", reason: "AGENT_UNAVAILABLE", code })
+              return
+            }
             const currentWorld = await loadOwnedWorkingWorld(session.user.id, previewWorldId!)
             const currentActive = currentWorld?.space?.windows.find((window) => window.id === currentWorld.space!.activeWindowId)
             if (!currentActive || currentActive.kind !== "running-app" || currentActive.minimized) {
@@ -633,6 +626,26 @@ export async function POST(request: Request) {
               finish({ type: "done", reason: "PREVIEW_CONTEXT_STALE", code: null })
               return
             }
+            try {
+              await recordLoomStart({
+                userId: session.user.id,
+                kind: "agent",
+                subject: sessionId!,
+                metadata: {
+                  provider: provider.id, external: provider.external, metered: provider.metered, resumed: resuming,
+                  mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint,
+                },
+              })
+            } catch {
+              finish({ type: "done", reason: "PREVIEW_SESSION_IDENTITY_NOT_DURABLE", code: null })
+              return
+            }
+            if (settled) return
+            previewIdentityEstablished = true
+            send({
+              type: "session", sessionId, resumed: resuming, provider: "Claude", mode: "preview",
+              worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint,
+            })
             if (!settled) send({ type: "event", event: previewResultEvent })
             finish({ type: "done", reason: null, code })
           } else finish({ type: "done", reason: null, code })

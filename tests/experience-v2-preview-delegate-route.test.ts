@@ -89,14 +89,26 @@ describe("Preview debugger route", () => {
     expect(groundedPrompt).not.toContain("attacker.test")
     expect(groundedPrompt).not.toContain("Fake")
     child.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "system", subtype: "init", session_id: sessionId })}\n`))
-    await vi.waitFor(() => expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
-      userId: "owner-1", subject: sessionId,
-      metadata: expect.objectContaining({ provider: "cloud", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint }),
-    })))
+    await Promise.resolve()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
     child.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "The runtime is reachable." })}\n`))
     child.emit("close", 0)
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
-    expect(events[0]).toEqual({ type: "session", sessionId, resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint })
+    expect(events).toEqual([
+      { type: "session", sessionId, resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint },
+      { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "The runtime is reachable." } },
+      { type: "done", reason: null, code: 0 },
+    ])
+    expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1", subject: sessionId,
+      metadata: expect.objectContaining({ provider: "cloud", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint }),
+    }))
+    expect(seams.loadOwnedWorkingWorld.mock.invocationCallOrder.at(-1)).toBeLessThan(seams.recordLoomStart.mock.invocationCallOrder[0])
+    expect(seams.inspectWorkspaceApp.mock.invocationCallOrder.at(-1)).toBeLessThan(seams.recordLoomStart.mock.invocationCallOrder[0])
+    expect(seams.recordLoomEnd).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "owner-1", subject: sessionId,
+      outcome: expect.objectContaining({ provider: "cloud", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint, code: 0, reason: null }),
+    }))
   })
 
   it("refuses absent or non-running active Preview before provider or authority work", async () => {
@@ -157,11 +169,10 @@ describe("Preview debugger route", () => {
     child.emit("close", 0)
 
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
-    expect(events).toEqual([
-      { type: "session", sessionId, resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint },
-      { type: "done", reason: "PREVIEW_CONTEXT_STALE", code: null },
-    ])
+    expect(events).toEqual([{ type: "done", reason: "PREVIEW_CONTEXT_STALE", code: null }])
     expect(events.some((event) => /Now stale|STALE ANSWER/.test(JSON.stringify(event)))).toBe(false)
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
   })
 
   it("materializes no session or receipt when the Claude binary cannot spawn", async () => {
@@ -191,6 +202,23 @@ describe("Preview debugger route", () => {
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
     expect(events).toEqual([{ type: "done", reason: "PREVIEW_SESSION_INIT_REQUIRED", code: null }])
     expect(JSON.stringify(events)).not.toMatch(/Authentication required|Authentication token rejected/)
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
+
+  it("materializes no session or receipt when Claude initializes before an authentication failure", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request({ mode: "preview", provider: "cloud", worldId: "world-a", prompt: "Diagnose.", sessionId, resume: false }))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "system", subtype: "init", session_id: sessionId })}\n`))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({
+      type: "result", subtype: "error", is_error: true, session_id: sessionId, result: "Authentication required",
+    })}\n`))
+    child.emit("close", 1)
+
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events).toEqual([{ type: "done", reason: "AGENT_UNAVAILABLE", code: 1 }])
+    expect(JSON.stringify(events)).not.toContain("Authentication required")
     expect(seams.recordLoomStart).not.toHaveBeenCalled()
     expect(seams.recordLoomEnd).not.toHaveBeenCalled()
   })
