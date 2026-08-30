@@ -14,6 +14,7 @@ import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
 import { saveOwnedLineWorld, selectedLineContextFingerprint } from "@/lib/environment/space-persistence"
 import { inspectWorkspaceApp, williamOsOrigin, type WorkspacePreviewEvidence } from "@/lib/environment/workspace-app"
+import { deriveSpaceGrounding } from "@/lib/environment/space-grounding"
 import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { getWorkOrders } from "@/app/actions/work-orders"
@@ -797,7 +798,7 @@ export async function POST(request: Request) {
   // huge ignored field would still buffer fully) -- this bounds the actual bytes.
   const parsed = await readBoundedJson(request)
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: parsed.status })
-  const body = parsed.value as { worldId?: unknown; text?: unknown; summon?: unknown }
+  const body = parsed.value as { worldId?: unknown; text?: unknown; summon?: unknown; lineContext?: unknown }
   // A surface asked for by ADDRESS rather than by sentence. The superseded routes redirect here
   // carrying `?summon=`, and the Desk forwards it as this field instead of inventing an owner turn
   // that the owner never typed -- a transcript that puts words in their mouth is a lie, however
@@ -814,6 +815,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "INVALID_WORLD_ID" }, { status: 400 })
   }
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
+  const lineContext = body.lineContext === "space-summary" ? "space-summary" : null
 
   if (summonRequest) {
     // Arriving at a surface is not a conversational turn: nothing is recorded as said. The
@@ -982,23 +984,36 @@ export async function POST(request: Request) {
         // A current-work read retains its exact selection for a later "continue it".
         if ("retained" in grounded) updated = { ...updated, pendingStartWork: grounded.retained ?? null }
       } else {
-        const previewOrigin = williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url)
-        const selectedObject = await deriveSelectedObjectGrounding(world, PROJECT_ROOT, previewOrigin)
-        if (selectedObject.changesSelected && !selectedObject.exact) {
-          return Response.json({ error: "LINE_CONTEXT_UNAVAILABLE" }, { status: 409 })
-        }
-        expectedSelectedContext = JSON.stringify({
-          persisted: selectedLineContextFingerprint(world),
-          selectedObject: selectedObject.version,
-        })
-        deriveSelectedContext = async (latest) => {
-          const latestSelectedObject = await deriveSelectedObjectGrounding(latest, PROJECT_ROOT, previewOrigin)
-          return JSON.stringify({
-            persisted: selectedLineContextFingerprint(latest),
-            selectedObject: latestSelectedObject.version,
+        if (lineContext === "space-summary") {
+          const spaceSummary = deriveSpaceGrounding(world)
+          expectedSelectedContext = JSON.stringify({
+            persisted: selectedLineContextFingerprint(world),
+            spaceSummary: spaceSummary.version,
           })
+          deriveSelectedContext = async (latest) => JSON.stringify({
+            persisted: selectedLineContextFingerprint(latest),
+            spaceSummary: deriveSpaceGrounding(latest).version,
+          })
+          say = await converse(updated, text, spaceSummary.facts)
+        } else {
+          const previewOrigin = williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url)
+          const selectedObject = await deriveSelectedObjectGrounding(world, PROJECT_ROOT, previewOrigin)
+          if (selectedObject.changesSelected && !selectedObject.exact) {
+            return Response.json({ error: "LINE_CONTEXT_UNAVAILABLE" }, { status: 409 })
+          }
+          expectedSelectedContext = JSON.stringify({
+            persisted: selectedLineContextFingerprint(world),
+            selectedObject: selectedObject.version,
+          })
+          deriveSelectedContext = async (latest) => {
+            const latestSelectedObject = await deriveSelectedObjectGrounding(latest, PROJECT_ROOT, previewOrigin)
+            return JSON.stringify({
+              persisted: selectedLineContextFingerprint(latest),
+              selectedObject: latestSelectedObject.version,
+            })
+          }
+          say = await converse(updated, text, `${groundingFacts(await loadProjects(userId))} ${selectedObject.facts}`)
         }
-        say = await converse(updated, text, `${groundingFacts(await loadProjects(userId))} ${selectedObject.facts}`)
       }
     }
     updated = withTurn(updated, "williamos", say)

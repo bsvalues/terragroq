@@ -34,6 +34,7 @@ type SpaceStorage = "server" | "browser"
 type EnvironmentOverlay = "council" | "mission-control" | null
 type CouncilView = "history" | "convening"
 type LineTarget = "william" | "agent"
+type LineContext = "space-summary" | null
 type LineMode = "default" | "change" | "review" | "fork"
 type DelegateContext = Readonly<{
   kind: "file" | "preview" | "diff" | "space" | "agent" | "conversation"
@@ -156,6 +157,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineReply, setLineReply] = useState<string | null>(null)
   const [lineBusy, setLineBusy] = useState(false)
   const [lineTarget, setLineTarget] = useState<LineTarget>("william")
+  const [lineContext, setLineContext] = useState<LineContext>(null)
   const [lineMode, setLineMode] = useState<LineMode>("default")
   const [delegateContext, setDelegateContext] = useState<DelegateContext | null>(null)
   const [forkContext, setForkContext] = useState<ForkContext | null>(null)
@@ -860,9 +862,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     })
   }, [])
 
-  const openLine = useCallback((prompt = "", target: LineTarget = "william") => {
+  const openLine = useCallback((prompt = "", target: LineTarget = "william", context: LineContext = null) => {
     agentPresentationEpochRef.current += 1
     setLineTarget(target)
+    setLineContext(context)
     setForkContext(null)
     if (target === "william") setDelegateContext(null)
     setLineMode("default")
@@ -958,6 +961,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         event.preventDefault()
         if (!change.running && !review.running) {
           setLineTarget("william")
+          setLineContext(null)
           setDelegateContext(null)
           setForkContext(null)
           setLineMode("default")
@@ -1059,7 +1063,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }
 
-  const sendWilliamTurn = useCallback(async (text: string): Promise<boolean> => {
+  const sendWilliamTurn = useCallback(async (text: string, context: LineContext = null): Promise<boolean> => {
     const normalized = text.trim()
     if (!normalized || lineBusy || williamBusy) return false
     appendConversation("owner", normalized)
@@ -1091,7 +1095,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       const response = await fetch("/api/environment/line", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ worldId: requestWorldId, text: normalized }),
+        body: JSON.stringify({ worldId: requestWorldId, text: normalized, ...(context ? { lineContext: context } : {}) }),
       })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error ?? `LINE_${response.status}`)
@@ -1216,7 +1220,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         }
         return
       }
-      await sendWilliamTurn(text)
+      await sendWilliamTurn(text, lineContext)
     } catch (error) {
       if (lineTarget !== "agent") {
         setLineReply(error instanceof Error ? error.message : "LINE_UNAVAILABLE")
@@ -1354,6 +1358,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineInput("")
     setLineReply(null)
     setLineTarget("william")
+    setLineContext(null)
     setLineMode("default")
     setDelegateContext(null)
     setChangeTarget(null)
@@ -1503,6 +1508,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   function openObjectAction(action: string) {
     if (action === "Merge unavailable") return
+    if (selectedKind === "space" && action === "Summarize") {
+      openLine("Summarize this exact current Space: ", "william", "space-summary")
+      return
+    }
     if (selectedKind === "preview" && action === "Inspect") {
       void inspectPreviewEvidence()
       return
