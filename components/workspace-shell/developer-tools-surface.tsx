@@ -220,7 +220,9 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
     if (!historyScope || (kind !== "terminal" && kind !== "tests")) { setHistory([]); return }
     try {
       const restored = loadToolRunHistory(historyStorage ?? window.localStorage, historyScope)
-      setHistory(historyForSurface(restored.runs, kind))
+      const relevantHistory = historyForSurface(restored.runs, kind)
+      setHistory(relevantHistory)
+      setSelectedTranscriptId(relevantHistory.at(-1)?.id ?? null)
       if (restored.error) setHistoryVerdict("Saved browser transcript history was corrupt and was not loaded.")
     } catch {
       setHistory([])

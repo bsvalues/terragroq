@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { DeveloperToolsSurface } from "@/components/workspace-shell/developer-tools-surface"
-import { loadToolRunHistory } from "@/components/workspace-shell/tool-run-history"
+import { loadToolRunHistory, persistToolRunTranscript, type ToolRunTranscript } from "@/components/workspace-shell/tool-run-history"
 
 afterEach(() => {
   cleanup()
@@ -22,6 +22,43 @@ const projectOperations = [
   { id: "repo.log", label: "Recent history", intent: "Show log", scope: "project", mutating: false },
   { id: "build.run", label: "Build the app", intent: "Build", scope: "project", mutating: false },
 ]
+
+function saveTranscript({
+  scope,
+  id,
+  operationId,
+  startedAt,
+  text,
+  status = "completed",
+}: {
+  scope: string
+  id: string
+  operationId: "tests.run" | "repo.status" | "repo.diff"
+  startedAt: string
+  text: string
+  status?: ToolRunTranscript["outcome"]["status"]
+}) {
+  const operation = operationId === "tests.run"
+    ? { label: "Run the tests", alias: "test" }
+    : operationId === "repo.status"
+      ? { label: "What has changed", alias: "git status" }
+      : { label: "Show diff summary", alias: "git diff" }
+  const terminal = status === "completed" ? { text: "exit 0", code: 0, reason: null }
+    : status === "cancelled" ? { text: "CANCELLED", code: null, reason: "CANCELLED" }
+      : { text: "INTERRUPTED", code: null, reason: "INTERRUPTED" }
+  const verdict = persistToolRunTranscript(window.localStorage, scope, {
+    schemaVersion: 1,
+    id,
+    operationId,
+    operationLabel: operation.label,
+    alias: operation.alias,
+    startedAt,
+    endedAt: new Date(Date.parse(startedAt) + 1_000).toISOString(),
+    outcome: { status, code: terminal.code, reason: terminal.reason },
+    lines: [{ channel: "stdout", text }, { channel: "meta", text: terminal.text }],
+  })
+  expect(verdict.ok).toBe(true)
+}
 
 describe("Experience V2 developer tools", () => {
   it("does not expose a covered inactive Test action as runnable", async () => {
@@ -261,9 +298,96 @@ describe("Experience V2 developer tools", () => {
     first.unmount()
 
     render(<DeveloperToolsSurface kind="tests" selectedPath={null} historyScope="server:world-a" />)
-    fireEvent.click(screen.getByRole("button", { name: /test.*completed.*saved browser transcript/i }))
     expect(screen.getByText("focused suite green", { exact: false })).toBeTruthy()
     expect(screen.getByText("Saved browser transcript · not live evidence")).toBeTruthy()
+  })
+
+  it("automatically renders the newest relevant saved transcript and keeps Live output explicit", async () => {
+    saveTranscript({ scope: "server:world-a", id: "older-terminal", operationId: "repo.status", startedAt: "2026-08-30T10:00:00.000Z", text: "older status bytes\n" })
+    saveTranscript({ scope: "server:world-a", id: "newer-terminal", operationId: "repo.diff", startedAt: "2026-08-30T10:01:00.000Z", text: "newest diff bytes\n" })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ operations: projectOperations })))
+
+    render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+
+    expect(await screen.findByText("newest diff bytes", { exact: false })).toBeTruthy()
+    expect(screen.queryByText("older status bytes", { exact: false })).toBeNull()
+    expect(screen.getByText("Saved browser transcript · not live evidence")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Live output" }).getAttribute("aria-pressed")).toBe("false")
+    expect(screen.getByRole("button", { name: /git diff.*saved browser transcript/i }).getAttribute("aria-pressed")).toBe("true")
+  })
+
+  it("selects only the newest valid transcript for the current kind and Space scope", async () => {
+    saveTranscript({ scope: "server:world-a", id: "world-a-test", operationId: "tests.run", startedAt: "2026-08-30T10:00:00.000Z", text: "world A test bytes\n" })
+    saveTranscript({ scope: "server:world-a", id: "world-a-terminal", operationId: "repo.status", startedAt: "2026-08-30T10:01:00.000Z", text: "world A terminal bytes\n" })
+    saveTranscript({ scope: "server:world-b", id: "world-b-terminal", operationId: "repo.diff", startedAt: "2026-08-30T10:02:00.000Z", text: "world B terminal bytes\n" })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ operations: projectOperations })))
+    const view = render(<DeveloperToolsSurface kind="tests" selectedPath={null} historyScope="server:world-a" />)
+
+    expect(await screen.findByText("world A test bytes", { exact: false })).toBeTruthy()
+    expect(screen.queryByText("world A terminal bytes", { exact: false })).toBeNull()
+
+    view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    expect(await screen.findByText("world A terminal bytes", { exact: false })).toBeTruthy()
+    expect(screen.queryByText("world A test bytes", { exact: false })).toBeNull()
+
+    view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-b" />)
+    expect(await screen.findByText("world B terminal bytes", { exact: false })).toBeTruthy()
+    expect(screen.queryByText("world A terminal bytes", { exact: false })).toBeNull()
+  })
+
+  it("automatically preserves cancelled and interrupted transcript truth without promoting restored bytes live", async () => {
+    saveTranscript({ scope: "server:cancelled", id: "cancelled-terminal", operationId: "repo.status", startedAt: "2026-08-30T10:00:00.000Z", text: "cancelled partial bytes\n", status: "cancelled" })
+    saveTranscript({ scope: "server:interrupted", id: "interrupted-terminal", operationId: "repo.diff", startedAt: "2026-08-30T10:01:00.000Z", text: "interrupted partial bytes\n", status: "interrupted" })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ operations: projectOperations })))
+    const view = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:cancelled" />)
+
+    expect(await screen.findByText("cancelled partial bytes", { exact: false })).toBeTruthy()
+    expect(screen.getByText("Cancelled · not completed or live evidence")).toBeTruthy()
+
+    view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:interrupted" />)
+    expect(await screen.findByText("interrupted partial bytes", { exact: false })).toBeTruthy()
+    expect(screen.getByText("Interrupted · not completed or live evidence")).toBeTruthy()
+    expect(screen.queryByText("cancelled partial bytes", { exact: false })).toBeNull()
+  })
+
+  it("keeps empty, corrupt, and unavailable history on Live output without restoring bytes", () => {
+    window.localStorage.setItem("williamos:tool-runs:v1:server:corrupt", "{not-json")
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ operations: projectOperations })))
+    const view = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:empty" />)
+
+    expect(screen.getByText("Type one fixed alias. Tab completes; Enter runs. No shell text is accepted.")).toBeTruthy()
+    expect(screen.queryByText("Saved browser transcript · not live evidence")).toBeNull()
+
+    view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:corrupt" />)
+    expect(screen.getByText("Saved browser transcript history was corrupt and was not loaded.")).toBeTruthy()
+    expect(screen.queryByText("Saved browser transcript · not live evidence")).toBeNull()
+
+    view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:unavailable" historyStorage={{
+      getItem: () => { throw new DOMException("blocked", "SecurityError") },
+      setItem: () => undefined,
+    }} />)
+    expect(screen.getByText("Saved browser transcript history is unavailable.")).toBeTruthy()
+    expect(screen.queryByText("Saved browser transcript · not live evidence")).toBeNull()
+  })
+
+  it("switches immediately from a restored transcript to Live output when a new command starts", async () => {
+    saveTranscript({ scope: "server:world-a", id: "saved-terminal", operationId: "repo.status", startedAt: "2026-08-30T10:00:00.000Z", text: "restored command bytes\n" })
+    let resolveRun!: (response: Response) => void
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? new Promise<Response>((resolve) => { resolveRun = resolve })
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    expect(await screen.findByText("restored command bytes", { exact: false })).toBeTruthy()
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+
+    expect(screen.queryByText("restored command bytes", { exact: false })).toBeNull()
+    expect(screen.getByRole("button", { name: "Live output" }).getAttribute("aria-pressed")).toBe("true")
+    expect(screen.getByText("Running repo.status")).toBeTruthy()
+    resolveRun(ndjson({ type: "exit", code: 0, reason: null }))
   })
 
   it("keeps Terminal and Test transcript switchers relevant while preserving their shared bounded history", async () => {
@@ -477,7 +601,6 @@ describe("Experience V2 developer tools", () => {
     first.unmount()
 
     const reopened = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
-    fireEvent.click(await screen.findByRole("button", { name: /git status.*saved browser transcript/i }))
     expect(screen.getByText("Saved browser transcript · not live evidence")).toBeTruthy()
     expect(screen.getByText("saved bytes", { exact: false })).toBeTruthy()
     reopened.unmount()
@@ -508,7 +631,6 @@ describe("Experience V2 developer tools", () => {
     first.unmount()
 
     render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
-    fireEvent.click(await screen.findByRole("button", { name: /git status.*cancelled/i }))
     expect(screen.getByText("partial bytes", { exact: false })).toBeTruthy()
     expect(screen.getByText("Cancelled · not completed or live evidence")).toBeTruthy()
   })
