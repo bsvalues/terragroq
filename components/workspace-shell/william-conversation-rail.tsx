@@ -19,6 +19,7 @@ export function WilliamConversationRail({
   busy,
   judgmentBusy,
   canThinkAgain,
+  canInspectJudgment,
   error,
   open,
   narrow,
@@ -29,6 +30,7 @@ export function WilliamConversationRail({
   onOpen,
   onClose,
   onThinkAgain,
+  onInspectJudgment,
   onCouncil,
   onOpenLocal,
   onOpenLine,
@@ -39,6 +41,7 @@ export function WilliamConversationRail({
   busy: boolean
   judgmentBusy: boolean
   canThinkAgain: boolean
+  canInspectJudgment: boolean
   error: string | null
   open: boolean
   narrow: boolean
@@ -49,6 +52,7 @@ export function WilliamConversationRail({
   onOpen: () => void
   onClose: () => void
   onThinkAgain: () => void
+  onInspectJudgment: () => void
   onCouncil: () => void
   onOpenLocal: () => void
   onOpenLine: () => void
@@ -86,6 +90,7 @@ export function WilliamConversationRail({
           <p>{judgment}</p>
           <div>
             <button type="button" onClick={onThinkAgain} disabled={!canThinkAgain || judgmentBusy}>{judgmentBusy ? "Reasoning" : "Think again"}</button>
+            {canInspectJudgment ? <button type="button" onClick={onInspectJudgment} aria-label="Inspect judgment basis">Inspect basis</button> : null}
             <button type="button" onClick={onCouncil}>Ask Council</button>
           </div>
         </section>

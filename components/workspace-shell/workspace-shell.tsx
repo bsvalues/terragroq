@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { AppWindow, Braces, Command, FlaskConical, GitCompare, Grid2X2, TerminalSquare, Users, X } from "lucide-react"
 
 import type { SummonedSurface } from "@/lib/environment/summon"
-import { EMPTY_SPINE, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
+import { EMPTY_SPINE, validateWilliamJudgment, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
 import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
@@ -267,14 +267,35 @@ function restoredConversation(turns: readonly WilliamConversationTurn[] | undefi
   })
 }
 
-function inspectorId(surface: Pick<InspectorSurface, "kind" | "subject">): string {
-  const source = `${surface.kind}\0${surface.subject}`
+function inspectorId(surface: Pick<InspectorSurface, "kind" | "subject" | "identity">): string {
+  const source = `${surface.kind}\0${surface.subject}\0${surface.identity ?? ""}`
   let hash = 2166136261
   for (let index = 0; index < source.length; index += 1) {
     hash ^= source.charCodeAt(index)
     hash = Math.imul(hash, 16777619)
   }
   return `inspector-${(hash >>> 0).toString(36)}`
+}
+
+function inspectableWilliamJudgment(value: unknown): WilliamJudgment | null {
+  try {
+    return validateWilliamJudgment(value)
+  } catch {
+    return null
+  }
+}
+
+function williamJudgmentInspectorSurface(value: unknown): InspectorSurface | null {
+  const snapshot = inspectableWilliamJudgment(value)
+  if (!snapshot) return null
+  const identity = `${snapshot.generatedAt}:${snapshot.basisFingerprint}`
+  return {
+    id: `inspector-william-judgment:${encodeURIComponent(snapshot.generatedAt)}:${snapshot.basisFingerprint}`,
+    kind: "william-judgment",
+    subject: "William judgment",
+    identity,
+    payload: snapshot,
+  }
 }
 
 export function WorkspaceShell({ initialSummon = null }: { initialSummon?: SummonedSurface | null }) {
@@ -372,6 +393,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const judgmentRequestedRef = useRef<string | null>(null)
   const judgmentContextRef = useRef<string | null>(null)
   const outcomeAssimilationRequestedRef = useRef(new Set<string>())
+  const inspectorReturnWindowRef = useRef(new Map<string, string | null>())
   stateRef.current = space
   spineRef.current = spine
   worldRef.current = worldId
@@ -940,6 +962,34 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }, [materializeSurfaces])
 
+  const openWilliamJudgmentInspector = useCallback(() => {
+    const surface = williamJudgmentInspectorSurface(judgment)
+    if (!surface) return
+    setInspectors((current) => current.some((entry) => entry.kind === surface.kind && entry.identity === surface.identity)
+      ? current
+      : [...current, surface])
+    setSpace((current) => {
+      if (current.activeWindowId !== surface.id) {
+        inspectorReturnWindowRef.current.set(surface.id, current.activeWindowId)
+      }
+      const highest = Math.max(
+        ...Object.values(current.windows).map((window) => window.z),
+        ...Object.values(current.inspectorWindows).map((window) => window.z),
+      )
+      const existing = current.inspectorWindows[surface.id]
+      return {
+        ...current,
+        activeWindowId: surface.id,
+        inspectorWindows: {
+          ...current.inspectorWindows,
+          [surface.id]: existing
+            ? { ...existing, minimized: false, z: highest + 1 }
+            : { x: 104, y: 72, width: 560, height: 480, z: highest + 1, minimized: false },
+        },
+      }
+    })
+  }, [judgment])
+
   const dismissInspector = useCallback((id: string) => {
     const previewId = inspectorId({ kind: "preview-evidence", subject: PREVIEW_EVIDENCE_SUBJECT })
     if (id === previewId) {
@@ -954,7 +1004,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       const inspectorSeeds = { ...current.inspectorSeeds }
       delete inspectorWindows[id]
       delete inspectorSeeds[id]
-      return { ...current, inspectorWindows, inspectorSeeds, activeWindowId: current.activeWindowId === id ? null : current.activeWindowId }
+      const returnWindow = inspectorReturnWindowRef.current.get(id)
+      inspectorReturnWindowRef.current.delete(id)
+      const canRestore = returnWindow === null
+        || returnWindow !== undefined && (returnWindow in current.windows || returnWindow in inspectorWindows)
+      return {
+        ...current,
+        inspectorWindows,
+        inspectorSeeds,
+        activeWindowId: current.activeWindowId === id ? canRestore ? returnWindow ?? null : null : current.activeWindowId,
+      }
     })
   }, [])
 
@@ -1782,12 +1841,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     ?? (judgmentBusy
       ? "William is forming a grounded judgment from the current Space."
       : `System fact: ${williamSafetyFact} ${judgmentError ? `William judgment unavailable (${judgmentError}).` : "William has not formed a judgment yet."}`)
+  const currentInspectableJudgment = inspectableWilliamJudgment(judgment)
 
   const applySpaceEnvelope = (payload: SpaceEnvelope) => {
     // A terminal result belongs only to the exact Space/transition that started it. Invalidate
     // before advancing the epoch so delayed provider frames cannot refresh or present in the next
     // Space, even though ordinary reset intentionally ignores an active operation.
     change.invalidate()
+    inspectorReturnWindowRef.current.clear()
     const name = payload.name ?? payload.project?.name ?? "Space"
     const restoredBase = normalizeSpace(
       payload.space,
@@ -2324,6 +2385,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         busy={williamBusy}
         judgmentBusy={judgmentBusy}
         canThinkAgain={storage === "server"}
+        canInspectJudgment={Boolean(currentInspectableJudgment)}
         error={williamError}
         open={williamRailOpen}
         narrow={williamRailNarrow}
@@ -2334,6 +2396,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         onOpen={() => setWilliamRailOpen(true)}
         onClose={() => setWilliamRailOpen(false)}
         onThinkAgain={() => void refreshWilliamJudgment()}
+        onInspectJudgment={openWilliamJudgmentInspector}
         onCouncil={() => void summonCouncil(`Challenge William's recommendation: ${williamJudgment}`)}
         onOpenLocal={openLocalConversation}
         onOpenLine={() => openLine()}
