@@ -463,6 +463,55 @@ describe("Experience V2 multi-Space re-entry", () => {
     expect(screen.getByText(/Space collection is temporarily unavailable.*SPACE_COLLECTION_UNAVAILABLE/i)).toBeTruthy()
   })
 
+  it("removes a confirmed inactive Space while keeping the current Space open", async () => {
+    const previewKey = (id: string) => {
+      const source = `${id}\0${project.identity}\0`
+      let hash = 2166136261
+      for (let index = 0; index < source.length; index += 1) {
+        hash ^= source.charCodeAt(index)
+        hash = Math.imul(hash, 16777619)
+      }
+      return `williamos:preview-evidence:v1:inspector-${(hash >>> 0).toString(36)}`
+    }
+    const scopedKeys = (id: string) => [
+      previewKey(id),
+      `williamos:agent-session:${id}:c%3A%2Fproject`,
+      `williamos:tool-runs:v1:server:${id}`,
+      `williamos:diff-snapshot:v1:server:${id}`,
+    ]
+    for (const key of [...scopedKeys("a"), ...scopedKeys("b")]) window.localStorage.setItem(key, "saved")
+    const savedAgentSessions = (id: string) => JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: `Codex:${id}`,
+      sessions: [{
+        schemaVersion: 1, sessionId: id, role: "Builder", provider: "Codex",
+        assignment: `Build ${id}`, updatedAt: "2026-08-30T20:00:00.000Z", completedTurns: [],
+      }],
+    })
+    window.localStorage.setItem(scopedKeys("a")[1], savedAgentSessions("build-a"))
+    window.localStorage.setItem(scopedKeys("b")[1], savedAgentSessions("build-b"))
+    const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
+      if (url === "/api/environment/spaces/b" && init?.method === "DELETE") return {
+        ok: true, status: 200, json: async () => ({ removedWorldId: "b", spaces: [summaries[0]] }),
+      }
+      if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
+      return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
+    })
+    vi.stubGlobal("fetch", fetchStub)
+    const user = userEvent.setup()
+    render(<WorkspaceShell />)
+    await user.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    await user.click(screen.getByRole("button", { name: "Remove Beta Space" }))
+    await user.click(screen.getByRole("button", { name: "Remove Space" }))
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Enter Beta" })).toBeNull())
+    expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy()
+    expect(fetchStub.mock.calls.some(([input, init]) => String(input) === "/api/environment/spaces/b" && init?.method === "DELETE")).toBe(true)
+    expect(scopedKeys("b").map((key) => window.localStorage.getItem(key))).toEqual([null, null, null, null])
+    expect(scopedKeys("a").every((key) => window.localStorage.getItem(key) !== null)).toBe(true)
+  })
+
   it("keeps A current and Mission Control open when exact B load fails", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)

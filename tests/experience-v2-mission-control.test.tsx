@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -288,6 +288,99 @@ describe("Experience V2 Mission Control", () => {
     await user.type(screen.getByRole("textbox", { name: "Space name" }), "Release verification")
     await user.click(screen.getByRole("button", { name: "Create Space" }))
     expect(onCreateSpace).toHaveBeenCalledWith("Release verification")
+  })
+
+  it("requires explicit confirmation before removing a non-current persisted Space", async () => {
+    const user = userEvent.setup()
+    const onRemoveSpace = vi.fn(async () => true)
+    render(
+      <MissionControlSurface
+        spaces={spaces}
+        currentSpaceId="terrafusion"
+        onEnterSpace={vi.fn()}
+        onDismiss={vi.fn()}
+        multiSpaceAvailable
+        onRemoveSpace={onRemoveSpace}
+      />,
+    )
+
+    expect(screen.queryByRole("button", { name: "Remove TerraFusion Build Space" })).toBeNull()
+    await user.click(screen.getByRole("button", { name: "Remove Research & Evidence Space" }))
+    expect(onRemoveSpace).not.toHaveBeenCalled()
+    expect(screen.getByRole("alertdialog", { name: "Remove Research & Evidence?" })).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Remove Space" }))
+    expect(onRemoveSpace).toHaveBeenCalledWith("research")
+  })
+
+  it("contains keyboard focus and Escape inside the destructive confirmation", async () => {
+    const user = userEvent.setup()
+    const onDismiss = vi.fn()
+    render(
+      <MissionControlSurface
+        spaces={spaces}
+        currentSpaceId="terrafusion"
+        onEnterSpace={vi.fn()}
+        onDismiss={onDismiss}
+        multiSpaceAvailable
+        onCreateSpace={vi.fn()}
+        onRemoveSpace={vi.fn(async () => true)}
+      />,
+    )
+
+    await user.click(screen.getByRole("button", { name: "Remove Research & Evidence Space" }))
+    const cancel = screen.getByRole("button", { name: "Cancel" })
+    const confirm = screen.getByRole("button", { name: "Remove Space" })
+    expect(document.activeElement).toBe(cancel)
+    expect((screen.getByRole("button", { name: "Enter TerraFusion Build, current Space" }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole("button", { name: "New Space" }) as HTMLButtonElement).disabled).toBe(true)
+
+    await user.tab()
+    expect(document.activeElement).toBe(confirm)
+    await user.tab({ shift: true })
+    expect(document.activeElement).toBe(cancel)
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect(screen.queryByRole("alertdialog")).toBeNull()
+    expect(screen.getByRole("dialog", { name: "Mission Control" })).toBeTruthy()
+    expect(onDismiss).not.toHaveBeenCalled()
+  })
+
+  it("keeps focus in the confirmation while removal is in flight", async () => {
+    const user = userEvent.setup()
+    let finish!: (removed: boolean) => void
+    const pending = new Promise<boolean>((resolve) => { finish = resolve })
+    const onDismiss = vi.fn()
+    render(
+      <MissionControlSurface
+        spaces={spaces}
+        currentSpaceId="terrafusion"
+        onEnterSpace={vi.fn()}
+        onDismiss={onDismiss}
+        multiSpaceAvailable
+        onRemoveSpace={vi.fn(() => pending)}
+      />,
+    )
+
+    await user.click(screen.getByRole("button", { name: "Remove Research & Evidence Space" }))
+    await user.click(screen.getByRole("button", { name: "Remove Space" }))
+    const confirmation = screen.getByRole("alertdialog", { name: "Remove Research & Evidence?" })
+    expect(document.activeElement).toBe(confirmation)
+    fireEvent.keyDown(window, { key: "Tab" })
+    expect(document.activeElement).toBe(confirmation)
+    fireEvent.keyDown(window, { key: "Escape" })
+    expect(screen.getByRole("alertdialog", { name: "Remove Research & Evidence?" })).toBeTruthy()
+    expect(onDismiss).not.toHaveBeenCalled()
+
+    await act(async () => { finish(true); await pending })
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+  })
+
+  it("keeps the Space when removal is refused", async () => {
+    const user = userEvent.setup()
+    const onRemoveSpace = vi.fn(async () => false)
+    render(<MissionControlSurface spaces={spaces} currentSpaceId="terrafusion" onEnterSpace={vi.fn()} onDismiss={vi.fn()} multiSpaceAvailable onRemoveSpace={onRemoveSpace} />)
+    await user.click(screen.getByRole("button", { name: "Remove Research & Evidence Space" }))
+    await user.click(screen.getByRole("button", { name: "Remove Space" }))
+    expect(screen.getByRole("alertdialog", { name: "Remove Research & Evidence?" })).toBeTruthy()
   })
 
   it("disables New Space truthfully in browser-local degradation", () => {

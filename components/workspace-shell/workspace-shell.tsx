@@ -8,6 +8,8 @@ import { EMPTY_SPINE, validateWilliamJudgment, type WilliamJudgment, type WorldS
 import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
+import { removeDiffBrowserSnapshot } from "./diff-snapshot-history"
+import { removeToolRunHistory } from "./tool-run-history"
 import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
 import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
@@ -2188,6 +2190,35 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
   }
 
+  const removeMissionSpace = async (targetWorldId: string) => {
+    if (!worldId || targetWorldId === worldId) {
+      setTransitionMessage("The current Space cannot be removed. Enter another Space first.")
+      return false
+    }
+    if (switchingSpace) return false
+    setSwitchingSpace(true)
+    setTransitionMessage("Removing the saved Space…")
+    try {
+      const response = await fetch(`/api/environment/spaces/${encodeURIComponent(targetWorldId)}`, { method: "DELETE" })
+      const payload = await response.json().catch(() => ({})) as { error?: string; removedWorldId?: string; spaces?: SpaceSummary[] }
+      if (!response.ok || payload.removedWorldId !== targetWorldId) throw new Error(payload.error ?? `SPACE_REMOVE_${response.status}`)
+      setSpaceSummaries((current) => payload.spaces ?? current.filter((summary) => summary.worldId !== targetWorldId))
+      if (project) {
+        removePreviewEvidenceSnapshot(targetWorldId, project.identity)
+        safeLocalStorageRemove(`williamos:agent-session:${encodeURIComponent(targetWorldId)}:${encodeURIComponent(project.identity)}`)
+      }
+      removeToolRunHistory(window.localStorage, `server:${targetWorldId}`)
+      removeDiffBrowserSnapshot(window.localStorage, `server:${targetWorldId}`)
+      setTransitionMessage(null)
+      return true
+    } catch (error) {
+      setTransitionMessage(error instanceof Error ? error.message : "Space removal failed. Nothing was removed.")
+      return false
+    } finally {
+      setSwitchingSpace(false)
+    }
+  }
+
   const missionWindowKind: Record<WindowId, MissionControlSpaceProjection["windows"][number]["kind"]> = {
     editor: "source", "running-app": "preview", tests: "tests", diff: "diff", terminal: "terminal",
   }
@@ -2635,7 +2666,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       ) : null}
 
       {overlay === "council" ? <div className={spatial.councilHost}>{councilSession ? <BrainCouncilSurface session={councilSession} historical={councilHistorical} busy={councilBusy} error={councilError} onDismiss={dismissCouncil} onAdvisoryAction={(action) => void handleCouncilAction(action)} /> : councilView === "convening" ? <section className={spatial.utilitySurface} aria-label="Brain Council"><header className={spatial.utilityMeta}><span>Brain Council</span><button type="button" className={spatial.utilityButton} onClick={dismissCouncil}>Dismiss</button></header><div className={spatial.utilityBody}><strong>{councilBusy ? "Convening five real advisory perspectives…" : "Council unavailable"}</strong><p className={spatial.muted}>{councilError ?? councilQuestion ?? "Preparing the current question."}</p>{councilError && councilQuestion ? <button type="button" className={spatial.utilityButton} onClick={() => void summonCouncil(councilQuestion)}>Try again</button> : null}</div></section> : <CouncilHistoryBrowser history={councilHistory} loading={councilBusy} error={councilError} onDismiss={dismissCouncil} onSelect={selectCouncilHistory} onNew={() => void summonCouncil(`Challenge the current direction for ${selectedLabel}.`)} />}</div> : null}
-      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => { if (!switchingSpace) setOverlay(null) }} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} transitionMessage={transitionMessage} transitioning={switchingSpace} collectionAvailable={spaceCollectionAvailable} collectionReason={spaceCollectionReason} williamOverview={missionOverview} /> : null}
+      {overlay === "mission-control" ? <MissionControlSurface spaces={missionSpaces} currentSpaceId={worldId} onEnterSpace={(id) => void enterMissionSpace(id)} onDismiss={() => { if (!switchingSpace) setOverlay(null) }} multiSpaceAvailable={multiSpaceAvailable} onCreateSpace={createMissionSpace} onRemoveSpace={removeMissionSpace} transitionMessage={transitionMessage} transitioning={switchingSpace} collectionAvailable={spaceCollectionAvailable} collectionReason={spaceCollectionReason} williamOverview={missionOverview} /> : null}
     </main>
   )
 }

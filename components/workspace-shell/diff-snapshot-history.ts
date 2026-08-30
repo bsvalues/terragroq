@@ -4,6 +4,7 @@ const MAX_STATUS_TEXT = 16_384
 const TRUNCATION_MARKER = "\n… saved browser snapshot truncated …"
 
 type DiffSnapshotStorage = Pick<Storage, "getItem" | "setItem">
+type DiffSnapshotCleanupStorage = Pick<Storage, "removeItem">
 
 export type DiffBrowserSnapshot = Readonly<{
   schemaVersion: 1
@@ -22,6 +23,15 @@ function storageKey(scope: string): string {
     throw new Error("DIFF_SNAPSHOT_SCOPE_INVALID")
   }
   return `williamos:diff-snapshot:v1:${scope}`
+}
+
+export function removeDiffBrowserSnapshot(storage: DiffSnapshotCleanupStorage, scope: string): boolean {
+  try {
+    storage.removeItem(storageKey(scope))
+    return true
+  } catch {
+    return false
+  }
 }
 
 function validateText(value: unknown, maximum: number, error: string): string {
