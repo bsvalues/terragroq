@@ -28,7 +28,7 @@ beforeEach(() => {
 const judgment = {
   recommendation: "Keep the save path revision-bound.",
   rationale: "The selected file has concurrent writers.",
-  basis: [],
+  basis: [{ key: "selected-path", label: "Selected path", value: "src/workspace-shell.tsx" }],
   confidence: 0.84,
   generatedAt: "2026-08-29T09:00:00.000Z",
   basisFingerprint: "f".repeat(64),
@@ -65,6 +65,77 @@ function spaceEnvelope() {
 }
 
 describe("durable William conversation rail", () => {
+  it("opens a focused editable override draft for the exact validated judgment and sends it through William", async () => {
+    const lineBodies: Array<{ worldId: string; text: string }> = []
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { space: unknown }
+        return Response.json({ ...spaceEnvelope(), space: body.space })
+      }
+      if (url === "/api/environment/line" && init?.method === "POST") {
+        lineBodies.push(JSON.parse(String(init.body)) as { worldId: string; text: string })
+        return Response.json({ worldId: "world-a", say: "I have reconsidered it against your reason.", spine: EMPTY_SPINE })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+
+    const override = await screen.findByRole("button", { name: "Override William judgment" })
+    await userEvent.click(override)
+
+    const composer = screen.getByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement
+    const draft = "Override William's recommendation:\n> Keep the save path revision-bound.\n\nReason: "
+    expect(composer.value).toBe(draft)
+    await waitFor(() => expect(document.activeElement).toBe(composer))
+    expect(lineBodies).toEqual([])
+
+    await userEvent.type(composer, "A narrower reservation already prevents concurrent writes.")
+    await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
+
+    await screen.findByText("I have reconsidered it against your reason.")
+    expect(lineBodies).toEqual([{
+      worldId: "world-a",
+      text: `${draft}A narrower reservation already prevents concurrent writes.`,
+    }])
+  })
+
+  it("does not offer Override for fallback system facts without a validated judgment", async () => {
+    const envelope = { ...spaceEnvelope(), judgment: null }
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(envelope)
+      if (url === "/api/environment/judgment" && init?.method === "POST") {
+        return Response.json({ error: "JUDGMENT_UNAVAILABLE" }, { status: 503 })
+      }
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+
+    await screen.findByText(/System fact:/)
+    expect(screen.queryByRole("button", { name: "Override William judgment" })).toBeNull()
+  })
+
+  it("does not offer Override for an unvalidated judgment-shaped value", async () => {
+    const envelope = { ...spaceEnvelope(), judgment: { ...judgment, basis: [] } }
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(envelope)
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+
+    await screen.findByText("Keep the save path revision-bound.")
+    expect(screen.queryByRole("button", { name: "Override William judgment" })).toBeNull()
+  })
+
   it("restores the Space conversation and sends grounded selected-object context through the Line", async () => {
     const lineBodies: Array<{ worldId: string; text: string }> = []
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -98,7 +169,7 @@ describe("durable William conversation rail", () => {
     expect(screen.getByRole("dialog", { name: "The Line" })).toBeTruthy()
   })
 
-  it("keeps the owner turn visible and gives a useful retry state when inference fails", async () => {
+  it("keeps an edited override draft visible and gives a useful retry state when inference fails", async () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
@@ -114,15 +185,15 @@ describe("durable William conversation rail", () => {
     }))
 
     render(<WorkspaceShell />)
-    await screen.findByRole("textbox", { name: "Message William" })
-    fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
-    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
-    await userEvent.type(await screen.findByRole("textbox", { name: "Message William" }), "Do not lose this question")
+    await userEvent.click(await screen.findByRole("button", { name: "Override William judgment" }))
+    const composer = screen.getByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement
+    await userEvent.type(composer, "Do not lose this reason")
+    const exactDraft = composer.value
     await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
 
-    await waitFor(() => expect(screen.getAllByText("Do not lose this question")).toHaveLength(2))
+    await screen.findByText((_content, element) => element?.tagName === "P" && element.textContent === exactDraft)
     expect((await screen.findByText(/INFERENCE_UNAVAILABLE.*question is still here/i)).textContent).toContain("INFERENCE_UNAVAILABLE")
-    expect((screen.getByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement).value).toBe("Do not lose this question")
+    expect((screen.getByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement).value).toBe(exactDraft)
   })
 
   it("persists the exact selected context first and rejects an inference reply after that context changes", async () => {
