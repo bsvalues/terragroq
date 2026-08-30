@@ -184,7 +184,7 @@ describe("Experience V2 selected-file Review", () => {
     expect(screen.queryByRole("heading", { name: /Review report/ })).toBeNull()
   })
 
-  it("routes a projected Reviewer back through its exact read-only Review path", async () => {
+  it("selects a projected Reviewer as the durable agent object instead of reopening independent file Review", async () => {
     vi.stubGlobal("fetch", baseFetch(() => stream(
       { type: "session", sessionId: SESSION_ID, resumed: false }, resultEvent("First report"), { type: "done", code: 0, reason: null },
     )))
@@ -196,9 +196,116 @@ describe("Experience V2 selected-file Review", () => {
     fireEvent.click(screen.getByRole("tab", { name: "other.ts" }))
     fireEvent.click(screen.getByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/ }))
 
-    expect(screen.getByText("Review · src/app.ts")).toBeTruthy()
-    expect(screen.getByRole("textbox", { name: "Review focus" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Talk" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Redirect" })).toBeTruthy()
+    expect(screen.queryByRole("textbox", { name: "Review focus" })).toBeNull()
     expect(screen.queryByRole("textbox", { name: "The Line" })).toBeNull()
+  })
+
+  it("talks to the exact completed Reviewer through its immutable read-only path and restores the same transcript", async () => {
+    let reviewCalls = 0
+    const fetcher = baseFetch(() => {
+      reviewCalls += 1
+      return reviewCalls === 1
+        ? stream(
+          { type: "session", sessionId: SESSION_ID, resumed: false },
+          resultEvent("First report"),
+          { type: "done", code: 0, reason: null },
+        )
+        : stream(
+          { type: "session", sessionId: SESSION_ID, provider: "Claude", mode: "review", resumed: true },
+          resultEvent("The authorization boundary is unsafe because the owner check occurs too late."),
+          { type: "done", code: 0, reason: null },
+        )
+    })
+    vi.stubGlobal("fetch", fetcher)
+    const first = render(<WorkspaceShell />)
+    await openReview("Check the authorization boundary.")
+    await screen.findByText("First report")
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    fireEvent.click(screen.getByRole("button", { name: "Focus Source" }))
+    fireEvent.click(screen.getByRole("tab", { name: "other.ts" }))
+
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Talk" }))
+    expect(screen.getByText("Reviewer · Claude · src/app.ts · read-only")).toBeTruthy()
+    const line = screen.getByRole("textbox", { name: "The Line" })
+    fireEvent.change(line, { target: { value: "Why is this unsafe?" } })
+    fireEvent.click(screen.getByRole("button", { name: "Send to Reviewer" }))
+
+    expect(await screen.findByText("The authorization boundary is unsafe because the owner check occurs too late.")).toBeTruthy()
+    const agentRequests = fetcher.mock.calls.filter(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
+    expect(JSON.parse(String(agentRequests[1]?.[1]?.body))).toEqual({
+      mode: "review",
+      path: "src/app.ts",
+      focus: "Why is this unsafe?",
+      provider: "cloud",
+      sessionId: SESSION_ID,
+      resume: true,
+    })
+    expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
+    await waitFor(() => {
+      const collection = JSON.parse(String(window.localStorage.getItem("williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion")))
+      expect(collection.sessions).toEqual([expect.objectContaining({
+        sessionId: SESSION_ID,
+        role: "Reviewer",
+        provider: "Claude",
+        reviewPath: "src/app.ts",
+        completedTurns: [
+          expect.objectContaining({ ownerPrompt: "Check the authorization boundary.", finalResult: "First report" }),
+          expect.objectContaining({ ownerPrompt: "Why is this unsafe?", finalResult: "The authorization boundary is unsafe because the owner check occurs too late." }),
+        ],
+      })])
+    })
+
+    first.unmount()
+    render(<WorkspaceShell />)
+    expect(await screen.findByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/ })).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /Builder · Claude/ })).toBeNull()
+  })
+
+  it("preserves a restored Reviewer transcript when exact read-only resume is refused without fallback", async () => {
+    const key = "williamos:agent-session:browser-world:c%3A%2Frepos%2Fterrafusion"
+    const prior = {
+      schemaVersion: 1,
+      sessionId: SESSION_ID,
+      role: "Reviewer",
+      provider: "Claude",
+      assignment: "Review src/app.ts",
+      reviewPath: "src/app.ts",
+      updatedAt: "2026-08-28T12:00:00.000Z",
+      completedTurns: [{ ownerPrompt: "Check authorization.", finalResult: "Saved report", completedAt: "2026-08-28T12:00:00.000Z" }],
+    }
+    window.localStorage.setItem(key, JSON.stringify({ schemaVersion: 3, selectedSessionKey: `Claude:${SESSION_ID}`, sessions: [prior] }))
+    const fetcher = baseFetch(() => Response.json({ error: "THREAD_DESCRIPTOR_MISMATCH" }, { status: 403 }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await screen.findByLabelText("Source content")
+    fireEvent.click(await screen.findByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/ }))
+    fireEvent.click(screen.getByRole("button", { name: "Redirect" }))
+    expect(screen.getByText("Reviewer · Claude · src/app.ts · read-only")).toBeTruthy()
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Recheck the owner boundary." } })
+    fireEvent.click(screen.getByRole("button", { name: "Send to Reviewer" }))
+
+    expect(await screen.findByText("Agent turn unavailable.")).toBeTruthy()
+    const agentRequests = fetcher.mock.calls.filter(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
+    expect(agentRequests).toHaveLength(1)
+    expect(JSON.parse(String(agentRequests[0]?.[1]?.body))).toEqual({
+      mode: "review",
+      path: "src/app.ts",
+      focus: "Recheck the owner boundary.",
+      provider: "cloud",
+      sessionId: SESSION_ID,
+      resume: true,
+    })
+    expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
+    expect(JSON.parse(String(window.localStorage.getItem(key)))).toEqual({
+      schemaVersion: 3,
+      selectedSessionKey: `Claude:${SESSION_ID}`,
+      sessions: [prior],
+    })
+    expect(screen.getByRole("button", { name: /Reviewer · Claude · Review src\/app.ts/ })).toBeTruthy()
   })
 
   it("reviews a restored agent's exact persisted file target instead of the currently selected file", async () => {

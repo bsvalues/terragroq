@@ -1170,9 +1170,10 @@ export function useExperienceAgentSessions({
       if (mode === "review" && isCurrent()) input.onReviewComplete?.(resultText)
       return persistedSession
     } catch (cause) {
-      // A failed resume is no longer evidence that the saved descriptor exists or belongs to this
-      // authenticated owner. Clear it so the next Delegate can start a fresh truthful session.
-      // A user cancellation is different: it does not disprove an already verified descriptor.
+      // A failed mutation-capable resume is no longer evidence that the saved descriptor exists or
+      // belongs to this owner, so Delegate clears it. Read-only Review keeps its historical transcript
+      // as an unverified resume hint; a refusal must not erase already-settled owner-visible review work.
+      // A user cancellation is different: it does not disprove any already verified descriptor.
       const error = cause as Error
       if (!isCurrent()) throw cause
       if (error instanceof AgentTurnCommittedPersistenceError) {
@@ -1183,7 +1184,7 @@ export function useExperienceAgentSessions({
       const terminalResumeRefusal = prior !== null && (error instanceof AgentTargetBindingError || error instanceof AgentStartRefusal
         && (error.status === 401 || error.status === 403 || error.status === 404)
       )
-      if (error?.name !== "AbortError" && terminalResumeRefusal && prior) {
+      if (error?.name !== "AbortError" && terminalResumeRefusal && prior && mode !== "review") {
         const priorKey = sessionKey(prior.provider, prior.sessionId)
         const remaining = sessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
         const remainingSelected = selectedSessionKeyRef.current === priorKey ? null : selectedSessionKeyRef.current
