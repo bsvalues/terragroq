@@ -133,6 +133,100 @@ describe("Experience V2 Mission Control", () => {
     expect(onDismiss).not.toHaveBeenCalled()
   })
 
+  it("re-enters the exact current live Space once from William's persistence inspection action", async () => {
+    const user = userEvent.setup()
+    const onEnterSpace = vi.fn()
+    render(
+      <MissionControlSurface
+        spaces={spaces}
+        currentSpaceId="terrafusion"
+        onEnterSpace={onEnterSpace}
+        onDismiss={vi.fn()}
+        williamOverview={{
+          summary: "Current Space: TerraFusion Build.",
+          attention: "Inspect TerraFusion Build persistence: SPACE_PERSIST_CONFLICT.",
+          attentionAction: {
+            kind: "inspect-current-space-persistence",
+            spaceId: "terrafusion",
+            label: "Inspect TerraFusion Build persistence",
+          },
+          truth: "live",
+        }}
+      />,
+    )
+
+    await user.click(screen.getByRole("button", { name: "Inspect TerraFusion Build persistence" }))
+    expect(onEnterSpace).toHaveBeenCalledOnce()
+    expect(onEnterSpace).toHaveBeenCalledWith("terrafusion")
+    expect(screen.getByText("Inspect TerraFusion Build persistence: SPACE_PERSIST_CONFLICT.")).toBeTruthy()
+  })
+
+  it("disables the persistence inspection action during a Space transition", () => {
+    render(
+      <MissionControlSurface
+        spaces={spaces}
+        currentSpaceId="terrafusion"
+        onEnterSpace={vi.fn()}
+        onDismiss={vi.fn()}
+        transitioning
+        williamOverview={{
+          summary: "Current Space: TerraFusion Build.",
+          attention: "Inspect TerraFusion Build persistence: SPACE_PERSIST_CONFLICT.",
+          attentionAction: {
+            kind: "inspect-current-space-persistence",
+            spaceId: "terrafusion",
+            label: "Inspect TerraFusion Build persistence",
+          },
+          truth: "live",
+        }}
+      />,
+    )
+
+    expect((screen.getByRole("button", { name: "Inspect TerraFusion Build persistence" }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it.each([
+    ["foreign target", "research"],
+    ["missing target", "missing"],
+  ])("rejects a %s persistence action while preserving its attention prose", (_case, spaceId) => {
+    render(
+      <MissionControlSurface
+        spaces={spaces}
+        currentSpaceId="terrafusion"
+        onEnterSpace={vi.fn()}
+        onDismiss={vi.fn()}
+        williamOverview={{
+          summary: "Current Space: TerraFusion Build.",
+          attention: "Persistence needs inspection.",
+          attentionAction: {
+            kind: "inspect-current-space-persistence",
+            spaceId,
+            label: "Inspect persistence",
+          },
+          truth: "live",
+        }}
+      />,
+    )
+
+    expect(screen.queryByRole("button", { name: "Inspect persistence" })).toBeNull()
+    expect(screen.getByText("Persistence needs inspection.")).toBeTruthy()
+  })
+
+  it("keeps collection-only attention as prose without manufacturing an action", () => {
+    render(
+      <MissionControlSurface
+        spaces={spaces}
+        currentSpaceId="terrafusion"
+        onEnterSpace={vi.fn()}
+        onDismiss={vi.fn()}
+        williamOverview={{ summary: "Current Space: TerraFusion Build.", attention: "Inspect Space collection: unavailable.", truth: "live" }}
+      />,
+    )
+
+    expect(screen.getByText("Inspect Space collection: unavailable.")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /Inspect Space collection/i })).toBeNull()
+  })
+
   it("labels inactive projections as saved state with unknown agent activity", () => {
     render(<MissionControlSurface spaces={spaces} currentSpaceId="terrafusion" onEnterSpace={vi.fn()} onDismiss={vi.fn()} />)
     const research = screen.getByRole("button", { name: "Enter Research & Evidence" })

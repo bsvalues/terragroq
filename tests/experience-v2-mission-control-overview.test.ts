@@ -82,6 +82,55 @@ describe("Mission Control real overview", () => {
     expect(previewOnly.summary).not.toContain("One visible acceptance condition")
   })
 
+  it("derives one inspection action only for the exact current live Space persistence failure", () => {
+    const overview = deriveMissionControlOverview({
+      spaces: [
+        { ...space("alpha", "Alpha", "2026-08-29T10:00:00.000Z"), state: "live" },
+        space("beta", "Beta", "2026-08-29T09:00:00.000Z"),
+      ],
+      currentSpaceId: "alpha",
+      currentSpaceJudgment: null,
+      collectionAvailable: true,
+      collectionReason: null,
+      persistence: { state: "failed", error: "SPACE_PERSIST_CONFLICT" },
+    })
+
+    expect(overview.attentionAction).toEqual({
+      kind: "inspect-current-space-persistence",
+      spaceId: "alpha",
+      label: "Inspect Alpha persistence",
+    })
+    expect(overview.attention).toBe("Inspect Alpha persistence: SPACE_PERSIST_CONFLICT.")
+  })
+
+  it("omits inspection actions for foreign, non-live, and collection-only attention", () => {
+    const alpha = space("alpha", "Alpha", "2026-08-29T10:00:00.000Z")
+    const common = {
+      spaces: [alpha],
+      currentSpaceJudgment: null,
+      collectionAvailable: true,
+      collectionReason: null,
+    }
+
+    expect(deriveMissionControlOverview({
+      ...common,
+      currentSpaceId: "foreign",
+      persistence: { state: "failed", error: "SPACE_PERSIST_CONFLICT" },
+    }).attentionAction).toBeUndefined()
+    expect(deriveMissionControlOverview({
+      ...common,
+      currentSpaceId: "alpha",
+      persistence: { state: "failed", error: "SPACE_PERSIST_CONFLICT" },
+    }).attentionAction).toBeUndefined()
+    expect(deriveMissionControlOverview({
+      ...common,
+      currentSpaceId: "alpha",
+      collectionAvailable: false,
+      collectionReason: "SPACE_COLLECTION_UNAVAILABLE",
+      persistence: { state: "saved", error: null },
+    }).attentionAction).toBeUndefined()
+  })
+
   it("does not label a judgment when there is no exact current Space", () => {
     const overview = deriveMissionControlOverview({
       spaces: [space("alpha", "Alpha", "invalid")],

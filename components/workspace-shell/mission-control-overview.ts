@@ -57,5 +57,18 @@ export function deriveMissionControlOverview(input: MissionControlOverviewInput)
     !input.collectionAvailable
       ? `Inspect Space collection: ${input.collectionReason ?? "collection unavailable"}.` : null,
   ].filter((value): value is string => Boolean(value)).join(" ") || null
-  return { summary, attention, truth: "live" }
+  const attentionAction = current?.state === "live" && current.truth === "live"
+    && input.persistence.state === "failed" && input.persistence.error
+    ? {
+      kind: "inspect-current-space-persistence" as const,
+      spaceId: current.id,
+      label: `Inspect ${current.name} persistence`,
+    }
+    : null
+  return {
+    summary,
+    attention,
+    ...(attentionAction ? { attentionAction } : {}),
+    truth: "live",
+  }
 }

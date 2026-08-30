@@ -364,6 +364,32 @@
 .williamCopy > span { overflow: hidden; color: #bbc4b8; font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
 .williamCopy small { color: #849081; font-size: 9px; }
 
+.attentionAction {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid #5a4c39;
+  border-radius: 4px;
+  color: #d4bd94;
+  background: #18140f;
+  font-size: 9px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.attentionAction:hover:not(:disabled),
+.attentionAction:focus-visible {
+  border-color: #a78d65;
+  outline: 2px solid #8c795b;
+  outline-offset: 2px;
+}
+
+.attentionAction:disabled {
+  cursor: not-allowed;
+  color: #756b5b;
+  border-color: #353027;
+  background: #12100d;
+}
+
 .fixtureLabel {
   padding: 4px 7px;
   border: 1px solid #574a37;
