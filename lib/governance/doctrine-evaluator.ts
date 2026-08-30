@@ -13,6 +13,7 @@ type DoctrineRule = Readonly<{
 }>
 
 /** Canonical deterministic Doctrine evaluation shared by actions and transactions. */
+// All callers receive the same Doctrine verdict semantics.
 export function evaluateDoctrine(action: string, rules: readonly DoctrineRule[]): DoctrineVerdict {
   const text = action.toLowerCase()
   const forbidden: DoctrineVerdict["matches"][number][] = []

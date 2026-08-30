@@ -1,4 +1,4 @@
-// All callers share one lifecycle and Doctrine transition engine.
+// Every caller uses the same governed transition checks.
 import { and, desc, eq } from "drizzle-orm"
 
 import { doctrine, eventLog, governanceEvent, workOrder, type AuthorityGrant, type WorkOrder } from "@/lib/db/schema"
