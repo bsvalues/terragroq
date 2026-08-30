@@ -345,7 +345,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [conversation, setConversation] = useState<readonly WilliamConversationEntry[]>([])
   const [williamInput, setWilliamInput] = useState("")
   const [williamRailOpen, setWilliamRailOpen] = useState(false)
-  const [williamRailNarrow, setWilliamRailNarrow] = useState(false)
   const [williamBusy, setWilliamBusy] = useState(false)
   const [williamError, setWilliamError] = useState<string | null>(null)
   const [overlay, setOverlay] = useState<EnvironmentOverlay>(null)
@@ -417,15 +416,6 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   persistenceErrorRef.current = persistenceError
   persistencePendingRef.current = persistencePending
   agentSavedSessionsRef.current = agentSessions.savedSessions
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return
-    const query = window.matchMedia("(max-width: 1040px)")
-    const updateWilliamRailViewport = () => setWilliamRailNarrow(query.matches)
-    updateWilliamRailViewport()
-    query.addEventListener("change", updateWilliamRailViewport)
-    return () => query.removeEventListener("change", updateWilliamRailViewport)
-  }, [])
 
   useEffect(() => {
     if (delegateContext?.kind !== "file" || delegateContext.label === space.selectedPath) return
@@ -2594,7 +2584,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         canOverrideJudgment={Boolean(currentInspectableJudgment)}
         error={williamError}
         open={williamRailOpen}
-        narrow={williamRailNarrow}
+        escapeDismissEnabled={!lineOpen && overlay === null}
         persistenceLabel={savedLabel}
         persistenceError={persistenceError}
         onInput={setWilliamInput}

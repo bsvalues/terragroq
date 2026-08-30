@@ -59,9 +59,11 @@ describe("the replacement root refuses the legacy product model", () => {
 
   it("keeps William present while The Line remains a separate transient input", () => {
     render(<Desk />)
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0)
+    fireEvent.click(screen.getByRole("button", { name: "Open William conversation" }))
     expect(screen.getAllByRole("textbox")).toHaveLength(1)
     expect(screen.getByRole("textbox", { name: "Message William" })).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: /Line/ }))
+    fireEvent.click(screen.getByRole("button", { name: /The Line/ }))
     expect(screen.getAllByRole("textbox")).toHaveLength(2)
     expect(screen.getByRole("textbox", { name: "The Line" })).toBeTruthy()
   })

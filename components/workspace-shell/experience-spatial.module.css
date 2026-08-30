@@ -134,7 +134,7 @@
 .windowLayer {
   position: absolute;
   z-index: 1;
-  inset: 89px 348px 0 0;
+  inset: 89px 0 0;
   overflow: hidden;
 }
 
@@ -190,7 +190,7 @@
 .dock {
   position: absolute;
   z-index: 12000;
-  right: 366px;
+  right: 18px;
   bottom: 18px;
   gap: 5px;
   padding: 5px;
@@ -216,17 +216,21 @@
 
 .williamConversationRail {
   position: absolute;
-  z-index: 11500;
+  z-index: 17000;
   right: 0;
   top: 89px;
   bottom: 0;
-  width: 348px;
+  width: min(382px, calc(100vw - 28px));
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
   border-left: 1px solid #2c352a;
   background: rgb(10 14 10 / 98%);
   box-shadow: -20px 0 60px rgb(0 0 0 / 22%);
+  transform: translateX(102%);
+  transition: transform 180ms ease;
 }
+
+.williamConversationRail[data-open="true"] { transform: translateX(0); }
 
 .williamConversationHeader {
   min-height: 62px;
@@ -244,7 +248,7 @@
 .williamRailClose {
   width: 28px;
   height: 28px;
-  display: none;
+  display: grid;
   place-items: center;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -352,7 +356,49 @@
 .williamRailPersistence,
 .williamRailPersistenceError { padding: 5px 12px 7px; color: #657161; font: 8.5px var(--font-geist-mono), monospace; text-align: right; }
 .williamRailPersistenceError { color: #d79480; }
-.williamDrawerTrigger { display: none; }
+.williamDrawerTrigger {
+  position: absolute;
+  z-index: 12000;
+  right: 18px;
+  bottom: 62px;
+  width: min(330px, calc(100vw - 36px));
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid #465642;
+  border-radius: 7px;
+  color: #d7e3d3;
+  background: rgb(18 24 18 / 94%);
+  box-shadow: 0 12px 36px rgb(0 0 0 / 36%);
+  text-align: left;
+}
+.williamDrawerTrigger:hover,
+.williamDrawerTrigger:focus-visible { border-color: #74886f; background: #182117; }
+.williamDrawerTrigger[aria-expanded="true"] { visibility: hidden; opacity: 0; pointer-events: none; }
+.williamAmbientOrb {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #62765e;
+  border-radius: 50%;
+  color: #d4e3cf;
+  background: #202b1e;
+  font: 700 9px var(--font-geist-mono), monospace;
+}
+.williamAmbientCopy { min-width: 0; display: grid; gap: 2px; }
+.williamAmbientCopy strong { color: #e2e9df; font-size: 10.5px; }
+.williamAmbientCopy small {
+  overflow: hidden;
+  color: #8f9d8b;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .williamOrb {
   width: 38px;
@@ -418,25 +464,7 @@
   .spacePath { display: none; }
   .windowLayer { right: 0; }
   .dock { right: 18px; }
-  .williamConversationRail { z-index: 17000; width: min(370px, calc(100vw - 28px)); transform: translateX(102%); transition: transform 180ms ease; }
-  .williamConversationRail[data-open="true"] { transform: translateX(0); }
-  .williamRailClose { display: grid; }
-  .williamDrawerTrigger {
-    position: absolute;
-    z-index: 12000;
-    right: 18px;
-    bottom: 62px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 10px;
-    border: 1px solid #53654f;
-    border-radius: 6px;
-    color: #d7e3d3;
-    background: #182117;
-    box-shadow: 0 12px 36px rgb(0 0 0 / 36%);
-    font-size: 10px;
-  }
+  .williamConversationRail { z-index: 17000; }
 }
 
 @media (max-width: 720px) {

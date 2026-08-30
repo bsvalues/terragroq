@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -71,6 +71,11 @@ function renderCouncil(currentSession: BrainCouncilSession = session) {
     />,
   )
   return { onDismiss, onAdvisoryAction }
+}
+
+async function openWilliamConversation() {
+  fireEvent.click(await screen.findByRole("button", { name: "Open William conversation" }))
+  return screen.findByRole("complementary", { name: "William conversation" })
 }
 
 describe("Experience V2 Brain Council surface", () => {
@@ -268,9 +273,10 @@ describe("Experience V2 Brain Council surface", () => {
     })
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
+    const conversation = await openWilliamConversation()
     await screen.findByRole("button", { name: "Open Brain Council" })
 
-    fireEvent.click(screen.getByRole("button", { name: "Ask Council" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Council" }))
     await screen.findByText(session.question)
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Brain Council" }))
     fireEvent.click(screen.getByRole("button", { name: "Open Brain Council" }))
@@ -301,8 +307,8 @@ describe("Experience V2 Brain Council surface", () => {
     })
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
-    await screen.findByRole("button", { name: "Ask Council" })
-    fireEvent.click(screen.getByRole("button", { name: "Ask Council" }))
+    const conversation = await openWilliamConversation()
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Council" }))
     await screen.findByText(session.question)
 
     fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
@@ -345,8 +351,8 @@ describe("Experience V2 Brain Council surface", () => {
     })
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
-    await screen.findByRole("button", { name: "Ask Council" })
-    fireEvent.click(screen.getByRole("button", { name: "Ask Council" }))
+    const conversation = await openWilliamConversation()
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Council" }))
     await screen.findByText(session.question)
     fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
     await screen.findByText(/Recording owner direction/)
@@ -383,8 +389,8 @@ describe("Experience V2 Brain Council surface", () => {
     })
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
-    await screen.findByRole("button", { name: "Ask Council" })
-    fireEvent.click(screen.getByRole("button", { name: "Ask Council" }))
+    const conversation = await openWilliamConversation()
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Council" }))
     await screen.findByText(session.question)
 
     fireEvent.click(screen.getByRole("button", { name: "Approve recommendation" }))
