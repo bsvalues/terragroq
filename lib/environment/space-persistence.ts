@@ -39,6 +39,7 @@ export type OwnedSpaceSummary = Readonly<{
   space: SpaceState
   updatedAt: string
 }>
+export type RemoveOwnedProjectSpaceResult = "removed" | "not-found" | "project-mismatch" | "last-space"
 
 /** Opaque, stable browser-fallback namespace bound to one signed-in user and project. */
 export function browserSpaceStorageKey(userId: string, projectIdentity: string): string {
@@ -98,6 +99,11 @@ export interface SpaceWorkingWorldStore {
   listOwnedForProject?(userId: string, projectIdentity: string): Promise<readonly OwnedWorkingWorldRecord[]>
   readOwnedPage?(userId: string, offset: number, limit: number): Promise<readonly OwnedWorkingWorldRecord[]>
   insertOwnedProjectSpace?(userId: string, projectIdentity: string, row: OwnedWorkingWorldRecord): Promise<"created" | "limit">
+  removeOwnedProjectSpace?(
+    userId: string,
+    projectIdentity: string,
+    worldId: string,
+  ): Promise<RemoveOwnedProjectSpaceResult>
   insertOwned(row: OwnedWorkingWorldRecord): Promise<void>
   updateOwned(userId: string, worldId: string, snapshot: string, intent: string, expectedSnapshot: string): Promise<boolean | Date>
 }
@@ -204,6 +210,51 @@ export const databaseSpaceWorkingWorldStore: SpaceWorkingWorldStore = {
         id: row.id, userId: row.userId, intent: row.intent, snapshot: row.snapshot, updatedAt: row.updatedAt,
       })
       return "created" as const
+    })
+  },
+
+  async removeOwnedProjectSpace(userId, projectIdentity, worldId) {
+    return db.transaction(async (transaction) => {
+      // Space creation and removal share one project-scoped lock. This makes the last-Space
+      // invariant true at the mutation boundary even when browser requests race each other.
+      await transaction.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`williamos-space:${userId}:${projectIdentity}`}))`)
+      const targets = await transaction.select({
+        id: workingWorld.id, userId: workingWorld.userId, intent: workingWorld.intent,
+        snapshot: workingWorld.snapshot, updatedAt: workingWorld.updatedAt,
+      }).from(workingWorld)
+        .where(and(eq(workingWorld.userId, userId), eq(workingWorld.id, worldId)))
+        .limit(1)
+      const target = targets[0]
+      if (!target) return "not-found" as const
+      try {
+        const world = validateWorkingWorld(JSON.parse(target.snapshot))
+        if (!world.resources.includes(`${WORKSPACE_ROOT_RESOURCE}${projectIdentity}`)) {
+          return "project-mismatch" as const
+        }
+      } catch {
+        // A corrupt or legacy world cannot be proven to belong to the configured project.
+        return "project-mismatch" as const
+      }
+      // Read the complete owner collection in one statement. OFFSET pagination is unsafe here:
+      // an ordinary concurrent save can reorder rows by updatedAt between pages and make one
+      // project Space appear twice, weakening the last-Space invariant.
+      const ownedRows = await transaction.select({
+        id: workingWorld.id, userId: workingWorld.userId, intent: workingWorld.intent,
+        snapshot: workingWorld.snapshot, updatedAt: workingWorld.updatedAt,
+      }).from(workingWorld)
+        .where(eq(workingWorld.userId, userId))
+      const projectRows = ownedRows.filter((candidate) => {
+        try {
+          return validateWorkingWorld(JSON.parse(candidate.snapshot)).resources.includes(`${WORKSPACE_ROOT_RESOURCE}${projectIdentity}`)
+        } catch {
+          return false
+        }
+      })
+      if (projectRows.length <= 1) return "last-space" as const
+      const removed = await transaction.delete(workingWorld)
+        .where(and(eq(workingWorld.userId, userId), eq(workingWorld.id, worldId)))
+        .returning({ id: workingWorld.id })
+      return removed.length === 1 ? "removed" as const : "not-found" as const
     })
   },
 
@@ -572,6 +623,22 @@ export async function createOwnedProjectSpace(
     : (await store.insertOwned(row), "created" as const)
   if (inserted === "limit") throw new Error("SPACE_LIMIT_REACHED")
   return { worldId, name, space, spine: world.spine, judgment: null, conversation: world.conversation, project: input.project }
+}
+
+/**
+ * Remove one exact owner/project-bound Space. The store owns the atomic count-and-delete so a
+ * concurrent create or remove cannot bypass the invariant that every project retains one Space.
+ */
+export async function removeOwnedProjectSpace(
+  input: Readonly<{ userId: string; project: WorkspaceProject; worldId: string }>,
+  store: SpaceWorkingWorldStore = databaseSpaceWorkingWorldStore,
+): Promise<Readonly<{ removedWorldId: string }>> {
+  if (!store.removeOwnedProjectSpace) throw new Error("SPACE_REMOVAL_UNAVAILABLE")
+  const result = await store.removeOwnedProjectSpace(input.userId, input.project.identity, input.worldId)
+  if (result === "not-found") throw new Error("WORLD_NOT_FOUND")
+  if (result === "project-mismatch") throw new Error("SPACE_PROJECT_MISMATCH")
+  if (result === "last-space") throw new Error("SPACE_LAST_PROJECT_SPACE")
+  return { removedWorldId: input.worldId }
 }
 
 function restoredSpace(world: WorkingWorldSnapshot, configured?: string | null): SpaceState {

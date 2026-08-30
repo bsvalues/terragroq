@@ -50,6 +50,7 @@ export type MissionControlSurfaceProps = Readonly<{
   williamOverview?: MissionControlWilliamOverview | null
   multiSpaceAvailable?: boolean
   onCreateSpace?: (name: string) => Promise<boolean | void>
+  onRemoveSpace?: (spaceId: string) => Promise<boolean | void>
   transitionMessage?: string | null
   transitioning?: boolean
   collectionAvailable?: boolean
@@ -74,11 +75,13 @@ function SpacePreview({
   space,
   current,
   onEnter,
+  onRequestRemove,
   disabled,
 }: {
   space: MissionControlSpaceProjection
   current: boolean
   onEnter: () => void
+  onRequestRemove?: () => void
   disabled?: boolean
 }) {
   const bounds = projectionBounds(space.windows)
@@ -141,7 +144,14 @@ function SpacePreview({
       </span>
   </>
 
-  return <button type="button" className={styles.space} data-current={current} data-state={space.state} onClick={onEnter} disabled={disabled} aria-label={`Enter ${space.name}${current ? ", current Space" : ""}`}>{content}</button>
+  return <div className={styles.spaceSlot}>
+    <button type="button" className={styles.space} data-current={current} data-state={space.state} onClick={onEnter} disabled={disabled} aria-label={`Enter ${space.name}${current ? ", current Space" : ""}`}>{content}</button>
+    {onRequestRemove ? (
+      <button type="button" className={styles.removeSpace} disabled={disabled} onClick={onRequestRemove} aria-label={`Remove ${space.name} Space`}>
+        Remove
+      </button>
+    ) : null}
+  </div>
 }
 
 export function MissionControlSurface({
@@ -152,16 +162,23 @@ export function MissionControlSurface({
   williamOverview,
   multiSpaceAvailable = false,
   onCreateSpace,
+  onRemoveSpace,
   transitionMessage,
   transitioning = false,
   collectionAvailable = true,
   collectionReason = null,
 }: MissionControlSurfaceProps) {
   const dialogRef = useRef<HTMLElement>(null)
+  const removeDialogRef = useRef<HTMLElement>(null)
+  const removeCancelRef = useRef<HTMLButtonElement>(null)
   const [creating, setCreating] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [removeCandidateId, setRemoveCandidateId] = useState<string | null>(null)
+  const [removeError, setRemoveError] = useState<string | null>(null)
+  const [removing, setRemoving] = useState(false)
   const createFlightRef = useRef(false)
+  const removeFlightRef = useRef(false)
   const spaceCount = spaces.length
   const currentLiveSpace = spaces.find((space) => (
     space.id === currentSpaceId && space.state === "live" && space.truth === "live"
@@ -193,18 +210,46 @@ export function MissionControlSurface({
       setSubmitting(false)
     }
   }
+  const removeCandidate = spaces.find((space) => space.id === removeCandidateId) ?? null
+  const confirmRemove = async () => {
+    if (!removeCandidate || !onRemoveSpace || removeFlightRef.current || removeCandidate.id === currentSpaceId) return
+    removeFlightRef.current = true
+    setRemoving(true)
+    setRemoveError(null)
+    try {
+      const removed = await onRemoveSpace(removeCandidate.id)
+      if (removed !== false) setRemoveCandidateId(null)
+    } catch (error) {
+      setRemoveError(error instanceof Error ? error.message : "Space removal failed.")
+    } finally {
+      removeFlightRef.current = false
+      setRemoving(false)
+    }
+  }
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const dialog = dialogRef.current
+    const dialog = removeDialogRef.current ?? dialogRef.current
     const focusable = () => [...(dialog?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])') ?? [])]
-    focusable()[0]?.focus()
+    if (removeCandidateId && removing) removeDialogRef.current?.focus()
+    else if (removeCandidateId) removeCancelRef.current?.focus()
+    else focusable()[0]?.focus()
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !transitioning) {
+      if (event.key === "Escape" && removeCandidateId && !removing) {
+        event.preventDefault()
+        setRemoveCandidateId(null)
+        setRemoveError(null)
+      } else if (event.key === "Escape" && !transitioning && !removeCandidateId) {
         event.preventDefault()
         onDismiss()
       } else if (event.key === "Tab") {
         const items = focusable()
-        if (items.length === 0) return
+        if (items.length === 0) {
+          if (removeCandidateId) {
+            event.preventDefault()
+            removeDialogRef.current?.focus()
+          }
+          return
+        }
         const first = items[0]
         const last = items.at(-1)!
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
@@ -213,7 +258,7 @@ export function MissionControlSurface({
     }
     window.addEventListener("keydown", onKeyDown)
     return () => { window.removeEventListener("keydown", onKeyDown); previous?.focus() }
-  }, [onDismiss, transitioning])
+  }, [onDismiss, removeCandidateId, removing, transitioning])
 
   return (
     <section ref={dialogRef} className={styles.overlay} role="dialog" aria-modal="true" aria-labelledby="mission-control-title">
@@ -224,9 +269,9 @@ export function MissionControlSurface({
         </div>
         <span className={styles.headerActions}>
           <span className={styles.spaceCount}>{spaceCount} {spaceCount === 1 ? "Space" : "Spaces"}</span>
-          <button type="button" className={styles.newSpace} disabled={!multiSpaceAvailable || !onCreateSpace || submitting} onClick={() => setCreating(true)}>New Space</button>
+          <button type="button" className={styles.newSpace} disabled={!multiSpaceAvailable || !onCreateSpace || submitting || Boolean(removeCandidate)} onClick={() => setCreating(true)}>New Space</button>
         </span>
-        <button type="button" className={styles.dismiss} disabled={transitioning} onClick={onDismiss} aria-label="Dismiss Mission Control">
+        <button type="button" className={styles.dismiss} disabled={transitioning || Boolean(removeCandidate)} onClick={onDismiss} aria-label="Dismiss Mission Control">
           <span aria-hidden="true">×</span>
         </button>
       </header>
@@ -239,6 +284,16 @@ export function MissionControlSurface({
           <button type="button" disabled={submitting} onClick={() => setCreating(false)}>Cancel</button>
           {createError ? <span role="alert">{createError}</span> : null}
         </form>
+      ) : null}
+
+      {removeCandidate ? (
+        <section ref={removeDialogRef} tabIndex={-1} className={styles.removeConfirm} role="alertdialog" aria-modal="true" aria-labelledby="mission-remove-title">
+          <strong id="mission-remove-title">Remove {removeCandidate.name}?</strong>
+          <span>This removes its saved layout and conversation context. The current Space stays open.</span>
+          <button type="button" disabled={removing} onClick={() => void confirmRemove()}>{removing ? "Removing…" : "Remove Space"}</button>
+          <button ref={removeCancelRef} type="button" disabled={removing} onClick={() => { setRemoveCandidateId(null); setRemoveError(null) }}>Cancel</button>
+          {removeError ? <span role="alert">{removeError}</span> : null}
+        </section>
       ) : null}
 
       {!multiSpaceAvailable ? <p className={styles.degraded}>New Space is unavailable because server persistence is unavailable. This browser-local Space remains usable.</p> : null}
@@ -257,7 +312,10 @@ export function MissionControlSurface({
             space={space}
             current={space.id === currentSpaceId}
             onEnter={() => onEnterSpace(space.id)}
-            disabled={transitioning}
+            onRequestRemove={multiSpaceAvailable && onRemoveSpace && spaces.length > 1 && space.id !== currentSpaceId
+              ? () => { setCreating(false); setRemoveCandidateId(space.id); setRemoveError(null) }
+              : undefined}
+            disabled={transitioning || removing || Boolean(removeCandidate)}
           />
         ))}
       </main>
@@ -277,7 +335,7 @@ export function MissionControlSurface({
           <button
             type="button"
             className={styles.attentionAction}
-            disabled={transitioning}
+            disabled={transitioning || Boolean(removeCandidate)}
             onClick={() => onEnterSpace(attentionAction.spaceId)}
           >
             {attentionAction.label}

@@ -23,6 +23,7 @@ export type ToolRunTranscript = Readonly<{
 
 type ToolRunEnvelope = Readonly<{ schemaVersion: 1; runs: readonly ToolRunTranscript[] }>
 type ToolRunStorage = Pick<Storage, "getItem" | "setItem">
+type ToolRunCleanupStorage = Pick<Storage, "removeItem">
 export type ToolRunHistoryLoad = Readonly<{ runs: readonly ToolRunTranscript[]; error: "TOOL_RUN_HISTORY_CORRUPT" | null }>
 export type ToolRunHistoryVerdict = Readonly<{ ok: boolean; runs: readonly ToolRunTranscript[]; error: "TOOL_RUN_HISTORY_NOT_SAVED" | null }>
 
@@ -55,6 +56,15 @@ function bytes(value: unknown): number {
 export function toolRunHistoryStorageKey(scope: string): string {
   if (typeof scope !== "string" || scope.length > 500 || !/^(server|browser):\S+$/.test(scope)) throw new Error("TOOL_RUN_SCOPE_INVALID")
   return `williamos:tool-runs:v1:${scope}`
+}
+
+export function removeToolRunHistory(storage: ToolRunCleanupStorage, scope: string): boolean {
+  try {
+    storage.removeItem(toolRunHistoryStorageKey(scope))
+    return true
+  } catch {
+    return false
+  }
 }
 
 function validateToolRunTranscriptShape(raw: unknown, enforceByteLimit: boolean): ToolRunTranscript {
