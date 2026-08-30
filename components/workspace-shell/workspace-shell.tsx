@@ -13,6 +13,7 @@ import { useSelectedFileReview } from "./use-selected-file-review"
 import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
 import { AgentTranscriptHistory } from "./agent-transcript-history"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
+import { ExternalWorkOrderAdmission } from "./external-work-order-admission"
 import { diffReviewInspectorBinding, diffReviewInspectorId, diffReviewInspectorIdentity, encodeDiffReviewInspectorPayload, InspectorSurfaceView, inspectorSurfaceWindowTitle, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
 import { deriveMissionControlOverview } from "./mission-control-overview"
@@ -2531,6 +2532,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       <div className={spatial.objectBar} aria-label="Selected object actions">
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
+          {selectedKind === "space" ? <ExternalWorkOrderAdmission
+            worldId={worldId}
+            persisted={storage === "server" && hydrated && !persistencePending && !persistenceError}
+            className={`${spatial.action} ${spatial.primaryAction}`}
+            onAdmitted={async (admission) => {
+              const admittedWorldId = admission.worldId
+              if (worldRef.current !== admittedWorldId) throw new Error("Work was admitted, but another Space is now selected. Reopen the admitted Space to continue.")
+              const response = await fetch(`/api/environment/space?worldId=${encodeURIComponent(admittedWorldId)}`, { cache: "no-store" })
+              const payload = await response.json().catch(() => null) as SpaceEnvelope | null
+              if (!response.ok || !payload || payload.worldId !== admittedWorldId || !payload.space) {
+                throw new Error("Work was admitted, but the current Space could not be refreshed. Reopen this Space to continue.")
+              }
+              applySpaceEnvelope(payload)
+            }}
+          /> : null}
           {selectedActions.map((action) => (
             <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? diffReviewUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}

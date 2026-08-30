@@ -5,18 +5,13 @@ import { workOrder } from "@/lib/db/schema"
 import type { WorkOrder } from "@/lib/db/schema"
 import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
-import { validateAction } from "@/app/actions/doctrine"
 import {
-  canTransition,
   buildClosureReport,
-  checkApprovalReadiness,
-  requiresExplicitApproval,
   type WoStatus,
 } from "@/lib/work-orders/lifecycle"
-import { checkAgentPermission } from "@/lib/goal/agent-matrix"
-import { createAuthorityGrant } from "@/app/actions/authority"
-import { appendGovernanceEvent } from "@/lib/governance/events"
-import { authorityRank } from "@/lib/goal/taxonomy"
+import type { DoctrineVerdict } from "@/lib/governance/doctrine-evaluator"
+import { transitionWorkOrderInTransaction } from "@/lib/work-orders/governed-transition"
+import { writeAuthorityGrantArtifact } from "@/lib/governance/authority-grant-write"
 import { and, desc, eq } from "drizzle-orm"
 
 /* ------------------------------------------------------------------ */
@@ -134,8 +129,8 @@ export type TransitionResult =
   | {
       ok: false
       reason: string
-      missing?: string[]
-      verdict?: Awaited<ReturnType<typeof validateAction>>
+      missing?: readonly string[]
+      verdict?: DoctrineVerdict
     }
 
 // Governed status transition. Validates the transition graph and enforces the
@@ -147,116 +142,12 @@ export async function transitionWorkOrder(
   opts?: { approveDoctrine?: boolean; grantAuthority?: boolean },
 ): Promise<TransitionResult> {
   const userId = await getUserId()
-  const wo = await requireOwn(id, userId)
-
-  if (!canTransition(wo.status, to)) {
-    return {
-      ok: false,
-      reason: `Illegal transition: ${wo.status} → ${to}`,
-    }
-  }
-
-  // Approval gate (§9.2): a WO may not become AUTHORIZED unless every
-  // precondition is satisfied, AND authority above A1 needs an explicit grant.
-  if (to === "approved") {
-    const readiness = checkApprovalReadiness(wo)
-    if (!readiness.ready) {
-      return {
-        ok: false,
-        reason: "Not ready for authorization",
-        missing: readiness.missing,
-      }
-    }
-    // Agent Permission Matrix (§14): the WO's authority must be permitted for
-    // its assigned agent.
-    if (wo.agent) {
-      const perm = checkAgentPermission(wo.agent, wo.authorityLevel)
-      if (!perm.allowed) {
-        return { ok: false, reason: perm.reason, missing: [perm.reason] }
-      }
-    }
-    if (requiresExplicitApproval(wo.authorityLevel) && !opts?.grantAuthority) {
-      return {
-        ok: false,
-        reason: `Authority ${wo.authorityLevel} requires explicit operator approval to grant`,
-        missing: [`Grant ${wo.authorityLevel} authority explicitly`],
-      }
-    }
-  }
-
-  // Doctrine gate on activation: the work itself must not be forbidden.
-  if (to === "active") {
-    const probe = [wo.goal, wo.scope, wo.title, wo.description]
-      .filter(Boolean)
-      .join(" . ")
-    const verdict = await validateAction(probe)
-    if (verdict.verdict === "forbidden") {
-      return {
-        ok: false,
-        reason: "Activation blocked by doctrine",
-        verdict,
-      }
-    }
-    if (verdict.verdict === "requires_approval" && !opts?.approveDoctrine) {
-      return {
-        ok: false,
-        reason: "Activation requires explicit operator approval",
-        verdict,
-      }
-    }
-  }
-
-  const terminal = to === "closed" || to === "aborted"
-  // On authorization, explicitly grant the requested authority and stamp the
-  // approver — this is the only place authorityGranted is ever set.
-  const granting = to === "approved"
-  await db
-    .update(workOrder)
-    .set({
-      status: to,
-      authorityGranted: granting ? wo.authorityLevel : wo.authorityGranted,
-      approvedBy: granting ? userId : wo.approvedBy,
-      approvedAt: granting ? new Date() : wo.approvedAt,
-      closedAt: terminal ? new Date() : wo.closedAt,
-      completedAt: to === "closed" ? new Date() : wo.completedAt,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(workOrder.id, id), eq(workOrder.userId, userId)))
-
-  // WO-011: authorization above A0 mints a durable AuthorityGrant record — the
-  // WO's authorityGranted field is a display mirror, not the source of truth.
-  // Loops consult the grant registry, so without this record no execute loop runs.
-  if (granting && authorityRank(wo.authorityLevel) > authorityRank("A0_READ_ONLY")) {
-    await createAuthorityGrant({
-      workOrderId: id,
-      grantedTo: wo.agent ?? "operator",
-      authorityLevel: wo.authorityLevel,
-      scope: wo.scope ?? undefined,
-      allowedActions: wo.allowedFiles,
-      blockedActions: wo.forbiddenFiles,
-      reason: `Granted on authorization of ${wo.ref ?? `#${id}`}`,
-    })
-  }
-
-  await appendGovernanceEvent({
-    userId,
-    eventType: granting ? "WO_AUTHORIZED" : "WO_TRANSITION",
-    entityType: "work_order",
-    entityId: id,
-    reason: granting ? `Authorized at ${wo.authorityLevel}` : `${wo.status} → ${to}`,
-    before: { status: wo.status },
-    after: { status: to },
-  })
-  await logEvent({
-    userId,
-    type: granting ? "work_order.authorized" : "work_order.transition",
-    summary: granting
-      ? `${wo.ref ?? `#${id}`}: AUTHORIZED at ${wo.authorityLevel}`
-      : `${wo.ref ?? `#${id}`}: ${wo.status} → ${to}`,
-    register: "work-orders",
-    refId: id,
-  })
-  return { ok: true, status: to }
+  const result = await db.transaction((transaction) => transitionWorkOrderInTransaction({
+    transaction, userId, workOrderId: id, to, now: new Date(),
+    grantAuthority: opts?.grantAuthority, approveDoctrine: opts?.approveDoctrine,
+  }))
+  if (result.ok && result.authorityGrant) await writeAuthorityGrantArtifact(result.authorityGrant)
+  return result.ok ? { ok: true, status: result.status } : result
 }
 
 // Complete or amend the WO contract while it is still a draft/proposed. This is

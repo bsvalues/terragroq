@@ -6,6 +6,7 @@ import { getUserId } from "@/lib/session"
 import { logEvent } from "@/lib/registers/events"
 import { and, desc, eq, ilike, or } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
+import { evaluateDoctrine, type DoctrineVerdict } from "@/lib/governance/doctrine-evaluator"
 
 /* ------------------------------------------------------------------ */
 /* Reads                                                              */
@@ -231,42 +232,15 @@ export async function deleteDoctrine(id: number) {
 /* Enforcement                                                        */
 /* ------------------------------------------------------------------ */
 
-export type DoctrineVerdict = {
-  verdict: "allowed" | "forbidden" | "requires_approval" | "unspecified"
-  matches: { ref: string | null; title: string; reason: string }[]
-}
+export type { DoctrineVerdict } from "@/lib/governance/doctrine-evaluator"
 
 // Validate a free-text action description against active doctrine. Forbidden
 // wins over requires-approval, which wins over explicitly allowed.
+// This public server action delegates to the same deterministic evaluator used by transactional Work Order activation.
 export async function validateAction(action: string): Promise<DoctrineVerdict> {
   const userId = await getUserId()
   const rules = await getActiveDoctrine(userId)
-  const text = action.toLowerCase()
-
-  const forbidden: DoctrineVerdict["matches"] = []
-  const approval: DoctrineVerdict["matches"] = []
-  const allowed: DoctrineVerdict["matches"] = []
-
-  for (const r of rules) {
-    for (const f of r.forbidden) {
-      if (f && text.includes(f.toLowerCase()))
-        forbidden.push({ ref: r.ref, title: r.title, reason: f })
-    }
-    for (const a of r.requiresApproval) {
-      if (a && text.includes(a.toLowerCase()))
-        approval.push({ ref: r.ref, title: r.title, reason: a })
-    }
-    for (const a of r.allowed) {
-      if (a && text.includes(a.toLowerCase()))
-        allowed.push({ ref: r.ref, title: r.title, reason: a })
-    }
-  }
-
-  if (forbidden.length > 0) return { verdict: "forbidden", matches: forbidden }
-  if (approval.length > 0)
-    return { verdict: "requires_approval", matches: approval }
-  if (allowed.length > 0) return { verdict: "allowed", matches: allowed }
-  return { verdict: "unspecified", matches: [] }
+  return evaluateDoctrine(action, rules)
 }
 
 /* ------------------------------------------------------------------ */
