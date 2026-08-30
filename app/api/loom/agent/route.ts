@@ -215,7 +215,7 @@ export async function POST(request: Request) {
     const world = await loadOwnedWorkingWorld(session.user.id, previewWorldId)
     if (!world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
     const active = world.space?.windows.find((window) => window.id === world.space!.activeWindowId)
-    if (!active || active.kind !== "running-app") {
+    if (!active || active.kind !== "running-app" || active.minimized) {
       return Response.json({ error: "PREVIEW_NOT_ACTIVE" }, { status: 409 })
     }
     previewEvidence = await inspectWorkspaceApp(
@@ -407,26 +407,19 @@ export async function POST(request: Request) {
     env,
   })
 
+  // Spawn failures (notably ENOENT) can arrive on the next tick. Attach the listener before doing
+  // anything else so Preview cannot record or publish a durable session in that race window.
+  let earlyChildError: Error | null = null
+  let deliverChildError: ((error: Error) => void) | null = null
+  child.on("error", (error) => {
+    const normalized = error instanceof Error ? error : new Error("AGENT_UNAVAILABLE")
+    if (deliverChildError) deliverChildError(normalized)
+    else earlyChildError = normalized
+  })
+
   // The prompt is passed as an argument, but --print still waits on stdin and then fails the turn.
   // Closing it immediately tells the CLI there is nothing coming.
   child.stdin.end()
-
-  if (previewMode) {
-    try {
-      await recordLoomStart({
-        userId: session.user.id,
-        kind: "agent",
-        subject: sessionId!,
-        metadata: {
-          provider: provider.id, external: provider.external, metered: provider.metered, resumed: resuming,
-          mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint,
-        },
-      })
-    } catch {
-      child.kill()
-      return Response.json({ error: "PREVIEW_SESSION_IDENTITY_NOT_DURABLE" }, { status: 503 })
-    }
-  }
 
   let settled = false
   let terminate: ((reason: "TIMEOUT" | "CANCELLED") => void) | null = null
@@ -434,14 +427,16 @@ export async function POST(request: Request) {
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      let timer: ReturnType<typeof setTimeout> | null = null
+      let previewIdentityEstablished = false
       const send = (event: Record<string, unknown>) => {
         try { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)) } catch { /* reader gone */ }
       }
       const finish = (event: Record<string, unknown>) => {
         if (settled) return
         settled = true
-        clearTimeout(timer)
-        if (sessionId) {
+        if (timer) clearTimeout(timer)
+        if (sessionId && (!previewMode || previewIdentityEstablished)) {
           void recordLoomEnd({
             userId: session.user.id,
             kind: "agent",
@@ -469,7 +464,12 @@ export async function POST(request: Request) {
         child.kill()
       }
 
-      if (!forkMode) {
+      deliverChildError = (error) => finish(previewMode
+        ? { type: "done", reason: "AGENT_UNAVAILABLE", code: null }
+        : { type: "done", reason: String(error?.message ?? "AGENT_UNAVAILABLE") })
+      if (earlyChildError) queueMicrotask(() => deliverChildError?.(earlyChildError!))
+
+      if (!forkMode && !previewMode) {
         send({
           type: "session", sessionId, resumed: resuming,
           ...(previewMode ? { provider: "Claude", mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint } : {}),
@@ -495,7 +495,7 @@ export async function POST(request: Request) {
         })
       }
 
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         terminate?.("TIMEOUT")
       }, AGENT_TIMEOUT_MS)
 
@@ -508,6 +508,11 @@ export async function POST(request: Request) {
         if (!line.trim() || settled) return
         let event: Record<string, unknown>
         try { event = JSON.parse(line) as Record<string, unknown> } catch {
+          if (previewMode) {
+            finish({ type: "done", reason: "PREVIEW_STREAM_INVALID", code: null })
+            child.kill()
+            return
+          }
           if (forkMode && !sessionId) {
             finish({ type: "done", reason: "FORK_SESSION_ID_REQUIRED", code: null })
             child.kill()
@@ -548,13 +553,52 @@ export async function POST(request: Request) {
           sessionId = childSessionId
           send({ type: "session", sessionId: childSessionId, provider: "Claude", mode: "fork", resumed: false, forkedFrom: forkSourceId })
         }
-        if (previewMode && event.type === "result") {
-          if (previewResultEvent) {
-            finish({ type: "done", reason: "PREVIEW_STREAM_INVALID", code: null })
-            child.kill()
+        if (previewMode) {
+          if (!previewIdentityEstablished) {
+            if (event.type !== "system" || event.subtype !== "init") {
+              finish({ type: "done", reason: "PREVIEW_SESSION_INIT_REQUIRED", code: null })
+              child.kill()
+              return
+            }
+            if (event.session_id !== sessionId) {
+              finish({ type: "done", reason: "PREVIEW_SESSION_ID_INVALID", code: null })
+              child.kill()
+              return
+            }
+            try {
+              await recordLoomStart({
+                userId: session.user.id,
+                kind: "agent",
+                subject: sessionId!,
+                metadata: {
+                  provider: provider.id, external: provider.external, metered: provider.metered, resumed: resuming,
+                  mode: "preview", worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint,
+                },
+              })
+            } catch {
+              finish({ type: "done", reason: "PREVIEW_SESSION_IDENTITY_NOT_DURABLE", code: null })
+              child.kill()
+              return
+            }
+            if (settled) return
+            previewIdentityEstablished = true
+            send({
+              type: "session", sessionId, resumed: resuming, provider: "Claude", mode: "preview",
+              worldId: previewWorldId, evidenceFingerprint: previewEvidence!.fingerprint,
+            })
             return
           }
-          previewResultEvent = event
+          if (event.type === "result") {
+            if (previewResultEvent) {
+              finish({ type: "done", reason: "PREVIEW_STREAM_INVALID", code: null })
+              child.kill()
+              return
+            }
+            previewResultEvent = event
+            return
+          }
+          // Preview is intentionally grounded only in the canonical terminal result. Assistant,
+          // tool, raw, and diagnostic provider payloads are never exposed through this surface.
           return
         }
         send({ type: "event", event })
@@ -567,17 +611,17 @@ export async function POST(request: Request) {
           for (const line of lines) await forwardLine(line)
         })
       })
-      child.stderr.on("data", (chunk: Buffer) => { if (!forkMode || sessionId) send({ type: "stderr", text: chunk.toString("utf8") }) })
-      child.on("error", (error) => finish({ type: "done", reason: String(error?.message ?? "AGENT_UNAVAILABLE") }))
+      child.stderr.on("data", (chunk: Buffer) => { if (!previewMode && (!forkMode || sessionId)) send({ type: "stderr", text: chunk.toString("utf8") }) })
       child.on("close", (code) => {
         const tail = buffer
         buffer = ""
         outputQueue = outputQueue.then(() => forwardLine(tail)).then(async () => {
           if (forkMode && !sessionId) finish({ type: "done", reason: "FORK_SESSION_ID_REQUIRED", code: null })
+          else if (previewMode && !previewIdentityEstablished) finish({ type: "done", reason: "PREVIEW_SESSION_INIT_REQUIRED", code: null })
           else if (previewMode && code === 0 && previewResultEvent) {
             const currentWorld = await loadOwnedWorkingWorld(session.user.id, previewWorldId!)
             const currentActive = currentWorld?.space?.windows.find((window) => window.id === currentWorld.space!.activeWindowId)
-            if (!currentActive || currentActive.kind !== "running-app") {
+            if (!currentActive || currentActive.kind !== "running-app" || currentActive.minimized) {
               finish({ type: "done", reason: "PREVIEW_CONTEXT_STALE", code: null })
               return
             }

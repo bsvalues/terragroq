@@ -88,11 +88,11 @@ describe("Preview debugger route", () => {
     expect(groundedPrompt).toContain("DOM unavailable; console unavailable; network unavailable")
     expect(groundedPrompt).not.toContain("attacker.test")
     expect(groundedPrompt).not.toContain("Fake")
-    expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "system", subtype: "init", session_id: sessionId })}\n`))
+    await vi.waitFor(() => expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
       userId: "owner-1", subject: sessionId,
       metadata: expect.objectContaining({ provider: "cloud", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint }),
-    }))
-
+    })))
     child.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "The runtime is reachable." })}\n`))
     child.emit("close", 0)
     const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
@@ -107,6 +107,16 @@ describe("Preview debugger route", () => {
     expect(seams.inspectWorkspaceApp).not.toHaveBeenCalled()
     expect(seams.spawn).not.toHaveBeenCalled()
     expect(seams.requireWorkContext).not.toHaveBeenCalled()
+  })
+
+  it("refuses a minimized running-app at start", async () => {
+    seams.loadOwnedWorkingWorld.mockResolvedValueOnce({
+      space: { activeWindowId: "workspace-running-app", windows: [{ id: "workspace-running-app", kind: "running-app", minimized: true }] },
+    })
+    const response = await POST(request({ mode: "preview", provider: "cloud", worldId: "world-a", prompt: "Diagnose." }))
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "PREVIEW_NOT_ACTIVE" })
+    expect(seams.spawn).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -136,6 +146,11 @@ describe("Preview debugger route", () => {
     const response = await POST(request({
       mode: "preview", provider: "cloud", worldId: "world-a", prompt: "Diagnose.", sessionId, resume: false,
     }))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "system", subtype: "init", session_id: sessionId })}\n`))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({
+      type: "assistant", session_id: sessionId,
+      message: { content: [{ type: "text", text: "STALE ANSWER" }] },
+    })}\n`))
     child.stdout.emit("data", Buffer.from(`${JSON.stringify({
       type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Now stale",
     })}\n`))
@@ -146,6 +161,55 @@ describe("Preview debugger route", () => {
       { type: "session", sessionId, resumed: false, provider: "Claude", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint },
       { type: "done", reason: "PREVIEW_CONTEXT_STALE", code: null },
     ])
-    expect(events.some((event) => JSON.stringify(event).includes("Now stale"))).toBe(false)
+    expect(events.some((event) => /Now stale|STALE ANSWER/.test(JSON.stringify(event)))).toBe(false)
+  })
+
+  it("materializes no session or receipt when the Claude binary cannot spawn", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const responsePromise = POST(request({ mode: "preview", provider: "cloud", worldId: "world-a", prompt: "Diagnose.", sessionId, resume: false }))
+    const response = await responsePromise
+    child.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }))
+    child.emit("close", -1)
+
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events).toEqual([{ type: "done", reason: "AGENT_UNAVAILABLE", code: null }])
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
+
+  it("materializes no session or receipt when Claude refuses before exact init", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request({ mode: "preview", provider: "cloud", worldId: "world-a", prompt: "Diagnose.", sessionId, resume: false }))
+    child.stderr.emit("data", Buffer.from("Authentication token rejected"))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({
+      type: "result", subtype: "error", is_error: true, session_id: sessionId, result: "Authentication required",
+    })}\n`))
+    child.emit("close", 1)
+
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events).toEqual([{ type: "done", reason: "PREVIEW_SESSION_INIT_REQUIRED", code: null }])
+    expect(JSON.stringify(events)).not.toMatch(/Authentication required|Authentication token rejected/)
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
+
+  it("fails terminal CAS when the active running-app becomes minimized", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    seams.loadOwnedWorkingWorld
+      .mockResolvedValueOnce({ space: { activeWindowId: "workspace-running-app", windows: [{ id: "workspace-running-app", kind: "running-app", minimized: false }] } })
+      .mockResolvedValueOnce({ space: { activeWindowId: "workspace-running-app", windows: [{ id: "workspace-running-app", kind: "running-app", minimized: true }] } })
+    const response = await POST(request({ mode: "preview", provider: "cloud", worldId: "world-a", prompt: "Diagnose.", sessionId, resume: false }))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "system", subtype: "init", session_id: sessionId })}\n`))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({
+      type: "result", subtype: "success", is_error: false, session_id: sessionId, result: "Now stale",
+    })}\n`))
+    child.emit("close", 0)
+
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events.at(-1)).toEqual({ type: "done", reason: "PREVIEW_CONTEXT_STALE", code: null })
+    expect(JSON.stringify(events)).not.toContain("Now stale")
   })
 })
