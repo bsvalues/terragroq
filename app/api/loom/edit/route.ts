@@ -7,6 +7,8 @@ import { LOCAL_ENDPOINT, LOCAL_MODEL } from "@/lib/loom/providers"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/receipts"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
+import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
@@ -36,7 +38,7 @@ export async function POST(request: Request) {
   const context = await requireWorkContext()
   if (!context.ok) return workContextRefusal(context)
 
-  let body: { path?: unknown; task?: unknown; model?: unknown; test?: unknown }
+  let body: { path?: unknown; task?: unknown; model?: unknown; test?: unknown; intent?: unknown; worldId?: unknown; expectedDiffFingerprint?: unknown }
   try {
     body = await request.json()
   } catch {
@@ -55,6 +57,37 @@ export async function POST(request: Request) {
   }
   if (isSensitiveWorkspacePath(resolved.relative)) {
     return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
+  }
+
+  if (body.intent === "improve-diff") {
+    const worldId = typeof body.worldId === "string" ? body.worldId : ""
+    const expectedDiffFingerprint = typeof body.expectedDiffFingerprint === "string" ? body.expectedDiffFingerprint : ""
+    if (!worldId || worldId.length > 200 || /[\0-\x1f\x7f]/.test(worldId)
+      || !expectedDiffFingerprint || expectedDiffFingerprint.length > 16_384) {
+      return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
+    }
+    const world = await loadOwnedWorkingWorld(session.user.id, worldId)
+    const activeDiff = world?.space?.windows?.find((window) => window.id === "workspace-diff")
+    const activePane = world?.space?.panes?.find((pane) => pane.id === world.space?.activePaneId) ?? null
+    const selectedPath = world?.space?.selection?.filePath ?? activePane?.filePath ?? null
+    if (!world || world.space?.activeWindowId !== "workspace-diff" || !activeDiff || activeDiff.minimized
+      || selectedPath !== resolved.relative) {
+      return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
+    }
+    // The browser supplies only the expected identity; the server derives current Git truth for
+    // the exact persisted selection itself, then rechecks that selection before spawning.
+    const currentDiff = await deriveWorkspaceFileDiff(PROJECT_ROOT, resolved.relative)
+    if (currentDiff.state !== "modified" || currentDiff.fingerprint !== expectedDiffFingerprint) {
+      return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
+    }
+    const terminalWorld = await loadOwnedWorkingWorld(session.user.id, worldId)
+    const terminalDiff = terminalWorld?.space?.windows?.find((window) => window.id === "workspace-diff")
+    const terminalPane = terminalWorld?.space?.panes?.find((pane) => pane.id === terminalWorld.space?.activePaneId) ?? null
+    const terminalPath = terminalWorld?.space?.selection?.filePath ?? terminalPane?.filePath ?? null
+    if (!terminalWorld || terminalWorld.space?.activeWindowId !== "workspace-diff" || !terminalDiff
+      || terminalDiff.minimized || terminalPath !== resolved.relative) {
+      return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
+    }
   }
 
   const model = typeof body.model === "string" && body.model ? body.model : LOCAL_MODEL

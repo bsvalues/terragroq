@@ -61,6 +61,49 @@ describe("Experience V2 developer tools", () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
+  it("publishes only an exact live modified diff identity for mutation actions", async () => {
+    const onLiveDiffContextChange = vi.fn()
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({
+        path: "src/app.ts",
+        state: "modified",
+        fingerprint: "diff-fingerprint-1",
+        untracked: false,
+        diff: "@@ -1 +1 @@\n-old\n+new",
+        status: " M src/app.ts",
+      }))
+      .mockResolvedValueOnce(Response.json({ error: "DIFF_UNAVAILABLE" }, { status: 503 }))
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<DeveloperToolsSurface
+      kind="diff"
+      selectedPath="src/app.ts"
+      onLiveDiffContextChange={onLiveDiffContextChange}
+    />)
+
+    await waitFor(() => expect(onLiveDiffContextChange).toHaveBeenCalledWith({
+      path: "src/app.ts",
+      fingerprint: "diff-fingerprint-1",
+    }))
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }))
+    await waitFor(() => expect(onLiveDiffContextChange).toHaveBeenLastCalledWith(null))
+  })
+
+  it.each([
+    [{ path: "src/app.ts", state: "clean", fingerprint: "clean-fingerprint", untracked: false, diff: "", status: "" }],
+    [{ path: "src/app.ts", state: "untracked", fingerprint: "new-fingerprint", untracked: true, note: "This file is new.", status: "?? src/app.ts" }],
+    [{ path: "other.ts", state: "modified", fingerprint: "foreign-fingerprint", untracked: false, diff: "+foreign", status: " M other.ts" }],
+  ])("does not publish non-actionable Changes truth as a mutation identity", async (payload) => {
+    const onLiveDiffContextChange = vi.fn()
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json(payload)))
+
+    render(<DeveloperToolsSurface kind="diff" selectedPath="src/app.ts" onLiveDiffContextChange={onLiveDiffContextChange} />)
+
+    await waitFor(() => expect(onLiveDiffContextChange).toHaveBeenCalled())
+    expect(onLiveDiffContextChange).not.toHaveBeenCalledWith(expect.objectContaining({ fingerprint: expect.any(String) }))
+    expect(onLiveDiffContextChange).toHaveBeenLastCalledWith(null)
+  })
+
   it("clears stale diff output and makes a governed refresh failure visible", async () => {
     let calls = 0
     const fetcher = vi.fn(() => {
@@ -395,7 +438,7 @@ describe("Experience V2 developer tools", () => {
   })
 
   it("refuses arbitrary commands and extra arguments locally without posting", async () => {
-    const fetcher = vi.fn(async () => Response.json({ operations: projectOperations }))
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ operations: projectOperations }))
     vi.stubGlobal("fetch", fetcher)
     render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
     const input = await screen.findByRole("textbox", { name: "Project terminal command" })

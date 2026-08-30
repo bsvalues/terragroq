@@ -96,6 +96,142 @@ async function openChange(task = "Use the verified helper.") {
 }
 
 describe("Experience V2 selected-file Change", () => {
+  it("runs Improve for the exact live current patch through structured edit and refreshes its outcome", async () => {
+    let diffReads = 0
+    const editStream = deferredNdjson({ type: "started", file: "src/app.ts" })
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile(diffReads > 1 ? "export const improved = true\n" : "export const before = true\n"))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
+        diffReads += 1
+        return Promise.resolve(Response.json({
+          path: "src/app.ts",
+          state: "modified",
+          fingerprint: diffReads === 1 ? "exact-live-diff" : "refreshed-diff",
+          untracked: false,
+          diff: diffReads === 1 ? "-before\n+current" : "-current\n+improved",
+          status: " M src/app.ts",
+        }))
+      }
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(editStream.response)
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    fireEvent.click(screen.getByRole("button", { name: /(?:Focus|Restore) Changes/ }))
+    const improve = await screen.findByRole("button", { name: "Improve" })
+    await waitFor(() => expect((improve as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(improve)
+
+    expect(screen.getByText("Improve current change · src/app.ts")).toBeTruthy()
+    const instruction = screen.getByRole("textbox", { name: "Improve instruction" })
+    fireEvent.change(instruction, { target: { value: "Make this patch clearer." } })
+    fireEvent.click(screen.getByRole("button", { name: "Start improvement" }))
+
+    expect(await screen.findByText("Working on src/app.ts.")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Stop improvement" })).toBeTruthy()
+    editStream.send({ type: "progress", text: "Applying bounded structured edit." })
+    expect(await screen.findByText("Applying bounded structured edit.")).toBeTruthy()
+    editStream.finish({ type: "done", receipt: { success: true } })
+    expect(await screen.findByText("Change applied; source and diff refreshed.")).toBeTruthy()
+    expect(await screen.findByText("+improved", { exact: false })).toBeTruthy()
+    const edit = fetcher.mock.calls.find(([request, options]) => String(request) === "/api/loom/edit" && options?.method === "POST")
+    expect(JSON.parse(String(edit?.[1]?.body))).toEqual({
+      path: "src/app.ts",
+      task: "Make this patch clearer.",
+      intent: "improve-diff",
+      worldId: "browser-world",
+      expectedDiffFingerprint: "exact-live-diff",
+    })
+    expect(fetcher.mock.calls.some(([request]) => String(request) === "/api/environment/line")).toBe(false)
+  })
+
+  it("keeps Improve unavailable until Changes has an exact live modified identity", async () => {
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+        path: "src/app.ts", state: "clean", fingerprint: "clean", untracked: false, diff: "", status: "",
+      }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    fireEvent.click(screen.getByRole("button", { name: /(?:Focus|Restore) Changes/ }))
+
+    const improve = await screen.findByRole("button", { name: "Improve" })
+    expect((improve as HTMLButtonElement).disabled).toBe(true)
+    expect(improve.getAttribute("title")).toContain("live modified patch")
+  })
+
+  it("surfaces the typed server stale refusal and materializes no successful outcome", async () => {
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(Response.json({
+        path: "src/app.ts", state: "modified", fingerprint: "captured-diff", untracked: false,
+        diff: "-before\n+current", status: " M src/app.ts",
+      }))
+      if (url === "/api/loom/edit" && init?.method === "POST") return Promise.resolve(Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    fireEvent.click(screen.getByRole("button", { name: /(?:Focus|Restore) Changes/ }))
+    const improve = await screen.findByRole("button", { name: "Improve" })
+    await waitFor(() => expect((improve as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(improve)
+    fireEvent.change(screen.getByRole("textbox", { name: "Improve instruction" }), { target: { value: "Improve this." } })
+    fireEvent.click(screen.getByRole("button", { name: "Start improvement" }))
+
+    expect(await screen.findByText("Change failed: DIFF_CONTEXT_STALE")).toBeTruthy()
+    expect(screen.queryByText("Change applied; source and diff refreshed.")).toBeNull()
+  })
+
+  it("refuses a captured Improve when the live patch identity changes before submit", async () => {
+    let diffReads = 0
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(workspaceResponse())
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/loom/files?path=src%2Fapp.ts" && !init?.method) return Promise.resolve(selectedFile("export const before = true\n"))
+      if (url === "/api/loom/diff?path=src%2Fapp.ts" && !init?.method) {
+        diffReads += 1
+        return Promise.resolve(Response.json({
+          path: "src/app.ts", state: "modified", fingerprint: `fingerprint-${diffReads}`,
+          untracked: false, diff: `-before\n+version-${diffReads}`, status: " M src/app.ts",
+        }))
+      }
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    fireEvent.click(screen.getByRole("button", { name: /(?:Focus|Restore) Changes/ }))
+    const improve = await screen.findByRole("button", { name: "Improve" })
+    await waitFor(() => expect((improve as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(improve)
+    fireEvent.change(screen.getByRole("textbox", { name: "Improve instruction" }), { target: { value: "Improve this." } })
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }))
+    await screen.findByText("+version-2", { exact: false })
+    fireEvent.click(screen.getByRole("button", { name: "Start improvement" }))
+
+    expect(await screen.findByText("The live change changed. Reopen Improve from the current Changes surface.")).toBeTruthy()
+    expect(fetcher.mock.calls.some(([request]) => String(request) === "/api/loom/edit")).toBe(false)
+  })
   it("settles a successful Change when initially minimized Changes mounts under StrictMode", async () => {
     let fileReads = 0
     let diffReads = 0

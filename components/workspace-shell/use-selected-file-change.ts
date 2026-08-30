@@ -24,6 +24,12 @@ type ActiveChange = {
   reader: ReadableStreamDefaultReader<Uint8Array> | null
 }
 
+export type DiffImproveRequest = Readonly<{
+  intent: "improve-diff"
+  worldId: string
+  expectedDiffFingerprint: string
+}>
+
 const idle: ChangeState = { phase: "settled", running: false, path: null, progress: null, outcome: null }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -60,7 +66,12 @@ export function useSelectedFileChange({
     setState({ phase: "settled", running: false, path: nextPath, progress: null, outcome: null })
   }, [])
 
-  const start = useCallback(async (task: string) => {
+  const refuse = useCallback((message: string) => {
+    if (active.current) return
+    setState({ phase: "settled", running: false, path, progress: null, outcome: message })
+  }, [path])
+
+  const start = useCallback(async (task: string, improve?: DiffImproveRequest, beforeRequest?: () => Promise<void>) => {
     if (active.current) return
     if (!path) {
       setState({ phase: "settled", running: false, path: null, progress: null, outcome: "Select a file before starting Change." })
@@ -128,14 +139,22 @@ export function useSelectedFileChange({
     }
 
     try {
+      if (beforeRequest) {
+        setState((current) => ({ ...current, progress: "Saving current Changes context…" }))
+        await beforeRequest()
+        if (operation.controller.signal.aborted) throw new DOMException("aborted", "AbortError")
+      }
       const response = await fetch("/api/loom/edit", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: operation.path, task }),
+        body: JSON.stringify({ path: operation.path, task, ...(improve ?? {}) }),
         signal: operation.controller.signal,
         cache: "no-store",
       })
-      if (!response.ok || !response.body) throw new Error(`CHANGE_${response.status}`)
+      if (!response.ok || !response.body) {
+        const payload = await response.json().catch(() => null) as { error?: unknown } | null
+        throw new Error(typeof payload?.error === "string" ? payload.error : `CHANGE_${response.status}`)
+      }
       const reader = response.body.getReader()
       operation.reader = reader
       if (operation.stopRequested) {
@@ -172,5 +191,5 @@ export function useSelectedFileChange({
     }
   }, [dirty, path])
 
-  return { ...state, canStop: state.phase === "streaming", start, stop, reset }
+  return { ...state, canStop: state.phase === "streaming", start, stop, reset, refuse }
 }

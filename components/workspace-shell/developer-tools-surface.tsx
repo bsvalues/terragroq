@@ -7,6 +7,7 @@ import { loadDiffBrowserSnapshot, persistDiffBrowserSnapshot } from "./diff-snap
 import { loadToolRunHistory, persistToolRunTranscript, type ToolOutputLine, type ToolRunTranscript } from "./tool-run-history"
 
 type DeveloperToolKind = "tests" | "diff" | "terminal"
+export type LiveDiffContext = Readonly<{ path: string; fingerprint: string }>
 type Operation = Readonly<{ id: string; label: string; intent: string; scope: "project" | "runtime"; mutating: boolean }>
 type ActiveRun = {
   id: string
@@ -37,7 +38,7 @@ function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick
   return run.historyScope === scope && run.historyStorage === storage
 }
 
-export function DeveloperToolsSurface({ kind, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange }: {
+export function DeveloperToolsSurface({ kind, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
   kind: DeveloperToolKind
   selectedPath: string | null
   active?: boolean
@@ -47,6 +48,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
   refreshPath?: string | null
   onRefreshSettled?: (path: string, key: number, result: "refreshed" | "failed") => void
   onRunningChange?: (running: Readonly<{ kind: "tests" | "terminal"; operationId: string }> | null) => void
+  onLiveDiffContextChange?: (context: LiveDiffContext | null) => void
 }) {
   const [diff, setDiff] = useState("")
   const [status, setStatus] = useState("")
@@ -67,14 +69,17 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
   const historyScopeRef = useRef(historyScope)
   const historyStorageRef = useRef(historyStorage)
   const diffController = useRef<AbortController | null>(null)
+  const diffRequestEpoch = useRef(0)
   const completedRefresh = useRef<Readonly<{ key: number; path: string | null }>>({ key: refreshKey, path: null })
   const governedRefresh = useRef<Readonly<{ key: number; path: string }> | null>(null)
   const refreshSettled = useRef(onRefreshSettled)
   const runningChanged = useRef(onRunningChange)
+  const liveDiffContextChanged = useRef(onLiveDiffContextChange)
   const output = useRef<HTMLPreElement>(null)
 
   useEffect(() => { refreshSettled.current = onRefreshSettled }, [onRefreshSettled])
   useEffect(() => { runningChanged.current = onRunningChange }, [onRunningChange])
+  useEffect(() => { liveDiffContextChanged.current = onLiveDiffContextChange }, [onLiveDiffContextChange])
   useEffect(() => {
     if (kind !== "tests" && kind !== "terminal") return
     runningChanged.current?.(running ? { kind, operationId: running } : null)
@@ -83,6 +88,8 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
   useEffect(() => { historyStorageRef.current = historyStorage }, [historyStorage])
 
   const loadDiff = useCallback(async (path = selectedPath, preserveSavedSnapshot = false): Promise<"refreshed" | "failed" | "aborted"> => {
+    const epoch = diffRequestEpoch.current + 1
+    diffRequestEpoch.current = epoch
     diffController.current?.abort()
     const abort = new AbortController()
     diffController.current = abort
@@ -91,19 +98,32 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
       setStatus("")
       setDiffSnapshot(false)
     }
+    liveDiffContextChanged.current?.(null)
     setError(null)
     const query = path ? `?path=${encodeURIComponent(path)}` : ""
     const scope = historyScopeRef.current
     const snapshotStorage = historyStorageRef.current
     try {
       const response = await fetch(`/api/loom/diff${query}`, { cache: "no-store", signal: abort.signal })
-      const payload = await response.json() as { error?: string; diff?: string; status?: string; note?: string; untracked?: boolean }
+      const payload = await response.json() as { error?: string; path?: string; state?: string; fingerprint?: string; diff?: string; status?: string; note?: string; untracked?: boolean }
       if (!response.ok) throw new Error(payload.error ?? `DIFF_${response.status}`)
+      if (diffRequestEpoch.current !== epoch || abort.signal.aborted) return "aborted"
       const nextDiff = payload.untracked ? payload.note ?? "This file is new." : payload.diff ?? ""
       const nextStatus = payload.status ?? ""
       setDiff(nextDiff)
       setStatus(nextStatus)
       setDiffSnapshot(false)
+      const exactPath = path ?? null
+      liveDiffContextChanged.current?.(
+        exactPath !== null
+          && payload.path === exactPath
+          && payload.state === "modified"
+          && typeof payload.fingerprint === "string"
+          && payload.fingerprint.length > 0
+          && payload.fingerprint.length <= 16_384
+          ? { path: exactPath, fingerprint: payload.fingerprint }
+          : null,
+      )
       if (scope) {
         const saved = persistDiffBrowserSnapshot(snapshotStorage ?? window.localStorage, scope, {
           schemaVersion: 1,
@@ -119,6 +139,8 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
       return "refreshed"
     } catch (caught) {
       if ((caught as Error)?.name === "AbortError") return "aborted"
+      if (diffRequestEpoch.current !== epoch || abort.signal.aborted) return "aborted"
+      liveDiffContextChanged.current?.(null)
       setError(caught instanceof Error ? caught.message : "DIFF_UNAVAILABLE")
       return "failed"
     } finally {
@@ -128,6 +150,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
 
   useEffect(() => {
     if (kind !== "diff") return
+    liveDiffContextChanged.current?.(null)
     setDiff("")
     setStatus("")
     setDiffSnapshot(false)
@@ -253,6 +276,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
     if (active) settleRun(active, { status: "interrupted", code: null, reason: "INTERRUPTED" }, [...active.lines, { channel: "meta", text: "INTERRUPTED" }])
     controller.current?.abort()
     diffController.current?.abort()
+    liveDiffContextChanged.current?.(null)
   }, [settleRun])
 
   const run = useCallback(async (operation: string, alias = terminalAlias(operation) ?? operation) => {

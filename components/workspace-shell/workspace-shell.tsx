@@ -7,7 +7,7 @@ import type { SummonedSurface } from "@/lib/environment/summon"
 import { EMPTY_SPINE, type WilliamJudgment, type WorldSpine } from "@/lib/environment/working-world"
 import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
-import { DeveloperToolsSurface } from "./developer-tools-surface"
+import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
 import { type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
 import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
@@ -64,6 +64,7 @@ type ContinueDelegateContext = Readonly<{
 type DelegateContext = StandardDelegateContext | ReviewerDelegateContext | ContinueDelegateContext
 type ForkContext = Readonly<{ sourceSessionId: string; assignment: string; label: string }>
 type ChangeRefresh = Readonly<{ path: string | null; key: number }>
+type CapturedDiffImprove = Readonly<{ path: string; fingerprint: string; worldId: string }>
 type ChangeRefreshWaiter = {
   path: string
   resolve: (result: ChangeRefreshResult) => void
@@ -206,8 +207,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [delegateContext, setDelegateContext] = useState<DelegateContext | null>(null)
   const [forkContext, setForkContext] = useState<ForkContext | null>(null)
   const [changeTarget, setChangeTarget] = useState<string | null>(null)
+  const [changeIntent, setChangeIntent] = useState<"change" | "improve-diff">("change")
+  const [capturedDiffImprove, setCapturedDiffImprove] = useState<CapturedDiffImprove | null>(null)
+  const [liveDiffContext, setLiveDiffContext] = useState<(LiveDiffContext & { worldId: string }) | null>(null)
+  const liveDiffContextRef = useRef<(LiveDiffContext & { worldId: string }) | null>(null)
   const [reviewTarget, setReviewTarget] = useState<string | null>(null)
   const [dirtyPaths, setDirtyPaths] = useState<Readonly<Record<string, boolean>>>({})
+  const dirtyPathsRef = useRef<Readonly<Record<string, boolean>>>({})
   const [changeRefresh, setChangeRefresh] = useState<ChangeRefresh>({ path: null, key: 0 })
   const changeRefreshKey = useRef(0)
   const changeRefreshWaiters = useRef(new Map<number, ChangeRefreshWaiter>())
@@ -920,7 +926,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }, [])
 
   const onSelectedFileDirtyChange = useCallback((path: string, dirty: boolean) => {
-    setDirtyPaths((current) => current[path] === dirty ? current : { ...current, [path]: dirty })
+    setDirtyPaths((current) => {
+      const next = current[path] === dirty ? current : { ...current, [path]: dirty }
+      dirtyPathsRef.current = next
+      return next
+    })
   }, [])
 
   const settleChangeRefresh = useCallback((surface: "editor" | "diff", path: string, key: number, result: ChangeRefreshResult | "failed") => {
@@ -957,6 +967,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const openChange = useCallback(() => {
     if (change.running || review.running) return
     const target = space.selectedPath
+    setChangeIntent("change")
+    setCapturedDiffImprove(null)
     setChangeTarget(target)
     change.reset(target)
     setLineTarget("william")
@@ -968,6 +980,25 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineOpen(true)
     requestAnimationFrame(() => lineRef.current?.focus())
   }, [change.reset, change.running, review.running, space.selectedPath])
+
+  const openDiffImprove = useCallback(() => {
+    if (change.running || review.running || !worldId || !space.selectedPath || space.activeWindowId !== "diff"
+      || dirtyPaths[space.selectedPath] || !liveDiffContext || liveDiffContext.worldId !== worldId
+      || liveDiffContext.path !== space.selectedPath) return
+    const captured = { path: liveDiffContext.path, fingerprint: liveDiffContext.fingerprint, worldId }
+    setChangeIntent("improve-diff")
+    setCapturedDiffImprove(captured)
+    setChangeTarget(captured.path)
+    change.reset(captured.path)
+    setLineTarget("william")
+    setDelegateContext(null)
+    setForkContext(null)
+    setLineMode("change")
+    setLineInput("")
+    setLineReply(null)
+    setLineOpen(true)
+    requestAnimationFrame(() => lineRef.current?.focus())
+  }, [change.reset, change.running, dirtyPaths, liveDiffContext, review.running, space.activeWindowId, space.selectedPath, worldId])
 
   const openReview = useCallback(() => {
     if (change.running || review.running) return
@@ -1165,6 +1196,36 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     if (lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !text
       || lineTarget === "agent" && lineMode === "default" && !delegateContext?.provider) return
     if (lineMode === "change") {
+      if (changeIntent === "improve-diff") {
+        const captured = capturedDiffImprove
+        if (!captured) {
+          change.refuse("The live change changed. Reopen Improve from the current Changes surface.")
+          return
+        }
+        const improveIsCurrent = () => {
+          const current = stateRef.current
+          const live = liveDiffContextRef.current
+          return Boolean(worldRef.current === captured.worldId
+            && current.activeWindowId === "diff" && current.selectedPath === captured.path
+            && !dirtyPathsRef.current[captured.path]
+            && live?.worldId === captured.worldId
+            && live.path === captured.path
+            && live.fingerprint === captured.fingerprint)
+        }
+        if (!improveIsCurrent()) {
+          change.refuse("The live change changed. Reopen Improve from the current Changes surface.")
+          return
+        }
+        void change.start(text, {
+          intent: "improve-diff",
+          worldId: captured.worldId,
+          expectedDiffFingerprint: captured.fingerprint,
+        }, storageRef.current === "server" ? async () => {
+          await persistBarrierRef.current()
+          if (!improveIsCurrent()) throw new Error("DIFF_CONTEXT_STALE")
+        } : undefined)
+        return
+      }
       void change.start(text)
       return
     }
@@ -1348,6 +1409,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction, forkAction] as const
     : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", continueAction, "Delegate", "Council"] as const
+  const improveUnavailableReason = selectedKind === "diff" && (
+    !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+      || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
+  ) ? "Improve needs the exact live modified patch for the saved selected file." : null
   const worldLine = spine.outcomeKey ? ` · ${spine.outcomeKey} · ${spine.execution}` : ""
   const workerLine = spine.worker ? ` · worker: ${spine.worker.lane} lane` : ""
   const williamSafetyFact = persistenceError
@@ -1424,6 +1489,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setJudgment(payload.judgment ?? null)
     setJudgmentError(null)
     setDirtyPaths({})
+    dirtyPathsRef.current = {}
     changeRefreshWaiters.current.clear()
     setChangeRefresh({ path: null, key: changeRefreshKey.current })
     setInspectors([
@@ -1446,6 +1512,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineMode("default")
     setDelegateContext(null)
     setChangeTarget(null)
+    setChangeIntent("change")
+    setCapturedDiffImprove(null)
+    setLiveDiffContext(null)
+    liveDiffContextRef.current = null
     setReviewTarget(null)
     change.reset(null)
     review.reset(null)
@@ -1684,7 +1754,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       openReview()
       return
     }
-    if (selectedKind === "diff" && (action === "Review" || action === "Improve" || action === "Challenge")) {
+    if (selectedKind === "diff" && action === "Improve") {
+      openDiffImprove()
+      return
+    }
+    if (selectedKind === "diff" && (action === "Review" || action === "Challenge")) {
       openLine(`${action} the exact current patch for the selected file.`)
       return
     }
@@ -1848,7 +1922,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
         {selectedKind === "space" && !spaceContinueCandidate ? <span role="status">{continueUnavailableMessage}</span> : null}
@@ -1865,7 +1939,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         </WindowFrame>
         {(["tests", "diff", "terminal"] as const).map((id) => (
           <WindowFrame key={id} id={id} title={windowName[id]} geometry={space.windows[id]} active={space.activeWindowId === id} onActivate={() => activate(id)} onGeometry={(geometry) => updateWindow(id, geometry)} onMinimize={() => minimize(id)} minimizeDisabled={id === "diff" && change.running} minimizeDisabledReason={id === "diff" && change.running ? "Changes cannot be minimized while Change is active" : undefined}>
-            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} selectedPath={space.selectedPath} active={space.activeWindowId === id} historyScope={toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onRunningChange={id === "diff" ? undefined : (running) => setRunningTools((current) => ({ ...current, [id]: running?.operationId ?? null }))} />
+            <DeveloperToolsSurface key={`${worldId ?? "unhydrated"}:${id}`} kind={id} selectedPath={space.selectedPath} active={space.activeWindowId === id} historyScope={toolRunHistoryScope} refreshKey={id === "diff" ? changeRefresh.key : 0} refreshPath={id === "diff" ? changeRefresh.path : null} onRefreshSettled={id === "diff" ? (path, key, result) => settleChangeRefresh("diff", path, key, result) : undefined} onLiveDiffContextChange={id === "diff" ? (context) => setLiveDiffContext((current) => {
+              const next = context && worldId ? { ...context, worldId } : current?.worldId === worldId ? null : current
+              liveDiffContextRef.current = next
+              return next
+            }) : undefined} onRunningChange={id === "diff" ? undefined : (running) => setRunningTools((current) => ({ ...current, [id]: running?.operationId ?? null }))} />
           </WindowFrame>
         ))}
         {inspectors.map((surface) => {
@@ -1909,14 +1987,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
       {lineOpen ? (
         <div className={spatial.lineBackdrop} role="dialog" aria-label="The Line" aria-modal="true" onPointerDown={(event) => { if (event.target === event.currentTarget && !change.running && !review.running) setLineOpen(false) }}>
-          <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? "Change" : lineMode === "review" ? "Review" : lineMode === "fork" ? "Fork session" : "The Line"}>
+          <form className={spatial.line} onSubmit={submitLine} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve current change" : "Change" : lineMode === "review" ? "Review" : lineMode === "fork" ? "Fork session" : "The Line"}>
             <Command size={16} aria-hidden />
-            <div><span className={spatial.lineContext}>{lineMode === "change" ? `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
+            <div><span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ? <output className={spatial.lineReply}>{lineReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}</div>
             <div className={spatial.lineControls}>
               {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider">{delegateContext.kind === "preview" ? <button type="button" className={spatial.lineClose} disabled aria-label="Codex unavailable" title="Preview diagnostic transport is not available for Codex yet.">Codex unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Codex" } : current)}>Codex</button>}<button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
               <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineMode === "fork" ? "Claude fork · source remains unchanged" : reviewerAgentContext ? "Read-only Reviewer session" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
-              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? "Changing" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : delegateContext?.kind === "continue" ? lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
-              {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>Stop change</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (lineMode === "review" && review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
+              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? changeIntent === "improve-diff" ? "Improving" : "Changing" : changeIntent === "improve-diff" ? "Start improvement" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : delegateContext?.kind === "continue" ? lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
+              {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>{changeIntent === "improve-diff" ? "Stop improvement" : "Stop change"}</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (lineMode === "review" && review.running) { if (review.canStop) review.stop(); return } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
             </div>
           </form>
         </div>
