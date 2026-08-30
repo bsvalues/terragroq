@@ -12,6 +12,7 @@ const UNVERIFIED = "323e4567-e89b-42d3-a456-426614174000"
 const COLLISION = "423e4567-e89b-42d3-a456-426614174000"
 
 let liveDiff = { path: "src/app.ts", state: "clean", fingerprint: "clean-diff", untracked: false, diff: "", status: "" }
+let workspaceActiveWindowId: "editor" | null = "editor"
 
 const harness = vi.hoisted(() => ({ controller: null as any }))
 
@@ -30,7 +31,7 @@ function workspaceResponse() {
   const space = {
     ...defaultSpace(),
     selectedPath: "src/app.ts",
-    activeWindowId: "editor" as const,
+    activeWindowId: workspaceActiveWindowId,
     editor: { openFiles: ["src/app.ts"], panes: [{ id: "primary" as const, activePath: "src/app.ts", selection: { anchor: 0, head: 0 } }], activePaneId: "primary" as const },
   }
   return Response.json({
@@ -86,6 +87,7 @@ function projected(sessionId: string, assignment: string, truth: "live" | "resum
 
 beforeEach(() => {
   liveDiff = { path: "src/app.ts", state: "clean", fingerprint: "clean-diff", untracked: false, diff: "", status: "" }
+  workspaceActiveWindowId = "editor"
   const saved = [descriptor(FIRST, "Review src/app.ts"), descriptor(SECOND, "Review src/other.ts"), descriptor(COLLISION, "Review src/app.ts"), descriptor(UNVERIFIED, "Review src/unverified.ts")]
   harness.controller = {
     sessions: [projected(FIRST, "Review src/app.ts"), projected(SECOND, "Review src/other.ts"), projected(COLLISION, "Review src/app.ts"), projected(UNVERIFIED, "Review src/unverified.ts", "resume-unverified")],
@@ -132,6 +134,7 @@ describe("Experience V2 Line durable-session targets", () => {
     const colliding = [FIRST, COLLISION].map((id) => screen.getByRole("button", { name: new RegExp(`Review src/app\\.ts.*${id}`) }))
     expect(new Set(colliding.map((button) => button.getAttribute("aria-label"))).size).toBe(2)
     expect(colliding.every((button) => button.getAttribute("title")?.includes(idFor(button, [FIRST, COLLISION])))).toBe(true)
+    expect(new Set(colliding.map((button) => button.textContent)).size).toBe(2)
     expect(screen.queryByText(/unverified\.ts/)).toBeNull()
   })
 
@@ -246,6 +249,57 @@ describe("Experience V2 Line durable-session targets", () => {
     settle(completed)
     view.rerender(<WorkspaceShell />)
     expect(await screen.findByText("Settled exact continuation.")).toBeTruthy()
+  })
+
+  it("reattaches a pre-init Space Continue to its exact prior session without a second dispatch", async () => {
+    workspaceActiveWindowId = null
+    let settle!: (value: any) => void
+    harness.controller.continueSession = vi.fn(() => new Promise((resolve) => { settle = resolve }))
+    vi.stubGlobal("fetch", fetcher())
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Continue from Space." } })
+    fireEvent.click(screen.getByRole("button", { name: "Continue session" }))
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(FIRST) }))
+
+    expect(screen.getByText("Agent is starting.")).toBeTruthy()
+    expect((screen.getByRole("button", { name: "Session working" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+    expect(harness.controller.continueSession).toHaveBeenCalledTimes(1)
+
+    settle(harness.controller.savedSessions[0])
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue session" })).toBeTruthy())
+  })
+
+  it("reattaches pre-init Reviewer Talk to the exact review session without starting another resume", async () => {
+    let settle!: (value: any) => void
+    harness.controller.runClaudeTurn = vi.fn(() => new Promise((resolve) => { settle = resolve }))
+    vi.stubGlobal("fetch", fetcher())
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+    const reviewerCard = screen.getAllByRole("button", { name: "Reviewer · Claude · Review src/app.ts" })[0]
+    fireEvent.click(reviewerCard)
+    fireEvent.click(screen.getByRole("button", { name: "Talk" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Talk to this Reviewer." } })
+    fireEvent.click(screen.getByRole("button", { name: "Send to Reviewer" }))
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    fireEvent.click(screen.getByRole("button", { name: "Talk" }))
+    expect(screen.getByText("Agent is starting.")).toBeTruthy()
+    expect((screen.getByRole("button", { name: "Session working" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(FIRST) }))
+
+    expect(screen.getByText("Agent is starting.")).toBeTruthy()
+    expect((screen.getByRole("button", { name: "Session working" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+    expect(harness.controller.runClaudeTurn).toHaveBeenCalledTimes(1)
+
+    settle(harness.controller.savedSessions[0])
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue session" })).toBeTruthy())
   })
 
   it("rebinds canonical fingerprints after a successful continuation so the same selected target can continue again", async () => {

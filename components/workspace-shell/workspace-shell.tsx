@@ -148,6 +148,11 @@ function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefine
   }
 }
 
+function resumeSessionKey(context: DelegateContext | null): string | null {
+  if (context?.kind === "continue" || context?.kind === "line-session") return context.sessionKey
+  return context?.kind === "reviewer" ? context.requiredSessionKey : null
+}
+
 function previewEvidenceStorageKey(worldId: string, projectIdentity: string): string {
   return `williamos:preview-evidence:v1:${inspectorId({ kind: worldId, subject: projectIdentity })}`
 }
@@ -245,7 +250,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const [lineContext, setLineContext] = useState<LineContext>(null)
   const [lineMode, setLineMode] = useState<LineMode>("default")
   const [lineTargetPickerOpen, setLineTargetPickerOpen] = useState(false)
-  const [lineSessionInFlightKeys, setLineSessionInFlightKeys] = useState<readonly string[]>([])
+  const [resumeSessionInFlightKeys, setResumeSessionInFlightKeys] = useState<readonly string[]>([])
   const [lineSessionObservedRunningKey, setLineSessionObservedRunningKey] = useState<string | null>(null)
   const [delegateContext, setDelegateContext] = useState<DelegateContext | null>(null)
   const [forkContext, setForkContext] = useState<ForkContext | null>(null)
@@ -1319,7 +1324,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineBusy(true)
     setLineReply(null)
     let agentPresentationIsCurrent: (() => boolean) | null = null
-    let lineSessionDispatchKey: string | null = null
+    let resumeDispatchKey: string | null = null
     try {
       const contextualText = lineTarget === "agent" && delegateContext
         ? `Owner request: ${text}`
@@ -1349,6 +1354,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         const presentationTransitionEpoch = transitionEpochRef.current
         const presentationWorldId = worldRef.current
         const presentationProvider = delegateContext.provider
+        const exactResumeSessionKey = resumeSessionKey(delegateContext)
         let presentationSessionKey: string | null = delegateContext.kind === "continue" || delegateContext.kind === "line-session"
           ? delegateContext.sessionKey
           : reviewerAgentContext ? `Claude:${reviewerAgentContext.sessionId}` : null
@@ -1372,15 +1378,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             || exactDescriptor.role !== delegateContext.role
             || exactDescriptor.assignment !== delegateContext.assignment
             || exactProjection?.truth !== "live"
-            || lineSessionInFlightKeys.includes(delegateContext.sessionKey)
-            || agentSessions.activeSessionIds.includes(delegateContext.sessionKey)
             || lineObjectBindingFingerprint(currentLineObjectBinding()) !== lineObjectBindingFingerprint(delegateContext.objectBinding)) {
             throw new Error("AGENT_LINE_SESSION_STALE")
           }
-          lineSessionDispatchKey = delegateContext.sessionKey
-          setLineSessionInFlightKeys((current) => current.includes(delegateContext.sessionKey)
-            ? current
-            : [...current, delegateContext.sessionKey])
         }
         if (reviewerAgentContext) {
           const exactKey = `Claude:${reviewerAgentContext.sessionId}`
@@ -1390,6 +1390,16 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             || exactSession.reviewPath !== reviewerAgentContext.reviewPath) {
             throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
           }
+        }
+        if (exactResumeSessionKey) {
+          if (resumeSessionInFlightKeys.includes(exactResumeSessionKey)
+            || agentSessions.activeSessionIds.includes(exactResumeSessionKey)) {
+            throw new Error("AGENT_SESSION_ALREADY_RUNNING")
+          }
+          resumeDispatchKey = exactResumeSessionKey
+          setResumeSessionInFlightKeys((current) => current.includes(exactResumeSessionKey)
+            ? current
+            : [...current, exactResumeSessionKey])
         }
         setLineReply(reviewerAgentContext ? "Reviewer is working." : "Agent is working.")
         const promotedPath = delegateContext.provider === "Codex" && delegateContext.kind === "file" ? delegateContext.label : null
@@ -1486,8 +1496,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           : error instanceof DOMException && error.name === "AbortError" ? "Agent turn stopped." : "Agent turn unavailable.")
       }
     } finally {
-      if (lineSessionDispatchKey) {
-        setLineSessionInFlightKeys((current) => current.filter((key) => key !== lineSessionDispatchKey))
+      if (resumeDispatchKey) {
+        setResumeSessionInFlightKeys((current) => current.filter((key) => key !== resumeDispatchKey))
       }
       if (!agentPresentationIsCurrent || agentPresentationIsCurrent()) setLineBusy(false)
     }
@@ -1533,7 +1543,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     }
     return worldId ? { kind: "space", worldId, revision: space.revision } : null
   }
-  const verifiedLineSessionTargets = agentSessions.collectionState === "available"
+  const eligibleLineSessionTargets = agentSessions.collectionState === "available"
     ? agentSessions.savedSessions.flatMap((descriptor) => {
       const sessionKey = lineSessionKey(descriptor.provider, descriptor.sessionId)
       const projection = agentSessions.sessions.find((candidate) => candidate.id === sessionKey)
@@ -1544,49 +1554,68 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         descriptor,
         projection,
         sessionKey,
-        label: `${descriptor.role} · ${descriptor.provider} · ${descriptor.assignment} · …${descriptor.sessionId.slice(-6)}`,
       }]
     })
     : []
+  const verifiedLineSessionTargets = eligibleLineSessionTargets.map((target) => {
+    const compactIdentity = target.descriptor.sessionId.slice(-6)
+    const collides = eligibleLineSessionTargets.some((candidate) => candidate.sessionKey !== target.sessionKey
+      && candidate.descriptor.role === target.descriptor.role
+      && candidate.descriptor.provider === target.descriptor.provider
+      && candidate.descriptor.assignment === target.descriptor.assignment
+      && candidate.descriptor.sessionId.slice(-6) === compactIdentity)
+    return {
+      ...target,
+      label: `${target.descriptor.role} · ${target.descriptor.provider} · ${target.descriptor.assignment} · ${collides ? target.descriptor.sessionId : `…${compactIdentity}`}`,
+    }
+  })
+  const currentResumeSessionKey = resumeSessionKey(delegateContext)
+  const currentResumeSessionIsActive = Boolean(lineTarget === "agent" && currentResumeSessionKey
+    && (resumeSessionInFlightKeys.includes(currentResumeSessionKey)
+      || agentSessions.activeSessionIds.includes(currentResumeSessionKey)))
 
   useEffect(() => {
-    if (!lineOpen || lineTarget !== "agent" || delegateContext?.kind !== "line-session"
-      || worldRef.current !== delegateContext.worldId
-      || transitionEpochRef.current !== delegateContext.transitionEpoch) return
+    if (!lineOpen || lineTarget !== "agent") return
+    const exactSessionKey = resumeSessionKey(delegateContext)
+    if (!exactSessionKey || delegateContext?.kind === "line-session"
+      && (worldRef.current !== delegateContext.worldId
+        || transitionEpochRef.current !== delegateContext.transitionEpoch)) return
     const projection = agentSessions.sessions.find((candidate) => (
-      candidate.id === delegateContext.sessionKey && candidate.truth === "live"
+      candidate.id === exactSessionKey && candidate.truth === "live"
     ))
     if (!projection) return
-    if (lineSessionInFlightKeys.includes(delegateContext.sessionKey)
-      && !agentSessions.activeSessionIds.includes(delegateContext.sessionKey)) {
+    if (resumeSessionInFlightKeys.includes(exactSessionKey)
+      && !agentSessions.activeSessionIds.includes(exactSessionKey)) {
       setLineReply("Agent is starting.")
       return
     }
-    if (agentSessions.activeSessionIds.includes(delegateContext.sessionKey)) {
-      setLineSessionObservedRunningKey(delegateContext.sessionKey)
+    if (agentSessions.activeSessionIds.includes(exactSessionKey)) {
+      setLineSessionObservedRunningKey(exactSessionKey)
       setLineReply(projection.presentation ?? "Agent is working.")
       return
     }
     if (projection.lastResult) {
-      if (lineSessionObservedRunningKey === delegateContext.sessionKey) {
-        const descriptor = agentSessions.savedSessions.find((candidate) => (
-          lineSessionKey(candidate.provider, candidate.sessionId) === delegateContext.sessionKey
-        ))
-        if (descriptor) {
-          setDelegateContext((current) => current?.kind === "line-session" && current.sessionKey === delegateContext.sessionKey
-            ? {
-              ...current,
-              descriptorFingerprint: lineSessionDescriptorFingerprint(descriptor),
-              collectionFingerprint: lineSessionCollectionFingerprint(agentSessions.savedSessions),
-            }
-            : current)
+      if (lineSessionObservedRunningKey === exactSessionKey) {
+        if (delegateContext?.kind === "line-session") {
+          const descriptor = agentSessions.savedSessions.find((candidate) => (
+            lineSessionKey(candidate.provider, candidate.sessionId) === exactSessionKey
+          ))
+          if (descriptor) {
+            setDelegateContext((current) => current?.kind === "line-session" && current.sessionKey === exactSessionKey
+              ? {
+                ...current,
+                descriptorFingerprint: lineSessionDescriptorFingerprint(descriptor),
+                collectionFingerprint: lineSessionCollectionFingerprint(agentSessions.savedSessions),
+              }
+              : current)
+          }
         }
         setLineSessionObservedRunningKey(null)
       }
       setLineReply(projection.lastResult)
       setLineBusy(false)
     }
-  }, [agentSessions.activeSessionIds, agentSessions.savedSessions, agentSessions.sessions, delegateContext, lineOpen, lineSessionInFlightKeys, lineSessionObservedRunningKey, lineTarget])
+  }, [agentSessions.activeSessionIds, agentSessions.savedSessions, agentSessions.sessions, delegateContext, lineOpen, lineSessionObservedRunningKey, lineTarget, resumeSessionInFlightKeys])
 
   function selectLineSessionTarget(target: (typeof verifiedLineSessionTargets)[number]) {
     const capturedWorldId = worldRef.current
@@ -1618,7 +1647,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     })
     const active = agentSessions.activeSessionIds.includes(target.sessionKey)
     setLineSessionObservedRunningKey(active ? target.sessionKey : null)
-    setLineReply(lineSessionInFlightKeys.includes(target.sessionKey) && !active
+    setLineReply(resumeSessionInFlightKeys.includes(target.sessionKey) && !active
       ? "Agent is starting."
       : active ? target.projection.presentation ?? "Agent is working."
       : target.projection.lastResult ?? "Verified durable session selected.")
@@ -1911,7 +1940,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       const projected = agentSessions.sessions.find((session) => session.id === key)
       if (!projected || !agentSessions.selectSession(key)) return
       setFocusedAgentId(key)
-      if (agentSessions.activeSessionIds.includes(key)) {
+      const starting = resumeSessionInFlightKeys.includes(key)
+      if (agentSessions.activeSessionIds.includes(key) || starting) {
         const reviewerContext = reviewerDelegateContext(projected)
         const local = projected.providerLabel === "Local"
         setDelegateContext(reviewerContext
@@ -1930,7 +1960,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setLineTargetPickerOpen(false)
         setLineOpen(true)
         requestAnimationFrame(() => lineRef.current?.focus())
-        setLineReply(projected.presentation ?? "Agent is working.")
+        setLineReply(starting ? "Agent is starting." : projected.presentation ?? "Agent is working.")
         return
       }
       setDelegateContext({
@@ -2245,7 +2275,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             <div className={spatial.lineControls}>
               {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider">{delegateContext.kind === "preview" ? <button type="button" className={spatial.lineClose} disabled aria-label="Codex unavailable" title="Preview diagnostic transport is not available for Codex yet.">Codex unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Codex" } : current)}>Codex</button>}<button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}
               <span className={spatial.lineContext}>{lineMode === "change" ? "Structured edit" : lineMode === "review" ? "Read-only Claude Reviewer" : lineMode === "fork" ? "Claude fork · source remains unchanged" : reviewerAgentContext ? "Read-only Reviewer session" : delegateContext?.provider === "Local" ? "Local conversation" : lineTarget === "agent" ? delegateContext?.provider ? `${delegateContext.provider} session` : "Choose provider" : "William"}</span>
-              <button type="submit" className={spatial.lineSend} disabled={lineBusy || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && (!delegateContext?.provider || delegateContext.kind === "line-session" && (agentSessions.activeSessionIds.includes(delegateContext.sessionKey) || lineSessionInFlightKeys.includes(delegateContext.sessionKey)))}>{lineMode === "change" ? change.running ? changeIntent === "improve-diff" ? "Improving" : "Changing" : changeIntent === "improve-diff" ? "Start improvement" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : delegateContext?.kind === "continue" || delegateContext?.kind === "line-session" ? delegateContext.kind === "line-session" && (agentSessions.activeSessionIds.includes(delegateContext.sessionKey) || lineSessionInFlightKeys.includes(delegateContext.sessionKey)) ? "Session working" : lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
+              <button type="submit" className={spatial.lineSend} disabled={lineBusy || currentResumeSessionIsActive || change.running || lineMode === "review" && review.running || lineMode !== "review" && !lineInput.trim() || lineMode === "default" && lineTarget === "agent" && !delegateContext?.provider}>{lineMode === "change" ? change.running ? changeIntent === "improve-diff" ? "Improving" : "Changing" : changeIntent === "improve-diff" ? "Start improvement" : "Start change" : lineMode === "review" ? review.running ? "Reviewing" : "Start review" : lineMode === "fork" ? lineBusy ? "Forking" : "Fork session" : currentResumeSessionIsActive ? "Session working" : delegateContext?.kind === "continue" || delegateContext?.kind === "line-session" ? lineBusy ? "Continuing" : "Continue session" : reviewerAgentContext ? lineBusy ? "Reviewer working" : "Send to Reviewer" : delegateContext?.provider === "Local" ? lineBusy ? "Thinking" : "Ask Local" : lineBusy ? "Working" : lineTarget === "agent" ? "Delegate" : "Send"}</button>
               {lineMode === "change" && change.canStop ? <button type="button" className={spatial.lineClose} onClick={change.stop}>{changeIntent === "improve-diff" ? "Stop improvement" : "Stop change"}</button> : null}{lineMode === "review" && review.canStop ? <button type="button" className={spatial.lineClose} onClick={review.stop}>Stop review</button> : null}<button type="button" className={spatial.lineClose} onClick={() => { if (change.running) { if (change.canStop) change.stop(); return } if (lineMode === "review" && review.running) { if (review.canStop) review.stop(); return } if (lineTarget === "agent") { agentPresentationEpochRef.current += 1; setLineBusy(false) } setLineOpen(false) }} aria-label="Close The Line"><X size={14} /></button>
             </div>
           </form>
