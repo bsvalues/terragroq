@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { DeveloperToolsSurface } from "@/components/workspace-shell/developer-tools-surface"
@@ -300,6 +300,7 @@ describe("Experience V2 developer tools", () => {
     render(<DeveloperToolsSurface kind="tests" selectedPath={null} historyScope="server:world-a" />)
     expect(screen.getByText("focused suite green", { exact: false })).toBeTruthy()
     expect(screen.getByText("Saved browser transcript · not live evidence")).toBeTruthy()
+    expect(screen.queryByText("Live workspace state")).toBeNull()
   })
 
   it("automatically renders the newest relevant saved transcript and keeps Live output explicit", async () => {
@@ -312,6 +313,7 @@ describe("Experience V2 developer tools", () => {
     expect(await screen.findByText("newest diff bytes", { exact: false })).toBeTruthy()
     expect(screen.queryByText("older status bytes", { exact: false })).toBeNull()
     expect(screen.getByText("Saved browser transcript · not live evidence")).toBeTruthy()
+    expect(screen.queryByText("Live workspace state")).toBeNull()
     expect(screen.getByRole("button", { name: "Live output" }).getAttribute("aria-pressed")).toBe("false")
     expect(screen.getByRole("button", { name: /git diff.*saved browser transcript/i }).getAttribute("aria-pressed")).toBe("true")
   })
@@ -343,10 +345,12 @@ describe("Experience V2 developer tools", () => {
 
     expect(await screen.findByText("cancelled partial bytes", { exact: false })).toBeTruthy()
     expect(screen.getByText("Cancelled · not completed or live evidence")).toBeTruthy()
+    expect(screen.queryByText("Live workspace state")).toBeNull()
 
     view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:interrupted" />)
     expect(await screen.findByText("interrupted partial bytes", { exact: false })).toBeTruthy()
     expect(screen.getByText("Interrupted · not completed or live evidence")).toBeTruthy()
+    expect(screen.queryByText("Live workspace state")).toBeNull()
     expect(screen.queryByText("cancelled partial bytes", { exact: false })).toBeNull()
   })
 
@@ -489,6 +493,40 @@ describe("Experience V2 developer tools", () => {
     expect(loadToolRunHistory(window.localStorage, "server:world-b").runs).toHaveLength(0)
     expect(screen.queryByText("old Space bytes", { exact: false })).toBeNull()
     expect(screen.queryByRole("button", { name: /git status.*saved browser transcript/i })).toBeNull()
+  })
+
+  it("interrupts an in-flight Terminal run on a same-Space switch to Tests without leaking late presentation", async () => {
+    saveTranscript({ scope: "server:world-a", id: "saved-test", operationId: "tests.run", startedAt: "2026-08-30T10:00:00.000Z", text: "exact saved test bytes\n" })
+    let streamController!: ReadableStreamDefaultController<Uint8Array>
+    const stream = new ReadableStream<Uint8Array>({ start(controller) { streamController = controller } })
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? new Response(stream, { headers: { "content-type": "application/x-ndjson" } })
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    const view = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+    fireEvent.change(input, { target: { value: "git status" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    await screen.findByText("Running repo.status")
+
+    view.rerender(<DeveloperToolsSurface kind="tests" selectedPath={null} historyScope="server:world-a" />)
+    expect(await screen.findByText("exact saved test bytes", { exact: false })).toBeTruthy()
+    const savedTest = screen.getByRole("button", { name: /test.*completed.*saved browser transcript/i })
+    expect(savedTest.getAttribute("aria-pressed")).toBe("true")
+    fireEvent.click(screen.getByRole("button", { name: "Live output" }))
+
+    await act(async () => {
+      streamController.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "stdout", text: "late Terminal bytes must stay hidden\n" })}\n`))
+      streamController.enqueue(new TextEncoder().encode(`${JSON.stringify({ type: "exit", code: 0, reason: null })}\n`))
+      streamController.close()
+      await Promise.resolve()
+    })
+
+    await waitFor(() => expect(screen.queryByText("Running repo.status")).toBeNull())
+    expect(screen.queryByText("late Terminal bytes must stay hidden", { exact: false })).toBeNull()
+    expect(screen.queryByRole("button", { name: /git status.*saved browser transcript/i })).toBeNull()
+    fireEvent.click(savedTest)
+    expect(screen.getByText("exact saved test bytes", { exact: false })).toBeTruthy()
   })
 
   it("does not publish Stop settlement from an old active run into the newly selected Space", async () => {

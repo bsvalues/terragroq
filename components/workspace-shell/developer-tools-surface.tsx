@@ -11,6 +11,7 @@ export type LiveDiffContext = Readonly<{ path: string; fingerprint: string }>
 type Operation = Readonly<{ id: string; label: string; intent: string; scope: "project" | "runtime"; mutating: boolean }>
 type ActiveRun = {
   id: string
+  kind: DeveloperToolKind
   operationId: string
   operationLabel: string
   alias: string
@@ -34,8 +35,8 @@ function historyForSurface(runs: readonly ToolRunTranscript[], kind: DeveloperTo
   return []
 }
 
-function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick<Storage, "getItem" | "setItem"> | null): boolean {
-  return run.historyScope === scope && run.historyStorage === storage
+function presentationMatches(run: ActiveRun, scope: string | null, storage: Pick<Storage, "getItem" | "setItem"> | null, kind: DeveloperToolKind): boolean {
+  return run.kind === kind && run.historyScope === scope && run.historyStorage === storage
 }
 
 export function DeveloperToolsSurface({ kind, selectedPath, active = true, historyScope = null, historyStorage = null, refreshKey = 0, refreshPath = null, onRefreshSettled, onRunningChange, onLiveDiffContextChange }: {
@@ -68,6 +69,8 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
   const runSequence = useRef(0)
   const historyScopeRef = useRef(historyScope)
   const historyStorageRef = useRef(historyStorage)
+  const surfaceKindRef = useRef(kind)
+  surfaceKindRef.current = kind
   const diffController = useRef<AbortController | null>(null)
   const diffRequestEpoch = useRef(0)
   const completedRefresh = useRef<Readonly<{ key: number; path: string | null }>>({ key: refreshKey, path: null })
@@ -82,7 +85,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
   useEffect(() => { liveDiffContextChanged.current = onLiveDiffContextChange }, [onLiveDiffContextChange])
   useEffect(() => {
     if (kind !== "tests" && kind !== "terminal") return
-    runningChanged.current?.(running ? { kind, operationId: running } : null)
+    runningChanged.current?.(running && activeRun.current?.kind === kind ? { kind, operationId: running } : null)
   }, [kind, running])
   useEffect(() => { historyScopeRef.current = historyScope }, [historyScope])
   useEffect(() => { historyStorageRef.current = historyStorage }, [historyStorage])
@@ -245,33 +248,43 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
     }
     const scope = run.historyScope
     if (!scope) {
-      if (presentationMatches(run, historyScopeRef.current, historyStorageRef.current)) setHistoryVerdict("Browser transcript not saved: this Space has no durable history scope.")
+      if (presentationMatches(run, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)) setHistoryVerdict("Browser transcript not saved: this Space has no durable history scope.")
       return
     }
     try {
       const verdict = persistToolRunTranscript(run.historyStorage ?? window.localStorage, scope, transcript)
-      if (!presentationMatches(run, historyScopeRef.current, historyStorageRef.current)) return
+      if (!presentationMatches(run, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)) return
       if (!verdict.ok) { setHistoryVerdict("Browser transcript not saved."); return }
-      setHistory(historyForSurface(verdict.runs, kind))
+      setHistory(historyForSurface(verdict.runs, run.kind))
       setHistoryVerdict(outcome.status === "cancelled" ? "cancelled · saved browser transcript"
         : outcome.status === "interrupted" ? "interrupted · saved browser transcript" : "Transcript saved in this browser.")
     } catch {
-      if (presentationMatches(run, historyScopeRef.current, historyStorageRef.current)) setHistoryVerdict("Browser transcript not saved.")
+      if (presentationMatches(run, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)) setHistoryVerdict("Browser transcript not saved.")
     }
-  }, [kind])
+  }, [])
 
   const stop = useCallback(() => {
     const active = activeRun.current
     if (active) {
       const next = [...active.lines, { channel: "meta", text: "CANCELLED" } satisfies ToolOutputLine]
       active.lines = next
-      if (presentationMatches(active, historyScopeRef.current, historyStorageRef.current)) setLines(next)
+      if (presentationMatches(active, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)) setLines(next)
       settleRun(active, { status: "cancelled", code: null, reason: "CANCELLED" }, next)
     }
     controller.current?.abort()
     controller.current = null
     setRunning(null)
   }, [settleRun])
+
+  useEffect(() => {
+    const active = activeRun.current
+    if (!active || active.kind === kind) return
+    const next = [...active.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
+    active.lines = next
+    settleRun(active, { status: "interrupted", code: null, reason: "INTERRUPTED" }, next)
+    controller.current?.abort()
+    controller.current = null
+  }, [kind, settleRun])
 
   useEffect(() => () => {
     const active = activeRun.current
@@ -291,7 +304,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
     const catalogued = LOOM_OPERATIONS.find((candidate) => candidate.id === operation)
     const startedAt = new Date().toISOString()
     const current: ActiveRun = {
-      id: `${startedAt}:${++runSequence.current}`, operationId: operation,
+      id: `${startedAt}:${++runSequence.current}`, kind, operationId: operation,
       operationLabel: catalogued?.label ?? operations.find((candidate) => candidate.id === operation)?.label ?? operation,
       alias, startedAt, lines: [], historyScope: historyScopeRef.current, historyStorage: historyStorageRef.current,
     }
@@ -321,11 +334,11 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
           try { event = JSON.parse(entry) } catch { continue }
           if (event.type === "stdout" || event.type === "stderr") {
             current.lines.push({ channel: event.type, text: event.text ?? "" })
-            if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current)) setLines([...current.lines])
+            if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)) setLines([...current.lines])
           } else if (event.type === "exit") {
             receivedExit = true
             current.lines.push({ channel: "meta", text: event.reason ?? `exit ${event.code}` })
-            if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current)) setLines([...current.lines])
+            if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)) setLines([...current.lines])
             const outcome: ToolRunTranscript["outcome"] = event.reason === "CANCELLED"
               ? { status: "cancelled", code: null, reason: event.reason }
               : typeof event.code === "number" && event.reason == null
@@ -338,12 +351,12 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
       if (!receivedExit && activeRun.current?.id === current.id) {
         const next = [...current.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
         current.lines = next
-        if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current)) setLines(next)
+        if (presentationMatches(current, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)) setLines(next)
         settleRun(current, { status: "interrupted", code: null, reason: "INTERRUPTED" }, next)
       }
     } catch (caught) {
       if ((caught as Error)?.name !== "AbortError" && activeRun.current?.id === current.id) {
-        const present = presentationMatches(current, historyScopeRef.current, historyStorageRef.current)
+        const present = presentationMatches(current, historyScopeRef.current, historyStorageRef.current, surfaceKindRef.current)
         if (present) setError(caught instanceof Error ? caught.message : "RUN_UNAVAILABLE")
         const next = [...current.lines, { channel: "meta", text: "INTERRUPTED" } satisfies ToolOutputLine]
         current.lines = next
@@ -354,7 +367,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
       if (activeRun.current?.id === current.id) { activeRun.current = null; setRunning(null) }
       if (controller.current === abort) controller.current = null
     }
-  }, [operations, settleRun, stop])
+  }, [kind, operations, settleRun, stop])
 
   const executeCommand = useCallback(() => {
     const operation = resolveProjectTerminalAlias(command)
@@ -379,10 +392,11 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
     : selectedTranscript?.outcome.status === "cancelled" ? "Cancelled · not completed or live evidence"
       : selectedTranscript ? "Interrupted · not completed or live evidence" : null
   const title = kind === "tests" ? "Focused validation" : kind === "diff" ? "Current change" : "Project terminal"
+  const surfaceRunning = activeRun.current?.kind === kind ? running : null
 
   return (
     <section className={styles.utilitySurface} aria-label={title}>
-      <header className={styles.utilityMeta}><span>{title}</span><span>{running ? `Running ${running}` : error ? error : kind === "diff" && diffSnapshot ? "Saved browser snapshot · not live evidence" : "Live workspace state"}</span></header>
+      <header className={styles.utilityMeta}><span>{title}</span><span>{transcriptTruth ?? (surfaceRunning ? `Running ${surfaceRunning}` : error ? error : kind === "diff" && diffSnapshot ? "Saved browser snapshot · not live evidence" : "Live workspace state")}</span></header>
       <div className={styles.utilityBody}>
         {kind === "diff" ? <>
           <div className={styles.utilityControls}>
@@ -396,20 +410,20 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
         </> : <>
           {kind === "terminal" ? <form className={styles.utilityControls} onSubmit={(event) => { event.preventDefault(); executeCommand() }}>
             <span aria-hidden="true">$</span>
-            <input aria-label="Project terminal command" autoComplete="off" disabled={running !== null}
+            <input aria-label="Project terminal command" autoComplete="off" disabled={surfaceRunning !== null}
               style={{ flex: "1 1 180px", minWidth: 0, border: "1px solid #3b4939", borderRadius: 5, padding: "5px 8px", background: "#090d09", color: "#c8d2c4", font: "inherit" }}
               placeholder="git status" value={command} onChange={(event) => { setCommand(event.target.value); setCommandVerdict(null) }}
               onKeyDown={(event) => {
                 if (event.key === "Tab" && completeCommand()) event.preventDefault()
                 if (event.key === "Enter") { event.preventDefault(); executeCommand() }
               }} />
-            <button type="submit" className={styles.utilityButton} disabled={running !== null}>Run</button>
+            <button type="submit" className={styles.utilityButton} disabled={surfaceRunning !== null}>Run</button>
           </form> : null}
           <div className={styles.utilityControls}>
-            {kind === "tests" ? <button type="button" className={styles.utilityButton} disabled={running !== null || !active} onClick={() => void run("tests.run", "test")}>Run full test suite</button>
+            {kind === "tests" ? <button type="button" className={styles.utilityButton} disabled={surfaceRunning !== null || !active} onClick={() => void run("tests.run", "test")}>Run full test suite</button>
               : operations.map((operation) => <button key={operation.id} type="button" aria-label={operation.label} className={styles.utilityButton}
-                disabled={running !== null} title={operation.intent} onClick={() => { const alias = terminalAlias(operation.id); if (alias) { setCommand(alias); void run(operation.id, alias) } }}>{operation.label}</button>)}
-            {running ? <button type="button" className={styles.utilityStop} onClick={stop}>Stop</button> : null}
+                disabled={surfaceRunning !== null} title={operation.intent} onClick={() => { const alias = terminalAlias(operation.id); if (alias) { setCommand(alias); void run(operation.id, alias) } }}>{operation.label}</button>)}
+            {surfaceRunning ? <button type="button" className={styles.utilityStop} onClick={stop}>Stop</button> : null}
           </div>
           {commandVerdict ? <output className={styles.muted}>{commandVerdict}</output> : null}
           {history.length ? <nav className={styles.utilityControls} aria-label="Saved browser transcripts" style={{ flexWrap: "nowrap", overflowX: "auto", paddingBottom: 4 }}>
@@ -418,7 +432,6 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
               aria-pressed={selectedTranscriptId === transcript.id} aria-label={`${transcript.alias} · ${transcript.outcome.status} · saved browser transcript`}
               onClick={() => setSelectedTranscriptId(transcript.id)}>{transcript.alias} · {transcript.outcome.status}</button>)}
           </nav> : null}
-          {transcriptTruth ? <p className={styles.muted}>{transcriptTruth}</p> : null}
           {!selectedTranscript && historyVerdict ? <output className={styles.muted}>{historyVerdict}</output> : null}
           <pre ref={output} className={styles.utilityOutput} aria-live="polite">{visibleLines.length === 0
             ? kind === "tests" ? active ? "Tests have not run in this Space yet." : "Focus Tests before running validation." : "Type one fixed alias. Tab completes; Enter runs. No shell text is accepted."
