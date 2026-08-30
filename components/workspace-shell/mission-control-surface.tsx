@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react"
 
+import type { MissionAgentSessionProjection } from "./agent-sessions"
 import styles from "./mission-control-surface.module.css"
 
 export type MissionControlWindowProjection = Readonly<{
@@ -14,13 +15,7 @@ export type MissionControlWindowProjection = Readonly<{
   detail?: string
 }>
 
-export type MissionControlAgentProjection = Readonly<{
-  id: string
-  name: string
-  role: string
-  activity: string
-  state: "working" | "waiting" | "blocked" | "idle"
-}>
+export type MissionControlAgentProjection = MissionAgentSessionProjection
 
 export type MissionControlSpaceProjection = Readonly<{
   id: string
@@ -83,6 +78,11 @@ function SpacePreview({
   const bounds = projectionBounds(space.windows)
   const visibleWindows = space.windows.filter((window) => !window.minimized)
   const minimizedWindows = space.windows.filter((window) => window.minimized)
+  const agentTruthUnknown = space.agentActivityKnown === false
+  const agentLabel = agentTruthUnknown
+    ? space.agents.length > 0 ? "Agent activity partially known" : "Agent activity unknown"
+    : `${space.agents.length} agent sessions`
+  const visibleAgents = space.agents.slice(0, 3)
   const content = <>
       <span className={styles.spaceHeader}>
         <span className={styles.spaceIdentity}>
@@ -123,12 +123,14 @@ function SpacePreview({
         <span className={styles.objectState}>
           {space.selectedObject ? `Selected · ${space.selectedObject}` : space.changed ?? "Place preserved"}
         </span>
-        <span className={styles.agents} aria-label={space.agentActivityKnown === false ? "Agent activity unknown" : `${space.agents.length} agent sessions`}>
-          {space.agentActivityKnown === false ? <span>Agent activity unknown</span> : space.agents.length === 0 ? <span>No active agents</span> : space.agents.slice(0, 3).map((agent) => (
+        <span className={styles.agents} aria-label={agentLabel}>
+          {visibleAgents.map((agent) => (
             <span key={agent.id} className={styles.agent} data-state={agent.state} title={`${agent.role} · ${agent.activity}`}>
-              <i /> {agent.name} · {agent.activity}
+              <i /> {agent.name} · {agent.activity}{agent.truth === "resume-unverified" ? <small className={styles.agentTruth}>Saved · resume unverified</small> : null}
             </span>
           ))}
+          {agentTruthUnknown ? <span>Agent activity unknown</span> : space.agents.length === 0 ? <span>No active agents</span> : null}
+          {space.agents.length > 3 ? <span className={styles.agentOverflow}>+{space.agents.length - 3} more</span> : null}
         </span>
       </span>
   </>

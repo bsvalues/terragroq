@@ -73,6 +73,22 @@ export type ExperienceAgentSession = Readonly<{
   presentation?: string
 }>
 
+export type MissionAgentSessionProjection = Readonly<{
+  id: string
+  name: string
+  role: string
+  activity: string
+  state: "working" | "waiting" | "blocked" | "idle"
+  truth?: "live" | "resume-unverified"
+}>
+
+export type SavedAgentSessionProjection = Readonly<{
+  state: AgentSessionCollectionState
+  sessions: readonly ExperienceAgentSession[]
+}>
+
+export type AgentSessionCollectionState = "available" | "missing" | "corrupt" | "oversized" | "unavailable" | "partial"
+
 export type ActiveAgentTurn = Readonly<{
   id: string
   provider: AgentProvider
@@ -135,6 +151,7 @@ export type ExperienceAgentSessionController = Readonly<{
   durableSession: DurableAgentSession | null
   savedDescriptor: DurableAgentSession | null
   savedSessions: readonly DurableAgentSession[]
+  collectionState: AgentSessionCollectionState
   selectedSessionKey: string | null
   descriptorState: "none" | "unverified" | "verified"
   activeSessionId: string | null
@@ -297,15 +314,20 @@ function parseCompletedTurns(value: unknown): readonly CompletedAgentTurn[] | nu
   return turns
 }
 
-function parseCollection(value: string | null): DurableAgentSessionCollection | null {
-  if (!value) return { schemaVersion: 3, selectedSessionKey: null, sessions: [] }
+type ParsedAgentSessionCollection = Readonly<{
+  collection: DurableAgentSessionCollection
+  partial: boolean
+}>
+
+function parseCollection(value: string | null): ParsedAgentSessionCollection | null {
+  if (!value) return { collection: { schemaVersion: 3, selectedSessionKey: null, sessions: [] }, partial: false }
   let raw: unknown
   try { raw = JSON.parse(value) } catch { return null }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
   const candidate = raw as Record<string, unknown>
   if (candidate.schemaVersion === 1) {
     const legacy = parseDescriptor(value)
-    return legacy ? { schemaVersion: 3, selectedSessionKey: sessionKey(legacy.provider, legacy.sessionId), sessions: [legacy] } : null
+    return legacy ? { collection: { schemaVersion: 3, selectedSessionKey: sessionKey(legacy.provider, legacy.sessionId), sessions: [legacy] }, partial: false } : null
   }
   if (candidate.schemaVersion !== 2 && candidate.schemaVersion !== 3 || !Array.isArray(candidate.sessions)
     || candidate.sessions.length > MAX_DURABLE_SESSIONS
@@ -314,6 +336,7 @@ function parseCollection(value: string | null): DurableAgentSessionCollection | 
   const sessions: DurableAgentSession[] = []
   const skippedTargetKeys = new Set<string>()
   const skippedTargetIds = new Set<string>()
+  let partial = false
   for (const rawSession of candidate.sessions) {
     const descriptor = parseDescriptor(JSON.stringify(rawSession))
     if (!descriptor) {
@@ -321,6 +344,7 @@ function parseCollection(value: string | null): DurableAgentSessionCollection | 
       if (!skipped) return null
       skippedTargetKeys.add(skipped.key)
       skippedTargetIds.add(skipped.sessionId)
+      partial = true
       continue
     }
     if (sessions.some((session) => sessionKey(session.provider, session.sessionId) === sessionKey(descriptor.provider, descriptor.sessionId))) return null
@@ -339,7 +363,7 @@ function parseCollection(value: string | null): DurableAgentSessionCollection | 
       selectedSessionKey = null
     }
   }
-  return { schemaVersion: 3, selectedSessionKey, sessions }
+  return { collection: { schemaVersion: 3, selectedSessionKey, sessions }, partial }
 }
 
 function boundedCollection(
@@ -487,6 +511,86 @@ function projectSessions(
   return sessions
 }
 
+type AgentSessionStorage = Pick<Storage, "getItem"> & Partial<Pick<Storage, "removeItem">>
+
+type LoadedAgentSessionCollection = Readonly<{
+  state: AgentSessionCollectionState
+  collection: DurableAgentSessionCollection | null
+  key: string | null
+}>
+
+/** The single guarded, bounded read seam used for both current restore and inactive projection. */
+function loadAgentSessionCollection(
+  ownerScope: string,
+  worldScope: string,
+  options: Readonly<{ storage?: AgentSessionStorage; removeCorrupt?: boolean }> = {},
+): LoadedAgentSessionCollection {
+  let key: string
+  let storage: AgentSessionStorage
+  try {
+    key = storageKey(ownerScope, worldScope)
+    storage = options.storage ?? window.localStorage
+  } catch {
+    return { state: "unavailable", collection: null, key: null }
+  }
+  let stored: string | null
+  try { stored = storage.getItem(key) } catch { return { state: "unavailable", collection: null, key } }
+  if (stored === null) return { state: "missing", collection: { schemaVersion: 3, selectedSessionKey: null, sessions: [] }, key }
+  const corrupt = (): LoadedAgentSessionCollection => {
+    if (options.removeCorrupt) {
+      try { storage.removeItem?.(key) } catch { /* cleanup failure cannot escape the guarded read seam */ }
+    }
+    return { state: "corrupt", collection: null, key }
+  }
+  if (stored.length === 0) return corrupt()
+  if (stored.length > MAX_COLLECTION_BYTES
+    || new TextEncoder().encode(stored).byteLength > MAX_COLLECTION_BYTES) {
+    return { state: "oversized", collection: null, key }
+  }
+  const parsed = parseCollection(stored)
+  if (!parsed) return corrupt()
+  return { state: parsed.partial ? "partial" : "available", collection: parsed.collection, key }
+}
+
+/** Read a different owned Space's browser-scoped resume hints without mutating or verifying them. */
+export function loadSavedAgentSessionProjection(
+  ownerScope: string,
+  worldScope: string,
+  storage?: AgentSessionStorage,
+): SavedAgentSessionProjection {
+  const loaded = loadAgentSessionCollection(ownerScope, worldScope, { storage })
+  return {
+    state: loaded.state,
+    sessions: loaded.collection ? projectSessions(null, loaded.collection.sessions, [], []) : [],
+  }
+}
+
+/** Produce bounded Mission Control copy. Current live truth wins any duplicate saved hint. */
+export function projectMissionAgentSessions(
+  sessions: readonly ExperienceAgentSession[],
+  current: boolean,
+): readonly MissionAgentSessionProjection[] {
+  const projected = new Map<string, MissionAgentSessionProjection>()
+  for (const session of sessions) {
+    const truth = current && session.truth === "live" ? "live" : "resume-unverified"
+    const candidate: MissionAgentSessionProjection = {
+      id: session.id,
+      name: session.providerLabel,
+      role: session.role,
+      activity: agentPresentationText(current ? session.presentation : null)
+        ?? agentPresentationText(session.assignment)
+        ?? "Bounded assignment",
+      state: truth === "resume-unverified"
+        ? "waiting"
+        : session.status === "working" || session.status === "thinking" ? "working" : "idle",
+      truth,
+    }
+    const existing = projected.get(session.id)
+    if (!existing || existing.truth !== "live" && candidate.truth === "live") projected.set(session.id, candidate)
+  }
+  return [...projected.values()]
+}
+
 export function useExperienceAgentSessions({
   ownerScope,
   worldScope,
@@ -499,6 +603,7 @@ export function useExperienceAgentSessions({
   worker: WorldWorker | null
 }): ProviderNeutralAgentSessionController {
   const [savedSessions, setSavedSessions] = useState<readonly DurableAgentSession[]>([])
+  const [collectionState, setCollectionState] = useState<AgentSessionCollectionState>("missing")
   const [selectedSessionKey, setSelectedSessionKey] = useState<string | null>(null)
   const [verifiedSessions, setVerifiedSessions] = useState<readonly DurableAgentSession[]>([])
   const [durableSession, setDurableSession] = useState<DurableAgentSession | null>(null)
@@ -511,6 +616,17 @@ export function useExperienceAgentSessions({
   const operationEpoch = useRef(0)
   const selectionGenerationRef = useRef(0)
   const operationsRef = useRef(new Map<number, ActiveAgentOperation>())
+
+  const persistCanonicalCollection = useCallback((write: () => DurableAgentSessionCollection) => {
+    try {
+      const persisted = write()
+      setCollectionState("available")
+      return persisted
+    } catch (cause) {
+      setCollectionState((current) => current === "partial" ? "partial" : "unavailable")
+      throw cause
+    }
+  }, [])
 
   const syncActiveTurns = useCallback(() => {
     setActiveTurns([...operationsRef.current.values()].map((operation) => ({
@@ -533,7 +649,7 @@ export function useExperienceAgentSessions({
       : null
     const nextSelectedKey = fallback ? sessionKey(fallback.provider, fallback.sessionId) : null
     try {
-      const persisted = persistCollection(operation.storageKey, sessionsRef.current, nextSelectedKey)
+      const persisted = persistCanonicalCollection(() => persistCollection(operation.storageKey, sessionsRef.current, nextSelectedKey))
       sessionsRef.current = persisted.sessions
       setSavedSessions(persisted.sessions)
     } catch (cause) {
@@ -546,7 +662,7 @@ export function useExperienceAgentSessions({
       ? fallback
       : null
     setDurableSession(verifiedFallback)
-  }, [])
+  }, [persistCanonicalCollection])
 
   const invalidateOperation = useCallback((operation: ActiveAgentOperation) => {
     if (operationsRef.current.get(operation.epoch) !== operation) return
@@ -573,18 +689,28 @@ export function useExperienceAgentSessions({
     // A turn is owned by the exact authenticated owner/workspace scope in which it began. Never let
     // a late frame from that scope materialize a ready session after the shell has moved elsewhere.
     invalidateAllOperations()
-    const key = storageKey(ownerScope, worldScope)
-    const stored = window.localStorage.getItem(key)
-    const collection = parseCollection(stored)
+    const loaded = loadAgentSessionCollection(ownerScope, worldScope, { removeCorrupt: true })
+    const key = loaded.key ?? storageKey(ownerScope, worldScope)
+    const collection = loaded.collection
+    setCollectionState(loaded.state)
     if (!collection) {
-      window.localStorage.removeItem(key)
+      sessionsRef.current = []
+      selectedSessionKeyRef.current = null
+      setSavedSessions([])
+      setSelectedSessionKey(null)
+    } else if (loaded.state === "partial") {
+      sessionsRef.current = collection.sessions
+      selectedSessionKeyRef.current = collection.selectedSessionKey
+      setSavedSessions(collection.sessions)
+      setSelectedSessionKey(collection.selectedSessionKey)
+    } else if (loaded.state === "missing") {
       sessionsRef.current = []
       selectedSessionKeyRef.current = null
       setSavedSessions([])
       setSelectedSessionKey(null)
     } else {
       try {
-        const persisted = persistCollection(key, collection.sessions, collection.selectedSessionKey)
+        const persisted = persistCanonicalCollection(() => persistCollection(key, collection.sessions, collection.selectedSessionKey))
         sessionsRef.current = persisted.sessions
         selectedSessionKeyRef.current = persisted.selectedSessionKey
         setSavedSessions(persisted.sessions)
@@ -594,6 +720,7 @@ export function useExperienceAgentSessions({
         selectedSessionKeyRef.current = null
         setSavedSessions([])
         setSelectedSessionKey(null)
+        setCollectionState("unavailable")
         setError(cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED")
       }
     }
@@ -603,7 +730,7 @@ export function useExperienceAgentSessions({
     setVerifiedSessions([])
     setDurableSession(null)
     setLoadedStorageKey(key)
-  }, [invalidateAllOperations, ownerScope, worldScope])
+  }, [invalidateAllOperations, ownerScope, persistCanonicalCollection, worldScope])
 
   useEffect(() => () => {
     const operations = [...operationsRef.current.values()]
@@ -640,7 +767,7 @@ export function useExperienceAgentSessions({
     const nextKey = selected ? sessionKey(selected.provider, selected.sessionId) : null
     let persisted: DurableAgentSessionCollection
     try {
-      persisted = persistCollection(key, sessions, nextKey)
+      persisted = persistCanonicalCollection(() => persistCollection(key, sessions, nextKey))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED")
       return false
@@ -652,7 +779,7 @@ export function useExperienceAgentSessions({
     setSelectedSessionKey(persisted.selectedSessionKey)
     setDurableSession(selected && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === nextKey) ? selected : null)
     return true
-  }, [ownerScope, worldScope])
+  }, [ownerScope, persistCanonicalCollection, worldScope])
 
   const executeTurn = useCallback(async (input: Omit<RunClaudeTurnInput, "mode"> & {
     provider: AgentProvider
@@ -967,9 +1094,9 @@ export function useExperienceAgentSessions({
         : null
       let persisted: DurableAgentSessionCollection
       try {
-        persisted = forkMode
+        persisted = persistCanonicalCollection(() => forkMode
           ? persistForkCollection(operationStorageKey, sessionsRef.current, sessionKey(forkSource!.provider, forkSource!.sessionId), settledSession, persistedSelectedKey)
-          : persistCollection(operationStorageKey, sessionsWithSettlement, persistedSelectedKey, { sessionKey: settledKey, completedAt })
+          : persistCollection(operationStorageKey, sessionsWithSettlement, persistedSelectedKey, { sessionKey: settledKey, completedAt }))
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : "AGENT_SESSION_PERSISTENCE_FAILED"
         throw new AgentTurnCommittedPersistenceError(message)
@@ -1009,7 +1136,7 @@ export function useExperienceAgentSessions({
         const priorKey = sessionKey(prior.provider, prior.sessionId)
         const remaining = sessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
         const remainingSelected = selectedSessionKeyRef.current === priorKey ? null : selectedSessionKeyRef.current
-        const persisted = persistCollection(operationStorageKey, remaining, remainingSelected)
+        const persisted = persistCanonicalCollection(() => persistCollection(operationStorageKey, remaining, remainingSelected))
         sessionsRef.current = persisted.sessions
         selectedSessionKeyRef.current = persisted.selectedSessionKey
         setSavedSessions(persisted.sessions)
@@ -1037,7 +1164,7 @@ export function useExperienceAgentSessions({
         syncActiveTurns()
       }
     }
-  }, [ownerScope, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
+  }, [ownerScope, persistCanonicalCollection, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
 
   const runAgentTurn = useCallback((input: RunAgentTurnInput) => executeTurn({ ...input, mode: "delegate" }), [executeTurn])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
@@ -1047,6 +1174,7 @@ export function useExperienceAgentSessions({
 
   const currentStorageKey = storageKey(ownerScope, worldScope)
   const scopeLoaded = loadedStorageKey === currentStorageKey
+  const presentedCollectionState = scopeLoaded ? collectionState : "unavailable"
   const presentedSavedSessions = scopeLoaded ? savedSessions : []
   const presentedVerifiedSessions = scopeLoaded ? verifiedSessions : []
   const presentedActiveTurns = scopeLoaded ? activeTurns : []
@@ -1065,6 +1193,7 @@ export function useExperienceAgentSessions({
     durableSession: presentedDurableSession,
     savedDescriptor,
     savedSessions: presentedSavedSessions,
+    collectionState: presentedCollectionState,
     selectedSessionKey: presentedSelectedSessionKey,
     descriptorState,
     activeSessionId: presentedActiveSessionIds[0] ?? null,

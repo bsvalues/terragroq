@@ -188,6 +188,20 @@
 .spaceTruth[data-truth="fixture"] { color: #c2a06f; }
 .space[data-state="unavailable"] .spaceTruth { color: #c2a06f; }
 
+.agentTruth {
+  margin-left: 4px;
+  color: #8f998d;
+  font-size: 7.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.agentOverflow {
+  color: #9da99a;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
 .projection {
   position: relative;
   display: block;
