@@ -14,6 +14,7 @@ import { CHAT_MODEL, INFERENCE_BASE_URL } from "@/lib/ai/config"
 import { resolveAmbiguity } from "@/lib/environment/assumption-policy"
 import { saveOwnedLineWorld, selectedLineContextFingerprint } from "@/lib/environment/space-persistence"
 import { inspectWorkspaceApp, williamOsOrigin, type WorkspacePreviewEvidence } from "@/lib/environment/workspace-app"
+import { deriveSpaceGrounding } from "@/lib/environment/space-grounding"
 import { classifyGrounded, composeProjectsAnswer, groundedIdentity, groundingFacts, type ProjectRow } from "@/lib/environment/grounding"
 import { answerCurrentWork, startRetainedWork } from "@/lib/environment/current-work-db"
 import { getWorkOrders } from "@/app/actions/work-orders"
@@ -797,7 +798,7 @@ export async function POST(request: Request) {
   // huge ignored field would still buffer fully) -- this bounds the actual bytes.
   const parsed = await readBoundedJson(request)
   if (!parsed.ok) return Response.json({ error: parsed.error }, { status: parsed.status })
-  const body = parsed.value as { worldId?: unknown; text?: unknown; summon?: unknown }
+  const body = parsed.value as { worldId?: unknown; text?: unknown; summon?: unknown; lineContext?: unknown }
   // A surface asked for by ADDRESS rather than by sentence. The superseded routes redirect here
   // carrying `?summon=`, and the Desk forwards it as this field instead of inventing an owner turn
   // that the owner never typed -- a transcript that puts words in their mouth is a lie, however
@@ -814,6 +815,7 @@ export async function POST(request: Request) {
     return Response.json({ error: "INVALID_WORLD_ID" }, { status: 400 })
   }
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
+  const lineContext = body.lineContext === "space-summary" ? "space-summary" : null
 
   if (summonRequest) {
     // Arriving at a surface is not a conversational turn: nothing is recorded as said. The
@@ -846,6 +848,35 @@ export async function POST(request: Request) {
   if (requestedWorldId) {
     const world = await loadWorld(userId, requestedWorldId)
     if (!world) return Response.json({ error: "WORLD_NOT_FOUND" }, { status: 404 })
+
+    // A typed selected-Space operation is the complete read-only operation, not prose for the
+    // generic classifier chain. Handle it before Continue, decision, dismissal, summon and
+    // current-work classifiers so editing its prompt cannot dispatch or mutate some other product
+    // capability. The browser selects the operation; every fact still comes from this exact owned
+    // world and is re-derived at the persistence CAS boundary.
+    if (lineContext === "space-summary") {
+      let updated = withTurn(world, "owner", text)
+      const spaceSummary = deriveSpaceGrounding(world)
+      const expectedSelectedContext = JSON.stringify({
+        persisted: selectedLineContextFingerprint(world),
+        spaceSummary: spaceSummary.version,
+      })
+      const deriveSelectedContext = async (latest: WorkingWorldSnapshot) => JSON.stringify({
+        persisted: selectedLineContextFingerprint(latest),
+        spaceSummary: deriveSpaceGrounding(latest).version,
+      })
+      const say = await converse(updated, text, spaceSummary.facts)
+      updated = withTurn(updated, "williamos", say)
+      try {
+        await saveWorld(userId, requestedWorldId, updated, false, expectedSelectedContext, deriveSelectedContext)
+      } catch (error) {
+        if (error instanceof Error && error.message === "LINE_CONTEXT_STALE") {
+          return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
+        }
+        throw error
+      }
+      return Response.json({ worldId: requestedWorldId, say, surfaces: [], spine: updated.spine } satisfies LineReply)
+    }
 
     let updated = withTurn(world, "owner", text)
     let say: string
