@@ -20,11 +20,13 @@ export interface ThreadResumeVerdict {
 
 export interface LoomThreadDescriptor {
   owner: string
-  mode: "agent" | "review" | null
+  mode: "agent" | "review" | "preview" | null
   path: string | null
   provider?: string
   workContextReceipt?: string
   forkedFrom?: string
+  worldId?: string
+  evidenceFingerprint?: string
 }
 
 export interface LoomCodexThreadDescriptor {
@@ -83,16 +85,21 @@ export async function loomThreadDescriptor(sessionId: string): Promise<LoomThrea
       : null
     const provider = boundedMetadataString(metadata?.provider, 40)
     const workContextReceipt = boundedMetadataString(metadata?.workContextReceipt, 500)
+    const worldId = boundedMetadataString(metadata?.worldId, 200)
+    const evidenceFingerprint = typeof metadata?.evidenceFingerprint === "string"
+      && /^[0-9a-f]{64}$/.test(metadata.evidenceFingerprint) ? metadata.evidenceFingerprint : null
     const forkedFrom = typeof metadata?.forkedFrom === "string"
       && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(metadata.forkedFrom)
       && metadata.forkedFrom !== sessionId ? metadata.forkedFrom : null
     return {
       owner: row.userId,
-      mode: metadata?.mode === "review" || metadata?.mode === "agent" ? metadata.mode : null,
+      mode: metadata?.mode === "review" || metadata?.mode === "agent" || metadata?.mode === "preview" ? metadata.mode : null,
       path: typeof metadata?.path === "string" ? metadata.path : null,
       ...(provider ? { provider } : {}),
       ...(workContextReceipt ? { workContextReceipt } : {}),
       ...(forkedFrom ? { forkedFrom } : {}),
+      ...(worldId ? { worldId } : {}),
+      ...(evidenceFingerprint ? { evidenceFingerprint } : {}),
     }
   } catch {
     return null
