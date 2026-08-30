@@ -163,6 +163,20 @@ describe("Experience V2 Mission Control", () => {
     expect(card.textContent).not.toContain("Build four")
   })
 
+  it("keeps exact current live turns visible while labeling saved-session truth unknown", () => {
+    const partial: MissionControlSpaceProjection = {
+      ...spaces[0],
+      agentActivityKnown: false,
+      agents: [{ id: "live", name: "Local", role: "Thinker", activity: "Agent is working.", state: "working", truth: "live" }],
+    }
+    render(<MissionControlSurface spaces={[partial]} currentSpaceId="terrafusion" onEnterSpace={vi.fn()} onDismiss={vi.fn()} />)
+
+    const card = screen.getByRole("button", { name: "Enter TerraFusion Build, current Space" })
+    expect(card.textContent).toContain("Local · Agent is working.")
+    expect(card.textContent).toContain("Agent activity unknown")
+    expect(within(card).getByLabelText("Agent activity partially known")).toBeTruthy()
+  })
+
   it("offers an accessible inline name-only New Space action", async () => {
     const user = userEvent.setup()
     const onCreateSpace = vi.fn(async () => true)

@@ -74,6 +74,30 @@ describe("Experience V2 multi-Space re-entry", () => {
     expect(inactive.textContent).not.toContain("Live agent")
   })
 
+  it("renders current and inactive skipped migrated records unknown instead of understating their saved sessions", async () => {
+    const invalid = { schemaVersion: 1, sessionId: "123e4567-e89b-42d3-a456-426614174000", role: "Reviewer", provider: "Claude", assignment: "Invalid target", target: { kind: "file", path: "src/app.ts" }, updatedAt: "2026-08-29T10:01:00.000Z", completedTurns: [] }
+    window.localStorage.setItem("williamos:agent-session:a:c%3A%2Fproject", JSON.stringify({
+      schemaVersion: 3, selectedSessionKey: null,
+      sessions: [{ schemaVersion: 1, sessionId: "current-valid", role: "Builder", provider: "Codex", assignment: "Would understate", updatedAt: "2026-08-29T10:00:00.000Z", completedTurns: [] }, invalid],
+    }))
+    window.localStorage.setItem("williamos:agent-session:b:c%3A%2Fproject", JSON.stringify({
+      schemaVersion: 3, selectedSessionKey: null, sessions: [invalid],
+    }))
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/environment/space"
+      ? { ok: true, status: 200, json: async () => envelope("a") }
+      : { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }))
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+
+    const current = screen.getByRole("button", { name: "Enter Alpha, current Space" })
+    const inactive = screen.getByRole("button", { name: "Enter Beta" })
+    expect(current.textContent).toContain("Agent activity unknown")
+    expect(current.textContent).not.toContain("Would understate")
+    expect(inactive.textContent).toContain("Agent activity unknown")
+    expect(inactive.textContent).not.toContain("No active agents")
+  })
+
   it("keeps server Space hydration usable when reading the opaque preference hint throws", async () => {
     const getItem = Storage.prototype.getItem
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(function (key) {
@@ -85,6 +109,24 @@ describe("Experience V2 multi-Space re-entry", () => {
       : { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }))
     render(<WorkspaceShell />)
     fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+    expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy()
+  })
+
+  it("keeps browser Space hydration usable when corrupt-record cleanup is storage-blocked", async () => {
+    const browserKey = "williamos:space:opaque-browser-space"
+    window.localStorage.setItem(browserKey, "{not-json")
+    const removeItem = Storage.prototype.removeItem
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function (key) {
+      if (key === browserKey) throw new DOMException("blocked", "SecurityError")
+      return removeItem.call(this, key)
+    })
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/environment/space"
+      ? { ok: true, status: 200, json: async () => ({ ...envelope("a"), storage: "browser", browserStorageKey: "opaque-browser-space" }) }
+      : { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }))
+
+    render(<WorkspaceShell />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
+
     expect(screen.getByRole("button", { name: "Enter Alpha, current Space" })).toBeTruthy()
   })
 

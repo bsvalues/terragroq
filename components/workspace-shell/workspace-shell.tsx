@@ -354,7 +354,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             const saved = window.localStorage.getItem(key)
             if (saved) storedSpace = (JSON.parse(saved) as { space?: unknown }).space ?? payload.space
           } catch {
-            window.localStorage.removeItem(key)
+            safeLocalStorageRemove(key)
           }
         }
         const identity = payload.worldId
@@ -1279,6 +1279,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const missionWindowKind: Record<WindowId, MissionControlSpaceProjection["windows"][number]["kind"]> = {
     editor: "source", "running-app": "preview", tests: "tests", diff: "diff", terminal: "terminal",
   }
+  const currentAgentCollectionKnown = agentSessions.collectionState === "available" || agentSessions.collectionState === "missing"
+  const currentMissionAgents = currentAgentCollectionKnown
+    ? agentSessions.sessions
+    : agentSessions.sessions.filter((agent) => agent.truth === "live")
   const currentMissionSpace: MissionControlSpaceProjection = {
     id: worldId ?? space.id,
     name: space.name,
@@ -1290,7 +1294,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       frame: geometry, minimized: geometry.minimized, active: space.activeWindowId === id,
       detail: id === "running-app" ? space.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
     })),
-    agents: projectMissionAgentSessions(agentSessions.sessions, true),
+    agents: projectMissionAgentSessions(currentMissionAgents, true),
+    agentActivityKnown: currentAgentCollectionKnown,
     selectedObject: space.selectedPath,
     changed: savedLabel,
   }
@@ -1315,7 +1320,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         minimized: geometry.minimized, active: restored.activeWindowId === id,
         detail: id === "running-app" ? restored.runningAppUrl ? "Target runtime attached" : "Runtime unavailable" : undefined,
       })),
-      agents: projectMissionAgentSessions(savedAgents.sessions, false),
+      agents: savedAgents.state === "available" ? projectMissionAgentSessions(savedAgents.sessions, false) : [],
       agentActivityKnown: savedAgents.state === "available",
       selectedObject: restored.selectedPath,
       changed: "Saved spatial state",
