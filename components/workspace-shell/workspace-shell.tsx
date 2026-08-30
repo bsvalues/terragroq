@@ -10,7 +10,7 @@ import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface } from "./developer-tools-surface"
 import { type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
-import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
+import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { InspectorSurfaceView, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
@@ -69,6 +69,14 @@ type ChangeRefreshWaiter = {
   resolve: (result: ChangeRefreshResult) => void
   editor?: ChangeRefreshResult
   diff?: "refreshed" | "failed"
+}
+
+function spaceContinueUnavailableMessage(state: AgentSessionCollectionState): string {
+  if (state === "corrupt") return "Saved durable sessions are corrupt, so Continue cannot verify an exact session."
+  if (state === "oversized") return "Saved durable sessions exceed the safe storage limit, so Continue cannot verify an exact session."
+  if (state === "partial") return "Saved durable-session collection integrity is partial, so Continue cannot verify an exact session."
+  if (state === "unavailable") return "Durable-session storage is unavailable, so Continue cannot verify an exact session."
+  return "No durable session exists in this Space; use Delegate."
 }
 
 const windowName: Record<WindowId, string> = {
@@ -1333,6 +1341,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     agentSessions.selectedSessionKey,
   )
   const continueAction = spaceContinueCandidate ? "Continue" : "Continue unavailable"
+  const continueUnavailableMessage = spaceContinueUnavailableMessage(agentSessions.collectionState)
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? ["Review", "Improve", "Challenge", "Merge unavailable"] as const
@@ -1603,7 +1612,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             : local
               ? { kind: "conversation", label: "Local model", provider: "Local", role: "Thinker", assignment: "Conversation" }
               : { kind: "agent", label: `${projected.role} · ${projected.providerLabel}`, provider: projected.providerLabel as AgentProvider, role: projected.role, assignment: projected.assignment }))
-        openLine("", "agent")
+        // Reattachment observes the turn already owned by its original presentation epoch. Opening
+        // a new agent intent here would invalidate that owner and strand its natural settlement.
+        setLineTarget("agent")
+        setLineContext(null)
+        setForkContext(null)
+        setLineMode("default")
+        setLineInput("")
+        setLineOpen(true)
+        requestAnimationFrame(() => lineRef.current?.focus())
         setLineReply(projected.presentation ?? "Agent is working.")
         return
       }
@@ -1831,10 +1848,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? "No durable session exists in this Space; use Delegate." : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable"} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
-        {selectedKind === "space" && !spaceContinueCandidate ? <span role="status">No durable session exists in this Space; use Delegate.</span> : null}
+        {selectedKind === "space" && !spaceContinueCandidate ? <span role="status">{continueUnavailableMessage}</span> : null}
       </div>
 
       <div className={spatial.windowLayer} aria-label="Spatial work surfaces">
