@@ -18,6 +18,7 @@ const BASE_PROBE: HistoricalSchemaProbe = {
   projectTable: false,
   projectUserKeyUnique: false,
   projectUserIdUnique: false,
+  project0003Ready: false,
   workbenchThreadTable: false,
   workbenchThreadSourceTable: false,
   threadSourceConstraintCurrent: false,
@@ -72,6 +73,7 @@ describe("historical migration runner", () => {
       workbenchThreadSourceTable: true,
       threadSourceConstraintCurrent: true,
       projectArtifactsPresent: true,
+      project0003Ready: true,
       projectSchemaReady: true,
       threadArtifactsPresent: true,
       threadSchemaReady: true,
@@ -80,6 +82,21 @@ describe("historical migration runner", () => {
       { id: "0003", action: "skip" },
       { id: "0005", action: "skip" },
       { id: "0010", action: "skip" },
+      { id: "0014", action: "apply" },
+    ])
+  })
+
+  it("accepts the exact 0003-only state and plans the remaining prerequisite chain", () => {
+    expect(buildHistoricalMigrationPlan({
+      ...BASE_PROBE,
+      projectTable: true,
+      projectArtifactsPresent: true,
+      project0003Ready: true,
+      projectUserKeyUnique: true,
+    }).map(({ id, action }) => ({ id, action }))).toEqual([
+      { id: "0003", action: "skip" },
+      { id: "0005", action: "apply" },
+      { id: "0010", action: "apply" },
       { id: "0014", action: "apply" },
     ])
   })
@@ -169,6 +186,7 @@ describe("historical migration runner", () => {
       ...BASE_PROBE,
       projectTable: true,
       projectArtifactsPresent: true,
+      project0003Ready: true,
       projectSchemaReady: true,
       projectUserIdUnique: true,
       projectUserKeyUnique: true,
@@ -185,6 +203,7 @@ describe("historical migration runner", () => {
       ...BASE_PROBE,
       projectTable: true,
       projectArtifactsPresent: true,
+      project0003Ready: true,
       projectSchemaReady: true,
       projectUserIdUnique: true,
       projectUserKeyUnique: true,

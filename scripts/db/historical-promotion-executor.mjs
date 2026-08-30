@@ -50,13 +50,6 @@ const EVENT_TYPES = Object.freeze({
   }),
 })
 
-const HISTORICAL_EVENT_TYPES = Object.freeze([
-  EVENT_TYPES.doctrine.created,
-  EVENT_TYPES.doctrine.archived,
-  EVENT_TYPES.private_project_context.created,
-  EVENT_TYPES.private_project_context.archived,
-])
-
 function tenant(value) {
   const userId = String(value ?? "").trim()
   if (!userId) throw new Error("WILLIAMOS_HISTORICAL_PROMOTION_USER_ID_REQUIRED")
@@ -199,13 +192,13 @@ async function loadPromotionEvents(client, userId, plan, rows) {
     SELECT id, type, register, "refId", metadata
     FROM event_log
     WHERE "userId" = $1
-      AND type = ANY($2::text[])
+      AND type ~ '^(doctrine|document)\\.historical_'
       AND (
-        metadata->>'candidateId' = ANY($3::text[])
-        OR (register = 'doctrine' AND "refId" = ANY($4::int[]))
-        OR (register = 'corpus' AND "refId" = ANY($5::int[]))
+        metadata->>'candidateId' = ANY($2::text[])
+        OR (register = 'doctrine' AND "refId" = ANY($3::int[]))
+        OR (register = 'corpus' AND "refId" = ANY($4::int[]))
       )
-  `, [userId, HISTORICAL_EVENT_TYPES, candidateIds, doctrineIds, documentIds])).rows
+  `, [userId, candidateIds, doctrineIds, documentIds])).rows
 }
 
 function validatePromotionEvents(plan, rows, events, expectedArchiveCount) {
@@ -216,6 +209,11 @@ function validatePromotionEvents(plan, rows, events, expectedArchiveCount) {
     const relevant = events.filter((event) =>
       event.metadata?.candidateId === candidateId
       || (row && event.register === spec.register && Number(event.refId) === Number(row.id)))
+    const allowedTypes = new Set([spec.created, spec.archived])
+    const unexpected = relevant.find((event) => !allowedTypes.has(event.type))
+    if (unexpected) {
+      throw new Error(`HISTORICAL_PROMOTION_EVENT_UNEXPECTED:${candidateId}:${unexpected.type}`)
+    }
     const expectations = [
       ["created", row ? 1 : 0],
       ["archived", row ? expectedArchiveCount(record, row) : 0],

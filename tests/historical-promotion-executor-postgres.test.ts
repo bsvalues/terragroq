@@ -156,6 +156,22 @@ runDatabase("historical nine-record executor on isolated PostgreSQL", { timeout:
       await expect(wrongBase.query("SELECT to_regclass('project') AS value"))
         .resolves.toMatchObject({ rows: [{ value: null }] })
 
+      const exact0003 = await fixture("historical_exact_0003")
+      await applyRaw(exact0003, ["0003"])
+      await expect(runHistoricalMigrations({ pool: exact0003, apply: false })).resolves.toMatchObject({
+        status: "DRY_RUN",
+        plan: [
+          { id: "0003", action: "skip" },
+          { id: "0005", action: "apply" },
+          { id: "0010", action: "apply" },
+          { id: "0014", action: "apply" },
+        ],
+      })
+      await expect(runHistoricalMigrations({ pool: exact0003, apply: true }))
+        .resolves.toMatchObject({ status: "APPLIED", applied: ["0005", "0010", "0014"] })
+      await expect(runHistoricalMigrations({ pool: exact0003, apply: true }))
+        .resolves.toMatchObject({ status: "APPLIED", applied: [] })
+
       const partialProject = await fixture("historical_partial_project")
       await applyRaw(partialProject, ["0003"])
       await partialProject.query('ALTER TABLE project DROP CONSTRAINT project_user_key_unique')
@@ -329,6 +345,35 @@ runDatabase("historical nine-record executor on isolated PostgreSQL", { timeout:
       ])
       await expect(executeHistoricalPromotion({ pool, userId: "tenant-event-mismatch", mode: "apply" }))
         .rejects.toThrow("HISTORICAL_PROMOTION_EVENT_MISMATCH:HKR-d200030578f50efe:created")
+
+      await seedTenant(pool, "tenant-event-cross-owner-project")
+      await executeHistoricalPromotion({ pool, userId: "tenant-event-cross-owner-project", mode: "apply" })
+      await pool.query(`INSERT INTO event_log ("userId", type, summary, register, "refId", metadata)
+        VALUES ($1, 'doctrine.historical_input_created', 'wrong owner orphan', 'doctrine', 999999, $2::jsonb)`, [
+        "tenant-event-cross-owner-project", JSON.stringify({ candidateId: "HKR-eabf2e0c67a8a0f4" }),
+      ])
+      await expect(executeHistoricalPromotion({ pool, userId: "tenant-event-cross-owner-project", mode: "apply" }))
+        .rejects.toThrow("HISTORICAL_PROMOTION_EVENT_UNEXPECTED:HKR-eabf2e0c67a8a0f4:doctrine.historical_input_created")
+
+      await seedTenant(pool, "tenant-event-cross-owner-doctrine")
+      await executeHistoricalPromotion({ pool, userId: "tenant-event-cross-owner-doctrine", mode: "apply" })
+      await pool.query(`INSERT INTO event_log ("userId", type, summary, register, "refId", metadata)
+        VALUES ($1, 'document.historical_project_context_archived', 'wrong owner orphan', 'corpus', NULL, $2::jsonb)`, [
+        "tenant-event-cross-owner-doctrine", JSON.stringify({ candidateId: "HKR-32a0add1327ffadd" }),
+      ])
+      await expect(executeHistoricalPromotion({ pool, userId: "tenant-event-cross-owner-doctrine", mode: "apply" }))
+        .rejects.toThrow("HISTORICAL_PROMOTION_EVENT_UNEXPECTED:HKR-32a0add1327ffadd:document.historical_project_context_archived")
+
+      await seedTenant(pool, "tenant-event-orphan-type")
+      await executeHistoricalPromotion({ pool, userId: "tenant-event-orphan-type", mode: "apply" })
+      await pool.query(`INSERT INTO event_log ("userId", type, summary, register, "refId", metadata)
+        SELECT "userId", 'doctrine.historical_input_orphaned', 'orphan historical lifecycle', 'doctrine', id,
+          jsonb_build_object('candidateId', "historicalCandidateId")
+        FROM doctrine WHERE "userId" = $1 AND "historicalCandidateId" = $2`, [
+        "tenant-event-orphan-type", "HKR-ada454f7cb889228",
+      ])
+      await expect(executeHistoricalPromotion({ pool, userId: "tenant-event-orphan-type", mode: "apply" }))
+        .rejects.toThrow("HISTORICAL_PROMOTION_EVENT_UNEXPECTED:HKR-ada454f7cb889228:doctrine.historical_input_orphaned")
 
       await seedTenant(pool, "tenant-archive-claim-collision")
       await executeHistoricalPromotion({ pool, userId: "tenant-archive-claim-collision", mode: "apply" })

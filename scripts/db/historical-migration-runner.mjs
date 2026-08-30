@@ -17,6 +17,7 @@ const FIXED_MIGRATIONS = Object.freeze([
  * baseSchemaReady:boolean, userTable:boolean, doctrineTable:boolean, documentTable:boolean,
  * documentChunkTable:boolean, eventLogTable:boolean, projectTable:boolean,
  * projectUserKeyUnique:boolean, projectUserIdUnique:boolean,
+ * project0003Ready:boolean,
  * workbenchThreadTable:boolean, workbenchThreadSourceTable:boolean,
  * threadSourceConstraintCurrent:boolean, projectArtifactsPresent:boolean,
  * projectSchemaReady:boolean, threadArtifactsPresent:boolean,
@@ -155,7 +156,7 @@ export function classifyHistoricalSchemaCatalog(catalog) {
   const projectArtifactsPresent = projectTable || projectResourceTable
   const projectUserKeyUnique = constraint("project", "project_user_key_unique", "u", ["unique (userid, key)"])
   const projectUserIdUnique = constraint("project", "project_user_id_unique", "u", ["unique (userid, id)"])
-  const projectSchemaReady = projectTable && projectResourceTable
+  const project0003Ready = projectTable && projectResourceTable
     && columnsMatch("project", [
       ["id", "integer", "NO"], ["userId", "text", "NO"], ["key", "text", "NO"],
       ["name", "text", "NO"], ["lifecycle", "text", "NO"],
@@ -167,7 +168,7 @@ export function classifyHistoricalSchemaCatalog(catalog) {
       ["relationship", "text", "NO"], ["createdAt", "timestamp with time zone", "NO"],
       ["updatedAt", "timestamp with time zone", "NO"],
     ])
-    && projectUserKeyUnique && projectUserIdUnique
+    && projectUserKeyUnique
     && constraint("project", "project_lifecycle_check", "c", ["lifecycle"])
     && sameLiterals(namedConstraint("project", "project_lifecycle_check")?.definition, ["active", "standby", "archived"])
     && constraint("project_resource", "project_resource_identity_unique", "u", ["projectid", "type", "canonicalidentity", "relationship"])
@@ -175,6 +176,7 @@ export function classifyHistoricalSchemaCatalog(catalog) {
     && sameLiterals(namedConstraint("project_resource", "project_resource_type_check")?.definition, ["repo", "database", "node", "service", "data_source"])
     && index("project_resource", "project_resource_user_project_idx", false, ["(userid, projectid)"])
     && index("project_resource", "project_resource_user_identity_idx", false, ["(userid, type, canonicalidentity)"])
+  const projectSchemaReady = project0003Ready && projectUserIdUnique
 
   const workbenchThreadTable = tables.has("workbench_thread")
   const workbenchThreadSourceTable = tables.has("workbench_thread_source")
@@ -261,6 +263,7 @@ export function classifyHistoricalSchemaCatalog(catalog) {
     projectTable,
     projectUserKeyUnique,
     projectUserIdUnique,
+    project0003Ready,
     workbenchThreadTable,
     workbenchThreadSourceTable,
     threadSourceConstraintCurrent,
@@ -294,7 +297,10 @@ export function buildHistoricalMigrationPlan(probe) {
     if (!probe[property]) throw new Error(`HISTORICAL_MIGRATION_BASE_SCHEMA_REQUIRED:${table}`)
   }
   if (!probe.baseSchemaReady) throw new Error("HISTORICAL_MIGRATION_BASE_SCHEMA_INVALID")
-  if (probe.projectArtifactsPresent && !probe.projectSchemaReady) {
+  if (probe.projectArtifactsPresent && !probe.project0003Ready) {
+    throw new Error("HISTORICAL_MIGRATION_PARTIAL_SCHEMA:project")
+  }
+  if (probe.threadArtifactsPresent && !probe.projectUserIdUnique) {
     throw new Error("HISTORICAL_MIGRATION_PARTIAL_SCHEMA:project")
   }
   if (probe.threadArtifactsPresent && (!probe.threadSchemaReady || !probe.threadSourceConstraintKnown)) {
