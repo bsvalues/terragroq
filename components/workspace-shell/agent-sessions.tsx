@@ -116,6 +116,7 @@ export type RunClaudeTurnInput = Readonly<{
   onPresentation?: (presentation: AgentTurnPresentation) => void
   onReviewComplete?: (report: string) => void
   target?: AgentSessionFileTarget
+  requiredSessionKey?: string
 }>
 
 export type RunAgentTurnInput = Readonly<{
@@ -275,6 +276,7 @@ function optionalMetadataSessionIdentity(value: unknown): Readonly<{ key: string
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
   if (!("target" in candidate) && !("forkedFrom" in candidate) && !("preview" in candidate)
+    && !("reviewPath" in candidate) && candidate.role !== "Reviewer"
     || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)) return null
   return { key: sessionKey(candidate.provider, candidate.sessionId), sessionId: candidate.sessionId }
@@ -297,11 +299,13 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
       ? candidate.forkedFrom : null
   const completedTurns = candidate.completedTurns === undefined ? [] : parseCompletedTurns(candidate.completedTurns)
   const preview = candidate.preview === undefined ? undefined : parsePreview(candidate.preview)
+  const isClaudeReviewer = candidate.provider === "Claude" && role === "Reviewer"
   if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)
     || !role || !assignment || !updatedAt || (candidate.target !== undefined && !target)
     || (candidate.reviewPath !== undefined && !reviewPath) || (candidate.forkedFrom !== undefined && !forkedFrom) || !completedTurns
     || target !== undefined && (role !== "Builder" || candidate.provider !== "Codex" || reviewPath !== undefined)
+    || isClaudeReviewer !== (reviewPath !== undefined)
     || (candidate.preview !== undefined && !preview)
     || forkedFrom !== undefined && (candidate.provider !== "Claude" || role !== "Builder" || reviewPath !== undefined || target !== undefined || preview !== undefined)
     || preview !== undefined && (candidate.provider !== "Claude" || role !== "Preview debugger" || target !== undefined || reviewPath !== undefined || forkedFrom !== undefined)
@@ -827,6 +831,7 @@ export function useExperienceAgentSessions({
     const reviewPath = boundedText(input.path, 1_000)
     const requestedTarget = input.target === undefined ? null : parseFileTarget(input.target)
     const focus = input.focus === undefined || input.focus === "" ? null : boundedText(input.focus, 2_000)
+    const requiredSessionKey = input.requiredSessionKey === undefined ? null : boundedText(input.requiredSessionKey, 200)
     if (!role) throw new Error("AGENT_ROLE_REQUIRED")
     if (!assignment) throw new Error("AGENT_ASSIGNMENT_REQUIRED")
     if ((mode === "delegate" || forkMode) && !prompt) throw new Error("AGENT_PROMPT_REQUIRED")
@@ -834,9 +839,28 @@ export function useExperienceAgentSessions({
       || input.provider !== "Codex")) throw new Error("AGENT_TARGET_INVALID")
     if (mode === "review" && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
     if (mode === "review" && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
+    if (mode === "review" && role !== "Reviewer") throw new Error("AGENT_REVIEW_ROLE_INVALID")
+    if (input.requiredSessionKey !== undefined && (!requiredSessionKey || !/^Claude:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requiredSessionKey))) {
+      throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
+    }
+    if (requiredSessionKey && mode !== "review") throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
     if (previewMode && (input.provider !== "Claude" || role !== "Preview debugger")) throw new Error("AGENT_PREVIEW_PROVIDER_INVALID")
 
+    const operationStorageKey = storageKey(ownerScope, worldScope)
     const storedPrior = sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === selectedSessionKeyRef.current) ?? null
+    const requiredPrior = requiredSessionKey
+      ? sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === requiredSessionKey) ?? null
+      : null
+    if (requiredSessionKey && (!requiredPrior || loadedStorageKey !== operationStorageKey)) {
+      throw new Error("AGENT_REVIEW_PRIOR_REQUIRED")
+    }
+    if (requiredSessionKey && (selectedSessionKeyRef.current !== requiredSessionKey
+      || requiredPrior?.provider !== "Claude"
+      || requiredPrior.role !== "Reviewer"
+      || requiredPrior.reviewPath !== reviewPath
+      || requiredPrior.assignment !== assignment)) {
+      throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
+    }
     if (previewMode && storedPrior?.preview && storedPrior.preview.worldId !== worldId) {
       throw new Error("AGENT_PREVIEW_SESSION_SCOPE_MISMATCH")
     }
@@ -847,7 +871,7 @@ export function useExperienceAgentSessions({
       ? storedPrior : null
     if (forkMode && !forkSource) throw new Error("AGENT_FORK_UNAVAILABLE")
     const prior = forkMode ? null : mode === "review"
-      ? storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer" && storedPrior.reviewPath === reviewPath ? storedPrior : null
+      ? requiredPrior ?? (storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer" && storedPrior.reviewPath === reviewPath ? storedPrior : null)
       : previewMode
         ? storedPrior?.provider === "Claude" && storedPrior.role === "Preview debugger" && storedPrior.preview?.worldId === worldId ? storedPrior : null
       : storedPrior?.provider === input.provider && !storedPrior.reviewPath
@@ -866,7 +890,6 @@ export function useExperienceAgentSessions({
     if (running.length > 0 && (!lane || running.some((candidate) => !candidate.lane || candidate.lane === lane))) {
       throw new Error("AGENT_TURN_ALREADY_RUNNING")
     }
-    const operationStorageKey = storageKey(ownerScope, worldScope)
     const operation: ActiveAgentOperation = {
       epoch: operationEpoch.current + 1,
       abort: new AbortController(),
@@ -1170,9 +1193,10 @@ export function useExperienceAgentSessions({
       if (mode === "review" && isCurrent()) input.onReviewComplete?.(resultText)
       return persistedSession
     } catch (cause) {
-      // A failed resume is no longer evidence that the saved descriptor exists or belongs to this
-      // authenticated owner. Clear it so the next Delegate can start a fresh truthful session.
-      // A user cancellation is different: it does not disprove an already verified descriptor.
+      // A failed mutation-capable resume is no longer evidence that the saved descriptor exists or
+      // belongs to this owner, so Delegate clears it. Read-only Review keeps its historical transcript
+      // as an unverified resume hint; a refusal must not erase already-settled owner-visible review work.
+      // A user cancellation is different: it does not disprove any already verified descriptor.
       const error = cause as Error
       if (!isCurrent()) throw cause
       if (error instanceof AgentTurnCommittedPersistenceError) {
@@ -1183,7 +1207,7 @@ export function useExperienceAgentSessions({
       const terminalResumeRefusal = prior !== null && (error instanceof AgentTargetBindingError || error instanceof AgentStartRefusal
         && (error.status === 401 || error.status === 403 || error.status === 404)
       )
-      if (error?.name !== "AbortError" && terminalResumeRefusal && prior) {
+      if (error?.name !== "AbortError" && terminalResumeRefusal && prior && mode !== "review") {
         const priorKey = sessionKey(prior.provider, prior.sessionId)
         const remaining = sessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
         const remainingSelected = selectedSessionKeyRef.current === priorKey ? null : selectedSessionKeyRef.current
@@ -1215,7 +1239,7 @@ export function useExperienceAgentSessions({
         syncActiveTurns()
       }
     }
-  }, [ownerScope, persistCanonicalCollection, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
+  }, [loadedStorageKey, ownerScope, persistCanonicalCollection, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
 
   const runAgentTurn = useCallback((input: RunAgentTurnInput) => executeTurn({ ...input, mode: "delegate" }), [executeTurn])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
