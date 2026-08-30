@@ -3,6 +3,7 @@
 import styles from "./workspace-shell.module.css"
 import { validateWilliamJudgment } from "@/lib/environment/working-world"
 import { parsePreviewInspectorPayload } from "./types"
+import type { AgentSessionDiffReview } from "./agent-sessions"
 
 export type InspectorSurface = Readonly<{
   id: string
@@ -11,6 +12,97 @@ export type InspectorSurface = Readonly<{
   identity?: string
   payload?: unknown
 }>
+
+type DiffReviewInspectorPayload = Readonly<{
+  schemaVersion: 1
+  kind: "diff-review"
+  binding: AgentSessionDiffReview
+  report: string
+}>
+
+const MAX_PERSISTED_REVIEW_PAYLOAD_BYTES = 200_000
+const DIFF_REVIEW_TRUNCATION_NOTICE = "\n\n[Report truncated in Inspector; full result remains in the durable Reviewer transcript.]"
+const textEncoder = new TextEncoder()
+
+function serializedDiffReviewPayload(binding: AgentSessionDiffReview, report: string): string {
+  return JSON.stringify({ schemaVersion: 1, kind: "diff-review", binding, report } satisfies DiffReviewInspectorPayload)
+}
+
+export function encodeDiffReviewInspectorPayload(binding: AgentSessionDiffReview, report: string): string {
+  const complete = serializedDiffReviewPayload(binding, report)
+  if (textEncoder.encode(complete).byteLength <= MAX_PERSISTED_REVIEW_PAYLOAD_BYTES) return complete
+
+  const codePoints = Array.from(report)
+  let lower = 0
+  let upper = codePoints.length
+  let accepted = serializedDiffReviewPayload(binding, DIFF_REVIEW_TRUNCATION_NOTICE)
+  while (lower <= upper) {
+    const middle = Math.floor((lower + upper) / 2)
+    const candidate = serializedDiffReviewPayload(binding, `${codePoints.slice(0, middle).join("")}${DIFF_REVIEW_TRUNCATION_NOTICE}`)
+    if (textEncoder.encode(candidate).byteLength <= MAX_PERSISTED_REVIEW_PAYLOAD_BYTES) {
+      accepted = candidate
+      lower = middle + 1
+    } else {
+      upper = middle - 1
+    }
+  }
+  return accepted
+}
+
+function parseDiffReviewInspectorPayload(value: unknown): DiffReviewInspectorPayload | null {
+  if (typeof value !== "string" || value.length > MAX_PERSISTED_REVIEW_PAYLOAD_BYTES
+    || textEncoder.encode(value).byteLength > MAX_PERSISTED_REVIEW_PAYLOAD_BYTES) return null
+  let decoded: unknown
+  try { decoded = JSON.parse(value) } catch { return null }
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return null
+  const candidate = decoded as Record<string, unknown>
+  const binding = candidate.binding
+  if (candidate.schemaVersion !== 1 || candidate.kind !== "diff-review" || typeof candidate.report !== "string"
+    || candidate.report.length === 0 || candidate.report.length > MAX_PERSISTED_REVIEW_PAYLOAD_BYTES
+    || !binding || typeof binding !== "object" || Array.isArray(binding)) return null
+  const exact = binding as Record<string, unknown>
+  const canonicalPath = typeof exact.path === "string" && exact.path === exact.path.trim() && exact.path.length <= 1_000
+    && !/[\\\u0000-\u001f\u007f]/.test(exact.path) && !exact.path.startsWith("/") && !/^[A-Za-z]:/.test(exact.path)
+    && exact.path.split("/").every((part) => part && part !== "." && part !== "..")
+  const completedAt = typeof exact.completedAt === "string" && exact.completedAt.length <= 40
+    && Number.isFinite(Date.parse(exact.completedAt)) && new Date(exact.completedAt).toISOString() === exact.completedAt
+  if (Object.keys(exact).length !== 7 || typeof exact.worldId !== "string" || !exact.worldId.trim() || exact.worldId.length > 200
+    || !canonicalPath || typeof exact.fingerprint !== "string" || !exact.fingerprint.trim() || exact.fingerprint.length > 16_384
+    || new TextEncoder().encode(exact.fingerprint).byteLength > 16_384
+    || typeof exact.baseHash !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(exact.baseHash)
+    || typeof exact.indexHash !== "string" || !/^[0-9a-f]{64}$/.test(exact.indexHash)
+    || typeof exact.patchHash !== "string" || !/^[0-9a-f]{64}$/.test(exact.patchHash) || !completedAt) return null
+  return candidate as DiffReviewInspectorPayload
+}
+
+export function diffReviewInspectorIdentity(binding: Pick<AgentSessionDiffReview, "worldId" | "fingerprint">): string {
+  return JSON.stringify([binding.worldId, binding.fingerprint])
+}
+
+function identityToken(value: string): string {
+  return [2166136261, 2246822507, 3266489909, 668265263].map((seed) => {
+    let hash = seed
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index)
+      hash = Math.imul(hash, 16777619)
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0")
+  }).join("")
+}
+
+export function diffReviewInspectorId(binding: Pick<AgentSessionDiffReview, "worldId" | "fingerprint">): string {
+  return `inspector-diff-review:${identityToken(diffReviewInspectorIdentity(binding))}`
+}
+
+export function diffReviewInspectorBinding(value: unknown): AgentSessionDiffReview | null {
+  return parseDiffReviewInspectorPayload(value)?.binding ?? null
+}
+
+export function inspectorSurfaceWindowTitle(surface: InspectorSurface): string {
+  return surface.kind === "review" && parseDiffReviewInspectorPayload(surface.payload)
+    ? `Inspector · Current changes · ${surface.subject}`
+    : `Inspector · ${surface.subject}`
+}
 
 function display(value: unknown): string {
   if (value === null || value === undefined) return "—"
@@ -106,6 +198,20 @@ export function InspectorSurfaceView({ surface, onRefresh }: { surface: Inspecto
     )
   }
   if (surface.kind === "review") {
+    const diffReview = parseDiffReviewInspectorPayload(surface.payload)
+    if (diffReview) return (
+      <article className={styles.inspectorCode} aria-label="Current changes review report">
+        <h2>Current changes · {surface.subject}</h2>
+        <dl>
+          <div><dt>Reviewed fingerprint</dt><dd>{diffReview.binding.fingerprint}</dd></div>
+          <div><dt>Base</dt><dd>{diffReview.binding.baseHash}</dd></div>
+          <div><dt>Index</dt><dd>{diffReview.binding.indexHash}</dd></div>
+          <div><dt>Patch</dt><dd>{diffReview.binding.patchHash}</dd></div>
+          <div><dt>Completed</dt><dd>{diffReview.binding.completedAt}</dd></div>
+        </dl>
+        <pre>{diffReview.report}</pre>
+      </article>
+    )
     return (
       <article className={styles.inspectorCode}>
         <h2>Review report · {surface.subject}</h2>

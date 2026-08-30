@@ -3,9 +3,10 @@ import fs from "node:fs"
 import path from "node:path"
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { Desk } from "@/components/desk/desk"
+import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
 import { SUMMONED_SURFACES } from "@/lib/environment/summon"
 
 /**
@@ -21,8 +22,13 @@ import { SUMMONED_SURFACES } from "@/lib/environment/summon"
  * Three independent assurance lanes found it by reading. These make it cost something.
  */
 
+beforeEach(() => {
+  window.localStorage.clear()
+})
+
 afterEach(() => {
   cleanup()
+  window.localStorage.clear()
   vi.unstubAllGlobals()
 })
 
@@ -31,12 +37,33 @@ const SURFACE_RENDERER = fs.readFileSync(path.join(ROOT, "components/workspace-s
 
 /** Arrive by ADDRESS, the way a superseded route's redirect does, with the Line stubbed. */
 async function arrive(summon: (typeof SUMMONED_SURFACES)[number], surface: unknown) {
+  const initialSpace = spaceToServer(defaultSpace(1440, 900, "w-1", "Test Space"))
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ worldId: "w-1", say: "here it is", surfaces: [surface] }),
-    })),
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? "GET"
+      if (url === "/api/environment/space" && method === "GET") {
+        return Response.json({ worldId: "w-1", space: initialSpace })
+      }
+      if (url === "/api/environment/space" && method === "PUT") {
+        const body = JSON.parse(String(init?.body)) as { space: unknown }
+        return Response.json({ worldId: "w-1", space: body.space, updatedAt: "2026-08-30T00:00:00.000Z" })
+      }
+      if (url === "/api/environment/line" && method === "POST") {
+        return Response.json({ worldId: "w-1", say: "here it is", surfaces: [surface] })
+      }
+      if (url === "/api/environment/space/outcome" && method === "POST") {
+        return Response.json({ error: "NO_ACTIVE_OUTCOME" }, { status: 409 })
+      }
+      if (url === "/api/environment/judgment" && method === "POST") {
+        return Response.json({ error: "JUDGMENT_UNAVAILABLE" }, { status: 503 })
+      }
+      if (url === "/api/loom/files?path=" && method === "GET") {
+        return Response.json({ kind: "directory", entries: [] })
+      }
+      throw new Error(`unexpected request: ${method} ${url}`)
+    }),
   )
   render(<Desk initialSummon={summon} />)
   await waitFor(() => expect(document.body.textContent).toContain("here it is"))

@@ -7,6 +7,7 @@ import type { WorldWorker } from "@/lib/environment/working-world"
 const CLAUDE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CODEX_SESSION_ID = /^[A-Za-z0-9._:-]{1,200}$/
 const ASSIGNMENT_HASH = /^[0-9a-f]{64}$/
+const GIT_OBJECT_HASH = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 const STORAGE_PREFIX = "williamos:agent-session:"
 const MAX_DURABLE_SESSIONS = 12
 const MAX_COMPLETED_TURNS = 20
@@ -39,6 +40,16 @@ export type AgentSessionPreview = Readonly<{
   evidenceFingerprint: string
 }>
 
+export type AgentSessionDiffReview = Readonly<{
+  worldId: string
+  path: string
+  fingerprint: string
+  baseHash: string
+  indexHash: string
+  patchHash: string
+  completedAt: string
+}>
+
 export type DurableAgentSession = Readonly<{
   schemaVersion: 1
   sessionId: string
@@ -47,6 +58,7 @@ export type DurableAgentSession = Readonly<{
   assignment: string
   target?: AgentSessionFileTarget
   reviewPath?: string
+  diffReview?: AgentSessionDiffReview
   forkedFrom?: string
   preview?: AgentSessionPreview
   updatedAt: string
@@ -71,9 +83,10 @@ export type ExperienceAgentSession = Readonly<{
   evidence: string
   truth: "live" | "resume-unverified"
   kind: "durable-session" | "world-worker"
-  mode: "delegate" | "review" | "preview"
+  mode: "delegate" | "review" | "diff-review" | "preview"
   target?: AgentSessionFileTarget
   reviewPath?: string
+  diffReview?: AgentSessionDiffReview
   forkedFrom?: string
   preview?: AgentSessionPreview
   lastResult?: string
@@ -109,12 +122,14 @@ export type RunClaudeTurnInput = Readonly<{
   role: string
   assignment: string
   prompt?: string
-  mode?: "delegate" | "review"
+  mode?: "delegate" | "review" | "diff-review"
   path?: string
+  worldId?: string
+  expectedDiffFingerprint?: string
   focus?: string
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
   onPresentation?: (presentation: AgentTurnPresentation) => void
-  onReviewComplete?: (report: string) => void
+  onReviewComplete?: (report: string, binding?: AgentSessionDiffReview) => void
   target?: AgentSessionFileTarget
   requiredSessionKey?: string
 }>
@@ -205,7 +220,7 @@ type ActiveAgentOperation = {
   priorSelectedSessionKey: string | null
   provider: AgentProvider
   role: string
-  mode: "delegate" | "review" | "fork" | "preview"
+  mode: "delegate" | "review" | "diff-review" | "fork" | "preview"
   lane: "writer" | "reviewer" | "thinker" | null
   accepted: DurableAgentSession | null
   acceptedKey: string | null
@@ -280,10 +295,29 @@ function parsePreview(value: unknown): AgentSessionPreview | null {
   return Object.keys(candidate).length === 2 && worldId && evidenceFingerprint ? { worldId, evidenceFingerprint } : null
 }
 
+function parseDiffReview(value: unknown): AgentSessionDiffReview | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const candidate = value as Record<string, unknown>
+  const worldId = boundedText(candidate.worldId, 200)
+  const path = canonicalWorkspaceFilePath(candidate.path)
+  const candidateFingerprint = boundedText(candidate.fingerprint, 16_384)
+  const fingerprint = candidateFingerprint && new TextEncoder().encode(candidateFingerprint).byteLength <= 16_384
+    ? candidateFingerprint : null
+  const baseHash = typeof candidate.baseHash === "string" && GIT_OBJECT_HASH.test(candidate.baseHash) ? candidate.baseHash : null
+  const indexHash = typeof candidate.indexHash === "string" && ASSIGNMENT_HASH.test(candidate.indexHash) ? candidate.indexHash : null
+  const patchHash = typeof candidate.patchHash === "string" && ASSIGNMENT_HASH.test(candidate.patchHash) ? candidate.patchHash : null
+  const candidateCompletedAt = boundedText(candidate.completedAt, 40)
+  const completedAt = candidateCompletedAt && Number.isFinite(Date.parse(candidateCompletedAt))
+    && new Date(candidateCompletedAt).toISOString() === candidateCompletedAt ? candidateCompletedAt : null
+  return Object.keys(candidate).length === 7 && worldId && path && fingerprint && baseHash && indexHash && patchHash && completedAt
+    ? { worldId, path, fingerprint, baseHash, indexHash, patchHash, completedAt }
+    : null
+}
+
 function optionalMetadataSessionIdentity(value: unknown): Readonly<{ key: string; sessionId: string }> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   const candidate = value as Record<string, unknown>
-  if (!("target" in candidate) && !("forkedFrom" in candidate) && !("preview" in candidate)
+  if (!("target" in candidate) && !("forkedFrom" in candidate) && !("preview" in candidate) && !("diffReview" in candidate)
     && !("reviewPath" in candidate) && candidate.role !== "Reviewer"
     || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)) return null
@@ -307,6 +341,7 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
       ? candidate.forkedFrom : null
   const completedTurns = candidate.completedTurns === undefined ? [] : parseCompletedTurns(candidate.completedTurns)
   const preview = candidate.preview === undefined ? undefined : parsePreview(candidate.preview)
+  const diffReview = candidate.diffReview === undefined ? undefined : parseDiffReview(candidate.diffReview)
   const isClaudeReviewer = candidate.provider === "Claude" && role === "Reviewer"
   if (candidate.schemaVersion !== 1 || candidate.provider !== "Claude" && candidate.provider !== "Codex" && candidate.provider !== "Local"
     || !validSessionId(candidate.provider, candidate.sessionId)
@@ -314,6 +349,9 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     || (candidate.reviewPath !== undefined && !reviewPath) || (candidate.forkedFrom !== undefined && !forkedFrom) || !completedTurns
     || target !== undefined && (role !== "Builder" || candidate.provider !== "Codex" || reviewPath !== undefined)
     || isClaudeReviewer !== (reviewPath !== undefined)
+    || (candidate.diffReview !== undefined && !diffReview)
+    || diffReview != null && (candidate.provider !== "Claude" || role !== "Reviewer" || reviewPath !== diffReview.path
+      || target !== undefined || preview !== undefined || forkedFrom !== undefined)
     || (candidate.preview !== undefined && !preview)
     || forkedFrom !== undefined && (candidate.provider !== "Claude" || role !== "Builder" || reviewPath !== undefined || target !== undefined || preview !== undefined)
     || preview !== undefined && (candidate.provider !== "Claude" || role !== "Preview debugger" || target !== undefined || reviewPath !== undefined || forkedFrom !== undefined)
@@ -326,6 +364,7 @@ function parseDescriptor(value: string | null): DurableAgentSession | null {
     assignment,
     ...(target ? { target } : {}),
     ...(reviewPath ? { reviewPath } : {}),
+    ...(diffReview ? { diffReview } : {}),
     ...(forkedFrom ? { forkedFrom } : {}),
     ...(preview ? { preview } : {}),
     updatedAt,
@@ -535,9 +574,10 @@ function projectSessions(
           : isLocal ? "saved conversation · replay verification required" : "saved transcript · server verification required",
       truth: isVerified || active ? "live" : "resume-unverified",
       kind: "durable-session",
-      mode: descriptor.preview ? "preview" : descriptor.reviewPath ? "review" : "delegate",
+      mode: descriptor.preview ? "preview" : descriptor.diffReview ? "diff-review" : descriptor.reviewPath ? "review" : "delegate",
       ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
+      ...(descriptor.diffReview ? { diffReview: descriptor.diffReview } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
       ...(descriptor.preview ? { preview: descriptor.preview } : {}),
       ...(descriptor.completedTurns?.at(-1)?.finalResult ? { lastResult: descriptor.completedTurns.at(-1)!.finalResult } : {}),
@@ -557,9 +597,10 @@ function projectSessions(
       evidence: descriptor.provider === "Local" ? "live model response" : "live agent stream",
       truth: "live",
       kind: "durable-session",
-      mode: descriptor.preview ? "preview" : descriptor.reviewPath ? "review" : "delegate",
+      mode: descriptor.preview ? "preview" : descriptor.diffReview ? "diff-review" : descriptor.reviewPath ? "review" : "delegate",
       ...(descriptor.target ? { target: descriptor.target } : {}),
       ...(descriptor.reviewPath ? { reviewPath: descriptor.reviewPath } : {}),
+      ...(descriptor.diffReview ? { diffReview: descriptor.diffReview } : {}),
       ...(descriptor.forkedFrom ? { forkedFrom: descriptor.forkedFrom } : {}),
       ...(descriptor.preview ? { preview: descriptor.preview } : {}),
       presentation: turn.presentation,
@@ -840,7 +881,7 @@ export function useExperienceAgentSessions({
 
   const executeTurn = useCallback(async (input: Omit<RunClaudeTurnInput, "mode"> & {
     provider: AgentProvider
-    mode?: "delegate" | "review" | "fork" | "preview"
+    mode?: "delegate" | "review" | "diff-review" | "fork" | "preview"
     sourceSessionId?: string
     exactContinuation?: boolean
   }) => {
@@ -853,7 +894,12 @@ export function useExperienceAgentSessions({
     const mode = input.mode ?? "delegate"
     const forkMode = mode === "fork"
     const previewMode = mode === "preview"
+    const diffReviewMode = mode === "diff-review"
     const reviewPath = boundedText(input.path, 1_000)
+    const reviewWorldId = boundedText(input.worldId, 200)
+    const candidateDiffFingerprint = boundedText(input.expectedDiffFingerprint, 16_384)
+    const expectedDiffFingerprint = candidateDiffFingerprint && new TextEncoder().encode(candidateDiffFingerprint).byteLength <= 16_384
+      ? candidateDiffFingerprint : null
     const requestedTarget = input.target === undefined ? null : parseFileTarget(input.target)
     const focus = input.focus === undefined || input.focus === "" ? null : boundedText(input.focus, 2_000)
     const requiredSessionKey = input.requiredSessionKey === undefined ? null : boundedText(input.requiredSessionKey, 200)
@@ -862,9 +908,10 @@ export function useExperienceAgentSessions({
     if ((mode === "delegate" || forkMode) && !prompt) throw new Error("AGENT_PROMPT_REQUIRED")
     if (input.target !== undefined && (!requestedTarget || mode !== "delegate" || role !== "Builder"
       || input.provider !== "Codex")) throw new Error("AGENT_TARGET_INVALID")
-    if (mode === "review" && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
-    if (mode === "review" && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
-    if (mode === "review" && role !== "Reviewer") throw new Error("AGENT_REVIEW_ROLE_INVALID")
+    if ((mode === "review" || diffReviewMode) && (!reviewPath || input.focus !== undefined && input.focus !== "" && !focus)) throw new Error("AGENT_REVIEW_INPUT_INVALID")
+    if (diffReviewMode && (!reviewWorldId || reviewWorldId !== worldId || !expectedDiffFingerprint)) throw new Error("AGENT_DIFF_REVIEW_INPUT_INVALID")
+    if ((mode === "review" || diffReviewMode) && input.provider !== "Claude") throw new Error("AGENT_REVIEW_PROVIDER_INVALID")
+    if ((mode === "review" || diffReviewMode) && role !== "Reviewer") throw new Error("AGENT_REVIEW_ROLE_INVALID")
     const requiredId = requiredSessionKey?.slice(`${input.provider}:`.length) ?? null
     const requiredKeyValid = Boolean(requiredSessionKey?.startsWith(`${input.provider}:`)
       && validSessionId(input.provider, requiredId))
@@ -872,7 +919,7 @@ export function useExperienceAgentSessions({
       throw new Error(input.exactContinuation ? "AGENT_CONTINUE_SESSION_UNAVAILABLE" : "AGENT_REVIEW_SESSION_MISMATCH")
     }
     if (input.exactContinuation && !requiredSessionKey) throw new Error("AGENT_CONTINUE_SESSION_UNAVAILABLE")
-    if (requiredSessionKey && !input.exactContinuation && mode !== "review") throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
+    if (requiredSessionKey && !input.exactContinuation && mode !== "review" && !diffReviewMode) throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
     if (previewMode && (input.provider !== "Claude" || role !== "Preview debugger")) throw new Error("AGENT_PREVIEW_PROVIDER_INVALID")
 
     const operationStorageKey = storageKey(ownerScope, worldScope)
@@ -887,7 +934,9 @@ export function useExperienceAgentSessions({
       requiredPrior.provider !== input.provider
       || requiredPrior.role !== role
       || requiredPrior.assignment !== assignment
-      || (mode === "review" ? requiredPrior.reviewPath !== reviewPath : Boolean(requiredPrior.reviewPath))
+      || (mode === "review" || diffReviewMode ? requiredPrior.reviewPath !== reviewPath : Boolean(requiredPrior.reviewPath))
+      || (diffReviewMode ? requiredPrior.diffReview?.worldId !== reviewWorldId
+        || requiredPrior.diffReview?.fingerprint !== expectedDiffFingerprint : Boolean(requiredPrior.diffReview))
       || (previewMode ? requiredPrior.preview?.worldId !== worldId : Boolean(requiredPrior.preview))
       || (requestedTarget ? requiredPrior.target?.path !== requestedTarget.path : Boolean(requiredPrior.target))
     )
@@ -911,13 +960,17 @@ export function useExperienceAgentSessions({
     if (forkMode && !forkSource) throw new Error("AGENT_FORK_UNAVAILABLE")
     const prior = input.exactContinuation ? requiredPrior : forkMode ? null : mode === "review"
       ? requiredPrior ?? (storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer" && storedPrior.reviewPath === reviewPath ? storedPrior : null)
+      : diffReviewMode
+        ? requiredPrior ?? (storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer"
+          && storedPrior.reviewPath === reviewPath && storedPrior.diffReview?.worldId === reviewWorldId
+          && storedPrior.diffReview?.fingerprint === expectedDiffFingerprint ? storedPrior : null)
       : previewMode
         ? storedPrior?.provider === "Claude" && storedPrior.role === "Preview debugger" && storedPrior.preview?.worldId === worldId ? storedPrior : null
       : storedPrior?.provider === input.provider && !storedPrior.reviewPath
         && !storedPrior.preview
         && storedPrior.role === role && storedPrior.assignment === assignment ? storedPrior : null
     const lane: ActiveAgentOperation["lane"] = input.provider === "Codex" && role === "Builder" && mode === "delegate" ? "writer"
-      : input.provider === "Claude" && role === "Reviewer" && mode === "review" ? "reviewer"
+      : input.provider === "Claude" && role === "Reviewer" && (mode === "review" || diffReviewMode) ? "reviewer"
         : previewMode ? "reviewer"
         : input.provider === "Local" && mode === "delegate" ? "thinker" : null
     const running = [...operationsRef.current.values()]
@@ -980,7 +1033,16 @@ export function useExperienceAgentSessions({
       const response = await fetch(input.provider === "Codex" ? "/api/loom/codex" : "/api/loom/agent", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(mode === "review" ? {
+        body: JSON.stringify(diffReviewMode ? {
+          mode: "diff-review",
+          worldId: reviewWorldId,
+          path: reviewPath,
+          expectedDiffFingerprint,
+          ...(focus ? { focus } : {}),
+          provider: "cloud",
+          sessionId: prior?.sessionId ?? null,
+          resume: prior !== null,
+        } : mode === "review" ? {
           mode: "review",
           path: reviewPath,
           ...(focus ? { focus } : {}),
@@ -1080,9 +1142,27 @@ export function useExperienceAgentSessions({
           const invalidPreviewBinding = previewMode && (event.provider !== "Claude" || event.mode !== "preview"
             || previewWorldId !== worldId || !previewFingerprint
             || input.exactContinuation && previewFingerprint !== prior?.preview?.evidenceFingerprint)
+          const diffReviewBinding = diffReviewMode ? parseDiffReview({
+            worldId: event.worldId,
+            path: event.path,
+            fingerprint: event.fingerprint,
+            baseHash: event.baseHash,
+            indexHash: event.indexHash,
+            patchHash: event.patchHash,
+            completedAt: event.completedAt,
+          }) : null
+          const invalidDiffReviewBinding = diffReviewMode && (!diffReviewBinding
+            || event.provider !== "Claude" || event.mode !== "diff-review"
+            || diffReviewBinding.worldId !== reviewWorldId || diffReviewBinding.path !== reviewPath
+            || diffReviewBinding.fingerprint !== expectedDiffFingerprint
+            || input.exactContinuation && (
+              diffReviewBinding.baseHash !== prior?.diffReview?.baseHash
+              || diffReviewBinding.indexHash !== prior?.diffReview?.indexHash
+              || diffReviewBinding.patchHash !== prior?.diffReview?.patchHash
+            ))
           if (!sessionIdValid || typeof event.resumed !== "boolean" || event.resumed !== expectedResumed
             || !matchesResumeId || unexpectedReuse || sessionSeen || canonicalResultSeen || !codexTruth || !claudeTruth || !localTruth
-            || !forkTruth || invalidResumeForkLineage || invalidTargetBinding || invalidPreviewBinding) {
+            || !forkTruth || invalidResumeForkLineage || invalidTargetBinding || invalidPreviewBinding || invalidDiffReviewBinding) {
             if (invalidTargetBinding) targetBindingInvalid = true
             malformed = true
             return
@@ -1095,7 +1175,8 @@ export function useExperienceAgentSessions({
             provider: input.provider,
             assignment,
             ...(capturedTarget ? { target: { kind: "file" as const, path: serverSelectedPath! } } : {}),
-            ...(mode === "review" ? { reviewPath: reviewPath! } : {}),
+            ...(mode === "review" || diffReviewMode ? { reviewPath: reviewPath! } : {}),
+            ...(diffReviewBinding ? { diffReview: diffReviewBinding } : {}),
             ...(forkMode ? { forkedFrom: forkSource!.sessionId } : {}),
             ...(resumeForkedFrom ? { forkedFrom: resumeForkedFrom } : {}),
             ...(previewMode ? { preview: { worldId: previewWorldId!, evidenceFingerprint: previewFingerprint! } } : {}),
@@ -1178,21 +1259,21 @@ export function useExperienceAgentSessions({
       const invalid = malformed || !terminalSeen
       if (invalid) throw targetBindingInvalid
         ? new AgentTargetBindingError()
-        : new Error(mode === "review" ? "AGENT_REVIEW_STREAM_INVALID" : "AGENT_STREAM_INVALID")
+        : new Error(mode === "review" || diffReviewMode ? "AGENT_REVIEW_STREAM_INVALID" : "AGENT_STREAM_INVALID")
       const reason = typeof finalOutcome.reason === "string" && finalOutcome.reason.trim()
         ? finalOutcome.reason.trim() : null
       if (reason || finalOutcome.code !== 0) {
         throw new Error(`AGENT_TURN_FAILED:${reason ?? `EXIT_${String(finalOutcome.code)}`}`)
       }
       const acceptedSession = accepted as DurableAgentSession | null
-      if (!sessionSeen || !acceptedSession || !canonicalResultSeen || !resultText) throw new Error(mode === "review" ? "AGENT_REVIEW_STREAM_INVALID" : "AGENT_STREAM_INVALID")
+      if (!sessionSeen || !acceptedSession || !canonicalResultSeen || !resultText) throw new Error(mode === "review" || diffReviewMode ? "AGENT_REVIEW_STREAM_INVALID" : "AGENT_STREAM_INVALID")
       if (!isCurrent()) throw new DOMException("Aborted", "AbortError")
       const completedAt = new Date().toISOString()
       const settledSession: DurableAgentSession = {
         ...acceptedSession,
         updatedAt: completedAt,
         completedTurns: [...(prior?.completedTurns ?? []), {
-          ownerPrompt: mode === "review" ? focus ?? `Review ${reviewPath}` : prompt!,
+          ownerPrompt: mode === "review" || diffReviewMode ? focus ?? `Review ${reviewPath}` : prompt!,
           finalResult: resultText,
           completedAt,
         }].slice(-MAX_COMPLETED_TURNS),
@@ -1230,7 +1311,7 @@ export function useExperienceAgentSessions({
         : null
       setDurableSession(selectedPersistedVerified ?? selectedActive)
       present("complete", persistedSession.completedTurns?.at(-1)?.finalResult ?? resultText, persistedSession.sessionId)
-      if (mode === "review" && isCurrent()) input.onReviewComplete?.(resultText)
+      if ((mode === "review" || diffReviewMode) && isCurrent()) input.onReviewComplete?.(resultText, persistedSession.diffReview)
       return persistedSession
     } catch (cause) {
       // A failed mutation-capable resume is no longer evidence that the saved descriptor exists or
@@ -1247,7 +1328,7 @@ export function useExperienceAgentSessions({
       const terminalResumeRefusal = prior !== null && (error instanceof AgentTargetBindingError || error instanceof AgentStartRefusal
         && (error.status === 401 || error.status === 403 || error.status === 404)
       )
-      if (error?.name !== "AbortError" && terminalResumeRefusal && prior && mode !== "review" && !input.exactContinuation) {
+      if (error?.name !== "AbortError" && terminalResumeRefusal && prior && mode !== "review" && !diffReviewMode && !input.exactContinuation) {
         const priorKey = sessionKey(prior.provider, prior.sessionId)
         const remaining = sessionsRef.current.filter((session) => sessionKey(session.provider, session.sessionId) !== priorKey)
         const remainingSelected = selectedSessionKeyRef.current === priorKey ? null : selectedSessionKeyRef.current
@@ -1296,13 +1377,17 @@ export function useExperienceAgentSessions({
       ? sessionsRef.current.find((session) => sessionKey(session.provider, session.sessionId) === exactKey) ?? null
       : null
     if (!prior || !exactKey) return Promise.reject(new Error("AGENT_CONTINUE_SESSION_UNAVAILABLE"))
-    const mode = prior.preview ? "preview" as const : prior.reviewPath ? "review" as const : "delegate" as const
+    const mode = prior.preview ? "preview" as const : prior.diffReview ? "diff-review" as const : prior.reviewPath ? "review" as const : "delegate" as const
     return executeTurn({
       provider: prior.provider,
       role: prior.role,
       assignment: prior.assignment,
-      prompt: mode === "review" ? undefined : input.prompt,
-      focus: mode === "review" ? input.prompt : undefined,
+      prompt: mode === "review" || mode === "diff-review" ? undefined : input.prompt,
+      focus: mode === "review" || mode === "diff-review" ? input.prompt : undefined,
+      ...(mode === "diff-review" ? {
+        worldId: prior.diffReview!.worldId,
+        expectedDiffFingerprint: prior.diffReview!.fingerprint,
+      } : {}),
       path: prior.reviewPath,
       target: prior.target,
       mode,
