@@ -64,6 +64,13 @@ function spaceEnvelope() {
   }
 }
 
+async function openWilliamConversation() {
+  const trigger = await screen.findByRole("button", { name: "Open William conversation" })
+  await userEvent.click(trigger)
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message William" })))
+  return trigger
+}
+
 describe("durable William conversation rail", () => {
   it("disables Override while an existing William turn is pending and dispatches nothing else", async () => {
     let resolveLine!: (response: Response) => void
@@ -85,6 +92,7 @@ describe("durable William conversation rail", () => {
     }))
 
     render(<WorkspaceShell />)
+    await openWilliamConversation()
     const composer = await screen.findByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement
     await userEvent.type(composer, "Finish the earlier turn")
     await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
@@ -120,6 +128,7 @@ describe("durable William conversation rail", () => {
     }))
 
     render(<WorkspaceShell />)
+    await openWilliamConversation()
     const composer = await screen.findByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement
     await userEvent.type(composer, "Finish the earlier turn")
     await userEvent.click(screen.getByRole("button", { name: "Send to William" }))
@@ -152,6 +161,7 @@ describe("durable William conversation rail", () => {
     }))
 
     render(<WorkspaceShell />)
+    await openWilliamConversation()
 
     const override = await screen.findByRole("button", { name: "Override William judgment" })
     await userEvent.click(override)
@@ -185,8 +195,10 @@ describe("durable William conversation rail", () => {
     }))
 
     render(<WorkspaceShell />)
+    await openWilliamConversation()
 
-    await screen.findByText(/System fact:/)
+    const rail = await screen.findByRole("complementary", { name: "William conversation" })
+    expect(rail.textContent).toMatch(/System fact:/)
     expect(screen.queryByRole("button", { name: "Override William judgment" })).toBeNull()
   })
 
@@ -200,8 +212,10 @@ describe("durable William conversation rail", () => {
     }))
 
     render(<WorkspaceShell />)
+    await openWilliamConversation()
 
-    await screen.findByText("Keep the save path revision-bound.")
+    const rail = await screen.findByRole("complementary", { name: "William conversation" })
+    expect(rail.textContent).toContain("Keep the save path revision-bound.")
     expect(screen.queryByRole("button", { name: "Override William judgment" })).toBeNull()
   })
 
@@ -223,6 +237,7 @@ describe("durable William conversation rail", () => {
     }))
 
     render(<WorkspaceShell />)
+    await openWilliamConversation()
 
     const rail = await screen.findByRole("complementary", { name: "William conversation" })
     expect(rail.textContent).toContain("What changed?")
@@ -254,6 +269,7 @@ describe("durable William conversation rail", () => {
     }))
 
     render(<WorkspaceShell />)
+    await openWilliamConversation()
     await userEvent.click(await screen.findByRole("button", { name: "Override William judgment" }))
     const composer = screen.getByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement
     await userEvent.type(composer, "Do not lose this reason")
@@ -286,6 +302,7 @@ describe("durable William conversation rail", () => {
     }))
 
     render(<WorkspaceShell />)
+    await openWilliamConversation()
     await userEvent.click(await screen.findByRole("button", { name: "Focus Developer preview" }))
     await userEvent.click(screen.getByRole("button", { name: "Focus Source" }))
     await userEvent.type(await screen.findByRole("textbox", { name: "Message William" }), "Hold the selected context")
@@ -300,7 +317,81 @@ describe("durable William conversation rail", () => {
     expect((screen.getByRole("textbox", { name: "Message William" }) as HTMLTextAreaElement).value).toBe("Hold the selected context")
   })
 
-  it("keeps the rail available as an accessible drawer on a narrow viewport", async () => {
+  it("keeps William ambient by default and restores trigger focus after Escape on desktop", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url.startsWith("/api/environment/council?") && !init?.method) return Response.json({ history: [] })
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    const trigger = await screen.findByRole("button", { name: "Open William conversation" })
+    expect(trigger.textContent).toContain("Ask William")
+    expect(trigger.textContent).toContain("Keep the save path revision-bound.")
+    const closedRail = screen.getByTestId("william-conversation-rail")
+    expect(closedRail.getAttribute("aria-hidden")).toBe("true")
+    expect(closedRail.hasAttribute("inert")).toBe(true)
+    expect(screen.queryByRole("textbox", { name: "Message William" })).toBeNull()
+
+    await userEvent.click(trigger)
+    const composer = screen.getByRole("textbox", { name: "Message William" })
+    expect(document.activeElement).toBe(composer)
+    expect(trigger.tabIndex).toBe(-1)
+    expect(trigger.getAttribute("aria-hidden")).toBe("true")
+    expect(trigger.hasAttribute("inert")).toBe(true)
+    const close = screen.getByRole("button", { name: "Close William conversation" })
+    close.focus()
+    await userEvent.tab({ shift: true })
+    expect(document.activeElement).not.toBe(trigger)
+    composer.focus()
+    fireEvent.keyDown(window, { key: "Escape" })
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+    expect(closedRail.getAttribute("aria-hidden")).toBe("true")
+    expect(trigger.tabIndex).toBe(0)
+  })
+
+  it("dismisses The Line before the open William drawer", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await openWilliamConversation()
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    expect(screen.getByRole("dialog", { name: "The Line" })).toBeTruthy()
+
+    fireEvent.keyDown(window, { key: "Escape" })
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "The Line" })).toBeNull())
+    expect(screen.getByRole("complementary", { name: "William conversation" }).getAttribute("data-open")).toBe("true")
+  })
+
+  it("dismisses Brain Council before the open William drawer", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json(spaceEnvelope())
+      if (url.startsWith("/api/environment/council?") && !init?.method) return Response.json({ history: [] })
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    }))
+
+    render(<WorkspaceShell />)
+    await openWilliamConversation()
+    await userEvent.click(screen.getByRole("button", { name: "Open Brain Council" }))
+    await screen.findByRole("dialog", { name: "Brain Council history" })
+
+    fireEvent.keyDown(window, { key: "Escape" })
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Brain Council history" })).toBeNull())
+    expect(screen.getByRole("complementary", { name: "William conversation" }).getAttribute("data-open")).toBe("true")
+  })
+
+  it("keeps the same ambient William drawer behavior on a narrow viewport", async () => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 680 })
     vi.stubGlobal("matchMedia", vi.fn(() => ({
       matches: true,
@@ -328,21 +419,22 @@ describe("durable William conversation rail", () => {
     const closedRail = screen.getByTestId("william-conversation-rail")
     expect(closedRail.getAttribute("aria-hidden")).toBe("true")
     expect(closedRail.hasAttribute("inert")).toBe(true)
-    fireEvent.click(trigger)
+    await userEvent.click(trigger)
     const rail = screen.getByRole("complementary", { name: "William conversation" })
     expect(rail.getAttribute("data-open")).toBe("true")
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message William" }))
     fireEvent.keyDown(window, { key: "k", ctrlKey: true })
     expect(screen.getByRole("dialog", { name: "The Line" })).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
-    fireEvent.click(screen.getByRole("button", { name: "Close William conversation" }))
-    expect(document.activeElement).toBe(trigger)
+    await userEvent.click(screen.getByRole("button", { name: "Close William conversation" }))
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
   })
 
   it("keeps restored durable and inspector title bars reachable inside the desktop work area", () => {
     const css = fs.readFileSync(path.join(process.cwd(), "components/workspace-shell/experience-spatial.module.css"), "utf8")
     const layer = css.match(/\.windowLayer\s*\{([^}]+)\}/)?.[1] ?? ""
-    expect(layer).toMatch(/inset:\s*89px\s+348px\s+0\s+0/)
-    const usableDesktopWidth = 1440 - 348
+    expect(layer).toMatch(/inset:\s*89px\s+0\s+0/)
+    const usableDesktopWidth = 1440
     const preview = defaultSpace(1440, 900).windows["running-app"]
     expect(preview.x + preview.width).toBeLessThanOrEqual(usableDesktopWidth)
     const restored = normalizeSpace({

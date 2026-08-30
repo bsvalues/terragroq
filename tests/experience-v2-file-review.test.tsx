@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { useState } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -72,6 +72,11 @@ async function openReview(focus = "Check the authorization boundary.") {
   const input = screen.getByRole("textbox", { name: "Review focus" })
   fireEvent.change(input, { target: { value: focus } })
   fireEvent.click(screen.getByRole("button", { name: "Start review" }))
+}
+
+async function openWilliamConversation() {
+  fireEvent.click(await screen.findByRole("button", { name: "Open William conversation" }))
+  return screen.findByRole("complementary", { name: "William conversation" })
 }
 
 describe("Experience V2 selected-file Review", () => {
@@ -489,7 +494,8 @@ describe("Experience V2 selected-file Review", () => {
     fireEvent.click(screen.getByRole("button", { name: "Change" }))
     expect((screen.getByRole("button", { name: "Start change" }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
-    fireEvent.click(screen.getByRole("button", { name: /The Line/ }))
+    const conversation = await openWilliamConversation()
+    fireEvent.click(within(conversation).getByRole("button", { name: /The Line/ }))
     expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
     fireEvent.click(screen.getByRole("button", { name: "Review" }))

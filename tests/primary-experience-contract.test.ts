@@ -109,4 +109,15 @@ describe("the environment owns one world, and one input", () => {
     expect(shell).toContain("InspectorSurfaceView")
     expect(shell).not.toContain("ProjectExplorer")
   })
+
+  it("keeps William summonable without permanently reserving the desktop edge", () => {
+    const shell = code("components/workspace-shell/workspace-shell.tsx")
+    const william = code("components/workspace-shell/william-conversation-rail.tsx")
+    const spatial = source("components/workspace-shell/experience-spatial.module.css")
+    expect(shell).toContain("useState(false)")
+    expect(william).toContain("const drawerHidden = !open")
+    expect(william).toContain('aria-controls="william-conversation-drawer"')
+    expect(spatial).toMatch(/\.windowLayer\s*\{[^}]*inset:\s*89px\s+0\s+0/s)
+    expect(spatial).toMatch(/\.williamConversationRail\s*\{[^}]*z-index:\s*17000/s)
+  })
 })

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
@@ -22,6 +22,11 @@ function deferredResponse() {
   let resolve!: (response: Response) => void
   const promise = new Promise<Response>((done) => { resolve = done })
   return { promise, resolve }
+}
+
+async function openWilliamConversation() {
+  fireEvent.click(await screen.findByRole("button", { name: "Open William conversation" }))
+  return screen.findByRole("complementary", { name: "William conversation" })
 }
 
 describe("William judgment client freshness", () => {
@@ -74,7 +79,8 @@ describe("William judgment client freshness", () => {
     teardownSave.resolve(Response.json({ worldId: "world-a", space: requests[1].body.space, spine: EMPTY_SPINE, judgment: null }))
     barrierSave.resolve(Response.json({ error: "SPACE_REVISION_STALE" }, { status: 409 }))
     await waitFor(() => expect(judgmentRequests).toBe(1))
-    await screen.findByText("Use the latest teardown-safe Space.")
+    const conversation = await openWilliamConversation()
+    await within(conversation).findByText("Use the latest teardown-safe Space.")
   })
 
   it("marks a changed Space as saving during the debounce before the PUT begins", async () => {
@@ -175,8 +181,9 @@ describe("William judgment client freshness", () => {
 
     secondSave.resolve(Response.json({ worldId: "world-a", space: saveBodies[1].space, spine: EMPTY_SPINE, judgment: null }))
     await waitFor(() => expect(judgmentRequests).toBe(1))
-    await screen.findByText("Continue with the saved Space.")
-    expect(screen.queryByText("The current Space must be saved before grounded reasoning can begin.")).toBeNull()
+    const conversation = await openWilliamConversation()
+    await within(conversation).findByText("Continue with the saved Space.")
+    expect(within(conversation).queryByText("The current Space must be saved before grounded reasoning can begin.")).toBeNull()
     expect(screen.getByText("space saved")).toBeTruthy()
   })
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
@@ -87,6 +87,11 @@ function workspaceFetch(options: { regenerated?: boolean; regeneratedJudgment?: 
   return { fetcher, calls }
 }
 
+async function openWilliamConversation() {
+  fireEvent.click(await screen.findByRole("button", { name: "Open William conversation" }))
+  return screen.findByRole("complementary", { name: "William conversation" })
+}
+
 beforeEach(() => {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 })
   Object.defineProperty(window, "innerHeight", { configurable: true, value: 900 })
@@ -104,9 +109,10 @@ describe("William judgment Inspector", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
 
-    await screen.findByText(firstJudgment.recommendation)
+    const conversation = await openWilliamConversation()
+    await within(conversation).findByText(firstJudgment.recommendation)
     const source = screen.getByRole("region", { name: "Source window" })
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
 
     const inspector = await screen.findByRole("region", { name: "Inspector · William judgment window" })
     expect(inspector.textContent).toContain("Snapshot generated then · not current live truth")
@@ -122,13 +128,13 @@ describe("William judgment Inspector", () => {
     expect(inspector.textContent).toContain("local-grounded-model")
     expect(inspector.textContent).toContain(firstJudgment.basisFingerprint)
 
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
     expect(screen.getAllByRole("region", { name: "Inspector · William judgment window" })).toHaveLength(1)
 
     fireEvent.click(screen.getByRole("button", { name: "Focus Source" }))
     const beforeCloseStyle = source.getAttribute("style")
     const beforeCloseClass = source.getAttribute("class")
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
     fireEvent.click(screen.getByRole("button", { name: "Close Inspector · William judgment" }))
     expect(screen.queryByRole("region", { name: "Inspector · William judgment window" })).toBeNull()
     expect(source.getAttribute("style")).toBe(beforeCloseStyle)
@@ -142,15 +148,16 @@ describe("William judgment Inspector", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
 
-    await screen.findByText(firstJudgment.recommendation)
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    const conversation = await openWilliamConversation()
+    await within(conversation).findByText(firstJudgment.recommendation)
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
     await screen.findByText(firstJudgment.rationale)
 
-    fireEvent.click(screen.getByRole("button", { name: "Think again" }))
-    await screen.findByText(nextJudgment.recommendation)
+    fireEvent.click(within(conversation).getByRole("button", { name: "Think again" }))
+    await within(conversation).findByText(nextJudgment.recommendation)
     expect(screen.getByText(firstJudgment.rationale)).toBeTruthy()
 
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
     await screen.findByText(nextJudgment.rationale)
     expect(screen.getAllByRole("region", { name: "Inspector · William judgment window" })).toHaveLength(2)
     expect(screen.getByText(firstJudgment.rationale)).toBeTruthy()
@@ -166,12 +173,13 @@ describe("William judgment Inspector", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
 
-    await screen.findByText(fnvCollisionFirst.recommendation)
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    const conversation = await openWilliamConversation()
+    await within(conversation).findByText(fnvCollisionFirst.recommendation)
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
     await screen.findByText(fnvCollisionFirst.rationale)
-    fireEvent.click(screen.getByRole("button", { name: "Think again" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Think again" }))
     await waitFor(() => expect(calls).toContain("POST /api/environment/judgment"))
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
 
     expect(await screen.findByText(fnvCollisionNext.basisFingerprint)).toBeTruthy()
     expect(screen.getAllByRole("region", { name: "Inspector · William judgment window" })).toHaveLength(2)
@@ -184,13 +192,14 @@ describe("William judgment Inspector", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
 
-    await screen.findByText(firstJudgment.recommendation)
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    const conversation = await openWilliamConversation()
+    await within(conversation).findByText(firstJudgment.recommendation)
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
     await screen.findByRole("region", { name: "Inspector · William judgment window" })
     fireEvent.click(screen.getByRole("button", { name: "Focus Tests" }))
     const testsWindow = screen.getByRole("region", { name: "Tests window" })
     const focusedTestsClass = testsWindow.getAttribute("class")
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
     fireEvent.click(screen.getByRole("button", { name: "Close Inspector · William judgment" }))
 
     expect(testsWindow.getAttribute("class")).toBe(focusedTestsClass)
@@ -230,8 +239,9 @@ describe("William judgment Inspector", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
 
-    await screen.findByText(firstJudgment.recommendation)
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    const conversation = await openWilliamConversation()
+    await within(conversation).findByText(firstJudgment.recommendation)
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
     await screen.findByRole("region", { name: "Inspector · William judgment window" })
     fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(await screen.findByRole("button", { name: "Enter Beta" }))
@@ -241,7 +251,7 @@ describe("William judgment Inspector", () => {
     fireEvent.click(screen.getByRole("button", { name: "Focus Tests" }))
     const testsWindow = screen.getByRole("region", { name: "Tests window" })
     const focusedTestsClass = testsWindow.getAttribute("class")
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
     fireEvent.click(screen.getByRole("button", { name: "Close Inspector · William judgment" }))
 
     expect(testsWindow.getAttribute("class")).toBe(focusedTestsClass)
@@ -253,8 +263,9 @@ describe("William judgment Inspector", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
 
-    await screen.findByText(exactConfidence.recommendation)
-    fireEvent.click(screen.getByRole("button", { name: "Inspect judgment basis" }))
+    const conversation = await openWilliamConversation()
+    await within(conversation).findByText(exactConfidence.recommendation)
+    fireEvent.click(within(conversation).getByRole("button", { name: "Inspect judgment basis" }))
     const inspector = await screen.findByRole("region", { name: "Inspector · William judgment window" })
     expect(inspector.textContent).toContain("0.8449")
   })
@@ -265,8 +276,8 @@ describe("William judgment Inspector", () => {
       const { fetcher } = workspaceFetch({ initial: invalid, storage: "browser" })
       vi.stubGlobal("fetch", fetcher)
       render(<WorkspaceShell />)
-      await screen.findByRole("complementary", { name: "William conversation" })
-      await waitFor(() => expect(screen.queryByRole("button", { name: "Inspect judgment basis" })).toBeNull())
+      const conversation = await openWilliamConversation()
+      await waitFor(() => expect(within(conversation).queryByRole("button", { name: "Inspect judgment basis" })).toBeNull())
     },
   )
 })

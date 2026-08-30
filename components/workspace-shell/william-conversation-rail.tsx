@@ -23,7 +23,7 @@ export function WilliamConversationRail({
   canOverrideJudgment,
   error,
   open,
-  narrow,
+  escapeDismissEnabled,
   persistenceLabel,
   persistenceError,
   onInput,
@@ -47,7 +47,7 @@ export function WilliamConversationRail({
   canOverrideJudgment: boolean
   error: string | null
   open: boolean
-  narrow: boolean
+  escapeDismissEnabled: boolean
   persistenceLabel: string
   persistenceError: string | null
   onInput: (value: string) => void
@@ -64,7 +64,26 @@ export function WilliamConversationRail({
   const historyRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
-  const drawerHidden = narrow && !open
+  const escapeDismissEnabledRef = useRef(escapeDismissEnabled)
+  const drawerHidden = !open
+  escapeDismissEnabledRef.current = escapeDismissEnabled
+
+  useEffect(() => {
+    if (!open) return
+    composerRef.current?.focus()
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !escapeDismissEnabledRef.current) return
+      event.preventDefault()
+      onClose()
+      requestAnimationFrame(() => triggerRef.current?.focus())
+    }
+    window.addEventListener("keydown", closeOnEscape)
+    return () => window.removeEventListener("keydown", closeOnEscape)
+  }, [onClose, open])
 
   useEffect(() => {
     historyRef.current?.scrollTo?.({ top: historyRef.current.scrollHeight, behavior: "smooth" })
@@ -72,11 +91,27 @@ export function WilliamConversationRail({
 
   return (
     <>
-      <button ref={triggerRef} type="button" className={spatial.williamDrawerTrigger} onClick={onOpen} aria-label="Open William conversation">
-        <MessageCircle size={16} aria-hidden />
-        <span>William</span>
+      <button
+        ref={triggerRef}
+        type="button"
+        className={spatial.williamDrawerTrigger}
+        onClick={onOpen}
+        aria-label="Open William conversation"
+        aria-expanded={open}
+        aria-controls="william-conversation-drawer"
+        aria-hidden={open ? "true" : undefined}
+        inert={open ? true : undefined}
+        tabIndex={open ? -1 : undefined}
+      >
+        <span className={spatial.williamAmbientOrb} aria-hidden>W</span>
+        <span className={spatial.williamAmbientCopy}>
+          <strong>Ask William</strong>
+          <small>{judgmentBusy ? "Forming a grounded judgment…" : judgment}</small>
+        </span>
+        <MessageCircle size={15} aria-hidden />
       </button>
       <aside
+        id="william-conversation-drawer"
         className={spatial.williamConversationRail}
         aria-label="William conversation"
         aria-hidden={drawerHidden ? "true" : undefined}
@@ -87,7 +122,7 @@ export function WilliamConversationRail({
         <header className={spatial.williamConversationHeader}>
           <span className={spatial.williamOrb} aria-hidden>W</span>
           <div><strong>William</strong><span>Present in this Space</span></div>
-          <button type="button" className={spatial.williamRailClose} onClick={() => { onClose(); triggerRef.current?.focus() }} aria-label="Close William conversation"><X size={15} /></button>
+          <button type="button" className={spatial.williamRailClose} onClick={() => { onClose(); requestAnimationFrame(() => triggerRef.current?.focus()) }} aria-label="Close William conversation"><X size={15} /></button>
         </header>
 
         <section className={spatial.williamJudgmentCard} aria-label="William judgment">

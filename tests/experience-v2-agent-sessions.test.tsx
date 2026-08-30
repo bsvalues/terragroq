@@ -46,6 +46,11 @@ function workspaceResponse(storage: "browser" | "server" = "browser") {
   return Response.json({ worldId: storage === "server" ? "server-world" : "browser-world", space: spaceToServer(space), spine: EMPTY_SPINE, project: { identity: "c:/repos/terrafusion", name: "TerraFusion" }, storage, browserStorageKey: storage === "browser" ? "codex-delegate-test" : null })
 }
 
+async function openWilliamConversation() {
+  fireEvent.click(await screen.findByRole("button", { name: "Open William conversation" }))
+  return screen.findByRole("complementary", { name: "William conversation" })
+}
+
 function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1" }: { worker?: WorldWorker | null; ownerScope?: string; worldScope?: string; worldId?: string | null }) {
   const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, worker })
   expose = controller
@@ -772,6 +777,7 @@ describe("Experience V2 real agent sessions", () => {
     }))
     render(<WorkspaceShell />)
     await screen.findByLabelText("Source content")
+    const conversation = await openWilliamConversation()
 
     fireEvent.click(screen.getByRole("button", { name: "Delegate" }))
     fireEvent.click(screen.getByRole("button", { name: "Codex" }))
@@ -789,7 +795,7 @@ describe("Experience V2 real agent sessions", () => {
     act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))
     await screen.findByRole("button", { name: "Stop Claude Reviewer turn" })
 
-    fireEvent.click(screen.getByRole("button", { name: "Ask Local" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Local" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Think alongside them." } })
     const askLocal = within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Ask Local" }) as HTMLButtonElement
     expect(askLocal.disabled).toBe(false)
@@ -1469,8 +1475,9 @@ describe("Experience V2 real agent sessions", () => {
     vi.stubGlobal("fetch", fetcher)
     render(<WorkspaceShell />)
     await screen.findByLabelText("Source content")
+    const conversation = await openWilliamConversation()
 
-    fireEvent.click(screen.getByRole("button", { name: "Ask Local" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Local" }))
     expect(screen.queryByRole("group", { name: "Choose agent provider" })).toBeNull()
     expect(screen.getByText("Local conversation · no workspace mutation")).toBeTruthy()
     expect(screen.getByRole("textbox", { name: "The Line" }).getAttribute("placeholder")).toBe("Ask the Local model")
@@ -1664,7 +1671,8 @@ describe("Experience V2 real agent sessions", () => {
     }))
     render(<WorkspaceShell />)
     await screen.findByLabelText("Source content")
-    fireEvent.click(screen.getByRole("button", { name: "Ask Local" }))
+    const conversation = await openWilliamConversation()
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Local" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Explain the current work." } })
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Ask Local" }))
 
@@ -1679,7 +1687,7 @@ describe("Experience V2 real agent sessions", () => {
     expect(requestSignal?.aborted).toBe(false)
     expect(cancelled).toBe(false)
 
-    fireEvent.click(screen.getByRole("button", { name: "Ask Local" }))
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Local" }))
     act(() => {
       agentStream.enqueue(encoder.encode(`${JSON.stringify({ type: "delta", text: "Late old-operation progress." })}\n`))
     })
@@ -1922,7 +1930,8 @@ describe("Experience V2 real agent sessions", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
     expect(within(screen.getByRole("dialog", { name: "Mission Control" })).getByText("Agent activity unknown")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Dismiss Mission Control" }))
-    fireEvent.click(screen.getByRole("button", { name: "Ask Local" }))
+    const conversation = await openWilliamConversation()
+    fireEvent.click(within(conversation).getByRole("button", { name: "Ask Local" }))
     fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "Establish canonical saved truth." } })
     fireEvent.click(within(screen.getByRole("form", { name: "The Line" })).getByRole("button", { name: "Ask Local" }))
     await screen.findByRole("button", { name: /Thinker · Local · Conversation/i })
