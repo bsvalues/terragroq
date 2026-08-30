@@ -460,4 +460,54 @@ describe("server-grounded diff Reviewer route", () => {
     expect(JSON.stringify(events)).not.toContain("UNRECORDED REVIEW")
     expect(seams.recordLoomEnd).not.toHaveBeenCalled()
   })
+
+  it("kills a no-newline provider frame before an unbounded stdout buffer can form", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request(diffReviewBody()))
+
+    child.stdout.emit("data", Buffer.alloc(262_145, 0x78))
+    child.emit("close", 1)
+
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events).toEqual([{ type: "done", reason: "DIFF_REVIEW_STREAM_TOO_LARGE", code: null }])
+    expect(child.kill).toHaveBeenCalledOnce()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
+
+  it("kills a huge newline-terminated result before JSON parsing or materialization", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request(diffReviewBody()))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({
+      type: "system", subtype: "init", session_id: SESSION_ID,
+    })}\n`))
+    child.stdout.emit("data", Buffer.from(`${JSON.stringify({
+      type: "result", subtype: "success", is_error: false, session_id: SESSION_ID,
+      result: "x".repeat(262_145),
+    })}\n`))
+    child.emit("close", 1)
+
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events).toEqual([{ type: "done", reason: "DIFF_REVIEW_STREAM_TOO_LARGE", code: null }])
+    expect(child.kill).toHaveBeenCalledOnce()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
+
+  it("kills oversized provider stderr without exposing or recording it", async () => {
+    const child = new FakeChild()
+    seams.spawn.mockReturnValue(child)
+    const response = await POST(request(diffReviewBody()))
+
+    child.stderr.emit("data", Buffer.alloc(262_145, 0x65))
+    child.emit("close", 1)
+
+    const events = (await response.text()).trim().split("\n").map((line) => JSON.parse(line))
+    expect(events).toEqual([{ type: "done", reason: "DIFF_REVIEW_STREAM_TOO_LARGE", code: null }])
+    expect(child.kill).toHaveBeenCalledOnce()
+    expect(seams.recordLoomStart).not.toHaveBeenCalled()
+    expect(seams.recordLoomEnd).not.toHaveBeenCalled()
+  })
 })

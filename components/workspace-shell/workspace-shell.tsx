@@ -12,7 +12,7 @@ import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileCha
 import { useSelectedFileReview } from "./use-selected-file-review"
 import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentationText, loadSavedAgentSessionProjection, projectMissionAgentSessions, selectSpaceContinueCandidate, useExperienceAgentSessions, type AgentProvider, type AgentSessionCollectionState, type AgentSessionDiffReview, type AgentTurnPresentation, type ExperienceAgentSession } from "./agent-sessions"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
-import { encodeDiffReviewInspectorPayload, InspectorSurfaceView, inspectorSurfaceWindowTitle, type InspectorSurface } from "./inspector-surface"
+import { diffReviewInspectorBinding, diffReviewInspectorId, diffReviewInspectorIdentity, encodeDiffReviewInspectorPayload, InspectorSurfaceView, inspectorSurfaceWindowTitle, type InspectorSurface } from "./inspector-surface"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
 import { deriveMissionControlOverview } from "./mission-control-overview"
 import { WilliamConversationRail, type WilliamConversationEntry } from "./william-conversation-rail"
@@ -458,7 +458,31 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         }
       })
     }
-    const incoming = (reply.surfaces ?? []).map((surface) => ({ ...surface, id: inspectorId(surface) }))
+    const usedIds = new Map(inspectors.map((surface) => [surface.id, surface]))
+    const incoming: InspectorSurface[] = []
+    for (const surface of reply.surfaces ?? []) {
+      const binding = surface.kind === "review" ? diffReviewInspectorBinding(surface.payload) : null
+      const exactIdentity = binding ? diffReviewInspectorIdentity(binding) : surface.identity ?? null
+      const exactExisting = exactIdentity ? [...inspectors, ...incoming].find((candidate) => {
+        const candidateBinding = candidate.kind === "review" ? diffReviewInspectorBinding(candidate.payload) : null
+        const candidateIdentity = candidateBinding ? diffReviewInspectorIdentity(candidateBinding) : candidate.identity ?? null
+        return candidate.kind === surface.kind && candidate.subject === surface.subject && candidateIdentity === exactIdentity
+      }) : null
+      if (exactExisting) {
+        incoming.push({ ...surface, identity: exactIdentity ?? undefined, id: exactExisting.id })
+      } else {
+        const baseId = binding ? diffReviewInspectorId(binding) : inspectorId(surface)
+        let id = baseId
+        let collision = 1
+        while (usedIds.has(id)) {
+          id = `${baseId}:${collision}`
+          collision += 1
+        }
+        const resolved = { ...surface, identity: exactIdentity ?? undefined, id }
+        usedIds.set(id, resolved)
+        incoming.push(resolved)
+      }
+    }
     if (incoming.length === 0) return
     setInspectors((current) => {
       const byId = new Map(current.map((surface) => [surface.id, surface]))
@@ -503,7 +527,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     materializeSurfaces({ surfaces: [{
       kind: "review",
       subject: path,
-      ...(binding ? { identity: `${binding.worldId}:${binding.fingerprint}` } : {}),
+      ...(binding ? { identity: diffReviewInspectorIdentity(binding) } : {}),
       payload: binding ? encodeDiffReviewInspectorPayload(binding, report) : report,
     }] })
   }, [materializeSurfaces])

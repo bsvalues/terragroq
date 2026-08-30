@@ -20,20 +20,45 @@ type DiffReviewInspectorPayload = Readonly<{
   report: string
 }>
 
+const MAX_PERSISTED_REVIEW_PAYLOAD_BYTES = 200_000
+const DIFF_REVIEW_TRUNCATION_NOTICE = "\n\n[Report truncated in Inspector; full result remains in the durable Reviewer transcript.]"
+const textEncoder = new TextEncoder()
+
+function serializedDiffReviewPayload(binding: AgentSessionDiffReview, report: string): string {
+  return JSON.stringify({ schemaVersion: 1, kind: "diff-review", binding, report } satisfies DiffReviewInspectorPayload)
+}
+
 export function encodeDiffReviewInspectorPayload(binding: AgentSessionDiffReview, report: string): string {
-  const boundedReport = report.length <= 160_000 ? report : `${report.slice(0, 160_000)}\n\n[Report truncated in Inspector; full result remains in the durable Reviewer transcript.]`
-  return JSON.stringify({ schemaVersion: 1, kind: "diff-review", binding, report: boundedReport } satisfies DiffReviewInspectorPayload)
+  const complete = serializedDiffReviewPayload(binding, report)
+  if (textEncoder.encode(complete).byteLength <= MAX_PERSISTED_REVIEW_PAYLOAD_BYTES) return complete
+
+  let lower = 0
+  let upper = report.length
+  let accepted = serializedDiffReviewPayload(binding, DIFF_REVIEW_TRUNCATION_NOTICE)
+  while (lower <= upper) {
+    let middle = Math.floor((lower + upper) / 2)
+    if (middle > 0 && /[\uD800-\uDBFF]/.test(report[middle - 1] ?? "")) middle -= 1
+    const candidate = serializedDiffReviewPayload(binding, `${report.slice(0, middle)}${DIFF_REVIEW_TRUNCATION_NOTICE}`)
+    if (textEncoder.encode(candidate).byteLength <= MAX_PERSISTED_REVIEW_PAYLOAD_BYTES) {
+      accepted = candidate
+      lower = middle + 1
+    } else {
+      upper = middle - 1
+    }
+  }
+  return accepted
 }
 
 function parseDiffReviewInspectorPayload(value: unknown): DiffReviewInspectorPayload | null {
-  if (typeof value !== "string" || value.length > 200_000) return null
+  if (typeof value !== "string" || value.length > MAX_PERSISTED_REVIEW_PAYLOAD_BYTES
+    || textEncoder.encode(value).byteLength > MAX_PERSISTED_REVIEW_PAYLOAD_BYTES) return null
   let decoded: unknown
   try { decoded = JSON.parse(value) } catch { return null }
   if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return null
   const candidate = decoded as Record<string, unknown>
   const binding = candidate.binding
   if (candidate.schemaVersion !== 1 || candidate.kind !== "diff-review" || typeof candidate.report !== "string"
-    || candidate.report.length === 0 || candidate.report.length > 180_000
+    || candidate.report.length === 0 || candidate.report.length > MAX_PERSISTED_REVIEW_PAYLOAD_BYTES
     || !binding || typeof binding !== "object" || Array.isArray(binding)) return null
   const exact = binding as Record<string, unknown>
   const canonicalPath = typeof exact.path === "string" && exact.path === exact.path.trim() && exact.path.length <= 1_000
@@ -48,6 +73,29 @@ function parseDiffReviewInspectorPayload(value: unknown): DiffReviewInspectorPay
     || typeof exact.indexHash !== "string" || !/^[0-9a-f]{64}$/.test(exact.indexHash)
     || typeof exact.patchHash !== "string" || !/^[0-9a-f]{64}$/.test(exact.patchHash) || !completedAt) return null
   return candidate as DiffReviewInspectorPayload
+}
+
+export function diffReviewInspectorIdentity(binding: Pick<AgentSessionDiffReview, "worldId" | "fingerprint">): string {
+  return JSON.stringify([binding.worldId, binding.fingerprint])
+}
+
+function identityToken(value: string): string {
+  return [2166136261, 2246822507, 3266489909, 668265263].map((seed) => {
+    let hash = seed
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index)
+      hash = Math.imul(hash, 16777619)
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0")
+  }).join("")
+}
+
+export function diffReviewInspectorId(binding: Pick<AgentSessionDiffReview, "worldId" | "fingerprint">): string {
+  return `inspector-diff-review:${identityToken(diffReviewInspectorIdentity(binding))}`
+}
+
+export function diffReviewInspectorBinding(value: unknown): AgentSessionDiffReview | null {
+  return parseDiffReviewInspectorPayload(value)?.binding ?? null
 }
 
 export function inspectorSurfaceWindowTitle(surface: InspectorSurface): string {

@@ -3,8 +3,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { WorkspaceShell } from "@/components/workspace-shell/workspace-shell"
+import { diffReviewInspectorId, encodeDiffReviewInspectorPayload, inspectorSurfaceWindowTitle } from "@/components/workspace-shell/inspector-surface"
 import { defaultSpace, spaceToServer } from "@/components/workspace-shell/types"
-import { EMPTY_SPINE } from "@/lib/environment/working-world"
+import { EMPTY_SPINE, validateSpaceState } from "@/lib/environment/working-world"
 
 const SESSION_ID = "123e4567-e89b-42d3-a456-426614174000"
 const WORLD_ID = "world-diff-review"
@@ -21,6 +22,16 @@ const BASE_HASH = "a".repeat(40)
 const INDEX_HASH = "b".repeat(64)
 const PATCH_HASH = "c".repeat(64)
 const COMPLETED_AT = "2026-08-30T09:00:00.000Z"
+
+const diffReviewBinding = {
+  worldId: WORLD_ID,
+  path: PATH,
+  fingerprint: FINGERPRINT,
+  baseHash: BASE_HASH,
+  indexHash: INDEX_HASH,
+  patchHash: PATCH_HASH,
+  completedAt: COMPLETED_AT,
+} as const
 
 vi.mock("next/dynamic", () => ({
   default: () => function TestSourceEditor(props: { value: string }) {
@@ -146,6 +157,53 @@ afterEach(() => {
 })
 
 describe("Experience V2 current Changes Review", () => {
+  it.each([
+    ["quote-heavy", '"'.repeat(100_000)],
+    ["multibyte", "界".repeat(70_000)],
+    ["near-boundary ASCII", "x".repeat(199_500)],
+  ])("bounds the fully serialized %s Inspector payload by UTF-8 bytes and keeps it server-valid", (_label, report) => {
+    const payload = encodeDiffReviewInspectorPayload(diffReviewBinding, report)
+    const repeated = encodeDiffReviewInspectorPayload(diffReviewBinding, report)
+    const decoded = JSON.parse(payload) as { report: string }
+    const base = spaceToServer(initialSpace())
+    const persisted = {
+      ...base,
+      windows: [...base.windows, {
+        id: "inspector-diff-review-boundary",
+        kind: "inspector" as const,
+        title: `Inspector · Current changes · ${PATH}`,
+        frame: { x: 100, y: 100, width: 560, height: 480 },
+        z: 100,
+        minimized: false,
+        surfaceKind: "review",
+        surfaceSubject: PATH,
+        surfacePayload: payload,
+      }],
+    }
+
+    expect(new TextEncoder().encode(payload).byteLength).toBeLessThanOrEqual(200_000)
+    expect(payload).toBe(repeated)
+    expect(decoded.report).toContain("[Report truncated in Inspector; full result remains in the durable Reviewer transcript.]")
+    expect(() => validateSpaceState(persisted)).not.toThrow()
+    expect(inspectorSurfaceWindowTitle({
+      id: "boundary",
+      kind: "review",
+      subject: PATH,
+      payload,
+    })).toBe(`Inspector · Current changes · ${PATH}`)
+  })
+
+  it("uses collision-free exact Diff Review Inspector identity and dedupes only exact replay", () => {
+    const legacyCollisionFirst = "14b2bb25c5"
+    const legacyCollisionNext = "12c1fd6b15uj"
+
+    expect(diffReviewInspectorId({ ...diffReviewBinding, fingerprint: legacyCollisionFirst }))
+      .not.toBe(diffReviewInspectorId({ ...diffReviewBinding, fingerprint: legacyCollisionNext }))
+    expect(diffReviewInspectorId(diffReviewBinding)).toBe(diffReviewInspectorId({ ...diffReviewBinding }))
+    expect(diffReviewInspectorId({ ...diffReviewBinding, worldId: "world-other" }))
+      .not.toBe(diffReviewInspectorId(diffReviewBinding))
+  })
+
   it("starts a durable exact-diff Reviewer and opens the grounded report in a movable Inspector", async () => {
     const baseFetcher = workspaceFetch()
     let persistedSpace: ReturnType<typeof spaceToServer> | null = null

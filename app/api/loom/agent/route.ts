@@ -34,6 +34,8 @@ const SHA256 = /^[0-9a-f]{64}$/
 const MAX_DIFF_REVIEW_FINGERPRINT_BYTES = 16_384
 const MAX_DIFF_REVIEW_FOCUS_CHARACTERS = 2_000
 const MAX_DIFF_REVIEW_RESULT_BYTES = 200_000
+const MAX_CLOUD_PROVIDER_FRAME_BYTES = 262_144
+const MAX_CLOUD_PROVIDER_STREAM_BYTES = 4_194_304
 // Claude receives the grounded review packet as one Windows argv value. Keep the complete prompt
 // comfortably below CreateProcess' command-line ceiling rather than inheriting the 2 MB UI cap.
 const MAX_DIFF_REVIEW_PATCH_BYTES = 20_000
@@ -713,7 +715,9 @@ export async function POST(request: Request) {
 
       // The CLI emits one JSON object per line. Chunks split lines, so partials are buffered and
       // only complete lines are forwarded -- a half-parsed event would look like agent output.
-      let buffer = ""
+      let buffer = Buffer.alloc(0)
+      let stdoutBytes = 0
+      let stderrBytes = 0
       let outputQueue = Promise.resolve()
       let previewResultEvent: Record<string, unknown> | null = null
       let diffReviewResultEvent: Record<string, unknown> | null = null
@@ -826,18 +830,67 @@ export async function POST(request: Request) {
         }
         send({ type: "event", event })
       }
+      const providerStreamTooLarge = () => {
+        if (settled) return
+        finish({
+          type: "done",
+          reason: diffReviewMode ? "DIFF_REVIEW_STREAM_TOO_LARGE"
+            : previewMode ? "PREVIEW_STREAM_TOO_LARGE"
+              : "AGENT_STREAM_TOO_LARGE",
+          code: null,
+        })
+        child.kill()
+      }
       child.stdout.on("data", (chunk: Buffer) => {
-        buffer += chunk.toString("utf8")
-        const lines = buffer.split("\n")
-        buffer = lines.pop() ?? ""
+        if (settled) return
+        stdoutBytes += chunk.byteLength
+        if (stdoutBytes > MAX_CLOUD_PROVIDER_STREAM_BYTES) {
+          providerStreamTooLarge()
+          return
+        }
+        const lines: string[] = []
+        let cursor = 0
+        for (;;) {
+          const newline = chunk.indexOf(0x0a, cursor)
+          if (newline < 0) break
+          const fragment = chunk.subarray(cursor, newline)
+          const lineBytes = buffer.byteLength + fragment.byteLength
+          if (lineBytes > MAX_CLOUD_PROVIDER_FRAME_BYTES) {
+            providerStreamTooLarge()
+            return
+          }
+          const complete = buffer.byteLength === 0
+            ? fragment
+            : Buffer.concat([buffer, fragment], lineBytes)
+          lines.push(complete.toString("utf8"))
+          buffer = Buffer.alloc(0)
+          cursor = newline + 1
+        }
+        const tail = chunk.subarray(cursor)
+        const tailBytes = buffer.byteLength + tail.byteLength
+        if (tailBytes > MAX_CLOUD_PROVIDER_FRAME_BYTES) {
+          providerStreamTooLarge()
+          return
+        }
+        if (tail.byteLength > 0) {
+          buffer = buffer.byteLength === 0 ? Buffer.from(tail) : Buffer.concat([buffer, tail], tailBytes)
+        }
         outputQueue = outputQueue.then(async () => {
           for (const line of lines) await forwardLine(line)
         })
       })
-      child.stderr.on("data", (chunk: Buffer) => { if (!previewMode && !diffReviewMode && (!forkMode || sessionId)) send({ type: "stderr", text: chunk.toString("utf8") }) })
+      child.stderr.on("data", (chunk: Buffer) => {
+        if (settled) return
+        stderrBytes += chunk.byteLength
+        if (chunk.byteLength > MAX_CLOUD_PROVIDER_FRAME_BYTES || stderrBytes > MAX_CLOUD_PROVIDER_FRAME_BYTES) {
+          providerStreamTooLarge()
+          return
+        }
+        if (!previewMode && !diffReviewMode && (!forkMode || sessionId)) send({ type: "stderr", text: chunk.toString("utf8") })
+      })
       child.on("close", (code) => {
-        const tail = buffer
-        buffer = ""
+        const tail = buffer.toString("utf8")
+        buffer = Buffer.alloc(0)
         outputQueue = outputQueue.then(() => forwardLine(tail)).then(async () => {
           if (forkMode && !sessionId) finish({ type: "done", reason: "FORK_SESSION_ID_REQUIRED", code: null })
           else if (previewMode && !previewSessionInitialized) finish({ type: "done", reason: "PREVIEW_SESSION_INIT_REQUIRED", code: null })
