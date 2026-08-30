@@ -1492,7 +1492,9 @@ export function AgentSessionStrip({
           key={session.id}
           type="button"
           aria-pressed={activeSessionId === session.id}
-          aria-label={`${session.role} · ${session.providerLabel} · ${session.assignment}`}
+          aria-label={session.kind === "durable-session"
+            ? `${session.role} · ${session.providerLabel} · ${session.assignment}`
+            : `${session.role} · ${session.providerLabel} · ${session.status} · ${session.evidence}`}
           onClick={() => onSelect?.(session)}
           className="flex w-48 max-w-48 items-center gap-2 rounded border border-[#303a2f] bg-[#121712] px-2 py-1 text-left text-[#dce3d9]"
           style={{ flex: "0 0 auto" }}
@@ -1504,13 +1506,15 @@ export function AgentSessionStrip({
             <strong data-agent-session-level="identity" className="truncate text-[10.5px]">
               {session.role} · {session.providerLabel}
             </strong>
-            <span
-              data-agent-session-level="assignment"
-              title={session.assignment}
-              className="block truncate text-[9.5px] text-[#c7d0c3]"
-            >
-              {session.assignment}
-            </span>
+            {session.kind === "durable-session" ? (
+              <span
+                data-agent-session-level="assignment"
+                title={session.assignment}
+                className="block truncate text-[9.5px] text-[#c7d0c3]"
+              >
+                {session.assignment}
+              </span>
+            ) : null}
             <small
               data-agent-session-level="truth"
               title={`${session.status} · ${session.evidence}`}

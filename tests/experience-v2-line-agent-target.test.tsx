@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { WorkspaceShell, lineObjectBindingFingerprint } from "@/components/workspace-shell/workspace-shell"
@@ -79,7 +79,7 @@ function projected(sessionId: string, assignment: string, truth: "live" | "resum
     providerLabel: "Claude",
     assignment,
     status: truth === "live" ? "ready" : "resume unverified",
-    evidence: "saved transcript",
+    evidence: truth === "live" ? "saved transcript" : "saved transcript · server verification required",
     truth,
     kind: "durable-session" as const,
     mode: "review" as const,
@@ -131,14 +131,19 @@ describe("Experience V2 Line durable-session targets", () => {
 
     const targets = screen.getByRole("group", { name: "Line targets" })
     expect(targets).toBeTruthy()
-    expect(screen.getByRole("button", { name: "William" }).getAttribute("aria-pressed")).toBe("true")
-    expect(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/app\\.ts.*${FIRST}`) })).toBeTruthy()
-    expect(screen.getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/other\\.ts.*${SECOND}`) })).toBeTruthy()
-    const colliding = [FIRST, COLLISION].map((id) => screen.getByRole("button", { name: new RegExp(`Review src/app\\.ts.*${id}`) }))
+    expect(within(targets).getByRole("button", { name: "William" }).getAttribute("aria-pressed")).toBe("true")
+    expect(within(targets).getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/app\\.ts.*${FIRST}`) })).toBeTruthy()
+    expect(within(targets).getByRole("button", { name: new RegExp(`Reviewer · Claude · Review src/other\\.ts.*${SECOND}`) })).toBeTruthy()
+    const colliding = [FIRST, COLLISION].map((id) => within(targets).getByRole("button", { name: new RegExp(`Review src/app\\.ts.*${id}`) }))
     expect(new Set(colliding.map((button) => button.getAttribute("aria-label"))).size).toBe(2)
     expect(colliding.every((button) => button.getAttribute("title")?.includes(idFor(button, [FIRST, COLLISION])))).toBe(true)
     expect(new Set(colliding.map((button) => button.textContent)).size).toBe(2)
-    expect(screen.queryByText(/unverified\.ts/)).toBeNull()
+    expect(within(targets).queryByText(/unverified\.ts/)).toBeNull()
+
+    const strip = screen.getByRole("navigation", { name: "Durable agent sessions" })
+    const unverified = within(strip).getByRole("button", { name: `Reviewer · Claude · Review src/unverified.ts` })
+    expect(within(unverified).getByTitle("Review src/unverified.ts").textContent).toBe("Review src/unverified.ts")
+    expect(within(unverified).getByText("resume unverified · saved transcript · server verification required")).toBeTruthy()
   })
 
   it("binds the exact chosen session and resumes it through continueSession without a William or replacement request", async () => {

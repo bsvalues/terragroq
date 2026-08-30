@@ -2612,12 +2612,34 @@ describe("Experience V2 real agent sessions", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Stop Claude turn" })).toBeNull())
   })
 
-  it("projects only the live World Spine worker and never invents provider sessions", () => {
+  it("keeps live World Spine worker facts separate from durable provider sessions", () => {
+    const durableId = "123e4567-e89b-42d3-a456-426614174000"
+    window.localStorage.setItem("williamos:agent-session:owner-1:terrafusion", JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: null,
+      sessions: [{
+        schemaVersion: 1,
+        sessionId: durableId,
+        role: "Reviewer",
+        provider: "Claude",
+        assignment: "Review src/world-worker.ts",
+        reviewPath: "src/world-worker.ts",
+        updatedAt: "2026-08-27T16:00:00.000Z",
+        completedTurns: [],
+      }],
+    }))
     render(<Harness worker={{ lane: "review", state: "reviewing", since: "2026-08-27T16:00:00Z" }} />)
 
-    expect(screen.getByRole("button", { name: /Worker · review lane/i })).toBeTruthy()
-    expect(screen.getByText("reviewing · live world state")).toBeTruthy()
-    expect(screen.queryByText(/Codex|Claude|HERMES/)).toBeNull()
+    const worker = screen.getByRole("button", { name: /Worker · review lane/i })
+    expect(worker).toBeTruthy()
+    expect(worker.getAttribute("aria-label")).not.toContain("Current Space execution")
+    expect(within(worker).getByText("reviewing · live world state")).toBeTruthy()
+    expect(worker.querySelector('[data-agent-session-level="assignment"]')).toBeNull()
+    expect(screen.queryByTitle("Current Space execution")).toBeNull()
+
+    const durable = screen.getByRole("button", { name: `Reviewer · Claude · Review src/world-worker.ts` })
+    expect(within(durable).getByTitle("Review src/world-worker.ts").textContent).toBe("Review src/world-worker.ts")
+    expect(within(durable).getByText("resume unverified · saved transcript · server verification required")).toBeTruthy()
   })
 
   it("creates a real Claude session from the streamed route response and persists its descriptor", async () => {
