@@ -10,6 +10,9 @@ const FIRST = "123e4567-e89b-42d3-a456-426614174000"
 const SECOND = "223e4567-e89b-42d3-a456-426614174000"
 const UNVERIFIED = "323e4567-e89b-42d3-a456-426614174000"
 const COLLISION = "423e4567-e89b-42d3-a456-426614174000"
+const BUILDER = "523e4567-e89b-42d3-a456-426614174001"
+const PREVIEW = "623e4567-e89b-42d3-a456-426614174002"
+const LOCAL = "723e4567-e89b-42d3-a456-426614174003"
 
 let liveDiff = { path: "src/app.ts", state: "clean", fingerprint: "clean-diff", untracked: false, diff: "", status: "" }
 let workspaceActiveWindowId: "editor" | null = "editor"
@@ -299,6 +302,51 @@ describe("Experience V2 Line durable-session targets", () => {
     expect(harness.controller.runClaudeTurn).toHaveBeenCalledTimes(1)
 
     settle(harness.controller.savedSessions[0])
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue session" })).toBeTruthy())
+  })
+
+  it.each([
+    { name: "Codex Builder", provider: "Codex" as const, sessionId: BUILDER, role: "Builder", assignment: "Build the bounded file", mode: "delegate" as const, method: "runAgentTurn" as const },
+    { name: "Preview debugger", provider: "Claude" as const, sessionId: PREVIEW, role: "Preview debugger", assignment: "Developer Preview diagnosis", mode: "preview" as const, method: "runPreviewDiagnostic" as const },
+    { name: "Local Thinker", provider: "Local" as const, sessionId: LOCAL, role: "Thinker", assignment: "Conversation", mode: "delegate" as const, method: "runAgentTurn" as const },
+  ])("reattaches pre-init $name Talk through its exact durable identity", async ({ provider, sessionId, role, assignment, mode, method }) => {
+    const exactKey = `${provider}:${sessionId}`
+    const durable = {
+      schemaVersion: 1 as const, sessionId, role, provider, assignment,
+      ...(mode === "preview" ? { preview: { worldId: "browser-world", evidenceFingerprint: "preview-fingerprint" } } : {}),
+      updatedAt: "2026-08-30T12:00:00.000Z", completedTurns: [],
+    }
+    const projection = {
+      id: exactKey, role, providerLabel: provider, assignment, status: "ready", evidence: "saved transcript",
+      truth: "live" as const, kind: "durable-session" as const, mode,
+      ...(mode === "preview" ? { preview: durable.preview } : {}),
+    }
+    harness.controller.savedSessions = [durable]
+    harness.controller.savedDescriptor = durable
+    harness.controller.durableSession = durable
+    harness.controller.sessions = [projection]
+    harness.controller.selectedSessionKey = exactKey
+    let settle!: (value: any) => void
+    harness.controller[method] = vi.fn(() => new Promise((resolve) => { settle = resolve }))
+    vi.stubGlobal("fetch", fetcher())
+    render(<WorkspaceShell />)
+    await screen.findByLabelText("Source content")
+
+    fireEvent.click(screen.getByRole("button", { name: `${role} · ${provider} · ${assignment}` }))
+    if (screen.queryByRole("button", { name: "Close The Line" })) fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    fireEvent.click(screen.getByRole("button", { name: "Talk" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: `Continue ${role}.` } })
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+    fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true })
+    fireEvent.click(screen.getByRole("button", { name: new RegExp(sessionId) }))
+
+    expect(screen.getByText("Agent is starting.")).toBeTruthy()
+    expect((screen.getByRole("button", { name: "Session working" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.submit(screen.getByRole("form", { name: "The Line" }))
+    expect(harness.controller[method]).toHaveBeenCalledTimes(1)
+
+    settle(durable)
     await waitFor(() => expect(screen.getByRole("button", { name: "Continue session" })).toBeTruthy())
   })
 

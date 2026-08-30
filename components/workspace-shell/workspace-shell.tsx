@@ -42,6 +42,7 @@ type StandardDelegateContext = Readonly<{
   provider: AgentProvider | null
   role: string
   assignment: string
+  requiredSessionKey?: string
 }>
 type ReviewerDelegateContext = Readonly<{
   kind: "reviewer"
@@ -148,9 +149,49 @@ function reviewerDelegateContext(agent: ExperienceAgentSession | null | undefine
   }
 }
 
+function durableSessionDelegateContext(agent: ExperienceAgentSession | null | undefined): ReviewerDelegateContext | StandardDelegateContext | null {
+  if (!agent || agent.kind !== "durable-session") return null
+  if (agent.mode === "review") return reviewerDelegateContext(agent)
+  const provider = agent.providerLabel
+  if (provider !== "Codex" && provider !== "Claude" && provider !== "Local") return null
+  const requiredSessionKey = agent.id
+  if (agent.mode === "preview") {
+    if (provider !== "Claude" || agent.role !== "Preview debugger" || !agent.preview) return null
+    return {
+      kind: "preview",
+      label: "TerraFusion developer preview",
+      provider,
+      role: agent.role,
+      assignment: agent.assignment,
+      requiredSessionKey,
+    }
+  }
+  if (provider === "Local") {
+    if (agent.role !== "Thinker" || agent.reviewPath || agent.preview) return null
+    return {
+      kind: "conversation",
+      label: "Local model",
+      provider,
+      role: agent.role,
+      assignment: agent.assignment,
+      requiredSessionKey,
+    }
+  }
+  if (agent.reviewPath || agent.preview) return null
+  return {
+    kind: "agent",
+    label: `${agent.role} · ${provider}`,
+    provider,
+    role: agent.role,
+    assignment: agent.assignment,
+    requiredSessionKey,
+  }
+}
+
 function resumeSessionKey(context: DelegateContext | null): string | null {
   if (context?.kind === "continue" || context?.kind === "line-session") return context.sessionKey
-  return context?.kind === "reviewer" ? context.requiredSessionKey : null
+  if (context?.kind === "reviewer") return context.requiredSessionKey
+  return context?.requiredSessionKey ?? null
 }
 
 function previewEvidenceStorageKey(worldId: string, projectIdentity: string): string {
@@ -1355,9 +1396,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         const presentationWorldId = worldRef.current
         const presentationProvider = delegateContext.provider
         const exactResumeSessionKey = resumeSessionKey(delegateContext)
-        let presentationSessionKey: string | null = delegateContext.kind === "continue" || delegateContext.kind === "line-session"
-          ? delegateContext.sessionKey
-          : reviewerAgentContext ? `Claude:${reviewerAgentContext.sessionId}` : null
+        let presentationSessionKey: string | null = exactResumeSessionKey
         agentPresentationIsCurrent = () => agentPresentationEpochRef.current === presentationEpoch
           && transitionEpochRef.current === presentationTransitionEpoch
           && worldRef.current === presentationWorldId
@@ -1390,6 +1429,35 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             || exactSession.reviewPath !== reviewerAgentContext.reviewPath) {
             throw new Error("AGENT_REVIEW_SESSION_MISMATCH")
           }
+        }
+        if (delegateContext.kind !== "reviewer" && delegateContext.kind !== "continue"
+          && delegateContext.kind !== "line-session" && delegateContext.requiredSessionKey) {
+          const exactKey = delegateContext.requiredSessionKey
+          const exactProjection = agentSessions.sessions.find((candidate) => candidate.id === exactKey)
+          const exactDescriptor = agentSessions.savedSessions.find((candidate) => (
+            lineSessionKey(candidate.provider, candidate.sessionId) === exactKey
+          ))
+          const commonMatches = agentSessions.collectionState === "available"
+            && focusedAgentId === exactKey
+            && agentSessions.selectedSessionKey === exactKey
+            && exactProjection?.kind === "durable-session"
+            && exactProjection.providerLabel === delegateContext.provider
+            && exactProjection.role === delegateContext.role
+            && exactProjection.assignment === delegateContext.assignment
+            && exactDescriptor?.provider === delegateContext.provider
+            && exactDescriptor.role === delegateContext.role
+            && exactDescriptor.assignment === delegateContext.assignment
+          const modeMatches = delegateContext.kind === "preview"
+            ? exactProjection?.mode === "preview" && exactDescriptor?.preview?.worldId === worldRef.current
+              && exactDescriptor.preview.evidenceFingerprint === exactProjection.preview?.evidenceFingerprint
+            : delegateContext.kind === "conversation"
+              ? delegateContext.provider === "Local" && exactProjection?.mode === "delegate"
+                && !exactDescriptor?.reviewPath && !exactDescriptor?.preview
+              : delegateContext.kind === "agent"
+                ? delegateContext.provider !== "Local" && exactProjection?.mode === "delegate"
+                  && !exactDescriptor?.reviewPath && !exactDescriptor?.preview
+                : false
+          if (!commonMatches || !modeMatches) throw new Error("AGENT_RESUME_SESSION_MISMATCH")
         }
         if (exactResumeSessionKey) {
           if (resumeSessionInFlightKeys.includes(exactResumeSessionKey)
@@ -1942,14 +2010,9 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       setFocusedAgentId(key)
       const starting = resumeSessionInFlightKeys.includes(key)
       if (agentSessions.activeSessionIds.includes(key) || starting) {
-        const reviewerContext = reviewerDelegateContext(projected)
-        const local = projected.providerLabel === "Local"
-        setDelegateContext(reviewerContext
-          ?? (projected.mode === "preview"
-            ? { kind: "preview", label: "TerraFusion developer preview", provider: "Claude", role: "Preview debugger", assignment: "Developer Preview diagnosis" }
-            : local
-              ? { kind: "conversation", label: "Local model", provider: "Local", role: "Thinker", assignment: "Conversation" }
-              : { kind: "agent", label: `${projected.role} · ${projected.providerLabel}`, provider: projected.providerLabel as AgentProvider, role: projected.role, assignment: projected.assignment }))
+        const exactContext = durableSessionDelegateContext(projected)
+        if (!exactContext) return
+        setDelegateContext(exactContext)
         // Reattachment observes the turn already owned by its original presentation epoch. Opening
         // a new agent intent here would invalidate that owner and strand its natural settlement.
         setLineTarget("agent")
@@ -2055,20 +2118,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     if (selectedAgent?.kind === "durable-session" && (action === "Talk" || action === "Redirect")) {
-      const local = selectedAgent.providerLabel === "Local"
-      const reviewerContext = reviewerDelegateContext(selectedAgent)
-      if (selectedAgent.mode === "review" && !reviewerContext) {
+      const exactContext = durableSessionDelegateContext(selectedAgent)
+      if (!exactContext) {
         setDelegateContext(null)
         setLineOpen(false)
         return
       }
-      setDelegateContext(reviewerContext
-        ?? (selectedAgent.mode === "preview"
-        ? { kind: "preview", label: "TerraFusion developer preview", provider: "Claude", role: "Preview debugger", assignment: "Developer Preview diagnosis" }
-        : local
-        ? { kind: "conversation", label: "Local model", provider: "Local", role: "Thinker", assignment: "Conversation" }
-        : { kind: "agent", label: `${selectedAgent.role} · ${selectedAgent.providerLabel}`, provider: selectedAgent.providerLabel as AgentProvider, role: selectedAgent.role, assignment: selectedAgent.assignment }))
-      openLine(local || selectedAgent.mode === "review" ? "" : `${action}: `, "agent")
+      setDelegateContext(exactContext)
+      openLine(selectedAgent.providerLabel === "Local" || selectedAgent.mode === "review" ? "" : `${action}: `, "agent")
       return
     }
     openLine(`${action} this selected ${selectedKindLabel}: `)
@@ -2156,14 +2213,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           const running = agentSessions.activeSessionIds.includes(agent.id)
           if (running && agent.kind === "durable-session") {
             setFocusedAgentId(agent.id)
-            const reviewerContext = reviewerDelegateContext(agent)
-            if (agent.mode === "review" && !reviewerContext) {
+            const exactContext = durableSessionDelegateContext(agent)
+            if (!exactContext) {
               setDelegateContext(null)
               setLineOpen(false)
               return
             }
-            setDelegateContext(reviewerContext
-              ?? { kind: "agent", label: `${agent.role} · ${agent.providerLabel}`, provider: agent.providerLabel as AgentProvider, role: agent.role, assignment: agent.assignment })
+            setDelegateContext(exactContext)
             openLine("", "agent")
             setLineReply(agent.presentation ?? "Agent is working.")
             return
@@ -2177,11 +2233,14 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           }
           setFocusedAgentId(agent.id)
           if (agent.kind === "durable-session") {
-            const local = agent.providerLabel === "Local"
-            setDelegateContext(local
-              ? { kind: "conversation", label: "Local model", provider: "Local", role: "Thinker", assignment: "Conversation" }
-              : { kind: "agent", label: `${agent.role} · ${agent.providerLabel}`, provider: agent.providerLabel as AgentProvider, role: agent.role, assignment: agent.assignment })
-            openLine(local ? "" : "Redirect: ", "agent")
+            const exactContext = durableSessionDelegateContext(agent)
+            if (!exactContext) {
+              setDelegateContext(null)
+              setLineOpen(false)
+              return
+            }
+            setDelegateContext(exactContext)
+            openLine(agent.providerLabel === "Local" ? "" : "Redirect: ", "agent")
             setLineReply(agent.lastResult ? agentPresentationText(agent.lastResult) ?? "Saved agent result is hidden from presentation." : null)
           }
         }} />
