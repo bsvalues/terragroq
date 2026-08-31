@@ -1,6 +1,7 @@
 import path from "node:path"
 import { promises as fs } from "node:fs"
 import { NextResponse } from "next/server"
+import { normalizeProjectRootForEnv } from "@/lib/setup/project-root-env"
 
 export const runtime = "nodejs"
 
@@ -39,10 +40,6 @@ function isLoopbackHost(url: URL) {
 
 function asTrimmedString(value: unknown) {
   return typeof value === "string" ? value.trim() : ""
-}
-
-export function normalizeProjectRootForEnv(projectRoot: string) {
-  return projectRoot.replace(/\\/g, "/")
 }
 
 function validatePayload(payload: SetupPayload) {

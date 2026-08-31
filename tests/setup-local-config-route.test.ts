@@ -12,7 +12,8 @@ vi.mock("node:fs", () => ({
   },
 }))
 
-import { normalizeProjectRootForEnv, POST } from "@/app/api/setup/local-config/route"
+import { POST } from "@/app/api/setup/local-config/route"
+import { normalizeProjectRootForEnv } from "@/lib/setup/project-root-env"
 
 const nodeRequire = createRequire(import.meta.url)
 
@@ -174,11 +175,18 @@ describe("POST /api/setup/local-config route contract", () => {
     "C:\\new\\terrafusion_os_1.0",
     "\\\\omen\\workspace\\terrafusion_os_1.0",
   ])("round-trips a Windows checkout root through Next's dotenv parser (%s)", (windowsRoot) => {
-    const normalized = normalizeProjectRootForEnv(windowsRoot)
+    const normalized = normalizeProjectRootForEnv(windowsRoot, "win32")
     const parsed = parseWithNextDotenv(`WILLIAMOS_PROJECT_ROOT=${JSON.stringify(normalized)}\n`)
 
     expect(normalized).not.toContain("\\")
     expect(parsed.WILLIAMOS_PROJECT_ROOT).toBe(normalized)
+  })
+
+  it("preserves a literal backslash in a POSIX checkout root", () => {
+    const posixRoot = "/srv/terrafusion\\repo"
+    const normalized = normalizeProjectRootForEnv(posixRoot, "linux")
+
+    expect(normalized).toBe(posixRoot)
   })
 
   it("writes .env.local with expected keys on valid setup payload", async () => {
