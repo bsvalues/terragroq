@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import {
   deriveCodexAssignment,
+  deriveCodexAssignmentForVerifiedRootAlias,
   inspectCodexAssignmentTarget,
   revalidateCodexAssignment,
   type CodexAssignmentRecord,
@@ -165,6 +166,31 @@ describe("server-derived Codex assignment", () => {
     expect(assignment.selectedPath).toBe("src/selected.ts")
     expect(assignment.allowed).toEqual(["src/other.ts", "src/selected.ts"])
     expect(assignment.forbidden).toEqual(["src/forbidden.ts", "src/generated/**"])
+  })
+
+  it("reconstructs an alias-root identity while inspecting only through the verified physical root", async () => {
+    const inspectedRoots: string[] = []
+    const dependencies = {
+      loadRecord: async () => record(),
+      inspectTarget: async (root: string) => {
+        inspectedRoots.push(root)
+        return target
+      },
+    }
+    const physical = await deriveCodexAssignment({
+      userId: "owner-1", worldId: "world-1", projectRoot: "C:/physical/workspace",
+    }, dependencies)
+    const legacyAlias = await deriveCodexAssignmentForVerifiedRootAlias({
+      userId: "owner-1",
+      worldId: "world-1",
+      configuredProjectRoot: "C:/stable/workspace-alias",
+      verifiedProjectRoot: "C:/physical/workspace",
+    }, dependencies)
+
+    expect(inspectedRoots).toEqual(["C:/physical/workspace", "C:/physical/workspace"])
+    expect(legacyAlias.projectRoot).toBe("C:/stable/workspace-alias")
+    expect(legacyAlias.assignmentHash).not.toBe(physical.assignmentHash)
+    expect(legacyAlias.target).toEqual(physical.target)
   })
 
   it.each([

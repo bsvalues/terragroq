@@ -323,8 +323,13 @@ const productionDependencies: CodexAssignmentDependencies = {
   inspectTarget: inspectCodexAssignmentTarget,
 }
 
-export async function deriveCodexAssignment(
-  input: Readonly<{ userId: string; worldId: string; projectRoot: string }>,
+async function deriveCodexAssignmentFromRootIdentity(
+  input: Readonly<{
+    userId: string
+    worldId: string
+    projectRoot: string
+    targetProjectRoot: string
+  }>,
   dependencies: CodexAssignmentDependencies = productionDependencies,
 ): Promise<CodexAssignment> {
   const record = await dependencies.loadRecord(input.userId, input.worldId)
@@ -363,7 +368,7 @@ export async function deriveCodexAssignment(
   if (forbidden.length > 0 && reservationCoversRequestedPath(selectedPath, forbidden).ok) {
     refuse("the selected file is inside the forbidden reservation")
   }
-  const target = await dependencies.inspectTarget(input.projectRoot, selectedPath)
+  const target = await dependencies.inspectTarget(input.targetProjectRoot, selectedPath)
   const assignmentHash = hashRecord(assignmentSnapshot({
     owner: input.userId,
     worldId: input.worldId,
@@ -397,6 +402,39 @@ export async function deriveCodexAssignment(
     assignmentHash,
     target,
   }
+}
+
+export async function deriveCodexAssignment(
+  input: Readonly<{ userId: string; worldId: string; projectRoot: string }>,
+  dependencies: CodexAssignmentDependencies = productionDependencies,
+): Promise<CodexAssignment> {
+  return deriveCodexAssignmentFromRootIdentity({
+    ...input,
+    targetProjectRoot: input.projectRoot,
+  }, dependencies)
+}
+
+/**
+ * Reconstruct the immutable assignment identity used before a configured checkout alias was
+ * resolved to its physical root. The caller must first prove both roots through the authenticated
+ * Project binding. Target inspection remains on that verified physical root, so this does not
+ * relax the workspace link boundary or grant execution through the alias.
+ */
+export async function deriveCodexAssignmentForVerifiedRootAlias(
+  input: Readonly<{
+    userId: string
+    worldId: string
+    configuredProjectRoot: string
+    verifiedProjectRoot: string
+  }>,
+  dependencies: CodexAssignmentDependencies = productionDependencies,
+): Promise<CodexAssignment> {
+  return deriveCodexAssignmentFromRootIdentity({
+    userId: input.userId,
+    worldId: input.worldId,
+    projectRoot: input.configuredProjectRoot,
+    targetProjectRoot: input.verifiedProjectRoot,
+  }, dependencies)
 }
 
 export async function revalidateCodexAssignment(

@@ -10,6 +10,7 @@ import {
 import { loomCodexThreadDescriptor } from "@/lib/loom/threads"
 import {
   deriveCodexAssignment,
+  deriveCodexAssignmentForVerifiedRootAlias,
   revalidateCodexAssignment,
   type CodexAssignment,
 } from "@/lib/loom/codex-assignment"
@@ -173,10 +174,11 @@ export async function POST(request: Request) {
       && !workspaceMatchesPhysical
       && !sameWorkspace(configuredProjectRoot, projectRoot)) {
       try {
-        const configuredRootAssignment = await deriveCodexAssignment({
+        const configuredRootAssignment = await deriveCodexAssignmentForVerifiedRootAlias({
           userId: session.user.id,
           worldId,
-          projectRoot: configuredProjectRoot,
+          configuredProjectRoot,
+          verifiedProjectRoot: projectRoot,
         })
         assignmentHashMatches = descriptor.assignmentHash === configuredRootAssignment.assignmentHash
       } catch {

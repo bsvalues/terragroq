@@ -4,6 +4,7 @@ import path from "node:path"
 const seams = vi.hoisted(() => ({
   getSession: vi.fn(),
   deriveCodexAssignment: vi.fn(),
+  deriveCodexAssignmentForVerifiedRootAlias: vi.fn(),
   revalidateCodexAssignment: vi.fn(),
   createIsolatedWorkspace: vi.fn(),
   inspectIsolatedWorkspace: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock("@/lib/projects/workspace-project-binding", () => ({
 }))
 vi.mock("@/lib/loom/codex-assignment", () => ({
   deriveCodexAssignment: seams.deriveCodexAssignment,
+  deriveCodexAssignmentForVerifiedRootAlias: seams.deriveCodexAssignmentForVerifiedRootAlias,
   revalidateCodexAssignment: seams.revalidateCodexAssignment,
 }))
 vi.mock("@/lib/loom/codex-isolated-workspace", () => ({
@@ -138,6 +140,9 @@ describe("durable Codex delegate route", () => {
       },
     })
     seams.revalidateCodexAssignment.mockResolvedValue(undefined)
+    seams.deriveCodexAssignmentForVerifiedRootAlias.mockResolvedValue({
+      assignmentHash: CONFIGURED_ALIAS_ASSIGNMENT_HASH,
+    })
     seams.createIsolatedWorkspace.mockResolvedValue({
       projectRoot: process.cwd(),
       runtimeRoot: "C:/Users/owner/.williamos/loom/codex-worktrees",
@@ -333,9 +338,7 @@ describe("durable Codex delegate route", () => {
     seams.deriveCodexAssignment.mockImplementation(async (input: { projectRoot: string }) => ({
       ...currentAssignment,
       projectRoot: input.projectRoot,
-      assignmentHash: input.projectRoot === configuredAlias
-        ? CONFIGURED_ALIAS_ASSIGNMENT_HASH
-        : ASSIGNMENT_HASH,
+      assignmentHash: ASSIGNMENT_HASH,
     }))
     seams.resolveProjectBinding.mockResolvedValueOnce({
       ok: true,
@@ -360,11 +363,12 @@ describe("durable Codex delegate route", () => {
 
     expect(response.status).toBe(200)
     await events(response)
-    expect(seams.deriveCodexAssignment).toHaveBeenCalledTimes(2)
-    expect(seams.deriveCodexAssignment).toHaveBeenNthCalledWith(2, {
+    expect(seams.deriveCodexAssignment).toHaveBeenCalledOnce()
+    expect(seams.deriveCodexAssignmentForVerifiedRootAlias).toHaveBeenCalledWith({
       userId: "owner-1",
       worldId: "world-1",
-      projectRoot: configuredAlias,
+      configuredProjectRoot: configuredAlias,
+      verifiedProjectRoot: process.cwd(),
     })
     expect(seams.resumeThread).toHaveBeenCalledWith("codex-thread-1", expect.objectContaining({
       cwd: "C:/Users/owner/.williamos/loom/codex-worktrees/delegate-1",
