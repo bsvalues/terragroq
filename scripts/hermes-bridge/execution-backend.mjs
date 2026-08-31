@@ -27,6 +27,21 @@ function workspaceLeaf(branch) {
   return leaf
 }
 
+function validationWorkspace(workspacePath, workingDirectory, flavor = path) {
+  const root = flavor.resolve(requiredString(workspacePath, "workspacePath"))
+  if (workingDirectory === undefined || workingDirectory === ".") return root
+  const relative = requiredString(workingDirectory, "workingDirectory").replaceAll("\\", "/")
+  if (relative.startsWith("/") || relative.split("/").includes("..")) {
+    throw new TypeError("workingDirectory escapes workspace")
+  }
+  const candidate = flavor.resolve(root, relative)
+  const separator = flavor === path.posix ? "/" : path.sep
+  if (candidate !== root && !candidate.startsWith(`${root}${separator}`)) {
+    throw new TypeError("workingDirectory escapes workspace")
+  }
+  return candidate
+}
+
 function hasExactWorktree(output, workspacePath, branch) {
   return String(output).split(/\r?\n\r?\n/).some((block) => {
     const lines = block.split(/\r?\n/)
@@ -114,7 +129,13 @@ export class LocalExecutionBackend extends ExecutionBackend {
 
   async validate({ workspacePath, commands = [] } = {}) {
     const results = []
-    for (const entry of commands) results.push(await this.runCommand({ workspacePath, ...entry }))
+    for (const entry of commands) {
+      const { workingDirectory, ...command } = entry
+      results.push(await this.runCommand({
+        workspacePath: validationWorkspace(this.#workspace(workspacePath), workingDirectory),
+        ...command,
+      }))
+    }
     return results
   }
 
@@ -245,11 +266,13 @@ export class AegisExecutionBackend extends ExecutionBackend {
   async validate({ workspacePath, commands = [] } = {}) {
     const results = []
     for (const entry of commands) {
+      const { workingDirectory, ...command } = entry
+      const validationPath = validationWorkspace(this.#workspace(workspacePath), workingDirectory, path.posix)
       if (entry.command === "npm" && entry.args?.[0] === "run" && entry.args?.[1] === "build") {
-        const cleanup = await this.runCommand({ workspacePath, command: "rm", args: ["-rf", "--", ".next"] })
+        const cleanup = await this.runCommand({ workspacePath: validationPath, command: "rm", args: ["-rf", "--", ".next"] })
         if (cleanup.exitCode !== 0) throw new Error(`remote validation cleanup exited ${cleanup.exitCode}`)
       }
-      results.push(await this.runCommand({ workspacePath, ...entry }))
+      results.push(await this.runCommand({ workspacePath: validationPath, ...command }))
     }
     return results
   }

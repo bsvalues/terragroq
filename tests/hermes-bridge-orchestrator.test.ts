@@ -337,6 +337,82 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
 })
 
+describe("deterministic validator circuit breaking", () => {
+  it("fences the first literal-coverage wall, resumes once with the immutable overlay, and does not select a successor", async () => {
+    const executionBackend = {
+      stat: vi.fn(async () => ({ exists: true, isFile: true })),
+    }
+    const value = fixture(undefined, { executionBackend })
+    Object.assign(value.lifecycle, {
+      inspectWorktreeSnapshot: vi.fn(async () => ({
+        snapshotHash: "a".repeat(64),
+        manifest: { version: "hermes-worktree-snapshot.v1" },
+      })),
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_WORK_CONTRACT_VALIDATOR_WALL",
+    })
+    const tripped = value.state.read().executions["77"]
+    expect(tripped.lease.status).toBe("ABANDONED")
+    expect(tripped.metadata.deterministicValidatorCircuit).toMatchObject({
+      status: "DETERMINISTIC_CONTRACT_RECOVERY",
+      recoveryAttemptOrdinal: 1,
+    })
+    const sourceFence = tripped.fencingToken
+
+    await expect(value.orchestrator.cycle()).resolves.toMatchObject({ result: "COMPLETE", outcomeId: "77" })
+    const recovered = value.state.read().executions["77"]
+    expect(recovered.fencingToken).toBeGreaterThan(sourceFence)
+    expect(recovered.metadata.deterministicValidatorCircuit.status).toBe("RECOVERED")
+    expect(value.selectOutcome).toHaveBeenCalledTimes(1)
+    expect(value.lifecycle.runValidationCommands).toHaveBeenCalledWith(expect.objectContaining({
+      commands: expect.arrayContaining([expect.objectContaining({
+        command: "npx",
+        args: expect.arrayContaining(["tests/hermes-live-status.test.tsx"]),
+      })]),
+    }))
+  })
+
+  it("opens permanently on a second wall and never advances to a successor", async () => {
+    const executionBackend = {
+      stat: vi.fn(async () => ({ exists: true, isFile: true })),
+    }
+    const value = fixture(undefined, { executionBackend })
+    Object.assign(value.lifecycle, {
+      inspectWorktreeSnapshot: vi.fn(async () => ({
+        snapshotHash: "a".repeat(64),
+        manifest: { version: "hermes-worktree-snapshot.v1" },
+      })),
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_WORK_CONTRACT_VALIDATOR_WALL",
+    })
+    const secondWallPaths = [
+      "components/hermes/live-status.tsx",
+      "tests/hermes-live-status.test.tsx",
+      "tests/deleted-hermes-status.test.tsx",
+    ]
+    value.lifecycle.inspectWorkingTreePaths.mockResolvedValue(secondWallPaths)
+    value.lifecycle.inspectChangedPaths.mockResolvedValue(secondWallPaths)
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_DETERMINISTIC_RECOVERY_REQUIRED",
+    })
+    expect(value.state.read().executions["77"]).toMatchObject({
+      lease: { status: "ABANDONED", abandonReason: "DETERMINISTIC_RECOVERY_REQUIRED" },
+      checkpoint: { state: "RECOVERY_REQUIRED" },
+      metadata: { deterministicValidatorCircuit: { status: "RECOVERY_REQUIRED" } },
+    })
+    await expect(value.orchestrator.cycle()).resolves.toEqual({
+      result: "RECOVERY_REQUIRED", outcomeId: "77", nextState: "DETERMINISTIC_RECOVERY_REQUIRED",
+    })
+    expect(value.selectOutcome).toHaveBeenCalledTimes(1)
+    expect(value.markComplete).not.toHaveBeenCalled()
+  })
+})
+
 describe("retired durable queue acquisition reconciliation", () => {
   it("reconciles one explicit retired acquisition while disabled and replays without another event", async () => {
     const resolveRetiredAcquisition = vi.fn()

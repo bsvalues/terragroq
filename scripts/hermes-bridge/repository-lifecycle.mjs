@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -31,6 +32,18 @@ const CREATE_REMOTE_DEPENDENCY_TREE = "const fs=require('node:fs'),d=process.arg
 const VERIFY_REMOTE_DEPENDENCY_MARKER = "const fs=require('node:fs');process.exit(fs.readFileSync(process.argv[1],'utf8')===process.argv[2]?0:1)"
 const PROHIBITED_WORD = /(^|[-_:])(deploy|production|release|tag)([-_:]|$)/i
 const SECRET_LIKE = /(?:ghp_|github_pat_|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:token|password|secret)\s*[:=]\s*\S+|\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s@/]*:[^@\s/]+@)/i
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`
+  }
+  return JSON.stringify(value)
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex")
+}
 
 export class HermesRepositoryLifecycleError extends Error {
   constructor(code, detail) {
@@ -261,6 +274,7 @@ function normalizeValidation(command, index) {
   const normalized = {
     command: command.command, args: command.args ?? [], env: command.env ?? {},
     timeoutMs: command.timeoutMs ?? 10 * 60 * 1000,
+    workingDirectory: command.workingDirectory ?? ".",
   }
   assertSafeInvocation(normalized.command, normalized.args)
   const executable = path.basename(normalized.command).toLowerCase().replace(/\.(cmd|exe)$/i, "")
@@ -280,11 +294,21 @@ function normalizeValidation(command, index) {
     || normalized.timeoutMs > MAX_VALIDATION_TIMEOUT_MS) {
     wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}] timeout`)
   }
+  if (typeof normalized.workingDirectory !== "string") {
+    wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}] workingDirectory`)
+  }
+  normalized.workingDirectory = normalized.workingDirectory.trim().replaceAll("\\", "/").replace(/^\.\//, "") || "."
+  if (normalized.workingDirectory.startsWith("/")
+    || normalized.workingDirectory.split("/").includes("..")
+    || !/^(?:\.|[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*)$/.test(normalized.workingDirectory)) {
+    wall("HERMES_REPOSITORY_VALIDATION_WALL", `validationCommands[${index}] workingDirectory`)
+  }
   return Object.freeze({
     command: normalized.command,
     args: Object.freeze([...normalized.args]),
     env: Object.freeze({ ...normalized.env }),
     timeoutMs: normalized.timeoutMs,
+    workingDirectory: normalized.workingDirectory,
   })
 }
 
@@ -1085,9 +1109,13 @@ export function createRepositoryLifecycle(options) {
         ...command.env,
         WILLIAMOS_HERMES_VALIDATION_ISOLATED: "1",
       }, workspaceRoot)
-      const invocation = resolveWorktreeValidationInvocation(command, record.worktreePath)
+      const commandRoot = path.resolve(record.worktreePath, command.workingDirectory)
+      if (commandRoot !== record.worktreePath && !inside(record.worktreePath, commandRoot)) {
+        wall("HERMES_REPOSITORY_VALIDATION_WALL", "workingDirectory escapes owned worktree")
+      }
+      const invocation = resolveWorktreeValidationInvocation(command, commandRoot)
       const result = await run(invocation.command, invocation.args, {
-        cwd: record.worktreePath, env: validationEnvironment,
+        cwd: commandRoot, env: validationEnvironment,
         timeoutMs: command.timeoutMs, allowFailure: true,
         credentialAccess: false,
       })
@@ -1107,6 +1135,46 @@ export function createRepositoryLifecycle(options) {
       results.push({ command: command.command, args: [...command.args], code: result.code })
     }
     return results
+  }
+
+  async function inspectWorktreeSnapshot({ worktreePath, branch } = {}) {
+    const record = ownedRecord(workspacePath(worktreePath), branchName(branch))
+    const [head, status, staged, unstaged, untracked] = await Promise.all([
+      run("git", ["-C", record.worktreePath, "rev-parse", "HEAD"], { credentialAccess: false }),
+      run("git", ["-C", record.worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all"], { credentialAccess: false }),
+      run("git", ["-C", record.worktreePath, "diff", "--cached", "--binary", "--no-ext-diff"], { credentialAccess: false }),
+      run("git", ["-C", record.worktreePath, "diff", "--binary", "--no-ext-diff"], { credentialAccess: false }),
+      run("git", ["-C", record.worktreePath, "ls-files", "--others", "--exclude-standard", "-z"], { credentialAccess: false }),
+    ])
+    const untrackedPaths = untracked.stdout.split("\0").filter(Boolean).map(safeRelativePath).sort()
+    if (untrackedPaths.length > 500) wall("HERMES_REPOSITORY_SNAPSHOT_WALL", "too many untracked paths")
+    const untrackedFiles = []
+    for (const relativePath of untrackedPaths) {
+      if (executionBackend && !executionBackend.isLocal) {
+        const digestResult = await run("sha256sum", [relativePath], {
+          cwd: record.worktreePath, credentialAccess: false,
+        })
+        const digest = digestResult.stdout.trim().split(/\s+/)[0]
+        if (!/^[0-9a-f]{64}$/.test(digest)) wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
+        untrackedFiles.push({ path: relativePath, sha256: digest })
+      } else {
+        const candidate = path.resolve(record.worktreePath, relativePath)
+        if (!inside(record.worktreePath, candidate) || !fs.statSync(candidate).isFile()) {
+          wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
+        }
+        untrackedFiles.push({ path: relativePath, sha256: sha256(fs.readFileSync(candidate)) })
+      }
+    }
+    const manifest = Object.freeze({
+      version: "hermes-worktree-snapshot.v1",
+      head: head.stdout.trim(),
+      statusSha256: sha256(status.stdout),
+      stagedDiffSha256: sha256(staged.stdout),
+      unstagedDiffSha256: sha256(unstaged.stdout),
+      untrackedFiles: Object.freeze(untrackedFiles.map(Object.freeze)),
+    })
+    if (!SHA.test(manifest.head)) wall("HERMES_REPOSITORY_SNAPSHOT_WALL", "HEAD")
+    return Object.freeze({ manifest, snapshotHash: sha256(canonicalJson(manifest)) })
   }
 
   async function commitChanges({ worktreePath, branch, paths, message } = {}) {
@@ -1591,6 +1659,7 @@ export function createRepositoryLifecycle(options) {
     inspectChangedPaths,
     inspectWorkingTreePaths,
     inspectWorktreeHead,
+    inspectWorktreeSnapshot,
     ensureValidationDependencies,
     removeValidationDependencies,
     removeTerminalRecoveryDependencies,

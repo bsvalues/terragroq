@@ -2,6 +2,11 @@ import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
+import {
+  transitionDeterministicValidatorCircuit,
+  validateDeterministicValidatorCircuit,
+} from "./deterministic-validator-recovery.mjs"
+
 const COUNTER_ALIASES = Object.freeze({
   ownerOperationTouchCount: "OWNER_OPERATION_TOUCH_COUNT",
   ownerCredentialTouchCount: "OWNER_CREDENTIAL_TOUCH_COUNT",
@@ -333,6 +338,11 @@ function validateState(state, storeId) {
     fail("HERMES_STATE_CORRUPT")
   }
   for (const execution of Object.values(state.executions)) {
+    const deterministicValidatorCircuit = execution?.metadata?.deterministicValidatorCircuit ?? null
+    if (deterministicValidatorCircuit !== null
+      && !validateDeterministicValidatorCircuit(deterministicValidatorCircuit)) {
+      fail("INVALID_DETERMINISTIC_VALIDATOR_CIRCUIT")
+    }
     const validationFailure = execution?.metadata?.validationFailure
     if (typeof validationFailure === "string" && validationFailure && SENSITIVE_EVIDENCE.test(validationFailure)) {
       fail("VALIDATION_FAILURE_SECRET_WALL")
@@ -362,6 +372,7 @@ export function readHermesState(filePath, storeId = "hermes-bridge") {
       "IDEMPOTENCY_SECRET_WALL",
       "TURN_RESULT_SECRET_WALL",
       "INVALID_TURN_RESULT_DIGEST",
+      "INVALID_DETERMINISTIC_VALIDATOR_CIRCUIT",
     ].includes(error?.code)) {
       throw error
     }
@@ -507,6 +518,13 @@ function metadata(input = {}, current = {}) {
     && (typeof runtimeEvidenceRef !== "string"
       || !/^EV-HERMES-\d+-\d+-\d+$/.test(runtimeEvidenceRef))) {
     fail("INVALID_RUNTIME_EVIDENCE_REF")
+  }
+  const deterministicValidatorCircuit = Object.hasOwn(input, "deterministicValidatorCircuit")
+    ? input.deterministicValidatorCircuit
+    : current.deterministicValidatorCircuit ?? null
+  if (deterministicValidatorCircuit !== null
+    && !validateDeterministicValidatorCircuit(deterministicValidatorCircuit)) {
+    fail("INVALID_DETERMINISTIC_VALIDATOR_CIRCUIT")
   }
   const remediationRound = input.remediationRound ?? current.remediationRound ?? null
   if (remediationRound !== null && (!Number.isInteger(remediationRound) || remediationRound < 0)) {
@@ -815,6 +833,7 @@ function metadata(input = {}, current = {}) {
       ? { durableQueueAcquisitionRetirementEvents: normalizedRetirementEvents }
       : {}),
     runtimeEvidenceRef,
+    deterministicValidatorCircuit,
     outcome,
   }
 }
@@ -1707,6 +1726,148 @@ export function deferProviderWall(filePath, request, options = {}) {
   })
 }
 
+export function tripDeterministicValidatorCircuit(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    assertFence(current, request.holderId, request.fencingToken)
+    if (request.expectedCheckpointSequence !== current.checkpoint.sequence) {
+      fail("CHECKPOINT_SEQUENCE_CONFLICT")
+    }
+    const circuit = validateDeterministicValidatorCircuit(request.circuit)
+    if (!circuit || circuit.status !== "DETERMINISTIC_CONTRACT_RECOVERY"
+      || circuit.sourceFencingToken !== current.fencingToken
+      || circuit.sourceCheckpointSequence !== current.checkpoint.sequence
+      || current.metadata.deterministicValidatorCircuit !== null) {
+      fail("DETERMINISTIC_VALIDATOR_CIRCUIT_STATE_WALL")
+    }
+    const tripped = {
+      ...current,
+      lease: {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        abandonedAt: at.iso,
+        abandonReason: "DETERMINISTIC_CONTRACT_RECOVERY",
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "DETERMINISTIC_CONTRACT_RECOVERY",
+        detail: circuit.fingerprint,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({ deterministicValidatorCircuit: circuit }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: tripped }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: tripped.fencingToken,
+      checkpointSequence: tripped.checkpoint.sequence,
+      leaseStatus: tripped.lease.status,
+      circuitStatus: circuit.status,
+    }
+  })
+}
+
+export function activateDeterministicValidatorRecovery(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at, requestedAt) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    const circuit = validateDeterministicValidatorCircuit(current.metadata.deterministicValidatorCircuit)
+    if (!circuit || circuit.status !== "DETERMINISTIC_CONTRACT_RECOVERY"
+      || current.lease.status !== "ABANDONED"
+      || current.checkpoint.state !== "DETERMINISTIC_CONTRACT_RECOVERY"
+      || current.fencingToken !== request.expectedFencingToken
+      || request.expectedCheckpointSequence !== current.checkpoint.sequence
+      || !request.holderId || !Number.isFinite(request.leaseDurationMs)
+      || request.leaseDurationMs <= 0) {
+      fail("DETERMINISTIC_VALIDATOR_CIRCUIT_STATE_WALL")
+    }
+    const recoveryCircuit = transitionDeterministicValidatorCircuit(circuit, {
+      status: "RECOVERY_ACTIVE", observedAt: at.iso,
+    })
+    const fencingToken = state.nextFencingToken++
+    const active = {
+      ...current,
+      fencingToken,
+      lease: {
+        status: "ACTIVE",
+        holderId: request.holderId,
+        acquiredAt: at.iso,
+        expiresAt: new Date(requestedAt.milliseconds + request.leaseDurationMs).toISOString(),
+      },
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "RECOVERY_ACTIVE",
+        detail: circuit.fingerprint,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({ deterministicValidatorCircuit: recoveryCircuit }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: active }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken,
+      checkpointSequence: active.checkpoint.sequence,
+      leaseExpiresAt: active.lease.expiresAt,
+      circuitStatus: recoveryCircuit.status,
+      replacementContract: recoveryCircuit.recovery.replacementContract,
+      metadata: active.metadata,
+    }
+  })
+}
+
+export function settleDeterministicValidatorRecovery(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    assertFence(current, request.holderId, request.fencingToken)
+    const circuit = validateDeterministicValidatorCircuit(current.metadata.deterministicValidatorCircuit)
+    if (!circuit || !["RECOVERY_ACTIVE", "RECOVERED"].includes(circuit.status)
+      || request.expectedCheckpointSequence !== current.checkpoint.sequence
+      || !["RECOVERED", "RECOVERY_REQUIRED"].includes(request.status)) {
+      fail("DETERMINISTIC_VALIDATOR_CIRCUIT_STATE_WALL")
+    }
+    if (request.status === "RECOVERED" && circuit.status !== "RECOVERY_ACTIVE") {
+      fail("DETERMINISTIC_VALIDATOR_CIRCUIT_STATE_WALL")
+    }
+    const nextCircuit = transitionDeterministicValidatorCircuit(circuit, {
+      status: request.status,
+      fingerprint: request.fingerprint ?? circuit.fingerprint,
+      observedAt: at.iso,
+    })
+    const terminal = request.status === "RECOVERY_REQUIRED"
+    const settled = {
+      ...current,
+      lease: terminal ? {
+        ...current.lease,
+        status: "ABANDONED",
+        expiresAt: at.iso,
+        abandonedAt: at.iso,
+        abandonReason: "DETERMINISTIC_RECOVERY_REQUIRED",
+      } : current.lease,
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: request.status,
+        detail: nextCircuit.fingerprint,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({ deterministicValidatorCircuit: nextCircuit }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: settled }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: settled.fencingToken,
+      checkpointSequence: settled.checkpoint.sequence,
+      leaseStatus: settled.lease.status,
+      circuitStatus: nextCircuit.status,
+    }
+  })
+}
+
 export function setKillSwitch(filePath, request, options = {}) {
   const { storeId = "hermes-bridge", now } = options
   return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
@@ -1752,6 +1913,9 @@ export function createHermesStateStore(filePath, options = {}) {
     finalizeTerminalPostMergeCleanupRecovery: (request) => finalizeTerminalPostMergeCleanupRecovery(filePath, request, options),
     completeActivePostMergeCleanupRecovery: (request) => completeActivePostMergeCleanupRecovery(filePath, request, options),
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),
+    tripDeterministicValidatorCircuit: (request) => tripDeterministicValidatorCircuit(filePath, request, options),
+    activateDeterministicValidatorRecovery: (request) => activateDeterministicValidatorRecovery(filePath, request, options),
+    settleDeterministicValidatorRecovery: (request) => settleDeterministicValidatorRecovery(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),
   })

@@ -39,6 +39,12 @@ import { evaluateOutcomePolicy } from "./policy.mjs"
 import { buildHermesCodexPrompt, HERMES_BLOCKED_SCOPE, HERMES_TURN_OUTPUT_SCHEMA } from "./prompt.mjs"
 import { createRepositoryLifecycle } from "./repository-lifecycle.mjs"
 import {
+  buildFocusedValidationCommand,
+  createDeterministicValidatorCircuit,
+  createDeterministicValidatorReplacement,
+  createDeterministicValidatorWallEvidence,
+} from "./deterministic-validator-recovery.mjs"
+import {
   HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
   HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
   HERMES_ISSUE_911_LIVE_ACCEPTANCE_CONTRACT_DIGEST,
@@ -1913,6 +1919,9 @@ export function createHermesOrchestrator(options = {}) {
         || OWNER_DECISION_RESUME_STATES.has(execution?.checkpoint?.state)
         || matchesRecoverableValidationState(execution, initialized)
         || hasOwnerDecisionResume(execution?.metadata)
+        || ["DETERMINISTIC_CONTRACT_RECOVERY", "RECOVERY_REQUIRED"].includes(
+          execution?.metadata?.deterministicValidatorCircuit?.status,
+        )
       )
     ))
     const recoveredExecutions = []
@@ -1979,6 +1988,9 @@ export function createHermesOrchestrator(options = {}) {
 
     const outcomeId = String(outcome.id)
     let current = durableExecution ?? state.read().executions[outcomeId]
+    if (current?.metadata?.deterministicValidatorCircuit?.status === "RECOVERY_REQUIRED") {
+      return { result: "RECOVERY_REQUIRED", outcomeId, nextState: "DETERMINISTIC_RECOVERY_REQUIRED" }
+    }
     if (current?.lease?.status === "RELEASED"
       && current.checkpoint?.state === "OWNER_DECISION_REQUIRED") {
       const expectedNextState = current.checkpoint.detail
@@ -2085,7 +2097,16 @@ export function createHermesOrchestrator(options = {}) {
       if (!abandoned && Date.parse(current.lease.expiresAt) > now().getTime()) {
         return { result: "LEASE_HELD", outcomeId }
       }
-      lease = state.reclaimLease({
+      lease = current.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY"
+        ? state.activateDeterministicValidatorRecovery({
+            idempotencyKey: `${outcomeId}:deterministic-validator:activate:${current.fencingToken}`,
+            outcomeId,
+            expectedFencingToken: current.fencingToken,
+            expectedCheckpointSequence: current.checkpoint.sequence,
+            holderId,
+            leaseDurationMs: LEASE_DURATION_MS,
+          })
+        : state.reclaimLease({
         idempotencyKey: `${outcomeId}:reclaim:${current.fencingToken + 1}`,
         outcomeId,
         expectedFencingToken: current.fencingToken,
@@ -2098,7 +2119,7 @@ export function createHermesOrchestrator(options = {}) {
             ? { threadId: null, turnId: null }
             : {}),
         },
-      })
+          })
     } else {
       lease = state.acquireLease({
         idempotencyKey: `${outcomeId}:acquire:1`, outcomeId, holderId,
@@ -2253,10 +2274,15 @@ export function createHermesOrchestrator(options = {}) {
       return { result: "OWNER_DECISION_REQUIRED", outcomeId, nextState }
     }
     const branch = lease.metadata?.branch ?? `codex/hermes-${safeLeaf(outcomeRef(outcome))}-${outcome.id}`
-    const { contract: workContract, projection: projectedContract } = projectedWorkContract(
+    const { contract: resolvedWorkContract, projection: projectedContract } = projectedWorkContract(
       outcome,
       workContractResolver,
     )
+    const activeDeterministicCircuit = state.read().executions[outcomeId]
+      ?.metadata?.deterministicValidatorCircuit ?? null
+    const workContract = ["RECOVERY_ACTIVE", "RECOVERED"].includes(activeDeterministicCircuit?.status)
+      ? activeDeterministicCircuit.recovery.replacementContract
+      : resolvedWorkContract
     const reservations = workContract.reservations
     const workOrderRef = workOrderRefFor(outcome)
     const baseSha = lease.metadata?.baseSha ?? await lifecycle.refreshOriginMain()
@@ -2318,12 +2344,56 @@ export function createHermesOrchestrator(options = {}) {
         })
         if (entry.exists && entry.isFile) focusedTests.push(changedPath)
       }
-      const unregisteredFocusedTest = focusedTests.find((testPath) => (
+      const unregisteredFocusedTests = focusedTests.filter((testPath) => (
         !workContract.validationCommands.some((entry) => entry.args?.includes(testPath))
       ))
-      if (unregisteredFocusedTest) {
-        throw Object.assign(new Error("Changed test is absent from the exact work contract"), {
+      if (unregisteredFocusedTests.length > 0) {
+        const snapshot = await lifecycle.inspectWorktreeSnapshot(record)
+        const focusedValidationCommand = buildFocusedValidationCommand({
+          command: "npx",
+          prefixArgs: ["vitest", "run"],
+          testPaths: unregisteredFocusedTests,
+          workingDirectory: ".",
+        })
+        const evidence = createDeterministicValidatorWallEvidence({
+          outcomeId,
+          outcomeKey: outcome.queueBinding?.outcomeKey ?? `outcome:${outcomeId}`,
+          contract: workContract,
+          worktreeSnapshotHash: snapshot.snapshotHash,
+          missingTestPaths: unregisteredFocusedTests,
+          focusedValidationCommand,
+        })
+        const durableCircuit = state.read().executions[outcomeId]
+          ?.metadata?.deterministicValidatorCircuit ?? null
+        if (["RECOVERY_ACTIVE", "RECOVERED"].includes(durableCircuit?.status)) {
+          state.settleDeterministicValidatorRecovery({
+            idempotencyKey: `${outcomeId}:deterministic-validator:required:${evidence.fingerprint}`,
+            outcomeId, holderId, fencingToken: lease.fencingToken,
+            expectedCheckpointSequence: sequence,
+            status: "RECOVERY_REQUIRED",
+            fingerprint: evidence.fingerprint,
+          })
+          throw Object.assign(new Error("Deterministic validator wall repeated after the one bounded recovery"), {
+            code: "HERMES_DETERMINISTIC_RECOVERY_REQUIRED",
+            deterministicValidatorEvidence: evidence,
+          })
+        }
+        const replacement = createDeterministicValidatorReplacement({ contract: workContract, evidence })
+        const circuit = createDeterministicValidatorCircuit({
+          evidence, replacement,
+          sourceFencingToken: lease.fencingToken,
+          sourceCheckpointSequence: sequence,
+          observedAt: now().toISOString(),
+        })
+        state.tripDeterministicValidatorCircuit({
+          idempotencyKey: `${outcomeId}:deterministic-validator:trip:${evidence.fingerprint}`,
+          outcomeId, holderId, fencingToken: lease.fencingToken,
+          expectedCheckpointSequence: sequence,
+          circuit,
+        })
+        throw Object.assign(new Error("Changed tests are absent from the exact work contract"), {
           code: "HERMES_WORK_CONTRACT_VALIDATOR_WALL",
+          deterministicValidatorEvidence: evidence,
         })
       }
       return workContract.validationCommands
@@ -2331,10 +2401,21 @@ export function createHermesOrchestrator(options = {}) {
     const runDeterministicValidation = async (workingPaths) => {
       await lifecycle.ensureValidationDependencies(record)
       try {
-        return await lifecycle.runValidationCommands({
+        const result = await lifecycle.runValidationCommands({
           ...record,
           commands: await validationCommandsFor(workingPaths),
         })
+        const circuit = state.read().executions[outcomeId]?.metadata?.deterministicValidatorCircuit
+        if (circuit?.status === "RECOVERY_ACTIVE") {
+          const settled = state.settleDeterministicValidatorRecovery({
+            idempotencyKey: `${outcomeId}:deterministic-validator:recovered:${circuit.fingerprint}`,
+            outcomeId, holderId, fencingToken: lease.fencingToken,
+            expectedCheckpointSequence: sequence,
+            status: "RECOVERED",
+          })
+          sequence = settled.checkpointSequence
+        }
+        return result
       } finally {
         await lifecycle.removeValidationDependencies(record)
       }
