@@ -23,12 +23,13 @@ const seams = vi.hoisted(() => ({
   closeAndWait: vi.fn(),
   sanitize: vi.fn(),
   onConstruct: vi.fn(),
+  resolveProjectBinding: vi.fn(),
   clientOptions: [] as unknown[],
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
-  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+  resolveTerraFusionWorkspaceBinding: seams.resolveProjectBinding,
 }))
 vi.mock("@/lib/loom/codex-assignment", () => ({
   deriveCodexAssignment: seams.deriveCodexAssignment,
@@ -94,6 +95,10 @@ describe("durable Codex delegate route", () => {
     vi.resetAllMocks()
     seams.clientOptions.length = 0
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
+    seams.resolveProjectBinding.mockResolvedValue({
+      ok: true,
+      binding: { workspaceRoot: process.cwd(), configuredWorkspaceRoot: process.cwd() },
+    })
     seams.connect.mockResolvedValue(undefined)
     seams.closeAndWait.mockResolvedValue(undefined)
     seams.sanitize.mockImplementation((value: unknown) => String(value ?? "")
@@ -317,6 +322,35 @@ describe("durable Codex delegate route", () => {
       type: "session", sessionId: "codex-thread-1", provider: "Codex", mode: "delegate", resumed: true,
       selectedPath: "src/selected.ts", assignmentHash: ASSIGNMENT_HASH,
     })
+  })
+
+  it("resumes a durable session recorded against the verified configured workspace alias", async () => {
+    seams.resolveProjectBinding.mockResolvedValueOnce({
+      ok: true,
+      binding: {
+        workspaceRoot: process.cwd(),
+        configuredWorkspaceRoot: "C:/stable/terrafusion-alias",
+      },
+    })
+    seams.poolQuery.mockResolvedValueOnce({
+      rows: [{ userId: "owner-1", metadata: {
+        provider: "Codex", mode: "delegate", workspace: "C:/stable/terrafusion-alias", committed: true,
+        worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9,
+        assignmentHash: ASSIGNMENT_HASH, selectedPath: "src/selected.ts",
+      } }],
+    })
+
+    const response = await POST(request({
+      prompt: "Continue.",
+      sessionId: "codex-thread-1",
+      resume: true,
+    }))
+
+    expect(response.status).toBe(200)
+    await events(response)
+    expect(seams.resumeThread).toHaveBeenCalledWith("codex-thread-1", expect.objectContaining({
+      cwd: "C:/Users/owner/.williamos/loom/codex-worktrees/delegate-1",
+    }))
   })
 
   it.each([

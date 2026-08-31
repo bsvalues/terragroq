@@ -102,6 +102,7 @@ export async function POST(request: Request) {
   const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
   if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
   const projectRoot = path.resolve(projectBinding.binding.workspaceRoot)
+  const configuredProjectRoot = path.resolve(projectBinding.binding.configuredWorkspaceRoot)
 
   let body: { worldId?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown }
   try {
@@ -165,7 +166,8 @@ export async function POST(request: Request) {
     if (descriptor.provider !== "Codex"
       || descriptor.mode !== "delegate"
       || descriptor.workspace === null
-      || !sameWorkspace(descriptor.workspace, projectRoot)
+      || (!sameWorkspace(descriptor.workspace, projectRoot)
+        && !sameWorkspace(descriptor.workspace, configuredProjectRoot))
       || descriptor.worldId !== assignment.worldId
       || descriptor.outcomeKey !== assignment.outcomeKey
       || descriptor.workOrderId !== assignment.workOrderId

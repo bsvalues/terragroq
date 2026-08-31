@@ -15,6 +15,7 @@ export type WorkspaceProjectBinding = Readonly<{
   projectKey: string
   projectName: string
   repositoryIdentity: string
+  configuredWorkspaceRoot: string
   workspaceRoot: string
   workspaceAppUrl: string | null
   project: WorkspaceProject
@@ -164,6 +165,7 @@ export async function resolveTerraFusionWorkspaceBinding(
       projectKey: row.projectKey,
       projectName: row.projectName,
       repositoryIdentity: row.repositoryIdentity,
+      configuredWorkspaceRoot,
       workspaceRoot,
       workspaceAppUrl: process.env.WILLIAMOS_WORKSPACE_APP_URL?.trim() || null,
       project: projectBinding,
