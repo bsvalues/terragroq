@@ -23,7 +23,6 @@ import { createHermesRepositoryLifecycle } from "../../scripts/hermes-bridge/rep
 
 const runFile = promisify(execFile)
 const SHA = /^[0-9a-f]{40}$/
-const DIGEST = /^[0-9a-f]{64}$/
 const WORKSPACE_RESOURCE = "williamos-workspace-root:v1:"
 const ADMISSION_OPERATION = "space.external_work_order.admit"
 
