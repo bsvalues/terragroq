@@ -63,4 +63,21 @@ describe("delivery commit inspection", () => {
     expect(first.contentDigest).toMatch(/^[0-9a-f]{64}$/)
     expect(second.contentDigest).toBe(first.contentDigest)
   })
+
+  it("measures both exact paths of a rename without collapsing the source", async () => {
+    const repo = repository()
+    fs.renameSync(path.join(repo.root, "src", "selected.ts"), path.join(repo.root, "src", "renamed.ts"))
+    git(repo.root, "add", "-A", "src")
+    git(repo.root, "commit", "-m", "rename selected path")
+    const renamedHead = git(repo.root, "rev-parse", "HEAD")
+
+    const measured = await inspectGitDelivery(
+      repo.root,
+      repo.commitSha,
+      renamedHead,
+      ["src/selected.ts", "src/renamed.ts"],
+      { allowMultiple: true },
+    )
+    expect(measured).toMatchObject({ commitSha: renamedHead, paths: ["src/renamed.ts", "src/selected.ts"] })
+  })
 })

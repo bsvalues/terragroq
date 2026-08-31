@@ -85,7 +85,7 @@ function harness(row = authorityRow()) {
     inspectPullRequest: vi.fn(async () => ({ number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "", checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0 })),
     inspectPullRequestFiles: vi.fn(async () => paths),
   }
-  const deriveBaseSha = vi.fn(async () => base)
+  const deriveBaseSha = vi.fn(async () => ({ baseRefSha: base, mergeBaseSha: base }))
   const { privateKey, publicKey } = generateKeyPairSync("ed25519")
   const runtime = createArtifactAdoptionRuntime({
     database: db,

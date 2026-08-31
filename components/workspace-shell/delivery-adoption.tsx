@@ -238,10 +238,10 @@ export function DeliveryAdoption({
         cache: "no-store",
       })
       const value = await payload(response)
-      if (!response.ok || !isSeal(value) || value.worldId !== worldId || value.adoptionHash !== authorization.adoptionHash) {
+      if (!response.ok || !isRestoredSeal(value) || value.worldId !== worldId || value.adoptionHash !== authorization.adoptionHash) {
         throw new Error(explainFailure(value, "WilliamOS could not validate and seal this exact artifact."))
       }
-      setSeal(value)
+      setSeal({ status: "SEALED", worldId: value.worldId, adoptionHash: value.adoptionHash, seal: value.seal })
       setStage("sealed")
     } catch (cause) {
       setStage("authorized")

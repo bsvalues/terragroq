@@ -97,7 +97,7 @@ describe("prospective delivery adoption UI", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({ status: "READY_FOR_CONFIRMATION", worldId, pullRequest: 1117, headSha, paths: ["app/a.ts", "lib/b.ts"], previewDigest }))
       .mockResolvedValueOnce(response({ status: "AUTHORIZED", worldId, pullRequest: 1117, headSha, paths: ["app/a.ts", "lib/b.ts"], previewDigest, idempotencyKey, adoptionHash, authorizationEventId: 101 }, 201))
-      .mockResolvedValueOnce(response({ status: "SEALED", worldId, adoptionHash, seal: { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" } }))
+      .mockResolvedValueOnce(response({ status: "SEALED", worldId, pullRequest: 1117, headSha, paths: ["app/a.ts", "lib/b.ts"], previewDigest, adoptionHash, seal: { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" } }))
     vi.stubGlobal("fetch", fetchMock)
     vi.stubGlobal("crypto", { randomUUID: () => idempotencyKey })
 
@@ -136,7 +136,7 @@ describe("prospective delivery adoption UI", () => {
         adoptionHash,
         authorizationEventId: 101,
       }))
-      .mockResolvedValueOnce(response({ status: "SEALED", worldId, adoptionHash, seal: { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" } }))
+      .mockResolvedValueOnce(response({ status: "SEALED", worldId, pullRequest: 1117, headSha, paths: ["app/a.ts", "lib/b.ts"], previewDigest, adoptionHash, seal: { payload: { version: "williamos-delivery-seal.v2" }, signature: "signed" } }))
     vi.stubGlobal("fetch", fetchMock)
     vi.stubGlobal("crypto", { randomUUID: () => idempotencyKey })
 

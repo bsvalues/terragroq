@@ -25,7 +25,7 @@ const context = {
   reservation: { allowed: paths, forbidden: ["terrafusion/**"], version: digest("a") },
 } as const
 
-const identity = { pullRequest: 1117, state: "OPEN" as const, headSha: head, baseSha: base, paths }
+const identity = { pullRequest: 1117, state: "OPEN" as const, headSha: head, baseRefSha: base, baseSha: base, paths }
 const evidence = {
   adoptionHash: digest("f"), pullRequest: 1117, state: "OPEN" as const, headSha: head, paths,
   checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true,
@@ -128,6 +128,7 @@ describe("prospective exact-artifact adoption", () => {
     }
     for (const override of [
       { inspectArtifactIdentity: vi.fn().mockResolvedValue({ ...identity, headSha: "3".repeat(40) }) },
+      { inspectArtifactIdentity: vi.fn().mockResolvedValue({ ...identity, baseRefSha: "4".repeat(40) }) },
       { inspectArtifactIdentity: vi.fn().mockResolvedValue({ ...identity, paths: [...paths, "escape.ts"] }) },
       { loadEvidence: vi.fn().mockResolvedValue({ validationEventId: 102, reviewEventId: 103, evidence: { ...evidence, adoptionHash: authorization.adoptionHash, state: "CLOSED" } }) },
       { loadEvidence: vi.fn().mockResolvedValue({ validationEventId: 102, reviewEventId: 103, evidence: { ...evidence, adoptionHash: authorization.adoptionHash, checksGreen: false } }) },

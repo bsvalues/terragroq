@@ -23,13 +23,14 @@ type Spine = Readonly<{
 }>
 
 type Identity = Readonly<{
-  pullRequest: number; state: "OPEN" | "CLOSED" | "MERGED"; headSha: string; baseSha: string; paths: readonly string[]
+  pullRequest: number; state: "OPEN" | "CLOSED" | "MERGED"; headSha: string
+  baseRefSha: string; baseSha: string; paths: readonly string[]
 }>
 
 export type ArtifactAdoptionAuthorization = Readonly<{
   adoptionHash: string; previewDigest: string; idempotencyKey: string
   context: Spine
-  artifact: Readonly<{ pullRequest: number; headSha: string; baseSha: string; paths: readonly string[] }>
+  artifact: Readonly<{ pullRequest: number; headSha: string; baseRefSha: string; baseSha: string; paths: readonly string[] }>
 }>
 
 export type ArtifactAdoptionEvidence = Readonly<{
@@ -75,7 +76,7 @@ function validSpine(userId: string, worldId: string, spine: Spine, now: Date): b
 
 function validIdentity(spine: Spine, identity: Identity): boolean {
   return identity.pullRequest === spine.pullRequest && identity.state === "OPEN"
-    && identity.headSha === spine.admittedHeadSha && SHA.test(identity.baseSha)
+    && identity.headSha === spine.admittedHeadSha && SHA.test(identity.baseRefSha) && SHA.test(identity.baseSha)
     && same(identity.paths, spine.reservation.allowed)
 }
 
@@ -84,7 +85,7 @@ async function snapshot(userId: string, worldId: string, deps: ArtifactAdoptionD
   if (!validSpine(userId, worldId, context, deps.now())) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "Space authority is missing, expired, or changed")
   const artifact = await deps.inspectArtifactIdentity(context)
   if (!validIdentity(context, artifact)) fail("DELIVERY_SEAL_DIFF_INVALID", "the exact admitted artifact changed")
-  const value = { context, artifact: { pullRequest: artifact.pullRequest, headSha: artifact.headSha, baseSha: artifact.baseSha, paths: set(artifact.paths) } }
+  const value = { context, artifact: { pullRequest: artifact.pullRequest, headSha: artifact.headSha, baseRefSha: artifact.baseRefSha, baseSha: artifact.baseSha, paths: set(artifact.paths) } }
   return { ...value, previewDigest: hash({ version: ARTIFACT_ADOPTION_SEAL_VERSION, value }) }
 }
 

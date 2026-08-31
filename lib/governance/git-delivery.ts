@@ -81,10 +81,10 @@ export async function inspectGitDelivery(
     const measuredCommit = (await git(root, ["rev-parse", `${commitSha}^{commit}`])).trim().toLowerCase()
     if (measuredBase !== baseSha.toLowerCase() || measuredCommit !== commitSha.toLowerCase()) invalid("the exact delivery commits are unavailable")
     await git(root, ["merge-base", "--is-ancestor", measuredBase, measuredCommit])
-    const changed = (await git(root, ["diff", "--name-only", "-z", measuredBase, measuredCommit, "--", ...paths]))
+    const changed = (await git(root, ["diff", "--no-renames", "--name-only", "-z", measuredBase, measuredCommit, "--", ...paths]))
       .split("\0").filter(Boolean).map((item) => item.replace(/\\/g, "/")).sort()
     if (JSON.stringify(changed) !== JSON.stringify(paths)) invalid("the exact assignment paths are not all changed by this commit")
-    const patch = await git(root, ["diff", "--binary", "--full-index", "--no-ext-diff", measuredBase, measuredCommit, "--", ...paths])
+    const patch = await git(root, ["diff", "--no-renames", "--binary", "--full-index", "--no-ext-diff", measuredBase, measuredCommit, "--", ...paths])
     if (!patch) invalid("the assignment patch is empty")
     if (paths.length !== 1 && !options.allowMultiple) invalid("one persisted Codex assignment must deliver one exact selected path")
     const delivered = await Promise.all(paths.map(async (deliveryPath) => ({
