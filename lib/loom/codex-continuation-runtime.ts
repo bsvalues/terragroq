@@ -15,17 +15,6 @@ function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
 }
 
-function metadata(value: unknown): Record<string, unknown> | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>
-  if (typeof value !== "string") return null
-  try {
-    const parsed = JSON.parse(value)
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null
-  } catch {
-    return null
-  }
-}
-
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {
   const normalize = (values: readonly string[]) => [...new Set(values.map((value) => value.trim().replace(/\\/g, "/")).filter(Boolean))].sort()
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right))
