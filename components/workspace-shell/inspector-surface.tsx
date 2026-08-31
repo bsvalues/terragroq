@@ -2,6 +2,7 @@
 
 import styles from "./workspace-shell.module.css"
 import { validateWilliamJudgment } from "@/lib/environment/working-world"
+import { HermesOperationalSurface } from "@/components/hermes/hermes-operational-surface"
 import { parsePreviewInspectorPayload } from "./types"
 import type { AgentSessionDiffReview } from "./agent-sessions"
 
@@ -99,6 +100,7 @@ export function diffReviewInspectorBinding(value: unknown): AgentSessionDiffRevi
 }
 
 export function inspectorSurfaceWindowTitle(surface: InspectorSurface): string {
+  if (surface.kind === "hermes") return "HERMES · Appliance"
   return surface.kind === "review" && parseDiffReviewInspectorPayload(surface.payload)
     ? `Inspector · Current changes · ${surface.subject}`
     : `Inspector · ${surface.subject}`
@@ -144,6 +146,7 @@ function Rows({ payload }: { payload: unknown }) {
 }
 
 export function InspectorSurfaceView({ surface, onRefresh }: { surface: InspectorSurface; onRefresh?: () => void }) {
+  if (surface.kind === "hermes") return <HermesOperationalSurface />
   if (surface.kind === "william-judgment") {
     try {
       const snapshot = validateWilliamJudgment(surface.payload)
