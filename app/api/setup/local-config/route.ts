@@ -1,7 +1,10 @@
 import path from "node:path"
 import { promises as fs } from "node:fs"
 import { NextResponse } from "next/server"
-import { normalizeProjectRootForEnv } from "@/lib/setup/project-root-env"
+import {
+  normalizeProjectRootForEnv,
+  serializeProjectRootEnvValue,
+} from "@/lib/setup/project-root-env"
 
 export const runtime = "nodejs"
 
@@ -73,11 +76,14 @@ function validatePayload(payload: SetupPayload) {
     throw new Error("BETTER_AUTH_URL must be a valid URL.")
   }
 
+  const normalizedProjectRoot = normalizeProjectRootForEnv(path.resolve(projectRoot))
+  serializeProjectRootEnvValue(normalizedProjectRoot)
+
   return {
     databaseUrl,
     authSecret,
     authUrl,
-    projectRoot: normalizeProjectRootForEnv(path.resolve(projectRoot)),
+    projectRoot: normalizedProjectRoot,
   }
 }
 
@@ -100,7 +106,7 @@ async function writeLocalEnv(input: {
     ["DATABASE_URL", envLine("DATABASE_URL", input.databaseUrl)],
     ["BETTER_AUTH_SECRET", envLine("BETTER_AUTH_SECRET", input.authSecret)],
     ["BETTER_AUTH_URL", envLine("BETTER_AUTH_URL", input.authUrl)],
-    ["WILLIAMOS_PROJECT_ROOT", envLine("WILLIAMOS_PROJECT_ROOT", input.projectRoot)],
+    ["WILLIAMOS_PROJECT_ROOT", `WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(input.projectRoot)}`],
     ["LOCAL_SETUP_ENABLED", envLine("LOCAL_SETUP_ENABLED", "true")],
     ...optionalEntries,
   ])

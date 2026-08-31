@@ -13,7 +13,10 @@ vi.mock("node:fs", () => ({
 }))
 
 import { POST } from "@/app/api/setup/local-config/route"
-import { normalizeProjectRootForEnv } from "@/lib/setup/project-root-env"
+import {
+  normalizeProjectRootForEnv,
+  serializeProjectRootEnvValue,
+} from "@/lib/setup/project-root-env"
 
 const nodeRequire = createRequire(import.meta.url)
 
@@ -147,7 +150,7 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 
-  it.each(["", "relative/terrafusion_os_1.0"])(
+  it.each(["", "relative/terrafusion_os_1.0", path.join(projectRoot, "owner's-checkout")])(
     "requires an absolute TerraFusion checkout path (%s)",
     async (invalidProjectRoot) => {
       const req = new Request("http://localhost:3000/api/setup/local-config", {
@@ -176,17 +179,19 @@ describe("POST /api/setup/local-config route contract", () => {
     "\\\\omen\\workspace\\terrafusion_os_1.0",
   ])("round-trips a Windows checkout root through Next's dotenv parser (%s)", (windowsRoot) => {
     const normalized = normalizeProjectRootForEnv(windowsRoot, "win32")
-    const parsed = parseWithNextDotenv(`WILLIAMOS_PROJECT_ROOT=${JSON.stringify(normalized)}\n`)
+    const parsed = parseWithNextDotenv(`WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalized)}\n`)
 
     expect(normalized).not.toContain("\\")
     expect(parsed.WILLIAMOS_PROJECT_ROOT).toBe(normalized)
   })
 
   it("preserves a literal backslash in a POSIX checkout root", () => {
-    const posixRoot = "/srv/terrafusion\\repo"
+    const posixRoot = "/srv/terrafusion\\repo\"quoted"
     const normalized = normalizeProjectRootForEnv(posixRoot, "linux")
+    const parsed = parseWithNextDotenv(`WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalized)}\n`)
 
     expect(normalized).toBe(posixRoot)
+    expect(parsed.WILLIAMOS_PROJECT_ROOT).toBe(posixRoot)
   })
 
   it("writes .env.local with expected keys on valid setup payload", async () => {
@@ -216,7 +221,7 @@ describe("POST /api/setup/local-config route contract", () => {
       'BETTER_AUTH_SECRET="12345678901234567890123456789012"',
     )
     expect(writeFileMock.mock.calls[0][1]).toContain('BETTER_AUTH_URL="http://localhost:3000"')
-    expect(writeFileMock.mock.calls[0][1]).toContain(`WILLIAMOS_PROJECT_ROOT=${JSON.stringify(normalizedProjectRoot)}`)
+    expect(writeFileMock.mock.calls[0][1]).toContain(`WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
     expect(writeFileMock.mock.calls[0][1]).toContain('LOCAL_SETUP_ENABLED="true"')
     expect(writeFileMock.mock.calls[0][1]).toContain('GROQ_API_KEY="groq-key-value"')
   })
@@ -255,7 +260,7 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writtenEnv).toContain('BETTER_AUTH_SECRET="12345678901234567890123456789012"')
     expect(writtenEnv).toContain('BETTER_AUTH_URL="http://localhost:3000"')
     expect(writtenEnv).toContain('LOCAL_SETUP_ENABLED="true"')
-    expect(writtenEnv).toContain(`WILLIAMOS_PROJECT_ROOT=${JSON.stringify(normalizedProjectRoot)}`)
+    expect(writtenEnv).toContain(`WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
     expect(writtenEnv).not.toContain('WILLIAMOS_PROJECT_ROOT="/repos/old"')
     expect(writtenEnv).not.toContain('DATABASE_URL="postgres://old"')
   })

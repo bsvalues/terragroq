@@ -9,3 +9,10 @@ export function normalizeProjectRootForEnv(
 ) {
   return platform === "win32" ? projectRoot.replace(/\\/g, "/") : projectRoot
 }
+
+export function serializeProjectRootEnvValue(projectRoot: string) {
+  if (/[\u0000-\u001f\u007f']/u.test(projectRoot)) {
+    throw new Error("WILLIAMOS_PROJECT_ROOT cannot contain control characters or a single quote.")
+  }
+  return `'${projectRoot}'`
+}
