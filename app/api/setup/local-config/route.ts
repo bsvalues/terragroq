@@ -130,7 +130,15 @@ function stableTerraFusionSpaceIdentity(existing: string, nextRoot: string): str
   const identity = declaredEnvValue(existing, "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY")
     ?? declaredEnvValue(existing, "WILLIAMOS_TERRAFUSION_ROOT")
     ?? nextRoot
-  return validateTerraFusionRoot(identity)
+  const windowsAbsolute = path.win32.isAbsolute(identity)
+  const posixAbsolute = path.posix.isAbsolute(identity)
+  if ((!windowsAbsolute && !posixAbsolute) || identity.includes("\0") || identity.length > 4096) {
+    throw new Error("WILLIAMOS_TERRAFUSION_SPACE_IDENTITY must be an absolute path.")
+  }
+  const pathFlavor = windowsAbsolute ? path.win32 : path.posix
+  const normalized = normalizeProjectRootForEnv(pathFlavor.resolve(identity), windowsAbsolute ? "win32" : "linux")
+  serializeProjectRootEnvValue(normalized)
+  return normalized
 }
 
 async function writeManagedLocalEnv(

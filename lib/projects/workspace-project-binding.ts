@@ -164,7 +164,7 @@ export async function resolveTerraFusionWorkspaceBinding(
   // checkout moves, so replacing a path cannot orphan persisted Spaces or browser namespaces.
   const configuredSpaceIdentity = process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY?.trim()
     || configuredWorkspaceRoot
-  if (!path.isAbsolute(configuredSpaceIdentity)) {
+  if (!path.win32.isAbsolute(configuredSpaceIdentity) && !path.posix.isAbsolute(configuredSpaceIdentity)) {
     return { ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" }
   }
   const projectBinding = workspaceProjectFromRoot(configuredSpaceIdentity, row.projectName)
