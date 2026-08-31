@@ -442,16 +442,18 @@ describe("Experience V2 multi-Space re-entry", () => {
 
   it("preserves known real Spaces when a committed creation returns degraded singleton collection metadata", async () => {
     const gamma = { worldId: "c", name: "Gamma", space: beta, updatedAt: "2026-08-28T11:00:00Z" }
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchStub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === "/api/environment/space" && !init?.method) return { ok: true, status: 200, json: async () => envelope("a") }
       if (url === "/api/environment/space" && init?.method === "PUT") return { ok: true, status: 200, json: async () => ({ space: JSON.parse(String(init.body)).space }) }
       if (url === "/api/environment/space" && init?.method === "POST") return { ok: true, status: 201, json: async () => ({
         ...envelope("b"), ...gamma, spaces: [gamma], collectionAvailable: false, collectionReason: "SPACE_COLLECTION_UNAVAILABLE",
       }) }
+      if (url === "/api/environment/space/outcome" && init?.method === "POST") return { ok: false, status: 409, json: async () => ({ status: "MISSING_AUTHORITY" }) }
       if (url.startsWith("/api/loom/files")) return { ok: true, status: 200, json: async () => ({ kind: "directory", entries: [] }) }
       return { ok: false, status: 503, json: async () => ({ error: "UNAVAILABLE" }) }
-    }))
+    })
+    vi.stubGlobal("fetch", fetchStub)
     render(<WorkspaceShell />)
     fireEvent.click(await screen.findByRole("button", { name: "Open Mission Control" }))
     fireEvent.click(screen.getByRole("button", { name: "New Space" }))
@@ -461,6 +463,7 @@ describe("Experience V2 multi-Space re-entry", () => {
     expect(screen.getByRole("button", { name: "Enter Alpha" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Enter Beta" })).toBeTruthy()
     expect(screen.getByText(/Space collection is temporarily unavailable.*SPACE_COLLECTION_UNAVAILABLE/i)).toBeTruthy()
+    expect(fetchStub.mock.calls.some(([input]) => String(input) === "/api/environment/space/outcome")).toBe(false)
   })
 
   it("removes a confirmed inactive Space while keeping the current Space open", async () => {

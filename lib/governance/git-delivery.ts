@@ -63,6 +63,7 @@ export async function inspectGitDelivery(
   baseSha: string,
   commitSha: string,
   requestedPaths: readonly string[],
+  options: Readonly<{ allowMultiple?: boolean }> = {},
 ): Promise<MeasuredDelivery> {
   const root = path.resolve(projectRoot)
   if (!COMMIT.test(baseSha) || !COMMIT.test(commitSha)) invalid("the delivery commits are malformed")
@@ -80,8 +81,13 @@ export async function inspectGitDelivery(
     if (JSON.stringify(changed) !== JSON.stringify(paths)) invalid("the exact assignment paths are not all changed by this commit")
     const patch = await git(root, ["diff", "--binary", "--full-index", "--no-ext-diff", measuredBase, measuredCommit, "--", ...paths])
     if (!patch) invalid("the assignment patch is empty")
-    if (paths.length !== 1) invalid("one persisted Codex assignment must deliver one exact selected path")
-    const deliveredBytes = await gitBytes(root, ["show", `${measuredCommit}:${paths[0]}`])
+    if (paths.length !== 1 && !options.allowMultiple) invalid("one persisted Codex assignment must deliver one exact selected path")
+    const deliveredBytes = paths.length === 1
+      ? await gitBytes(root, ["show", `${measuredCommit}:${paths[0]}`])
+      : Buffer.concat(await Promise.all(paths.map(async (deliveryPath) => {
+          const bytes = await gitBytes(root, ["show", `${measuredCommit}:${deliveryPath}`])
+          return Buffer.concat([Buffer.from(`${deliveryPath}\0${bytes.length}\0`, "utf8"), bytes])
+        })))
     const origin = canonicalRemote(await git(root, ["remote", "get-url", "origin"]))
     return {
       repository: origin,

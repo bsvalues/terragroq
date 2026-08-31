@@ -51,6 +51,31 @@ function review(block: string, changedFiles = ["lib/governance/owner.ts"], patch
   })
 }
 
+function adoptionFixture(keys = generateKeyPairSync("ed25519")) {
+  const payload = {
+    version: "williamos-delivery-seal.v2",
+    authorityKind: "prospective_artifact_adoption",
+    issuer: "WilliamOS",
+    keyId: "test-key",
+    issuedAt: "2026-08-31T20:00:00.000Z",
+    adoption: {
+      adoptionHash: "8".repeat(64), owner: "owner-1", worldId: "world-1", spaceRevision: 9,
+      outcome: { id: 5, key: "WILLIAMOS_EXPERIENCE_V2", version: 7 },
+      workOrder: { id: 41, ref: "WO-0041", version: "work-v1" },
+      grant: { id: 9, ref: "GRANT-0009", version: "grant-v1" },
+      reservation: { allowed: ["app/a.ts", "lib/b.ts"], forbidden: [], version: "c".repeat(64) },
+      artifact: { pullRequest: 1117, headSha: "2".repeat(40), paths: ["app/a.ts", "lib/b.ts"] },
+      evidence: { validationDigest: "6".repeat(64), reviewDigest: "7".repeat(64), validationHeadSha: "2".repeat(40), reviewHeadSha: "2".repeat(40) },
+    },
+    delivery: {
+      repository: "https://github.com/bsvalues/terragroq", baseSha: "1".repeat(40),
+      commitSha: "2".repeat(40), paths: ["app/a.ts", "lib/b.ts"], patchDigest: "9".repeat(64), contentDigest: "5".repeat(64),
+    },
+  } as const
+  const signature = sign(null, Buffer.from(canonical(payload)), keys.privateKey).toString("base64url")
+  return { block: ["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify({ payload, signature }), "```"].join("\n"), keys }
+}
+
 describe("WilliamOS delivery seal review", () => {
   it("accepts a WilliamOS-signed seal bound to the exact PR head, patch, and changed path", () => {
     const signed = fixture()
@@ -67,6 +92,18 @@ describe("WilliamOS delivery seal review", () => {
       headSha: "2".repeat(40),
       patchDigests: { "app/a.ts": "a".repeat(64), "lib/b.ts": "b".repeat(64) },
       publicKeys: { "test-key": keys.publicKey },
+    })).toEqual({ ok: true })
+  })
+
+  it("accepts one truthful prospective adoption seal for an exact multi-file artifact", () => {
+    const signed = adoptionFixture()
+    expect(reviewPullRequestReceipt({
+      body: signed.block,
+      changedFiles: ["app/a.ts", "lib/b.ts"],
+      headSha: "2".repeat(40),
+      repository: "https://github.com/bsvalues/terragroq",
+      patchDigests: { ["app/a.ts\0lib/b.ts"]: "9".repeat(64) },
+      publicKeys: { "test-key": signed.keys.publicKey },
     })).toEqual({ ok: true })
   })
 
