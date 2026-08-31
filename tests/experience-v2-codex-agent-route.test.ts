@@ -27,6 +27,9 @@ const seams = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+}))
 vi.mock("@/lib/loom/codex-assignment", () => ({
   deriveCodexAssignment: seams.deriveCodexAssignment,
   revalidateCodexAssignment: seams.revalidateCodexAssignment,

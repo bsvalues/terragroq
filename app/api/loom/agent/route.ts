@@ -14,11 +14,11 @@ import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import type { WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const AGENT_BIN = process.env.WILLIAMOS_AGENT_BIN ?? "claude"
 const AGENT_TIMEOUT_MS = 60 * 60_000
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -124,11 +124,11 @@ async function diffReviewThreadRecord(sessionId: string): Promise<DiffReviewThre
   }
 }
 
-async function deriveDiffReviewSnapshot(path: string): Promise<WorkspaceFileDiffSnapshot> {
+async function deriveDiffReviewSnapshot(projectRoot: string, path: string): Promise<WorkspaceFileDiffSnapshot> {
   // Keep the Git adapter out of legacy agent/review/preview module initialization. Besides avoiding
   // unnecessary process machinery for those routes, this means only diff-review can reach Git.
   const { deriveWorkspaceFileDiff } = await import("@/lib/loom/workspace-diff")
-  return deriveWorkspaceFileDiff(PROJECT_ROOT, path)
+  return deriveWorkspaceFileDiff(projectRoot, path)
 }
 
 function previewPrompt(evidence: WorkspacePreviewEvidence, ownerPrompt: string): string {
@@ -274,6 +274,9 @@ function reduceLocalFrame(state: LocalStreamState, line: string): string | null 
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const projectRoot = projectBinding.binding.workspaceRoot
 
   let body: {
     prompt?: unknown
@@ -330,7 +333,7 @@ export async function POST(request: Request) {
     if (typeof body.path === "string" && isSensitiveWorkspacePath(body.path)) {
       return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
     }
-    const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
+    const resolved = await resolveRealWorkspacePath(projectRoot, body.path, fs.realpath)
     if (!resolved.ok || !resolved.absolute || !resolved.relative || resolved.relative === ".") {
       return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
     }
@@ -351,7 +354,7 @@ export async function POST(request: Request) {
     if (body.path !== resolved.relative || selectedWorldPath(world) !== resolved.relative) {
       return Response.json({ error: "DIFF_REVIEW_PATH_STALE" }, { status: 409 })
     }
-    const snapshot = await deriveDiffReviewSnapshot(resolved.relative)
+    const snapshot = await deriveDiffReviewSnapshot(projectRoot, resolved.relative)
     if (snapshot.state === "oversize" || Buffer.byteLength(snapshot.patch, "utf8") > MAX_DIFF_REVIEW_PATCH_BYTES) {
       return Response.json({ error: "DIFF_REVIEW_PATCH_UNAVAILABLE" }, { status: 413 })
     }
@@ -419,7 +422,7 @@ export async function POST(request: Request) {
     if (typeof body.path === "string" && isSensitiveWorkspacePath(body.path)) {
       return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
     }
-    const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
+    const resolved = await resolveRealWorkspacePath(projectRoot, body.path, fs.realpath)
     if (!resolved.ok || !resolved.absolute || !resolved.relative || resolved.relative === ".") {
       return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
     }
@@ -578,7 +581,7 @@ export async function POST(request: Request) {
       || selectedWorldPath(currentWorld) !== diffReviewContext!.path) {
       return Response.json({ error: "DIFF_REVIEW_CONTEXT_STALE" }, { status: 409 })
     }
-    const currentSnapshot = await deriveDiffReviewSnapshot(diffReviewContext!.path)
+    const currentSnapshot = await deriveDiffReviewSnapshot(projectRoot, diffReviewContext!.path)
     const currentIdentity = diffReviewIdentity(currentSnapshot)
     if (!currentIdentity || currentSnapshot.patch !== diffReviewPatch || !sameDiffReviewIdentity(
       diffReviewContext!,
@@ -608,7 +611,7 @@ export async function POST(request: Request) {
   delete env.ANTHROPIC_AUTH_TOKEN
 
   const child = spawn(AGENT_BIN, args, {
-    cwd: PROJECT_ROOT,
+    cwd: projectRoot,
     shell: false,
     windowsHide: true,
     env,
@@ -961,7 +964,7 @@ export async function POST(request: Request) {
               finish({ type: "done", reason: "DIFF_REVIEW_CONTEXT_STALE", code: null })
               return
             }
-            const currentSnapshot = await deriveDiffReviewSnapshot(diffReviewContext!.path)
+            const currentSnapshot = await deriveDiffReviewSnapshot(projectRoot, diffReviewContext!.path)
             const currentIdentity = diffReviewIdentity(currentSnapshot)
             if (!currentIdentity || currentSnapshot.patch !== diffReviewPatch || !sameDiffReviewIdentity(
               diffReviewContext!,

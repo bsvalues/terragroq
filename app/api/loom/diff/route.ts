@@ -3,11 +3,10 @@ import fs from "node:fs/promises"
 import { getSession } from "@/lib/session"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
-
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 
 /**
  * The current diff for one exact selected file. Whole-repository requests are refused because an
@@ -22,13 +21,16 @@ const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const projectRoot = projectBinding.binding.workspaceRoot
 
   const requested = new URL(request.url).searchParams.get("path")
   if (requested === null || requested === "") return Response.json({ error: "DIFF_PATH_REQUIRED" }, { status: 400 })
   if (isSensitiveWorkspacePath(requested)) {
     return Response.json({ error: "SENSITIVE_PATH" }, { status: 400 })
   }
-  const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, requested, fs.realpath)
+  const resolved = await resolveRealWorkspacePath(projectRoot, requested, fs.realpath)
   if (!resolved.ok || !resolved.relative) {
     return Response.json({ error: resolved?.refusal ?? "PATH_INVALID" }, { status: 400 })
   }
@@ -37,7 +39,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const snapshot = await deriveWorkspaceFileDiff(PROJECT_ROOT, resolved.relative)
+    const snapshot = await deriveWorkspaceFileDiff(projectRoot, resolved.relative)
     if (snapshot.state === "git-unavailable") {
       return Response.json({ error: "GIT_UNAVAILABLE", state: snapshot.state, path: snapshot.path }, { status: 503 })
     }

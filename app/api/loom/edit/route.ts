@@ -9,11 +9,11 @@ import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/r
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const SEA_ROOT = process.env.WILLIAMOS_SEA_ROOT ?? "D:/williamos-sea"
 const PYTHON = process.env.WILLIAMOS_PYTHON ?? "python"
 const EDIT_TIMEOUT_MS = 20 * 60_000
@@ -33,6 +33,9 @@ const EDIT_TIMEOUT_MS = 20 * 60_000
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const projectRoot = projectBinding.binding.workspaceRoot
 
   // A model editing real files is the most consequential thing this application does.
   const context = await requireWorkContext()
@@ -51,7 +54,7 @@ export async function POST(request: Request) {
   if (typeof body.path === "string" && isSensitiveWorkspacePath(body.path)) {
     return Response.json({ error: "SENSITIVE_PATH" }, { status: 403 })
   }
-  const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, body.path, fs.realpath)
+  const resolved = await resolveRealWorkspacePath(projectRoot, body.path, fs.realpath)
   if (!resolved.ok || !resolved.relative) {
     return Response.json({ error: resolved.refusal ?? "PATH_INVALID" }, { status: 400 })
   }
@@ -76,7 +79,7 @@ export async function POST(request: Request) {
     }
     // The browser supplies only the expected identity; the server derives current Git truth for
     // the exact persisted selection itself, then rechecks that selection before spawning.
-    const currentDiff = await deriveWorkspaceFileDiff(PROJECT_ROOT, resolved.relative)
+    const currentDiff = await deriveWorkspaceFileDiff(projectRoot, resolved.relative)
     if (currentDiff.state !== "modified" || currentDiff.fingerprint !== expectedDiffFingerprint) {
       return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
     }
@@ -91,7 +94,7 @@ export async function POST(request: Request) {
     // Loading the terminal owned Space is itself an await boundary. Re-derive Git identity after it
     // and immediately before spawn so a patch/index/HEAD change during that load cannot cross the
     // mutation boundary under the earlier fingerprint.
-    const terminalDiffSnapshot = await deriveWorkspaceFileDiff(PROJECT_ROOT, resolved.relative)
+    const terminalDiffSnapshot = await deriveWorkspaceFileDiff(projectRoot, resolved.relative)
     if (terminalDiffSnapshot.state !== "modified" || terminalDiffSnapshot.fingerprint !== expectedDiffFingerprint) {
       return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
     }
@@ -100,7 +103,7 @@ export async function POST(request: Request) {
   const model = typeof body.model === "string" && body.model ? body.model : LOCAL_MODEL
   const args = [
     "-m", "sea", "worker",
-    "--root", PROJECT_ROOT,
+    "--root", projectRoot,
     "--base-url", LOCAL_ENDPOINT,
     "--model", model,
     "--api", "ollama",

@@ -27,11 +27,11 @@ import {
   CodexAppServerClient,
   sanitizeAppServerText,
 } from "@/scripts/hermes-bridge/app-server-client.mjs"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = path.resolve(process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd())
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/
 const MAX_PROMPT_CHARS = 32_000
 const MAX_DELTA_CHARS = 16_000
@@ -99,6 +99,9 @@ function delegatedPrompt(assignment: CodexAssignment, prompt: string): string {
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const projectRoot = path.resolve(projectBinding.binding.workspaceRoot)
 
   let body: { worldId?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown }
   try {
@@ -132,7 +135,7 @@ export async function POST(request: Request) {
     assignment = await deriveCodexAssignment({
       userId: session.user.id,
       worldId,
-      projectRoot: PROJECT_ROOT,
+      projectRoot,
     })
   } catch (error) {
     const code = typeof (error as { code?: unknown })?.code === "string"
@@ -162,7 +165,7 @@ export async function POST(request: Request) {
     if (descriptor.provider !== "Codex"
       || descriptor.mode !== "delegate"
       || descriptor.workspace === null
-      || !sameWorkspace(descriptor.workspace, PROJECT_ROOT)
+      || !sameWorkspace(descriptor.workspace, projectRoot)
       || descriptor.worldId !== assignment.worldId
       || descriptor.outcomeKey !== assignment.outcomeKey
       || descriptor.workOrderId !== assignment.workOrderId
@@ -255,7 +258,7 @@ export async function POST(request: Request) {
         try {
           assertNotCancelled()
           isolated = await createCodexIsolatedWorkspace({
-            projectRoot: PROJECT_ROOT,
+            projectRoot,
             selectedPath: assignment.selectedPath,
             initialContent: assignment.target.content,
           })
@@ -316,7 +319,7 @@ export async function POST(request: Request) {
             await recordLoomCodexAssignment({
               userId: session.user.id,
               threadId: durableThreadId,
-              workspace: PROJECT_ROOT,
+              workspace: projectRoot,
               worldId: assignment.worldId,
               spaceRevision: assignment.binding.spaceRevision,
               outcomeId: assignment.binding.outcomeId,
@@ -399,7 +402,7 @@ export async function POST(request: Request) {
           isolated = null
           assertNotCancelled()
 
-          const baseWriterDependencies = workspaceFileWriteDependencies(PROJECT_ROOT)
+          const baseWriterDependencies = workspaceFileWriteDependencies(projectRoot)
           let successReceiptFailed = false
           const writerDependencies = {
             ...baseWriterDependencies,
@@ -439,7 +442,7 @@ export async function POST(request: Request) {
                 await commitLoomCodexSuccess({
                   userId: session.user.id,
                   threadId: durableThreadId,
-                  workspace: PROJECT_ROOT,
+                  workspace: projectRoot,
                   resumed: resuming,
                   worldId: assignment.worldId,
                   outcomeKey: assignment.outcomeKey,

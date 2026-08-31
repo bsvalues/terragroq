@@ -3,9 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const seams = vi.hoisted(() => ({
   getSession: vi.fn(),
   remove: vi.fn(),
+  resolveBinding: vi.fn(),
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({ resolveTerraFusionWorkspaceBinding: seams.resolveBinding }))
 vi.mock("@/lib/environment/space-persistence", () => ({
   workspaceProjectFromRoot: () => ({ identity: "c:/project", name: "Project" }),
   removeOwnedProjectSpace: seams.remove,
@@ -19,6 +21,9 @@ const context = (worldId: string) => ({ params: Promise.resolve({ worldId }) })
 beforeEach(() => {
   seams.getSession.mockReset().mockResolvedValue({ user: { id: "owner-a" } })
   seams.remove.mockReset().mockResolvedValue({ removedWorldId: "world-b" })
+  seams.resolveBinding.mockReset().mockResolvedValue({ ok: true, binding: {
+    project: { identity: "c:/project", name: "Project" },
+  } })
 })
 
 describe("Experience V2 Space removal route", () => {
