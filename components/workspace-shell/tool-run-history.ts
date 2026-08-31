@@ -1,4 +1,4 @@
-import { findLoomOperation } from "@/lib/loom/operations"
+import { findLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 
 export const MAX_TOOL_RUNS = 12
 export const MAX_TOOL_RUN_HISTORY_BYTES = 131_072
@@ -91,7 +91,8 @@ function validateToolRunTranscriptShape(raw: unknown, enforceByteLimit: boolean)
   const operationLabel = text(run.operationLabel, 200, "TOOL_RUN_LABEL_INVALID")
   const alias = text(run.alias, 200, "TOOL_RUN_ALIAS_INVALID")
   const operation = findLoomOperation(operationId)
-  if (!operation || operation.scope !== "project" || operation.mutating || operation.label !== operationLabel || operation.terminalAlias !== alias) {
+  const terminalOperation = resolveProjectTerminalCommand(alias)
+  if (!operation || operation.scope !== "project" || operation.mutating || operation.label !== operationLabel || terminalOperation?.id !== operation.id) {
     throw new Error("TOOL_RUN_OPERATION_NOT_CANONICAL")
   }
   const transcript: ToolRunTranscript = {
