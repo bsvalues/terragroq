@@ -282,6 +282,8 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       }
       const review = {
         ...common, reviewed: pullRequest.reviewed === true, reviewCompleted: pullRequest.reviewCompleted === true,
+        isDraft: pullRequest.isDraft === true,
+        reviewDecision: String(pullRequest.reviewDecision ?? "").toUpperCase(),
         unresolvedThreadCount: Number(pullRequest.unresolvedThreadCount ?? -1),
       }
       return {
@@ -290,6 +292,8 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
         checksComplete: exact && validation.checksComplete,
         reviewed: exact && review.reviewed,
         reviewCompleted: exact && review.reviewCompleted,
+        isDraft: review.isDraft,
+        reviewDecision: review.reviewDecision,
         unresolvedThreadCount: review.unresolvedThreadCount,
         validationEvidenceDigest: hashRecord(validation), reviewEvidenceDigest: hashRecord(review),
       }

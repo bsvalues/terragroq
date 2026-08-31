@@ -35,6 +35,7 @@ export type ArtifactAdoptionAuthorization = Readonly<{
 export type ArtifactAdoptionEvidence = Readonly<{
   adoptionHash: string; pullRequest: number; state: "OPEN" | "CLOSED" | "MERGED"; headSha: string; paths: readonly string[]
   checksGreen: boolean; checksComplete: boolean; reviewed: boolean; reviewCompleted: boolean
+  isDraft: boolean; reviewDecision: string
   unresolvedThreadCount: number; validationEvidenceDigest: string; reviewEvidenceDigest: string
 }>
 
@@ -108,7 +109,8 @@ function validEvidence(auth: ArtifactAdoptionAuthorization, evidence: ArtifactAd
   return evidence.adoptionHash === auth.adoptionHash && evidence.pullRequest === auth.artifact.pullRequest
     && evidence.state === "OPEN" && evidence.headSha === auth.artifact.headSha
     && same(evidence.paths, auth.artifact.paths) && evidence.checksGreen && evidence.checksComplete
-    && evidence.reviewed && evidence.reviewCompleted && evidence.unresolvedThreadCount === 0
+    && evidence.reviewed && evidence.reviewCompleted && !evidence.isDraft
+    && evidence.reviewDecision !== "CHANGES_REQUESTED" && evidence.unresolvedThreadCount === 0
     && DIGEST.test(evidence.validationEvidenceDigest) && DIGEST.test(evidence.reviewEvidenceDigest)
 }
 

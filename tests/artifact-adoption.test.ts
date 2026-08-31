@@ -29,6 +29,7 @@ const identity = { pullRequest: 1117, state: "OPEN" as const, headSha: head, bas
 const evidence = {
   adoptionHash: digest("f"), pullRequest: 1117, state: "OPEN" as const, headSha: head, paths,
   checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true,
+  isDraft: false, reviewDecision: "",
   unresolvedThreadCount: 0, validationEvidenceDigest: digest("b"), reviewEvidenceDigest: digest("c"),
 }
 
@@ -131,6 +132,8 @@ describe("prospective exact-artifact adoption", () => {
       { loadEvidence: vi.fn().mockResolvedValue({ validationEventId: 102, reviewEventId: 103, evidence: { ...evidence, adoptionHash: authorization.adoptionHash, state: "CLOSED" } }) },
       { loadEvidence: vi.fn().mockResolvedValue({ validationEventId: 102, reviewEventId: 103, evidence: { ...evidence, adoptionHash: authorization.adoptionHash, checksGreen: false } }) },
       { loadEvidence: vi.fn().mockResolvedValue({ validationEventId: 102, reviewEventId: 103, evidence: { ...evidence, adoptionHash: authorization.adoptionHash, reviewed: false } }) },
+      { loadEvidence: vi.fn().mockResolvedValue({ validationEventId: 102, reviewEventId: 103, evidence: { ...evidence, adoptionHash: authorization.adoptionHash, isDraft: true } }) },
+      { loadEvidence: vi.fn().mockResolvedValue({ validationEventId: 102, reviewEventId: 103, evidence: { ...evidence, adoptionHash: authorization.adoptionHash, reviewDecision: "CHANGES_REQUESTED" } }) },
       { loadContext: vi.fn().mockResolvedValue({ ...context, spaceRevision: 10 }) },
     ]) {
       await expect(issueProspectiveArtifactAdoptionSeal({ userId: "owner-1", adoptionHash: authorization.adoptionHash }, dependencies({ ...baseDeps, ...override })))

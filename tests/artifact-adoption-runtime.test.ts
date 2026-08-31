@@ -82,7 +82,7 @@ function harness(row = authorityRow()) {
   })
   const db = { query, connect: vi.fn(async () => ({ query: txQuery, release: vi.fn() })) }
   const lifecycle = {
-    inspectPullRequest: vi.fn(async () => ({ number: 1117, state: "OPEN", headRefOid: head, checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0 })),
+    inspectPullRequest: vi.fn(async () => ({ number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "", checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0 })),
     inspectPullRequestFiles: vi.fn(async () => paths),
   }
   const deriveBaseSha = vi.fn(async () => base)
@@ -168,6 +168,21 @@ describe("persisted prospective artifact adoption", () => {
       checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0,
     })
     await expect(candidate.runtime.issue("owner-1", "space-1", "adopt:1117:closed"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+  })
+
+  it.each([
+    ["draft", { isDraft: true, reviewDecision: "" }],
+    ["changes requested", { isDraft: false, reviewDecision: "CHANGES_REQUESTED" }],
+  ])("fails closed when the trusted pull request is %s", async (_label, reviewState) => {
+    const candidate = harness()
+    const preview = await candidate.runtime.preview("owner-1", "space-1")
+    await candidate.runtime.authorize("owner-1", "space-1", `adopt:1117:${_label}`, preview.previewDigest)
+    candidate.lifecycle.inspectPullRequest.mockResolvedValue({
+      number: 1117, state: "OPEN", headRefOid: head, checksGreen: true, checksComplete: true,
+      reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0, ...reviewState,
+    })
+    await expect(candidate.runtime.issue("owner-1", "space-1", `adopt:1117:${_label}`))
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
   })
 
