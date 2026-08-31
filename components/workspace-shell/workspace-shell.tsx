@@ -9,6 +9,7 @@ import { isExecutionLive } from "@/lib/environment/world-execution"
 import { EditorSurface } from "./editor-surface"
 import { DeveloperToolsSurface, type LiveDiffContext } from "./developer-tools-surface"
 import { removeDiffBrowserSnapshot } from "./diff-snapshot-history"
+import { ExternalWorkOrderAdmission } from "./external-work-order-admission"
 import { removeToolRunHistory } from "./tool-run-history"
 import { type ChangeOperationScope, type ChangeRefreshResult, useSelectedFileChange } from "./use-selected-file-change"
 import { useSelectedFileReview } from "./use-selected-file-review"
@@ -2562,6 +2563,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       <div className={spatial.objectBar} aria-label="Selected object actions">
         <span className={spatial.objectLabel}><strong>Selected {selectedKindLabel}</strong> · {selectedLabel}</span>
         <div className={spatial.objectActions}>
+          {selectedKind === "space" ? <ExternalWorkOrderAdmission
+            worldId={worldId}
+            persisted={storage === "server" && hydrated && !persistencePending && !persistenceError}
+            className={`${spatial.action} ${spatial.primaryAction}`}
+            onAdmitted={async (admission) => {
+              if (worldRef.current !== admission.worldId) return
+              const response = await fetch(`/api/environment/space?worldId=${encodeURIComponent(admission.worldId)}`, { cache: "no-store" })
+              const payload = await response.json() as SpaceEnvelope & { error?: string }
+              if (!response.ok || payload.worldId !== admission.worldId || !payload.space) {
+                throw new Error(payload.error ?? `SPACE_${response.status}`)
+              }
+              if (worldRef.current !== admission.worldId) return
+              applySpaceEnvelope(payload)
+            }}
+          /> : null}
           {selectedActions.map((action) => (
             <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? diffReviewUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
