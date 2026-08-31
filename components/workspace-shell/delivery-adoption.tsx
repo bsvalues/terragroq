@@ -96,15 +96,6 @@ function hasSeal(value: Record<string, unknown>): value is { seal: ArtifactSeal[
     && typeof value.seal.signature === "string" && value.seal.signature.length > 0
 }
 
-function isSeal(value: unknown): value is ArtifactSeal {
-  return isRecord(value)
-    && hasExactKeys(value, ["status", "worldId", "adoptionHash", "seal"])
-    && value.status === "SEALED"
-    && typeof value.worldId === "string"
-    && isDigest(value.adoptionHash)
-    && hasSeal(value)
-}
-
 function isRestoredSeal(value: unknown): value is RestoredArtifactSeal {
   return isRecord(value)
     && hasExactKeys(value, ["status", "worldId", "pullRequest", "headSha", "paths", "previewDigest", "adoptionHash", "seal"])
