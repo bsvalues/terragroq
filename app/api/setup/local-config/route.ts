@@ -5,15 +5,19 @@ import {
   normalizeProjectRootForEnv,
   serializeProjectRootEnvValue,
 } from "@/lib/setup/project-root-env"
+import { getAuthReadiness } from "@/lib/auth-readiness"
 
 export const runtime = "nodejs"
 
 type SetupPayload = {
+  operation?: unknown
   databaseUrl?: unknown
   authSecret?: unknown
   authUrl?: unknown
-  projectRoot?: unknown
+  terraFusionRoot?: unknown
 }
+
+type SetupOperation = "full" | "terrafusion-root"
 
 function localSetupEnabled() {
   if (process.env.LOCAL_SETUP_ENABLED === "false") return false
@@ -45,11 +49,32 @@ function asTrimmedString(value: unknown) {
   return typeof value === "string" ? value.trim() : ""
 }
 
-function validatePayload(payload: SetupPayload) {
+function validateTerraFusionRoot(value: unknown) {
+  const terraFusionRoot = asTrimmedString(value)
+  if (!terraFusionRoot) {
+    throw new Error("WILLIAMOS_TERRAFUSION_ROOT is required.")
+  }
+  if (!path.isAbsolute(terraFusionRoot) || terraFusionRoot.includes("\0") || terraFusionRoot.length > 4096) {
+    throw new Error("WILLIAMOS_TERRAFUSION_ROOT must be an absolute path to the TerraFusion checkout.")
+  }
+
+  const normalizedTerraFusionRoot = normalizeProjectRootForEnv(path.resolve(terraFusionRoot))
+  serializeProjectRootEnvValue(normalizedTerraFusionRoot)
+  return normalizedTerraFusionRoot
+}
+
+function parseOperation(payload: SetupPayload): SetupOperation {
+  const operation = asTrimmedString(payload.operation) || "full"
+  if (operation !== "full" && operation !== "terrafusion-root") {
+    throw new Error("Unsupported setup operation.")
+  }
+  return operation
+}
+
+function validateFullPayload(payload: SetupPayload) {
   const databaseUrl = asTrimmedString(payload.databaseUrl)
   const authSecret = asTrimmedString(payload.authSecret)
   const authUrl = asTrimmedString(payload.authUrl)
-  const projectRoot = asTrimmedString(payload.projectRoot)
 
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required.")
@@ -63,27 +88,17 @@ function validatePayload(payload: SetupPayload) {
   if (!authUrl) {
     throw new Error("BETTER_AUTH_URL is required.")
   }
-  if (!projectRoot) {
-    throw new Error("WILLIAMOS_PROJECT_ROOT is required.")
-  }
-  if (!path.isAbsolute(projectRoot) || projectRoot.includes("\0") || projectRoot.length > 4096) {
-    throw new Error("WILLIAMOS_PROJECT_ROOT must be an absolute path to the TerraFusion checkout.")
-  }
-
   try {
     new URL(authUrl)
   } catch {
     throw new Error("BETTER_AUTH_URL must be a valid URL.")
   }
 
-  const normalizedProjectRoot = normalizeProjectRootForEnv(path.resolve(projectRoot))
-  serializeProjectRootEnvValue(normalizedProjectRoot)
-
   return {
     databaseUrl,
     authSecret,
     authUrl,
-    projectRoot: normalizedProjectRoot,
+    terraFusionRoot: validateTerraFusionRoot(payload.terraFusionRoot),
   }
 }
 
@@ -91,25 +106,8 @@ function envLine(key: string, value: string) {
   return `${key}=${JSON.stringify(value)}`
 }
 
-async function writeLocalEnv(input: {
-  databaseUrl: string
-  authSecret: string
-  authUrl: string
-  projectRoot: string
-}) {
+async function writeManagedLocalEnv(managedEntries: Map<string, string>) {
   const envPath = path.join(process.cwd(), ".env.local")
-  const optionalEntries: [string, string][] = process.env.GROQ_API_KEY
-    ? [["GROQ_API_KEY", envLine("GROQ_API_KEY", process.env.GROQ_API_KEY)]]
-    : []
-
-  const managedEntries = new Map<string, string>([
-    ["DATABASE_URL", envLine("DATABASE_URL", input.databaseUrl)],
-    ["BETTER_AUTH_SECRET", envLine("BETTER_AUTH_SECRET", input.authSecret)],
-    ["BETTER_AUTH_URL", envLine("BETTER_AUTH_URL", input.authUrl)],
-    ["WILLIAMOS_PROJECT_ROOT", `WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(input.projectRoot)}`],
-    ["LOCAL_SETUP_ENABLED", envLine("LOCAL_SETUP_ENABLED", "true")],
-    ...optionalEntries,
-  ])
 
   let existing = ""
   try {
@@ -152,6 +150,31 @@ async function writeLocalEnv(input: {
   await fs.writeFile(envPath, `${nextLines.join("\n").replace(/\n+$/, "")}\n`, "utf8")
 }
 
+async function writeFullLocalEnv(input: {
+  databaseUrl: string
+  authSecret: string
+  authUrl: string
+  terraFusionRoot: string
+}) {
+  const optionalEntries: [string, string][] = process.env.GROQ_API_KEY
+    ? [["GROQ_API_KEY", envLine("GROQ_API_KEY", process.env.GROQ_API_KEY)]]
+    : []
+  await writeManagedLocalEnv(new Map<string, string>([
+    ["DATABASE_URL", envLine("DATABASE_URL", input.databaseUrl)],
+    ["BETTER_AUTH_SECRET", envLine("BETTER_AUTH_SECRET", input.authSecret)],
+    ["BETTER_AUTH_URL", envLine("BETTER_AUTH_URL", input.authUrl)],
+    ["WILLIAMOS_TERRAFUSION_ROOT", `WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(input.terraFusionRoot)}`],
+    ["LOCAL_SETUP_ENABLED", envLine("LOCAL_SETUP_ENABLED", "true")],
+    ...optionalEntries,
+  ]))
+}
+
+async function writeTerraFusionRoot(terraFusionRoot: string) {
+  await writeManagedLocalEnv(new Map([
+    ["WILLIAMOS_TERRAFUSION_ROOT", `WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(terraFusionRoot)}`],
+  ]))
+}
+
 export async function POST(req: Request) {
   if (!localSetupEnabled()) {
     return NextResponse.json(
@@ -176,16 +199,6 @@ export async function POST(req: Request) {
     )
   }
 
-  if ((process.env.AUTH_SIGNUP_MODE ?? "bootstrap") === "closed") {
-      return NextResponse.json(
-        {
-          ok: false,
-          message: "Local setup assistant is disabled because owner provisioning is closed.",
-        },
-        { status: 403 },
-      )
-  }
-
   let payload: SetupPayload
   try {
     payload = (await req.json()) as SetupPayload
@@ -196,9 +209,78 @@ export async function POST(req: Request) {
     )
   }
 
-  let validated: { databaseUrl: string; authSecret: string; authUrl: string; projectRoot: string }
+  let operation: SetupOperation
   try {
-    validated = validatePayload(payload)
+    operation = parseOperation(payload)
+  } catch (error) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: error instanceof Error ? error.message : "Invalid setup payload.",
+      },
+      { status: 400 },
+    )
+  }
+
+  if (operation === "terrafusion-root") {
+    const readiness = await getAuthReadiness({ probeDatabase: true })
+    if (!readiness.ready) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: "TerraFusion checkout setup requires an authentication-ready WilliamOS instance.",
+        },
+        { status: 409 },
+      )
+    }
+
+    let terraFusionRoot: string
+    try {
+      terraFusionRoot = validateTerraFusionRoot(payload.terraFusionRoot)
+    } catch (error) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: error instanceof Error ? error.message : "Invalid TerraFusion checkout path.",
+        },
+        { status: 400 },
+      )
+    }
+
+    try {
+      await writeTerraFusionRoot(terraFusionRoot)
+    } catch (error) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: error instanceof Error
+            ? `Failed to write .env.local: ${error.message}`
+            : "Failed to write .env.local",
+        },
+        { status: 500 },
+      )
+    }
+
+    return NextResponse.json({
+      ok: true,
+      message: "Saved the TerraFusion checkout to .env.local. Restart WilliamOS to connect it.",
+      restartRequired: true,
+    })
+  }
+
+  if ((process.env.AUTH_SIGNUP_MODE ?? "bootstrap") === "closed") {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: "Local setup assistant is disabled because owner provisioning is closed.",
+      },
+      { status: 403 },
+    )
+  }
+
+  let validated: ReturnType<typeof validateFullPayload>
+  try {
+    validated = validateFullPayload(payload)
   } catch (error) {
     return NextResponse.json(
       {
@@ -210,7 +292,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    await writeLocalEnv(validated)
+    await writeFullLocalEnv(validated)
   } catch (error) {
     return NextResponse.json(
       {

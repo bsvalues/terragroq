@@ -6,11 +6,11 @@ import {
   type WorkspaceProjectBindingDependencies,
 } from "@/lib/projects/workspace-project-binding"
 
-const originalRoot = process.env.WILLIAMOS_PROJECT_ROOT
+const originalRoot = process.env.WILLIAMOS_TERRAFUSION_ROOT
 
 afterEach(() => {
-  if (originalRoot === undefined) delete process.env.WILLIAMOS_PROJECT_ROOT
-  else process.env.WILLIAMOS_PROJECT_ROOT = originalRoot
+  if (originalRoot === undefined) delete process.env.WILLIAMOS_TERRAFUSION_ROOT
+  else process.env.WILLIAMOS_TERRAFUSION_ROOT = originalRoot
 })
 
 function dependencies(
@@ -54,7 +54,7 @@ describe("TerraFusion workspace Project binding", () => {
   })
 
   it("binds the durable Project only after the configured checkout origin matches", async () => {
-    process.env.WILLIAMOS_PROJECT_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
     const result = await resolveTerraFusionWorkspaceBinding("owner", dependencies())
 
     expect(result).toEqual({
@@ -74,13 +74,13 @@ describe("TerraFusion workspace Project binding", () => {
   })
 
   it("refuses an absent configured checkout instead of falling back to WilliamOS cwd", async () => {
-    delete process.env.WILLIAMOS_PROJECT_ROOT
+    delete process.env.WILLIAMOS_TERRAFUSION_ROOT
     await expect(resolveTerraFusionWorkspaceBinding("owner", dependencies()))
       .resolves.toEqual({ ok: false, error: "WORKSPACE_ROOT_NOT_CONFIGURED" })
   })
 
   it("refuses a checkout whose origin is not the Project primary repository", async () => {
-    process.env.WILLIAMOS_PROJECT_ROOT = "/repos/william-os-devops"
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/william-os-devops"
     await expect(resolveTerraFusionWorkspaceBinding(
       "owner",
       dependencies(undefined, "git@github.com:bsvalues/terragroq.git"),
@@ -88,7 +88,7 @@ describe("TerraFusion workspace Project binding", () => {
   })
 
   it("refuses missing and ambiguous primary Project bindings", async () => {
-    process.env.WILLIAMOS_PROJECT_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
     await expect(resolveTerraFusionWorkspaceBinding("owner", dependencies([])))
       .resolves.toEqual({ ok: false, error: "TERRAFUSION_PROJECT_UNBOUND" })
     const row = {
@@ -100,7 +100,7 @@ describe("TerraFusion workspace Project binding", () => {
   })
 
   it("returns a typed refusal when durable Project lookup is unavailable", async () => {
-    process.env.WILLIAMOS_PROJECT_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
     await expect(resolveTerraFusionWorkspaceBinding("owner", {
       loadProjectRows: async () => { throw new Error("database address") },
       readGitRemoteOrigin: async () => "git@github.com:bsvalues/terrafusion_os_1.0.git",
@@ -110,7 +110,7 @@ describe("TerraFusion workspace Project binding", () => {
   })
 
   it("refuses a nested directory even when it inherits the canonical repository remote", async () => {
-    process.env.WILLIAMOS_PROJECT_ROOT = "/repos/terrafusion_os_1.0/frontend"
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0/frontend"
     const seams = dependencies()
     await expect(resolveTerraFusionWorkspaceBinding("owner", {
       ...seams,
@@ -119,7 +119,7 @@ describe("TerraFusion workspace Project binding", () => {
   })
 
   it("keeps the configured-path Space identity while operating on a verified symlink target", async () => {
-    process.env.WILLIAMOS_PROJECT_ROOT = "/links/terrafusion"
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/links/terrafusion"
     const seams = dependencies()
     const result = await resolveTerraFusionWorkspaceBinding("owner", {
       ...seams,

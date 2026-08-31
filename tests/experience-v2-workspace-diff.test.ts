@@ -13,7 +13,7 @@ const execute = promisify(execFile)
 const roots: string[] = []
 
 afterEach(async () => {
-  delete process.env.WILLIAMOS_PROJECT_ROOT
+  delete process.env.WILLIAMOS_TERRAFUSION_ROOT
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
 })
 
@@ -258,7 +258,7 @@ describe("server-derived workspace diff grounding", () => {
     await execute("git", ["init", "--quiet"], { cwd: root, windowsHide: true })
     await fs.writeFile(path.join(root, ".env"), "SECRET_MUST_NOT_LEAVE_SERVER=true\n")
     await execute("git", ["add", "--", ".env"], { cwd: root, windowsHide: true, env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } })
-    process.env.WILLIAMOS_PROJECT_ROOT = root
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = root
     vi.resetModules()
     vi.doMock("@/lib/session", () => ({ getSession: vi.fn(async () => ({ user: { id: "owner-a" } })) }))
     vi.doMock("@/lib/projects/workspace-project-binding", () => ({

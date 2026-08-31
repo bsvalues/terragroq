@@ -134,7 +134,7 @@ export async function resolveTerraFusionWorkspaceBinding(
   const canonicalRepository = normalizeRepositoryIdentity(row.repositoryIdentity)
   if (!canonicalRepository) return { ok: false, error: "TERRAFUSION_PRIMARY_REPO_INVALID" }
 
-  const configuredRoot = process.env.WILLIAMOS_PROJECT_ROOT?.trim()
+  const configuredRoot = process.env.WILLIAMOS_TERRAFUSION_ROOT?.trim()
   if (!configuredRoot) return { ok: false, error: "WORKSPACE_ROOT_NOT_CONFIGURED" }
   if (!path.isAbsolute(configuredRoot)) return { ok: false, error: "WORKSPACE_ROOT_NOT_ABSOLUTE" }
   const configuredWorkspaceRoot = path.resolve(configuredRoot)

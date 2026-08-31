@@ -4,12 +4,17 @@ import path from "node:path"
 
 const writeFileMock = vi.hoisted(() => vi.fn())
 const readFileMock = vi.hoisted(() => vi.fn())
+const getAuthReadinessMock = vi.hoisted(() => vi.fn())
 
 vi.mock("node:fs", () => ({
   promises: {
     writeFile: writeFileMock,
     readFile: readFileMock,
   },
+}))
+
+vi.mock("@/lib/auth-readiness", () => ({
+  getAuthReadiness: getAuthReadinessMock,
 }))
 
 import { POST } from "@/app/api/setup/local-config/route"
@@ -38,9 +43,9 @@ function processWithNextEnv(input: string): string | undefined {
       forceReload: boolean,
     ) => [NodeJS.ProcessEnv, Record<string, string>]
   }
-  const previousRoot = process.env.WILLIAMOS_PROJECT_ROOT
+  const previousRoot = process.env.WILLIAMOS_TERRAFUSION_ROOT
   const previousProcessed = process.env.__NEXT_PROCESSED_ENV
-  delete process.env.WILLIAMOS_PROJECT_ROOT
+  delete process.env.WILLIAMOS_TERRAFUSION_ROOT
   delete process.env.__NEXT_PROCESSED_ENV
   try {
     const [, parsed] = nextEnv.processEnv(
@@ -49,10 +54,10 @@ function processWithNextEnv(input: string): string | undefined {
       { error: () => undefined },
       true,
     )
-    return parsed.WILLIAMOS_PROJECT_ROOT
+    return parsed.WILLIAMOS_TERRAFUSION_ROOT
   } finally {
-    if (previousRoot === undefined) delete process.env.WILLIAMOS_PROJECT_ROOT
-    else process.env.WILLIAMOS_PROJECT_ROOT = previousRoot
+    if (previousRoot === undefined) delete process.env.WILLIAMOS_TERRAFUSION_ROOT
+    else process.env.WILLIAMOS_TERRAFUSION_ROOT = previousRoot
     if (previousProcessed === undefined) delete process.env.__NEXT_PROCESSED_ENV
     else process.env.__NEXT_PROCESSED_ENV = previousProcessed
   }
@@ -72,6 +77,7 @@ describe("POST /api/setup/local-config route contract", () => {
     delete process.env.LOCAL_SETUP_ENABLED
     delete process.env.AUTH_SIGNUP_MODE
     delete process.env.GROQ_API_KEY
+    getAuthReadinessMock.mockResolvedValue({ ready: true })
   })
 
   afterEach(() => {
@@ -196,7 +202,7 @@ describe("POST /api/setup/local-config route contract", () => {
           databaseUrl: "postgres://postgres:postgres@localhost:5432/terragroq",
           authSecret: "12345678901234567890123456789012",
           authUrl: "http://localhost:3000",
-          projectRoot: invalidProjectRoot,
+          terraFusionRoot: invalidProjectRoot,
         }),
       })
 
@@ -204,7 +210,7 @@ describe("POST /api/setup/local-config route contract", () => {
       const body = await response.json()
 
       expect(response.status).toBe(400)
-      expect(body.message).toContain("WILLIAMOS_PROJECT_ROOT")
+      expect(body.message).toContain("WILLIAMOS_TERRAFUSION_ROOT")
       expect(writeFileMock).not.toHaveBeenCalled()
     },
   )
@@ -215,22 +221,22 @@ describe("POST /api/setup/local-config route contract", () => {
     "\\\\omen\\workspace\\terrafusion_os_1.0",
   ])("round-trips a Windows checkout root through Next's dotenv parser (%s)", (windowsRoot) => {
     const normalized = normalizeProjectRootForEnv(windowsRoot, "win32")
-    const line = `WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalized)}\n`
+    const line = `WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(normalized)}\n`
     const parsed = parseWithNextDotenv(line)
 
     expect(normalized).not.toContain("\\")
-    expect(parsed.WILLIAMOS_PROJECT_ROOT).toBe(normalized)
+    expect(parsed.WILLIAMOS_TERRAFUSION_ROOT).toBe(normalized)
     expect(processWithNextEnv(line)).toBe(normalized)
   })
 
   it("preserves a literal backslash in a POSIX checkout root", () => {
     const posixRoot = "/srv/terrafusion\\repo\"quoted"
     const normalized = normalizeProjectRootForEnv(posixRoot, "linux")
-    const line = `WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalized)}\n`
+    const line = `WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(normalized)}\n`
     const parsed = parseWithNextDotenv(line)
 
     expect(normalized).toBe(posixRoot)
-    expect(parsed.WILLIAMOS_PROJECT_ROOT).toBe(posixRoot)
+    expect(parsed.WILLIAMOS_TERRAFUSION_ROOT).toBe(posixRoot)
     expect(processWithNextEnv(line)).toBe(posixRoot)
   })
 
@@ -243,7 +249,7 @@ describe("POST /api/setup/local-config route contract", () => {
         databaseUrl: "postgres://postgres:postgres@localhost:5432/terragroq",
         authSecret: "12345678901234567890123456789012",
         authUrl: "http://localhost:3000",
-        projectRoot,
+        terraFusionRoot: projectRoot,
       }),
     })
     const response = await POST(req)
@@ -261,7 +267,7 @@ describe("POST /api/setup/local-config route contract", () => {
       'BETTER_AUTH_SECRET="12345678901234567890123456789012"',
     )
     expect(writeFileMock.mock.calls[0][1]).toContain('BETTER_AUTH_URL="http://localhost:3000"')
-    expect(writeFileMock.mock.calls[0][1]).toContain(`WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
+    expect(writeFileMock.mock.calls[0][1]).toContain(`WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
     expect(writeFileMock.mock.calls[0][1]).toContain('LOCAL_SETUP_ENABLED="true"')
     expect(writeFileMock.mock.calls[0][1]).toContain('GROQ_API_KEY="groq-key-value"')
   })
@@ -272,7 +278,8 @@ describe("POST /api/setup/local-config route contract", () => {
         "CUSTOM_FLAG=true",
         'BETTER_AUTH_URL="http://localhost:1111"',
         'DATABASE_URL="postgres://old"',
-        'WILLIAMOS_PROJECT_ROOT="/repos/old"',
+        'WILLIAMOS_PROJECT_ROOT="C:/repos/william-os-devops"',
+        'WILLIAMOS_TERRAFUSION_ROOT="/repos/old"',
         "",
       ].join("\n"),
     )
@@ -283,7 +290,7 @@ describe("POST /api/setup/local-config route contract", () => {
         databaseUrl: "postgres://postgres:postgres@localhost:5432/terragroq",
         authSecret: "12345678901234567890123456789012",
         authUrl: "http://localhost:3000",
-        projectRoot,
+        terraFusionRoot: projectRoot,
       }),
     })
 
@@ -300,9 +307,64 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writtenEnv).toContain('BETTER_AUTH_SECRET="12345678901234567890123456789012"')
     expect(writtenEnv).toContain('BETTER_AUTH_URL="http://localhost:3000"')
     expect(writtenEnv).toContain('LOCAL_SETUP_ENABLED="true"')
-    expect(writtenEnv).toContain(`WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
-    expect(writtenEnv).not.toContain('WILLIAMOS_PROJECT_ROOT="/repos/old"')
+    expect(writtenEnv).toContain('WILLIAMOS_PROJECT_ROOT="C:/repos/william-os-devops"')
+    expect(writtenEnv).toContain(`WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
+    expect(writtenEnv).not.toContain('WILLIAMOS_TERRAFUSION_ROOT="/repos/old"')
     expect(writtenEnv).not.toContain('DATABASE_URL="postgres://old"')
+  })
+
+  it("lets an auth-ready closed instance add only its TerraFusion checkout", async () => {
+    process.env.AUTH_SIGNUP_MODE = "closed"
+    readFileMock.mockResolvedValue(
+      [
+        'DATABASE_URL="postgres://existing"',
+        'BETTER_AUTH_SECRET="existing-auth-secret-must-not-change"',
+        'WILLIAMOS_PROJECT_ROOT="C:/repos/william-os-devops"',
+        "CUSTOM_FLAG=true",
+        "",
+      ].join("\n"),
+    )
+
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "terrafusion-root",
+        terraFusionRoot: projectRoot,
+      }),
+    })
+    const response = await POST(req)
+    const body = await response.json()
+    const writtenEnv = writeFileMock.mock.calls[0][1] as string
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({ ok: true, restartRequired: true })
+    expect(getAuthReadinessMock).toHaveBeenCalledWith({ probeDatabase: true })
+    expect(writtenEnv).toContain('DATABASE_URL="postgres://existing"')
+    expect(writtenEnv).toContain('BETTER_AUTH_SECRET="existing-auth-secret-must-not-change"')
+    expect(writtenEnv).toContain('WILLIAMOS_PROJECT_ROOT="C:/repos/william-os-devops"')
+    expect(writtenEnv).toContain("CUSTOM_FLAG=true")
+    expect(writtenEnv).toContain(`WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
+  })
+
+  it("refuses root-only setup until WilliamOS authentication is actually ready", async () => {
+    process.env.AUTH_SIGNUP_MODE = "closed"
+    getAuthReadinessMock.mockResolvedValueOnce({ ready: false })
+
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operation: "terrafusion-root",
+        terraFusionRoot: projectRoot,
+      }),
+    })
+    const response = await POST(req)
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body.message).toContain("authentication-ready")
+    expect(writeFileMock).not.toHaveBeenCalled()
   })
 
   it("surfaces write failures as 500 responses", async () => {
@@ -315,7 +377,7 @@ describe("POST /api/setup/local-config route contract", () => {
         databaseUrl: "postgres://postgres:postgres@localhost:5432/terragroq",
         authSecret: "12345678901234567890123456789012",
         authUrl: "http://localhost:3000",
-        projectRoot,
+        terraFusionRoot: projectRoot,
       }),
     })
     const response = await POST(req)

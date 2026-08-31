@@ -55,7 +55,8 @@ covered by tests.
   - `BETTER_AUTH_SECRET` — session signing secret (`openssl rand -base64 32`)
   - `BETTER_AUTH_URL` — base URL of the app (optional in dev)
   - `AUTH_SIGNUP_MODE` — `bootstrap` (default), `open`, or `closed`
-  - `WILLIAMOS_PROJECT_ROOT` — absolute path to the real `bsvalues/terrafusion_os_1.0` checkout WilliamOS develops
+  - `WILLIAMOS_PROJECT_ROOT` — absolute path to the WilliamOS source checkout used by system and governance operations
+  - `WILLIAMOS_TERRAFUSION_ROOT` — absolute path to the real `bsvalues/terrafusion_os_1.0` checkout WilliamOS develops
 
 ### Install & run
 
