@@ -52,6 +52,14 @@ describe("`/` is the working environment, not a dashboard home", () => {
     expect(root).not.toContain("WorkbenchShell")
   })
 
+  it("provisions canonical owner Projects before the working environment renders", () => {
+    const root = code("app/page.tsx")
+    const provision = root.indexOf("await ensureCanonicalOwnerProjects(userId)")
+    const render = root.indexOf("return <Desk")
+    expect(provision).toBeGreaterThan(-1)
+    expect(render).toBeGreaterThan(provision)
+  })
+
   it("mounts no legacy shell frame in the primary journey", () => {
     const root = code("app/page.tsx")
     for (const legacy of ["AppShell", "AppShellFrame", "ProjectExplorer", "Inspector", "ThreadTimeline"]) {
