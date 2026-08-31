@@ -27,6 +27,7 @@ import { classifyGrounded } from "@/lib/environment/grounding"
  * a surface that exists. A union a test cannot enumerate is a union that silently loses a member.
  */
 export const SUMMONED_SURFACES = [
+  "hermes",
   "project",
   "activity",
   "evidence",
@@ -52,6 +53,10 @@ const OPERATIONAL = /\b(source|file|route|endpoint|component|repo|repository|com
 /** The project registry: what work exists, what is active, what is on standby. */
 const PROJECT =
   /\b(show|open|list|bring up|pull up|what|which)\b[^?]*\bprojects?\b|\bprojects? (surface|registry|list)\b/i
+
+/** The appliance operational surface inside WilliamOS — never a separate HERMES application. */
+const HERMES =
+  /\b(?:show|open|bring up|pull up)\b[^?]*\bhermes\b|\bhow is hermes\b|\bhermes (?:status|health|appliance)\b/i
 
 /** What the runtime and lanes are doing right now. */
 const ACTIVITY =
@@ -112,6 +117,7 @@ export function classifySummon(text: string): SummonedSurface | null {
   // selection with it, so the next "continue" had nothing to start. The rule is enforced where the
   // hijack happens rather than restated where it does not.
   if (classifyGrounded(text) === "current-work") return null
+  if (HERMES.test(text)) return "hermes"
   if (WORK_ORDERS.test(text)) return "work-orders"
   if (DECISIONS.test(text)) return "decisions"
   if (RUNTIME_TRACE.test(text)) return "runtime-trace"
@@ -126,14 +132,14 @@ export function classifySummon(text: string): SummonedSurface | null {
  * Sentences that DISMISS a surface. The owner said it plainly: "and when those aren't useful anymore,
  * they disappear." A surface you can only accumulate is a panel with extra steps.
  */
-const DISMISS = /\b(hide|close|dismiss|get rid of|drop|remove)\b[^?]*\b(browser|diff|tests?|trace|source|project|activity|evidence|work[ -]?orders?|decisions?|surface|panel|logs?|it|that|them|everything|all)\b/i
+const DISMISS = /\b(hide|close|dismiss|get rid of|drop|remove)\b[^?]*\b(hermes|browser|diff|tests?|trace|source|project|activity|evidence|work[ -]?orders?|decisions?|surface|panel|logs?|it|that|them|everything|all)\b/i
 
 export function classifyDismissal(text: string): "all" | string | null {
   if (!DISMISS.test(text)) return null
   if (/\b(everything|all|them)\b/i.test(text)) return "all"
   // Work orders first: "work order" contains no other surface name, but listing it ahead of the
   // single-word alternatives keeps the match unambiguous as this list grows with each migration.
-  const named = /\b(work[ -]?orders?|decisions?|browser|diff|tests?|trace|source|project|activity|evidence|logs?)\b/i.exec(text)
+  const named = /\b(hermes|work[ -]?orders?|decisions?|browser|diff|tests?|trace|source|project|activity|evidence|logs?)\b/i.exec(text)
   if (!named) return "all"
   const subject = named[1].toLowerCase()
   // "logs" is what an owner calls the trace surface; honour their word, not ours.

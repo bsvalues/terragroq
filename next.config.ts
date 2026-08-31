@@ -28,6 +28,7 @@ const nextConfig: NextConfig = {
       { source: "/trace", destination: "/?summon=runtime-trace", permanent: true },
       { source: "/activity", destination: "/?summon=activity", permanent: true },
       { source: "/projects", destination: "/?summon=project", permanent: true },
+      { source: "/hermes", destination: "/?summon=hermes", permanent: true },
       { source: "/chat", destination: "/", permanent: true },
       { source: "/env", destination: "/", permanent: true },
       { source: "/environment", destination: "/", permanent: true },

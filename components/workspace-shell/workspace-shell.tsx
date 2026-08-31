@@ -652,6 +652,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           ...Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
             seed.kind === "review" && typeof seed.payload === "string"
               ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
+              : seed.kind === "hermes"
+                ? [{ id, kind: "hermes", subject: seed.subject }]
               : [],
           ),
           ...(previewSurface ? [previewSurface] : []),
@@ -2091,6 +2093,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       ...Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
         seed.kind === "review" && typeof seed.payload === "string"
           ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
+          : seed.kind === "hermes"
+            ? [{ id, kind: "hermes", subject: seed.subject }]
           : [],
       ),
       ...(previewSurface ? [previewSurface] : []),

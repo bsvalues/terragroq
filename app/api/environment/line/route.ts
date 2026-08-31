@@ -21,6 +21,7 @@ import { getWorkOrders } from "@/app/actions/work-orders"
 import { getActivity } from "@/lib/operator/activity"
 import { getRuntimeExecutions } from "@/app/actions/runtime-executions"
 import { getOutcomeQueueSurface } from "@/app/actions/outcome-queue"
+import { describeHermesForOwner, readHermesStatus } from "@/lib/hermes/status-source"
 import { createDecision, getDecisions, supersedeDecision } from "@/app/actions/decisions"
 import {
   classifyDecisionRecord,
@@ -72,7 +73,7 @@ const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT?.trim() || null
 const SELF_ORIGIN = process.env.WILLIAMOS_SELF_ORIGIN?.trim() || `http://127.0.0.1:${process.env.PORT ?? "3100"}`
 
 type SurfaceDirective = Readonly<{
-  kind: "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace" | "queue"
+  kind: "hermes" | "browser" | "trace" | "source" | "diff" | "tests" | "project" | "activity" | "evidence" | "work-orders" | "decisions" | "runtime-trace" | "queue"
   subject: string
   payload?: unknown
 }>
@@ -306,6 +307,17 @@ async function summonSurface(
   userId: string,
   spine: WorldSpine,
 ): Promise<{ say: string; surface: SurfaceDirective }> {
+  if (kind === "hermes") {
+    const status = await readHermesStatus()
+    return {
+      say: describeHermesForOwner(status),
+      // The surface reads live state itself. Persisting a copied packet would turn yesterday's
+      // observation into today's UI after reload, which is the exact false-green class this seam
+      // exists to prevent.
+      surface: { kind: "hermes", subject: "HERMES appliance" },
+    }
+  }
+
   if (kind === "project") {
     const rows = await db
       .select({ name: project.name, key: project.key, lifecycle: project.lifecycle })
