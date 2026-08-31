@@ -359,7 +359,8 @@ describe("Experience V2 developer tools", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ operations: projectOperations })))
     const view = render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:empty" />)
 
-    expect(screen.getByText("Type one fixed alias. Tab completes; Enter runs. No shell text is accepted.")).toBeTruthy()
+    expect(screen.getByText("Type a safe project command. Tab completes known actions; Enter runs. Mutating or shell-interpreted text is refused.")).toBeTruthy()
+    expect(screen.getByText("Read-only project shell · git status, diff, and log accept common inspection flags. Build and test remain bounded actions.")).toBeTruthy()
     expect(screen.queryByText("Saved browser transcript · not live evidence")).toBeNull()
 
     view.rerender(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:corrupt" />)
@@ -447,7 +448,7 @@ describe("Experience V2 developer tools", () => {
     expect(screen.getByText("warning", { exact: false })).toBeTruthy()
     expect(screen.getByText("exit 3", { exact: false })).toBeTruthy()
     const post = fetcher.mock.calls.find(([, init]) => init?.method === "POST")
-    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ operation: "repo.status" })
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ operation: "repo.status", terminalCommand: "git status" })
   })
 
   it.each([
@@ -599,16 +600,37 @@ describe("Experience V2 developer tools", () => {
     expect(loadToolRunHistory(window.localStorage, "server:world-b").runs).toHaveLength(0)
   })
 
-  it("refuses arbitrary commands and extra arguments locally without posting", async () => {
+  it("runs a bounded argument-bearing inspection command and preserves its exact transcript label", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "POST"
+      ? ndjson(
+        { type: "started", operation: "repo.status", label: "What has changed" },
+        { type: "stdout", text: " M safe-file.ts\n" },
+        { type: "exit", code: 0, reason: null },
+      )
+      : Response.json({ operations: projectOperations }))
+    vi.stubGlobal("fetch", fetcher)
+    render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
+    const input = await screen.findByRole("textbox", { name: "Project terminal command" })
+
+    fireEvent.change(input, { target: { value: "git status --short" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+
+    expect(await screen.findByText("M safe-file.ts", { exact: false })).toBeTruthy()
+    expect(screen.getByRole("button", { name: /git status --short.*completed.*saved browser transcript/i })).toBeTruthy()
+    const post = fetcher.mock.calls.find(([, init]) => init?.method === "POST")
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({ operation: "repo.status", terminalCommand: "git status --short" })
+  })
+
+  it("refuses arbitrary, mutating, path-bearing and shell-interpreted commands locally without posting", async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ operations: projectOperations }))
     vi.stubGlobal("fetch", fetcher)
     render(<DeveloperToolsSurface kind="terminal" selectedPath={null} historyScope="server:world-a" />)
     const input = await screen.findByRole("textbox", { name: "Project terminal command" })
 
-    for (const command of ["rm -rf .", "powershell Get-ChildItem", "git status --short"]) {
+    for (const command of ["rm -rf .", "powershell Get-ChildItem", "git checkout main", "git diff -- ../../secret", "git status && whoami"]) {
       fireEvent.change(input, { target: { value: command } })
       fireEvent.keyDown(input, { key: "Enter" })
-      expect(await screen.findByText(`Not run: “${command}” is not a fixed project alias.`)).toBeTruthy()
+      expect(await screen.findByText(`Not run: “${command}” is outside the safe project-command grammar.`)).toBeTruthy()
     }
     expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0)
   })
