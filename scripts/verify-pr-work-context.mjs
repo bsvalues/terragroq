@@ -55,6 +55,7 @@ for (const seal of seals) {
       seal.payload.delivery.baseSha,
       headSha,
       seal.payload.delivery.paths,
+      { allowMultiple: true },
     )
     repository ??= measured.repository
     patchDigests[[...measured.paths].sort().join("\0")] = measured.patchDigest
