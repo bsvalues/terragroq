@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { LOOM_OPERATIONS, resolveProjectTerminalCommand } from "@/lib/loom/operations"
+import { LOOM_OPERATIONS, resolveProjectTerminalAlias } from "@/lib/loom/operations"
 import styles from "./experience-spatial.module.css"
 import { loadDiffBrowserSnapshot, persistDiffBrowserSnapshot } from "./diff-snapshot-history"
 import { loadToolRunHistory, persistToolRunTranscript, type ToolOutputLine, type ToolRunTranscript } from "./tool-run-history"
@@ -294,7 +294,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
     liveDiffContextChanged.current?.(null)
   }, [settleRun])
 
-  const run = useCallback(async (operation: string, alias = terminalAlias(operation) ?? operation, terminalCommand?: string) => {
+  const run = useCallback(async (operation: string, alias = terminalAlias(operation) ?? operation) => {
     stop()
     setSelectedTranscriptId(null)
     setLines([])
@@ -315,7 +315,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
     let receivedExit = false
     try {
       const response = await fetch("/api/loom/run", {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(terminalCommand ? { operation, terminalCommand } : { operation }),
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ operation }),
         signal: abort.signal, cache: "no-store",
       })
       if (!response.ok || !response.body) throw new Error(`RUN_${response.status}`)
@@ -370,13 +370,12 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
   }, [kind, operations, settleRun, stop])
 
   const executeCommand = useCallback(() => {
-    const operation = resolveProjectTerminalCommand(command)
+    const operation = resolveProjectTerminalAlias(command)
     if (!operation || !operations.some((available) => available.id === operation.id)) {
-      setCommandVerdict(`Not run: “${command}” is outside the safe project-command grammar.`)
+      setCommandVerdict(`Not run: “${command}” is not a fixed project alias.`)
       return
     }
-    setCommand(operation.terminalAlias ?? command.trim())
-    void run(operation.id, operation.terminalAlias, operation.terminalAlias)
+    void run(operation.id, operation.terminalAlias)
   }, [command, operations, run])
 
   const completeCommand = useCallback(() => {
@@ -411,18 +410,15 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
         </> : <>
           {kind === "terminal" ? <form className={styles.utilityControls} onSubmit={(event) => { event.preventDefault(); executeCommand() }}>
             <span aria-hidden="true">$</span>
-            <input aria-label="Project terminal command" aria-describedby="project-terminal-guide" autoComplete="off" disabled={surfaceRunning !== null}
+            <input aria-label="Project terminal command" autoComplete="off" disabled={surfaceRunning !== null}
               style={{ flex: "1 1 180px", minWidth: 0, border: "1px solid #3b4939", borderRadius: 5, padding: "5px 8px", background: "#090d09", color: "#c8d2c4", font: "inherit" }}
-              placeholder="git status --short" value={command} onChange={(event) => { setCommand(event.target.value); setCommandVerdict(null) }}
+              placeholder="git status" value={command} onChange={(event) => { setCommand(event.target.value); setCommandVerdict(null) }}
               onKeyDown={(event) => {
                 if (event.key === "Tab" && completeCommand()) event.preventDefault()
                 if (event.key === "Enter") { event.preventDefault(); executeCommand() }
               }} />
             <button type="submit" className={styles.utilityButton} disabled={surfaceRunning !== null}>Run</button>
           </form> : null}
-          {kind === "terminal" ? <p id="project-terminal-guide" className={styles.terminalGuide}>
-            Read-only project shell · git status, diff, and log accept common inspection flags. Build and test remain bounded actions.
-          </p> : null}
           <div className={styles.utilityControls}>
             {kind === "tests" ? <button type="button" className={styles.utilityButton} disabled={surfaceRunning !== null || !active} onClick={() => void run("tests.run", "test")}>Run full test suite</button>
               : operations.map((operation) => <button key={operation.id} type="button" aria-label={operation.label} className={styles.utilityButton}
@@ -438,7 +434,7 @@ export function DeveloperToolsSurface({ kind, selectedPath, active = true, histo
           </nav> : null}
           {!selectedTranscript && historyVerdict ? <output className={styles.muted}>{historyVerdict}</output> : null}
           <pre ref={output} className={styles.utilityOutput} aria-live="polite">{visibleLines.length === 0
-            ? kind === "tests" ? active ? "Tests have not run in this Space yet." : "Focus Tests before running validation." : "Type a safe project command. Tab completes known actions; Enter runs. Mutating or shell-interpreted text is refused."
+            ? kind === "tests" ? active ? "Tests have not run in this Space yet." : "Focus Tests before running validation." : "Type one fixed alias. Tab completes; Enter runs. No shell text is accepted."
             : visibleLines.map((line, index) => <span key={index} data-channel={line.channel}>{line.text}</span>)}</pre>
         </>}
       </div>
