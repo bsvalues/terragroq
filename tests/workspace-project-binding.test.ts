@@ -40,8 +40,17 @@ describe("TerraFusion workspace Project binding", () => {
     "bsvalues/terrafusion_os_1.0",
     "git@github.com:bsvalues/terrafusion_os_1.0.git",
     "https://github.com/bsvalues/terrafusion_os_1.0.git",
+    "ssh://git@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git",
   ])("normalizes supported canonical repository identity %s", (value) => {
     expect(normalizeRepositoryIdentity(value)).toBe("bsvalues/terrafusion_os_1.0")
+  })
+
+  it.each([
+    "ssh://owner@ssh.github.com:443/bsvalues/terrafusion_os_1.0.git",
+    "ssh://git@ssh.github.com:22/bsvalues/terrafusion_os_1.0.git",
+    "https://ssh.github.com:443/bsvalues/terrafusion_os_1.0.git",
+  ])("refuses a non-canonical SSH-over-443 identity %s", (value) => {
+    expect(normalizeRepositoryIdentity(value)).toBeNull()
   })
 
   it("binds the durable Project only after the configured checkout origin matches", async () => {

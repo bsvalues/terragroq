@@ -51,7 +51,13 @@ export function normalizeRepositoryIdentity(value: string): string | null {
 
   try {
     const url = new URL(raw)
-    if (url.hostname.toLowerCase() !== "github.com") return null
+    const hostname = url.hostname.toLowerCase()
+    const githubWebRemote = hostname === "github.com"
+    const githubSshOver443Remote = hostname === "ssh.github.com"
+      && url.protocol === "ssh:"
+      && url.username === "git"
+      && url.port === "443"
+    if (!githubWebRemote && !githubSshOver443Remote) return null
     const identity = url.pathname.replace(/^\/+|\/+$/g, "").replace(/\.git$/i, "")
     return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(identity) ? identity.toLowerCase() : null
   } catch {
