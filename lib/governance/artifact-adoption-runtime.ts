@@ -41,7 +41,7 @@ export type ArtifactAdoptionRuntimeOptions = Readonly<{
   database: Database
   workspaceExists(root: string): Promise<boolean>
   createLifecycle(root: string, repository: string): Lifecycle
-  deriveBaseSha(root: string, repository: string, pullRequest: number, headSha: string): Promise<Readonly<{ baseRefSha: string; mergeBaseSha: string }>>
+  deriveBaseSha(root: string, repository: string, pullRequest: number, headSha: string): Promise<Readonly<{ pullRequestBaseSha: string; baseRefSha: string; mergeBaseSha: string }>>
   inspectDelivery: ArtifactAdoptionDependencies["inspectDelivery"]
   signingKey: DeliverySigningKey | null
   now(): Date
@@ -170,7 +170,7 @@ const CONTEXT_SQL = `SELECT world."snapshot" AS "worldSnapshot",
     AND receipt."operation" = '${ADMISSION_OPERATION}' AND receipt."outcomeKey" = outcome."outcomeKey"
   WHERE world."userId" = $1 AND world."id" = $2`
 
-async function defaultBaseSha(root: string, repository: string, pullRequest: number, headSha: string): Promise<Readonly<{ baseRefSha: string; mergeBaseSha: string }>> {
+async function defaultBaseSha(root: string, repository: string, pullRequest: number, headSha: string): Promise<Readonly<{ pullRequestBaseSha: string; baseRefSha: string; mergeBaseSha: string }>> {
   try {
     const slug = repository.replace(/^https:\/\/github\.com\//, "")
     if (slug !== SUPPORTED_REPOSITORY) throw new Error("unsupported repository")
@@ -178,15 +178,15 @@ async function defaultBaseSha(root: string, repository: string, pullRequest: num
       encoding: "utf8", windowsHide: true,
     })
     const value = JSON.parse(result.stdout) as Record<string, unknown>
-    const baseRefSha = String(value.baseRefOid ?? "").toLowerCase()
+    const pullRequestBaseSha = String(value.baseRefOid ?? "").toLowerCase()
     const baseRefName = String(value.baseRefName ?? "").trim()
     if (Number(value.number) !== pullRequest || value.state !== "OPEN"
-      || value.headRefOid !== headSha || !SHA.test(baseRefSha) || !baseRefName) throw new Error("bad pull request identity")
+      || value.headRefOid !== headSha || !SHA.test(pullRequestBaseSha) || !baseRefName) throw new Error("bad pull request identity")
     await runFile("git", ["-C", root, "fetch", "--quiet", "origin", `refs/heads/${baseRefName}:refs/remotes/origin/${baseRefName}`], { windowsHide: true })
-    const fetched = (await runFile("git", ["-C", root, "rev-parse", `refs/remotes/origin/${baseRefName}^{commit}`], { encoding: "utf8", windowsHide: true })).stdout.trim().toLowerCase()
+    const baseRefSha = (await runFile("git", ["-C", root, "rev-parse", `refs/remotes/origin/${baseRefName}^{commit}`], { encoding: "utf8", windowsHide: true })).stdout.trim().toLowerCase()
     const mergeBaseSha = (await runFile("git", ["-C", root, "merge-base", baseRefSha, headSha], { encoding: "utf8", windowsHide: true })).stdout.trim().toLowerCase()
-    if (fetched !== baseRefSha || !SHA.test(mergeBaseSha)) throw new Error("bad pull request base")
-    return { baseRefSha, mergeBaseSha }
+    if (!SHA.test(baseRefSha) || !SHA.test(mergeBaseSha)) throw new Error("bad pull request base")
+    return { pullRequestBaseSha, baseRefSha, mergeBaseSha }
   } catch { fail("DELIVERY_SEAL_DIFF_INVALID", "the exact artifact base commit is unavailable") }
 }
 
@@ -243,6 +243,7 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
       )
       return {
         pullRequest: context.pullRequest, state: "OPEN", headSha: context.admittedHeadSha,
+        pullRequestBaseSha: base.pullRequestBaseSha,
         baseRefSha: base.baseRefSha, baseSha: base.mergeBaseSha, paths: context.reservation.allowed,
       }
     },

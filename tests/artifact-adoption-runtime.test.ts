@@ -85,7 +85,7 @@ function harness(row = authorityRow()) {
     inspectPullRequest: vi.fn(async () => ({ number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "", checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0 })),
     inspectPullRequestFiles: vi.fn(async () => paths),
   }
-  const deriveBaseSha = vi.fn(async () => ({ baseRefSha: base, mergeBaseSha: base }))
+  const deriveBaseSha = vi.fn(async () => ({ pullRequestBaseSha: "0".repeat(40), baseRefSha: base, mergeBaseSha: base }))
   const { privateKey, publicKey } = generateKeyPairSync("ed25519")
   const runtime = createArtifactAdoptionRuntime({
     database: db,
@@ -130,6 +130,19 @@ describe("persisted prospective artifact adoption", () => {
     expect([repository, pullRequest, admittedHead]).toEqual([
       "https://github.com/bsvalues/terragroq", 1117, head,
     ])
+  })
+
+  it("keeps the historical PR base distinct from the current base-ref tip and merge base", async () => {
+    const candidate = harness()
+    const preview = await candidate.runtime.preview("owner-1", "space-1")
+    await candidate.runtime.authorize("owner-1", "space-1", "adopt:1117:moved-base", preview.previewDigest)
+    candidate.deriveBaseSha.mockResolvedValue({
+      pullRequestBaseSha: "0".repeat(40),
+      baseRefSha: "3".repeat(40),
+      mergeBaseSha: base,
+    })
+    await expect(candidate.runtime.issue("owner-1", "space-1", "adopt:1117:moved-base"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
   })
 
   it("records authorization before inspecting GitHub, then records distinct exact-head validation and review events", async () => {
