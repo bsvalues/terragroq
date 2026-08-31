@@ -41,6 +41,10 @@ function asTrimmedString(value: unknown) {
   return typeof value === "string" ? value.trim() : ""
 }
 
+export function normalizeProjectRootForEnv(projectRoot: string) {
+  return projectRoot.replace(/\\/g, "/")
+}
+
 function validatePayload(payload: SetupPayload) {
   const databaseUrl = asTrimmedString(payload.databaseUrl)
   const authSecret = asTrimmedString(payload.authSecret)
@@ -72,7 +76,12 @@ function validatePayload(payload: SetupPayload) {
     throw new Error("BETTER_AUTH_URL must be a valid URL.")
   }
 
-  return { databaseUrl, authSecret, authUrl, projectRoot: path.resolve(projectRoot) }
+  return {
+    databaseUrl,
+    authSecret,
+    authUrl,
+    projectRoot: normalizeProjectRootForEnv(path.resolve(projectRoot)),
+  }
 }
 
 function envLine(key: string, value: string) {
