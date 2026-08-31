@@ -91,14 +91,21 @@ describe("the cockpit's start script is declared in the repository", () => {
     expect(code).not.toMatch(/&\s*\$node\s+@resolverArgs\s+2>&1/)
   })
 
-  it("only ever overrides the variables it resolves", () => {
+  it("only applies the runtime variables it resolves or reads explicitly", () => {
     const assignments = executableOnly(startText).match(/\$env:[A-Za-z_][A-Za-z0-9_]*\s*=/g) ?? []
     const names = new Set(assignments.map((a) => a.replace(/\s*=$/, "").replace("$env:", "")))
     // WILLIAMOS_TERRAFUSION_ROOT joined this set in #1015. Its ABSENCE was the defect: the application
     // reads the declared TerraFusion target root, `.env.local` declared it, and
     // nothing applied it -- so the deployed bundle became "the workspace" and every governed save
     // was refused with FAILED_STALE_MAIN while the cockpit answered 200.
-    expect(names).toEqual(new Set(["NODE_ENV", "HOSTNAME", "PORT", "DATABASE_URL", "WILLIAMOS_TERRAFUSION_ROOT"]))
+    expect(names).toEqual(new Set([
+      "NODE_ENV",
+      "HOSTNAME",
+      "PORT",
+      "DATABASE_URL",
+      "WILLIAMOS_TERRAFUSION_ROOT",
+      "WILLIAMOS_PROJECT_ROOT",
+    ]))
   })
 })
 
@@ -109,6 +116,13 @@ describe("the cockpit is given a proven governed workspace, or it does not start
     expect(code).toMatch(/\$env:WILLIAMOS_TERRAFUSION_ROOT\s*=\s*\$resolvedProjectRoot/)
     // Applied BEFORE the server is launched, or it is not applied at all.
     expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_ROOT")).toBeLessThan(code.indexOf("Start-Process"))
+  })
+
+  it("exports the WilliamOS source root separately from the TerraFusion target", () => {
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_PROJECT_ROOT"/)
+    expect(code).toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$declaredWilliamOsRoot/)
+    expect(code).not.toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$resolvedProjectRoot/)
+    expect(code.indexOf("$env:WILLIAMOS_PROJECT_ROOT")).toBeLessThan(code.indexOf("Start-Process"))
   })
 
   it("does not carry a written-down workspace path of its own", () => {

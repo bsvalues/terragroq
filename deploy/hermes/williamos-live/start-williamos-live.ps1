@@ -138,6 +138,7 @@ function Deny-Boot {
 }
 
 $declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_ROOT" }
+$declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"
 if (-not $declaredRoot) {
   Deny-Boot "PROJECT_ROOT_UNDECLARED" "no WILLIAMOS_TERRAFUSION_ROOT was declared in $envFile and none was passed as -ProjectRoot. Without it WilliamOS has no declared TerraFusion checkout."
 }
@@ -232,6 +233,12 @@ $env:DATABASE_URL = $resolvedUrl
 # Same precedence, same reason: declared in .env.local, but only an already-present process variable
 # is actually read by the server, so applying it here is what makes the declaration take effect.
 $env:WILLIAMOS_TERRAFUSION_ROOT = $resolvedProjectRoot
+# The TerraFusion target and the WilliamOS source checkout have deliberately separate meanings.
+# Preserve the source-root declaration for system operations such as the sign-in fix; never alias
+# the validated TerraFusion target into this variable.
+if ($declaredWilliamOsRoot) {
+  $env:WILLIAMOS_PROJECT_ROOT = $declaredWilliamOsRoot
+}
 
 $process = Start-Process -FilePath $node -ArgumentList @($server) -WorkingDirectory $AppRoot -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -Wait -PassThru -WindowStyle Hidden
 exit $process.ExitCode
