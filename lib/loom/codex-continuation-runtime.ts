@@ -254,8 +254,10 @@ export async function acquireCodexContinuationClaim(
           "SELECT pg_advisory_unlock(hashtext($1), hashtext($2))",
           [`williamos-continuation:${userId}`, worldId],
         )
-      } finally {
         client.release()
+      } catch (error) {
+        client.release(error instanceof Error ? error : new Error("CODEX_CONTINUATION_UNLOCK_FAILED"))
+        throw error
       }
     }
   } catch (error) {

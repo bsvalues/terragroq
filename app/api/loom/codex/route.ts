@@ -177,11 +177,17 @@ export async function POST(request: Request) {
   }
 
   if (automatic) {
-    const continuation = await readCodexContinuation(
-      session.user.id,
-      worldId,
-      codexContinuationDependencies,
-    )
+    let continuation
+    try {
+      continuation = await readCodexContinuation(
+        session.user.id,
+        worldId,
+        codexContinuationDependencies,
+      )
+    } catch (error) {
+      await releaseClaim()
+      throw error
+    }
     if (continuation.status !== "NEXT_ASSIGNMENT"
       || continuation.selectedPath !== assignment.selectedPath) {
       await releaseClaim()

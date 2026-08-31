@@ -322,6 +322,17 @@ describe("durable Codex delegate route", () => {
     expect(seams.startThread).not.toHaveBeenCalled()
   })
 
+  it("releases the automatic Space claim when continuation restoration fails", async () => {
+    const release = vi.fn().mockResolvedValue(undefined)
+    seams.acquireCodexContinuationClaim.mockResolvedValue(release)
+    seams.readCodexContinuation.mockRejectedValue(new Error("database unavailable"))
+
+    await expect(POST(request({ automatic: true }))).rejects.toThrow("database unavailable")
+
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(seams.startThread).not.toHaveBeenCalled()
+  })
+
   it("rejects browser prompt text on an automatic continuation request", async () => {
     const response = await POST(request({ automatic: true, prompt: "Widen the assignment." }))
 
