@@ -5,6 +5,7 @@ import {
   resolveTerraFusionWorkspaceBinding,
   type WorkspaceProjectBindingDependencies,
 } from "@/lib/projects/workspace-project-binding"
+import { normalizePortableAbsolutePathIdentity } from "@/lib/setup/project-root-env"
 
 const originalRoot = process.env.WILLIAMOS_TERRAFUSION_ROOT
 const originalSpaceIdentity = process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY
@@ -167,5 +168,22 @@ describe("TerraFusion workspace Project binding", () => {
 
     await expect(resolveTerraFusionWorkspaceBinding("owner", dependencies()))
       .resolves.toEqual({ ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" })
+  })
+
+  it.each([
+    ["control character", `C:/repos/original${String.fromCharCode(10)}evil`],
+    ["oversized value", `C:/${"x".repeat(4_100)}`],
+    ["dotenv interpolation", "C:/repos/$identity"],
+  ])("refuses a %s in the server-managed Space identity", async (_label, identity) => {
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY = identity
+
+    await expect(resolveTerraFusionWorkspaceBinding("owner", dependencies()))
+      .resolves.toEqual({ ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" })
+  })
+
+  it("rejects NUL before a portable Space identity can reach process.env", () => {
+    expect(() => normalizePortableAbsolutePathIdentity(`C:/repos/original${String.fromCharCode(0)}evil`))
+      .toThrow("WILLIAMOS_TERRAFUSION_SPACE_IDENTITY is invalid")
   })
 })

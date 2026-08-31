@@ -7,6 +7,7 @@ import { and, eq } from "drizzle-orm"
 import { db } from "@/lib/db"
 import { project, projectResource } from "@/lib/db/schema"
 import { workspaceProjectFromRoot, type WorkspaceProject } from "@/lib/environment/space-persistence"
+import { normalizePortableAbsolutePathIdentity } from "@/lib/setup/project-root-env"
 
 const TERRAFUSION_PROJECT_KEY = "terrafusion"
 
@@ -162,9 +163,12 @@ export async function resolveTerraFusionWorkspaceBinding(
   // Filesystem operations follow the currently verified checkout. Space identity is a separate,
   // server-managed continuity key: /setup seeds it from the first root and preserves it when that
   // checkout moves, so replacing a path cannot orphan persisted Spaces or browser namespaces.
-  const configuredSpaceIdentity = process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY?.trim()
-    || configuredWorkspaceRoot
-  if (!path.win32.isAbsolute(configuredSpaceIdentity) && !path.posix.isAbsolute(configuredSpaceIdentity)) {
+  let configuredSpaceIdentity: string
+  try {
+    configuredSpaceIdentity = normalizePortableAbsolutePathIdentity(
+      process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY || configuredWorkspaceRoot,
+    )
+  } catch {
     return { ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" }
   }
   const projectBinding = workspaceProjectFromRoot(configuredSpaceIdentity, row.projectName)
