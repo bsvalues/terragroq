@@ -13,6 +13,8 @@ import {
   revalidateCodexAssignment,
   type CodexAssignment,
 } from "@/lib/loom/codex-assignment"
+import { prepareCodexContinuation, readCodexContinuation } from "@/lib/loom/codex-continuation"
+import { codexContinuationDependencies } from "@/lib/loom/codex-continuation-runtime"
 import {
   cleanupCodexIsolatedWorkspace,
   createCodexIsolatedWorkspace,
@@ -100,21 +102,26 @@ export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  let body: { worldId?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown }
+  let body: { worldId?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown; automatic?: unknown }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
-  if (!body || typeof body !== "object" || Object.keys(body).some((key) => !["worldId", "prompt", "sessionId", "resume"].includes(key))) {
+  if (!body || typeof body !== "object" || Object.keys(body).some((key) => !["worldId", "prompt", "sessionId", "resume", "automatic"].includes(key))) {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
   const worldId = typeof body.worldId === "string" ? body.worldId.trim() : ""
   if (!worldId || worldId.length > 200 || worldId.includes("\0")) {
     return Response.json({ error: "WORLD_ID_REQUIRED" }, { status: 400 })
   }
-  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
-  if (!prompt) return Response.json({ error: "PROMPT_REQUIRED" }, { status: 400 })
+  const automatic = body.automatic === true
+  if (body.automatic !== undefined && body.automatic !== true) {
+    return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
+  }
+  let prompt = typeof body.prompt === "string" ? body.prompt.trim() : ""
+  if (automatic && prompt) return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
+  if (!automatic && !prompt) return Response.json({ error: "PROMPT_REQUIRED" }, { status: 400 })
   if (prompt.length > MAX_PROMPT_CHARS) {
     return Response.json({ error: "PROMPT_TOO_LONG" }, { status: 400 })
   }
@@ -125,6 +132,9 @@ export async function POST(request: Request) {
     : null
   if (resuming && !requestedId) {
     return Response.json({ error: "SESSION_ID_REQUIRED" }, { status: 400 })
+  }
+  if (automatic && (resuming || requestedId)) {
+    return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
 
   let assignment: CodexAssignment
@@ -143,6 +153,22 @@ export async function POST(request: Request) {
       { error: code, ...(detail ? { detail } : {}) },
       { status: 409, headers: { "cache-control": "no-store" } },
     )
+  }
+
+  if (automatic) {
+    const continuation = await readCodexContinuation(
+      session.user.id,
+      worldId,
+      codexContinuationDependencies,
+    )
+    if (continuation.status !== "NEXT_ASSIGNMENT"
+      || continuation.selectedPath !== assignment.selectedPath) {
+      return Response.json(
+        { error: "CODEX_CONTINUATION_NOT_PENDING" },
+        { status: 409, headers: { "cache-control": "no-store" } },
+      )
+    }
+    prompt = continuation.task
   }
 
   if (resuming) {
@@ -190,6 +216,7 @@ export async function POST(request: Request) {
   let promotionInFlight = false
   let successCommitInFlight = false
   let successCommitted = false
+  let continuationFrame: Record<string, unknown> | null = null
   let forcedCloseTimer: ReturnType<typeof setTimeout> | null = null
   const closeClientAndWait = (): Promise<void> => {
     if (clientClosePromise) return clientClosePromise
@@ -456,6 +483,19 @@ export async function POST(request: Request) {
                     outcome: "SAVED",
                   },
                 })
+                try {
+                  const continuation = await prepareCodexContinuation({
+                    userId: session.user.id,
+                    worldId: assignment.worldId,
+                    outcomeKey: assignment.outcomeKey,
+                    workOrderId: assignment.workOrderId,
+                    grantId: assignment.grantId,
+                    completedPath: assignment.selectedPath,
+                  }, codexContinuationDependencies)
+                  continuationFrame = { type: "continuation", ...continuation }
+                } catch {
+                  continuationFrame = { type: "continuation", status: "CONTINUATION_BLOCKED" }
+                }
               } catch {
                 successReceiptFailed = true
                 throw Object.assign(new Error("Codex success transaction failed"), { code: "CODEX_RECEIPT_FAILED" })
@@ -482,6 +522,7 @@ export async function POST(request: Request) {
             })
           }
           successCommitted = true
+          if (continuationFrame) send(continuationFrame)
           send({ type: "result", text: result })
           done(null, 0)
         } catch (error) {

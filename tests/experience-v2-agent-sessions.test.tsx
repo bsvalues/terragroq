@@ -51,8 +51,8 @@ async function openWilliamConversation() {
   return screen.findByRole("complementary", { name: "William conversation" })
 }
 
-function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1" }: { worker?: WorldWorker | null; ownerScope?: string; worldScope?: string; worldId?: string | null }) {
-  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, worker })
+function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_SCOPE, worldId = "world-1", autoContinue = false, onAutoContinuation }: { worker?: WorldWorker | null; ownerScope?: string; worldScope?: string; worldId?: string | null; autoContinue?: boolean; onAutoContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void> }) {
+  const controller = useExperienceAgentSessions({ ownerScope, worldScope, worldId, worker, autoContinue, onAutoContinuation })
   expose = controller
   return (
     <AgentSessionStrip
@@ -67,6 +67,149 @@ function Harness({ worker = null, ownerScope = OWNER_SCOPE, worldScope = WORLD_S
 let expose: ProviderNeutralAgentSessionController | null = null
 
 describe("Experience V2 real agent sessions", () => {
+  it("restores and starts a pending server continuation after reload", async () => {
+    const onAutoContinuation = vi.fn()
+    const fetcher = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith("/api/loom/codex/continuation")) {
+        return Promise.resolve(Response.json({
+          status: "NEXT_ASSIGNMENT",
+          selectedPath: "src/other.ts",
+          task: "Continue the bound Work Order in src/other.ts.",
+        }))
+      }
+      return Promise.resolve(ndjson(
+        { type: "session", sessionId: "codex-restored-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
+        { type: "result", text: "Restored continuation completed." },
+        { type: "done", code: 0, reason: null },
+      ))
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<Harness autoContinue onAutoContinuation={onAutoContinuation} />)
+
+    await waitFor(() => expect(expose!.savedSessions).toEqual([
+      expect.objectContaining({ sessionId: "codex-restored-next", target: { kind: "file", path: "src/other.ts" } }),
+    ]))
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(onAutoContinuation).toHaveBeenCalledWith({ status: "WORK_ORDER_PATHS_COMPLETE" })
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe("/api/loom/codex/continuation?worldId=world-1")
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ automatic: true })
+  })
+
+  it("continues a server-derived Codex assignment without another owner action", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId: "codex-slice-1", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue the bound Work Order in src/other.ts." },
+        { type: "result", text: "First slice complete." },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId: "codex-slice-2", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: "b".repeat(64) },
+        { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
+        { type: "result", text: "Second slice complete." },
+        { type: "done", code: 0, reason: null },
+      ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.collectionState).toBe("missing"))
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Codex",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Implement the first bounded slice.",
+        target: { kind: "file", path: "src/app.ts" },
+      })
+    })
+
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({
+      worldId: "world-1",
+      automatic: true,
+      sessionId: null,
+      resume: false,
+    })
+    expect(expose!.savedSessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: "codex-slice-1", target: { kind: "file", path: "src/app.ts" } }),
+      expect.objectContaining({ sessionId: "codex-slice-2", target: { kind: "file", path: "src/other.ts" } }),
+    ]))
+  })
+
+  it("waits for the persisted Space selection to reach the visible UI before starting the next assignment", async () => {
+    let releaseSelection!: () => void
+    const selectionVisible = new Promise<void>((resolve) => { releaseSelection = resolve })
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId: "codex-visible-1", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue visibly." },
+        { type: "result", text: "First slice complete." },
+        { type: "done", code: 0, reason: null },
+      ))
+      .mockResolvedValueOnce(ndjson(
+        { type: "session", sessionId: "codex-visible-2", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: "b".repeat(64) },
+        { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
+        { type: "result", text: "Second slice complete." },
+        { type: "done", code: 0, reason: null },
+      ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.collectionState).toBe("missing"))
+
+    let turn!: Promise<unknown>
+    act(() => {
+      turn = expose!.runAgentTurn({
+        provider: "Codex",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Implement the first bounded slice.",
+        target: { kind: "file", path: "src/app.ts" },
+        onContinuation: async (continuation) => {
+          if (continuation.status === "NEXT_ASSIGNMENT") await selectionVisible
+        },
+      })
+    })
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1))
+    await act(async () => { await Promise.resolve() })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+
+    releaseSelection()
+    await act(async () => { await turn })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it("preserves the completed slice when visible Space synchronization blocks continuation", async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(ndjson(
+      { type: "session", sessionId: "codex-sync-blocked", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/app.ts", assignmentHash: ASSIGNMENT_HASH },
+      { type: "continuation", status: "NEXT_ASSIGNMENT", selectedPath: "src/other.ts", task: "Continue visibly." },
+      { type: "result", text: "The first slice is durably complete." },
+      { type: "done", code: 0, reason: null },
+    ))
+    vi.stubGlobal("fetch", fetcher)
+    render(<Harness />)
+    await waitFor(() => expect(expose!.collectionState).toBe("missing"))
+
+    await act(async () => {
+      await expose!.runAgentTurn({
+        provider: "Codex",
+        role: "Builder",
+        assignment: "src/app.ts",
+        prompt: "Implement the first bounded slice.",
+        target: { kind: "file", path: "src/app.ts" },
+        onContinuation: async () => { throw new Error("CONTINUATION_SELECTION_MISMATCH") },
+      })
+    })
+
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(expose!.savedSessions).toEqual([
+      expect.objectContaining({ sessionId: "codex-sync-blocked", completedTurns: [expect.objectContaining({ finalResult: "The first slice is durably complete." })] }),
+    ])
+    expect(expose!.error).toBe("CODEX_CONTINUATION_UI_SYNC_FAILED")
+  })
+
   it.each([
     {
       label: "Codex Builder",

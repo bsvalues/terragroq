@@ -29,6 +29,91 @@ function deferredResponse() {
 }
 
 describe("WorkspaceShell addressed arrival under React Strict Mode", () => {
+  it("refreshes the persisted Space revision after automatic outcome attachment", async () => {
+    const initial = { ...defaultSpace(), revision: 4 }
+    const attached = { ...defaultSpace(), revision: 5 }
+    const fetchStub = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? "GET"
+      if (url === "/api/environment/space" && method === "GET") {
+        return Promise.resolve(Response.json({
+          worldId: "world-attached",
+          space: spaceToServer(initial),
+          project: { identity: "c:/repos/williamos", name: "WilliamOS" },
+        }))
+      }
+      if (url === "/api/environment/space/outcome" && method === "POST") {
+        return Promise.resolve(Response.json({ status: "ATTACHED", worldId: "world-attached" }))
+      }
+      if (url === "/api/environment/space?worldId=world-attached" && method === "GET") {
+        return Promise.resolve(Response.json({
+          worldId: "world-attached",
+          space: spaceToServer(attached),
+          project: { identity: "c:/repos/williamos", name: "WilliamOS" },
+        }))
+      }
+      if (url === "/api/environment/judgment" && method === "POST") {
+        return Promise.resolve(Response.json({ error: "JUDGMENT_UNAVAILABLE" }, { status: 503 }))
+      }
+      if (url.startsWith("/api/loom/files")) {
+        return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      }
+      throw new Error(`unexpected request: ${method} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetchStub)
+
+    render(<WorkspaceShell />)
+
+    await waitFor(() => expect(fetchStub.mock.calls.some(([input]) => (
+      String(input) === "/api/environment/space?worldId=world-attached"
+    ))).toBe(true))
+    expect(screen.queryByText(/SPACE_REVISION_STALE/)).toBeNull()
+  })
+
+  it("recovers a reload-race stale revision from the current persisted Space", async () => {
+    const initial = { ...defaultSpace(), revision: 4 }
+    const current = { ...defaultSpace(), revision: 5 }
+    let exactReads = 0
+    const fetchStub = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? "GET"
+      if (url === "/api/environment/space" && method === "GET") {
+        return Promise.resolve(Response.json({
+          worldId: "world-reload-race",
+          space: spaceToServer(initial),
+          project: { identity: "c:/repos/williamos", name: "WilliamOS" },
+        }))
+      }
+      if (url === "/api/environment/space/outcome" && method === "POST") {
+        return Promise.resolve(Response.json({ status: "SPACE_ALREADY_BOUND" }, { status: 409 }))
+      }
+      if (url === "/api/environment/space" && method === "PUT") {
+        return Promise.resolve(Response.json({ error: "SPACE_REVISION_STALE" }, { status: 400 }))
+      }
+      if (url === "/api/environment/space?worldId=world-reload-race" && method === "GET") {
+        exactReads += 1
+        return Promise.resolve(Response.json({
+          worldId: "world-reload-race",
+          space: spaceToServer(current),
+          project: { identity: "c:/repos/williamos", name: "WilliamOS" },
+        }))
+      }
+      if (url === "/api/environment/judgment" && method === "POST") {
+        return Promise.resolve(Response.json({ error: "JUDGMENT_UNAVAILABLE" }, { status: 503 }))
+      }
+      if (url.startsWith("/api/loom/files")) {
+        return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      }
+      throw new Error(`unexpected request: ${method} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetchStub)
+
+    render(<WorkspaceShell />)
+
+    await waitFor(() => expect(exactReads).toBe(1), { timeout: 2_000 })
+    expect(screen.queryByText(/SPACE_REVISION_STALE/)).toBeNull()
+  })
+
   it("shares in-flight re-entry and summon requests so replay cannot strand the workspace", async () => {
     const reentry = deferredResponse()
     const summon = deferredResponse()

@@ -1,0 +1,50 @@
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const seams = vi.hoisted(() => ({
+  getSession: vi.fn(),
+  readCodexContinuation: vi.fn(),
+}))
+
+vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
+vi.mock("@/lib/loom/codex-continuation", () => ({
+  readCodexContinuation: seams.readCodexContinuation,
+}))
+vi.mock("@/lib/loom/codex-continuation-runtime", () => ({
+  codexContinuationDependencies: {},
+}))
+
+import { GET } from "@/app/api/loom/codex/continuation/route"
+
+describe("Codex continuation restoration route", () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
+  })
+
+  it("restores the server-derived pending assignment for an owned Space", async () => {
+    seams.readCodexContinuation.mockResolvedValue({
+      status: "NEXT_ASSIGNMENT",
+      selectedPath: "src/next.ts",
+      task: "Continue the bound Work Order in src/next.ts.",
+    })
+
+    const response = await GET(new Request("http://williamos.test/api/loom/codex/continuation?worldId=world-1"))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual({
+      status: "NEXT_ASSIGNMENT",
+      selectedPath: "src/next.ts",
+      task: "Continue the bound Work Order in src/next.ts.",
+    })
+    expect(seams.readCodexContinuation).toHaveBeenCalledWith("owner-1", "world-1", {})
+  })
+
+  it("does not expose continuation state without an authenticated owner session", async () => {
+    seams.getSession.mockResolvedValue(null)
+
+    const response = await GET(new Request("http://williamos.test/api/loom/codex/continuation?worldId=world-1"))
+
+    expect(response.status).toBe(401)
+    expect(seams.readCodexContinuation).not.toHaveBeenCalled()
+  })
+})

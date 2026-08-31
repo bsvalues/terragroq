@@ -140,8 +140,10 @@ export type RunAgentTurnInput = Readonly<{
   assignment: string
   prompt: string
   target?: AgentSessionFileTarget
+  automatic?: boolean
   onEvent?: (event: Readonly<Record<string, unknown>>) => void
   onPresentation?: (presentation: AgentTurnPresentation) => void
+  onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void>
 }>
 
 export type RunPreviewDiagnosticInput = Readonly<{
@@ -694,11 +696,15 @@ export function useExperienceAgentSessions({
   worldScope,
   worldId,
   worker,
+  autoContinue = false,
+  onAutoContinuation,
 }: {
   ownerScope: string
   worldScope: string
   worldId: string | null
   worker: WorldWorker | null
+  autoContinue?: boolean
+  onAutoContinuation?: RunAgentTurnInput["onContinuation"]
 }): ProviderNeutralAgentSessionController {
   const [savedSessions, setSavedSessions] = useState<readonly DurableAgentSession[]>([])
   const [collectionState, setCollectionState] = useState<AgentSessionCollectionState>("missing")
@@ -714,6 +720,7 @@ export function useExperienceAgentSessions({
   const operationEpoch = useRef(0)
   const selectionGenerationRef = useRef(0)
   const operationsRef = useRef(new Map<number, ActiveAgentOperation>())
+  const autoContinuationAttemptRef = useRef<string | null>(null)
 
   const persistCanonicalCollection = useCallback((write: () => DurableAgentSessionCollection) => {
     try {
@@ -884,6 +891,8 @@ export function useExperienceAgentSessions({
     mode?: "delegate" | "review" | "diff-review" | "fork" | "preview"
     sourceSessionId?: string
     exactContinuation?: boolean
+    automatic?: boolean
+    onContinuation?: (continuation: Readonly<{ status: string; selectedPath?: string; task?: string }>) => void | Promise<void>
   }) => {
     if (input.provider !== "Codex" && input.provider !== "Claude" && input.provider !== "Local") {
       throw new Error("AGENT_PROVIDER_INVALID")
@@ -1061,7 +1070,12 @@ export function useExperienceAgentSessions({
           provider: "cloud",
           sourceSessionId: forkSource!.sessionId,
           prompt,
-        } : input.provider === "Codex" ? {
+        } : input.provider === "Codex" ? input.automatic ? {
+          worldId,
+          automatic: true,
+          sessionId: null,
+          resume: false,
+        } : {
           worldId,
           prompt,
           sessionId: prior?.sessionId ?? null,
@@ -1103,6 +1117,7 @@ export function useExperienceAgentSessions({
       let terminalSeen = false
       let canonicalResultSeen = false
       let targetBindingInvalid = false
+      let continuationSeen = false
       let resultText: string | null = null
       const acceptLine = (line: string) => {
         if (!isCurrent()) return
@@ -1205,6 +1220,24 @@ export function useExperienceAgentSessions({
           return
         }
         if (!sessionSeen) { malformed = true; return }
+        if (input.provider === "Codex" && event.type === "continuation") {
+          const status = boundedText(event.status, 100)
+          if (!status || continuationSeen || canonicalResultSeen) { malformed = true; return }
+          continuationSeen = true
+          if (status === "NEXT_ASSIGNMENT") {
+            const selectedPath = canonicalWorkspaceFilePath(event.selectedPath)
+            const task = boundedText(event.task, 20_000)
+            if (!selectedPath || !task) { malformed = true; return }
+            input.onContinuation?.({ status, selectedPath, task })
+          } else if (["ASSIGNMENT_IN_FLIGHT", "WORK_ORDER_PATHS_COMPLETE", "SPACE_PERSISTENCE_BUSY", "CONTINUATION_BLOCKED"].includes(status)) {
+            input.onContinuation?.({ status })
+          } else {
+            malformed = true
+            return
+          }
+          if (isCurrent()) input.onEvent?.(event)
+          return
+        }
         if (input.provider === "Claude" && event.type === "event") {
           if (!event.event || typeof event.event !== "object" || Array.isArray(event.event) || canonicalResultSeen) { malformed = true; return }
           const payload = event.event as Record<string, unknown>
@@ -1362,7 +1395,74 @@ export function useExperienceAgentSessions({
     }
   }, [loadedStorageKey, ownerScope, persistCanonicalCollection, repairInvalidatedSelection, syncActiveTurns, worldId, worldScope])
 
-  const runAgentTurn = useCallback((input: RunAgentTurnInput) => executeTurn({ ...input, mode: "delegate" }), [executeTurn])
+  const runAgentTurn = useCallback(async (input: RunAgentTurnInput) => {
+    let current = input
+    let completed: DurableAgentSession | null = null
+    for (let transition = 0; transition < 64; transition += 1) {
+      const transitionResult: { current: Readonly<{ status: string; selectedPath?: string; task?: string }> | null } = { current: null }
+      completed = await executeTurn({
+        ...current,
+        mode: "delegate",
+        onContinuation: (continuation) => { transitionResult.current = continuation },
+      })
+      const next = transitionResult.current
+      if (next) {
+        try {
+          await input.onContinuation?.(next)
+        } catch {
+          setError("CODEX_CONTINUATION_UI_SYNC_FAILED")
+          return completed
+        }
+      }
+      if (!next || next.status !== "NEXT_ASSIGNMENT" || !next.selectedPath || !next.task) return completed
+      current = {
+        provider: "Codex",
+        role: "Builder",
+        assignment: next.selectedPath,
+        prompt: next.task,
+        target: { kind: "file", path: next.selectedPath },
+        automatic: true,
+        onEvent: input.onEvent,
+        onPresentation: input.onPresentation,
+        onContinuation: input.onContinuation,
+      }
+    }
+    throw new Error("CODEX_CONTINUATION_LIMIT")
+  }, [executeTurn])
+
+  useEffect(() => {
+    const exactStorageKey = storageKey(ownerScope, worldScope)
+    if (!autoContinue || !worldId || loadedStorageKey !== exactStorageKey
+      || operationsRef.current.size > 0) return
+    const attemptKey = `${exactStorageKey}:${worldId}`
+    if (autoContinuationAttemptRef.current === attemptKey) return
+    autoContinuationAttemptRef.current = attemptKey
+    let cancelled = false
+    void fetch(`/api/loom/codex/continuation?worldId=${encodeURIComponent(worldId)}`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return null
+        return response.json() as Promise<Record<string, unknown>>
+      })
+      .then(async (continuation) => {
+        if (cancelled || continuation?.status !== "NEXT_ASSIGNMENT") return
+        const selectedPath = canonicalWorkspaceFilePath(continuation.selectedPath)
+        const task = boundedText(continuation.task, 20_000)
+        if (!selectedPath || !task) return
+        await runAgentTurn({
+          provider: "Codex",
+          role: "Builder",
+          assignment: selectedPath,
+          prompt: task,
+          target: { kind: "file", path: selectedPath },
+          automatic: true,
+          onContinuation: onAutoContinuation,
+        })
+      })
+      .catch((cause) => {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : "CODEX_CONTINUATION_UNAVAILABLE")
+      })
+    return () => { cancelled = true }
+  }, [autoContinue, loadedStorageKey, onAutoContinuation, ownerScope, runAgentTurn, worldId, worldScope])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
   const runPreviewDiagnostic = useCallback((input: RunPreviewDiagnosticInput) => executeTurn({
     ...input, provider: "Claude", role: "Preview debugger", assignment: "Developer Preview diagnosis", mode: "preview",
