@@ -159,11 +159,15 @@ export async function resolveTerraFusionWorkspaceBinding(
     return { ok: false, error: "WORKSPACE_ROOT_PROJECT_MISMATCH" }
   }
 
-  // Space identity remains the stable configured checkout path used before this verifier existed.
-  // Filesystem operations use the verified real Git root above, but changing a symlink/junction to
-  // its physical target here would orphan the owner's already-persisted Spaces after an upgrade.
-  // Outcome assimilation still resolves the configured path's Git origin to the canonical repo.
-  const projectBinding = workspaceProjectFromRoot(configuredWorkspaceRoot, row.projectName)
+  // Filesystem operations follow the currently verified checkout. Space identity is a separate,
+  // server-managed continuity key: /setup seeds it from the first root and preserves it when that
+  // checkout moves, so replacing a path cannot orphan persisted Spaces or browser namespaces.
+  const configuredSpaceIdentity = process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY?.trim()
+    || configuredWorkspaceRoot
+  if (!path.isAbsolute(configuredSpaceIdentity)) {
+    return { ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" }
+  }
+  const projectBinding = workspaceProjectFromRoot(configuredSpaceIdentity, row.projectName)
   return {
     ok: true,
     binding: {

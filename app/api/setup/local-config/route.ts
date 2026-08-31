@@ -106,7 +106,36 @@ function envLine(key: string, value: string) {
   return `${key}=${JSON.stringify(value)}`
 }
 
-async function writeManagedLocalEnv(managedEntries: Map<string, string>) {
+function declaredEnvValue(existing: string, key: string): string | null {
+  const keyPattern = new RegExp(`^\\s*${key}\\s*=\\s*(.*)$`)
+  for (const line of existing.split(/\r?\n/)) {
+    const match = line.match(keyPattern)
+    if (!match) continue
+    const raw = match[1].trim()
+    if (raw.startsWith('"') && raw.endsWith('"')) {
+      try {
+        const parsed = JSON.parse(raw)
+        return typeof parsed === "string" ? parsed.trim() || null : null
+      } catch {
+        return null
+      }
+    }
+    if (raw.startsWith("'") && raw.endsWith("'")) return raw.slice(1, -1).trim() || null
+    return raw || null
+  }
+  return null
+}
+
+function stableTerraFusionSpaceIdentity(existing: string, nextRoot: string): string {
+  const identity = declaredEnvValue(existing, "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY")
+    ?? declaredEnvValue(existing, "WILLIAMOS_TERRAFUSION_ROOT")
+    ?? nextRoot
+  return validateTerraFusionRoot(identity)
+}
+
+async function writeManagedLocalEnv(
+  managedEntriesFor: Map<string, string> | ((existing: string) => Map<string, string>),
+) {
   const envPath = path.join(process.cwd(), ".env.local")
 
   let existing = ""
@@ -118,6 +147,9 @@ async function writeManagedLocalEnv(managedEntries: Map<string, string>) {
       throw error
     }
   }
+  const managedEntries = typeof managedEntriesFor === "function"
+    ? managedEntriesFor(existing)
+    : managedEntriesFor
 
   const nextLines: string[] = []
   const seenKeys = new Set<string>()
@@ -159,20 +191,28 @@ async function writeFullLocalEnv(input: {
   const optionalEntries: [string, string][] = process.env.GROQ_API_KEY
     ? [["GROQ_API_KEY", envLine("GROQ_API_KEY", process.env.GROQ_API_KEY)]]
     : []
-  await writeManagedLocalEnv(new Map<string, string>([
-    ["DATABASE_URL", envLine("DATABASE_URL", input.databaseUrl)],
-    ["BETTER_AUTH_SECRET", envLine("BETTER_AUTH_SECRET", input.authSecret)],
-    ["BETTER_AUTH_URL", envLine("BETTER_AUTH_URL", input.authUrl)],
-    ["WILLIAMOS_TERRAFUSION_ROOT", `WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(input.terraFusionRoot)}`],
-    ["LOCAL_SETUP_ENABLED", envLine("LOCAL_SETUP_ENABLED", "true")],
-    ...optionalEntries,
-  ]))
+  await writeManagedLocalEnv((existing) => {
+    const spaceIdentity = stableTerraFusionSpaceIdentity(existing, input.terraFusionRoot)
+    return new Map<string, string>([
+      ["DATABASE_URL", envLine("DATABASE_URL", input.databaseUrl)],
+      ["BETTER_AUTH_SECRET", envLine("BETTER_AUTH_SECRET", input.authSecret)],
+      ["BETTER_AUTH_URL", envLine("BETTER_AUTH_URL", input.authUrl)],
+      ["WILLIAMOS_TERRAFUSION_ROOT", `WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(input.terraFusionRoot)}`],
+      ["WILLIAMOS_TERRAFUSION_SPACE_IDENTITY", `WILLIAMOS_TERRAFUSION_SPACE_IDENTITY=${serializeProjectRootEnvValue(spaceIdentity)}`],
+      ["LOCAL_SETUP_ENABLED", envLine("LOCAL_SETUP_ENABLED", "true")],
+      ...optionalEntries,
+    ])
+  })
 }
 
 async function writeTerraFusionRoot(terraFusionRoot: string) {
-  await writeManagedLocalEnv(new Map([
-    ["WILLIAMOS_TERRAFUSION_ROOT", `WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(terraFusionRoot)}`],
-  ]))
+  await writeManagedLocalEnv((existing) => {
+    const spaceIdentity = stableTerraFusionSpaceIdentity(existing, terraFusionRoot)
+    return new Map([
+      ["WILLIAMOS_TERRAFUSION_ROOT", `WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(terraFusionRoot)}`],
+      ["WILLIAMOS_TERRAFUSION_SPACE_IDENTITY", `WILLIAMOS_TERRAFUSION_SPACE_IDENTITY=${serializeProjectRootEnvValue(spaceIdentity)}`],
+    ])
+  })
 }
 
 export async function POST(req: Request) {

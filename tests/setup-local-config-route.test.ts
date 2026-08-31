@@ -268,6 +268,7 @@ describe("POST /api/setup/local-config route contract", () => {
     )
     expect(writeFileMock.mock.calls[0][1]).toContain('BETTER_AUTH_URL="http://localhost:3000"')
     expect(writeFileMock.mock.calls[0][1]).toContain(`WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
+    expect(writeFileMock.mock.calls[0][1]).toContain(`WILLIAMOS_TERRAFUSION_SPACE_IDENTITY=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
     expect(writeFileMock.mock.calls[0][1]).toContain('LOCAL_SETUP_ENABLED="true"')
     expect(writeFileMock.mock.calls[0][1]).toContain('GROQ_API_KEY="groq-key-value"')
   })
@@ -309,6 +310,7 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writtenEnv).toContain('LOCAL_SETUP_ENABLED="true"')
     expect(writtenEnv).toContain('WILLIAMOS_PROJECT_ROOT="C:/repos/william-os-devops"')
     expect(writtenEnv).toContain(`WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
+    expect(writtenEnv).toContain(`WILLIAMOS_TERRAFUSION_SPACE_IDENTITY=${serializeProjectRootEnvValue(normalizeProjectRootForEnv(path.resolve("/repos/old")))}`)
     expect(writtenEnv).not.toContain('WILLIAMOS_TERRAFUSION_ROOT="/repos/old"')
     expect(writtenEnv).not.toContain('DATABASE_URL="postgres://old"')
   })
@@ -346,7 +348,33 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writtenEnv).toContain('WILLIAMOS_PROJECT_ROOT="C:/repos/william-os-devops"')
     expect(writtenEnv).toContain("CUSTOM_FLAG=true")
     expect(writtenEnv).toContain(`WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
+    expect(writtenEnv).toContain(`WILLIAMOS_TERRAFUSION_SPACE_IDENTITY=${serializeProjectRootEnvValue("C:/repos/old-terrafusion")}`)
     expect(writtenEnv).not.toContain('WILLIAMOS_TERRAFUSION_ROOT="C:/repos/old-terrafusion"')
+  })
+
+  it("preserves the original Space identity across repeated checkout moves", async () => {
+    process.env.AUTH_SIGNUP_MODE = "closed"
+    readFileMock.mockResolvedValue(
+      [
+        'DATABASE_URL="postgres://existing"',
+        'BETTER_AUTH_SECRET="existing-auth-secret-must-not-change"',
+        'WILLIAMOS_TERRAFUSION_ROOT="C:/repos/second-terrafusion"',
+        'WILLIAMOS_TERRAFUSION_SPACE_IDENTITY="C:/repos/original-terrafusion"',
+        "",
+      ].join("\n"),
+    )
+
+    const response = await POST(new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operation: "terrafusion-root", terraFusionRoot: projectRoot }),
+    }))
+    const writtenEnv = writeFileMock.mock.calls[0][1] as string
+
+    expect(response.status).toBe(200)
+    expect(writtenEnv).toContain(`WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
+    expect(writtenEnv).toContain(`WILLIAMOS_TERRAFUSION_SPACE_IDENTITY=${serializeProjectRootEnvValue("C:/repos/original-terrafusion")}`)
+    expect(writtenEnv).not.toContain(`WILLIAMOS_TERRAFUSION_SPACE_IDENTITY=${serializeProjectRootEnvValue("C:/repos/second-terrafusion")}`)
   })
 
   it("refuses root-only setup until WilliamOS authentication is actually ready", async () => {

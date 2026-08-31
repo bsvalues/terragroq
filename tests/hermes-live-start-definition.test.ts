@@ -104,6 +104,7 @@ describe("the cockpit's start script is declared in the repository", () => {
       "PORT",
       "DATABASE_URL",
       "WILLIAMOS_TERRAFUSION_ROOT",
+      "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY",
       "WILLIAMOS_PROJECT_ROOT",
     ]))
   })
@@ -123,6 +124,13 @@ describe("the cockpit is given a proven governed workspace, or it does not start
     expect(code).toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$declaredWilliamOsRoot/)
     expect(code).not.toMatch(/\$env:WILLIAMOS_PROJECT_ROOT\s*=\s*\$resolvedProjectRoot/)
     expect(code.indexOf("$env:WILLIAMOS_PROJECT_ROOT")).toBeLessThan(code.indexOf("Start-Process"))
+  })
+
+  it("exports the stable Space identity without replacing it with the current checkout", () => {
+    expect(code).toMatch(/Get-DeclaredEnvValue\s+-File\s+\$envFile\s+-Key\s+"WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"/)
+    expect(code).toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$declaredTerraFusionSpaceIdentity/)
+    expect(code).not.toMatch(/\$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY\s*=\s*\$resolvedProjectRoot/)
+    expect(code.indexOf("$env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY")).toBeLessThan(code.indexOf("Start-Process"))
   })
 
   it("does not carry a written-down workspace path of its own", () => {

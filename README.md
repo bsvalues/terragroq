@@ -57,6 +57,7 @@ covered by tests.
   - `AUTH_SIGNUP_MODE` — `bootstrap` (default), `open`, or `closed`
   - `WILLIAMOS_PROJECT_ROOT` — absolute path to the WilliamOS source checkout used by system and governance operations
   - `WILLIAMOS_TERRAFUSION_ROOT` — absolute path to the real `bsvalues/terrafusion_os_1.0` checkout WilliamOS develops
+  - `WILLIAMOS_TERRAFUSION_SPACE_IDENTITY` — server-managed stable Space identity; `/setup` preserves it when the TerraFusion checkout moves
 
 ### Install & run
 

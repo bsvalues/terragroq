@@ -7,10 +7,13 @@ import {
 } from "@/lib/projects/workspace-project-binding"
 
 const originalRoot = process.env.WILLIAMOS_TERRAFUSION_ROOT
+const originalSpaceIdentity = process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY
 
 afterEach(() => {
   if (originalRoot === undefined) delete process.env.WILLIAMOS_TERRAFUSION_ROOT
   else process.env.WILLIAMOS_TERRAFUSION_ROOT = originalRoot
+  if (originalSpaceIdentity === undefined) delete process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY
+  else process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY = originalSpaceIdentity
 })
 
 function dependencies(
@@ -137,5 +140,32 @@ describe("TerraFusion workspace Project binding", () => {
         },
       }),
     })
+  })
+
+  it("keeps the original Space identity after the verified checkout moves", async () => {
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/moved/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY = "/repos/original/terrafusion_os_1.0"
+
+    const result = await resolveTerraFusionWorkspaceBinding("owner", dependencies())
+
+    expect(result).toEqual({
+      ok: true,
+      binding: expect.objectContaining({
+        configuredWorkspaceRoot: expect.stringMatching(/repos[\\/]moved[\\/]terrafusion_os_1\.0$/),
+        workspaceRoot: expect.stringMatching(/repos[\\/]moved[\\/]terrafusion_os_1\.0$/),
+        project: {
+          identity: expect.stringMatching(/repos[\\/]original[\\/]terrafusion_os_1\.0$/),
+          name: "TerraFusion OS",
+        },
+      }),
+    })
+  })
+
+  it("refuses a non-absolute server-managed Space identity", async () => {
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = "/repos/terrafusion_os_1.0"
+    process.env.WILLIAMOS_TERRAFUSION_SPACE_IDENTITY = "relative/identity"
+
+    await expect(resolveTerraFusionWorkspaceBinding("owner", dependencies()))
+      .resolves.toEqual({ ok: false, error: "WORKSPACE_SPACE_IDENTITY_INVALID" })
   })
 })
