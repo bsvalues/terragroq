@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import path from "node:path"
 
 const seams = vi.hoisted(() => ({
   getSession: vi.fn(),
@@ -76,6 +77,7 @@ import { loomCodexThreadDescriptor } from "@/lib/loom/threads"
 
 const ASSIGNMENT_HASH = "a".repeat(64)
 const STALE_ASSIGNMENT_HASH = "b".repeat(64)
+const CONFIGURED_ALIAS_ASSIGNMENT_HASH = "c".repeat(64)
 
 function request(body: Record<string, unknown>, signal?: AbortSignal) {
   return new Request("http://williamos.test/api/loom/codex", {
@@ -325,18 +327,28 @@ describe("durable Codex delegate route", () => {
   })
 
   it("resumes a durable session recorded against the verified configured workspace alias", async () => {
+    const configuredAlias = path.resolve("C:/stable/terrafusion-alias")
+    const currentAssignment = await seams.deriveCodexAssignment({})
+    seams.deriveCodexAssignment.mockReset()
+    seams.deriveCodexAssignment.mockImplementation(async (input: { projectRoot: string }) => ({
+      ...currentAssignment,
+      projectRoot: input.projectRoot,
+      assignmentHash: input.projectRoot === configuredAlias
+        ? CONFIGURED_ALIAS_ASSIGNMENT_HASH
+        : ASSIGNMENT_HASH,
+    }))
     seams.resolveProjectBinding.mockResolvedValueOnce({
       ok: true,
       binding: {
         workspaceRoot: process.cwd(),
-        configuredWorkspaceRoot: "C:/stable/terrafusion-alias",
+        configuredWorkspaceRoot: configuredAlias,
       },
     })
     seams.poolQuery.mockResolvedValueOnce({
       rows: [{ userId: "owner-1", metadata: {
-        provider: "Codex", mode: "delegate", workspace: "C:/stable/terrafusion-alias", committed: true,
+        provider: "Codex", mode: "delegate", workspace: configuredAlias, committed: true,
         worldId: "world-1", outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 9,
-        assignmentHash: ASSIGNMENT_HASH, selectedPath: "src/selected.ts",
+        assignmentHash: CONFIGURED_ALIAS_ASSIGNMENT_HASH, selectedPath: "src/selected.ts",
       } }],
     })
 
@@ -348,6 +360,12 @@ describe("durable Codex delegate route", () => {
 
     expect(response.status).toBe(200)
     await events(response)
+    expect(seams.deriveCodexAssignment).toHaveBeenCalledTimes(2)
+    expect(seams.deriveCodexAssignment).toHaveBeenNthCalledWith(2, {
+      userId: "owner-1",
+      worldId: "world-1",
+      projectRoot: configuredAlias,
+    })
     expect(seams.resumeThread).toHaveBeenCalledWith("codex-thread-1", expect.objectContaining({
       cwd: "C:/Users/owner/.williamos/loom/codex-worktrees/delegate-1",
     }))

@@ -163,16 +163,35 @@ export async function POST(request: Request) {
         { status: 403, headers: { "cache-control": "no-store" } },
       )
     }
+    const workspaceMatchesPhysical = descriptor.workspace !== null
+      && sameWorkspace(descriptor.workspace, projectRoot)
+    const workspaceMatchesConfigured = descriptor.workspace !== null
+      && sameWorkspace(descriptor.workspace, configuredProjectRoot)
+    let assignmentHashMatches = descriptor.assignmentHash === assignment.assignmentHash
+    if (!assignmentHashMatches
+      && workspaceMatchesConfigured
+      && !workspaceMatchesPhysical
+      && !sameWorkspace(configuredProjectRoot, projectRoot)) {
+      try {
+        const configuredRootAssignment = await deriveCodexAssignment({
+          userId: session.user.id,
+          worldId,
+          projectRoot: configuredProjectRoot,
+        })
+        assignmentHashMatches = descriptor.assignmentHash === configuredRootAssignment.assignmentHash
+      } catch {
+        assignmentHashMatches = false
+      }
+    }
     if (descriptor.provider !== "Codex"
       || descriptor.mode !== "delegate"
       || descriptor.workspace === null
-      || (!sameWorkspace(descriptor.workspace, projectRoot)
-        && !sameWorkspace(descriptor.workspace, configuredProjectRoot))
+      || (!workspaceMatchesPhysical && !workspaceMatchesConfigured)
       || descriptor.worldId !== assignment.worldId
       || descriptor.outcomeKey !== assignment.outcomeKey
       || descriptor.workOrderId !== assignment.workOrderId
       || descriptor.grantId !== assignment.grantId
-      || descriptor.assignmentHash !== assignment.assignmentHash
+      || !assignmentHashMatches
       || descriptor.selectedPath !== assignment.selectedPath) {
       return Response.json(
         { error: "THREAD_DESCRIPTOR_MISMATCH" },
