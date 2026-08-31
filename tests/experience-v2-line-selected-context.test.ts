@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { createHash } from "node:crypto"
 
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { createWorkingWorld, type SpaceState, type WorkingWorldSnapshot } from "@/lib/environment/working-world"
 
@@ -18,6 +18,7 @@ const harness = vi.hoisted(() => ({
   startRetainedWork: vi.fn(),
   createDecision: vi.fn(),
   supersedeDecision: vi.fn(),
+  resolveProjectBinding: vi.fn(),
 }))
 
 vi.mock("@/lib/session", () => ({ getUserId: vi.fn(async () => "owner-a") }))
@@ -28,6 +29,9 @@ vi.mock("@/lib/environment/space-persistence", async (importOriginal) => ({
 vi.mock("@/lib/loom/workspace-diff", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/loom/workspace-diff")>(),
   deriveWorkspaceFileDiff: harness.diff,
+}))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: harness.resolveProjectBinding,
 }))
 vi.mock("@/lib/environment/current-work-db", () => ({
   answerCurrentWork: harness.answerCurrentWork,
@@ -58,6 +62,13 @@ vi.mock("@/lib/db", () => ({
 
 const roots: string[] = []
 
+beforeEach(() => {
+  harness.resolveProjectBinding.mockImplementation(async () => ({
+    ok: true,
+    binding: { workspaceRoot: process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd() },
+  }))
+})
+
 afterEach(async () => {
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -68,6 +79,7 @@ afterEach(async () => {
   harness.startRetainedWork.mockReset()
   harness.createDecision.mockReset()
   harness.supersedeDecision.mockReset()
+  harness.resolveProjectBinding.mockReset()
   harness.selectCount = 0
   harness.decisionExists = false
   delete process.env.WILLIAMOS_PROJECT_ROOT
@@ -342,7 +354,11 @@ describe("server-derived Line selected-object grounding", () => {
       runningAppUrl: "http://tf.test:5000/real-preview",
     }
     harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
-    process.env.WILLIAMOS_PROJECT_ROOT = root
+    process.env.WILLIAMOS_PROJECT_ROOT = path.join(root, "raw-configured-alias")
+    harness.resolveProjectBinding.mockResolvedValue({
+      ok: true,
+      binding: { workspaceRoot: root },
+    })
     process.env.WILLIAMOS_WORKSPACE_APP_URL = change === "secret-configuration" || change === "secret-to-valid"
       ? "http://tf.test:5000/real-preview?token=server-secret"
       : "http://tf.test:5000/real-preview"
@@ -534,6 +550,7 @@ describe("server-derived Line selected-object grounding", () => {
 
     expect(response.status).toBe(409)
     await expect(response.json()).resolves.toEqual({ error: "LINE_CONTEXT_STALE" })
+    expect(harness.resolveProjectBinding).toHaveBeenCalledTimes(2)
     expect(harness.diff).toHaveBeenNthCalledWith(1, root, "src/authoritative.ts")
     const system = inferenceBody.messages?.find((message) => message.role === "system")?.content ?? ""
     expect(system).toContain("Current patch (server-derived)")
