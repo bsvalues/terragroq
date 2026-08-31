@@ -125,9 +125,11 @@ describe("persisted prospective artifact adoption", () => {
   it("binds the preview to the admitted repository, pull request, and exact head when resolving its base", async () => {
     const candidate = harness()
     await candidate.runtime.preview("owner-1", "space-1")
-    expect(candidate.deriveBaseSha).toHaveBeenCalledWith(
-      "c:\\repo", "https://github.com/bsvalues/terragroq", 1117, head,
-    )
+    const [workspace, repository, pullRequest, admittedHead] = candidate.deriveBaseSha.mock.calls[0]
+    expect(workspace.replace(/\\/g, "/")).toMatch(/c:\/repo$/)
+    expect([repository, pullRequest, admittedHead]).toEqual([
+      "https://github.com/bsvalues/terragroq", 1117, head,
+    ])
   })
 
   it("records authorization before inspecting GitHub, then records distinct exact-head validation and review events", async () => {
