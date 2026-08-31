@@ -11,8 +11,8 @@ export function normalizeProjectRootForEnv(
 }
 
 export function serializeProjectRootEnvValue(projectRoot: string) {
-  if (/[\u0000-\u001f\u007f']/u.test(projectRoot)) {
-    throw new Error("WILLIAMOS_PROJECT_ROOT cannot contain control characters or a single quote.")
+  if (/[\u0000-\u001f\u007f'$]/u.test(projectRoot)) {
+    throw new Error("WILLIAMOS_PROJECT_ROOT cannot contain control characters, a single quote, or a dollar sign.")
   }
   return `'${projectRoot}'`
 }

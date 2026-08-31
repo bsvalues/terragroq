@@ -27,6 +27,37 @@ function parseWithNextDotenv(input: string): Record<string, string> {
   return (nodeRequire(dotenvEntry) as { parse: (value: string) => Record<string, string> }).parse(input)
 }
 
+function processWithNextEnv(input: string): string | undefined {
+  const nextDirectory = path.dirname(nodeRequire.resolve("next/package.json"))
+  const nextEnvEntry = nodeRequire.resolve("@next/env", { paths: [nextDirectory] })
+  const nextEnv = nodeRequire(nextEnvEntry) as {
+    processEnv: (
+      files: Array<{ path: string; contents: string; env: Record<string, string> }>,
+      directory: string,
+      logger: { error: () => void },
+      forceReload: boolean,
+    ) => [NodeJS.ProcessEnv, Record<string, string>]
+  }
+  const previousRoot = process.env.WILLIAMOS_PROJECT_ROOT
+  const previousProcessed = process.env.__NEXT_PROCESSED_ENV
+  delete process.env.WILLIAMOS_PROJECT_ROOT
+  delete process.env.__NEXT_PROCESSED_ENV
+  try {
+    const [, parsed] = nextEnv.processEnv(
+      [{ path: ".env.local", contents: input, env: {} }],
+      process.cwd(),
+      { error: () => undefined },
+      true,
+    )
+    return parsed.WILLIAMOS_PROJECT_ROOT
+  } finally {
+    if (previousRoot === undefined) delete process.env.WILLIAMOS_PROJECT_ROOT
+    else process.env.WILLIAMOS_PROJECT_ROOT = previousRoot
+    if (previousProcessed === undefined) delete process.env.__NEXT_PROCESSED_ENV
+    else process.env.__NEXT_PROCESSED_ENV = previousProcessed
+  }
+}
+
 describe("POST /api/setup/local-config route contract", () => {
   const originalEnv = process.env
   const projectRoot = path.resolve("/repos/terrafusion_os_1.0")
@@ -150,7 +181,12 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 
-  it.each(["", "relative/terrafusion_os_1.0", path.join(projectRoot, "owner's-checkout")])(
+  it.each([
+    "",
+    "relative/terrafusion_os_1.0",
+    path.join(projectRoot, "owner's-checkout"),
+    path.join(projectRoot, "$workspace"),
+  ])(
     "requires an absolute TerraFusion checkout path (%s)",
     async (invalidProjectRoot) => {
       const req = new Request("http://localhost:3000/api/setup/local-config", {
@@ -179,19 +215,23 @@ describe("POST /api/setup/local-config route contract", () => {
     "\\\\omen\\workspace\\terrafusion_os_1.0",
   ])("round-trips a Windows checkout root through Next's dotenv parser (%s)", (windowsRoot) => {
     const normalized = normalizeProjectRootForEnv(windowsRoot, "win32")
-    const parsed = parseWithNextDotenv(`WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalized)}\n`)
+    const line = `WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalized)}\n`
+    const parsed = parseWithNextDotenv(line)
 
     expect(normalized).not.toContain("\\")
     expect(parsed.WILLIAMOS_PROJECT_ROOT).toBe(normalized)
+    expect(processWithNextEnv(line)).toBe(normalized)
   })
 
   it("preserves a literal backslash in a POSIX checkout root", () => {
     const posixRoot = "/srv/terrafusion\\repo\"quoted"
     const normalized = normalizeProjectRootForEnv(posixRoot, "linux")
-    const parsed = parseWithNextDotenv(`WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalized)}\n`)
+    const line = `WILLIAMOS_PROJECT_ROOT=${serializeProjectRootEnvValue(normalized)}\n`
+    const parsed = parseWithNextDotenv(line)
 
     expect(normalized).toBe(posixRoot)
     expect(parsed.WILLIAMOS_PROJECT_ROOT).toBe(posixRoot)
+    expect(processWithNextEnv(line)).toBe(posixRoot)
   })
 
   it("writes .env.local with expected keys on valid setup payload", async () => {
