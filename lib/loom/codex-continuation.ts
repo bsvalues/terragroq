@@ -59,10 +59,47 @@ export type CodexContinuationEvidenceEvent = Readonly<{
   selectedPath?: string
   committed?: boolean
   terminal?: boolean
+  recordedAt?: string
 }>
 
+export const CODEX_CONTINUATION_ASSIGNMENT_LEASE_MS = 65 * 60_000
+
+function eventMetadata(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>
+  if (typeof value !== "string") return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+/** Normalize the two canonical receipt shapes plus the existing terminal agent event. */
+export function codexContinuationEvidenceEvent(row: Readonly<Record<string, unknown>>): CodexContinuationEvidenceEvent {
+  const facts = eventMetadata(row.metadata)
+  const entityType = String(row.entityType) as CodexContinuationEvidenceEvent["entityType"]
+  const selectedPath = entityType === "loom_codex_assignment"
+    ? (typeof facts?.promotionPath === "string" ? facts.promotionPath : undefined)
+    : (typeof facts?.selectedPath === "string" ? facts.selectedPath : undefined)
+  return {
+    entityType,
+    entityId: String(row.entityId ?? ""),
+    selectedPath,
+    committed: facts?.committed === true,
+    terminal: row.eventType === "LOOP_STOPPED",
+    recordedAt: row.createdAt instanceof Date ? row.createdAt.toISOString()
+      : typeof row.createdAt === "string" ? row.createdAt : undefined,
+  }
+}
+
 /** Reduce existing durable assignment, completion, and terminal facts into live path state. */
-export function deriveCodexPathEvidence(events: readonly CodexContinuationEvidenceEvent[]): Readonly<{
+export function deriveCodexPathEvidence(
+  events: readonly CodexContinuationEvidenceEvent[],
+  nowMs = Date.now(),
+): Readonly<{
   assignedPaths: string[]
   completedPaths: string[]
 }> {
@@ -75,6 +112,8 @@ export function deriveCodexPathEvidence(events: readonly CodexContinuationEviden
   const assignedPaths = events
     .filter((event) => event.entityType === "loom_codex_assignment"
       && event.selectedPath
+      && (!event.recordedAt
+        || nowMs - Date.parse(event.recordedAt) <= CODEX_CONTINUATION_ASSIGNMENT_LEASE_MS)
       && !terminalThreads.has(event.entityId))
     .map((event) => event.selectedPath!)
   return {

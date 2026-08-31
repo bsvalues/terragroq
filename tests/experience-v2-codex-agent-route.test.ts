@@ -15,6 +15,7 @@ const seams = vi.hoisted(() => ({
   commitLoomCodexSuccess: vi.fn(),
   prepareCodexContinuation: vi.fn(),
   readCodexContinuation: vi.fn(),
+  acquireCodexContinuationClaim: vi.fn(),
   poolQuery: vi.fn(),
   connect: vi.fn(),
   readAccount: vi.fn(),
@@ -54,6 +55,7 @@ vi.mock("@/lib/loom/codex-continuation", () => ({
 }))
 vi.mock("@/lib/loom/codex-continuation-runtime", () => ({
   codexContinuationDependencies: {},
+  acquireCodexContinuationClaim: seams.acquireCodexContinuationClaim,
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
 vi.mock("@/scripts/hermes-bridge/app-server-client.mjs", () => ({
@@ -111,6 +113,7 @@ describe("durable Codex delegate route", () => {
     seams.commitLoomCodexSuccess.mockResolvedValue(undefined)
     seams.prepareCodexContinuation.mockResolvedValue({ status: "WORK_ORDER_PATHS_COMPLETE" })
     seams.readCodexContinuation.mockResolvedValue({ status: "NO_ACTIVE_ASSIGNMENT" })
+    seams.acquireCodexContinuationClaim.mockResolvedValue(vi.fn().mockResolvedValue(undefined))
     seams.deriveCodexAssignment.mockResolvedValue({
       owner: "owner-1",
       worldId: "world-1",
@@ -306,6 +309,17 @@ describe("durable Codex delegate route", () => {
     expect(seams.runTurn).toHaveBeenCalledWith(expect.objectContaining({
       prompt: expect.stringContaining("Server-derived continuation task."),
     }))
+  })
+
+  it("refuses a concurrent automatic dispatch when the exact Space claim is held", async () => {
+    seams.acquireCodexContinuationClaim.mockResolvedValue(null)
+
+    const response = await POST(request({ automatic: true }))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "CODEX_CONTINUATION_IN_FLIGHT" })
+    expect(seams.deriveCodexAssignment).not.toHaveBeenCalled()
+    expect(seams.startThread).not.toHaveBeenCalled()
   })
 
   it("rejects browser prompt text on an automatic continuation request", async () => {

@@ -7,6 +7,7 @@ import type {
   CodexContinuationRecord,
 } from "@/lib/loom/codex-continuation"
 import { deriveCodexPathEvidence } from "@/lib/loom/codex-continuation"
+import { codexContinuationEvidenceEvent } from "@/lib/loom/codex-continuation"
 
 type BindingRow = Record<string, unknown>
 
@@ -140,16 +141,21 @@ async function load(userId: string, worldId: string): Promise<CodexContinuationR
   if (!row || bindingResult.rows.length !== 1 || !validBinding(userId, worldId, row)) return null
   const eventResult = await pool.query(
     `WITH scoped AS (
-      SELECT "id", "eventType", "entityType", "entityId", "metadata"
+      SELECT "id", "eventType", "entityType", "entityId", "metadata", "createdAt"
       FROM "governance_event"
       WHERE "userId" = $1
         AND "entityType" IN ('loom_codex_assignment', 'loom_codex_ready')
         AND "metadata"::jsonb ->> 'worldId' = $2
-        AND "metadata"::jsonb ->> 'outcomeKey' = $3
-        AND ("metadata"::jsonb ->> 'workOrderId')::integer = $4
-        AND ("metadata"::jsonb ->> 'grantId')::integer = $5
+        AND CASE WHEN "entityType" = 'loom_codex_assignment'
+          THEN "metadata"::jsonb #>> '{outcome,key}' = $3
+            AND ("metadata"::jsonb #>> '{workOrder,id}')::integer = $4
+            AND ("metadata"::jsonb #>> '{grant,id}')::integer = $5
+          ELSE "metadata"::jsonb ->> 'outcomeKey' = $3
+            AND ("metadata"::jsonb ->> 'workOrderId')::integer = $4
+            AND ("metadata"::jsonb ->> 'grantId')::integer = $5
+        END
     ), terminal AS (
-      SELECT event."id", event."eventType", event."entityType", event."entityId", event."metadata"
+      SELECT event."id", event."eventType", event."entityType", event."entityId", event."metadata", event."createdAt"
       FROM "governance_event" event
       WHERE event."userId" = $1
         AND event."eventType" = 'LOOP_STOPPED'
@@ -164,17 +170,8 @@ async function load(userId: string, worldId: string): Promise<CodexContinuationR
     ORDER BY "id" ASC`,
     [userId, worldId, String(row.outcomeKey), Number(row.workOrderId), Number(row.grantId)],
   )
-  const evidenceEvents = (eventResult.rows as ReadonlyArray<Record<string, unknown>>).map((event) => {
-    const facts = metadata(event.metadata)
-    const selectedPath = typeof facts?.selectedPath === "string" ? facts.selectedPath : null
-    return {
-      entityType: event.entityType as "loom_codex_assignment" | "loom_codex_ready" | "loom_agent",
-      entityId: String(event.entityId ?? ""),
-      selectedPath: selectedPath ?? undefined,
-      committed: facts?.committed === true,
-      terminal: event.eventType === "LOOP_STOPPED",
-    }
-  })
+  const evidenceEvents = (eventResult.rows as ReadonlyArray<Record<string, unknown>>)
+    .map(codexContinuationEvidenceEvent)
   const { assignedPaths, completedPaths } = deriveCodexPathEvidence(evidenceEvents)
   const snapshot = typeof row.worldSnapshot === "string" ? row.worldSnapshot : JSON.stringify(row.worldSnapshot)
   return {
@@ -232,3 +229,37 @@ async function persist(input: Parameters<CodexContinuationDependencies["persist"
 }
 
 export const codexContinuationDependencies: CodexContinuationDependencies = { load, persist }
+
+/** Hold one process-crash-safe database-session claim for an automatic Space dispatch. */
+export async function acquireCodexContinuationClaim(
+  userId: string,
+  worldId: string,
+): Promise<(() => Promise<void>) | null> {
+  const client = await pool.connect()
+  try {
+    const result = await client.query(
+      "SELECT pg_try_advisory_lock(hashtext($1), hashtext($2)) AS acquired",
+      [`williamos-continuation:${userId}`, worldId],
+    )
+    if (result.rows[0]?.acquired !== true) {
+      client.release()
+      return null
+    }
+    let released = false
+    return async () => {
+      if (released) return
+      released = true
+      try {
+        await client.query(
+          "SELECT pg_advisory_unlock(hashtext($1), hashtext($2))",
+          [`williamos-continuation:${userId}`, worldId],
+        )
+      } finally {
+        client.release()
+      }
+    }
+  } catch (error) {
+    client.release()
+    throw error
+  }
+}

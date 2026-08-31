@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import { createWorkingWorld } from "@/lib/environment/working-world"
 import { createDefaultSpace } from "@/lib/environment/space-persistence"
 import {
+  codexContinuationEvidenceEvent,
   deriveCodexPathEvidence,
   planCodexContinuation,
   prepareCodexContinuation,
@@ -11,6 +12,35 @@ import {
 } from "@/lib/loom/codex-continuation"
 
 describe("Experience V2 Codex continuation", () => {
+  it("reads the canonical nested assignment receipt shape and top-level ready receipt shape", () => {
+    const recordedAt = "2026-08-31T17:00:00.000Z"
+    expect([
+      codexContinuationEvidenceEvent({
+        eventType: "EVIDENCE_RECORDED",
+        entityType: "loom_codex_assignment",
+        entityId: "thread-live",
+        createdAt: recordedAt,
+        metadata: {
+          worldId: "world-1",
+          outcome: { key: "OUTCOME-1" },
+          workOrder: { id: 42 },
+          grant: { id: 17 },
+          promotionPath: "b.ts",
+        },
+      }),
+      codexContinuationEvidenceEvent({
+        eventType: "EVIDENCE_RECORDED",
+        entityType: "loom_codex_ready",
+        entityId: "thread-ready",
+        createdAt: recordedAt,
+        metadata: { selectedPath: "a.ts", committed: true },
+      }),
+    ]).toEqual([
+      { entityType: "loom_codex_assignment", entityId: "thread-live", selectedPath: "b.ts", committed: false, terminal: false, recordedAt },
+      { entityType: "loom_codex_ready", entityId: "thread-ready", selectedPath: "a.ts", committed: true, terminal: false, recordedAt },
+    ])
+  })
+
   it("does not leave a terminal failed assignment permanently in flight", () => {
     expect(deriveCodexPathEvidence([
       { entityType: "loom_codex_assignment", entityId: "thread-failed", selectedPath: "b.ts" },
@@ -20,6 +50,20 @@ describe("Experience V2 Codex continuation", () => {
     ])).toEqual({
       assignedPaths: ["c.ts"],
       completedPaths: ["a.ts"],
+    })
+  })
+
+  it("releases an abandoned assignment after the bounded execution lease", () => {
+    expect(deriveCodexPathEvidence([
+      {
+        entityType: "loom_codex_assignment",
+        entityId: "thread-abandoned",
+        selectedPath: "b.ts",
+        recordedAt: "2026-08-31T15:00:00.000Z",
+      },
+    ], Date.parse("2026-08-31T17:00:01.000Z"))).toEqual({
+      assignedPaths: [],
+      completedPaths: [],
     })
   })
 

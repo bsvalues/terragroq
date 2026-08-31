@@ -14,7 +14,10 @@ import {
   type CodexAssignment,
 } from "@/lib/loom/codex-assignment"
 import { prepareCodexContinuation, readCodexContinuation } from "@/lib/loom/codex-continuation"
-import { codexContinuationDependencies } from "@/lib/loom/codex-continuation-runtime"
+import {
+  acquireCodexContinuationClaim,
+  codexContinuationDependencies,
+} from "@/lib/loom/codex-continuation-runtime"
 import {
   cleanupCodexIsolatedWorkspace,
   createCodexIsolatedWorkspace,
@@ -137,6 +140,23 @@ export async function POST(request: Request) {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
 
+  let releaseContinuationClaim: (() => Promise<void>) | null = null
+  if (automatic) {
+    releaseContinuationClaim = await acquireCodexContinuationClaim(session.user.id, worldId)
+    if (!releaseContinuationClaim) {
+      return Response.json(
+        { error: "CODEX_CONTINUATION_IN_FLIGHT" },
+        { status: 409, headers: { "cache-control": "no-store" } },
+      )
+    }
+  }
+  const releaseClaim = async () => {
+    if (!releaseContinuationClaim) return
+    const release = releaseContinuationClaim
+    releaseContinuationClaim = null
+    await release()
+  }
+
   let assignment: CodexAssignment
   try {
     assignment = await deriveCodexAssignment({
@@ -145,6 +165,7 @@ export async function POST(request: Request) {
       projectRoot: PROJECT_ROOT,
     })
   } catch (error) {
+    await releaseClaim()
     const code = typeof (error as { code?: unknown })?.code === "string"
       ? String((error as { code: string }).code)
       : "CODEX_ASSIGNMENT_REFUSED"
@@ -163,6 +184,7 @@ export async function POST(request: Request) {
     )
     if (continuation.status !== "NEXT_ASSIGNMENT"
       || continuation.selectedPath !== assignment.selectedPath) {
+      await releaseClaim()
       return Response.json(
         { error: "CODEX_CONTINUATION_NOT_PENDING" },
         { status: 409, headers: { "cache-control": "no-store" } },
@@ -571,6 +593,7 @@ export async function POST(request: Request) {
           done(reason, null)
         } finally {
           try { await closeClientAndWait() } catch { /* failure already settled above */ }
+          try { await releaseClaim() } catch { /* the completed stream already carries terminal truth */ }
         }
       })()
     },

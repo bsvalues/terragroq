@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { StrictMode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
@@ -96,6 +97,37 @@ describe("Experience V2 real agent sessions", () => {
     expect(onAutoContinuation).toHaveBeenCalledWith({ status: "WORK_ORDER_PATHS_COMPLETE" })
     expect(String(fetcher.mock.calls[0]?.[0])).toBe("/api/loom/codex/continuation?worldId=world-1")
     expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ automatic: true })
+  })
+
+  it("restores and starts a pending continuation during the Strict Mode effect replay", async () => {
+    let resolveContinuation!: (response: Response) => void
+    const continuationResponse = new Promise<Response>((resolve) => { resolveContinuation = resolve })
+    const fetcher = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).startsWith("/api/loom/codex/continuation")) {
+        return continuationResponse
+      }
+      return Promise.resolve(ndjson(
+        { type: "session", sessionId: "codex-strict-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
+        { type: "result", text: "Strict continuation completed." },
+        { type: "done", code: 0, reason: null },
+      ))
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<StrictMode><Harness autoContinue /></StrictMode>)
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1))
+    await act(async () => resolveContinuation(Response.json({
+      status: "NEXT_ASSIGNMENT",
+      selectedPath: "src/other.ts",
+      task: "Continue the bound Work Order in src/other.ts.",
+    })))
+
+    await waitFor(() => expect(expose!.savedSessions).toEqual([
+      expect.objectContaining({ sessionId: "codex-strict-next" }),
+    ]))
+    expect(fetcher.mock.calls.filter(([input]) => !String(input).includes("/continuation?"))).toHaveLength(1)
   })
 
   it("continues a server-derived Codex assignment without another owner action", async () => {

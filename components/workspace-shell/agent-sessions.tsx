@@ -1461,7 +1461,10 @@ export function useExperienceAgentSessions({
       .catch((cause) => {
         if (!cancelled) setError(cause instanceof Error ? cause.message : "CODEX_CONTINUATION_UNAVAILABLE")
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      if (autoContinuationAttemptRef.current === attemptKey) autoContinuationAttemptRef.current = null
+    }
   }, [autoContinue, loadedStorageKey, onAutoContinuation, ownerScope, runAgentTurn, worldId, worldScope])
   const runClaudeTurn = useCallback((input: RunClaudeTurnInput) => executeTurn({ ...input, provider: "Claude" }), [executeTurn])
   const runPreviewDiagnostic = useCallback((input: RunPreviewDiagnosticInput) => executeTurn({
