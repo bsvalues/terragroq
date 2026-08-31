@@ -159,6 +159,37 @@ describe("persisted prospective artifact adoption", () => {
     expect(events.filter((event) => event.type === "EVIDENCE_RECORDED")).toHaveLength(1)
   })
 
+  it("permits only the exact self-referential delivery check before sealing", async () => {
+    const candidate = harness()
+    const preview = await candidate.runtime.preview("owner-1", "space-1")
+    await candidate.runtime.authorize("owner-1", "space-1", "adopt:1117:self-seal", preview.previewDigest)
+    candidate.lifecycle.inspectPullRequest.mockResolvedValue({
+      number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "",
+      checksGreen: false, checksComplete: true,
+      failedChecks: [{ name: "WilliamOS assignment delivery seal", state: "FAILURE" }],
+      pendingChecks: [], reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0,
+    })
+    await expect(candidate.runtime.issue("owner-1", "space-1", "adopt:1117:self-seal"))
+      .resolves.toMatchObject({ status: "SEALED" })
+  })
+
+  it.each([
+    ["another failed check", [{ name: "WilliamOS assignment delivery seal", state: "FAILURE" }, { name: "vitest", state: "FAILURE" }], []],
+    ["another pending check", [{ name: "WilliamOS assignment delivery seal", state: "FAILURE" }], [{ name: "production build", state: "IN_PROGRESS" }]],
+    ["no observed checks", [], []],
+  ])("fails closed with %s while the delivery check is unsealed", async (_label, failedChecks, pendingChecks) => {
+    const candidate = harness()
+    const preview = await candidate.runtime.preview("owner-1", "space-1")
+    await candidate.runtime.authorize("owner-1", "space-1", `adopt:1117:${_label}`, preview.previewDigest)
+    candidate.lifecycle.inspectPullRequest.mockResolvedValue({
+      number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "",
+      checksGreen: false, checksComplete: pendingChecks.length === 0,
+      failedChecks, pendingChecks, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0,
+    })
+    await expect(candidate.runtime.issue("owner-1", "space-1", `adopt:1117:${_label}`))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
+  })
+
   it("fails closed when the trusted pull request is no longer open", async () => {
     const candidate = harness()
     const preview = await candidate.runtime.preview("owner-1", "space-1")

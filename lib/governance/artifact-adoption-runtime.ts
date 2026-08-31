@@ -26,6 +26,7 @@ const SHA = /^[0-9a-f]{40}$/
 const WORKSPACE_RESOURCE = "williamos-workspace-root:v1:"
 const ADMISSION_OPERATION = "space.external_work_order.admit"
 const SUPPORTED_REPOSITORY = "bsvalues/terragroq"
+const DELIVERY_SEAL_CHECK = "WilliamOS assignment delivery seal"
 
 type QueryResult = { rows: Record<string, unknown>[] }
 type Queryable = { query(sql: string, values?: readonly unknown[]): Promise<QueryResult> }
@@ -83,6 +84,17 @@ function exactPaths(value: unknown): string[] {
 
 function same(left: readonly string[], right: readonly string[]): boolean {
   return JSON.stringify([...left].sort()) === JSON.stringify([...right].sort())
+}
+
+function checkRows(value: unknown): ReadonlyArray<Readonly<{ name: string; state: string }>> {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return []
+    const row = entry as Record<string, unknown>
+    return typeof row.name === "string" && typeof row.state === "string"
+      ? [{ name: row.name, state: row.state }]
+      : []
+  })
 }
 
 function iso(value: unknown): string {
@@ -276,9 +288,19 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
         headSha,
         paths: inspectedPaths,
       }
+      const failedChecks = checkRows(pullRequest.failedChecks)
+      const pendingChecks = checkRows(pullRequest.pendingChecks)
+      const blockedChecks = [...failedChecks, ...pendingChecks]
+      // The delivery check cannot pass until this seal exists. During prospective issuance only,
+      // disregard that one exact self-referential check while requiring every other check to be
+      // complete and green. The protected workflow still verifies the resulting seal afterward.
+      const onlySelfSealBlocked = blockedChecks.length > 0
+        && blockedChecks.every((check) => check.name === DELIVERY_SEAL_CHECK)
+      const checksComplete = pullRequest.checksComplete === true
+        || (onlySelfSealBlocked && pendingChecks.every((check) => check.name === DELIVERY_SEAL_CHECK))
+      const checksGreen = pullRequest.checksGreen === true || (onlySelfSealBlocked && checksComplete)
       const validation = {
-        ...common, checksGreen: pullRequest.checksGreen === true, checksComplete: pullRequest.checksComplete === true,
-        failedChecks: pullRequest.failedChecks ?? [], pendingChecks: pullRequest.pendingChecks ?? [],
+        ...common, checksGreen, checksComplete, failedChecks, pendingChecks,
       }
       const review = {
         ...common, reviewed: pullRequest.reviewed === true, reviewCompleted: pullRequest.reviewCompleted === true,
