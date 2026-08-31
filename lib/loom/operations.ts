@@ -147,65 +147,15 @@ export function findLoomOperation(id: unknown): LoomOperation | null {
   return LOOM_OPERATIONS.find((operation) => operation.id === id) ?? null
 }
 
-const GIT_STATUS_FLAGS = new Set([
-  "--short", "-s", "--branch", "-b", "--porcelain", "--porcelain=v1",
-  "--untracked-files=no", "--untracked-files=normal", "--untracked-files=all",
-])
-const GIT_DIFF_FLAGS = new Set(["--stat", "--name-only", "--name-status", "--check", "--compact-summary", "HEAD"])
-const GIT_LOG_FLAGS = new Set(["--oneline", "--decorate", "--no-decorate", "--stat", "--name-status"])
-
-function resolveReadOnlyGitCommand(tokens: readonly string[], alias: string): LoomOperation | null {
-  const [, subcommand, ...args] = tokens
-  const id = subcommand === "status" ? "repo.status" : subcommand === "diff" ? "repo.diff" : subcommand === "log" ? "repo.log" : null
-  if (!id) return null
-  const base = findLoomOperation(id)
-  if (!base) return null
-
-  const seen = new Set<string>()
-  let logLimit = false
-  for (const argument of args) {
-    if (seen.has(argument)) return null
-    seen.add(argument)
-    if (subcommand === "status" && GIT_STATUS_FLAGS.has(argument)) continue
-    if (subcommand === "diff" && GIT_DIFF_FLAGS.has(argument)) continue
-    if (subcommand === "log" && GIT_LOG_FLAGS.has(argument)) continue
-    if (subcommand === "log" && /^-[1-9]\d{0,2}$/.test(argument) && Number(argument.slice(1)) <= 100 && !logLimit) {
-      logLimit = true
-      continue
-    }
-    return null
-  }
-  const boundedArgs = subcommand === "log" && !logLimit ? [...args, "-20"] : args
-  return { ...base, args: [subcommand, ...boundedArgs], terminalAlias: alias }
-}
-
-/**
- * Resolve one command from the bounded Project Terminal grammar.
- *
- * The browser may supply text, but only these read-only Git inspection forms become argv. The
- * executable remains fixed, every argument is independently allowlisted, and execution never uses a
- * shell. Quotes, paths, revisions, redirects, pipes, separators, config overrides and mutating Git
- * subcommands therefore fail closed.
- */
-export function resolveProjectTerminalCommand(input: unknown): LoomOperation | null {
-  if (typeof input !== "string" || input.length > 160 || input.includes("\0")) return null
-  const alias = input.trim().replace(/\s+/g, " ")
-  if (!alias) return null
-  const fixed = LOOM_OPERATIONS.find((operation) => (
+/** Resolve one whole alias to an existing non-mutating project operation. No token is parsed. */
+export function resolveProjectTerminalAlias(input: unknown): LoomOperation | null {
+  if (typeof input !== "string") return null
+  const alias = input.trim()
+  return LOOM_OPERATIONS.find((operation) => (
     operation.scope === "project"
     && operation.mutating === false
     && operation.terminalAlias === alias
-  ))
-  if (fixed) return fixed
-  if (!/^[A-Za-z0-9=._\- ]+$/.test(alias)) return null
-  const tokens = alias.split(" ")
-  if (tokens[0] !== "git") return null
-  return resolveReadOnlyGitCommand(tokens, alias)
-}
-
-/** Compatibility name retained for callers that consume the terminal's canonical command text. */
-export function resolveProjectTerminalAlias(input: unknown): LoomOperation | null {
-  return resolveProjectTerminalCommand(input)
+  )) ?? null
 }
 
 export type LoomOperationRefusal = "UNKNOWN_OPERATION" | "CONFIRMATION_REQUIRED"

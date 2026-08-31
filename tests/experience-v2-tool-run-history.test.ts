@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { resolveProjectTerminalAlias, resolveProjectTerminalCommand } from "@/lib/loom/operations"
+import { resolveProjectTerminalAlias } from "@/lib/loom/operations"
 import {
   loadToolRunHistory,
   persistToolRunTranscript,
@@ -29,43 +29,14 @@ function transcript(index: number, text = `output ${index}`): ToolRunTranscript 
 }
 
 describe("Experience V2 bounded tool transcript history", () => {
-  it("resolves stable actions and bounded read-only Git inspection arguments", () => {
+  it("resolves exact stable aliases and refuses unknown text or added arguments", () => {
     expect(resolveProjectTerminalAlias("git status")?.id).toBe("repo.status")
     expect(resolveProjectTerminalAlias("git diff")?.id).toBe("repo.diff")
     expect(resolveProjectTerminalAlias("git log")?.id).toBe("repo.log")
     expect(resolveProjectTerminalAlias("build")?.id).toBe("build.run")
-    expect(resolveProjectTerminalAlias("git status --short")).toMatchObject({
-      id: "repo.status",
-      command: "git",
-      args: ["status", "--short"],
-      terminalAlias: "git status --short",
-    })
-    expect(resolveProjectTerminalCommand("git diff --name-status HEAD")?.args).toEqual(["diff", "--name-status", "HEAD"])
-    expect(resolveProjectTerminalCommand("git log --oneline")?.args).toEqual(["log", "--oneline", "-20"])
-    expect(resolveProjectTerminalCommand("git log --oneline -25")?.args).toEqual(["log", "--oneline", "-25"])
+    expect(resolveProjectTerminalAlias("git status --short")).toBeNull()
     expect(resolveProjectTerminalAlias("rm -rf .")).toBeNull()
     expect(resolveProjectTerminalAlias("powershell Get-ChildItem")).toBeNull()
-  })
-
-  it("fails closed for mutations, shell syntax, paths, revisions, config overrides and excessive log limits", () => {
-    for (const command of [
-      "git checkout main",
-      "git status && whoami",
-      "git diff -- ../../secret",
-      "git diff main",
-      "git -c core.pager=cat status",
-      "git log -101",
-      "git log -10 -20",
-      "git status --short --short",
-    ]) expect(resolveProjectTerminalCommand(command)).toBeNull()
-  })
-
-  it("accepts a persisted transcript for the exact bounded command that produced it", () => {
-    const storage = new MemoryStorage()
-    const bounded = { ...transcript(0), alias: "git status --short" }
-
-    expect(persistToolRunTranscript(storage, "server:world-a", bounded).ok).toBe(true)
-    expect(loadToolRunHistory(storage, "server:world-a").runs[0]?.alias).toBe("git status --short")
   })
 
   it("scopes history to the exact server world or opaque browser fallback", () => {

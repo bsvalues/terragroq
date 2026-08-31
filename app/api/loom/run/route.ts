@@ -2,7 +2,7 @@ import { spawn } from "node:child_process"
 
 
 import { getSession } from "@/lib/session"
-import { resolveLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
+import { resolveLoomOperation } from "@/lib/loom/operations"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
 
@@ -21,31 +21,22 @@ const MAX_OUTPUT_BYTES = 2_000_000
  * stream, the best a page can do is poll a summary. Here the operator sees the same bytes the machine
  * is producing, at the moment it produces them, and closing the tab kills the process.
  *
- * Safety comes from the catalogue plus the bounded Project Terminal grammar. Fixed actions retain
- * their constant argv. Typed read-only Git inspections are re-derived on the server from an
- * individually allowlisted subcommand and flags. The executable is fixed, the operation id must
- * match the derived command, and nothing is executed through a shell.
+ * Safety comes from the catalogue, not from parsing: the request names an id, the argv is a constant
+ * in this repository, and nothing is executed through a shell. There is no place for operator text to
+ * become part of a command.
  */
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
 
-  let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown }
+  let body: { operation?: unknown; confirmed?: unknown }
   try {
     body = await request.json()
   } catch {
     return Response.json({ error: "BAD_REQUEST" }, { status: 400 })
   }
 
-  const terminalOperation = body.terminalCommand === undefined ? null : resolveProjectTerminalCommand(body.terminalCommand)
-  const resolution = terminalOperation
-    ? terminalOperation.id === body.operation
-      ? { ok: true, operation: terminalOperation }
-      : { ok: false, refusal: "UNKNOWN_OPERATION" as const }
-    : resolveLoomOperation(body.operation, { confirmed: body.confirmed === true })
-  if (body.terminalCommand !== undefined && !terminalOperation) {
-    return Response.json({ error: "UNSUPPORTED_TERMINAL_COMMAND" }, { status: 404 })
-  }
+  const resolution = resolveLoomOperation(body.operation, { confirmed: body.confirmed === true })
   if (!resolution.ok || !resolution.operation) {
     return Response.json({ error: resolution.refusal }, { status: resolution.refusal === "UNKNOWN_OPERATION" ? 404 : 409 })
   }
