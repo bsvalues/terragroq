@@ -20,6 +20,8 @@ export type CodexContinuationInput = Readonly<{
 export type CodexContinuationPlan =
   | Readonly<{ status: "NEXT_ASSIGNMENT"; selectedPath: string; task: string }>
   | Readonly<{ status: "ASSIGNMENT_IN_FLIGHT"; selectedPath: string }>
+  | Readonly<{ status: "PATH_RESERVATION_NOT_EXACT"; reservation: string }>
+  | Readonly<{ status: "PATH_RESERVATION_UNAVAILABLE"; selectedPath: string }>
   | Readonly<{ status: "WAITING_FOR_FIRST_ASSIGNMENT" }>
   | Readonly<{ status: "WORK_ORDER_PATHS_COMPLETE" }>
 
@@ -41,6 +43,7 @@ export type CodexContinuationRecord = Readonly<{
 
 export type CodexContinuationDependencies = Readonly<{
   load: (userId: string, worldId: string) => Promise<CodexContinuationRecord | null>
+  inspectTarget: (selectedPath: string) => Promise<boolean>
   persist: (input: Readonly<{
     userId: string
     worldId: string
@@ -126,6 +129,12 @@ function normalizedPaths(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim().replace(/\\/g, "/")).filter(Boolean))]
 }
 
+function isExactFileReservation(value: string): boolean {
+  return value !== "."
+    && !value.endsWith("/")
+    && !/[?*\[\]{}]/.test(value)
+}
+
 function continuationTask(input: CodexContinuationInput, selectedPath: string): string {
   return [
     `Continue Work Order ${input.workOrderId}: ${input.title}.`,
@@ -155,6 +164,9 @@ export function planCodexContinuation(input: CodexContinuationInput): CodexConti
   for (const selectedPath of allowed) {
     if (completed.has(selectedPath)) continue
     if (assigned.has(selectedPath)) return { status: "ASSIGNMENT_IN_FLIGHT", selectedPath }
+    if (!isExactFileReservation(selectedPath)) {
+      return { status: "PATH_RESERVATION_NOT_EXACT", reservation: selectedPath }
+    }
     return {
       status: "NEXT_ASSIGNMENT",
       selectedPath,
@@ -231,6 +243,9 @@ export async function prepareCodexContinuation(
       assignedPaths: record.assignedPaths,
     })
     if (plan.status !== "NEXT_ASSIGNMENT") return plan
+    if (!await dependencies.inspectTarget(plan.selectedPath)) {
+      return { status: "PATH_RESERVATION_UNAVAILABLE", selectedPath: plan.selectedPath }
+    }
     const nextWorld = selectContinuationPath(record.world, plan.selectedPath)
     if (nextWorld === record.world) return plan
     const persisted = await dependencies.persist({
@@ -255,7 +270,7 @@ export async function readCodexContinuation(
 ): Promise<CodexContinuationPlan | Readonly<{ status: "NO_ACTIVE_ASSIGNMENT" }>> {
   const record = await dependencies.load(userId, worldId)
   if (!record) return { status: "NO_ACTIVE_ASSIGNMENT" }
-  return planCodexContinuation({
+  const plan = planCodexContinuation({
     worldId,
     outcomeKey: record.outcomeKey,
     workOrderId: record.workOrderId,
@@ -268,4 +283,8 @@ export async function readCodexContinuation(
     completedPaths: record.completedPaths,
     assignedPaths: record.assignedPaths,
   })
+  if (plan.status === "NEXT_ASSIGNMENT" && !await dependencies.inspectTarget(plan.selectedPath)) {
+    return { status: "PATH_RESERVATION_UNAVAILABLE", selectedPath: plan.selectedPath }
+  }
+  return plan
 }

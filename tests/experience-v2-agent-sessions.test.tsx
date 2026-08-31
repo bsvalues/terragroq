@@ -99,6 +99,82 @@ describe("Experience V2 real agent sessions", () => {
     expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({ automatic: true })
   })
 
+  it("starts a restored automatic assignment as a fresh session even when an older saved session matches its path", async () => {
+    const key = "williamos:agent-session:owner-1:terrafusion"
+    window.localStorage.setItem(key, JSON.stringify({
+      schemaVersion: 3,
+      selectedSessionKey: "Codex:codex-old-other",
+      sessions: [{
+        schemaVersion: 1,
+        sessionId: "codex-old-other",
+        role: "Builder",
+        provider: "Codex",
+        assignment: "src/other.ts",
+        target: { kind: "file", path: "src/other.ts" },
+        updatedAt: "2026-08-30T05:00:00.000Z",
+        completedTurns: [],
+      }],
+    }))
+    const fetcher = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).startsWith("/api/loom/codex/continuation")) {
+        return Promise.resolve(Response.json({
+          status: "NEXT_ASSIGNMENT",
+          selectedPath: "src/other.ts",
+          task: "Continue the current Work Order in src/other.ts.",
+        }))
+      }
+      return Promise.resolve(ndjson(
+        { type: "session", sessionId: "codex-fresh-other", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
+        { type: "result", text: "Fresh automatic continuation completed." },
+        { type: "done", code: 0, reason: null },
+      ))
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<Harness autoContinue />)
+
+    await waitFor(() => expect(expose!.savedSessions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: "codex-fresh-other" }),
+    ])))
+    expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toMatchObject({
+      automatic: true,
+      sessionId: null,
+      resume: false,
+    })
+    expect(expose!.error).toBeNull()
+  })
+
+  it("retries a transient continuation read and starts the pending assignment without a reload", async () => {
+    let continuationReads = 0
+    const fetcher = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      if (String(input).startsWith("/api/loom/codex/continuation")) {
+        continuationReads += 1
+        if (continuationReads === 1) return Promise.resolve(Response.json({ error: "TEMPORARY" }, { status: 503 }))
+        return Promise.resolve(Response.json({
+          status: "NEXT_ASSIGNMENT",
+          selectedPath: "src/other.ts",
+          task: "Continue after a transient read failure.",
+        }))
+      }
+      return Promise.resolve(ndjson(
+        { type: "session", sessionId: "codex-retried-next", provider: "Codex", mode: "delegate", resumed: false, selectedPath: "src/other.ts", assignmentHash: ASSIGNMENT_HASH },
+        { type: "continuation", status: "WORK_ORDER_PATHS_COMPLETE" },
+        { type: "result", text: "Retried continuation completed." },
+        { type: "done", code: 0, reason: null },
+      ))
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<Harness autoContinue />)
+
+    await waitFor(() => expect(expose!.savedSessions).toEqual([
+      expect.objectContaining({ sessionId: "codex-retried-next" }),
+    ]), { timeout: 2_000 })
+    expect(continuationReads).toBe(2)
+    expect(fetcher).toHaveBeenCalledTimes(3)
+  })
+
   it("restores and starts a pending continuation during the Strict Mode effect replay", async () => {
     let resolveContinuation!: (response: Response) => void
     const continuationResponse = new Promise<Response>((resolve) => { resolveContinuation = resolve })

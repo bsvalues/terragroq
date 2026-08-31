@@ -311,6 +311,23 @@ describe("durable Codex delegate route", () => {
     }))
   })
 
+  it("reapplies the prompt limit to a server-derived automatic task", async () => {
+    const release = vi.fn().mockResolvedValue(undefined)
+    seams.acquireCodexContinuationClaim.mockResolvedValue(release)
+    seams.readCodexContinuation.mockResolvedValueOnce({
+      status: "NEXT_ASSIGNMENT",
+      selectedPath: "src/selected.ts",
+      task: "x".repeat(32_001),
+    })
+
+    const response = await POST(request({ automatic: true }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "PROMPT_TOO_LONG" })
+    expect(release).toHaveBeenCalledTimes(1)
+    expect(seams.startThread).not.toHaveBeenCalled()
+  })
+
   it("refuses a concurrent automatic dispatch when the exact Space claim is held", async () => {
     seams.acquireCodexContinuationClaim.mockResolvedValue(null)
 

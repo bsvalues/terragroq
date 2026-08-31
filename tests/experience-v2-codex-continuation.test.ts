@@ -120,6 +120,25 @@ describe("Experience V2 Codex continuation", () => {
     })).toMatchObject({ status: "NEXT_ASSIGNMENT", selectedPath: "b.ts" })
   })
 
+  it.each(["lib/environment/", "tests/**", "src/[legacy].ts"])(
+    "does not turn a broad reservation into a literal file assignment: %s",
+    (reservation) => {
+      expect(planCodexContinuation({
+        worldId: "experience-v2",
+        outcomeKey: "OUTCOME-EXPERIENCE-V2",
+        workOrderId: 42,
+        grantId: 17,
+        title: "Continue safely",
+        objective: "Use only a concrete file.",
+        acceptanceCriteria: ["Do not dispatch a broad reservation."],
+        validators: ["pnpm test"],
+        allowedPaths: ["a.ts", reservation],
+        completedPaths: ["a.ts"],
+        assignedPaths: [],
+      })).toEqual({ status: "PATH_RESERVATION_NOT_EXACT", reservation })
+    },
+  )
+
   it("settles when every reserved path has durable completion evidence", () => {
     expect(planCodexContinuation({
       worldId: "experience-v2",
@@ -231,6 +250,7 @@ describe("Experience V2 Codex continuation", () => {
         completedPaths: ["lib/loom/codex-continuation.ts"],
         assignedPaths: [],
       }),
+      inspectTarget: vi.fn().mockResolvedValue(true),
       persist,
     })
 
@@ -276,6 +296,7 @@ describe("Experience V2 Codex continuation", () => {
         completedPaths: ["a.ts"],
         assignedPaths: [],
       }),
+      inspectTarget: vi.fn().mockResolvedValue(true),
       persist: vi.fn(),
     })).rejects.toThrow("CODEX_CONTINUATION_AUTHORITY_CHANGED")
   })
@@ -301,10 +322,54 @@ describe("Experience V2 Codex continuation", () => {
       assignedPaths: [],
     })
 
-    const first = await readCodexContinuation("owner", "experience-v2", { load, persist: vi.fn() })
-    const restored = await readCodexContinuation("owner", "experience-v2", { load, persist: vi.fn() })
+    const inspectTarget = vi.fn().mockResolvedValue(true)
+    const first = await readCodexContinuation("owner", "experience-v2", { load, inspectTarget, persist: vi.fn() })
+    const restored = await readCodexContinuation("owner", "experience-v2", { load, inspectTarget, persist: vi.fn() })
 
     expect(restored).toEqual(first)
     expect(first).toMatchObject({ status: "NEXT_ASSIGNMENT", selectedPath: "b.ts" })
+  })
+
+  it("does not persist or restore a syntactically exact reservation unless it is a tracked regular file", async () => {
+    const world = {
+      ...createWorkingWorld({ intent: "Finish Experience V2" }),
+      space: createDefaultSpace(null),
+    }
+    const load = vi.fn().mockResolvedValue({
+      snapshot: JSON.stringify(world),
+      authorityVersion: "authority-v1",
+      world,
+      outcomeKey: "OUTCOME-EXPERIENCE-V2",
+      workOrderId: 42,
+      grantId: 17,
+      title: "Continue",
+      objective: "Keep building.",
+      acceptanceCriteria: ["Start only a real file."],
+      validators: ["pnpm test"],
+      allowedPaths: ["a.ts", "missing-file.ts"],
+      completedPaths: ["a.ts"],
+      assignedPaths: [],
+    })
+    const inspectTarget = vi.fn().mockResolvedValue(false)
+    const persist = vi.fn()
+
+    await expect(prepareCodexContinuation({
+      userId: "owner",
+      worldId: "experience-v2",
+      outcomeKey: "OUTCOME-EXPERIENCE-V2",
+      workOrderId: 42,
+      grantId: 17,
+      completedPath: "a.ts",
+    }, { load, inspectTarget, persist })).resolves.toEqual({
+      status: "PATH_RESERVATION_UNAVAILABLE",
+      selectedPath: "missing-file.ts",
+    })
+    await expect(readCodexContinuation("owner", "experience-v2", {
+      load, inspectTarget, persist,
+    })).resolves.toEqual({
+      status: "PATH_RESERVATION_UNAVAILABLE",
+      selectedPath: "missing-file.ts",
+    })
+    expect(persist).not.toHaveBeenCalled()
   })
 })

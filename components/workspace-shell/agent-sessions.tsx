@@ -967,7 +967,7 @@ export function useExperienceAgentSessions({
       && verifiedSessionsRef.current.some((session) => sessionKey(session.provider, session.sessionId) === sessionKey(storedPrior.provider, storedPrior.sessionId))
       ? storedPrior : null
     if (forkMode && !forkSource) throw new Error("AGENT_FORK_UNAVAILABLE")
-    const prior = input.exactContinuation ? requiredPrior : forkMode ? null : mode === "review"
+    const prior = input.automatic ? null : input.exactContinuation ? requiredPrior : forkMode ? null : mode === "review"
       ? requiredPrior ?? (storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer" && storedPrior.reviewPath === reviewPath ? storedPrior : null)
       : diffReviewMode
         ? requiredPrior ?? (storedPrior?.provider === "Claude" && storedPrior.role === "Reviewer"
@@ -1434,20 +1434,44 @@ export function useExperienceAgentSessions({
     const exactStorageKey = storageKey(ownerScope, worldScope)
     if (!autoContinue || !worldId || loadedStorageKey !== exactStorageKey
       || operationsRef.current.size > 0) return
-    const attemptKey = `${exactStorageKey}:${worldId}`
+    const exactWorldId = worldId
+    const attemptKey = `${exactStorageKey}:${exactWorldId}`
     if (autoContinuationAttemptRef.current === attemptKey) return
     autoContinuationAttemptRef.current = attemptKey
     let cancelled = false
-    void fetch(`/api/loom/codex/continuation?worldId=${encodeURIComponent(worldId)}`, { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) return null
-        return response.json() as Promise<Record<string, unknown>>
-      })
-      .then(async (continuation) => {
-        if (cancelled || continuation?.status !== "NEXT_ASSIGNMENT") return
-        const selectedPath = canonicalWorkspaceFilePath(continuation.selectedPath)
-        const task = boundedText(continuation.task, 20_000)
-        if (!selectedPath || !task) return
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    function retry(attempt: number) {
+      retryTimer = setTimeout(() => { void read(attempt + 1) }, attempt * 250)
+    }
+    const settleReadFailure = (cause?: unknown) => {
+      if (autoContinuationAttemptRef.current === attemptKey) autoContinuationAttemptRef.current = null
+      setError(cause instanceof Error ? cause.message : "CODEX_CONTINUATION_UNAVAILABLE")
+    }
+    async function read(attempt: number): Promise<void> {
+      let response: Response
+      try {
+        response = await fetch(`/api/loom/codex/continuation?worldId=${encodeURIComponent(exactWorldId)}`, { cache: "no-store" })
+      } catch (cause) {
+        if (cancelled) return
+        if (attempt < 3) return retry(attempt)
+        return settleReadFailure(cause)
+      }
+      if (cancelled) return
+      if (!response.ok) {
+        if (attempt < 3) return retry(attempt)
+        return settleReadFailure()
+      }
+      let continuation: Record<string, unknown>
+      try {
+        continuation = await response.json() as Record<string, unknown>
+      } catch (cause) {
+        return settleReadFailure(cause)
+      }
+      if (cancelled || continuation.status !== "NEXT_ASSIGNMENT") return
+      const selectedPath = canonicalWorkspaceFilePath(continuation.selectedPath)
+      const task = boundedText(continuation.task, 20_000)
+      if (!selectedPath || !task) return
+      try {
         await runAgentTurn({
           provider: "Codex",
           role: "Builder",
@@ -1457,12 +1481,14 @@ export function useExperienceAgentSessions({
           automatic: true,
           onContinuation: onAutoContinuation,
         })
-      })
-      .catch((cause) => {
+      } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : "CODEX_CONTINUATION_UNAVAILABLE")
-      })
+      }
+    }
+    void read(1)
     return () => {
       cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
       if (autoContinuationAttemptRef.current === attemptKey) autoContinuationAttemptRef.current = null
     }
   }, [autoContinue, loadedStorageKey, onAutoContinuation, ownerScope, runAgentTurn, worldId, worldScope])

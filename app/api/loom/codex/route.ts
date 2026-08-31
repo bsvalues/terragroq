@@ -197,6 +197,10 @@ export async function POST(request: Request) {
       )
     }
     prompt = continuation.task
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      await releaseClaim()
+      return Response.json({ error: "PROMPT_TOO_LONG" }, { status: 400 })
+    }
   }
 
   if (resuming) {
