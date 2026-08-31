@@ -57,6 +57,9 @@ export function AuthSetupAssistant({
   const [authUrl, setAuthUrl] = useState(defaultAuthUrl)
   const [terraFusionRoot, setTerraFusionRoot] = useState(defaultTerraFusionRoot)
   const [saving, setSaving] = useState(false)
+  const [editingTerraFusionRoot, setEditingTerraFusionRoot] = useState(
+    !initialTerraFusionRootConfigured,
+  )
   const [statusChecking, setStatusChecking] = useState(false)
   const [saved, setSaved] = useState(false)
   const [statusResult, setStatusResult] = useState<SetupStatusResponse | null>(null)
@@ -101,7 +104,14 @@ export function AuthSetupAssistant({
       ) {
         throw new Error("Setup status endpoint returned an invalid payload.")
       }
-      setStatusResult(payload as SetupStatusResponse)
+      const verifiedStatus = payload as SetupStatusResponse
+      setStatusResult(verifiedStatus)
+      if (
+        verifiedStatus.terraFusionRootConfigured &&
+        verifiedStatus.processStartedAt !== initialProcessStartedAt
+      ) {
+        setEditingTerraFusionRoot(false)
+      }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Setup status check failed.",
@@ -227,22 +237,37 @@ export function AuthSetupAssistant({
         </div>
 
         <div className="rounded-lg border border-border bg-muted/20 p-4">
-          {terraFusionRootConfigured ? (
+          {terraFusionRootConfigured && !editingTerraFusionRoot ? (
             <div className="flex items-start gap-2">
               <CheckCircle2 className="mt-0.5 h-4 w-4 text-success" aria-hidden />
               <div className="space-y-1">
                 <h3 className="text-sm font-semibold">TerraFusion checkout connected</h3>
                 <p className="text-sm text-muted-foreground">
-                  WilliamOS has a distinct target checkout for TerraFusion development.
+                  WilliamOS has a distinct target checkout for TerraFusion development. If that checkout moved or is no longer correct, replace it here.
                 </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  onClick={() => setEditingTerraFusionRoot(true)}
+                >
+                  Change TerraFusion checkout
+                </Button>
               </div>
             </div>
           ) : (
             <>
               <div className="space-y-1">
-                <h3 className="text-sm font-semibold">Connect the TerraFusion checkout</h3>
+                <h3 className="text-sm font-semibold">
+                  {terraFusionRootConfigured
+                    ? "Change the TerraFusion checkout"
+                    : "Connect the TerraFusion checkout"}
+                </h3>
                 <p className="text-sm text-muted-foreground">
-                  Authentication is ready, but WilliamOS still needs the real TerraFusion repository it will develop and preview.
+                  {terraFusionRootConfigured
+                    ? "Replace the configured target when the TerraFusion checkout moved or no longer identifies the repository WilliamOS should develop."
+                    : "Authentication is ready, but WilliamOS still needs the real TerraFusion repository it will develop and preview."}
                 </p>
               </div>
               <form onSubmit={onTerraFusionRootSave} className="mt-4 grid gap-3">
@@ -271,6 +296,16 @@ export function AuthSetupAssistant({
                     "Save TerraFusion checkout"
                   )}
                 </Button>
+                {terraFusionRootConfigured && !saved ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="w-fit"
+                    onClick={() => setEditingTerraFusionRoot(false)}
+                  >
+                    Keep current checkout
+                  </Button>
+                ) : null}
                 {saved ? (
                   <div className="space-y-2 text-xs text-muted-foreground">
                     <p>Checkout saved. Restart WilliamOS, then verify the target connection.</p>

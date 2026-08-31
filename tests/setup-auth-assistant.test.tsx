@@ -107,18 +107,25 @@ describe("auth-ready TerraFusion checkout setup", () => {
     expect(String(request[1]?.body)).not.toContain("authSecret")
   })
 
-  it("shows a truthful connected state when the target root is already configured", () => {
+  it("lets an auth-ready owner replace a configured checkout that moved or became stale", () => {
     render(
       <AuthSetupAssistant
         initialReadiness={ready}
         defaultAuthUrl="http://localhost:3000"
-        defaultTerraFusionRoot="C:\\repos\\terrafusion_os_1.0"
+        defaultTerraFusionRoot={"C:\\repos\\terrafusion_os_1.0"}
         initialTerraFusionRootConfigured
         initialProcessStartedAt={100}
       />,
     )
 
     expect(screen.getByRole("heading", { name: "TerraFusion checkout connected" })).toBeTruthy()
-    expect(screen.queryByRole("button", { name: "Save TerraFusion checkout" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Change TerraFusion checkout" }))
+    expect(screen.getByRole("heading", { name: "Change the TerraFusion checkout" })).toBeTruthy()
+    expect(screen.getByLabelText("TerraFusion checkout")).toHaveProperty(
+      "value",
+      "C:\\repos\\terrafusion_os_1.0",
+    )
+    expect(screen.getByRole("button", { name: "Save TerraFusion checkout" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Keep current checkout" })).toBeTruthy()
   })
 })

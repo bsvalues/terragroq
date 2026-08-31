@@ -320,6 +320,7 @@ describe("POST /api/setup/local-config route contract", () => {
         'DATABASE_URL="postgres://existing"',
         'BETTER_AUTH_SECRET="existing-auth-secret-must-not-change"',
         'WILLIAMOS_PROJECT_ROOT="C:/repos/william-os-devops"',
+        'WILLIAMOS_TERRAFUSION_ROOT="C:/repos/old-terrafusion"',
         "CUSTOM_FLAG=true",
         "",
       ].join("\n"),
@@ -345,6 +346,7 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writtenEnv).toContain('WILLIAMOS_PROJECT_ROOT="C:/repos/william-os-devops"')
     expect(writtenEnv).toContain("CUSTOM_FLAG=true")
     expect(writtenEnv).toContain(`WILLIAMOS_TERRAFUSION_ROOT=${serializeProjectRootEnvValue(normalizedProjectRoot)}`)
+    expect(writtenEnv).not.toContain('WILLIAMOS_TERRAFUSION_ROOT="C:/repos/old-terrafusion"')
   })
 
   it("refuses root-only setup until WilliamOS authentication is actually ready", async () => {
