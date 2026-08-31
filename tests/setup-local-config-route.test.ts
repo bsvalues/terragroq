@@ -142,6 +142,25 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 
+  it("bounds a forwarded full-bootstrap body before rejecting it", async () => {
+    const req = new Request("http://localhost/api/setup/local-config", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Forwarded-Host": "192.168.88.9:3443",
+      },
+      body: JSON.stringify({ ignored: "x".repeat(20_000) }),
+    })
+
+    const response = await POST(req)
+    const body = await response.json()
+
+    expect(req.headers.has("content-length")).toBe(false)
+    expect(response.status).toBe(413)
+    expect(body.message).toContain("too large")
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
   it("allows authenticated root-only setup through Next's same-origin forwarded request", async () => {
     const req = new Request("http://localhost:3000/api/setup/local-config", {
       method: "POST",

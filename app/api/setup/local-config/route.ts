@@ -7,7 +7,7 @@ import {
   serializeProjectRootEnvValue,
 } from "@/lib/setup/project-root-env"
 import { getAuthReadiness } from "@/lib/auth-readiness"
-import { guardLineRequest } from "@/lib/environment/line-guard"
+import { guardLineRequest, readBoundedJson } from "@/lib/environment/line-guard"
 import { getSession } from "@/lib/session"
 
 export const runtime = "nodejs"
@@ -21,6 +21,8 @@ type SetupPayload = {
 }
 
 type SetupOperation = "full" | "terrafusion-root"
+
+const MAX_SETUP_REQUEST_BYTES = 16_000
 
 function localSetupEnabled() {
   if (process.env.LOCAL_SETUP_ENABLED === "false") return false
@@ -250,15 +252,19 @@ export async function POST(req: Request) {
     )
   }
 
-  let payload: SetupPayload
-  try {
-    payload = (await req.json()) as SetupPayload
-  } catch {
+  const parsedBody = await readBoundedJson(req, MAX_SETUP_REQUEST_BYTES)
+  if (!parsedBody.ok) {
     return NextResponse.json(
-      { ok: false, message: "Invalid JSON payload." },
-      { status: 400 },
+      {
+        ok: false,
+        message: parsedBody.error === "MESSAGE_TOO_LARGE"
+          ? "Setup payload is too large."
+          : "Invalid JSON payload.",
+      },
+      { status: parsedBody.status },
     )
   }
+  const payload = parsedBody.value as SetupPayload
 
   let operation: SetupOperation
   try {
