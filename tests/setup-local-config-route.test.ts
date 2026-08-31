@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import path from "node:path"
 
 const writeFileMock = vi.hoisted(() => vi.fn())
 const readFileMock = vi.hoisted(() => vi.fn())
@@ -14,6 +15,7 @@ import { POST } from "@/app/api/setup/local-config/route"
 
 describe("POST /api/setup/local-config route contract", () => {
   const originalEnv = process.env
+  const projectRoot = path.resolve("/repos/terrafusion_os_1.0")
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -133,6 +135,29 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 
+  it.each(["", "relative/terrafusion_os_1.0"])(
+    "requires an absolute TerraFusion checkout path (%s)",
+    async (invalidProjectRoot) => {
+      const req = new Request("http://localhost:3000/api/setup/local-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          databaseUrl: "postgres://postgres:postgres@localhost:5432/terragroq",
+          authSecret: "12345678901234567890123456789012",
+          authUrl: "http://localhost:3000",
+          projectRoot: invalidProjectRoot,
+        }),
+      })
+
+      const response = await POST(req)
+      const body = await response.json()
+
+      expect(response.status).toBe(400)
+      expect(body.message).toContain("WILLIAMOS_PROJECT_ROOT")
+      expect(writeFileMock).not.toHaveBeenCalled()
+    },
+  )
+
   it("writes .env.local with expected keys on valid setup payload", async () => {
     process.env.GROQ_API_KEY = "groq-key-value"
     const req = new Request("http://localhost:3000/api/setup/local-config", {
@@ -142,6 +167,7 @@ describe("POST /api/setup/local-config route contract", () => {
         databaseUrl: "postgres://postgres:postgres@localhost:5432/terragroq",
         authSecret: "12345678901234567890123456789012",
         authUrl: "http://localhost:3000",
+        projectRoot,
       }),
     })
     const response = await POST(req)
@@ -159,6 +185,7 @@ describe("POST /api/setup/local-config route contract", () => {
       'BETTER_AUTH_SECRET="12345678901234567890123456789012"',
     )
     expect(writeFileMock.mock.calls[0][1]).toContain('BETTER_AUTH_URL="http://localhost:3000"')
+    expect(writeFileMock.mock.calls[0][1]).toContain(`WILLIAMOS_PROJECT_ROOT=${JSON.stringify(projectRoot)}`)
     expect(writeFileMock.mock.calls[0][1]).toContain('LOCAL_SETUP_ENABLED="true"')
     expect(writeFileMock.mock.calls[0][1]).toContain('GROQ_API_KEY="groq-key-value"')
   })
@@ -169,6 +196,7 @@ describe("POST /api/setup/local-config route contract", () => {
         "CUSTOM_FLAG=true",
         'BETTER_AUTH_URL="http://localhost:1111"',
         'DATABASE_URL="postgres://old"',
+        'WILLIAMOS_PROJECT_ROOT="/repos/old"',
         "",
       ].join("\n"),
     )
@@ -179,6 +207,7 @@ describe("POST /api/setup/local-config route contract", () => {
         databaseUrl: "postgres://postgres:postgres@localhost:5432/terragroq",
         authSecret: "12345678901234567890123456789012",
         authUrl: "http://localhost:3000",
+        projectRoot,
       }),
     })
 
@@ -195,6 +224,8 @@ describe("POST /api/setup/local-config route contract", () => {
     expect(writtenEnv).toContain('BETTER_AUTH_SECRET="12345678901234567890123456789012"')
     expect(writtenEnv).toContain('BETTER_AUTH_URL="http://localhost:3000"')
     expect(writtenEnv).toContain('LOCAL_SETUP_ENABLED="true"')
+    expect(writtenEnv).toContain(`WILLIAMOS_PROJECT_ROOT=${JSON.stringify(projectRoot)}`)
+    expect(writtenEnv).not.toContain('WILLIAMOS_PROJECT_ROOT="/repos/old"')
     expect(writtenEnv).not.toContain('DATABASE_URL="postgres://old"')
   })
 
@@ -208,6 +239,7 @@ describe("POST /api/setup/local-config route contract", () => {
         databaseUrl: "postgres://postgres:postgres@localhost:5432/terragroq",
         authSecret: "12345678901234567890123456789012",
         authUrl: "http://localhost:3000",
+        projectRoot,
       }),
     })
     const response = await POST(req)

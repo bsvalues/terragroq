@@ -41,15 +41,18 @@ function generateSecret() {
 export function AuthSetupAssistant({
   initialReadiness,
   defaultAuthUrl,
+  defaultProjectRoot,
   initialProcessStartedAt,
 }: {
   initialReadiness: AuthReadiness
   defaultAuthUrl: string
+  defaultProjectRoot: string
   initialProcessStartedAt: number
 }) {
   const [databaseUrl, setDatabaseUrl] = useState("")
   const [authSecret, setAuthSecret] = useState("")
   const [authUrl, setAuthUrl] = useState(defaultAuthUrl)
+  const [projectRoot, setProjectRoot] = useState(defaultProjectRoot)
   const [saving, setSaving] = useState(false)
   const [statusChecking, setStatusChecking] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -113,6 +116,7 @@ export function AuthSetupAssistant({
           databaseUrl,
           authSecret,
           authUrl,
+          projectRoot,
         }),
       })
 
@@ -359,6 +363,22 @@ export function AuthSetupAssistant({
             required
             autoComplete="off"
           />
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="project-root">TerraFusion checkout</Label>
+          <Input
+            id="project-root"
+            type="text"
+            value={projectRoot}
+            onChange={(e) => setProjectRoot(e.target.value)}
+            placeholder="C:\\Users\\you\\terrafusion_os_1.0"
+            required
+            autoComplete="off"
+          />
+          <p className="text-xs text-muted-foreground">
+            Absolute path to the real TerraFusion repository WilliamOS will develop and preview.
+          </p>
         </div>
 
         <Button type="submit" disabled={saving}>

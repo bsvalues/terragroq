@@ -55,6 +55,7 @@ covered by tests.
   - `BETTER_AUTH_SECRET` — session signing secret (`openssl rand -base64 32`)
   - `BETTER_AUTH_URL` — base URL of the app (optional in dev)
   - `AUTH_SIGNUP_MODE` — `bootstrap` (default), `open`, or `closed`
+  - `WILLIAMOS_PROJECT_ROOT` — absolute path to the real `bsvalues/terrafusion_os_1.0` checkout WilliamOS develops
 
 ### Install & run
 
@@ -66,8 +67,9 @@ pnpm dev          # http://localhost:3000
 The app is auth-gated. Visit `/sign-in` to create an account (email + password),
 then you are redirected into the console shell.
 
-If auth prerequisites are missing, use `/setup` to configure local onboarding from
-the UI (writes `.env.local`), then restart the app process.
+If auth prerequisites are missing, use `/setup` to configure local onboarding and
+select the real TerraFusion checkout from the UI (writes `.env.local`), then restart
+the app process.
 
 Enterprise sign-up policy defaults to bootstrap-only: first operator can register,
 then sign-up closes automatically unless `AUTH_SIGNUP_MODE=open`.

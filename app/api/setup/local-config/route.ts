@@ -8,6 +8,7 @@ type SetupPayload = {
   databaseUrl?: unknown
   authSecret?: unknown
   authUrl?: unknown
+  projectRoot?: unknown
 }
 
 function localSetupEnabled() {
@@ -44,6 +45,7 @@ function validatePayload(payload: SetupPayload) {
   const databaseUrl = asTrimmedString(payload.databaseUrl)
   const authSecret = asTrimmedString(payload.authSecret)
   const authUrl = asTrimmedString(payload.authUrl)
+  const projectRoot = asTrimmedString(payload.projectRoot)
 
   if (!databaseUrl) {
     throw new Error("DATABASE_URL is required.")
@@ -57,6 +59,12 @@ function validatePayload(payload: SetupPayload) {
   if (!authUrl) {
     throw new Error("BETTER_AUTH_URL is required.")
   }
+  if (!projectRoot) {
+    throw new Error("WILLIAMOS_PROJECT_ROOT is required.")
+  }
+  if (!path.isAbsolute(projectRoot) || projectRoot.includes("\0") || projectRoot.length > 4096) {
+    throw new Error("WILLIAMOS_PROJECT_ROOT must be an absolute path to the TerraFusion checkout.")
+  }
 
   try {
     new URL(authUrl)
@@ -64,7 +72,7 @@ function validatePayload(payload: SetupPayload) {
     throw new Error("BETTER_AUTH_URL must be a valid URL.")
   }
 
-  return { databaseUrl, authSecret, authUrl }
+  return { databaseUrl, authSecret, authUrl, projectRoot: path.resolve(projectRoot) }
 }
 
 function envLine(key: string, value: string) {
@@ -75,6 +83,7 @@ async function writeLocalEnv(input: {
   databaseUrl: string
   authSecret: string
   authUrl: string
+  projectRoot: string
 }) {
   const envPath = path.join(process.cwd(), ".env.local")
   const optionalEntries: [string, string][] = process.env.GROQ_API_KEY
@@ -85,6 +94,7 @@ async function writeLocalEnv(input: {
     ["DATABASE_URL", envLine("DATABASE_URL", input.databaseUrl)],
     ["BETTER_AUTH_SECRET", envLine("BETTER_AUTH_SECRET", input.authSecret)],
     ["BETTER_AUTH_URL", envLine("BETTER_AUTH_URL", input.authUrl)],
+    ["WILLIAMOS_PROJECT_ROOT", envLine("WILLIAMOS_PROJECT_ROOT", input.projectRoot)],
     ["LOCAL_SETUP_ENABLED", envLine("LOCAL_SETUP_ENABLED", "true")],
     ...optionalEntries,
   ])
@@ -174,7 +184,7 @@ export async function POST(req: Request) {
     )
   }
 
-  let validated: { databaseUrl: string; authSecret: string; authUrl: string }
+  let validated: { databaseUrl: string; authSecret: string; authUrl: string; projectRoot: string }
   try {
     validated = validatePayload(payload)
   } catch (error) {

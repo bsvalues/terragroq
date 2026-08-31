@@ -6,6 +6,7 @@ import { AuthSetupAssistant } from "@/components/setup/auth-setup-assistant"
 export default async function SetupPage() {
   const readiness = await getAuthReadiness({ probeDatabase: true })
   const defaultAuthUrl = process.env.BETTER_AUTH_URL ?? "http://localhost:3000"
+  const defaultProjectRoot = process.env.WILLIAMOS_PROJECT_ROOT ?? ""
   const initialProcessStartedAt = getProcessStartedAt()
 
   return (
@@ -16,6 +17,7 @@ export default async function SetupPage() {
           <AuthSetupAssistant
             initialReadiness={readiness}
             defaultAuthUrl={defaultAuthUrl}
+            defaultProjectRoot={defaultProjectRoot}
             initialProcessStartedAt={initialProcessStartedAt}
           />
         </div>
