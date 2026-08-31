@@ -152,9 +152,11 @@ export async function resolveTerraFusionWorkspaceBinding(
     return { ok: false, error: "WORKSPACE_ROOT_PROJECT_MISMATCH" }
   }
 
-  // Space identity remains the verified local checkout root. Outcome assimilation deliberately
-  // resolves that root's Git origin back to the canonical repository before attaching authority.
-  const projectBinding = workspaceProjectFromRoot(workspaceRoot, row.projectName)
+  // Space identity remains the stable configured checkout path used before this verifier existed.
+  // Filesystem operations use the verified real Git root above, but changing a symlink/junction to
+  // its physical target here would orphan the owner's already-persisted Spaces after an upgrade.
+  // Outcome assimilation still resolves the configured path's Git origin to the canonical repo.
+  const projectBinding = workspaceProjectFromRoot(configuredWorkspaceRoot, row.projectName)
   return {
     ok: true,
     binding: {

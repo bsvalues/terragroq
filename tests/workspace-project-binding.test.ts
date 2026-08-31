@@ -108,4 +108,25 @@ describe("TerraFusion workspace Project binding", () => {
       readGitTopLevel: async () => "/repos/terrafusion_os_1.0",
     })).resolves.toEqual({ ok: false, error: "WORKSPACE_ROOT_NOT_REPOSITORY_ROOT" })
   })
+
+  it("keeps the configured-path Space identity while operating on a verified symlink target", async () => {
+    process.env.WILLIAMOS_PROJECT_ROOT = "/links/terrafusion"
+    const seams = dependencies()
+    const result = await resolveTerraFusionWorkspaceBinding("owner", {
+      ...seams,
+      readGitTopLevel: async (root) => root.replace(/[\\/]links[\\/]/, "/physical/"),
+      realpath: async (root) => root.replace(/[\\/]links[\\/]/, "/physical/"),
+    })
+
+    expect(result).toEqual({
+      ok: true,
+      binding: expect.objectContaining({
+        workspaceRoot: expect.stringMatching(/physical[\\/]terrafusion$/),
+        project: {
+          identity: expect.stringMatching(/links[\\/]terrafusion$/),
+          name: "TerraFusion OS",
+        },
+      }),
+    })
+  })
 })
