@@ -49,4 +49,18 @@ describe("delivery commit inspection", () => {
     await expect(inspectGitDelivery(repo.root, repo.baseSha, repo.commitSha, ["src/missing.ts"]))
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
   })
+
+  it("measures an exact deleted path with a deterministic head-absent representation", async () => {
+    const repo = repository()
+    fs.unlinkSync(path.join(repo.root, "src", "selected.ts"))
+    git(repo.root, "add", "src/selected.ts")
+    git(repo.root, "commit", "-m", "delete selected path")
+    const deletedHead = git(repo.root, "rev-parse", "HEAD")
+
+    const first = await inspectGitDelivery(repo.root, repo.commitSha, deletedHead, ["src/selected.ts"])
+    const second = await inspectGitDelivery(repo.root, repo.commitSha, deletedHead, ["src/selected.ts"])
+    expect(first).toMatchObject({ commitSha: deletedHead, paths: ["src/selected.ts"] })
+    expect(first.contentDigest).toMatch(/^[0-9a-f]{64}$/)
+    expect(second.contentDigest).toBe(first.contentDigest)
+  })
 })

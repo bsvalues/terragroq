@@ -85,17 +85,18 @@ function harness(row = authorityRow()) {
     inspectPullRequest: vi.fn(async () => ({ number: 1117, state: "OPEN", headRefOid: head, checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0 })),
     inspectPullRequestFiles: vi.fn(async () => paths),
   }
+  const deriveBaseSha = vi.fn(async () => base)
   const { privateKey, publicKey } = generateKeyPairSync("ed25519")
   const runtime = createArtifactAdoptionRuntime({
     database: db,
     workspaceExists: vi.fn(async () => true),
     createLifecycle: vi.fn(() => lifecycle),
-    deriveBaseSha: vi.fn(async () => base),
+    deriveBaseSha,
     inspectDelivery: vi.fn(async () => ({ repository: "https://github.com/bsvalues/terragroq", baseSha: base, commitSha: head, paths, patchDigest: "d".repeat(64), contentDigest: "e".repeat(64) })),
     signingKey: { keyId: "test-key", privateKey, publicKey },
     now: () => new Date("2026-08-31T20:00:00.000Z"),
   })
-  return { runtime, db, lifecycle, events, txQuery }
+  return { runtime, db, lifecycle, events, txQuery, deriveBaseSha }
 }
 
 describe("persisted prospective artifact adoption", () => {
@@ -111,6 +112,22 @@ describe("persisted prospective artifact adoption", () => {
     }
     await expect(harness(authorityRow({ repository: "other/repo" })).runtime.preview("owner-1", "space-1"))
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
+    await expect(harness(authorityRow({
+      repository: "other/repo",
+      admissionRequest: {
+        worldId: "space-1",
+        externalWorkOrder: { repository: "other/repo", reservedPaths: paths, pullRequest: { number: 1117, headSha: head } },
+      },
+    })).runtime.preview("owner-1", "space-1"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
+  })
+
+  it("binds the preview to the admitted repository, pull request, and exact head when resolving its base", async () => {
+    const candidate = harness()
+    await candidate.runtime.preview("owner-1", "space-1")
+    expect(candidate.deriveBaseSha).toHaveBeenCalledWith(
+      "c:\\repo", "https://github.com/bsvalues/terragroq", 1117, head,
+    )
   })
 
   it("records authorization before inspecting GitHub, then records distinct exact-head validation and review events", async () => {

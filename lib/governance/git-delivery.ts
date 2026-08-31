@@ -30,6 +30,11 @@ async function gitBytes(root: string, args: readonly string[]): Promise<Buffer> 
   return result.stdout
 }
 
+async function gitBytesIfPresent(root: string, revision: string, deliveryPath: string): Promise<Buffer | null> {
+  const entry = await gitBytes(root, ["ls-tree", "-z", revision, "--", deliveryPath])
+  return entry.length === 0 ? null : gitBytes(root, ["show", `${revision}:${deliveryPath}`])
+}
+
 function canonicalRemote(value: string): string {
   const trimmed = value.trim().replace(/\.git$/i, "").replace(/\/$/, "")
   const scp = /^git@([^:]+):(.+)$/.exec(trimmed)
@@ -82,12 +87,17 @@ export async function inspectGitDelivery(
     const patch = await git(root, ["diff", "--binary", "--full-index", "--no-ext-diff", measuredBase, measuredCommit, "--", ...paths])
     if (!patch) invalid("the assignment patch is empty")
     if (paths.length !== 1 && !options.allowMultiple) invalid("one persisted Codex assignment must deliver one exact selected path")
-    const deliveredBytes = paths.length === 1
-      ? await gitBytes(root, ["show", `${measuredCommit}:${paths[0]}`])
-      : Buffer.concat(await Promise.all(paths.map(async (deliveryPath) => {
-          const bytes = await gitBytes(root, ["show", `${measuredCommit}:${deliveryPath}`])
-          return Buffer.concat([Buffer.from(`${deliveryPath}\0${bytes.length}\0`, "utf8"), bytes])
-        })))
+    const delivered = await Promise.all(paths.map(async (deliveryPath) => ({
+      deliveryPath,
+      bytes: await gitBytesIfPresent(root, measuredCommit, deliveryPath),
+    })))
+    const deliveredBytes = paths.length === 1 && delivered[0].bytes !== null
+      ? delivered[0].bytes
+      : Buffer.concat(delivered.map(({ deliveryPath, bytes }) => (
+          bytes === null
+            ? Buffer.from(`${deliveryPath}\0deleted\0`, "utf8")
+            : Buffer.concat([Buffer.from(`${deliveryPath}\0${bytes.length}\0`, "utf8"), bytes])
+        )))
     const origin = canonicalRemote(await git(root, ["remote", "get-url", "origin"]))
     return {
       repository: origin,

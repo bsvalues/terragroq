@@ -25,6 +25,7 @@ const runFile = promisify(execFile)
 const SHA = /^[0-9a-f]{40}$/
 const WORKSPACE_RESOURCE = "williamos-workspace-root:v1:"
 const ADMISSION_OPERATION = "space.external_work_order.admit"
+const SUPPORTED_REPOSITORY = "bsvalues/terragroq"
 
 type QueryResult = { rows: Record<string, unknown>[] }
 type Queryable = { query(sql: string, values?: readonly unknown[]): Promise<QueryResult> }
@@ -39,7 +40,7 @@ export type ArtifactAdoptionRuntimeOptions = Readonly<{
   database: Database
   workspaceExists(root: string): Promise<boolean>
   createLifecycle(root: string, repository: string): Lifecycle
-  deriveBaseSha(root: string, headSha: string): Promise<string>
+  deriveBaseSha(root: string, repository: string, pullRequest: number, headSha: string): Promise<string>
   inspectDelivery: ArtifactAdoptionDependencies["inspectDelivery"]
   signingKey: DeliverySigningKey | null
   now(): Date
@@ -116,7 +117,7 @@ function parseContextRow(userId: string, worldId: string, row: Record<string, un
     || Number(row.grantWorkOrderId) !== Number(row.workOrderId) || String(row.grantTo).toLowerCase() !== "codex"
     || !same(allowed, grantAllowed) || !same(allowed, admitted) || !same(forbidden, grantBlocked)
     || String(row.repository ?? "").trim().toLowerCase() !== repository
-    || !/^[^/:\s]+\/[^/\s]+$/.test(repository) || !Number.isSafeInteger(pr) || pr <= 0 || !SHA.test(headSha)
+    || repository !== SUPPORTED_REPOSITORY || !Number.isSafeInteger(pr) || pr <= 0 || !SHA.test(headSha)
     || !workspace || workspaceProjectFromRoot(workspace).identity !== workspace) {
     fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the Space, Work Order, grant, admission receipt, or exact reservation is inconsistent")
   }
@@ -157,12 +158,18 @@ const CONTEXT_SQL = `SELECT world."snapshot" AS "worldSnapshot",
     AND receipt."operation" = '${ADMISSION_OPERATION}' AND receipt."outcomeKey" = outcome."outcomeKey"
   WHERE world."userId" = $1 AND world."id" = $2`
 
-async function defaultBaseSha(root: string, headSha: string): Promise<string> {
+async function defaultBaseSha(_root: string, repository: string, pullRequest: number, headSha: string): Promise<string> {
   try {
-    const result = await runFile("git", ["-C", root, "merge-base", "origin/main", headSha], { encoding: "utf8", windowsHide: true })
-    const sha = result.stdout.trim().toLowerCase()
-    if (!SHA.test(sha)) throw new Error("bad base")
-    return sha
+    const slug = repository.replace(/^https:\/\/github\.com\//, "")
+    if (slug !== SUPPORTED_REPOSITORY) throw new Error("unsupported repository")
+    const result = await runFile("gh", ["pr", "view", String(pullRequest), "--repo", slug, "--json", "number,state,headRefOid,baseRefOid"], {
+      encoding: "utf8", windowsHide: true,
+    })
+    const value = JSON.parse(result.stdout) as Record<string, unknown>
+    const baseSha = String(value.baseRefOid ?? "").toLowerCase()
+    if (Number(value.number) !== pullRequest || value.state !== "OPEN"
+      || value.headRefOid !== headSha || !SHA.test(baseSha)) throw new Error("bad pull request identity")
+    return baseSha
   } catch { fail("DELIVERY_SEAL_DIFF_INVALID", "the exact artifact base commit is unavailable") }
 }
 
@@ -215,7 +222,9 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     loadContext,
     inspectArtifactIdentity: async (context) => ({
       pullRequest: context.pullRequest, state: "OPEN", headSha: context.admittedHeadSha,
-      baseSha: await options.deriveBaseSha(context.workspace, context.admittedHeadSha), paths: context.reservation.allowed,
+      baseSha: await options.deriveBaseSha(
+        context.workspace, context.repository, context.pullRequest, context.admittedHeadSha,
+      ), paths: context.reservation.allowed,
     }),
     recordAuthorization: async (userId, authorization) => {
       const client = await options.database.connect()
