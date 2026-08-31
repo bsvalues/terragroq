@@ -5,6 +5,7 @@ import path from "node:path"
 const writeFileMock = vi.hoisted(() => vi.fn())
 const readFileMock = vi.hoisted(() => vi.fn())
 const getAuthReadinessMock = vi.hoisted(() => vi.fn())
+const getSessionMock = vi.hoisted(() => vi.fn())
 
 vi.mock("node:fs", () => ({
   promises: {
@@ -15,6 +16,10 @@ vi.mock("node:fs", () => ({
 
 vi.mock("@/lib/auth-readiness", () => ({
   getAuthReadiness: getAuthReadinessMock,
+}))
+
+vi.mock("@/lib/session", () => ({
+  getSession: getSessionMock,
 }))
 
 import { POST } from "@/app/api/setup/local-config/route"
@@ -78,6 +83,7 @@ describe("POST /api/setup/local-config route contract", () => {
     delete process.env.AUTH_SIGNUP_MODE
     delete process.env.GROQ_API_KEY
     getAuthReadinessMock.mockResolvedValue({ ready: true })
+    getSessionMock.mockResolvedValue({ user: { id: "owner" } })
   })
 
   afterEach(() => {
@@ -133,6 +139,61 @@ describe("POST /api/setup/local-config route contract", () => {
 
     expect(response.status).toBe(403)
     expect(body.ok).toBe(false)
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
+  it("allows authenticated root-only setup through Next's same-origin forwarded request", async () => {
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+        "X-Forwarded-Host": "localhost:3000",
+        "X-Forwarded-Proto": "http",
+      },
+      body: JSON.stringify({ operation: "terrafusion-root", terraFusionRoot: projectRoot }),
+    })
+
+    const response = await POST(req)
+
+    expect(response.status).toBe(200)
+    expect(getSessionMock).toHaveBeenCalledTimes(1)
+    expect(writeFileMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("refuses unauthenticated root-only setup without writing", async () => {
+    getSessionMock.mockResolvedValueOnce(null)
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operation: "terrafusion-root", terraFusionRoot: projectRoot }),
+    })
+
+    const response = await POST(req)
+    const body = await response.json()
+
+    expect(response.status).toBe(401)
+    expect(body.message).toContain("Authentication is required")
+    expect(getAuthReadinessMock).not.toHaveBeenCalled()
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
+  it("refuses a cross-origin root-only request before writing", async () => {
+    const req = new Request("http://localhost:3000/api/setup/local-config", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://evil.example",
+        "X-Forwarded-Host": "localhost:3000",
+        "X-Forwarded-Proto": "http",
+      },
+      body: JSON.stringify({ operation: "terrafusion-root", terraFusionRoot: projectRoot }),
+    })
+
+    const response = await POST(req)
+
+    expect(response.status).toBe(403)
+    expect(getSessionMock).not.toHaveBeenCalled()
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 

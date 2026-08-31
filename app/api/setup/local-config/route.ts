@@ -7,6 +7,8 @@ import {
   serializeProjectRootEnvValue,
 } from "@/lib/setup/project-root-env"
 import { getAuthReadiness } from "@/lib/auth-readiness"
+import { guardLineRequest } from "@/lib/environment/line-guard"
+import { getSession } from "@/lib/session"
 
 export const runtime = "nodejs"
 
@@ -229,7 +231,7 @@ export async function POST(req: Request) {
   }
 
   const url = new URL(req.url)
-  if (!isLoopbackHost(url) || wasForwarded(req.headers)) {
+  if (!isLoopbackHost(url)) {
     return NextResponse.json(
       {
         ok: false,
@@ -237,6 +239,14 @@ export async function POST(req: Request) {
           "Local setup assistant only accepts loopback requests. Use localhost when running setup.",
       },
       { status: 403 },
+    )
+  }
+
+  const requestRejection = guardLineRequest(req)
+  if (requestRejection) {
+    return NextResponse.json(
+      { ok: false, message: requestRejection.error },
+      { status: requestRejection.status },
     )
   }
 
@@ -264,6 +274,14 @@ export async function POST(req: Request) {
   }
 
   if (operation === "terrafusion-root") {
+    const session = await getSession()
+    if (!session?.user) {
+      return NextResponse.json(
+        { ok: false, message: "Authentication is required to change the TerraFusion checkout." },
+        { status: 401 },
+      )
+    }
+
     const readiness = await getAuthReadiness({ probeDatabase: true })
     if (!readiness.ready) {
       return NextResponse.json(
@@ -307,6 +325,20 @@ export async function POST(req: Request) {
       message: "Saved the TerraFusion checkout to .env.local. Restart WilliamOS to connect it.",
       restartRequired: true,
     })
+  }
+
+  // Full bootstrap can replace database and authentication authority. It remains restricted to a
+  // direct loopback client. Next's normal browser route adds forwarding headers, so only the
+  // authenticated, CSRF-guarded TerraFusion-root operation is allowed through that path.
+  if (wasForwarded(req.headers)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "Local setup assistant only accepts loopback requests. Use localhost when running setup.",
+      },
+      { status: 403 },
+    )
   }
 
   if ((process.env.AUTH_SIGNUP_MODE ?? "bootstrap") === "closed") {
