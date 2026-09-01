@@ -22,12 +22,13 @@ afterEach(() => {
 })
 
 describe("Experience V2 selected Space actions", () => {
-  it("opens dedicated Summarize in the transient Line and requests only the server-grounded Space context", async () => {
+  it("summarizes the exact Space in one click without exposing a second editable prompt", async () => {
     const serverSpace = spaceToServer({
       ...defaultSpace(1440, 900, "world-a", "TerraFusion"),
       activeWindowId: null,
     })
     const requests: Record<string, unknown>[] = []
+    let resolveSummary!: (response: Response) => void
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url === "/api/environment/space" && !init?.method) return Response.json({
@@ -40,7 +41,7 @@ describe("Experience V2 selected Space actions", () => {
       }
       if (url === "/api/environment/line") {
         requests.push(JSON.parse(String(init?.body)))
-        return Response.json({ worldId: "world-a", say: "Grounded summary", surfaces: [], spine: EMPTY_SPINE })
+        return new Promise<Response>((resolve) => { resolveSummary = resolve })
       }
       if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
       return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
@@ -50,17 +51,20 @@ describe("Experience V2 selected Space actions", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Summarize" }))
     const line = screen.getByRole("dialog", { name: "The Line" })
     const input = within(line).getByRole("textbox", { name: "The Line" }) as HTMLInputElement
-    expect(input.value).toBe("Summarize this exact current Space: ")
-    fireEvent.change(input, { target: { value: "Summarize this exact current Space." } })
-    fireEvent.click(within(line).getByRole("button", { name: "Send" }))
-
     await waitFor(() => expect(requests).toHaveLength(1))
+    expect(input.value).toBe("")
+    expect(input.disabled).toBe(true)
+    expect(within(line).getByText("Exact current Space · server-grounded · read-only")).toBeTruthy()
+    expect((within(line).getByRole("button", { name: "Working" }) as HTMLButtonElement).disabled).toBe(true)
     expect(requests[0]).toEqual({
       worldId: "world-a",
       text: "Summarize this exact current Space.",
       lineContext: "space-summary",
     })
-    expect(screen.getByText("Grounded summary")).toBeTruthy()
+    resolveSummary(Response.json({ worldId: "world-a", say: "Grounded summary", surfaces: [], spine: EMPTY_SPINE }))
+    expect(await screen.findByText("Grounded summary")).toBeTruthy()
+    fireEvent.submit(within(line).getByRole("form", { name: "The Line" }))
+    expect(requests).toHaveLength(1)
 
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
     fireEvent.keyDown(window, { key: "k", ctrlKey: true })
@@ -70,6 +74,50 @@ describe("Experience V2 selected Space actions", () => {
     fireEvent.click(within(genericLine).getByRole("button", { name: "Send" }))
     await waitFor(() => expect(requests).toHaveLength(2))
     expect(requests[1]).toEqual({ worldId: "world-a", text: "A separate ordinary question." })
+  })
+
+  it("keeps a pending summary bound to its exact Space by refusing cross-Space re-entry", async () => {
+    const worldA = spaceToServer({ ...defaultSpace(1440, 900, "world-a", "Alpha"), activeWindowId: null })
+    const worldB = spaceToServer({ ...defaultSpace(1440, 900, "world-b", "Beta"), activeWindowId: null })
+    const spaces = [
+      { worldId: "world-a", name: "Alpha", space: worldA, updatedAt: "2026-08-30T05:00:00.000Z" },
+      { worldId: "world-b", name: "Beta", space: worldB, updatedAt: "2026-08-30T05:01:00.000Z" },
+    ]
+    let resolveSummary!: (response: Response) => void
+    let betaReads = 0
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Response.json({
+        worldId: "world-a", name: "Alpha", space: worldA, spaces, multiSpaceAvailable: true,
+        project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server", spine: EMPTY_SPINE,
+      })
+      if (url === "/api/environment/space?worldId=world-b" && !init?.method) {
+        betaReads += 1
+        return Response.json({
+          worldId: "world-b", name: "Beta", space: worldB, spaces, multiSpaceAvailable: true,
+          project: { identity: "c:/repos/williamos", name: "WilliamOS" }, storage: "server", spine: EMPTY_SPINE,
+        })
+      }
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body))
+        return Response.json({ worldId: body.worldId, space: body.space, updatedAt: "2026-08-30T05:01:00.000Z" })
+      }
+      if (url === "/api/environment/line") return new Promise<Response>((resolve) => { resolveSummary = resolve })
+      if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
+      return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
+    }))
+    render(<WorkspaceShell />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "Summarize" }))
+    await waitFor(() => expect(resolveSummary).toBeTypeOf("function"))
+    fireEvent.click(screen.getByRole("button", { name: "Open Mission Control" }))
+    fireEvent.click(screen.getByRole("button", { name: "Enter Beta" }))
+    expect(await screen.findByText("Finish or stop active work before switching Spaces.")).toBeTruthy()
+    expect(betaReads).toBe(0)
+
+    resolveSummary(Response.json({ worldId: "world-a", say: "EXACT ALPHA SUMMARY", surfaces: [], spine: EMPTY_SPINE }))
+    expect(await screen.findByText("EXACT ALPHA SUMMARY")).toBeTruthy()
+    expect(betaReads).toBe(0)
   })
 
   it("truthfully disables Continue when this Space has no durable session", async () => {
@@ -122,10 +170,17 @@ describe("Experience V2 selected Space actions", () => {
   })
 
   it("describes unavailable durable-session storage truthfully instead of claiming no session exists", async () => {
-    const originalGetItem = Storage.prototype.getItem
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(function getItem(key) {
-      if (key === SESSION_KEY) throw new DOMException("blocked", "SecurityError")
-      return originalGetItem.call(this, key)
+    const availableStorage = window.localStorage
+    vi.stubGlobal("localStorage", {
+      get length() { return availableStorage.length },
+      clear: () => availableStorage.clear(),
+      getItem: (key: string) => {
+        if (key === SESSION_KEY) throw new DOMException("blocked", "SecurityError")
+        return availableStorage.getItem(key)
+      },
+      key: (index: number) => availableStorage.key(index),
+      removeItem: (key: string) => availableStorage.removeItem(key),
+      setItem: (key: string, value: string) => availableStorage.setItem(key, value),
     })
     const serverSpace = spaceToServer({ ...defaultSpace(1440, 900, "world-a", "TerraFusion"), activeWindowId: null })
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -173,7 +228,7 @@ describe("Experience V2 selected Space actions", () => {
           { type: "session", sessionId: CLAUDE_REVIEW_ID, provider: "Claude", mode: "review", resumed: true },
           { type: "event", event: { type: "result", subtype: "success", is_error: false, session_id: CLAUDE_REVIEW_ID, result: "Continued selected review." } },
           { type: "done", code: 0, reason: null },
-        ].map(JSON.stringify).join("\n")}\n`)
+        ].map((frame) => JSON.stringify(frame)).join("\n")}\n`)
       }
       if (url.startsWith("/api/loom/files")) return Response.json({ kind: "directory", entries: [] })
       return Response.json({ error: "UNAVAILABLE" }, { status: 503 })
