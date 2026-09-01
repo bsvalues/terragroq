@@ -157,7 +157,7 @@ function WorldWorkerAssignmentInspector({ payload }: { payload: unknown }) {
     </div>
   )
   return (
-    <article className={styles.inspectorRows} aria-label="Persisted HERMES assignment">
+    <article className={styles.inspectorRows} aria-label="Persisted execution assignment">
       <h2>{snapshot.role} · {snapshot.providerLabel}</h2>
       <p><strong>Persisted assignment · runtime liveness unverified</strong></p>
       <p>{snapshot.assignment}</p>

@@ -3089,7 +3089,10 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.queryByRole("button", { name: /HERMES · Local execution · Finish assignment freshness/i })).toBeNull()
   })
 
-  it("opens and deduplicates the exact persisted HERMES assignment Inspector without appliance probes", async () => {
+  it.each([
+    { role: "HERMES" as const, assignee: "hermes-codex-bridge", providerLabel: "Local execution", accessibleName: /HERMES · Local execution · Finish Experience V2/i },
+    { role: "Executor" as const, assignee: "builder-a", providerLabel: "codex", accessibleName: /Executor · codex · Finish Experience V2/i },
+  ])("opens and deduplicates the exact persisted $role assignment Inspector without appliance or dispatch probes", async ({ role, assignee, providerLabel, accessibleName }) => {
     const spine = {
       ...EMPTY_SPINE,
       projectId: 1,
@@ -3104,13 +3107,13 @@ describe("Experience V2 real agent sessions", () => {
       ],
     }
     const executionSession: ProjectedWorldWorkerSession = {
-      id: "world-worker:server-world:41:hermes-codex-bridge",
+      id: `world-worker:server-world:41:${assignee}`,
       worldId: "server-world",
       workOrderId: 41,
-      assignee: "hermes-codex-bridge",
+      assignee,
       agent: "codex",
-      role: "HERMES",
-      providerLabel: "Local execution",
+      role,
+      providerLabel,
       assignment: "Finish Experience V2 · Work Order #41: Inspect persisted execution",
       status: "validating",
       evidence: "test: Focused product suite · PASS",
@@ -3139,7 +3142,7 @@ describe("Experience V2 real agent sessions", () => {
     vi.stubGlobal("fetch", fetcher)
 
     render(<WorkspaceShell />)
-    const worker = await screen.findByRole("button", { name: /HERMES · Local execution · Finish Experience V2/i })
+    const worker = await screen.findByRole("button", { name: accessibleName })
     fireEvent.click(worker)
 
     expect(await screen.findByText("Assignment · Work Order #41")).toBeTruthy()
@@ -3159,6 +3162,7 @@ describe("Experience V2 real agent sessions", () => {
       lineContext: { kind: "execution-assignment", workOrderId: 41 },
     })
     expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/hermes")).toBe(false)
+    expect(fetcher.mock.calls.some(([input]) => String(input).startsWith("/api/loom/agent"))).toBe(false)
   })
 
   it("creates a real Claude session from the streamed route response and persists its descriptor", async () => {

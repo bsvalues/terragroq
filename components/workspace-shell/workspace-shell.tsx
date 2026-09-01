@@ -2136,8 +2136,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
     : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", "Challenge", "Merge unavailable"] as const
-    : selectedKind === "agent" && selectedAgent?.kind === "world-worker" && selectedAgent.role === "HERMES" ? ["Inspect", "Ask William", "Council"] as const
-    : selectedKind === "agent" && selectedAgent?.kind === "world-worker" ? ["Council"] as const
+    : selectedKind === "agent" && selectedAgent?.kind === "world-worker" ? ["Inspect", "Ask William", "Council"] as const
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Talk", pauseAction, forkAction] as const
     : selectedKind === "agent" ? ["Talk", "Redirect", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
     : ["Summarize", continueAction, "Delegate", "Council"] as const
@@ -2459,11 +2458,11 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
 
   function openObjectAction(action: string) {
     if (action === "Merge unavailable") return
-    if (selectedAgent?.kind === "world-worker" && selectedAgent.role === "HERMES" && action === "Inspect") {
+    if (selectedAgent?.kind === "world-worker" && action === "Inspect") {
       materializeExecutionAssignment(selectedAgent.id)
       return
     }
-    if (selectedAgent?.kind === "world-worker" && selectedAgent.role === "HERMES" && action === "Ask William") {
+    if (selectedAgent?.kind === "world-worker" && action === "Ask William") {
       const exact = boundExecutionSession
       if (!exact || exact.id !== selectedAgent.id) {
         setTransitionMessage("That persisted assignment is no longer bound to this Space.")
@@ -2714,9 +2713,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             setFocusedAgentId(agent.id)
             setDelegateContext(null)
             setLineOpen(false)
-            if (agent.role === "HERMES") {
-              materializeExecutionAssignment(agent.id)
-            }
+            materializeExecutionAssignment(agent.id)
             return
           }
           const running = agentSessions.activeSessionIds.includes(agent.id)

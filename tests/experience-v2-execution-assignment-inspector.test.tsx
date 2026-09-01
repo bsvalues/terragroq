@@ -66,6 +66,40 @@ describe("persisted execution assignment Inspector", () => {
     expect(executionAssignmentInspectorIdentity(parsed!)).toBe('["space-experience-v2",1122]')
   })
 
+  it("round-trips and renders a provider-neutral persisted Executor assignment", () => {
+    const executor: ProjectedWorldWorkerSession = {
+      ...session,
+      id: "world-worker:space-experience-v2:1122:builder-a",
+      assignee: "builder-a",
+      agent: "codex",
+      role: "Executor",
+      providerLabel: "codex",
+    }
+    const payload = encodeExecutionAssignmentInspectorPayload(executor, spine)
+    const parsed = parseExecutionAssignmentInspectorPayload(payload)
+
+    expect(parsed).toMatchObject({
+      worldId: "space-experience-v2",
+      workOrderId: 1122,
+      assignee: "builder-a",
+      agent: "codex",
+      role: "Executor",
+      providerLabel: "codex",
+    })
+    expect(executionAssignmentInspectorIdentity(parsed!)).toBe('["space-experience-v2",1122]')
+
+    render(<InspectorSurfaceView surface={{
+      id: "assignment-executor-1122",
+      kind: EXECUTION_ASSIGNMENT_INSPECTOR_KIND,
+      subject: "Work Order #1122",
+      payload,
+    }} />)
+    expect(screen.getByRole("article", { name: "Persisted execution assignment" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Executor · codex" })).toBeTruthy()
+    expect(screen.getByText("builder-a")).toBeTruthy()
+    expect(screen.getByText("Persisted assignment · runtime liveness unverified")).toBeTruthy()
+  })
+
   it("renders the immutable persisted snapshot without probing HERMES appliance health", () => {
     const fetcher = vi.fn()
     vi.stubGlobal("fetch", fetcher)
