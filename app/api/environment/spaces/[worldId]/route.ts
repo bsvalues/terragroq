@@ -1,16 +1,11 @@
 import {
   removeOwnedProjectSpace,
-  workspaceProjectFromRoot,
 } from "@/lib/environment/space-persistence"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
-
-const WORKSPACE_PROJECT = workspaceProjectFromRoot(
-  process.env.WILLIAMOS_PROJECT_ROOT?.trim() || process.cwd(),
-  process.env.WILLIAMOS_PROJECT_NAME,
-)
 
 const reply = (value: unknown, status = 200) => Response.json(value, {
   status,
@@ -29,10 +24,12 @@ export async function DELETE(
   if (!session) return reply({ error: "UNAUTHENTICATED" }, 401)
   const { worldId } = await context.params
   if (!validWorldId(worldId)) return reply({ error: "WORLD_ID_INVALID" }, 400)
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return reply({ error: projectBinding.error }, 503)
   try {
     const removed = await removeOwnedProjectSpace({
       userId: session.user.id,
-      project: WORKSPACE_PROJECT,
+      project: projectBinding.binding.project,
       worldId,
     })
     return reply(removed)

@@ -17,6 +17,9 @@ const seams = vi.hoisted(() => ({
 vi.mock("node:child_process", () => ({ spawn: seams.spawn }))
 vi.mock("node:fs/promises", () => ({ default: { realpath: vi.fn() } }))
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+}))
 vi.mock("@/lib/governance/work-context-gate", () => ({
   requireWorkContext: seams.requireWorkContext,
   workContextRefusal: vi.fn(),

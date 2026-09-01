@@ -5,21 +5,17 @@ import {
   listOwnedProjectSpaces,
   loadOrCreateOwnedSpace,
   saveOwnedSpace,
-  workspaceProjectFromRoot,
+  type WorkspaceProject,
 } from "@/lib/environment/space-persistence"
 import { readBoundedJson } from "@/lib/environment/line-guard"
 import { admitWorkspaceApp, williamOsOrigin } from "@/lib/environment/workspace-app"
+import { resolveTerraFusionWorkspaceBinding, type WorkspaceProjectBinding } from "@/lib/projects/workspace-project-binding"
 import { getSession } from "@/lib/session"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const WORKSPACE_APP_URL = process.env.WILLIAMOS_WORKSPACE_APP_URL?.trim() || null
 const CANONICAL_WILLIAMOS_URL = process.env.BETTER_AUTH_URL?.trim() || null
-const WORKSPACE_PROJECT = workspaceProjectFromRoot(
-  process.env.WILLIAMOS_PROJECT_ROOT?.trim() || process.cwd(),
-  process.env.WILLIAMOS_PROJECT_NAME,
-)
 const MAX_SPACE_BYTES = 256_000
 
 const reply = (value: unknown, status = 200) => Response.json(value, {
@@ -31,9 +27,9 @@ function validWorldId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && !value.includes("\0")
 }
 
-async function admittedAppUrl(request: Request): Promise<string | null> {
+async function admittedAppUrl(request: Request, binding: WorkspaceProjectBinding): Promise<string | null> {
   const admission = await admitWorkspaceApp(
-    WORKSPACE_APP_URL,
+    binding.workspaceAppUrl,
     williamOsOrigin(CANONICAL_WILLIAMOS_URL, request.url),
   )
   return admission.ok ? admission.url : null
@@ -41,13 +37,14 @@ async function admittedAppUrl(request: Request): Promise<string | null> {
 
 async function collectionMetadata(input: Readonly<{
   userId: string
+  project: WorkspaceProject
   workspaceAppUrl: string | null
   current: { worldId: string; name: string; space: unknown }
 }>) {
   try {
     return {
       spaces: await listOwnedProjectSpaces({
-        userId: input.userId, project: WORKSPACE_PROJECT,
+        userId: input.userId, project: input.project,
         workspaceAppUrl: input.workspaceAppUrl, current: input.current,
       }),
       collectionAvailable: true as const,
@@ -67,23 +64,27 @@ export async function GET(request: Request) {
   const requested = new URL(request.url).searchParams.get("worldId")
   if (requested !== null && !validWorldId(requested)) return reply({ error: "WORLD_ID_INVALID" }, 400)
 
-  const workspaceAppUrl = await admittedAppUrl(request)
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return reply({ error: projectBinding.error }, 503)
+  const binding = projectBinding.binding
+
+  const workspaceAppUrl = await admittedAppUrl(request, binding)
   try {
     const result = await loadOrCreateOwnedSpace({
       userId: session.user.id,
       worldId: requested,
       workspaceAppUrl,
-      project: WORKSPACE_PROJECT,
+      project: binding.project,
       newWorldId: crypto.randomUUID,
     })
     if (!result) return reply({ error: "WORLD_NOT_FOUND" }, 404)
-    const collection = await collectionMetadata({ userId: session.user.id, workspaceAppUrl, current: result })
+    const collection = await collectionMetadata({ userId: session.user.id, project: binding.project, workspaceAppUrl, current: result })
     return reply({
       ...result,
       storage: "server",
       ...collection,
       multiSpaceAvailable: true,
-      preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+      preferenceStorageKey: browserSpaceStorageKey(session.user.id, binding.project.identity),
     })
   } catch (error) {
     const reason = error instanceof Error ? error.message : "SPACE_PERSISTENCE_UNAVAILABLE"
@@ -94,13 +95,13 @@ export async function GET(request: Request) {
     const fallback = createDefaultSpace(workspaceAppUrl)
     return reply({
       worldId: "browser-local",
-      name: WORKSPACE_PROJECT.name,
+      name: binding.project.name,
       space: fallback,
-      project: WORKSPACE_PROJECT,
+      project: binding.project,
       storage: "browser",
-      browserStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
-      preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
-      spaces: [{ worldId: "browser-local", name: WORKSPACE_PROJECT.name, space: fallback, updatedAt: new Date(0).toISOString() }],
+      browserStorageKey: browserSpaceStorageKey(session.user.id, binding.project.identity),
+      preferenceStorageKey: browserSpaceStorageKey(session.user.id, binding.project.identity),
+      spaces: [{ worldId: "browser-local", name: binding.project.name, space: fallback, updatedAt: new Date(0).toISOString() }],
       multiSpaceAvailable: false,
     })
   }
@@ -112,19 +113,22 @@ export async function POST(request: Request) {
   const parsed = await readBoundedJson(request, 2_000)
   if (!parsed.ok) return reply({ error: parsed.error }, parsed.status)
   const body = parsed.value as { name?: unknown }
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return reply({ error: projectBinding.error }, 503)
+  const binding = projectBinding.binding
   try {
-    const workspaceAppUrl = await admittedAppUrl(request)
+    const workspaceAppUrl = await admittedAppUrl(request, binding)
     const result = await createOwnedProjectSpace({
       userId: session.user.id,
-      project: WORKSPACE_PROJECT,
+      project: binding.project,
       name: body.name,
       workspaceAppUrl,
       newWorldId: crypto.randomUUID,
     })
-    const collection = await collectionMetadata({ userId: session.user.id, workspaceAppUrl, current: result })
+    const collection = await collectionMetadata({ userId: session.user.id, project: binding.project, workspaceAppUrl, current: result })
     return reply({
       ...result, storage: "server", ...collection, multiSpaceAvailable: true,
-      preferenceStorageKey: browserSpaceStorageKey(session.user.id, WORKSPACE_PROJECT.identity),
+      preferenceStorageKey: browserSpaceStorageKey(session.user.id, binding.project.identity),
     }, 201)
   } catch (error) {
     const message = error instanceof Error ? error.message : ""
@@ -142,14 +146,18 @@ export async function PUT(request: Request) {
   const body = parsed.value as { worldId?: unknown; space?: unknown }
   if (!validWorldId(body.worldId)) return reply({ error: "WORLD_ID_INVALID" }, 400)
 
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return reply({ error: projectBinding.error }, 503)
+  const binding = projectBinding.binding
+
   try {
-    const workspaceAppUrl = await admittedAppUrl(request)
+    const workspaceAppUrl = await admittedAppUrl(request, binding)
     const result = await saveOwnedSpace({
       userId: session.user.id,
       worldId: body.worldId,
       space: body.space,
       workspaceAppUrl,
-      project: WORKSPACE_PROJECT,
+      project: binding.project,
     })
     return result ? reply(result) : reply({ error: "WORLD_NOT_FOUND" }, 404)
   } catch (error) {

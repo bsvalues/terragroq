@@ -42,6 +42,7 @@ export async function GET(req: Request) {
     {
       ok: true,
       readiness,
+      terraFusionRootConfigured: Boolean(process.env.WILLIAMOS_TERRAFUSION_ROOT?.trim()),
       processStartedAt: getProcessStartedAt(),
       runtimeInstanceId: getRuntimeInstanceId(),
       checkedAt: new Date().toISOString(),

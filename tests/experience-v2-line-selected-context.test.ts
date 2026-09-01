@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { createHash } from "node:crypto"
 
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { createWorkingWorld, type SpaceState, type WorkingWorldSnapshot } from "@/lib/environment/working-world"
 
@@ -18,6 +18,7 @@ const harness = vi.hoisted(() => ({
   startRetainedWork: vi.fn(),
   createDecision: vi.fn(),
   supersedeDecision: vi.fn(),
+  resolveProjectBinding: vi.fn(),
 }))
 
 vi.mock("@/lib/session", () => ({ getUserId: vi.fn(async () => "owner-a") }))
@@ -28,6 +29,9 @@ vi.mock("@/lib/environment/space-persistence", async (importOriginal) => ({
 vi.mock("@/lib/loom/workspace-diff", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/loom/workspace-diff")>(),
   deriveWorkspaceFileDiff: harness.diff,
+}))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: harness.resolveProjectBinding,
 }))
 vi.mock("@/lib/environment/current-work-db", () => ({
   answerCurrentWork: harness.answerCurrentWork,
@@ -58,6 +62,13 @@ vi.mock("@/lib/db", () => ({
 
 const roots: string[] = []
 
+beforeEach(() => {
+  harness.resolveProjectBinding.mockImplementation(async () => ({
+    ok: true,
+    binding: { workspaceRoot: process.env.WILLIAMOS_TERRAFUSION_ROOT ?? process.cwd() },
+  }))
+})
+
 afterEach(async () => {
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -68,9 +79,10 @@ afterEach(async () => {
   harness.startRetainedWork.mockReset()
   harness.createDecision.mockReset()
   harness.supersedeDecision.mockReset()
+  harness.resolveProjectBinding.mockReset()
   harness.selectCount = 0
   harness.decisionExists = false
-  delete process.env.WILLIAMOS_PROJECT_ROOT
+  delete process.env.WILLIAMOS_TERRAFUSION_ROOT
   delete process.env.WILLIAMOS_WORKSPACE_APP_URL
   delete process.env.BETTER_AUTH_URL
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
@@ -342,7 +354,11 @@ describe("server-derived Line selected-object grounding", () => {
       runningAppUrl: "http://tf.test:5000/real-preview",
     }
     harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
-    process.env.WILLIAMOS_PROJECT_ROOT = root
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = path.join(root, "raw-configured-alias")
+    harness.resolveProjectBinding.mockResolvedValue({
+      ok: true,
+      binding: { workspaceRoot: root },
+    })
     process.env.WILLIAMOS_WORKSPACE_APP_URL = change === "secret-configuration" || change === "secret-to-valid"
       ? "http://tf.test:5000/real-preview?token=server-secret"
       : "http://tf.test:5000/real-preview"
@@ -444,7 +460,7 @@ describe("server-derived Line selected-object grounding", () => {
       const actual = await input.deriveSelectedContext?.(latest)
       if (actual !== input.expectedSelectedContext) throw new Error("LINE_CONTEXT_STALE")
     })
-    process.env.WILLIAMOS_PROJECT_ROOT = root
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = root
     let inferenceBody: { messages?: { role?: string; content?: string }[] } = {}
     vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       inferenceBody = JSON.parse(String(init?.body)) as typeof inferenceBody
@@ -513,7 +529,7 @@ describe("server-derived Line selected-object grounding", () => {
       const latest = JSON.parse(harness.snapshot) as ReturnType<typeof createWorkingWorld> & { space: SpaceState }
       if (await input.deriveSelectedContext?.(latest) !== input.expectedSelectedContext) throw new Error("LINE_CONTEXT_STALE")
     })
-    process.env.WILLIAMOS_PROJECT_ROOT = root
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = root
     let inferenceBody: { messages?: { role?: string; content?: string }[] } = {}
     vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       inferenceBody = JSON.parse(String(init?.body)) as typeof inferenceBody
@@ -534,6 +550,7 @@ describe("server-derived Line selected-object grounding", () => {
 
     expect(response.status).toBe(409)
     await expect(response.json()).resolves.toEqual({ error: "LINE_CONTEXT_STALE" })
+    expect(harness.resolveProjectBinding).toHaveBeenCalledTimes(2)
     expect(harness.diff).toHaveBeenNthCalledWith(1, root, "src/authoritative.ts")
     const system = inferenceBody.messages?.find((message) => message.role === "system")?.content ?? ""
     expect(system).toContain("Current patch (server-derived)")
@@ -583,7 +600,7 @@ describe("server-derived Line selected-object grounding", () => {
       const latest = JSON.parse(harness.snapshot) as ReturnType<typeof createWorkingWorld> & { space: SpaceState }
       if (await input.deriveSelectedContext?.(latest) !== input.expectedSelectedContext) throw new Error("LINE_CONTEXT_STALE")
     })
-    process.env.WILLIAMOS_PROJECT_ROOT = root
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = root
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ choices: [{ message: { content: "Stale binary review" } }] })))
     const { POST } = await import("@/app/api/environment/line/route")
 
@@ -630,7 +647,7 @@ describe("server-derived Line selected-object grounding", () => {
       const latest = JSON.parse(harness.snapshot) as ReturnType<typeof createWorkingWorld> & { space: SpaceState }
       if (await input.deriveSelectedContext?.(latest) !== input.expectedSelectedContext) throw new Error("LINE_CONTEXT_STALE")
     })
-    process.env.WILLIAMOS_PROJECT_ROOT = root
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = root
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ choices: [{ message: { content: "Stale staged review" } }] })))
     const { POST } = await import("@/app/api/environment/line/route")
 
@@ -667,7 +684,7 @@ describe("server-derived Line selected-object grounding", () => {
       selection: { filePath: selectedPath, anchor: 0, head: 0 }, activeWindowId: "workspace-diff", activePaneId: "primary", runningAppUrl: null,
     }
     harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "TerraFusion" }), space })
-    process.env.WILLIAMOS_PROJECT_ROOT = root
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = root
     const inference = vi.fn(async () => Response.json({ choices: [{ message: { content: "must not run" } }] }))
     vi.stubGlobal("fetch", inference)
     const open = vi.spyOn(nodeFs.promises, "open")
@@ -708,7 +725,7 @@ describe("server-derived Line selected-object grounding", () => {
       path: "src/slow.ts", state: "modified", status: " M src/slow.ts", patch: "+slow\n",
       baseHash: "base", indexHash: "index", patchHash: "patch", fingerprint: "diff", reason: null,
     })
-    process.env.WILLIAMOS_PROJECT_ROOT = root
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = root
     const inference = vi.fn(async () => Response.json({ choices: [{ message: { content: "must not run" } }] }))
     vi.stubGlobal("fetch", inference)
     vi.useFakeTimers()

@@ -88,7 +88,8 @@ function TreeNode({ entry, depth, selectedPath, onOpen }: {
   )
 }
 
-export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange, reloadPath = null, reloadKey = 0, onReloadSettled }: {
+export function EditorSurface({ projectName = "Project", space, onEditorChange, onSelectedFileDirtyChange, reloadPath = null, reloadKey = 0, onReloadSettled }: {
+  projectName?: string
   space: WorkspaceSpace
   onEditorChange: (editor: WorkspaceSpace["editor"], selectedPath: string | null) => void
   onSelectedFileDirtyChange?: (path: string, dirty: boolean) => void
@@ -264,7 +265,7 @@ export function EditorSurface({ space, onEditorChange, onSelectedFileDirtyChange
   return (
     <div className={styles.editorSurface}>
       <nav className={styles.fileTree} aria-label="Workspace files">
-        <div className={styles.fileTreeName}>TERRAFUSION</div>
+        <div className={styles.fileTreeName}>{projectName.toUpperCase()}</div>
         {treeError ? <div className={styles.inlineRefusal} role="alert">{treeError}</div> : null}
         <ul>
           {(roots ?? []).map((entry) => (

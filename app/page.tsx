@@ -3,6 +3,7 @@ import { redirect } from "next/navigation"
 import { getUserId } from "@/lib/session"
 import { Desk } from "@/components/desk/desk"
 import { isSummonedSurface } from "@/lib/environment/summon"
+import { ensureCanonicalOwnerProjects } from "@/lib/projects/owner-project-provisioning"
 
 /**
  * `/` IS the working environment.
@@ -43,6 +44,11 @@ export default async function WilliamOSRoot({
     userId = null
   }
   if (!userId) redirect("/sign-in")
+  // The first authenticated landing is also the retryable provisioning seam for the owner's
+  // canonical Projects. Signup cannot safely own this: its post-create hooks run after the user
+  // transaction commits, so a transient failure could otherwise strand a valid owner with no
+  // usable Space. Awaiting here guarantees the workspace never hydrates ahead of its Project truth.
+  await ensureCanonicalOwnerProjects(userId)
   // A superseded route redirected here carrying the surface it used to be. Anything unrecognized is
   // simply dropped: an unknown surface name opens the ordinary empty environment rather than an error
   // page, because a stale bookmark is not a fault the owner needs reported.

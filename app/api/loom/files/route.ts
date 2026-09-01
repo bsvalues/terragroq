@@ -6,11 +6,11 @@ import { assertOwner, resolveOwnerUserId } from "@/lib/governance/owner"
 import { ownerLookup } from "@/lib/governance/owner-lookup"
 import { writeManualOwnerWorkspaceFile } from "@/lib/loom/manual-owner-file-save"
 import { isIgnoredEntry, isSensitiveWorkspacePath, looksBinary, resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const MAX_FILE_BYTES = 2_000_000
 const MAX_WRITE_BODY_BYTES = MAX_FILE_BYTES + 32_000
 
@@ -22,8 +22,12 @@ export async function GET(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
 
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return refuse(projectBinding.error, 503)
+  const binding = projectBinding.binding
+
   const url = new URL(request.url)
-  const resolved = await resolveRealWorkspacePath(PROJECT_ROOT, url.searchParams.get("path") ?? "", fs.realpath)
+  const resolved = await resolveRealWorkspacePath(binding.workspaceRoot, url.searchParams.get("path") ?? "", fs.realpath)
   if (!resolved.ok || !resolved.absolute) return refuse(resolved.refusal ?? "PATH_INVALID", 400)
   if (isSensitiveWorkspacePath(resolved.relative ?? "")) return refuse("SENSITIVE_PATH", 403)
 
@@ -38,6 +42,7 @@ export async function GET(request: Request) {
     const entries = await fs.readdir(resolved.absolute, { withFileTypes: true })
     return Response.json({
       kind: "directory",
+      project: binding.project,
       path: resolved.relative,
       entries: entries
         .filter((entry) => !isIgnoredEntry(entry.name))
@@ -55,10 +60,11 @@ export async function GET(request: Request) {
 
   const bytes = await fs.readFile(resolved.absolute)
   if (looksBinary(bytes)) {
-    return Response.json({ kind: "binary", path: resolved.relative, size: stats.size }, { headers: { "cache-control": "no-store" } })
+    return Response.json({ kind: "binary", project: binding.project, path: resolved.relative, size: stats.size }, { headers: { "cache-control": "no-store" } })
   }
   return Response.json({
     kind: "file",
+    project: binding.project,
     path: resolved.relative,
     content: bytes.toString("utf8"),
     size: stats.size,
@@ -76,6 +82,10 @@ export async function GET(request: Request) {
 export async function PUT(request: Request) {
   const session = await getSession()
   if (!session) return refuse("UNAUTHENTICATED", 401)
+
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return refuse(projectBinding.error, 503)
+  const binding = projectBinding.binding
 
   const ownerId = await resolveOwnerUserId(ownerLookup(), process.env.WILLIAMOS_OWNER_EMAIL)
   const owner = assertOwner(session.user.id, ownerId)
@@ -95,9 +105,9 @@ export async function PUT(request: Request) {
     path: body.path,
     content: body.content,
     modifiedAt: body.modifiedAt,
-  }, PROJECT_ROOT)
+  }, binding.workspaceRoot)
   if (!result.ok) {
     return Response.json(result, { status: result.status, headers: { "cache-control": "no-store" } })
   }
-  return Response.json(result, { headers: { "cache-control": "no-store" } })
+  return Response.json({ ...result, project: binding.project }, { headers: { "cache-control": "no-store" } })
 }

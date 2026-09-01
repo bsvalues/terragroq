@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const sessionMocks = vi.hoisted(() => ({ getSession: vi.fn() }))
+const bindingMocks = vi.hoisted(() => ({ resolve: vi.fn() }))
 const fsMocks = vi.hoisted(() => ({
   readFile: vi.fn(),
   readdir: vi.fn(),
@@ -9,6 +10,7 @@ const fsMocks = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/session", () => ({ getSession: sessionMocks.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({ resolveTerraFusionWorkspaceBinding: bindingMocks.resolve }))
 vi.mock("node:fs/promises", () => ({ default: fsMocks }))
 
 import { GET } from "@/app/api/loom/files/route"
@@ -20,6 +22,10 @@ describe("workspace file API sensitive-path boundary", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     sessionMocks.getSession.mockResolvedValue({ user: { id: "owner-a" } })
+    bindingMocks.resolve.mockResolvedValue({ ok: true, binding: {
+      workspaceRoot: "C:/project",
+      project: { identity: "c:/project", name: "TerraFusion OS" },
+    } })
     fsMocks.realpath.mockImplementation(async (candidate: string) => candidate)
     fsMocks.stat.mockResolvedValue({
       isDirectory: () => true,

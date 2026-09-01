@@ -10,6 +10,7 @@ import {
 import { loomCodexThreadDescriptor } from "@/lib/loom/threads"
 import {
   deriveCodexAssignment,
+  deriveCodexAssignmentForVerifiedRootAlias,
   revalidateCodexAssignment,
   type CodexAssignment,
 } from "@/lib/loom/codex-assignment"
@@ -32,11 +33,11 @@ import {
   CodexAppServerClient,
   sanitizeAppServerText,
 } from "@/scripts/hermes-bridge/app-server-client.mjs"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = path.resolve(process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd())
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/
 const MAX_PROMPT_CHARS = 32_000
 const MAX_DELTA_CHARS = 16_000
@@ -104,6 +105,10 @@ function delegatedPrompt(assignment: CodexAssignment, prompt: string): string {
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const projectRoot = path.resolve(projectBinding.binding.workspaceRoot)
+  const configuredProjectRoot = path.resolve(projectBinding.binding.configuredWorkspaceRoot)
 
   let body: { worldId?: unknown; prompt?: unknown; sessionId?: unknown; resume?: unknown; automatic?: unknown }
   try {
@@ -162,7 +167,7 @@ export async function POST(request: Request) {
     assignment = await deriveCodexAssignment({
       userId: session.user.id,
       worldId,
-      projectRoot: PROJECT_ROOT,
+      projectRoot,
     })
   } catch (error) {
     await releaseClaim()
@@ -217,15 +222,36 @@ export async function POST(request: Request) {
         { status: 403, headers: { "cache-control": "no-store" } },
       )
     }
+    const workspaceMatchesPhysical = descriptor.workspace !== null
+      && sameWorkspace(descriptor.workspace, projectRoot)
+    const workspaceMatchesConfigured = descriptor.workspace !== null
+      && sameWorkspace(descriptor.workspace, configuredProjectRoot)
+    let assignmentHashMatches = descriptor.assignmentHash === assignment.assignmentHash
+    if (!assignmentHashMatches
+      && workspaceMatchesConfigured
+      && !workspaceMatchesPhysical
+      && !sameWorkspace(configuredProjectRoot, projectRoot)) {
+      try {
+        const configuredRootAssignment = await deriveCodexAssignmentForVerifiedRootAlias({
+          userId: session.user.id,
+          worldId,
+          configuredProjectRoot,
+          verifiedProjectRoot: projectRoot,
+        })
+        assignmentHashMatches = descriptor.assignmentHash === configuredRootAssignment.assignmentHash
+      } catch {
+        assignmentHashMatches = false
+      }
+    }
     if (descriptor.provider !== "Codex"
       || descriptor.mode !== "delegate"
       || descriptor.workspace === null
-      || !sameWorkspace(descriptor.workspace, PROJECT_ROOT)
+      || (!workspaceMatchesPhysical && !workspaceMatchesConfigured)
       || descriptor.worldId !== assignment.worldId
       || descriptor.outcomeKey !== assignment.outcomeKey
       || descriptor.workOrderId !== assignment.workOrderId
       || descriptor.grantId !== assignment.grantId
-      || descriptor.assignmentHash !== assignment.assignmentHash
+      || !assignmentHashMatches
       || descriptor.selectedPath !== assignment.selectedPath) {
       return Response.json(
         { error: "THREAD_DESCRIPTOR_MISMATCH" },
@@ -314,7 +340,7 @@ export async function POST(request: Request) {
         try {
           assertNotCancelled()
           isolated = await createCodexIsolatedWorkspace({
-            projectRoot: PROJECT_ROOT,
+            projectRoot,
             selectedPath: assignment.selectedPath,
             initialContent: assignment.target.content,
           })
@@ -375,7 +401,7 @@ export async function POST(request: Request) {
             await recordLoomCodexAssignment({
               userId: session.user.id,
               threadId: durableThreadId,
-              workspace: PROJECT_ROOT,
+              workspace: projectRoot,
               worldId: assignment.worldId,
               spaceRevision: assignment.binding.spaceRevision,
               outcomeId: assignment.binding.outcomeId,
@@ -458,7 +484,7 @@ export async function POST(request: Request) {
           isolated = null
           assertNotCancelled()
 
-          const baseWriterDependencies = workspaceFileWriteDependencies(PROJECT_ROOT)
+          const baseWriterDependencies = workspaceFileWriteDependencies(projectRoot)
           let successReceiptFailed = false
           const writerDependencies = {
             ...baseWriterDependencies,
@@ -498,7 +524,7 @@ export async function POST(request: Request) {
                 await commitLoomCodexSuccess({
                   userId: session.user.id,
                   threadId: durableThreadId,
-                  workspace: PROJECT_ROOT,
+                  workspace: projectRoot,
                   resumed: resuming,
                   worldId: assignment.worldId,
                   outcomeKey: assignment.outcomeKey,

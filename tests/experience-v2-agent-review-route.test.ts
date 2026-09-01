@@ -18,6 +18,9 @@ vi.mock("node:fs/promises", () => ({
   default: { realpath: vi.fn(), stat: seams.stat },
 }))
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+}))
 vi.mock("@/lib/loom/workspace", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/loom/workspace")>(),
   resolveRealWorkspacePath: seams.resolveRealWorkspacePath,

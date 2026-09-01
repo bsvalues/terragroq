@@ -39,8 +39,8 @@
   application answers 200 on /sign-in while being unable to reach its database, so the failure would
   look exactly like a healthy service. That is precisely how this went unnoticed for two days.
 
-  THE SECOND DEFECT THIS CLOSES (#1015). The application reads its workspace as
-  `process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()`. `.env.local` DECLARED that variable, but
+  THE SECOND DEFECT THIS CLOSES (#1015). The application reads the TerraFusion target workspace as
+  `process.env.WILLIAMOS_TERRAFUSION_ROOT`. `.env.local` DECLARED that variable, but
   nothing ever APPLIED it: a Next standalone server does not load `.env.local` into the environment
   of the already-running process for server-side reads, and this launcher exported only NODE_ENV,
   HOSTNAME, PORT and DATABASE_URL. So the fallback won and `process.cwd()` -- the deployed standalone
@@ -70,7 +70,7 @@ param(
   [int]$Port = 3100,
   [string]$BindHost = "127.0.0.1",
   [string]$FabricRoot,
-  # The governed workspace the cockpit edits. Declared in .env.local; this overrides it when a
+  # The TerraFusion workspace the cockpit edits. Declared in .env.local; this legacy-named switch overrides it when a
   # deployment needs to say so explicitly. Never defaulted to a literal here -- see the header.
   [string]$ProjectRoot
 )
@@ -137,9 +137,11 @@ function Deny-Boot {
   exit 1
 }
 
-$declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT" }
+$declaredRoot = if ($ProjectRoot) { $ProjectRoot } else { Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_ROOT" }
+$declaredWilliamOsRoot = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_PROJECT_ROOT"
+$declaredTerraFusionSpaceIdentity = Get-DeclaredEnvValue -File $envFile -Key "WILLIAMOS_TERRAFUSION_SPACE_IDENTITY"
 if (-not $declaredRoot) {
-  Deny-Boot "PROJECT_ROOT_UNDECLARED" "no WILLIAMOS_PROJECT_ROOT was declared in $envFile and none was passed as -ProjectRoot. Without it the application falls back to its own deployment directory and silently treats the bundle as the workspace."
+  Deny-Boot "PROJECT_ROOT_UNDECLARED" "no WILLIAMOS_TERRAFUSION_ROOT was declared in $envFile and none was passed as -ProjectRoot. Without it WilliamOS has no declared TerraFusion checkout."
 }
 if (-not (Test-Path -LiteralPath $declaredRoot -PathType Container)) {
   Deny-Boot "PROJECT_ROOT_MISSING" "the declared workspace '$declaredRoot' does not exist."
@@ -231,7 +233,16 @@ $env:PORT = "$Port"
 $env:DATABASE_URL = $resolvedUrl
 # Same precedence, same reason: declared in .env.local, but only an already-present process variable
 # is actually read by the server, so applying it here is what makes the declaration take effect.
-$env:WILLIAMOS_PROJECT_ROOT = $resolvedProjectRoot
+$env:WILLIAMOS_TERRAFUSION_ROOT = $resolvedProjectRoot
+if ($declaredTerraFusionSpaceIdentity) {
+  $env:WILLIAMOS_TERRAFUSION_SPACE_IDENTITY = $declaredTerraFusionSpaceIdentity
+}
+# The TerraFusion target and the WilliamOS source checkout have deliberately separate meanings.
+# Preserve the source-root declaration for system operations such as the sign-in fix; never alias
+# the validated TerraFusion target into this variable.
+if ($declaredWilliamOsRoot) {
+  $env:WILLIAMOS_PROJECT_ROOT = $declaredWilliamOsRoot
+}
 
 $process = Start-Process -FilePath $node -ArgumentList @($server) -WorkingDirectory $AppRoot -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -Wait -PassThru -WindowStyle Hidden
 exit $process.ExitCode

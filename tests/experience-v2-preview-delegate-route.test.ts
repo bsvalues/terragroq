@@ -15,6 +15,9 @@ const seams = vi.hoisted(() => ({
 
 vi.mock("node:child_process", () => ({ spawn: seams.spawn }))
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),
+}))
 vi.mock("@/lib/environment/space-persistence", () => ({ loadOwnedWorkingWorld: seams.loadOwnedWorkingWorld }))
 vi.mock("@/lib/environment/workspace-app", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/environment/workspace-app")>(),

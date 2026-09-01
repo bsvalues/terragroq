@@ -5,12 +5,12 @@ import { getSession } from "@/lib/session"
 import { resolveLoomOperation, resolveProjectTerminalCommand } from "@/lib/loom/operations"
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { requireWorkContext, workContextRefusal } from "@/lib/governance/work-context-gate"
+import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
 
 export const dynamic = "force-dynamic"
 // Node runtime, not edge: this streams the output of a real process on this machine.
 export const runtime = "nodejs"
 
-const PROJECT_ROOT = process.env.WILLIAMOS_PROJECT_ROOT ?? process.cwd()
 const MAX_OUTPUT_BYTES = 2_000_000
 
 /**
@@ -29,6 +29,9 @@ const MAX_OUTPUT_BYTES = 2_000_000
 export async function POST(request: Request) {
   const session = await getSession()
   if (!session) return Response.json({ error: "UNAUTHENTICATED" }, { status: 401 })
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(session.user.id)
+  if (!projectBinding.ok) return Response.json({ error: projectBinding.error }, { status: 503 })
+  const projectRoot = projectBinding.binding.workspaceRoot
 
   let body: { operation?: unknown; confirmed?: unknown; terminalCommand?: unknown }
   try {
@@ -61,7 +64,7 @@ export async function POST(request: Request) {
 
   const command = operation.command === "node" ? process.execPath : operation.command
   const child = spawn(command, [...operation.args], {
-    cwd: operation.scope === "project" ? PROJECT_ROOT : PROJECT_ROOT,
+    cwd: projectRoot,
     shell: false,
     windowsHide: true,
     env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },

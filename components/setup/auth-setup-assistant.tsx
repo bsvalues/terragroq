@@ -19,6 +19,7 @@ type SetupSaveResponse = {
 type SetupStatusResponse = {
   ok: boolean
   readiness: AuthReadiness
+  terraFusionRootConfigured: boolean
   processStartedAt: number
   runtimeInstanceId: string
   checkedAt: string
@@ -41,16 +42,24 @@ function generateSecret() {
 export function AuthSetupAssistant({
   initialReadiness,
   defaultAuthUrl,
+  defaultTerraFusionRoot,
+  initialTerraFusionRootConfigured,
   initialProcessStartedAt,
 }: {
   initialReadiness: AuthReadiness
   defaultAuthUrl: string
+  defaultTerraFusionRoot: string
+  initialTerraFusionRootConfigured: boolean
   initialProcessStartedAt: number
 }) {
   const [databaseUrl, setDatabaseUrl] = useState("")
   const [authSecret, setAuthSecret] = useState("")
   const [authUrl, setAuthUrl] = useState(defaultAuthUrl)
+  const [terraFusionRoot, setTerraFusionRoot] = useState(defaultTerraFusionRoot)
   const [saving, setSaving] = useState(false)
+  const [editingTerraFusionRoot, setEditingTerraFusionRoot] = useState(
+    !initialTerraFusionRootConfigured,
+  )
   const [statusChecking, setStatusChecking] = useState(false)
   const [saved, setSaved] = useState(false)
   const [statusResult, setStatusResult] = useState<SetupStatusResponse | null>(null)
@@ -62,6 +71,8 @@ export function AuthSetupAssistant({
   const [credentialSaved, setCredentialSaved] = useState(false)
 
   const effectiveReadiness = statusResult?.readiness ?? initialReadiness
+  const terraFusionRootConfigured =
+    statusResult?.terraFusionRootConfigured ?? initialTerraFusionRootConfigured
   const restartDetected =
     statusResult != null && statusResult.processStartedAt !== initialProcessStartedAt
 
@@ -88,11 +99,19 @@ export function AuthSetupAssistant({
         !payload.readiness ||
         typeof payload.processStartedAt !== "number" ||
         typeof payload.runtimeInstanceId !== "string" ||
-        typeof payload.checkedAt !== "string"
+        typeof payload.checkedAt !== "string" ||
+        typeof payload.terraFusionRootConfigured !== "boolean"
       ) {
         throw new Error("Setup status endpoint returned an invalid payload.")
       }
-      setStatusResult(payload as SetupStatusResponse)
+      const verifiedStatus = payload as SetupStatusResponse
+      setStatusResult(verifiedStatus)
+      if (
+        verifiedStatus.terraFusionRootConfigured &&
+        verifiedStatus.processStartedAt !== initialProcessStartedAt
+      ) {
+        setEditingTerraFusionRoot(false)
+      }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Setup status check failed.",
@@ -113,6 +132,7 @@ export function AuthSetupAssistant({
           databaseUrl,
           authSecret,
           authUrl,
+          terraFusionRoot,
         }),
       })
 
@@ -126,6 +146,34 @@ export function AuthSetupAssistant({
       toast.success(payload.message)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Setup save failed.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function onTerraFusionRootSave(e: React.FormEvent) {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      const response = await fetch("/api/setup/local-config", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          operation: "terrafusion-root",
+          terraFusionRoot,
+        }),
+      })
+
+      const payload = (await response.json()) as SetupSaveResponse
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "TerraFusion checkout save failed.")
+      }
+
+      setSaved(true)
+      setStatusResult(null)
+      toast.success(payload.message)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "TerraFusion checkout save failed.")
     } finally {
       setSaving(false)
     }
@@ -186,6 +234,96 @@ export function AuthSetupAssistant({
               <Link href="/sign-in">Go to Primary Access</Link>
             </Button>
           </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-muted/20 p-4">
+          {terraFusionRootConfigured && !editingTerraFusionRoot ? (
+            <div className="flex items-start gap-2">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 text-success" aria-hidden />
+              <div className="space-y-1">
+                <h3 className="text-sm font-semibold">TerraFusion checkout connected</h3>
+                <p className="text-sm text-muted-foreground">
+                  WilliamOS has a distinct target checkout for TerraFusion development. If that checkout moved or is no longer correct, replace it here.
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="mt-2"
+                  onClick={() => setEditingTerraFusionRoot(true)}
+                >
+                  Change TerraFusion checkout
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-1">
+                <h3 className="text-sm font-semibold">
+                  {terraFusionRootConfigured
+                    ? "Change the TerraFusion checkout"
+                    : "Connect the TerraFusion checkout"}
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  {terraFusionRootConfigured
+                    ? "Replace the configured target when the TerraFusion checkout moved or no longer identifies the repository WilliamOS should develop."
+                    : "Authentication is ready, but WilliamOS still needs the real TerraFusion repository it will develop and preview."}
+                </p>
+              </div>
+              <form onSubmit={onTerraFusionRootSave} className="mt-4 grid gap-3">
+                <div className="grid gap-2">
+                  <Label htmlFor="terra-fusion-root-ready">TerraFusion checkout</Label>
+                  <Input
+                    id="terra-fusion-root-ready"
+                    type="text"
+                    value={terraFusionRoot}
+                    onChange={(e) => setTerraFusionRoot(e.target.value)}
+                    placeholder="C:\\Users\\you\\terrafusion_os_1.0"
+                    required
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    This updates only the target checkout. It does not reopen or rewrite authentication setup.
+                  </p>
+                </div>
+                <Button type="submit" disabled={saving} className="w-fit">
+                  {saving ? (
+                    <>
+                      <RefreshCw className="mr-1.5 h-4 w-4 animate-spin" aria-hidden />
+                      Saving checkout…
+                    </>
+                  ) : (
+                    "Save TerraFusion checkout"
+                  )}
+                </Button>
+                {terraFusionRootConfigured && !saved ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="w-fit"
+                    onClick={() => setEditingTerraFusionRoot(false)}
+                  >
+                    Keep current checkout
+                  </Button>
+                ) : null}
+                {saved ? (
+                  <div className="space-y-2 text-xs text-muted-foreground">
+                    <p>Checkout saved. Restart WilliamOS, then verify the target connection.</p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => void checkPostRestartStatus()}
+                      disabled={statusChecking}
+                    >
+                      {statusChecking ? "Checking…" : "I restarted — check target"}
+                    </Button>
+                  </div>
+                ) : null}
+              </form>
+            </>
+          )}
         </div>
 
         <div className="rounded-lg border border-border bg-muted/20 p-4">
@@ -359,6 +497,22 @@ export function AuthSetupAssistant({
             required
             autoComplete="off"
           />
+        </div>
+
+        <div className="grid gap-2">
+          <Label htmlFor="project-root">TerraFusion checkout</Label>
+          <Input
+            id="project-root"
+            type="text"
+            value={terraFusionRoot}
+            onChange={(e) => setTerraFusionRoot(e.target.value)}
+            placeholder="C:\\Users\\you\\terrafusion_os_1.0"
+            required
+            autoComplete="off"
+          />
+          <p className="text-xs text-muted-foreground">
+            Absolute path to the real TerraFusion repository WilliamOS will develop and preview.
+          </p>
         </div>
 
         <Button type="submit" disabled={saving}>

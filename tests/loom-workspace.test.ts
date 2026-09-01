@@ -16,6 +16,11 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: terminalRouteSeams.spawn,
 }))
 vi.mock("@/lib/session", () => ({ getSession: terminalRouteSeams.getSession }))
+vi.mock("@/lib/projects/workspace-project-binding", () => ({
+  resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: {
+    workspaceRoot: process.platform === "win32" ? "C:\\work\\repo" : "/work/repo",
+  } }),
+}))
 vi.mock("@/lib/loom/receipts", () => ({
   recordLoomStart: terminalRouteSeams.recordLoomStart,
   recordLoomEnd: terminalRouteSeams.recordLoomEnd,
