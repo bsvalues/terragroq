@@ -316,15 +316,10 @@ export class AegisExecutionBackend extends ExecutionBackend {
 }
 
 export function selectExecutionBackend(env = process.env) {
-  // Explicit opt-in, checked first and matched exactly. WILLIAMOS_CODEX_EXEC_NODE selects
-  // WHERE Codex runs; this selects WHETHER Codex runs at all, so it cannot be folded into it.
-  // Nothing sets this variable today, so existing deployments keep their current backend.
-  if (env?.WILLIAMOS_EXECUTOR === "resident-model") {
-    const options = {}
-    if (env.WILLIAMOS_HERMES_RUNTIME_ROOT) options.runtimeRoot = env.WILLIAMOS_HERMES_RUNTIME_ROOT
-    if (env.WILLIAMOS_REPOSITORY_ROOT) options.repositoryRoot = env.WILLIAMOS_REPOSITORY_ROOT
-    return new ResidentModelExecutionBackend(options)
-  }
+  // A configured governed execution node owns the worktree and every file mechanic.
+  // In particular, a Windows resident supervisor must not retain local snapshot
+  // behavior while claiming AEGIS routing. Resident-model execution remains an
+  // exact local-only opt-in when no governed execution node is configured.
   const host = env?.WILLIAMOS_CODEX_EXEC_NODE
   if (typeof host === "string" && host.trim().length > 0) {
     const options = { host }
@@ -332,6 +327,12 @@ export function selectExecutionBackend(env = process.env) {
     if (runtimeRoot) options.runtimeRoot = runtimeRoot
     if (env.WILLIAMOS_AEGIS_REPOSITORY_ROOT) options.repositoryRoot = env.WILLIAMOS_AEGIS_REPOSITORY_ROOT
     return new AegisExecutionBackend(options)
+  }
+  if (env?.WILLIAMOS_EXECUTOR === "resident-model") {
+    const options = {}
+    if (env.WILLIAMOS_HERMES_RUNTIME_ROOT) options.runtimeRoot = env.WILLIAMOS_HERMES_RUNTIME_ROOT
+    if (env.WILLIAMOS_REPOSITORY_ROOT) options.repositoryRoot = env.WILLIAMOS_REPOSITORY_ROOT
+    return new ResidentModelExecutionBackend(options)
   }
   const options = {}
   if (env?.WILLIAMOS_HERMES_RUNTIME_ROOT) options.runtimeRoot = env.WILLIAMOS_HERMES_RUNTIME_ROOT

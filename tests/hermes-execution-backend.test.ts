@@ -28,9 +28,10 @@ describe("execution backends", () => {
     for (const value of ["resident", "resident-model ", "RESIDENT-MODEL", "", " "]) {
       expect(selectExecutionBackend({ WILLIAMOS_EXECUTOR: value })).not.toBeInstanceOf(ResidentModelExecutionBackend)
     }
-    // Whether Codex runs outranks where Codex runs.
+    // A governed AEGIS node owns file/worktree mechanics even when a resident
+    // model is configured; this prevents Windows local snapshot bypass.
     expect(selectExecutionBackend({ WILLIAMOS_EXECUTOR: "resident-model", WILLIAMOS_CODEX_EXEC_NODE: "aegis" }))
-      .toBeInstanceOf(ResidentModelExecutionBackend)
+      .toBeInstanceOf(AegisExecutionBackend)
     // Absent the opt-in, existing selection is untouched.
     expect(selectExecutionBackend({ WILLIAMOS_CODEX_EXEC_NODE: "aegis" })).toBeInstanceOf(AegisExecutionBackend)
     expect(selectExecutionBackend({})).toBeInstanceOf(LocalExecutionBackend)
@@ -51,9 +52,14 @@ describe("execution backends", () => {
     fs.mkdirSync(workspacePath, { recursive: true })
     fs.writeFileSync(path.join(workspacePath, "present.txt"), "yes")
     expect(await backend.stat({ workspacePath, relPath: "present.txt" })).toEqual({ exists: true, isFile: true })
-    expect(await backend.snapshotFile({ workspacePath, relPath: "present.txt" })).toEqual({
-      sha256: createHash("sha256").update("yes").digest("hex"),
-    })
+    if (process.platform === "win32") {
+      await expect(backend.snapshotFile({ workspacePath, relPath: "present.txt" }))
+        .rejects.toMatchObject({ code: "HERMES_REPOSITORY_SNAPSHOT_WALL" })
+    } else {
+      expect(await backend.snapshotFile({ workspacePath, relPath: "present.txt" })).toEqual({
+        sha256: createHash("sha256").update("yes").digest("hex"),
+      })
+    }
     expect(await backend.validate({ workspacePath, commands: [{ command: "npm", args: ["test"], timeoutMs: 1000 }] }))
       .toEqual([{ exitCode: 0, stdout: "ok", stderr: "" }])
     expect(await backend.git({ workspacePath, args: ["status"] })).toEqual({ exitCode: 0, stdout: "ok" })
