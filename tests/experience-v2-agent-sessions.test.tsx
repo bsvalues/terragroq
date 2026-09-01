@@ -1045,7 +1045,6 @@ describe("Experience V2 real agent sessions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
 
     fireEvent.click(screen.getByRole("button", { name: "Review" }))
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }))
     await waitFor(() => expect(streams.has("Review")).toBe(true))
     const reviewId = "423e4567-e89b-42d3-a456-426614174000"
     act(() => streams.get("Review")!.enqueue(encoder.encode(`${JSON.stringify({ type: "session", sessionId: reviewId, provider: "Claude", mode: "review", resumed: false })}\n`)))

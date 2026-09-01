@@ -28,7 +28,7 @@ describe("WilliamOS Experience V2 shell", () => {
     expect(source).not.toContain("<textarea")
     expect(source).toContain("lineOpen ? (")
     expect(source).toContain('aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve current change" : "Change"')
-    expect(source).toContain('["Ask", "Change", "Delegate", "Review"] as const')
+    expect(source).toContain('["Ask", "Change", "Delegate", fileReviewUnavailableReason ? "Review unavailable" : "Review"] as const')
     expect(source).toContain('["Inspect", "Debug", previewExplainUnavailableReason ? "Explain unavailable" : "Explain", "Delegate"] as const')
     expect(source).toContain('[diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", diffChallengeUnavailableReason ? "Challenge unavailable" : "Challenge", "Merge unavailable"] as const')
     expect(source).toContain('action === "Merge unavailable"')

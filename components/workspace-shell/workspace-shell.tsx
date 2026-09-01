@@ -174,6 +174,12 @@ function lineSessionKey(provider: string, sessionId: string): string {
   return `${provider}:${sessionId}`
 }
 
+function isReviewableWorkspacePath(path: string | null): path is string {
+  if (!path || path.startsWith("/") || path.includes("\\") || /^[A-Za-z]:/.test(path)) return false
+  const segments = path.split("/")
+  return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..")
+}
+
 function lineSessionDescriptorFingerprint(session: unknown): string {
   return JSON.stringify(session)
 }
@@ -1527,10 +1533,21 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   }, [change.running, dirtyPaths, liveDiffContext, persistenceError, persistencePending, review.reset, review.running, space.activeWindowId, space.selectedPath, storage, worldId])
 
   const openReview = useCallback(() => {
-    if (change.running || review.running) return
     const target = space.selectedPath
+    if (change.running || review.running) {
+      setTransitionMessage("Finish the active Change or Review before reviewing another file.")
+      return
+    }
+    if (!worldId || !isReviewableWorkspacePath(target) || dirtyPaths[target] || persistenceError) {
+      setTransitionMessage(dirtyPaths[target ?? ""]
+        ? "Save the selected file before Review so Claude does not inspect stale disk content."
+        : "Review needs an exact durably saved workspace-relative file in the active Space.")
+      return
+    }
+    const capturedWorldId = worldId
+    const capturedEpoch = transitionEpochRef.current
     setCapturedDiffReview(null)
-    setAgentWorkReview(false)
+    setAgentWorkReview(true)
     setReviewTarget(target)
     review.reset(target)
     setLineTarget("agent")
@@ -1541,8 +1558,17 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setLineReply(null)
     setLineTargetPickerOpen(false)
     setLineOpen(true)
-    requestAnimationFrame(() => lineRef.current?.focus())
-  }, [change.running, review.reset, review.running, space.selectedPath])
+    void review.startCapturedPath({
+      path: target,
+      isStartCurrent: () => worldRef.current === capturedWorldId
+        && transitionEpochRef.current === capturedEpoch
+        && stateRef.current.selectedPath === target
+        && !dirtyPathsRef.current[target]
+        && !persistenceErrorRef.current,
+      isPresentationCurrent: () => worldRef.current === capturedWorldId
+        && transitionEpochRef.current === capturedEpoch,
+    })
+  }, [change.running, dirtyPaths, persistenceError, review.reset, review.running, review.startCapturedPath, space.selectedPath, worldId])
 
   const openAgentWorkReview = useCallback((sessionKey: string, target: string) => {
     if (change.running || review.running) {
@@ -2483,7 +2509,13 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           : !worldId || !project || !space.selectedPath || dirtyPaths[space.selectedPath]
             ? "Explain needs an exact durably saved selected source file."
             : null
-  const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
+  const fileReviewUnavailableReason = selectedKind !== "file" ? null
+    : change.running || review.running ? "Finish the active Change or Review before reviewing another file."
+      : !worldId || !isReviewableWorkspacePath(space.selectedPath) ? "Review needs an exact workspace-relative selected file."
+        : dirtyPaths[space.selectedPath] ? "Save the selected file before Review so Claude does not inspect stale disk content."
+          : persistenceError ? `Review is unavailable because Space persistence is refusing writes (${persistenceError}).`
+            : null
+  const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", fileReviewUnavailableReason ? "Review unavailable" : "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", previewExplainUnavailableReason ? "Explain unavailable" : "Explain", "Delegate"] as const
     : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", diffChallengeUnavailableReason ? "Challenge unavailable" : "Challenge", "Merge unavailable"] as const
     : selectedKind === "agent" && selectedAgent?.kind === "world-worker" ? ["Inspect", "Ask William", "Council"] as const
@@ -3223,7 +3255,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             }}
           /> : null}
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Challenge unavailable" || action === "Explain unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? diffReviewUnavailableReason ?? undefined : action === "Challenge unavailable" ? diffChallengeUnavailableReason ?? undefined : action === "Explain unavailable" ? previewExplainUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Challenge unavailable" || action === "Explain unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? selectedKind === "file" ? fileReviewUnavailableReason ?? undefined : diffReviewUnavailableReason ?? undefined : action === "Challenge unavailable" ? diffChallengeUnavailableReason ?? undefined : action === "Explain unavailable" ? previewExplainUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
         {selectedKind === "space" && !spaceContinueCandidate ? <span role="status">{continueUnavailableMessage}</span> : null}

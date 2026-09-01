@@ -65,13 +65,10 @@ function baseFetch(review: (init: RequestInit) => Promise<Response> | Response) 
   })
 }
 
-async function openReview(focus = "Check the authorization boundary.") {
+async function openReview(_focus = "") {
   await screen.findByLabelText("Source content")
   fireEvent.click(screen.getByRole("button", { name: "Review" }))
   expect(screen.getByText("Review · src/app.ts")).toBeTruthy()
-  const input = screen.getByRole("textbox", { name: "Review focus" })
-  fireEvent.change(input, { target: { value: focus } })
-  fireEvent.click(screen.getByRole("button", { name: "Start review" }))
 }
 
 async function openWilliamConversation() {
@@ -80,6 +77,39 @@ async function openWilliamConversation() {
 }
 
 describe("Experience V2 selected-file Review", () => {
+  it("starts a clean selected file Review in one click without a composer or second Start", async () => {
+    const pending = deferredStream()
+    const fetcher = baseFetch(() => pending.response)
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    await screen.findByLabelText("Source content")
+    fireEvent.click(screen.getByRole("button", { name: "Review" }))
+
+    expect(screen.getByText("Starting read-only Review…")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Stop review" })).toBeTruthy()
+    expect(screen.queryByRole("textbox", { name: "Review focus" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Start review" })).toBeNull()
+    const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      mode: "review", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false,
+    })
+  })
+
+  it("refuses File Review while the selected source buffer is dirty", async () => {
+    const fetcher = baseFetch(() => new Promise<Response>(() => undefined))
+    vi.stubGlobal("fetch", fetcher)
+    render(<WorkspaceShell />)
+
+    const source = await screen.findByLabelText("Source content")
+    fireEvent.change(source, { target: { value: "export const app = false\n" } })
+
+    const unavailable = await screen.findByRole("button", { name: "Review unavailable" }) as HTMLButtonElement
+    expect(unavailable.disabled).toBe(true)
+    expect(unavailable.title).toBe("Save the selected file before Review so Claude does not inspect stale disk content.")
+    expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/loom/agent")).toBe(false)
+  })
+
   it("runs a path-bound review and materializes plain text in a captured-path inspector", async () => {
     const report = "<img src=x onerror=alert(1)>\nP1: authorization is bypassed"
     const fetcher = baseFetch(() => stream(
@@ -98,7 +128,7 @@ describe("Experience V2 selected-file Review", () => {
     expect(screen.queryByText(/Streaming draft must not duplicate/)).toBeNull()
     expect(document.querySelector("img")).toBeNull()
     const request = fetcher.mock.calls.find(([input, init]) => String(input) === "/api/loom/agent" && init?.method === "POST")
-    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ mode: "review", path: "src/app.ts", focus: "Check the authorization boundary.", provider: "cloud", sessionId: null, resume: false })
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({ mode: "review", path: "src/app.ts", provider: "cloud", sessionId: null, resume: false })
     expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/line")).toBe(false)
   })
 
@@ -257,7 +287,7 @@ describe("Experience V2 selected-file Review", () => {
         provider: "Claude",
         reviewPath: "src/app.ts",
         completedTurns: [
-          expect.objectContaining({ ownerPrompt: "Check the authorization boundary.", finalResult: "First report" }),
+          expect.objectContaining({ ownerPrompt: "Review src/app.ts", finalResult: "First report" }),
           expect.objectContaining({ ownerPrompt: "Why is this unsafe?", finalResult: "The authorization boundary is unsafe because the owner check occurs too late." }),
         ],
       })])
@@ -497,7 +527,6 @@ describe("Experience V2 selected-file Review", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Focus Source" }))
     fireEvent.click(screen.getByRole("button", { name: "Review" }))
-    fireEvent.click(screen.getByRole("button", { name: "Start review" }))
 
     expect(await screen.findByText("Replacement report")).toBeTruthy()
     expect(screen.queryByText("First report")).toBeNull()
@@ -518,7 +547,8 @@ describe("Experience V2 selected-file Review", () => {
     expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByRole("button", { name: "Close The Line" }))
     fireEvent.click(screen.getByRole("button", { name: "Review" }))
-    expect((screen.getByRole("button", { name: "Start review" }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByText("Starting read-only Review…")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Start review" })).toBeNull()
   })
 
   it("stops the exact accepted Reviewer without stopping another concurrent turn", async () => {
