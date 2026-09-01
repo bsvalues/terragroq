@@ -1732,7 +1732,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       }
       if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
       const serverContext = context && typeof context === "object" && context.kind === "agent-snapshot"
-        ? (({ clientGuard: _clientGuard, ...snapshot }) => snapshot)(context)
+        ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== "clientGuard"))
         : context
       const response = await fetch("/api/environment/line", {
         method: "POST",
