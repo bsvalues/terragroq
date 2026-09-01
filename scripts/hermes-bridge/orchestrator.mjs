@@ -2113,11 +2113,32 @@ export function createHermesOrchestrator(options = {}) {
         outcome = await resumeQueueAfterReviewRecovery(outcome, reviewRecoveryProof)
       }
     }
+    const assertDeterministicRecoverySnapshot = async (execution) => {
+      const expectedSnapshotHash = execution?.metadata?.deterministicValidatorCircuit
+        ?.recovery?.structuredInputs?.worktreeSnapshotHash
+      const recoveryWorktreePath = execution?.metadata?.worktreePath
+      const recoveryBranch = execution?.metadata?.branch
+      if (!/^[0-9a-f]{64}$/.test(expectedSnapshotHash ?? "")
+        || typeof recoveryWorktreePath !== "string" || typeof recoveryBranch !== "string") {
+        throw Object.assign(new Error("Deterministic recovery snapshot identity is incomplete"), {
+          code: "HERMES_DETERMINISTIC_RECOVERY_SNAPSHOT_WALL",
+        })
+      }
+      const observedSnapshot = await lifecycle.inspectWorktreeSnapshot({
+        worktreePath: recoveryWorktreePath, branch: recoveryBranch,
+      })
+      if (observedSnapshot.snapshotHash !== expectedSnapshotHash) {
+        throw Object.assign(new Error("Deterministic recovery worktree changed after the wall"), {
+          code: "HERMES_DETERMINISTIC_RECOVERY_SNAPSHOT_WALL",
+        })
+      }
+    }
     const deterministicRecovery = current?.metadata?.deterministicValidatorQueueRecovery
     const deterministicRecoveryNeedsBinding = deterministicRecovery === null
       || Date.parse(deterministicRecovery?.recoveredLeaseExpiresAt ?? "") <= now().getTime()
     if (current?.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY"
       && deterministicRecoveryNeedsBinding) {
+      await assertDeterministicRecoverySnapshot(current)
       const recoveryBinding = await recoverDeterministicQueue({ execution: current })
       state.bindDeterministicValidatorQueueRecovery({
         idempotencyKey: `${outcomeId}:deterministic-validator:bind:${recoveryBinding.fingerprint}:${recoveryBinding.receiptId}`,
@@ -2151,24 +2172,7 @@ export function createHermesOrchestrator(options = {}) {
         return { result: "LEASE_HELD", outcomeId }
       }
       if (current.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY") {
-        const expectedSnapshotHash = current.metadata.deterministicValidatorCircuit
-          ?.recovery?.structuredInputs?.worktreeSnapshotHash
-        const recoveryWorktreePath = current.metadata?.worktreePath
-        const recoveryBranch = current.metadata?.branch
-        if (!/^[0-9a-f]{64}$/.test(expectedSnapshotHash ?? "")
-          || typeof recoveryWorktreePath !== "string" || typeof recoveryBranch !== "string") {
-          throw Object.assign(new Error("Deterministic recovery snapshot identity is incomplete"), {
-            code: "HERMES_DETERMINISTIC_RECOVERY_SNAPSHOT_WALL",
-          })
-        }
-        const observedSnapshot = await lifecycle.inspectWorktreeSnapshot({
-          worktreePath: recoveryWorktreePath, branch: recoveryBranch,
-        })
-        if (observedSnapshot.snapshotHash !== expectedSnapshotHash) {
-          throw Object.assign(new Error("Deterministic recovery worktree changed after the wall"), {
-            code: "HERMES_DETERMINISTIC_RECOVERY_SNAPSHOT_WALL",
-          })
-        }
+        await assertDeterministicRecoverySnapshot(current)
       }
       lease = current.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY"
         ? state.activateDeterministicValidatorRecovery({

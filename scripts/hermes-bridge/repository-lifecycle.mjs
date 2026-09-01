@@ -126,6 +126,56 @@ finally:
             pass
 `
 
+export const DESCRIPTOR_BOUND_VALIDATION_SCRIPT = `
+import os, shutil, stat, sys
+root_path = sys.argv[1]
+relative = sys.argv[2]
+clean_next = sys.argv[3] == '1'
+command = sys.argv[4]
+arguments = sys.argv[5:]
+if not os.path.isabs(root_path) or '\\x00' in root_path or '\\x00' in relative:
+    raise SystemExit(70)
+parts = [] if relative == '.' else relative.split('/')
+if any(part in ('', '.', '..') or '/' in part or '\\x00' in part for part in parts):
+    raise SystemExit(71)
+if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'fchdir'):
+    raise SystemExit(72)
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+opened = []
+current_fd = os.open(os.path.sep, directory_flags)
+opened.append(current_fd)
+try:
+    for part in [part for part in root_path.split(os.path.sep) if part]:
+        next_fd = os.open(part, directory_flags, dir_fd=current_fd)
+        opened.append(next_fd)
+        current_fd = next_fd
+    for part in parts:
+        next_fd = os.open(part, directory_flags, dir_fd=current_fd)
+        opened.append(next_fd)
+        current_fd = next_fd
+    if not stat.S_ISDIR(os.fstat(current_fd).st_mode):
+        raise SystemExit(73)
+    if clean_next:
+        if not getattr(shutil.rmtree, 'avoids_symlink_attacks', False):
+            raise SystemExit(74)
+        try:
+            output_stat = os.stat('.next', dir_fd=current_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            output_stat = None
+        if output_stat is not None:
+            if not stat.S_ISDIR(output_stat.st_mode):
+                raise SystemExit(75)
+            shutil.rmtree('.next', dir_fd=current_fd)
+    os.fchdir(current_fd)
+    os.execvpe(command, [command, *arguments], os.environ)
+finally:
+    for descriptor in reversed(opened):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+`
+
 export function readSafeUntrackedSnapshotFile(worktreePath, relativePath) {
   const root = path.resolve(worktreePath)
   const relative = safeRelativePath(relativePath)
@@ -596,6 +646,7 @@ export function createRepositoryLifecycle(options) {
   const runner = options.runner ?? createCommandRunner()
   if (typeof runner !== "function") wall("HERMES_REPOSITORY_CONFIG_WALL", "runner function required")
   const executionBackend = options.executionBackend ?? null
+  const validationTestDouble = process.env.NODE_ENV === "test" && options.runner !== undefined
   const validationCommands = (options.validationCommands ?? []).map(normalizeValidation)
   const records = new Map()
   const remoteValidationLinks = new Map()
@@ -1088,7 +1139,19 @@ export function createRepositoryLifecycle(options) {
 
   async function removeValidationArtifacts(record) {
     await removeValidationDependencies(record)
-    removeGeneratedNextOutput(record)
+    if (executionBackend && !executionBackend.isLocal) return
+    if (validationTestDouble) {
+      removeGeneratedNextOutput(record)
+      return
+    }
+    if (process.platform === "win32") {
+      wall("HERMES_REPOSITORY_RUNNER_WALL", "Windows local validation cleanup requires the governed AEGIS backend")
+    }
+    const cleanup = await run("python3", [
+      "-c", DESCRIPTOR_BOUND_VALIDATION_SCRIPT,
+      record.worktreePath, ".", "1", "true",
+    ], { cwd: workspaceRoot, credentialAccess: false })
+    if (cleanup.code !== 0) wall("HERMES_REPOSITORY_CLEANUP_WALL", "descriptor-bound validation cleanup failed")
   }
 
   async function removeTerminalRecoveryDependencies({ worktreePath, branch, expectedHeadSha } = {}) {
@@ -1191,21 +1254,43 @@ export function createRepositoryLifecycle(options) {
     }
     const results = []
     for (const command of normalized) {
-      const commandRoot = canonicalValidationDirectory(record, command.workingDirectory)
       const executable = path.basename(command.command).replace(/\.(?:cmd|exe)$/i, "")
-      if (executable === "npm" && command.args[0] === "run" && command.args[1] === "build") {
-        removeGeneratedNextOutput(record, command.workingDirectory)
-      }
       const validationEnvironment = resolveWorktreeValidationEnvironment({
         ...command.env,
         WILLIAMOS_HERMES_VALIDATION_ISOLATED: "1",
       }, workspaceRoot)
-      const invocation = resolveWorktreeValidationInvocation(command, commandRoot)
-      const result = await run(invocation.command, invocation.args, {
-        cwd: commandRoot, env: validationEnvironment,
-        timeoutMs: command.timeoutMs, allowFailure: true,
-        credentialAccess: false,
-      })
+      let result
+      if (validationTestDouble) {
+        const commandRoot = canonicalValidationDirectory(record, command.workingDirectory)
+        if (executable === "npm" && command.args[0] === "run" && command.args[1] === "build") {
+          removeGeneratedNextOutput(record, command.workingDirectory)
+        }
+        const invocation = resolveWorktreeValidationInvocation(command, commandRoot)
+        result = await run(invocation.command, invocation.args, {
+          cwd: commandRoot, env: validationEnvironment,
+          timeoutMs: command.timeoutMs, allowFailure: true,
+          credentialAccess: false,
+        })
+      } else {
+        if (process.platform === "win32") {
+          wall("HERMES_REPOSITORY_RUNNER_WALL", "Windows local validation requires the governed AEGIS backend")
+        }
+        const lexicalRoot = path.resolve(record.worktreePath, command.workingDirectory)
+        if (lexicalRoot !== record.worktreePath && !inside(record.worktreePath, lexicalRoot)) {
+          wall("HERMES_REPOSITORY_VALIDATION_WALL", "workingDirectory escapes owned worktree")
+        }
+        const relativeRoot = path.relative(record.worktreePath, lexicalRoot).replaceAll(path.sep, "/") || "."
+        result = await run("python3", [
+          "-c", DESCRIPTOR_BOUND_VALIDATION_SCRIPT,
+          record.worktreePath, relativeRoot,
+          executable === "npm" && command.args[0] === "run" && command.args[1] === "build" ? "1" : "0",
+          command.command, ...command.args,
+        ], {
+          cwd: workspaceRoot, env: validationEnvironment,
+          timeoutMs: command.timeoutMs, allowFailure: true,
+          credentialAccess: false,
+        })
+      }
       if (result.code !== 0) {
         const output = `${result.stdout}\n${result.stderr}`.trim().slice(-4_000)
         if (SECRET_LIKE.test(output)) wall("HERMES_REPOSITORY_SECRET_WALL", "validation output refused")

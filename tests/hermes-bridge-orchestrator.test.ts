@@ -426,12 +426,14 @@ describe("deterministic validator circuit breaking", () => {
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({
       code: "HERMES_WORK_CONTRACT_VALIDATOR_WALL",
     })
+    queueRecovery.mockClear()
     inspectWorktreeSnapshot.mockResolvedValue({
       snapshotHash: "b".repeat(64), manifest: { version: "hermes-worktree-snapshot.v1" },
     })
     await expect(value.orchestrator.cycle()).rejects.toMatchObject({
       code: "HERMES_DETERMINISTIC_RECOVERY_SNAPSHOT_WALL",
     })
+    expect(queueRecovery).not.toHaveBeenCalled()
     expect(value.lifecycle.runValidationCommands).not.toHaveBeenCalled()
   })
 

@@ -4,7 +4,11 @@ import { createHash } from "node:crypto"
 
 import { CodexAppServerClient } from "./app-server-client.mjs"
 import { createHermesKernelClient, HERMES_KERNEL_INVOKER_RELATIVE, HERMES_KERNEL_POLICY_RELATIVE } from "./hermes-kernel-client.mjs"
-import { ATOMIC_SNAPSHOT_SCRIPT, createCommandRunner } from "./repository-lifecycle.mjs"
+import {
+  ATOMIC_SNAPSHOT_SCRIPT,
+  DESCRIPTOR_BOUND_VALIDATION_SCRIPT,
+  createCommandRunner,
+} from "./repository-lifecycle.mjs"
 
 function requiredString(value, name) {
   if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
@@ -43,27 +47,6 @@ function validationWorkspace(workspacePath, workingDirectory, flavor = path) {
   return candidate
 }
 
-function canonicalLocalValidationWorkspace(workspacePath, workingDirectory) {
-  const root = fs.realpathSync(validationWorkspace(workspacePath, "."))
-  const candidate = fs.realpathSync(validationWorkspace(root, workingDirectory))
-  if (candidate !== root && !candidate.startsWith(`${root}${path.sep}`)) {
-    throw new TypeError("workingDirectory resolves outside workspace")
-  }
-  if (!fs.statSync(candidate).isDirectory()) throw new TypeError("workingDirectory is not a directory")
-  return candidate
-}
-
-const REMOTE_VALIDATION_WORKSPACE_SCRIPT = String.raw`import os,sys
-root=os.path.realpath(sys.argv[1])
-candidate=os.path.realpath(os.path.join(root,sys.argv[2]))
-try:
-    contained=os.path.commonpath([root,candidate]) == root
-except ValueError:
-    contained=False
-if not contained or not os.path.isdir(candidate):
-    raise SystemExit(73)
-print(candidate, end='')`
-
 function hasExactWorktree(output, workspacePath, branch) {
   return String(output).split(/\r?\n\r?\n/).some((block) => {
     const lines = block.split(/\r?\n/)
@@ -100,13 +83,14 @@ export class LocalExecutionBackend extends ExecutionBackend {
   constructor({
     runtimeRoot = process.env.WILLIAMOS_HERMES_RUNTIME_ROOT ?? path.join(process.cwd(), ".williamos-hermes"),
     repositoryRoot = process.cwd(),
-    commandRunner = createCommandRunner(),
+    commandRunner,
     clientFactory = (options) => new CodexAppServerClient(options),
   } = {}) {
     super()
     this.runtimeRoot = path.resolve(runtimeRoot)
     this.repositoryRoot = path.resolve(repositoryRoot)
-    this.commandRunner = commandRunner
+    this.commandRunner = commandRunner ?? createCommandRunner()
+    this.validationTestDouble = process.env.NODE_ENV === "test" && commandRunner !== undefined
     this.clientFactory = clientFactory
     this.isLocal = true
   }
@@ -162,10 +146,27 @@ export class LocalExecutionBackend extends ExecutionBackend {
     const results = []
     for (const entry of commands) {
       const { workingDirectory, ...command } = entry
-      results.push(await this.runCommand({
-        workspacePath: canonicalLocalValidationWorkspace(this.#workspace(workspacePath), workingDirectory),
-        ...command,
-      }))
+      const root = path.resolve(this.#workspace(workspacePath))
+      const lexicalPath = validationWorkspace(root, workingDirectory)
+      if (this.validationTestDouble) {
+        const canonicalRoot = fs.realpathSync(root)
+        const canonicalPath = fs.realpathSync(lexicalPath)
+        if (canonicalPath !== canonicalRoot && !canonicalPath.startsWith(`${canonicalRoot}${path.sep}`)) {
+          throw new TypeError("workingDirectory resolves outside workspace")
+        }
+        results.push(await this.runCommand({ workspacePath: canonicalPath, ...command }))
+        continue
+      }
+      if (process.platform === "win32") {
+        throw new Error("Windows local validation requires the governed AEGIS backend")
+      }
+      const relative = path.relative(root, lexicalPath).replaceAll(path.sep, "/") || "."
+      results.push(await this.#run("python3", [
+        "-c", DESCRIPTOR_BOUND_VALIDATION_SCRIPT,
+        root, relative,
+        entry.command === "npm" && entry.args?.[0] === "run" && entry.args?.[1] === "build" ? "1" : "0",
+        requiredString(command.command, "command"), ...(command.args ?? []),
+      ], this.repositoryRoot, command.timeoutMs, command.env, command.credentialAccess))
     }
     return results
   }
@@ -312,21 +313,15 @@ export class AegisExecutionBackend extends ExecutionBackend {
     const results = []
     for (const entry of commands) {
       const { workingDirectory, ...command } = entry
-      const lexicalPath = validationWorkspace(this.#workspace(workspacePath), workingDirectory, path.posix)
-      const canonical = await this.#remote("python3", [
-        "-c", REMOTE_VALIDATION_WORKSPACE_SCRIPT,
-        path.posix.resolve(this.#workspace(workspacePath)),
-        path.posix.relative(path.posix.resolve(this.#workspace(workspacePath)), lexicalPath) || ".",
-      ])
-      if (canonical.exitCode !== 0 || !canonical.stdout.trim().startsWith("/")) {
-        throw new Error("remote validation workingDirectory resolves outside workspace")
-      }
-      const validationPath = canonical.stdout.trim()
-      if (entry.command === "npm" && entry.args?.[0] === "run" && entry.args?.[1] === "build") {
-        const cleanup = await this.runCommand({ workspacePath: validationPath, command: "rm", args: ["-rf", "--", ".next"] })
-        if (cleanup.exitCode !== 0) throw new Error(`remote validation cleanup exited ${cleanup.exitCode}`)
-      }
-      results.push(await this.runCommand({ workspacePath: validationPath, ...command }))
+      const root = path.posix.resolve(this.#workspace(workspacePath))
+      const lexicalPath = validationWorkspace(root, workingDirectory, path.posix)
+      const relative = path.posix.relative(root, lexicalPath) || "."
+      results.push(await this.#remote("python3", [
+        "-c", DESCRIPTOR_BOUND_VALIDATION_SCRIPT,
+        root, relative,
+        entry.command === "npm" && entry.args?.[0] === "run" && entry.args?.[1] === "build" ? "1" : "0",
+        requiredString(command.command, "command"), ...(command.args ?? []),
+      ], { timeoutMs: command.timeoutMs, env: command.env }))
     }
     return results
   }

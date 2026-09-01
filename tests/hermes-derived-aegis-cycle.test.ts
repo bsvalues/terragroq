@@ -115,7 +115,7 @@ async function seed(client: import("pg").PoolClient) {
     await client.query(`INSERT INTO work_order
       (id,"userId",ref,title,goal,scope,"allowedFiles",validators,lane,status,priority,assignee,"authorityLevel","authorityGranted","authorityGrantId","acceptanceCriteria",agent,"approvedBy","linkedDecisionId","commitAllowed","tagAllowed","pushAllowed") VALUES
       (4,'primary-user','WO-HERMES-OUTCOME-4','Parent','Parent','parent',ARRAY['docs/reports'],ARRAY['git diff --check'],'operator-objective','active','high','hermes-codex-bridge','A2_WRITE_OWN','parent',81,ARRAY['parent'],'hermes','primary-user',74,true,false,true),
-      (201,'primary-user',$1,'Derived docs',$2,$2,ARRAY[$3],ARRAY['git diff --check'],'docs','approved','high','hermes-codex-bridge','A2_WRITE_OWN','A2_WRITE_OWN',205,ARRAY['docs-only'],'codex','williamos-runtime-policy',204,true,false,true)`, [childRef, goalRef, reportPath])
+      (201,'primary-user',$1,'Derived docs',$2,$2,ARRAY[$3],ARRAY['git diff --check'],'docs','approved','high','hermes-codex-bridge','A2_WRITE_OWN','A2_WRITE_OWN',205,ARRAY[]::text[],'codex','williamos-runtime-policy',204,true,false,true)`, [childRef, goalRef, reportPath])
     await client.query(`INSERT INTO goal (id,"userId",ref,command,lane,mode,risk,authority,verdict,"matchedRules","requiresApproval","linkedWorkOrderId",status)
       VALUES (202,'primary-user',$1,'Reconcile compose drift','docs','implementation','R1','A2_WRITE_OWN','allow',ARRAY['runtime_finding.derive'],false,201,'classified')`, [goalRef])
     await client.query(`INSERT INTO governance_event (id,"userId",ref,"eventType","entityType","entityId",actor,reason,metadata) VALUES
@@ -173,11 +173,21 @@ function deliveryHarness() {
     if (remote.includes("exec node -e")) { validationTree = true; return ok() }
     if (remote.includes("exec cp -a --reflink=auto")) return ok()
     if (remote.includes("exec rm -rf --") && remote.includes("node_modules")) { validationTree = false; return ok() }
+    if (remote.includes("os.fchdir(current_fd)")) {
+      if (remote.includes("git") && remote.includes("diff") && remote.includes("--check")) {
+        validations.push("git diff --check")
+      }
+      return ok()
+    }
     if (remote.includes("check-ignore -q -- node_modules/")) return ok()
     if (remote.includes("ls-files -z -- node_modules")) return ok()
     if (remote.includes("status --porcelain=v1 -z --untracked-files=all -- node_modules")) return ok()
     if (remote.includes("remote get-url origin")) return ok("https://github.com/bsvalues/terragroq.git\n")
     if (remote.includes("rev-parse refs/remotes/origin/main")) return ok(`${state.merged ? mergeSha : baseSha}\n`)
+    if (remote.includes("ls-remote --heads origin refs/heads/codex/hermes-goal-runtime-finding-101-202")) {
+      return ok(`${headSha}\trefs/heads/codex/hermes-goal-runtime-finding-101-202\n`)
+    }
+    if (remote.includes("rev-parse refs/heads/codex/hermes-goal-runtime-finding-101-202")) return ok(`${headSha}\n`)
     if (remote.includes("show-ref --verify --quiet")) return { code: 1, stdout: "", stderr: "" }
     if (remote.includes("worktree list --porcelain")) return ok("")
     if (remote.includes("status --porcelain=v1 -z --untracked-files=all")) return ok(state.committed ? "" : `?? ${reportPath}\0`)
@@ -191,7 +201,10 @@ function deliveryHarness() {
     if (remote.includes("exec gh pr comment")) { state.requested = true; return ok() }
     if (remote.includes("exec gh pr view")) return ok(JSON.stringify({ number: 991, headRefName: "codex/hermes-goal-runtime-finding-101-202", headRefOid: headSha, baseRefName: "main", state: state.merged ? "MERGED" : "OPEN", isDraft: false, reviewDecision: "APPROVED", statusCheckRollup: [{ name: "unit", conclusion: "SUCCESS" }], reviews: [{ author: { login: "independent-reviewer" }, state: "APPROVED", commit: { oid: headSha } }], mergeCommit: state.merged ? { oid: mergeSha } : null, url: "https://github.com/bsvalues/terragroq/pull/991" }))
     if (remote.includes("exec gh api graphql")) return ok(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } }, comments: { nodes: state.requested ? [{ author: { login: "bsvalues" }, body: `@codex review Exact-head review requested for ${headSha}.`, createdAt: "2026-08-20T18:01:00.000Z", updatedAt: "2026-08-20T18:01:00.000Z" }] : [], pageInfo: { hasPreviousPage: false, hasNextPage: false } } } } } }))
-    if (remote.includes("pulls/991/files?per_page=100")) return ok(JSON.stringify([[{ filename: reportPath }]]))
+    if (remote.includes("repos/bsvalues/terragroq/pulls/991") && !remote.includes("/files?")) {
+      return ok(JSON.stringify({ changed_files: 1, head: { sha: headSha } }))
+    }
+    if (remote.includes("pulls/991/files?per_page=100")) return ok(JSON.stringify([{ filename: reportPath }]))
     if (remote.includes("exec gh pr merge")) { state.merged = true; return ok() }
     if (remote.includes("merge-base --is-ancestor")) return ok()
     if (remote.includes("worktree remove")) { state.cleaned = true; return ok() }
@@ -214,6 +227,9 @@ describe("derived AEGIS repository seam without database claims", () => {
     await expect(harness.lifecycle.runValidationCommands(record, contract.validationCommands)).resolves.toEqual([{ command: "git", args: ["diff", "--check"], code: 0 }])
     expect(harness.validations).toEqual(["git diff --check"])
     expect(harness.calls.every((call) => call.command === "ssh")).toBe(true)
+    const validationCall = harness.calls.find((call) => String(call.args?.at(-1) ?? "").includes("os.fchdir(current_fd)"))
+    expect(validationCall?.args.at(-1)).toContain("os.O_NOFOLLOW")
+    expect(validationCall?.args.at(-1)).toContain("'/worker/runtime/worktrees/hermes-goal-runtime-finding-101-202' '.' '0' 'git' 'diff' '--check'")
   })
 })
 
@@ -268,6 +284,7 @@ runDatabase("derived finding durable AEGIS cycle", { timeout: 60_000 }, () => {
       resumeQueueAfterReviewRecovery: queue.resumeAfterReviewRecovery,
       projectCheckpoint: (input: any) => projectOutcomeRuntimeCheckpoint({ ...input, databaseUrl: scopedUrl }),
       projectLease: (input: any) => projectOutcomeRuntimeLease({ ...input, databaseUrl: scopedUrl }),
+      isClaudeLaneAvailable: () => false,
       holderId: "resident-hermes", now: () => now, sleep: async () => {}, leaseRenewalIntervalMs: 3_600_000 })
     try {
       await expect(orchestrator.cycle()).resolves.toEqual({ result: "COMPLETE", outcomeId: "202", prNumber: 991, mergeSha, changedPaths: [reportPath] })

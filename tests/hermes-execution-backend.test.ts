@@ -145,8 +145,8 @@ describe("execution backends", () => {
       commandRunner: async (call: Call) => {
         calls.push(call)
         if (call.args.at(-1)?.includes("'test' '-e' '/worker/runtime/worktrees/goal-8/file.txt' '-a' '-f'")) return { code: 0 }
-        if (call.args.at(-1)?.includes("commonpath([root,candidate])")) {
-          return { code: 0, stdout: "/worker/runtime/worktrees/goal-8/frontend" }
+        if (call.args.at(-1)?.includes("os.fchdir(current_fd)")) {
+          return { code: 0, stdout: "remote", stderr: "" }
         }
         if (call.args.at(-1)?.includes("exec 'python3' '-c'")) return { code: 0, stdout: `${"c".repeat(64)}\n` }
         return { code: 0, stdout: "remote", stderr: "" }
@@ -167,23 +167,21 @@ describe("execution backends", () => {
     for (const call of calls) expect(call).toMatchObject({ command: "ssh", args: ["-o", "BatchMode=yes", "aegis-worker", expect.any(String)] })
     expect(calls[2].args.at(-1)).toContain("'git' '-C' '/worker/repo' 'worktree' 'add'")
     expect(calls[3].args.at(-1)).toContain("cd -- '/worker/runtime/worktrees/goal-8' && NEXT_TELEMETRY_DISABLED='1' exec 'npm' 'test' 'it'\"'\"'s-safe'")
-    expect(calls.some((call) => call.args.at(-1)?.includes("os.O_NOFOLLOW"))).toBe(true)
-    expect(calls.some((call) => call.args.at(-1)?.includes(
-      "cd -- '/worker/runtime/worktrees/goal-8/frontend' && exec 'rm' '-rf' '--' '.next'",
-    ))).toBe(true)
-    expect(calls.some((call) => call.args.at(-1)?.includes(
-      "cd -- '/worker/runtime/worktrees/goal-8/frontend' && exec 'npm' 'run' 'build'",
-    ))).toBe(true)
+    const validationCall = calls.find((call) => call.args.at(-1)?.includes("os.fchdir(current_fd)"))
+    expect(validationCall?.args.at(-1)).toContain("os.O_NOFOLLOW")
+    expect(validationCall?.args.at(-1)).toContain("'/worker/runtime/worktrees/goal-8' 'frontend' '1' 'npm' 'run' 'build'")
+    expect(calls.some((call) => call.args.at(-1)?.includes("exec 'rm' '-rf' '--' '.next'"))).toBe(false)
+    expect(calls.some((call) => call.args.at(-1)?.includes("cd -- '/worker/runtime/worktrees/goal-8/frontend'"))).toBe(false)
     expect(calls.at(-1)?.args.at(-1)).toContain("'git' '-C' '/worker/repo' 'worktree' 'remove'")
   })
 
-  it("rejects an AEGIS validation path when the remote canonical check escapes", async () => {
+  it("fails a descriptor-bound AEGIS validation before the requested command when a component escapes", async () => {
     const calls: Call[] = []
     const backend = new AegisExecutionBackend({
       host: "aegis",
       commandRunner: async (call: Call) => {
         calls.push(call)
-        return call.args.at(-1)?.includes("commonpath([root,candidate])")
+        return call.args.at(-1)?.includes("os.fchdir(current_fd)")
           ? { code: 73, stdout: "", stderr: "" }
           : { code: 0, stdout: "", stderr: "" }
       },
@@ -191,8 +189,10 @@ describe("execution backends", () => {
     await expect(backend.validate({
       workspacePath: "/srv/william/hermes/worktrees/outcome-44",
       commands: [{ command: "npm", args: ["test"], workingDirectory: "linked" }],
-    })).rejects.toThrow("resolves outside workspace")
-    expect(calls.some((call) => call.args.at(-1)?.includes("exec 'npm'"))).toBe(false)
+    })).resolves.toEqual([{ exitCode: 73, stdout: "", stderr: "" }])
+    expect(calls).toHaveLength(1)
+    expect(calls[0].args.at(-1)).toContain("os.O_NOFOLLOW")
+    expect(calls[0].args.at(-1)).toContain("os.fchdir(current_fd)")
   })
 
   it("rejects workspace traversal before filesystem or SSH access", async () => {
