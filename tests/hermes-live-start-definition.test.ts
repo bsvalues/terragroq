@@ -20,9 +20,11 @@ import path from "node:path"
 
 const START_SCRIPT = path.join(process.cwd(), "deploy", "hermes", "williamos-live", "start-williamos-live.ps1")
 const DEPLOY_SCRIPT = path.join(process.cwd(), "scripts", "deploy-hermes-runtime.ps1")
+const RESTORE_SCRIPT = path.join(process.cwd(), "scripts", "restore-hermes-runtime.ps1")
 
 const startText = fs.readFileSync(START_SCRIPT, "utf8")
 const deployText = fs.readFileSync(DEPLOY_SCRIPT, "utf8")
+const restoreText = fs.readFileSync(RESTORE_SCRIPT, "utf8")
 
 /** Drop the comment-based help block and every `#` line comment, leaving only executable text. */
 function executableOnly(text: string) {
@@ -237,6 +239,17 @@ describe("the deploy places what the start script needs and can be undone", () =
       expect(code).toContain(file)
     }
     expect(code).toContain("restore-hermes-runtime.ps1")
+  })
+
+  it("records absent rollback inputs so restore can remove files introduced by deploy", () => {
+    const code = executableOnly(deployText)
+    const restore = executableOnly(restoreText)
+    expect(code).toContain("rollback-manifest.json")
+    expect(code).toContain("wasPresent")
+    expect(code).toContain("nextPresent")
+    expect(restore).toContain("expectedRollbackFiles")
+    expect(restore).toContain("Compare-Object")
+    expect(restore).toMatch(/elseif\s*\(Test-Path -LiteralPath \$target\)[\s\S]*Remove-Item -LiteralPath \$target/)
   })
 
   it("refuses to stop unrelated processes on either product port", () => {

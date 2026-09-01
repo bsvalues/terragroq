@@ -62,4 +62,10 @@ describe("the HERMES HTTPS supervisor", () => {
     expect(code).toContain("Port $HttpsPort is owned by an unrelated process")
     expect(code.indexOf("CommandLine -notlike")).toBeLessThan(code.indexOf("Stop-Process -Id $process.ProcessId"))
   })
+
+  it("removes a newly created task and launcher when a fresh install fails", () => {
+    const code = executableOnly(installer)
+    expect(code).toContain("Unregister-ScheduledTask")
+    expect(code).toMatch(/elseif\s*\(Test-Path -LiteralPath \$launcherTarget\)[\s\S]*Remove-Item -LiteralPath \$launcherTarget/)
+  })
 })

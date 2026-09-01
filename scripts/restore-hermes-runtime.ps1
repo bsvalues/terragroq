@@ -29,8 +29,27 @@ function Stop-ExpectedListener {
 if (-not (Test-Path -LiteralPath $RollbackRoot -PathType Container)) {
   throw "Rollback directory does not exist: $RollbackRoot"
 }
-if (-not (Test-Path -LiteralPath (Join-Path $RollbackRoot ".next") -PathType Container)) {
+$manifestPath = Join-Path $RollbackRoot "rollback-manifest.json"
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+  throw "Rollback is incomplete: $manifestPath is missing"
+}
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+if ($manifest.version -ne 1 -or $null -eq $manifest.nextPresent -or $null -eq $manifest.files) {
+  throw "Rollback manifest is invalid: $manifestPath"
+}
+$expectedRollbackFiles = @("server.js", "package.json", "lib\generated\build-provenance.json", "scripts\hermes-https-proxy.mjs")
+$manifestPaths = @($manifest.files | ForEach-Object { [string]$_.path })
+if (@(Compare-Object -ReferenceObject $expectedRollbackFiles -DifferenceObject $manifestPaths).Count -ne 0) {
+  throw "Rollback manifest does not name the exact runtime file set"
+}
+if ($manifest.nextPresent -and -not (Test-Path -LiteralPath (Join-Path $RollbackRoot ".next") -PathType Container)) {
   throw "Rollback is incomplete: $RollbackRoot\.next is missing"
+}
+foreach ($entry in $manifest.files) {
+  if (-not $entry.path -or $null -eq $entry.wasPresent) { throw "Rollback manifest has an invalid file entry" }
+  if ($entry.wasPresent -and -not (Test-Path -LiteralPath (Join-Path $RollbackRoot $entry.path) -PathType Leaf)) {
+    throw "Rollback is incomplete: $(Join-Path $RollbackRoot $entry.path) is missing"
+  }
 }
 
 Stop-ScheduledTask -TaskName $HttpsTaskName -ErrorAction SilentlyContinue
@@ -40,15 +59,22 @@ Stop-ExpectedListener -ListenerPort $Port -ExpectedCommandFragment "server.js"
 Stop-ExpectedListener -ListenerPort $HttpsPort -ExpectedCommandFragment "hermes-https-proxy.mjs"
 Start-Sleep -Seconds 2
 
-$null = robocopy (Join-Path $RollbackRoot ".next") (Join-Path $Runtime ".next") /MIR /NFL /NDL /NJH /NJS /NP
-if ($LASTEXITCODE -ge 8) { throw "rollback failed copying .next (exit $LASTEXITCODE)" }
+if ($manifest.nextPresent) {
+  $null = robocopy (Join-Path $RollbackRoot ".next") (Join-Path $Runtime ".next") /MIR /NFL /NDL /NJH /NJS /NP
+  if ($LASTEXITCODE -ge 8) { throw "rollback failed copying .next (exit $LASTEXITCODE)" }
+} elseif (Test-Path -LiteralPath (Join-Path $Runtime ".next")) {
+  Remove-Item -LiteralPath (Join-Path $Runtime ".next") -Recurse -Force
+}
 
-foreach ($file in @("server.js", "package.json", "lib\generated\build-provenance.json", "scripts\hermes-https-proxy.mjs")) {
-  $source = Join-Path $RollbackRoot $file
-  if (-not (Test-Path -LiteralPath $source)) { throw "Rollback is incomplete: $source is missing" }
-  $target = Join-Path $Runtime $file
-  $null = New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force
-  Copy-Item -LiteralPath $source -Destination $target -Force
+foreach ($entry in $manifest.files) {
+  $source = Join-Path $RollbackRoot $entry.path
+  $target = Join-Path $Runtime $entry.path
+  if ($entry.wasPresent) {
+    $null = New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force
+    Copy-Item -LiteralPath $source -Destination $target -Force
+  } elseif (Test-Path -LiteralPath $target) {
+    Remove-Item -LiteralPath $target -Force
+  }
 }
 
 Start-ScheduledTask -TaskName $TaskName

@@ -125,10 +125,14 @@ try {
     }
   if (Test-Path -LiteralPath (Join-Path $backupRoot "start-williamos-https.ps1")) {
     Copy-Item -LiteralPath (Join-Path $backupRoot "start-williamos-https.ps1") -Destination $launcherTarget -Force
+  } elseif (Test-Path -LiteralPath $launcherTarget) {
+    Remove-Item -LiteralPath $launcherTarget -Force
   }
   if (Test-Path -LiteralPath (Join-Path $backupRoot "task.xml")) {
     Register-ScheduledTask -TaskName $TaskName -Xml (Get-Content -LiteralPath (Join-Path $backupRoot "task.xml") -Raw) -Force | Out-Null
     Start-ScheduledTask -TaskName $TaskName
+  } else {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
   }
   throw
 }

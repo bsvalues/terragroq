@@ -188,18 +188,27 @@ if (Test-Path $envPath) { $envGuard = (Get-FileHash $envPath -Algorithm SHA256).
 if (-not $SkipRollbackCapture) {
   $rollbackRoot = "$Runtime.rollback-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
   $null = New-Item -ItemType Directory -Path $rollbackRoot -Force
-  if (Test-Path (Join-Path $Runtime ".next")) {
+  $rollbackFiles = @("server.js", "package.json", "lib\generated\build-provenance.json", "scripts\hermes-https-proxy.mjs")
+  $rollbackManifest = [ordered]@{
+    version = 1
+    nextPresent = (Test-Path -LiteralPath (Join-Path $Runtime ".next") -PathType Container)
+    files = @()
+  }
+  if ($rollbackManifest.nextPresent) {
     $null = robocopy (Join-Path $Runtime ".next") (Join-Path $rollbackRoot ".next") /MIR /NFL /NDL /NJH /NJS /NP
     if ($LASTEXITCODE -ge 8) { throw "rollback capture failed copying .next (exit $LASTEXITCODE)" }
   }
-  foreach ($file in @("server.js", "package.json", "lib\generated\build-provenance.json", "scripts\hermes-https-proxy.mjs")) {
+  foreach ($file in $rollbackFiles) {
     $existing = Join-Path $Runtime $file
-    if (Test-Path $existing) {
+    $wasPresent = Test-Path -LiteralPath $existing -PathType Leaf
+    $rollbackManifest.files += [ordered]@{ path = $file; wasPresent = $wasPresent }
+    if ($wasPresent) {
       $rollbackFile = Join-Path $rollbackRoot $file
       $null = New-Item -ItemType Directory -Path (Split-Path -Parent $rollbackFile) -Force
-      Copy-Item $existing $rollbackFile -Force
+      Copy-Item -LiteralPath $existing -Destination $rollbackFile -Force
     }
   }
+  $rollbackManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $rollbackRoot "rollback-manifest.json") -Encoding utf8
   # Recorded rather than assumed: a rollback directory nobody can name is not a rollback.
   Write-Output "rollback captured: $rollbackRoot"
   Write-Output "to restore: powershell -NoProfile -ExecutionPolicy Bypass -File `"$Source\scripts\restore-hermes-runtime.ps1`" -RollbackRoot `"$rollbackRoot`" -Runtime `"$Runtime`" -TaskName `"$TaskName`" -HttpsTaskName `"$HttpsTaskName`""
