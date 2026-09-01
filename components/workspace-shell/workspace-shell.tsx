@@ -50,7 +50,16 @@ type AgentSnapshotLineContext = DurableLineSnapshot & Readonly<{
     collectionFingerprint: string
   }>
 }>
-type LineContext = "space-summary" | Readonly<{ kind: "execution-assignment"; workOrderId: number }> | AgentSnapshotLineContext | null
+type DiffChallengeLineContext = Readonly<{
+  kind: "diff-challenge"
+  path: string
+  baseHash: string
+  indexHash: string
+  patchHash: string
+  fingerprint: string
+  clientGuard: Readonly<{ worldId: string; transitionEpoch: number }>
+}>
+type LineContext = "space-summary" | Readonly<{ kind: "execution-assignment"; workOrderId: number }> | AgentSnapshotLineContext | DiffChallengeLineContext | null
 type LineMode = "default" | "change" | "review" | "fork"
 type ExecutionObservation = Readonly<{
   worldId: string
@@ -158,6 +167,21 @@ function lineSessionCollectionFingerprint(sessions: readonly unknown[]): string 
   return JSON.stringify([...sessions]
     .map((session) => lineSessionDescriptorFingerprint(session))
     .sort())
+}
+
+function liveModifiedDiffIdentity(context: LiveDiffContext | null): Omit<DiffChallengeLineContext, "kind" | "clientGuard"> | null {
+  if (!context) return null
+  try {
+    const value = JSON.parse(context.fingerprint) as Record<string, unknown>
+    if (Object.keys(value).sort().join("|") !== "baseHash|indexHash|patchHash|path|state|status"
+      || value.path !== context.path || value.state !== "modified"
+      || typeof value.baseHash !== "string" || !value.baseHash
+      || typeof value.indexHash !== "string" || !value.indexHash
+      || typeof value.patchHash !== "string" || !value.patchHash) return null
+    return { path: context.path, baseHash: value.baseHash, indexHash: value.indexHash, patchHash: value.patchHash, fingerprint: context.fingerprint }
+  } catch {
+    return null
+  }
 }
 
 // 250 code points remains below Council's 2,000-character history limit even when every
@@ -1687,12 +1711,34 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       && lineSessionCollectionFingerprint(agentSavedSessionsRef.current) === context.clientGuard.collectionFingerprint
   }, [])
 
+  const diffChallengeLineContextIsCurrent = useCallback((context: DiffChallengeLineContext): boolean => {
+    const current = stateRef.current
+    const live = liveDiffContextRef.current
+    return worldRef.current === context.clientGuard.worldId
+      && transitionEpochRef.current === context.clientGuard.transitionEpoch
+      && storageRef.current === "server"
+      && !persistenceErrorRef.current
+      && current.activeWindowId === "diff"
+      && current.selectedPath === context.path
+      && !dirtyPathsRef.current[context.path]
+      && live?.worldId === context.clientGuard.worldId
+      && live.path === context.path
+      && live.fingerprint === context.fingerprint
+  }, [])
+
   const sendWilliamTurn = useCallback(async (text: string, context: LineContext = null): Promise<boolean> => {
     const normalized = text.trim()
     if (!normalized || lineBusy || williamBusy) return false
     if (context && typeof context === "object" && context.kind === "agent-snapshot"
       && !agentSnapshotLineContextIsCurrent(context)) {
       const stale = "The selected browser-saved session changed before William dispatch, so no advice was requested."
+      setLineReply(stale)
+      setWilliamError(stale)
+      return false
+    }
+    if (context && typeof context === "object" && context.kind === "diff-challenge"
+      && (!diffChallengeLineContextIsCurrent(context) || persistencePendingRef.current)) {
+      const stale = "The exact current patch changed before William could challenge it, so no advice was requested."
       setLineReply(stale)
       setWilliamError(stale)
       return false
@@ -1730,8 +1776,15 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setWilliamError(stale)
         return false
       }
+      if (context && typeof context === "object" && context.kind === "diff-challenge"
+        && !diffChallengeLineContextIsCurrent(context)) {
+        const stale = "The exact current patch changed before William could challenge it, so no advice was requested."
+        setLineReply(stale)
+        setWilliamError(stale)
+        return false
+      }
       if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
-      const serverContext = context && typeof context === "object" && context.kind === "agent-snapshot"
+      const serverContext = context && typeof context === "object" && (context.kind === "agent-snapshot" || context.kind === "diff-challenge")
         ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== "clientGuard"))
         : context
       const response = await fetch("/api/environment/line", {
@@ -1742,6 +1795,10 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error ?? `LINE_${response.status}`)
       if (!requestIsCurrent()) throw new Error("WILLIAM_CONTEXT_CHANGED")
+      if (context && typeof context === "object" && context.kind === "diff-challenge"
+        && !diffChallengeLineContextIsCurrent(context)) {
+        throw new Error("LINE_CONTEXT_STALE")
+      }
       acceptLineReply(payload as LineReply)
       return true
     } catch (error) {
@@ -1753,7 +1810,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       setLineBusy(false)
       setWilliamBusy(false)
     }
-  }, [acceptLineReply, agentSessions.sessions, agentSnapshotLineContextIsCurrent, appendConversation, focusedAgentId, lineBusy, williamBusy])
+  }, [acceptLineReply, agentSessions.sessions, agentSnapshotLineContextIsCurrent, appendConversation, diffChallengeLineContextIsCurrent, focusedAgentId, lineBusy, williamBusy])
 
   const reviewerAgentContext = delegateContext?.kind === "reviewer" ? delegateContext : null
 
@@ -2310,9 +2367,18 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             ? "Review needs the exact live modified patch for the saved selected file."
             : persistencePending ? "Review waits until the current Space is durably saved."
               : null
+  const diffChallengeUnavailableReason = selectedKind !== "diff" ? null
+    : storage !== "server" ? "Challenge requires a server-bound Space with durable persistence."
+      : persistenceError ? `Challenge is unavailable because Space persistence is refusing writes (${persistenceError}).`
+        : persistencePending ? "Challenge waits until the current Space is durably saved."
+          : !worldId || !space.selectedPath || dirtyPaths[space.selectedPath]
+            || !liveDiffContext || liveDiffContext.worldId !== worldId || liveDiffContext.path !== space.selectedPath
+            || !liveModifiedDiffIdentity(liveDiffContext)
+            ? "Challenge needs the exact live modified patch for the saved selected file."
+            : null
   const selectedActions = selectedKind === "file" ? ["Ask", "Change", "Delegate", "Review"] as const
     : selectedKind === "preview" ? ["Inspect", "Debug", "Explain", "Delegate"] as const
-    : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", "Challenge", "Merge unavailable"] as const
+    : selectedKind === "diff" ? [diffReviewUnavailableReason ? "Review unavailable" : "Review", "Improve", diffChallengeUnavailableReason ? "Challenge unavailable" : "Challenge", "Merge unavailable"] as const
     : selectedKind === "agent" && selectedAgent?.kind === "world-worker" ? ["Inspect", "Ask William", "Council"] as const
     : selectedKind === "agent" && selectedAgent?.providerLabel === "Local" ? ["Inspect", "Ask William", "Talk", "Council", pauseAction, forkAction] as const
     : selectedKind === "agent" ? ["Inspect", "Ask William", "Talk", "Redirect", "Council", pauseAction, forkAction, selectedAgent?.target ? "Review work" : "Review work unavailable"] as const
@@ -2790,8 +2856,23 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return
     }
     if (selectedKind === "diff" && action === "Review unavailable") return
+    if (selectedKind === "diff" && action === "Challenge unavailable") return
     if (selectedKind === "diff" && action === "Challenge") {
-      openLine(`${action} the exact current patch for the selected file.`)
+      const live = liveDiffContextRef.current
+      const identity = liveModifiedDiffIdentity(live)
+      if (!worldId || !identity || live?.worldId !== worldId || identity.path !== space.selectedPath
+        || storageRef.current !== "server" || persistencePendingRef.current || persistenceErrorRef.current
+        || dirtyPathsRef.current[identity.path]) {
+        setTransitionMessage("Challenge needs the exact live modified patch for the durably saved selected file.")
+        return
+      }
+      const context: DiffChallengeLineContext = {
+        kind: "diff-challenge",
+        ...identity,
+        clientGuard: { worldId, transitionEpoch: transitionEpochRef.current },
+      }
+      openLine("", "william", context)
+      void sendWilliamTurn("Challenge the exact current patch for the selected file.", context)
       return
     }
     if (action === "Council") {
@@ -2976,7 +3057,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             }}
           /> : null}
           {selectedActions.map((action) => (
-            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? diffReviewUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
+            <button key={action} type="button" className={`${spatial.action} ${action === "Delegate" || action === "Council" || action === "Fork" ? spatial.primaryAction : ""}`} disabled={action === "Review work unavailable" || action === "Review unavailable" || action === "Challenge unavailable" || action === "Pause unavailable" || action === "Fork unavailable" || action === "Merge unavailable" || action === "Continue unavailable" || action === "Improve" && Boolean(improveUnavailableReason)} title={action === "Review work unavailable" ? "This session has no verified file target." : action === "Review unavailable" ? diffReviewUnavailableReason ?? undefined : action === "Challenge unavailable" ? diffChallengeUnavailableReason ?? undefined : action === "Pause unavailable" ? "Only the selected running session can be paused." : action === "Fork unavailable" ? "Only an idle verified Claude Builder session can be forked." : action === "Merge unavailable" ? "Current Changes actions are read-only; merge is unavailable here." : action === "Continue unavailable" ? continueUnavailableMessage : action === "Improve" ? improveUnavailableReason ?? undefined : undefined} onClick={() => openObjectAction(action)}>{action}</button>
           ))}
         </div>
         {selectedKind === "space" && !spaceContinueCandidate ? <span role="status">{continueUnavailableMessage}</span> : null}
@@ -3066,7 +3147,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
                 {verifiedLineSessionTargets.map((target) => <button key={target.sessionKey} type="button" className={spatial.lineClose} aria-pressed={delegateContext?.kind === "line-session" && delegateContext.sessionKey === target.sessionKey} aria-label={`${target.label} · session ${target.descriptor.sessionId}`} title={`${target.label} · session ${target.descriptor.sessionId}`} onClick={() => selectLineSessionTarget(target)}>{target.label}</button>)}
               </div> : null}
               {lineTranscriptSession ? <AgentTranscriptHistory key={lineTranscriptSession.sessionKey} {...lineTranscriptSession} /> : null}
-              <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? capturedDiffReview ? `Review current change · ${review.path ?? "no file selected"}` : `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : lineContext && typeof lineContext === "object" && lineContext.kind === "execution-assignment" ? `Persisted assignment · Work Order #${lineContext.workOrderId} · runtime liveness unverified` : lineContext && typeof lineContext === "object" && lineContext.kind === "agent-snapshot" ? `Browser-saved session snapshot · ${lineContext.sessionKey} · runtime liveness unverified` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Preview debugger · Claude · read-only" : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Describe the bounded diagnostic focus" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ?? lineTerminalReply ? <output className={spatial.lineReply}>{lineReply ?? lineTerminalReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
+              <span className={spatial.lineContext}>{lineMode === "change" ? changeIntent === "improve-diff" ? `Improve current change · ${change.path ?? "no file selected"}` : `Change · ${change.path ?? "no file selected"}` : lineMode === "review" ? capturedDiffReview ? `Review current change · ${review.path ?? "no file selected"}` : `Review · ${review.path ?? "no file selected"}` : lineMode === "fork" ? `Fork · ${forkContext?.label ?? "Claude Builder"}` : lineContext && typeof lineContext === "object" && lineContext.kind === "execution-assignment" ? `Persisted assignment · Work Order #${lineContext.workOrderId} · runtime liveness unverified` : lineContext && typeof lineContext === "object" && lineContext.kind === "agent-snapshot" ? `Browser-saved session snapshot · ${lineContext.sessionKey} · runtime liveness unverified` : lineContext && typeof lineContext === "object" && lineContext.kind === "diff-challenge" ? `Challenge exact patch · ${lineContext.path} · ${lineContext.patchHash}` : delegateContext?.kind === "continue" ? `Continue · ${delegateContext.label} · verification pending` : delegateContext?.kind === "line-session" ? `${delegateContext.label} · ${delegateContext.objectContext} · ${delegateContext.spaceContext}` : reviewerAgentContext ? `Reviewer · Claude · ${reviewerAgentContext.reviewPath} · read-only` : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Preview debugger · Claude · read-only" : delegateContext?.provider === "Local" ? "Local conversation · no workspace mutation" : lineTarget === "agent" && delegateContext ? `${delegateContext.kind} · ${delegateContext.label}` : `${selectedKind} · ${selectedLabel}`}</span><input ref={lineRef} className={spatial.lineInput} value={lineInput} onChange={(event) => setLineInput(event.target.value)} disabled={(lineMode === "change" && change.running) || (lineMode === "review" && review.running)} placeholder={lineMode === "change" ? changeIntent === "improve-diff" ? "Describe how to improve this exact patch" : "Describe the change to make" : lineMode === "review" ? "Optional review focus" : lineMode === "fork" ? "Describe how the fork should diverge" : reviewerAgentContext ? "Ask or redirect this Reviewer" : delegateContext?.kind === "preview" && delegateContext.previewDebugBinding ? "Describe the bounded diagnostic focus" : delegateContext?.provider === "Local" ? "Ask the Local model" : lineTarget === "agent" ? "Describe the bounded assignment" : "Ask, change, delegate, or review"} aria-label={lineMode === "change" ? changeIntent === "improve-diff" ? "Improve instruction" : "Change instruction" : lineMode === "review" ? "Review focus" : lineMode === "fork" ? "Fork instruction" : "The Line"} autoComplete="off" />{lineMode === "change" ? (change.progress ? <output className={spatial.lineReply}>{change.progress}</output> : change.outcome ? <output className={spatial.lineReply}>{change.outcome}</output> : null) : lineMode === "review" ? (review.progress ? <output className={spatial.lineReply}>{review.progress}</output> : review.outcome ? <output className={spatial.lineReply}>{review.outcome}</output> : null) : lineReply ?? lineTerminalReply ? <output className={spatial.lineReply}>{lineReply ?? lineTerminalReply}</output> : conversation.at(-1) ? <span className={spatial.lineReply}>{conversation.at(-1)?.role === "williamos" ? "William" : "You"} · {conversation.at(-1)?.text}</span> : null}
             </div>
             <div className={spatial.lineControls}>
               {lineMode === "default" && lineTarget === "agent" && delegateContext?.provider === null ? <div role="group" aria-label="Choose agent provider">{delegateContext.kind === "preview" ? <button type="button" className={spatial.lineClose} disabled aria-label="Codex unavailable" title="Preview diagnostic transport is not available for Codex yet.">Codex unavailable</button> : <button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Codex" } : current)}>Codex</button>}<button type="button" className={spatial.lineClose} onClick={() => setDelegateContext((current) => current && current.kind !== "reviewer" ? { ...current, provider: "Claude" } : current)}>Claude</button></div> : null}

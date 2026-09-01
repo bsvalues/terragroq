@@ -930,4 +930,44 @@ describe("server-derived Line selected-object grounding", () => {
     expect(harness.diff).not.toHaveBeenCalled()
     expect(harness.save).not.toHaveBeenCalled()
   })
+
+  it("runs a typed read-only Challenge from the exact server-derived patch and persists its answer", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "williamos-line-diff-challenge-"))
+    roots.push(root)
+    await fs.mkdir(path.join(root, "src"), { recursive: true })
+    await fs.writeFile(path.join(root, "src", "exact.ts"), "export const exact = true\n")
+    const space: SpaceState = {
+      schemaVersion: 1, revision: 20,
+      windows: [{ id: "workspace-diff", kind: "diff", title: "Changes", frame: { x: 0, y: 0, width: 700, height: 500 }, z: 1, minimized: false }],
+      openFiles: ["src/exact.ts"], panes: [{ id: "primary", filePath: "src/exact.ts" }],
+      selection: { filePath: "src/exact.ts", anchor: 0, head: 0 }, activeWindowId: "workspace-diff", activePaneId: "primary", runningAppUrl: null,
+    }
+    harness.snapshot = JSON.stringify({ ...createWorkingWorld({ intent: "WilliamOS" }), space })
+    const identity = { path: "src/exact.ts", state: "modified", status: " M src/exact.ts", baseHash: "base-a", indexHash: "index-a", patchHash: "patch-a" }
+    const snapshot = { ...identity, patch: "-old\n+exact-current-patch\n", fingerprint: JSON.stringify(identity), reason: null }
+    harness.diff.mockResolvedValue(snapshot)
+    harness.save.mockImplementationOnce(async (input: { expectedSelectedContext?: string; deriveSelectedContext?: (world: WorkingWorldSnapshot) => Promise<string> }) => {
+      const latest = JSON.parse(harness.snapshot) as WorkingWorldSnapshot
+      expect(await input.deriveSelectedContext?.(latest)).toBe(input.expectedSelectedContext)
+    })
+    process.env.WILLIAMOS_TERRAFUSION_ROOT = root
+    let inferenceBody: { messages?: { role?: string; content?: string }[] } = {}
+    vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+      inferenceBody = JSON.parse(String(init?.body))
+      return Response.json({ choices: [{ message: { content: "The exact patch risks an unhandled edge case." } }] })
+    }))
+    const { POST } = await import("@/app/api/environment/line/route")
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST", headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({ worldId: "world-a", text: "Challenge the exact current patch for the selected file.", lineContext: { kind: "diff-challenge", path: identity.path, baseHash: identity.baseHash, indexHash: identity.indexHash, patchHash: identity.patchHash, fingerprint: snapshot.fingerprint } }),
+    }))
+
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({ say: "The exact patch risks an unhandled edge case." }))
+    const system = inferenceBody.messages?.find((message) => message.role === "system")?.content ?? ""
+    expect(system).toContain("exact-current-patch")
+    expect(system).toContain("read-only challenge")
+    expect(harness.save).toHaveBeenCalledOnce()
+    expect(harness.diff).toHaveBeenCalledTimes(2)
+  })
 })

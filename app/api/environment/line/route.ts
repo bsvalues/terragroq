@@ -101,6 +101,27 @@ type LineReply = Readonly<{
 
 type ExecutionAssignmentLineContext = Readonly<{ kind: "execution-assignment"; workOrderId: number }>
 
+const diffChallengeLineContextSchema = z.object({
+  kind: z.literal("diff-challenge"),
+  path: z.string().min(1).max(4_096),
+  baseHash: z.string().min(1).max(128),
+  indexHash: z.string().min(1).max(128),
+  patchHash: z.string().min(1).max(128),
+  fingerprint: z.string().min(1).max(16_384),
+}).strict().superRefine((context, refinement) => {
+  try {
+    const value = JSON.parse(context.fingerprint) as Record<string, unknown>
+    if (Object.keys(value).sort().join("|") !== "baseHash|indexHash|patchHash|path|state|status"
+      || value.path !== context.path || value.state !== "modified"
+      || value.baseHash !== context.baseHash || value.indexHash !== context.indexHash || value.patchHash !== context.patchHash) {
+      refinement.addIssue({ code: "custom", path: ["fingerprint"], message: "Diff identity fields do not match the fingerprint" })
+    }
+  } catch {
+    refinement.addIssue({ code: "custom", path: ["fingerprint"], message: "Diff fingerprint is not valid JSON" })
+  }
+})
+type DiffChallengeLineContext = z.infer<typeof diffChallengeLineContextSchema>
+
 const savedAgentLineContextSchema = z.object({
   kind: z.literal("agent-snapshot"),
   sessionKey: z.string().trim().min(1).max(300),
@@ -155,6 +176,11 @@ function parseExecutionAssignmentLineContext(value: unknown): ExecutionAssignmen
 
 function parseSavedAgentLineContext(value: unknown): SavedAgentLineContext | null {
   const parsed = savedAgentLineContextSchema.safeParse(value)
+  return parsed.success ? parsed.data : null
+}
+
+function parseDiffChallengeLineContext(value: unknown): DiffChallengeLineContext | null {
+  const parsed = diffChallengeLineContextSchema.safeParse(value)
   return parsed.success ? parsed.data : null
 }
 
@@ -905,6 +931,37 @@ async function deriveSelectedObjectGrounding(
   }
 }
 
+async function deriveDiffChallengeGrounding(
+  world: WorkingWorldSnapshot,
+  userId: string,
+  context: DiffChallengeLineContext,
+  previewOrigin: string,
+): Promise<Readonly<{ facts: string; version: string }> | null> {
+  const projectBinding = await resolveTerraFusionWorkspaceBinding(userId)
+  if (!projectBinding.ok) return null
+  const selected = await deriveSelectedObjectGrounding(world, projectBinding.binding.workspaceRoot, previewOrigin)
+  if (!selected.changesSelected || !selected.exact) return null
+  let diffVersion: unknown = null
+  try {
+    diffVersion = (JSON.parse(selected.version) as { diff?: unknown }).diff
+  } catch {
+    return null
+  }
+  if (diffVersion !== context.fingerprint) return null
+  return {
+    facts: [
+      "Operation: read-only challenge of the exact current patch. Identify the strongest credible objections, risks, omissions, and a concrete recommendation. Do not propose or perform mutation.",
+      `Client stale guard matched exact path/base/index/patch identity: ${JSON.stringify(context.path)} · ${context.baseHash} · ${context.indexHash} · ${context.patchHash}.`,
+      selected.facts,
+    ].join("\n"),
+    version: JSON.stringify({
+      persisted: selectedLineContextFingerprint(world),
+      workspaceRoot: projectBinding.binding.workspaceRoot,
+      selectedObject: selected.version,
+    }),
+  }
+}
+
 export async function POST(request: Request) {
   // A cookie-authenticated, state-changing, model-fanning endpoint: refuse the cross-site CSRF
   // shape and oversized bodies before doing any work. See lib/environment/line-guard.ts.
@@ -944,12 +1001,13 @@ export async function POST(request: Request) {
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
   const executionAssignmentContext = parseExecutionAssignmentLineContext(body.lineContext)
   const savedAgentContext = parseSavedAgentLineContext(body.lineContext)
+  const diffChallengeContext = parseDiffChallengeLineContext(body.lineContext)
   const lineContext = body.lineContext === "space-summary" ? "space-summary"
-    : executionAssignmentContext ?? savedAgentContext ?? null
+    : executionAssignmentContext ?? savedAgentContext ?? diffChallengeContext ?? null
   if (body.lineContext !== undefined && body.lineContext !== null && lineContext === null) {
     return Response.json({ error: "INVALID_LINE_CONTEXT" }, { status: 400 })
   }
-  if ((executionAssignmentContext || savedAgentContext) && (!requestedWorldId || summonRequest)) {
+  if ((executionAssignmentContext || savedAgentContext || diffChallengeContext) && (!requestedWorldId || summonRequest)) {
     return Response.json({ error: "INVALID_LINE_CONTEXT" }, { status: 400 })
   }
 
@@ -1005,6 +1063,25 @@ export async function POST(request: Request) {
       updated = withTurn(updated, "williamos", say)
       try {
         await saveWorld(userId, requestedWorldId, updated, false, expectedSelectedContext, deriveSelectedContext)
+      } catch (error) {
+        if (error instanceof Error && error.message === "LINE_CONTEXT_STALE") {
+          return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
+        }
+        throw error
+      }
+      return Response.json({ worldId: requestedWorldId, say, surfaces: [], spine: updated.spine } satisfies LineReply)
+    }
+    if (lineContext && typeof lineContext === "object" && lineContext.kind === "diff-challenge") {
+      const previewOrigin = williamOsOrigin(process.env.BETTER_AUTH_URL?.trim() || null, request.url)
+      const grounding = await deriveDiffChallengeGrounding(world, userId, lineContext, previewOrigin)
+      if (!grounding) return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
+      let updated = withTurn(world, "owner", text)
+      const say = await converse(updated, text, grounding.facts)
+      updated = withTurn(updated, "williamos", say)
+      const deriveSelectedContext = async (latest: WorkingWorldSnapshot) =>
+        (await deriveDiffChallengeGrounding(latest, userId, lineContext, previewOrigin))?.version ?? "LINE_CONTEXT_STALE"
+      try {
+        await saveWorld(userId, requestedWorldId, updated, false, grounding.version, deriveSelectedContext)
       } catch (error) {
         if (error instanceof Error && error.message === "LINE_CONTEXT_STALE") {
           return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
