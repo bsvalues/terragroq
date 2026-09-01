@@ -642,6 +642,13 @@ describe("Claude Builder fork route", () => {
     expect(events[0]).toEqual({
       type: "session", sessionId: childId, provider: "Claude", mode: "delegate",
       resumed: true, forkedFrom: sourceId,
+      worldId: mutationAuthority.worldId,
+      worldRevision: mutationAuthority.worldRevision,
+      outcomeKey: mutationAuthority.outcomeKey,
+      workOrderId: mutationAuthority.workOrderId,
+      grantId: mutationAuthority.grantId,
+      actor: mutationAuthority.actor,
+      selectedPath: mutationAuthority.selectedPath,
     })
     expect(seams.recordLoomStart).toHaveBeenCalledWith(expect.objectContaining({
       subject: childId,
