@@ -3045,6 +3045,9 @@ describe("Experience V2 real agent sessions", () => {
       if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
       if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
       if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      if (url === "/api/environment/line" && init?.method === "POST") return Promise.resolve(Response.json({
+        worldId: "server-world", say: "Inspect the focused product suite next.", surfaces: [], spine,
+      }))
       throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
     })
     vi.stubGlobal("fetch", fetcher)
@@ -3059,6 +3062,16 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByText("No detail recorded")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Inspect" }))
     expect(screen.getAllByText("Assignment · Work Order #41")).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: "Ask William" }))
+    expect(screen.getByText("Persisted assignment · Work Order #41 · runtime liveness unverified")).toBeTruthy()
+    fireEvent.change(screen.getByRole("textbox", { name: "The Line" }), { target: { value: "What should I inspect next?" } })
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    expect(await screen.findByText("Inspect the focused product suite next.")).toBeTruthy()
+    const lineCall = fetcher.mock.calls.find(([input]) => String(input) === "/api/environment/line")
+    expect(JSON.parse(String(lineCall?.[1]?.body))).toMatchObject({
+      worldId: "server-world",
+      lineContext: { kind: "execution-assignment", workOrderId: 41 },
+    })
     expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/hermes")).toBe(false)
   })
 

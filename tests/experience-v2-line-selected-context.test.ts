@@ -91,6 +91,99 @@ afterEach(async () => {
 
 describe("server-derived Line selected-object grounding", () => {
   it.each([
+    { worldId: null, text: "What evidence should I inspect next?" },
+    { worldId: "world-a", text: "", summon: "hermes" },
+  ])("rejects assignment context outside an exact existing Space before mutation: %o", async (requestBody) => {
+    const inference = vi.fn()
+    vi.stubGlobal("fetch", inference)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    const response = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({
+        ...requestBody,
+        lineContext: { kind: "execution-assignment", workOrderId: 41 },
+      }),
+    }))
+
+    expect(response.status).toBe(400)
+    await expect(response.json()).resolves.toEqual({ error: "INVALID_LINE_CONTEXT" })
+    expect(harness.save).not.toHaveBeenCalled()
+    expect(inference).not.toHaveBeenCalled()
+  })
+
+  it("grounds a typed persisted assignment from the owned world and fences Work Order drift", async () => {
+    const world: WorkingWorldSnapshot = {
+      ...createWorkingWorld({ intent: "Finish Experience V2" }),
+      spine: {
+        projectId: 1,
+        projectName: "WilliamOS",
+        threadId: "thread-owned",
+        outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+        outcomeTitle: "Finish Experience V2",
+        workOrderId: 41,
+        execution: "validating",
+        worker: { lane: "hermes", state: "validating", since: "2026-09-01T18:00:00.000Z" },
+        evidence: [{ kind: "test", detail: "Focused suite", result: "PASS", at: "2026-09-01T18:01:00.000Z" }],
+      },
+    }
+    harness.snapshot = JSON.stringify(world)
+    let system = ""
+    const inference = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { messages?: { role?: string; content?: string }[] }
+      system = body.messages?.find((message) => message.role === "system")?.content ?? ""
+      return Response.json({ choices: [{ message: { content: "Inspect the focused test evidence next." } }] })
+    })
+    vi.stubGlobal("fetch", inference)
+    const { POST } = await import("@/app/api/environment/line/route")
+
+    harness.save.mockImplementationOnce(async (input: {
+      expectedSelectedContext?: string
+      deriveSelectedContext?: (latest: WorkingWorldSnapshot) => Promise<string>
+    }) => {
+      expect(await input.deriveSelectedContext?.(world)).toBe(input.expectedSelectedContext)
+    })
+    const accepted = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({
+        worldId: "world-a",
+        text: "What evidence should I inspect next?",
+        lineContext: { kind: "execution-assignment", workOrderId: 41 },
+      }),
+    }))
+    expect(accepted.status).toBe(200)
+    expect(system).toContain("Selected object: persisted execution assignment; runtime liveness is unverified.")
+    expect(system).toContain("Outcome: WILLIAMOS_EXPERIENCE_V2 · Finish Experience V2")
+    expect(system).toContain("Work Order: #41")
+    expect(system).toContain("Focused suite · PASS")
+
+    harness.selectCount = 0
+    harness.save.mockImplementationOnce(async (input: {
+      expectedSelectedContext?: string
+      deriveSelectedContext?: (latest: WorkingWorldSnapshot) => Promise<string>
+    }) => {
+      const actual = await input.deriveSelectedContext?.({
+        ...world,
+        spine: { ...world.spine, workOrderId: 42, evidence: [] },
+      })
+      if (actual !== input.expectedSelectedContext) throw new Error("LINE_CONTEXT_STALE")
+    })
+    const stale = await POST(new Request("http://localhost/api/environment/line", {
+      method: "POST",
+      headers: { "content-type": "application/json", host: "localhost" },
+      body: JSON.stringify({
+        worldId: "world-a",
+        text: "What evidence should I inspect next?",
+        lineContext: { kind: "execution-assignment", workOrderId: 41 },
+      }),
+    }))
+    expect(stale.status).toBe(409)
+    await expect(stale.json()).resolves.toEqual({ error: "LINE_CONTEXT_STALE" })
+  })
+
+  it.each([
     "continue",
     "record a decision: ship the changed workflow",
     "record a decision superseding ADR-0007: ship the replacement",

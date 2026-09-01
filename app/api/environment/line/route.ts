@@ -98,6 +98,46 @@ type LineReply = Readonly<{
   dismiss?: "all" | string
 }>
 
+type ExecutionAssignmentLineContext = Readonly<{ kind: "execution-assignment"; workOrderId: number }>
+
+function parseExecutionAssignmentLineContext(value: unknown): ExecutionAssignmentLineContext | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const row = value as Record<string, unknown>
+  return Object.keys(row).sort().join("|") === "kind|workOrderId" && row.kind === "execution-assignment"
+    && Number.isSafeInteger(row.workOrderId) && (row.workOrderId as number) > 0
+    ? { kind: "execution-assignment", workOrderId: row.workOrderId as number }
+    : null
+}
+
+function deriveExecutionAssignmentLineGrounding(world: WorkingWorldSnapshot, expectedWorkOrderId: number) {
+  const { spine } = world
+  if (spine.workOrderId !== expectedWorkOrderId || !spine.outcomeKey || !spine.outcomeTitle) return null
+  const evidence = spine.evidence.slice(-50)
+  const worker = spine.worker ? `${spine.worker.lane} · ${spine.worker.state} · since ${spine.worker.since}` : "not recorded"
+  const evidenceFacts = evidence.length > 0
+    ? evidence.map((item) => `${item.at} · ${item.kind} · ${item.detail || "no detail recorded"}${item.result ? ` · ${item.result}` : ""}`).join("\n")
+    : "No persisted execution evidence is recorded."
+  return {
+    facts: [
+      "Selected object: persisted execution assignment; runtime liveness is unverified.",
+      `Outcome: ${spine.outcomeKey} · ${spine.outcomeTitle}`,
+      `Work Order: #${expectedWorkOrderId}`,
+      `Execution: ${spine.execution}`,
+      `Worker: ${worker}`,
+      "Latest persisted evidence (up to 50 records):",
+      evidenceFacts,
+    ].join("\n"),
+    version: JSON.stringify({
+      outcomeKey: spine.outcomeKey,
+      outcomeTitle: spine.outcomeTitle,
+      workOrderId: spine.workOrderId,
+      execution: spine.execution,
+      worker: spine.worker,
+      evidence,
+    }),
+  }
+}
+
 const LOGIN_WORK = /(login|log.?in|sign.?in|auth)\b/i
 const BROKEN = /(broken|busted|wrong|fail|drops?|mess|not work|doesn.?t work|figure out)/i
 const FIX_INTENT = /\b(fix|repair|patch|clean(?: it)? up|make it work|do it|go ahead)\b/i
@@ -828,7 +868,15 @@ export async function POST(request: Request) {
     return Response.json({ error: "INVALID_WORLD_ID" }, { status: 400 })
   }
   const requestedWorldId = typeof body.worldId === "string" && body.worldId ? body.worldId : null
-  const lineContext = body.lineContext === "space-summary" ? "space-summary" : null
+  const executionAssignmentContext = parseExecutionAssignmentLineContext(body.lineContext)
+  const lineContext = body.lineContext === "space-summary" ? "space-summary"
+    : executionAssignmentContext ?? null
+  if (body.lineContext !== undefined && body.lineContext !== null && lineContext === null) {
+    return Response.json({ error: "INVALID_LINE_CONTEXT" }, { status: 400 })
+  }
+  if (executionAssignmentContext && (!requestedWorldId || summonRequest)) {
+    return Response.json({ error: "INVALID_LINE_CONTEXT" }, { status: 400 })
+  }
 
   if (summonRequest) {
     // Arriving at a surface is not a conversational turn: nothing is recorded as said. The
@@ -879,6 +927,33 @@ export async function POST(request: Request) {
         spaceSummary: deriveSpaceGrounding(latest).version,
       })
       const say = await converse(updated, text, spaceSummary.facts)
+      updated = withTurn(updated, "williamos", say)
+      try {
+        await saveWorld(userId, requestedWorldId, updated, false, expectedSelectedContext, deriveSelectedContext)
+      } catch (error) {
+        if (error instanceof Error && error.message === "LINE_CONTEXT_STALE") {
+          return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
+        }
+        throw error
+      }
+      return Response.json({ worldId: requestedWorldId, say, surfaces: [], spine: updated.spine } satisfies LineReply)
+    }
+    if (lineContext && typeof lineContext === "object" && lineContext.kind === "execution-assignment") {
+      const grounding = deriveExecutionAssignmentLineGrounding(world, lineContext.workOrderId)
+      if (!grounding) return Response.json({ error: "LINE_CONTEXT_STALE" }, { status: 409 })
+      let updated = withTurn(world, "owner", text)
+      const expectedSelectedContext = JSON.stringify({
+        persisted: selectedLineContextFingerprint(world),
+        executionAssignment: grounding.version,
+      })
+      const deriveSelectedContext = async (latest: WorkingWorldSnapshot) => {
+        const latestGrounding = deriveExecutionAssignmentLineGrounding(latest, lineContext.workOrderId)
+        return JSON.stringify({
+          persisted: selectedLineContextFingerprint(latest),
+          executionAssignment: latestGrounding?.version ?? "LINE_CONTEXT_STALE",
+        })
+      }
+      const say = await converse(updated, text, grounding.facts)
       updated = withTurn(updated, "williamos", say)
       try {
         await saveWorld(userId, requestedWorldId, updated, false, expectedSelectedContext, deriveSelectedContext)
