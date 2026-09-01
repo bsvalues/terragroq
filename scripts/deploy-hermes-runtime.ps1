@@ -320,7 +320,7 @@ Copy-Item $httpsProxySource $httpsProxyTarget -Force
 $null = robocopy (Join-Path $Source ".next\static") (Join-Path $Runtime ".next\static") /MIR /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying .next\static (exit $LASTEXITCODE)" }
 if (Test-Path (Join-Path $Source "public")) {
-  $null = robocopy (Join-Path $Source "public") (Join-Path $Runtime "public") /E /NFL /NDL /NJH /NJS /NP
+  $null = robocopy (Join-Path $Source "public") (Join-Path $Runtime "public") /MIR /NFL /NDL /NJH /NJS /NP
   if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying public (exit $LASTEXITCODE)" }
 }
 
@@ -344,7 +344,12 @@ if ($WithDependencies) {
 $fabricSource = Join-Path $Source "lib\fabric"
 $fabricTarget = Join-Path $Runtime "lib\fabric"
 $null = New-Item -ItemType Directory -Path $fabricTarget -Force
-$null = robocopy $fabricSource $fabricTarget "*.mjs" /NFL /NDL /NJH /NJS /NP
+# Only JavaScript modules belong in the production boot closure. Remove the outgoing generation's
+# modules after rollback capture, then copy the source closure recursively so deleted/relocated
+# modules cannot survive as runnable stale bytes. Non-module runtime files are left untouched.
+Get-ChildItem -LiteralPath $fabricTarget -Filter "*.mjs" -File -Recurse -ErrorAction SilentlyContinue |
+  Remove-Item -Force
+$null = robocopy $fabricSource $fabricTarget "*.mjs" /E /NFL /NDL /NJH /NJS /NP
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed copying lib\fabric boot tooling (exit $LASTEXITCODE)" }
 
 $resolverCli = "scripts\fabric\resolve-authority-registry-url.mjs"

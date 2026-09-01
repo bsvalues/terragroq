@@ -193,6 +193,13 @@ describe("the deploy places what the start script needs and can be undone", () =
     // registry -> run-baseline -> audit/broker/transport, and a list would fail at boot, not here.
     expect(code).toContain('Join-Path $Source "lib\\fabric"')
     expect(code).toContain("scripts\\fabric\\resolve-authority-registry-url.mjs")
+    expect(code).toMatch(/Get-ChildItem[^\n]*\$fabricTarget[^\n]*"\*\.mjs"[\s\S]*Remove-Item -Force/)
+    expect(code).toMatch(/robocopy \$fabricSource \$fabricTarget "\*\.mjs" \/E/)
+  })
+
+  it("mirrors public assets so stale files from the outgoing generation cannot survive", () => {
+    const code = executableOnly(deployText)
+    expect(code).toMatch(/robocopy \(Join-Path \$Source "public"\) \(Join-Path \$Runtime "public"\) \/MIR/)
   })
 
   it("installs the repository-owned WilliamOS Live task definition before restart", () => {
