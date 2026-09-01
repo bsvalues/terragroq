@@ -26,6 +26,71 @@ afterEach(() => {
 })
 
 describe("prospective delivery adoption UI", () => {
+  it("previews an owner-selected exact PR target while keeping repository and paths server-derived", async () => {
+    const user = userEvent.setup()
+    const idempotencyKey = "44444444-4444-4444-8444-444444444444"
+    const adoptionHash = "9".repeat(64)
+    const paths = ["components/workspace-shell/delivery-adoption.tsx", "tests/delivery-adoption-ui.test.tsx"]
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ error: "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND" }, 409))
+      .mockResolvedValueOnce(response({ status: "READY_FOR_CONFIRMATION", worldId, pullRequest: 1118, headSha, paths, previewDigest }))
+      .mockResolvedValueOnce(response({ status: "AUTHORIZED", worldId, pullRequest: 1118, headSha, paths, previewDigest, idempotencyKey, adoptionHash, authorizationEventId: 204 }, 201))
+    vi.stubGlobal("fetch", fetchMock)
+    vi.stubGlobal("crypto", { randomUUID: () => idempotencyKey })
+
+    render(<DeliveryAdoption worldId={worldId} />)
+    fireEvent.change(await screen.findByLabelText("Pull request number"), { target: { value: "1118" } })
+    fireEvent.change(screen.getByLabelText("Expected exact head SHA"), { target: { value: headSha } })
+    await user.click(screen.getByRole("button", { name: "Preview exact target" }))
+
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      mode: "PREVIEW",
+      worldId,
+      pullRequest: 1118,
+      expectedHeadSha: headSha,
+    })
+    expect(await screen.findByText(paths[0])).toBeTruthy()
+    expect(screen.getByText(paths[1])).toBeTruthy()
+    expect(screen.queryByLabelText(/repository|paths|grant/i)).toBeNull()
+
+    await user.click(screen.getByRole("button", { name: "Authorize exact artifact" }))
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
+      mode: "AUTHORIZE",
+      worldId,
+      pullRequest: 1118,
+      expectedHeadSha: headSha,
+      confirmedPreviewDigest: previewDigest,
+      idempotencyKey,
+    })
+  })
+
+  it("rejects malformed target identity locally without duplicating errors or contacting the server", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(response({ error: "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND" }, 409))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<DeliveryAdoption worldId={worldId} />)
+    fireEvent.change(await screen.findByLabelText("Pull request number"), { target: { value: "0" } })
+    fireEvent.change(screen.getByLabelText("Expected exact head SHA"), { target: { value: "NOT-A-HEAD" } })
+    await userEvent.click(screen.getByRole("button", { name: "Preview exact target" }))
+
+    expect(screen.getAllByRole("alert")).toHaveLength(1)
+    expect(screen.getByRole("alert").textContent).toBe("Enter a positive pull request number.")
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it("opens exact-artifact delivery directly for a Space that already has active authority", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(response({ error: "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND" }, 409))
+    vi.stubGlobal("fetch", fetchMock)
+
+    render(<ExternalWorkOrderAdmission worldId={worldId} persisted bound />)
+    await userEvent.click(screen.getByRole("button", { name: "Admit external work" }))
+
+    expect(await screen.findByLabelText("Pull request number")).toBeTruthy()
+    expect(screen.getByLabelText("Expected exact head SHA")).toBeTruthy()
+    expect(screen.queryByLabelText("External Work Order reference")).toBeNull()
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ mode: "PREVIEW", worldId })
+  })
+
   it("continues from admitted work into exact-artifact delivery without editable authority inputs", async () => {
     const user = userEvent.setup()
     const fetchMock = vi.fn()
@@ -108,6 +173,8 @@ describe("prospective delivery adoption UI", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
       mode: "AUTHORIZE",
       worldId,
+      pullRequest: 1117,
+      expectedHeadSha: headSha,
       confirmedPreviewDigest: previewDigest,
       idempotencyKey,
     })

@@ -15,6 +15,8 @@ const digest = (value: string) => value.repeat(64).slice(0, 64)
 const head = "2".repeat(40)
 const base = "1".repeat(40)
 const paths = ["app/a.ts", "lib/b.ts"]
+const target = { pullRequest: 1117, expectedHeadSha: head } as const
+const deliveryGrant = { id: 44, ref: "GRANT-ADOPT", version: digest("9"), expiresAt: "2026-09-01T00:00:00.000Z" } as const
 
 const context = {
   owner: "owner-1", worldId: "space-1", spaceRevision: 9, workspace: "C:/repo",
@@ -38,8 +40,9 @@ function dependencies(overrides: Partial<ArtifactAdoptionDependencies> = {}): Ar
   return {
     loadContext: vi.fn().mockResolvedValue(context),
     inspectArtifactIdentity: vi.fn().mockResolvedValue(identity),
-    recordAuthorization: vi.fn().mockImplementation(async (_user, authorization) => ({ eventId: 101, authorization })),
+    recordAuthorization: vi.fn().mockImplementation(async (_user, authorization) => ({ eventId: 101, authorization: { ...authorization, deliveryGrant } })),
     loadAuthorization: vi.fn().mockResolvedValue(null),
+    validateDeliveryGrant: vi.fn().mockResolvedValue(true),
     inspectAuthorizedEvidence: vi.fn().mockResolvedValue(evidence),
     recordEvidence: vi.fn().mockResolvedValue({ validationEventId: 102, reviewEventId: 103 }),
     loadEvidence: vi.fn().mockResolvedValue(null),
@@ -52,9 +55,9 @@ function dependencies(overrides: Partial<ArtifactAdoptionDependencies> = {}): Ar
 }
 
 async function authorizeFixture(deps: ArtifactAdoptionDependencies) {
-  const preview = await previewProspectiveArtifactAdoption({ userId: "owner-1", worldId: "space-1" }, deps)
+  const preview = await previewProspectiveArtifactAdoption({ userId: "owner-1", worldId: "space-1", target }, deps)
   return (await authorizeProspectiveArtifactAdoption({
-    userId: "owner-1", worldId: "space-1", idempotencyKey: "adopt-pr-1117-head",
+    userId: "owner-1", worldId: "space-1", target, idempotencyKey: "adopt-pr-1117-head",
     confirmedPreviewDigest: preview.previewDigest,
   }, deps)).authorization
 }
@@ -66,7 +69,7 @@ describe("prospective exact-artifact adoption", () => {
     const deps = dependencies({
       recordAuthorization: vi.fn().mockImplementation(async (_user, authorization) => {
         order.push("authorized")
-        persisted = { eventId: 101, authorization }
+        persisted = { eventId: 101, authorization: { ...authorization, deliveryGrant } }
         return persisted
       }),
       loadAuthorization: vi.fn().mockImplementation(async () => persisted),

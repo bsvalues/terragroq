@@ -15,6 +15,7 @@ import {
   type ArtifactAdoptionAuthorization,
   type ArtifactAdoptionDependencies,
   type ArtifactAdoptionEvidence,
+  type ArtifactAdoptionTarget,
 } from "@/lib/governance/artifact-adoption"
 import { DeliverySealError, deliverySigningKeyFromBase64, type DeliverySigningKey, type WilliamOSDeliverySeal } from "@/lib/governance/delivery-seal"
 import { inspectGitDelivery } from "@/lib/governance/git-delivery"
@@ -24,9 +25,9 @@ import { createHermesRepositoryLifecycle } from "../../scripts/hermes-bridge/rep
 const runFile = promisify(execFile)
 const SHA = /^[0-9a-f]{40}$/
 const WORKSPACE_RESOURCE = "williamos-workspace-root:v1:"
-const ADMISSION_OPERATION = "space.external_work_order.admit"
 const SUPPORTED_REPOSITORY = "bsvalues/terragroq"
 const DELIVERY_SEAL_CHECK = "WilliamOS assignment delivery seal"
+const DELIVERY_GRANTEE = "williamos-delivery"
 
 type CommandRunner = (
   executable: string,
@@ -107,37 +108,30 @@ function iso(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value ?? "")
 }
 
-function parseContextRow(userId: string, worldId: string, row: Record<string, unknown>): Context {
+function parseBaseContextRow(userId: string, worldId: string, row: Record<string, unknown>) {
   const world = validateWorkingWorld(object(row.worldSnapshot))
   if (!world.space) {
     fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the persisted Space has no durable spatial state")
   }
-  const request = object(row.admissionRequest)
-  const packet = object(request.externalWorkOrder)
-  const pullRequest = object(packet.pullRequest)
   const allowed = exactPaths(row.allowedFiles)
   const grantAllowed = exactPaths(row.grantAllowed)
-  const admitted = exactPaths(packet.reservedPaths)
   const forbidden = strings(row.forbiddenFiles).sort()
   const grantBlocked = strings(row.grantBlocked).sort()
-  const repository = String(packet.repository ?? "").trim().toLowerCase()
+  const repository = String(row.repository ?? "").trim().toLowerCase()
   const resource = world.resources.filter((value) => value.startsWith(WORKSPACE_RESOURCE))
   const workspace = resource.length === 1 ? resource[0].slice(WORKSPACE_RESOURCE.length) : ""
-  const headSha = String(pullRequest.headSha ?? "")
-  const pr = Number(pullRequest.number)
   const grantExpiry = row.grantExpiresAt == null ? null : iso(row.grantExpiresAt)
-  if (request.worldId !== worldId || world.spine.outcomeKey !== row.outcomeKey
+  if (world.spine.outcomeKey !== row.outcomeKey
     || world.spine.workOrderId !== Number(row.workOrderId) || world.space.revision < 0
     || row.outcomeState !== "active" || Number(row.activeWorkOrderId) !== Number(row.workOrderId)
     || row.workOrderStatus !== "active" || Number(row.workOrderGrantId) !== Number(row.grantId)
     || String(row.workOrderAgent).toLowerCase() !== "codex"
     || row.grantStatus !== "active" || row.grantRevokedAt != null
     || Number(row.grantWorkOrderId) !== Number(row.workOrderId) || String(row.grantTo).toLowerCase() !== "codex"
-    || !same(allowed, grantAllowed) || !same(allowed, admitted) || !same(forbidden, grantBlocked)
-    || String(row.repository ?? "").trim().toLowerCase() !== repository
-    || repository !== SUPPORTED_REPOSITORY || !Number.isSafeInteger(pr) || pr <= 0 || !SHA.test(headSha)
+    || !same(allowed, grantAllowed) || !same(forbidden, grantBlocked)
+    || repository !== SUPPORTED_REPOSITORY
     || !workspace || workspaceProjectFromRoot(workspace).identity !== workspace) {
-    fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the Space, Work Order, grant, admission receipt, or exact reservation is inconsistent")
+    fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the Space, Work Order, grant, or workspace binding is inconsistent")
   }
   return {
     owner: userId,
@@ -145,13 +139,49 @@ function parseContextRow(userId: string, worldId: string, row: Record<string, un
     spaceRevision: world.space.revision,
     workspace: path.resolve(workspace),
     repository: `https://github.com/${repository}`,
-    pullRequest: pr,
-    admittedHeadSha: headSha,
     outcome: { id: Number(row.outcomeId), key: String(row.outcomeKey), version: Number(row.outcomeVersion) },
     workOrder: { id: Number(row.workOrderId), ref: row.workOrderRef == null ? null : String(row.workOrderRef), version: iso(row.workOrderVersion) },
     grant: { id: Number(row.grantId), ref: row.grantRef == null ? null : String(row.grantRef), version: String(row.grantVersion ?? iso(row.grantCreatedAt)), expiresAt: grantExpiry },
-    reservation: { allowed, forbidden, version: hashRecord({ allowed, forbidden, grantId: Number(row.grantId), grantVersion: String(row.grantVersion ?? iso(row.grantCreatedAt)) }) },
+    anchorReservation: { allowed, forbidden },
   }
+}
+
+function contextForTarget(
+  base: ReturnType<typeof parseBaseContextRow>,
+  target: ArtifactAdoptionTarget,
+  paths: readonly string[],
+): Context {
+  const reservation = {
+    allowed: [...paths].sort(),
+    forbidden: [...base.anchorReservation.forbidden],
+    version: hashRecord({
+      kind: "prospective-artifact-reservation.v1", owner: base.owner, worldId: base.worldId,
+      outcome: base.outcome, workOrder: base.workOrder, anchorGrant: base.grant,
+      pullRequest: target.pullRequest, headSha: target.expectedHeadSha, paths: [...paths].sort(),
+    }),
+  }
+  return {
+    ...base,
+    pullRequest: target.pullRequest,
+    admittedHeadSha: target.expectedHeadSha,
+    reservation,
+  }
+}
+
+function validDeliveryGrantRow(userId: string, authorization: ArtifactAdoptionAuthorization, row: Record<string, unknown>): boolean {
+  const scope = object(row.scope)
+  return Number(row.id) === authorization.deliveryGrant.id
+    && (row.ref == null ? null : String(row.ref)) === authorization.deliveryGrant.ref
+    && Number(row.workOrderId) === authorization.context.workOrder.id
+    && String(row.grantedBy) === userId && String(row.grantedTo) === DELIVERY_GRANTEE
+    && String(row.authorityLevel) === "A8_PUSH" && String(row.status) === "active" && row.revokedAt == null
+    && String(row.contentHash) === authorization.deliveryGrant.version
+    && (row.expiresAt == null ? null : iso(row.expiresAt)) === authorization.deliveryGrant.expiresAt
+    && String(scope.repository) === authorization.context.repository
+    && Number(scope.pullRequest) === authorization.artifact.pullRequest
+    && String(scope.headSha) === authorization.artifact.headSha
+    && same(exactPaths(row.allowedActions), authorization.artifact.paths)
+    && same(strings(row.blockedActions), ["implementation:mutate", "authority:widen", "artifact:retarget"])
 }
 
 const CONTEXT_SQL = `SELECT world."snapshot" AS "worldSnapshot",
@@ -164,7 +194,7 @@ const CONTEXT_SQL = `SELECT world."snapshot" AS "worldSnapshot",
     grant_row."grantedTo" AS "grantTo", grant_row."status" AS "grantStatus", grant_row."revokedAt" AS "grantRevokedAt",
     grant_row."expiresAt" AS "grantExpiresAt", grant_row."contentHash" AS "grantVersion", grant_row."createdAt" AS "grantCreatedAt",
     grant_row."allowedActions" AS "grantAllowed", grant_row."blockedActions" AS "grantBlocked",
-    resource."canonicalIdentity" AS "repository", receipt."requestBinding" AS "admissionRequest"
+    resource."canonicalIdentity" AS "repository"
   FROM "working_world" world
   JOIN "outcome_queue_item" outcome ON outcome."userId" = world."userId" AND outcome."outcomeKey" = world."snapshot"::jsonb#>>'{spine,outcomeKey}'
   JOIN "work_order" work ON work."userId" = world."userId" AND work."id" = outcome."activeWorkOrderId"
@@ -172,9 +202,8 @@ const CONTEXT_SQL = `SELECT world."snapshot" AS "worldSnapshot",
   JOIN "project_resource" resource ON resource."userId" = world."userId"
     AND resource."projectId" = (world."snapshot"::jsonb#>>'{spine,projectId}')::integer
     AND resource."type" = 'repo' AND resource."relationship" = 'primary-repo'
-  JOIN "outcome_queue_mutation_receipt" receipt ON receipt."userId" = world."userId"
-    AND receipt."operation" = '${ADMISSION_OPERATION}' AND receipt."outcomeKey" = outcome."outcomeKey"
-  WHERE world."userId" = $1 AND world."id" = $2`
+  WHERE world."userId" = $1 AND world."id" = $2
+    AND (grant_row."expiresAt" IS NULL OR grant_row."expiresAt" > CURRENT_TIMESTAMP)`
 
 export async function deriveArtifactAdoptionBaseSha(
   root: string,
@@ -228,13 +257,26 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     JSON.stringify(seal, null, 2),
     "```",
   ].join("\n")
-  const loadContext = async (userId: string, worldId: string): Promise<Context> => {
+  const loadContext = async (userId: string, worldId: string, target: ArtifactAdoptionTarget): Promise<Context> => {
+    if (!Number.isSafeInteger(target.pullRequest) || target.pullRequest <= 0 || !SHA.test(target.expectedHeadSha)) {
+      fail("DELIVERY_SEAL_REQUEST_INVALID", "the exact artifact target is malformed")
+    }
     const result = await options.database.query(CONTEXT_SQL, [userId, worldId])
     if (result.rows.length === 0) fail("DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND", "no exact Space-bound delivery adoption is available")
-    if (result.rows.length !== 1) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "one exact Space-bound admission is required")
-    const context = parseContextRow(userId, worldId, result.rows[0])
-    if (!await options.workspaceExists(context.workspace)) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the persisted Space workspace is unavailable")
-    return context
+    if (result.rows.length !== 1) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "one exact Space-bound authority context is required")
+    const base = parseBaseContextRow(userId, worldId, result.rows[0])
+    if (!await options.workspaceExists(base.workspace)) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the persisted Space workspace is unavailable")
+    const lifecycle = options.createLifecycle(base.workspace, base.repository)
+    const [pullRequest, files] = await Promise.all([
+      lifecycle.inspectPullRequest(target.pullRequest, { allowRemediationBranch: true }),
+      lifecycle.inspectPullRequestFiles(target.pullRequest),
+    ])
+    const paths = exactPaths(files)
+    if (Number(pullRequest.number) !== target.pullRequest || String(pullRequest.state) !== "OPEN"
+      || String(pullRequest.headRefOid) !== target.expectedHeadSha) {
+      fail("DELIVERY_SEAL_DIFF_INVALID", "the requested artifact is not the exact current open pull-request head")
+    }
+    return contextForTarget(base, target, paths)
   }
   const loadAuthorization = async (userId: string, adoptionHash: string) => {
     const result = await options.database.query(
@@ -282,24 +324,69 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
         if (prior.rows.length > 1) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "prospective authorization idempotency is ambiguous")
         if (prior.rows.length === 1) {
           const persisted = object(prior.rows[0].metadata) as unknown as ArtifactAdoptionAuthorization
-          if (hashRecord(persisted) !== hashRecord(authorization)) fail("DELIVERY_SEAL_CONFIRMATION_STALE", "idempotency key is bound to another artifact")
+          if (persisted.adoptionHash !== authorization.adoptionHash
+            || persisted.previewDigest !== authorization.previewDigest
+            || hashRecord(persisted.context) !== hashRecord(authorization.context)
+            || hashRecord(persisted.artifact) !== hashRecord(authorization.artifact)) {
+            fail("DELIVERY_SEAL_CONFIRMATION_STALE", "idempotency key is bound to another artifact")
+          }
           await client.query("COMMIT")
           return { eventId: Number(prior.rows[0].id), authorization: persisted }
+        }
+        const grantVersion = hashRecord({
+          kind: "prospective-artifact-delivery-grant.v1", adoptionHash: authorization.adoptionHash,
+          owner: userId, worldId: authorization.context.worldId,
+          workOrder: authorization.context.workOrder, artifact: authorization.artifact,
+          reservation: authorization.context.reservation,
+        })
+        const grantRef = `GRANT-ADOPT-${authorization.adoptionHash.slice(0, 24).toUpperCase()}`
+        const grant = await client.query(
+          `INSERT INTO "authority_grant" ("userId","ref","workOrderId","grantedBy","grantedTo","authorityLevel","scope","allowedActions","blockedActions","reason","status","expiresAt","contentHash")
+            VALUES ($1,$2,$3,$1,$4,'A8_PUSH',$5,$6::text[],$7::text[],$8,'active',$9,$10) RETURNING "id","ref","contentHash","expiresAt"`,
+          [userId, grantRef, authorization.context.workOrder.id, DELIVERY_GRANTEE,
+            JSON.stringify({ repository: authorization.context.repository, pullRequest: authorization.artifact.pullRequest, headSha: authorization.artifact.headSha }),
+            authorization.artifact.paths, ["implementation:mutate", "authority:widen", "artifact:retarget"],
+            "Owner prospectively authorized delivery of one exact existing artifact",
+            authorization.context.grant.expiresAt, grantVersion],
+        )
+        const grantRow = grant.rows[0]
+        if (!grantRow || !Number.isSafeInteger(Number(grantRow.id)) || String(grantRow.contentHash) !== grantVersion) {
+          fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the prospective delivery grant was not persisted exactly")
+        }
+        const persistedAuthorization: ArtifactAdoptionAuthorization = {
+          ...authorization,
+          deliveryGrant: {
+            id: Number(grantRow.id), ref: grantRow.ref == null ? null : String(grantRow.ref),
+            version: grantVersion,
+            expiresAt: grantRow.expiresAt == null ? null : iso(grantRow.expiresAt),
+          },
         }
         const inserted = await client.query(
           `INSERT INTO "governance_event" ("userId","eventType","entityType","entityId","actor","reason","metadata")
             VALUES ($1,$2,$3,$4,'williamos',$5,$6::jsonb) RETURNING "id"`,
           [userId, "ARTIFACT_ADOPTION_AUTHORIZED", "williamos_artifact_adoption_authorization", authorization.adoptionHash,
-            "Owner prospectively authorized delivery of one exact existing artifact", JSON.stringify(authorization)],
+            "Owner prospectively authorized delivery of one exact existing artifact", JSON.stringify(persistedAuthorization)],
         )
         await client.query("COMMIT")
-        return { eventId: Number(inserted.rows[0]?.id), authorization }
+        return { eventId: Number(inserted.rows[0]?.id), authorization: persistedAuthorization }
       } catch (error) {
         try { await client.query("ROLLBACK") } catch { /* retain original */ }
         throw error
       } finally { client.release() }
     },
     loadAuthorization,
+    validateDeliveryGrant: async (userId, authorization) => {
+      const result = await options.database.query(
+        `SELECT "id","ref","workOrderId","grantedBy","grantedTo","authorityLevel","scope","allowedActions","blockedActions","status","expiresAt","revokedAt","contentHash"
+          FROM "authority_grant" WHERE "userId"=$1 AND "id"=$2 LIMIT 2`,
+        [userId, authorization.deliveryGrant.id],
+      )
+      if (result.rows.length !== 1) return false
+      const row = result.rows[0]
+      const expiry = row.expiresAt == null ? null : Date.parse(iso(row.expiresAt))
+      return validDeliveryGrantRow(userId, authorization, row)
+        && (expiry === null || (Number.isFinite(expiry) && expiry > options.now().getTime()))
+    },
     inspectAuthorizedEvidence: async (authorization) => {
       const lifecycle = options.createLifecycle(authorization.context.workspace, authorization.context.repository)
       const [pullRequest, files] = await Promise.all([
@@ -407,8 +494,20 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
     now: options.now,
   }
   return {
-    preview: async (userId: string, worldId: string) => {
-      const ready = await previewProspectiveArtifactAdoption({ userId, worldId }, dependencies)
+    preview: async (userId: string, worldId: string, requestedTarget?: ArtifactAdoptionTarget) => {
+      let target = requestedTarget
+      if (!target) {
+        const existing = await options.database.query(
+          `SELECT "metadata" FROM "governance_event" WHERE "userId"=$1
+            AND "eventType"='ARTIFACT_ADOPTION_AUTHORIZED' AND "entityType"='williamos_artifact_adoption_authorization'
+            AND "metadata"->'context'->>'worldId'=$2 ORDER BY "id" DESC LIMIT 2`,
+          [userId, worldId],
+        )
+        if (existing.rows.length !== 1) fail("DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND", "no prospective artifact adoption is available to restore")
+        const authorization = object(existing.rows[0].metadata) as unknown as ArtifactAdoptionAuthorization
+        target = { pullRequest: authorization.artifact.pullRequest, expectedHeadSha: authorization.artifact.headSha }
+      }
+      const ready = await previewProspectiveArtifactAdoption({ userId, worldId, target }, dependencies)
       const found = await options.database.query(
         `SELECT "id", "metadata" FROM "governance_event" WHERE "userId"=$1
           AND "eventType"='ARTIFACT_ADOPTION_AUTHORIZED' AND "entityType"='williamos_artifact_adoption_authorization'
@@ -434,8 +533,8 @@ export function createArtifactAdoptionRuntime(options: ArtifactAdoptionRuntimeOp
         authorizationEventId: Number(found.rows[0].id),
       }
     },
-    authorize: async (userId: string, worldId: string, idempotencyKey: string, confirmedPreviewDigest: string) => {
-      const result = await authorizeProspectiveArtifactAdoption({ userId, worldId, idempotencyKey, confirmedPreviewDigest }, dependencies)
+    authorize: async (userId: string, worldId: string, target: ArtifactAdoptionTarget, idempotencyKey: string, confirmedPreviewDigest: string) => {
+      const result = await authorizeProspectiveArtifactAdoption({ userId, worldId, target, idempotencyKey, confirmedPreviewDigest }, dependencies)
       return {
         status: "AUTHORIZED" as const, worldId,
         pullRequest: result.authorization.artifact.pullRequest, headSha: result.authorization.artifact.headSha,
@@ -496,26 +595,43 @@ export async function recordArtifactAdoptionSealWithAuthorityFence(
     const authorizationEventId = priorMetadata ? Number(priorMetadata.authorizationEventId) : input.authorizationEventId
     const validationEventId = priorMetadata ? Number(priorMetadata.validationEventId) : input.validationEventId
     const reviewEventId = priorMetadata ? Number(priorMetadata.reviewEventId) : input.reviewEventId
-    const result = await client.query(
-      `${CONTEXT_SQL.replace("SELECT ", `SELECT authorization_event."metadata" AS "authorizationMetadata",
-          validation_event."metadata" AS "validationMetadata", review_event."metadata" AS "reviewMetadata", `)
-        .replace("WHERE world.\"userId\" = $1 AND world.\"id\" = $2", "")},
-        "governance_event" authorization_event,
-        "governance_event" validation_event,
-        "governance_event" review_event
-       WHERE world."userId"=$1 AND world."id"=$2
-         AND authorization_event."id"=$3 AND authorization_event."userId"=$1 AND authorization_event."eventType"='ARTIFACT_ADOPTION_AUTHORIZED'
-         AND validation_event."id"=$4 AND validation_event."userId"=$1 AND validation_event."eventType"='ARTIFACT_ADOPTION_VALIDATED'
-         AND review_event."id"=$5 AND review_event."userId"=$1 AND review_event."eventType"='ARTIFACT_ADOPTION_REVIEWED'
-       FOR UPDATE OF authorization_event, validation_event, review_event, world, outcome, work, grant_row`,
-      [input.userId, seal.payload.adoption.worldId, authorizationEventId, validationEventId, reviewEventId],
+    const events = await client.query(
+      `SELECT authorization_event."metadata" AS "authorizationMetadata",
+          validation_event."metadata" AS "validationMetadata", review_event."metadata" AS "reviewMetadata"
+        FROM "governance_event" authorization_event
+        JOIN "governance_event" validation_event ON validation_event."userId"=authorization_event."userId"
+        JOIN "governance_event" review_event ON review_event."userId"=authorization_event."userId"
+       WHERE authorization_event."id"=$2 AND authorization_event."userId"=$1
+         AND authorization_event."eventType"='ARTIFACT_ADOPTION_AUTHORIZED'
+         AND validation_event."id"=$3 AND validation_event."eventType"='ARTIFACT_ADOPTION_VALIDATED'
+         AND review_event."id"=$4 AND review_event."eventType"='ARTIFACT_ADOPTION_REVIEWED'
+       FOR UPDATE OF authorization_event, validation_event, review_event`,
+      [input.userId, authorizationEventId, validationEventId, reviewEventId],
     )
-    const row = result.rows[0]
-    if (!row) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "prospective adoption authority changed before sealing")
-    const context = parseContextRow(input.userId, seal.payload.adoption.worldId, row)
-    const authorization = object(row.authorizationMetadata) as unknown as ArtifactAdoptionAuthorization
-    const validation = object(row.validationMetadata)
-    const review = object(row.reviewMetadata)
+    const eventRow = events.rows[0]
+    if (!eventRow) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "prospective adoption authority changed before sealing")
+    const authorization = object(eventRow.authorizationMetadata) as unknown as ArtifactAdoptionAuthorization
+    const validation = object(eventRow.validationMetadata)
+    const review = object(eventRow.reviewMetadata)
+    const contextResult = await client.query(
+      `${CONTEXT_SQL} FOR UPDATE OF world, outcome, work, grant_row`,
+      [input.userId, seal.payload.adoption.worldId],
+    )
+    if (contextResult.rows.length !== 1) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the Space authority changed before sealing")
+    const baseContext = parseBaseContextRow(input.userId, seal.payload.adoption.worldId, contextResult.rows[0])
+    const context = contextForTarget(baseContext, {
+      pullRequest: authorization.artifact.pullRequest,
+      expectedHeadSha: authorization.artifact.headSha,
+    }, authorization.artifact.paths)
+    const deliveryGrant = await client.query(
+      `SELECT "id","ref","workOrderId","grantedBy","grantedTo","authorityLevel","scope","allowedActions","blockedActions","status","expiresAt","revokedAt","contentHash"
+        FROM "authority_grant" WHERE "userId"=$1 AND "id"=$2 AND "status"='active' AND "revokedAt" IS NULL
+          AND ("expiresAt" IS NULL OR "expiresAt" > CURRENT_TIMESTAMP) LIMIT 1 FOR UPDATE`,
+      [input.userId, authorization.deliveryGrant.id],
+    )
+    if (deliveryGrant.rows.length !== 1 || !validDeliveryGrantRow(input.userId, authorization, deliveryGrant.rows[0])) {
+      fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "the exact prospective delivery grant changed or expired before sealing")
+    }
     const validationEvidence = object(validation.evidence) as unknown as ArtifactAdoptionEvidence
     const reviewEvidence = object(review.evidence) as unknown as ArtifactAdoptionEvidence
     const signed = seal.payload.adoption
@@ -554,5 +670,6 @@ export async function recordArtifactAdoptionSealWithAuthorityFence(
 let singleton: ReturnType<typeof createArtifactAdoptionRuntime> | null = null
 function runtime() { return singleton ??= createArtifactAdoptionRuntime(defaultOptions()) }
 export const previewPersistedArtifactAdoption = (userId: string, worldId: string) => runtime().preview(userId, worldId)
-export const authorizePersistedArtifactAdoption = (userId: string, worldId: string, idempotencyKey: string, digest: string) => runtime().authorize(userId, worldId, idempotencyKey, digest)
+export const previewTargetArtifactAdoption = (userId: string, worldId: string, target: ArtifactAdoptionTarget) => runtime().preview(userId, worldId, target)
+export const authorizePersistedArtifactAdoption = (userId: string, worldId: string, target: ArtifactAdoptionTarget, idempotencyKey: string, digest: string) => runtime().authorize(userId, worldId, target, idempotencyKey, digest)
 export const issuePersistedArtifactAdoption = (userId: string, worldId: string, idempotencyKey: string) => runtime().issue(userId, worldId, idempotencyKey)

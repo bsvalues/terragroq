@@ -7,6 +7,7 @@ import { createArtifactAdoptionRuntime, deriveArtifactAdoptionBaseSha } from "@/
 const head = "2".repeat(40)
 const base = "1".repeat(40)
 const paths = ["app/a.ts", "lib/b.ts"]
+const target = { pullRequest: 1117, expectedHeadSha: head } as const
 
 function authorityRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -37,8 +38,14 @@ function authorityRow(overrides: Record<string, unknown> = {}) {
 
 function harness(row = authorityRow()) {
   const events: Array<{ type: string; entity: string; metadata: unknown }> = []
+  const grants: Array<Record<string, unknown>> = []
+  let expireGrantAtFence = false
   const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
     if (sql.includes("FROM \"working_world\" world")) return { rows: [row] }
+    if (sql.includes("FROM \"authority_grant\"") && !sql.includes("JOIN")) {
+      const grant = grants.find((value) => Number(value.id) === Number(values?.[1]))
+      return { rows: grant ? [grant] : [] }
+    }
     if (sql.includes("entityType\"='williamos_delivery_seal'")) {
       const sealed = events.find((event) => event.type === "EVIDENCE_RECORDED")
       return { rows: sealed ? [{ metadata: sealed.metadata }] : [] }
@@ -63,6 +70,20 @@ function harness(row = authorityRow()) {
   })
   const txQuery = vi.fn(async (sql: string, values?: readonly unknown[]) => {
     if (sql.startsWith("BEGIN") || sql === "COMMIT" || sql === "ROLLBACK" || sql.includes("pg_advisory_xact_lock")) return { rows: [] }
+    if (sql.includes("INSERT INTO \"authority_grant\"")) {
+      const grant = {
+        id: 44, ref: values?.[1], workOrderId: values?.[2], grantedBy: values?.[0], grantedTo: values?.[3],
+        authorityLevel: "A8_PUSH", scope: values?.[4], allowedActions: values?.[5], blockedActions: values?.[6],
+        status: "active", expiresAt: values?.[8], revokedAt: null, contentHash: values?.[9],
+      }
+      grants.push(grant)
+      return { rows: [grant] }
+    }
+    if (sql.includes("FROM \"authority_grant\"") && sql.includes("FOR UPDATE")) {
+      const grant = grants.find((value) => Number(value.id) === Number(values?.[1]))
+      return { rows: grant ? [{ ...grant, ...(expireGrantAtFence ? { expiresAt: new Date("2026-08-31T19:59:59.000Z") } : {}) }] : [] }
+    }
+    if (sql.includes("FROM \"working_world\" world") && sql.includes("FOR UPDATE OF world")) return { rows: [row] }
     if (sql.includes("FOR UPDATE OF authorization_event")) {
       const authorization = events.find((event) => event.type === "ARTIFACT_ADOPTION_AUTHORIZED")?.metadata
       const validation = events.find((event) => event.type === "ARTIFACT_ADOPTION_VALIDATED")?.metadata
@@ -82,10 +103,10 @@ function harness(row = authorityRow()) {
   })
   const db = { query, connect: vi.fn(async () => ({ query: txQuery, release: vi.fn() })) }
   const lifecycle = {
-    inspectPullRequest: vi.fn(async () => ({ number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "", checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0 })),
-    inspectPullRequestFiles: vi.fn(async () => paths),
+    inspectPullRequest: vi.fn(async (_number: number, _options?: { allowRemediationBranch?: boolean }): Promise<Record<string, unknown>> => ({ number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "", checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0 })),
+    inspectPullRequestFiles: vi.fn(async (_number: number): Promise<readonly string[]> => paths),
   }
-  const deriveBaseSha = vi.fn(async () => ({ pullRequestBaseSha: "0".repeat(40), baseRefSha: base, mergeBaseSha: base }))
+  const deriveBaseSha = vi.fn(async (_root: string, _repository: string, _pullRequest: number, _headSha: string) => ({ pullRequestBaseSha: "0".repeat(40), baseRefSha: base, mergeBaseSha: base }))
   const { privateKey, publicKey } = generateKeyPairSync("ed25519")
   const runtime = createArtifactAdoptionRuntime({
     database: db,
@@ -96,7 +117,7 @@ function harness(row = authorityRow()) {
     signingKey: { keyId: "test-key", privateKey, publicKey },
     now: () => new Date("2026-08-31T20:00:00.000Z"),
   })
-  return { runtime, db, lifecycle, events, txQuery, deriveBaseSha }
+  return { runtime, db, lifecycle, events, txQuery, deriveBaseSha, expireGrantAtFence: () => { expireGrantAtFence = true } }
 }
 
 describe("persisted prospective artifact adoption", () => {
@@ -125,17 +146,17 @@ describe("persisted prospective artifact adoption", () => {
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_DIFF_INVALID" })
     expect(execute.mock.calls.some(([, args]) => args.includes("merge-base"))).toBe(false)
   })
-  it("derives exact artifact authority from the persisted Space admission and rejects malformed reservations before GitHub", async () => {
+  it("derives the target artifact from GitHub while requiring a valid persisted Space authority spine", async () => {
     const valid = harness()
-    await expect(valid.runtime.preview("owner-1", "space-1")).resolves.toMatchObject({ pullRequest: 1117, headSha: head, paths })
-    expect(valid.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+    await expect(valid.runtime.preview("owner-1", "space-1", target)).resolves.toMatchObject({ pullRequest: 1117, headSha: head, paths })
+    expect(valid.lifecycle.inspectPullRequest).toHaveBeenCalledWith(1117, { allowRemediationBranch: true })
 
     for (const bad of [["app/**"], ["app/a.ts", "app/a.ts"], ["../escape.ts"], ["app/"]]) {
       const invalid = harness(authorityRow({ allowedFiles: bad, grantAllowed: bad, admissionRequest: { worldId: "space-1", externalWorkOrder: { repository: "bsvalues/terragroq", reservedPaths: bad, pullRequest: { number: 1117, headSha: head } } } }))
-      await expect(invalid.runtime.preview("owner-1", "space-1")).rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
+      await expect(invalid.runtime.preview("owner-1", "space-1", target)).rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
       expect(invalid.lifecycle.inspectPullRequest).not.toHaveBeenCalled()
     }
-    await expect(harness(authorityRow({ repository: "other/repo" })).runtime.preview("owner-1", "space-1"))
+    await expect(harness(authorityRow({ repository: "other/repo" })).runtime.preview("owner-1", "space-1", target))
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
     await expect(harness(authorityRow({
       repository: "other/repo",
@@ -143,13 +164,13 @@ describe("persisted prospective artifact adoption", () => {
         worldId: "space-1",
         externalWorkOrder: { repository: "other/repo", reservedPaths: paths, pullRequest: { number: 1117, headSha: head } },
       },
-    })).runtime.preview("owner-1", "space-1"))
+    })).runtime.preview("owner-1", "space-1", target))
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
   })
 
-  it("binds the preview to the admitted repository, pull request, and exact head when resolving its base", async () => {
+  it("binds the preview to the Space repository and owner-confirmed exact PR head when resolving its base", async () => {
     const candidate = harness()
-    await candidate.runtime.preview("owner-1", "space-1")
+    await candidate.runtime.preview("owner-1", "space-1", target)
     const [workspace, repository, pullRequest, admittedHead] = candidate.deriveBaseSha.mock.calls[0]
     expect(workspace.replace(/\\/g, "/")).toMatch(/c:\/repo$/)
     expect([repository, pullRequest, admittedHead]).toEqual([
@@ -159,8 +180,8 @@ describe("persisted prospective artifact adoption", () => {
 
   it("keeps the historical PR base distinct from the current base-ref tip and merge base", async () => {
     const candidate = harness()
-    const preview = await candidate.runtime.preview("owner-1", "space-1")
-    await candidate.runtime.authorize("owner-1", "space-1", "adopt:1117:moved-base", preview.previewDigest)
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:moved-base", preview.previewDigest)
     candidate.deriveBaseSha.mockResolvedValue({
       pullRequestBaseSha: "0".repeat(40),
       baseRefSha: "3".repeat(40),
@@ -170,13 +191,13 @@ describe("persisted prospective artifact adoption", () => {
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
   })
 
-  it("records authorization before inspecting GitHub, then records distinct exact-head validation and review events", async () => {
+  it("records prospective authorization before recording distinct exact-head validation and review evidence", async () => {
     const { runtime, lifecycle, events } = harness()
-    const preview = await runtime.preview("owner-1", "space-1")
-    const authorized = await runtime.authorize("owner-1", "space-1", "adopt:1117:exact", preview.previewDigest)
+    const preview = await runtime.preview("owner-1", "space-1", target)
+    const authorized = await runtime.authorize("owner-1", "space-1", target, "adopt:1117:exact", preview.previewDigest)
     expect(authorized.status).toBe("AUTHORIZED")
     expect(events.map((event) => event.type)).toEqual(["ARTIFACT_ADOPTION_AUTHORIZED"])
-    expect(lifecycle.inspectPullRequest).not.toHaveBeenCalled()
+    expect(lifecycle.inspectPullRequest).toHaveBeenCalledTimes(2)
 
     await expect(runtime.preview("owner-1", "space-1")).resolves.toMatchObject({ status: "AUTHORIZED", previewDigest: preview.previewDigest, idempotencyKey: "adopt:1117:exact", authorizationEventId: 101 })
     const sealed = await runtime.issue("owner-1", "space-1", "adopt:1117:exact")
@@ -189,7 +210,7 @@ describe("persisted prospective artifact adoption", () => {
     expect(lifecycle.inspectPullRequest).toHaveBeenCalledWith(1117, { allowRemediationBranch: true })
     expect(sealed.seal.payload).toMatchObject({ version: "williamos-delivery-seal.v2", delivery: { commitSha: head, paths } })
     expect(sealed.sealBlock).toBe(["```WILLIAMOS_DELIVERY_SEAL", JSON.stringify(sealed.seal, null, 2), "```"].join("\n"))
-    expect(lifecycle.inspectPullRequest).toHaveBeenCalledTimes(2)
+    expect(lifecycle.inspectPullRequest).toHaveBeenCalledTimes(6)
 
     const replayed = await runtime.issue("owner-1", "space-1", "adopt:1117:exact")
     expect(replayed.seal).toEqual(sealed.seal)
@@ -198,10 +219,18 @@ describe("persisted prospective artifact adoption", () => {
     expect(events.filter((event) => event.type === "EVIDENCE_RECORDED")).toHaveLength(1)
   })
 
+  it("permits a legitimate non-expiring Space grant to authorize and issue", async () => {
+    const candidate = harness(authorityRow({ grantExpiresAt: null }))
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:no-expiry", preview.previewDigest)
+    await expect(candidate.runtime.issue("owner-1", "space-1", "adopt:1117:no-expiry"))
+      .resolves.toMatchObject({ status: "SEALED" })
+  })
+
   it("permits only the exact self-referential delivery check before sealing", async () => {
     const candidate = harness()
-    const preview = await candidate.runtime.preview("owner-1", "space-1")
-    await candidate.runtime.authorize("owner-1", "space-1", "adopt:1117:self-seal", preview.previewDigest)
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:self-seal", preview.previewDigest)
     candidate.lifecycle.inspectPullRequest.mockResolvedValue({
       number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "",
       checksGreen: false, checksComplete: true,
@@ -218,8 +247,8 @@ describe("persisted prospective artifact adoption", () => {
     ["no observed checks", [], []],
   ])("fails closed with %s while the delivery check is unsealed", async (_label, failedChecks, pendingChecks) => {
     const candidate = harness()
-    const preview = await candidate.runtime.preview("owner-1", "space-1")
-    await candidate.runtime.authorize("owner-1", "space-1", `adopt:1117:${_label}`, preview.previewDigest)
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, `adopt:1117:${_label}`, preview.previewDigest)
     candidate.lifecycle.inspectPullRequest.mockResolvedValue({
       number: 1117, state: "OPEN", headRefOid: head, isDraft: false, reviewDecision: "",
       checksGreen: false, checksComplete: pendingChecks.length === 0,
@@ -231,11 +260,11 @@ describe("persisted prospective artifact adoption", () => {
 
   it("fails closed when the trusted pull request is no longer open", async () => {
     const candidate = harness()
-    const preview = await candidate.runtime.preview("owner-1", "space-1")
-    await candidate.runtime.authorize("owner-1", "space-1", "adopt:1117:closed", preview.previewDigest)
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:closed", preview.previewDigest)
     candidate.lifecycle.inspectPullRequest.mockResolvedValue({
       number: 1117, state: "CLOSED", headRefOid: head,
-      checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0,
+      isDraft: false, reviewDecision: "", checksGreen: true, checksComplete: true, reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0,
     })
     await expect(candidate.runtime.issue("owner-1", "space-1", "adopt:1117:closed"))
       .rejects.toMatchObject({ code: "DELIVERY_SEAL_EVIDENCE_INVALID" })
@@ -246,8 +275,8 @@ describe("persisted prospective artifact adoption", () => {
     ["changes requested", { isDraft: false, reviewDecision: "CHANGES_REQUESTED" }],
   ])("fails closed when the trusted pull request is %s", async (_label, reviewState) => {
     const candidate = harness()
-    const preview = await candidate.runtime.preview("owner-1", "space-1")
-    await candidate.runtime.authorize("owner-1", "space-1", `adopt:1117:${_label}`, preview.previewDigest)
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, `adopt:1117:${_label}`, preview.previewDigest)
     candidate.lifecycle.inspectPullRequest.mockResolvedValue({
       number: 1117, state: "OPEN", headRefOid: head, checksGreen: true, checksComplete: true,
       reviewed: true, reviewCompleted: true, unresolvedThreadCount: 0, ...reviewState,
@@ -258,8 +287,8 @@ describe("persisted prospective artifact adoption", () => {
 
   it("final fence rolls back when persisted authority or exact evidence no longer matches", async () => {
     const { runtime, txQuery } = harness()
-    const preview = await runtime.preview("owner-1", "space-1")
-    await runtime.authorize("owner-1", "space-1", "adopt:1117:exact", preview.previewDigest)
+    const preview = await runtime.preview("owner-1", "space-1", target)
+    await runtime.authorize("owner-1", "space-1", target, "adopt:1117:exact", preview.previewDigest)
     txQuery.mockImplementation(async (sql: string) => {
       if (sql.startsWith("BEGIN") || sql === "ROLLBACK") return { rows: [] }
       if (sql.includes("FOR UPDATE OF authorization_event")) return { rows: [] }
@@ -272,12 +301,24 @@ describe("persisted prospective artifact adoption", () => {
 
   it("selects all locked event metadata explicitly in the final serializable fence", async () => {
     const { runtime, txQuery } = harness()
-    const preview = await runtime.preview("owner-1", "space-1")
-    await runtime.authorize("owner-1", "space-1", "adopt:1117:exact", preview.previewDigest)
+    const preview = await runtime.preview("owner-1", "space-1", target)
+    await runtime.authorize("owner-1", "space-1", target, "adopt:1117:exact", preview.previewDigest)
     await runtime.issue("owner-1", "space-1", "adopt:1117:exact")
     const sql = String(txQuery.mock.calls.find(([statement]) => String(statement).includes("FOR UPDATE OF authorization_event"))?.[0] ?? "")
     expect(sql).toContain('authorization_event."metadata" AS "authorizationMetadata"')
     expect(sql).toContain('validation_event."metadata" AS "validationMetadata"')
     expect(sql).toContain('review_event."metadata" AS "reviewMetadata"')
+  })
+
+  it("rechecks the delivery grant expiry inside the final serializable fence", async () => {
+    const candidate = harness()
+    const preview = await candidate.runtime.preview("owner-1", "space-1", target)
+    await candidate.runtime.authorize("owner-1", "space-1", target, "adopt:1117:expiry-fence", preview.previewDigest)
+    candidate.expireGrantAtFence()
+
+    await expect(candidate.runtime.issue("owner-1", "space-1", "adopt:1117:expiry-fence"))
+      .rejects.toMatchObject({ code: "DELIVERY_SEAL_ASSIGNMENT_STALE" })
+    const grantFence = String(candidate.txQuery.mock.calls.find(([statement]) => String(statement).includes('FROM "authority_grant"') && String(statement).includes("FOR UPDATE"))?.[0] ?? "")
+    expect(grantFence).toContain('"expiresAt" > CURRENT_TIMESTAMP')
   })
 })

@@ -22,6 +22,18 @@ type Spine = Readonly<{
   reservation: Readonly<{ allowed: readonly string[]; forbidden: readonly string[]; version: string }>
 }>
 
+export type ArtifactAdoptionTarget = Readonly<{
+  pullRequest: number
+  expectedHeadSha: string
+}>
+
+export type ArtifactAdoptionDeliveryGrant = Readonly<{
+  id: number
+  ref: string | null
+  version: string
+  expiresAt: string | null
+}>
+
 type Identity = Readonly<{
   pullRequest: number; state: "OPEN" | "CLOSED" | "MERGED"; headSha: string
   pullRequestBaseSha: string; baseRefSha: string; baseSha: string; paths: readonly string[]
@@ -30,6 +42,7 @@ type Identity = Readonly<{
 export type ArtifactAdoptionAuthorization = Readonly<{
   adoptionHash: string; previewDigest: string; idempotencyKey: string
   context: Spine
+  deliveryGrant: ArtifactAdoptionDeliveryGrant
   artifact: Readonly<{ pullRequest: number; headSha: string; pullRequestBaseSha: string; baseRefSha: string; baseSha: string; paths: readonly string[] }>
 }>
 
@@ -41,10 +54,11 @@ export type ArtifactAdoptionEvidence = Readonly<{
 }>
 
 export type ArtifactAdoptionDependencies = Readonly<{
-  loadContext(userId: string, worldId: string): Promise<Spine>
+  loadContext(userId: string, worldId: string, target: ArtifactAdoptionTarget): Promise<Spine>
   inspectArtifactIdentity(context: Spine): Promise<Identity>
-  recordAuthorization(userId: string, authorization: ArtifactAdoptionAuthorization): Promise<{ eventId: number; authorization: ArtifactAdoptionAuthorization }>
+  recordAuthorization(userId: string, authorization: Omit<ArtifactAdoptionAuthorization, "deliveryGrant">): Promise<{ eventId: number; authorization: ArtifactAdoptionAuthorization }>
   loadAuthorization(userId: string, adoptionHash: string): Promise<{ eventId: number; authorization: ArtifactAdoptionAuthorization } | null>
+  validateDeliveryGrant(userId: string, authorization: ArtifactAdoptionAuthorization): Promise<boolean>
   inspectAuthorizedEvidence(authorization: ArtifactAdoptionAuthorization): Promise<ArtifactAdoptionEvidence>
   recordEvidence(userId: string, authorizationEventId: number, authorization: ArtifactAdoptionAuthorization, evidence: ArtifactAdoptionEvidence): Promise<{ validationEventId: number; reviewEventId: number }>
   loadEvidence(userId: string, adoptionHash: string): Promise<{ validationEventId: number; reviewEventId: number; evidence: ArtifactAdoptionEvidence } | null>
@@ -81,8 +95,8 @@ function validIdentity(spine: Spine, identity: Identity): boolean {
     && same(identity.paths, spine.reservation.allowed)
 }
 
-async function snapshot(userId: string, worldId: string, deps: ArtifactAdoptionDependencies) {
-  const context = await deps.loadContext(userId, worldId)
+async function snapshot(userId: string, worldId: string, target: ArtifactAdoptionTarget, deps: ArtifactAdoptionDependencies) {
+  const context = await deps.loadContext(userId, worldId, target)
   if (!validSpine(userId, worldId, context, deps.now())) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "Space authority is missing, expired, or changed")
   const artifact = await deps.inspectArtifactIdentity(context)
   if (!validIdentity(context, artifact)) fail("DELIVERY_SEAL_DIFF_INVALID", "the exact admitted artifact changed")
@@ -90,20 +104,23 @@ async function snapshot(userId: string, worldId: string, deps: ArtifactAdoptionD
   return { ...value, previewDigest: hash({ version: ARTIFACT_ADOPTION_SEAL_VERSION, value }) }
 }
 
-export async function previewProspectiveArtifactAdoption(input: Readonly<{ userId: string; worldId: string }>, deps: ArtifactAdoptionDependencies) {
-  const value = await snapshot(input.userId, input.worldId, deps)
+export async function previewProspectiveArtifactAdoption(input: Readonly<{ userId: string; worldId: string; target: ArtifactAdoptionTarget }>, deps: ArtifactAdoptionDependencies) {
+  const value = await snapshot(input.userId, input.worldId, input.target, deps)
   return { status: "READY_FOR_CONFIRMATION" as const, worldId: input.worldId, pullRequest: value.artifact.pullRequest, headSha: value.artifact.headSha, paths: value.artifact.paths, previewDigest: value.previewDigest }
 }
 
 export async function authorizeProspectiveArtifactAdoption(
-  input: Readonly<{ userId: string; worldId: string; idempotencyKey: string; confirmedPreviewDigest: string }>,
+  input: Readonly<{ userId: string; worldId: string; target: ArtifactAdoptionTarget; idempotencyKey: string; confirmedPreviewDigest: string }>,
   deps: ArtifactAdoptionDependencies,
 ) {
   if (!input.idempotencyKey || !DIGEST.test(input.confirmedPreviewDigest)) fail("DELIVERY_SEAL_REQUEST_INVALID", "confirmation is malformed")
-  const value = await snapshot(input.userId, input.worldId, deps)
+  const value = await snapshot(input.userId, input.worldId, input.target, deps)
   if (value.previewDigest !== input.confirmedPreviewDigest) fail("DELIVERY_SEAL_CONFIRMATION_STALE", "the exact prospective artifact changed")
   const adoptionHash = hash({ version: ARTIFACT_ADOPTION_SEAL_VERSION, authorityKind: "prospective_artifact_adoption", previewDigest: value.previewDigest, idempotencyKey: input.idempotencyKey })
-  const authorization: ArtifactAdoptionAuthorization = { adoptionHash, previewDigest: value.previewDigest, idempotencyKey: input.idempotencyKey, context: value.context, artifact: value.artifact }
+  const authorization: Omit<ArtifactAdoptionAuthorization, "deliveryGrant"> = {
+    adoptionHash, previewDigest: value.previewDigest, idempotencyKey: input.idempotencyKey,
+    context: value.context, artifact: value.artifact,
+  }
   return deps.recordAuthorization(input.userId, authorization)
 }
 
@@ -140,8 +157,12 @@ export async function issueProspectiveArtifactAdoptionSeal(
   const persisted = await deps.loadAuthorization(input.userId, input.adoptionHash)
   if (!persisted || persisted.authorization.adoptionHash !== input.adoptionHash) fail("DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND", "prospective authorization is not durable")
   const auth = persisted.authorization
-  const current = await snapshot(input.userId, auth.context.worldId, deps)
+  const current = await snapshot(input.userId, auth.context.worldId, {
+    pullRequest: auth.artifact.pullRequest,
+    expectedHeadSha: auth.artifact.headSha,
+  }, deps)
   if (current.previewDigest !== auth.previewDigest) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "Space authority or exact artifact changed")
+  if (!await deps.validateDeliveryGrant(input.userId, auth)) fail("DELIVERY_SEAL_ASSIGNMENT_STALE", "prospective delivery grant is missing, expired, or changed")
   const proof = await deps.loadEvidence(input.userId, input.adoptionHash)
   if (!proof || !validEvidence(auth, proof.evidence)) fail("DELIVERY_SEAL_EVIDENCE_INVALID", "post-authorization exact-head validation and independent review evidence is required")
   const delivery = await deps.inspectDelivery(auth.context.workspace, auth.artifact.baseSha, auth.artifact.headSha, auth.artifact.paths)
@@ -181,7 +202,7 @@ export async function issueProspectiveArtifactAdoptionSeal(
     adoption: {
       adoptionHash: auth.adoptionHash, owner: auth.context.owner, worldId: auth.context.worldId, spaceRevision: auth.context.spaceRevision,
       outcome: auth.context.outcome, workOrder: auth.context.workOrder,
-      grant: { id: auth.context.grant.id, ref: auth.context.grant.ref, version: auth.context.grant.version },
+      grant: { id: auth.deliveryGrant.id, ref: auth.deliveryGrant.ref, version: auth.deliveryGrant.version },
       reservation: auth.context.reservation,
       artifact: { pullRequest: auth.artifact.pullRequest, headSha: auth.artifact.headSha, paths: auth.artifact.paths },
       evidence: { validationDigest: proof.evidence.validationEvidenceDigest, reviewDigest: proof.evidence.reviewEvidenceDigest, validationHeadSha: proof.evidence.headSha, reviewHeadSha: proof.evidence.headSha },

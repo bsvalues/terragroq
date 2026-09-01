@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const seams = vi.hoisted(() => ({ getSession: vi.fn(), owner: vi.fn(), preview: vi.fn(), authorize: vi.fn(), issue: vi.fn() }))
+const seams = vi.hoisted(() => ({ getSession: vi.fn(), owner: vi.fn(), preview: vi.fn(), previewTarget: vi.fn(), authorize: vi.fn(), issue: vi.fn() }))
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/governance/owner", () => ({ resolveOwnerUserId: seams.owner, assertOwner: (id: string, owner: string | null) => id === owner ? { ok: true } : { ok: false, failure: "NOT_OWNER" } }))
 vi.mock("@/lib/governance/owner-lookup", () => ({ ownerLookup: () => ({}) }))
 vi.mock("@/lib/governance/artifact-adoption-runtime", () => ({
   previewPersistedArtifactAdoption: seams.preview,
+  previewTargetArtifactAdoption: seams.previewTarget,
   authorizePersistedArtifactAdoption: seams.authorize,
   issuePersistedArtifactAdoption: seams.issue,
 }))
@@ -30,13 +31,15 @@ describe("prospective delivery adoption route", () => {
     expect(seams.preview).not.toHaveBeenCalled()
   })
 
-  it("supports strict preview, authorize, and issue requests using only server-derived authority", async () => {
+  it("supports restore, exact-target preview, authorize, and issue while keeping scope server-derived", async () => {
     seams.preview.mockResolvedValue({ status: "READY_FOR_CONFIRMATION", worldId: "space-1", previewDigest: "a".repeat(64) })
+    seams.previewTarget.mockResolvedValue({ status: "READY_FOR_CONFIRMATION", worldId: "space-1", previewDigest: "a".repeat(64) })
     seams.authorize.mockResolvedValue({ status: "AUTHORIZED", worldId: "space-1", adoptionHash: "b".repeat(64), authorizationEventId: 101 })
     seams.issue.mockResolvedValue({ status: "SEALED", worldId: "space-1", adoptionHash: "b".repeat(64), seal: { payload: {}, signature: "signed" } })
     const bodies = [
       { mode: "PREVIEW", worldId: "space-1" },
-      { mode: "AUTHORIZE", worldId: "space-1", confirmedPreviewDigest: "a".repeat(64), idempotencyKey: "adopt:1117" },
+      { mode: "PREVIEW", worldId: "space-1", pullRequest: 1117, expectedHeadSha: "2".repeat(40) },
+      { mode: "AUTHORIZE", worldId: "space-1", pullRequest: 1117, expectedHeadSha: "2".repeat(40), confirmedPreviewDigest: "a".repeat(64), idempotencyKey: "adopt:1117" },
       { mode: "ISSUE", worldId: "space-1", idempotencyKey: "adopt:1117" },
     ]
     for (const body of bodies) {
@@ -44,7 +47,8 @@ describe("prospective delivery adoption route", () => {
       expect(response.status).toBe(body.mode === "AUTHORIZE" ? 201 : 200)
     }
     expect(seams.preview).toHaveBeenCalledWith("owner-1", "space-1")
-    expect(seams.authorize).toHaveBeenCalledWith("owner-1", "space-1", "adopt:1117", "a".repeat(64))
+    expect(seams.previewTarget).toHaveBeenCalledWith("owner-1", "space-1", { pullRequest: 1117, expectedHeadSha: "2".repeat(40) })
+    expect(seams.authorize).toHaveBeenCalledWith("owner-1", "space-1", { pullRequest: 1117, expectedHeadSha: "2".repeat(40) }, "adopt:1117", "a".repeat(64))
     expect(seams.issue).toHaveBeenCalledWith("owner-1", "space-1", "adopt:1117")
   })
 })

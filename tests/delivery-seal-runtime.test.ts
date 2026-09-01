@@ -44,6 +44,12 @@ describe("delivery commit inspection", () => {
     expect(measured.patchDigest).toMatch(/^[0-9a-f]{64}$/)
   })
 
+  it.runIf(process.platform === "win32")("accepts the same Windows worktree root with different path casing", async () => {
+    const repo = repository()
+    const measured = await inspectGitDelivery(repo.root.toUpperCase(), repo.baseSha, repo.commitSha, ["src/selected.ts"])
+    expect(measured).toMatchObject({ commitSha: repo.commitSha, paths: ["src/selected.ts"] })
+  })
+
   it("refuses a commit whose selected assignment path has no delivered patch", async () => {
     const repo = repository()
     await expect(inspectGitDelivery(repo.root, repo.baseSha, repo.commitSha, ["src/missing.ts"]))

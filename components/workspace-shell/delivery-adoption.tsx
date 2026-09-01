@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import { Check, Clipboard, Fingerprint, GitCommitHorizontal, LoaderCircle, ShieldCheck } from "lucide-react"
 
 const ENDPOINT = "/api/governance/delivery-adoption"
@@ -32,7 +32,8 @@ type ArtifactSeal = Readonly<{
 type RestoredArtifactSeal = ArtifactSeal & Omit<ArtifactPreview, "status">
 
 type Failure = Readonly<{ error?: string; detail?: string }>
-type Stage = "loading" | "ready" | "authorized" | "sealed" | "absent" | "error"
+type ArtifactTarget = Readonly<{ pullRequest: number; expectedHeadSha: string }>
+type Stage = "loading" | "target" | "ready" | "authorized" | "sealed" | "absent" | "error"
 
 const ERROR_COPY: Readonly<Record<string, string>> = {
   DELIVERY_SEAL_CONFIRMATION_STALE: "The exact artifact changed after preview. WilliamOS did not authorize it.",
@@ -136,21 +137,31 @@ export function DeliveryAdoption({
   const [seal, setSeal] = useState<ArtifactSeal | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [copyStatus, setCopyStatus] = useState<string | null>(null)
+  const [pullRequestInput, setPullRequestInput] = useState("")
+  const [expectedHeadInput, setExpectedHeadInput] = useState("")
   const attemptRef = useRef<string | null>(null)
+  const targetRef = useRef<ArtifactTarget | null>(null)
+
+  const targetError = useMemo(() => {
+    const pullRequest = Number(pullRequestInput)
+    if (!Number.isSafeInteger(pullRequest) || pullRequest <= 0) return "Enter a positive pull request number."
+    if (!isHead(expectedHeadInput.trim())) return "Enter the exact lowercase 40-character head SHA."
+    return null
+  }, [expectedHeadInput, pullRequestInput])
 
   const explainFailure = useCallback((value: unknown, fallback: string) => {
     const failure = isRecord(value) ? value as Failure : null
     return ERROR_COPY[failure?.error ?? ""] ?? failure?.detail ?? fallback
   }, [])
 
-  const loadPreview = useCallback(async (signal?: AbortSignal) => {
+  const loadPreview = useCallback(async (signal?: AbortSignal, target?: ArtifactTarget) => {
     setStage("loading")
     setError(null)
     try {
       const response = await fetch(ENDPOINT, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mode: "PREVIEW", worldId }),
+        body: JSON.stringify({ mode: "PREVIEW", worldId, ...(target ?? {}) }),
         cache: "no-store",
         signal,
       })
@@ -162,8 +173,20 @@ export function DeliveryAdoption({
         onAvailabilityChange?.(false)
         return
       }
+      if (!response.ok && !restoreOnly && failureCode === "DELIVERY_SEAL_ASSIGNMENT_NOT_FOUND") {
+        setPreview(null)
+        setStage("target")
+        return
+      }
       if (!response.ok || (!isPreview(value) && !isAuthorization(value) && !isRestoredSeal(value)) || value.worldId !== worldId) {
         throw new Error(explainFailure(value, "WilliamOS could not preview the exact artifact."))
+      }
+      if (target && (value.pullRequest !== target.pullRequest || value.headSha !== target.expectedHeadSha)) {
+        throw new Error("WilliamOS returned an artifact that does not match the requested exact target.")
+      }
+      targetRef.current = target ?? {
+        pullRequest: value.pullRequest,
+        expectedHeadSha: value.headSha,
       }
       setPreview({
         status: "READY_FOR_CONFIRMATION",
@@ -197,6 +220,13 @@ export function DeliveryAdoption({
     return () => controller.abort()
   }, [loadPreview])
 
+  function previewTarget(event: FormEvent) {
+    event.preventDefault()
+    setError(targetError)
+    if (targetError) return
+    void loadPreview(undefined, { pullRequest: Number(pullRequestInput), expectedHeadSha: expectedHeadInput.trim() })
+  }
+
   async function authorize() {
     if (!preview || stage !== "ready") return
     const idempotencyKey = attemptRef.current ?? globalThis.crypto.randomUUID()
@@ -207,7 +237,13 @@ export function DeliveryAdoption({
       const response = await fetch(ENDPOINT, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mode: "AUTHORIZE", worldId, confirmedPreviewDigest: preview.previewDigest, idempotencyKey }),
+        body: JSON.stringify({
+          mode: "AUTHORIZE",
+          worldId,
+          ...(targetRef.current ?? {}),
+          confirmedPreviewDigest: preview.previewDigest,
+          idempotencyKey,
+        }),
         cache: "no-store",
       })
       const value = await payload(response)
@@ -268,6 +304,24 @@ export function DeliveryAdoption({
       </div>
 
       <div className="grid gap-4 p-4">
+        {stage === "target" ? (
+          <form onSubmit={previewTarget} className="grid gap-4">
+            <div>
+              <p className="text-sm font-semibold text-[#e4ece0]">Choose the immutable pull request target</p>
+              <p className="mt-1 text-xs leading-5 text-[#9ca797]">The repository comes from this Space. WilliamOS will inspect the requested head and derive its complete changed-path set before you can authorize anything.</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-[150px_minmax(0,1fr)]">
+              <label className="grid gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#96a391]">Pull request number
+                <input inputMode="numeric" value={pullRequestInput} onChange={(event) => setPullRequestInput(event.target.value)} className="rounded border border-[#344033] bg-[#101510] px-2.5 py-2 text-[12px] text-[#e0e8dc] outline-none focus:border-[#8fa486] focus:ring-1 focus:ring-[#8fa486]" autoFocus />
+              </label>
+              <label className="grid gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#96a391]">Expected exact head SHA
+                <input value={expectedHeadInput} onChange={(event) => setExpectedHeadInput(event.target.value)} className="rounded border border-[#344033] bg-[#101510] px-2.5 py-2 font-mono text-[12px] normal-case tracking-normal text-[#e0e8dc] outline-none focus:border-[#8fa486] focus:ring-1 focus:ring-[#8fa486]" spellCheck={false} />
+              </label>
+            </div>
+            {error ? <p role="alert" className="border-l-2 border-[#b86f66] pl-3 text-xs leading-5 text-[#efbbb4]">{error}</p> : null}
+            <button type="submit" className="justify-self-end rounded border border-[#687b63] bg-[#1a2419] px-4 py-2 text-xs font-semibold text-[#e5eee1] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#9caf94]">Preview exact target</button>
+          </form>
+        ) : null}
         {preview ? (
           <div className="grid gap-3">
             <div className="grid grid-cols-[18px_1fr] gap-x-3 text-xs">
@@ -288,7 +342,7 @@ export function DeliveryAdoption({
           <button type="button" onClick={() => void copySealBlock()} className="flex items-center gap-2 justify-self-end rounded border border-[#8da083] bg-[#253122] px-3 py-2 font-semibold text-[#edf3e9]"><Clipboard className="size-3.5" aria-hidden />Copy complete seal block</button>
           {copyStatus ? <p role="status" className="text-[#aebaa9]">{copyStatus}</p> : null}
         </div> : null}
-        {error ? <p role="alert" className="border-l-2 border-[#b86f66] pl-3 text-xs leading-5 text-[#efbbb4]">{error}</p> : null}
+        {error && stage !== "target" ? <p role="alert" className="border-l-2 border-[#b86f66] pl-3 text-xs leading-5 text-[#efbbb4]">{error}</p> : null}
 
         {stage === "ready" ? <button type="button" onClick={() => void authorize()} className="justify-self-end rounded border border-[#8da083] bg-[#253122] px-4 py-2 text-xs font-semibold text-[#edf3e9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#a7ba9d]">Authorize exact artifact</button> : null}
         {stage === "authorized" ? <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-xs leading-5 text-[#9ca797]">Prospective authorization is persisted. WilliamOS will now inspect validation and independent review for this same head.</p><button type="button" onClick={() => void issue()} className="rounded border border-[#8da083] bg-[#253122] px-4 py-2 text-xs font-semibold text-[#edf3e9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#a7ba9d]">Validate exact head and issue seal</button></div> : null}

@@ -62,6 +62,14 @@ function normalizedPaths(root: string, values: readonly string[]): string[] {
   return [...seen].sort()
 }
 
+function sameFilesystemPath(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left)
+  const normalizedRight = path.resolve(right)
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight
+}
+
 /** Measure an exact assignment patch using only Git and Node built-ins. */
 export async function inspectGitDelivery(
   projectRoot: string,
@@ -76,7 +84,7 @@ export async function inspectGitDelivery(
   if (paths.length === 0) invalid("the delivery has no assigned paths")
   try {
     const top = (await git(root, ["rev-parse", "--show-toplevel"])).trim()
-    if (path.resolve(top) !== root) invalid("the assignment workspace is not the exact Git worktree root")
+    if (!sameFilesystemPath(top, root)) invalid("the assignment workspace is not the exact Git worktree root")
     const measuredBase = (await git(root, ["rev-parse", `${baseSha}^{commit}`])).trim().toLowerCase()
     const measuredCommit = (await git(root, ["rev-parse", `${commitSha}^{commit}`])).trim().toLowerCase()
     if (measuredBase !== baseSha.toLowerCase() || measuredCommit !== commitSha.toLowerCase()) invalid("the exact delivery commits are unavailable")

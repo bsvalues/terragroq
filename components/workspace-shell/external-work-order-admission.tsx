@@ -136,11 +136,13 @@ function isAdmissionResult(value: unknown): value is AdmissionResult {
 export function ExternalWorkOrderAdmission({
   worldId,
   persisted,
+  bound = false,
   className,
   onAdmitted,
 }: {
   worldId: string | null
   persisted: boolean
+  bound?: boolean
   className?: string
   onAdmitted?: (result: AdmissionResult) => void | Promise<void>
 }) {
@@ -212,7 +214,7 @@ export function ExternalWorkOrderAdmission({
   function handleOpen(next: boolean) {
     if (!next && submitting) return
     setOpen(next)
-    if (next && worldId && persisted) setArtifactRestoreState("checking")
+    if (next && worldId && persisted) setArtifactRestoreState(bound ? "artifact" : "checking")
     if (!next) reset()
   }
 
@@ -322,7 +324,7 @@ export function ExternalWorkOrderAdmission({
 
         {step === "capture" && worldId && persisted && artifactRestoreState !== "none" ? (
           <div className="p-6">
-            <DeliveryAdoption worldId={worldId} restoreOnly onAvailabilityChange={handleArtifactAvailability} />
+            <DeliveryAdoption worldId={worldId} restoreOnly={!bound} onAvailabilityChange={handleArtifactAvailability} />
           </div>
         ) : step === "capture" ? (
           <form onSubmit={(event) => void review(event)} className="grid gap-5 p-6">

@@ -2553,6 +2553,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
           {selectedKind === "space" ? <ExternalWorkOrderAdmission
             worldId={worldId}
             persisted={storage === "server" && hydrated && !persistencePending && !persistenceError}
+            bound={Boolean(spine.outcomeKey) && spine.workOrderId !== null}
             className={`${spatial.action} ${spatial.primaryAction}`}
             onAdmitted={async (admission) => {
               if (worldRef.current !== admission.worldId) return
