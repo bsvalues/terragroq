@@ -355,6 +355,9 @@ function validateState(state, storeId) {
       fail("INVALID_TURN_RESULT_DIGEST")
     }
   }
+  const greatestPersistedFence = Math.max(0, ...Object.values(state.executions)
+    .map((execution) => Number(execution?.fencingToken) || 0))
+  if (state.nextFencingToken <= greatestPersistedFence) fail("HERMES_STATE_CORRUPT")
   if (SENSITIVE_EVIDENCE.test(JSON.stringify(state.idempotency))) {
     fail("IDEMPOTENCY_SECRET_WALL")
   }
@@ -525,6 +528,28 @@ function metadata(input = {}, current = {}) {
   if (deterministicValidatorCircuit !== null
     && !validateDeterministicValidatorCircuit(deterministicValidatorCircuit)) {
     fail("INVALID_DETERMINISTIC_VALIDATOR_CIRCUIT")
+  }
+  const deterministicValidatorQueueRecovery = Object.hasOwn(input, "deterministicValidatorQueueRecovery")
+    ? input.deterministicValidatorQueueRecovery
+    : current.deterministicValidatorQueueRecovery ?? null
+  if (deterministicValidatorQueueRecovery !== null
+    && (!deterministicValidatorQueueRecovery
+      || deterministicValidatorQueueRecovery.version !== "hermes-deterministic-validator-queue-recovery.v1"
+      || typeof deterministicValidatorQueueRecovery.recoveryId !== "string"
+      || !SHA256.test(String(deterministicValidatorQueueRecovery.fingerprint ?? ""))
+      || !Number.isSafeInteger(deterministicValidatorQueueRecovery.sourceExpectedVersion)
+      || !Number.isSafeInteger(deterministicValidatorQueueRecovery.recoveredExpectedVersion)
+      || deterministicValidatorQueueRecovery.recoveredExpectedVersion
+        !== deterministicValidatorQueueRecovery.sourceExpectedVersion + 1
+      || !Number.isSafeInteger(deterministicValidatorQueueRecovery.sourceFencingToken)
+      || !Number.isSafeInteger(deterministicValidatorQueueRecovery.recoveredFencingToken)
+      || deterministicValidatorQueueRecovery.recoveredFencingToken
+        <= deterministicValidatorQueueRecovery.sourceFencingToken
+      || !Number.isSafeInteger(deterministicValidatorQueueRecovery.receiptId)
+      || deterministicValidatorQueueRecovery.receiptId <= 0
+      || typeof deterministicValidatorQueueRecovery.recordedAt !== "string"
+      || !Number.isFinite(Date.parse(deterministicValidatorQueueRecovery.recordedAt)))) {
+    fail("INVALID_DETERMINISTIC_VALIDATOR_QUEUE_RECOVERY")
   }
   const remediationRound = input.remediationRound ?? current.remediationRound ?? null
   if (remediationRound !== null && (!Number.isInteger(remediationRound) || remediationRound < 0)) {
@@ -834,6 +859,7 @@ function metadata(input = {}, current = {}) {
       : {}),
     runtimeEvidenceRef,
     deterministicValidatorCircuit,
+    deterministicValidatorQueueRecovery,
     outcome,
   }
 }
@@ -1778,7 +1804,8 @@ export function activateDeterministicValidatorRecovery(filePath, request, option
     const circuit = validateDeterministicValidatorCircuit(current.metadata.deterministicValidatorCircuit)
     if (!circuit || circuit.status !== "DETERMINISTIC_CONTRACT_RECOVERY"
       || current.lease.status !== "ABANDONED"
-      || current.checkpoint.state !== "DETERMINISTIC_CONTRACT_RECOVERY"
+      || current.checkpoint.state !== "DETERMINISTIC_CONTRACT_RECOVERY_BOUND"
+      || current.metadata.deterministicValidatorQueueRecovery?.fingerprint !== circuit.fingerprint
       || current.fencingToken !== request.expectedFencingToken
       || request.expectedCheckpointSequence !== current.checkpoint.sequence
       || !request.holderId || !Number.isFinite(request.leaseDurationMs)
@@ -1788,7 +1815,8 @@ export function activateDeterministicValidatorRecovery(filePath, request, option
     const recoveryCircuit = transitionDeterministicValidatorCircuit(circuit, {
       status: "RECOVERY_ACTIVE", observedAt: at.iso,
     })
-    const fencingToken = state.nextFencingToken++
+    const fencingToken = Math.max(state.nextFencingToken, current.fencingToken + 1)
+    state.nextFencingToken = fencingToken + 1
     const active = {
       ...current,
       fencingToken,
@@ -1815,6 +1843,92 @@ export function activateDeterministicValidatorRecovery(filePath, request, option
       circuitStatus: recoveryCircuit.status,
       replacementContract: recoveryCircuit.recovery.replacementContract,
       metadata: active.metadata,
+    }
+  })
+}
+
+export function bindDeterministicValidatorQueueRecovery(filePath, request, options = {}) {
+  const { storeId = "hermes-bridge", now } = options
+  return mutate(filePath, storeId, request.idempotencyKey, request, now, (state, at) => {
+    assertRunning(state)
+    const current = execution(state, request.outcomeId)
+    const circuit = validateDeterministicValidatorCircuit(current.metadata.deterministicValidatorCircuit)
+    const binding = request.recoveryBinding
+    const queue = current.metadata.outcome?.queueBinding
+    if (!circuit || circuit.status !== "DETERMINISTIC_CONTRACT_RECOVERY"
+      || current.lease.status !== "ABANDONED"
+      || current.fencingToken !== request.expectedFencingToken
+      || current.checkpoint.sequence !== request.expectedCheckpointSequence
+      || current.checkpoint.state !== "DETERMINISTIC_CONTRACT_RECOVERY"
+      || current.metadata.deterministicValidatorQueueRecovery !== null
+      || !binding || binding.recoveryId !== circuit.recovery.recoveryId
+      || binding.fingerprint !== circuit.fingerprint
+      || binding.sourceExpectedVersion !== queue?.expectedVersion
+      || binding.sourceFencingToken !== queue?.fencingToken
+      || binding.recoveredExpectedVersion !== queue.expectedVersion + 1
+      || binding.recoveredFencingToken <= queue.fencingToken
+      || binding.replacementContract?.id !== circuit.recovery.replacementContract.id
+      || binding.replacementContract?.digest !== circuit.recovery.replacementContract.digest) {
+      fail("DETERMINISTIC_VALIDATOR_QUEUE_RECOVERY_STATE_WALL")
+    }
+    const durableBinding = {
+      version: binding.version,
+      recoveryId: binding.recoveryId,
+      fingerprint: binding.fingerprint,
+      sourceExpectedVersion: binding.sourceExpectedVersion,
+      sourceFencingToken: binding.sourceFencingToken,
+      recoveredExpectedVersion: binding.recoveredExpectedVersion,
+      recoveredFencingToken: binding.recoveredFencingToken,
+      recordedAt: binding.recordedAt,
+      receiptId: binding.receiptId,
+    }
+    const bound = {
+      ...current,
+      checkpoint: {
+        sequence: current.checkpoint.sequence + 1,
+        state: "DETERMINISTIC_CONTRACT_RECOVERY_BOUND",
+        detail: circuit.fingerprint,
+        recordedAt: at.iso,
+      },
+      metadata: metadata({
+        deterministicValidatorQueueRecovery: durableBinding,
+        outcome: {
+          ...current.metadata.outcome,
+          outcomeKey: current.metadata.outcome.outcomeKey ?? queue.outcomeKey,
+          queueBinding: {
+            ...queue,
+            expectedVersion: binding.recoveredExpectedVersion,
+            fencingToken: binding.recoveredFencingToken,
+          },
+          deterministicValidatorQueueRecovery: durableBinding,
+          deterministicValidatorReplacement: {
+            recoveryId: binding.recoveryId,
+            fingerprint: binding.fingerprint,
+            id: circuit.recovery.replacementContract.id,
+            digest: circuit.recovery.replacementContract.digest,
+          },
+          verifiedQueueWorkContract: {
+            provenance: {
+              operation: "deterministic_validator.recover",
+              outcomeKey: current.metadata.outcome.outcomeKey ?? queue.outcomeKey,
+              workOrderRef: current.metadata.outcome.verifiedQueueWorkContract?.provenance?.workOrderRef
+                ?? `WO-HERMES-${current.metadata.outcome.id}-001`,
+              recoveryId: binding.recoveryId,
+              fingerprint: binding.fingerprint,
+              receiptId: binding.receiptId,
+            },
+            contract: circuit.recovery.replacementContract,
+          },
+        },
+      }, current.metadata),
+    }
+    state.executions = { ...state.executions, [request.outcomeId]: bound }
+    return {
+      outcomeId: request.outcomeId,
+      fencingToken: bound.fencingToken,
+      checkpointSequence: bound.checkpoint.sequence,
+      queueRecovery: durableBinding,
+      metadata: bound.metadata,
     }
   })
 }
@@ -1915,6 +2029,7 @@ export function createHermesStateStore(filePath, options = {}) {
     deferProviderWall: (request) => deferProviderWall(filePath, request, options),
     tripDeterministicValidatorCircuit: (request) => tripDeterministicValidatorCircuit(filePath, request, options),
     activateDeterministicValidatorRecovery: (request) => activateDeterministicValidatorRecovery(filePath, request, options),
+    bindDeterministicValidatorQueueRecovery: (request) => bindDeterministicValidatorQueueRecovery(filePath, request, options),
     settleDeterministicValidatorRecovery: (request) => settleDeterministicValidatorRecovery(filePath, request, options),
     setKillSwitch: (request) => setKillSwitch(filePath, request, options),
     recordOwnerTouch: (request) => recordOwnerTouch(filePath, request, options),

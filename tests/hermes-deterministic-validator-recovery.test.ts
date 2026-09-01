@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -107,7 +107,12 @@ describe("Hermes deterministic validator recovery", () => {
     store.initialize()
     const lease = store.acquireLease({
       idempotencyKey: "acquire-44", outcomeId: "44", holderId: "supervisor-a",
-      leaseDurationMs: 60_000, metadata: { outcome: { id: 44 } },
+      leaseDurationMs: 60_000, metadata: { outcome: { id: 44, queueBinding: {
+        userId: "owner", outcomeKey: "goal:GOAL-0040",
+        expectedVersion: 20, fencingToken: 19, executionBinding: "execution-44",
+        leaseHolder: "Hermes", leaseToken: "lease-44", acquisitionKey: "acquisition-44",
+        activeWorkOrderId: 44,
+      } } },
     })
     const { evidence, replacement } = recoveryFixture()
     const circuit = createDeterministicValidatorCircuit({
@@ -132,10 +137,27 @@ describe("Hermes deterministic validator recovery", () => {
     expect(restarted.read().executions["44"].metadata.deterministicValidatorCircuit.status)
       .toBe("DETERMINISTIC_CONTRACT_RECOVERY")
     now += 1_000
+    const bound = restarted.bindDeterministicValidatorQueueRecovery({
+      idempotencyKey: "bind-44", outcomeId: "44",
+      expectedFencingToken: lease.fencingToken,
+      expectedCheckpointSequence: tripped.checkpointSequence,
+      recoveryBinding: {
+        version: "hermes-deterministic-validator-queue-recovery.v1",
+        recoveryId: replacement.recoveryId,
+        fingerprint: evidence.fingerprint,
+        sourceExpectedVersion: 20,
+        sourceFencingToken: 19,
+        recoveredExpectedVersion: 21,
+        recoveredFencingToken: 20,
+        recordedAt: new Date(now).toISOString(),
+        receiptId: 911,
+        replacementContract: replacement.replacementContract,
+      },
+    })
     const recovery = restarted.activateDeterministicValidatorRecovery({
       idempotencyKey: "activate-44", outcomeId: "44",
       expectedFencingToken: lease.fencingToken,
-      expectedCheckpointSequence: tripped.checkpointSequence,
+      expectedCheckpointSequence: bound.checkpointSequence,
       holderId: "supervisor-b", leaseDurationMs: 60_000,
     })
     expect(recovery.fencingToken).toBeGreaterThan(lease.fencingToken)
@@ -143,7 +165,7 @@ describe("Hermes deterministic validator recovery", () => {
     expect(() => restarted.activateDeterministicValidatorRecovery({
       idempotencyKey: "activate-44-racer", outcomeId: "44",
       expectedFencingToken: lease.fencingToken,
-      expectedCheckpointSequence: tripped.checkpointSequence,
+      expectedCheckpointSequence: bound.checkpointSequence,
       holderId: "supervisor-c", leaseDurationMs: 60_000,
     })).toThrow()
 
@@ -151,5 +173,22 @@ describe("Hermes deterministic validator recovery", () => {
     expect(persisted.executions["44"].fencingToken).toBe(recovery.fencingToken)
     expect(persisted.executions["44"].metadata.deterministicValidatorCircuit.status)
       .toBe("RECOVERY_ACTIVE")
+  })
+
+  it("fails closed on restart when the durable allocator can repeat a persisted fence", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hermes-dvr-monotonic-")); dirs.push(dir)
+    const statePath = join(dir, "state.json")
+    const store = createHermesStateStore(statePath)
+    store.initialize()
+    const lease = store.acquireLease({
+      idempotencyKey: "monotonic-acquire", outcomeId: "44", holderId: "supervisor-a",
+      leaseDurationMs: 60_000, metadata: { outcome: { id: 44 } },
+    })
+    const persisted = JSON.parse(readFileSync(statePath, "utf8"))
+    persisted.nextFencingToken = lease.fencingToken
+    writeFileSync(statePath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8")
+
+    expect(() => createHermesStateStore(statePath).read())
+      .toThrow(expect.objectContaining({ code: "HERMES_STATE_CORRUPT" }))
   })
 })

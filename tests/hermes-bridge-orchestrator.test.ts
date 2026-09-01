@@ -338,11 +338,42 @@ afterEach(() => {
 })
 
 describe("deterministic validator circuit breaking", () => {
+  const queueRecovery = vi.fn(async ({ execution }: any) => {
+    const circuit = execution.metadata.deterministicValidatorCircuit
+    const queue = execution.metadata.outcome.queueBinding
+    return {
+      version: "hermes-deterministic-validator-queue-recovery.v1",
+      recoveryId: circuit.recovery.recoveryId,
+      fingerprint: circuit.fingerprint,
+      sourceExpectedVersion: queue.expectedVersion,
+      sourceFencingToken: queue.fencingToken,
+      recoveredExpectedVersion: queue.expectedVersion + 1,
+      recoveredFencingToken: queue.fencingToken + 1,
+      recordedAt: "2026-07-21T01:00:01.000Z",
+      receiptId: 911,
+      replacementContract: circuit.recovery.replacementContract,
+    }
+  })
+
   it("fences the first literal-coverage wall, resumes once with the immutable overlay, and does not select a successor", async () => {
     const executionBackend = {
       stat: vi.fn(async () => ({ exists: true, isFile: true })),
     }
-    const value = fixture(undefined, { executionBackend })
+    const selectOutcome = vi.fn(async () => queueBoundOutcome())
+    const packageLocalTest = "packages/ui/src/__tests__/county.spec.ts"
+    const value = fixture(["components/hermes/live-status.tsx", packageLocalTest], {
+      executionBackend, selectOutcome,
+      recoverDeterministicValidatorQueue: queueRecovery,
+      workContractResolver: () => ({
+        version: "test.v1", id: "orchestrator-package-fixture", digest: "e".repeat(64),
+        repository: "bsvalues/terragroq", lane: "test",
+        reservations: ["components/hermes/live-status.tsx", packageLocalTest],
+        validationCommands: [{
+          command: "npx", args: ["vitest", "run", "tests/outcome-execution-control-rendered.test.tsx"],
+          timeoutMs: 900_000,
+        }],
+      }),
+    })
     Object.assign(value.lifecycle, {
       inspectWorktreeSnapshot: vi.fn(async () => ({
         snapshotHash: "a".repeat(64),
@@ -365,11 +396,13 @@ describe("deterministic validator circuit breaking", () => {
     const recovered = value.state.read().executions["77"]
     expect(recovered.fencingToken).toBeGreaterThan(sourceFence)
     expect(recovered.metadata.deterministicValidatorCircuit.status).toBe("RECOVERED")
-    expect(value.selectOutcome).toHaveBeenCalledTimes(1)
+    expect(selectOutcome).toHaveBeenCalledTimes(1)
+    expect(queueRecovery).toHaveBeenCalledOnce()
+    expect(recovered.metadata.outcome.queueBinding).toMatchObject({ expectedVersion: 4, fencingToken: 3 })
     expect(value.lifecycle.runValidationCommands).toHaveBeenCalledWith(expect.objectContaining({
       commands: expect.arrayContaining([expect.objectContaining({
         command: "npx",
-        args: expect.arrayContaining(["tests/hermes-live-status.test.tsx"]),
+        args: expect.arrayContaining([packageLocalTest]),
       })]),
     }))
   })
@@ -378,7 +411,11 @@ describe("deterministic validator circuit breaking", () => {
     const executionBackend = {
       stat: vi.fn(async () => ({ exists: true, isFile: true })),
     }
-    const value = fixture(undefined, { executionBackend })
+    const selectOutcome = vi.fn(async () => queueBoundOutcome())
+    const value = fixture(undefined, {
+      executionBackend, selectOutcome,
+      recoverDeterministicValidatorQueue: queueRecovery,
+    })
     Object.assign(value.lifecycle, {
       inspectWorktreeSnapshot: vi.fn(async () => ({
         snapshotHash: "a".repeat(64),
@@ -408,7 +445,7 @@ describe("deterministic validator circuit breaking", () => {
     await expect(value.orchestrator.cycle()).resolves.toEqual({
       result: "RECOVERY_REQUIRED", outcomeId: "77", nextState: "DETERMINISTIC_RECOVERY_REQUIRED",
     })
-    expect(value.selectOutcome).toHaveBeenCalledTimes(1)
+    expect(selectOutcome).toHaveBeenCalledTimes(1)
     expect(value.markComplete).not.toHaveBeenCalled()
   })
 })
@@ -5971,6 +6008,29 @@ describe("Hermes bridge orchestrator", { timeout: 30_000 }, () => {
         ownerDecisionPacketDigest: null,
       },
     })
+  })
+
+  it("blocks commit and push when the execution is fenced during host validation", async () => {
+    const value = fixture()
+    value.lifecycle.runValidationCommands.mockImplementationOnce(async () => {
+      const active = value.state.read().executions["77"]
+      value.state.abandonLease({
+        idempotencyKey: `77:test-stale-worker:${active.fencingToken}`,
+        outcomeId: "77",
+        holderId: "test-holder",
+        fencingToken: active.fencingToken,
+        reason: "TEST_CONCURRENT_FENCE",
+      })
+      return [{ command: "npx", args: ["vitest", "run"], code: 0 }]
+    })
+
+    await expect(value.orchestrator.cycle()).rejects.toMatchObject({
+      code: "HERMES_FENCING_TOKEN_CONFLICT",
+    })
+    expect(value.lifecycle.commitChanges).not.toHaveBeenCalled()
+    expect(value.lifecycle.pushBranch).not.toHaveBeenCalled()
+    expect(value.lifecycle.createPullRequest).not.toHaveBeenCalled()
+    expect(value.lifecycle.mergePullRequest).not.toHaveBeenCalled()
   })
 })
 

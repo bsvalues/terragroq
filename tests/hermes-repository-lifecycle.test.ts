@@ -9,6 +9,7 @@ import {
   resolveWorktreeValidationEnvironment,
   resolveWorktreeValidationInvocation,
   createRepositoryLifecycle,
+  readSafeUntrackedSnapshotFile,
   HermesRepositoryLifecycleError,
 } from "../scripts/hermes-bridge/repository-lifecycle.mjs"
 
@@ -29,6 +30,24 @@ type Call = {
   timeoutMs?: number
   credentialAccess?: boolean
 }
+
+describe("untracked snapshot containment", () => {
+  it("rejects an untracked symbolic link before reading its external target", () => {
+    const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-snapshot-root-"))
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-snapshot-outside-"))
+    try {
+      const target = path.join(outside, "secret.test.ts")
+      const link = path.join(worktree, "linked.test.ts")
+      fs.writeFileSync(target, "outside")
+      fs.symlinkSync(target, link, "file")
+      expect(() => readSafeUntrackedSnapshotFile(worktree, "linked.test.ts"))
+        .toThrow(expect.objectContaining({ code: "HERMES_REPOSITORY_SNAPSHOT_WALL" }))
+    } finally {
+      fs.rmSync(worktree, { recursive: true, force: true })
+      fs.rmSync(outside, { recursive: true, force: true })
+    }
+  })
+})
 
 function fixture(overrides: Record<string, (call: Call) => unknown> = {}) {
   const calls: Call[] = []

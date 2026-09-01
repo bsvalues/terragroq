@@ -73,6 +73,26 @@ function inside(root, candidate) {
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative)
 }
 
+export function readSafeUntrackedSnapshotFile(worktreePath, relativePath) {
+  const root = path.resolve(worktreePath)
+  const candidate = path.resolve(root, safeRelativePath(relativePath))
+  let file
+  let canonicalRoot
+  let canonicalCandidate
+  try {
+    file = fs.lstatSync(candidate)
+    canonicalRoot = fs.realpathSync(root)
+    canonicalCandidate = fs.realpathSync(candidate)
+  } catch {
+    wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
+  }
+  if (!inside(root, candidate) || file.isSymbolicLink() || !file.isFile()
+    || !inside(canonicalRoot, canonicalCandidate)) {
+    wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
+  }
+  return fs.readFileSync(candidate)
+}
+
 function branchName(value) {
   if (typeof value !== "string" || !BRANCH.test(value) || value.includes("..") || value.endsWith(".lock")) {
     wall("HERMES_REPOSITORY_BRANCH_WALL", "codex/hermes-* required")
@@ -1151,6 +1171,11 @@ export function createRepositoryLifecycle(options) {
     const untrackedFiles = []
     for (const relativePath of untrackedPaths) {
       if (executionBackend && !executionBackend.isLocal) {
+        const link = await run("test", ["-L", relativePath], {
+          cwd: record.worktreePath, credentialAccess: false, allowFailure: true,
+        })
+        if (link.code === 0) wall("HERMES_REPOSITORY_SNAPSHOT_WALL", `${relativePath} is a symbolic link`)
+        if (link.code !== 1) wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
         const digestResult = await run("sha256sum", [relativePath], {
           cwd: record.worktreePath, credentialAccess: false,
         })
@@ -1158,11 +1183,9 @@ export function createRepositoryLifecycle(options) {
         if (!/^[0-9a-f]{64}$/.test(digest)) wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
         untrackedFiles.push({ path: relativePath, sha256: digest })
       } else {
-        const candidate = path.resolve(record.worktreePath, relativePath)
-        if (!inside(record.worktreePath, candidate) || !fs.statSync(candidate).isFile()) {
-          wall("HERMES_REPOSITORY_SNAPSHOT_WALL", relativePath)
-        }
-        untrackedFiles.push({ path: relativePath, sha256: sha256(fs.readFileSync(candidate)) })
+        untrackedFiles.push({ path: relativePath, sha256: sha256(
+          readSafeUntrackedSnapshotFile(record.worktreePath, relativePath),
+        ) })
       }
     }
     const manifest = Object.freeze({

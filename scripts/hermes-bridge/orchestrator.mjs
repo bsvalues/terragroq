@@ -44,6 +44,7 @@ import {
   createDeterministicValidatorReplacement,
   createDeterministicValidatorWallEvidence,
 } from "./deterministic-validator-recovery.mjs"
+import { recoverDeterministicValidatorQueue } from "./deterministic-validator-queue-recovery.mjs"
 import {
   HERMES_ISSUE_911_RELIABILITY_CONTRACT_DIGEST,
   HERMES_ISSUE_911_RELIABILITY_CONTRACT_ID,
@@ -480,6 +481,23 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
       && Number(provenance?.workOrderId) === Number(binding?.activeWorkOrderId)
       && typeof provenance?.workOrderRef === "string"
       && provenance.workOrderRef.trim() !== ""
+    const recoveryBinding = outcome?.metadata?.deterministicValidatorQueueRecovery
+      ?? outcome?.deterministicValidatorQueueRecovery
+    const recoveryReplacement = outcome?.deterministicValidatorReplacement
+    const deterministicRecovery = provenance?.operation === "deterministic_validator.recover"
+      && provenance?.outcomeKey === outcome?.outcomeKey
+      && provenance?.outcomeKey === binding?.outcomeKey
+      && typeof provenance?.workOrderRef === "string"
+      && provenance.workOrderRef.trim() !== ""
+      && provenance?.recoveryId === recoveryBinding?.recoveryId
+      && provenance?.fingerprint === recoveryBinding?.fingerprint
+      && provenance?.receiptId === recoveryBinding?.receiptId
+      && recoveryBinding?.recoveredExpectedVersion === binding?.expectedVersion
+      && recoveryBinding?.recoveredFencingToken === binding?.fencingToken
+      && recoveryReplacement?.recoveryId === recoveryBinding?.recoveryId
+      && recoveryReplacement?.fingerprint === recoveryBinding?.fingerprint
+      && recoveryReplacement?.id === verified?.contract?.id
+      && recoveryReplacement?.digest === verified?.contract?.digest
     // The contract acceptance is an INDEPENDENT re-resolution, not trust in storage: the verified
     // contract must equal (by id + collision-resistant digest) what this process re-resolves from
     // the governed goal fields itself — a registered contract or a lane-policy derivation (owner
@@ -500,7 +518,7 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
           && verified?.contract?.id === independentContract.id
           && verified?.contract?.digest === independentContract.digest)
       )
-    if (!verified || (!derived && !workbenchParent)) {
+    if (!verified || (!derived && !workbenchParent && !deterministicRecovery)) {
       throw Object.assign(new Error("Queue work contract provenance conflicts"), {
         code: "HERMES_WORK_CONTRACT_WALL",
       })
@@ -519,7 +537,7 @@ export function requireHermesWorkContract(outcome, resolver = resolveHermesWorkC
 }
 
 function workOrderRefFor(outcome) {
-  return ["runtime_finding.derive", "workbench_execution.authorize"].includes(
+  return ["runtime_finding.derive", "workbench_execution.authorize", "deterministic_validator.recover"].includes(
     outcome?.verifiedQueueWorkContract?.provenance?.operation,
   )
     ? outcome.verifiedQueueWorkContract.provenance.workOrderRef
@@ -841,6 +859,8 @@ export function createHermesOrchestrator(options = {}) {
     ?? resolveActiveReviewRecoveryProvenance
   const verifyReviewRecoveryContinuation = options.verifyActiveReviewRecoveryContinuation
     ?? verifyActiveReviewRecoveryContinuation
+  const recoverDeterministicQueue = options.recoverDeterministicValidatorQueue
+    ?? recoverDeterministicValidatorQueue
   // Lane availability lives beside the runtime operator's own state, not this bridge's: `selectLane`
   // reads one file, so this writer must aim at the same one. Derived from `runtimeRoot` rather than
   // hard-wired to the home directory so a relocated or test root stays self-contained.
@@ -1428,6 +1448,17 @@ export function createHermesOrchestrator(options = {}) {
     return recorded
   }
 
+  function assertLiveFence(lease) {
+    const current = state.read().executions[String(lease.outcomeId)]
+    if (!current || current.fencingToken !== lease.fencingToken
+      || current.lease?.status !== "ACTIVE" || current.lease?.abandonedAt
+      || current.lease?.holderId !== holderId) {
+      throw Object.assign(new Error("Execution fence is no longer live"), {
+        code: "HERMES_FENCING_TOKEN_CONFLICT",
+      })
+    }
+  }
+
   async function finalizeMerged({ lease, sequence, outcome, branch, reservations, worktreePath, prNumber }) {
     const pr = await lifecycle.inspectPullRequest(prNumber)
     const mergeSha = pr.mergeCommit?.oid
@@ -1441,6 +1472,7 @@ export function createHermesOrchestrator(options = {}) {
       throw Object.assign(new Error("Merge commit is absent from origin/main"), { code: "HERMES_MAIN_VERIFICATION_WALL" })
     }
     try {
+      assertLiveFence(lease)
       await lifecycle.cleanupOwnedWorktree({
         branch, worktreePath, mergeCommitSha: mergeSha, expectedHeadSha: pr.headRefOid,
       })
@@ -1536,11 +1568,13 @@ export function createHermesOrchestrator(options = {}) {
     quiesceLeaseRenewal = async () => {},
   }) {
     await assertLeaseProjectionHealthy()
+    assertLiveFence(lease)
     if (await lifecycle.inspectWorktreeHead(record) !== commit) {
       throw Object.assign(new Error("Recorded commit no longer matches the owned worktree"), { code: "HERMES_COMMIT_RECOVERY_WALL" })
     }
     await lifecycle.pushBranch(record)
     await assertLeaseProjectionHealthy()
+    assertLiveFence(lease)
     const pullRequest = await lifecycle.createPullRequest({
       branch,
       title: `feat(williamos): deliver ${safeLeaf(outcomeRef(outcome))}`,
@@ -1555,6 +1589,7 @@ export function createHermesOrchestrator(options = {}) {
     }
     let nextSequence = sequence
     if (!candidate.reviewed && !candidate.reviewRequested) {
+      assertLiveFence(lease)
       await lifecycle.requestCodexReview({ number: prNumber, headRefOid: commit })
       const requested = await checkpoint(lease, nextSequence, "PR_REVIEW_REQUESTED", `PR #${prNumber}`, {
         prNumber, branch, headRefOid: commit, remediationRound,
@@ -1582,6 +1617,7 @@ export function createHermesOrchestrator(options = {}) {
         const reReviewedOutdatedFindings = remediationRound > 0 && candidate.cleanReviewEvidence
           && findings.length > 0 && findings.every((finding) => finding.isOutdated)
         if (reReviewedOutdatedFindings) {
+          assertLiveFence(lease)
           await lifecycle.resolveReviewThreads(findings.map((finding) => finding.threadId))
           candidate = await lifecycle.inspectPullRequest(prNumber)
           findings = []
@@ -1632,6 +1668,7 @@ export function createHermesOrchestrator(options = {}) {
     const changedPaths = await lifecycle.inspectPullRequestFiles(prNumber)
     assertChangedPathsAllowed(changedPaths, reservations)
     await quiesceLeaseRenewal()
+    assertLiveFence(lease)
     await lifecycle.mergePullRequest({ number: prNumber, branch })
     const pr = await lifecycle.inspectPullRequest(prNumber)
     await assertLeaseProjectionHealthy()
@@ -2097,6 +2134,19 @@ export function createHermesOrchestrator(options = {}) {
       if (!abandoned && Date.parse(current.lease.expiresAt) > now().getTime()) {
         return { result: "LEASE_HELD", outcomeId }
       }
+      if (current.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY"
+        && current.metadata?.deterministicValidatorQueueRecovery === null) {
+        const recoveryBinding = await recoverDeterministicQueue({ execution: current })
+        state.bindDeterministicValidatorQueueRecovery({
+          idempotencyKey: `${outcomeId}:deterministic-validator:bind:${recoveryBinding.fingerprint}`,
+          outcomeId,
+          expectedFencingToken: current.fencingToken,
+          expectedCheckpointSequence: current.checkpoint.sequence,
+          recoveryBinding,
+        })
+        current = state.read().executions[outcomeId]
+        outcome = current.metadata.outcome
+      }
       lease = current.metadata?.deterministicValidatorCircuit?.status === "DETERMINISTIC_CONTRACT_RECOVERY"
         ? state.activateDeterministicValidatorRecovery({
             idempotencyKey: `${outcomeId}:deterministic-validator:activate:${current.fencingToken}`,
@@ -2335,7 +2385,7 @@ export function createHermesOrchestrator(options = {}) {
     )
     const validationCommandsFor = async (workingPaths) => {
       const candidates = workingPaths.filter((changedPath) =>
-        changedPath.startsWith("tests/") && /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(changedPath))
+        /(?:^|\/)(?:__tests__\/[^/]+|[^/]+\.(?:test|spec))\.[cm]?[jt]sx?$/.test(changedPath))
       const focusedTests = []
       for (const changedPath of candidates) {
         const entry = await executionBackend.stat({
@@ -2466,6 +2516,7 @@ export function createHermesOrchestrator(options = {}) {
           ...consumedTurnResultMetadata(),
         })
         sequence = cp.checkpointSequence
+        assertLiveFence(lease)
         const committed = await lifecycle.commitChanges({
           ...record,
           paths: workingPaths,
@@ -2506,6 +2557,7 @@ export function createHermesOrchestrator(options = {}) {
       const worktreeHead = await lifecycle.inspectWorktreeHead(record)
       if (workingPaths.length > 0) {
         assertChangedPathsAllowed(workingPaths, reservations)
+        assertLiveFence(lease)
         const recoveredCommit = await lifecycle.commitChanges({
           ...record,
           paths: workingPaths,
@@ -2590,6 +2642,7 @@ export function createHermesOrchestrator(options = {}) {
         await Promise.all([...renewalProjections])
       }
       if (renewalFailure) throw renewalFailure
+      assertLiveFence(lease)
     }
     const quiesceLeaseRenewal = async () => {
       if (renewal) {
@@ -2852,6 +2905,7 @@ export function createHermesOrchestrator(options = {}) {
         })
         sequence = cp.checkpointSequence
 
+        await assertLeaseProjectionHealthy()
         const committed = await lifecycle.commitChanges({
           ...record,
           paths: workingPaths,
