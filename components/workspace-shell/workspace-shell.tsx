@@ -18,6 +18,7 @@ import { AgentSessionStrip, AgentTurnCommittedPersistenceError, agentPresentatio
 import { AgentTranscriptHistory } from "./agent-transcript-history"
 import { BrainCouncilSurface, CouncilHistoryBrowser, type BrainCouncilSession, type CouncilAdvisoryAction } from "./brain-council-surface"
 import { diffReviewInspectorBinding, diffReviewInspectorId, diffReviewInspectorIdentity, encodeDiffReviewInspectorPayload, InspectorSurfaceView, inspectorSurfaceWindowTitle, type InspectorSurface } from "./inspector-surface"
+import { encodeExecutionAssignmentInspectorPayload, EXECUTION_ASSIGNMENT_INSPECTOR_KIND, executionAssignmentInspectorIdentity, parseExecutionAssignmentInspectorPayload } from "./execution-assignment-inspector"
 import { MissionControlSurface, type MissionControlSpaceProjection } from "./mission-control-surface"
 import { deriveMissionControlOverview } from "./mission-control-overview"
 import { WilliamConversationRail, type WilliamConversationEntry } from "./william-conversation-rail"
@@ -479,7 +480,8 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       const exactExisting = exactIdentity ? [...inspectors, ...incoming].find((candidate) => {
         const candidateBinding = candidate.kind === "review" ? diffReviewInspectorBinding(candidate.payload) : null
         const candidateIdentity = candidateBinding ? diffReviewInspectorIdentity(candidateBinding) : candidate.identity ?? null
-        return candidate.kind === surface.kind && candidate.subject === surface.subject && candidateIdentity === exactIdentity
+        return candidate.kind === surface.kind && candidateIdentity === exactIdentity
+          && (surface.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND || candidate.subject === surface.subject)
       }) : null
       if (exactExisting) {
         incoming.push({ ...surface, identity: exactIdentity ?? undefined, id: exactExisting.id })
@@ -526,7 +528,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         inspectorSeeds[surface.id] = {
           kind: surface.kind,
           subject: surface.subject,
-          ...(surface.kind === "review" && typeof surface.payload === "string"
+          ...((surface.kind === "review" || surface.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND) && typeof surface.payload === "string"
             ? { payload: surface.payload }
             : {}),
         }
@@ -535,6 +537,25 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
       return { ...current, inspectorWindows, inspectorSeeds, activeWindowId: active }
     })
   }, [inspectors])
+
+  const materializeExecutionAssignment = useCallback((sessionId: string) => {
+    const session = boundExecutionSession
+    if (!session || session.id !== sessionId || session.worldId !== worldId || session.workOrderId !== spine.workOrderId) {
+      setTransitionMessage("That persisted assignment is no longer bound to this Space.")
+      return
+    }
+    try {
+      const payload = encodeExecutionAssignmentInspectorPayload(session, spine)
+      materializeSurfaces({ surfaces: [{
+        kind: EXECUTION_ASSIGNMENT_INSPECTOR_KIND,
+        subject: `Work Order #${session.workOrderId}`,
+        identity: executionAssignmentInspectorIdentity(session),
+        payload,
+      }] })
+    } catch {
+      setTransitionMessage("The exact persisted assignment snapshot is unavailable.")
+    }
+  }, [boundExecutionSession, materializeSurfaces, spine, worldId])
 
   const materializeReviewReport = useCallback((path: string, report: string, binding?: AgentSessionDiffReview) => {
     materializeSurfaces({ surfaces: [{
@@ -665,8 +686,18 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
         setSpace(restored)
         setInspectors([
           ...Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
-            seed.kind === "review" && typeof seed.payload === "string"
-              ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
+            (seed.kind === "review" || seed.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND) && typeof seed.payload === "string"
+              ? [{
+                  id,
+                  kind: seed.kind,
+                  subject: seed.subject,
+                  payload: seed.payload,
+                  ...(seed.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND
+                    ? { identity: parseExecutionAssignmentInspectorPayload(seed.payload)
+                        ? executionAssignmentInspectorIdentity(parseExecutionAssignmentInspectorPayload(seed.payload)!)
+                        : undefined }
+                    : {}),
+                }]
               : seed.kind === "hermes"
                 ? [{ id, kind: "hermes", subject: seed.subject }]
               : [],
@@ -2172,8 +2203,18 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
     setChangeRefresh({ path: null, key: changeRefreshKey.current })
     setInspectors([
       ...Object.entries(restored.inspectorSeeds).flatMap(([id, seed]) =>
-        seed.kind === "review" && typeof seed.payload === "string"
-          ? [{ id, kind: "review", subject: seed.subject, payload: seed.payload }]
+        (seed.kind === "review" || seed.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND) && typeof seed.payload === "string"
+          ? [{
+              id,
+              kind: seed.kind,
+              subject: seed.subject,
+              payload: seed.payload,
+              ...(seed.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND
+                ? { identity: parseExecutionAssignmentInspectorPayload(seed.payload)
+                    ? executionAssignmentInspectorIdentity(parseExecutionAssignmentInspectorPayload(seed.payload)!)
+                    : undefined }
+                : {}),
+            }]
           : seed.kind === "hermes"
             ? [{ id, kind: "hermes", subject: seed.subject }]
           : [],
@@ -2372,7 +2413,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
   function openObjectAction(action: string) {
     if (action === "Merge unavailable") return
     if (selectedAgent?.kind === "world-worker" && selectedAgent.role === "HERMES" && action === "Inspect") {
-      materializeSurfaces({ surfaces: [{ kind: "hermes", subject: "HERMES local execution" }] })
+      materializeExecutionAssignment(selectedAgent.id)
       return
     }
     if (selectedKind === "space" && action === "Summarize") {
@@ -2617,7 +2658,7 @@ export function WorkspaceShell({ initialSummon = null }: { initialSummon?: Summo
             setDelegateContext(null)
             setLineOpen(false)
             if (agent.role === "HERMES") {
-              materializeSurfaces({ surfaces: [{ kind: "hermes", subject: "HERMES local execution" }] })
+              materializeExecutionAssignment(agent.id)
             }
             return
           }

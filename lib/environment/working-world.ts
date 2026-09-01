@@ -81,6 +81,14 @@ export type SpaceWindow =
       surfacePayload: string
     }>)
   | (SpaceWindowBase & Readonly<{
+      kind: "inspector"
+      surfaceKind: "execution-assignment"
+      /** Display label only; the exact assignment identity is inside the validated snapshot. */
+      surfaceSubject: string
+      /** Immutable, bounded assignment snapshot captured from the mounted world's persisted spine. */
+      surfacePayload: string
+    }>)
+  | (SpaceWindowBase & Readonly<{
       kind: Exclude<SpaceWindowKind, "inspector">
       surfaceKind?: never
       surfaceSubject?: never
@@ -436,6 +444,9 @@ export function validateSpaceState(raw: unknown): SpaceState {
       if (window.surfaceKind === "review") {
         workspaceRelativePath(window.surfaceSubject)
         boundedString(window.surfacePayload, "SPACE_REVIEW_PAYLOAD_INVALID", 200_000)
+      } else if (window.surfaceKind === "execution-assignment") {
+        boundedString(window.surfaceSubject, "SPACE_INSPECTOR_SURFACE_SUBJECT_INVALID", 1000)
+        boundedString(window.surfacePayload, "SPACE_EXECUTION_ASSIGNMENT_PAYLOAD_INVALID", 200_000)
       } else {
         if (!isSummonedSurface(window.surfaceKind)) throw new Error("SPACE_INSPECTOR_SURFACE_KIND_INVALID")
         boundedString(window.surfaceSubject, "SPACE_INSPECTOR_SURFACE_SUBJECT_INVALID", 1000)

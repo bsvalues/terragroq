@@ -3,6 +3,7 @@
 import styles from "./workspace-shell.module.css"
 import { validateWilliamJudgment } from "@/lib/environment/working-world"
 import { HermesOperationalSurface } from "@/components/hermes/hermes-operational-surface"
+import { EXECUTION_ASSIGNMENT_INSPECTOR_KIND, parseExecutionAssignmentInspectorPayload } from "./execution-assignment-inspector"
 import { parsePreviewInspectorPayload } from "./types"
 import type { AgentSessionDiffReview } from "./agent-sessions"
 
@@ -101,6 +102,9 @@ export function diffReviewInspectorBinding(value: unknown): AgentSessionDiffRevi
 
 export function inspectorSurfaceWindowTitle(surface: InspectorSurface): string {
   if (surface.kind === "hermes") return "HERMES · Appliance"
+  const assignment = surface.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND
+    ? parseExecutionAssignmentInspectorPayload(surface.payload) : null
+  if (assignment) return `Assignment · Work Order #${assignment.workOrderId}`
   return surface.kind === "review" && parseDiffReviewInspectorPayload(surface.payload)
     ? `Inspector · Current changes · ${surface.subject}`
     : `Inspector · ${surface.subject}`
@@ -145,8 +149,43 @@ function Rows({ payload }: { payload: unknown }) {
   )
 }
 
+function WorldWorkerAssignmentInspector({ payload }: { payload: unknown }) {
+  const snapshot = parseExecutionAssignmentInspectorPayload(payload)
+  if (!snapshot) return (
+    <div className={styles.inspectorEmpty} role="status">
+      Persisted execution assignment snapshot unavailable.
+    </div>
+  )
+  return (
+    <article className={styles.inspectorRows} aria-label="Persisted HERMES assignment">
+      <h2>{snapshot.role} · {snapshot.providerLabel}</h2>
+      <p><strong>Persisted assignment · runtime liveness unverified</strong></p>
+      <p>{snapshot.assignment}</p>
+      <dl>
+        <div><dt>Space</dt><dd>{snapshot.worldId}</dd></div>
+        <div><dt>Outcome</dt><dd>{snapshot.outcomeKey} · {snapshot.outcomeTitle}</dd></div>
+        <div><dt>Work Order</dt><dd>#{snapshot.workOrderId}</dd></div>
+        <div><dt>Status</dt><dd>{snapshot.status}</dd></div>
+        <div><dt>Executor</dt><dd>{snapshot.assignee}</dd></div>
+        <div><dt>Agent</dt><dd>{snapshot.agent ?? "—"}</dd></div>
+        <div><dt>Observed</dt><dd>{snapshot.observedAt}</dd></div>
+      </dl>
+      <h3>Latest persisted evidence · up to 50 records</h3>
+      {snapshot.evidence.length > 0 ? snapshot.evidence.map((evidence, index) => (
+        <dl key={`${evidence.at}:${evidence.kind}:${index}`}>
+          <div><dt>Kind</dt><dd>{evidence.kind}</dd></div>
+          <div><dt>Detail</dt><dd>{evidence.detail || "No detail recorded"}</dd></div>
+          <div><dt>Result</dt><dd>{evidence.result || "—"}</dd></div>
+          <div><dt>Recorded</dt><dd>{evidence.at}</dd></div>
+        </dl>
+      )) : <p>No persisted execution evidence yet.</p>}
+    </article>
+  )
+}
+
 export function InspectorSurfaceView({ surface, onRefresh }: { surface: InspectorSurface; onRefresh?: () => void }) {
   if (surface.kind === "hermes") return <HermesOperationalSurface />
+  if (surface.kind === EXECUTION_ASSIGNMENT_INSPECTOR_KIND) return <WorldWorkerAssignmentInspector payload={surface.payload} />
   if (surface.kind === "william-judgment") {
     try {
       const snapshot = validateWilliamJudgment(surface.payload)

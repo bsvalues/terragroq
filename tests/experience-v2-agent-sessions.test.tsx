@@ -3003,6 +3003,65 @@ describe("Experience V2 real agent sessions", () => {
     expect(screen.getByRole("button", { name: /HERMES · Local execution · Finish the durable HERMES session/i })).toBeTruthy()
   })
 
+  it("opens and deduplicates the exact persisted HERMES assignment Inspector without appliance probes", async () => {
+    const spine = {
+      ...EMPTY_SPINE,
+      projectId: 1,
+      projectName: "WilliamOS",
+      outcomeKey: "WILLIAMOS_EXPERIENCE_V2",
+      outcomeTitle: "Finish Experience V2",
+      workOrderId: 41,
+      execution: "validating" as const,
+      evidence: [
+        { kind: "test", detail: "Focused product suite", result: "PASS", at: "2026-09-01T18:00:00.000Z" },
+        { kind: "checkpoint", detail: "", result: null, at: "2026-09-01T18:01:00.000Z" },
+      ],
+    }
+    const executionSession: ProjectedWorldWorkerSession = {
+      id: "world-worker:server-world:41:hermes-codex-bridge",
+      worldId: "server-world",
+      workOrderId: 41,
+      assignee: "hermes-codex-bridge",
+      agent: "codex",
+      role: "HERMES",
+      providerLabel: "Local execution",
+      assignment: "Finish Experience V2 · Work Order #41: Inspect persisted execution",
+      status: "validating",
+      evidence: "test: Focused product suite · PASS",
+      observedAt: "2026-09-01T18:01:00.000Z",
+    }
+    const space = defaultSpace(1440, 900, "server-world", "Experience V2")
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === "/api/environment/space" && !init?.method) return Promise.resolve(Response.json({
+        worldId: "server-world", space: spaceToServer(space), spine,
+        project: { identity: "c:/repos/william-os-devops", name: "WilliamOS" }, storage: "server", browserStorageKey: null,
+      }))
+      if (url === "/api/environment/space" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { worldId: string; space: unknown }
+        return Promise.resolve(Response.json({ worldId: body.worldId, space: body.space, spine, judgment: null }))
+      }
+      if (url.startsWith("/api/environment/execution?")) return Promise.resolve(Response.json({ ...spine, session: executionSession }))
+      if (url.startsWith("/api/loom/codex/continuation")) return Promise.resolve(Response.json({ status: "WORK_ORDER_PATHS_COMPLETE" }))
+      if (url === "/api/loom/files?path=" && !init?.method) return Promise.resolve(Response.json({ kind: "directory", entries: [] }))
+      if (url === "/api/environment/judgment" && init?.method === "POST") return Promise.resolve(Response.json({ judgment: null }))
+      throw new Error(`unexpected request: ${init?.method ?? "GET"} ${url}`)
+    })
+    vi.stubGlobal("fetch", fetcher)
+
+    render(<WorkspaceShell />)
+    const worker = await screen.findByRole("button", { name: /HERMES · Local execution · Finish Experience V2/i })
+    fireEvent.click(worker)
+
+    expect(await screen.findByText("Assignment · Work Order #41")).toBeTruthy()
+    expect(screen.getByText("WILLIAMOS_EXPERIENCE_V2 · Finish Experience V2")).toBeTruthy()
+    expect(screen.getByText("Focused product suite")).toBeTruthy()
+    expect(screen.getByText("No detail recorded")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Inspect" }))
+    expect(screen.getAllByText("Assignment · Work Order #41")).toHaveLength(1)
+    expect(fetcher.mock.calls.some(([input]) => String(input) === "/api/environment/hermes")).toBe(false)
+  })
+
   it("creates a real Claude session from the streamed route response and persists its descriptor", async () => {
     const sessionId = "123e4567-e89b-42d3-a456-426614174000"
     const fetcher = vi.fn().mockResolvedValue(ndjson(
