@@ -68,6 +68,7 @@ export async function POST(request: Request) {
           repositoryIdentity: projectBinding.binding.repositoryIdentity,
           spaceIdentity: projectBinding.binding.project.identity,
         },
+        expected: { actor: "williamos", capability: operation.id },
         target: { kind: "operation", operation: operation.id },
       })
     } catch (error) {

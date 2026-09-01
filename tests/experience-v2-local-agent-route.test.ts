@@ -8,7 +8,10 @@ const seams = vi.hoisted(() => ({
   recordLoomEnd: vi.fn(),
 }))
 
-vi.mock("node:child_process", () => ({ spawn: seams.spawn }))
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...await importOriginal<typeof import("node:child_process")>(),
+  spawn: seams.spawn,
+}))
 vi.mock("@/lib/session", () => ({ getSession: seams.getSession }))
 vi.mock("@/lib/projects/workspace-project-binding", () => ({
   resolveTerraFusionWorkspaceBinding: async () => ({ ok: true, binding: { workspaceRoot: process.cwd() } }),

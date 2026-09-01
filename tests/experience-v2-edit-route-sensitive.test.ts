@@ -144,8 +144,11 @@ describe("selected-file Change sensitive-path boundary", () => {
 
     const response = await POST(improveRequest())
     expect(response.status).toBe(200)
+    expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledTimes(2)
     expect(seams.deriveSpaceMutationAuthority).toHaveBeenCalledWith(expect.objectContaining({
-      userId: "owner-1", worldId: "world-a", target: { kind: "selected-file", requestedPath: "src/app.ts" },
+      userId: "owner-1", worldId: "world-a",
+      expected: { actor: "sea", capability: "selected-file-change" },
+      target: { kind: "selected-file", requestedPath: "src/app.ts" },
     }))
     expect(seams.loadOwnedWorkingWorld).toHaveBeenCalledWith("owner-1", "world-a")
     expect(seams.deriveWorkspaceFileDiff).toHaveBeenCalledTimes(2)
@@ -155,6 +158,18 @@ describe("selected-file Change sensitive-path boundary", () => {
     child.stdout.emit("data", Buffer.from(JSON.stringify({ success: true })))
     child.emit("close", 0)
     await response.text()
+  })
+
+  it("refuses Change when its exact Space authority snapshot changes before SEA spawn", async () => {
+    seams.deriveSpaceMutationAuthority
+      .mockResolvedValueOnce({ worldId: "world-a", worldRevision: 3, workOrderId: 41, grantId: 51, selectedPath: "src/app.ts" })
+      .mockResolvedValueOnce({ worldId: "world-a", worldRevision: 4, workOrderId: 41, grantId: 51, selectedPath: "src/app.ts" })
+
+    const response = await POST(request("src/app.ts"))
+
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({ error: "SPACE_MUTATION_AUTHORITY_STALE" })
+    expect(seams.spawn).not.toHaveBeenCalled()
   })
 
   it.each([

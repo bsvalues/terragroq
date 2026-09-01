@@ -12,6 +12,14 @@ import { LOCAL_ENDPOINT, LOCAL_MODEL, resolveProvider } from "@/lib/loom/provide
 import { recordLoomEnd, recordLoomStart } from "@/lib/loom/receipts"
 import { assertThreadResume, loomThreadDescriptor } from "@/lib/loom/threads"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
+import { inspectCodexAssignmentTarget } from "@/lib/loom/codex-assignment"
+import {
+  cleanupCodexIsolatedWorkspace,
+  createCodexIsolatedWorkspace,
+  inspectCodexIsolatedWorkspace,
+  type CodexIsolatedWorkspace,
+} from "@/lib/loom/codex-isolated-workspace"
+import { workspaceFileWriteDependencies, writeGovernedWorkspaceFile } from "@/lib/loom/workspace-file-write"
 import type { WorkspaceFileDiffSnapshot } from "@/lib/loom/workspace-diff"
 import {
   deriveSpaceMutationAuthority,
@@ -563,6 +571,7 @@ export async function POST(request: Request) {
           projectId: binding.projectId, projectKey: binding.projectKey,
           repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
         },
+        expected: { actor: "claude", capability: "selected-file-change" },
         target: { kind: "selected-file" },
       })
     } catch (error) {
@@ -613,6 +622,7 @@ export async function POST(request: Request) {
           projectId: binding.projectId, projectKey: binding.projectKey,
           repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
         },
+        expected: { actor: "claude", capability: "selected-file-change" },
         target: { kind: "selected-file", requestedPath: mutationAuthority.selectedPath },
       })
       if (terminal.worldRevision !== mutationAuthority.worldRevision
@@ -624,6 +634,21 @@ export async function POST(request: Request) {
       return Response.json({ error: error instanceof SpaceMutationAuthorityError ? "SPACE_MUTATION_AUTHORITY_STALE" : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
         status: error instanceof SpaceMutationAuthorityError ? 409 : 503,
       })
+    }
+  }
+
+  let mutationWorkspace: CodexIsolatedWorkspace | null = null
+  let mutationTarget: Awaited<ReturnType<typeof inspectCodexAssignmentTarget>> | null = null
+  if (mutationAuthority) {
+    try {
+      mutationTarget = await inspectCodexAssignmentTarget(projectRoot, mutationAuthority.selectedPath!)
+      mutationWorkspace = await createCodexIsolatedWorkspace({
+        projectRoot,
+        selectedPath: mutationAuthority.selectedPath!,
+        initialContent: mutationTarget.content,
+      })
+    } catch {
+      return Response.json({ error: "CLAUDE_ISOLATION_UNAVAILABLE" }, { status: 503 })
     }
   }
 
@@ -647,7 +672,7 @@ export async function POST(request: Request) {
   delete env.ANTHROPIC_AUTH_TOKEN
 
   const child = spawn(AGENT_BIN, args, {
-    cwd: projectRoot,
+    cwd: mutationWorkspace?.root ?? projectRoot,
     shell: false,
     windowsHide: true,
     env,
@@ -1033,6 +1058,60 @@ export async function POST(request: Request) {
             })
             if (!settled) send({ type: "event", event: diffReviewResultEvent })
             finish({ type: "done", reason: null, code })
+          } else if (mutationAuthority && mutationWorkspace && mutationTarget) {
+            if (code !== 0) {
+              await cleanupCodexIsolatedWorkspace(mutationWorkspace).catch(() => undefined)
+              mutationWorkspace = null
+              finish({ type: "done", reason: null, code })
+              return
+            }
+            try {
+              const isolatedResult = await inspectCodexIsolatedWorkspace(mutationWorkspace)
+              await cleanupCodexIsolatedWorkspace(mutationWorkspace)
+              mutationWorkspace = null
+              const baseWriter = workspaceFileWriteDependencies(projectRoot)
+              const promoted = await writeGovernedWorkspaceFile({
+                userId: session.user.id,
+                path: mutationAuthority.selectedPath!,
+                content: isolatedResult.content,
+                modifiedAt: mutationTarget.modifiedAt,
+              }, {
+                ...baseWriter,
+                authorize: async (requestedPath) => {
+                  if (requestedPath !== mutationAuthority!.selectedPath) {
+                    return { ok: false, failure: "FAILED_SCOPE_COLLISION", detail: "Claude promotion escaped the exact Space selection" }
+                  }
+                  try {
+                    const terminal = await deriveSpaceMutationAuthority({
+                      userId: session.user.id,
+                      worldId: mutationAuthority!.worldId,
+                      binding: {
+                        projectId: binding.projectId, projectKey: binding.projectKey,
+                        repositoryIdentity: binding.repositoryIdentity, spaceIdentity: binding.project.identity,
+                      },
+                      expected: { actor: "claude", capability: "selected-file-change" },
+                      target: { kind: "selected-file", requestedPath },
+                    })
+                    return terminal.worldRevision === mutationAuthority!.worldRevision
+                      && terminal.workOrderId === mutationAuthority!.workOrderId
+                      && terminal.grantId === mutationAuthority!.grantId
+                      ? { ok: true }
+                      : { ok: false, failure: "FAILED_AUTHORITY_NOT_GRANTED", detail: "Claude Space authority changed before promotion" }
+                  } catch {
+                    return { ok: false, failure: "FAILED_AUTHORITY_NOT_GRANTED", detail: "Claude Space authority changed before promotion" }
+                  }
+                },
+              })
+              if (!promoted.ok) {
+                finish({ type: "done", reason: `CLAUDE_PROMOTION_${promoted.error}`, code: null })
+                return
+              }
+              finish({ type: "done", reason: null, code })
+            } catch (error) {
+              if (mutationWorkspace) await cleanupCodexIsolatedWorkspace(mutationWorkspace).catch(() => undefined)
+              mutationWorkspace = null
+              finish({ type: "done", reason: (error as { code?: string })?.code ?? "CLAUDE_ISOLATION_VIOLATION", code: null })
+            }
           } else finish({ type: "done", reason: null, code })
         })
       })

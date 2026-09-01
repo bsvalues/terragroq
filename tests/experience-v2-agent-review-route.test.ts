@@ -8,6 +8,11 @@ const seams = vi.hoisted(() => ({
   getSession: vi.fn(),
   resolveRealWorkspacePath: vi.fn(),
   deriveSpaceMutationAuthority: vi.fn(),
+  inspectTarget: vi.fn(),
+  createIsolated: vi.fn(),
+  inspectIsolated: vi.fn(),
+  cleanupIsolated: vi.fn(),
+  writeGoverned: vi.fn(),
   poolQuery: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
@@ -34,6 +39,16 @@ vi.mock("@/lib/loom/workspace", async (importOriginal) => ({
 vi.mock("@/lib/governance/space-mutation-authority", () => ({
   deriveSpaceMutationAuthority: seams.deriveSpaceMutationAuthority,
   SpaceMutationAuthorityError: class SpaceMutationAuthorityError extends Error { code = "SPACE_MUTATION_AUTHORITY_REFUSED" },
+}))
+vi.mock("@/lib/loom/codex-assignment", () => ({ inspectCodexAssignmentTarget: seams.inspectTarget }))
+vi.mock("@/lib/loom/codex-isolated-workspace", () => ({
+  createCodexIsolatedWorkspace: seams.createIsolated,
+  inspectCodexIsolatedWorkspace: seams.inspectIsolated,
+  cleanupCodexIsolatedWorkspace: seams.cleanupIsolated,
+}))
+vi.mock("@/lib/loom/workspace-file-write", () => ({
+  workspaceFileWriteDependencies: () => ({ authorize: vi.fn(), resolve: vi.fn(), auditStart: vi.fn(), auditFinish: vi.fn() }),
+  writeGovernedWorkspaceFile: seams.writeGoverned,
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
 vi.mock("@/lib/loom/receipts", () => ({
@@ -76,6 +91,11 @@ describe("selected-file review route", () => {
       relative: "src/example.ts",
     })
     seams.deriveSpaceMutationAuthority.mockResolvedValue(mutationAuthority)
+    seams.inspectTarget.mockResolvedValue({ content: "before", modifiedAt: "2026-08-30T00:00:00.000Z", digest: "a".repeat(64) })
+    seams.createIsolated.mockResolvedValue({ projectRoot: process.cwd(), runtimeRoot: "C:/runtime", root: "C:/runtime/delegate-1", baseSha: "a".repeat(40), selectedPath: "src/example.ts", initialContentDigest: "a".repeat(64) })
+    seams.inspectIsolated.mockResolvedValue({ content: "after", digest: "b".repeat(64) })
+    seams.cleanupIsolated.mockResolvedValue(undefined)
+    seams.writeGoverned.mockResolvedValue({ ok: true, path: "src/example.ts", modifiedAt: "2026-08-30T00:01:00.000Z", name: "example.ts" })
     seams.poolQuery.mockResolvedValue({
       rows: [{ userId: "owner-1", metadata: { mode: "review", path: "src/example.ts" } }],
     })
@@ -384,6 +404,15 @@ describe("selected-file review route", () => {
 
     child.emit("close", 0)
     await response.text()
+    expect(seams.createIsolated).toHaveBeenCalledWith(expect.objectContaining({
+      projectRoot: process.cwd(), selectedPath: "src/example.ts", initialContent: "before",
+    }))
+    expect(seams.spawn.mock.calls[0][2]).toMatchObject({ cwd: "C:/runtime/delegate-1" })
+    expect(seams.inspectIsolated).toHaveBeenCalledOnce()
+    expect(seams.cleanupIsolated).toHaveBeenCalledOnce()
+    expect(seams.writeGoverned).toHaveBeenCalledWith(expect.objectContaining({
+      path: "src/example.ts", content: "after", modifiedAt: "2026-08-30T00:00:00.000Z",
+    }), expect.any(Object))
   })
 
   it("records review receipts as read-only path-bound work", async () => {
@@ -444,6 +473,11 @@ describe("Claude Builder fork route", () => {
     vi.clearAllMocks()
     seams.getSession.mockResolvedValue({ user: { id: "owner-1" } })
     seams.deriveSpaceMutationAuthority.mockResolvedValue(mutationAuthority)
+    seams.inspectTarget.mockResolvedValue({ content: "before", modifiedAt: "2026-08-30T00:00:00.000Z", digest: "a".repeat(64) })
+    seams.createIsolated.mockResolvedValue({ projectRoot: process.cwd(), runtimeRoot: "C:/runtime", root: "C:/runtime/delegate-1", baseSha: "a".repeat(40), selectedPath: "src/example.ts", initialContentDigest: "a".repeat(64) })
+    seams.inspectIsolated.mockResolvedValue({ content: "after", digest: "b".repeat(64) })
+    seams.cleanupIsolated.mockResolvedValue(undefined)
+    seams.writeGoverned.mockResolvedValue({ ok: true, path: "src/example.ts", modifiedAt: "2026-08-30T00:01:00.000Z", name: "example.ts" })
     seams.poolQuery.mockResolvedValue({ rows: [{
       userId: "owner-1",
       metadata: { provider: "cloud", mode: "agent", worldId: "world-a", path: "src/example.ts" },
@@ -512,6 +546,10 @@ describe("Claude Builder fork route", () => {
     })
     expect(events[1]).toEqual({ type: "event", event: { type: "system", subtype: "init", session_id: childId } })
     expect(events.at(-1)).toEqual({ type: "done", reason: null, code: 0 })
+    expect(seams.spawn.mock.calls[0][2]).toMatchObject({ cwd: "C:/runtime/delegate-1" })
+    expect(seams.inspectIsolated).toHaveBeenCalledOnce()
+    expect(seams.cleanupIsolated).toHaveBeenCalledOnce()
+    expect(seams.writeGoverned).toHaveBeenCalledOnce()
     expect(seams.recordLoomEnd).toHaveBeenCalledWith(expect.objectContaining({
       userId: "owner-1", kind: "agent", subject: childId,
       outcome: expect.objectContaining({ forkedFrom: sourceId, code: 0, reason: null }),

@@ -6,7 +6,7 @@ import { getSession } from "@/lib/session"
 import { LOCAL_ENDPOINT, LOCAL_MODEL } from "@/lib/loom/providers"
 import { isSensitiveWorkspacePath, resolveRealWorkspacePath } from "@/lib/loom/workspace"
 import { recordLoomEnd, recordLoomEvidence, recordLoomStart } from "@/lib/loom/receipts"
-import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError } from "@/lib/governance/space-mutation-authority"
+import { deriveSpaceMutationAuthority, SpaceMutationAuthorityError, type SpaceMutationAuthority } from "@/lib/governance/space-mutation-authority"
 import { loadOwnedWorkingWorld } from "@/lib/environment/space-persistence"
 import { deriveWorkspaceFileDiff } from "@/lib/loom/workspace-diff"
 import { resolveTerraFusionWorkspaceBinding } from "@/lib/projects/workspace-project-binding"
@@ -60,8 +60,9 @@ export async function POST(request: Request) {
   }
 
   const worldId = typeof body.worldId === "string" ? body.worldId : ""
+  let mutationAuthority: SpaceMutationAuthority
   try {
-    await deriveSpaceMutationAuthority({
+    mutationAuthority = await deriveSpaceMutationAuthority({
       userId: session.user.id,
       worldId,
       binding: {
@@ -70,6 +71,7 @@ export async function POST(request: Request) {
         repositoryIdentity: binding.repositoryIdentity,
         spaceIdentity: binding.project.identity,
       },
+      expected: { actor: "sea", capability: "selected-file-change" },
       target: { kind: "selected-file", requestedPath: resolved.relative },
     })
   } catch (error) {
@@ -113,6 +115,33 @@ export async function POST(request: Request) {
     if (terminalDiffSnapshot.state !== "modified" || terminalDiffSnapshot.fingerprint !== expectedDiffFingerprint) {
       return Response.json({ error: "DIFF_CONTEXT_STALE" }, { status: 409 })
     }
+  }
+
+  // Every Space/diff/filesystem await above can race the active Work Order or grant. Re-derive the
+  // exact SEA authority immediately before spawn and reject any snapshot drift.
+  try {
+    const terminalAuthority = await deriveSpaceMutationAuthority({
+      userId: session.user.id,
+      worldId,
+      binding: {
+        projectId: binding.projectId,
+        projectKey: binding.projectKey,
+        repositoryIdentity: binding.repositoryIdentity,
+        spaceIdentity: binding.project.identity,
+      },
+      expected: { actor: "sea", capability: "selected-file-change" },
+      target: { kind: "selected-file", requestedPath: resolved.relative },
+    })
+    if (terminalAuthority.worldRevision !== mutationAuthority.worldRevision
+      || terminalAuthority.workOrderId !== mutationAuthority.workOrderId
+      || terminalAuthority.grantId !== mutationAuthority.grantId
+      || terminalAuthority.selectedPath !== mutationAuthority.selectedPath) {
+      return Response.json({ error: "SPACE_MUTATION_AUTHORITY_STALE" }, { status: 409 })
+    }
+  } catch (error) {
+    return Response.json({ error: error instanceof SpaceMutationAuthorityError ? "SPACE_MUTATION_AUTHORITY_STALE" : "SPACE_MUTATION_AUTHORITY_UNAVAILABLE" }, {
+      status: error instanceof SpaceMutationAuthorityError ? 409 : 503,
+    })
   }
 
   const model = typeof body.model === "string" && body.model ? body.model : LOCAL_MODEL

@@ -47,6 +47,7 @@ describe("server-derived Space mutation authority", () => {
   it("authorizes the exact persisted selected file without trusting a browser authority claim", async () => {
     await expect(deriveSpaceMutationAuthority({
       userId: "owner-1", worldId: "space-1", binding,
+      expected: { actor: "claude", capability: "selected-file-change" },
       target: { kind: "selected-file", requestedPath: "src/app.ts" },
     }, dependencies(record()))).resolves.toMatchObject({
       worldId: "space-1", selectedPath: "src/app.ts", workOrderId: 41, grantId: 51,
@@ -67,6 +68,7 @@ describe("server-derived Space mutation authority", () => {
   ])("fails closed for %s", async (_label, overrides) => {
     await expect(deriveSpaceMutationAuthority({
       userId: "owner-1", worldId: "space-1", binding,
+      expected: { actor: "claude", capability: "selected-file-change" },
       target: { kind: "selected-file", requestedPath: "src/app.ts" },
     }, dependencies(record(overrides as Partial<SpaceMutationAuthorityRecord>))))
       .rejects.toBeInstanceOf(SpaceMutationAuthorityError)
@@ -79,6 +81,7 @@ describe("server-derived Space mutation authority", () => {
     })
     await expect(deriveSpaceMutationAuthority({
       userId: "owner-1", worldId: "space-1", binding,
+      expected: { actor: "claude", capability: "service.restart" },
       target: { kind: "operation", operation: "service.restart" },
     }, dependencies(runtime))).resolves.toMatchObject({ operation: "service.restart" })
   })
@@ -94,7 +97,18 @@ describe("server-derived Space mutation authority", () => {
     })
     await expect(deriveSpaceMutationAuthority({
       userId: "owner-1", worldId: "space-1", binding,
+      expected: { actor: "claude", capability: "service.restart" },
       target: { kind: "operation", operation: "service.restart" },
     }, dependencies(runtime))).rejects.toBeInstanceOf(SpaceMutationAuthorityError)
+  })
+
+  it.each([
+    [{ actor: "sea", capability: "selected-file-change" }, { kind: "selected-file", requestedPath: "src/app.ts" }],
+    [{ actor: "claude", capability: "selected-file-review" }, { kind: "selected-file", requestedPath: "src/app.ts" }],
+    [{ actor: "claude", capability: "tests.run" }, { kind: "operation", operation: "service.restart" }],
+  ] as const)("fails closed when the server-owned actor or capability expectation does not match", async (expected, target) => {
+    await expect(deriveSpaceMutationAuthority({
+      userId: "owner-1", worldId: "space-1", binding, expected, target,
+    }, dependencies(record()))).rejects.toBeInstanceOf(SpaceMutationAuthorityError)
   })
 })

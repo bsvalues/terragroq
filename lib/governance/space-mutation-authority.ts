@@ -174,6 +174,7 @@ export async function deriveSpaceMutationAuthority(
     userId: string
     worldId: string
     binding: SpaceMutationProjectBinding
+    expected: Readonly<{ actor: string; capability: string }>
     target: Readonly<{ kind: "selected-file"; requestedPath?: string | null }> | Readonly<{ kind: "operation"; operation: string }>
   }>,
   dependencies: SpaceMutationAuthorityDependencies = productionDependencies,
@@ -196,7 +197,8 @@ export async function deriveSpaceMutationAuthority(
     refuse("the Space is not bound to one active outcome and Work Order")
   }
   const actor = record.workOrder.agent?.trim().toLowerCase() ?? ""
-  if (!actor || record.workOrder.authorityGrantId !== record.grant.id
+  if (!actor || input.expected.actor.trim().toLowerCase() !== actor
+    || record.workOrder.authorityGrantId !== record.grant.id
     || record.grant.workOrderId !== record.workOrder.id || record.grant.userId !== input.userId
     || record.grant.grantedTo.trim().toLowerCase() !== actor) {
     refuse("the Work Order and grant are not bound to the same exact actor")
@@ -225,6 +227,9 @@ export async function deriveSpaceMutationAuthority(
     workOrderId: record.workOrder.id, grantId: record.grant.id, actor,
   }
   if (input.target.kind === "selected-file") {
+    if (input.expected.capability !== "selected-file-change") {
+      refuse("the requested capability does not match selected-file mutation authority")
+    }
     const selectedPath = record.world.selectedPath
     if (!selectedPath || (input.target.requestedPath != null && selectedPath !== input.target.requestedPath)
       || allowed.length === 0 || !reservationCoversRequestedPath(selectedPath, allowed).ok
@@ -234,6 +239,9 @@ export async function deriveSpaceMutationAuthority(
     return { ...base, selectedPath }
   }
   const operation = input.target.operation
+  if (input.expected.capability !== operation) {
+    refuse("the requested capability does not match the reserved runtime operation")
+  }
   const reservation = `operation:${operation}`
   if (!operation || allowed.length !== 1 || allowed[0] !== reservation || forbidden.length !== 0) {
     refuse("the runtime operation is not exactly and exclusively reserved")

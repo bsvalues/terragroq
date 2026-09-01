@@ -8,6 +8,11 @@ const seams = vi.hoisted(() => ({
   loadOwnedWorkingWorld: vi.fn(),
   inspectWorkspaceApp: vi.fn(),
   deriveSpaceMutationAuthority: vi.fn(),
+  inspectTarget: vi.fn(),
+  createIsolated: vi.fn(),
+  inspectIsolated: vi.fn(),
+  cleanupIsolated: vi.fn(),
+  writeGoverned: vi.fn(),
   poolQuery: vi.fn(),
   recordLoomStart: vi.fn(),
   recordLoomEnd: vi.fn(),
@@ -29,6 +34,16 @@ vi.mock("@/lib/environment/workspace-app", async (importOriginal) => ({
 vi.mock("@/lib/governance/space-mutation-authority", () => ({
   deriveSpaceMutationAuthority: seams.deriveSpaceMutationAuthority,
   SpaceMutationAuthorityError: class SpaceMutationAuthorityError extends Error { code = "SPACE_MUTATION_AUTHORITY_REFUSED" },
+}))
+vi.mock("@/lib/loom/codex-assignment", () => ({ inspectCodexAssignmentTarget: seams.inspectTarget }))
+vi.mock("@/lib/loom/codex-isolated-workspace", () => ({
+  createCodexIsolatedWorkspace: seams.createIsolated,
+  inspectCodexIsolatedWorkspace: seams.inspectIsolated,
+  cleanupCodexIsolatedWorkspace: seams.cleanupIsolated,
+}))
+vi.mock("@/lib/loom/workspace-file-write", () => ({
+  workspaceFileWriteDependencies: () => ({ authorize: vi.fn(), resolve: vi.fn(), auditStart: vi.fn(), auditFinish: vi.fn() }),
+  writeGovernedWorkspaceFile: seams.writeGoverned,
 }))
 vi.mock("@/lib/db", () => ({ pool: { query: seams.poolQuery } }))
 vi.mock("@/lib/loom/receipts", () => ({ recordLoomStart: seams.recordLoomStart, recordLoomEnd: seams.recordLoomEnd }))
@@ -72,6 +87,11 @@ describe("Preview debugger route", () => {
       projectKey: "terrafusion", repositoryIdentity: "bsvalues/terrafusion_os_1.0",
       outcomeKey: "OUTCOME-1", workOrderId: 41, grantId: 51, actor: "claude", selectedPath: "src/app.ts",
     })
+    seams.inspectTarget.mockResolvedValue({ content: "before", modifiedAt: "2026-08-30T00:00:00.000Z", digest: "a".repeat(64) })
+    seams.createIsolated.mockResolvedValue({ projectRoot: process.cwd(), runtimeRoot: "C:/runtime", root: "C:/runtime/delegate-1", baseSha: "a".repeat(40), selectedPath: "src/app.ts", initialContentDigest: "a".repeat(64) })
+    seams.inspectIsolated.mockResolvedValue({ content: "after", digest: "b".repeat(64) })
+    seams.cleanupIsolated.mockResolvedValue(undefined)
+    seams.writeGoverned.mockResolvedValue({ ok: true, path: "src/app.ts", modifiedAt: "2026-08-30T00:01:00.000Z", name: "app.ts" })
     seams.poolQuery.mockResolvedValue({ rows: [{ userId: "owner-1", metadata: {
       provider: "cloud", mode: "preview", worldId: "world-a", evidenceFingerprint: fingerprint,
     } }] })
