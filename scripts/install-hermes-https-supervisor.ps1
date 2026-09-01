@@ -57,6 +57,20 @@ function Get-TaskFileArgument {
     Where-Object { $_ } | Select-Object -First 1
 }
 
+function Test-CommandLineHasExactPath {
+  param([string]$CommandLine, [string]$ExpectedPath)
+  if (-not $CommandLine) { return $false }
+  $normalizedExpected = [IO.Path]::GetFullPath($ExpectedPath).TrimEnd('\')
+  foreach ($match in [regex]::Matches($CommandLine, '(?:"([^"]*)"|''([^'']*)''|(\S+))')) {
+    $token = @($match.Groups[1].Value, $match.Groups[2].Value, $match.Groups[3].Value) |
+      Where-Object { $_ } | Select-Object -First 1
+    try {
+      if ([IO.Path]::GetFullPath($token).TrimEnd('\') -ieq $normalizedExpected) { return $true }
+    } catch { }
+  }
+  return $false
+}
+
 function Assert-InstalledSupervisor {
   foreach ($required in @($launcherTarget, $proxyTarget)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing installed WilliamOS HTTPS file: $required" }
@@ -125,7 +139,7 @@ if ($RestoreFrom) {
   Get-NetTCPConnection -LocalPort $HttpsPort -State Listen -ErrorAction SilentlyContinue |
     ForEach-Object {
       $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
-      if ($process.CommandLine -notlike "*$proxyTarget*") {
+      if (-not $process -or -not (Test-CommandLineHasExactPath -CommandLine $process.CommandLine -ExpectedPath $proxyTarget)) {
         throw "Port $HttpsPort is owned by an unrelated process $($process.ProcessId); refusing to stop it"
       }
       Stop-Process -Id $process.ProcessId -Force
@@ -203,7 +217,7 @@ try {
   Get-NetTCPConnection -LocalPort $HttpsPort -State Listen -ErrorAction SilentlyContinue |
     ForEach-Object {
       $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
-      if ($process.CommandLine -notlike "*$proxyTarget*") {
+      if (-not $process -or -not (Test-CommandLineHasExactPath -CommandLine $process.CommandLine -ExpectedPath $proxyTarget)) {
         throw "Port $HttpsPort is owned by an unrelated process $($process.ProcessId); refusing to stop it"
       }
       Stop-Process -Id $process.ProcessId -Force
@@ -226,7 +240,7 @@ try {
   Get-NetTCPConnection -LocalPort $HttpsPort -State Listen -ErrorAction SilentlyContinue |
     ForEach-Object {
       $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)"
-      if ($process -and $process.CommandLine -like "*$proxyTarget*") {
+      if ($process -and (Test-CommandLineHasExactPath -CommandLine $process.CommandLine -ExpectedPath $proxyTarget)) {
         Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
       }
     }

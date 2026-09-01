@@ -78,7 +78,12 @@ describe("the HERMES HTTPS supervisor", () => {
   it("refuses to kill an unrelated owner of the HTTPS port", () => {
     const code = executableOnly(installer)
     expect(code).toContain("Port $HttpsPort is owned by an unrelated process")
-    expect(code.indexOf("CommandLine -notlike")).toBeLessThan(code.indexOf("Stop-Process -Id $process.ProcessId"))
+    expect(code).toContain("function Test-CommandLineHasExactPath")
+    expect(code).toContain("[regex]::Matches($CommandLine")
+    expect(code).toContain("[IO.Path]::GetFullPath($token)")
+    expect(code).not.toMatch(/CommandLine\s+-(?:not)?like/)
+    expect(code.indexOf("Test-CommandLineHasExactPath -CommandLine $process.CommandLine"))
+      .toBeLessThan(code.indexOf("Stop-Process -Id $process.ProcessId"))
   })
 
   it("verifies the HTTPS task uses the exact normalized launcher argument", () => {
